@@ -9,10 +9,9 @@
 """
     BuildInspection()
 
-Observability record for [`build_evaluator`](@ref): pass one via the `inspect`
-keyword (`_build_evaluator(doc; inspect=BuildInspection())`; [`esm_problem`](@ref)
-forwards its own `inspect` keyword) and the build fills it with named
-BUILD-TIME products that are otherwise internal to the evaluator closure:
+Observability record for a build: pass one via [`esm_problem`](@ref)'s
+`inspect` keyword and the build fills it with named BUILD-TIME products that
+are otherwise internal to the evaluator closure:
 
 * `setup_arrays::Dict{String,Array{Float64}}` — the materialized setup-time
   geometry arrays (RFC §8.1 / esm-spec §8.6.1), keyed by (flattened) observed
@@ -85,8 +84,10 @@ mutable struct BuildInspection
     param_classes::Dict{String,Symbol}
     # Which tier every rule of this build landed on (API_SPEC §5.8). The same
     # record `compiler_report(prob)` returns, put here too so a caller who
-    # builds through `build_evaluator` — or whose build REFUSED — can still read
-    # it. Empty until the build that owns this record finishes.
+    # builds through the private builder — or whose build REFUSED, leaving no
+    # Problem to read it off — can still read it. [`compiler_report`](@ref)
+    # takes this record as well as an `EsmProblem`. Empty until the build that
+    # owns this record finishes.
     compiler_report::CompilerReport
     # The live forcing buffers this build bound, in the stable (name-sorted)
     # NamedTuple order a compiled backend's buffers argument is aligned with,
@@ -110,7 +111,7 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
 
 The **discrete-cadence materialization** sink — the middle phase of the
 three-phase cadence partition (`const ⊏ discrete ⊏ continuous`, `cadence.jl`).
-Pass one via the `materialize_out` keyword of [`build_evaluator`](@ref) to
+Pass one via the `materialize_out` keyword of [`esm_problem`](@ref) to
 OPT IN to the cut; without it, discrete-cadence derived fields stay inlined into
 the per-step RHS (the pre-cut behavior; every existing build is byte-identical).
 
@@ -3407,7 +3408,7 @@ function _build_evaluator_impl_inner(model::Model;
     # An event, continuous or discrete, is refused before anything is built
     # (esm-spec §9.6.6): this evaluator has no event handling, so a model built
     # without its events would report a wrong answer. This check covers a model
-    # handed to `build_evaluator` directly. A FLATTENED system reaches this entry
+    # handed to the builder directly. A FLATTENED system reaches this entry
     # through `flattened_to_esm`, which does not carry events, so `simulate` (and
     # with it `run_inline_tests`) and `_build_evaluator(::FlattenedSystem)` refuse
     # it earlier, while the events are still in hand. The ModelingToolkit export
@@ -4729,7 +4730,8 @@ end
     param_map(p) -> Dict{String,Int}
 
 Parameter NAME → its position in a parameter VECTOR, the `p`-side mirror of the
-`var_map` [`build_evaluator`](@ref) returns for the state.
+`var_map` a build returns for the state (and [`esm_problem`](@ref) hangs on
+its Problem).
 
 Take it from the `p` that `build_evaluator` handed back:
 
@@ -4841,7 +4843,7 @@ performs before compiling, exposed as a public seam so downstream tools
 (e.g. EarthSciASTDiff, which differentiates the tree) analyze the SAME tree
 the evaluator compiles. `file` is not mutated.
 
-Model selection matches [`build_evaluator`](@ref): `model_name = nothing`
+Model selection matches the build's: `model_name = nothing`
 selects the document's only model, or throws `E_TREEWALK_AMBIGUOUS_MODEL`
 when there are several; an unknown name throws `E_TREEWALK_NO_MODEL`.
 A document with no surviving references returns the plain copy.
@@ -5412,7 +5414,7 @@ end
 
 Evaluate a single AST expression at the supplied numeric `bindings` by
 running it through the same compile + walker pipeline as
-[`build_evaluator`](@ref). All keys of `bindings` are exposed as readable
+the evaluator build. All keys of `bindings` are exposed as readable
 state variables; the special name `"t"` (if present) is bound to the
 walker's time argument as well. Adding an op to the tree-walk evaluator
 transparently extends this entry point — there is no separate dispatch

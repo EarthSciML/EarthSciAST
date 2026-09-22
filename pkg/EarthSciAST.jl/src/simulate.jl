@@ -448,8 +448,9 @@ _solve_problem(prob, alg; kwargs...) = throw(SimulateError(
 """
     EsmProblem
 
-The ESM simulation problem: the compiled tree-walk RHS `f!`, the seeded initial
-state `u0`, the integration interval `tspan`, the parameter carrier `p`, the
+The ESM simulation problem: the right-hand side `f!` the chosen `compiler`
+built — the compiled tree walk under `:native` / `:interpreter`, the compiled
+StableHLO program under `:xla` — the seeded initial state `u0`, the integration interval `tspan`, the parameter carrier `p`, the
 `var_map`, the live forcing buffers, the discrete-provider/refresh scaffolding,
 and the problem's own callback set — everything deterministic per document,
 built exactly once by [`esm_problem`](@ref).
@@ -484,7 +485,8 @@ Fields are an extension seam, not stable API; `var_map`, `p`, `u0`, `tspan`
 and `output_meta` are the ones downstream code reads.
 """
 struct EsmProblem
-    f!::Function                          # compiled tree-walk RHS (in-place)
+    f!::Function                          # the built RHS, in-place, whatever
+                                          # `compiler` produced it
     u0::Vector{Float64}                   # seeded initial state; COPIED per run
     tspan::Tuple{Float64,Float64}         # integration interval
     p::Any                                # parameter NamedTuple (or nothing)
@@ -784,7 +786,7 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
   documents build, not how fast they run.
 
 Julia extension-seam keywords (§2.5.2 explicitly allows these; NOT stable API):
-`const_arrays`, `param_arrays` (forwarded to [`build_evaluator`](@ref) — the
+`const_arrays`, `param_arrays` (forwarded to the build — the
 regridder source polygons and the live forcing buffers), `inspect` (share the
 problem's [`BuildInspection`](@ref) with the caller), `materialize_out` (a
 caller-owned [`DiscreteMaterializer`](@ref)), `pushdown_rewrite`, `seed_ic!`
