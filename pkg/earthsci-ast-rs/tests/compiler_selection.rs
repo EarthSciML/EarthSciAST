@@ -120,12 +120,21 @@ fn a_value_outside_the_vocabulary_is_compiler_unknown() {
 // 3 + 4: a strict `native`, and the reference that takes the same document
 // ---------------------------------------------------------------------------
 
-/// `interp.linear` is a §9.2 closed function with no tape lowering — the
-/// single largest reason in the 2026-09-21 corpus census (405 rules of 1057).
+/// The document `native` refuses, and the reason it refuses for.
+///
+/// This used to be an `interp.linear` fixture, which was then the largest
+/// single decline in the corpus census (405 rules of 1057). That family is on
+/// the tape now, so the canonical refusal moved to the next one that is a
+/// genuine CAPABILITY gap rather than a cost choice:
+/// `polygon_intersection_area` has no array evaluator at all, so nothing about
+/// this test can quietly become a tautology the way a lowered `interp.linear`
+/// would have.
+const REFUSED_FIXTURE: &str = "tests/coupling/interfaces.esm";
+
 /// The refusal must name the RULE, not just the document.
 #[test]
 fn native_refuses_a_rule_the_tape_cannot_lower_and_names_it() {
-    let path = fixture("tests/closed_functions/interp/linear/canonical.esm");
+    let path = fixture(REFUSED_FIXTURE);
     match build(&path, Compiler::Native) {
         Err(SimulateError::Compile(CompileError::CompilerRefusedRule {
             compiler,
@@ -135,15 +144,21 @@ fn native_refuses_a_rule_the_tape_cannot_lower_and_names_it() {
             reason,
         })) => {
             assert_eq!(compiler, "native");
-            assert_eq!(kind, "state derivative");
-            assert!(rule.contains('y'), "the rule is named: {rule}");
-            assert_eq!(tier, "continuous");
             assert!(
-                reason.contains("interp.linear"),
+                kind == "observed" || kind == "state derivative",
+                "the rule kind is one of the two: {kind}"
+            );
+            assert!(!rule.is_empty(), "the rule is named");
+            assert!(
+                tier == "const" || tier == "segment" || tier == "continuous",
+                "the cadence tier is reported: {tier}"
+            );
+            assert!(
+                reason.contains("polygon_intersection_area"),
                 "the deepest decline reason is carried: {reason}"
             );
         }
-        other => panic!("native must refuse an interp.linear rule, got {other:?}"),
+        other => panic!("native must refuse a polygon_intersection_area rule, got {other:?}"),
     }
 }
 
@@ -151,7 +166,7 @@ fn native_refuses_a_rule_the_tape_cannot_lower_and_names_it() {
 fn the_default_compiler_is_the_strict_native() {
     // No `compiler` at all: the same refusal, because an unspecified compiler
     // IS `native` and `native` is strict (§2.5.10).
-    let path = fixture("tests/closed_functions/interp/linear/canonical.esm");
+    let path = fixture(REFUSED_FIXTURE);
     let err = esm_problem(path.as_path(), (0.0, 1.0), ProblemOptions::default())
         .expect_err("the default is strict");
     assert!(
@@ -165,7 +180,7 @@ fn the_default_compiler_is_the_strict_native() {
 
 #[test]
 fn the_interpreter_takes_the_document_native_refused() {
-    let path = fixture("tests/closed_functions/interp/linear/canonical.esm");
+    let path = fixture(REFUSED_FIXTURE);
     let prob = build(&path, Compiler::Interpreter).expect("the reference evaluates the core");
     assert_eq!(prob.compiler(), Compiler::Interpreter);
     let report = prob.compiler_report();

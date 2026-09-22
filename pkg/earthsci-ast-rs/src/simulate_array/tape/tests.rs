@@ -2475,15 +2475,20 @@ fn datetime_on_a_literal_time_folds_at_build_time() {
     assert_eq!(dy[0], 2000.0, "datetime.year(946684800) is 2000");
 }
 
-/// What the tape still refuses in the closed-function registry: the `interp.*`
-/// entries, which read a table rather than decomposing a scalar. They must
-/// become a NAMED fallback (so the rule runs in the oracle and the compiled
-/// lane refuses it by name), never a silent wrong answer.
+/// The `interp.*` entries lower to ONE `Instr::Interp` each, whatever the
+/// table's size — the instruction carries an index into `interp_tables`, not
+/// the table — and the per-element answer is the registry's own.
+///
+/// This test used to assert the opposite (a named fallback), which is what the
+/// tape did before the family was lowered. The shape of the assertion is kept:
+/// what is checked is the INSTRUCTION, not just the absence of a fallback,
+/// because a family lowered into a select chain per knot would also report no
+/// fallback while putting a table's worth of instructions on the tape.
 #[test]
-fn interp_closed_functions_still_fall_back_by_name() {
+fn interp_closed_functions_lower_to_one_instruction() {
     let doc = json!({
         "esm": "1.1.0",
-        "metadata": {"name": "tape_interp_fallback"},
+        "metadata": {"name": "tape_interp"},
         "models": {"M": {
             "variables": {"x": {"type": "unknown"}},
             "equations": [
@@ -2494,11 +2499,22 @@ fn interp_closed_functions_still_fall_back_by_name() {
         }}
     });
     let compiled = compile(doc);
-    let (_prog, report) = compiled.build_tape(&HashSet::new());
-    assert_eq!(report.fallbacks.len(), 1, "{:?}", report.fallbacks);
-    assert!(
-        report.fallbacks[0].1.contains("interp.searchsorted"),
-        "the fallback reason must name the function: {:?}",
-        report.fallbacks
-    );
+    let (prog, report) = compiled.build_tape(&HashSet::new());
+    assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
+    assert_eq!(opcount(&prog, "Interp"), 1, "{report}");
+    // The table is on the PROGRAM, and the `const` literal that carried it
+    // into the call is not materialized at all: nothing reads it any more.
+    assert_eq!(prog.interp_tables.len(), 1);
+    assert_eq!(opcount(&prog, "ConstArray"), 0, "{report}");
+
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let mut dy = vec![0.0f64; 1];
+    // `t = 1.5` sits between `xs[2]` and `xs[3]`, so the first entry >= t is
+    // the third, 1-based.
+    run_reference(&prog, &compiled, &[0.0], &param_vec, 1.5, &mut dy);
+    assert_eq!(dy[0], 3.0);
+    // Past the end: N + 1, one past the last index.
+    run_reference(&prog, &compiled, &[0.0], &param_vec, 9.0, &mut dy);
+    assert_eq!(dy[0], 4.0);
 }

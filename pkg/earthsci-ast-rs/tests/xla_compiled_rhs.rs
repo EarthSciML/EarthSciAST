@@ -623,3 +623,138 @@ fn compiled_datetime_family_matches_the_interpreter() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// esm-spec §9.2 `interp.*`
+// ---------------------------------------------------------------------------
+
+/// The `interp.*` family through the emitter, against this crate's
+/// interpreter.
+///
+/// Built from an inline document rather than added to the tier manifest: the
+/// manifest is the cross-language tier's, owned by its coordinator, and this
+/// gate is about the RUST emitter's new arm. The three entries are exercised
+/// in one document so a single probe sweep covers all of them.
+///
+/// The tolerance is §9.2's OWN mixed-FMA bound, `{abs: 0, rel: 4e-16}` (~2 ulp
+/// at unit magnitude), and the reason it is not bitwise is worth stating: the
+/// cell search, the clamps and the corner reads are exact integer and
+/// selection work, and the blend is the three IEEE-754 operations §9.2 pins,
+/// in that order — so the ONLY thing that can move a bit here is XLA
+/// contracting `a + w * (b - a)` into an FMA, which it does. §9.2 anticipates
+/// exactly that ("bindings that use FMA selectively MUST ensure their results
+/// still match the non-FMA reference within the per-fixture tolerance") and
+/// prices it at this bound.
+///
+/// So the test also COUNTS the probes that are not bit-identical and asserts
+/// that count stays small. A tolerance alone would pass just as happily if
+/// every probe drifted; the count is what would catch a lowering that started
+/// blending in a different order rather than merely fusing a multiply.
+#[test]
+fn interp_lowers_and_matches_the_interpreter() {
+    if !runtime_available() {
+        return;
+    }
+    // A non-uniform axis (so a wrong cell cannot hide behind even spacing), a
+    // 3x4 bilinear grid, and a searchsorted table with a duplicate run.
+    let doc = r#"{
+  "esm": "1.0.0",
+  "metadata": { "name": "XlaInterpProbe", "description": "One state per §9.2 interp entry, each reading query states, so a probe places every query independently." },
+  "models": { "M": { "variables": {
+      "qa": { "type": "unknown", "units": "1", "default": 0.0 },
+      "qb": { "type": "unknown", "units": "1", "default": 0.0 },
+      "lin": { "type": "unknown", "units": "1", "default": 0.0 },
+      "bil": { "type": "unknown", "units": "1", "default": 0.0 },
+      "ss":  { "type": "unknown", "units": "1", "default": 0.0 }
+    },
+    "equations": [
+      { "lhs": { "op": "D", "args": ["qa"], "wrt": "t" }, "rhs": 0.0 },
+      { "lhs": { "op": "D", "args": ["qb"], "wrt": "t" }, "rhs": 0.0 },
+      { "lhs": { "op": "D", "args": ["lin"], "wrt": "t" },
+        "rhs": { "op": "fn", "name": "interp.linear", "args": [
+          { "op": "const", "args": [], "value": [10.0, 20.0, 40.0, 80.0, 160.0] },
+          { "op": "const", "args": [], "value": [0.0, 1.0, 2.5, 3.0, 7.0] },
+          "qa" ]} },
+      { "lhs": { "op": "D", "args": ["bil"], "wrt": "t" },
+        "rhs": { "op": "fn", "name": "interp.bilinear", "args": [
+          { "op": "const", "args": [], "value": [[0.0, 1.0, 2.0, 3.0], [10.0, 11.5, 12.0, 13.0], [20.0, 21.0, 22.5, 23.0]] },
+          { "op": "const", "args": [], "value": [0.0, 1.0, 2.0] },
+          { "op": "const", "args": [], "value": [0.0, 10.0, 25.0, 30.0] },
+          "qa", "qb" ]} },
+      { "lhs": { "op": "D", "args": ["ss"], "wrt": "t" },
+        "rhs": { "op": "fn", "name": "interp.searchsorted", "args": [
+          "qa", { "op": "const", "args": [], "value": [1.0, 2.0, 2.0, 2.0, 4.0, 5.0] } ]} }
+    ] } }
+}"#;
+    let file = load_string(doc).expect("the probe document loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("it compiles");
+    let program = match CompiledRhs::compile(&compiled) {
+        Ok(p) => p,
+        Err(CompileRhsError::Refused(e)) => {
+            panic!("the emitter refused rule {}: {}", e.rule, e.reason)
+        }
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+    };
+    let names: Vec<String> = compiled.state_variable_names().to_vec();
+    let bare = |n: &str| {
+        names
+            .iter()
+            .position(|s| s == n || s.split_once('.').map(|x| x.1) == Some(n))
+            .unwrap_or_else(|| panic!("no state {n:?} in {names:?}"))
+    };
+    let (ia, ib) = (bare("qa"), bare("qb"));
+    let params: HashMap<String, f64> = HashMap::new();
+    let pv = compiled.debug_resolve_params(&params);
+
+    // Below range, on the first knot, mid-cell, on each interior knot, on the
+    // last knot, above range — in both axes, and on the duplicate run of the
+    // searchsorted table. NaN is left out: the tier compares `f64` bits, and a
+    // NaN payload is not a lowering property (the interpreter's comes out of
+    // Rust's arithmetic, the compiled one out of XLA's).
+    let qas = [-2.0, 0.0, 0.5, 1.0, 2.0, 2.5, 2.75, 3.0, 5.0, 7.0, 9.0];
+    let qbs = [-5.0, 0.0, 4.0, 10.0, 18.0, 25.0, 27.5, 30.0, 51.0];
+    let mut probes = 0usize;
+    let mut inexact = 0usize;
+    let mut worst = 0.0f64;
+    for a in qas {
+        for b in qbs {
+            let mut u = vec![0.0f64; names.len()];
+            u[ia] = a;
+            u[ib] = b;
+            let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, false);
+            let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
+            assert_eq!(got.len(), want.len());
+            for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                if g.to_bits() == w.to_bits() {
+                    continue;
+                }
+                inexact += 1;
+                // §9.2's mixed-FMA / non-FMA bound.
+                assert!(
+                    (g - w).abs() <= 4e-16 * w.abs(),
+                    "interp probe (qa={a}, qb={b}) tendency {}: compiled {g:.17e} vs \
+                     interpreter {w:.17e} — beyond §9.2's mixed-FMA tolerance, so this \
+                     is a lowering difference and not a contracted multiply",
+                    names[i]
+                );
+                worst = worst.max((g - w).abs() / (4e-16 * w.abs()));
+            }
+            probes += 1;
+        }
+    }
+    // Every tendency of every probe; only the `interp.linear` /
+    // `interp.bilinear` blends can be inexact at all, and only where the
+    // weight is not 0 or 1.
+    let checked = probes * names.len();
+    assert!(
+        inexact * 4 <= checked,
+        "{inexact} of {checked} compiled values differ from the interpreter; the blend \
+         is supposed to be the same three operations, with only a contracted multiply \
+         between them"
+    );
+    eprintln!(
+        "interp: {probes} probes, {} of {checked} values bit-identical, worst \
+         {worst:.3e} of §9.2's mixed-FMA tolerance",
+        checked - inexact
+    );
+}
