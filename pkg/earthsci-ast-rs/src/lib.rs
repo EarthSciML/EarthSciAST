@@ -83,6 +83,10 @@ pub(crate) mod data_output;
 /// esm-spec §8.2.1: load-time resolution of a data source's
 /// `source.url_template` against the referencing document's own directory.
 pub(crate) mod data_source_urls;
+/// esm-spec §9.6.6 `data_source_unbound`: what binds a DATA-FED parameter, and
+/// the refusal when nothing does (CONFORMANCE_SPEC §5.46).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod data_fed;
 pub(crate) mod diagnostic;
 pub(crate) mod display;
 pub(crate) mod edit;

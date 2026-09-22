@@ -11,7 +11,7 @@ import sympy as sp
 
 from . import op_registry
 from .classification import ode_states
-from .error_handling import UNSUPPORTED_CONSTRUCT
+from .error_handling import DATA_SOURCE_UNBOUND, UNSUPPORTED_CONSTRUCT
 from .errors import EarthSciAstError, SimulationError
 from .esm_types import Expr, ExprNode, Model
 from .expr_walk import iter_children, map_children
@@ -228,6 +228,42 @@ class UnsupportedConstructError(SimulationError):
             f"{UNSUPPORTED_CONSTRUCT}: {construct} {detail} is not supported by the "
             f"{evaluator}; refusing the build rather than running the model without "
             f"it (esm-spec §9.6.6)"
+        )
+
+
+class DataSourceUnboundError(SimulationError):
+    """A data-fed parameter reached a build with nothing bound to it
+    (esm-spec §9.6.6 ``data_source_unbound``, CONFORMANCE_SPEC §5.46).
+
+    "Nothing bound to it" means no provider object for it, no array loaded for
+    it, and no caller-supplied ``p`` value for it. The refusal is a document
+    contract rather than a compiler capability, so it is identical under every
+    ``compiler`` and fires before any right-hand side is built.
+
+    It is refused rather than evaluated at the parameter's ``default`` because
+    the default is not a fallback value, it is a placeholder: a forcing at its
+    default integrates to a complete, smooth, reproducible trajectory, reported
+    under the label of a quantity the document says is read from a file, with
+    nothing in the result recording that the file was never opened.
+    """
+
+    #: Stable cross-binding diagnostic code (esm-spec §9.6.6).
+    code = DATA_SOURCE_UNBOUND
+
+    def __init__(self, parameter: str, source: str, detail: str = "") -> None:
+        self.parameter = parameter
+        self.source = source
+        self.detail = detail
+        super().__init__(
+            f"{DATA_SOURCE_UNBOUND}: parameter {parameter!r} is fed by the data "
+            f'source {source!r} (an `update` of kind "data"), and nothing bound '
+            f"it: no provider, no loaded array, and no `p` value"
+            + (f" ({detail})" if detail else "")
+            + f". Pass providers={{{parameter!r}: <provider>}} to supply the data, "
+            f"or p={{{parameter!r}: <value>}} to pin a value. The build will not "
+            f"fall back to the parameter's `default`: a forcing at its default "
+            f"produces a whole trajectory that looks like an answer "
+            f"(esm-spec §9.6.6)"
         )
 
 

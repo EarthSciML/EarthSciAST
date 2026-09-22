@@ -120,6 +120,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # refused at the build with `equation_count_mismatch`, never resolved by
     # letting the derivative win (esm-spec §4.9.4).
     include("doubly_defined_state_conformance_test.jl")
+    # A DATA-FED parameter with nothing bound to it is refused at construction,
+    # never bound from its `default` and integrated (esm-spec §9.6.6
+    # `data_source_unbound`, CONFORMANCE_SPEC §5.46).
+    include("data_source_unbound_conformance_test.jl")
     include("pointwise_lift_axis_names_test.jl")  # §10.5 lift axes by NAME, not by extent
     include("coupling_imports_test.jl")
     include("flattened_to_esm_test.jl")

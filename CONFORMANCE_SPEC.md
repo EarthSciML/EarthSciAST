@@ -6318,6 +6318,72 @@ hands both equations to `mtkcompile`, which reports the imbalance in its own
 vocabulary.
 
 
+### 5.46 A Data-Fed Parameter Nothing Bound Is Refused, Not Defaulted (normative)
+
+A **data-fed parameter** is one whose `update` is `{kind: "data", source: …,
+from: {file_variable: …}}` (esm-spec §5.4, §8.5). From esm 1.0.0 that parameter
+IS the loaded field — a data source is not a component and has no coupling edge
+— so the `update` block is the whole of the document's statement that this
+number comes from a file.
+
+**The rule.** When a binding is asked to build a document and a data-fed
+parameter has **nothing bound to it** — no provider object for it, no array
+loaded for it, and no caller-supplied `p` value for it — the build MUST FAIL at
+construction with `data_source_unbound` (esm-spec §9.6.6). The message MUST name
+the parameter, the `data_sources` entry its `update` names, and what the caller
+can pass. It MUST fail before any right-hand side is built, and it MUST NOT bind
+the parameter from its `default`, from zero, or from a NaN sentinel. This binds
+`esm_problem`, `build_evaluator` and `run_inline_tests` alike.
+
+**Why.** The alternative is not a missing number, it is a plausible-looking
+wrong answer. A scalar forcing with a `default` of 0.1 integrates to a complete,
+smooth, reproducible trajectory; it is reported under the label of a rate the
+document says is read from a file, and nothing in the result records that the
+file was never opened. Refusing costs the caller one argument. Defaulting costs
+them the result, and costs the reader any way of telling. The shaped case makes
+the same point from the other side: a data-fed FIELD carries no `default` at
+all, so whatever a binding produces for it is a property of how it seeded an
+array and not of the document.
+
+**It is a document contract, not a compiler capability.** The refusal MUST be
+identical in shape under `compiler=native` and under `compiler=interpreter`.
+Whether a particular compiler can LOWER a read of the forcing channel is a
+separate question, answered separately by `compiler_refused_rule`; whether
+anything BOUND the forcing is decided before any right-hand side exists, and has
+the same answer for every compiler. A binding whose two compilers disagree here
+— one refusing and one running — is reporting a compiler property in place of a
+document property.
+
+**The `p` escape hatch is required to keep working.** A caller who passes an
+explicit `p` value for the parameter HAS bound it. That is how a data-fed
+document is run offline, and it is how its own inline tests run at all:
+`Test.parameter_overrides` (esm-spec §6.6) is the `p` argument of `esm_problem`
+by another name. Such a build MUST succeed, and the pinned value MUST reach the
+right-hand side — a binding that merely suppressed the refusal and then
+integrated the `default` would pass a refusal test and fail its purpose.
+
+**An unresolvable source is not a bound source.** A parameter whose
+`update.source` names no declared `data_sources` entry is a validation defect
+with its own code (`data_source_undefined`, esm-spec §8.5). A binding whose
+simulation front door runs structural validation reports that and never reaches
+the build; one whose front door does not MUST still refuse, with
+`data_source_unbound`. Either code satisfies this tier for that case. What no
+binding may do is drop the loader field because its source did not resolve,
+leave the parameter looking ordinary, and integrate it at its `default`.
+
+#### 5.46.1 Gate
+
+`tests/conformance/data_source_unbound/` — a manifest, three refusal fixtures
+and two controls, with no goldens: the category pins a refusal and two
+trajectories, not a numeric agreement. Consumed by
+`pkg/EarthSciAST.jl/test/data_source_unbound_conformance_test.jl`,
+`pkg/earthsci-ast-py/tests/test_data_source_unbound_conformance.py` and
+`pkg/earthsci-ast-rs/tests/data_source_unbound_conformance.rs`, each of which
+asserts the refusal under BOTH compilers, asserts that the message names the
+parameter, and runs the two controls. Go and TypeScript do not simulate and only
+register the code.
+
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

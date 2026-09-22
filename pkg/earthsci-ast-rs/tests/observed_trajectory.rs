@@ -266,21 +266,51 @@ fn a_reaction_system_is_not_mistaken_for_a_static_document() {
         eprintln!("· skipping: no {POLLU}");
         return;
     }
-    let prob = esm_problem(
-        ProblemInput::Path(Path::new(POLLU)),
-        (0.0, 1.0),
-        ProblemOptions {
-            // The reference compiler, because the CLASSIFICATION is what this
-            // test is about and `native` does not get as far as answering it:
-            // the fixture's photolysis rates are data-fed parameters
-            // (`update: { kind: "data" }`) with no source bound here, so the
-            // tape refuses `PureChemistry.jO3` as an unresolved symbol
-            // (API_SPEC §5.8).
-            compiler: Some(earthsci_ast::Compiler::Interpreter),
-            ..Default::default()
-        },
-    )
-    .expect("esm_problem");
+    // Nothing here supplies the photolysis rates the document declares as
+    // data-fed parameters, and a build with nothing bound to them is a refusal
+    // now (esm-spec §9.6.6 `data_source_unbound`) — under BOTH compilers, this
+    // being a property of the document and not of the evaluator. That refusal
+    // is asserted first, because it is what makes the pinned build below an
+    // honest reading of the classification rather than an accident.
+    for compiler in [
+        earthsci_ast::Compiler::Native,
+        earthsci_ast::Compiler::Interpreter,
+    ] {
+        let err = esm_problem(
+            ProblemInput::Path(Path::new(POLLU)),
+            (0.0, 1.0),
+            ProblemOptions {
+                compiler: Some(compiler),
+                ..Default::default()
+            },
+        )
+        .expect_err("no photolysis source is bound here");
+        let text = err.to_string();
+        assert!(
+            text.contains("data_source_unbound") && text.contains("PureChemistry.j"),
+            "{compiler:?}: the refusal must name the unbound data-fed parameter: {text}"
+        );
+    }
+
+    // Pinning the four rates BINDS them (esm-spec §6.6.2), which is the
+    // documented way to run a data-fed document with no data — and the only way
+    // to reach the question this test is actually about. The values are the
+    // fixture's own declared defaults, so the trajectory is the one the
+    // document describes when its source happens to agree with them.
+    let mut opts = ProblemOptions {
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
+        ..Default::default()
+    };
+    for (rate, value) in [
+        ("PureChemistry.jO3", 1e-5),
+        ("PureChemistry.jNO2", 5e-3),
+        ("PureChemistry.jNO3", 2e-3),
+        ("PureChemistry.jH2O2", 1e-6),
+    ] {
+        opts.p.insert(rate.to_string(), value);
+    }
+    let prob = esm_problem(ProblemInput::Path(Path::new(POLLU)), (0.0, 1.0), opts)
+        .expect("a pinned chemistry document builds");
     assert!(
         prob.is_dynamic(),
         "a document of 25 reactions was classified static",
@@ -298,17 +328,14 @@ fn a_reaction_system_is_not_mistaken_for_a_static_document() {
         "twenty-five reactions are twenty-five state derivatives, not a static evaluation"
     );
 
-    // The RUN, and why it is a refusal rather than a trajectory: the array
-    // runtime binds a data-fed parameter from its SOURCE, not from its
-    // `default`, and this call supplies no source. Running on the declared
-    // defaults would produce a trajectory that looks like an answer and is
-    // not one, so the refusal names the parameter it could not bind.
+    // And it RUNS — which is the half the refusal used to stand in for. A
+    // static classification would have failed here with `NotDynamic` instead.
     let mut o = SolveOptions::default();
     o.sample_evenly(0.0, 1.0, 3);
-    let err = solve(&prob, &o).expect_err("no data source is bound here");
-    let text = err.to_string();
+    let sol = solve(&prob, &o).expect("a pinned chemistry document runs");
+    assert_eq!(sol.time.len(), 3, "three save points were asked for");
     assert!(
-        text.contains("jO3"),
-        "the refusal must name the unbound data-fed parameter: {text}"
+        !sol.state.is_empty(),
+        "twenty-five species integrate to twenty-five rows"
     );
 }
