@@ -21,7 +21,7 @@
 #   --engine    WHICH LANE evaluates the right-hand side — this tier's own axis.
 #               The tree-walk evaluator, or direct StableHLO emission.
 #   --compiler  WHICH STRATEGY BUILDS it, over API_SPEC §5.8's closed vocabulary.
-#               Passed straight to `build_evaluator` and never interpreted here.
+#               Passed straight to the build and never interpreted here.
 #
 # `--compiler` is REQUIRED (CONFORMANCE_SPEC §5.44.5): a problem-building stage
 # NAMES the compiler it runs, so that a change to the library's default can never
