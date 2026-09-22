@@ -922,14 +922,17 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         @test get(dn.stats, :scalar_batch, 0) == 0
 
         # ONE WHOLE-LANE READ PER TENT POSITION, and not one per cell. The
-        # per-entry walk reads the state one element at a time
-        # (`slice1@rhs_scalar.stategather`); the batched surface reads all
-        # `NI*NJ` lanes at once, so the site tally carries NO single-position
+        # per-entry walk reads the state one element at a time — through a
+        # state-gather node (`slice1@rhs_scalar.stategather`) where the build
+        # formed one, or a plain state node (`slice1@rhs_scalar.state`) under
+        # `compiler=:interpreter`, which forms none; the batched surface reads
+        # all `NI*NJ` lanes at once, so the site tally carries NO single-position
         # read at all and exactly `M*M` whole-lane reads — one per position of
         # the tent, whatever form the cost model gives each one.
-        rd1 = Symbol("slice1@rhs_scalar.stategather")
-        @test get(dn.stats, rd1, 0) > 0
-        @test get(d.stats, rd1, 0) == 0
+        reads1(stats) = get(stats, Symbol("slice1@rhs_scalar.stategather"), 0) +
+                        get(stats, Symbol("slice1@rhs_scalar.state"), 0)
+        @test reads1(dn.stats) > 0
+        @test reads1(d.stats) == 0
         @test get(d.stats, Symbol("concat@rhs_scalar.x"), 0) +
               get(d.stats, Symbol("gather@rhs_scalar.x"), 0) == M * M
 
@@ -946,7 +949,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
                                    samples; census = false)
             println("  batched tally (always): ", da.stats)
             @test get(da.stats, Symbol("gather@rhs_scalar.x"), 0) == M * M
-            @test get(da.stats, rd1, 0) == 0
+            @test reads1(da.stats) == 0
         end
 
         # And the emitted program stops following the cell count: the group's
