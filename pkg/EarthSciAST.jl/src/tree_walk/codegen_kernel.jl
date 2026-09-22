@@ -49,12 +49,10 @@
 # SSA-style locals, never writes into the kernel's `_AccScratch` buffers — so
 # an emitted kernel and an interpreted one coexist within one RHS call.
 #
-# Kill switch: ESS_CODEGEN_DISABLE=1 disables BOTH generated functions
-# (primary and overflow), so every kernel runs the per-cell interpreter — the
-# differential-oracle escape hatch, mirroring ESS_STENCIL_DISABLE. (Since the
-# lane-tape retirement this means interpreter-EVERYTHING: slower than it was
-# when the tape still served Float64 residuals, but still bit-identical.)
-# Debug: ESS_CODEGEN_DEBUG=1 prints per-build emission/decline/latency lines.
+# With the tier off (`compiler=:interpreter`) BOTH generated functions (primary
+# and overflow) stand down and every kernel runs the per-cell interpreter: that
+# is the differential oracle, slower but bit-identical by the emitter's
+# contract.
 # Budget: ESS_CODEGEN_NODE_BUDGET overrides the emitted-node cap (default
 # 64_000_000 across all kernels of one build) that backstops a runaway build.
 #
@@ -64,12 +62,10 @@
 # only in descriptor constants) and every site becomes a call — see
 # `_cg_emit_subcall` / `_cg_cell_fn!` and the default-off rationale at
 # `_cg_subcall_fn_disabled`. ESS_CG_SUBCALL_FN_MIN_NODES sets the stay-inline
-# size floor; ESS_CG_STRUCT_DUMP=<dir> dumps cell-body canonical keys.
+# size floor.
 # ========================================================================
 
-_codegen_disabled() = !_compiler_plan_now().codegen ||
-    get(ENV, "ESS_CODEGEN_DISABLE", "") == "1"
-_codegen_debug() = get(ENV, "ESS_CODEGEN_DEBUG", "") == "1"
+_codegen_disabled() = !_compiler_plan_now().codegen
 # CUMULATIVE emitted-node budget across all kernels in one build call — a
 # build-latency backstop, NOT a per-function compile bound (the intra-kernel
 # split, ess-iip-split, handles that: every generated function stays under
@@ -79,7 +75,9 @@ _codegen_debug() = get(ENV, "ESS_CODEGEN_DEBUG", "") == "1"
 # models always emit fully; it only backstops a runaway. The duo LMARS `:inplace`
 # state RHS is ~1.5e6 nodes (13 spine-dominated momentum kernels, ~1.1e5–1.6e5
 # each); the AST build of that is ~3 GB and cheap. Override with
-# ESS_CODEGEN_NODE_BUDGET.
+# ESS_CODEGEN_NODE_BUDGET — a REFUSAL BOUNDARY under `native`, since a kernel
+# past it that the overflow emission also declines is a refused rule, not a
+# quiet demotion.
 _codegen_node_budget() =
     something(tryparse(Int, get(ENV, "ESS_CODEGEN_NODE_BUDGET", "")), 64_000_000)
 
@@ -104,19 +102,18 @@ end
 # budget. Under non-Float64 `T` it is called unconditionally, so its
 # native-compile cost is paid at the first Dual call.
 # (Since ess-f64ofl, below, the same function also serves Float64 calls when
-# the Float64 overflow routing is armed; ESS_F64_OVERFLOW_CODEGEN=0 restores
-# the interpreter-at-Float64 routing for the residual kernels.)
-# Kill switch: ESS_DUAL_CODEGEN_DISABLE=1 restores the pre-dual routing exactly
-# (the differential-oracle escape hatch, mirroring ESS_CODEGEN_DISABLE); the
-# tier is also off whenever ESS_CODEGEN_DISABLE=1 disables codegen wholesale,
-# so the existing oracle stays a pure interpreter build.
+# the Float64 overflow routing is armed.)
+# Off, the routing is the pre-dual one; the tier is also off under
+# `compiler=:interpreter`, which disables codegen wholesale, so the oracle stays
+# a pure interpreter build.
 # Budget: ESS_DUAL_CODEGEN_NODE_BUDGET overrides the overflow emission budget
 # (default unbounded — per-function size is still capped by
-# ESS_CODEGEN_FN_NODE_CAP chunking, which is what bounds LLVM memory).
+# ESS_CODEGEN_FN_NODE_CAP chunking, which is what bounds LLVM memory). It is a
+# REFUSAL BOUNDARY under `native`: this is the emission whose decline is what
+# leaves a tree walk in the right-hand side.
 # Build tally: `:dual_codegen_kernel` / `:dual_codegen_decline_<reason>` in
 # `_CASCADE_TALLY` — the observability hook for which tier Dual evaluation uses.
-_dual_codegen_disabled() = !_compiler_plan_now().dual_codegen ||
-    get(ENV, "ESS_DUAL_CODEGEN_DISABLE", "") == "1"
+_dual_codegen_disabled() = !_compiler_plan_now().dual_codegen
 _dual_codegen_node_budget() =
     something(tryparse(Int, get(ENV, "ESS_DUAL_CODEGEN_NODE_BUDGET", "")), typemax(Int))
 
@@ -131,21 +128,17 @@ _dual_codegen_node_budget() =
 # active, the overflow RGF runs CHUNKED on its own threaded cell axis (see
 # "Threaded cell axis for the codegen tier" below).
 #
-# Kill switch ESS_F64_OVERFLOW_CODEGEN=0 routes every residual Float64 kernel
-# to the per-cell interpreter instead — the differential oracle for this
-# routing. (Historical note: before the lane-tape retirement this switch
-# restored the tape-at-Float64 routing; the tape is gone, so the oracle is now
-# the interpreter — slower, still bit-identical by the emitter's contract.)
+# Off, every residual Float64 kernel routes to the per-cell interpreter
+# instead — the differential oracle for this routing.
 # Kernels even the overflow emission declines (`dual_resid`) keep the
-# interpreter at Float64, exactly as before.
+# interpreter at Float64.
 # The routing is inert unless the PRIMARY emission declined something and the
-# overflow function exists (`ESS_DUAL_CODEGEN_DISABLE=1` therefore also
-# disables it, keeping that switch a full pre-overflow oracle). On every model
-# within the primary budget — all repo fixtures — nothing changes at all.
+# overflow function exists, so turning the overflow tier off turns this off
+# too. On every model within the primary budget — all repo fixtures — nothing
+# changes at all.
 # Build tally: `:f64_overflow_armed` when a section is built with the routing
 # armed (overflow function present + feature on).
-_f64_overflow_codegen_enabled() = _compiler_plan_now().f64_overflow &&
-    get(ENV, "ESS_F64_OVERFLOW_CODEGEN", "1") != "0"
+_f64_overflow_codegen_enabled() = _compiler_plan_now().f64_overflow
 
 # ---- Shared-prelude (xcse) cache reads (ess-cgfsc) ---------------------------
 # The cross-kernel fn-CSE pass (xcse.jl, plan B4) rewrites kernel invariant-tier
@@ -168,14 +161,11 @@ _f64_overflow_codegen_enabled() = _compiler_plan_now().f64_overflow &&
 # build.jl, hand-built test sections) pass `shared_cache = nothing` and keep
 # today's decline — as does ANY payload that is not that one cache object.
 #
-# Kill switch: ESS_CG_FOREIGN_SCRATCH_DISABLE=1 restores the unconditional
-# `:foreign_scratch` decline exactly (the differential oracle).
+# Off, every such read is an unconditional `:foreign_scratch` decline.
 # Build tally: `:cg_foreign_scratch_emit` — one bump per kernel that COMPILED
 # carrying at least one shared-prelude read (primary or overflow emission; a
 # kernel that later declines for another reason is not counted).
-_cg_foreign_scratch_disabled() =
-    !_compiler_plan_now().cg_foreign_scratch ||
-    get(ENV, "ESS_CG_FOREIGN_SCRATCH_DISABLE", "") == "1"
+_cg_foreign_scratch_disabled() = !_compiler_plan_now().cg_foreign_scratch
 
 # Per-kernel decline: the kernel keeps the per-cell interpreter runner.
 # Never an error — the tier is a pure optimization.
@@ -257,12 +247,12 @@ _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing) =
            IdDict{Any,Any}(), Any[],
            Dict{String,Tuple{Symbol,Vector{Symbol}}}(), String[], false)
 
-_cg_helper_dedup_disabled() = !_compiler_plan_now().cg_helper_dedup ||
-    get(ENV, "ESS_CG_HELPER_DEDUP_DISABLE", "") == "1"
+_cg_helper_dedup_disabled() = !_compiler_plan_now().cg_helper_dedup
 
-# Sub-kernel / cell-body function tier (ess-cg-subcall-fn): OPT-IN via
-# ESS_CG_SUBCALL_FN=1 (ESS_CG_SUBCALL_FN_DISABLE=1 still force-disables, as
-# the differential oracle). Measured on the duo LMARS RHS (2026-08-28) the
+# Sub-kernel / cell-body function tier (ess-cg-subcall-fn). EXPERIMENTAL, and
+# it ships OFF: `ESS_CG_SUBCALL_FN=1` is the one `ESS_*` variable that turns it
+# on. It is not an oracle selector — no tier stands down when it is unset, the
+# tier simply does not exist in the default build. Measured on the duo LMARS RHS (2026-08-28) the
 # tier is value-exact and shares real structure (94/120 sub-bodies dedup), but
 # the emitted-node total is unchanged — the mass is ~28 near-identical cell
 # bodies fragmented per region class by value-dependent boundary folds, which
@@ -270,13 +260,13 @@ _cg_helper_dedup_disabled() = !_compiler_plan_now().cg_helper_dedup ||
 # memory goes UP (38+ GB vs 32.6 GB) from the added function boundaries. Until
 # the duo rules gather affinely over shared cell sets (where this tier's
 # sharing actually lands), the fused emission is the better default.
-_cg_subcall_fn_disabled() =
-    get(ENV, "ESS_CG_SUBCALL_FN_DISABLE", "") == "1" ||
-    get(ENV, "ESS_CG_SUBCALL_FN", "") != "1"
+_cg_subcall_fn_disabled() = get(ENV, "ESS_CG_SUBCALL_FN", "") != "1"
 
 # Bodies at or under this emitted-node floor stay inlined per site: a leaf
 # template of a handful of nodes is cheaper re-emitted than behind a `@noinline`
-# call per cell per site. Override with ESS_CG_SUBCALL_FN_MIN_NODES.
+# call per cell per site. Override with ESS_CG_SUBCALL_FN_MIN_NODES — a refusal
+# boundary under `native` while the tier above it is opted in, since it decides
+# which bodies the emitter is asked to carve out.
 _cg_subcall_fn_min_nodes() =
     something(tryparse(Int, get(ENV, "ESS_CG_SUBCALL_FN_MIN_NODES", "")), 64)
 
@@ -932,11 +922,6 @@ function _cg_cell_fn!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbol})
     ab = _CGAbs()
     kb = _cg_abstract!(ab, body0)
     key = string(kb)
-    if (d = get(ENV, "ESS_CG_STRUCT_DUMP", "")) != ""
-        open(joinpath(d, "cellkey_$(length(ctx.substruct_log))_$(objectid(K)).txt"), "w") do io
-            write(io, key)
-        end
-    end
     hit = get(ctx.substruct, key, nothing)
     if hit !== nothing
         ctx.nodes = nodes0
@@ -1217,7 +1202,10 @@ end
 # first-call compile memory is super-linear in single-function size (one ~400k-
 # node function OOMs a 40 GB host). Loop nests are packed into `@noinline`
 # sub-functions up to this cap so LLVM compiles bounded pieces. Override with
-# ESS_CODEGEN_FN_NODE_CAP; 0 disables splitting (one function, legacy layout).
+# ESS_CODEGEN_FN_NODE_CAP; 0 disables splitting (one function, one flat body).
+# A refusal boundary under `native`: on a Julia that cannot split, an oversized
+# body declines to the interpreter, and a decline the overflow emission repeats
+# is a refused rule.
 _codegen_fn_node_cap() =
     something(tryparse(Int, get(ENV, "ESS_CODEGEN_FN_NODE_CAP", "")), 20_000)
 
@@ -1405,12 +1393,11 @@ end
 
 # Cap an emitted cell expression to the per-function node target, spilling into
 # helpers as needed. A no-op (returns `ex` unchanged, no helper minted) when it
-# already fits — so small kernels keep today's single-function fast path byte
-# for byte. `ESS_CODEGEN_BODY_SPLIT_DISABLE=1` forces the no-op (the pre-split
-# build; used as the differential oracle and to reproduce the OOM).
+# already fits — so small kernels keep the single-function fast path byte for
+# byte. Off, it is the no-op: one flat body per kernel, which is the
+# differential oracle and what reproduces the OOM.
 function _cg_bound_body!(ctx::_CGCtx, ex)
-    (!_compiler_plan_now().codegen_body_split ||
-     get(ENV, "ESS_CODEGEN_BODY_SPLIT_DISABLE", "") == "1") && return ex
+    _compiler_plan_now().codegen_body_split || return ex
     cap = _codegen_fn_node_cap()
     cap <= 0 && return ex
     _cg_expr_size(ex) <= cap && return ex
@@ -1438,7 +1425,6 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
                             tally::Symbol=:codegen,
                             shared_cache::Union{Nothing,_CSECache}=nothing)
     isempty(acc_kernels) && return nothing
-    t0 = time_ns()
     ctx = _CGCtx(budget, shared_cache)
     covered = fill(false, length(acc_kernels))
     reasons = fill(:none, length(acc_kernels))
@@ -1486,8 +1472,6 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
             ctx.fscratch = fscratch0
             reasons[j] = err.reason
             _tally_cascade!(Symbol(tally, "_decline_", err.reason))
-            _codegen_debug() &&
-                println(stderr, "[ess-codegen/$tally] kernel $j DECLINED: $(err.reason)")
         end
     end
     any(covered) || return nothing
@@ -1593,15 +1577,6 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     # small tuple. `_cggrpG[pos]` then reads a concrete-element container.
     tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
     ntabs = sum(length, ctx.tab_objs; init=0)
-    if _codegen_debug()
-        ms = (time_ns() - t0) / 1e6
-        println(stderr, "[ess-codegen/$tally] emitted $(count(covered))/$(length(covered)) ",
-                "kernels in $(length(chunks)) fn(s) + $(length(ctx.helpers)) split helper(s) ",
-                "($(get(_CASCADE_TALLY, :cg_helper_deduped, 0)) deduped), $(ctx.nodes) nodes, ",
-                "$ntabs tabs in $ngrp typed group(s), $(ncells) cells ",
-                "(outs $(disjoint ? "disjoint" : "SHARED")), ",
-                "build $(round(ms; digits=1)) ms")
-    end
     return _CGBuilt(f, tabpack, covered, reasons, ncells, disjoint)
 end
 
@@ -1632,13 +1607,10 @@ end
 # `_chunk_ordinals`, and disjoint writes commute. Threaded `du` is bitwise
 # `===` serial `du`.
 #
-# OPT-IN semantics: no Polyester ⇒ serial, ESS_THREADS_DISABLE=1 ⇒ serial,
-# section total below the per-chunk min-cells threshold
-# (ESS_THREADS_MIN_CELLS) ⇒ serial. ESS_CG_THREADS_DISABLE=1 additionally
-# forces this tier serial — the codegen-threading differential oracle.
+# OPT-IN semantics: no Polyester ⇒ serial; a section total below the per-chunk
+# min-cells threshold (ESS_THREADS_MIN_CELLS) ⇒ serial.
 # Verdicts land in `_THREAD_TALLY` (`:cg_threaded` / `:cg_serial_small` /
 # `:cg_serial_shared_outs`), documented with the existing keys.
-_cg_threads_disabled() = get(ENV, "ESS_CG_THREADS_DISABLE", "") == "1"
 
 # One-time threading verdict for one generated function's cell axes:
 # `state` is 0 unexamined, 1 chunked, -1 serial (too few cells), -2 serial
@@ -1696,7 +1668,7 @@ end
 # Per-call gate for the chunked path (the shared `_threads_available()` plus
 # the codegen-specific kill switch; both re-read per call, so toggling either
 # env var between calls flips the route without touching the cached verdict).
-@inline _cg_threads_available() = _threads_available() && !_cg_threads_disabled()
+@inline _cg_threads_available() = _threads_available()
 
 # ---- The RHS's kernel section (wired into `_make_rhs`, acc_merge.jl) --------
 # One concretely-typed callable holding the generated function (or `Nothing`)
@@ -1724,7 +1696,7 @@ struct _KernelSection{F,TB,G,GTB}
     dual_resid::Vector{Int}
     # Float64 overflow routing (ess-f64ofl): when true, the overflow function
     # above also serves Float64 calls (in place of the per-cell interpreter).
-    # Baked at build time from ESS_F64_OVERFLOW_CODEGEN (default on).
+    # Baked at build time from the plan's Float64 overflow routing.
     f64cg::Bool
     # Threaded cell axis: one lazily-decided chunk verdict per generated
     # function (primary / overflow), see `_SecTCache` above.
@@ -1792,10 +1764,9 @@ end
 end
 
 # Partition the kernels between the codegen tier and the pre-existing runners.
-# `ESS_CODEGEN_DISABLE=1` (or an empty emission) yields a section that is
-# exactly the pre-codegen kernel loop; `ESS_DUAL_CODEGEN_DISABLE=1` yields the
-# pre-dual routing (Duals interpret every residual kernel) with the primary
-# tier intact.
+# With the codegen tier off (or an empty emission) the section is exactly the
+# pre-codegen kernel loop; with only the overflow tier off it is the pre-dual
+# routing (Duals interpret every residual kernel) with the primary tier intact.
 # `shared_cache` (ess-cgfsc): the build's scalar prelude `_CSECache`, passed
 # ONLY by the `_make_rhs` call site (acc_merge.jl) — the one place where the
 # section provably runs after that cache's prelude tiers were filled in the
@@ -1851,8 +1822,8 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
     # Dual overflow tier: retry the residual kernels under the dual budget. Its
     # RGF is only ever CALLED with non-Float64 arguments, so nothing here adds
     # Float64 compile latency — only the (cheap) AST emission runs at build.
-    # Gated on ESS_CODEGEN_DISABLE too: that switch must keep yielding a pure
-    # pre-codegen build (the codegen tier's differential oracle).
+    # Gated on the primary tier too: with codegen off the build must stay a pure
+    # pre-codegen one, which is the tier's differential oracle.
     dg = (_codegen_disabled() || _dual_codegen_disabled() || isempty(kernels)) ?
          nothing :
          _build_codegen_rhs(kernels; budget=_dual_codegen_node_budget(),
@@ -1865,9 +1836,9 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
                               false, _sec_tcache(cg), _sec_tcache(nothing))
     end
     # Float64 overflow routing (ess-f64ofl): armed whenever the overflow
-    # function exists and ESS_F64_OVERFLOW_CODEGEN has not turned it off.
-    # `ESS_DUAL_CODEGEN_DISABLE=1` / `ESS_CODEGEN_DISABLE=1` reach the branch
-    # above instead, so both remain full oracles for their tiers.
+    # function exists and the plan has not turned the routing off. A build with
+    # either codegen tier off reaches the branch above instead, so both remain
+    # full oracles for their tiers.
     f64cg = _f64_overflow_codegen_enabled()
     f64cg && _tally_cascade!(:f64_overflow_armed)
     dual_resid = Int[j for j in eachindex(dg.covered) if !dg.covered[j]]

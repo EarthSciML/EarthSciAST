@@ -154,8 +154,7 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         run_solver = input.solver
         # esm-spec §9.6.4 Option B: `flatten` ALWAYS carries surviving
         # `apply_expression_template` references into the FlattenedSystem; they
-        # ride to the tree-walk build boundary below. Under
-        # `ESS_TEMPLATE_REF_DISABLE=1` load already expanded, so none exist.
+        # ride to the tree-walk build boundary below.
         input = flatten(input)
     end
     if input isa FlattenedSystem
@@ -728,18 +727,19 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
   compiled node per cell.
 
   `:interpreter` is the reference and carries no performance promise: every
-  fast tier off, which is what the `ESS_UNTIERED=1` + `_DISABLE` family
-  produces. Pick it to check another compiler, or to run a document `:native`
-  refuses. `:xla`, `:mtk` and `:sympy` raise `compiler_unavailable` from this
-  entry point today, naming what to load or which binding has them; a value
-  outside the vocabulary raises `compiler_unknown`.
+  fast tier off, one tree walk per output cell. Pick it to check another
+  compiler, or to run a document `:native` refuses. It keeps the build-time
+  MEMOS (the template expansion memo, the reference-preserving template image),
+  which change build wall time and not one evaluated bit. `:xla`, `:mtk` and
+  `:sympy` raise `compiler_unavailable` from this entry point today, naming
+  what to load or which binding has them; a value outside the vocabulary raises
+  `compiler_unknown`.
 
-  Naming `:native` EXPLICITLY also asserts that no `ESS_*` oracle kill switch
-  is set: one that is turns off a tier `native` is defined to use, so the build
-  would not be the compiler the caller named, and that is
-  `compiler_unavailable` naming the variable. Leaving the keyword out is the
-  same default and does not assert it, which is what keeps the switches (and
-  the differential tests built on them) working until they retire.
+  Naming `:native` is exactly the default: no environment variable selects an
+  evaluation strategy, so the keyword is the whole answer (esm-libraries-spec
+  §2.5.10). The `ESS_*` variables that remain are tuning thresholds — under a
+  strict `native` each is a refusal boundary, so moving one changes which
+  documents build, not how fast they run.
 
 Julia extension-seam keywords (§2.5.2 explicitly allows these; NOT stable API):
 `const_arrays`, `param_arrays` (forwarded to [`build_evaluator`](@ref) — the
@@ -792,7 +792,7 @@ function esm_problem(input, tspan;
                      model_name::Union{Nothing,AbstractString} = nothing,
                      metaparameters::AbstractDict = Dict{String,Int}(),
                      base_path::AbstractString = pwd(),
-                     compiler::Union{Nothing,Symbol} = nothing,
+                     compiler::Symbol = :native,
                      sample_time::Union{Nothing,Real} = nothing,
                      # ---- Julia extension seam (§2.5.2) ----
                      const_arrays::AbstractDict = Dict{String,Any}(),
@@ -1122,7 +1122,7 @@ function observed_field(prob::EsmProblem, name::AbstractString)
     # esm-libraries-spec §2.5.10 puts under the compiler's refusal rule, so it
     # runs under the plan that BUILT the problem rather than under whatever
     # plan (if any) happens to be in scope on the reader's task.
-    return _with_compiler_plan(_compiler_plan(compiler(prob); explicit = false)) do
+    return _with_compiler_plan(_compiler_plan(compiler(prob))) do
         _observed_field_impl(prob, name)
     end
 end

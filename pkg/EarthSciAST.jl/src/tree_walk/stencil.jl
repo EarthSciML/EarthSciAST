@@ -32,8 +32,9 @@
 # `LANE_EXPRTBL` lane materialized as a per-box value table — see the
 # SUBTREE-TABLE RESCUE section below. Everything else still throws.
 #
-# `ESS_STENCIL_DISABLE=1` forces the per-cell SCALAR reference (compiled cell
-# nodes on `rhs_list`, evaluated by `_eval_node`) — the differential oracle.
+# With this tier off (`compiler=:interpreter`) an array equation takes the
+# per-cell SCALAR reference instead: compiled cell nodes on `rhs_list`,
+# evaluated by `_eval_node` — the differential oracle.
 
 struct _StencilFallback <: EarthSciASTError
     reason::String
@@ -74,8 +75,7 @@ const _STENCIL_ELEMENTWISE_OPS = _ops_with(:stencil_elementwise)
 const _LANE_PREFIX = "\0lane\0"
 _lane_name(k::Int) = string(_LANE_PREFIX, k)
 
-_stencil_disabled() = !_compiler_plan_now().stencil ||
-    get(ENV, "ESS_STENCIL_DISABLE", "") == "1"
+_stencil_disabled() = !_compiler_plan_now().stencil
 
 # ─────────────────────────────────────────────────────────────────────────────
 # COMPILE-ONCE TEMPLATE TIER (esm-spec §9.6.4 Option B; RFC
@@ -149,11 +149,9 @@ const _SubCallSite = Tuple{_SubVariant,Int}   # (variant, lane base in enclosing
 # (`_lane_repl_key`), so a cache hit from another equation is byte-identical
 # to the variant that equation would have compiled itself.
 #
-# KILL SWITCH: `ESS_XEQ_VARIANT_DISABLE=1` restores the per-equation caches
-# (no store is created; every `_TemplateCtx` gets fresh dicts and every
-# obs-inline a fresh memo — the pre-A3 build exactly).
-_xeq_disabled() = !_compiler_plan_now().xeq_variant ||
-    get(ENV, "ESS_XEQ_VARIANT_DISABLE", "") == "1"
+# Off, the caches are per equation: no store is created, every `_TemplateCtx`
+# gets fresh dicts and every obs-inline a fresh memo.
+_xeq_disabled() = !_compiler_plan_now().xeq_variant
 
 struct _XEqStore
     variants::Dict{Tuple{UInt64,String,String},_SubVariant}
@@ -188,7 +186,7 @@ _idxset_key(idx_names::Vector{String}) = join(sort(idx_names), '\0')
 # compiled bodies by `(root identity, loop-index-set key, body branch key)` —
 # PER BUILD when an `_XEqStore` is threaded in (the A3 hoist; `variants` /
 # `bound_bodies` then alias the store's dicts), per equation otherwise
-# (`ESS_XEQ_VARIANT_DISABLE=1`, or a caller without a store). `gmemo` is the
+# (cross-equation variants off, or a caller without a store). `gmemo` is the
 # shared `_refs_idxset` guard memo (per-equation: its answers depend on this
 # equation's idxset); `bio` a scratch buffer for body branch keys. The compile
 # inputs (`var_map`, `param_sym_set`, `reg_funcs`) ride along because variant
@@ -245,15 +243,20 @@ end
 # fusing, big physics stencils compile once and are CALLED. The variant IR has
 # carried nested sub-call sites since the tier landed (`_SubVariant.subcalls`,
 # `_lower_subcall`'s local re-basing), so this only starts minting them.
-# OPT-IN via ESS_NESTED_TEMPLATE_BOUNDARY=1 (the DISABLE form still
-# force-disables — the differential oracle). Measured on the duo LMARS RHS the
-# nested boundaries mint correctly (89 sites) but deliver no emitted-node
-# reduction there (see the ess-cg-subcall-fn default note, codegen_kernel.jl);
-# outermost-only remains the default until an affinely-gathering rule encoding
-# gives the carved bodies real cross-class sharing.
+# EXPERIMENTAL, and it ships OFF: `ESS_NESTED_TEMPLATE_BOUNDARY=1` is the one
+# `ESS_*` variable that turns it on. It is not an oracle selector — no tier
+# stands down when it is unset, the tier simply does not exist in the default
+# build — and nothing in the corpus depends on it. Measured on the duo LMARS RHS
+# the nested boundaries mint correctly (89 sites) but deliver no emitted-node
+# reduction there (see the sub-kernel function tier's default note,
+# codegen_kernel.jl); outermost-only remains the default until an
+# affinely-gathering rule encoding gives the carved bodies real cross-class
+# sharing.
 _nested_boundary_disabled() =
-    get(ENV, "ESS_NESTED_TEMPLATE_BOUNDARY_DISABLE", "") == "1" ||
     get(ENV, "ESS_NESTED_TEMPLATE_BOUNDARY", "") != "1"
+# Size floor for minting a nested boundary: a refusal boundary under `native`,
+# since moving it changes which bodies are carved out and therefore what the
+# emitter is asked to compile.
 _nested_boundary_min_nodes() =
     something(tryparse(Int, get(ENV, "ESS_NESTED_TEMPLATE_BOUNDARY_MIN_NODES", "")), 256)
 function _site_node_count(e::OpExpr, tctx::_TemplateCtx)
@@ -458,11 +461,9 @@ end
 # identity argument) — the table entries are bit-for-bit what the per-cell
 # reference computes for the same subtree.
 #
-# KILL SWITCH: `ESS_SUBTREE_TBL_DISABLE=1` restores the pre-rescue
-# whole-equation decline byte-for-byte — the differential-oracle escape hatch
-# (test/stencil_subtree_tbl_test.jl), mirroring `ESS_OBSREF_DISABLE`.
-_subtree_tbl_disabled() = !_compiler_plan_now().subtree_tbl ||
-    get(ENV, "ESS_SUBTREE_TBL_DISABLE", "") == "1"
+# Off, the equation declines whole — the differential oracle
+# (test/stencil_subtree_tbl_test.jl).
+_subtree_tbl_disabled() = !_compiler_plan_now().subtree_tbl
 
 # One rescued subtree: the expression, the loop-index binding ORDER (sorted —
 # deterministic, and consistent between compile and per-cell rebinding), and
@@ -563,11 +564,6 @@ function _try_exprtbl_lane(e::OpExpr, ctx::_StencilCtx)
     push!(ctx.recipes, _LaneRecipe(LANE_EXPRTBL, "", ASTExpr[], Int[], Int[],
                                    _ExprTblSpec(e, names, nothing), ""))
     _tally_cascade!(:affine_subtree_tbl)
-    if get(ENV, "ESS_STENCIL_DEBUG", "") == "1"
-        println(stderr, "[ess-affine] subtree-table rescue: op '", e.op,
-                "' -> lane ", length(ctx.recipes))
-        flush(stderr)
-    end
     return VarExpr(_lane_name(length(ctx.recipes)))
 end
 
@@ -638,8 +634,7 @@ function _stencilize_shared(node::OpExpr, ctx::_StencilCtx, tctx::_TemplateCtx,
         # bounded (the duo interior templates fused to ~127k-node bodies per
         # region class otherwise). Nested region selections still reach the
         # variant key through `_branch_key!`, which descends everything
-        # identically. `ESS_NESTED_TEMPLATE_BOUNDARY_DISABLE=1` restores the
-        # outermost-only behavior (the differential oracle).
+        # identically. Without the opt-in, boundaries stay outermost-only.
         subctx = _StencilCtx(ctx.idxset, rs, ctx.idx_env, ctx.array_var_info,
                              ctx.const_arrays, ctx.pgather,
                              IdDict{OpExpr,ASTExpr}(), tctx.gmemo,
@@ -1034,8 +1029,8 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
     #     pbl_sum_X[gi,gj] = Σ_gk dp[gi,gj,gk] · pbl_f[gi,gj,gk] · X[gi,gj,gk]
     # whose `pbl_f` is a region-split layer-overlap expression, so `gk` reaches a
     # makearray select in every term. Only an INLINING build gets here at all
-    # (`ESS_ARRAY_OBS_INLINE=1`, or an observed excluded from materialization —
-    # both emitters materialize by default since 66b8e9a6): materializing the
+    # (`compiler=:interpreter`, or an observed excluded from materialization —
+    # both emitters materialize by default): materializing the
     # observed gives the reduction its own fill equation, where the contraction
     # is top-level and never enters a branch-key walk.
     #
@@ -1217,9 +1212,7 @@ function _eval_recipe(rec::_LaneRecipe, idx_env::Dict{String,Int},
             (1 <= v <= pg.dims[d]) ||
                 throw(TreeWalkError("E_TREEWALK_PGATHER_OOB",
                     "forcing array '$(rec.var_name)' index $(v) out of range " *
-                    "[1, $(pg.dims[d])] on dim $(d)" *
-                    (get(ENV, "ESS_PGATHER_OOB_DEBUG", "") == "1" ?
-                     " idx_args=$(repr(rec.idx_args)) idx_env=$(idx_env)" : "")))
+                    "[1, $(pg.dims[d])] on dim $(d)"))
             inds[d] = v
         end
         return LinearIndices(Tuple(pg.dims))[inds...]

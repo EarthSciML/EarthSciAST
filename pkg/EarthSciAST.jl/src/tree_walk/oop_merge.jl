@@ -63,16 +63,11 @@
 # blocked kernel (reduce segment / unmergeable descriptor kind / nested
 # sub-subs), a failed group merge, or a merged kernel whose fresh plan is
 # not vectorizable — each falls back to the original kernels for that scope.
-# `ESS_OOP_MERGE_DISABLE=1` restores the unmerged build byte for byte.
+# Off, the build is the unmerged one byte for byte.
 # ========================================================================
 
-# The historical name (the pass landed :oop-only) and a form-neutral alias —
-# the pass now runs for BOTH emitters, but existing tests and tooling set
-# `ESS_OOP_MERGE_DISABLE`, so that name must keep working forever.
-_oop_merge_disabled() =
-    !_compiler_plan_now().oop_merge ||
-    get(ENV, "ESS_OOP_MERGE_DISABLE", "") == "1" ||
-    get(ENV, "ESS_KERNEL_CLASS_MERGE_DISABLE", "") == "1"
+# The name is historical (the pass landed :oop-only); it runs for BOTH emitters.
+_oop_merge_disabled() = !_compiler_plan_now().oop_merge
 
 _oop_mergeable_acc_kind(k) =
     k in (_AK_STATE_AFFINE, _AK_STATE_TBL_BOX, _AK_STATE_FIXED,
@@ -631,13 +626,11 @@ end
 #
 # SAFETY. Same posture as round 1: any ineligible input, structural mismatch,
 # clone-budget overrun, or unvectorizable rebuilt plan falls back to the
-# round-1 kernels for that class; ESS_OOP_MERGE_DISABLE=1 (or the alias)
-# disables both rounds; ESS_OOP_MERGE_EXPAND_DISABLE=1 disables round 2 only.
+# round-1 kernels for that class. The class-merge gate disables both rounds;
+# the gate below disables round 2 only.
 # ============================================================================
 
-_oop_merge_expand_disabled() =
-    !_compiler_plan_now().oop_merge_expand ||
-    get(ENV, "ESS_OOP_MERGE_EXPAND_DISABLE", "") == "1"
+_oop_merge_expand_disabled() = !_compiler_plan_now().oop_merge_expand
 
 _oop_x_statefam(k) = k in (_AK_STATE_AFFINE, _AK_STATE_TBL_BOX, _AK_STATE_FIXED)
 _oop_x_forcfam(k)  = k in (_AK_ARR_FIXED, _AK_FORCING_BOX, _AK_ARR_TBL_BOX)
@@ -1057,8 +1050,8 @@ function _merge_acc_kernel_classes(kernels::AbstractVector{_AccKernel})
     # Round 2 (expansion-normalized; see the section header above): collapse
     # classes that differ only in per-kernel CSE slicing / slot numbering /
     # literal-vs-frozen-const leaves / same-shape interp tables. Same
-    # per-class fallback posture; ESS_OOP_MERGE_EXPAND_DISABLE=1 keeps the
-    # round-1 output byte for byte.
+    # per-class fallback posture; with round 2 off the round-1 output stands
+    # byte for byte.
     rxdiag = nothing
     if !_oop_merge_expand_disabled() && length(merged) > 1
         merged, mplans, rxdiag = _merge_oop_x_kernels(merged, mplans)

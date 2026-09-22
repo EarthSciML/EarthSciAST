@@ -24,7 +24,7 @@
 #
 # The trailing testsets extend layer 3 to the lane-table-intern change's traced
 # side: the clamp-bound collapse (`_lane_bound`) must land as SCALAR
-# constants (lane-wide splat columns under the ESS_LANE_INTERN_DISABLE=1
+# constants (lane-wide splat columns with the collapse off,
 # oracle), and the module must hold ONE table payload per distinct CONTENT —
 # under both env settings, and through `build_evaluator(form=:oop)` itself.
 
@@ -190,7 +190,7 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
     # ---- the lane-table-intern change's TRACED-SIDE claims, measured in HLO.
     #
     # Two claims landed host-side (tree_walk/acc_merge.jl `_lane_intern`,
-    # tree_walk/interp_lanes.jl `_lane_bound`, both under ESS_LANE_INTERN_DISABLE=1)
+    # tree_walk/interp_lanes.jl `_lane_bound`, both with the collapse off)
     # with their Reactant-side effect asserted only by argument. Pinned here on
     # the emitted module text (`@code_hlo optimize = false` — pre-canonicalize,
     # so every constant is still visible where the trace put it):
@@ -229,7 +229,7 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
         f = (x, y) -> ESM._interp_bilinear_lanes(h, x, y)
         xr, yr = RX.ConcreteRArray(xs), RX.ConcreteRArray(ys)
         son = repr(RX.@code_hlo optimize = false f(xr, yr))
-        soff = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
+        soff = ESM._with_compiler_plan(ESM._compiler_plan(:interpreter)) do
             repr(RX.@code_hlo optimize = false f(xr, yr))
         end
 
@@ -254,7 +254,7 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
         # Both programs still compute each lane's own core's numbers.
         ref = _ld_core_ref(h, xs, ys)
         gon = Array((RX.@compile sync = true f(xr, yr))(xr, yr))
-        goff = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
+        goff = ESM._with_compiler_plan(ESM._compiler_plan(:interpreter)) do
             Array((RX.@compile sync = true f(xr, yr))(xr, yr))
         end
         @test all(isapprox(a, b; rtol = 1e-14) for (a, b) in zip(gon, ref))
@@ -325,10 +325,14 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
 
         # Oracle build+trace: bound columns return on the merged class (z's
         # scalar-spec form has none to lose); the table inventory is unmoved.
-        s_off, d_off = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
-            g, _, _, _, _ = ESM.build_evaluator(doc; form = :oop)
-            dg = RXE.direct_rhs(g)
-            repr(RX.@code_hlo optimize = false dg(ur, pr, tr)), dg
+        # The oracle is the SAME merged build traced with the lane-bound
+        # collapse off: `_lane_bound` reads the compiler in force where it is
+        # called, which is at trace time, so the class merge that produced
+        # these lanes stays exactly as it was.
+        g, _, _, _, _ = ESM.build_evaluator(doc; form = :oop)
+        d_off = RXE.direct_rhs(g)
+        s_off = ESM._with_compiler_plan(ESM._compiler_plan(:interpreter)) do
+            repr(RX.@code_hlo optimize = false d_off(ur, pr, tr))
         end
         @test _ld_has_col(s_off, "7.250000e+00", Lm)
         @test _ld_has_col(s_off, "5.000000e+00", Lm)
@@ -339,7 +343,7 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
         du = zero(u); fi(du, u, p, 0.0)
         got = Array((RX.@compile sync = true d(ur, pr, tr))(ur, pr, tr))
         @test all(isapprox(a, b; rtol = 1e-12, atol = 1e-13) for (a, b) in zip(got, du))
-        got_off = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
+        got_off = ESM._with_compiler_plan(ESM._compiler_plan(:interpreter)) do
             Array((RX.@compile sync = true d_off(ur, pr, tr))(ur, pr, tr))
         end
         @test all(isapprox(a, b; rtol = 1e-12, atol = 1e-13) for (a, b) in zip(got_off, du))

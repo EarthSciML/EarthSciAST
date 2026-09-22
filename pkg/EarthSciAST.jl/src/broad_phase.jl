@@ -278,8 +278,8 @@ _overlap_partners(oi::_OverlapIndex, side::Symbol, pos::Int) =
 # value-equality match set (§5.5.8, exact key equality). §5.5.8 asks for ONE
 # driver for both, and this is where that is spelled: the pair index is the whole
 # interface. A gate that materialised no index (an `on` gate whose two symbols
-# are the same range symbol, or one built under `ESS_JOIN_ON_GATE_DISABLE`) is
-# left as a pure filter.
+# are the same range symbol, or one built with the driver off) is left as a
+# pure filter.
 #
 # When a node carries SEVERAL drivable gates, only the FIRST in document order
 # drives; the others stay membership tests on the driven leaves (§5.5.8 "every

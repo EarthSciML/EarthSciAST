@@ -1662,16 +1662,16 @@ struct SimulateTestEngine
     # Which compiler builds each test's problem (API_SPEC §5.8). A runner that
     # could not name one could only ever exercise the default, which is the
     # single compiler a compiler-agreement fixture has no need to re-check.
-    compiler::Union{Nothing,Symbol}
+    compiler::Symbol
 end
 
 SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol) =
     SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol,
-                       Dict{String,Any}(), Dict{String,Any}(), nothing)
+                       Dict{String,Any}(), Dict{String,Any}(), :native)
 SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol,
                    seed_p, seed_u0) =
     SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol,
-                       seed_p, seed_u0, nothing)
+                       seed_p, seed_u0, :native)
 
 # Per-test handle: the successful simulation plus the build-observability sink
 # (assertions on ARRAY OBSERVEDS evaluate their resolved expression from
@@ -2077,7 +2077,7 @@ function run_inline_tests(inputs; model_name::Union{Nothing,AbstractString}=noth
                           reltol::Union{Float64,Nothing}=nothing,
                           abstol::Union{Float64,Nothing}=nothing,
                           base_dir::Union{Nothing,AbstractString}=nothing,
-                          compiler::Union{Nothing,Symbol}=nothing,
+                          compiler::Symbol=:native,
                           options_for=nothing)
     documents = _expand_inputs(inputs)
     batch = !((inputs isa EsmFile) ||

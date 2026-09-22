@@ -24,20 +24,17 @@
 #       equations become ONE class kernel with repair-pass tallies ZERO
 #       (`:classmerge_round1_merge` / `:classmerge_round2_merge` == 0).
 #   (b) AFFINE-BOX: the box/table kernel classes are emitted by the direct
-#       stage (its tallies carry exactly the merges the repair pass performed
-#       under the kill switch) and the repair pass finds NOTHING.
+#       stage (its own merge tallies are non-zero) and the repair pass finds
+#       NOTHING left to do.
 #   (c) GRID INDEPENDENCE: for a multi-equation fixture the kernel count,
 #       every structural diag counter, and the cascade tally are identical at
 #       N and 3N; per-lane data grows exactly 3x.
 #   (d) BIT-IDENTITY: du is `===` per element (NaN/-0.0 count) against the
-#       kill-switch oracle (ESS_CROSS_EQ_CLASS_EMIT_DISABLE=1), the
-#       per-equation-emitter-only oracle (ESS_DIRECT_CLASS_EMIT_DISABLE=1),
-#       the fully split build (ESS_KERNEL_CLASS_MERGE_DISABLE=1), and the
-#       per-cell scalar reference (ESS_STENCIL_DISABLE=1) — both emitters,
-#       codegen on and off, and through ForwardDiff Duals — plus a sweep of
-#       the repo fixture corpus (tests/valid + tests/conformance).
-#   (e) COMPAT: under each disable switch the system behaves exactly as
-#       before this landed (per-equation emission + repair-only merging).
+#       per-cell scalar reference (`compiler=:interpreter`) — kernels emitted
+#       and left on the per-cell runner, and through ForwardDiff Duals.
+#   (e) CORPUS: over tests/valid + tests/conformance the repair pass performs
+#       NO merge anywhere — every class the corpus contains was emitted
+#       directly.
 #
 # The per-cell fixtures force the per-cell path exactly as
 # direct_class_emission_test does: an aggregate whose contracted bound is
@@ -123,23 +120,17 @@ _xq_probe(n, k) = Float64[1.0 + 0.9 * sin(1.3i + 0.7k) for i in 1:n]
 
 # ---- builders ---------------------------------------------------------------
 
-# `crosseq=false` → ESS_CROSS_EQ_CLASS_EMIT_DISABLE=1 (per-equation emission +
-# repair-only merging — the kill-switch oracle). `direct=false` →
-# ESS_DIRECT_CLASS_EMIT_DISABLE=1 (content-keyed assemble-then-merge; stands
-# the cross-eq stage down too). `merge=false` → the umbrella switch (fully
-# split, no class kernels of any provenance). `stencil=false` → the per-cell
-# scalar reference.
-function _xq_build(model, ics; crosseq::Bool=true, direct::Bool=true,
-                   merge::Bool=true, codegen::Bool=true, stencil::Bool=true,
+# `compiler=:interpreter` is the per-cell scalar reference: no pooled emitter,
+# no class merge, no kernels at all. `codegen=false` puts the primary
+# emission's node budget at zero — a retained tuning threshold — so the class
+# kernels stay on `kernel_section.kernels` and can be introspected.
+function _xq_build(model, ics; codegen::Bool=true, compiler::Symbol=:native,
                    const_arrays=Dict{String,Any}())
-    withenv("ESS_CROSS_EQ_CLASS_EMIT_DISABLE" => (crosseq ? nothing : "1"),
-            "ESS_DIRECT_CLASS_EMIT_DISABLE" => (direct ? nothing : "1"),
-            "ESS_KERNEL_CLASS_MERGE_DISABLE" => (merge ? nothing : "1"),
-            "ESS_CODEGEN_DISABLE" => (codegen ? nothing : "1"),
-            "ESS_STENCIL_DISABLE" => (stencil ? nothing : "1")) do
+    withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
         ESM._reset_cascade_tally!()
         f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, const_arrays=const_arrays)
+            initial_conditions=ics, const_arrays=const_arrays,
+            compiler=compiler)
         (f=f, u0=u0, p=p, vm=vm, diag=diag, tally=copy(ESM._CASCADE_TALLY))
     end
 end
@@ -175,22 +166,14 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
 
 @testset "cross-equation + affine-box direct class emission" begin
 
-    @testset "kill switches gate the stage (white-box)" begin
+    @testset "the compiler gates the stage (white-box)" begin
         @test ESM._cross_eq_class_emit_enabled()
-        withenv("ESS_CROSS_EQ_CLASS_EMIT_DISABLE" => "1") do
+        # The interpreter stands the whole class-emission chain down at once:
+        # this stage, the per-equation emitter beneath it, and the class merge.
+        ESM._with_compiler_plan(ESM._compiler_plan(:interpreter)) do
             @test !ESM._cross_eq_class_emit_enabled()
-        end
-        # Standing down the per-equation emitter (or any class-merge umbrella
-        # switch) stands the cross-eq stage down too — a build with direct
-        # emission off must behave exactly as before this landed.
-        withenv("ESS_DIRECT_CLASS_EMIT_DISABLE" => "1") do
-            @test !ESM._cross_eq_class_emit_enabled()
-        end
-        withenv("ESS_KERNEL_CLASS_MERGE_DISABLE" => "1") do
-            @test !ESM._cross_eq_class_emit_enabled()
-        end
-        withenv("ESS_OOP_MERGE_DISABLE" => "1") do
-            @test !ESM._cross_eq_class_emit_enabled()
+            @test !ESM._direct_class_emit_enabled()
+            @test ESM._oop_merge_disabled()
         end
     end
 
@@ -202,13 +185,15 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         model = mkmodel(N)
         ics = _xq_ics(N)
         ron  = _xq_build(model, ics; codegen=false)                 # everything on
-        roff = _xq_build(model, ics; crosseq=false, codegen=false)  # kill switch
-        rdo  = _xq_build(model, ics; direct=false, codegen=false)   # pre-direct oracle
-        rspl = _xq_build(model, ics; merge=false, codegen=false)    # fully split
+        rref = _xq_build(model, ics; compiler=:interpreter)         # the reference
 
-        # Every setting really takes the per-cell path, once per equation.
-        for r in (ron, roff, rdo, rspl)
-            @test get(r.tally, :percell_acc, 0) == 2
+        # The fixture really takes the per-cell path, once per equation. Under
+        # `:native` those cells merge into access kernels (`:percell_acc`);
+        # under `:interpreter` they stay plain scalar nodes
+        # (`:percell_disabled`), which is the reference this file compares to.
+        @test get(ron.tally, :percell_acc, 0) == 2
+        @test get(rref.tally, :percell_disabled, 0) == 2
+        for r in (ron, rref)
             @test get(r.tally, :affine, 0) == 0
         end
 
@@ -222,29 +207,11 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         @test get(ron.tally, :direct_class_kernel, 0) == (want_lanespec ? 1 : 0)
         @test count(_xq_has_lanespec, _xq_kernels(ron.f)) == (want_lanespec ? 1 : 0)
 
-        # KILL SWITCH: per-equation emission splits per equation
-        # (n_classmerge_in == 2) and only the REPAIR pass gets back to one
-        # kernel — exactly the pre-change pipeline.
-        @test roff.diag.n_acc_kernels == 1
-        @test roff.diag.n_classmerge_in == 2
-        @test _xq_repair(roff.tally) >= 1
-        @test _xq_directmerge(roff.tally) == 0
-
-        # DIRECT OFF: the cross-eq stage stands down with it — identical
-        # posture to the kill switch (content-keyed per-equation compile,
-        # repair-only merging).
-        @test rdo.diag.n_acc_kernels == 1
-        @test rdo.diag.n_classmerge_in == 2
-        @test _xq_repair(rdo.tally) >= 1
-        @test _xq_directmerge(rdo.tally) == 0
-        @test get(rdo.tally, :direct_class_kernel, 0) == 0
-
-        # MERGE OFF: fully split — one kernel per equation, no lane-batched
-        # class kernel of any provenance.
-        @test rspl.diag.n_acc_kernels == 2
-        @test _xq_repair(rspl.tally) == 0
-        @test _xq_directmerge(rspl.tally) == 0
-        @test count(_xq_has_lanespec, _xq_kernels(rspl.f)) == 0
+        # INTERPRETER: no class kernel of any provenance, and no merge.
+        @test get(rref.tally, :direct_class_kernel, 0) == 0
+        @test _xq_repair(rref.tally) == 0
+        @test _xq_directmerge(rref.tally) == 0
+        @test count(_xq_has_lanespec, _xq_kernels(rref.f)) == 0
     end
 
     @testset "(b) affine-box classes: direct stage emits, repair finds nothing" begin
@@ -253,37 +220,24 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         ics = _xq_ics(N)
         ca = Dict{String,Any}("W" => _xq_W(N))
         ron  = _xq_build(model, ics; codegen=false, const_arrays=ca)
-        roff = _xq_build(model, ics; crosseq=false, codegen=false, const_arrays=ca)
-        rspl = _xq_build(model, ics; merge=false, codegen=false, const_arrays=ca)
 
         # The affine path owned both equations, and the subtree-table rescue
         # fired (the LANE_EXPRTBL per-box tables are really in play).
-        for r in (ron, roff, rspl)
-            @test get(r.tally, :affine, 0) == 2
-            @test get(r.tally, :percell_acc, 0) == 0
-            @test get(r.tally, :affine_subtree_tbl, 0) >= 1
-        end
+        @test get(ron.tally, :affine, 0) == 2
+        @test get(ron.tally, :percell_acc, 0) == 0
+        @test get(ron.tally, :affine_subtree_tbl, 0) >= 1
 
-        # ON: the assembled-kernel classes are emitted by the DIRECT stage —
-        # it performed exactly the merges the repair pass performs under the
-        # kill switch (the work MOVED, tally for tally) — and the repair pass
-        # found NOTHING.
+        # The assembled-kernel classes are emitted by the DIRECT stage, and
+        # the repair pass that follows it found NOTHING: every merge in this
+        # build is on a `direct_classmerge_*` key.
         @test _xq_repair(ron.tally) == 0
         @test _xq_directmerge(ron.tally) >= 1
-        @test get(ron.tally, :direct_classmerge_round1_merge, 0) ==
-              get(roff.tally, :classmerge_round1_merge, 0)
-        @test get(ron.tally, :direct_classmerge_round2_merge, 0) ==
-              get(roff.tally, :classmerge_round2_merge, 0)
-        @test _xq_directmerge(roff.tally) == 0
 
-        # Same final kernel list size either way; both smaller than unmerged.
-        @test ron.diag.n_acc_kernels == roff.diag.n_acc_kernels
-        @test ron.diag.n_classmerge_in == roff.diag.n_classmerge_in ==
-              rspl.diag.n_acc_kernels
-        @test ron.diag.n_acc_kernels < rspl.diag.n_acc_kernels
+        # The merge really shrank the list it was handed.
+        @test ron.diag.n_acc_kernels < ron.diag.n_classmerge_in
     end
 
-    @testset "(d) bit-identity vs all oracles — $name" for (name, mk) in (
+    @testset "(d) bit-identity vs the scalar reference — $name" for (name, mk) in (
             ("interp twins", N -> (_xq_twin_interp_model(N), Dict{String,Any}())),
             ("plain twins", N -> (_xq_twin_plain_model(N), Dict{String,Any}())),
             ("affine-box twins", N -> (_xq_afbox_model(N), Dict{String,Any}("W" => _xq_W(N)))))
@@ -292,18 +246,12 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         ics = _xq_ics(N)
         ron   = _xq_build(model, ics; const_arrays=consts)              # + codegen
         roni  = _xq_build(model, ics; const_arrays=consts, codegen=false)
-        roff  = _xq_build(model, ics; const_arrays=consts, crosseq=false)
-        rdo   = _xq_build(model, ics; const_arrays=consts, direct=false)
-        rspl  = _xq_build(model, ics; const_arrays=consts, merge=false)
-        rref  = _xq_build(model, ics; const_arrays=consts, stencil=false)
-        @test ron.u0 == roni.u0 == roff.u0 == rdo.u0 == rspl.u0 == rref.u0
+        rref  = _xq_build(model, ics; const_arrays=consts, compiler=:interpreter)
+        @test ron.u0 == roni.u0 == rref.u0
         for k in 1:3, t in (0.0, 0.7, 3.25)
             u = k == 1 ? copy(ron.u0) : _xq_probe(2N, k)
             dud = _xq_du(ron.f, u, ron.p, t)
             @test _xq_bitsame(dud, _xq_du(roni.f, u, roni.p, t))
-            @test _xq_bitsame(dud, _xq_du(roff.f, u, roff.p, t))
-            @test _xq_bitsame(dud, _xq_du(rdo.f, u, rdo.p, t))
-            @test _xq_bitsame(dud, _xq_du(rspl.f, u, rspl.p, t))
             @test _xq_bitsame(dud, _xq_du(rref.f, u, rref.p, t))
         end
 
@@ -311,12 +259,9 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         # cross-equation / affine-box class kernels.
         Jn = ForwardDiff.jacobian((du, u) -> ron.f(du, u, ron.p, 0.4),
                                   zero(ron.u0), ron.u0)
-        Jo = ForwardDiff.jacobian((du, u) -> roff.f(du, u, roff.p, 0.4),
-                                  zero(roff.u0), roff.u0)
-        Js = ForwardDiff.jacobian((du, u) -> rspl.f(du, u, rspl.p, 0.4),
-                                  zero(rspl.u0), rspl.u0)
-        @test _xq_bitsame(Jn, Jo)
-        @test _xq_bitsame(Jn, Js)
+        Jr = ForwardDiff.jacobian((du, u) -> rref.f(du, u, rref.p, 0.4),
+                                  zero(rref.u0), rref.u0)
+        @test _xq_bitsame(Jn, Jr)
     end
 
     @testset "(c) grid independence of the pooled emitter" begin
@@ -368,14 +313,15 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         @test dA * N2 == dB * N1
     end
 
-    # ---- (d, corpus) repo fixture sweep: bit-identity + zero repair ---------
+    # ---- (e) repo fixture sweep: the repair pass finds nothing anywhere ----
     # Every .esm under tests/valid and tests/conformance that builds through
-    # the tree-walk evaluator is built with the stage ON and with the kill
-    # switch, and the two RHS evaluations must agree === per element. Models
+    # the tree-walk evaluator is built once and its cascade tally read. Models
     # that cannot build standalone (MTK-only surfaces, providers, missing
-    # data) are skipped SYMMETRICALLY — an asymmetric build/eval failure is a
-    # test failure, since the switch may not change what builds.
-    @testset "(d) fixture-corpus differential + zero repair tallies" begin
+    # data) are skipped. Cross-COMPILER agreement over this corpus is the
+    # conformance tier's job, not this file's; what this sweep owns is the
+    # claim no fixture can make on its own — that across the whole corpus the
+    # repair pass performs no merge, because every class was emitted directly.
+    @testset "(e) fixture-corpus zero repair tallies" begin
         roots = [joinpath(TESTUTILS_REPO_ROOT, "tests", "valid"),
                  joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance")]
         esms = String[]
@@ -388,9 +334,8 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         sort!(esms)
         @test length(esms) >= 100
 
-        function corpus_build(file, name; crosseq::Bool)
-            withenv("ESS_CROSS_EQ_CLASS_EMIT_DISABLE" => (crosseq ? nothing : "1"),
-                    "ESS_CODEGEN_DISABLE" => "1") do
+        function corpus_build(file, name)
+            withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
                 ESM._reset_cascade_tally!()
                 try
                     f!, u0, p, _t, _vm = ESM.build_evaluator(file; model_name=name)
@@ -400,16 +345,6 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
                     return nothing
                 end
             end
-        end
-        function du_or_nothing(f!, u0, p, t)
-            du = zeros(length(u0))
-            try
-                f!(du, u0, p, t)
-            catch e
-                corpus_is_resource_error(e) && rethrow()
-                return nothing
-            end
-            return du
         end
 
         built = 0
@@ -426,26 +361,14 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
             end
             file.models === nothing && (skipped += 1; continue)
             for name in sort!(collect(String.(keys(file.models))))
-                ron = corpus_build(file, name; crosseq=true)
-                rof = corpus_build(file, name; crosseq=false)
-                # The switch must not change WHAT builds.
-                @test (ron === nothing) == (rof === nothing)
-                if ron === nothing || rof === nothing
+                ron = corpus_build(file, name)
+                if ron === nothing
                     skipped += 1
                     continue
                 end
                 built += 1
-                @test _xq_bitsame(ron.u0, rof.u0)
                 repair_total += _xq_repair(ron.tally)
                 direct_total += _xq_directmerge(ron.tally)
-                for t in (0.0, 0.7)
-                    a = du_or_nothing(ron.f, ron.u0, ron.p, t)
-                    b = du_or_nothing(rof.f, rof.u0, rof.p, t)
-                    # The switch must not change WHAT evaluates, either.
-                    @test (a === nothing) == (b === nothing)
-                    (a === nothing || b === nothing) && continue
-                    @test _xq_bitsame(a, b)
-                end
             end
         end
         # The sweep is real (a corpus regression that stops fixtures building

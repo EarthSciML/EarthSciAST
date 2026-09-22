@@ -21,9 +21,9 @@
 #
 # Three-way oracle per model, everything bit-identical:
 #   :tbl — the default build (subtree-table rescue);  cascade must land :affine
-#   :off — ESS_SUBTREE_TBL_DISABLE=1, the pre-rescue whole-equation per-cell
-#          fallback byte-for-byte (the before-shape, asserted in-test)
-#   :ref — ESS_STENCIL_DISABLE=1, the maximally independent per-cell reference
+#   :ref — `compiler=:interpreter`, the per-cell reference. With the affine
+#          tier off the rescue has nothing to rescue, so this build is also
+#          the pre-rescue whole-equation per-cell shape.
 # plus a ForwardDiff state-Jacobian equality (Dual numerics), a grid-structure
 # pin (kernel count grid-independent, table length scales with the box — the
 # grid_invariance_test idiom), and a NEGATIVE control (state reference inside
@@ -62,19 +62,15 @@ end
 _stt_W(N) = Float64[sin(1.7i * k) + 0.05i for i in 1:N, k in 1:3]
 _stt_ics(N) = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
 
-# Build `model` under the three env modes; tag → (f!, u0, p, tally, diag).
+# Build `model` under both compilers; tag → (f!, u0, p, tally, diag).
 function _stt_build3(model, ics, W)
     out = Dict{Symbol,Any}()
-    for (tag, envs) in (
-            (:tbl, ("ESS_SUBTREE_TBL_DISABLE" => nothing, "ESS_STENCIL_DISABLE" => nothing)),
-            (:off, ("ESS_SUBTREE_TBL_DISABLE" => "1", "ESS_STENCIL_DISABLE" => nothing)),
-            (:ref, ("ESS_SUBTREE_TBL_DISABLE" => nothing, "ESS_STENCIL_DISABLE" => "1")))
-        withenv(envs...) do
-            ESM._reset_cascade_tally!()
-            f!, u0, p, _t, _vm, diag = ESM._build_evaluator_impl(model;
-                initial_conditions=ics, const_arrays=Dict("W" => W))
-            out[tag] = (f!, u0, p, copy(ESM._CASCADE_TALLY), diag)
-        end
+    for (tag, compiler) in ((:tbl, :native), (:ref, :interpreter))
+        ESM._reset_cascade_tally!()
+        f!, u0, p, _t, _vm, diag = ESM._build_evaluator_impl(model;
+            initial_conditions=ics, const_arrays=Dict("W" => W),
+            compiler=compiler)
+        out[tag] = (f!, u0, p, copy(ESM._CASCADE_TALLY), diag)
     end
     out
 end
@@ -85,11 +81,12 @@ end
 _stt_jac(t) = ForwardDiff.jacobian(
     uu -> (d = similar(uu); fill!(d, 0); t[1](d, uu, t[3], 0.0); d), t[2])
 
-# Structural introspection build (grid pin): ESS_CODEGEN_DISABLE=1 keeps the
-# complete kernel list in `kernel_section.kernels` (the grid_invariance_test
-# idiom — n_emitted == 0 asserted at the use site).
+# Structural introspection build (grid pin): a zero primary node budget — a
+# retained tuning threshold — keeps the complete kernel list in
+# `kernel_section.kernels` (the grid_invariance_test idiom — n_emitted == 0
+# asserted at the use site).
 function _stt_kernels(N)
-    withenv("ESS_CODEGEN_DISABLE" => "1") do
+    withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
         ESM._reset_cascade_tally!()
         f, u0, p, _t, _vm, _diag = ESM._build_evaluator_impl(_stt_model(N);
             initial_conditions=_stt_ics(N), const_arrays=Dict("W" => _stt_W(N)))
@@ -114,15 +111,14 @@ _stt_tbl_len(kernels) = sum(sum(Int[length(d.arr) for d in K.acc
         @test get(b[:tbl][4], :affine, 0) == 1
         @test get(b[:tbl][4], :percell_acc, 0) == 0
         @test get(b[:tbl][4], :affine_subtree_tbl, 0) == 1
-        # …and the BEFORE-shape is reproduced by the kill switch: the whole
-        # equation declines to per-cell, exactly the pre-rescue build.
-        @test get(b[:off][4], :percell_acc, 0) == 1
-        @test get(b[:off][4], :affine, 0) == 0
-        @test get(b[:off][4], :affine_subtree_tbl, 0) == 0
-        # Numerics: BIT-identical across all three paths, and nontrivial.
-        du = Dict(tag => _stt_du(b[tag]) for tag in (:tbl, :off, :ref))
+        # …and the reference really is the per-cell shape: no affine landing,
+        # no rescue.
+        @test get(b[:ref][4], :percell_disabled, 0) == 1
+        @test get(b[:ref][4], :affine, 0) == 0
+        @test get(b[:ref][4], :affine_subtree_tbl, 0) == 0
+        # Numerics: BIT-identical across both paths, and nontrivial.
+        du = Dict(tag => _stt_du(b[tag]) for tag in (:tbl, :ref))
         @test du[:tbl] == du[:ref]
-        @test du[:off] == du[:ref]
         @test any(!iszero, du[:ref])
         # ForwardDiff Dual: the state Jacobian is bit-identical too (the
         # table entries are Float64 → zero partials, same as the per-cell
@@ -151,9 +147,8 @@ _stt_tbl_len(kernels) = sum(sum(Int[length(d.arr) for d in K.acc
         @test get(b[:tbl][4], :percell_acc, 0) == 1
         @test get(b[:tbl][4], :affine, 0) == 0
         @test get(b[:tbl][4], :affine_subtree_tbl, 0) == 0
-        du = Dict(tag => _stt_du(b[tag]) for tag in (:tbl, :off, :ref))
+        du = Dict(tag => _stt_du(b[tag]) for tag in (:tbl, :ref))
         @test du[:tbl] == du[:ref]
-        @test du[:off] == du[:ref]
         @test any(!iszero, du[:ref])
         # And the state factor is LIVE through the fallback (Jacobian picks up
         # the Σ_k W[i,k] diagonal contribution identically on both paths).

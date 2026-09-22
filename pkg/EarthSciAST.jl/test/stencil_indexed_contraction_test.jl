@@ -19,7 +19,7 @@
 #   * ENGAGEMENT: the fixture's fill + consumer both fire affine
 #     (`:percell_acc == 0`), and the unroll tally counts;
 #   * VALUES: du is BIT-identical to the per-cell scalar reference
-#     (`ESS_STENCIL_DISABLE=1`) at Float64 and under ForwardDiff — fold shape,
+#     (`compiler=:interpreter`) at Float64 and under ForwardDiff — fold shape,
 #     term order, and reducer chaining match `_combine_with_reducer` exactly;
 #   * the branch-key walk stays in lockstep (two strips with different donors
 #     land in different kernels — wrong keys would fuse them and the value
@@ -121,12 +121,11 @@ function _sic_write_fixture(dir)
 end
 
 function _sic_build(F; disable=false)
-    withenv("ESS_STENCIL_DISABLE" => (disable ? "1" : nothing)) do
-        ESM._reset_cascade_tally!()
-        flat = ESM.flatten(ESM.load_path(F))
-        f!, u0, p, _t, vm = ESM.build_evaluator(flat)
-        (f!, u0, p, vm, copy(ESM._CASCADE_TALLY))
-    end
+    ESM._reset_cascade_tally!()
+    flat = ESM.flatten(ESM.load_path(F))
+    f!, u0, p, _t, vm = ESM.build_evaluator(flat;
+        compiler = disable ? :interpreter : :native)
+    return (f!, u0, p, vm, copy(ESM._CASCADE_TALLY))
 end
 
 _sic_du(f!, u, p, t) = (d = similar(u); fill!(d, 0.0); f!(d, u, p, t); d)

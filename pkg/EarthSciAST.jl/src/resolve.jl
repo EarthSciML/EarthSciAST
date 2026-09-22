@@ -521,46 +521,41 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
     end
     # esm-spec §9.6.4 Option B: `lower_expression_templates` PRESERVES surviving
     # `apply_expression_template` references and per-component registries.
-    #   * Default (fast path): references survive into the typed IR. The
-    #     per-component registries are MATERIALIZED (`_materialize_components!`) and
-    #     carried on the EsmFile so `save` emits the reference-preserving form
-    #     (R1 / §9.6.4 rule 5). The build paths handle references (tree-walk via a
-    #     per-node `Expand` fallback; MTK Expands-at-entry).
-    #   * `ESS_TEMPLATE_REF_DISABLE=1`: Expand at load (Option-A image), references
-    #     never reach the build. This is the escape hatch analogous to
-    #     `ESS_STENCIL_DISABLE` and the differential-test baseline (gate d).
+    # References survive into the typed IR. The per-component registries are
+    # MATERIALIZED (`_materialize_components!`) and carried on the EsmFile so
+    # `save` emits the reference-preserving form (R1 / §9.6.4 rule 5). The build
+    # paths handle references (tree-walk via a per-node `Expand` fallback; MTK
+    # Expands-at-entry). Expanding at load instead (the Option-A image) is the
+    # same program by a slower route, so it is not a compiler: a caller who
+    # wants that image calls `expand_document` for itself.
     comp_tpls = nothing
     esm_stamp = nothing
     if machinery_ran
         # Template machinery ran: `loaded` is the fresh rewritten native root
         # (the no-machinery fast path returns its input BY IDENTITY).
-        if _template_ref_disabled()
-            expanded = expand_document(loaded)
-        else
-            root = loaded
-            authored = _authored_template_names(machinery_input)
-            # Coupling `variable_map` transform references can't be per-component
-            # materialized (coupling is not a component), so expand them against
-            # the receiving component's registry BEFORE it is stripped below.
-            _expand_coupling_transform_refs!(root)
-            blocks, bump = _materialize_components!(root, authored)
-            # The materialized blocks travel on the EsmFile (for emit); strip them
-            # from the coerce tree so `coerce_esm_file` only sees the surviving
-            # references in expression positions.
-            for compkind in ("models", "reaction_systems")
-                comps = get(root, compkind, nothing)
-                (comps isa AbstractDict) || continue
-                for (_, comp) in comps
-                    comp isa AbstractDict && haskey(comp, "expression_templates") &&
-                        delete!(comp, "expression_templates")
-                end
+        root = loaded
+        authored = _authored_template_names(machinery_input)
+        # Coupling `variable_map` transform references can't be per-component
+        # materialized (coupling is not a component), so expand them against
+        # the receiving component's registry BEFORE it is stripped below.
+        _expand_coupling_transform_refs!(root)
+        blocks, bump = _materialize_components!(root, authored)
+        # The materialized blocks travel on the EsmFile (for emit); strip them
+        # from the coerce tree so `coerce_esm_file` only sees the surviving
+        # references in expression positions.
+        for compkind in ("models", "reaction_systems")
+            comps = get(root, compkind, nothing)
+            (comps isa AbstractDict) || continue
+            for (_, comp) in comps
+                comp isa AbstractDict && haskey(comp, "expression_templates") &&
+                    delete!(comp, "expression_templates")
             end
-            if !isempty(blocks)
-                comp_tpls = OrderedDict{String,Any}(k => v for (k, v) in blocks)
-            end
-            bump && (esm_stamp = _esm_stamp_floor(get(root, "esm", nothing)))
-            expanded = root
         end
+        if !isempty(blocks)
+            comp_tpls = OrderedDict{String,Any}(k => v for (k, v) in blocks)
+        end
+        bump && (esm_stamp = _esm_stamp_floor(get(root, "esm", nothing)))
+        expanded = root
     else
         # No component templates (e.g. a directly-loaded library file, or a
         # metaparameters-only problem file): the document flows on unchanged;
@@ -578,18 +573,6 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
                               component_templates=comp_tpls, esm=esm_stamp,
                               coordinates=raw_coordinates)
 end
-
-"""
-    _template_ref_disabled() -> Bool
-
-The `ESS_TEMPLATE_REF_DISABLE=1` escape hatch (analogous to `ESS_STENCIL_DISABLE`,
-RFC out-of-line-expression-templates §7.7 / §12): when set, expression-template
-references are Expanded at load (the Option-A image) and never reach the build;
-when unset (default), references survive into the typed IR and the build handles
-them. Gate (d)'s differential builds a fixture both ways and compares exactly.
-"""
-_template_ref_disabled() = !_compiler_plan_now().template_ref ||
-    get(ENV, "ESS_TEMPLATE_REF_DISABLE", "") == "1"
 
 # A deep, plain-`Dict` copy of a top-level declaration block, or `nothing`.
 # Plain `Dict`/`Vector`/scalars only (`_to_native_json`) — the snapshot lives

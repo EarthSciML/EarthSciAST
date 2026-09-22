@@ -3,24 +3,23 @@
 # Kernels the PRIMARY codegen emission declines on the node budget used to run
 # the per-cell interpreter at Float64. The dual overflow tier (ess-dualfp)
 # re-emits them into a second generated function for non-Float64 `T`;
-# ess-f64ofl routes Float64 calls through that SAME function too — unless
-# ESS_F64_OVERFLOW_CODEGEN=0 (the kill switch: residual Float64 kernels run
-# the per-cell interpreter — since the lane-tape retirement, the slower but
-# bit-identical differential oracle for this routing).
+# ess-f64ofl routes Float64 calls through that SAME function too. With the
+# routing off — which is `compiler=:interpreter`, since no environment variable
+# selects an evaluator any more — the residual Float64 kernels run the per-cell
+# interpreter, which is the slower but bit-identical oracle.
 #
 # Pinned here, on the dual_fast_path_test overflow-class fixture (primary
 # codegen declined via a forced zero budget):
 #   1. ROUTING — the build tally shows the primary decline
 #      (`:codegen_decline_budget`), the overflow acceptance
 #      (`:dual_codegen_kernel`), and the Float64 arming (`:f64_overflow_armed`);
-#      the section carries `f64cg == true` with the feature on and
-#      `f64cg == false` with it off; and a RUNTIME witness: with the feature
-#      on and the overflow function covering every residual kernel, emptying
-#      the section's `kernels` vector does not change the Float64
-#      output — proof the interpreter loop never runs.
-#   2. FLOAT64 BIT-IDENTITY — du is `===` per element (NaN/-0.0 count) across
-#      feature-on, feature-off (interpreter oracle), and ESS_CODEGEN_DISABLE=1
-#      (pre-codegen interpreter oracle).
+#      the section carries `f64cg == true` under `:native` and `false` under
+#      `:interpreter`; and a RUNTIME witness: with the routing armed and the
+#      overflow function covering every residual kernel, emptying the section's
+#      `kernels` vector does not change the Float64 output — proof the
+#      interpreter loop never runs.
+#   2. FLOAT64 BIT-IDENTITY — du is `===` per element (NaN/-0.0 count) between
+#      the armed build and `compiler=:interpreter`.
 #   3. SANITY — at the default budget nothing declines, so the overflow
 #      function does not exist and the feature changes nothing at all.
 #   4. ALLOCATIONS — a warmed Float64 f! call on the overflow routing
@@ -30,11 +29,11 @@ using EarthSciAST
 include("testutils.jl")
 const ESM = EarthSciAST
 
-function _fof_build(model, ics; env...)
+function _fof_build(model, ics; compiler::Symbol=:native, env...)
     withenv((String(k) => v for (k, v) in pairs(env))...) do
         ESM._reset_cascade_tally!()
         f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics)
+            initial_conditions=ics, compiler=compiler)
         (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
     end
 end
@@ -79,20 +78,14 @@ _fof_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
     model = _fof_model(N)
     ics = _fof_ics(N)
 
-    # A: primary codegen forced off (budget 0), feature at its default (ON) —
-    #    the overflow function serves Float64. B: same, feature killed —
-    #    interpreter at Float64, the oracle. C: codegen disabled
-    #    wholesale (pre-codegen build; must also keep the routing off).
+    # A: primary codegen forced off (budget 0) — the overflow function serves
+    #    Float64. C: the interpreter, per-cell at Float64, the oracle.
     fA, uA, pA, vmA, _, tallyA = _fof_build(model, ics;
         ESS_CODEGEN_NODE_BUDGET="0")
-    fB, uB, pB, _, _, tallyB = _fof_build(model, ics;
-        ESS_CODEGEN_NODE_BUDGET="0", ESS_F64_OVERFLOW_CODEGEN="0")
-    fC, uC, pC, _, _, tallyC = _fof_build(model, ics;
-        ESS_CODEGEN_DISABLE="1")
+    fC, uC, pC, _, _, tallyC = _fof_build(model, ics; compiler=:interpreter)
 
     @testset "routing: tally + section introspection" begin
         ksA = getfield(fA, :kernel_section)
-        ksB = getfield(fB, :kernel_section)
         ksC = getfield(fC, :kernel_section)
 
         # Primary tier really declined on the budget; overflow tier accepted;
@@ -106,25 +99,21 @@ _fof_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         @test getfield(ksA, :n_dual_emitted) == length(getfield(ksA, :kernels))
         @test isempty(getfield(ksA, :dual_resid))
 
-        # The kill switch: same section shape, routing disarmed — the
-        # residual kernels then serve Float64 through the interpreter.
-        @test getfield(ksB, :f64cg) === false
-        @test get(tallyB, :f64_overflow_armed, 0) == 0
-        @test !isempty(getfield(ksB, :kernels))
-
-        # ESS_CODEGEN_DISABLE=1 keeps every codegen tier off: no overflow
-        # function, nothing to arm.
+        # The interpreter keeps every codegen tier off: no overflow function
+        # and nothing to arm. Its array equations never reach an access kernel
+        # at all — they are plain per-cell scalar entries — so the section's
+        # kernel list is empty rather than residual.
         @test getfield(ksC, :dualf) === nothing
         @test getfield(ksC, :f64cg) === false
         @test get(tallyC, :f64_overflow_armed, 0) == 0
+        @test getfield(ksC, :n_emitted) == 0
     end
 
-    @testset "Float64 bit-identity (overflow ≡ interpreter ≡ no codegen)" begin
-        @test uA == uB && uA == uC
+    @testset "Float64 bit-identity (overflow ≡ interpreter)" begin
+        @test uA == uC
         for k in 1:5, t in (0.0, 0.7, 3.25)
             u = k == 1 ? copy(uA) : _fof_probe(length(uA), k)
             duA = _fof_du(fA, u, pA, t)
-            @test _fof_bitsame(duA, _fof_du(fB, u, pB, t))
             @test _fof_bitsame(duA, _fof_du(fC, u, pC, t))
         end
     end
@@ -142,7 +131,7 @@ _fof_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         empty!(getfield(ksW, :kernels))
         u = _fof_probe(length(uW), 2)
         duW = _fof_du(fW, u, pW, 0.7)
-        @test _fof_bitsame(duW, _fof_du(fB, u, pB, 0.7))
+        @test _fof_bitsame(duW, _fof_du(fC, u, pC, 0.7))
         @test any(x -> x !== 0.0, duW)   # and it really computed something
     end
 
@@ -160,12 +149,12 @@ _fof_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         u = _fof_probe(length(uA), 3)
         for _ in 1:3
             fA(du, u, pA, 0.3)
-            fB(du, u, pB, 0.3)
+            fC(du, u, pC, 0.3)
         end
         allocA = @allocated fA(du, u, pA, 0.3)
-        allocB = @allocated fB(du, u, pB, 0.3)
-        @info "f64-call allocations" overflow = allocA interp = allocB
+        allocC = @allocated fC(du, u, pC, 0.3)
+        @info "f64-call allocations" overflow = allocA interp = allocC
         @test allocA == 0
-        @test allocA <= allocB
+        @test allocA <= allocC
     end
 end

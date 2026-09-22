@@ -519,13 +519,15 @@ end
 # (xcse.jl, which safely DECLINES an unknown kind → leaves it inline).
 const _ARRAY_CELL_DEPTH = Ref(0)
 
-# Opt-in / kill-switch and coverage floor. Default ON, but only for reductions at
+# Tier gate and coverage floor. On under `native`, but only for reductions at
 # least `_contraction_loop_min()` long — small reductions keep unrolling so the
 # vast existing small-aggregate test surface (and its CSE / stencil interactions)
-# is byte-for-byte unchanged. `ESS_CONTRACTION_LOOP=0` forces the pure-unroll
-# reference everywhere.
-_contraction_loop_enabled() = _compiler_plan_now().contraction_loop &&
-    get(ENV, "ESS_CONTRACTION_LOOP", "1") != "0"
+# is byte-for-byte unchanged. Off, the pure unroll is the reference everywhere.
+#
+# The floor is overridden with ESS_CONTRACTION_LOOP_MIN: a REFUSAL BOUNDARY
+# under `native`, because which side of it a reduction falls on decides which
+# tier compiles the equation and therefore whether the compiler can express it.
+_contraction_loop_enabled() = _compiler_plan_now().contraction_loop
 function _contraction_loop_min()
     v = get(ENV, "ESS_CONTRACTION_LOOP_MIN", "")
     n = tryparse(Int, v)
@@ -588,14 +590,18 @@ end
 # loop-vs-affine order decides the equation exactly as before, so every
 # small-reduction fixture stays byte-for-byte identical.
 #
-# `ESS_CONTRACTION_LOOP=0` disables this tier too: it is documented as forcing
-# the pure-unroll reference EVERYWHERE, and this tier is a contraction loop — one
-# that also loops the output index. `ESS_ARRAY_CONTRACTION_DISABLE=1` is the
-# narrower switch that drops only this tier and leaves the per-cell loop in play,
-# which is what the differential test uses for its oracle.
+# The contraction-loop gate disables this tier too: it forces the pure-unroll
+# reference EVERYWHERE, and this tier is a contraction loop — one that also
+# loops the output index. The plan's own bit for this tier is the narrower one,
+# dropping only this tier and leaving the per-cell loop in play, which is the
+# differential test's oracle.
+#
+# The floor is overridden with ESS_ARRAY_CONTRACTION_MIN: a REFUSAL BOUNDARY
+# under `native`, and the sharpest one in the build — a strict `native` refuses
+# every equation this tier ACCEPTS (its runner walks the tree per output cell),
+# so lowering the floor takes documents OUT of the set that builds.
 _array_contraction_enabled() =
-    _compiler_plan_now().array_contraction && _contraction_loop_enabled() &&
-    get(ENV, "ESS_ARRAY_CONTRACTION_DISABLE", "") != "1"
+    _compiler_plan_now().array_contraction && _contraction_loop_enabled()
 function _array_contraction_min()
     v = get(ENV, "ESS_ARRAY_CONTRACTION_MIN", "")
     n = tryparse(Int, v)

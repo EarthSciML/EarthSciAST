@@ -236,9 +236,9 @@ end
         end
 
         # forced per-cell reference: bit-identical on every written slot
-        fr!, u0r, pr, _, _ = withenv("ESS_STENCIL_DISABLE" => "1") do
-            build_evaluator(model; initial_conditions=ics, const_arrays=ca)
-        end
+        fr!, u0r, pr, _, _ = build_evaluator(model; initial_conditions=ics,
+                                             const_arrays=ca,
+                                             compiler=:interpreter)
         dur = fill(-1.0, length(u0r)); fr!(dur, u0r, pr, 0.0)
         @test du == dur
 

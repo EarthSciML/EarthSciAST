@@ -10,8 +10,8 @@
 # instead of constant-folding) and rebinds only those per cell.
 #
 # The whole game is that this changes NOTHING numerically. Every case below
-# materializes the SAME map twice — once on the fast path, once with
-# `ESS_SETUP_MAP_COMPILE_ONCE_DISABLE=1` forcing the per-cell reference — and
+# materializes the SAME map twice — once on the fast path, once under
+# `compiler=:interpreter`, which is the per-cell reference — and
 # demands `isequal` cell for cell. `isequal`, never `≈` and never `==`: `-0.0`
 # must not pass for `+0.0` and `NaN` must match `NaN`.
 #
@@ -49,7 +49,7 @@ function both_ways(json, env)
     fast = EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX, regfns)
     hits = EA._SETUP_MAP_FASTPATH_HITS[] - hits0
     miss = EA._SETUP_MAP_FASTPATH_MISS[] - miss0
-    ref = withenv("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE" => "1") do
+    ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
         EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX, regfns)
     end
     return fast, ref, hits, miss
@@ -126,7 +126,7 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
                                                  Dict{String,Function}())
         @test EA._SETUP_MAP_FASTPATH_HITS[] - h0 == 1
         @test EA._SETUP_MAP_FASTPATH_MISS[] - m0 == 0
-        ref = withenv("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE" => "1") do
+        ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, idx,
                                               Dict{String,Function}())
         end
@@ -142,35 +142,18 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         @test bitsame(fast, ref)
     end
 
-    @testset "kill switch keeps the per-cell reference available" begin
+    @testset "the interpreter keeps the per-cell reference available" begin
         body = _op("exp", _ix(_v("A"), _v("x"), _v("y")))
         j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
         rhs = EA.expression_from_json(j)
         m0 = EA._SETUP_MAP_FASTPATH_MISS[]
         h0 = EA._SETUP_MAP_FASTPATH_HITS[]
-        withenv("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE" => "1") do
+        EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
                                               Dict{String,Function}())
         end
         @test EA._SETUP_MAP_FASTPATH_MISS[] - m0 == 1   # forced onto the reference
         @test EA._SETUP_MAP_FASTPATH_HITS[] - h0 == 0
-    end
-
-    @testset "verify mode agrees on the same maps" begin
-        body = _op("+", _op("log", _op("*", _ix(_v("A"), _v("x"), _v("y")),
-                                            _ix(_v("A"), _v("x"), _v("y")))),
-                        _ix(_v("B"), _v("x"), _v("y")))
-        j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
-        rhs = EA.expression_from_json(j)
-        got = withenv("ESS_SETUP_MAP_COMPILE_ONCE_VERIFY" => "1") do
-            EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
-                                              Dict{String,Function}())
-        end                                   # throws unless bit-identical
-        ref = withenv("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE" => "1") do
-            EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
-                                              Dict{String,Function}())
-        end
-        @test bitsame(got, ref)
     end
 
     # ---- the two guards that keep the fast path exact ----
@@ -230,7 +213,7 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         rhs = EA.expression_from_json(j)
         fast = EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
                                                  Dict{String,Function}())
-        ref = withenv("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE" => "1") do
+        ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
                                               Dict{String,Function}())
         end
@@ -244,12 +227,13 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         for body in (_ix(_v("B"), _op("+", _v("x"), 1), 1),
                      _ix(_v("B"), _op("-", _v("x"), 1), 2))
             rhs = EA.expression_from_json(_map(["x"], ["x" => "X"], body))
-            for disable in ("", "1")
+            for interp in (false, true)
+                mat() = EA._materialize_setup_general_map(rhs, copy(ENV0), nothing,
+                                                          IDX, Dict{String,Function}())
                 err = try
-                    withenv("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE" => disable) do
-                        EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
-                                                          Dict{String,Function}())
-                    end
+                    interp ?
+                        EA._with_compiler_plan(mat, EA._compiler_plan(:interpreter)) :
+                        mat()
                     nothing
                 catch e
                     e
