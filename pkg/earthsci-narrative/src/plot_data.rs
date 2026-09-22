@@ -29,6 +29,14 @@ impl PlotData {
             PlotData::Heatmap(p) => &p.id,
         }
     }
+
+    /// The plot's description, which a front end shows as its caption.
+    pub fn description(&self) -> Option<&str> {
+        match self {
+            PlotData::Line(p) | PlotData::Scatter(p) => p.description.as_deref(),
+            PlotData::Heatmap(p) => p.description.as_deref(),
+        }
+    }
 }
 
 /// What an axis shows, for its label.

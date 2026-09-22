@@ -13,6 +13,7 @@
 //! - [`assemble`]: elements into an `.esm` document, with diagnostics.
 //! - [`analysis`]: run §6.7 analyses into plot data.
 //! - [`build`]: all of the above in one call, per element.
+//! - [`markdown`]: the Markdown front end (native only, `markdown` feature).
 //! - [`typst_math`]: expressions as Typst math.
 //! - [`plot_data`]: the data behind one figure.
 //! - [`svg`]: figures as SVG.
@@ -25,12 +26,14 @@ pub mod assemble;
 pub mod build;
 pub mod diagnostic;
 pub mod element;
+#[cfg(feature = "markdown")]
+pub mod markdown;
 pub mod plot_data;
 pub mod svg;
 pub mod typst_math;
 
 pub use assemble::{Assembly, assemble, check};
-pub use build::{BuildOptions, BuildOutput, build, build_json};
+pub use build::{BuildOptions, BuildOutput, build, build_json, build_value};
 pub use diagnostic::{Diagnostic, Severity};
 pub use element::{Document, Element, ElementKind, FORMAT_VERSION, SourceSpan};
 pub use plot_data::PlotData;

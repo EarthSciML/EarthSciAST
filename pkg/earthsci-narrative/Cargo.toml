@@ -13,8 +13,30 @@ publish = false
 # `wasm32-unknown-unknown` with no host imports, because the Typst plugin and
 # the browser widget both link it: keep every dependency pure Rust, and keep
 # filesystem, clock and thread APIs out of the library.
+#
+# The Markdown front end and its command are the exception, and that is what
+# the `markdown` and `cli` features are for: the Typst plugin builds this crate
+# with `default-features = false` and carries neither.
+
+# `required-features` makes cargo SKIP this target in a `--no-default-features`
+# build rather than fail to compile it — the arrangement `earthsci-ast` uses
+# for its `esm` binary.
+[[bin]]
+name = "esm-narrative"
+path = "src/bin/esm-narrative.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["markdown", "dep:clap"]
+markdown = ["dep:serde_yaml_ng"]
 
 [dependencies]
 earthsci-ast = { path = "../earthsci-ast-rs", default-features = false, features = ["solve"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
+# A container directive's body is YAML, so a test or an analysis is written in
+# the esm-spec §6.6 / §6.7 shapes without JSON's punctuation. `serde_yaml_ng`
+# is the maintained continuation of `serde_yaml`, archived in 2024.
+serde_yaml_ng = { version = "0.10", optional = true }
+clap = { version = "4.0", features = ["derive"], optional = true }

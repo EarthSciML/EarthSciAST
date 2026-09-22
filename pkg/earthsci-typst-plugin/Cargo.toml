@@ -21,7 +21,9 @@ crate-type = ["cdylib"]
 # No `cli` (clap) and, above all, no `wasm`: that feature links wasm-bindgen,
 # whose imports a Typst host cannot satisfy.
 earthsci-ast = { path = "../earthsci-ast-rs", default-features = false, features = ["solve"] }
-earthsci-narrative = { path = "../earthsci-narrative" }
+# `default-features = false` leaves out the Markdown front end and its
+# command: clap and a YAML parser have no place in a Typst plugin.
+earthsci-narrative = { path = "../earthsci-narrative", default-features = false }
 serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
 wasm-minimal-protocol = "0.2"
 # Only to register the custom backend `.cargo/config.toml` selects.

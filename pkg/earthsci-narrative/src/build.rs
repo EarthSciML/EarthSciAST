@@ -151,6 +151,21 @@ pub fn build(doc: &Document, opts: &BuildOptions) -> BuildOutput {
     build_with_errors(doc, &[], opts)
 }
 
+/// [`build_json`] for a document a front end has already assembled as JSON.
+pub fn build_value(doc: Value, opts: &BuildOptions) -> BuildOutput {
+    match Document::from_value(doc) {
+        Ok((doc, errors)) => build_with_errors(&doc, &errors, opts),
+        Err(e) => BuildOutput {
+            version: FORMAT_VERSION,
+            ok: false,
+            esm: Value::Null,
+            diagnostics: vec![Diagnostic::error("invalid_document", e.0)],
+            elements: Vec::new(),
+            quantities: Vec::new(),
+        },
+    }
+}
+
 fn build_with_errors(doc: &Document, errors: &[ElementError], opts: &BuildOptions) -> BuildOutput {
     let mut assembly = assemble(doc);
     for e in errors {
