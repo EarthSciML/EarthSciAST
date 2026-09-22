@@ -28,8 +28,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::{
-    EsmProblem, Flow, ProblemOptions, Rhs, SimulateError, SolveOptions, esm_problem, load_string,
-    solve,
+    Compiler, EsmProblem, Flow, ProblemOptions, Rhs, SimulateError, SolveOptions, esm_problem,
+    load_string, solve,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -112,6 +112,13 @@ fn problem_for(json: &str, tspan: (f64, f64)) -> EsmProblem {
         tspan,
         ProblemOptions {
             rhs: Rhs::Always,
+            // The reproducer's `rad` is a causal self-reference (a sweep), which
+            // strict `native` refuses rather than demoting to the sequential
+            // oracle (esm-libraries-spec §2.5.10). This file measures the
+            // NON-ADVANCING RUN, not the compiler, so it names the reference
+            // evaluator — the same convention CONFORMANCE_SPEC §5.44 sets for a
+            // stage whose fixtures `native` declines.
+            compiler: Some(Compiler::Interpreter),
             ..Default::default()
         },
     )
