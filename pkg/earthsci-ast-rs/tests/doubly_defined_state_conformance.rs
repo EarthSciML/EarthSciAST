@@ -72,7 +72,10 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
                     .unwrap_or_else(|| panic!("{id}: the build did not refuse"));
                 let msg = err.to_string();
                 assert!(msg.contains(code), "{id}: expected `{code}` in: {msg}");
-                assert!(msg.contains(unknown), "{id}: `{unknown}` not named in: {msg}");
+                assert!(
+                    msg.contains(unknown),
+                    "{id}: `{unknown}` not named in: {msg}"
+                );
                 assert!(
                     msg.contains("D(") && msg.contains("§4.9.4"),
                     "{id}: both equations and the rule must be named in: {msg}"

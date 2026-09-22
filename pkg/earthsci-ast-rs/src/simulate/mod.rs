@@ -939,7 +939,9 @@ mod tests {
         // the tie.
         let flat = crate::flatten(&file).expect("flatten fixture");
         for route in [
-            crate::simulate::Compiled::from_flattened(&flat).err().map(|e| e.to_string()),
+            crate::simulate::Compiled::from_flattened(&flat)
+                .err()
+                .map(|e| e.to_string()),
             crate::simulate_array::ArrayCompiled::from_flattened(&flat)
                 .err()
                 .map(|e| e.to_string()),

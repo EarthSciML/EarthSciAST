@@ -564,7 +564,11 @@ pub fn doubly_defined_unknown_refusal(
     algebraic: &crate::types::Equation,
 ) -> CompileError {
     let render = |eq: &crate::types::Equation| {
-        format!("{} ~ {}", crate::to_ascii(&eq.lhs), crate::to_ascii(&eq.rhs))
+        format!(
+            "{} ~ {}",
+            crate::to_ascii(&eq.lhs),
+            crate::to_ascii(&eq.rhs)
+        )
     };
     CompileError::DoublyDefinedUnknown {
         name: name.to_string(),

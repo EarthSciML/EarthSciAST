@@ -28,8 +28,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::{
-    Compiler, EsmProblem, Flow, ProblemOptions, Rhs, SimulateError, SolveOptions,
-    esm_problem,
+    Compiler, EsmProblem, Flow, ProblemOptions, Rhs, SimulateError, SolveOptions, esm_problem,
     load_string, solve,
 };
 use std::sync::Arc;
