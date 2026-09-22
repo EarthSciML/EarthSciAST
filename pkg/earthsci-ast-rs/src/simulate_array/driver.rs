@@ -102,6 +102,23 @@ impl TapedObserveds {
     }
 }
 
+/// The refusal a model that serves [`crate::Compiler::Xla`] gets when no
+/// compiled program was installed on it.
+///
+/// It is `compiler_unavailable` rather than a refused rule because nothing
+/// about the DOCUMENT is wrong: the build either never got as far as emitting
+/// (no `xla` feature) or handed the integrator a model it had not finished.
+#[cfg(feature = "solve")]
+fn xla_not_installed() -> SimulateError {
+    SimulateError::CompilerUnavailable {
+        compiler: "xla",
+        details: "this Problem names `xla` but carries no compiled program; the build did not \
+                  install one, and the tape is NOT run in its place — a compiler that cannot \
+                  run says so (esm-libraries-spec §2.5.10)"
+            .to_string(),
+    }
+}
+
 /// Run the compiled XLA right-hand side into `out`, routing a device failure
 /// into `fault` (FIRST failure wins) and leaving `out` NaN so the solver stops
 /// instead of integrating whatever was there before.
@@ -154,7 +171,6 @@ impl ArrayCompiled {
     /// Whether this model serves a [`crate::Compiler::Xla`] build: the
     /// right-hand side (and the finite-difference Jacobian differenced out of
     /// it) is the XLA executable rather than the tape's own interpreter.
-    #[cfg(feature = "xla")]
     pub(crate) fn is_xla(&self) -> bool {
         self.runtime_mode == RuntimeMode::Xla
     }
@@ -1416,8 +1432,26 @@ impl ArrayCompiled {
         //
         // Both closures hold the ONE executable (`Rc`); nothing recompiles per
         // segment or per call.
+        //
+        // A missing executable under `xla` is a REFUSAL, not a quiet return to
+        // the tape. Without this the one way the two could come apart — a
+        // model that reached the integrator with `RuntimeMode::Xla` and an
+        // empty cell — would be answered by the tape under the name `xla`,
+        // which is exactly the substitution §2.5.10 exists to prevent.
         #[cfg(feature = "xla")]
-        let xla_rhs = self.xla_program();
+        let xla_rhs = match (self.is_xla(), self.xla_program()) {
+            (false, _) => None,
+            (true, Some(program)) => Some(program),
+            (true, None) => return Err(xla_not_installed()),
+        };
+        #[cfg(not(feature = "xla"))]
+        if self.is_xla() {
+            // Unreachable: a build without the feature answers
+            // `compiler_unavailable` for `xla` before a backend exists. Kept
+            // so the no-fallback property holds by CODE rather than by that
+            // argument.
+            return Err(xla_not_installed());
+        }
         #[cfg(feature = "xla")]
         let xla_jac = xla_rhs.clone();
         // Where an XLA execution failure goes. diffsol's right-hand side is
