@@ -1,0 +1,113 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ArrayDoublyDefinedState",
+    "description": "The same defect on a document whose array-shaped unknown takes the array evaluator: `x` carries BOTH `D(x, t) ~ k` and `x ~ k * 3`, while `x_seen` broadcasts `x` over an axis. Both of a binding's build routes must refuse it, not only the scalar one — a shaped document reaches a different compile in Rust and Python.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "doubly_defined_state",
+      "equations"
+    ]
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "ArrayDoublyDefinedState": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Defined twice: by a derivative equation and by an algebraic one."
+        },
+        "x_seen": {
+          "type": "unknown",
+          "shape": [
+            "rows"
+          ],
+          "units": "1",
+          "description": "`x` broadcast over an axis, so the document takes the array evaluator."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "The rate the derivative equation uses and the constraint scales."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "k"
+        },
+        {
+          "lhs": "x",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "k",
+              3.0
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": "x_seen",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "r": {
+                "from": "rows"
+              }
+            },
+            "expr": "x"
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "the_document_has_no_answer",
+          "description": "Deliberately unanswerable: integrating gives x(1) = 3 and the constraint says x = 6. A binding that reports EITHER number has dropped an equation.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "x_seen",
+              "time": 1.0,
+              "expected": 6.0,
+              "coords": {
+                "rows": 1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
