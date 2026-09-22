@@ -25,7 +25,7 @@ _dm_k(offset)  = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
     @testset "cut matches the inline baseline; only the param-tainted var is cached" begin
         # Inline baseline (no sink): g and k are both inlined into the state RHS.
         srcA = [1.0, 1.0]
-        f0!, u00, p0, _, vm0 = _DM_ESS.build_evaluator(file; initial_conditions=ics,
+        f0!, u00, p0, _, vm0 = _DM_ESS._build_evaluator(file; initial_conditions=ics,
             const_arrays=Dict("W" => _DM_W), param_arrays=Dict("src" => srcA))
         du0 = zero(u00); f0!(du0, u00, p0, 0.0)
         base = [du0[vm0["c[$j]"]] for j in 1:3]
@@ -34,7 +34,7 @@ _dm_k(offset)  = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
         # Cut (sink): g becomes a discrete cache; k (const-fed) stays inline.
         srcB = [1.0, 1.0]
         dm = _DM_ESS.DiscreteMaterializer()
-        f!, u0, p, _, vm = _DM_ESS.build_evaluator(file; initial_conditions=ics,
+        f!, u0, p, _, vm = _DM_ESS._build_evaluator(file; initial_conditions=ics,
             const_arrays=Dict("W" => _DM_W), param_arrays=Dict("src" => srcB),
             materialize_out=dm)
         @test haskey(dm.caches, "g")             # param-tainted, state-free -> cached
@@ -47,7 +47,7 @@ _dm_k(offset)  = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
     @testset "the cache is discrete: stale until materialize!, then tracks" begin
         srcB = [1.0, 1.0]
         dm = _DM_ESS.DiscreteMaterializer()
-        f!, u0, p, _, vm = _DM_ESS.build_evaluator(file; initial_conditions=ics,
+        f!, u0, p, _, vm = _DM_ESS._build_evaluator(file; initial_conditions=ics,
             const_arrays=Dict("W" => _DM_W), param_arrays=Dict("src" => srcB),
             materialize_out=dm)
         du = zero(u0); f!(du, u0, p, 0.0)
@@ -70,7 +70,7 @@ _dm_k(offset)  = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
     @testset "no sink ⇒ no discrete cut (opt-in), build still succeeds" begin
         # Without the sink the param-tainted g stays inlined — the pre-cut path.
         src = [1.0, 1.0]
-        f!, u0, p, _, vm = _DM_ESS.build_evaluator(file; initial_conditions=ics,
+        f!, u0, p, _, vm = _DM_ESS._build_evaluator(file; initial_conditions=ics,
             const_arrays=Dict("W" => _DM_W), param_arrays=Dict("src" => src))
         du = zero(u0); f!(du, u0, p, 0.0)
         @test [du[vm["c[$j]"]] for j in 1:3] ≈ _dm_g([1.0, 1.0]) .+ _dm_k(1.0)

@@ -14,7 +14,7 @@
 # (`_aggregate_oplus_identity == ("+", 0.0)`); a `max_product` / `min_sum` /
 # etc. aggregate of the SAME shape is left untouched (the soundness guard).
 #
-# Hooked in the AbstractDict front door (`build_evaluator(esm; …)`), opt-in
+# Hooked in the AbstractDict front door (`_build_evaluator(esm; …)`), opt-in
 # behind the `pushdown_rewrite=true` kwarg, BEFORE `coerce_esm_file` so both
 # the typed value-invention path and the impl re-parse see the generated
 # constructs. Off by default so every existing test is byte-identical.

@@ -113,7 +113,7 @@ function _ut_fastjx_model(K::Int, M::Int)
 end
 
 # ---------------------------------------------------------------------------
-# Fixture 3 — repo documents. `build_evaluator(::EsmFile)` drops the diagnostics,
+# Fixture 3 — repo documents. `EarthSciAST._build_evaluator(::EsmFile)` drops the diagnostics,
 # and this file needs them (a fixture whose prelude turned out EMPTY would pass
 # every assertion below while exercising nothing), so it goes through the same
 # model/index-set/template plumbing that method does.

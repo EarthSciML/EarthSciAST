@@ -210,7 +210,7 @@ end
 function fixture_rhs(fx, base, compiler)
     path = joinpath(base, String(fx.path))
     file = load_path(path)
-    f!, u0, p, _, var_map = build_evaluator(file; model_name = String(fx.model),
+    f!, u0, p, _, var_map = EarthSciAST._build_evaluator(file; model_name = String(fx.model),
                                             compiler = Symbol(compiler))
     slot = bare_var_map(var_map)
 
@@ -343,7 +343,7 @@ function fixture_rhs_compiled(fx, base, compiler)
 
     path = joinpath(base, String(fx.path))
     file = load_path(path)
-    fo, u0, p, _, var_map = build_evaluator(file; model_name = String(fx.model),
+    fo, u0, p, _, var_map = EarthSciAST._build_evaluator(file; model_name = String(fx.model),
                                             form = :oop,
                                             compiler = Symbol(compiler))
     slot = bare_var_map(var_map)

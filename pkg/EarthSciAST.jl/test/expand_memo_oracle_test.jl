@@ -35,7 +35,7 @@ const ESM = EarthSciAST
 
     # Build a flattened system and return (du probes, u0, var_map).
     function probe(flat; compiler = :native)
-        f, u0, p, _, vmap = build_evaluator(flat; compiler = compiler)
+        f, u0, p, _, vmap = EarthSciAST._build_evaluator(flat; compiler = compiler)
         dus = Vector{Float64}[]
         for (ti, u) in zip((0.0, 0.7, 3.25), probe_states(length(u0)))
             du = similar(u0)

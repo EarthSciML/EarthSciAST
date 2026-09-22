@@ -288,7 +288,7 @@ end
     # eager-loop deferral ROUTING is exercised by the separate testset below.
     # ============================================================
     insp = EA.BuildInspection()
-    f!, u0, p, _tspan, var_map = EA.build_evaluator(doc;
+    f!, u0, p, _tspan, var_map = EA._build_evaluator(doc;
         model_name = "ISRM", const_arrays = ca, inspect = insp,
         _gated_providers = Dict{String,Any}("ISRM_SR" => mock), _sample_time = 0.0)
 

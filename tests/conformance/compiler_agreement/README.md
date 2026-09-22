@@ -31,9 +31,46 @@ Design decisions of record (2026-09-21) that this tier implements:
 > and `native` with no refusals on any fixture, and all three are
 > `bindings_required` for each; Python is `bindings_required` for `sympy`,
 > which refuses the four array fixtures by name and runs the two scalar ones.
-> `xla` and `mtk` stay `bindings_optional` until a binding's `esm_problem` can
-> build with them; each crosses to `bindings_required` on the same one-way
-> ratchet.
+>
+> **Julia is now `bindings_required` for `xla` as well.**
+> `esm_problem(…; compiler = :xla)` builds the document out of place, lowers the
+> compiled tree-walk intermediate representation to StableHLO and compiles it
+> once per build; all six fixtures pass against the golden AND against their
+> anchors, with **no refusals and no named exclusions**, so julia crosses on the
+> same one-way ratchet `native` used. Its adapter runs in
+> `pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env`, which carries
+> Reactant, so an `unavailable` from julia now means that environment did not
+> instantiate rather than that the compiler is absent. Two things about the run
+> are worth reading here rather than inferring:
+>
+> * **The device is the host CPU client** (`EARTHSCI_JULIA_XLA_DEVICE`, default
+>   `cpu`). The report schema has no field for a platform, and inventing one
+>   would make it a field every binding had to reproduce, so the compiler that
+>   ran is in the trajectory's provenance and the device is in the Julia
+>   Problem's own `compiler_report`.
+> * **`decay_solver_block`'s stiff Jacobian is finite-differenced under `xla`,
+>   and only under `xla`.** A Rosenbrock method builds its Jacobian by
+>   forward-differentiating the right-hand side, and a compiled device program
+>   is not a Julia function a `Dual` can be pushed through — it refuses such a
+>   call rather than answer a wrong derivative. The adapter asks the PROBLEM
+>   which compiler built it (§5.8's `compiler(prob)`) rather than reading its
+>   own `--compiler` flag, and finite-differences the Jacobian when the answer
+>   is `:xla`. The algorithm stays `Rodas5P`, its order is unchanged and the
+>   fixture's tolerances are untouched; the fixture lands inside its 2.8e-11
+>   band against the golden with room to spare.
+>
+> `mtk` stays `bindings_optional` until a binding's `esm_problem` can build with
+> it, and crosses on the same ratchet.
+>
+> **What `xla` does not cover yet, on either binding**: a document that binds
+> LIVE FORCING BUFFERS. Julia refuses one by name
+> (`compiler_refused_rule`, "live forcing buffers (…)"), because the compiled
+> program takes such buffers as arguments and needs them re-synced to the device
+> at each cadence boundary, and the buffer-free form would bake the build-time
+> forcing in as a constant and run the whole simulation against it. No fixture
+> in this tier binds one, so nothing here is skipped for it; the refusal is
+> recorded so that a fixture added later is read as a coverage gap rather than a
+> defect.
 
 ## Shape
 

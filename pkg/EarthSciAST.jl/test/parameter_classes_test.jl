@@ -68,7 +68,7 @@ function _pc_doc(; fold_ic::Bool = true)
             "equations" => eqs)))
 end
 
-# Both spellings: `build_evaluator(::Dict)` builds the document as authored (bare
+# Both spellings: `EarthSciAST._build_evaluator(::Dict)` builds the document as authored (bare
 # names), while `esm_problem` FLATTENS first (`M.dat`). Same arrays either way.
 _pc_const() = Dict{String,Any}("dat" => [2.0, 0.0], "M.dat" => [2.0, 0.0])
 _pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0])
@@ -76,7 +76,7 @@ _pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0]
 @testset "parameter classes" begin
     @testset "the four classes, derived from what the build read" begin
         insp = BuildInspection()
-        f!, u0, p, _t, vm = ESM_PC.build_evaluator(_pc_doc();
+        f!, u0, p, _t, vm = ESM_PC._build_evaluator(_pc_doc();
             const_arrays = _pc_const(), param_arrays = _pc_param_arrays(),
             inspect = insp)
         cls = parameter_classes(insp)
@@ -102,9 +102,9 @@ _pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0]
         # Same variable, same declaration, one document with the `ic()` equation
         # and one without. Declared type cannot tell them apart; the build can.
         i1 = BuildInspection(); i2 = BuildInspection()
-        ESM_PC.build_evaluator(_pc_doc(fold_ic = true);
+        ESM_PC._build_evaluator(_pc_doc(fold_ic = true);
             const_arrays = _pc_const(), param_arrays = _pc_param_arrays(), inspect = i1)
-        ESM_PC.build_evaluator(_pc_doc(fold_ic = false);
+        ESM_PC._build_evaluator(_pc_doc(fold_ic = false);
             const_arrays = _pc_const(), param_arrays = _pc_param_arrays(), inspect = i2)
         @test parameter_classes(i1)["y0"] === :structural
         @test parameter_classes(i2)["y0"] === :numeric

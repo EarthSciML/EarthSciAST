@@ -105,7 +105,7 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 @testset "parameter-vector ABI (`p::AbstractVector`)" begin
 
     @testset "param_map is the build's own parameter order" begin
-        _, _, p, _, _ = _PV_ESM.build_evaluator(_pv_rd(8))
+        _, _, p, _, _ = _PV_ESM._build_evaluator(_pv_rd(8))
         pm = param_map(p)
         @test pm isa Dict{String,Int}
         # It IS `keys(p)`'s order, and `keys(p)` is `sort!(param_names)`.
@@ -130,7 +130,7 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
         for (name, doc, N) in [("reaction-diffusion N=16", _pv_rd(16), 16),
                                ("0-D with a CSE prelude", _pv_zerod(), 2)]
             @testset "$name" begin
-                fi, u0, p, _, _ = _PV_ESM.build_evaluator(doc)
+                fi, u0, p, _, _ = _PV_ESM._build_evaluator(doc)
                 u = length(u0) == 2 ? [0.7, 0.4] : _pv_seed(N)
                 t = 0.37
 
@@ -153,7 +153,7 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
     @testset "ForwardDiff ∂/∂p over a vector `p`" begin
         N = 16
         doc = _pv_rd(N)
-        fi, _, p, _, _ = _PV_ESM.build_evaluator(doc)
+        fi, _, p, _, _ = _PV_ESM._build_evaluator(doc)
         u = _pv_seed(N)
         t = 0.37
         w = [1.0 + 0.05k for k in 1:N]
@@ -182,7 +182,7 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
         # The one failure mode a vector `p` has and a NamedTuple `p` does not.
         # `_read_param_data` is deliberately not `@inbounds` so this raises.
         N = 8
-        fi, _, p, _, _ = _PV_ESM.build_evaluator(_pv_rd(N))
+        fi, _, p, _, _ = _PV_ESM._build_evaluator(_pv_rd(N))
         u = _pv_seed(N)
         short = collect(Float64, values(p))[1:(end - 1)]
         @test_throws BoundsError _pv_ip(fi, u, short, 0.0)
@@ -194,7 +194,7 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
         # `_NK_PARAM` path never had that problem (its symbol is on the node), and
         # an index into a homogeneous vector must not introduce one.
         N = 64
-        fi, u0, p, _, _ = _PV_ESM.build_evaluator(_pv_rd(N))
+        fi, u0, p, _, _ = _PV_ESM._build_evaluator(_pv_rd(N))
         u = _pv_seed(N)
         du = similar(u)
         for (name, q) in ["NamedTuple" => p, "ComponentVector" => ComponentVector(p),

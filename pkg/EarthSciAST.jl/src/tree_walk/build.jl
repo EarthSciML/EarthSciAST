@@ -10,7 +10,7 @@
     BuildInspection()
 
 Observability record for [`build_evaluator`](@ref): pass one via the `inspect`
-keyword (`build_evaluator(doc; inspect=BuildInspection())`; [`esm_problem`](@ref)
+keyword (`_build_evaluator(doc; inspect=BuildInspection())`; [`esm_problem`](@ref)
 forwards its own `inspect` keyword) and the build fills it with named
 BUILD-TIME products that are otherwise internal to the evaluator closure:
 
@@ -88,6 +88,13 @@ mutable struct BuildInspection
     # builds through `build_evaluator` — or whose build REFUSED — can still read
     # it. Empty until the build that owns this record finishes.
     compiler_report::CompilerReport
+    # The live forcing buffers this build bound, in the stable (name-sorted)
+    # NamedTuple order a compiled backend's buffers argument is aligned with,
+    # and the name → position map. Published by EVERY build form, which is what
+    # lets `forcing_buffers(prob)` answer on an `EsmProblem` whatever compiler
+    # built it — the seam used to hang off the out-of-place build product alone.
+    forcing_buffers::NamedTuple
+    forcing_buffer_index::Dict{String,Int}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -95,7 +102,8 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,ASTExpr}(),
                                     Dict{String,Int}(),
                                     Dict{String,Symbol}(),
-                                    CompilerReport(:native))
+                                    CompilerReport(:native),
+                                    NamedTuple(), Dict{String,Int}())
 
 """
     DiscreteMaterializer()
@@ -3117,6 +3125,16 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # ---- Default tspan ----
     tspan_default = _pick_tspan(tspan, model)
 
+    # ---- Build observability: the live forcing buffers (see BuildInspection) --
+    # Published for BOTH forms, from the same `pgather` the out-of-place product
+    # carries as a field, so that `forcing_buffers(prob)` is a question about
+    # the PROBLEM rather than about which build form happened to produce it.
+    if inspect !== nothing
+        _fb, _fbi = _forcing_buffer_container(pgather)
+        inspect.forcing_buffers = _fb
+        inspect.forcing_buffer_index = _fbi
+    end
+
     # ---- The RHS slot ----
     # Two products of the SAME compiled IR (tree_walk/oop.jl explains why both
     # exist): `:inplace` is the zero-alloc, eltype-generic Float64 evaluator
@@ -3391,7 +3409,7 @@ function _build_evaluator_impl_inner(model::Model;
     # without its events would report a wrong answer. This check covers a model
     # handed to `build_evaluator` directly. A FLATTENED system reaches this entry
     # through `flattened_to_esm`, which does not carry events, so `simulate` (and
-    # with it `run_inline_tests`) and `build_evaluator(::FlattenedSystem)` refuse
+    # with it `run_inline_tests`) and `_build_evaluator(::FlattenedSystem)` refuse
     # it earlier, while the events are still in hand. The ModelingToolkit export
     # runs both kinds of event and does not come through here.
     ev = _first_event(model)
@@ -4632,7 +4650,7 @@ function _compile_faq_percell!(percell_scalar, acc_kernels, covered::BitVector,
 end
 
 """
-    build_evaluator(model::Model; initial_conditions=Dict(),
+    _build_evaluator(model::Model; initial_conditions=Dict(),
                     parameter_overrides=Dict(), tspan=nothing,
                     registered_functions=Dict(), kwargs...)
 
@@ -4702,7 +4720,7 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
   program receives them as real inputs and an in-place refresh
   ([`sync_forcing!`](@ref)) stays visible to it.
 """
-function build_evaluator(model::Model; kwargs...)
+function _build_evaluator(model::Model; kwargs...)
     f!, u0, p, tspan_default, var_map, _diag = _build_evaluator_impl(model; kwargs...)
     return f!, u0, p, tspan_default, var_map
 end
@@ -4716,7 +4734,7 @@ Parameter NAME → its position in a parameter VECTOR, the `p`-side mirror of th
 Take it from the `p` that `build_evaluator` handed back:
 
 ```julia
-f!, u0, p, tspan, var_map = build_evaluator(doc)
+f!, u0, p, tspan, var_map = _build_evaluator(doc)
 pm = param_map(p)                  # "k_diff" => 1, "k_rxn" => 3, …
 θ  = ComponentVector(p)            # the same order, as an AbstractVector
 f!(du, u, θ, t)                    # …and it is accepted as `p`
@@ -4780,11 +4798,11 @@ solve(remake(prob; p = Dict(θ[1] => 2.0)), Tsit5())
 parameter_classes(insp::BuildInspection) = insp.param_classes
 
 """
-    build_evaluator(file::EsmFile; model_name=nothing, kwargs...)
+    _build_evaluator(file::EsmFile; model_name=nothing, kwargs...)
 
 Delegate to the typed entry point after selecting the model.
 """
-function build_evaluator(file::EsmFile;
+function _build_evaluator(file::EsmFile;
                          model_name::Union{Nothing,AbstractString}=nothing,
                          kwargs...)
     model = _select_model(file, model_name)
@@ -4792,7 +4810,7 @@ function build_evaluator(file::EsmFile;
     # typed evaluator, which no longer reads it off the `Model`. `_model_name`
     # rides along for the §6.6.2 rule-2 namespace scope: the selected model's
     # own name is the one namespace its (bare) variable names cannot show.
-    return build_evaluator(model; index_sets=file.index_sets,
+    return _build_evaluator(model; index_sets=file.index_sets,
                            _template_reg=_component_template_reg(file, model_name),
                            _model_name=(model_name === nothing ?
                                         _sole_model_name(file) : String(model_name)),
@@ -5098,7 +5116,7 @@ function _unbundle_gated(entry)
 end
 
 """
-    build_evaluator(esm::AbstractDict; model_name=nothing, kwargs...)
+    _build_evaluator(esm::AbstractDict; model_name=nothing, kwargs...)
 
 Parse a raw ESM dict, then delegate. This is the signature from the
 bead description; the typed entry point is faster for callers that
@@ -5109,7 +5127,7 @@ keyed by name. `index(name, i)` references in the equations are inlined as
 literal values. Used to inject `__stgfw_` Fornberg weight arrays for
 `stencil_gen` models with `spacing="from_grid"`.
 """
-function build_evaluator(esm::AbstractDict;
+function _build_evaluator(esm::AbstractDict;
                          model_name::Union{Nothing,AbstractString}=nothing,
                          kwargs...)
     kwd = Dict{Symbol,Any}(kwargs)
@@ -5300,7 +5318,7 @@ function build_evaluator(esm::AbstractDict;
     delete!(kwd, :_gated_providers)
     delete!(kwd, :_sample_time)
 
-    return build_evaluator(file; model_name=model_name,
+    return _build_evaluator(file; model_name=model_name,
                            _vi_extents=(_vi === nothing ? Dict{String,Int}() : _vi.extents),
                            _vi_vars=(_vi === nothing ? Set{String}() : _vi.vi_var_names),
                            _vi_maps=(_vi === nothing ? _EMPTY_VI_MAPS :
@@ -5309,7 +5327,7 @@ function build_evaluator(esm::AbstractDict;
 end
 
 """
-    build_evaluator(flat::FlattenedSystem; kwargs...)
+    _build_evaluator(flat::FlattenedSystem; kwargs...)
 
 Build an evaluator directly from a `FlattenedSystem` by reconstituting it into a
 single-model native ESM document (`flattened_to_esm`) and running the
@@ -5317,7 +5335,7 @@ single-model native ESM document (`flattened_to_esm`) and running the
 materialized. Use this for a 0-D / array flattened system; for one carrying a
 spatial PDE, `discretize(flat; …)` first.
 """
-function build_evaluator(flat::FlattenedSystem; kwargs...)
+function _build_evaluator(flat::FlattenedSystem; kwargs...)
     # esm-spec §9.6.4 Option B / RFC §7.7: surviving `apply_expression_template`
     # references carried by `flatten` (a non-empty `template_registry`) ride the
     # reconstituted document (`flattened_to_esm` emits the registry as the
@@ -5330,7 +5348,7 @@ function build_evaluator(flat::FlattenedSystem; kwargs...)
     # `flattened_to_esm` does not carry events, so they are refused HERE, while
     # the flattened system still holds them (esm-spec §9.6.6).
     _refuse_flat_events(flat)
-    return build_evaluator(flattened_to_esm(flat); kwargs...)
+    return _build_evaluator(flattened_to_esm(flat); kwargs...)
 end
 
 # Does any equation / variable expression of `model` (or a subsystem) carry a
@@ -5367,7 +5385,7 @@ function _model_has_surviving_refs(model::Model)
 end
 
 # The single model's name when the document declares exactly one, else
-# `nothing` — the name `build_evaluator(file)` selects by default, needed for
+# `nothing` — the name `_build_evaluator(file)` selects by default, needed for
 # the esm-spec §6.6.2 rule-2 namespace scope (a bare-named single-model build
 # admits the §4.6 spelling `M.A` for its parameter `A` only if `M` is known to
 # name the model).

@@ -89,7 +89,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
         file = EarthSciAST.load_path(path)
         # The clip runs at setup: src_poly / tgt_poly are supplied as const_arrays
         # (RFC App. B.1). tracer IC = 1 so d(tracer)/dt = −area·tracer = −area.
-        f!, u0, p, _, vmap = build_evaluator(
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
             file; model_name="PolygonClipAreaPlanar",
             initial_conditions=Dict("tracer" => 1.0),
             const_arrays=Dict("src_poly" => _SQUARE_A, "tgt_poly" => _SQUARE_B))
@@ -125,7 +125,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
                 )],
             )),
         )
-        @test_throws EarthSciAST.TreeWalkError build_evaluator(bad; model_name="M")
+        @test_throws EarthSciAST.TreeWalkError EarthSciAST._build_evaluator(bad; model_name="M")
     end
 
     # --- spherical / geodesic area (closed-form excess, no backend) ---

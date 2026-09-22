@@ -338,7 +338,7 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
             withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
                 ESM._reset_cascade_tally!()
                 try
-                    f!, u0, p, _t, _vm = ESM.build_evaluator(file; model_name=name)
+                    f!, u0, p, _t, _vm = ESM._build_evaluator(file; model_name=name)
                     return (f=f!, u0=u0, p=p, tally=copy(ESM._CASCADE_TALLY))
                 catch e
                     corpus_is_resource_error(e) && rethrow()

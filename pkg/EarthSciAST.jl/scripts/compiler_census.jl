@@ -135,9 +135,9 @@ function _census_one(M, path::AbstractString)
                     names = file.models === nothing ? String[] :
                             sort!(String[String(k) for k in keys(file.models)])
                     if length(names) <= 1
-                        M.build_evaluator(file)
+                        M._build_evaluator(file)
                     else
-                        M.build_evaluator(file; model_name = names[1])
+                        M._build_evaluator(file; model_name = names[1])
                     end
                     entry = "build_evaluator"
                     ok = true

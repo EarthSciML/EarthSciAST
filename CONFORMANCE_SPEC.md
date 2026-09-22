@@ -6103,6 +6103,18 @@ fixture tolerances and the requirement ledger live in
 Go and TypeScript are **out of scope**: neither has a Problem type, so neither
 has a compiler to name (`API_SPEC.md` §3, capability profiles).
 
+**Status.** `interpreter` and `native` are `bindings_required` for Julia, Rust
+and Python; `sympy` is required for Python. **Julia is `bindings_required` for
+`xla`**: `esm_problem(…; compiler = :xla)` reaches the direct StableHLO emitter
+and reproduces all six fixtures against the golden and against their anchors
+with no refusals. `xla` stays `bindings_optional` for Rust, and `mtk` for Julia,
+until each binding's `esm_problem` can build with it; each crosses on the same
+one-way ratchet. The one shape `xla` refuses by name in Julia — a document
+binding LIVE FORCING BUFFERS, whose device re-sync is not wired to the refresh
+callback yet — is carried in the tier README's status rather than here, because
+no fixture in the tier binds one and it is therefore a coverage note, not a
+measured exclusion.
+
 #### 5.44.1 What is compared
 
 A **trajectory**: the state rows at the fixture's `saveat` times, plus the
@@ -6239,7 +6251,13 @@ reporting an unrequired refusal as a named exclusion.
 The producer stages in `scripts/test-conformance.sh` are one per binding per
 compiler, named `compiler-agreement <compiler> producer (<binding>)`:
 `interpreter` and `native` for Julia, Rust and Python; `xla` for Julia and Rust;
-`mtk` for Julia; `sympy` for Python. Adapters are discovered the way §5.38's
+`mtk` for Julia; `sympy` for Python. The `xla` stages are not wired into
+`scripts/test-conformance.sh` yet: the Julia one needs the Reactant-bearing
+adapter environment (`pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env`),
+which pulls an XLA runtime into every conformance run, and that is a fleet-wide
+decision rather than this tier's. The ledger records that julia ANSWERS for
+`xla`; running it is `python3 scripts/run-compiler-agreement-conformance.py
+--bindings julia --compiler xla`. Adapters are discovered the way §5.38's
 are, through `EARTHSCI_COMPILER_AGREEMENT_ADAPTER_<BINDING>`:
 
 | Binding | Adapter |
@@ -6249,8 +6267,7 @@ are, through `EARTHSCI_COMPILER_AGREEMENT_ADAPTER_<BINDING>`:
 | Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/compiler_agreement_adapter.py` |
 
 **Every problem-building stage NAMES its compiler.** A stage that calls
-`esm_problem` or `build_evaluator` with no compiler runs whatever the library
-default happens to be, so a change to that default silently changes what the
+`esm_problem` with no compiler runs whatever the library default happens to be, so a change to that default silently changes what the
 stage measures — while its goldens still say what it measured before. Every such
 stage's adapter therefore takes the compiler as an argument and every stage
 passes one explicitly. Which value is the stage's own to state:

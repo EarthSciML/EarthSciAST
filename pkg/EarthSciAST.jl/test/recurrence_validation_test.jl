@@ -276,7 +276,7 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
                         "recurrence_causal_self_reference.esm")
         if _require_fixture(path)
             err = try
-                build_evaluator(load_path(path))
+                EarthSciAST._build_evaluator(load_path(path))
                 nothing
             catch e
                 e
@@ -306,7 +306,7 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
             ESM_R.Equation(_D("x"), _v("a")),
         ]
         err = try
-            build_evaluator(ESM_R.Model(vars, eqs))
+            EarthSciAST._build_evaluator(ESM_R.Model(vars, eqs))
             nothing
         catch e
             e
@@ -327,7 +327,7 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
             ESM_R.Equation(_D("x"), _v("y")),
         ]
         err = try
-            build_evaluator(ESM_R.Model(vars, eqs))
+            EarthSciAST._build_evaluator(ESM_R.Model(vars, eqs))
             nothing
         catch e
             e

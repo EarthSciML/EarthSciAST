@@ -265,7 +265,7 @@ end
             "index_sets" => Dict("points" => Dict("kind" => "interval", "size" => 1),
                                  "cells"  => Dict("kind" => "interval", "size" => 2)),
             "models" => _mirror_doc(1, 2)["models"])
-        ESS.build_evaluator(sm; model_name="Mirror",
+        ESS._build_evaluator(sm; model_name="Mirror",
             const_arrays=Dict{String,Any}("X" => [0.5], "Y" => [0.5],
                 "W" => [0.0, 1.0], "S" => [0.0, 0.0],
                 "E" => [1.0, 2.0], "N" => [1.0, 1.0]))
@@ -273,7 +273,7 @@ end
 
     ESS._VI_ENUM_VISITS[] = 0
     tmir = @elapsed f!, u0, pp, _, vmap =
-        ESS.build_evaluator(_mirror_doc(npts, ncells); model_name="Mirror",
+        ESS._build_evaluator(_mirror_doc(npts, ncells); model_name="Mirror",
                             const_arrays=_mca(npts, ncells))
     mir_visits = ESS._VI_ENUM_VISITS[]
 
@@ -337,7 +337,7 @@ end
     fca = Dict{String,Any}("X" => PX, "Y" => PY, "annual" => annual,
         "W" => CW, "S" => CS, "E" => CE, "N" => CN, "SR" => SR)
     insp = ESS.BuildInspection()
-    ESS.build_evaluator(rw; model_name="Fwd", const_arrays=fca, inspect=insp)
+    ESS._build_evaluator(rw; model_name="Fwd", const_arrays=fca, inspect=insp)
     nsupport = insp.derived_extents["pd_faq__cells"]
     @test nsupport == npts                     # distinct cells, one point each
 

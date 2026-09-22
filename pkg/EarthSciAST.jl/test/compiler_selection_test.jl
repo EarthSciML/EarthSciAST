@@ -78,7 +78,7 @@ end
 
 _csel_contraction_build(doc, ics; compiler) =
     withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-        build_evaluator(doc; initial_conditions = ics, compiler = compiler)
+        EarthSciAST._build_evaluator(doc; initial_conditions = ics, compiler = compiler)
     end
 
 # `du` at the seeded state, so two builds can be compared element for element.
@@ -148,7 +148,7 @@ end
         runs = map(((), (; compiler = :native))) do kw
             insp = BuildInspection()
             f!, u0, p, _t, vm = withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-                build_evaluator(doc; initial_conditions = ics, inspect = insp,
+                EarthSciAST._build_evaluator(doc; initial_conditions = ics, inspect = insp,
                                 kw...)
             end
             du = zeros(Float64, length(u0))
@@ -174,7 +174,7 @@ end
                  for r in 1:16]
         insp = BuildInspection()
         f!, u0, p, _t, vm = withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-            build_evaluator(doc; initial_conditions = ics, compiler = :native,
+            EarthSciAST._build_evaluator(doc; initial_conditions = ics, compiler = :native,
                             inspect = insp)
         end
         du = zeros(Float64, length(u0))
@@ -261,12 +261,43 @@ end
         push!(eqs, eqs[2])
         insp2 = BuildInspection()
         @test_throws TreeWalkError withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-            build_evaluator(doc; initial_conditions = ics, inspect = insp2,
+            EarthSciAST._build_evaluator(doc; initial_conditions = ics, inspect = insp2,
                             compiler = :native)
         end
         @test insp2.compiler_report.compiler === :native
         @test any(r -> r.tier === :array_contraction_codegen,
                   insp2.compiler_report.rules)
+    end
+
+    @testset "build_evaluator has left the public surface" begin
+        # API_SPEC §8 item 23: the extension seam under the runners is retired.
+        # It is not EXPORTED any more — `esm_problem` is the way in — and the
+        # name that remains is a deprecated alias kept for one minor version so
+        # a downstream package keeps running while it migrates.
+        @test !(:build_evaluator in names(EarthSciAST))
+        @test :esm_problem in names(EarthSciAST)
+        # The alias still builds, and builds the same thing the private entry
+        # point does: a deprecation that changed the answer would be a second
+        # break hiding inside the first.
+        file = load_path(_CSEL_AGREE[1])
+        dep = @test_logs (:warn,) match_mode = :any CSEL.build_evaluator(file)
+        priv = CSEL._build_evaluator(load_path(_CSEL_AGREE[1]))
+        @test isequal(dep[2], priv[2])          # u0
+        @test dep[5] == priv[5]                 # var_map
+        du_dep = zeros(length(dep[2])); dep[1](du_dep, dep[2], dep[3], 0.0)
+        du_priv = zeros(length(priv[2])); priv[1](du_priv, priv[2], priv[3], 0.0)
+        @test isequal(du_dep, du_priv)
+
+        # What the seam used to publish now hangs on the Problem, for every
+        # compiler rather than only for the out-of-place build form.
+        prob = esm_problem(_CSEL_AGREE[1], (0.0, 1.0))
+        @test forcing_buffers(prob) isa NamedTuple
+        @test forcing_buffer_index(prob) isa Dict{String,Int}
+        @test length(forcing_buffers(prob)) == length(forcing_buffer_index(prob))
+        insp = BuildInspection()
+        esm_problem(_CSEL_AGREE[1], (0.0, 1.0); inspect = insp)
+        @test compiler_report(insp) === insp.compiler_report
+        @test compiler_report(insp).compiler === :native
     end
 
     @testset "run_inline_tests takes a compiler" begin

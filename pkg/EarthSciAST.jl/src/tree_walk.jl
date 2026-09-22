@@ -8,7 +8,7 @@
 #
 # Public API:
 #
-#     build_evaluator(model::Model; kwargs...)
+#     _build_evaluator(model::Model; kwargs...)
 #         → (f!, u0::Vector{Float64}, p::NamedTuple, tspan::Tuple{Float64,Float64},
 #            var_map::Dict{String,Int})
 #
@@ -20,7 +20,7 @@
 # eltype-generic, so ForwardDiff runs through it over the state or the parameters
 # (a stiff solve gets an exact AD Jacobian for free).
 #
-# `build_evaluator(model; form = :oop)` returns the COMPILED INTERMEDIATE
+# `_build_evaluator(model; form = :oop)` returns the COMPILED INTERMEDIATE
 # REPRESENTATION in the same slot (tree_walk/oop.jl) rather than a second
 # evaluator: the same node spines and access kernels `f!` is lowered from, as
 # data, for a compiled backend to emit a program from. `direct_rhs`

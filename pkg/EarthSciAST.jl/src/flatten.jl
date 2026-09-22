@@ -1424,7 +1424,7 @@ end
     flattened_to_esm(flat::FlattenedSystem; name="Flattened", esm_version=SCHEMA_VERSION) -> Dict{String,Any}
 
 Reconstitute a `FlattenedSystem` into a single-model native ESM **document**
-(`Dict{String,Any}`) that can be run directly: `build_evaluator(doc)` for a 0-D /
+(`Dict{String,Any}`) that can be run directly: `_build_evaluator(doc)` for a 0-D /
 array system, or `discretize(doc)` first when it carries a spatial PDE.
 
 A native dict — not a typed `EsmFile` — is the target on purpose: the value-

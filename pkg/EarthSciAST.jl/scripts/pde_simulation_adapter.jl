@@ -106,7 +106,7 @@ _ic_dict(obj) = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in pairs
 
 function rhs_at(model, probe_state, t, compiler)
     ics = _ic_dict(probe_state)
-    f!, u0, p, _, vmap = build_evaluator(model; initial_conditions=ics,
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions=ics,
                                          compiler=Symbol(compiler))
     du = similar(u0)
     f!(du, u0, p, Float64(t))
@@ -115,7 +115,7 @@ end
 
 function trajectory(model, ic, t0, t1, out_times, reltol, abstol, compiler)
     ics = _ic_dict(ic)
-    f!, u0, p, _, vmap = build_evaluator(model; initial_conditions=ics,
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions=ics,
                                          compiler=Symbol(compiler))
     prob = ODE.ODEProblem(f!, u0, (Float64(t0), Float64(t1)), p)
     sol = ODE.solve(prob, ODE.Tsit5(); reltol=reltol, abstol=abstol)
@@ -204,7 +204,7 @@ function _pipeline_evaluator(path, providers, t0, compiler)
         k = String(rawk)
         merged_const[k] = ESS._provider_const_field(ESS.provider_sample(prov, t0), k)
     end
-    return build_evaluator(doc; const_arrays = merged_const,
+    return EarthSciAST._build_evaluator(doc; const_arrays = merged_const,
                           compiler = Symbol(compiler))
 end
 

@@ -128,7 +128,7 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
 
         du_val = NaN
         t = @elapsed begin
-            f!, u0, p, _tspan, var_map = build_evaluator(ESM.Model(vars, eqs))
+            f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(ESM.Model(vars, eqs))
             du = similar(u0)
             f!(du, u0, p, 0.0)
             du_val = du[var_map["x"]]
@@ -147,7 +147,7 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         model = _elemwise_array_chain_model(3)
         _eqs2, folded = ESM._fold_elementwise_array_observeds(model.equations, model)
         @test folded == Set(["a", "b"])
-        f!, u0, p, _t, vmap = build_evaluator(model;
+        f!, u0, p, _t, vmap = EarthSciAST._build_evaluator(model;
             index_sets=_CHAIN_INDEX_SETS, initial_conditions=_CHAIN_ICS)
         # Folded observeds carry no ODE slots; values are exact powers of two.
         @test !any(k -> occursin(r"^[ab]\[", k), keys(vmap))
@@ -169,7 +169,7 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         model = _elemwise_array_chain_model(depth)
         local du, vmap
         t = @elapsed begin
-            f!, u0, p, _t, vmap = build_evaluator(model;
+            f!, u0, p, _t, vmap = EarthSciAST._build_evaluator(model;
                 index_sets=_CHAIN_INDEX_SETS, initial_conditions=_CHAIN_ICS)
             du = similar(u0)
             f!(du, u0, p, 0.0)

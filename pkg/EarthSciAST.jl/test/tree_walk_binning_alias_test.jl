@@ -145,7 +145,7 @@ _twb_binkey(lon, lat, sym) = Dict{String,Any}("op"=>"skolem", "label"=>"bin", "a
             ]))))
 
         insp = _TWB.BuildInspection()
-        f!, u0, p, tspan, vmap = build_evaluator(doc; model_name="M", inspect=insp)
+        f!, u0, p, tspan, vmap = EarthSciAST._build_evaluator(doc; model_name="M", inspect=insp)
         du = similar(u0); f!(du, u0, p, 0.0)
         F_tgt = [du[vmap["regrid_state[$j]"]] for j in 1:2]
         pou   = [du[vmap["pou_state[$j]"]] for j in 1:2]
@@ -205,7 +205,7 @@ _twb_binkey(lon, lat, sym) = Dict{String,Any}("op"=>"skolem", "label"=>"bin", "a
             ]))))
 
         insp = _TWB.BuildInspection()
-        f!, u0, p, tspan, vmap = build_evaluator(doc; model_name="M", inspect=insp)
+        f!, u0, p, tspan, vmap = EarthSciAST._build_evaluator(doc; model_name="M", inspect=insp)
         du = similar(u0); f!(du, u0, p, 0.0)
         # The alias resolved: A_ij over the aliased rings is the full unit overlap.
         @test du[vmap["s[1]"]] ≈ 1.0

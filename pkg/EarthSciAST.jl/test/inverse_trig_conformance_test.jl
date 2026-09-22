@@ -36,7 +36,7 @@ function _eval_invtrig_fixture(filename::AbstractString, model_name::AbstractStr
     @test isfile(path)
     file = EarthSciAST.load_path(path)
     ics = Dict(e => 0.0 for e in elements)
-    f!, u0, p, _, vmap = build_evaluator(file; model_name=model_name,
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(file; model_name=model_name,
                                          initial_conditions=ics)
     du = similar(u0)
     f!(du, u0, p, 0.0)

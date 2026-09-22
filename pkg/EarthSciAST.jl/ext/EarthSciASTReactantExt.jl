@@ -6,7 +6,7 @@ is in the session.
 
 WHAT IT PROVIDES. `direct_rhs` / `direct_rhs_with_buffers`
 (ext/reactant_direct/): a StableHLO program built DIRECTLY from the compiled
-tree-walk intermediate representation that `build_evaluator(model; form = :oop)`
+tree-walk intermediate representation that `EarthSciAST._build_evaluator(model; form = :oop)`
 returns — every operation in the module comes from an IR node rather than from
 Julia broadcast tracing. See ext/reactant_direct/mod.jl for the value model and
 ext/reactant_direct/api.jl for the contract (hard errors, never a fallback).
@@ -32,7 +32,7 @@ IS seen by the already-compiled program, so the discrete-cadence model survives
 compilation verbatim: one aliased buffer per forcing, refreshed in place at each
 cadence boundary, no reallocation and no recompile.
 
-    fo   = build_evaluator(model; form = :oop, param_arrays = forcing)[1]
+    fo   = EarthSciAST._build_evaluator(model; form = :oop, param_arrays = forcing)[1]
     db   = direct_rhs_with_buffers(fo)
     dev  = map(ConcreteRArray, forcing_buffers(fo))
     xla  = @compile db(u_r, p_r, t_r, dev)

@@ -448,7 +448,7 @@ end
     want(i, k) = sum(Float64(10i + kk) for kk in 1:NK) / 2 - Float64(10i + k)
 
     function du_iip(; inline)
-        f!, u0, p, _, vm = EarthSciAST.build_evaluator(doc;
+        f!, u0, p, _, vm = EarthSciAST._build_evaluator(doc;
             initial_conditions = ics, compiler = inline ? :interpreter : :native)
         du = similar(u0); f!(du, u0, p, 0.0)
         return [du[vm["q[$i,$k]"]] for i in 1:NI, k in 1:NK]

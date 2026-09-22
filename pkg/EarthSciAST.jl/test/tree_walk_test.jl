@@ -39,7 +39,7 @@ function _eval1(expr::ESM.ASTExpr; u_vals=Dict{String,Float64}(),
     vars["_probe"] = ModelVariable(UnknownVariable; default=0.0)
     eq = ESM.Equation(_D("_probe"), expr)
     model = ESM.Model(vars, [eq])
-    f!, u0, p, _tspan, var_map = build_evaluator(model;
+    f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model;
         registered_functions=registered_functions)
     # Override state values from u_vals
     for (k, v) in u_vals
@@ -215,7 +215,7 @@ end
             ESM.Equation(_D("x"), _op("-", _op("*", _v("y"), _v("x")))),
         ]
         model = ESM.Model(vars, eqs)
-        f!, u0, p, _tspan, var_map = build_evaluator(model)
+        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
         du = similar(u0)
         f!(du, u0, p, 0.0)
         # D(x) = -(2 * 0.5 * 1.0) = -1.0
@@ -247,7 +247,7 @@ end
             ESM.Equation(_v("a"), _v("k")),
             ESM.Equation(_D("x"), _op("*", _v("c"), _v("x"))),
         ]
-        f!, u0, p, _tspan, var_map = build_evaluator(ESM.Model(vars, eqs))
+        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(ESM.Model(vars, eqs))
         du = similar(u0)
         f!(du, u0, p, 0.0)
         @test du[var_map["x"]] === (2.0 * 2.0 + 1.0) * 1.0
@@ -264,7 +264,7 @@ end
             ESM.Equation(_D("x"), _v("a")),
         ]
         err = try
-            build_evaluator(ESM.Model(cyc_vars, cyc_eqs))
+            EarthSciAST._build_evaluator(ESM.Model(cyc_vars, cyc_eqs))
             nothing
         catch e
             e
@@ -283,7 +283,7 @@ end
         )
         eq = ESM.Equation(_D("x"), _op("*", _op("-", _v("k")), _v("x")))
         model = ESM.Model(vars, [eq])
-        f!, u0, p, _tspan, var_map = build_evaluator(model)
+        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 10.0), p)
         sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
                                         reltol=1e-8, abstol=1e-10)
@@ -303,7 +303,7 @@ end
                        ESM.TimeSpan(0.0, 25.0),
                        ESM.Assertion[]; description="default")]
         model = ESM.Model(vars, [eq]; tests=tests)
-        _, _, _, tspan_default, _ = build_evaluator(model)
+        _, _, _, tspan_default, _ = EarthSciAST._build_evaluator(model)
         @test tspan_default == (0.0, 25.0)
     end
 
@@ -339,7 +339,7 @@ end
             push!(eqs, ESM.Equation(_D("u_$i"), rhs))
         end
         model = ESM.Model(vars, eqs)
-        f!, u0, p, _tspan, var_map = build_evaluator(model)
+        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
         # Diffusion time ~ L² / α = 1 / 0.5 = 2. Integrate to t = 5.
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 5.0), p)
         sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
@@ -378,7 +378,7 @@ end
         model = ESM.Model(vars, eqs)
 
         # Tree-walk path
-        f_tw!, u0_tw, p_tw, _tspan, var_map = build_evaluator(model)
+        f_tw!, u0_tw, p_tw, _tspan, var_map = EarthSciAST._build_evaluator(model)
 
         # MTK path
         sys = MTK.System(model; name=:HeatParity)
@@ -448,7 +448,7 @@ end
                 ),
             ),
         )
-        f!, u0, p, _tspan, var_map = build_evaluator(esm)
+        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(esm)
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 10.0), p)
         sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
                                         reltol=1e-8, abstol=1e-10)
@@ -493,7 +493,7 @@ end
         model = ESM.Model(vars, eqs)
         # Build acceptance: < 5 s wall-clock.
         t_build = @elapsed begin
-            f!, u0, p, _tspan, var_map = build_evaluator(model)
+            f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
         end
         @test t_build < 5.0
         @test length(u0) == Nx * Ny
@@ -537,7 +537,7 @@ end
         end
         model = ESM.Model(vars, eqs)
         t_build = @elapsed begin
-            f!, u0, p, _tspan, var_map = build_evaluator(model)
+            f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
         end
         @test t_build < 5.0
         du = similar(u0)

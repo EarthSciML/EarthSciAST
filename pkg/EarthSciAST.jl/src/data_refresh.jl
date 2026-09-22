@@ -3,7 +3,7 @@
 #
 # The companion to the JL-J0 engine touch (`param_arrays` / `_NK_PARAM_GATHER`,
 # ess-14f.3). J0 made a forcing buffer readable LIVE by the RHS: a dense
-# `Array{Float64}` bound through `build_evaluator(...; param_arrays=...)` is
+# `Array{Float64}` bound through `_build_evaluator(...; param_arrays=...)` is
 # captured BY REFERENCE, so an in-place `buf .= …` shows through to `f!` with
 # zero reallocation. J1 builds the thing that DOES that in-place write at the
 # right times: a `PresetTimeCallback` whose `affect!` pulls fresh native arrays
@@ -291,7 +291,7 @@ end
 
 Registry mapping a forcing variable name to its live buffer — the dense
 `Array{Float64}` bound BY REFERENCE through
-`build_evaluator(model; param_arrays = …)` (ess-14f.3). The refresh callback's
+`_build_evaluator(model; param_arrays = …)` (ess-14f.3). The refresh callback's
 `affect!` writes the freshly sampled forcing into these exact objects in place, so the RHS
 (which gathers the same aliased storage via `_NK_PARAM_GATHER`) sees the update
 on its next evaluation.
@@ -302,7 +302,7 @@ the buffers are shared, not copied:
 
 ```julia
 forcing = Dict("wind" => zeros(nx, ny))
-f!, u0, p, tspan, _ = build_evaluator(model; param_arrays = forcing, …)
+f!, u0, p, tspan, _ = _build_evaluator(model; param_arrays = forcing, …)
 buffers = RefreshBuffers(forcing)   # same array objects — aliased, not copied
 ```
 """
@@ -347,7 +347,7 @@ The caller attaches both to their own problem:
 
 ```julia
 forcing = Dict("wind" => zeros(nx, ny))
-f!, u0, p, tspan, _ = build_evaluator(model; param_arrays = forcing, …)
+f!, u0, p, tspan, _ = _build_evaluator(model; param_arrays = forcing, …)
 cb, tstops = build_refresh_callback(;
     providers = Dict("wind" => wind_provider),   # var name => data Provider
     buffers   = RefreshBuffers(forcing))         # same array objects as param_arrays
@@ -424,20 +424,24 @@ the [`DiscreteMaterializer`](@ref) caches are refilled, when `post_refresh`
 chains `materialize!` first):
 
 ```julia
-ext  = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
-fo   = build_evaluator(model; form = :oop, param_arrays = forcing)[1]
-host = forcing_buffers(fo)                  # aliased host buffers, stable order
+prob = esm_problem(doc, tspan; param_arrays = forcing)
+host = forcing_buffers(prob)                # aliased host buffers, stable order
 dev  = map(Reactant.ConcreteRArray, host)   # the compiled program's inputs
-db   = ext.direct_rhs_with_buffers(fo)
-rhs  = @compile db(u_r, p_r, t_r, dev)
 cb, tstops = build_refresh_callback(;
     providers, buffers = RefreshBuffers(forcing),
     post_refresh = () -> sync_forcing!(dev, host))
 ```
 
-`src` is normally [`forcing_buffers`](@ref)`(fo)`; any NamedTuple pair works as
-long as every key of `src` is present in `dest` and shapes/lengths agree
+`src` is normally [`forcing_buffers`](@ref)`(prob)`; any NamedTuple pair works
+as long as every key of `src` is present in `dest` and shapes/lengths agree
 (`copyto!` enforces length). Missing keys throw [`RefreshError`](@ref).
+
+THE COMPILED SIDE OF THIS IS NOT WIRED TO `esm_problem` YET, which is why the
+snippet above stops at the buffers: `esm_problem(…; compiler = :xla)` REFUSES a
+document that binds live forcing, by name, rather than bake the build-time
+values into the program as constants. Composing that refresh — this
+`post_refresh` hook, chained after the [`DiscreteMaterializer`](@ref) fill — is
+what the refusal is waiting on.
 """
 function sync_forcing!(dest::NamedTuple, src::NamedTuple)
     for k in keys(src)

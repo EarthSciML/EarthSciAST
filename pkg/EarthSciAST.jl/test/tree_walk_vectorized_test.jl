@@ -72,7 +72,7 @@ end
     @testset "numeric identity vs analytic stencil (rtol 1e-12)" begin
         for N in (8, 32)
             ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
-            f!, u0, p, _, vmap = build_evaluator(_stencil_model(N);
+            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(_stencil_model(N);
                                                  initial_conditions=ics)
             du = similar(u0); f!(du, u0, p, 0.0)
             uv(k) = (1 <= k <= N) ? (sin(0.3k) + 0.1k) : 0.0   # ghost → 0
@@ -94,7 +94,7 @@ end
         A = [1.0 2.0 3.0; 4.0 5.0 6.0]
         ics = Dict("y[1]" => 0.0, "y[2]" => 0.0,
                    "x[1]" => 1.0, "x[2]" => 1.0, "x[3]" => 1.0)
-        f!, u0, p, _, vmap = build_evaluator(m; initial_conditions=ics,
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions=ics,
                                              const_arrays=Dict("A" => A))
         _, _, _, _, _, d = ESM._build_evaluator_impl(m; initial_conditions=ics,
                                                      const_arrays=Dict("A" => A))
@@ -128,7 +128,7 @@ end
                           [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                         _ao1(body, "i", 1, N))])
             ics = Dict("u[$i]" => queries[i] for i in 1:N)
-            f!, u0, p, _, vmap = build_evaluator(m; initial_conditions=ics)
+            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions=ics)
             du = similar(u0); f!(du, u0, p, 0.0)
             return [du[vmap["u[$i]"]] for i in 1:N]
         end
@@ -140,7 +140,7 @@ end
                           [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                         _ao1(body, "i", 1, N))])
             ics = Dict("u[$i]" => queries[i] for i in 1:N)
-            f!, u0, p, _, vmap = build_evaluator(m; initial_conditions=ics)
+            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions=ics)
             du = similar(u0); f!(du, u0, p, 0.0)
             return [du[vmap["u[$i]"]] for i in 1:N]
         end
@@ -189,7 +189,7 @@ end
                           [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                         _ao1(body, "i", 1, N))])
             ics = Dict("u[$i]" => xqs[i] for i in 1:N)
-            f!, u0, p, _, vmap = build_evaluator(m; initial_conditions=ics)
+            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions=ics)
             du = similar(u0); f!(du, u0, p, 0.0)
             for (i, xq) in enumerate(xqs)
                 ref = Float64(ESM.evaluate_closed_function("interp.bilinear",
@@ -253,7 +253,7 @@ end
                           [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                         _ao1(body, "i", 1, N))])
             ics = Dict("u[$k]" => 0.0 for k in 1:N)
-            f!, u0, p, _, vmap = build_evaluator(m; initial_conditions=ics)
+            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions=ics)
             du = similar(u0); f!(du, u0, p, 0.0)
             for i in 1:N
                 @test du[vmap["u[$i]"]] == 40.0   # interp.linear(table, axis, 2.0) on knot
@@ -271,7 +271,7 @@ end
 # nodes on `rhs_list`, evaluated by `_eval_node` with no merge machinery).
 @testset "array kernels ≡ per-cell scalar reference (differential)" begin
     _build(model, ics, disable) =
-        build_evaluator(model; initial_conditions=ics,
+        EarthSciAST._build_evaluator(model; initial_conditions=ics,
                         compiler = disable ? :interpreter : :native)
 
     # Bit-identical du across interior + ghost-boundary kernels, every grid size.
@@ -310,7 +310,7 @@ end
 # to the forced per-cell path. `compiler=:interpreter` forces that per-cell path.
 @testset "compile-once field-ic ≡ per-cell fallback (u0, ess-perf)" begin
     _build_u0(N, disable) =
-        build_evaluator(_fieldic_model(N);
+        EarthSciAST._build_evaluator(_fieldic_model(N);
                         compiler = disable ? :interpreter : :native)[2]   # u0 is 2nd
 
     @testset "bit-identical u0 (N=$N)" for N in (4, 16, 32)

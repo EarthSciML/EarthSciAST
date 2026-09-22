@@ -104,7 +104,7 @@ function _cto_build(NI, NJ, NK; compiler = :native, env = Dict{String,String}())
         _CTO_ESS._BENCH_ON[] = true
         local f, u0, p, vm
         try
-            f, u0, p, _, vm = build_evaluator(doc; initial_conditions = ics,
+            f, u0, p, _, vm = EarthSciAST._build_evaluator(doc; initial_conditions = ics,
                                               compiler = compiler,
                                               const_arrays = Dict("dp" => dp))
         finally

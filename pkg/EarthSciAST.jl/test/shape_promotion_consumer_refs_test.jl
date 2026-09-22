@@ -86,7 +86,7 @@ consumer_rhs(sys) = only(eq for eq in sys.equations
         # The exact downstream symptom (reseact saw it as
         # "E_TREEWALK_UNBOUND_VARIABLE: FastJX.j_NO2"):
         err = try
-            f!, u0, p, _t, vmap = E.build_evaluator(E.flattened_to_esm(broken);
+            f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(broken);
                 const_arrays=Dict("M.f"=>[1.0,2.0,3.0]),
                 initial_conditions=Dict("M.s[$i]"=>1.0 for i in 1:3))
             du = similar(u0); f!(du, u0, p, 0.0)
@@ -109,7 +109,7 @@ consumer_rhs(sys) = only(eq for eq in sys.equations
                       c.args[1] == E.VarExpr("M.j")]
         @test length(gathers) == 1
         @test gathers[1].args[2:end] == E.ASTExpr[E.VarExpr("i")]
-        f!, u0, p, _t, vmap = E.build_evaluator(E.flattened_to_esm(prom);
+        f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(prom);
             const_arrays=Dict("M.f"=>[1.0,2.0,3.0]),
             initial_conditions=Dict("M.s[$i]"=>1.0 for i in 1:3))
         du = similar(u0); f!(du, u0, p, 0.0)
@@ -141,7 +141,7 @@ end
     body = consumer_rhs(prom).expr_body
     @test body isa E.OpExpr && body.op == "index" &&
           body.args == E.ASTExpr[E.VarExpr("M.j"), E.VarExpr("k")]
-    f!, u0, p, _t, vmap = E.build_evaluator(E.flattened_to_esm(prom);
+    f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(prom);
         const_arrays=Dict("M.f"=>[1.0,2.0,3.0]), initial_conditions=Dict("M.z"=>0.0))
     du = similar(u0); f!(du, u0, p, 0.0)
     @test du[vmap["M.z"]] ≈ 12.0                     # Σ 2f = 2+4+6
@@ -224,7 +224,7 @@ end
     prom_on  = E.promote_downstream_shapes(flat)
     prom_off = E.promote_downstream_shapes(flat; index_consumer_refs=false)
     for prom in (prom_on, prom_off)
-        f!, u0, p, _t, vmap = E.build_evaluator(E.flattened_to_esm(prom);
+        f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(prom);
             const_arrays=Dict("M.f"=>[1.0,2.0,3.0]), initial_conditions=Dict("M.s"=>0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["M.s"]] ≈ 18.0

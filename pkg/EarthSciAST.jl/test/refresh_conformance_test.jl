@@ -81,7 +81,7 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
         # cache; scale_tgt reads only const data -> build-once.
         fsrc_buf = copy(fsrc_anchor(0.0))
         dm = _ESS_RG.DiscreteMaterializer()
-        f!, u0, p, _ts, vm = _ESS_RG.build_evaluator(sim_doc;
+        f!, u0, p, _ts, vm = _ESS_RG._build_evaluator(sim_doc;
             initial_conditions = ics,
             const_arrays = Dict("scale_src" => scale_native),
             param_arrays = Dict("F_src" => fsrc_buf),
@@ -110,7 +110,7 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
         # provider, no tstop). Forcing frozen per segment -> closed form to tol.
         fsrc_buf2 = copy(fsrc_anchor(0.0))
         dm2 = _ESS_RG.DiscreteMaterializer()
-        f2!, u02, p2, _ts2, vm2 = _ESS_RG.build_evaluator(sim_doc;
+        f2!, u02, p2, _ts2, vm2 = _ESS_RG._build_evaluator(sim_doc;
             initial_conditions = ics,
             const_arrays = Dict("scale_src" => scale_native),
             param_arrays = Dict("F_src" => fsrc_buf2),

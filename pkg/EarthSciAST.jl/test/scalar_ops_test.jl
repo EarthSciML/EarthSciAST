@@ -130,7 +130,7 @@ end
                                                   "args" => Any["a"]),
                                     "rhs" => Dict("op" => "*",
                                                   "args" => Any[-1.0, "a"]))])))
-    fo, u0, p, _, _ = ESM.build_evaluator(doc; form = :oop)
+    fo, u0, p, _, _ = ESM._build_evaluator(doc; form = :oop)
     @test applicable(fo, zeros(1), p, 0.0)              # reads as out-of-place …
     @test !applicable(fo, zeros(1), zeros(1), p, 0.0)   # … and never as in-place
     err = try

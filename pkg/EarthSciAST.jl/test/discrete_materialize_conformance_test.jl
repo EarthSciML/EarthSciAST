@@ -69,7 +69,7 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         # at each anchor and assert the cache holds the golden contraction.
         srcbuf = copy(src_at(0.0))
         dm = _ESS_DM.DiscreteMaterializer()
-        f!, u0, p, _ts, vm = _ESS_DM.build_evaluator(_ESS_DM.load_path(fixture);
+        f!, u0, p, _ts, vm = _ESS_DM._build_evaluator(_ESS_DM.load_path(fixture);
             initial_conditions = ics, param_arrays = Dict("src" => srcbuf),
             materialize_out = dm)
         @test haskey(dm.caches, "g")     # forcing-tainted, state-free -> DISCRETE cache
@@ -86,7 +86,7 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         # frozen per segment -> RHS pure -> closed form matched to solver tol.
         srcbuf2 = copy(src_at(0.0))
         dm2 = _ESS_DM.DiscreteMaterializer()
-        f2!, u02, p2, _ts2, vm2 = _ESS_DM.build_evaluator(_ESS_DM.load_path(fixture);
+        f2!, u02, p2, _ts2, vm2 = _ESS_DM._build_evaluator(_ESS_DM.load_path(fixture);
             initial_conditions = ics, param_arrays = Dict("src" => srcbuf2),
             materialize_out = dm2)
         interior = [t for t in anchors if t > 0.0]

@@ -246,7 +246,7 @@ end
             flat = ESM.flatten(ESM.load_path(FIX))
             function build(codegen)
                 ESM._reset_cascade_tally!()
-                f!, u0, p, _, _ = ESM.build_evaluator(flat;
+                f!, u0, p, _, _ = ESM._build_evaluator(flat;
                     compiler = codegen ? :native : :interpreter)
                 return (f!, u0, p, copy(ESM._CASCADE_TALLY))
             end

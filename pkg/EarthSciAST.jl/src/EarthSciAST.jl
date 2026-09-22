@@ -146,6 +146,8 @@ include("data_output.jl")
 # emitter's `DirectEmitError`, and before simulate.jl, which dispatches on it.
 include("compiler_xla.jl")
 include("simulate.jl")
+# Names that have left the public surface, kept for one minor version.
+include("deprecated.jl")
 include("reference_graph.jl")
 include("cadence.jl")
 include("value_invention.jl")
@@ -321,7 +323,7 @@ export
     # dependency-free fallback + conformance oracle.
     broad_phase_candidates, build_spatial_index,
     # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)
-    build_evaluator, evaluate_expr, TreeWalkError, BuildInspection,
+    evaluate_expr, TreeWalkError, BuildInspection,
     # Public template-expansion seam (esm-spec §9.6.4 Option B): the typed
     # model exactly as `build_evaluator` sees it post-expansion, for
     # downstream analyzers (EarthSciASTDiff differentiates this tree). Two

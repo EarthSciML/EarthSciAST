@@ -75,7 +75,7 @@ end
 
 # RHS at t = 0 from the built evaluator, as a name → value map.
 function _bc_rhs(doc::AbstractDict)
-    f!, u0, p, _t, vm = E.build_evaluator(doc)
+    f!, u0, p, _t, vm = E._build_evaluator(doc)
     du = similar(u0)
     f!(du, u0, p, 0.0)
     return Dict{String,Float64}(k => du[i] for (k, i) in vm)
@@ -234,7 +234,7 @@ end
     @test hit.details["index_set"] == "qux"
     @test hit.path == "/models/X/equations/0/rhs"
 
-    err = _bc_err(() -> E.build_evaluator(doc))
+    err = _bc_err(() -> E._build_evaluator(doc))
     @test err isa E.TreeWalkError
     @test err.code == "E_TREEWALK_ARRAY_SHAPE_MISMATCH"
 end
@@ -304,7 +304,7 @@ end
                          (_bc_bcast("sin", "x", "x"),      "E_TREEWALK_BROADCAST_FN"),
                          (_bc_bcast("/", "x"),             "E_TREEWALK_BROADCAST_FN"),
                          (_bc_bcast("min", "x"),           "E_TREEWALK_BROADCAST_FN")]
-        err = _bc_err(() -> E.build_evaluator(mk(node)))
+        err = _bc_err(() -> E._build_evaluator(mk(node)))
         @test err isa E.TreeWalkError
         @test err.code == code
     end
@@ -335,13 +335,13 @@ end
                  _op("transpose", _v("u"); perm=Any[0]),
                  _op("concat", _v("u"), _v("u"); axis=0)]
         m = ESS.Model(vars, [ESS.Equation(_D("u"), node)])
-        err = _bc_err(() -> E.build_evaluator(m; initial_conditions=ics))
+        err = _bc_err(() -> E._build_evaluator(m; initial_conditions=ics))
         @test err isa E.TreeWalkError
         @test err.code == "unevaluable_operator"
     end
     # …while a typed `broadcast` node with a legal `fn` now LOWERS and runs.
     m = ESS.Model(vars, [ESS.Equation(_D("u"), _op("broadcast", _v("u"); fn="-"))])
-    f!, u0, p, _t, vm = E.build_evaluator(m; initial_conditions=ics)
+    f!, u0, p, _t, vm = E._build_evaluator(m; initial_conditions=ics)
     du = similar(u0); f!(du, u0, p, 0.0)
     @test du[vm["u"]] == -1.0
 end
@@ -351,7 +351,7 @@ end
     # with the wrong number of subscripts is still a hard error (the guards were
     # narrowed to their real job, not widened into acceptance).
     doc = _bc_oracle("G", _bc_idx("w1", "i", "j", "k"))   # 3 subscripts into 1-D w1
-    err = _bc_err(() -> E.build_evaluator(doc))
+    err = _bc_err(() -> E._build_evaluator(doc))
     @test err isa E.TreeWalkError
     @test err.code == "E_TREEWALK_INDEX_NDIM"
 end

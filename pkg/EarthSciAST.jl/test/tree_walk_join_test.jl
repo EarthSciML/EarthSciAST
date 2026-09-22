@@ -41,7 +41,7 @@ const ESMJ = EarthSciAST
                   expr_body=body, ranges=ranges, join=join, filter=filter)
         model = ESMJ.Model(Dict("u" => ModelVariable(UnknownVariable)),
                            [ESMJ.Equation(_op("D", _v("u"); wrt="t"), rhs)])
-        f!, u0, p, _, vmap = build_evaluator(model; index_sets=index_sets,
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; index_sets=index_sets,
                                              const_arrays=const_arrays)
         du = similar(u0); f!(du, u0, p, 0.0)
         return du[vmap["u"]]
@@ -152,7 +152,7 @@ const ESMJ = EarthSciAST
                   join=Any[[("i", "k")]])
         model = ESMJ.Model(Dict("o" => ModelVariable(UnknownVariable)),
                            [ESMJ.Equation(lhs, rhs)])
-        f!, u0, p, _, vmap = build_evaluator(model; index_sets=isets,
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; index_sets=isets,
                                              const_arrays=Dict("v" => [5.0 7.0; 8.0 9.0]))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["o[1]"]] == 5.0
@@ -281,14 +281,14 @@ const ESMJ = EarthSciAST
                   ranges=Dict("i" => _R("county"), "j" => _R("county")), join=Any[[("i", "j")]])
         mk(tag) = ESMJ.Model(Dict("u" => ModelVariable(UnknownVariable)),
                              [ESMJ.Equation(_op("D", _v("u"); wrt="t"), _op(tag; common...))])
-        run1(m) = (r = build_evaluator(m; index_sets=isets, const_arrays=ca); du = similar(r[2]); r[1](du, r[2], r[3], 0.0); du[r[5]["u"]])
+        run1(m) = (r = EarthSciAST._build_evaluator(m; index_sets=isets, const_arrays=ca); du = similar(r[2]); r[1](du, r[2], r[3], 0.0); du[r[5]["u"]])
         @test run1(mk("faq")) == run1(mk("faq")) == 1.0 + 4.0
     end
 
     @testset "canonical join_filter.esm fixture (ESI MOVES contraction) evaluates" begin
         path = joinpath(@__DIR__, "..", "..", "..", "tests", "valid", "faq", "join_filter.esm")
         doc  = JSON3.read(read(path, String))
-        f!, u0, p, _, vmap = build_evaluator(doc; model_name="EmissionsAggregate",
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(doc; model_name="EmissionsAggregate",
             const_arrays=Dict("activity" => [10.0, 20.0], "base_rate" => [3.0, 5.0]))
         du = similar(u0); f!(du, u0, p, 0.0)
         k = first(key for key in keys(vmap) if endswith(String(key), "emissions"))

@@ -577,6 +577,48 @@ The names and their meanings are stable; the record's shape is per-binding.
 """
 compiler_report(prob::EsmProblem)::CompilerReport = prob.inspection.compiler_report
 
+"""
+    compiler_report(insp::BuildInspection) -> CompilerReport
+
+The same record, off a build's inspection sink. A caller who passed
+`inspect = insp` to [`esm_problem`](@ref) reads it here — including after a
+build that REFUSED, which is the case the partial record is most wanted for and
+the one no Problem exists to carry.
+
+This is the whole of what build observability now answers about the compiler:
+the tier every rule landed on, the declines it collected getting there, and the
+build's cascade counters. `compiler_report(prob)` is the same object.
+"""
+compiler_report(insp::BuildInspection)::CompilerReport = insp.compiler_report
+
+"""
+    forcing_buffers(prob::EsmProblem) -> NamedTuple
+
+The live forcing buffers of `prob`: every `param_arrays` entry and every
+[`DiscreteMaterializer`](@ref) cache the build bound, in a STABLE (name-sorted)
+order, each value the ALIASED flat host view of the exact array the build bound
+— not a copy, so a discrete-cadence refresh writing the original array is
+visible through this container. Empty for a document with no live forcing.
+
+This is where the seam lives now. It used to hang off the out-of-place build
+product (`build_evaluator(model; form = :oop)`), which meant a caller had to
+build the document a second, special way to reach it; the Problem publishes it
+whatever compiler built it. Position of a name is
+[`forcing_buffer_index`](@ref)`(prob)[name]`, and
+[`sync_forcing!`](@ref) mirrors the container into a compiled program's device
+arrays at a cadence boundary.
+"""
+forcing_buffers(prob::EsmProblem)::NamedTuple = prob.inspection.forcing_buffers
+
+"""
+    forcing_buffer_index(prob::EsmProblem) -> Dict{String,Int}
+
+Name → position in [`forcing_buffers`](@ref)`(prob)`, and in any container
+aligned with it. Treat as read-only.
+"""
+forcing_buffer_index(prob::EsmProblem)::Dict{String,Int} =
+    prob.inspection.forcing_buffer_index
+
 
 # Equation count of the prepared (flattened, single-model) run document —
 # display metadata only, read off the doc `prepare` already holds.
@@ -979,7 +1021,7 @@ function esm_problem(input, tspan;
     # executable is wrapped back into the in-place `f!` this Problem's surface
     # promises, just below. Every other compiler builds the in-place evaluator
     # directly. See src/compiler_xla.jl.
-    f!, u0_built, p_built, _tspan, var_map = build_evaluator(doc;
+    f!, u0_built, p_built, _tspan, var_map = _build_evaluator(doc;
         compiler = compiler,
         form = compiler === :xla ? :oop : :inplace,
         model_name = model_name,

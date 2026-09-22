@@ -53,7 +53,7 @@ const _UC_EVALUATOR = "Julia tree-walk evaluator"
                        length(doc.reaction_systems)
                 target = (n_models == 1 && n_rs == 0) ? doc : EarthSciAST.flatten(doc)
                 err = try
-                    build_evaluator(target)
+                    EarthSciAST._build_evaluator(target)
                     nothing
                 catch e
                     e

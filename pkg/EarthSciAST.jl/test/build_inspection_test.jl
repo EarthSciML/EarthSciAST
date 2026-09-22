@@ -2,7 +2,7 @@
 #
 # Two capability seams landed together and are pinned here:
 #
-# 1. `build_evaluator(...; inspect=BuildInspection())` exposes the materialized
+# 1. `EarthSciAST._build_evaluator(...; inspect=BuildInspection())` exposes the materialized
 #    SETUP-TIME geometry arrays (RFC §8.1 / esm-spec §8.6.1), the const-array
 #    registry, and the resolved observed map — the official surface the ESD
 #    conformance runner reads the per-pair regrid A_ij / A_j / W_ij from
@@ -108,7 +108,7 @@ end
 @testset "BuildInspection — per-pair regrid setup arrays (exact rationals)" begin
     doc = _bi_regrid_doc()
     insp = BuildInspection()
-    f!, u0, p, tspan, var_map = build_evaluator(doc; inspect=insp)
+    f!, u0, p, tspan, var_map = EarthSciAST._build_evaluator(doc; inspect=insp)
 
     @test issubset(Set(["A_ij", "A_j", "W_ij"]), Set(keys(insp.setup_arrays)))
     A = insp.setup_arrays["A_ij"]
@@ -139,7 +139,7 @@ end
     @test insp.observed_exprs isa Dict{String,EarthSciAST.ASTExpr}
 
     # Observability is inert: the build without `inspect` is identical.
-    f2!, u02, p2, tspan2, var_map2 = build_evaluator(_bi_regrid_doc())
+    f2!, u02, p2, tspan2, var_map2 = EarthSciAST._build_evaluator(_bi_regrid_doc())
     @test u02 == u0 && var_map2 == var_map && tspan2 == tspan
     du = similar(u0); du2 = similar(u02)
     f!(du, u0, p, 0.0); f2!(du2, u02, p2, 0.0)
@@ -218,7 +218,7 @@ end
     doc = _bi_ragged_doc()
 
     # Direct build: du at the zero IC IS the ragged divergence.
-    f!, u0, p, tspan, var_map = build_evaluator(doc)
+    f!, u0, p, tspan, var_map = EarthSciAST._build_evaluator(doc)
     @test haskey(var_map, "u[1]") && haskey(var_map, "u[2]")
     du = similar(u0)
     f!(du, u0, p, 0.0)
@@ -227,7 +227,7 @@ end
 
     # Inspection: the const-op factors AND the bare alias are registered.
     insp = BuildInspection()
-    build_evaluator(doc; inspect=insp)
+    EarthSciAST._build_evaluator(doc; inspect=insp)
     @test insp.const_arrays["F"] == [10.0, 20.0, 30.0]
     @test insp.const_arrays["nEdgesOnCell"] == [2.0, 3.0]
     @test haskey(insp.observed_exprs, "div")

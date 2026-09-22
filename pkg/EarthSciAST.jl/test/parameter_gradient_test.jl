@@ -75,7 +75,7 @@ const _PG_T = 0.37
 # hide a per-cell sign or ordering error by cancellation.
 const _PG_W = [1.0 + 0.05k for k in 1:_PG_N]
 
-const _PG_FI, _, _PG_P0, _, _ = _PG_ESM.build_evaluator(_PG_DOC)
+const _PG_FI, _, _PG_P0, _, _ = _PG_ESM._build_evaluator(_PG_DOC)
 const _PG_SYMS = keys(_PG_P0)
 const _PG_PVEC0 = collect(Float64, values(_PG_P0))
 _pg_nt(pv) = NamedTuple{_PG_SYMS}(Tuple(pv))

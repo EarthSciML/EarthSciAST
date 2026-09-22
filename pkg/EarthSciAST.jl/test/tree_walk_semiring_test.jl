@@ -75,7 +75,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
                 output_idx=Any[], semiring=sr, expr_body=_n(1.0),
                 ranges=Dict("k" => Any[1, 0]))
             model = ESM.Model(vars, [ESM.Equation(_op("D", _v("z"); wrt="t"), rhs)])
-            f!, u0, p, _, vmap = build_evaluator(model)
+            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model)
             du = similar(u0); f!(du, u0, p, 0.0)
             @test du[vmap["z"]] == expected
         end
@@ -99,7 +99,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
                ESM.Equation(_op("D", _v("w"); wrt="t"), agg_max)]
         model = ESM.Model(vars, eqs)
         ics = Dict("x[1]"=>3.0, "x[2]"=>1.0, "x[3]"=>5.0, "x[4]"=>2.0, "x[5]"=>4.0)
-        f!, u0, p, _, vmap = build_evaluator(model; initial_conditions=ics)
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions=ics)
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["z"]] == 1.0   # min
         @test du[vmap["w"]] == 5.0   # max
@@ -117,8 +117,8 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
                    expr_body=_D_idx("u", _v("i")), ranges=Dict("i" => Any[1, N])),
             OpExpr(tag, ESM.ASTExpr[]; output_idx=Any["i"], reduce="+",
                    expr_body=_op("-", _idx("u", _v("i"))), ranges=Dict("i" => Any[1, N])))])
-        fa!, ua, pa, _, va = build_evaluator(mk("faq");   initial_conditions=ics)
-        fb!, ub, pb, _, vb = build_evaluator(mk("faq"); initial_conditions=ics)
+        fa!, ua, pa, _, va = EarthSciAST._build_evaluator(mk("faq");   initial_conditions=ics)
+        fb!, ub, pb, _, vb = EarthSciAST._build_evaluator(mk("faq"); initial_conditions=ics)
         dua = similar(ua); fa!(dua, ua, pa, 0.0)
         dub = similar(ub); fb!(dub, ub, pb, 0.0)
         @test va == vb
@@ -153,7 +153,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         ]
         model = ESM.Model(vars, eqs)
         ics = Dict("u[$i]" => Float64(i) for i in 1:N)
-        f!, u0, p, _, vmap = build_evaluator(model; index_sets=index_sets,
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; index_sets=index_sets,
                                              initial_conditions=ics)
         du = similar(u0); f!(du, u0, p, 0.0)
         for i in 1:N
@@ -176,7 +176,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
                    expr_body=_idx("pop", _v("c")),
                    ranges=Dict("c" => ESM.IndexSetRef("county"))))
         model = ESM.Model(vars, [eq])
-        f!, u0, p, _, vmap = build_evaluator(model; index_sets=index_sets,
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; index_sets=index_sets,
             const_arrays=Dict("pop" => [10.0, 20.0, 30.0]))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["total"]] == 60.0
@@ -216,9 +216,9 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         model_exp = ESM.Model(vars, [ESM.Equation(lhs, rhs_exp)])
 
         ics = Dict("u[$c]" => 0.0 for c in 1:N_c)
-        fr!, ur, pr, _, vr = build_evaluator(model_reg; index_sets=index_sets,
+        fr!, ur, pr, _, vr = EarthSciAST._build_evaluator(model_reg; index_sets=index_sets,
                                              initial_conditions=ics, const_arrays=carrs)
-        fe!, ue, pe, _, ve = build_evaluator(model_exp; initial_conditions=ics, const_arrays=carrs)
+        fe!, ue, pe, _, ve = EarthSciAST._build_evaluator(model_exp; initial_conditions=ics, const_arrays=carrs)
         u = copy(ur); u[vr["u[2]"]] = 1.0
         dur = similar(ur); fr!(dur, u, pr, 0.0)
         ue2 = copy(ue); ue2[ve["u[2]"]] = 1.0
@@ -242,11 +242,11 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
                    ranges=Dict("i" => ESM.IndexSetRef("not_declared"))))
         # No registry at all.
         model0 = ESM.Model(vars, [eq])
-        @test_throws ESM.TreeWalkError build_evaluator(model0)
+        @test_throws ESM.TreeWalkError EarthSciAST._build_evaluator(model0)
         # Registry present but missing the referenced name.
         model1 = ESM.Model(vars, [eq])
         err = try
-            build_evaluator(model1;
+            EarthSciAST._build_evaluator(model1;
                 index_sets=Dict("cells" => ESM.IndexSet("interval"; size=3)))
             nothing
         catch e; e; end
@@ -289,7 +289,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         if isfile(path)
             file = EarthSciAST.load_path(path)
             ics = Dict("u[$i]" => Float64(i) for i in 1:5)
-            f!, u0, p, _, vmap = build_evaluator(file; model_name="AggregateDemo",
+            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(file; model_name="AggregateDemo",
                                                  initial_conditions=ics)
             du = similar(u0); f!(du, u0, p, 0.0)
             for i in 1:5

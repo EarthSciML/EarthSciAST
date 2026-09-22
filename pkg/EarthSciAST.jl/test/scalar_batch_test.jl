@@ -83,7 +83,7 @@ end
     @testset "rhs_list contraction loops: one group, every lane in it" begin
         doc, ics, NI, NJ = _sb_halo(8)
         fo, _, _, _, _ = withenv(_sb_env()...) do
-            build_evaluator(doc; initial_conditions = ics, form = :oop)
+            EarthSciAST._build_evaluator(doc; initial_conditions = ics, form = :oop)
         end
         ir = _sb_ir(fo)
         # The fixture must actually reach the per-cell tier, or every assertion
@@ -105,7 +105,7 @@ end
 
         # Grouping off: every entry stays single, `rest` is the whole surface.
         fn, _, _, _, _ = withenv(_sb_env()...) do
-            build_evaluator(doc; initial_conditions = ics, form = :oop,
+            EarthSciAST._build_evaluator(doc; initial_conditions = ics, form = :oop,
                             compiler = :interpreter)
         end
         rn = getfield(_sb_ir(fn), :rhs_batches)
@@ -161,7 +161,7 @@ end
         ics = Dict{String,Any}("v[$j]" => 0.0 for j in 1:N)
         for j in 1:N, k in 1:M; ics["q[$j,$k]"] = Float64(3j + k); end
         bld(batch) = withenv(_sb_env()...) do
-            build_evaluator(model; index_sets = isets, initial_conditions = ics,
+            EarthSciAST._build_evaluator(model; index_sets = isets, initial_conditions = ics,
                             form = :oop, compiler = _sb_compiler(batch))[1]
         end
 
@@ -208,7 +208,7 @@ end
                    "rhs"=>Dict("op"=>"^","args"=>Any["x",3.0])),
             ])))
         ics = Dict("x"=>1.5,"y"=>-2.5,"a"=>0.0,"b"=>0.0,"c"=>0.0)
-        fo, _, _, _, vm = build_evaluator(doc; initial_conditions=ics, form=:oop)
+        fo, _, _, _, vm = EarthSciAST._build_evaluator(doc; initial_conditions=ics, form=:oop)
         rb = getfield(_sb_ir(fo), :rhs_batches)
         pow = [g for g in rb.groups if g.root.kind == _SB_ESS._NK_OP &&
                (g.root.op === :^ || g.root.op === :pow)]

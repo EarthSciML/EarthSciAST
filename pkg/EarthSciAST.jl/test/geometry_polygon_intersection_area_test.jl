@@ -95,7 +95,7 @@ const _PIA_SQUARE_B = [1.0 1.0; 3.0 1.0; 3.0 3.0; 1.0 3.0]
         @test isfile(path)
         file = EarthSciAST.load_path(path)
         f!, u0, p, tspan, vmap =
-            build_evaluator(file; model_name="PolygonIntersectionAreaPaddedRing")
+            EarthSciAST._build_evaluator(file; model_name="PolygonIntersectionAreaPaddedRing")
         du = similar(u0)
         f!(du, u0, p, 0.0)
         # The fused leaf const-folds the PADDED rings to the deduplicated-ring
@@ -114,7 +114,7 @@ const _PIA_SQUARE_B = [1.0 1.0; 3.0 1.0; 3.0 3.0; 1.0 3.0]
         file = EarthSciAST.load_path(path)
 
         f!, u0, p, tspan, vmap =
-            build_evaluator(file; model_name="PolygonIntersectionAreaPlanar")
+            EarthSciAST._build_evaluator(file; model_name="PolygonIntersectionAreaPlanar")
         @test haskey(vmap, "area_state")
         @test u0[vmap["area_state"]] == 0.0        # ic(area_state) = 0.0
         @test tspan == (0.0, 1.0)
