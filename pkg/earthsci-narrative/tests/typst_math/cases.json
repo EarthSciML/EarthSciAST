@@ -189,8 +189,13 @@
       },
       {
         "expression": "-(a + b)",
-        "typst": "-a + b",
-        "description": "Unary minus is loose, as in the core: this prints as -a + b"
+        "typst": "-(a + b)",
+        "description": "A negated sum keeps its parentheses (the core prints -a + b)"
+      },
+      {
+        "expression": "-a * b + c",
+        "typst": "-(a dot.op b + c)",
+        "description": "The text syntax reads a leading minus as covering the whole sum; the output says so"
       },
       {
         "expression": "-a * b",

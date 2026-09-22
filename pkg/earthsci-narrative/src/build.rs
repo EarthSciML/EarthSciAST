@@ -5,6 +5,8 @@
 //! [`ElementOutput`] per input element, in the same order, so a front end
 //! renders element `i` from `elements[i]` without matching anything up.
 
+use std::collections::HashSet;
+
 use earthsci_ast::{
     AssertionResult, EsmFile, Expr, SolveOptions, parse_equation, run_inline_tests, to_latex,
     to_unicode,
@@ -83,6 +85,10 @@ pub struct ElementOutput {
     pub figures: Vec<Figure>,
     /// Whether any error is attached to this element.
     pub has_errors: bool,
+    /// For a `test`, `analysis` or `plot`: it was not run, because its model
+    /// has errors.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub skipped: bool,
 }
 
 /// Math in each notation a front end might want.
@@ -176,15 +182,25 @@ fn build_with_errors(doc: &Document, errors: &[ElementError], opts: &BuildOption
         })
         .collect();
 
+    // Running a model whose declarations or equations are wrong only buries
+    // those errors under solver failures, so such a model's tests and
+    // analyses are skipped. An error on a test or plot stops only that one.
+    let broken = broken_models(doc, &assembly, file.is_none());
+    for (element, out) in doc.elements.iter().zip(elements.iter_mut()) {
+        let runs = matches!(
+            element.kind,
+            ElementKind::Test(_) | ElementKind::Analysis(_) | ElementKind::Plot(_)
+        );
+        let skip = |model: &Option<String>| model.as_ref().is_none_or(|m| broken.contains(m));
+        out.skipped = runs && skip(&out.info.model) && (opts.run_tests || opts.run_analyses);
+    }
     let mut extra = Vec::new();
-    // Tests and analyses need a document the core loaded; an error elsewhere
-    // does not stop them, so an author sees every result at once.
     if let Some(file) = &file {
         if opts.run_tests {
-            run_tests(file, &assembly, &mut elements, &mut extra);
+            run_tests(file, &assembly, &broken, &mut elements, &mut extra);
         }
         if opts.run_analyses {
-            run_analyses(file, &assembly, opts, &mut elements, &mut extra);
+            run_analyses(file, &assembly, &broken, opts, &mut elements, &mut extra);
         }
     }
     let mut diagnostics = assembly.diagnostics;
@@ -205,6 +221,38 @@ fn build_with_errors(doc: &Document, errors: &[ElementError], opts: &BuildOption
         elements,
         quantities: assembly.quantities,
     }
+}
+
+/// The models with an error in a declaration or equation, or every model when
+/// the document has an error no element owns or did not load.
+fn broken_models(doc: &Document, assembly: &Assembly, unloaded: bool) -> HashSet<String> {
+    let all = || {
+        assembly
+            .elements
+            .iter()
+            .filter_map(|e| e.model.clone())
+            .collect()
+    };
+    if unloaded {
+        return all();
+    }
+    let mut broken = HashSet::new();
+    for d in assembly.diagnostics.iter().filter(|d| d.is_error()) {
+        let Some(i) = d.element else { return all() };
+        let defines = matches!(
+            doc.elements.get(i).map(|e| &e.kind),
+            Some(
+                ElementKind::Model(_)
+                    | ElementKind::Var(_)
+                    | ElementKind::Param(_)
+                    | ElementKind::Eq(_)
+            )
+        );
+        if defines && let Some(m) = &assembly.elements[i].model {
+            broken.insert(m.clone());
+        }
+    }
+    broken
 }
 
 fn math_of(kind: &ElementKind) -> Option<Math> {
@@ -238,10 +286,14 @@ fn element_at(assembly: &Assembly, model: &str, rest: &str) -> Option<usize> {
 fn run_tests(
     file: &EsmFile,
     assembly: &Assembly,
+    broken: &HashSet<String>,
     elements: &mut [ElementOutput],
     extra: &mut Vec<Diagnostic>,
 ) {
     for (model_name, model) in file.models.iter().flatten() {
+        if broken.contains(model_name) {
+            continue;
+        }
         let Some(tests) = &model.tests else { continue };
         let results = run_inline_tests(file, Some(model_name), &SolveOptions::default());
         for (at, test) in tests.iter().enumerate() {
@@ -281,11 +333,15 @@ fn run_tests(
 fn run_analyses(
     file: &EsmFile,
     assembly: &Assembly,
+    broken: &HashSet<String>,
     opts: &BuildOptions,
     elements: &mut [ElementOutput],
     extra: &mut Vec<Diagnostic>,
 ) {
     for (model_name, model) in file.models.iter().flatten() {
+        if broken.contains(model_name) {
+            continue;
+        }
         for (at, analysis) in model.analyses.iter().flatten().enumerate() {
             // The analysis element, when the author wrote one; otherwise the
             // plot element whose own run this is.

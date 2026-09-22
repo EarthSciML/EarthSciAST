@@ -6,9 +6,9 @@
 //!
 //! - **Operators** are laid out natively, with the LaTeX backend's
 //!   parenthesization rules (`display.rs`, `format_operator`): the same
-//!   precedence table, the same loose unary minus, `a + (-b)` printed as
-//!   `a - b`, and a right operand of `-` or `/` parenthesized only when it binds
-//!   no tighter. Division is an explicit `frac(a, b)`, a derivative
+//!   precedence table, `a + (-b)` printed as `a - b`, and a right operand of
+//!   `-` or `/` parenthesized only when it binds no tighter. One departure: a
+//!   negated sum keeps its parentheses (see `UNARY_MINUS_OPERAND`). Division is an explicit `frac(a, b)`, a derivative
 //!   `frac(partial x, partial t)`, and a product joins its factors with
 //!   `dot.op`.
 //! - **Names and numbers** reuse the core's decisions by translating its LaTeX
@@ -61,10 +61,14 @@ fn precedence(op: &str) -> i32 {
     }
 }
 
-/// The precedence a unary minus's operand renders at. Only a child at the
-/// loosest tier (comparisons, logic) is parenthesized, as in the core, so
-/// `-(a + b)` prints as `-a + b`.
-const LOOSEST_PRECEDENCE: i32 = 0;
+/// The precedence a unary minus's operand renders at: additive, so a negated
+/// sum keeps its parentheses, `-(a + b)`.
+///
+/// This departs from the core's printers, which print that node as `-a + b`
+/// (its parser reads a leading minus as covering the whole sum, so the pair
+/// round-trips). A reader of a paper takes `-a + b` to mean `(-a) + b`, so
+/// here the parentheses stay; the output still parses back to the same tree.
+const UNARY_MINUS_OPERAND: i32 = 1;
 
 /// Operators the core renders from fields other than `args` (its
 /// `format_structural_op`). They print as upright text here.
@@ -161,7 +165,7 @@ fn render_operator(expr: &Expr, node: &ExpressionNode, parent_prec: i32) -> Stri
             }
         }
         "-" => match args {
-            [a] => format!("-{}", render(a, LOOSEST_PRECEDENCE)),
+            [a] => format!("-{}", render(a, UNARY_MINUS_OPERAND)),
             // Left-associative: the right operand keeps parentheses when it
             // binds no tighter (`a - (b - c)`), not when it binds tighter.
             [a, b] => format!("{} - {}", render(a, op_prec - 1), render(b, op_prec)),

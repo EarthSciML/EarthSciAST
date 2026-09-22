@@ -260,7 +260,7 @@ pub struct PlotElement {
 }
 
 /// One plot axis: a §6.7 axis object, or a bare variable name.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum AxisSpec {
     /// `"N"`.
@@ -283,13 +283,47 @@ impl AxisSpec {
 }
 
 /// A plot's `y`: one axis or several.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum YSpec {
     /// A single axis.
     One(AxisSpec),
     /// Several axes, one series each.
     Many(Vec<AxisSpec>),
+}
+
+// Written out rather than `#[serde(untagged)]`: serde reads a struct from a
+// JSON array too, so an untagged `AxisSpec` took `["A", "B"]` as one axis with
+// variable `A` and label `B`.
+impl<'de> Deserialize<'de> for AxisSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        match Value::deserialize(d)? {
+            Value::String(name) => Ok(AxisSpec::Name(name)),
+            v @ Value::Object(_) => serde_json::from_value(v)
+                .map(AxisSpec::Axis)
+                .map_err(D::Error::custom),
+            _ => Err(D::Error::custom(
+                "an axis is a variable name or an object with a `variable`",
+            )),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for YSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        match Value::deserialize(d)? {
+            Value::Array(items) => items
+                .into_iter()
+                .map(|v| serde_json::from_value(v).map_err(D::Error::custom))
+                .collect::<Result<_, _>>()
+                .map(YSpec::Many),
+            v => serde_json::from_value(v)
+                .map(YSpec::One)
+                .map_err(D::Error::custom),
+        }
+    }
 }
 
 /// A parameter a reader may vary in an interactive figure.
@@ -554,6 +588,19 @@ mod tests {
         let (doc, errors) = Document::from_value(doc).unwrap();
         assert!(errors.is_empty(), "{errors:?}");
         let kinds: Vec<_> = doc.elements.iter().map(|e| e.kind.name()).collect();
+        let ElementKind::Plot(plot) = &doc.elements[6].kind else {
+            panic!()
+        };
+        assert_eq!(
+            plot.y,
+            YSpec::Many(vec![
+                AxisSpec::Name("N".into()),
+                AxisSpec::Axis(PlotAxis {
+                    variable: "lambda".into(),
+                    label: None
+                })
+            ])
+        );
         assert_eq!(
             kinds,
             ["model", "var", "param", "eq", "test", "analysis", "plot"]

@@ -524,6 +524,19 @@ impl<'a> Assembler<'a> {
     }
 
     fn equation(&mut self, m: usize, index: usize, eq: &EqElement) {
+        for minus in covering_minus(&eq.text) {
+            let message = format!(
+                "`{snippet}` means `-({rest})` in this syntax, because a leading minus covers everything after it up to the closing parenthesis. If only `{term}` is negative, write `({term})`; if the whole sum is, write `-({rest})`",
+                snippet = minus.snippet,
+                rest = minus.snippet[1..].trim_start(),
+                term = minus.term,
+            );
+            self.error(index, "ambiguous_minus", message).span =
+                Some(crate::diagnostic::TextSpan {
+                    start: minus.start,
+                    end: minus.end,
+                });
+        }
         match parse_equation(&eq.text) {
             Ok(parsed) => {
                 let model = &mut self.models[m];
@@ -1145,6 +1158,94 @@ fn collect_names(expr: &Expr, out: &mut Vec<String>) {
     }
 }
 
+/// A leading minus whose operand is a sum, which the text syntax reads as
+/// negating the whole sum.
+struct CoveringMinus {
+    /// Character offset of the minus sign.
+    start: usize,
+    /// Character offset just past the sum it covers.
+    end: usize,
+    /// The source text from the minus to the end of the sum.
+    snippet: String,
+    /// The source text from the minus to the first `+` or `-` of the sum.
+    term: String,
+}
+
+/// Find each leading minus in `text` that the parser reads as covering a sum.
+///
+/// The text syntax gives a unary minus the precedence of addition (a pinned,
+/// cross-binding choice: `-a + b` parses as `-(a + b)`), where ordinary
+/// mathematics negates only the first term. An author writing
+/// `D(A) = -k*A + j*B` means the latter, and would silently get the former.
+/// A minus is flagged when it starts an operand (not a negative number
+/// literal, which binds tightly) and a `+` or binary `-` follows it at the
+/// same parenthesis depth before its operand ends. Parenthesizing either
+/// reading, `(-k*A) + j*B` or `-(k*A + j*B)`, clears it.
+fn covering_minus(text: &str) -> Vec<CoveringMinus> {
+    let c: Vec<char> = text.chars().collect();
+    let prev = |i: usize| (0..i).rev().map(|j| c[j]).find(|ch| !ch.is_whitespace());
+    // A sign right after the `e` of a number's exponent (`1e-5`).
+    let exponent = |i: usize| {
+        i >= 2
+            && matches!(c[i - 1], 'e' | 'E')
+            && (c[i - 2].is_ascii_digit() || c[i - 2] == '.')
+            && c.get(i + 1).is_some_and(|d| d.is_ascii_digit())
+    };
+    let mut found = Vec::new();
+    for i in 0..c.len() {
+        if c[i] != '-' || exponent(i) {
+            continue;
+        }
+        let prefix = prev(i).is_none_or(|p| "(,[=+-*/^<>!".contains(p));
+        let literal = c
+            .get(i + 1)
+            .is_some_and(|d| d.is_ascii_digit() || *d == '.');
+        if !prefix || literal {
+            continue;
+        }
+        let mut depth = 0usize;
+        let mut end = c.len();
+        let mut split = None;
+        for (k, &ch) in c.iter().enumerate().skip(i + 1) {
+            match ch {
+                '(' | '[' => depth += 1,
+                ')' | ']' if depth == 0 => {
+                    end = k;
+                    break;
+                }
+                ')' | ']' => depth -= 1,
+                ',' | '=' | '<' | '>' | '!' if depth == 0 => {
+                    end = k;
+                    break;
+                }
+                '+' if depth == 0 && !exponent(k) => {
+                    split.get_or_insert(k);
+                }
+                '-' if depth == 0 && !exponent(k) => {
+                    let binary = prev(k).is_some_and(|p| p.is_alphanumeric() || "_.)]".contains(p));
+                    if binary {
+                        split.get_or_insert(k);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(split) = split {
+            let slice = |a: usize, b: usize| c[a..b].iter().collect::<String>().trim().to_string();
+            found.push(CoveringMinus {
+                start: i,
+                end: (i..end)
+                    .rev()
+                    .find(|&k| !c[k].is_whitespace())
+                    .map_or(end, |k| k + 1),
+                snippet: slice(i, end),
+                term: slice(i, split),
+            });
+        }
+    }
+    found
+}
+
 /// A plain identifier: a letter or underscore, then letters, digits and
 /// underscores.
 fn is_identifier(s: &str) -> bool {
@@ -1462,6 +1563,47 @@ mod tests {
             a.diagnostics[0].path.as_deref(),
             Some("/models/Model/tests/0/assertions/0/variable")
         );
+    }
+
+    #[test]
+    fn a_minus_covering_a_sum_is_flagged() {
+        let spans = |t: &str| {
+            covering_minus(t)
+                .iter()
+                .map(|m| (m.snippet.clone(), m.term.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            spans("D(A, t) = -k_ab*A + k_ba*B"),
+            [("-k_ab*A + k_ba*B".to_string(), "-k_ab*A".to_string())]
+        );
+        assert_eq!(spans("D(x) = a * -b - c")[0].0, "-b - c");
+        assert_eq!(spans("D(x) = -(a) + b").len(), 1);
+        assert_eq!(spans("f(-a + b, c)")[0].0, "-a + b");
+        // Not flagged: a lone term, a parenthesized sum, a negative literal,
+        // an exponent, a binary minus, a minus inside a group.
+        for ok in [
+            "D(x) = -k*x",
+            "D(x) = -(a + b)",
+            "D(x) = (-a) + b",
+            "D(x) = -3*x + y",
+            "D(x) = 1e-5*x - y",
+            "D(x) = a - b + c",
+            "D(x) = exp(-Ea/(R*T)) + c",
+            "y = b - -a",
+        ] {
+            assert!(spans(ok).is_empty(), "{ok}: {:?}", spans(ok));
+        }
+        let d = doc(json!([
+            {"kind": "var", "name": "x", "default": 1},
+            {"kind": "param", "name": "k", "default": 1},
+            {"kind": "eq", "text": "D(x) = -k*x + 1"}
+        ]));
+        let a = assemble(&d);
+        assert_eq!(codes(&a), [(Some(2), "ambiguous_minus")]);
+        let d = &a.diagnostics[0];
+        assert_eq!(d.span.map(|s| (s.start, s.end)), Some((7, 15)));
+        assert!(d.message.contains("write `(-k*x)`"), "{}", d.message);
     }
 
     #[test]
