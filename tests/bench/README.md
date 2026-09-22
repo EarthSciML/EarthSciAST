@@ -49,8 +49,8 @@ Reports:
    compiled template-body variant count, and `_compile` node-lowering count
    (the RFC's headline metrics), plus wall-clock, via the build-time counters
    (`src/tree_walk/build_helpers.jl`, off by default). Both fixtures, two
-   columns each: the default compile-once path vs `ESS_TEMPLATE_REF_DISABLE=1`
-   (Expand-at-load → fused build).
+   columns each: the default compile-once path vs `expanded_file` /
+   `expand_flattened_refs` (Expand-at-load → fused build).
 
 ## Status of the numbers
 
@@ -64,7 +64,7 @@ fused ones. Measured on `transport_3axis_7cubed_fullrank.esm`:
 | | branch templates | body variants | node-lowerings |
 |---|---|---|---|
 | compile-once (default) | 125 (tiny parents) | **15** | **331** |
-| `ESS_TEMPLATE_REF_DISABLE=1` (fused) | 125 (full spines) | 0 | **2,275** |
+| Expand-at-load (fused) | 125 (full spines) | 0 | **2,275** |
 
 **5+5+5 replaces 5×5×5.** The node-lowering ratio here (~7×) is bounded by this
 fixture's small bodies (~25 nodes); the ratio scales with body size / parent
@@ -78,8 +78,8 @@ variants on ESD's deeply factored templates and cost more than they saved.
 
 Gate 3 (§12) is pinned by `test/compile_once_templates_test.jl`: the fast path
 (the default — `flatten` always carries references to the build boundary), the
-fused Expand-at-load build (`ESS_TEMPLATE_REF_DISABLE=1`, the one differential
-escape hatch), the per-cell reference (`ESS_STENCIL_DISABLE=1`), and the
+fused Expand-at-load build (`expand_flattened_refs`), the per-cell reference
+(`compiler=:interpreter`), and the
 out-of-place emitter all produce the **bit-identical** RHS on both fixtures
 (exact `==` on `du`, multiple states and times), and the reduced-rank fixture
 pins the sound fallback chain

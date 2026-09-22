@@ -14,9 +14,12 @@
 #   * the conservative GATE: a reduction whose body indexes STATE at a
 #     loop-var-dependent slot (no static per-k node) FALLS BACK to unrolling and
 #     still gives the right answer;
-#   * raising the tier's admission floor (`ESS_CONTRACTION_LOOP_MIN`, a
-#     retained tuning threshold and a refusal boundary under `native`) above
-#     the reduction length forces the pure-unroll reference.
+#   * the WHOLE-ARRAY contraction tier is held off throughout by pinning its
+#     admission floor above every reduction here, so the tier under test is
+#     the per-cell contraction loop and not the nest above it (both floors are
+#     retained tuning thresholds, and refusal boundaries under `native`);
+#   * raising the per-cell tier's own floor above the reduction length then
+#     forces the pure-unroll reference.
 
 using Test
 using ForwardDiff
@@ -71,7 +74,8 @@ _cl_doc_weighted(W::Vector{Float64}) = Dict{String,Any}(
 )
 
 _cl_build(doc; loop::Bool) =
-    withenv("ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int)))) do
+    withenv("ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int))),
+            "ESS_ARRAY_CONTRACTION_MIN" => string(typemax(Int))) do
         build_evaluator(doc; initial_conditions = Dict("x" => 2.0, "s" => 0.0))
     end
 
@@ -195,7 +199,8 @@ end
 _cl_ics2d_w() = Dict("out[1,1]"=>0.0,"out[1,2]"=>0.0,"out[2,1]"=>0.0,"out[2,2]"=>0.0)
 _cl_ics2d_a() = merge(_cl_ics2d_w(), Dict("x[1,1]"=>1.0,"x[1,2]"=>2.0,"x[2,1]"=>3.0,"x[2,2]"=>4.0))
 _cl_build2d(doc, ics; loop::Bool) =
-    withenv("ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int)))) do
+    withenv("ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int))),
+            "ESS_ARRAY_CONTRACTION_MIN" => string(typemax(Int))) do
         build_evaluator(doc; initial_conditions=ics)
     end
 _cl_du2d(doc, ics; loop::Bool) = begin
@@ -271,7 +276,8 @@ end
                    "rhs"=>agg)])))
         ics = Dict{String,Any}("out[1,1]"=>0.0,"out[1,2]"=>0.0,"out[2,1]"=>0.0,"out[2,2]"=>0.0)
         for k in 1:N, l in 1:N; ics["src[$k,$l]"] = Float64(k + l); end
-        du(loop) = withenv("ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int)))) do
+        du(loop) = withenv("ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int))),
+            "ESS_ARRAY_CONTRACTION_MIN" => string(typemax(Int))) do
             f!,u0,p,_,vm = build_evaluator(doc; initial_conditions=ics)
             d=similar(u0); f!(d,u0,p,0.0); (d,vm)
         end
@@ -323,7 +329,8 @@ function _cl_halo_ics(NQ)
     d
 end
 function _cl_halo_du(doc, ics; loop::Bool)
-    withenv("ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int)))) do
+    withenv("ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int))),
+            "ESS_ARRAY_CONTRACTION_MIN" => string(typemax(Int))) do
         f!,u0,p,_,vm = build_evaluator(doc; initial_conditions=ics)
         (f!,u0,p,vm)
     end

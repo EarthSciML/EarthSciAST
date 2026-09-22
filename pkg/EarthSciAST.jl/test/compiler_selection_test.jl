@@ -125,39 +125,22 @@ end
         end
     end
 
-    @testset "an explicit :native refuses to run beside an oracle kill switch" begin
+    @testset "the default and a named :native are the same strict build" begin
         # §2.5.10: "oracle selection is an argument, not an environment
-        # variable". While the switches survive (they retire a phase later), a
-        # caller who NAMED `:native` and has one set would get a build that is
-        # not the compiler they named, so the two ways of saying it are refused
-        # together rather than silently resolved one way.
-        doc = _CSEL_AGREE[1]
-        e = withenv("ESS_CODEGEN_DISABLE" => "1") do
-            try
-                esm_problem(doc, (0.0, 1.0); compiler = :native)
-                nothing
-            catch err
-                err
+        # variable". No environment variable selects an evaluation strategy any
+        # more, so there is no second way of saying which compiler runs — and
+        # therefore nothing for the keyword to disagree with. Naming `:native`
+        # and naming nothing must be the same build, strictness included.
+        doc, ics = _csel_contraction_doc()
+        for kw in ((), (; compiler = :native))
+            @test_throws TreeWalkError withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
+                build_evaluator(doc; initial_conditions = ics, kw...)
             end
         end
-        @test e isa SimulateError
-        @test e.code == CSEL.ERROR_CODES.COMPILER_UNAVAILABLE
-        @test occursin("ESS_CODEGEN_DISABLE", e.msg)
-        # An UNNAMED compiler beside a switch is a NON-STRICT native: the
-        # switch is a request for the reference path, so refusing the rule it
-        # just forced would make the switch unusable, and the differential
-        # tests built on the switches keep working until they are retired.
-        @test withenv("ESS_CODEGEN_DISABLE" => "1") do
-            compiler(esm_problem(doc, (0.0, 1.0)))
-        end === :native
-        # …and the strictness is back the moment the switch is not set.
-        @test_throws TreeWalkError withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-            d, i = _csel_contraction_doc()
-            build_evaluator(d; initial_conditions = i)
-        end
-        # …and `:interpreter` is unaffected, since it turns the tier off anyway.
-        @test withenv("ESS_CODEGEN_DISABLE" => "1") do
-            compiler(esm_problem(doc, (0.0, 1.0); compiler = :interpreter))
+        # …and `:interpreter` runs the same document, since it turns the tier
+        # off rather than refusing what the tier accepts.
+        @test withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
+            compiler(esm_problem(_CSEL_AGREE[1], (0.0, 1.0); compiler = :interpreter))
         end === :interpreter
     end
 

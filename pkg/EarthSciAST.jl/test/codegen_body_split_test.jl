@@ -8,9 +8,9 @@
 # OOM the Julia compiler as one function). This pins:
 #   * a forced-split build (tiny ESS_CODEGEN_FN_NODE_CAP) still CODEGENS the
 #     kernel (`:codegen_kernel` fires) and does NOT decline it to the interpreter;
-#   * its du is BIT-identical to the un-split build (ESS_CODEGEN_BODY_SPLIT_DISABLE)
-#     at Float64 and under ForwardDiff (the split is value-exact, order-preserving);
-#   * the pre-split build is byte-restored by ESS_CODEGEN_BODY_SPLIT_DISABLE=1.
+#   * its du is BIT-identical to the un-split build — the same build with the
+#     cap left at its default, which the kernel fits inside — at Float64 and
+#     under ForwardDiff (the split is value-exact, order-preserving).
 # On Julia < 1.12 the split is unavailable (`_cg_split_supported`: RGF turns a
 # sub-function into an UNTYPED opaque closure there, which boxes per cell and
 # segfaults when nested), so an oversized body DECLINES to the interpreter
@@ -41,11 +41,11 @@ function _bs_model(N)
     ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 
-# Build under an explicit (fn_node_cap, split_disable) env pair; return RHS +
-# a tally snapshot.
-function _bs_build(model, ics; fncap=nothing, split_off=false)
-    withenv("ESS_CODEGEN_FN_NODE_CAP" => (fncap === nothing ? nothing : string(fncap)),
-            "ESS_CODEGEN_BODY_SPLIT_DISABLE" => (split_off ? "1" : nothing)) do
+# Build at an explicit per-function node cap (a retained tuning threshold);
+# `fncap = nothing` is the shipped cap, which this kernel fits inside, so that
+# build is the un-split reference. Returns RHS + a tally snapshot.
+function _bs_build(model, ics; fncap=nothing)
+    withenv("ESS_CODEGEN_FN_NODE_CAP" => (fncap === nothing ? nothing : string(fncap))) do
         ESM._reset_cascade_tally!()
         f!, u0, p, _t, vm, _diag = ESM._build_evaluator_impl(model; initial_conditions=ics)
         (f!, u0, p, copy(ESM._CASCADE_TALLY))
@@ -61,8 +61,9 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
     model = _bs_model(6)
     ics = Dict("u" => 1.0)
 
-    # Reference: split OFF (one function per kernel, the pre-change layout).
-    fr, u0, pr, rt = _bs_build(model, ics; split_off=true)
+    # Reference: the shipped cap, which this kernel fits inside — so the split
+    # is a no-op and the emission is one function per kernel.
+    fr, u0, pr, rt = _bs_build(model, ics)
     @test get(rt, :codegen_kernel, 0) >= 1        # kernel codegens (not interpreter)
     @test _decl(rt) == 0                          # nothing declined
 
