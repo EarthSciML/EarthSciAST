@@ -636,13 +636,20 @@ fn compiled_datetime_family_matches_the_interpreter() {
 /// gate is about the RUST emitter's new arm. The three entries are exercised
 /// in one document so a single probe sweep covers all of them.
 ///
-/// The comparison is BITWISE, not tolerance-based, and deliberately so. The
-/// blend is three IEEE-754 operations in the order §9.2 pins, and the cell
-/// search and the clamps are exact, so the only thing that could move a bit
-/// here is XLA contracting `a + w * (b - a)` into an FMA. §9.2 permits that
-/// and prices it at ~2 ulp — so if this assertion ever fires with a one- or
-/// two-ulp difference, the fix is to relax THIS test to the spec's
-/// `{abs: 0, rel: 4e-16}`, not to change the lowering.
+/// The tolerance is §9.2's OWN mixed-FMA bound, `{abs: 0, rel: 4e-16}` (~2 ulp
+/// at unit magnitude), and the reason it is not bitwise is worth stating: the
+/// cell search, the clamps and the corner reads are exact integer and
+/// selection work, and the blend is the three IEEE-754 operations §9.2 pins,
+/// in that order — so the ONLY thing that can move a bit here is XLA
+/// contracting `a + w * (b - a)` into an FMA, which it does. §9.2 anticipates
+/// exactly that ("bindings that use FMA selectively MUST ensure their results
+/// still match the non-FMA reference within the per-fixture tolerance") and
+/// prices it at this bound.
+///
+/// So the test also COUNTS the probes that are not bit-identical and asserts
+/// that count stays small. A tolerance alone would pass just as happily if
+/// every probe drifted; the count is what would catch a lowering that started
+/// blending in a different order rather than merely fusing a multiply.
 #[test]
 fn interp_lowers_and_matches_the_interpreter() {
     if !runtime_available() {
@@ -707,6 +714,8 @@ fn interp_lowers_and_matches_the_interpreter() {
     let qas = [-2.0, 0.0, 0.5, 1.0, 2.0, 2.5, 2.75, 3.0, 5.0, 7.0, 9.0];
     let qbs = [-5.0, 0.0, 4.0, 10.0, 18.0, 25.0, 27.5, 30.0, 51.0];
     let mut probes = 0usize;
+    let mut inexact = 0usize;
+    let mut worst = 0.0f64;
     for a in qas {
         for b in qbs {
             let mut u = vec![0.0f64; names.len()];
@@ -716,16 +725,36 @@ fn interp_lowers_and_matches_the_interpreter() {
             let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
             assert_eq!(got.len(), want.len());
             for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
-                assert_eq!(
-                    g.to_bits(),
-                    w.to_bits(),
+                if g.to_bits() == w.to_bits() {
+                    continue;
+                }
+                inexact += 1;
+                // §9.2's mixed-FMA / non-FMA bound.
+                assert!(
+                    (g - w).abs() <= 4e-16 * w.abs(),
                     "interp probe (qa={a}, qb={b}) tendency {}: compiled {g:.17e} vs \
-                     interpreter {w:.17e}",
+                     interpreter {w:.17e} — beyond §9.2's mixed-FMA tolerance, so this \
+                     is a lowering difference and not a contracted multiply",
                     names[i]
                 );
+                worst = worst.max((g - w).abs() / (4e-16 * w.abs()));
             }
             probes += 1;
         }
     }
-    eprintln!("interp: {probes} probes, bit-identical");
+    // Every tendency of every probe; only the `interp.linear` /
+    // `interp.bilinear` blends can be inexact at all, and only where the
+    // weight is not 0 or 1.
+    let checked = probes * names.len();
+    assert!(
+        inexact * 4 <= checked,
+        "{inexact} of {checked} compiled values differ from the interpreter; the blend \
+         is supposed to be the same three operations, with only a contracted multiply \
+         between them"
+    );
+    eprintln!(
+        "interp: {probes} probes, {} of {checked} values bit-identical, worst \
+         {worst:.3e} of §9.2's mixed-FMA tolerance",
+        checked - inexact
+    );
 }
