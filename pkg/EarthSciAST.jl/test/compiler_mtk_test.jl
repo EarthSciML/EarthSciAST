@@ -92,6 +92,21 @@ _mtkc_obs_doc() = Dict{String,Any}(
                              "rhs" => Dict{String,Any}("op" => "*",
                                                        "args" => Any[3.0, "x"]))])))
 
+# The smallest sink that satisfies the producer protocol: it records `(t, state)`
+# at every output tick and tracks the lifecycle calls.
+mutable struct _MtkcSink
+    rows::Vector{Tuple{Float64,Vector{Float64}}}
+    opened::Bool
+    closed::Bool
+end
+_MtkcSink() = _MtkcSink(Tuple{Float64,Vector{Float64}}[], false, false)
+EarthSciAST.sink_output_times(::_MtkcSink) = Float64[0.0, 1.5, 2.5]
+EarthSciAST.sink_open!(s::_MtkcSink) = (s.opened = true; nothing)
+EarthSciAST.sink_write!(s::_MtkcSink, snap::StateSnapshot; selection = nothing) =
+    (push!(s.rows, (snap.t, Vector{Float64}(snap.state[1][1]))); nothing)
+EarthSciAST.sink_flush!(::_MtkcSink) = nothing
+EarthSciAST.sink_close!(s::_MtkcSink) = (s.closed = true; nothing)
+
 # The refusal an `esm_problem` call raised, or `nothing` when it built.
 function _mtkc_raise(f, args...; kwargs...)
     try
@@ -160,6 +175,28 @@ end
         # constraint on its answer; the answer is 2.
         @test only(observed_field(prob, "s")) ≈ 2.0 rtol = 1e-10
         @test only(observed_field(prob, "ImplicitEquationOnTheScalarPath.s")) ≈ 2.0 rtol = 1e-10
+        # A run over a system with nothing to integrate still returns a
+        # solution rather than `nothing` (OrdinaryDiffEq's null integrator
+        # would); it is empty, because every value lives in an observed.
+        sol = solve(prob, Rodas5P(); reltol = 1e-10, abstol = 1e-12)
+        @test sol !== nothing
+        @test isempty(EarthSciAST.final_state(sol))
+    end
+
+    @testset "an implicit equation on the ARRAY path: the recurrence" begin
+        f = _mtkc_uc("implicit_equation_on_the_array_path.esm")
+        err = _mtkc_raise(esm_problem, f, (0.0, 1.0))
+        @test err isa TreeWalkError && err.code == "unsupported_construct"
+
+        prob = esm_problem(f, (0.0, 1.0); compiler = :mtk)
+        # `s[k] = 1` at k = 1 and `2*s[k-1]` after, solved as a residual over
+        # the whole shaped unknown: [1, 2, 4, 8]. The name of the whole field
+        # reads its CELLS in row-major order, not the one array-typed value its
+        # defining equation's left-hand side carries.
+        @test observed_field(prob, "ImplicitEquationOnTheArrayPath.s") ≈
+              [1.0, 2.0, 4.0, 8.0] rtol = 1e-10
+        @test only(observed_field(prob, "ImplicitEquationOnTheArrayPath.s[4]")) ≈
+              8.0 rtol = 1e-10
     end
 
     # ── What it refuses, by name ────────────────────────────────────────────
@@ -250,6 +287,23 @@ end
         @test !isempty(parameter_classes(prob))
         @test all(v === :structural for v in values(parameter_classes(prob)))
         @test_throws SimulateError remake(prob; p = Dict("Decay.k" => 2.0))
+    end
+
+    # A sink's output callback is a SOLVE-TIME callback, and the compiled
+    # system's events live on the problem it is solved against. DiffEq composes
+    # the two; it does not let one replace the other. The witness is the value:
+    # if the event callback had been dropped the sawtooth would read 2.5.
+    @testset "a sink composes with the compiled system's events" begin
+        sink = _MtkcSink()
+        prob = esm_problem(_mtkc_uc("continuous_event_on_the_scalar_path.esm"),
+                           (0.0, 2.5); compiler = :mtk, sinks = (sink,))
+        @test callbacks(prob) !== nothing
+        sol = solve(prob, Tsit5(); reltol = 1e-10, abstol = 1e-12)
+        @test SciMLBase.successful_retcode(sol)
+        @test sink.opened && sink.closed
+        @test !isempty(sink.rows)
+        @test last(sink.rows)[1] ≈ 2.5 atol = 1e-9
+        @test only(last(sink.rows)[2]) ≈ 0.5 atol = 1e-6
     end
 
     @testset "observed_field reads the compiled system's observed equations" begin

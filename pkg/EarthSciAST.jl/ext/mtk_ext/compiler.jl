@@ -627,6 +627,10 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
     # the installed ModelingToolkit spells this; older versions called it
     # `structural_simplify`, and both names are tried so the compiler tracks the
     # package rather than one release of it.
+    # `model_name` names the SYSTEM here. `flatten` has already merged the
+    # document into ONE system by the time this compiler sees it, so there is no
+    # model left to select; the keyword survives as the compiled system's name,
+    # which is what ModelingToolkit's own printing shows.
     name = model_name === nothing ? :esm : Symbol(String(model_name))
     system = ModelingToolkit.System(flat; name = name)
     system = _mtk_compile(system)
@@ -795,9 +799,14 @@ end
 function _mtk_resolve_field_name(b::MTKCompiler, prob, want::String,
                                  spelled::String)
     isobs(nm) = nm in b.observed_names
-    isobs(want) && return want
+    # CELLS FIRST. An array-valued observed is answered as BOTH the whole array
+    # (its defining equation's left-hand side is the `Symbolics.Arr`) and its
+    # scalarized elements, so the bare stem is in `observed_names` too — and
+    # reading THAT gives one value of array type where the caller asked for the
+    # field. The cells are the field; the stem only names it.
     cells = _mtk_field_cells(b, want)
     isempty(cells) || return cells
+    isobs(want) && return want
 
     if !occursin('.', want)
         # BARE name (§5.8): only on a single-component document, and the
@@ -814,9 +823,9 @@ function _mtk_resolve_field_name(b::MTKCompiler, prob, want::String,
                                                       limit = 2)[2]) == want]))
         if length(comps) == 1 && !isempty(cands)
             qualified = first(cands)
-            isobs(qualified) && return qualified
             cells = _mtk_field_cells(b, qualified)
             isempty(cells) || return cells
+            isobs(qualified) && return qualified
         elseif length(comps) > 1 && !isempty(cands)
             throw(SimulateError(
                 "observed_field: '$spelled' is a bare name and this problem has " *
