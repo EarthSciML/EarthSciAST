@@ -134,6 +134,90 @@ exclusion costs the sibling fixture's 84 assertions nothing. Nothing was
 weakened to make a binding pass: every assertion is at the tolerance it was
 authored with, and the scalar tier's default band is EXACT.
 
+## Verification
+
+Everything below was run on this branch; the logs are under
+`/scratch/ctessum/compiler-sel/logs/testmig/`.
+
+### The cross-language harness, baseline versus after
+
+| | Job | Command | Result |
+|---|---|---|---|
+| baseline, at `25efca83a` | 10694465 | `./scripts/test-conformance.sh --skip-binding-suites` | **exit 0**, 39 SUCCESS stages, 0 failures |
+| after, at the branch head | 10695526 | the same command | **exit 0**, 46 SUCCESS stages, 0 failures |
+
+`--skip-binding-suites` is what CI passes and what the harness is designed for;
+the per-binding suites are verified separately below. The corpus manifest is
+byte-identical between the two runs — 342 validation files, 484 display cases,
+26 substitution cases — because the new fixtures live under
+`tests/conformance/`, which the validation sweep does not walk. That is
+deliberate: a semantics fixture should not also become a round-trip fixture by
+accident.
+
+The stage sets diff cleanly: **every one of the baseline's 39 stages is present
+and green in the after run, and the after run adds exactly the seven new ones**
+— nothing was lost, renamed or quietly dropped.
+
+| New stage | Wall clock |
+|---|---|
+| `inline-test self-test` | 0 s |
+| `inline-test interpreter producer (julia)` | 226 s |
+| `inline-test interpreter producer (rust)` | 21 s |
+| `inline-test interpreter producer (python)` | 3 s |
+| `inline-test native producer (julia)` | 254 s |
+| `inline-test native producer (rust)` | 5 s |
+| `inline-test native producer (python)` | 4 s |
+
+The two Julia stages dominate because each starts four Julia processes (two
+tiers × the adapter's own environment bootstrap); the other five cost under 35
+seconds between them.
+
+One honesty note about the baseline. The Rust crate gained its new adapter
+module partway through that run, so the Rust stages after `compiled-RHS
+interpreter producer (rust)` compiled a crate that already carried
+`src/inline_tests_adapter.rs`. The module adds an unused code path and a bin
+target and nothing else; `cargo check`, `cargo clippy -D warnings` and the full
+`cargo test` all pass on it, and every stage of that baseline run was green.
+
+### The two new tiers, per binding per compiler
+
+Each cell is `scripts/run-inline-tests-conformance.py --bindings <b> --compiler
+<c>`, run directly as well as through the harness stages.
+
+| Tier | julia | rust | python |
+|---|---|---|---|
+| `broadcast_alignment` / `interpreter` | OK | OK | OK |
+| `broadcast_alignment` / `native` | OK | OK, 2 named exclusions | OK |
+| `scalar_operator_semantics` / `interpreter` | OK, 1 named exclusion | OK, 2 named exclusions | OK |
+| `scalar_operator_semantics` / `native` | OK, 1 named exclusion | OK, 3 named exclusions | OK |
+
+The self-test (`--self-test`, no binding needed) passes for both manifests,
+including the load-bearing check that every committed golden reproduces the
+DOCUMENT's own `expected` at each assertion's resolved §6.6.4 band, and the
+eight negative controls.
+
+### The per-binding suites
+
+| Suite | Command | Result |
+|---|---|---|
+| Julia, `tree_walk_test.jl` | `julia --project=<env> -e 'include("tree_walk_test.jl")'` | **rc 0**, 113 / 113 |
+| Julia, `broadcast_alignment_test.jl` | same | **rc 0**, 260 / 260 |
+| Rust, whole crate | `cargo test --no-fail-fast` | **exit 0**, 166 test binaries, 1778 tests passed, 0 failed |
+| Python, whole suite | `python3 -m pytest tests/ -q` | 4048 passed, 30 skipped, 3 xfailed, **19 failed + 3 errors** |
+
+**The 19 Python failures are pre-existing and environmental, not this branch.**
+They are all in `test_esio_provider.py`, `test_loader_ingest_and_select.py` and
+`test_loader_unit_conversion_conformance.py` — EarthSciIO provider and
+loader-ingest paths this branch does not touch. Proved rather than assumed: the
+base commit was extracted with `git archive 25efca83a` into a scratch tree and
+those three files were run against it, giving **the identical 19 failures and 3
+errors**.
+
+Lint gates, run the way CI runs them: `ruff check src/ tests/ ../../scripts/`
+and `ruff format --check` from `pkg/earthsci-ast-py` (clean, 273 files),
+`cargo fmt -- --check` (clean), and `cargo clippy --features
+conformance-adapters --lib --bins --tests -- -D warnings` (clean).
+
 ## Per-file disposition
 
 ### Julia (52 files, under `pkg/EarthSciAST.jl/`)
