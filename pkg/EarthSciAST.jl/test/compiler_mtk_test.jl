@@ -27,6 +27,7 @@
 # vocabulary lives, as the arm an MTK-free session takes.
 using Test
 using EarthSciAST
+using JSON3
 using SciMLBase
 using OrdinaryDiffEqTsit5
 using OrdinaryDiffEqRosenbrock
@@ -197,6 +198,55 @@ end
               [1.0, 2.0, 4.0, 8.0] rtol = 1e-10
         @test only(observed_field(prob, "ImplicitEquationOnTheArrayPath.s[4]")) ≈
               8.0 rtol = 1e-10
+    end
+
+    # ── The WHOLE §5.39 category, driven from its own manifest ─────────────
+    #
+    # The three testsets above assert the VALUES on three documents. This one
+    # asserts the COVERAGE on all fifteen: every document that category says the
+    # tree-walk evaluator must refuse either RUNS under `:mtk` or is refused BY
+    # NAME, and nothing errors. It is data-driven off the shared manifest, so a
+    # case added there is covered here the day it lands rather than the day
+    # someone remembers this file.
+    #
+    # One case refuses, and it is named: `D(a + b) ~ 3` is a time derivative of
+    # an EXPRESSION, which credits no state — an implicit equation spelled
+    # wrong, and one no compiler in any binding runs.
+    @testset "every §5.39 fixture runs or refuses by name" begin
+        uc_dir = _mtkc_fixture("conformance", "unsupported_construct")
+        manifest = JSON3.read(read(joinpath(uc_dir, "manifest.json"), String))
+        refused = String[]
+        for case in manifest.cases
+            id = String(case.id)
+            path = joinpath(uc_dir, String(case.path))
+            @testset "$id" begin
+                # The document's own inline test gives the interval; the values
+                # are asserted above, on the three representative documents.
+                doc = JSON3.read(read(path, String))
+                models = get(doc, :models, nothing)
+                tests = models === nothing || isempty(models) ? () :
+                        get(first(values(models)), :tests, ())
+                span = isempty(tests) ? (0.0, 3.5) :
+                       (Float64(first(tests).time_span.start),
+                        Float64(first(tests).time_span[Symbol("end")]))
+                err = _mtkc_raise(esm_problem, path, span; compiler = :mtk)
+                if err === nothing
+                    prob = esm_problem(path, span; compiler = :mtk)
+                    sol = solve(prob, Rodas5P(); reltol = 1e-10, abstol = 1e-12)
+                    @test SciMLBase.successful_retcode(sol)
+                else
+                    # A refusal, never an error: the message names the compiler,
+                    # the rule and the reason.
+                    @test err isa TreeWalkError
+                    @test err.code == _MTKC.ERROR_CODES.COMPILER_REFUSED_RULE
+                    @test occursin(r"^compiler=:mtk refuses '.+': ", err.detail)
+                    push!(refused, id)
+                end
+            end
+        end
+        # Exactly one case refuses, and it is the one that is not really an
+        # event or a solvable residual.
+        @test refused == ["implicit_equation_as_the_derivative_of_an_expression"]
     end
 
     # ── What it refuses, by name ────────────────────────────────────────────

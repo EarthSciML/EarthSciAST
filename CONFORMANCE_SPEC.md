@@ -5678,12 +5678,20 @@ TypeScript do not simulate; they only register the code.
 never raises the code. Since the `compiler` keyword landed (`API_SPEC.md` §5.8)
 that path is not only the export: `esm_problem(file; compiler = :mtk)` builds
 through it, so **`:mtk` is the compiler that RUNS what this category has the
-others refuse** — the `_on_the_scalar_path` documents of all three kinds reach
-the values their inline tests name (the two event ones by integrating; the
-implicit one because `mtkcompile` solves its residual away into an observed
-equation, leaving nothing to integrate), and the implicit ARRAY document reaches
-[1, 2, 4, 8] the same way
-(`pkg/EarthSciAST.jl/test/compiler_mtk_test.jl`). The refusals this category
+others refuse** — **fourteen of this category's fifteen documents build and run
+under it**, on the scalar path and the array path, on an inline subsystem, on a
+coupled two-model document and on a reaction system alike. The event ones reach
+the values their inline tests name by integrating; the implicit ones reach
+theirs because `mtkcompile` solves the residual away into an observed equation,
+leaving nothing to integrate. The fifteenth,
+`implicit_equation_as_the_derivative_of_an_expression`, is refused BY NAME with
+`compiler_refused_rule`: `D(a + b) ~ 3` is a time derivative of an EXPRESSION,
+credits no state, and is an implicit equation spelled wrong rather than a
+derivative — no compiler in any binding runs it, which is why that refusal
+points at no other compiler and says how to rewrite the equation instead. All
+fifteen are driven from this category's own manifest by
+`pkg/EarthSciAST.jl/test/compiler_mtk_test.jl`, so a case added here is covered
+there the day it lands. The refusals this category
 gates are therefore refusals BY THE DEFAULT COMPILER: `:native` and
 `:interpreter` share the tree-walk evaluator and raise `unsupported_construct`
 exactly as before, and a document carrying one of the three constructs is run by
