@@ -142,4 +142,3 @@ def test_the_inline_test_runner_reports_the_refusal_rather_than_a_number(case):
         assert r.passed is False, f"{case['id']}: {r.message}"
         assert r.actual is None, f"{case['id']}: produced {r.actual!r}: {r.message}"
         assert any(code in r.message for code in case["accepts"]), r.message
-
