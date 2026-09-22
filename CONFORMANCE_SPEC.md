@@ -6269,6 +6269,54 @@ Either way the compiler is an argument and never an inheritance, and this tier
 remains the only place `native`'s coverage is measured. Without that, the whole
 harness goes red for reasons unrelated to what each stage tests.
 
+### 5.45 A Doubly-Defined Unknown Is Refused, Never Tie-Broken (normative)
+
+**Decision pinned.** An unknown that carries BOTH a derivative equation
+(`D(x, t) ~ f`) and a whole-variable algebraic one (`x ~ g`) MUST be refused at
+BUILD by every simulating binding, with the esm-spec §4.9.4 diagnostic
+`equation_count_mismatch`, and the message MUST name the unknown and BOTH
+equations. §4.9.4 counts an equation against the unknowns whichever form its LHS
+takes, so the two together are one more equation than the model has unknowns to
+bind — which is exactly what each binding's `validate` already reports at
+`/models/<M>`. The build is the other place that same document arrives, and it
+says the same thing.
+
+**Reason.** The alternative is to tie-break, and there is no defensible winner.
+Rust did it on purpose — "differential wins over algebraic when both are
+present" — on the grounds that reporting the name as algebraic would hide a
+genuinely settable initial condition from a Run UI. But the document declares a
+constraint, and integrating the derivative alone runs a model the file does not
+describe while saying nothing about the equation dropped to do it. A refused
+document has no run, so there is no Run UI left to mislead. Julia, for its part,
+kept both equations and failed later, deep in classification, with a
+Julia-local code naming neither the unknown nor either equation — a refusal, but
+not one an author can act on.
+
+**Shape.** Golden-free; it pins no numbers. Two refusal cases — the same defect
+on a scalar document and on one whose shaped unknown takes a binding's ARRAY
+compile, because the scalar and array routes are separate code in Rust and
+Python and both must refuse. Each has its own CONTROL: the same document with
+the algebraic equation removed, which takes the same evaluator and MUST still
+run. The controls are the non-vacuity anchor: a binding that refused every
+document would otherwise satisfy the refusal cases. Both refusal fixtures give
+the two equations DIFFERING right-hand sides (`k` against `k * 3`), so no
+binding can argue the pair is a harmless duplicate; an IDENTICAL pair is left to
+each binding's own structural validator, which is where a duplicate definition
+is decided.
+
+The manifest and fixtures live in `tests/conformance/doubly_defined_state/`.
+Adapters: `pkg/EarthSciAST.jl/test/doubly_defined_state_conformance_test.jl`;
+`pkg/earthsci-ast-py/tests/test_doubly_defined_state_conformance.py`;
+`pkg/earthsci-ast-rs/tests/doubly_defined_state_conformance.rs`. Each adapter
+also asserts that its binding's `validate` reports the same code on the same
+file, which is what makes the refusal a property of the document rather than of
+the evaluator. Go and TypeScript do not simulate; they only register the code.
+
+**Out of scope.** Julia's ModelingToolkit route is a code GENERATOR
+(`to_julia_code`), not a build, so it never raises the code; a generated script
+hands both equations to `mtkcompile`, which reports the imbalance in its own
+vocabulary.
+
 
 ## 6. CI Integration
 

@@ -862,10 +862,19 @@ mod tests {
     }
 
     #[test]
-    fn a_state_with_both_equations_is_differential() {
-        // esm-y3n: the derivative wins. A host that missed this rule would hide
-        // a genuinely settable initial condition from its Run UI.
-        let names = algebraic_names_of(
+    fn a_state_with_both_equations_is_refused_at_build() {
+        // esm-spec §4.9.4 counts an equation against the unknowns whichever form
+        // its LHS takes, so `D(x) ~ k` beside `x ~ k * 2` is one more equation
+        // than this model has unknowns to bind, and `validate` reports it as
+        // `equation_count_mismatch`.
+        //
+        // This used to tie-break in favour of the derivative (esm-y3n), on the
+        // grounds that reporting `x` as algebraic would hide a genuinely
+        // settable initial condition from a Run UI. A refused document has no
+        // run, so there is no UI to mislead — while integrating the derivative
+        // alone answers a question the file does not ask, and says nothing
+        // about the constraint it dropped to do so.
+        let file = crate::parse::load_string(
             r#"
                 {
                   "esm": "1.0.0",
@@ -897,15 +906,66 @@ mod tests {
                         },
                         {
                           "lhs": "x",
-                          "rhs": "k"
+                          "rhs": {
+                            "op": "*",
+                            "args": [
+                              "k",
+                              2.0
+                            ]
+                          }
                         }
                       ]
                     }
                   }
                 }
                 "#,
+        )
+        .expect("parse fixture");
+        let err = crate::problem::esm_problem(&file, (0.0, 1.0), Default::default())
+            .expect_err("a doubly-defined unknown must not build");
+        let msg = err.to_string();
+        assert!(
+            msg.contains(crate::diagnostic::codes::EQUATION_COUNT_MISMATCH),
+            "{msg}"
         );
-        assert!(names.is_empty(), "derivative must win, got {names:?}");
+        // The unknown and BOTH competing equations are named, so the author can
+        // see which two definitions to choose between.
+        assert!(msg.contains("'x'"), "{msg}");
+        assert!(msg.contains("D(x)/Dt ~ k"), "{msg}");
+        assert!(msg.contains("x ~ k * 2"), "{msg}");
+        // Both build routes refuse, not just the one `esm_problem` picked: the
+        // array runtime (above, and again here on its flattened entry) and the
+        // scalar interpreter, whose `classify_equations` is what used to break
+        // the tie.
+        let flat = crate::flatten(&file).expect("flatten fixture");
+        for route in [
+            crate::simulate::Compiled::from_flattened(&flat)
+                .err()
+                .map(|e| e.to_string()),
+            crate::simulate_array::ArrayCompiled::from_flattened(&flat)
+                .err()
+                .map(|e| e.to_string()),
+        ] {
+            let route = route.expect("the route must refuse, not build");
+            assert!(
+                route.contains(crate::diagnostic::codes::EQUATION_COUNT_MISMATCH),
+                "{route}"
+            );
+        }
+        // …and `validate` refuses the same document, which is what makes this a
+        // property of the file rather than of the evaluator.
+        let report = crate::validate(&file);
+        assert!(!report.is_valid, "validate accepted it");
+        assert!(
+            report.structural_errors.iter().any(|e| {
+                matches!(
+                    e.code,
+                    crate::validate::StructuralErrorCode::EquationCountMismatch
+                )
+            }),
+            "{:?}",
+            report.structural_errors
+        );
     }
 
     #[test]

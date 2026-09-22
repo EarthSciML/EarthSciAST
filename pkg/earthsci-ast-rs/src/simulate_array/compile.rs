@@ -828,6 +828,22 @@ impl ArrayCompiled {
                 ));
             }
 
+            // (0a′) Reject an unknown carrying BOTH a derivative equation and a
+            // bare-LHS one. esm-spec §4.9.4 counts both, so the document has one
+            // more equation than it has unknowns and `validate` reports
+            // `equation_count_mismatch`; the build says the same rather than
+            // integrating a system free of the constraint the file declares.
+            // After mounting, so a pair inside a subsystem is seen under its
+            // mounted names, and ahead of `partition_states`, which would
+            // otherwise pick one of the two without saying so.
+            if let Some((name, diff, alg)) =
+                crate::compile_error::first_doubly_defined_unknown(&model.equations)
+            {
+                return Err(crate::compile_error::doubly_defined_unknown_refusal(
+                    &name, diff, alg,
+                ));
+            }
+
             // (0b) Reject a reference to a variable bound in NONE of the model's
             // binding categories — the array-path analogue of the scalar
             // interpreter's `resolve_expr` "Unknown variable" gate, and the same

@@ -114,6 +114,17 @@ pub(super) fn classify_equations(
             eq,
         ));
     }
+    // An unknown carrying BOTH `D(x) ~ f` and `x ~ g` is one more equation than
+    // unknowns (esm-spec §4.9.4), which `validate` reports as
+    // `equation_count_mismatch`. Refused here under the same code, before the
+    // loop below files the two equations into competing buckets.
+    if let Some((name, diff, alg)) =
+        crate::compile_error::first_doubly_defined_unknown(&flat.equations)
+    {
+        return Err(crate::compile_error::doubly_defined_unknown_refusal(
+            &name, diff, alg,
+        ));
+    }
     for eq in &flat.equations {
         if let Some(state_name) = state_lhs_name(&eq.lhs) {
             let idx = state_index.get(&state_name).ok_or_else(|| {
@@ -141,11 +152,11 @@ pub(super) fn classify_equations(
         // ignored.
     }
 
-    // Every state must have a defining equation; differential wins over
-    // algebraic when both are present (esm-y3n).
+    // Every state must have a defining equation. A state with BOTH is refused
+    // above, so the two buckets are disjoint by the time this runs and there is
+    // no tie left to break.
     for (idx, name) in state_names.iter().enumerate() {
         if state_diff_raw[idx].is_some() {
-            state_alg_raw[idx] = None;
             continue;
         }
         if state_alg_raw[idx].is_none() {

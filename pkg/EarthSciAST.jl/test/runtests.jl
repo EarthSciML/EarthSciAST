@@ -116,6 +116,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # tree-walk evaluator with `unsupported_construct`, never run without it
     # (issues #264, #356).
     include("unsupported_construct_conformance_test.jl")
+    # An unknown carrying BOTH a derivative equation and an algebraic one is
+    # refused at the build with `equation_count_mismatch`, never resolved by
+    # letting the derivative win (esm-spec §4.9.4).
+    include("doubly_defined_state_conformance_test.jl")
     include("pointwise_lift_axis_names_test.jl")  # §10.5 lift axes by NAME, not by extent
     include("coupling_imports_test.jl")
     include("flattened_to_esm_test.jl")
