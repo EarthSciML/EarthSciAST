@@ -6331,6 +6331,16 @@ one entry per `(test_id, assertion_idx)`. The self-test rejects a golden whose
 key set does not match the document's, which is what keeps a golden from
 silently surviving an edit to the fixture it is about.
 
+**When the reference itself refuses a fixture** there is no reference actual to
+mint, and the fixture's `golden` is `null`. That is a statement, not an
+omission, so it is written down: the manifest MUST carry a
+`golden_absent_reason`, AND a `named_exclusions` entry naming the REFERENCE
+binding — if the reference can run the document, there is no excuse for not
+minting from it. Such a fixture is still gated: the bindings that DO run it are
+held to the document's authored `expected`, which is an oracle outside every
+binding. What it loses is the cross-compiler drift check, and that returns the
+moment the reference gains the rule and the golden can be minted.
+
 #### 5.45.3 Outcomes and gate
 
 Per fixture, per binding, per compiler, an adapter answers exactly one of:

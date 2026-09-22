@@ -139,12 +139,7 @@ fn refusal_code(message: &str) -> Option<String> {
             return Some(code.to_string());
         }
     }
-    let bytes = message.as_bytes();
-    let needle = b"E_TREEWALK_";
-    let start = bytes
-        .windows(needle.len())
-        .position(|w| w == needle)
-        .map(|i| i)?;
+    let start = message.find("E_TREEWALK_")?;
     let end = message[start..]
         .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
         .map(|i| start + i)
