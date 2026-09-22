@@ -786,11 +786,37 @@ function EarthSciAST._backend_observed_field(b::MTKCompiler, prob,
     want = get(prob.merged_renames, String(name), String(name))
     target = _mtk_resolve_field_name(b, prob, want, String(name))
     cells = target isa AbstractVector ? target : [target]
-    out = Float64[]
-    for nm in cells
-        push!(out, _mtk_observed_value(b, prob, nm, String(name)))
+    # The state set and the observed definitions are properties of the SYSTEM,
+    # so they are built once for the whole read rather than once per cell — a
+    # shaped field is thousands of cells on a real document.
+    unknown_set = Set{Any}(Symbolics.unwrap(u)
+                           for u in ModelingToolkit.unknowns(b.system))
+    defs = Dict{Any,Any}()
+    for oe in ModelingToolkit.observed(b.system)
+        defs[Symbolics.unwrap(oe.lhs)] = oe.rhs
     end
-    return out
+    syms = Any[]
+    for nm in cells
+        sym = get(b.handles, nm, nothing)
+        sym === nothing && throw(SimulateError(
+            "observed_field: '$name' resolved to '$nm', which the compiled " *
+            "ModelingToolkit system does not carry"))
+        dep = _mtk_state_dependency(sym, unknown_set, defs)
+        dep === nothing || throw(SimulateError(
+            "observed_field: '$name' is not a BUILD-TIME field — the compiled " *
+            "system's observed equation for it depends on the state '$dep', so " *
+            "its value is a function of the trajectory. Read it off a solution " *
+            "instead"))
+        push!(syms, sym)
+    end
+    # ONE generated observed function for the whole field, never one per cell.
+    # esm-libraries-spec §2.5.10 puts every evaluation a compiler performs for
+    # the problem under the same rule as the right-hand side, and a build that
+    # GENERATED A FUNCTION per output cell is the thing that rule exists to
+    # refuse; SymbolicIndexingInterface takes a vector of symbols and returns
+    # one function that answers the whole row.
+    vals = _MTK_SII.observed(b.system, syms)(prob.u0, prob.p, prob.tspan[1])
+    return Float64[Float64(v) for v in vals]
 end
 
 # The name(s) to read: one for a scalar observed, the row-major cell list for a
@@ -855,36 +881,14 @@ function _mtk_field_cells(b::MTKCompiler, stem::String)
     return String[nm for (_, nm) in hits]
 end
 
-function _mtk_observed_value(b::MTKCompiler, prob, nm::String, spelled::String)
-    sym = get(b.handles, nm, nothing)
-    sym === nothing && throw(SimulateError(
-        "observed_field: '$spelled' resolved to '$nm', which the compiled " *
-        "ModelingToolkit system does not carry"))
-    # STATE DEPENDENCE, symbolically: the observed equation for this name,
-    # expanded through the ones it reads, must mention no unknown of the
-    # compiled system.
-    dep = _mtk_state_dependency(b, sym)
-    dep === nothing || throw(SimulateError(
-        "observed_field: '$spelled' is not a BUILD-TIME field — the compiled " *
-        "system's observed equation for it depends on the state '$dep', so its " *
-        "value is a function of the trajectory. Read it off a solution instead"))
-    getter = _MTK_SII.observed(b.system, sym)
-    u = prob.u0
-    return Float64(getter(u, prob.p, prob.tspan[1]))
-end
-
-# The name of an unknown the observed equation for `sym` reaches, or `nothing`
-# when it reaches none. Walks observed-into-observed, so a chain that ends at a
-# state is caught at any depth; the visited set makes a cyclic registry
-# terminate rather than recur (`mtkcompile` does not produce one, but this must
-# not be the thing that hangs if it ever did).
-function _mtk_state_dependency(b::MTKCompiler, sym)
-    unknown_set = Set{Any}(Symbolics.unwrap(u)
-                           for u in ModelingToolkit.unknowns(b.system))
-    defs = Dict{Any,Any}()
-    for oe in ModelingToolkit.observed(b.system)
-        defs[Symbolics.unwrap(oe.lhs)] = oe.rhs
-    end
+# STATE DEPENDENCE, symbolically: the name of an unknown the observed equation
+# for `sym` reaches, or `nothing` when it reaches none. Walks
+# observed-into-observed, so a chain that ends at a state is caught at any
+# depth; the visited set makes a cyclic registry terminate rather than recur
+# (`mtkcompile` does not produce one, but this must not be the thing that hangs
+# if it ever did). Symbolic rather than numeric, so the answer does not depend
+# on what `u0` happens to hold.
+function _mtk_state_dependency(sym, unknown_set::Set{Any}, defs::Dict{Any,Any})
     seen = Set{Any}()
     stack = Any[Symbolics.unwrap(sym)]
     while !isempty(stack)

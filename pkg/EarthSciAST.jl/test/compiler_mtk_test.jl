@@ -202,29 +202,35 @@ end
     # ── What it refuses, by name ────────────────────────────────────────────
     @testset "refusals name the rule and never fall back" begin
         decay = _mtkc_fixture("valid", "solver_block.esm")
+        # The last element says whether the message POINTS AT ANOTHER COMPILER.
+        # Four of these are documents `:native` runs, so the refusal says so.
+        # `D(<expression>)` is not: no compiler in any binding runs it — the
+        # tree walk raises `unsupported_construct` on the same document — so
+        # naming one would be wrong advice, and the message says how to REWRITE
+        # the equation instead.
         cases = [
             ("data handed in at the call",
              () -> esm_problem(decay, (0.0, 1.0); compiler = :mtk,
                                const_arrays = Dict("tbl" => [1.0, 2.0])),
-             "const_arrays"),
+             "const_arrays", true),
             ("a provider",
              () -> esm_problem(decay, (0.0, 1.0); compiler = :mtk,
                                providers = Dict("Loader.v" => nothing)),
-             "DATA-FED"),
+             "DATA-FED", true),
             ("the pushdown rewrite",
              () -> esm_problem(decay, (0.0, 1.0); compiler = :mtk,
                                pushdown_rewrite = true),
-             "pushdown"),
+             "pushdown", true),
             ("a continuous spatial dimension",
              () -> esm_problem(_mtkc_pde_doc(), (0.0, 1.0); compiler = :mtk),
-             "PDE"),
+             "PDE", true),
             ("a time derivative of an expression",
              () -> esm_problem(
                  _mtkc_uc("implicit_equation_as_the_derivative_of_an_expression.esm"),
                  (0.0, 1.0); compiler = :mtk),
-             "credits no state"),
+             "credits no state", false),
         ]
-        for (what, build, needle) in cases
+        for (what, build, needle, points_elsewhere) in cases
             @testset "$what" begin
                 err = _mtkc_raise(build)
                 @test err isa TreeWalkError
@@ -236,10 +242,19 @@ end
                 @test err !== nothing &&
                       occursin(r"^compiler=:mtk refuses '.+': ", err.detail)
                 @test err !== nothing && occursin(needle, err.detail)
-                # Never a fallback: the message says what to build with instead.
-                @test err !== nothing && occursin("compiler=:native", err.detail)
+                # Never a fallback — the refusal is the whole answer. Where
+                # another compiler DOES run the document the message says so;
+                # where none does it says how to rewrite it.
+                @test err !== nothing &&
+                      occursin("compiler=:native", err.detail) == points_elsewhere
             end
         end
+        # …and the same document `:mtk` refuses for `D(a + b)` is one the tree
+        # walk refuses too, which is why that message points at no compiler.
+        walk = _mtkc_raise(esm_problem,
+            _mtkc_uc("implicit_equation_as_the_derivative_of_an_expression.esm"),
+            (0.0, 1.0))
+        @test walk isa TreeWalkError && walk.code == "unsupported_construct"
     end
 
     # ── Agreement with the oracle ───────────────────────────────────────────
