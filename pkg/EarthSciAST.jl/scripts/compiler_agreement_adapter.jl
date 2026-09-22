@@ -92,6 +92,14 @@ const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
 # nonlinear solver: an implicit equation compiles to a DAE whose consistent
 # initialization is a nonlinear solve, and OrdinaryDiffEq only carries one when
 # OrdinaryDiffEqNonlinearSolve is loaded.
+#
+# CALLED AT TOP LEVEL, not from `main`. A package loaded by `@eval` defines its
+# methods in a NEW world age, and a frame that is already running cannot call
+# them — from inside `main` every fixture failed with "method too new to be
+# called from this world context" naming the extension's own entry point, which
+# reads as a broken binding rather than as this file calling too early. Each
+# top-level statement gets the current world, so loading here and calling `main`
+# on the next line is what makes the extension visible.
 function load_compiler_runtime(compiler)
     compiler == "mtk" || return nothing
     @eval begin
@@ -99,6 +107,17 @@ function load_compiler_runtime(compiler)
         import OrdinaryDiffEqNonlinearSolve
     end
     return nothing
+end
+
+# `--compiler`'s value straight off `ARGS`, for the top-level load above.
+# `parse_args` is the validating read and still runs inside `main`; this one only
+# has to be right about which runtime to bring in, and an unknown value falls
+# through to `parse_args`'s error.
+function compiler_arg(args)
+    for i in eachindex(args)
+        args[i] == "--compiler" && i < lastindex(args) && return args[i + 1]
+    end
+    return ""
 end
 
 function parse_args(args)
@@ -356,7 +375,6 @@ end
 
 function main()
     manifest_path, output_path, compiler = parse_args(ARGS)
-    load_compiler_runtime(compiler)
     manifest = JSON3.read(read(manifest_path, String))
     base = tests_root(manifest_path)
 
@@ -403,4 +421,5 @@ function main()
     failed && exit(1)
 end
 
+load_compiler_runtime(compiler_arg(ARGS))
 main()
