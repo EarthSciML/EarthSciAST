@@ -255,6 +255,8 @@
         "atol_scaled_class": 1e-14,
         "reltol_integration": 1e-10,
         "abstol_integration": 1e-12,
+        "integration_factor": 100,
+        "integration_factor_detail": "the \u00a75.44.2 integration safety factor: a solver's reltol/abstol bound its LOCAL error per step, while the value compared here carries the GLOBAL error, which exceeds it by an integrator-dependent factor. Without it the band demands that every binding's integrator beat a promise no integrator makes, and two correct integrators read as a compiler disagreement. 100x on 1e-10 is still six orders below any compiler-level defect.",
         "detail": "a method-of-lines stencil is a fold, and this fixture's interior rows cancel exactly; the scaled floor is what makes an exact zero comparable (CONFORMANCE_SPEC \u00a75.38.2)"
       },
       "anchor": {
@@ -292,7 +294,9 @@
         "rtol_class": 1e-12,
         "atol_class": 1e-300,
         "reltol_integration": 1e-10,
-        "abstol_integration": 1e-12
+        "abstol_integration": 1e-12,
+        "integration_factor": 100,
+        "integration_factor_detail": "the \u00a75.44.2 integration safety factor: a solver's reltol/abstol bound its LOCAL error per step, while the value compared here carries the GLOBAL error, which exceeds it by an integrator-dependent factor. Without it the band demands that every binding's integrator beat a promise no integrator makes, and two correct integrators read as a compiler disagreement. 100x on 1e-10 is still six orders below any compiler-level defect."
       },
       "anchor": {
         "source": "inline_tests",
@@ -330,7 +334,9 @@
         "rtol_class": 1e-12,
         "atol_class": 1e-300,
         "reltol_integration": 1e-10,
-        "abstol_integration": 1e-12
+        "abstol_integration": 1e-12,
+        "integration_factor": 100,
+        "integration_factor_detail": "the \u00a75.44.2 integration safety factor: a solver's reltol/abstol bound its LOCAL error per step, while the value compared here carries the GLOBAL error, which exceeds it by an integrator-dependent factor. Without it the band demands that every binding's integrator beat a promise no integrator makes, and two correct integrators read as a compiler disagreement. 100x on 1e-10 is still six orders below any compiler-level defect."
       },
       "anchor": {
         "source": "inline_tests",

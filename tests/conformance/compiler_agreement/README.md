@@ -146,7 +146,8 @@ as passing.
       "source_tier": "pde_simulation | simulate_faq | inline_tests | …",
       "trajectory": { "from": "manifest | inline_tests", "…": "…" },
       "integration": { "reltol": 1e-10, "abstol": 1e-12 },
-      "tolerance": { "source": "pde_simulation | derived", "…": "…" },
+      "tolerance": { "source": "pde_simulation | derived",
+                     "integration_factor": 100, "…": "…" },
       "anchor": { "source": "pde_simulation | inline_tests | none" },
       "required": { "julia": [], "rust": [], "python": [] }
     }
@@ -202,31 +203,61 @@ tier-wide, so a later change to either tier cannot silently move the other's
 gate.
 
 **`"source": "derived"`** — the fixture declares a `class` from the four above,
-and the band is that class widened by the integration tolerance:
+and the band is that class widened by the integration tolerance times the
+**integration safety factor** `F` (`tolerance.integration_factor`, default
+`100`):
 
 ```
-rtol = rtol_class + reltol_integration
-atol = atol_class + abstol_integration
+rtol = rtol_class + F · reltol_integration
+atol = atol_class + F · abstol_integration
 ```
 
 For the `reduction` class the class floor is scaled rather than fixed, exactly
 as `CONFORMANCE_SPEC.md` §5.38.2 defines it:
 
 ```
-atol = atol_scaled_class · maxᵢ|wantᵢ|  +  abstol_integration
+atol = atol_scaled_class · maxᵢ|wantᵢ|  +  F · abstol_integration
 ```
 
 with the maximum taken over the saved row **of the reference**, so it is the
-same number for every binding. The addition of the integration tolerance is the
-whole difference from `compiled_rhs`: a trajectory carries the integrator's own
-error on top of the arithmetic's, and a band that ignored it would fail every
-binding for a defect none of them has.
+same number for every binding. Carrying the integration tolerance at all is the
+difference from `compiled_rhs`: a trajectory carries the integrator's own error
+on top of the arithmetic's, and a band that ignored it would fail every binding
+for a defect none of them has.
+
+**Why the factor, and why it does not loosen the gate.** A solver's `reltol` /
+`abstol` bound its **local** error per step. What is compared here is the value
+at a save time, which carries the accumulated **global** error — larger by a
+factor that depends on the method, the step count and the problem, and which no
+integrator undertakes to bound. A band equal to the local tolerance therefore
+demands of every binding something its integrator never promised, and fails it
+for the difference between two CORRECT integrators. That is not this tier's
+question: it asks whether compilers agree, not whether BDF and `Rodas5P` do.
+This was not hypothetical — under the unfactored band Rust's
+`decay_solver_block` sat 21x outside it and Python's `decay_solver_block` and
+`logistic_growth` likewise, every one of them an integrator difference.
+
+The factor applies to the **integration half only**. The class half — the
+arithmetic, which is what the tier is actually gating — is never multiplied, so
+the gate on the thing under test is unchanged. And `100 × 1e-10` is still some
+six orders of magnitude below anything a compiler-level defect produces, so the
+band remains far tighter than the failures it exists to catch.
+
+A fixture may state its own `integration_factor`; the runner requires it to be
+a number `≥ 1`, since a factor below one would tighten the band back below the
+integrator's own local tolerance. **A copied `pde_simulation` band gets no
+factor** — that tier measured its bounds as trajectory bounds already — and
+**anchors get no factor either** (below).
 
 An **anchor** is gated separately, at the tolerance its own source declares —
 `pde_simulation`'s `traj_analytic_*` for a fixture from that tier, the inline
-test's declared `tolerance` for one from a `tests` block. An anchor is a
-statement about the physics and a golden is a statement about the arithmetic;
-holding them to one band would mean loosening the arithmetic one.
+test's declared `tolerance` for one from a `tests` block — and **the integration
+safety factor does not apply to it**. An anchor's band is the fixture's own
+statement about how close to the physics it must land, already written with the
+integrator in mind; multiplying it would weaken a claim this tier did not make
+and does not own. An anchor is a statement about the physics and a golden is a
+statement about the arithmetic; holding them to one band would mean loosening
+the arithmetic one.
 
 A fixture MAY carry a tighter or looser bound than these rules give, with a
 written reason in its entry, and only with one. The runner reads that override as
@@ -236,7 +267,9 @@ the reason, is a manifest error (exit 2) rather than a quietly widened gate.
 
 A `derived` block MAY also restate the figures it derives from — `rtol_class`,
 `atol_class`, `atol_scaled_class`, `reltol_integration`, `abstol_integration` —
-for legibility, and the entries here do. Each restated figure is checked against
+for legibility, and the entries here do. (`integration_factor` is not a restated
+figure: it is stated here and nowhere else, so nothing checks it against an
+authority.) Each restated figure is checked against
 its authority (`tolerance_classes` and the fixture's `integration` block) and a
 disagreement is a manifest error. Writing a number twice is only worth doing if
 the two copies are made to agree.

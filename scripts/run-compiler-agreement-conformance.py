@@ -95,6 +95,11 @@ DEFAULT_OUTPUT = Path("conformance-results/compiler_agreement/report.json")
 # a typo cannot quietly become a tier nobody gates.
 COMPILERS = ("interpreter", "native", "xla", "mtk", "sympy")
 
+# §5.44.2's integration SAFETY FACTOR, applied to the integration half of a
+# `derived` band and to nothing else. A manifest states it per fixture; this is
+# what a block that omits it gets. See `integration_factor` for why it exists.
+DEFAULT_INTEGRATION_FACTOR = 100.0
+
 # Fallback tolerance classes, used only when a manifest omits the block. The
 # manifest is the authority; these are §5.38.2's four classes written out so a
 # hand-trimmed manifest cannot silently loosen the gate.
@@ -389,6 +394,15 @@ def _validate_tolerance(fx: dict, fid: str, path: Path, classes: dict) -> None:
                 f"{path}: fixtures[{fid}].tolerance overrides the derived band without a "
                 "written 'reason' (CONFORMANCE_SPEC §5.44.2 allows the override only with one)"
             )
+    if "integration_factor" in tol:
+        fac = tol["integration_factor"]
+        if not isinstance(fac, (int, float)) or isinstance(fac, bool) or float(fac) < 1.0:
+            raise ManifestError(
+                f"{path}: fixtures[{fid}].tolerance.integration_factor must be a number >= 1 "
+                "(it MULTIPLIES the integration half of the band; a factor below 1 would "
+                "tighten the band below the integrator's own local tolerance, which no "
+                "integrator promises to meet)"
+            )
     cls = classes[cls_name]
     restated = {
         "rtol_class": cls.get("rtol"),
@@ -679,33 +693,58 @@ def _close(got: float, want: float, rtol: float, atol: float) -> bool:
     return abs(got - want) <= atol + rtol * abs(want)
 
 
+def integration_factor(fixture: dict) -> float:
+    """The §5.44.2 INTEGRATION SAFETY FACTOR this fixture's derived band carries.
+
+    A solver's ``reltol`` / ``abstol`` bound its LOCAL error per step. Its GLOBAL
+    error at a save time is larger, by a factor that depends on the method, the
+    step count and the problem — no integrator promises otherwise. A band equal to
+    the local tolerance therefore demands of every binding something its
+    integrator never undertook to deliver, and fails it for the difference between
+    two correct integrators rather than for a compiler defect. That is not what
+    this tier asks: the question is whether COMPILERS agree, not whether BDF and
+    Rodas5P do.
+
+    So the integration term is multiplied by a written factor (default
+    ``DEFAULT_INTEGRATION_FACTOR``). It is deliberately blunt: 100x on 1e-10 is
+    still six orders of magnitude below anything a compiler-level defect would
+    produce, so the band stays far tighter than the thing it is there to catch."""
+    tol = fixture.get("tolerance") or {}
+    return float(tol.get("integration_factor", DEFAULT_INTEGRATION_FACTOR))
+
+
 def row_band(fixture: dict, classes: dict, want_row: dict[str, float]) -> tuple[float, float]:
     """The (rtol, atol) band for ONE saved row, exactly as §5.44.2 states it.
 
     ``source: pde_simulation`` copies that tier's trajectory-versus-golden bounds
-    verbatim; nothing is added, because they already are a trajectory band.
+    verbatim; nothing is added and NO factor applies, because they already are a
+    trajectory band that tier measured as one.
 
-    ``source: derived`` widens the class by the integration tolerance::
+    ``source: derived`` widens the class by the integration tolerance, and the
+    integration term alone carries the safety factor ``F``
+    (:func:`integration_factor`)::
 
-        rtol = rtol_class + reltol_integration
-        atol = atol_class + abstol_integration
+        rtol = rtol_class + F * reltol_integration
+        atol = atol_class + F * abstol_integration
 
     and for the ``reduction`` class the class floor is scaled rather than fixed::
 
-        atol = atol_scaled_class * max_i |want_i|  +  abstol_integration
+        atol = atol_scaled_class * max_i |want_i|  +  F * abstol_integration
 
     with the maximum taken over the saved row OF THE REFERENCE, so it is the same
-    number for every binding. Adding the integration tolerance is the whole
-    difference from §5.38: a trajectory carries the integrator's own error on top
-    of the arithmetic's, and a band that ignored it would fail every binding for a
-    defect none of them has."""
+    number for every binding. The ARITHMETIC half of the band — the class — is
+    never widened by the factor: that half is what the tier is actually gating,
+    and loosening it would loosen the gate itself. Carrying the integration
+    tolerance at all is the difference from §5.38, and carrying it with a factor
+    is what keeps two correct integrators from reading as a disagreement."""
     tol = fixture["tolerance"]
     if tol.get("source") == "pde_simulation" or ("rtol" in tol and "atol" in tol):
         return float(tol["rtol"]), float(tol["atol"])
     cls = classes[tol["class"]]
     integ = fixture.get("integration") or {}
-    reltol_i = float(integ.get("reltol", 0.0))
-    abstol_i = float(integ.get("abstol", 0.0))
+    factor = integration_factor(fixture)
+    reltol_i = factor * float(integ.get("reltol", 0.0))
+    abstol_i = factor * float(integ.get("abstol", 0.0))
     rtol = float(cls.get("rtol", 0.0)) + reltol_i
     if "atol_scaled" in cls:
         scale = max((abs(v) for v in want_row.values() if math.isfinite(v)), default=0.0)
@@ -1273,8 +1312,9 @@ def _availability_controls(manifest: dict, rc: int) -> int:
 
 
 def _tolerance_controls(manifest: dict, classes: dict, rc: int) -> int:
-    """The §5.44.2 arithmetic itself: the derived band is the class WIDENED BY THE
-    INTEGRATION TOLERANCE, and the ``reduction`` floor scales with the row."""
+    """The §5.44.2 arithmetic itself: the derived band is the class widened by the
+    integration tolerance TIMES THE SAFETY FACTOR, the ``reduction`` floor scales
+    with the row, and a copied band gets neither."""
     for fx in manifest["fixtures"]:
         tol = fx["tolerance"]
         integ = fx["integration"]
@@ -1286,22 +1326,54 @@ def _tolerance_controls(manifest: dict, classes: dict, rc: int) -> int:
                 rc,
                 ok,
                 f"tolerance/{fx['id']}",
-                f"the copied band is used verbatim (rtol={rtol:g} atol={atol:g})",
+                f"the copied band is used verbatim, with no factor (rtol={rtol:g} atol={atol:g})",
             )
             continue
         cls = classes[tol["class"]]
-        want_rtol = float(cls.get("rtol", 0.0)) + float(integ["reltol"])
+        f = integration_factor(fx)
+        want_rtol = float(cls.get("rtol", 0.0)) + f * float(integ["reltol"])
         if "atol_scaled" in cls:
-            want_atol = float(cls["atol_scaled"]) * 1000.0 + float(integ["abstol"])
+            want_atol = float(cls["atol_scaled"]) * 1000.0 + f * float(integ["abstol"])
         else:
-            want_atol = float(cls.get("atol", 0.0)) + float(integ["abstol"])
+            want_atol = float(cls.get("atol", 0.0)) + f * float(integ["abstol"])
         rc = _report_control(
             rc,
             rtol == want_rtol and atol == want_atol,
             f"tolerance/{fx['id']}",
             (
-                f"class {tol['class']} widened by the integration tolerance gives "
+                f"class {tol['class']} widened by {f:g}x the integration tolerance gives "
                 f"rtol={rtol:g} atol={atol:g}"
+            ),
+        )
+    # The FACTOR's own arithmetic, pinned on one fixture by computing the band
+    # twice — once as the manifest states it and once with the factor forced to 1
+    # — and asserting the difference is exactly the integration term scaled. A
+    # per-fixture equality alone would pass just as happily if `integration_factor`
+    # returned a constant, so this is the control that says the field is READ.
+    pinned = next(
+        (f for f in manifest["fixtures"] if (f["tolerance"].get("source")) == "derived"),
+        None,
+    )
+    if pinned is not None:
+        f = integration_factor(pinned)
+        integ = pinned["integration"]
+        unscaled = copy.deepcopy(pinned)
+        unscaled["tolerance"]["integration_factor"] = 1.0
+        rtol_f, atol_f = row_band(pinned, classes, {"a": 1000.0, "b": 0.0})
+        rtol_1, atol_1 = row_band(unscaled, classes, {"a": 1000.0, "b": 0.0})
+        ok = (
+            f > 1.0
+            and math.isclose(rtol_f - rtol_1, (f - 1.0) * float(integ["reltol"]), rel_tol=1e-12)
+            and math.isclose(atol_f - atol_1, (f - 1.0) * float(integ["abstol"]), rel_tol=1e-12)
+        )
+        rc = _report_control(
+            rc,
+            ok,
+            "tolerance/integration_factor",
+            (
+                f"the factor multiplies the INTEGRATION term and nothing else: on "
+                f"{pinned['id']}, {f:g}x takes rtol {rtol_1:g} -> {rtol_f:g} and atol "
+                f"{atol_1:g} -> {atol_f:g}"
             ),
         )
     # A scaled floor must admit an exact zero beside a large entry and reject one
