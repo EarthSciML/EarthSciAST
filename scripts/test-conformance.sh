@@ -625,7 +625,7 @@ run_pde_simulation_conformance_rust() {
         return 1
     fi
     log "Running PDE-simulation conformance with the Rust vectorized simulator..."
-    EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-pde-sim-adapter-rust --" \
+    EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-pde-sim-adapter-rust -- --compiler native" \
         python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
             --bindings rust \
             --output "$OUTPUT_DIR/pde_simulation/rust_report.json"
@@ -699,7 +699,7 @@ run_pde_pipeline_conformance_rust() {
         return 1
     fi
     log "Running full-pipeline PDE conformance with the Rust vectorized simulator..."
-    EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-pde-sim-adapter-rust --" \
+    EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-pde-sim-adapter-rust -- --compiler native" \
         python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
             --manifest "$PDE_PIPELINE_MANIFEST" \
             --bindings rust \
