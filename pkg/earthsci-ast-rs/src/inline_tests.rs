@@ -2299,6 +2299,8 @@ fn build_for_test(
             built: Built::TestError(
                 "data-source providers need the build pipeline, which is native-only".to_string(),
             ),
+            retry_bindings,
+            retry_fields: OnceCell::new(),
         };
     }
     #[cfg(not(target_arch = "wasm32"))]
