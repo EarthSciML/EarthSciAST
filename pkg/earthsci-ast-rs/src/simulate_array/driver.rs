@@ -755,7 +755,7 @@ impl ArrayCompiled {
         refresh_fn(t0)?;
 
         // The tape is built BEFORE the static hoist, not after it. Under
-        // `native` the hoist is served FROM the tape (see
+        // either strict compiler the hoist is served FROM the tape (see
         // [`Self::hoist_static_observeds`]), so the order the two ran in was
         // itself the defect: the hoist evaluated every CONST-tier observed
         // through the whole-array overlay, once per solve, before the tape the
@@ -930,10 +930,11 @@ impl ArrayCompiled {
         tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) -> SolveSetup {
         let sa0 = build_state_arrays(&self.var_shapes, ic_vec);
-        // `native` (API_SPEC §5.8): the tape's own CONST section computes
-        // exactly these rules, once per solve, on the same schedule this hoist
-        // used to. Materializing them a SECOND time through the whole-array
-        // overlay would be the off-tape per-cell evaluation
+        // The two STRICT compilers, `native` and `xla` (API_SPEC §5.8): the
+        // tape's own CONST section computes exactly these rules, once per
+        // solve, on the same schedule this hoist used to. Materializing them a
+        // SECOND time through the whole-array overlay would be the off-tape
+        // per-cell evaluation
         // `esm-libraries-spec.md` §2.5.10 refuses — and it would be invisible,
         // since the overlay declines on its own terms and reports nothing.
         //
@@ -1005,9 +1006,9 @@ impl ArrayCompiled {
         boundaries: &[f64],
         tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) {
-        // `native`: one taped read-out at t0 answers BOTH halves of this sink
-        // — the static observeds (which the hoist no longer materializes) and,
-        // on a segmented run, the varying ones. The off-tape snapshot below is
+        // Under either strict compiler: one taped read-out at t0 answers BOTH
+        // halves of this sink — the static observeds (which the hoist no
+        // longer materializes) and, on a segmented run, the varying ones. The off-tape snapshot below is
         // what §2.5.10 would otherwise leave un-gated.
         if self.tape_serves_passes()
             && let Some(tape) = tape
@@ -1352,11 +1353,11 @@ impl ArrayCompiled {
         // consistency placeholder; their FAQ rings are produced-and-consumed in
         // this one pass (own transient registry, discarded after).
         let seg_seed: ArrMap = if segment_static_rules.is_empty() || self.tape_serves_passes() {
-            // `native`: the tape's SEGMENT section computes the
-            // segment-invariant observeds itself, on the same once-per-segment
+            // Under either strict compiler: the tape's SEGMENT section
+            // computes the segment-invariant observeds itself, on the same once-per-segment
             // schedule, so seeding them here would be the same rules evaluated
-            // a second time off the tape (§2.5.10). `static_obs` is empty under
-            // `native` for the same reason — see `hoist_static_observeds`.
+            // a second time off the tape (§2.5.10). `static_obs` is empty
+            // under them for the same reason — see `hoist_static_observeds`.
             static_obs.clone()
         } else {
             let sa_seg = build_state_arrays(&self.var_shapes, u0);
@@ -1419,7 +1420,8 @@ impl ArrayCompiled {
                 _ => None,
             };
         // `interpreter`: the per-cell oracle for the right-hand side too, not
-        // just for the observeds. `native` and the legacy routing pass `false`
+        // just for the observeds. The strict compilers and the legacy routing
+        // pass `false`
         // and take the whole-array overlay where the tape is absent.
         let force_scalar = self.is_interpreter();
 
@@ -1549,7 +1551,9 @@ impl ArrayCompiled {
                 let mut s = RhsScratch::new(&var_shapes_jac);
                 s.set_const_arrays(Rc::clone(&const_scope_jac));
                 s.set_static((*jac_seed).clone());
-                // Under `native` the FD Jacobian runs on the TAPE as well.
+                // Under `native` the FD Jacobian runs on the TAPE as well
+                // (under `xla` it runs on the emitted program instead, which
+                // the arm above took).
                 // The two right-hand-side evaluations it differences are the
                 // same rules the production closure runs, so leaving them on
                 // the legacy interpreter meant an implicit solve evaluated the
@@ -1746,8 +1750,8 @@ impl ArrayCompiled {
         if self.observed_rules.is_empty() || time.is_empty() {
             return;
         }
-        // `native`: the observeds reported at output times are read off the
-        // TAPE, one call per saved node, instead of being re-derived through
+        // Under either strict compiler: the observeds reported at output
+        // times are read off the TAPE, one call per saved node, instead of being re-derived through
         // the whole-array overlay. esm-libraries-spec §2.5.10 names this pass
         // explicitly — "the observeds reported at output times" are under the
         // refusal like the right-hand side is — and it is the one that runs
@@ -2000,12 +2004,12 @@ impl ArrayCompiled {
         }
     }
 
-    /// [`Self::append_observed_trajectories`] served from the tape — the
-    /// `native` path.
+    /// [`Self::append_observed_trajectories`] served from the tape — the path
+    /// both strict compilers take.
     ///
     /// Same rows, same order, same cell-key spelling; the only difference is
     /// where the numbers come from. One taped call per saved time point
-    /// publishes every observed (a `native` build exports them all, because a
+    /// publishes every observed (a strict build exports them all, because a
     /// harvest that covered only the probe cone would silently skip a
     /// caller-requested array observed and a static one), and the rows are read
     /// straight off that map.
@@ -2030,7 +2034,7 @@ impl ArrayCompiled {
         let wanted = self.resolve_requested_observeds(requested);
         // WHICH observeds become rows is decided exactly as the overlay path
         // decides it, and deliberately not by what the tape happens to
-        // publish: a `native` build exports every observed so the harvest
+        // publish: a strict build exports every observed so the harvest
         // cannot miss one, and emitting every one of them would put rows in
         // the solution that the same document did not carry before. The
         // candidates are the hoisted static observeds plus the probe cone —
