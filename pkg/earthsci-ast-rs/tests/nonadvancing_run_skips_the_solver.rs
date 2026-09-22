@@ -28,8 +28,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::{
-    Compile, EsmProblem, Flow, ProblemOptions, SimulateError, SolveOptions, esm_problem,
-    load_string, solve,
+    EsmProblem, Flow, ProblemOptions, Rhs, SimulateError, SolveOptions, esm_problem, load_string,
+    solve,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -111,7 +111,7 @@ fn problem_for(json: &str, tspan: (f64, f64)) -> EsmProblem {
         &file,
         tspan,
         ProblemOptions {
-            compile: Compile::Always,
+            rhs: Rhs::Always,
             ..Default::default()
         },
     )
