@@ -136,7 +136,9 @@ impl RhsScratch {
     /// The observeds the tape published on the last call, or `None` on a
     /// scratch that carries no tape.
     pub(super) fn taped_observeds(&self) -> Option<&ArrMap> {
-        self.tape.as_ref().map(super::tape::TapeCtx::exported_observeds)
+        self.tape
+            .as_ref()
+            .map(super::tape::TapeCtx::exported_observeds)
     }
 
     /// Install the hoisted static observeds (see [`Self::static_keys`]): seed

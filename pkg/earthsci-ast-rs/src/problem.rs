@@ -216,7 +216,10 @@ pub enum Rhs {
 /// `Compiler` decides WHICH strategy builds it — so the two sat on the same
 /// `ProblemOptions` as `compile` and `compiler`. The type is `extension` tier,
 /// so the rename is a minor.
-#[deprecated(since = "0.2.0", note = "renamed to `Rhs`; the field is now `ProblemOptions::rhs`")]
+#[deprecated(
+    since = "0.2.0",
+    note = "renamed to `Rhs`; the field is now `ProblemOptions::rhs`"
+)]
 pub type Compile = Rhs;
 
 /// Which strategy builds a Problem's right-hand side (API_SPEC §5.8,
@@ -921,7 +924,10 @@ fn qualify(model: &str, key: &str) -> String {
 /// and the two name their slots differently. Without it the SAME document would
 /// report `M.y` or `y` depending on a routing decision the caller cannot see,
 /// which is the failure §2.5.10 exists to prevent.
-fn qualify_array_names(compiled: &crate::simulate_array::ArrayCompiled, names: &[String]) -> Vec<String> {
+fn qualify_array_names(
+    compiled: &crate::simulate_array::ArrayCompiled,
+    names: &[String],
+) -> Vec<String> {
     let Some(ns) = compiled.namespace() else {
         return names.to_vec();
     };
@@ -2542,8 +2548,7 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
             // single-model array build names its rows bare, the flattened one
             // and the scalar interpreter qualify. See `qualify_array_names`.
             let mut sol = sol;
-            sol.state_variable_names =
-                qualify_array_names(compiled, &sol.state_variable_names);
+            sol.state_variable_names = qualify_array_names(compiled, &sol.state_variable_names);
             Ok(sol)
         }
     }

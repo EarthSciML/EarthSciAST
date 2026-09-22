@@ -88,7 +88,10 @@ fn a_compiler_this_binding_does_not_provide_is_refused_not_substituted() {
             "the registry code must be in the message: {msg}"
         );
         match err {
-            SimulateError::CompilerUnavailable { compiler: c, details } => {
+            SimulateError::CompilerUnavailable {
+                compiler: c,
+                details,
+            } => {
                 assert_eq!(c, compiler.as_str());
                 // §2.5.10: the message names what would have to be loaded or
                 // built. A refusal that does not is a dead end.
@@ -111,7 +114,10 @@ fn a_value_outside_the_vocabulary_is_compiler_unknown() {
     let err = Compiler::parse_named("numba").expect_err("numba is not in the vocabulary");
     assert!(err.contains("compiler_unknown"), "{err}");
     for c in Compiler::vocabulary() {
-        assert!(err.contains(c.as_str()), "the refusal lists the whole vocabulary: {err}");
+        assert!(
+            err.contains(c.as_str()),
+            "the refusal lists the whole vocabulary: {err}"
+        );
         assert_eq!(Compiler::parse_named(c.as_str()), Ok(*c));
     }
 }
@@ -238,8 +244,7 @@ fn native_and_the_interpreter_agree_bit_for_bit() {
             .unwrap_or_else(|e| panic!("{rel} must build under the interpreter: {e}"));
 
         let a = solve(&native, &opts).unwrap_or_else(|e| panic!("{rel} native solve: {e}"));
-        let b = solve(&reference, &opts)
-            .unwrap_or_else(|e| panic!("{rel} interpreter solve: {e}"));
+        let b = solve(&reference, &opts).unwrap_or_else(|e| panic!("{rel} interpreter solve: {e}"));
 
         assert_eq!(a.state_variable_names, b.state_variable_names, "{rel}");
         assert_eq!(a.time.len(), b.time.len(), "{rel}");
@@ -273,7 +278,11 @@ fn the_report_names_every_rule_not_only_the_declines() {
     let prob = build_rhs(&path, Compiler::Native, Rhs::Always).expect("builds");
     let report = prob.compiler_report();
     assert!(!report.rules().is_empty());
-    assert_eq!(report.n_oracle(), 0, "a native build has no rule off the tape");
+    assert_eq!(
+        report.n_oracle(),
+        0,
+        "a native build has no rule off the tape"
+    );
     assert_eq!(report.n_taped(), report.rules().len());
     let mut derivatives = 0;
     for r in report.rules() {
@@ -284,7 +293,11 @@ fn the_report_names_every_rule_not_only_the_declines() {
             r.rule,
             r.cadence
         );
-        assert!(matches!(r.kind, "observed" | "state derivative"), "{}", r.kind);
+        assert!(
+            matches!(r.kind, "observed" | "state derivative"),
+            "{}",
+            r.kind
+        );
         if r.kind == "state derivative" {
             derivatives += 1;
         }
@@ -323,7 +336,11 @@ fn a_const_tier_observed_document_is_served_from_the_tape() {
     );
     let prob = build_rhs(&path, Compiler::Native, Rhs::Always).expect("builds under native");
     let report = prob.compiler_report();
-    let n_const = report.rules().iter().filter(|r| r.cadence == "const").count();
+    let n_const = report
+        .rules()
+        .iter()
+        .filter(|r| r.cadence == "const")
+        .count();
     assert!(
         n_const > 0,
         "the fixture must carry a CONST-tier observed, or this test proves nothing"
@@ -341,10 +358,7 @@ fn a_const_tier_observed_document_is_served_from_the_tape() {
         &opts,
     )
     .expect("solves under the interpreter");
-    assert_eq!(
-        native.state_variable_names,
-        reference.state_variable_names
-    );
+    assert_eq!(native.state_variable_names, reference.state_variable_names);
     for (r, (a, b)) in native.state.iter().zip(reference.state.iter()).enumerate() {
         for (k, (x, y)) in a.iter().zip(b.iter()).enumerate() {
             assert_eq!(

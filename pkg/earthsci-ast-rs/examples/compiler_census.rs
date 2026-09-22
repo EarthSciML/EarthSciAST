@@ -119,10 +119,7 @@ fn record(out: &mut Map<String, Value>, tag: &str, path: &Path, compiler: Compil
             out.insert(format!("{tag}_n_oracle"), json!(report.n_oracle()));
             let mut by_tier: Map<String, Value> = Map::new();
             for r in report.rules() {
-                let n = by_tier
-                    .get(r.cadence)
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
+                let n = by_tier.get(r.cadence).and_then(Value::as_u64).unwrap_or(0);
                 by_tier.insert(r.cadence.to_string(), json!(n + 1));
             }
             out.insert(format!("{tag}_cadence"), Value::Object(by_tier));

@@ -78,14 +78,12 @@ fn row<'s>(sol: &'s earthsci_ast::Solution, name: &str) -> &'s [f64] {
     // See `Solution::index_of`: the array runtime's single-model build names
     // its rows bare and the flattened one qualifies, so a fixture written
     // against either spelling has to resolve against both.
-    let i = sol
-        .index_of(name)
-        .unwrap_or_else(|| {
-            panic!(
-                "no row named '{name}'; rows are {:?}",
-                sol.state_variable_names
-            )
-        });
+    let i = sol.index_of(name).unwrap_or_else(|| {
+        panic!(
+            "no row named '{name}'; rows are {:?}",
+            sol.state_variable_names
+        )
+    });
     &sol.state[i]
 }
 

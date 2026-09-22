@@ -34,7 +34,7 @@ use serde_json::{Map, Value, json};
 use crate::compile_error::CompileError;
 use crate::compiled_rhs_adapter::resolve_fixture_path;
 use crate::problem::{Compiler, ProblemOptions, Rhs, esm_problem, observed_trajectories, solve};
-use crate::simulate::{Alg, SimulateError, SolveOptions, Solution};
+use crate::simulate::{Alg, SimulateError, Solution, SolveOptions};
 use crate::types::EsmFile;
 
 /// The adapter's parsed command line.
@@ -183,7 +183,10 @@ fn f64_list(v: &Value, what: &str) -> Result<Vec<f64>, String> {
     v.as_array()
         .ok_or_else(|| format!("{what} is not an array"))?
         .iter()
-        .map(|x| x.as_f64().ok_or_else(|| format!("{what} holds a non-number")))
+        .map(|x| {
+            x.as_f64()
+                .ok_or_else(|| format!("{what} holds a non-number"))
+        })
         .collect()
 }
 

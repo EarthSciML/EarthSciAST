@@ -186,14 +186,12 @@ fn fast_opts(final_t: f64) -> SolveOptions {
 /// Final-time value of a named scalar state slot (e.g. `"Src.u[1]"`).
 fn final_value(sol: &earthsci_ast::Solution, name: &str) -> f64 {
     // See `Solution::index_of`: either spelling resolves.
-    let row = sol
-        .index_of(name)
-        .unwrap_or_else(|| {
-            panic!(
-                "state slot {name:?} not found; have {:?}",
-                sol.state_variable_names
-            )
-        });
+    let row = sol.index_of(name).unwrap_or_else(|| {
+        panic!(
+            "state slot {name:?} not found; have {:?}",
+            sol.state_variable_names
+        )
+    });
     *sol.state[row].last().expect("at least one output time")
 }
 

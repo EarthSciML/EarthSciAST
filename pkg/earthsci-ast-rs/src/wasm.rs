@@ -802,10 +802,7 @@ impl Problem {
 
         let compiler = match compiler.as_deref() {
             None | Some("") => None,
-            Some(name) => Some(
-                Compiler::parse_named(name)
-                    .map_err(|m| JsValue::from_str(&m))?,
-            ),
+            Some(name) => Some(Compiler::parse_named(name).map_err(|m| JsValue::from_str(&m))?),
         };
         let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
         let prob = esm_problem(

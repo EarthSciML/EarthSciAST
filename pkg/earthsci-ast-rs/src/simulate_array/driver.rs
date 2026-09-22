@@ -641,8 +641,7 @@ impl ArrayCompiled {
         let (tape, tape_fallbacks) = self.build_solve_tape(discrete_forcing);
 
         let cadence = self.partition_observed_cadence(discrete_forcing);
-        let setup =
-            self.hoist_static_observeds(cadence, &ic_vec, &param_vec, t0, tape.as_ref());
+        let setup = self.hoist_static_observeds(cadence, &ic_vec, &param_vec, t0, tape.as_ref());
 
         if let Some(insp) = inspect {
             self.fill_solve_inspection(
@@ -1276,10 +1275,11 @@ impl ArrayCompiled {
         let jac_seed = Rc::clone(&seg_seed);
         let const_scope_jac = Rc::clone(&self.const_scope);
         let jac_scratch: RefCell<Option<RhsScratch>> = RefCell::new(None);
-        let tape_jac: Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)> = match (self.is_native(), tape) {
-            (true, Some((prog, full_obs))) => Some((Rc::clone(prog), Rc::clone(full_obs))),
-            _ => None,
-        };
+        let tape_jac: Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)> =
+            match (self.is_native(), tape) {
+                (true, Some((prog, full_obs))) => Some((Rc::clone(prog), Rc::clone(full_obs))),
+                _ => None,
+            };
         // `interpreter`: the per-cell oracle for the right-hand side too, not
         // just for the observeds. `native` and the legacy routing pass `false`
         // and take the whole-array overlay where the tape is absent.

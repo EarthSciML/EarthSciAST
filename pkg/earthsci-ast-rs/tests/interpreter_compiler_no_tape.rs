@@ -152,7 +152,11 @@ fn native_tapes_the_same_document_whole() {
     assert_eq!(prob.compiler(), Compiler::Native);
     let report = prob.compiler_report();
     assert!(report.n_taped() > 0, "native IS the tape");
-    assert_eq!(report.n_oracle(), 0, "a native build has no rule off the tape");
+    assert_eq!(
+        report.n_oracle(),
+        0,
+        "a native build has no rule off the tape"
+    );
 }
 
 #[test]
