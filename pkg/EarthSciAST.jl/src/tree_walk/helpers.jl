@@ -43,6 +43,63 @@ function _refuse_flat_events(flat::FlattenedSystem)
     return nothing
 end
 
+# The first unknown carrying BOTH a derivative equation and a bare-LHS one, as
+# `(name, derivative_equation, bare_equation)`; `nothing` when there is none.
+#
+# The search is over EQUATION SHAPES, not over any state/observed split. The
+# derivative side accepts every spelling `_lhs_role` credits as `:derivative`
+# (`D(x)`, `D(x[i])`, a `faq` whose body is a `D`); the competing definition
+# must be a BARE variable LHS. An indexed LHS writes one cell rather than
+# redefining the whole unknown and is not counted, which keeps this to the shape
+# the Python and Rust builds refuse, so the three bindings refuse the same
+# documents.
+#
+# First in equation order, so a document with several gets a stable message.
+function _first_doubly_defined_unknown(equations)
+    diff_eqs = Dict{String,Equation}()
+    bare_eqs = Dict{String,Equation}()
+    for eq in equations
+        role, name = _lhs_role(eq.lhs)
+        if role === :derivative
+            get!(diff_eqs, name, eq)
+        elseif eq.lhs isa VarExpr
+            get!(bare_eqs, (eq.lhs::VarExpr).name, eq)
+        end
+    end
+    for eq in equations
+        role, name = _lhs_role(eq.lhs)
+        role === :derivative || continue
+        haskey(bare_eqs, name) || continue
+        return (name, diff_eqs[name], bare_eqs[name])
+    end
+    return nothing
+end
+
+# The refusal of a doubly-defined unknown (esm-spec §4.9.4), naming the unknown
+# and both equations.
+_doubly_defined_refusal(name::AbstractString, diff_eq::Equation, bare_eq::Equation) =
+    TreeWalkError(
+        ERROR_CODES.EQUATION_COUNT_MISMATCH,
+        "unknown '$name' is defined twice — by `$(to_ascii(diff_eq))` and by " *
+        "`$(to_ascii(bare_eq))`. esm-spec §4.9.4 counts an equation whichever form " *
+        "its LHS takes, so this system has one more equation than it has unknowns " *
+        "to bind; keeping the derivative and dropping the constraint would run a " *
+        "model the document does not describe. Remove one of the two definitions.")
+
+# Throw that refusal when `equations` doubly-defines an unknown.
+#
+# `validate` reports the same document as `equation_count_mismatch`, and the
+# build is the other place it arrives. Tie-breaking in favour of the derivative
+# — which is what `algebraic_states_to_observeds` leaves standing, since it
+# keeps a doubly-defined name a STATE and drops nothing — integrates a system
+# free of a constraint the file declares and reports the trajectory as the
+# answer.
+function _refuse_doubly_defined_unknown(equations)
+    found = _first_doubly_defined_unknown(equations)
+    found === nothing || throw(_doubly_defined_refusal(found...))
+    return nothing
+end
+
 # The first event `model` or any of its subsystems declares, a continuous one
 # before a discrete one; `nothing` when there is none.
 function _first_event(model::Model)::Union{Nothing,ContinuousEvent,DiscreteEvent}
