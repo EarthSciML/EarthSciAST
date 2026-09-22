@@ -1024,30 +1024,29 @@ impl<'m> TapeBuilder<'m> {
         }
         if let Some((shape, origin)) = &obox {
             match bx {
-                Some(b) => {
-                    // Inside a box, anything that is not THE box is a real
-                    // array argument, which the registry rejects with
-                    // `closed_function_arg_type`.
+                // Inside a box, anything that is not THE box is a real array
+                // argument, which the registry rejects with
+                // `closed_function_arg_type`.
+                Some(b)
                     if shape.as_slice() != b.shape.as_slice()
-                        || origin.as_slice() != b.lo.as_slice()
-                    {
-                        bail_tape!(
-                            "op: closed function `{name}` on an array-valued query (the \
-                             registry takes a scalar)"
-                        );
-                    }
+                        || origin.as_slice() != b.lo.as_slice() =>
+                {
+                    bail_tape!(
+                        "op: closed function `{name}` on an array-valued query (the \
+                         registry takes a scalar)"
+                    );
                 }
                 // Wholesale, `eval_fn` broadcasts an array query over the
                 // fixed table for `interp.linear` ONLY; the other two entries
                 // reach `expect_scalar` and come back as the NaN sentinel,
-                // which the oracle is what produces.
+                // which only the oracle produces.
                 None if kind != InterpKind::Linear => {
                     bail_tape!(
                         "wholesale: closed function `{name}` on an array-valued query \
                          (the registry takes a scalar)"
                     );
                 }
-                None => {}
+                Some(_) | None => {}
             }
         }
 
