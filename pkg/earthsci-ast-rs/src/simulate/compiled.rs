@@ -303,6 +303,9 @@ impl Compiled {
                 // Rides to the caller so a name-keyed read of the result can
                 // resolve a spelling the merge deleted (issue #230).
                 merged_variable_renames: self.merged_renames.clone(),
+                // The scalar interpreter qualifies every row, so no bare row
+                // needs a namespace to be addressed by.
+                namespace: None,
             },
         })
     }
