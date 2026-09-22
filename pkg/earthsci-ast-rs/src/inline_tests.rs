@@ -89,8 +89,15 @@ use crate::simulate::{Solution, SolveOptions};
 /// constructed; it is recorded as an assertion ERROR, never ignored.
 ///
 /// See [`run_inline_tests_with_providers`].
+#[cfg(not(target_arch = "wasm32"))]
 pub type BuildProviderFactory<'a> =
     dyn Fn() -> Result<Vec<(String, Box<dyn crate::prepare::PrepareProvider>)>, String> + 'a;
+
+/// The wasm32 build has no build pipeline (`crate::prepare` is native-only), so
+/// there is no provider contract to satisfy: a factory passed here is refused,
+/// and every assertion of a test that needs one is recorded as an ERROR.
+#[cfg(target_arch = "wasm32")]
+pub type BuildProviderFactory<'a> = dyn Fn() -> Result<(), String> + 'a;
 
 /// Qualify a test's override keys with the component that OWNS the test.
 ///
@@ -2204,6 +2211,8 @@ fn build_for_test(
     let retry_bindings = build_providers
         .is_none()
         .then(|| (scalar_params.clone(), u0.clone()));
+    // Only the native provider branch below writes to it.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut popts = ProblemOptions {
         p: scalar_params,
         u0,
@@ -2215,6 +2224,18 @@ fn build_for_test(
     // failure here is NOT a solve failure and must not be reported as one:
     // it means the numbers the test asserts on were never read, so every
     // assertion of this test is an ERROR naming the source.
+    #[cfg(target_arch = "wasm32")]
+    if build_providers.is_some() {
+        return BuiltModel {
+            key,
+            ephemeral,
+            index_sets,
+            built: Built::TestError(
+                "data-source providers need the build pipeline, which is native-only".to_string(),
+            ),
+        };
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     if let Some(make) = build_providers {
         match make() {
             Ok(provs) => {
@@ -2283,6 +2304,20 @@ fn build_for_test(
 /// §9.6.6 asks for. A rebuild that FAILS changes nothing — the first problem
 /// stands and the assertion reports exactly what it reported before — because
 /// this is an attempt to answer more, never a new way to fail.
+///
+/// On wasm32 there is no build pipeline to retry with, so the first problem
+/// always stands.
+#[cfg(target_arch = "wasm32")]
+fn with_build_pipeline_if_needed(
+    _run_file: &EsmFile,
+    _tspan: (f64, f64),
+    _bindings: Option<(HashMap<String, f64>, HashMap<String, f64>)>,
+    built: EsmProblem,
+) -> EsmProblem {
+    built
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn with_build_pipeline_if_needed(
     run_file: &EsmFile,
     tspan: (f64, f64),
