@@ -922,28 +922,17 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         @test get(dn.stats, :scalar_batch, 0) == 0
 
         # ONE WHOLE-LANE READ PER TENT POSITION, and not one per cell. The
-        # per-entry walk reads the state one element at a time
-        # (a `slice1@rhs_scalar.*` site); the batched surface reads all
-        # `NI*NJ` lanes at once, so the site tally carries NO single-position
+        # per-entry walk reads the state one element at a time — through a
+        # state-gather node (`slice1@rhs_scalar.stategather`) where the build
+        # formed one, or a plain state node (`slice1@rhs_scalar.state`) under
+        # `compiler=:interpreter`, which forms none; the batched surface reads
+        # all `NI*NJ` lanes at once, so the site tally carries NO single-position
         # read at all and exactly `M*M` whole-lane reads — one per position of
         # the tent, whatever form the cost model gives each one.
-        #
-        # COUNT BOTH SPELLINGS OF A SINGLE-SLOT READ. The site's `why` names the
-        # NODE KIND the read came from: `stategather` for the state-box
-        # lowering, `state` for a plain state node. Which one this build
-        # produces is a property of the oracle's tier settings — the per-entry
-        # build above is `compiler = :interpreter`, which turns the state-box
-        # tier off — and the claim here is about the read's WIDTH, not about
-        # which tier lowered it. (Before f6f15932c the oracle was
-        # `ESS_OOP_BATCH=0` on an otherwise `native` build, which kept the
-        # state box on and made `stategather` the only spelling; the switch to
-        # `:interpreter` changed the spelling and this assertion was left
-        # behind.)
-        rd1 = (Symbol("slice1@rhs_scalar.stategather"),
-               Symbol("slice1@rhs_scalar.state"))
-        _de_reads1(st) = sum(get(st, k, 0) for k in rd1)
-        @test _de_reads1(dn.stats) > 0
-        @test _de_reads1(d.stats) == 0
+        reads1(stats) = get(stats, Symbol("slice1@rhs_scalar.stategather"), 0) +
+                        get(stats, Symbol("slice1@rhs_scalar.state"), 0)
+        @test reads1(dn.stats) > 0
+        @test reads1(d.stats) == 0
         @test get(d.stats, Symbol("concat@rhs_scalar.x"), 0) +
               get(d.stats, Symbol("gather@rhs_scalar.x"), 0) == M * M
 
@@ -960,7 +949,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
                                    samples; census = false)
             println("  batched tally (always): ", da.stats)
             @test get(da.stats, Symbol("gather@rhs_scalar.x"), 0) == M * M
-            @test get(da.stats, rd1, 0) == 0
+            @test reads1(da.stats) == 0
         end
 
         # And the emitted program stops following the cell count: the group's
