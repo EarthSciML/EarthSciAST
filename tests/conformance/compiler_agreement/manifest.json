@@ -15,12 +15,11 @@
     },
     "native": {
       "bindings_required": [
-        "julia"
-      ],
-      "bindings_optional": [
+        "julia",
         "rust",
         "python"
       ],
+      "bindings_optional": [],
       "note": "The strict default. Julia's strict build has landed, so julia must ANSWER for `native`; rust and python stay optional until theirs do and cross on the same one-way ratchet. A REFUSAL is governed by each fixture's `required` map, not by this list."
     },
     "xla": {
@@ -39,10 +38,10 @@
       "note": "Julia only; needs ModelingToolkit loaded. The one compiler that runs events and implicit equations."
     },
     "sympy": {
-      "bindings_required": [],
-      "bindings_optional": [
+      "bindings_required": [
         "python"
       ],
+      "bindings_optional": [],
       "note": "Python only; scalar documents only."
     }
   },

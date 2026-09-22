@@ -27,11 +27,13 @@ Design decisions of record (2026-09-21) that this tier implements:
 
 > **Status.** `golden/` holds all six reference trajectories, minted from the
 > Julia `interpreter` and committed; each one reproduces the analytic anchor its
-> fixture carries. Julia answers for both `interpreter` and `native` with no
-> refusals on any fixture, and is `bindings_required` for each. Rust and Python
-> stay `bindings_optional` for `native` while their adapters are being written;
-> each crosses to `bindings_required` when its strict build lands, on the same
-> one-way ratchet.
+> fixture carries. Julia, Rust and Python each answer for both `interpreter`
+> and `native` with no refusals on any fixture, and all three are
+> `bindings_required` for each; Python is `bindings_required` for `sympy`,
+> which refuses the four array fixtures by name and runs the two scalar ones.
+> `xla` and `mtk` stay `bindings_optional` until a binding's `esm_problem` can
+> build with them; each crosses to `bindings_required` on the same one-way
+> ratchet.
 
 ## Shape
 
