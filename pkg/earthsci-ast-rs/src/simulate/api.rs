@@ -411,11 +411,13 @@ impl Solution {
     ///    this name (issue #230) — consulted after the exact match, so the map
     ///    can never shadow a live row;
     /// 3. a BARE `name` against the unique qualified row with that tail;
-    /// 4. a QUALIFIED `name` against the unique BARE row with that tail. The
-    ///    mirror of (3), and the arm a caller needs when a document's rows
-    ///    come from the array runtime's single-model build, which names its
-    ///    slots without the model's namespace while the flattened build and
-    ///    the scalar interpreter qualify.
+    /// 4. a QUALIFIED `name` against the row it names once the solution's own
+    ///    [`SolutionMetadata::namespace`] is stripped from its front. The
+    ///    mirror of (3), and the arm a
+    ///    caller needs when a document's rows come from the array runtime's
+    ///    single-model build, which names its slots without the model's
+    ///    namespace while the flattened build and the scalar interpreter
+    ///    qualify.
     ///
     /// An ambiguous tail resolves to nothing rather than to an arbitrary one
     /// of the candidates, in both directions.
@@ -428,19 +430,18 @@ impl Solution {
         {
             return Some(i);
         }
-        let tail = name.rsplit('.').next().unwrap_or(name);
-        let dotted = name.contains('.');
+        if name.contains('.') {
+            // A qualified request reaches a row the build left unqualified only
+            // through the namespace it left off: `M.x` is this model's `x` (and
+            // `M.North.u` its mounted `North.u`), but `Other.x` is not.
+            let ns = self.metadata.namespace.as_deref()?;
+            let rest = name.strip_prefix(ns)?.strip_prefix('.')?;
+            return self.state_variable_names.iter().position(|n| n == rest);
+        }
         let mut hit = None;
         for (i, n) in self.state_variable_names.iter().enumerate() {
-            // A bare request matches a QUALIFIED row's tail; a qualified one
-            // matches a BARE row outright. Neither ever matches across two
-            // different components, because a qualified row's tail is compared
-            // against the whole request only when the request is bare.
-            let matches = if dotted {
-                !n.contains('.') && n == tail
-            } else {
-                n.contains('.') && n.rsplit('.').next() == Some(name)
-            };
+            // A bare request matches a QUALIFIED row's tail.
+            let matches = n.contains('.') && n.rsplit('.').next() == Some(name);
             if matches {
                 if hit.is_some() {
                     return None; // ambiguous tail
@@ -531,4 +532,11 @@ pub struct SolutionMetadata {
     /// --format grid` output plan. Empty for a document with no renaming merge,
     /// which is the overwhelming majority.
     pub merged_variable_renames: HashMap<String, String>,
+    /// The model namespace this solution's BARE rows belong to, when the build
+    /// named its slots without it (the array runtime's single-model build).
+    ///
+    /// [`Solution::get`] accepts `<namespace>.x` for a row the build named `x`,
+    /// and only under this namespace, so `Other.x` never reads another model's
+    /// `x`. `None` when every row is already qualified.
+    pub namespace: Option<String>,
 }
