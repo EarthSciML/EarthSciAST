@@ -61,7 +61,6 @@ fn approx(a: f64, b: f64, eps: f64) -> bool {
 // hyperbolic leaves that `tests/conformance/inverse_trig/` owns, the
 // slot-addressed calling convention, and the two construction-time refusals.
 
-
 #[test]
 fn exp_log_log10_sqrt() {
     assert!(approx(

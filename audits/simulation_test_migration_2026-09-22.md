@@ -18,22 +18,25 @@ fixture + golden" is a **duplicate** of something `scripts/test-conformance.sh`
 already runs for every binding, and can therefore be deleted. **On this
 repository that is not true, and it matters.**
 
-`scripts/test-conformance.sh` drives exactly seven tier families with
-per-binding producer stages: `determinism`, `cadence`, `pde_simulation`,
-`pde_simulation_pipeline`, `compiled_rhs`, `compiler_agreement`, and (self-test
-only) `geometry`. Every OTHER tier under `tests/conformance/` — 50-odd of them,
-including `shaped_parameter_broadcast`, `scalar_ic`, `merged_rename_reach`, all
-eight `pde_inline_*` categories and the rest — is driven **only by each
-binding's own test suite**, through exactly the per-binding adapter files the
-censuses bucketed as *move-to-fixture*.
+Before this branch, `scripts/test-conformance.sh` drove exactly **six** tier
+families with per-binding producer stages — `determinism`, `cadence`,
+`pde_simulation`, `pde_simulation_pipeline`, `compiled_rhs` and
+`compiler_agreement` — plus `geometry`, which has a self-test and no producers.
+Every OTHER tier under `tests/conformance/` — fifty-odd of them, including
+`shaped_parameter_broadcast`, `scalar_ic`, `merged_rename_reach`, all eight
+`pde_inline_*` categories and the rest — is driven **only by each binding's own
+test suite**, through exactly the per-binding adapter files the censuses
+bucketed as *move-to-fixture*.
 
 Those adapters are therefore **not duplicates**: each one is the only thing that
-runs that shared fixture in that binding. Deleting a Julia adapter would delete
-Julia's coverage of that tier outright. They are gated in CI — the
-`standard-conformance-testing` job carries
-`needs: [julia-tests, typescript-tests, python-tests, rust-tests, go-tests]`, so
-all five suites pass before the harness starts — but they are gated **there**,
-not in the harness.
+runs that shared fixture in that binding, and deleting a Julia adapter would
+delete Julia's coverage of that tier outright. They ARE gated in CI: each
+binding's suite is its own job in `.github/workflows/conformance-testing.yml`
+(`julia-tests`, `typescript-tests`, `python-tests`, `rust-tests`, `go-tests`)
+and each fails the workflow on its own. What they are not gated by is the
+HARNESS — `standard-conformance-testing` deliberately carries no `needs:` on
+them any more (the comment at line 665 of that workflow records why), so it runs
+concurrently with the suites rather than behind them.
 
 So the ledger's first category is **already shared**, not "already covered, so
 deletable". A file in it needs no work and must not be removed; the semantics it

@@ -137,13 +137,11 @@ def load_manifest(path: Path) -> dict:
             raise ManifestError(f"{path}: {key} must be a string")
     if manifest.get("reference_binding") != REFERENCE_BINDING:
         raise ManifestError(
-            f"{path}: reference_binding must be {REFERENCE_BINDING!r} "
-            f"(CONFORMANCE_SPEC §5.45.2)"
+            f"{path}: reference_binding must be {REFERENCE_BINDING!r} (CONFORMANCE_SPEC §5.45.2)"
         )
     if manifest.get("reference_compiler") != REFERENCE_COMPILER:
         raise ManifestError(
-            f"{path}: reference_compiler must be {REFERENCE_COMPILER!r} "
-            f"(CONFORMANCE_SPEC §5.45.2)"
+            f"{path}: reference_compiler must be {REFERENCE_COMPILER!r} (CONFORMANCE_SPEC §5.45.2)"
         )
     required = manifest.get("bindings_required")
     if not isinstance(required, list) or not required:
@@ -195,17 +193,13 @@ def _validate_golden_field(path: Path, fid: str, fx: dict) -> None:
     if isinstance(g, str) and g:
         return
     if g is not None:
-        raise ManifestError(
-            f"{path}: fixtures[{fid}].golden must be a non-empty string or null"
-        )
+        raise ManifestError(f"{path}: fixtures[{fid}].golden must be a non-empty string or null")
     if not isinstance(fx.get("golden_absent_reason"), str) or not fx["golden_absent_reason"]:
         raise ManifestError(
             f"{path}: fixtures[{fid}] has no golden and no golden_absent_reason. "
             f"A missing reference is a statement, and it has to be written down."
         )
-    if not any(
-        ex.get("binding") == REFERENCE_BINDING for ex in (fx.get("named_exclusions") or [])
-    ):
+    if not any(ex.get("binding") == REFERENCE_BINDING for ex in (fx.get("named_exclusions") or [])):
         raise ManifestError(
             f"{path}: fixtures[{fid}] has no golden, but nothing records the "
             f"{REFERENCE_BINDING} reference refusing it. The only reason a fixture may "
@@ -585,9 +579,7 @@ class InlineTestsHarness(AdapterHarness):
                 payload["adapter_status"] = "unavailable"
                 return payload
             if "fixtures" not in payload:
-                return self._broken(
-                    binding, "invalid_output", "adapter output missing 'fixtures'"
-                )
+                return self._broken(binding, "invalid_output", "adapter output missing 'fixtures'")
             payload.setdefault("binding", binding)
             payload.setdefault("compiler", self.compiler)
             payload["adapter_status"] = "ok"
