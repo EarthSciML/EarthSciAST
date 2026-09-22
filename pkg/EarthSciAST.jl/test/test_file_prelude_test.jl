@@ -315,3 +315,29 @@ end
         "(testutils.jl documents that both must work). Add the line named:\n" *
         join(offenders, "\n"))
 end
+
+# ── …and runtests.jl names every test file ──────────────────────────────────
+#
+# The sibling failure, and the one that has no symptom at all: a `*_test.jl`
+# that `runtests.jl` never includes. It passes standalone, it reads like part of
+# the suite, and CI — which runs `Pkg.test()`, i.e. `runtests.jl` — never
+# executes a line of it. `compiler_selection_test.jl` sat that way through the
+# whole compiler-selection branch: the closed vocabulary, the strict tier report
+# and the native-versus-interpreter agreement, none of it run.
+#
+# The check is textual on purpose. An include guarded by a condition
+# (`ESM_TEST_REACTANT=1`) still NAMES its file, which is the property being
+# pinned — that the driver knows the file exists — and whether a given run takes
+# that branch is the guard's business, documented where the guard is.
+@testset "runtests.jl includes every test file" begin
+    driver = read(joinpath(_PRELUDE_TEST_DIR, "runtests.jl"), String)
+    named = Set{String}(m.captures[1] for m in eachmatch(r"include\(\"([^\"]+)\"\)", driver))
+    @test "testutils.jl" in named                  # the driver was really read
+    files = sort!(filter(f -> endswith(f, "_test.jl"), readdir(_PRELUDE_TEST_DIR)))
+    @test length(files) > 100                      # the sweep is not vacuous
+    orphans = [f for f in files if !(f in named)]
+    @test isempty(orphans) || error(
+        "$(length(orphans)) test file(s) are never included by runtests.jl, so " *
+        "`Pkg.test()` — and therefore CI — never runs them:\n" *
+        join(("  " * f for f in orphans), "\n"))
+end

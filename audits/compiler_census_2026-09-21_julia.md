@@ -408,12 +408,20 @@ on the overflow pass.
 | `subcall_order` | :668 | a sub-kernel whose invariant slots were not registered before the call site | capability (an ordering limitation, not a construct) | **yes** |
 | `fn_payload` | :845 | a closed-function payload shape the emitter cannot box | capability | **yes** |
 | `box_rank` | :1039 | a strided Cartesian box of rank > 3 | capability | **yes** |
-| `body_split_unsupported` | :1405 | the body exceeds `_codegen_fn_node_cap()` (20 000) and this Julia cannot split safely | **cost on Julia ≥ 1.12, capability below it** — `_cg_split_supported()` is a version gate (codegen_kernel.jl:1208-1223: on < 1.12 the inner functions become untyped opaque closures that box per cell and segfault when nested) | **yes** where it fires |
+| ~~`body_split_unsupported`~~ | :1405 | the body exceeds `_codegen_fn_node_cap()` (20 000) and this Julia cannot split safely | **cost on Julia ≥ 1.12, capability below it** — `_cg_split_supported()` is a version gate (codegen_kernel.jl:1208-1223: on < 1.12 the inner functions become untyped opaque closures that box per cell and segfault when nested) | **yes** where it fires |
+
+**REMOVED since this census.** `body_split_unsupported` no longer exists. The
+split now has a second TRANSPORT (`_cg_split_by_value`): each sub-function is
+compiled as its own `RuntimeGeneratedFunction` and reaches the body in a tuple
+appended to `tabs`, called at a literal index, so no inner definition — and no
+opaque closure — is involved. Julia < 1.12 takes that transport, every Julia can
+split, and an oversized body is compiled rather than declined. The row is kept,
+struck through, because the environment-dependent CLASS it recorded is the thing
+that changed.
 
 The reasons that recur on the overflow pass are the ones that put a kernel on
-`_run_acc_kernel!`. `budget` is the only reason that structurally cannot;
-`body_split_unsupported` is the only other one whose class depends on the environment
-rather than the document.
+`_run_acc_kernel!`. `budget` is the only reason that structurally cannot, and now
+the only one whose class depends on anything but the document.
 
 ### 2C. Whole-array contraction — the tier that accepts *and* interprets
 
