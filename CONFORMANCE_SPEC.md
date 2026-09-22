@@ -2568,7 +2568,7 @@ As in §5.10 / §5.12, trajectories MUST NOT be asserted byte-identical; the
 integrator is pinned per binding in `manifest.json` (`integrators`). The forcing
 snapshots come from the golden's `forcing.by_anchor` — **no providers, no network,
 no file I/O** — driven by each binding's forcing primitive (Julia
-`build_evaluator(…; param_arrays)` + a `build_refresh_callback` whose
+`esm_problem(…; param_arrays)` + a `build_refresh_callback` whose
 `post_refresh = dm.materialize!` fires per anchor; Python
 `_simulate_with_numpy(…, loader_arrays=…)`; Rust
 `ArrayCompiled::forcing_handle()`), so the suite is deterministic and CI-safe. The
