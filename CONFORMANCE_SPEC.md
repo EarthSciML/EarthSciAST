@@ -6270,6 +6270,164 @@ remains the only place `native`'s coverage is measured. Without that, the whole
 harness goes red for reasons unrelated to what each stage tests.
 
 
+### 5.45 Inline-Test Conformance Tiers (normative)
+
+§5.38 governs one right-hand side at fixed probe states; §5.44 governs a whole
+RUN, compared as a state trajectory keyed by bare column-major element name.
+This section governs the third shape, and it is the one most SEMANTICS fixtures
+need: a **document that carries its own `tests` block** (esm-spec §6.6), run
+through each binding's OWN inline-test runner under a NAMED compiler.
+
+The difference from §5.44 is not stylistic. A §6.6.5 `coords` assertion, a
+`reduce` assertion and an assertion on an OBSERVED each name something that is
+not a state element, so §5.44's trajectory comparison cannot carry them as
+anchors — and those are most of what a semantics fixture asserts. Delegating the
+assertion to each binding's §6.6 runner is also what makes the comparison
+meaningful, because that runner is part of what is under test.
+
+The contract — manifest schema, adapter CLI, outcomes, golden format, stage
+names — is each tier's own `README.md`. The runner is
+`scripts/run-inline-tests-conformance.py`, and a manifest it drives declares
+`"runner": "inline_tests"`.
+
+Go and TypeScript are **out of scope** for every tier of this family: neither
+has a simulator or an inline-test runner, so neither can drive one
+(`API_SPEC.md` §3, capability profiles). That is an exclusion from the
+CATEGORY, never from the rule the category gates.
+
+#### 5.45.1 What is compared, and why it is two things
+
+Per assertion, an adapter reports **both** `passed` — its binding's own §6.6.3
+verdict — and `actual`, the reduction value that verdict was reached on. The
+runner gates both:
+
+* `passed` is gated against the **document's authored `expected`**, at the
+  assertion's resolved §6.6.4 band. The document is the oracle, it is outside
+  every binding, and it travels with the physics it is about.
+* `actual` is gated against **`golden/<id>.json`**, the reference's number for
+  the same assertion, at the tier's own band.
+
+Neither alone is enough. An assertion whose declared band is loose enough to
+admit two different answers PASSES for two bindings that disagree; the golden is
+what makes the disagreement visible. And a golden alone says only that a number
+did not move — it is the authored `expected` that says the number was right in
+the first place, which is why the always-on self-test holds every committed
+golden to the document's own expectation before any binding runs.
+
+Nothing here inspects an emitted program. Agreement is numerical, exactly as
+§5.38.1 requires.
+
+#### 5.45.2 The reference
+
+The reference is the **Julia `interpreter`**, and `--write-golden` refuses to
+mint from any other binding or any other compiler. It is the same reference
+§5.38 and §5.44 use and for the same reason: the interpreter is complete over
+the evaluable core (`esm-libraries-spec.md` §2.5.10) and shares no code with the
+compiled or vectorized tiers it gates, so a compiled path that reproduces it has
+been checked against something it does not share code with.
+
+A golden carries its provenance (`reference_binding`, `reference_compiler`) and
+one entry per `(test_id, assertion_idx)`. The self-test rejects a golden whose
+key set does not match the document's, which is what keeps a golden from
+silently surviving an edit to the fixture it is about.
+
+**When the reference itself refuses a fixture** there is no reference actual to
+mint, and the fixture's `golden` is `null`. That is a statement, not an
+omission, so it is written down: the manifest MUST carry a
+`golden_absent_reason`, AND a `named_exclusions` entry naming the REFERENCE
+binding — if the reference can run the document, there is no excuse for not
+minting from it. Such a fixture is still gated: the bindings that DO run it are
+held to the document's authored `expected`, which is an oracle outside every
+binding. What it loses is the cross-compiler drift check, and that returns the
+moment the reference gains the rule and the golden can be minted.
+
+#### 5.45.3 Outcomes and gate
+
+Per fixture, per binding, per compiler, an adapter answers exactly one of:
+
+| Outcome | Meaning |
+|---|---|
+| assertions | a list of `{test_id, assertion_idx, variable, passed, actual, message}` |
+| `refused` | this compiler cannot evaluate this document; carries the `code` it declined with and the `reason` |
+| `unavailable` | this compiler does not exist in this binding, or its runtime is not configured here; the WHOLE output, because it is a fact about the binding rather than about a document |
+| `error` | the load, the build or the run threw something that names no coded diagnostic |
+
+**A refusal has two shapes and both are refusals.** One is thrown out of the
+build. The other is a run in which EVERY assertion failed carrying ONE coded
+diagnostic — an operator with no evaluation rule declines at EVALUATION rather
+than at build, and reporting that as "every number is wrong" would file a
+refusal in the same bucket as a numeric defect. An adapter therefore classifies
+a whole-fixture, single-code failure as `refused`, and a message naming NO code
+can never reach that classification: a wrong answer must never become a green
+named exclusion.
+
+The gate:
+
+* a **failed assertion** is RED, for every compiler and every binding — and it
+  is red on the BINDING's own verdict, which is the assertion the document
+  authored. Nothing weakens an assertion to make a binding pass;
+* a value **outside the golden band** is RED even where the assertion passed;
+* a **refusal** is a **named exclusion** — reported with the binding, the
+  compiler, the fixture and the code, in the report and on the console, and
+  green — only where the fixture's `named_exclusions` ledger names that
+  `(binding, compiler)` AND the code matches. An unnamed refusal, or one whose
+  code has drifted from the ledger, is RED. It is never a pass and never a
+  silent skip;
+* an **`unavailable`** is RED for a binding the manifest lists in
+  `bindings_required`, and a reported skip otherwise;
+* an **`error`** is RED unconditionally: unlike a refusal it says nothing about
+  what a compiler can run, so no ledger excuses it.
+
+**The two ledgers are never merged.** `bindings_required` says a binding must be
+able to ANSWER at all; a fixture's `required` map (binding → the compilers that
+must run THIS document) says which compilers must not refuse it. Merging them
+would make a coverage gap indistinguishable from a missing runtime. A fixture
+that both REQUIRES and EXCLUDES the same `(binding, compiler)` is a manifest
+error the self-test rejects, because it says two things at once.
+
+An exclusion that no longer excludes anything — the binding ran the fixture
+cleanly — is reported as a **stale-exclusion note**, not a failure. Failing the
+binding that got better is the one way a ratchet can run backwards.
+
+#### 5.45.4 The tiers of this family
+
+| Tier | What it gates |
+|---|---|
+| `broadcast_alignment` | esm-spec §4.3.4 name-based operand alignment in an array-level equation, its ANONYMOUS-shape boundary, and the one-operand `broadcast` node |
+| `scalar_operator_semantics` | what each scalar operator of esm-spec §9.2's evaluable core COMPUTES |
+
+Each tier's `README.md` is its contract and records what did NOT move into it.
+A tier is added by writing that README, a manifest with `"runner":
+"inline_tests"`, its fixtures, its goldens, and one stage per binding per
+compiler in `scripts/test-conformance.sh`.
+
+#### 5.45.5 Gate wiring
+
+`scripts/run-inline-tests-conformance.py --manifest <m> --self-test` is the
+always-on guard and needs no live binding: it validates the manifest and both
+ledgers, holds every committed golden to the DOCUMENT's own expectation at each
+assertion's resolved band, and asserts the harness rejects a value moved off its
+band, a missing assertion, an assertion the binding itself failed, an error, an
+unnamed refusal and a refusal whose code drifted — while reporting a ledgered
+refusal as a named exclusion.
+
+The producer stages in `scripts/test-conformance.sh` are one per tier per
+binding per compiler, named `inline-tests <tier> <compiler> producer
+(<binding>)`. Adapters are discovered the way §5.38's and §5.44's are, through
+`EARTHSCI_INLINE_TESTS_ADAPTER_<BINDING>`:
+
+| Binding | Adapter |
+|---|---|
+| Julia (reference) | `pkg/EarthSciAST.jl/scripts/inline_tests_adapter.jl` |
+| Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-inline-tests-adapter-rust.rs`, feature `conformance-adapters` |
+| Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/inline_tests_adapter.py` |
+
+**Every stage NAMES its compiler**, on §5.44.5's terms and for §5.44.5's reason:
+`--compiler` is required by the runner and by every adapter, and a run that
+omits it is a configuration error rather than a run under whatever the library
+default happens to be.
+
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

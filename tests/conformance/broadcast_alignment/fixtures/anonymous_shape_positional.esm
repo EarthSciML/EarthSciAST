@@ -1,0 +1,304 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "anonymous_shape_positional",
+    "description": "The SCOPE BOUNDARY of esm-spec \u00a74.3.4's name-based alignment. `spine` is a `faq` whose `output_idx` are the NODE-LOCAL symbols p, q, r \u2014 not index-set names \u2014 so its result has an ANONYMOUS shape and its axes align POSITIONALLY with the result's, in declaration order. `dp` therefore reads spine[i,j,k] = i + 10 j + 100 k, and `dq` multiplies that by the NAMED rank-1 operand `w1`, whose `lat` axis DOES align by name and replicates over lon and lev. One document holds both rules, so a binding that applied name alignment to the anonymous operand (or positional alignment to the named one) disagrees on one state while agreeing on the other.",
+    "authors": [
+      "EarthSciAST Test Suite"
+    ],
+    "tags": [
+      "array-level",
+      "broadcast",
+      "anonymous-shape",
+      "positional",
+      "conformance",
+      "esm-spec-4.3.4"
+    ]
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 3
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 2
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "anonymous_shape_positional": {
+      "tolerance": {
+        "rel": 1e-08,
+        "abs": 1e-10
+      },
+      "variables": {
+        "dp": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 0.0,
+          "description": "Constant tendency from a purely ANONYMOUS operand; dp(1) reads it back cell by cell."
+        },
+        "dq": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 0.0,
+          "description": "The same anonymous operand times the NAMED rank-1 `w1`."
+        },
+        "w1": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lat"
+          ],
+          "description": "w1[j] = 10 j, i.e. [10, 20]. Its axis is NAMED, so it aligns by name."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Anonymous faq axes align positionally: dp[i,j,k](1) = i + 10 j + 100 k.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "dp"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "p",
+              "q",
+              "r"
+            ],
+            "ranges": {
+              "p": {
+                "from": "lon"
+              },
+              "q": {
+                "from": "lat"
+              },
+              "r": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                "p",
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        10,
+                        "q"
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        100,
+                        "r"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "The anonymous operand times the NAMED one: dq[i,j,k](1) = (i + 10 j + 100 k) * 10 j.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "dq"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": [
+                  "p",
+                  "q",
+                  "r"
+                ],
+                "ranges": {
+                  "p": {
+                    "from": "lon"
+                  },
+                  "q": {
+                    "from": "lat"
+                  },
+                  "r": {
+                    "from": "lev"
+                  }
+                },
+                "expr": {
+                  "op": "+",
+                  "args": [
+                    "p",
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            10,
+                            "q"
+                          ]
+                        },
+                        {
+                          "op": "*",
+                          "args": [
+                            100,
+                            "r"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "w1"
+            ]
+          }
+        },
+        {
+          "lhs": "w1",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": {
+                "from": "lat"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                10,
+                "j"
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "anonymous_shape_positional_t1",
+          "description": "Probe both states at t = 1 through \u00a76.6.5 `coords`.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 111.0,
+              "coords": {
+                "lon": 1,
+                "lat": 1,
+                "lev": 1
+              }
+            },
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 212.0,
+              "coords": {
+                "lon": 2,
+                "lat": 1,
+                "lev": 2
+              }
+            },
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 123.0,
+              "coords": {
+                "lon": 3,
+                "lat": 2,
+                "lev": 1
+              }
+            },
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 223.0,
+              "coords": {
+                "lon": 3,
+                "lat": 2,
+                "lev": 2
+              }
+            },
+            {
+              "variable": "dq",
+              "time": 1.0,
+              "expected": 1110.0,
+              "coords": {
+                "lon": 1,
+                "lat": 1,
+                "lev": 1
+              }
+            },
+            {
+              "variable": "dq",
+              "time": 1.0,
+              "expected": 2120.0,
+              "coords": {
+                "lon": 2,
+                "lat": 1,
+                "lev": 2
+              }
+            },
+            {
+              "variable": "dq",
+              "time": 1.0,
+              "expected": 2460.0,
+              "coords": {
+                "lon": 3,
+                "lat": 2,
+                "lev": 1
+              }
+            },
+            {
+              "variable": "dq",
+              "time": 1.0,
+              "expected": 4460.0,
+              "coords": {
+                "lon": 3,
+                "lat": 2,
+                "lev": 2
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
