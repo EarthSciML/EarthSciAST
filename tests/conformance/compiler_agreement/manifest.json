@@ -20,7 +20,7 @@
         "python"
       ],
       "bindings_optional": [],
-      "note": "The strict default. Julia's strict build has landed, so julia must ANSWER for `native`; rust and python stay optional until theirs do and cross on the same one-way ratchet. A REFUSAL is governed by each fixture's `required` map, not by this list."
+      "note": "The strict default. All three strict builds have landed and all three crossed the one-way ratchet, so julia, rust and python must each ANSWER for `native`; `bindings_optional` is empty. A REFUSAL is governed by each fixture's `required` map, not by this list."
     },
     "xla": {
       "bindings_required": [
