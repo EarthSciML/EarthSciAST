@@ -382,12 +382,6 @@ end
             @test typed_bytes == raw_bytes            # typed save == raw emit
             @test typed_bytes == golden               # == the committed golden
         end
-        # ESS_TEMPLATE_REF_DISABLE=1 → Expand-at-load: references gone from the
-        # typed IR, save reverts to the historical (expanded) form.
-        withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-            f = EarthSciAST.load_path(conf("opacity_negative", "fixture.esm"))
-            @test f.component_templates === nothing
-        end
         # A template-LIBRARY file round-trips to itself (authored declarations
         # survive verbatim, §9.6.4 rule 5): the top-level registry is preserved.
         lib = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "template_import_lib.esm")
@@ -404,8 +398,8 @@ end
     # the build boundary against the merged `template_registry` — THE default
     # path) MUST be bit-identical to (a) the `expand_flattened_refs` boundary
     # utility's Expand image (RFC §7.7 "Expand at your boundary") and (b) the
-    # `ESS_TEMPLATE_REF_DISABLE=1` Expand-at-load image — the ONE remaining
-    # escape hatch. Compares the built `f!(du,u,p,t)` on several random
+    # `compiler=:interpreter` reference build. Compares the built
+    # `f!(du,u,p,t)` on several random
     # states — a stronger check than comparing only the solved trajectory (it
     # pins the RHS everywhere). The 3-axis 7×7×7
     # `tests/bench/transport_3axis_7cubed.esm` reference-heavy fixture is the
@@ -434,13 +428,9 @@ end
                 f2!(du2, u, p2, 0.3)
                 @test du1 == du2                                  # bit-identical RHS
             end
-            # And bit-identical to the ESS_TEMPLATE_REF_DISABLE=1 Expand-at-load path.
-            fd = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-                EarthSciAST.load_path(F)
-            end
-            @test fd.component_templates === nothing
+            # And bit-identical to the per-cell reference evaluator.
             f3!, u03, p3, _t3, _vm3 = EarthSciAST.build_evaluator(
-                EarthSciAST.flatten(fd))
+                flat_fast; compiler=:interpreter)
             u = _probe(1)
             du1 = zeros(n); du3 = zeros(n)
             f1!(du1, u, p1, 0.3); f3!(du3, u, p3, 0.3)

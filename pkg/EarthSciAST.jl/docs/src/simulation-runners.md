@@ -6,27 +6,37 @@ CurrentModule = EarthSciAST
 
 A simulation runner is the machinery that turns canonical-form AST into a
 right-hand side. EarthSciAST.jl has several, and which one runs is an explicit
-argument: `esm_problem(…; compiler = …)`, over a closed vocabulary shared with
-the Python and Rust bindings. `API_SPEC.md` §5.8 is the contract and
+argument: `esm_problem(…; compiler = …)`, over a closed vocabulary
+shared with the Python and Rust bindings. `API_SPEC.md` §5.8 is the contract and
 `esm-libraries-spec.md` §2.5.10 is the normative text; this page says what each
 value means in Julia and how much of it is reachable today.
 
 | `compiler` | Role | Julia runner | Status |
 |---|---|---|---|
-| `:native` | The universally fast option, with no heavy external dependency — hence the default. Every kernel lands on a codegen, affine or whole-array tier; a rule that would need a per-cell tree walk is a build error naming the rule and the reason, never a quiet demotion. | the tiered tree-walk build (`RuntimeGeneratedFunctions` codegen, already a package dependency) | **implemented.** `compiler = :native`, and the default when the keyword is left out |
-| `:interpreter` | Deliberately simple: the correctness check for the other compilers. Every fast tier off, complete over the evaluable core, no performance promise of any kind. | the same tree walk with the per-cell runner for every kernel | **implemented.** `compiler = :interpreter`, selected by argument rather than by environment switch |
-| `:xla` | Specialty: needs a heavy external dependency. StableHLO emitted directly and compiled through Reactant; a hard error on anything it cannot lower. | the direct emitter in the Reactant extension | **planned.** `esm_problem(…; compiler = :xla)` raises `compiler_unavailable`; the emitter is reached through [`build_evaluator`](@ref)`(…; form = :oop)` |
-| `:mtk` | Specialty: only some documents — but it is the one runner that executes **events and implicit equations**. | `ModelingToolkit.System(model)` via the package extension | **planned as a compiler.** The extension is live and supported, but `esm_problem(…; compiler = :mtk)` raises `compiler_unavailable` |
+| `:native` | The universally fast option, with no heavy external dependency — hence the default. Every kernel lands on a codegen, affine or whole-array tier; a rule that would need a per-cell tree walk is a build error naming the rule and the reason, never a quiet demotion. | the tiered tree-walk build (`RuntimeGeneratedFunctions` codegen, already a package dependency) | **live.** It is what you get when you name nothing |
+| `:interpreter` | Deliberately simple: the correctness check for the other compilers. Every fast tier off, complete over the evaluable core, no performance promise of any kind. | the same tree walk with the per-cell runner for every kernel | **live.** Ask for it by name; no environment variable selects it |
+| `:xla` | Specialty: needs a heavy external dependency. StableHLO emitted directly and compiled through Reactant; a hard error on anything it cannot lower. | the direct emitter in the Reactant extension | **planned.** Reachable today only through [`build_evaluator`](@ref)`(…; form = :oop)`, not from `esm_problem` |
+| `:mtk` | Specialty: only some documents — but it is the one runner that executes **events and implicit equations**. | `ModelingToolkit.System(model)` via the package extension | **planned as a compiler.** The extension is live and supported; it is not yet something `esm_problem` can be asked for |
 | `:sympy` | Specialty: Python only, and there only for scalar documents. | — | `compiler_unavailable` |
 
 **What is reachable today, and what is not.** `esm_problem` / `solve` build the
-tree-walk evaluator, and that is the only thing they build: `:native` and
-`:interpreter` are its two plans, and `:xla` and `:mtk` raise
-`compiler_unavailable` rather than reaching the Reactant emitter or
-ModelingToolkit. Both of those are reached through their own entry points,
-below. ModelingToolkit is not the default of the public simulation API and is
-not reachable from it: a document run through `esm_problem` is run by the
-tree-walk build.
+tree-walk evaluator under `:native` or `:interpreter`, and that is the only
+thing they build: there is no keyword that reaches the Reactant emitter or
+ModelingToolkit from the stable entry point.
+
+No environment variable selects an evaluation strategy. The `ESS_*` variables
+that remain are tuning thresholds — a node budget, a per-function size cap, a
+threading floor, a tier's admission floor — and under a strict `:native` each
+is a **refusal boundary**: crossing it produces `compiler_refused_rule` rather
+than a quiet demotion, so moving one changes which documents build. Two
+experimental emission tiers ship off and are opted into by name
+(`ESS_CG_SUBCALL_FN`, `ESS_NESTED_TEMPLATE_BOUNDARY`); neither is an oracle,
+and nothing in the corpus depends on either.
+
+`:xla` and `:mtk` are each reached through their own entry point, below.
+ModelingToolkit in particular is not the default of the public simulation API
+and is not reachable from it: a document run through `esm_problem` is run by
+the tree-walk build.
 
 Each runner consumes the canonical-form AST emitted by [`discretize`](@ref) and
 walks it generically — none contains per-rule-shape dispatch — and each meets

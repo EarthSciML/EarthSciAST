@@ -4,7 +4,7 @@
 # element, so NaN and -0.0 count) across several (u, t) probes, at Float64 AND
 # under ForwardDiff Dual:
 #   * default                 → the codegen tier (RuntimeGeneratedFunctions)
-#   * ESS_CODEGEN_DISABLE=1   → the pre-codegen runner (per-cell interpreter)
+#   * compiler=:interpreter   → the pre-codegen runner (per-cell interpreter)
 # Every case asserts the codegen tier actually FIRED (`:codegen_kernel` in
 # `_CASCADE_TALLY`), so a silent decline cannot make the comparison pass
 # trivially. Fixtures deliberately span the descriptor/op surface: affine
@@ -22,12 +22,11 @@ const ESM = EarthSciAST
 # Build with the codegen tier on (default) or off (the differential reference).
 # Returns (f!, u0, p, vmap, diag, tally-snapshot).
 function _cgk_build(model, ics; codegen::Bool, const_arrays=Dict(), form=:inplace)
-    withenv("ESS_CODEGEN_DISABLE" => (codegen ? nothing : "1")) do
-        ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, const_arrays=const_arrays, form=form)
-        (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
-    end
+    ESM._reset_cascade_tally!()
+    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
+        initial_conditions=ics, const_arrays=const_arrays, form=form,
+        compiler = codegen ? :native : :interpreter)
+    return (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
 end
 
 _cgk_fired(tally) = get(tally, :codegen_kernel, 0)
@@ -245,10 +244,11 @@ end
             @test_skip "bench fixture transport_3axis_7cubed_fullrank.esm missing"
         else
             flat = ESM.flatten(ESM.load_path(FIX))
-            build(codegen) = withenv("ESS_CODEGEN_DISABLE" => (codegen ? nothing : "1")) do
+            function build(codegen)
                 ESM._reset_cascade_tally!()
-                f!, u0, p, _, _ = ESM.build_evaluator(flat)
-                (f!, u0, p, copy(ESM._CASCADE_TALLY))
+                f!, u0, p, _, _ = ESM.build_evaluator(flat;
+                    compiler = codegen ? :native : :interpreter)
+                return (f!, u0, p, copy(ESM._CASCADE_TALLY))
             end
             fc, u0, p, tally = build(true)
             fr, v0, q, rtally = build(false)

@@ -625,8 +625,8 @@ Where:
 > driver from both sides (the index-set product grows 200x to 1e8 with the match
 > count fixed and the visit count must not move; the product is held at 1e7 while
 > the matches grow to 10 000 and the visit count must track them) and against
-> BOTH differential arms — the same document with the driver killed
-> (`ESS_JOIN_ON_GATE_DISABLE=1`), and `_foreach_aggregate_term` run driven and
+> BOTH differential arms — the same document with the driver off
+> (`compiler=:interpreter`), and `_foreach_aggregate_term` run driven and
 > undriven with the emitted term SEQUENCES compared element for element. A visit
 > count of 0 means the gate declined, so a silent fallback fails too. Measured
 > (build + one RHS call, on a loaded machine): 5e5 candidate pairs, gate OFF

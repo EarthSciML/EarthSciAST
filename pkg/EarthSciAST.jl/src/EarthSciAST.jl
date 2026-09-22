@@ -328,12 +328,14 @@ export
     # — whose surviving references resolve against the flattener's MERGED
     # `template_registry` (§9.6.4 rule 7), not a per-model
     # `component_templates` entry, so `expanded_model` cannot serve there.
+    # `expanded_file(file)` is the whole-document third half, for a consumer
+    # that wants the fused DOCUMENT rather than a build input.
     # `flatten` ALWAYS hands its consumers reference-preserving expressions, so
     # any consumer without its own template handling must call this at its
     # entry ("Expand at your boundary", RFC out-of-line-expression-templates
     # §7.7) — the MTK `System`/`PDESystem` constructors and EarthSciASTDiff's
     # `sysview` both do.
-    expanded_model, expand_flattened_refs,
+    expanded_model, expand_flattened_refs, expanded_file,
     # Parameter-vector ABI: name → position in a `p` that is an AbstractVector
     # (the `p`-side mirror of `var_map`). See `param_map`'s docstring for why it
     # is a function of `p` and not a sixth `build_evaluator` return value.

@@ -17,8 +17,8 @@
 # This pins:
 #   * the tier ENGAGES (`:cg_subcall_fn` fires with the floor at 0) and the
 #     kernels still codegen (no decline);
-#   * its du is BIT-identical to the pre-tier inline emission
-#     (ESS_CG_SUBCALL_FN_DISABLE=1) at Float64 and under ForwardDiff — the
+#   * its du is BIT-identical to the default build, which does not opt in and
+#     so emits every body inline, at Float64 and under ForwardDiff — the
 #     emission is value- and order-exact, only wrapped in calls;
 #   * the size floor (ESS_CG_SUBCALL_FN_MIN_NODES) keeps small bodies inlined
 #     (huge floor ⇒ no functions minted) without changing values;

@@ -282,7 +282,8 @@ of `f!`, exactly what the note proposes: at `build_evaluator` time each `_AccKer
 expression, literal strides and offsets baked in, direct indexing — and fused into one
 function compiled via RuntimeGeneratedFunctions. It is bit-exactness-contracted against
 the interpreter, eltype-generic (derives `T = _rhs_value_type(u,p,t)` the same way), has
-a per-kernel decline/fallback protocol and a kill switch (`ESS_CODEGEN_DISABLE=1`).
+a per-kernel decline/fallback protocol, and it stands down under
+`compiler=:interpreter`.
 Emitted code contains no payload loads.
 
 So the design question is not "what would a lowering look like" but "extend the
@@ -303,7 +304,7 @@ Measured, and this is load-bearing for the plan. On the RD model with the codege
 UndefVarError: `codegen_ft` not defined in `Enzyme.Compiler`
 ```
 
-With `ESS_CODEGEN_DISABLE=1` the same case gives the ordinary
+Under `compiler=:interpreter` the same case gives the ordinary
 `IllegalTypeAnalysisException` instead, and the 0-D model (which emits no kernels, so
 no RGF) gives `IllegalTypeAnalysisException` either way. That 2x2 isolates the RGF as
 the trigger. (Logs: `measurements/iip-strict-codegen.txt` vs

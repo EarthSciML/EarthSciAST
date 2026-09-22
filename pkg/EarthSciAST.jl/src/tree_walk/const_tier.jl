@@ -27,12 +27,13 @@
 # the tier, the first call at a given `(p, t, epoch)` fills the time slots and the
 # other N reuse them. Memoizing on `t` is inherently safe for these slots: their
 # defs carry no history — a step REJECTION that revisits a `t` recomputes (or
-# reuses) exactly the same pure function of that `t`. Kill switch:
-# `ESS_TCADENCE_DISABLE=1` at build time demotes every time slot to DYNAMIC,
-# restoring the refill-every-call behavior bit-for-bit.
-# The wider switch `ESS_UNTIERED=1` demotes EVERY slot — const tier included —
-# so the whole prelude is refilled on every call; that build is the untiered
-# differential oracle the bit-identity tests compare against (see `_untiered`).
+# reuses) exactly the same pure function of that `t`. With the time tier off
+# every time slot is demoted to DYNAMIC at build, restoring the
+# refill-every-call behavior bit-for-bit; with the whole cadence off EVERY slot
+# is demoted, const tier included, so the prelude is refilled on every call.
+# That second build is the untiered differential oracle the bit-identity tests
+# compare against, and it is what `compiler=:interpreter` selects (see
+# `_untiered`).
 #
 # Lane-invariant kernel subtrees are prelude defs too (the `_AccCSE` invariant tier) — so the tier pays off on the ARRAY path as
 # well, not just on scalar equations.
@@ -142,43 +143,41 @@ function _def_tier(n::_Node, tier::Vector{Int8}, slot::Int, cache::_CSECache)::I
     return tr
 end
 
-_tcadence_disabled() = !_compiler_plan_now().tcadence ||
-    get(ENV, "ESS_TCADENCE_DISABLE", "") == "1"
+_tcadence_disabled() = !_compiler_plan_now().tcadence
 
-# ---- The untiered kill switch: `ESS_UNTIERED=1` -------------------------------
+# ---- The untiered prelude -----------------------------------------------------
 #
 # WHAT IT IS FOR: an in-place build that is, by construction, the UNTIERED
-# evaluator — the differential oracle. Read at BUILD time like the switch above,
-# it classifies every prelude slot DYNAMIC, so `f!` refills the WHOLE prelude on
-# every call in ascending slot order and takes neither the const-cadence nor the
-# time-cadence skip. Its numbers are therefore the numbers of a prelude with no
-# memoization anywhere, and a test that needs that reference ("the tiered `f!`
-# must agree bit-for-bit with an evaluator that never skips") can build one
-# without leaving the in-place emitter.
+# evaluator — the differential oracle `compiler=:interpreter` names. Read at
+# BUILD time like the gate above, it classifies every prelude slot DYNAMIC, so
+# `f!` refills the WHOLE prelude on every call in ascending slot order and takes
+# neither the const-cadence nor the time-cadence skip. Its numbers are therefore
+# the numbers of a prelude with no memoization anywhere, and a test that needs
+# that reference ("the tiered `f!` must agree bit-for-bit with an evaluator that
+# never skips") can build one without leaving the in-place emitter.
 #
-# `ESS_TCADENCE_DISABLE=1` is the narrower switch — it demotes the TIME slots
+# The time-cadence gate above is the narrower one — it demotes the TIME slots
 # only and leaves the const tier skipping — so it is not by itself an untiered
 # build. This one subsumes it.
 #
-# As with the time-tier switch, the recorded `tier[]` entries keep their computed
+# As with the time tier, the recorded `tier[]` entries keep their computed
 # values: classification is a property of the prelude, so demotion happens at the
 # routing step only and every slot still lands in ascending order.
-_untiered() = !_compiler_plan_now().tiered ||
-    get(ENV, "ESS_UNTIERED", "") == "1"
+_untiered() = !_compiler_plan_now().tiered
 
 # Partition the FINAL prelude (post `_share_kernel_invariants!`) into its three cadence
 # tiers. Returns three ASCENDING slot-index vectors — the order `f!` must evaluate
 # them in — which together are a permutation of `1:length(prelude)`.
 #
-# With `ESS_TCADENCE_DISABLE=1` (read at BUILD time, like `ESS_STENCIL_DISABLE`)
+# With the time tier off (a build-time decision, like the affine stencil tier's)
 # every TIME slot is routed into the dynamic vector instead: refilled every call,
-# which is bit-identical to the pre-B3 two-tier evaluator. The recorded `tier[]`
+# which is bit-identical to a two-tier evaluator. The recorded `tier[]`
 # entries keep their computed values so downstream classification is unchanged —
 # a consumer of a demoted slot is itself TIME-or-worse and lands in the dynamic
 # vector too, preserving ascending evaluation order among them.
 #
-# With `ESS_UNTIERED=1` BOTH other vectors come back empty and `dyn_slots` is
-# `1:length(prelude)` — the untiered oracle build described at `_untiered` above.
+# Untiered, BOTH other vectors come back empty and `dyn_slots` is
+# `1:length(prelude)` — the oracle build described at `_untiered` above.
 function _classify_const_slots(prelude::AbstractVector{_Node}, cache::_CSECache)
     n = length(prelude)
     tdisabled = _tcadence_disabled()
@@ -191,7 +190,7 @@ function _classify_const_slots(prelude::AbstractVector{_Node}, cache::_CSECache)
         tr = _def_tier(prelude[s], tier, s, cache)
         @inbounds tier[s] = tr
         if untiered
-            push!(dyn_slots, s)      # ESS_UNTIERED=1: no slot may be skipped
+            push!(dyn_slots, s)      # untiered: no slot may be skipped
         elseif tr === _TIER_CONST
             push!(const_slots, s)
         elseif tr === _TIER_TIME && !tdisabled

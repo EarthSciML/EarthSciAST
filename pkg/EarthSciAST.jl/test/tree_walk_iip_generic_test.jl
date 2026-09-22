@@ -15,8 +15,9 @@
 #
 #   1. NOTHING MOVED AT Float64. Same bits, still zero allocations, still zero after
 #      the Dual buffers have been created (the lazy alt-buffer must not leak into the
-#      Float64 path). Bit-identity is asserted with `==` against an `ESS_UNTIERED=1`
-#      build — the same emitter with every prelude slot refilled on every call.
+#      Float64 path). Bit-identity is asserted with `==` against a
+#      `compiler=:interpreter` build — the same emitter with every prelude slot
+#      refilled on every call.
 #
 #   2. FORWARDDIFF WORKS THROUGH IT, on BOTH axes. The parameter axis is not a
 #      variation of the state axis but a separate failure mode: there `u` stays
@@ -140,13 +141,11 @@ _gi_call(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 _gi_pcall(f!, u, p, t, ::Type{V}) where {V} =
     (du = zeros(V, length(u)); f!(du, u, p, t); du)
 
-# The TIERED `f!` and its UNTIERED twin (`ESS_UNTIERED=1`, tree_walk/const_tier.jl):
-# the same emitter with every prelude slot classified dynamic, so it refills the whole
+# The `:native` `f!` and its `:interpreter` twin (tree_walk/const_tier.jl): the
+# same emitter with every prelude slot classified dynamic, so it refills the whole
 # prelude on every call and takes no cadence skip. That is the Float64 oracle below.
 _gi_both(doc) = (ESM.build_evaluator(doc)[1],
-                 withenv("ESS_UNTIERED" => "1") do
-                     ESM.build_evaluator(doc)[1]
-                 end)
+                 ESM.build_evaluator(doc; compiler=:interpreter)[1])
 
 # Central-difference Jacobian of the TRUSTED Float64 `f!` w.r.t. the state.
 function _gi_fd_state_jac(f!, u, p, t; h = 1e-6)
@@ -164,8 +163,8 @@ end
 
     # ---- 1. Nothing moved at Float64 ----------------------------------------
 
-    @testset "bit-identical at Float64 to the untiered build" begin
-        # The oracle: an `ESS_UNTIERED=1` build refills every prelude slot on every
+    @testset "bit-identical at Float64 to the interpreter build" begin
+        # The oracle: a `compiler=:interpreter` build refills every prelude slot on every
         # call, so it carries nothing across calls that a scratch-reuse or
         # cadence-skip bug could go stale in — and it is itself pinned bit-identical
         # to the out-of-place emitter (tree_walk_untiered_test.jl). Agreeing with it
@@ -238,9 +237,7 @@ end
 
         # And it must agree bit for bit with the per-cell reference's Jacobian:
         # the two walk the same IR, so a divergence means one of them is lying.
-        fr! = withenv("ESS_STENCIL_DISABLE" => "1") do
-            ESM.build_evaluator(doc)[1]
-        end
+        fr! = ESM.build_evaluator(doc; compiler=:interpreter)[1]
         @test J == ForwardDiff.jacobian(
             uu -> (d = similar(uu, eltype(uu)); fill!(d, 0); fr!(d, uu, p, 0.0); d), u)
     end
@@ -363,9 +360,7 @@ end
 
         # Against the same problem solved through the per-cell reference build
         # (a different lowering, same IR): the two trajectories must agree.
-        fr! = withenv("ESS_STENCIL_DISABLE" => "1") do
-            ESM.build_evaluator(doc)[1]
-        end
+        fr! = ESM.build_evaluator(doc; compiler=:interpreter)[1]
         solr = OrdinaryDiffEqRosenbrock.solve(
             ODEProblem(fr!, u, (0.0, 2.0), p), OrdinaryDiffEqRosenbrock.Rosenbrock23();
             abstol = 1e-10, reltol = 1e-10)

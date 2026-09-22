@@ -407,10 +407,10 @@ end
 # `rhs_list` entries to batch) and the whole-array contraction tier must not
 # take it first.
 _de_halo_build(doc, ics; form = :oop, batch = true) =
-    withenv("ESS_CONTRACTION_LOOP" => "1", "ESS_CONTRACTION_LOOP_MIN" => "8",
-            "ESS_ARRAY_CONTRACTION_MIN" => "1024",
-            "ESS_OOP_BATCH" => (batch ? "1" : "0")) do
-        build_evaluator(doc; initial_conditions = ics, form = form)
+    withenv("ESS_CONTRACTION_LOOP_MIN" => "8",
+            "ESS_ARRAY_CONTRACTION_MIN" => "1024") do
+        build_evaluator(doc; initial_conditions = ics, form = form,
+                        compiler = batch ? :native : :interpreter)
     end
 
 @testset "direct StableHLO emission from the compiled IR" begin
@@ -915,7 +915,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # no longer follows the cell count.
         fn, u0n, pn, _, _ = _de_halo_build(doc, ics; batch = false)
         @test isempty(getfield(getfield(fn, :rhs), :rhs_batches).groups)
-        dn, _ = _de_compare("halo (per-entry, ESS_OOP_BATCH=0)", fn, fi!, pn,
+        dn, _ = _de_compare("halo (per-entry, compiler=:interpreter)", fn, fi!, pn,
                                samples; census = false)
         println("  batched tally:   ", d.stats)
         println("  per-entry tally: ", dn.stats)

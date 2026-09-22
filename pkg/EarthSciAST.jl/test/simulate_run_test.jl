@@ -181,22 +181,19 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
         @test r[Symbol("Chem.B")][end] > 1e-3
     end
 
-    @testset "default (compile-once tier) == ESS_TEMPLATE_REF_DISABLE solve, bit-identical" begin
+    @testset "default (compile-once tier) == Expand-at-load solve, bit-identical" begin
         # THE default path: surviving `apply_expression_template` references are
         # carried by `flatten` to the build boundary, where the affine compile-once
         # tier factors each body once (RFC out-of-line-templates step c). The
-        # SOLVED state must be bit-identical to a solve of the same fixture loaded
-        # under `ESS_TEMPLATE_REF_DISABLE=1` (Expand-at-load, the Option-A image —
-        # the ONE differential escape hatch): RFC §12 gate 3 through the full
-        # `simulate` pipeline (provider-free, self-contained bench fixture). This is
-        # the reseact.esm Stage-C build path: 321 PPM references survive, the doc is
-        # ~277x smaller, and the tier build replaces a ~200M-node-lowering fused build.
+        # SOLVED state must be bit-identical to a solve of the same fixture with
+        # the references expanded before the build sees them (the Option-A image,
+        # `expanded_file`): RFC §12 gate 3 through the full `simulate` pipeline
+        # (provider-free, self-contained bench fixture). This is the reseact.esm
+        # Stage-C build path: 321 PPM references survive, the doc is ~277x
+        # smaller, and the tier build replaces a ~200M-node-lowering fused build.
         fix = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench",
                        "transport_3axis_7cubed_fullrank.esm")
-        # The env hatch acts at LOAD, so it wraps the load call.
-        fatload = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-            ESM_S.load_path(fix)
-        end
+        fatload = ESM_S.expanded_file(ESM_S.load_path(fix))
         rf = solve(ESM_S.esm_problem(fatload, (0.0, 0.5)), Tsit5(); saveat = [0.0, 0.5])
         rt = solve(ESM_S.esm_problem(ESM_S.load_path(fix), (0.0, 0.5)), Tsit5();
                             saveat = [0.0, 0.5])

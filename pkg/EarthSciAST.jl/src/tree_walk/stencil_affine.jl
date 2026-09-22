@@ -185,8 +185,8 @@ end
 # ========================================================================
 # The DEFAULT array-kernel build. Returns kernels or `nothing` (fall back to the
 # existing symbolic-stencil / per-cell chain, `covered` untouched).
-# `ESS_STENCIL_DISABLE=1` forces the per-cell reference — the differential-test
-# escape hatch, and the only switch on this path.
+# With this tier off the equation takes the per-cell reference, which is what
+# the differential tests compare against.
 
 # Reusable caches for the per-cell signature (branch template memo + branch-key
 # guard memo + a scratch IOBuffer), shared across the whole equation's sweep.
@@ -235,11 +235,9 @@ _AffineSig() = _AffineSig(Dict{String,_StencilBranch}(), IdDict{OpExpr,Bool}(), 
 # verification would fail. It is reference-free by construction: keying the
 # deviation from an affine model derived at some probe cell silently poisons the
 # scan whenever that probe sits on the clamped side of the transition being
-# looked for. Ghost membership (a state slot resolving to 0) keeps its own bit,
-# as before. `ESS_LANE_AFFINE_KEY_DISABLE=1` restores the Δ-keyed signature byte
-# for byte.
-_lane_affine_key_disabled() = !_compiler_plan_now().lane_affine_key ||
-    get(ENV, "ESS_LANE_AFFINE_KEY_DISABLE", "") == "1"
+# looked for. Ghost membership (a state slot resolving to 0) keeps its own bit.
+# Off, the signature is the Δ-keyed one.
+_lane_affine_key_disabled() = !_compiler_plan_now().lane_affine_key
 
 # Is this subscript expression an AFFINE function of the loop indices — a sum of
 # integer literals and loop-index terms with integer coefficients? Such an
@@ -760,48 +758,6 @@ function _box_local_addr(box, D)
     return s, off, acc            # acc == number of cells in the box
 end
 
-# ── ESS_AK_TBL_DEBUG=1: table-materialization ATTRIBUTION log ──────────────
-# Every per-box table a build materializes (a lane the affine derivation could
-# not prove) records `(kind, var_name, rendered index args)` → (boxes, total
-# entries) in `_AK_TBL_LOG`. Debug-only observability — the log is written
-# only under the env flag and read by probes; it never feeds the build.
-const _AK_TBL_LOG = Dict{String,Tuple{Int,Int}}()
-_ak_tbl_debug() = get(ENV, "ESS_AK_TBL_DEBUG", "") == "1"
-_reset_ak_tbl_log!() = empty!(_AK_TBL_LOG)
-function _ak_render(io::IO, e::ASTExpr)
-    if e isa VarExpr
-        print(io, e.name)
-    elseif e isa IntExpr
-        print(io, e.value)
-    elseif e isa NumExpr
-        print(io, e.value)
-    elseif e isa OpExpr
-        print(io, e.op, '(')
-        for (i, a) in enumerate(e.args)
-            i > 1 && print(io, ',')
-            _ak_render(io, a)
-        end
-        print(io, ')')
-    else
-        print(io, '?')
-    end
-end
-function _ak_tbl_log!(kind::Symbol, rec::_LaneRecipe, len::Int)
-    _ak_tbl_debug() || return nothing
-    io = IOBuffer()
-    print(io, kind, ' ', rec.var_name, '[')
-    for (i, a) in enumerate(rec.idx_args)
-        i > 1 && print(io, ',')
-        _ak_render(io, a)
-    end
-    print(io, ']')
-    key = String(take!(io))
-    length(key) > 300 && (key = key[1:300] * "…")
-    n, tot = get(_AK_TBL_LOG, key, (0, 0))
-    _AK_TBL_LOG[key] = (n + 1, tot + len)
-    return nothing
-end
-
 # ── LANE-AFFINE STATE BOX (a state gather on its OWN grid) ────────────────
 #
 # `_AK_STATE_AFFINE` models `u[oln + Δ]` — a gather from an array laid out
@@ -825,13 +781,12 @@ end
 # box and every equation of the build through the pool below, and it is the same
 # size as the variable — never O(#cells) per lane.
 #
-# `ESS_STATE_BOX_DISABLE=1` restores the dense per-box table byte for byte.
-_state_box_disabled() = !_compiler_plan_now().state_box ||
-    get(ENV, "ESS_STATE_BOX_DISABLE", "") == "1"
+# Off, every lane gets the dense per-box table.
+_state_box_disabled() = !_compiler_plan_now().state_box
 
 # Build-scoped, mirroring `_LANE_INTERN_POOL`: installed in
 # `_build_evaluator_impl`, torn down in its `finally`. `nothing` outside a build
-# (or under the kill switch) simply means the table is not shared.
+# (or with the lowering off) simply means the table is not shared.
 const _STATE_SLOT_TBL_POOL =
     Base.RefValue{Union{Nothing,Dict{Tuple{String,Int,Int},Vector{Int}}}}(nothing)
 
@@ -888,16 +843,14 @@ function _materialize_state_tbl_inner(rec::_LaneRecipe, idx_names, box, D,
         tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
                               var_map, const_arrays)::Int
     end
-    _ak_tbl_log!(:state, rec, len)
     return _AccRepl(_AccStateTblBox(tbl, s[1], s[2], s[3], off))
 end
 
-# Kill switch for the non-affine LIVE-forcing lane table lowering below
-# (perf-plan A2, prototypes/perf-gap-closure-plan.md): `ESS_OBSREF_DISABLE=1`
-# restores the pre-A2 whole-equation per-cell fallback byte-for-byte — the
-# differential-oracle escape hatch (test/stencil_affine_pgather_tbl_test.jl).
-_obsref_disabled() = !_compiler_plan_now().obsref ||
-    get(ENV, "ESS_OBSREF_DISABLE", "") == "1"
+# Gate for the non-affine LIVE-forcing lane table lowering below (perf-plan A2,
+# prototypes/perf-gap-closure-plan.md). Off, the whole equation takes the
+# per-cell fallback — the differential oracle
+# (test/stencil_affine_pgather_tbl_test.jl).
+_obsref_disabled() = !_compiler_plan_now().obsref
 
 # Materialize a NON-AFFINE live-forcing (pgather) lane as a per-box INDEX table
 # into the ALIASED live buffer (perf-plan A2). The forcing chains that observed
@@ -935,7 +888,6 @@ function _materialize_pgather_tbl_inner(rec::_LaneRecipe, idx_names, box, D,
         tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
                               var_map, const_arrays)::Int
     end
-    _ak_tbl_log!(:pgather, rec, len)
     return _AccRepl(_AccArrTblBox(pg.flat, tbl, s[1], s[2], s[3], off))
 end
 
@@ -971,7 +923,6 @@ function _materialize_const_box_inner(rec::_LaneRecipe, idx_names, box, D,
     end
     v1 = vals[1]
     all(==(v1), vals) && return _LitRepl(v1)   # exhaustively verified invariant
-    _ak_tbl_log!(rec.kind == LANE_EXPRTBL ? :exprtbl : :const, rec, len)
     return _AccRepl(_AccConstBox(vals, s[1], s[2], s[3], off))
 end
 
@@ -982,8 +933,8 @@ end
 # (pgather) index all MATERIALIZE per-box tables instead of declining — see
 # `_materialize_state_tbl` / `_materialize_const_box` /
 # `_materialize_pgather_tbl` (the pgather table holds indices into the aliased
-# live buffer, so it stays refresh-live; `ESS_OBSREF_DISABLE=1` restores the
-# pre-A2 whole-equation per-cell fallback for the differential oracle). A live
+# live buffer, so it stays refresh-live; with that lowering off the whole
+# equation takes the per-cell fallback, the differential oracle). A live
 # forcing lane otherwise lowers to `_AccForcingBox` over the aliased buffer
 # (never folded to a literal, so it stays refresh-live).
 # `structural` is `_affine_idx_expr` over every one of the lane's subscripts.
@@ -1323,8 +1274,8 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
                              template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,
                              # A3: the per-BUILD cross-equation store (variant +
                              # bound-body caches, shared obs-inline memo).
-                             # `nothing` restores the per-equation caches
-                             # (ESS_XEQ_VARIANT_DISABLE=1 / storeless callers).
+                             # `nothing` is the per-equation caches
+                             # (cross-equation variants off / storeless callers).
                              xeq::Union{Nothing,_XEqStore}=nothing)
     (lhs_body.op == "D" && !isempty(lhs_body.args) &&
      lhs_body.args[1] isa OpExpr && (lhs_body.args[1]::OpExpr).op == "index" &&
@@ -1371,24 +1322,6 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
     lhs_idx_args = inner.args[2:end]
     length(lhs_idx_args) == D || return nothing
 
-    if get(ENV, "ESS_STENCIL_DEBUG", "") == "1" && sites !== nothing
-        # IDENTITY-MEMOIZED walk (`foreach_subexpr_once`) — NOTE the metric
-        # changed with it (ESS-0hh): `reachable-in-body` used to count PATHS to
-        # each site root and now counts DISTINCT reachable roots. Distinct is
-        # the meaningful diagnostic — the compile-once tier compiles each root
-        # once regardless of in-degree, and `sites` is keyed by identity — and
-        # the per-path count made this debug print itself exponential on the
-        # obs-inlined body, which is a compact DAG by construction
-        # (`_sub_preserving`): enabling debugging must never hang the build.
-        hit = 0
-        foreach_subexpr_once(body) do x
-            x isa OpExpr && haskey(sites, x) && (hit += 1)
-            nothing
-        end
-        println(stderr, "[compile-once] sites=", length(sites),
-                " reachable-in-body=", hit)
-        flush(stderr)
-    end
     tctx = sites === nothing ? nothing :
            _TemplateCtx(sites, var_map, param_sym_set, reg_funcs;
                         idxkey=_idxset_key(idx_names), store=xeq)
@@ -1420,8 +1353,7 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
         return kernels
     catch err
         if err isa _StencilFallback
-            get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
-                @info "affine stencil fallback" reason = err.reason
+            _note_decline!(:affine, Symbol(err.reason))
             return nothing
         end
         rethrow()

@@ -383,7 +383,7 @@ end
 # equal vectors — come out as the SAME object, so downstream `===` fast paths
 # (the merge guard, `_check_fn_group_specs`) hit and a merged kernel's per-lane
 # spec table shares one object per distinct content. Identity when the pool is
-# off (outside a build, or ESS_LANE_INTERN_DISABLE=1).
+# off (outside a build, or with lane interning off).
 function _build_interp_spec(fname::AbstractString, const_args::Vector{Any})
     if fname == "interp.linear"
         return _lane_intern(_build_interp_linear_spec(fname, const_args...))

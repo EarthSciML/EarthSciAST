@@ -23,11 +23,10 @@
 #     and lands there, so its build IR does not grow with the grid;
 #   * an equation the affine tier DECLINES falls back to the loop.
 #
-# Numerically nothing may move: the wide case is pinned bit-for-bit against the
-# pure-unroll reference (`ESS_CONTRACTION_LOOP=0`), the per-cell reference
-# (`ESS_STENCIL_DISABLE=1` — which for this shape IS the contraction-loop
-# per-cell path, so it cross-checks the two tiers against each other) and exact
-# arithmetic.
+# Numerically nothing may move, whichever tier takes the equation: every case is
+# pinned bit-for-bit against `compiler=:interpreter` — which turns the nest, the
+# per-cell contraction loop and the affine stencil all off, so the reduction is
+# reached by the pure unroll — and against exact arithmetic.
 
 using Test
 include("testutils.jl")
@@ -87,21 +86,17 @@ end
 _cto_exact(NI, NJ, NK) =
     [ sum(_cto_dpv(i, j, k) * _cto_cv(i, j, k) for k in 1:NK) for i in 1:NI, j in 1:NJ ]
 
-# Build once, returning `(du, var_map, tally, node_lowerings)`. `env` overrides are
-# applied around the build only.
-function _cto_build(NI, NJ, NK; env = Dict{String,String}())
+# Build once, returning `(du, var_map, tally, node_lowerings)`. `compiler`
+# chooses the evaluator; the two `env` entries are the TUNING THRESHOLDS that
+# decide which side of a tier's admission floor this fixture falls on, stated
+# per case so the routing under test is a property of the fixture rather than of
+# the ambient environment.
+function _cto_build(NI, NJ, NK; compiler = :native, env = Dict{String,String}())
     doc = _cto_doc(NI, NJ, NK)
     ics = _cto_ics(NI, NJ, NK)
-    # The whole-array contraction nest (ess-array-contraction) sits above BOTH
-    # tiers this file compares, so every case has to say which side of its floor
-    # it is on rather than inherit the ambient value — otherwise the routing
-    # under test is decided by the environment, not by the fixture.
-    pairs = ["ESS_CONTRACTION_LOOP" => get(env, "ESS_CONTRACTION_LOOP", nothing),
-             "ESS_CONTRACTION_LOOP_MIN" => get(env, "ESS_CONTRACTION_LOOP_MIN", "8"),
+    pairs = ["ESS_CONTRACTION_LOOP_MIN" => get(env, "ESS_CONTRACTION_LOOP_MIN", "8"),
              "ESS_ARRAY_CONTRACTION_MIN" =>
-                 get(env, "ESS_ARRAY_CONTRACTION_MIN", "1024"),
-             "ESS_STENCIL_DISABLE" => get(env, "ESS_STENCIL_DISABLE", nothing),
-             "ESS_CODEGEN_DISABLE" => get(env, "ESS_CODEGEN_DISABLE", nothing)]
+                 get(env, "ESS_ARRAY_CONTRACTION_MIN", "1024")]
     dp = [ _cto_dpv(i, j, k) for i in 1:NI, j in 1:NJ, k in 1:NK ]
     withenv(pairs...) do
         _CTO_ESS._reset_cascade_tally!()
@@ -109,12 +104,8 @@ function _cto_build(NI, NJ, NK; env = Dict{String,String}())
         _CTO_ESS._BENCH_ON[] = true
         local f, u0, p, vm
         try
-            # The default compiler, which is `native`. One case here routes to
-            # the whole-array contraction nest, which `native` now takes in its
-            # GENERATED form (array_contraction_codegen.jl); the oracle cases
-            # name an `ESS_*` kill switch, which makes the default non-strict on
-            # its own. What this file compares is tier ROUTING.
             f, u0, p, _, vm = build_evaluator(doc; initial_conditions = ics,
+                                              compiler = compiler,
                                               const_arrays = Dict("dp" => dp))
         finally
             _CTO_ESS._BENCH_ON[] = false
@@ -152,7 +143,6 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
         @test NI * NJ < NK                  # the admission condition, stated
         du, vm, tally, _ = _cto_build(NI, NJ, NK)
         @test _cto_get(tally, :percell_loop) == 1
-        @test _cto_get(tally, :array_contraction) == 0
         @test _cto_get(tally, :array_contraction_codegen) == 0
         @test _cto_outs(du, vm, NI, NJ) == _cto_exact(NI, NJ, NK)
     end
@@ -168,41 +158,39 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
         env = Dict("ESS_ARRAY_CONTRACTION_MIN" => "8")
         du, vm, tally, _ = _cto_build(NI, NJ, NK; env = env)
         @test _cto_get(tally, :array_contraction_codegen) == 1
-        @test _cto_get(tally, :array_contraction) == 0     # never the walked form
         @test _cto_get(tally, :percell_loop) == 0
         @test _cto_get(tally, :percell_acc) == 0
-        # Numerics do not move with the tier: the loop's own answer, bit for bit.
+        # Numerics do not move with the tier. The same fixture BELOW the floor is
+        # the per-cell loop's own answer, bit for bit — the two tiers checked
+        # against each other, which only this file can do.
         du_l, vm_l, tally_l, _ = _cto_build(NI, NJ, NK)
         @test _cto_get(tally_l, :percell_loop) == 1        # the oracle is the loop
         A = _cto_outs(du, vm, NI, NJ)
         @test all(A[i] === _cto_outs(du_l, vm_l, NI, NJ)[i] for i in eachindex(A))
         @test A == _cto_exact(NI, NJ, NK)
-        # …and bit for bit against the tier's OWN walker — the same nest, the
-        # same fold order, with the emitter off. This shape reaches the emitter
-        # through a 3-D const gather at two output indices and a state gather at
-        # the contracted one, which the source-receptor shape does not.
-        du_w, vm_w, tally_w, _ = _cto_build(NI, NJ, NK;
-            env = merge(env, Dict("ESS_CODEGEN_DISABLE" => "1")))
-        @test _cto_get(tally_w, :array_contraction) == 1
-        @test all(A[i] === _cto_outs(du_w, vm_w, NI, NJ)[i] for i in eachindex(A))
+        # …and bit for bit against the pure unroll. This shape reaches the
+        # emitter through a 3-D const gather at two output indices and a state
+        # gather at the contracted one, which the source-receptor shape in
+        # `array_contraction_test.jl` does not.
+        du_i, vm_i, tally_i, _ = _cto_build(NI, NJ, NK; compiler = :interpreter,
+                                            env = env)
+        @test _cto_get(tally_i, :array_contraction_codegen) == 0
+        @test all(A[i] === _cto_outs(du_i, vm_i, NI, NJ)[i] for i in eachindex(A))
     end
 
-    # ── Numerics may not move. The affine tier's answer is pinned against BOTH
-    # independent references, bit for bit, on the wide case that changed tiers.
-    @testset "wide case is bit-identical to both references" begin
+    # ── Numerics may not move. The affine tier's answer on the wide case is
+    # pinned against the pure unroll, `===` per element, and against exact
+    # arithmetic.
+    @testset "wide case is bit-identical to the unrolled reference" begin
         NI, NJ, NK = 6, 6, 8
         du_a, vm_a, tally_a, _ = _cto_build(NI, NJ, NK)
-        du_u, vm_u, tally_u, _ = _cto_build(NI, NJ, NK;
-            env = Dict("ESS_CONTRACTION_LOOP" => "0"))          # pure unroll
-        du_p, vm_p, tally_p, _ = _cto_build(NI, NJ, NK;
-            env = Dict("ESS_STENCIL_DISABLE" => "1"))           # per-cell: the LOOP tier
-        @test _cto_get(tally_a, :percell_loop) == 0
-        @test _cto_get(tally_u, :percell_loop) == 0
-        # The reference really is the other tier, not a relabelled affine build.
-        @test _cto_get(tally_p, :percell_loop) == 1
+        du_u, vm_u, tally_u, _ = _cto_build(NI, NJ, NK; compiler = :interpreter)
+        @test _cto_get(tally_a, :affine) >= 2
+        # The reference really is the unroll, not a relabelled affine build.
+        @test _cto_get(tally_u, :affine) == 0
+        @test _cto_get(tally_u, :percell_disabled) >= 1
         A = _cto_outs(du_a, vm_a, NI, NJ)
-        @test A == _cto_outs(du_u, vm_u, NI, NJ)
-        @test A == _cto_outs(du_p, vm_p, NI, NJ)
+        @test all(A[i] === _cto_outs(du_u, vm_u, NI, NJ)[i] for i in eachindex(A))
         @test A == _cto_exact(NI, NJ, NK)
     end
 

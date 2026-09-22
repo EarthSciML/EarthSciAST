@@ -8,31 +8,26 @@
 # this emitter produced.
 #
 # What must hold, and is asserted here:
-#   1. KILL SWITCHES — `ESS_DIRECT_CLASS_EMIT_DISABLE=1` restores the
-#      content-keyed assemble-then-merge pipeline (the differential oracle);
-#      the class-merge umbrella switch (`ESS_KERNEL_CLASS_MERGE_DISABLE=1`)
-#      stands the emitter down too, so a merge-disabled build carries NO
-#      lane-batched class kernels of either provenance.
+#   1. THE GATE — the emitter runs under `:native` and stands down under
+#      `:interpreter`, which turns the class merge off with it: a build with no
+#      class merge must carry NO lane-batched class kernels of either
+#      provenance. The shape-vs-content signature and the merge's own
+#      spec-mismatch guard are pinned directly, below the build.
 #   2. ZERO RESIDUAL MERGES — on the per-cell-path fixtures the direct build's
 #      cascade tally shows the class kernel came from the EMITTER
 #      (`:direct_class_kernel`) and the repair pass performed no merge
 #      (`:classmerge_round1_merge` / `:classmerge_round2_merge` absent,
-#      `n_classmerge_in == n_acc_kernels`); the kill-switch build reaches the
-#      SAME final kernel count only by repairing (`:classmerge_round1_merge`).
+#      `n_classmerge_in == n_acc_kernels` — the emitter left the repair pass
+#      nothing, which is the whole point of emitting directly).
 #   3. BIT-IDENTITY — du is `===` per element (NaN/-0.0 count; never ≈)
-#      against BOTH oracles (direct-off = assemble-then-merge, merge-off =
-#      fully split) and the forced per-cell scalar reference
-#      (ESS_STENCIL_DISABLE=1), across interp lane classes
-#      (linear/bilinear/searchsorted), a guarded (ifelse) class, codegen on
-#      AND off, and under ForwardDiff Duals (Jacobian bit-compare).
-#   4. DIRECT DOES BETTER (documented improvement) — a class whose interp
-#      query chain is loop-INVARIANT keeps a REAL invariant tier under direct
-#      emission (CSE runs after the merge, so only the lane-varying `:fn` node
-#      is pinned cell-varying — `_acc_fn_pay_lane_varying`), where the
-#      post-hoc merge must fold the whole tier into the per-lane cell tier
-#      (its members' inv recipes carry content-DIFFERENT specs, failing
-#      `_oop_inv_nodes_identical`). Same bits either way; only WHERE the
-#      invariant part is computed moves.
+#      against the per-cell scalar reference (`compiler=:interpreter`), across
+#      interp lane classes (linear/bilinear/searchsorted), a guarded (ifelse)
+#      class, with the kernels emitted AND left on the per-cell runner, and
+#      under ForwardDiff Duals (Jacobian bit-compare).
+#   4. THE INVARIANT TIER SURVIVES — a class whose interp query chain is
+#      loop-INVARIANT keeps a REAL invariant tier under direct emission (CSE
+#      runs after the merge, so only the lane-varying `:fn` node is pinned
+#      cell-varying — `_acc_fn_pay_lane_varying`).
 #   5. GRID INDEPENDENCE of the direct path, by the grid_invariance_test
 #      methodology: at N=8 vs N=24 every structural diag counter, per-kernel
 #      structural signature, and the cascade tally are IDENTICAL, and the
@@ -113,19 +108,15 @@ _dce_probe(n, k) = Float64[1.0 + 0.9 * sin(1.3i + 0.7k) for i in 1:n]
 
 # ---- builders ---------------------------------------------------------------
 
-# `direct=false` → ESS_DIRECT_CLASS_EMIT_DISABLE=1 (assemble-then-merge, the
-# kill-switch oracle). `merge=false` → ESS_KERNEL_CLASS_MERGE_DISABLE=1 (fully
-# split: no repair pass AND the emitter stands down). `stencil=false` →
-# ESS_STENCIL_DISABLE=1 (per-cell scalar reference, no kernels at all).
-function _dce_build(model, ics; direct::Bool=true, merge::Bool=true,
-                    codegen::Bool=true, stencil::Bool=true)
-    withenv("ESS_DIRECT_CLASS_EMIT_DISABLE" => (direct ? nothing : "1"),
-            "ESS_KERNEL_CLASS_MERGE_DISABLE" => (merge ? nothing : "1"),
-            "ESS_CODEGEN_DISABLE" => (codegen ? nothing : "1"),
-            "ESS_STENCIL_DISABLE" => (stencil ? nothing : "1")) do
+# `compiler=:interpreter` is the per-cell scalar reference: no emitter, no
+# class merge, no kernels at all. `codegen=false` puts the primary emission's
+# node budget at zero — a retained tuning threshold — so the class kernels stay
+# on `kernel_section.kernels` and can be introspected.
+function _dce_build(model, ics; codegen::Bool=true, compiler::Symbol=:native)
+    withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
         ESM._reset_cascade_tally!()
         f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics)
+            initial_conditions=ics, compiler=compiler)
         (f=f, u0=u0, p=p, vm=vm, diag=diag, tally=copy(ESM._CASCADE_TALLY))
     end
 end
@@ -159,18 +150,13 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
 
 @testset "direct class emission (per-cell scalarizer → class kernels)" begin
 
-    @testset "kill switches gate the emitter (white-box)" begin
+    @testset "the compiler gates the emitter (white-box)" begin
         @test ESM._direct_class_emit_enabled()
-        withenv("ESS_DIRECT_CLASS_EMIT_DISABLE" => "1") do
+        # The interpreter turns the emitter off, and the class merge with it —
+        # a build with no class merge must carry no lane-batched class kernel.
+        ESM._with_compiler_plan(ESM._compiler_plan(:interpreter)) do
             @test !ESM._direct_class_emit_enabled()
-        end
-        # The class-merge umbrella switches stand the emitter down too: a
-        # merge-disabled build must carry NO lane-batched class kernels.
-        withenv("ESS_KERNEL_CLASS_MERGE_DISABLE" => "1") do
-            @test !ESM._direct_class_emit_enabled()
-        end
-        withenv("ESS_OOP_MERGE_DISABLE" => "1") do
-            @test !ESM._direct_class_emit_enabled()
+            @test ESM._oop_merge_disabled()
         end
 
         # Signature: non-direct = byte-for-byte the content key (2-arg ≡
@@ -186,8 +172,8 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         @test sig(nA, false) != sig(nB, false)   # content key splits
         @test sig(nA, true) == sig(nB, true)     # shape key shares
 
-        # Merge: the 3-arg (kill-switch) form keeps the loud spec-mismatch
-        # guard; the direct form mints the per-lane spec table in cell order
+        # Merge: the 3-arg form keeps the loud spec-mismatch guard; the
+        # direct (4-arg) form mints the per-lane spec table in cell order
         # with `_outs_cells` addressing.
         @test_throws ESM.TreeWalkError ESM._acc_merge_nodes(
             ESM._Node[nA, nB], 2, ESM._AccDesc[])
@@ -211,14 +197,10 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
             ("guarded interp.linear", _dce_guard_model(6)))
         ics = _dce_ics(6)
         rdef = _dce_build(model, ics; codegen=false)
-        roff = _dce_build(model, ics; direct=false, codegen=false)
-        rspl = _dce_build(model, ics; merge=false, codegen=false)
 
-        # The fixture really takes the per-cell path at every setting.
-        for r in (rdef, roff, rspl)
-            @test get(r.tally, :percell_acc, 0) == 1
-            @test get(r.tally, :affine, 0) == 0
-        end
+        # The fixture really takes the per-cell path.
+        @test get(rdef.tally, :percell_acc, 0) == 1
+        @test get(rdef.tally, :affine, 0) == 0
 
         # DIRECT: one class kernel straight out of the emitter; the repair
         # pass found NOTHING to do (the zero-residual-merges pin).
@@ -229,21 +211,14 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         @test get(rdef.tally, :classmerge_round2_merge, 0) == 0
         @test count(_dce_has_lanespec, _dce_kernels(rdef.f)) == 1
 
-        # KILL SWITCH: the compile splits per table (n_classmerge_in == 2) and
-        # only the repair pass gets back to one kernel.
-        @test roff.diag.n_acc_kernels == 1
-        @test roff.diag.n_classmerge_in == 2
-        @test get(roff.tally, :direct_class_kernel, 0) == 0
-        @test get(roff.tally, :classmerge_round1_merge, 0) == 1
-
-        # MERGE OFF: fully split, and NO lane-batched class kernel of either
-        # provenance (the emitter stood down under the umbrella switch).
-        @test rspl.diag.n_acc_kernels == 2
-        @test get(rspl.tally, :direct_class_kernel, 0) == 0
-        @test count(_dce_has_lanespec, _dce_kernels(rspl.f)) == 0
+        # INTERPRETER: no class kernel of either provenance, and no access
+        # kernel at all — the equation stays on the per-cell scalar walker.
+        rref = _dce_build(model, ics; compiler=:interpreter)
+        @test get(rref.tally, :direct_class_kernel, 0) == 0
+        @test count(_dce_has_lanespec, _dce_kernels(rref.f)) == 0
     end
 
-    @testset "bit-identity vs both oracles + scalar reference — $name" for
+    @testset "bit-identity vs the scalar reference — $name" for
             (name, mkmodel) in (
             ("interp.linear", _dce_linear_model),
             ("interp.bilinear", _dce_bilinear_model),
@@ -255,50 +230,42 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         ics = _dce_ics(N)
         rdef = _dce_build(model, ics)                       # direct + codegen
         rdefi = _dce_build(model, ics; codegen=false)       # direct, interpreted
-        roff = _dce_build(model, ics; direct=false)         # assemble-then-merge
-        rspl = _dce_build(model, ics; merge=false)          # fully split
-        rref = _dce_build(model, ics; stencil=false)        # per-cell scalar walk
-        @test rdef.u0 == roff.u0 == rspl.u0 == rref.u0
+        rref = _dce_build(model, ics; compiler=:interpreter) # per-cell scalar walk
+        @test rdef.u0 == rref.u0
         for k in 1:4, t in (0.0, 0.7, 3.25)
             u = k == 1 ? copy(rdef.u0) : _dce_probe(N, k)
             dud = _dce_du(rdef.f, u, rdef.p, t)
             @test _dce_bitsame(dud, _dce_du(rdefi.f, u, rdefi.p, t))
-            @test _dce_bitsame(dud, _dce_du(roff.f, u, roff.p, t))
-            @test _dce_bitsame(dud, _dce_du(rspl.f, u, rspl.p, t))
             @test _dce_bitsame(dud, _dce_du(rref.f, u, rref.p, t))
         end
 
         # ForwardDiff Duals: values AND partials bit-identical through the
-        # direct class kernel, both emitters.
+        # direct class kernel, emitted and interpreted.
         Jd = ForwardDiff.jacobian((du, u) -> rdef.f(du, u, rdef.p, 0.4),
                                   zero(rdef.u0), rdef.u0)
-        Jo = ForwardDiff.jacobian((du, u) -> roff.f(du, u, roff.p, 0.4),
-                                  zero(roff.u0), roff.u0)
-        Js = ForwardDiff.jacobian((du, u) -> rspl.f(du, u, rspl.p, 0.4),
-                                  zero(rspl.u0), rspl.u0)
-        @test _dce_bitsame(Jd, Jo)
-        @test _dce_bitsame(Jd, Js)
+        Jr = ForwardDiff.jacobian((du, u) -> rref.f(du, u, rref.p, 0.4),
+                                  zero(rref.u0), rref.u0)
+        @test _dce_bitsame(Jd, Jr)
     end
 
-    @testset "direct emission KEEPS the invariant tier the repair pass folds" begin
+    @testset "direct emission KEEPS a real invariant tier" begin
         # The class's `g/h` interp query chain is loop-invariant. Direct
         # emission runs `_build_acc_cse` AFTER the merge: only the lane-spec
         # `:fn` node is pinned cell-varying (`_acc_fn_pay_lane_varying`), so
-        # the chain keeps a REAL inv slot (evaluated once per call). The
-        # post-hoc merge sees content-DIFFERENT specs in its members' inv
-        # recipes (`_oop_inv_nodes_identical` declines) and must fold the
-        # whole tier per lane — same bits, strictly more work per call. This
-        # is the documented direct-emission improvement.
+        # the chain keeps a REAL inv slot, evaluated once per call rather than
+        # once per lane. (A post-hoc merge cannot: its members' inv recipes
+        # carry content-DIFFERENT specs, so `_oop_inv_nodes_identical` declines
+        # and the whole tier folds into the cell tier. Same bits either way,
+        # which is why the counter is what this pins.)
         N = 6
         ics = _dce_ics(N)
         rdef = _dce_build(_dce_inv_model(N), ics; codegen=false)
-        roff = _dce_build(_dce_inv_model(N), ics; direct=false, codegen=false)
-        @test rdef.diag.n_acc_kernels == roff.diag.n_acc_kernels == 1
+        rref = _dce_build(_dce_inv_model(N), ics; compiler=:interpreter)
+        @test rdef.diag.n_acc_kernels == 1
         @test rdef.diag.n_acc_inv_slots >= 1     # kept by construction
-        @test roff.diag.n_acc_inv_slots == 0     # folded by the repair pass
         for t in (0.0, 0.42)
             @test _dce_bitsame(_dce_du(rdef.f, rdef.u0, rdef.p, t),
-                               _dce_du(roff.f, roff.u0, roff.p, t))
+                               _dce_du(rref.f, rref.u0, rref.p, t))
         end
     end
 

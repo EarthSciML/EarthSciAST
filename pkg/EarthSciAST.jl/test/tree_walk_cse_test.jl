@@ -488,14 +488,13 @@ end
     end
 
     _alloc_of(K, M, t) = begin
-        # Built with the B3 TIME tier disabled, deliberately: the whole sza→bands
-        # chain depends only on `t`, so the tiered `f!` evaluates it once per
+        # Built with `compiler=:interpreter`, deliberately: the whole sza→bands
+        # chain depends only on `t`, so a `:native` `f!` evaluates it once per
         # `(p, t, epoch)` and warm same-`t` calls skip it entirely — this probe
         # wants the per-CALL evaluation cost, not the memoized one. The same-`t`
         # skip has its own suite (tree_walk_tcadence_test.jl).
-        f!, u0, p, _ts, _vm = withenv("ESS_TCADENCE_DISABLE" => "1") do
-            build_evaluator(_fanout_model(K, M))
-        end
+        f!, u0, p, _ts, _vm = build_evaluator(_fanout_model(K, M);
+                                              compiler=:interpreter)
         du = similar(u0)
         rhs_alloc_bytes(f!, du, u0, p, t)
     end
@@ -1131,21 +1130,21 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     end
 
     # ----------------------------------------------------------------
-    # (9) The tiered `f!` ≡ the UNTIERED `f!` (`ESS_UNTIERED=1`, const_tier.jl):
-    # the same emitter with every slot classified dynamic, so it refills the whole
-    # prelude on every call and skips nothing. Bit-for-bit, across a `p` change and
-    # repeated calls. (`tree_walk_untiered_test.jl` pins the switch itself — that
-    # every slot really is classified dynamic — which is what makes it usable as
-    # an oracle here.)
+    # (9) The `:native` `f!` ≡ the `:interpreter` `f!` (const_tier.jl): the same
+    # emitter with every slot classified dynamic, so it refills the whole prelude
+    # on every call and skips nothing. Bit-for-bit, across a `p` change and
+    # repeated calls. (`tree_walk_untiered_test.jl` pins the interpreter's own
+    # prelude — that every slot really is classified dynamic — which is what
+    # makes it usable as an oracle here.)
     # ----------------------------------------------------------------
-    @testset "`form=:inplace` (tiered) agrees bit-for-bit with the untiered build" begin
+    @testset "`form=:inplace` (tiered) agrees bit-for-bit with the interpreter" begin
         fi, u0, p, _ts, _vm, di = ESM._build_evaluator_impl(_ct_arrhenius(); form=:inplace)
-        fu, _u0, _p, _ts2, _vm2, dun = withenv("ESS_UNTIERED" => "1") do
-            ESM._build_evaluator_impl(_ct_arrhenius(); form=:inplace)
-        end
+        fu, _u0, _p, _ts2, _vm2, dun = ESM._build_evaluator_impl(_ct_arrhenius();
+            form=:inplace, compiler=:interpreter)
 
-        # The classification is a property of the PRELUDE; the switch only changes
-        # which tier each slot is ROUTED to, and it routes them all to dynamic.
+        # The classification is a property of the PRELUDE; the compiler only
+        # changes which tier each slot is ROUTED to, and the interpreter routes
+        # them all to dynamic.
         @test di.n_const_slots == 5 && di.n_dynamic_slots == 0
         @test dun.n_const_slots == 0 && dun.n_time_slots == 0
         @test dun.n_dynamic_slots == 5

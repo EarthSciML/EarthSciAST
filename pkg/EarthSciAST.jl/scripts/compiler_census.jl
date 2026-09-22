@@ -94,9 +94,8 @@ const PERCELL_BUILD_KEYS = ("percell_loop", "percell_acc", "percell_disabled")
     _census_one(M, path) -> Dict
 
 Build `path` through `M` (the loaded `EarthSciAST` module) and report what the
-cascade did. Never throws: every failure is a record. `ESS_CODEGEN_DEBUG` /
-`ESS_STENCIL_DEBUG` are expected to be `1` in the environment, and this captures
-the stderr they write — including the `@info` the affine fallback logs, which is
+cascade did. Never throws: every failure is a record. Whatever the build writes
+to stderr is captured — including the `@info` the affine fallback logs, which is
 why a fresh `ConsoleLogger` is installed over the same file.
 """
 function _census_one(M, path::AbstractString)
@@ -192,13 +191,12 @@ function _census_one(M, path::AbstractString)
     # THE headline: kernels neither emission covered, i.e. `dual_resid` —
     # `_run_acc_kernel!` walks these per cell on every RHS call.
     rec["n_interp_at_rhs"]      = isempty(dual_decl) ? 0 : sum(values(dual_decl))
-    # The OTHER per-cell tree walk at RHS time, and the one the cascade reaches by
-    # ACCEPTING rather than declining: a whole-array contraction section evaluates
-    # `_eval_node` once per output cell (array_contraction.jl:71-79) and no codegen
-    # tier ever sees it. Counted separately because it is a different unit — these
-    # are equations, `n_interp_at_rhs` counts kernels — and because whether
-    # `native` must refuse it is a ruling, not a measurement.
-    rec["n_array_contraction"]  = get(tally, "array_contraction", 0)
+    # The whole-array contraction tier. Its nest is EMITTED (array_contraction.jl),
+    # so an equation landing here carries no tree walk at RHS-call time; it is
+    # counted separately anyway because it is a different unit — these are
+    # equations, `n_interp_at_rhs` counts kernels — and because it is the tier
+    # whose reach the census exists to measure.
+    rec["n_array_contraction"]  = get(tally, "array_contraction_codegen", 0)
     # Per-cell at BUILD only: the equation was scalarized per output cell during
     # construction and the resulting kernels then compiled, so the RHS-call path
     # carries no tree walk from it. This is the distinction a raw
