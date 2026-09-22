@@ -82,7 +82,12 @@ pub(crate) fn pin_data_fed_parameters<'a>(
             }
             if let Some(subs) = model.subsystems.as_mut() {
                 for (sub_name, sub) in subs.iter_mut() {
-                    pin_in_json(sub, &format!("{model_name}.{sub_name}"), p.clone(), &mut pinned_names);
+                    pin_in_json(
+                        sub,
+                        &format!("{model_name}.{sub_name}"),
+                        p.clone(),
+                        &mut pinned_names,
+                    );
                 }
             }
         }
@@ -99,7 +104,12 @@ pub(crate) fn pin_data_fed_parameters<'a>(
             }
             if let Some(subs) = sys.subsystems.as_mut() {
                 for (sub_name, sub) in subs.iter_mut() {
-                    pin_in_json(sub, &format!("{sys_name}.{sub_name}"), p.clone(), &mut pinned_names);
+                    pin_in_json(
+                        sub,
+                        &format!("{sys_name}.{sub_name}"),
+                        p.clone(),
+                        &mut pinned_names,
+                    );
                 }
             }
         }
@@ -242,9 +252,12 @@ mod tests {
 
     #[test]
     fn the_json_reading_accepts_both_update_forms_and_rejects_a_non_data_rule() {
-        let data = serde_json::json!({"kind": "data", "source": "S", "from": {"file_variable": "v"}});
+        let data =
+            serde_json::json!({"kind": "data", "source": "S", "from": {"file_variable": "v"}});
         assert!(json_update_is_data_fed(Some(&data)));
-        assert!(json_update_is_data_fed(Some(&serde_json::json!([data.clone()]))));
+        assert!(json_update_is_data_fed(Some(&serde_json::json!([
+            data.clone()
+        ]))));
         // A `data` rule with no `from` binds nothing from a file, and a
         // scheduled rule is not provider-fed at all.
         assert!(!json_update_is_data_fed(Some(

@@ -43,7 +43,11 @@ fn accepted(case: &Value) -> Vec<String> {
         .as_array()
         .expect("a refusal case lists `accepts`")
         .iter()
-        .map(|c| c.as_str().expect("`accepts` entries are strings").to_string())
+        .map(|c| {
+            c.as_str()
+                .expect("`accepts` entries are strings")
+                .to_string()
+        })
         .collect()
 }
 
