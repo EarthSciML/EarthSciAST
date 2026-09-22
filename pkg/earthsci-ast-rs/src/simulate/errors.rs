@@ -86,6 +86,27 @@ pub enum SimulateError {
         class: String,
     },
 
+    /// The caller supplied a time span whose start or end is not a finite
+    /// number — `NaN`, `+∞` or `−∞`.
+    ///
+    /// A document cannot spell one: the schema's `TimeSpan` bounds are JSON
+    /// numbers, and esm-spec §6.6.4 records that "JSON has no infinite
+    /// literal". So this is a caller-supplied argument of [`Compiled::solve`],
+    /// validated alongside the parameter and initial-condition maps of the same
+    /// call.
+    ///
+    /// Refused rather than interpreted. Every ordering test against `NaN` is
+    /// false, so a `NaN` endpoint reads as a run that cannot advance and would
+    /// hand back the initial state as though it were a trajectory; an infinite
+    /// end gives the solver loop a stop time it can never reach.
+    #[error("Invalid time span ({start}, {end}): start and end must both be finite")]
+    InvalidTimeSpan {
+        /// The requested start of the interval.
+        start: f64,
+        /// The requested end of the interval.
+        end: f64,
+    },
+
     /// The user supplied a parameter name that does not appear in the
     /// flattened system.
     #[error("Invalid parameter '{name}'")]

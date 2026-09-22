@@ -4,6 +4,113 @@ use super::*;
 // Solver loop and array/spatial routing
 // ============================================================================
 
+/// Refuse a time span whose start or end is not a finite number.
+///
+/// `NaN` and both infinities are refused together, and refused at the backend
+/// entry points — ahead of the branch between [`nonadvancing_trajectory`] and
+/// the solver — so the two cannot disagree about what such a span means.
+///
+/// Neither is a span this format can express (see
+/// [`SimulateError::InvalidTimeSpan`]), and neither names an integration:
+/// against `NaN` every ordering test is false, which is indistinguishable from
+/// a span that cannot advance, and an infinite end is a stop time the solver
+/// loop can never reach.
+#[cfg(feature = "solve")]
+pub(crate) fn reject_nonfinite_span(t0: f64, t_end: f64) -> Result<(), SimulateError> {
+    if t0.is_finite() && t_end.is_finite() {
+        return Ok(());
+    }
+    Err(SimulateError::InvalidTimeSpan {
+        start: t0,
+        end: t_end,
+    })
+}
+
+/// The answer to a run that provably never takes a solver step, or `None` when
+/// the solver really does have to advance.
+///
+/// Two shapes qualify, and the answer to both is the initial state on the
+/// caller's output grid:
+///
+///   * an EMPTY interval (`t_end <= t0`). esm-spec §6.6.2 makes that a real
+///     test shape — "the instantaneous-derivative test shape (observed
+///     tendencies asserted at `time: 0`)" — and §6.6 constrains an assertion's
+///     `time` only to lie in `[time_span.start, time_span.end]`, which `0` does
+///     in `[0, 0]`; the schema's `TimeSpan` carries no `end > start` rule
+///     either. So a document may legitimately ask for `{start: 0, end: 0}` and
+///     does: `tests/valid/units_propagation.esm` among others. `set_stop_time`
+///     REFUSES that interval — "Stop time is at the current state time" — so it
+///     has to be answered without entering diffsol at all.
+///   * a NON-empty interval whose whole output grid lies at or before `t0`
+///     (`saveat` present and every requested time `<= t0`) — the shape an
+///     inline test takes when the document declares, say, `{start: 0, end: 1}`
+///     and every assertion is at the initial instant. [`run_solver`]'s `saveat`
+///     branch drains such times from the initial state and breaks before its
+///     first `step()`, so the trajectory is the same either way.
+///
+/// Every caller consults this BEFORE building the diffsol problem and its
+/// solver (issue #438). Constructing an implicit solver materializes a dense
+/// Jacobian, and this crate supplies a MATRIX-FREE finite-difference Jacobian,
+/// so diffsol pays one closure call per state column and each call evaluates
+/// the whole right-hand side twice: `2·n_states + 1` full RHS evaluations,
+/// every observed included, for a run whose answer is the untouched initial
+/// state. On a column model whose state count and whose per-evaluation cost
+/// both grow with the vertical grid, that is quadratic work in the grid size
+/// for an answer that needs one evaluation.
+///
+/// The `Flow::Cancel` arm is the caller's progress observer declining the run
+/// before it starts, exactly as it may inside [`run_solver`]; the single step-0
+/// report is made here so that a caller sees the same one either way.
+#[cfg(feature = "solve")]
+pub(crate) fn nonadvancing_trajectory(
+    t0: f64,
+    t_end: f64,
+    initial_state: &[f64],
+    opts: &SolveOptions,
+) -> Option<RawTrajectory> {
+    // A grid that asks for nothing past `t0` cannot observe a step, so taking
+    // one is pure cost. An ABSENT grid is the solver's own natural step grid,
+    // which a non-empty interval does have to produce.
+    let grid_ends_at_start = match &opts.saveat {
+        Some(t_eval) => t_eval.iter().all(|&t| t <= t0),
+        None => false,
+    };
+    if t_end > t0 && !grid_ends_at_start {
+        return None;
+    }
+
+    let mut times: Vec<f64> = Vec::new();
+    let mut state_rows: Vec<Vec<f64>> = vec![Vec::new(); initial_state.len()];
+    if let Some(cb) = &opts.progress {
+        let p = Progress {
+            t0,
+            t: t0,
+            t_end,
+            step: 0,
+            maxiters: opts.maxiters,
+            u: initial_state,
+        };
+        if matches!(cb(&p), Flow::Cancel) {
+            return Some((times, state_rows, ReturnCode::Terminated));
+        }
+    }
+
+    // With a grid, every requested time gets the initial state — including a
+    // time BEYOND an empty interval, which is the courtesy extrapolation the
+    // tail of [`run_solver`]'s `saveat` branch performs, and for a run that
+    // never moves the initial state is what it extrapolates. Without a grid,
+    // the single point the run produces is `t0` itself.
+    let natural = [t0];
+    let grid: &[f64] = opts.saveat.as_deref().unwrap_or(&natural);
+    for &t in grid {
+        times.push(t);
+        for (i, &v) in initial_state.iter().enumerate() {
+            state_rows[i].push(v);
+        }
+    }
+    Some((times, state_rows, ReturnCode::Success))
+}
+
 /// Run the configured solver from `t0` to `t_end`, honoring `opts.maxiters`
 /// and `opts.saveat`. Returns `(time_vec, state_matrix_rows)` where
 /// `state_matrix_rows[i]` is the trajectory of state variable `i`.
@@ -64,47 +171,24 @@ where
         cb(&p)
     };
 
+    // A run that provably never steps is answered from the initial state
+    // without touching diffsol — an empty interval, or an output grid that
+    // asks for nothing past `t0` (see [`nonadvancing_trajectory`], which makes
+    // the step-0 report itself so a host still sees exactly one).
+    //
+    // Reaching it here is a backstop: every caller that builds a solver checks
+    // it FIRST, because the expense this avoids — the dense Jacobian an
+    // implicit solver materializes on construction — is already paid by the
+    // time `run_solver` is handed one (issue #438).
+    if let Some(traj) = nonadvancing_trajectory(t0, t_end, &initial_state, opts) {
+        return Ok(traj);
+    }
+
     // One report before stepping, so a host can render a determinate 0% the
     // moment the solve starts rather than after the first (possibly slow) step.
     let mut retcode = ReturnCode::Success;
     if matches!(report(0, t0, &initial_state), Flow::Cancel) {
         return Ok((times, state_rows, ReturnCode::Terminated));
-    }
-
-    // An EMPTY interval integrates nothing, and its whole answer is the initial
-    // state. esm-spec §6.6.2 makes that a real test shape — "the
-    // instantaneous-derivative test shape (observed tendencies asserted at
-    // `time: 0`)" — and §6.6 constrains an assertion's `time` only to lie in
-    // `[time_span.start, time_span.end]`, which `0` does in `[0, 0]`; the
-    // schema's `TimeSpan` carries no `end > start` rule either. So a document
-    // may legitimately ask for `{start: 0, end: 0}` and does:
-    // `tests/valid/units_propagation.esm`, and 22 other corpus documents that
-    // only got away with it by being STATIC (no ODEs at all, so `solve` returns
-    // `NotDynamic` and the inline-test runner answers from the build).
-    //
-    // `set_stop_time` REFUSES that interval — "Stop time is at the current state
-    // time" — so the one dynamic document in that set failed all ten of its
-    // assertions on a solver complaint about having nothing to do, while Julia
-    // and Python both evaluated it. Answer it here instead, from the state the
-    // solver was initialized with, and never enter diffsol. Nothing about how
-    // diffsol is driven over a NON-empty interval changes: `set_stop_time` now
-    // runs just below, on exactly the intervals it always accepted.
-    //
-    // The `saveat` branch already did this for the requested times at or before
-    // `t0`; this is the same answer for the whole grid when the run cannot get
-    // past `t0`. A grid time BEYOND an empty interval is the courtesy
-    // extrapolation the tail of that branch performs, which for a run that
-    // never moves is the initial state too.
-    if t_end <= t0 {
-        match &opts.saveat {
-            Some(t_eval) => {
-                for &t in t_eval {
-                    push_state(&mut times, &mut state_rows, t, &initial_state);
-                }
-            }
-            None => push_state(&mut times, &mut state_rows, t0, &initial_state),
-        }
-        return Ok((times, state_rows, retcode));
     }
 
     solver

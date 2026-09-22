@@ -273,6 +273,10 @@ impl Compiled {
         // (`crate::precision`); a no-op for a Float64 model.
         let _precision_guard = self.precision.enter();
         let (t0, t_end) = tspan;
+        // Validated here, at the entry point, so the non-advancing shortcut and
+        // the solver path below it are never handed a span they would read
+        // differently.
+        reject_nonfinite_span(t0, t_end)?;
 
         let param_vec = self.build_param_vec(params)?;
         let mut ic_vec = self.build_initial_state(initial_conditions, &param_vec, t0)?;
@@ -598,6 +602,18 @@ impl Compiled {
         ic_vec: &[f64],
         opts: &SolveOptions,
     ) -> IntegrateResult {
+        // A run that never advances is answered from the initial state, before
+        // any of the machinery below exists (issue #438): building the solver
+        // materializes a dense Jacobian, which this crate's matrix-free
+        // finite-difference Jacobian pays for in full right-hand-side
+        // evaluations, one pair per state column — for a trajectory that is the
+        // untouched initial state. See [`nonadvancing_trajectory`], which also
+        // makes the step-0 progress report. [`run_solver`] keeps the same check
+        // as a backstop and produces the identical trajectory, so this is a
+        // cost-only shortcut.
+        if let Some((time, state, retcode)) = nonadvancing_trajectory(t0, t_end, ic_vec, opts) {
+            return Ok((time, state, SolveStats::default(), retcode));
+        }
         let n_states = self.state_names.len();
         let rhs_closure = self.make_rhs_closure();
         let jac_closure = self.make_jac_closure();
