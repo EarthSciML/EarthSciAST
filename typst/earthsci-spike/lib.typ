@@ -31,3 +31,7 @@
     ..xs.zip(ys).slice(1).map(((x, y)) => curve.line((sx(x), sy(y)))),
   )))
 }
+
+// Build a narrative document (the element format of `earthsci-narrative`):
+// assemble, validate, render math, run tests and analyses, draw figures.
+#let build(doc, ..opts) = _call(_p.build, json.encode(doc), json.encode(opts.named()))

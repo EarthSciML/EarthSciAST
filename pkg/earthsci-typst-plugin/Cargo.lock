@@ -275,10 +275,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "earthsci-narrative"
+version = "0.1.0"
+dependencies = [
+ "earthsci-ast",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "earthsci-typst-plugin"
 version = "0.0.0"
 dependencies = [
  "earthsci-ast",
+ "earthsci-narrative",
  "getrandom 0.3.4",
  "serde_json",
  "wasm-minimal-protocol",
