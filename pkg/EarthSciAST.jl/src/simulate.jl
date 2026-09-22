@@ -761,10 +761,32 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
   fast tier off, one tree walk per output cell. Pick it to check another
   compiler, or to run a document `:native` refuses. It keeps the build-time
   MEMOS (the template expansion memo, the reference-preserving template image),
-  which change build wall time and not one evaluated bit. `:xla`, `:mtk` and
-  `:sympy` raise `compiler_unavailable` from this entry point today, naming
-  what to load or which binding has them; a value outside the vocabulary raises
-  `compiler_unknown`.
+  which change build wall time and not one evaluated bit.
+
+  **`:mtk` is the specialty compiler that works only for some documents**, and
+  it is the one that runs EVENTS and IMPLICIT EQUATIONS — the constructs
+  CONFORMANCE_SPEC §5.39 has every other evaluator refuse with
+  `unsupported_construct`. It needs `using ModelingToolkit` (without it, the
+  answer is `compiler_unavailable` naming that), and it builds
+  `ModelingToolkit.System(flatten(input))` → `mtkcompile` → `ODEProblem`, which
+  is what `solve` then integrates, so the compiled system's events, mass matrix
+  and observed equations are all in force. What it REFUSES by name
+  (`compiler_refused_rule`) is the document content it cannot express: a
+  parameter or field fed by LOADED DATA (a `providers` entry, a `const_arrays`
+  / `param_arrays` argument, `pushdown_rewrite = true`), a CONTINUOUS spatial
+  dimension (a PDE, which needs `ModelingToolkit.PDESystem` and a
+  discretization), a geometry operator, and a time derivative of an expression.
+  Two consequences a caller sees: every parameter classifies `:structural`
+  (the value is read where `mtkcompile` can see it and is baked into the
+  compiled problem, so `esm_problem(…; p = …)` sets it and `remake(prob; p = …)`
+  refuses), and a solution is indexed with the COMPILED SYSTEM's symbols rather
+  than the flattened ESM spelling — `prob.var_map` and
+  [`observed_field`](@ref) are the document-named surface there. See the
+  Simulation Runners page for the whole story.
+
+  `:xla` and `:sympy` raise `compiler_unavailable` from this entry point,
+  naming what to load or which binding has them; a value outside the vocabulary
+  raises `compiler_unknown`.
 
   Naming `:native` is exactly the default: no environment variable selects an
   evaluation strategy, so the keyword is the whole answer (esm-libraries-spec
