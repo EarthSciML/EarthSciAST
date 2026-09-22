@@ -38,6 +38,33 @@ pub enum CompileError {
         detail: String,
     },
 
+    /// One unknown carries BOTH a derivative equation and a bare-LHS one
+    /// (esm-spec §4.9.4 `equation_count_mismatch`).
+    ///
+    /// §4.9.4 counts an equation against the unknowns "whichever form its LHS
+    /// takes", so `D(x) ~ f` beside `x ~ g` is two equations binding one
+    /// unknown: the document is unbalanced, and `validate` reports exactly
+    /// that. This crate used to tie-break in favour of the derivative, which
+    /// integrates a system free of a constraint the file declares and reports
+    /// the trajectory as the answer. The build is the other place that same
+    /// document arrives, so it refuses under the same code.
+    #[error(
+        "{code}: unknown '{name}' is defined twice — by `{differential}` and by \
+         `{algebraic}`. esm-spec §4.9.4 counts an equation whichever form its LHS \
+         takes, so this system has one more equation than it has unknowns to bind; \
+         keeping the derivative and dropping the constraint would run a model the \
+         document does not describe. Remove one of the two definitions.",
+        code = crate::diagnostic::codes::EQUATION_COUNT_MISMATCH
+    )]
+    DoublyDefinedUnknown {
+        /// The unknown both equations define, spelled as the system spells it.
+        name: String,
+        /// The derivative equation, rendered `lhs ~ rhs`.
+        differential: String,
+        /// The competing bare-LHS equation, rendered `lhs ~ rhs`.
+        algebraic: String,
+    },
+
     /// The chosen compiler cannot run one of this document's rules
     /// (esm-spec §9.6.6 `compiler_refused_rule`, esm-libraries-spec §2.5.10).
     ///
@@ -487,6 +514,63 @@ pub fn first_implicit_equation(
         );
         !structural && matches!(lhs_form(&eq.lhs), LhsForm::Expression)
     })
+}
+
+/// The first unknown carrying BOTH a derivative equation and a bare-LHS one,
+/// with the two competing equations (esm-spec §4.9.4).
+///
+/// The search is over EQUATION SHAPES, not over any state/observed split: the
+/// derivative side accepts every spelling [`crate::classification::lhs_form`]
+/// unwraps to a [`LhsForm::Derivative`](crate::classification::LhsForm), while
+/// the competing definition must be a BARE variable LHS. An indexed LHS
+/// (`u[i] ~ …`) is deliberately not counted here — it writes one cell of `u`
+/// rather than redefining the whole unknown — which keeps this to the shape
+/// Python's `_assert_no_doubly_defined_state` refuses, so the two bindings
+/// refuse the same documents.
+///
+/// Returns the FIRST such unknown in equation order, so the message is stable
+/// for a document with several.
+pub fn first_doubly_defined_unknown(
+    equations: &[crate::types::Equation],
+) -> Option<(String, &crate::types::Equation, &crate::types::Equation)> {
+    use crate::classification::{LhsForm, lhs_form};
+    use crate::types::Expr;
+    use std::collections::HashMap;
+
+    let mut differential: HashMap<String, &crate::types::Equation> = HashMap::new();
+    let mut bare: HashMap<&str, &crate::types::Equation> = HashMap::new();
+    for eq in equations {
+        if let LhsForm::Derivative(name) = lhs_form(&eq.lhs) {
+            differential.entry(name).or_insert(eq);
+        } else if let Expr::Variable(name) = &eq.lhs {
+            bare.entry(name.as_str()).or_insert(eq);
+        }
+    }
+    equations.iter().find_map(|eq| {
+        let LhsForm::Derivative(name) = lhs_form(&eq.lhs) else {
+            return None;
+        };
+        let diff = *differential.get(&name)?;
+        let alg = *bare.get(name.as_str())?;
+        Some((name, diff, alg))
+    })
+}
+
+/// The refusal of the doubly-defined unknown [`first_doubly_defined_unknown`]
+/// found, naming the unknown and both equations.
+pub fn doubly_defined_unknown_refusal(
+    name: &str,
+    differential: &crate::types::Equation,
+    algebraic: &crate::types::Equation,
+) -> CompileError {
+    let render = |eq: &crate::types::Equation| {
+        format!("{} ~ {}", crate::to_ascii(&eq.lhs), crate::to_ascii(&eq.rhs))
+    };
+    CompileError::DoublyDefinedUnknown {
+        name: name.to_string(),
+        differential: render(differential),
+        algebraic: render(algebraic),
+    }
 }
 
 /// The refusal of an implicit equation by `evaluator`, naming the equation.
