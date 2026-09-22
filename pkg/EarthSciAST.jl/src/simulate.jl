@@ -974,8 +974,14 @@ function esm_problem(input, tspan;
     # what lets `remake(prob; p = …)` accept the numeric half instead of refusing
     # every override.
     param_classes = Dict{String,Symbol}()
+    # `:xla` is built OUT OF PLACE — the compiled tree-walk intermediate
+    # representation is what the direct StableHLO emitter lowers — and the
+    # executable is wrapped back into the in-place `f!` this Problem's surface
+    # promises, just below. Every other compiler builds the in-place evaluator
+    # directly. See src/compiler_xla.jl.
     f!, u0_built, p_built, _tspan, var_map = build_evaluator(doc;
         compiler = compiler,
+        form = compiler === :xla ? :oop : :inplace,
         model_name = model_name,
         parameter_overrides = overrides,
         const_arrays = merged_const,
@@ -987,6 +993,11 @@ function esm_problem(input, tspan;
         # The front door fetches these pre-sliced right after value-invention.
         _gated_providers = gated_providers,
         _sample_time = t_sample)
+
+    if compiler === :xla
+        f! = _xla_problem_rhs(f!, var_map, u0_built, p_built,
+                              insp.compiler_report)
+    end
 
     # ---- initial state: the document's own ICs, then the caller's -----------
     u0_run = _seed_u0(u0_built, var_map, u0, seed_ic!)

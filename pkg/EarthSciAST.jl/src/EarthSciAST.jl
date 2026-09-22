@@ -142,6 +142,9 @@ include("tree_walk.jl")
 include("unit_conversion.jl")
 include("data_refresh.jl")
 include("data_output.jl")
+# `compiler=:xla` (API_SPEC §5.8): after the tree walk, because it names the
+# emitter's `DirectEmitError`, and before simulate.jl, which dispatches on it.
+include("compiler_xla.jl")
 include("simulate.jl")
 include("reference_graph.jl")
 include("cadence.jl")

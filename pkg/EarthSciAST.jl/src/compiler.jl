@@ -106,12 +106,17 @@ function _compiler_plan(compiler::Symbol)
     elseif compiler === :interpreter
         return _plan_all(:interpreter, false, false)
     elseif compiler === :xla
-        throw(SimulateError(
-            "compiler=:xla is not reachable from esm_problem yet — the direct " *
-            "StableHLO emitter exists (it needs Reactant loaded) but is wired to " *
-            "the `:oop` build_evaluator form, not to this entry point; a later " *
-            "phase of the compiler-selection work lands it here",
-            ERROR_CODES.COMPILER_UNAVAILABLE))
+        # The specialty compiler that needs a HEAVY EXTERNAL DEPENDENCY: the
+        # direct StableHLO emitter, which exists only with Reactant in the
+        # session. `_xla_extension` raises `compiler_unavailable` when it is
+        # not, which is the right failure for a value that IS in the
+        # vocabulary; everything else about the lane is in compiler_xla.jl.
+        # The PLAN is `native`'s: the emitter lowers the compiled tree-walk
+        # intermediate representation, so the tiers that build it all run, and
+        # they run strictly — a rule `native` would refuse is a rule `:xla` has
+        # no program for either.
+        _xla_extension()
+        return _plan_all(:xla, true, true)
     elseif compiler === :mtk
         throw(SimulateError(
             "compiler=:mtk is not reachable from esm_problem yet — today's route " *
@@ -169,10 +174,14 @@ landed on, and every decline it collected getting there.
 * `rule` — the rule's identity, component-qualified the way the document spells
   it (a derivative target with its output axes, an observed's name, a setup
   array's name).
-* `kind` — `:equation`, `:observed` or `:setup_array`.
+* `kind` — `:equation`, `:observed`, `:setup_array`, or `:rhs_program` for a
+  compiler that emits ONE program for the whole assembled right-hand side
+  (`:xla`) rather than lowering it rule by rule.
 * `tier` — where it landed: `:affine`, `:scan`, `:array_contraction_codegen`,
   `:percell_build` (scalarized per output cell at BUILD, then compiled),
-  `:codegen`, `:interpreter`, `:setup_compiled`, `:setup_percell`.
+  `:codegen`, `:interpreter`, `:setup_compiled`, `:setup_percell`; and, on the
+  `:rhs_program` row an `:xla` build adds, `:xla_direct_cpu` /
+  `:xla_direct_gpu`, which name the emitter and the device together.
 * `declines` — `tier => reason` for every tier that looked at this rule and
   passed, deepest reason last.
 """
