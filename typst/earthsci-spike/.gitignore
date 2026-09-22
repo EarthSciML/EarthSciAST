@@ -1,0 +1,5 @@
+# Built by pkg/earthsci-typst-plugin/build.sh
+earthsci.wasm
+# Example output
+examples/*.png
+examples/*.pdf
