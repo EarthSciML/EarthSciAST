@@ -75,6 +75,7 @@
         "compiler_agreement_adapter",
         "esio_provider",
         "extension",
+        "inline_tests_adapter",
         "intern",
         "performance",
         "precision",
