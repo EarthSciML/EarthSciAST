@@ -113,8 +113,7 @@ end
         # In the vocabulary, not provided by this binding / this phase. Each one
         # names what would have to be loaded or which binding has it — and none
         # of them silently builds with another compiler.
-        for (v, needle) in ((:xla, "Reactant"), (:mtk, "ModelingToolkit"),
-                            (:sympy, "Python"))
+        for (v, needle) in ((:xla, "Reactant"), (:sympy, "Python"))
             e = try
                 esm_problem(doc, (0.0, 1.0); compiler = v)
                 nothing
@@ -124,6 +123,38 @@ end
             @test e isa SimulateError
             @test e.code == CSEL.ERROR_CODES.COMPILER_UNAVAILABLE
             @test occursin(needle, e.msg)
+        end
+
+        # `:mtk` is a MEMBER of the vocabulary that this binding provides —
+        # through a package extension, so what it needs is a loaded package
+        # rather than another binding. The vocabulary check runs FIRST, which is
+        # what makes the answer `compiler_unavailable` (in the vocabulary, not
+        # reachable here) rather than `compiler_unknown` (no such value).
+        #
+        # The test target carries ModelingToolkit, so THIS session takes the
+        # available arm and `:mtk` builds — which is `compiler_mtk_test.jl`'s
+        # subject. What is asserted here is the arm an MTK-FREE session takes:
+        # the plan is where the two diverge, and the message it raises names
+        # what to load. Asserting it end-to-end would need a second process with
+        # a different environment, which this suite has no way to spawn.
+        @test :mtk in CSEL.COMPILER_VOCABULARY
+        if Base.get_extension(EarthSciAST, :EarthSciASTMTKExt) === nothing
+            e = try
+                esm_problem(doc, (0.0, 1.0); compiler = :mtk)
+                nothing
+            catch err
+                err
+            end
+            @test e isa SimulateError
+            @test e.code == CSEL.ERROR_CODES.COMPILER_UNAVAILABLE
+            @test occursin("ModelingToolkit", e.msg)
+        else
+            @test CSEL._compiler_plan(:mtk).name === :mtk
+            # Strict, and every `native` tier off: this compiler emits none of
+            # this package's own kernels, and it refuses what it cannot express
+            # rather than building part of a document.
+            @test CSEL._compiler_plan(:mtk).strict
+            @test !CSEL._compiler_plan(:mtk).codegen
         end
     end
 

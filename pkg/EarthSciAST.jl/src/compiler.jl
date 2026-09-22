@@ -113,12 +113,31 @@ function _compiler_plan(compiler::Symbol)
             "phase of the compiler-selection work lands it here",
             ERROR_CODES.COMPILER_UNAVAILABLE))
     elseif compiler === :mtk
-        throw(SimulateError(
-            "compiler=:mtk is not reachable from esm_problem yet — today's route " *
-            "to a ModelingToolkit system is `ModelingToolkit.System(flatten(file))` " *
-            "with ModelingToolkit loaded; a later phase of the compiler-selection " *
-            "work lands it on this keyword",
-            ERROR_CODES.COMPILER_UNAVAILABLE))
+        # VOCABULARY FIRST, AVAILABILITY SECOND. `:mtk` is a member of the
+        # closed vocabulary, so a session without ModelingToolkit hears
+        # `compiler_unavailable` naming what to load — never `compiler_unknown`,
+        # which would say the value does not exist.
+        #
+        # `:mtk` is a SPECIALTY compiler: it works only for some documents, and
+        # it is the one that runs EVENTS and IMPLICIT EQUATIONS (the constructs
+        # CONFORMANCE_SPEC §5.39 has every other evaluator refuse). `:native`
+        # remains the universally fast default with no heavy external
+        # dependency; `:interpreter` remains the simple oracle that checks them.
+        Base.get_extension(EarthSciAST, :EarthSciASTMTKExt) === nothing &&
+            throw(SimulateError(
+                "compiler=:mtk builds a ModelingToolkit `System` and needs " *
+                "ModelingToolkit loaded — add `using ModelingToolkit` so the " *
+                "EarthSciASTMTKExt extension activates. It is a SPECIALTY " *
+                "compiler that runs only some documents (it is the one that runs " *
+                "events and implicit equations); compiler=:native is the " *
+                "universally fast default",
+                ERROR_CODES.COMPILER_UNAVAILABLE))
+        # Every `native` tier is OFF: this compiler emits nothing of this
+        # package's own, so a tier flag would describe a cascade that never
+        # runs. `strict` stays TRUE — `:mtk` refuses a document it cannot
+        # express by name (`compiler_refused_rule`) rather than building part
+        # of it, which is what `_refuse_rule` reads off the plan in force.
+        return _plan_all(:mtk, true, false)
     elseif compiler === :sympy
         throw(SimulateError(
             "compiler=:sympy is a Python-binding compiler (a lambdified SymPy " *

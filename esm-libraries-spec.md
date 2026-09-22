@@ -338,6 +338,25 @@ external dependency to exist at all. A binding MUST NOT make `native` depend on
 something a caller has to install, and MUST NOT make `interpreter` fast at the
 cost of sharing machinery with the compilers it checks.
 
+**"Only some documents" is a promise about REFUSALS, not about coverage
+drifting.** A specialty compiler states which constructs it cannot express and
+refuses those BY NAME (§2.5.10), so the set of documents it runs is readable
+from its refusals rather than discovered a run at a time. `mtk` runs events and
+implicit equations, which is what it is FOR; what it gives up is everything the
+document carries besides equations — loaded DATA above all, since a provider
+field, a caller-supplied array and the projection-pushdown rewrite have no place
+in a symbolic system — plus a continuous spatial dimension, which is a different
+kind of system (a PDE and its discretization) rather than a gap.
+
+**A compiler that builds a FOREIGN program may index its solution in that
+program's own naming.** §2.5.7 keeps name-keyed result access the documented
+path, and a binding SHOULD translate where it can; but a solution produced by a
+foreign solver carries that solver's symbols, and translating them is not always
+possible without breaking that solver's own machinery. Where a binding does not
+translate, the Problem's name → state-slot map and its build-time observed
+reader remain the portable surface, and the binding MUST say so in the
+compiler's documentation rather than leaving a caller to discover it.
+
 `build_evaluator` (Julia) remains a **tier-2 extension seam**, and is
 **scheduled for retirement**. Two properties argue for keeping it — it is the
 entry point for a caller that wants the compiled right-hand side without a
@@ -508,10 +527,15 @@ what each value MEANS, which is the part a binding must not reinterpret.
 - **`xla`** — *a specialty compiler, and the kind that needs a heavy external
   dependency.* A program lowered to StableHLO and executed through XLA.
 - **`mtk`** — *a specialty compiler, and the kind that runs only some
-  documents.* A ModelingToolkit system. It is the one compiler that runs
-  **events and implicit equations**, the constructs §9.6.6's
-  `unsupported_construct` has the other compilers refuse; a refusal of one of
-  those constructs SHOULD name it.
+  documents.* A ModelingToolkit system, structurally compiled and run through
+  its own problem. It is the one compiler that runs **events and implicit
+  equations**, the constructs §9.6.6's `unsupported_construct` has the other
+  compilers refuse; a refusal of one of those constructs SHOULD name it. What
+  it refuses instead is the document's non-equation content: a parameter or
+  field fed by LOADED DATA (a provider, an array supplied at the call, the
+  projection-pushdown rewrite), a CONTINUOUS spatial dimension, a geometry
+  operator, and a time derivative of an expression — which credits no state and
+  is an implicit equation spelled wrong rather than a derivative.
 - **`sympy`** — *a specialty compiler, and the kind that runs only some
   documents.* A lambdified SymPy **scalar** right-hand side. It refuses array
   documents, and it refuses an algebraic constraint it cannot solve rather than

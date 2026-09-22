@@ -908,7 +908,7 @@ run_compiled_rhs_conformance_compiled_rust() {
 #
 # CONFORMANCE_SPEC §5.44.5 also names `xla` (julia, rust), `mtk` (julia) and
 # `sympy` (python) producer stages. Each is one more `_run_compiler_agreement_stage`
-# line and lands with the adapter that can answer for it.
+# line and lands with the adapter that can answer for it; `mtk` (julia) has.
 # Contract: tests/conformance/compiler_agreement/README.md. Normative: CONFORMANCE_SPEC §5.44.
 COMPILER_AGREEMENT_RUNNER="$SCRIPT_DIR/run-compiler-agreement-conformance.py"
 COMPILER_AGREEMENT_GOLDEN_DIR="$TESTS_DIR/conformance/compiler_agreement/golden"
@@ -1188,6 +1188,15 @@ run_compiler_agreement_native_julia()  { _run_compiler_agreement_stage julia nat
 run_compiler_agreement_native_rust()   { _run_compiler_agreement_stage rust native; }
 run_compiler_agreement_native_python() { _run_compiler_agreement_stage python native; }
 
+# `mtk` is the SPECIALTY compiler that runs events and implicit equations — the
+# constructs §5.39 has every other evaluator refuse. Julia only, and it needs
+# ModelingToolkit plus a nonlinear solver in the adapter's environment
+# (scripts/compiler_agreement_env carries both); the adapter loads them for this
+# compiler alone, so no other stage pays for them. Julia is `bindings_required`
+# for it, so an `unavailable` here is RED — the packages are declared, and a
+# missing one is a broken environment rather than an optional runtime.
+run_compiler_agreement_mtk_julia() { _run_compiler_agreement_stage julia mtk; }
+
 run_property_corpus() {
     log "Running property-corpus round-trip across bindings..."
     local corpus="$PROJECT_ROOT/tests/property_corpus/expressions"
@@ -1389,6 +1398,7 @@ main() {
     run_stage "compiler-agreement native producer (julia)" run_compiler_agreement_native_julia
     run_stage "compiler-agreement native producer (rust)" run_compiler_agreement_native_rust
     run_stage "compiler-agreement native producer (python)" run_compiler_agreement_native_python
+    run_stage "compiler-agreement mtk producer (julia)" run_compiler_agreement_mtk_julia
 
     run_stage "inline-test self-test" run_inline_tests_conformance_self_test
     run_stage "inline-test interpreter producer (julia)" run_inline_tests_interpreter_julia

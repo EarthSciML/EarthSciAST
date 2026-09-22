@@ -5674,10 +5674,30 @@ Adapters: `pkg/EarthSciAST.jl/test/unsupported_construct_conformance_test.jl`;
 `pkg/earthsci-ast-rs/tests/unsupported_construct_conformance.rs`. Go and
 TypeScript do not simulate; they only register the code.
 
-**Out of scope.** Julia's ModelingToolkit export runs both kinds of event and
-hands implicit equations to `mtkcompile`, so it never raises the code. Running
-any of the three constructs on an array evaluator is future work in every
-binding.
+**Out of scope.** Julia's ModelingToolkit path runs all three constructs, so it
+never raises the code. Since the `compiler` keyword landed (`API_SPEC.md` §5.8)
+that path is not only the export: `esm_problem(file; compiler = :mtk)` builds
+through it, so **`:mtk` is the compiler that RUNS what this category has the
+others refuse** — **fourteen of this category's fifteen documents build and run
+under it**, on the scalar path and the array path, on an inline subsystem, on a
+coupled two-model document and on a reaction system alike. The event ones reach
+the values their inline tests name by integrating; the implicit ones reach
+theirs because `mtkcompile` solves the residual away into an observed equation,
+leaving nothing to integrate. The fifteenth,
+`implicit_equation_as_the_derivative_of_an_expression`, is refused BY NAME with
+`compiler_refused_rule`: `D(a + b) ~ 3` is a time derivative of an EXPRESSION,
+credits no state, and is an implicit equation spelled wrong rather than a
+derivative — no compiler in any binding runs it, which is why that refusal
+points at no other compiler and says how to rewrite the equation instead. All
+fifteen are driven from this category's own manifest by
+`pkg/EarthSciAST.jl/test/compiler_mtk_test.jl`, so a case added here is covered
+there the day it lands. The refusals this category
+gates are therefore refusals BY THE DEFAULT COMPILER: `:native` and
+`:interpreter` share the tree-walk evaluator and raise `unsupported_construct`
+exactly as before, and a document carrying one of the three constructs is run by
+naming `:mtk`, not by a fallback. Running any of the three on an ARRAY evaluator
+is still future work in every binding; `:mtk` reaches the array fixtures through
+its own symbolic lowering rather than through an array evaluator.
 
 ### 5.40 An Out-of-Range Const-Array Gather Fails, on Every Axis and in Both Spellings (normative)
 
@@ -6102,6 +6122,17 @@ fixture tolerances and the requirement ledger live in
 
 Go and TypeScript are **out of scope**: neither has a Problem type, so neither
 has a compiler to name (`API_SPEC.md` §3, capability profiles).
+
+**What answers today.** Julia, Rust and Python each answer for `interpreter` and
+`native` on all six fixtures and are `bindings_required` for both; Python is
+required for `sympy`, which runs the two scalar fixtures and refuses the four
+array ones by name. **Julia is required for `mtk`** as of 2026-09-22 — it runs
+all six, the array fixtures included, because their stencils are already
+`arrayop` over an index set and carry no continuous spatial dimension for that
+compiler to refuse. What `mtk` DOES refuse is not exercised by these fixtures: a
+document fed by loaded data, one with a continuous spatial dimension, a geometry
+operator, and a time derivative of an expression. `xla` remains
+`bindings_optional` for Julia and Rust.
 
 #### 5.44.1 What is compared
 

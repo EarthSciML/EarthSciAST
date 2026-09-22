@@ -16,9 +16,16 @@
 # API_SPEC §5.8's closed vocabulary. Its value is passed STRAIGHT to
 # `esm_problem` and never interpreted here: an adapter that read the value and
 # chose a build itself would be reimplementing the thing under test. That is
-# also why `:xla` and `:mtk` are not special-cased below — they answer
-# `unavailable` because `esm_problem` raises `compiler_unavailable` for them,
-# which is the binding's own statement about itself.
+# also why no compiler is special-cased below: a build is never chosen here.
+#
+# THE ONE THING THIS ADAPTER DOES DO PER COMPILER is load the RUNTIME that
+# compiler needs, which is configuration and not a build choice — the Rust
+# adapter's `XLA_EXTENSION_DIR` is the same step spelled as an environment
+# variable. `:mtk` lives in a package EXTENSION, so without ModelingToolkit in
+# the session `esm_problem` answers `compiler_unavailable`, and that answer
+# would be a fact about this adapter rather than about the binding. It is
+# loaded ONLY for `--compiler mtk` (see `load_compiler_runtime`), so no other
+# compiler's run pays for it.
 #
 # THE THREE OUTCOMES THIS ADAPTER DECIDES, and the one it must not conflate:
 #
@@ -79,6 +86,39 @@ const BINDING = "julia"
 # value outside it is a broken invocation rather than a compiler this binding
 # happens not to have, and the two must not arrive at the same answer.
 const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
+
+# The runtime a compiler needs in the session, loaded for that compiler alone.
+# `:mtk` needs ModelingToolkit (the extension that implements it) plus a
+# nonlinear solver: an implicit equation compiles to a DAE whose consistent
+# initialization is a nonlinear solve, and OrdinaryDiffEq only carries one when
+# OrdinaryDiffEqNonlinearSolve is loaded.
+#
+# CALLED AT TOP LEVEL, not from `main`. A package loaded by `@eval` defines its
+# methods in a NEW world age, and a frame that is already running cannot call
+# them — from inside `main` every fixture failed with "method too new to be
+# called from this world context" naming the extension's own entry point, which
+# reads as a broken binding rather than as this file calling too early. Each
+# top-level statement gets the current world, so loading here and calling `main`
+# on the next line is what makes the extension visible.
+function load_compiler_runtime(compiler)
+    compiler == "mtk" || return nothing
+    @eval begin
+        import ModelingToolkit
+        import OrdinaryDiffEqNonlinearSolve
+    end
+    return nothing
+end
+
+# `--compiler`'s value straight off `ARGS`, for the top-level load above.
+# `parse_args` is the validating read and still runs inside `main`; this one only
+# has to be right about which runtime to bring in, and an unknown value falls
+# through to `parse_args`'s error.
+function compiler_arg(args)
+    for i in eachindex(args)
+        args[i] == "--compiler" && i < lastindex(args) && return args[i + 1]
+    end
+    return ""
+end
 
 function parse_args(args)
     manifest = nothing
@@ -381,4 +421,5 @@ function main()
     failed && exit(1)
 end
 
+load_compiler_runtime(compiler_arg(ARGS))
 main()
