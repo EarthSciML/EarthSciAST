@@ -34,7 +34,7 @@ use serde_json::{Map, Value, json};
 use crate::compile_error::CompileError;
 use crate::compiled_rhs_adapter::resolve_fixture_path;
 use crate::problem::{Compiler, ProblemOptions, Rhs, esm_problem, observed_trajectories, solve};
-use crate::simulate::{SimulateError, SolveOptions, Solution};
+use crate::simulate::{Alg, SimulateError, SolveOptions, Solution};
 use crate::types::EsmFile;
 
 /// The adapter's parsed command line.
@@ -127,6 +127,28 @@ fn num(v: f64) -> Value {
 /// defensively, exactly as the PDE-simulation adapter does.
 fn nearest_index(times: &[f64], t: f64) -> Option<usize> {
     (0..times.len()).min_by(|&a, &b| (times[a] - t).abs().total_cmp(&(times[b] - t).abs()))
+}
+
+/// The algorithm this fixture integrates with.
+///
+/// esm-spec §2.2's `solver` block is the document's declaration about ITSELF,
+/// and `stiffness: "high"` selects the stiff family — the rule the reference
+/// adapter applies too, so a document that declares itself stiff is integrated
+/// the same way in both bindings. Everything else takes the explicit
+/// Runge-Kutta arm rather than this binding's stiff DEFAULT: the tier compares
+/// trajectories NUMERICALLY against a reference produced by the Tsitouras 5(4)
+/// tableau this arm implements, and two different integrators at the same
+/// tolerance disagree by more than the fixture's band for reasons that have
+/// nothing to do with the compiler under test.
+///
+/// The TOLERANCES are not taken from the block: the manifest's per-fixture
+/// `integration` is what the adapter passes to `solve`, because a conformance
+/// tier has an opinion about the integrator's error and states it per fixture.
+fn solver_alg(file: &EsmFile) -> Alg {
+    match file.solver.as_ref().and_then(|s| s.stiffness.as_deref()) {
+        Some("high") => Alg::Bdf,
+        _ => Alg::Erk,
+    }
 }
 
 /// The run one fixture describes: what to seed, how long for, and when to save.
@@ -338,6 +360,7 @@ fn run_fixture(fx: &Value, manifest_dir: &Path, compiler: Compiler) -> Result<An
 
     let integration = &fx["integration"];
     let opts = SolveOptions {
+        alg: solver_alg(&file),
         reltol: integration["reltol"].as_f64(),
         abstol: integration["abstol"].as_f64(),
         saveat: Some(run.saveat.clone()),
