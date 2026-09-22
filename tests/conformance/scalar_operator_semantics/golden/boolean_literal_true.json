@@ -1,0 +1,19 @@
+{
+  "fixture": "boolean_literal_true",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "literal_true_value",
+      "assertion_idx": 1,
+      "variable": "literal_true",
+      "actual": 1.0
+    },
+    {
+      "test_id": "literal_true_value",
+      "assertion_idx": 2,
+      "variable": "probe",
+      "actual": 0.9999999999999998
+    }
+  ]
+}

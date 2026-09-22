@@ -27,8 +27,8 @@ its own evaluator, in its own vocabulary:
 
 Three private op tables and no cross-binding gate is exactly the shape in which
 two bindings disagree for a year and nothing notices. Authoring the rules as ONE
-document that every binding evaluates is what closes it — and it found a real
-divergence on its first run (see **Named exclusions** below).
+document that every binding evaluates is what closes it — and it found three real
+divergences on its first run (see **Named exclusions** below).
 
 ## Shape
 
@@ -61,18 +61,37 @@ Non-vacuity is structural, in three places:
 
 ## Named exclusions
 
-`boolean_literal_false.esm` is **split out of** the main fixture and holds the
-`false` literal op alone. Julia's tree-walk evaluator carries an evaluation rule
-for `true` and **none** for `false`, so it refuses that document with
-`unevaluable_operator` under both `interpreter` and `native` (measured
-2026-09-22). `false` is in the evaluable core
-(`esm-libraries-spec.md` §2.5.10), so this is a gap to close, not a boundary —
-and splitting it into its own fixture is what makes the exclusion cost the other
-57 operators nothing.
+The tier found **three disagreements on its first run**, and each contested
+operator is split into a fixture of its own so that an exclusion costs the other
+84 operators nothing.
 
-The manifest records it as a **named exclusion**: the refusal is reported with
-the binding, the compiler and the code on every run, and it is green only
-because the ledger names it. If Julia gains the rule, the runner prints a
+| Fixture | Binding / compilers | Code | What it means |
+|---|---|---|---|
+| `boolean_literal_false` | julia / `interpreter`, `native` | `unevaluable_operator` | Julia's tree-walk evaluator carries a rule for the `true` literal op and **none** for `false` |
+| `boolean_literal_false` | rust / `interpreter`, `native` | `unlowered_operator` | Rust classes `false` as a REWRITE TARGET and refuses it before evaluation |
+| `pow_alias` | rust / `interpreter`, `native` | `unlowered_operator` | Rust classes `pow` as a rewrite target; Julia and Python evaluate it, and to the same number `^` gives |
+| `boolean_literal_true` | rust / `native` | `compiler_refused_rule` | Rust's strict `native` has no wholesale lowering for the `true` leaf; its `interpreter` runs it |
+
+The three are not the same KIND of gap, and the ledger keeps them apart. `pow`
+and `false` are refused by Rust under `interpreter` too, so they are
+disagreements about what the evaluable-core VOCABULARY is
+(`esm-libraries-spec.md` §2.5.10 says both are in it). `true` is refused only
+by Rust's `native`, so it is an ordinary `native` coverage gap on one leaf.
+`pow_alias` is deliberately paired with the sibling fixture's `^(2, 3) = 8`, so
+the two documents together say exactly what is and is not agreed — the
+arithmetic is, the **alias** is not.
+
+`boolean_literal_false` carries **no golden**, because the reference is one of
+the bindings that refuses it. Its `golden_absent_reason` says so, and the
+manifest validator requires a named exclusion for the reference binding before
+it will accept a null golden: the only reason a fixture may carry no golden is
+that the reference cannot produce one. Python is still held to the DOCUMENT's
+own expectation, which is an oracle outside every binding; what is missing is
+only the cross-compiler drift check.
+
+The manifest records each as a **named exclusion**: the refusal is reported
+with the binding, the compiler and the code on every run, and it is green only
+because the ledger names it. If a binding gains the rule, the runner prints a
 "stale exclusion" note rather than failing the binding that got better, and the
 entry should then be trimmed by hand and `required` widened.
 

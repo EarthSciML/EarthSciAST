@@ -310,23 +310,14 @@ end
     end
 end
 
-@testset "anonymous shapes keep POSITIONAL semantics" begin
-    # A producer in element-wise position carries node-local `output_idx`
-    # symbols (`p`/`q`/`r`), NOT index-set names, so it is gathered positionally
-    # over the result loops. Value = p + 10q + 100r at (i,j,k).
-    prod = _bc_agg(("p", "q", "r"),
-                   ("p" => "lon", "q" => "lat", "r" => "lev"),
-                   _bc_op("+", "p", _bc_op("+", _bc_op("*", 10, "q"),
-                                                _bc_op("*", 100, "r"))))
-    got = _bc_rhs(_bc_model("An", prod))
-    @test got["dp[2,1,2]"] ≈ 2 + 10 + 200
-    @test got["dp[3,2,1]"] ≈ 3 + 20 + 100
-    # …and the same producer multiplied by a NAME-aligned lower-rank operand:
-    # the producer stays positional while `w1[lat]` aligns by name.
-    got2 = _bc_rhs(_bc_model("An2", _bc_op("*", prod, "w1")))
-    @test got2["dp[2,1,2]"] ≈ (2 + 10 + 200) * 10
-    @test got2["dp[3,2,1]"] ≈ (3 + 20 + 100) * 20
-end
+# The "anonymous shapes keep POSITIONAL semantics" testset moved to
+# `tests/conformance/broadcast_alignment/fixtures/anonymous_shape_positional.esm`
+# (CONFORMANCE_SPEC §5.45.3). That fixture carries all four of its assertions —
+# dp[2,1,2] = 212, dp[3,2,1] = 123, and the same two multiplied by the
+# NAME-aligned `w1` — at a TIGHTER band than the `≈` default used here, plus
+# four more cells, and `scripts/test-conformance.sh` runs it for julia, rust and
+# python under both `interpreter` and `native`. The scope BOUNDARY of §4.3.4 is
+# exactly the kind of rule that should not be pinned in one binding alone.
 
 @testset "reshape / transpose / concat are refused with unevaluable_operator" begin
     vars = Dict("u" => ESS.ModelVariable(ESS.UnknownVariable))

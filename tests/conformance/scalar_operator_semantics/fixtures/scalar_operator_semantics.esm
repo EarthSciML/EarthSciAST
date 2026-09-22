@@ -106,6 +106,72 @@
           "default": 1.3,
           "description": "1.3"
         },
+        "seven": {
+          "type": "parameter",
+          "units": "1",
+          "default": 7.0,
+          "description": "7"
+        },
+        "eight": {
+          "type": "parameter",
+          "units": "1",
+          "default": 8.0,
+          "description": "8"
+        },
+        "minus_seven": {
+          "type": "parameter",
+          "units": "1",
+          "default": -7.0,
+          "description": "-7"
+        },
+        "minus_three_half": {
+          "type": "parameter",
+          "units": "1",
+          "default": -3.5,
+          "description": "-3.5"
+        },
+        "two_point_seven": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.7,
+          "description": "2.7"
+        },
+        "two_point_two": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.2,
+          "description": "2.2"
+        },
+        "forty_two_ref": {
+          "type": "parameter",
+          "units": "1",
+          "default": 42.0,
+          "description": "42, read through `Pre`"
+        },
+        "ninety_nine": {
+          "type": "parameter",
+          "units": "1",
+          "default": 99.0,
+          "description": "99"
+        },
+        "quarter_pi": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.7853981633974483,
+          "description": "pi/4, to the nearest double"
+        },
+        "euler": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.718281828459045,
+          "description": "e, to the nearest double"
+        },
+        "thousand": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1000.0,
+          "description": "1000"
+        },
         "sum_of_three": {
           "type": "unknown",
           "units": "1",
@@ -140,11 +206,6 @@
           "type": "unknown",
           "units": "1",
           "description": "`^` with an integer-literal exponent."
-        },
-        "pow_power": {
-          "type": "unknown",
-          "units": "1",
-          "description": "`pow` is the same operator as `^` and must give the same number."
         },
         "integer_literal": {
           "type": "unknown",
@@ -215,11 +276,6 @@
           "type": "unknown",
           "units": "1",
           "description": "`not` of a false comparison."
-        },
-        "literal_true": {
-          "type": "unknown",
-          "units": "1",
-          "description": "The `true` literal op is 1."
         },
         "ifelse_taken": {
           "type": "unknown",
@@ -316,6 +372,156 @@
           "units": "rad",
           "description": "atan2(1, -3) is in the SECOND quadrant; atan2(-3, 1) is in the fourth. This is the assertion a swapped argument order fails."
         },
+        "sum_two": {
+          "type": "unknown",
+          "units": "1",
+          "description": "+(2, 3) = 5."
+        },
+        "sum_four": {
+          "type": "unknown",
+          "units": "1",
+          "description": "n-ary + over four operands."
+        },
+        "difference_wide": {
+          "type": "unknown",
+          "units": "1",
+          "description": "-(10, 3) = 7."
+        },
+        "unary_minus_five": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Unary -(5) = -5."
+        },
+        "power_ten": {
+          "type": "unknown",
+          "units": "1",
+          "description": "2^10 = 1024, exactly."
+        },
+        "exponential_at_one": {
+          "type": "unknown",
+          "units": "1",
+          "description": "exp(1) = e. The one elementary row whose last bits are a libm's, so it carries a looser bound than the exact rows around it."
+        },
+        "logarithm_at_e": {
+          "type": "unknown",
+          "units": "1",
+          "description": "log(e) = 1."
+        },
+        "log10_at_thousand": {
+          "type": "unknown",
+          "units": "1",
+          "description": "log10(1000) = 3."
+        },
+        "square_root_of_two": {
+          "type": "unknown",
+          "units": "1",
+          "description": "sqrt(2). IEEE-754 requires sqrt to be correctly rounded, so this is exact on every conforming platform."
+        },
+        "absolute_value_small": {
+          "type": "unknown",
+          "units": "1",
+          "description": "abs(-3.5) = 3.5."
+        },
+        "sign_negative_seven": {
+          "type": "unknown",
+          "units": "1",
+          "description": "sign(-7) = -1."
+        },
+        "sign_two": {
+          "type": "unknown",
+          "units": "1",
+          "description": "sign(2) = 1."
+        },
+        "floor_two_seven": {
+          "type": "unknown",
+          "units": "1",
+          "description": "floor(2.7) = 2."
+        },
+        "ceiling_two_two": {
+          "type": "unknown",
+          "units": "1",
+          "description": "ceil(2.2) = 3."
+        },
+        "tangent_at_quarter_pi": {
+          "type": "unknown",
+          "units": "1",
+          "description": "tan(pi/4). NOT exactly 1: pi/4 is not representable, so the answer is the double nearest to tan of the double nearest to pi/4, and the expectation is that number rather than the ideal one."
+        },
+        "minimum_two": {
+          "type": "unknown",
+          "units": "1",
+          "description": "min(2, 3) = 2."
+        },
+        "maximum_two": {
+          "type": "unknown",
+          "units": "1",
+          "description": "max(2, 3) = 3."
+        },
+        "ifelse_truthy": {
+          "type": "unknown",
+          "units": "1",
+          "description": "A NON-boolean truthy predicate selects the second argument."
+        },
+        "ifelse_falsy": {
+          "type": "unknown",
+          "units": "1",
+          "description": "A zero predicate selects the third."
+        },
+        "less_than_equal_operands": {
+          "type": "unknown",
+          "units": "1",
+          "description": "<(2, 2) = 0: `<` is STRICT."
+        },
+        "greater_than_true": {
+          "type": "unknown",
+          "units": "1",
+          "description": ">(3, 2) = 1."
+        },
+        "greater_equal_equal": {
+          "type": "unknown",
+          "units": "1",
+          "description": ">=(2, 2) = 1."
+        },
+        "equal_wide": {
+          "type": "unknown",
+          "units": "1",
+          "description": "==(2, 2) = 1."
+        },
+        "not_equal_wide": {
+          "type": "unknown",
+          "units": "1",
+          "description": "!=(2, 3) = 1."
+        },
+        "conjunction_numeric": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`and` over NUMERIC truthiness, not over comparison results."
+        },
+        "conjunction_numeric_false": {
+          "type": "unknown",
+          "units": "1",
+          "description": "and(1, 0) = 0."
+        },
+        "disjunction_numeric": {
+          "type": "unknown",
+          "units": "1",
+          "description": "or(0, 1) = 1."
+        },
+        "disjunction_numeric_false": {
+          "type": "unknown",
+          "units": "1",
+          "description": "or(0, 0) = 0."
+        },
+        "negation_of_zero": {
+          "type": "unknown",
+          "units": "1",
+          "description": "not(0) = 1."
+        },
+        "negation_of_one": {
+          "type": "unknown",
+          "units": "1",
+          "description": "not(1) = 0."
+        },
         "time_value": {
           "type": "unknown",
           "units": "1",
@@ -393,16 +599,6 @@
           "lhs": "caret_power",
           "rhs": {
             "op": "^",
-            "args": [
-              "two",
-              3
-            ]
-          }
-        },
-        {
-          "lhs": "pow_power",
-          "rhs": {
-            "op": "pow",
             "args": [
               "two",
               3
@@ -582,13 +778,6 @@
                 ]
               }
             ]
-          }
-        },
-        {
-          "lhs": "literal_true",
-          "rhs": {
-            "op": "true",
-            "args": []
           }
         },
         {
@@ -785,6 +974,297 @@
           }
         },
         {
+          "lhs": "sum_two",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "two",
+              "three"
+            ]
+          }
+        },
+        {
+          "lhs": "sum_four",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "one",
+              "two",
+              "three",
+              "four"
+            ]
+          }
+        },
+        {
+          "lhs": "difference_wide",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "ten",
+              "three"
+            ]
+          }
+        },
+        {
+          "lhs": "unary_minus_five",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "five"
+            ]
+          }
+        },
+        {
+          "lhs": "power_ten",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "two",
+              10
+            ]
+          }
+        },
+        {
+          "lhs": "exponential_at_one",
+          "rhs": {
+            "op": "exp",
+            "args": [
+              "one"
+            ]
+          }
+        },
+        {
+          "lhs": "logarithm_at_e",
+          "rhs": {
+            "op": "log",
+            "args": [
+              "euler"
+            ]
+          }
+        },
+        {
+          "lhs": "log10_at_thousand",
+          "rhs": {
+            "op": "log10",
+            "args": [
+              "thousand"
+            ]
+          }
+        },
+        {
+          "lhs": "square_root_of_two",
+          "rhs": {
+            "op": "sqrt",
+            "args": [
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "absolute_value_small",
+          "rhs": {
+            "op": "abs",
+            "args": [
+              "minus_three_half"
+            ]
+          }
+        },
+        {
+          "lhs": "sign_negative_seven",
+          "rhs": {
+            "op": "sign",
+            "args": [
+              "minus_seven"
+            ]
+          }
+        },
+        {
+          "lhs": "sign_two",
+          "rhs": {
+            "op": "sign",
+            "args": [
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "floor_two_seven",
+          "rhs": {
+            "op": "floor",
+            "args": [
+              "two_point_seven"
+            ]
+          }
+        },
+        {
+          "lhs": "ceiling_two_two",
+          "rhs": {
+            "op": "ceil",
+            "args": [
+              "two_point_two"
+            ]
+          }
+        },
+        {
+          "lhs": "tangent_at_quarter_pi",
+          "rhs": {
+            "op": "tan",
+            "args": [
+              "quarter_pi"
+            ]
+          }
+        },
+        {
+          "lhs": "minimum_two",
+          "rhs": {
+            "op": "min",
+            "args": [
+              "two",
+              "three"
+            ]
+          }
+        },
+        {
+          "lhs": "maximum_two",
+          "rhs": {
+            "op": "max",
+            "args": [
+              "two",
+              "three"
+            ]
+          }
+        },
+        {
+          "lhs": "ifelse_truthy",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              "one",
+              "forty_two",
+              "ninety_nine"
+            ]
+          }
+        },
+        {
+          "lhs": "ifelse_falsy",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              "zero",
+              "forty_two",
+              "ninety_nine"
+            ]
+          }
+        },
+        {
+          "lhs": "less_than_equal_operands",
+          "rhs": {
+            "op": "<",
+            "args": [
+              "two",
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "greater_than_true",
+          "rhs": {
+            "op": ">",
+            "args": [
+              "three",
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "greater_equal_equal",
+          "rhs": {
+            "op": ">=",
+            "args": [
+              "two",
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "equal_wide",
+          "rhs": {
+            "op": "==",
+            "args": [
+              "two",
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "not_equal_wide",
+          "rhs": {
+            "op": "!=",
+            "args": [
+              "two",
+              "three"
+            ]
+          }
+        },
+        {
+          "lhs": "conjunction_numeric",
+          "rhs": {
+            "op": "and",
+            "args": [
+              "one",
+              "one"
+            ]
+          }
+        },
+        {
+          "lhs": "conjunction_numeric_false",
+          "rhs": {
+            "op": "and",
+            "args": [
+              "one",
+              "zero"
+            ]
+          }
+        },
+        {
+          "lhs": "disjunction_numeric",
+          "rhs": {
+            "op": "or",
+            "args": [
+              "zero",
+              "one"
+            ]
+          }
+        },
+        {
+          "lhs": "disjunction_numeric_false",
+          "rhs": {
+            "op": "or",
+            "args": [
+              "zero",
+              "zero"
+            ]
+          }
+        },
+        {
+          "lhs": "negation_of_zero",
+          "rhs": {
+            "op": "not",
+            "args": [
+              "zero"
+            ]
+          }
+        },
+        {
+          "lhs": "negation_of_one",
+          "rhs": {
+            "op": "not",
+            "args": [
+              "one"
+            ]
+          }
+        },
+        {
           "lhs": "time_value",
           "rhs": "t"
         },
@@ -808,8 +1288,8 @@
             "end": 4.0
           },
           "tolerance": {
-            "rel": 1e-12,
-            "abs": 1e-13
+            "rel": 0.0,
+            "abs": 0.0
           },
           "assertions": [
             {
@@ -844,11 +1324,6 @@
             },
             {
               "variable": "caret_power",
-              "time": 0.0,
-              "expected": 8.0
-            },
-            {
-              "variable": "pow_power",
               "time": 0.0,
               "expected": 8.0
             },
@@ -923,11 +1398,6 @@
               "expected": 1.0
             },
             {
-              "variable": "literal_true",
-              "time": 0.0,
-              "expected": 1.0
-            },
-            {
               "variable": "ifelse_taken",
               "time": 0.0,
               "expected": 10.0
@@ -990,7 +1460,11 @@
             {
               "variable": "log10_at_hundred",
               "time": 0.0,
-              "expected": 2.0
+              "expected": 2.0,
+              "tolerance": {
+                "rel": 1e-14,
+                "abs": 1e-300
+              }
             },
             {
               "variable": "square_root_of_nine",
@@ -1015,12 +1489,186 @@
             {
               "variable": "arctangent_two_argument",
               "time": 0.0,
-              "expected": 0.7853981633974483
+              "expected": 0.7853981633974483,
+              "tolerance": {
+                "rel": 1e-14,
+                "abs": 1e-300
+              }
             },
             {
               "variable": "arctangent_quadrant",
               "time": 0.0,
-              "expected": 2.819842099193151
+              "expected": 2.819842099193151,
+              "tolerance": {
+                "rel": 1e-14,
+                "abs": 1e-300
+              }
+            },
+            {
+              "variable": "sum_two",
+              "time": 0.0,
+              "expected": 5.0
+            },
+            {
+              "variable": "sum_four",
+              "time": 0.0,
+              "expected": 10.0
+            },
+            {
+              "variable": "difference_wide",
+              "time": 0.0,
+              "expected": 7.0
+            },
+            {
+              "variable": "unary_minus_five",
+              "time": 0.0,
+              "expected": -5.0
+            },
+            {
+              "variable": "power_ten",
+              "time": 0.0,
+              "expected": 1024.0
+            },
+            {
+              "variable": "exponential_at_one",
+              "time": 0.0,
+              "expected": 2.718281828459045,
+              "tolerance": {
+                "rel": 1e-14,
+                "abs": 1e-300
+              }
+            },
+            {
+              "variable": "logarithm_at_e",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-14,
+                "abs": 1e-300
+              }
+            },
+            {
+              "variable": "log10_at_thousand",
+              "time": 0.0,
+              "expected": 3.0,
+              "tolerance": {
+                "rel": 1e-14,
+                "abs": 1e-300
+              }
+            },
+            {
+              "variable": "square_root_of_two",
+              "time": 0.0,
+              "expected": 1.4142135623730951
+            },
+            {
+              "variable": "absolute_value_small",
+              "time": 0.0,
+              "expected": 3.5
+            },
+            {
+              "variable": "sign_negative_seven",
+              "time": 0.0,
+              "expected": -1.0
+            },
+            {
+              "variable": "sign_two",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "floor_two_seven",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "ceiling_two_two",
+              "time": 0.0,
+              "expected": 3.0
+            },
+            {
+              "variable": "tangent_at_quarter_pi",
+              "time": 0.0,
+              "expected": 0.9999999999999999,
+              "tolerance": {
+                "rel": 1e-14,
+                "abs": 1e-300
+              }
+            },
+            {
+              "variable": "minimum_two",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "maximum_two",
+              "time": 0.0,
+              "expected": 3.0
+            },
+            {
+              "variable": "ifelse_truthy",
+              "time": 0.0,
+              "expected": 42.0
+            },
+            {
+              "variable": "ifelse_falsy",
+              "time": 0.0,
+              "expected": 99.0
+            },
+            {
+              "variable": "less_than_equal_operands",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "greater_than_true",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "greater_equal_equal",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "equal_wide",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "not_equal_wide",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "conjunction_numeric",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "conjunction_numeric_false",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "disjunction_numeric",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "disjunction_numeric_false",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "negation_of_zero",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "negation_of_one",
+              "time": 0.0,
+              "expected": 0.0
             },
             {
               "variable": "time_value",
@@ -1050,8 +1698,8 @@
             "four": 0.5
           },
           "tolerance": {
-            "rel": 1e-12,
-            "abs": 1e-13
+            "rel": 0.0,
+            "abs": 0.0
           },
           "assertions": [
             {
@@ -1076,11 +1724,6 @@
             },
             {
               "variable": "caret_power",
-              "time": 0.0,
-              "expected": 125.0
-            },
-            {
-              "variable": "pow_power",
               "time": 0.0,
               "expected": 125.0
             },

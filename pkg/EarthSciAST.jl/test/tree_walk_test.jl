@@ -57,63 +57,26 @@ end
     # ========================================================
     # Scalar op coverage
     # ========================================================
-    @testset "Arithmetic ops" begin
-        @test _eval1(_op("+", _n(1.0), _n(2.0), _n(3.0))) == 6.0
-        @test _eval1(_op("-", _n(5.0), _n(2.0))) == 3.0
-        @test _eval1(_op("-", _n(4.0))) == -4.0
-        # `neg` is the canonical-form unary negation emitted by
-        # `canonicalize` (esm-qrj). `discretize` rewrites `-x` to `neg(x)`.
-        @test _eval1(_op("neg", _n(4.0))) == -4.0
-        @test _eval1(_op("*", _n(2.0), _n(3.0), _n(4.0))) == 24.0
-        @test _eval1(_op("/", _n(10.0), _n(4.0))) == 2.5
-        @test _eval1(_op("^", _n(2.0), _n(3.0))) == 8.0
-        @test _eval1(_op("pow", _n(2.0), _n(3.0))) == 8.0
-    end
-
-    @testset "Integer vs float literals" begin
-        @test _eval1(_i(7)) == 7.0
-        @test _eval1(_op("+", _i(1), _i(2))) == 3.0
-        @test _eval1(_op("*", _i(3), _n(1.5))) == 4.5
-    end
-
-    @testset "Comparisons and logical" begin
-        @test _eval1(_op("<", _n(1.0), _n(2.0))) == 1.0
-        @test _eval1(_op("<=", _n(2.0), _n(2.0))) == 1.0
-        @test _eval1(_op(">", _n(1.0), _n(2.0))) == 0.0
-        @test _eval1(_op(">=", _n(2.0), _n(1.0))) == 1.0
-        @test _eval1(_op("==", _n(1.0), _n(1.0))) == 1.0
-        @test _eval1(_op("!=", _n(1.0), _n(2.0))) == 1.0
-        @test _eval1(_op("and", _op("<", _n(1.0), _n(2.0)),
-                                _op("<", _n(2.0), _n(3.0)))) == 1.0
-        @test _eval1(_op("or", _op(">", _n(1.0), _n(2.0)),
-                               _op("<", _n(2.0), _n(3.0)))) == 1.0
-        @test _eval1(_op("not", _op(">", _n(1.0), _n(2.0)))) == 1.0
-    end
-
-    @testset "ifelse, sign, min, max" begin
-        @test _eval1(_op("ifelse", _op("<", _n(1.0), _n(2.0)),
-                                   _n(10.0), _n(20.0))) == 10.0
-        @test _eval1(_op("ifelse", _op(">", _n(1.0), _n(2.0)),
-                                   _n(10.0), _n(20.0))) == 20.0
-        @test _eval1(_op("sign", _n(-3.0))) == -1.0
-        @test _eval1(_op("sign", _n(0.0))) == 0.0
-        @test _eval1(_op("sign", _n(42.0))) == 1.0
-        @test _eval1(_op("min", _n(3.0), _n(1.0), _n(2.0))) == 1.0
-        @test _eval1(_op("max", _n(3.0), _n(5.0), _n(2.0))) == 5.0
-    end
-
-    @testset "Elementary functions" begin
-        @test _eval1(_op("sin", _n(0.0))) == 0.0
-        @test _eval1(_op("cos", _n(0.0))) == 1.0
-        @test _eval1(_op("exp", _n(0.0))) == 1.0
-        @test _eval1(_op("log", _n(1.0))) == 0.0
-        @test _eval1(_op("log10", _n(100.0))) ≈ 2.0
-        @test _eval1(_op("sqrt", _n(9.0))) == 3.0
-        @test _eval1(_op("abs", _n(-7.5))) == 7.5
-        @test _eval1(_op("floor", _n(1.7))) == 1.0
-        @test _eval1(_op("ceil", _n(1.3))) == 2.0
-        @test _eval1(_op("atan2", _n(1.0), _n(1.0))) ≈ π / 4
-    end
+    #
+    # The op-by-op VALUE tests that used to live here — arithmetic, integer vs
+    # float literals, comparisons and logic, `ifelse`/`sign`/`min`/`max`, and the
+    # elementary functions — are now the cross-binding
+    # `tests/conformance/scalar_operator_semantics/` tier (CONFORMANCE_SPEC
+    # §5.45.4), which pins every one of them at EXACT tolerance over the UNION of
+    # the operand values this file and Rust's `tests/interpret.rs` each used to
+    # pin privately, and which `scripts/test-conformance.sh` runs for julia, rust
+    # and python under both `interpreter` and `native`.
+    #
+    # Three private op tables and no cross-binding gate is how two bindings
+    # disagree for a year: moving them found that Julia has an evaluation rule
+    # for the `true` literal op and NONE for `false`, and that Rust refuses `pow`
+    # and `false` outright and cannot lower `true` under `native`. All of that is
+    # recorded as named exclusions in that tier rather than in three suites that
+    # never compared notes.
+    #
+    # What stays below is everything a document cannot state: the closed-function
+    # registry, the unsupported-op diagnostics, observed inlining and cycle
+    # detection, the solves, and the ModelingToolkit parity sampling.
 
     @testset "Time variable and Pre" begin
         @test _eval1(_v("t"); t=3.5) == 3.5

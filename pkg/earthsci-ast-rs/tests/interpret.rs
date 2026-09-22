@@ -32,43 +32,35 @@ fn approx(a: f64, b: f64, eps: f64) -> bool {
 // Arithmetic
 // ============================================================================
 
-#[test]
-fn add() {
-    let e = op("+", vec![n(2.0), n(3.0)]);
-    assert_eq!(interpret(&e, &[], &[], &[], 0.0), 5.0);
-
-    // n-ary addition
-    let e = op("+", vec![n(1.0), n(2.0), n(3.0), n(4.0)]);
-    assert_eq!(interpret(&e, &[], &[], &[], 0.0), 10.0);
-}
-
-#[test]
-fn sub_binary_and_unary() {
-    let e = op("-", vec![n(10.0), n(3.0)]);
-    assert_eq!(interpret(&e, &[], &[], &[], 0.0), 7.0);
-
-    let e = op("-", vec![n(5.0)]);
-    assert_eq!(interpret(&e, &[], &[], &[], 0.0), -5.0);
-}
-
-#[test]
-fn mul_and_div() {
-    let e = op("*", vec![n(2.0), n(3.0), n(4.0)]);
-    assert_eq!(interpret(&e, &[], &[], &[], 0.0), 24.0);
-
-    let e = op("/", vec![n(7.0), n(2.0)]);
-    assert_eq!(interpret(&e, &[], &[], &[], 0.0), 3.5);
-}
-
-#[test]
-fn pow() {
-    let e = op("^", vec![n(2.0), n(10.0)]);
-    assert_eq!(interpret(&e, &[], &[], &[], 0.0), 1024.0);
-}
-
 // ============================================================================
 // Transcendentals
 // ============================================================================
+
+// ============================================================================
+// Where the op-by-op VALUE rows went
+// ============================================================================
+//
+// `add`, `sub_binary_and_unary`, `mul_and_div`, `pow`, `abs_sign_floor_ceil`,
+// `min_max`, `ifelse_chooses_branch`, `relational` and `logical` are now the
+// cross-binding `tests/conformance/scalar_operator_semantics/` tier
+// (CONFORMANCE_SPEC §5.45.4). That fixture carries the SAME operands this file
+// used — +(2,3), +(1,2,3,4), -(10,3), -(5), *(2,3,4), /(7,2), ^(2,10),
+// abs(-3.5), sign(-7), sign(2), sign(0), floor(2.7), ceil(2.2), min(2,3),
+// max(2,3), ifelse(1,42,99), ifelse(0,42,99), the six relational rows and the
+// six logical rows — at EXACT tolerance, alongside the operands Julia's
+// `tree_walk_test.jl` pinned privately, and `scripts/test-conformance.sh` runs
+// it for julia, rust and python under both `interpreter` and `native`.
+//
+// Moving them is what surfaced that this binding classes `pow` and the `false`
+// literal as REWRITE TARGETS and refuses them before evaluation, and that its
+// strict `native` cannot lower `true`. All three are named exclusions in that
+// tier's manifest.
+//
+// What stays below is what a document cannot state: the rows whose last bits
+// belong to a libm at operands the fixture does not carry, the inverse and
+// hyperbolic leaves that `tests/conformance/inverse_trig/` owns, the
+// slot-addressed calling convention, and the two construction-time refusals.
+
 
 #[test]
 fn exp_log_log10_sqrt() {
@@ -97,34 +89,6 @@ fn exp_log_log10_sqrt() {
         std::f64::consts::SQRT_2,
         1e-12
     ));
-}
-
-#[test]
-fn abs_sign_floor_ceil() {
-    assert_eq!(
-        interpret(&op("abs", vec![n(-3.5)]), &[], &[], &[], 0.0),
-        3.5
-    );
-    assert_eq!(
-        interpret(&op("sign", vec![n(-7.0)]), &[], &[], &[], 0.0),
-        -1.0
-    );
-    assert_eq!(
-        interpret(&op("sign", vec![n(2.0)]), &[], &[], &[], 0.0),
-        1.0
-    );
-    assert_eq!(
-        interpret(&op("sign", vec![n(0.0)]), &[], &[], &[], 0.0),
-        0.0
-    );
-    assert_eq!(
-        interpret(&op("floor", vec![n(2.7)]), &[], &[], &[], 0.0),
-        2.0
-    );
-    assert_eq!(
-        interpret(&op("ceil", vec![n(2.2)]), &[], &[], &[], 0.0),
-        3.0
-    );
 }
 
 // ============================================================================
@@ -193,84 +157,9 @@ fn hyperbolic() {
 // Min / max / ifelse
 // ============================================================================
 
-#[test]
-fn min_max() {
-    assert_eq!(
-        interpret(&op("min", vec![n(2.0), n(3.0)]), &[], &[], &[], 0.0),
-        2.0
-    );
-    assert_eq!(
-        interpret(&op("max", vec![n(2.0), n(3.0)]), &[], &[], &[], 0.0),
-        3.0
-    );
-}
-
-#[test]
-fn ifelse_chooses_branch() {
-    let e = op("ifelse", vec![n(1.0), n(42.0), n(99.0)]);
-    assert_eq!(interpret(&e, &[], &[], &[], 0.0), 42.0);
-
-    let e = op("ifelse", vec![n(0.0), n(42.0), n(99.0)]);
-    assert_eq!(interpret(&e, &[], &[], &[], 0.0), 99.0);
-}
-
 // ============================================================================
 // Relational and logical (return 0/1)
 // ============================================================================
-
-#[test]
-fn relational() {
-    assert_eq!(
-        interpret(&op("<", vec![n(1.0), n(2.0)]), &[], &[], &[], 0.0),
-        1.0
-    );
-    assert_eq!(
-        interpret(&op("<", vec![n(2.0), n(2.0)]), &[], &[], &[], 0.0),
-        0.0
-    );
-    assert_eq!(
-        interpret(&op(">", vec![n(3.0), n(2.0)]), &[], &[], &[], 0.0),
-        1.0
-    );
-    assert_eq!(
-        interpret(&op("<=", vec![n(2.0), n(2.0)]), &[], &[], &[], 0.0),
-        1.0
-    );
-    assert_eq!(
-        interpret(&op(">=", vec![n(2.0), n(2.0)]), &[], &[], &[], 0.0),
-        1.0
-    );
-    assert_eq!(
-        interpret(&op("==", vec![n(2.0), n(2.0)]), &[], &[], &[], 0.0),
-        1.0
-    );
-    assert_eq!(
-        interpret(&op("!=", vec![n(2.0), n(3.0)]), &[], &[], &[], 0.0),
-        1.0
-    );
-}
-
-#[test]
-fn logical() {
-    assert_eq!(
-        interpret(&op("and", vec![n(1.0), n(1.0)]), &[], &[], &[], 0.0),
-        1.0
-    );
-    assert_eq!(
-        interpret(&op("and", vec![n(1.0), n(0.0)]), &[], &[], &[], 0.0),
-        0.0
-    );
-    assert_eq!(
-        interpret(&op("or", vec![n(0.0), n(1.0)]), &[], &[], &[], 0.0),
-        1.0
-    );
-    assert_eq!(
-        interpret(&op("or", vec![n(0.0), n(0.0)]), &[], &[], &[], 0.0),
-        0.0
-    );
-    assert_eq!(interpret(&op("not", vec![n(0.0)]), &[], &[], &[], 0.0), 1.0);
-    assert_eq!(interpret(&op("not", vec![n(1.0)]), &[], &[], &[], 0.0), 0.0);
-}
 
 // ============================================================================
 // Variable references

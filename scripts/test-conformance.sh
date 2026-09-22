@@ -1029,6 +1029,150 @@ _run_compiler_agreement_stage() {
     return $rc
 }
 
+# ── Inline-test conformance tiers (CONFORMANCE_SPEC.md §5.45) ───────────────
+#
+# A tier of this family has fixtures that are DOCUMENTS carrying their own
+# esm-spec §6.6 `tests` blocks, and every binding runs the SAME documents
+# through its OWN §6.6 runner under a NAMED compiler. It is the third shape the
+# harness needs: `compiled_rhs` compares one right-hand side at fixed probe
+# states and `compiler_agreement` compares a state trajectory keyed by bare
+# element name, so neither can carry a §6.6.5 `coords` assertion, a `reduce`
+# assertion, or an assertion on an OBSERVED — which is most of what a semantics
+# fixture asserts.
+#
+# Each stage gates TWO things: each binding's own §6.6.3 verdict against the
+# document's authored `expected`, and its ACTUAL reduction value against the
+# committed Julia-`interpreter` golden. A refusal is a NAMED EXCLUSION printed
+# with its code, or a failure; it is never a silent skip.
+#
+# Contract: tests/conformance/<tier>/README.md. Normative: CONFORMANCE_SPEC §5.45.
+INLINE_TESTS_RUNNER="$SCRIPT_DIR/run-inline-tests-conformance.py"
+
+# Every tier whose manifest declares `"runner": "inline_tests"`. Listed
+# explicitly rather than globbed: a tier appears in the gate because someone put
+# it there, and a manifest that lands without a stage should be noticed.
+INLINE_TESTS_TIERS=(broadcast_alignment scalar_operator_semantics)
+
+run_inline_tests_conformance_self_test() {
+    local rc=0 tier manifest
+    for tier in "${INLINE_TESTS_TIERS[@]}"; do
+        manifest="$TESTS_DIR/conformance/$tier/manifest.json"
+        log "Running inline-test conformance harness self-test ($tier)..."
+        if python3 "$INLINE_TESTS_RUNNER" --manifest "$manifest" --self-test; then
+            success "Inline-test conformance harness self-test passed ($tier)"
+        else
+            error "Inline-test conformance harness self-test failed ($tier)"
+            rc=1
+        fi
+    done
+    return $rc
+}
+
+# The named exclusions a run recorded. This list IS the coverage backlog, so a
+# producer that legitimately refused a fixture says so in the stage log rather
+# than passing in silence.
+_inline_tests_report_ledgers() {
+    local report="$1"
+    [ -f "$report" ] || return 0
+    python3 - "$report" <<'PY' || true
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        report = json.load(f)
+except (OSError, ValueError):
+    sys.exit(0)
+for x in report.get("named_exclusions") or []:
+    print(f"{x['binding']} / {x['compiler']} refused {x['fixture']}: {x['code']} — {x['reason']}")
+for b, br in (report.get("bindings") or {}).items():
+    for fid, fr in (br.get("fixtures") or {}).items():
+        if fr.get("stale_exclusion"):
+            print(fr["stale_exclusion"])
+PY
+}
+
+_inline_tests_adapter_path() {
+    case "$1" in
+        julia)  echo "$JULIA_DIR/scripts/inline_tests_adapter.jl" ;;
+        rust)   echo "$RUST_DIR/src/bin/earthsci-inline-tests-adapter-rust.rs" ;;
+        python) echo "$PYTHON_DIR/src/earthsci_ast/cli/inline_tests_adapter.py" ;;
+        *)      echo "" ;;
+    esac
+}
+
+_inline_tests_binding_dir() {
+    case "$1" in
+        julia)  echo "$JULIA_DIR" ;;
+        rust)   echo "$RUST_DIR" ;;
+        python) echo "$PYTHON_DIR" ;;
+        *)      echo "" ;;
+    esac
+}
+
+_run_inline_tests_stage() {
+    local binding="$1" compiler="$2"
+    local adapter dir tier manifest report rc=0 note
+    adapter="$(_inline_tests_adapter_path "$binding")"
+    dir="$(_inline_tests_binding_dir "$binding")"
+    if [ -z "$adapter" ] || [ -z "$dir" ]; then
+        error "inline-tests: $binding has no adapter mapping in this script"
+        return 1
+    fi
+    if [ ! -e "$adapter" ]; then
+        warning "inline-tests $compiler producer ($binding): UNAVAILABLE — no adapter at ${adapter#"$PROJECT_ROOT"/} yet"
+        return 0
+    fi
+    if ! check_language_availability "$binding" "$dir"; then
+        error "inline-tests $compiler producer ($binding): the toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
+        return 1
+    fi
+    for tier in "${INLINE_TESTS_TIERS[@]}"; do
+        manifest="$TESTS_DIR/conformance/$tier/manifest.json"
+        report="$OUTPUT_DIR/inline_tests/${tier}_${binding}_${compiler}_report.json"
+        log "Running inline-test conformance ($tier / $binding / $compiler)..."
+        case "$binding" in
+            julia)
+                env EARTHSCI_INLINE_TESTS_ADAPTER_JULIA="julia $adapter" \
+                    python3 "$INLINE_TESTS_RUNNER" --manifest "$manifest" \
+                        --bindings "$binding" --compiler "$compiler" --output "$report" || rc=$?
+                ;;
+            rust)
+                env EARTHSCI_INLINE_TESTS_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-inline-tests-adapter-rust --" \
+                    python3 "$INLINE_TESTS_RUNNER" --manifest "$manifest" \
+                        --bindings "$binding" --compiler "$compiler" --output "$report" || rc=$?
+                ;;
+            python)
+                # PYTHONPATH is pinned to this worktree's package src so the
+                # adapter resolves from this checkout and not from a stray
+                # editable install pointing at another worktree.
+                env EARTHSCI_INLINE_TESTS_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.inline_tests_adapter" \
+                    PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}" \
+                    python3 "$INLINE_TESTS_RUNNER" --manifest "$manifest" \
+                        --bindings "$binding" --compiler "$compiler" --output "$report" || rc=$?
+                ;;
+        esac
+        note="$(_inline_tests_report_ledgers "$report")"
+        if [ -n "$note" ]; then
+            while IFS= read -r line; do
+                [ -n "$line" ] && warning "$line"
+            done <<< "$note"
+        fi
+    done
+    return $rc
+}
+
+# `interpreter` is the reference evaluator and is complete over the evaluable
+# core, so a refusal from it is a defect rather than coverage — which is why
+# every tier of this family names it as well as the strict `native` default.
+run_inline_tests_interpreter_julia()  { _run_inline_tests_stage julia interpreter; }
+run_inline_tests_interpreter_rust()   { _run_inline_tests_stage rust interpreter; }
+run_inline_tests_interpreter_python() { _run_inline_tests_stage python interpreter; }
+
+# `native` is the strict default, and every fixture of both tiers BUILDS under
+# it today, so this stage additionally asserts that none of them refuses.
+run_inline_tests_native_julia()  { _run_inline_tests_stage julia native; }
+run_inline_tests_native_rust()   { _run_inline_tests_stage rust native; }
+run_inline_tests_native_python() { _run_inline_tests_stage python native; }
+
 # `interpreter` is bindings_required in all three: a compiler that cannot answer
 # here is a missing runtime the tier will not tolerate, and a refusal is a defect.
 run_compiler_agreement_interpreter_julia()  { _run_compiler_agreement_stage julia interpreter; }
@@ -1245,6 +1389,14 @@ main() {
     run_stage "compiler-agreement native producer (julia)" run_compiler_agreement_native_julia
     run_stage "compiler-agreement native producer (rust)" run_compiler_agreement_native_rust
     run_stage "compiler-agreement native producer (python)" run_compiler_agreement_native_python
+
+    run_stage "inline-test self-test" run_inline_tests_conformance_self_test
+    run_stage "inline-test interpreter producer (julia)" run_inline_tests_interpreter_julia
+    run_stage "inline-test interpreter producer (rust)" run_inline_tests_interpreter_rust
+    run_stage "inline-test interpreter producer (python)" run_inline_tests_interpreter_python
+    run_stage "inline-test native producer (julia)" run_inline_tests_native_julia
+    run_stage "inline-test native producer (rust)" run_inline_tests_native_rust
+    run_stage "inline-test native producer (python)" run_inline_tests_native_python
 
     print_timing_summary
 

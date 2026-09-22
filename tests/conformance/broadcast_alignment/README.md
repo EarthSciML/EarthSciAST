@@ -98,9 +98,20 @@ requires and excludes the same pair is a manifest error the self-test rejects.
 
 A refusal is a **named exclusion** — reported with the binding, the compiler,
 the fixture and the code, and green — or a **failure**. It is never a silent
-skip and never a fallback. Every fixture here is currently `required` for
-`interpreter` and `native` in all three executing bindings, and the exclusion
-list is empty: this tier has no coverage backlog.
+skip and never a fallback.
+
+The ledger as measured on 2026-09-22:
+
+| Binding / compiler | Fixture | Code | Why |
+|---|---|---|---|
+| rust / `native` | `broadcast_node_mixed_rank` | `compiler_refused_rule` | Rust's strict `native` has no wholesale lowering for the array-level `broadcast` node and declines rather than demoting the rule to the per-cell oracle |
+| rust / `native` | `unary_broadcast_fn` | `compiler_refused_rule` | the same rule, on the one-operand spelling |
+
+Everything else is `required` for `interpreter` and `native` in all three
+executing bindings. Rust's own `tests/array_level_broadcast.rs` already forced
+`Compiler::Interpreter` on exactly these documents; this ledger is the first
+place that refusal is NAMED rather than worked around, and it is what a
+`native` coverage issue would be filed from.
 
 ## Running it
 
