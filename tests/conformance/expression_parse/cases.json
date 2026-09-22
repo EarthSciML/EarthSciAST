@@ -293,6 +293,125 @@
       "text": "-a + b",
       "tier": "scalar",
       "ast": {
+        "op": "+",
+        "args": [
+          {
+            "op": "-",
+            "args": [
+              "a"
+            ]
+          },
+          "b"
+        ]
+      },
+      "reprint": "-a + b"
+    },
+    {
+      "text": "-a - b",
+      "tier": "scalar",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "-",
+            "args": [
+              "a"
+            ]
+          },
+          "b"
+        ]
+      },
+      "reprint": "-a - b"
+    },
+    {
+      "text": "-a * b",
+      "tier": "scalar",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "*",
+            "args": [
+              "a",
+              "b"
+            ]
+          }
+        ]
+      },
+      "reprint": "-a * b"
+    },
+    {
+      "text": "-a / b",
+      "tier": "scalar",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "/",
+            "args": [
+              "a",
+              "b"
+            ]
+          }
+        ]
+      },
+      "reprint": "-a / b"
+    },
+    {
+      "text": "-a^2",
+      "tier": "scalar",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "^",
+            "args": [
+              "a",
+              2
+            ]
+          }
+        ]
+      },
+      "reprint": "-a^2"
+    },
+    {
+      "text": "-a^-b",
+      "tier": "scalar",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "^",
+            "args": [
+              "a",
+              {
+                "op": "-",
+                "args": [
+                  "b"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "reprint": "-a^(-b)"
+    },
+    {
+      "text": "2^-3",
+      "tier": "scalar",
+      "ast": {
+        "op": "^",
+        "args": [
+          2,
+          -3
+        ]
+      },
+      "reprint": "2^-3"
+    },
+    {
+      "text": "-(a + b)",
+      "tier": "scalar",
+      "ast": {
         "op": "-",
         "args": [
           {
@@ -304,7 +423,105 @@
           }
         ]
       },
-      "reprint": "-a + b"
+      "reprint": "-(a + b)"
+    },
+    {
+      "text": "-(a - b)",
+      "tier": "scalar",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "-",
+            "args": [
+              "a",
+              "b"
+            ]
+          }
+        ]
+      },
+      "reprint": "-(a - b)"
+    },
+    {
+      "text": "-a * b + c",
+      "tier": "scalar",
+      "ast": {
+        "op": "+",
+        "args": [
+          {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "a",
+                  "b"
+                ]
+              }
+            ]
+          },
+          "c"
+        ]
+      },
+      "reprint": "-a * b + c"
+    },
+    {
+      "text": "-x^2 + y^2",
+      "tier": "scalar",
+      "ast": {
+        "op": "+",
+        "args": [
+          {
+            "op": "-",
+            "args": [
+              {
+                "op": "^",
+                "args": [
+                  "x",
+                  2
+                ]
+              }
+            ]
+          },
+          {
+            "op": "^",
+            "args": [
+              "y",
+              2
+            ]
+          }
+        ]
+      },
+      "reprint": "-x^2 + y^2"
+    },
+    {
+      "text": "-k_ab * A + k_ba * B",
+      "tier": "scalar",
+      "ast": {
+        "op": "+",
+        "args": [
+          {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k_ab",
+                  "A"
+                ]
+              }
+            ]
+          },
+          {
+            "op": "*",
+            "args": [
+              "k_ba",
+              "B"
+            ]
+          }
+        ]
+      },
+      "reprint": "-k_ab * A + k_ba * B"
     },
     {
       "text": "2 * (a + b)",
@@ -1486,40 +1703,6 @@
       "tier": "display-fixture",
       "ast": -3.14,
       "reprint": "-3.14"
-    },
-    {
-      "text": "-a * b",
-      "tier": "display-fixture",
-      "ast": {
-        "op": "-",
-        "args": [
-          {
-            "op": "*",
-            "args": [
-              "a",
-              "b"
-            ]
-          }
-        ]
-      },
-      "reprint": "-a * b"
-    },
-    {
-      "text": "-a - b",
-      "tier": "display-fixture",
-      "ast": {
-        "op": "-",
-        "args": [
-          {
-            "op": "-",
-            "args": [
-              "a",
-              "b"
-            ]
-          }
-        ]
-      },
-      "reprint": "-a - b"
     },
     {
       "text": "-a^b",

@@ -28,11 +28,14 @@ const UNICODE_SUPERSCRIPTS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵',
 // Operator precedence levels (higher = tighter binding)
 const PRECEDENCE: &[(&str, i32)] = &[("+", 1), ("-", 1), ("*", 2), ("/", 2), ("^", 3)];
 
-/// Precedence of the loosest-binding operators — the boolean / comparison tier,
-/// which this table leaves at 0. Mirrors `LOOSEST_PRECEDENCE` in
-/// pretty-print.ts: inside a unary-minus operand, only a child at or below this
-/// precedence needs parentheses.
-const LOOSEST_PRECEDENCE: i32 = 0;
+/// The `parent_prec` a unary-minus operand renders at: the ADDITIVE level of
+/// this module's compressed table, so a `+`/binary-`-` child (precedence 1) is
+/// parenthesized and a `*`/`/`/`^` child (2/3) is not. It mirrors the parser's
+/// `UMINUS_MIN` (parse_expression.rs), which reads a unary-minus operand at
+/// multiplicative precedence — print `-(a + b)` without the parentheses and it
+/// reads back as `(-a) + b`, a different expression. `-a * b` and `-a^2` need
+/// none. Mirrors `UMINUS_OPERAND_MIN` in pretty-print.ts.
+const UMINUS_OPERAND_PARENT_PREC: i32 = 1;
 
 /// Get operator precedence (higher means tighter binding)
 fn get_precedence(op: &str) -> i32 {
@@ -1127,13 +1130,15 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
         "-" => {
             let minus = pick(fmt, "−", "-", "-");
             if args.len() == 1 {
-                // Unary minus is deliberately LOOSE (pretty-print.ts: "for unary
-                // minus, be less aggressive"): only a child at the loosest
-                // (logical-or) precedence is parenthesized, so `−(a + b)` prints
-                // `−a + b`. That is not injective, but it IS what the parser
-                // reads back (`parse_expression` gives unary `-` the additive
-                // minimum precedence), so the pair still round-trips.
-                format!("{minus}{}", render_at(&args[0], fmt, LOOSEST_PRECEDENCE))
+                // A unary-minus operand renders at the ADDITIVE level, so a sum
+                // or difference keeps its parentheses (`−(a + b)`) while a
+                // product or power does not (`−a · b`, `−a^2`) — exactly the
+                // operands the parser re-absorbs. See
+                // `UMINUS_OPERAND_PARENT_PREC`.
+                format!(
+                    "{minus}{}",
+                    render_at(&args[0], fmt, UMINUS_OPERAND_PARENT_PREC)
+                )
             } else if args.len() == 2 {
                 // Left-associative and NON-associative on the right: the right
                 // operand renders at `op_prec` — a child at the SAME precedence

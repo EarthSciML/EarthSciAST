@@ -97,6 +97,45 @@ describe('parseExpression: expected ASTs', () => {
       args: [{ op: '+', args: ['a', 'b'] }, 'c'],
     })
   })
+  // Unary minus binds TIGHTER than `+`/binary `-` and LOOSER than `^` — the
+  // standard mathematical reading. It used to bind at ADDITIVE precedence, so
+  // `-k_ab * A + k_ba * B` parsed as `-(k_ab * A + k_ba * B)` and silently
+  // changed the meaning of every equation spelled that way.
+  it('binds unary minus tighter than + and binary -', () => {
+    expect(parseExpression('-a + b')).toEqual({
+      op: '+',
+      args: [{ op: '-', args: ['a'] }, 'b'],
+    })
+    expect(parseExpression('-a - b')).toEqual({
+      op: '-',
+      args: [{ op: '-', args: ['a'] }, 'b'],
+    })
+    expect(parseExpression('-k_ab * A + k_ba * B')).toEqual({
+      op: '+',
+      args: [
+        { op: '-', args: [{ op: '*', args: ['k_ab', 'A'] }] },
+        { op: '*', args: ['k_ba', 'B'] },
+      ],
+    })
+  })
+  it('binds unary minus looser than ^ and *', () => {
+    // `-a^2` is `-(a^2)`, NOT `(-a)^2`.
+    expect(parseExpression('-a^2')).toEqual({ op: '-', args: [{ op: '^', args: ['a', 2] }] })
+    // `-a * b` is `-(a * b)`; `(-a) * b` is the same number either way.
+    expect(parseExpression('-a * b')).toEqual({ op: '-', args: [{ op: '*', args: ['a', 'b'] }] })
+    // A unary minus inside an exponent still parses, as does a negative literal.
+    expect(parseExpression('-a^-b')).toEqual({
+      op: '-',
+      args: [{ op: '^', args: ['a', { op: '-', args: ['b'] }] }],
+    })
+    expect(parseExpression('2^-3')).toEqual({ op: '^', args: [2, -3] })
+  })
+  it('keeps the parentheses of a negated sum through a reprint', () => {
+    const negatedSum = { op: '-', args: [{ op: '+', args: ['a', 'b'] }] }
+    expect(reprint(negatedSum)).toBe('-(a + b)')
+    expect(parseExpression('-(a + b)')).toEqual(negatedSum)
+    expect(reprint({ op: '-', args: [{ op: '-', args: ['a', 'b'] }] })).toBe('-(a - b)')
+  })
   it('lowers both derivative spellings to the same node', () => {
     const d = { op: 'D', wrt: 't', args: ['O3'] }
     expect(parseExpression('D(O3)/Dt')).toEqual(d)

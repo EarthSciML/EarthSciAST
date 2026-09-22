@@ -88,11 +88,15 @@ const INFIX: readonly string[] = [
 const RIGHT_ASSOC = new Set<string>(['^'])
 
 // Prefix operand minimum-precedences, sourced from the registry:
-//  - unary `-` binds LOOSELY (registry precedence of `-`, = additive), so it
-//    swallows a whole additive/multiplicative operand, matching how the printer
-//    renders `-(Ea/(R*T))` as `-Ea / (R * T)` with no inner parens.
+//  - unary `-` binds at MULTIPLICATIVE precedence, the standard mathematical
+//    reading: tighter than `+`/binary `-` (`-a + b` = `(-a) + b`, NOT the
+//    `-(a + b)` this used to produce), looser than `^` (`-a^2` = `-(a^2)`).
+//    Its operand therefore absorbs a `*`//` chain (`-a * b` = `-(a * b)`,
+//    numerically identical to `(-a) * b`) and a power, but stops at the first
+//    `+`/`-`. The printer's matching rule lives in pretty-print.ts
+//    (`UMINUS_OPERAND_MIN`), so `-(a + b)` keeps its parentheses.
 //  - `not` binds TIGHTLY at its registry precedence (`not p and q` = `(not p) and q`).
-const UMINUS_MIN = opPrecedence('-')
+const UMINUS_MIN = opPrecedence('*')
 const NOT_MIN = opPrecedence('not')
 // Template binding values (`name<k = value, …>`) bind at additive precedence so
 // the closing `>` — a comparison operator — is never swallowed as `value > …`.

@@ -1999,9 +1999,17 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 // tightest). Higher precedence binds tighter.
 const functionPrecedence = 8
 
-// loosestPrecedence is opPrecedence("or") — inside a function call or unary
-// minus, only a child at or below this precedence is parenthesized.
+// loosestPrecedence is opPrecedence("or") — inside a function call, only a
+// child at or below this precedence is parenthesized.
 const loosestPrecedence = 1
+
+// uminusOperandMinPrec is opPrecedence("*"): the minimum precedence a
+// unary-minus operand may have and still print WITHOUT parentheses. It must
+// equal the parser's exprUnaryMinusMinPrec (parse_expression.go), which reads a
+// unary-minus operand at multiplicative precedence — print `-(a + b)` without
+// its parens and it reads back as `(-a) + b`, a different expression. `-a * b`
+// and `-a^2` need none. Mirrors UMINUS_OPERAND_MIN in pretty-print.ts.
+const uminusOperandMinPrec = 5
 
 // opPrecedenceTable holds the infix precedence of every operator that renders
 // infix; every other op (function call, structural, unknown) binds tightest.
@@ -2051,9 +2059,10 @@ func needsParentheses(parentOp string, parentArgc int, child any, isRight bool) 
 	if isFunctionCallOp(parentOp) {
 		return childPrec <= loosestPrecedence
 	}
-	// Unary minus is likewise lenient.
+	// Unary minus parenthesizes exactly the operands the parser would not
+	// re-absorb — see uminusOperandMinPrec.
 	if parentOp == "-" && parentArgc == 1 {
-		return childPrec <= loosestPrecedence
+		return childPrec < uminusOperandMinPrec
 	}
 	if childPrec < parentPrec {
 		return true

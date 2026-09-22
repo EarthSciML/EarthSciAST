@@ -478,7 +478,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
     "unicode": "a − b/c",
   },
   {
-    "ascii": "-a + b",
+    "ascii": "-(a + b)",
     "input": {
       "args": [
         {
@@ -491,12 +491,12 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       ],
       "op": "-",
     },
-    "latex": "-a + b",
+    "latex": "-(a + b)",
     "mathml": "<mrow><mo>-</mo><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow></mrow>",
-    "unicode": "−a + b",
+    "unicode": "−(a + b)",
   },
   {
-    "ascii": "-a - b",
+    "ascii": "-(a - b)",
     "input": {
       "args": [
         {
@@ -509,9 +509,9 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       ],
       "op": "-",
     },
-    "latex": "-a - b",
+    "latex": "-(a - b)",
     "mathml": "<mrow><mo>-</mo><mrow><mi>a</mi><mo>-</mo><mi>b</mi></mrow></mrow>",
-    "unicode": "−a − b",
+    "unicode": "−(a − b)",
   },
   {
     "ascii": "b + c + d",
