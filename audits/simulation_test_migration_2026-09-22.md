@@ -84,6 +84,30 @@ fixtures and 138 assertions.
 | tier 1 | `tests/conformance/broadcast_alignment/` — 7 fixtures (4 referenced from `tests/valid/array_broadcast/`, 3 authored), 48 assertions |
 | tier 2 | `tests/conformance/scalar_operator_semantics/` — 4 fixtures, 90 assertions: 84 in one algebraic document (70 operators, the `t` row, the override arm and one integrated state), plus three split-out single-operator documents (`pow`, `true`, `false`) |
 
+## What was deleted, and the rule that governed it
+
+Only where the shared fixture carries the SAME assertion at the same or a
+tighter band. That rule is why the list is short and why three obvious-looking
+candidates are not on it.
+
+| File | Removed | Now carried by |
+|---|---|---|
+| `pkg/EarthSciAST.jl/test/tree_walk_test.jl` | the five scalar-operator testsets (`Arithmetic ops`, `Integer vs float literals`, `Comparisons and logical`, `ifelse, sign, min, max`, `Elementary functions`) — 37 lines | `scalar_operator_semantics`, at EXACT tolerance where this file used `==`, and at `rel 1e-14` only on the rows whose last bits belong to a libm |
+| `pkg/earthsci-ast-rs/tests/interpret.rs` | nine test functions: `add`, `sub_binary_and_unary`, `mul_and_div`, `pow`, `abs_sign_floor_ceil`, `min_max`, `ifelse_chooses_branch`, `relational`, `logical` | the same tier, at the SAME operands — which is why the fixture carries `+(2,3)`, `^(2,10)`, `abs(-3.5)`, `sign(-7)`, `floor(2.7)`, `ceil(2.2)`, `ifelse(1,42,99)` and the six relational and six logical rows beside the Julia ones |
+| `pkg/EarthSciAST.jl/test/broadcast_alignment_test.jl` | the `anonymous shapes keep POSITIONAL semantics` testset | `broadcast_alignment/fixtures/anonymous_shape_positional.esm`, which carries all four of its assertions at a tighter band plus four more |
+
+Each deletion left a comment in place naming where the assertions went and what
+stayed, so the next reader of those files does not have to reconstruct it.
+
+**Not deleted, on purpose.** `interpret.rs`'s `exp_log_log10_sqrt`, `trig` and
+`hyperbolic` rows evaluate at operands the fixture does not carry (`exp(1)`,
+`log10(1000)`, `sqrt(2)`, `asin(1)`, `atan(1)`, the hyperbolics) or belong to
+`tests/conformance/inverse_trig/`. `broadcast_alignment_test.jl`'s cases A / B
+/ C also compare against a second Julia build over EVERY cell. And
+`test_broadcast_and_index_alignment.py`'s two end-to-end tests use different
+operands and compare whole arrays. In each case the fixture does not carry the
+same assertion, so the rule said keep it.
+
 ## Named refusals, for issue filing
 
 Every one was MEASURED on this branch on 2026-09-22 and is recorded in the
@@ -119,7 +143,7 @@ already shared 44 · migrated now 2 · deferred 6
 | File | Disposition | Detail |
 |---|---|---|
 | `test/array_ops_test.jl` | **already shared** | The four value testsets (1, 2, 6, 8) are the analytic arms of `tests/fixtures/faq/01`, `02`, `06`, `08`, which every binding already runs through `simulate_faq`. What is left in the file is MTK-path structure (`length(unknowns(simp))`), serialization round trips, `infer_array_shapes`, and an MTK-vs-tree-walk bit-identity — none of which a document can state. The `Cancel` accumulation-order case (§5.45 candidate) is deferred; see below. |
-| `test/broadcast_alignment_test.jl` | **migrated now** | Its §4.3.4 VALUE testsets are now `tests/conformance/broadcast_alignment/`, run by `scripts/test-conformance.sh` for julia, rust and python under both `interpreter` and `native`. The file keeps its `validate()` diagnostics (`array_shape_mismatch`, the `broadcast` `fn` contract), its two-build oracle differentials, the internal predicates and the MTK exporter's `fn` vocabulary. |
+| `test/broadcast_alignment_test.jl` | **migrated now** | The "anonymous shapes keep POSITIONAL semantics" testset was DELETED and is now `broadcast_alignment/fixtures/anonymous_shape_positional.esm`, which carries all four of its assertions at a tighter band plus four more and is run for julia, rust and python under both compilers. The cases A / B / C testsets were NOT deleted although the tier now carries their values too: each also asserts `bare == oracle` over EVERY cell against a second Julia build, which no document can state, and the tier's probe sets are not cell-for-cell identical to theirs. The file also keeps its `validate()` diagnostics (`array_shape_mismatch`, the `broadcast` `fn` contract), the internal predicates and the ModelingToolkit exporter's `fn` vocabulary. |
 | `test/build_once_spatial_field_conformance_test.jl` | **already shared** | Adapter over `tests/conformance/build_once_spatial_field/` (§5.12); rust and python have their own adapters over the same fixture and golden. |
 | `test/conformance_assertion_nonfinite_test.jl` | **already shared** | Adapter over `tests/conformance/assertion_nonfinite/` (§5.20). |
 | `test/conformance_assertion_tolerance_test.jl` | **already shared** | Adapter over `tests/conformance/assertion_tolerance/` (§5.37). |
@@ -177,7 +201,7 @@ already shared 45 · migrated now 2 · deferred 8
 
 | File | Disposition | Detail |
 |---|---|---|
-| `array_level_broadcast.rs` | **migrated now** | Its §4.3.4 value claims are now `tests/conformance/broadcast_alignment/`, which REFERENCES the same four `tests/valid/array_broadcast/*.esm` documents this file drives and adds three more. The file keeps its structural guard, its bare-vs-`broadcast` and bare-vs-`faq` bit-identity arms, and the `array_shape_mismatch` refusals. |
+| `array_level_broadcast.rs` | **migrated now** | The four documents this file drives are now REFERENCED by `tests/conformance/broadcast_alignment/`, which gates them in julia and python as well and adds three more. **Nothing was deleted from this file**, deliberately: its remaining arms are the bare-vs-`broadcast` and bare-vs-`faq` BIT-IDENTITY comparisons, the structural guard on the fixtures' own shape, and the `array_shape_mismatch` refusals — none of which a document can state, and none of which the tier duplicates. What the migration bought is that the same documents are now run by three bindings instead of one, and that Rust's `native` refusal on two of them is NAMED. |
 | `arrayed_vars.rs` | **already shared** | Shape / location round trips through `esm_problem` over shared documents; never solves. |
 | `assertion_nonfinite_conformance.rs` | **already shared** | Adapter over `tests/conformance/assertion_nonfinite/`. |
 | `build_once_spatial_field_conformance.rs` | **already shared** | Adapter over `tests/conformance/build_once_spatial_field/` (§5.12). |
@@ -240,7 +264,7 @@ already shared 26 · migrated now 1 · deferred 1
 | File | Disposition | Detail |
 |---|---|---|
 | `test_assertion_nonfinite_conformance.py` | **already shared** | Adapter over `tests/conformance/assertion_nonfinite/`. |
-| `test_broadcast_and_index_alignment.py` | **migrated now** | Its §4.3.4 end-to-end value claims are now `tests/conformance/broadcast_alignment/` — `test_observed_expression_is_aligned_too` became the `observed_expression_aligned` fixture and `test_broadcast_end_to_end_matches_the_bare_operator` became `unary_broadcast_fn`. The file keeps its `validate()` ledger (the `invalid_broadcast_fn` reasons, the `array_shape_mismatch` record shape, the power-alias and elementwise-op questions it records as live cross-binding divergences) and its `eval_expr` / `align_expression` unit tests. |
+| `test_broadcast_and_index_alignment.py` | **migrated now** | Two of its end-to-end claims were the SOURCE of new shared fixtures: `test_observed_expression_is_aligned_too` is where `observed_expression_aligned` came from, and `test_broadcast_end_to_end_matches_the_bare_operator` is where `unary_broadcast_fn` came from. **Nothing was deleted from this file**: the fixtures use different operands (`w2 * z1` rather than `w1 * ones3`) and the Python tests additionally compare WHOLE ARRAYS against the `faq` oracle, so the tier does not carry the same assertion and the rule against deleting one that it does not was applied. The file also keeps its `validate()` ledger — the `invalid_broadcast_fn` reasons, the `array_shape_mismatch` record shape, and the power-alias and elementwise-op questions it records as live cross-binding divergences, one of which this phase confirmed from the other side (`pow`). |
 | `test_build_once_spatial_field_conformance.py` | **already shared** | Adapter over `tests/conformance/build_once_spatial_field/`. |
 | `test_discrete_materialize_conformance.py` | **already shared** | Adapter over `tests/conformance/discrete_materialize/`. |
 | `test_elementwise_observed_gather_conformance.py` | **already shared** | Adapter over `tests/conformance/elementwise_observed_gather/`. |
