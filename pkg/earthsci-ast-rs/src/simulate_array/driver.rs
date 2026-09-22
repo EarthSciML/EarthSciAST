@@ -934,8 +934,7 @@ impl ArrayCompiled {
         // tape's own CONST section computes exactly these rules, once per
         // solve, on the same schedule this hoist used to. Materializing them a
         // SECOND time through the whole-array overlay would be the off-tape
-        // per-cell evaluation
-        // `esm-libraries-spec.md` §2.5.10 refuses — and it would be invisible,
+        // per-cell evaluation `esm-libraries-spec.md` §2.5.10 refuses — and it would be invisible,
         // since the overlay declines on its own terms and reports nothing.
         //
         // What consumed the hoisted map still gets it: the RHS and Jacobian
@@ -1008,8 +1007,9 @@ impl ArrayCompiled {
     ) {
         // Under either strict compiler: one taped read-out at t0 answers BOTH
         // halves of this sink — the static observeds (which the hoist no
-        // longer materializes) and, on a segmented run, the varying ones. The off-tape snapshot below is
-        // what §2.5.10 would otherwise leave un-gated.
+        // longer materializes) and, on a segmented run, the varying ones. The
+        // off-tape snapshot below is what §2.5.10 would otherwise leave
+        // un-gated.
         if self.tape_serves_passes()
             && let Some(tape) = tape
         {
@@ -1354,8 +1354,8 @@ impl ArrayCompiled {
         // this one pass (own transient registry, discarded after).
         let seg_seed: ArrMap = if segment_static_rules.is_empty() || self.tape_serves_passes() {
             // Under either strict compiler: the tape's SEGMENT section
-            // computes the segment-invariant observeds itself, on the same once-per-segment
-            // schedule, so seeding them here would be the same rules evaluated
+            // computes the segment-invariant observeds itself, on the same
+            // once-per-segment schedule, so seeding them here would be the same rules evaluated
             // a second time off the tape (§2.5.10). `static_obs` is empty
             // under them for the same reason — see `hoist_static_observeds`.
             static_obs.clone()
@@ -1421,8 +1421,8 @@ impl ArrayCompiled {
             };
         // `interpreter`: the per-cell oracle for the right-hand side too, not
         // just for the observeds. The strict compilers and the legacy routing
-        // pass `false`
-        // and take the whole-array overlay where the tape is absent.
+        // pass `false` and take the whole-array overlay where the tape is
+        // absent.
         let force_scalar = self.is_interpreter();
 
         // `xla` (API_SPEC §5.8): the right-hand side is the XLA executable the
