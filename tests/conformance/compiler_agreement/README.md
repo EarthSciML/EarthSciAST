@@ -31,9 +31,19 @@ Design decisions of record (2026-09-21) that this tier implements:
 > and `native` with no refusals on any fixture, and all three are
 > `bindings_required` for each; Python is `bindings_required` for `sympy`,
 > which refuses the four array fixtures by name and runs the two scalar ones.
-> `xla` and `mtk` stay `bindings_optional` until a binding's `esm_problem` can
-> build with them; each crosses to `bindings_required` on the same one-way
-> ratchet.
+> **Rust crossed the ratchet for `xla` on 2026-09-22**: `esm_problem(…,
+> compiler = Xla)` emits the model's tape as an XLA computation and runs the
+> compiled right-hand side (and the finite-difference Jacobian differenced out
+> of it) on the solve path, and all six fixtures agree with the golden with no
+> refusals — so rust is `bindings_required` for `xla`. Read that entry with its
+> build condition: `xla` is the member whose availability is a property of the
+> BUILD, so "required" means a build that HAS the `xla` Cargo feature and an
+> unpacked `xla_extension` must answer. A stage that runs this compiler is
+> responsible for providing both, which is why `scripts/test-conformance.sh`
+> registers no `xla` stage and the dedicated `XLA Compiled Backends` workflow —
+> which fetches the extension — is where one belongs. Julia's `xla`, and `mtk`,
+> stay `bindings_optional` until their `esm_problem` can build with them; each
+> crosses on the same one-way ratchet.
 
 ## Shape
 
@@ -523,6 +533,15 @@ Stages in `scripts/test-conformance.sh` are one per binding per compiler, named
 for Julia, Rust and Python; `xla` for Julia and Rust; `mtk` for Julia; `sympy`
 for Python. `compiler-agreement self-test` is the always-on guard and needs no
 live binding.
+
+The `xla` stages are the exception and are deliberately NOT registered in
+`scripts/test-conformance.sh`: that script is what a plain checkout runs, and
+`xla` needs a separately fetched 144 MB `xla_extension` that a plain checkout
+does not have. An unconfigured build answers `unavailable`, which for a
+`bindings_required` binding is RED — so the stage belongs in the workflow that
+fetches the extension first. For Rust, the runner's own planned command adds
+the `xla` Cargo feature when, and only when, `--compiler xla` is what was
+asked for; an explicit `EARTHSCI_COMPILER_AGREEMENT_ADAPTER_RUST` still wins.
 
 A producer stage **declines to start**, with a warning naming exactly what is
 missing, when its binding's adapter is not on disk or when `golden/` holds no

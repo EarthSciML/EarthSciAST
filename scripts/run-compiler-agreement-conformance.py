@@ -161,6 +161,14 @@ class CompilerAgreementHarness(AdapterHarness):
     3. A non-zero exit WITH a parsable report is read and gated anyway: the
        per-fixture entries are what say which fixture broke, and throwing them
        away would collapse "one fixture errored" into "the adapter fell over".
+    4. The Rust planned command depends on the COMPILER, because ``xla`` is the
+       one member whose availability is a property of the build: it needs the
+       crate's non-default ``xla`` Cargo feature and an unpacked
+       ``xla_extension``. Built without it, the adapter answers ``unavailable``
+       for ``xla`` and can say nothing about any document, so the planned
+       command asks for the feature when — and only when — ``xla`` is what was
+       requested. An explicit ``EARTHSCI_COMPILER_AGREEMENT_ADAPTER_RUST`` still
+       wins over it, unchanged.
     """
 
     def __init__(self, compiler: str) -> None:
@@ -173,8 +181,29 @@ class CompilerAgreementHarness(AdapterHarness):
             return argv
         planned = PLANNED_ADAPTERS.get(binding)
         if planned is not None and (REPO_ROOT / planned[0]).exists():
-            return list(planned[1])
+            return self._with_compiler_features(binding, list(planned[1]))
         return None
+
+    def _with_compiler_features(self, binding: str, argv: list[str]) -> list[str]:
+        """The planned command, with the Cargo features this compiler needs.
+
+        Only Rust and only ``xla``: the emitter over the tape and the PJRT
+        runtime it executes on are both behind the non-default ``xla`` feature
+        (``pkg/earthsci-ast-rs/Cargo.toml``), which also needs
+        ``XLA_EXTENSION_DIR`` pointing at an unpacked ``xla_extension`` release
+        at BUILD time. Asking for the feature on every compiler would make the
+        two always-available stages depend on a 144 MB download; not asking for
+        it here would make the ``xla`` stage permanently ``unavailable``.
+        """
+        if binding != "rust" or self.compiler != "xla":
+            return argv
+        try:
+            i = argv.index("--features")
+        except ValueError:
+            return argv
+        if "xla" not in argv[i + 1].split(","):
+            argv[i + 1] = f"{argv[i + 1]},xla"
+        return argv
 
     def run(
         self, binding: str, argv: list[str], manifest_path: Path, timeout: float | None
