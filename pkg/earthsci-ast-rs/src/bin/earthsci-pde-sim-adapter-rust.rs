@@ -64,16 +64,25 @@ fn state_vec(names: &[String], state: &Map<String, Value>) -> Vec<f64> {
         .collect()
 }
 
-/// The compiler this tier means (CONFORMANCE_SPEC §5.44.5).
+/// The compiler this tier NAMES (CONFORMANCE_SPEC §5.44.5).
 ///
-/// Every stage other than the compiler-agreement tier names the compiler it
-/// means rather than inheriting `esm_problem`'s default: these goldens were
-/// minted against the reference evaluator, and a stage that silently changed
-/// evaluator when the default became `native` would be testing something else
-/// under the same name. `native`'s coverage is measured in §5.44 and nowhere
-/// else. `--compiler` overrides it, which is how this tier's fixtures are
-/// checked against another compiler without moving the gate.
-const TIER_COMPILER: Compiler = Compiler::Interpreter;
+/// Every problem-building stage names its compiler rather than inheriting the
+/// library default, so that a change to that default can never change what the
+/// stage measures while its goldens still say what it measured before.
+///
+/// `native` is what this stage names, because every fixture it carries builds
+/// under it: all eight were checked, and their numbers are bit-identical to the
+/// reference path across the 205 values this adapter reports. That is the
+/// stronger of the two choices — the stage keeps exercising the compiled tiers
+/// its goldens were minted from, and additionally asserts that none of its
+/// fixtures refuses. A stage whose fixtures a strict `native` REFUSES names
+/// `interpreter` instead and says why where it names it; this one has no such
+/// refusal to record.
+///
+/// `--compiler` overrides it, which is how these fixtures are checked under
+/// another compiler without moving the gate. The compiler-agreement tier
+/// (§5.44) remains the only place `native`'s coverage is measured.
+const TIER_COMPILER: Compiler = Compiler::Native;
 
 /// `--manifest <m> --output <o> [--compiler <value>]`, rejecting anything else.
 ///
