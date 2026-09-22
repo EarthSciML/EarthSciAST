@@ -145,6 +145,12 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("wildfire_simulation_test.jl")
     include("mtk_export_test.jl")
 
+    # ---- Choosing the compiler (API_SPEC §5.8, esm-libraries-spec §2.5.10) ----
+    # The closed vocabulary, the strict `native` tier report, and the agreement
+    # of `native` with the `:interpreter` oracle — the whole point of the
+    # compiler keyword, and this file was never on the list, so none of it ran.
+    include("compiler_selection_test.jl")
+
     # ---- Tree-walk evaluator (src/tree_walk.jl) + discrete-cadence data refresh ----
     include("tree_walk_test.jl")
     include("dag_walk_memo_test.jl")               # ESS-1p5 exponential-path DAG walk regression
