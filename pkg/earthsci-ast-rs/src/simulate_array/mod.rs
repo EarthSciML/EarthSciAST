@@ -638,6 +638,15 @@ pub struct ArrayCompiled {
     /// `ModelVariable.refresh` field (plan PR-2) is deferred: forcing resolves
     /// by name at runtime and does not need it.
     forcing: Rc<RefCell<HashMap<String, ArrayD<f64>>>>,
+    /// Every DATA-FED parameter routed to [`Self::forcing`] at classification:
+    /// the name the runtime looks up, and the `data_sources` key its `update`
+    /// names (esm-spec §5.4/§8.5). Read by
+    /// [`crate::data_fed::refuse_unbound`] at construction to answer whether
+    /// anything actually bound each one — a forcing nothing bound must be a
+    /// refusal, never a run at the parameter's `default` (esm-spec §9.6.6
+    /// `data_source_unbound`, CONFORMANCE_SPEC §5.46). Empty for every model
+    /// with no data feed.
+    data_fed: Vec<(String, String)>,
     /// Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1),
     /// classified out of the equation list by [`Self::from_model`] (single-model
     /// path) or carried from [`crate::flatten::FlattenedSystem::field_ics`]
