@@ -578,6 +578,22 @@ pub(crate) enum RuntimeMode {
     /// oracle everywhere, as the reference the other compilers are checked
     /// against.
     Interpreter,
+    /// [`crate::Compiler::Xla`]: the specialty compiler that needs a heavy
+    /// external dependency. The tape is lowered to a StableHLO computation by
+    /// `tape::xla_emit` and run through PJRT (`crate::xla_runtime::CompiledRhs`),
+    /// so the right-hand side — and the
+    /// finite-difference Jacobian built out of it — are the compiled
+    /// executable, not the tape's own interpreter.
+    ///
+    /// It is as STRICT as [`Self::Native`] and strict twice over: every rule
+    /// must lower to the tape (or construction refuses it), and the whole tape
+    /// must lower to XLA (or construction refuses that, naming the rule). The
+    /// passes the tape serves under `native` — the build-time materialization,
+    /// the per-segment seed, the inspection snapshot and the observeds
+    /// reported at output times — are served from the tape here too, because
+    /// the emitted program's only output is `du`. That is one evaluator, not
+    /// two: the same tape both feeds the emitter and answers those passes.
+    Xla,
 }
 
 /// Compiled, parameter-sweep-ready ODE model for array-op models.
@@ -586,6 +602,19 @@ pub struct ArrayCompiled {
     /// [`crate::problem::esm_problem`] right after the build, and
     /// [`RuntimeMode::Legacy`] for every other entry point.
     pub(crate) runtime_mode: RuntimeMode,
+    /// The XLA executable this model's right-hand side runs on under
+    /// [`RuntimeMode::Xla`], installed by
+    /// [`crate::problem::esm_problem`] at CONSTRUCTION — so a model the
+    /// emitter cannot lower is a build refusal rather than a surprise on the
+    /// first step — and empty under every other mode.
+    ///
+    /// A cell rather than a plain field because the program is emitted from a
+    /// finished [`ArrayCompiled`]: the emitter reads the model it is going to
+    /// be installed on. `Rc` so the per-segment RHS and Jacobian closures can
+    /// each hold the ONE executable; compiling it is the expensive step and
+    /// there must never be a second.
+    #[cfg(feature = "xla")]
+    pub(crate) xla_rhs: std::cell::OnceCell<Rc<crate::xla_runtime::CompiledRhs>>,
     /// Every state spelling an `operator_compose` renaming match DELETED,
     /// mapped onto the survivor (issue #230). Carried from
     /// `FlattenMetadata::merged_variable_renames` by

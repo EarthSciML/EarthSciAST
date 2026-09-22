@@ -102,10 +102,112 @@ impl TapedObserveds {
     }
 }
 
+/// Run the compiled XLA right-hand side into `out`, routing a device failure
+/// into `fault` (FIRST failure wins) and leaving `out` NaN so the solver stops
+/// instead of integrating whatever was there before.
+///
+/// Shared by the production right-hand side and the finite-difference
+/// Jacobian, which under [`crate::Compiler::Xla`] evaluate exactly the same
+/// program; a second copy of the failure handling would be a second place to
+/// get it wrong.
+#[cfg(all(feature = "solve", feature = "xla"))]
+fn run_xla_rhs(
+    program: &crate::xla_runtime::CompiledRhs,
+    fault: &Rc<RefCell<Option<String>>>,
+    state: &[f64],
+    params: &[f64],
+    t: f64,
+    out: &mut [f64],
+) {
+    match program.eval(state, params, t) {
+        Ok(du) => out.copy_from_slice(&du),
+        Err(e) => {
+            let mut slot = fault.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(e.to_string());
+            }
+            for v in out.iter_mut() {
+                *v = f64::NAN;
+            }
+        }
+    }
+}
+
 impl ArrayCompiled {
-    /// Whether this model serves a strict [`crate::Compiler::Native`] build.
-    pub(crate) fn is_native(&self) -> bool {
-        self.runtime_mode == RuntimeMode::Native
+    /// Whether the TAPE serves this Problem's passes other than the right-hand
+    /// side — the build-time materialization of constants and static
+    /// observeds, the per-segment seed, the inspection snapshot and the
+    /// observeds reported at output times (esm-libraries-spec §2.5.10).
+    ///
+    /// True under the two STRICT compilers, [`crate::Compiler::Native`] and
+    /// [`crate::Compiler::Xla`], and for the same reason in both: each refuses
+    /// the document unless every rule lowered to the tape, so there is no
+    /// second evaluator left for those passes to drift against. Under `xla`
+    /// the right-hand side itself runs on the emitted executable instead (see
+    /// `is_xla`) — the emitted program's only output is `du`, so the
+    /// observed passes stay on the tape the emitter was built from, which is
+    /// still ONE evaluator rather than two.
+    pub(crate) fn tape_serves_passes(&self) -> bool {
+        matches!(self.runtime_mode, RuntimeMode::Native | RuntimeMode::Xla)
+    }
+
+    /// Whether this model serves a [`crate::Compiler::Xla`] build: the
+    /// right-hand side (and the finite-difference Jacobian differenced out of
+    /// it) is the XLA executable rather than the tape's own interpreter.
+    #[cfg(feature = "xla")]
+    pub(crate) fn is_xla(&self) -> bool {
+        self.runtime_mode == RuntimeMode::Xla
+    }
+
+    /// Emit this model's tape as an XLA computation, compile it for the
+    /// device, and install it as the right-hand side
+    /// [`crate::Compiler::Xla`] runs (API_SPEC §5.8).
+    ///
+    /// Called ONCE, at construction, by [`crate::problem::esm_problem`] — so a
+    /// model the emitter cannot lower is a BUILD refusal naming the rule
+    /// rather than a surprise on the first step, and so the XLA compilation
+    /// (seconds for a large program) is paid once per Problem rather than once
+    /// per integration segment. Idempotent: a second call keeps the first
+    /// executable.
+    #[cfg(feature = "xla")]
+    pub(crate) fn install_xla_rhs(&self) -> Result<(), crate::xla_runtime::CompileRhsError> {
+        use crate::xla_runtime::{CompileRhsError, CompiledRhs};
+        if self.xla_rhs.get().is_some() {
+            return Ok(());
+        }
+        let program = CompiledRhs::compile(self)?;
+        // The two length contracts `CompiledRhs::eval` would otherwise raise
+        // per CALL, checked once here instead. After this the only way an
+        // evaluation can fail is the device itself, which is what the run-time
+        // error channel in [`Self::run_one_segment`] carries.
+        if program.n_states() != self.n_states {
+            return Err(CompileRhsError::Runtime(format!(
+                "the emitted program returns {} state slots, the model has {}",
+                program.n_states(),
+                self.n_states
+            )));
+        }
+        if program.params_len() < self.param_names.len() {
+            return Err(CompileRhsError::Runtime(format!(
+                "the emitted program takes {} parameters, the model has {}",
+                program.params_len(),
+                self.param_names.len()
+            )));
+        }
+        let _ = self.xla_rhs.set(Rc::new(program));
+        Ok(())
+    }
+
+    /// The installed XLA executable, when this model serves
+    /// [`crate::Compiler::Xla`]. `None` under every other compiler, so a
+    /// caller can hand the answer straight to the closure builders.
+    #[cfg(feature = "xla")]
+    pub(crate) fn xla_program(&self) -> Option<Rc<crate::xla_runtime::CompiledRhs>> {
+        if self.is_xla() {
+            self.xla_rhs.get().cloned()
+        } else {
+            None
+        }
     }
 
     /// Whether this model serves a [`crate::Compiler::Interpreter`] build: no
@@ -823,7 +925,7 @@ impl ArrayCompiled {
         // scratches read the tape's slots rather than a seeded observed map,
         // and the inspection snapshot and the output-node pass harvest their
         // values from the tape ([`TapedObserveds`]).
-        if self.is_native() && tape.is_some() {
+        if self.tape_serves_passes() && tape.is_some() {
             return SolveSetup {
                 cadence,
                 sa0,
@@ -891,7 +993,7 @@ impl ArrayCompiled {
         // — the static observeds (which the hoist no longer materializes) and,
         // on a segmented run, the varying ones. The off-tape snapshot below is
         // what §2.5.10 would otherwise leave un-gated.
-        if self.is_native()
+        if self.tape_serves_passes()
             && let Some(tape) = tape
         {
             let mut harvest = TapedObserveds::new(self, tape);
@@ -1233,7 +1335,7 @@ impl ArrayCompiled {
         // coupled-loader profile. They are state-free, so `sa_seg` is only a
         // consistency placeholder; their FAQ rings are produced-and-consumed in
         // this one pass (own transient registry, discarded after).
-        let seg_seed: ArrMap = if segment_static_rules.is_empty() || self.is_native() {
+        let seg_seed: ArrMap = if segment_static_rules.is_empty() || self.tape_serves_passes() {
             // `native`: the tape's SEGMENT section computes the
             // segment-invariant observeds itself, on the same once-per-segment
             // schedule, so seeding them here would be the same rules evaluated
@@ -1296,7 +1398,7 @@ impl ArrayCompiled {
         let const_scope_jac = Rc::clone(&self.const_scope);
         let jac_scratch: RefCell<Option<RhsScratch>> = RefCell::new(None);
         let tape_jac: Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)> =
-            match (self.is_native(), tape) {
+            match (self.tape_serves_passes(), tape) {
                 (true, Some((prog, full_obs))) => Some((Rc::clone(prog), Rc::clone(full_obs))),
                 _ => None,
             };
@@ -1304,6 +1406,35 @@ impl ArrayCompiled {
         // just for the observeds. `native` and the legacy routing pass `false`
         // and take the whole-array overlay where the tape is absent.
         let force_scalar = self.is_interpreter();
+
+        // `xla` (API_SPEC §5.8): the right-hand side is the XLA executable the
+        // build installed, not the tape's own interpreter. The FD Jacobian
+        // goes through it too — it differences two right-hand-side evaluations
+        // of the same rules, so leaving it on the tape would mean an implicit
+        // solve ran the whole model on a DIFFERENT compiler from the one the
+        // caller named, once per Jacobian call.
+        //
+        // Both closures hold the ONE executable (`Rc`); nothing recompiles per
+        // segment or per call.
+        #[cfg(feature = "xla")]
+        let xla_rhs = self.xla_program();
+        #[cfg(feature = "xla")]
+        let xla_jac = xla_rhs.clone();
+        // Where an XLA execution failure goes. diffsol's right-hand side is
+        // `Fn(..) -> ()`, so a device failure has no return channel: it lands
+        // here, the derivative is filled with NaN so the solver stops rather
+        // than integrating stale numbers, and the first message is raised
+        // after the run as `compiler_unavailable` — which is what a device
+        // that stopped working mid-solve IS (esm-spec §9.6.6: this binding,
+        // build or PROCESS cannot provide the compiler). The lengths that
+        // `CompiledRhs::eval` would otherwise report here were already checked
+        // at install time, so nothing about the MODEL can reach this channel.
+        #[cfg(feature = "xla")]
+        let xla_fault: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        #[cfg(feature = "xla")]
+        let xla_fault_rhs = Rc::clone(&xla_fault);
+        #[cfg(feature = "xla")]
+        let xla_fault_jac = Rc::clone(&xla_fault);
 
         // External forcing channel (PR-1, ess-14f.7): clone the `Rc` handle into
         // each closure so both the RHS and the Jacobian read the *same*
@@ -1320,6 +1451,11 @@ impl ArrayCompiled {
             let dy_s = dy.as_mut_slice();
             for slot in dy_s.iter_mut() {
                 *slot = 0.0;
+            }
+            #[cfg(feature = "xla")]
+            if let Some(program) = &xla_rhs {
+                run_xla_rhs(program, &xla_fault_rhs, y_s, p_s, t, dy_s);
+                return;
             }
             let mut scratch = rhs_scratch.borrow_mut();
             evaluate_rhs_with_scratch(
@@ -1364,6 +1500,16 @@ impl ArrayCompiled {
 
             let mut f_y = vec![0.0f64; n];
             let mut f_yp = vec![0.0f64; n];
+            #[cfg(feature = "xla")]
+            if let Some(program) = &xla_jac {
+                run_xla_rhs(program, &xla_fault_jac, y_s, p_s, t, &mut f_y);
+                run_xla_rhs(program, &xla_fault_jac, &y_perturbed, p_s, t, &mut f_yp);
+                let jv_s = jv.as_mut_slice();
+                for i in 0..n {
+                    jv_s[i] = (f_yp[i] - f_y[i]) / eps;
+                }
+                return;
+            }
             let mut scratch_slot = jac_scratch.borrow_mut();
             let scratch = scratch_slot.get_or_insert_with(|| {
                 let mut s = RhsScratch::new(&var_shapes_jac);
@@ -1455,51 +1601,76 @@ impl ArrayCompiled {
         // Mirror the scalar `Compiled::integrate` dispatch: run the solver, then
         // read the real step/eval counters out of diffsol before the concrete
         // solver is dropped (see [`SolveStats::from_solver`]).
-        let (time, state, stats, retcode) = match opts.alg {
-            Alg::Bdf => {
-                let mut solver: Bdf<'_, _, NewtonNonlinearSolver<_, FaerLU<f64>, _>> = problem
-                    .bdf::<FaerLU<f64>>()
-                    .map_err(|e| SimulateError::DiffsolError {
+        //
+        // Wrapped in an immediately-invoked closure so a solver failure does
+        // not leave the function before the XLA fault channel below is read: a
+        // device that stopped working reaches the solver as a NaN derivative,
+        // and reporting "tolerance not met" for it would name the wrong thing.
+        type SolvedSegment = (Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode);
+        let solved = (|| -> Result<SolvedSegment, SimulateError> {
+            let out = match opts.alg {
+                Alg::Bdf => {
+                    let mut solver: Bdf<'_, _, NewtonNonlinearSolver<_, FaerLU<f64>, _>> = problem
+                        .bdf::<FaerLU<f64>>()
+                        .map_err(|e| SimulateError::DiffsolError {
+                            details: e.to_string(),
+                        })?;
+                    let (time, state, retcode) =
+                        crate::simulate::run_solver(&mut solver, t_end, opts)?;
+                    let bs = solver.get_statistics();
+                    let stats = SolveStats::from_solver(
+                        &solver,
+                        bs.number_of_steps,
+                        bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+                    );
+                    (time, state, stats, retcode)
+                }
+                Alg::Sdirk => {
+                    let mut solver: Sdirk<'_, _, FaerLU<f64>> = problem
+                        .tr_bdf2::<FaerLU<f64>>()
+                        .map_err(|e| SimulateError::DiffsolError {
+                            details: e.to_string(),
+                        })?;
+                    let (time, state, retcode) =
+                        crate::simulate::run_solver(&mut solver, t_end, opts)?;
+                    let bs = solver.get_statistics();
+                    let stats = SolveStats::from_solver(
+                        &solver,
+                        bs.number_of_steps,
+                        bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+                    );
+                    (time, state, stats, retcode)
+                }
+                Alg::Erk => {
+                    let mut solver = problem.tsit45().map_err(|e| SimulateError::DiffsolError {
                         details: e.to_string(),
                     })?;
-                let (time, state, retcode) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
-                let bs = solver.get_statistics();
-                let stats = SolveStats::from_solver(
-                    &solver,
-                    bs.number_of_steps,
-                    bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
-                );
-                (time, state, stats, retcode)
-            }
-            Alg::Sdirk => {
-                let mut solver: Sdirk<'_, _, FaerLU<f64>> = problem
-                    .tr_bdf2::<FaerLU<f64>>()
-                    .map_err(|e| SimulateError::DiffsolError {
-                        details: e.to_string(),
-                    })?;
-                let (time, state, retcode) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
-                let bs = solver.get_statistics();
-                let stats = SolveStats::from_solver(
-                    &solver,
-                    bs.number_of_steps,
-                    bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
-                );
-                (time, state, stats, retcode)
-            }
-            Alg::Erk => {
-                let mut solver = problem.tsit45().map_err(|e| SimulateError::DiffsolError {
-                    details: e.to_string(),
-                })?;
-                let (time, state, retcode) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
-                let bs = solver.get_statistics();
-                let stats = SolveStats::from_solver(
-                    &solver,
-                    bs.number_of_steps,
-                    bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
-                );
-                (time, state, stats, retcode)
-            }
-        };
+                    let (time, state, retcode) =
+                        crate::simulate::run_solver(&mut solver, t_end, opts)?;
+                    let bs = solver.get_statistics();
+                    let stats = SolveStats::from_solver(
+                        &solver,
+                        bs.number_of_steps,
+                        bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+                    );
+                    (time, state, stats, retcode)
+                }
+            };
+            Ok(out)
+        })();
+        // §9.6.6 `compiler_unavailable`: the caller named `xla`, and the XLA
+        // runtime stopped being able to provide it mid-solve. It is reported
+        // in preference to whatever the solver made of the NaN derivative,
+        // because that is the fact — and the first failure is reported, since
+        // every one after it ran on the same broken device.
+        #[cfg(feature = "xla")]
+        if let Some(details) = xla_fault.borrow().clone() {
+            return Err(SimulateError::CompilerUnavailable {
+                compiler: "xla",
+                details: format!("the compiled right-hand side failed during the solve: {details}"),
+            });
+        }
+        let (time, state, stats, retcode) = solved?;
         Ok((time, state, stats, retcode))
     }
 
@@ -1547,7 +1718,7 @@ impl ArrayCompiled {
         // explicitly — "the observeds reported at output times" are under the
         // refusal like the right-hand side is — and it is the one that runs
         // most often, once per saved time point.
-        if self.is_native()
+        if self.tape_serves_passes()
             && let Some(tape) = tape
         {
             self.append_observed_trajectories_taped(

@@ -2855,7 +2855,7 @@ pub(super) fn build_tape_program(
         observed_rules,
         rhs_rules,
         &observed_names,
-        compiled.is_native(),
+        compiled.tape_serves_passes(),
     );
 
     // ---- flatten + fusion + liveness + coloring ----------------------------
