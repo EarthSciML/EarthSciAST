@@ -350,6 +350,38 @@ pub fn reset_gate_index_builds() {
     GATE_INDEX_BUILDS.with(|c| c.set(0));
 }
 
+thread_local! {
+    /// How many gates the planner has declined as uneconomic on this thread.
+    static PLAN_DECLINES: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Record that the planner declined a gate.
+#[inline]
+pub(crate) fn bump_gate_plan_declines() {
+    PLAN_DECLINES.with(|c| c.set(c.get().wrapping_add(1)));
+}
+
+/// How many gates this thread's planner has declined as uneconomic.
+///
+/// Test-only: nothing in a release build reads it. `ESS_JOIN_GATE_STATS`
+/// reports declines as they happen, straight to stderr.
+///
+/// A decline is invisible in an answer -- that is the point -- so without a
+/// counter the only evidence that the planner did anything is peak memory,
+/// which a test cannot assert on portably. With `ESS_JOIN_GATE_STATS=1` it is
+/// also reported per node, so a document's plan is a command's output rather
+/// than an argument from the source.
+#[cfg(test)]
+pub(crate) fn gate_plan_declines() -> u64 {
+    PLAN_DECLINES.with(Cell::get)
+}
+
+/// Zero this thread's declined-gate counter. Test-only, like its reader.
+#[cfg(test)]
+pub(crate) fn reset_gate_plan_declines() {
+    PLAN_DECLINES.with(|c| c.set(0));
+}
+
 /// Kill-switch for the whole join-gate DRIVER (`ESS_JOIN_GATE_DISABLE=1`, or
 /// [`set_join_gate_enabled`] within a thread).
 ///
@@ -458,6 +490,86 @@ fn gate_cache_budget_env() -> usize {
 
 thread_local! {
     static GATE_CACHE_PAIRS: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// How far a gate is allowed to overshoot the pair-space it could narrow
+/// before the planner declines to build it (`ESS_GATE_PLAN_RATIO`, default
+/// [`DEFAULT_GATE_PLAN_RATIO`]).
+///
+/// A gate's cost is its match count; its value is the product of the two
+/// symbols' ranges, as narrowed by the gates already resolved. When a clause
+/// would materialise far more pairs than the space it is pruning, it cannot
+/// pay for itself: an equality on a SIX-VALUED key against a 1.4-million-row
+/// table matches 167 million pairs while a sibling clause has already cut that
+/// table to seven rows, so the gate spends gigabytes to narrow 4,592 tuples.
+///
+/// Declining is safe for the same reason [`join_gate_enabled`] is: `crate::join`
+/// also lowers every `on` clause into the node's `filter`, so the equality is
+/// applied either way and only the enumeration order changes.
+pub(crate) fn gate_plan_ratio() -> u128 {
+    GATE_PLAN_RATIO.with(|c| match c.get() {
+        Some(v) => v,
+        None => {
+            let v = env_u128("ESS_GATE_PLAN_RATIO", DEFAULT_GATE_PLAN_RATIO);
+            c.set(Some(v));
+            v
+        }
+    })
+}
+
+/// A gate smaller than this is never declined, whatever the ratio says
+/// (`ESS_GATE_PLAN_FLOOR`, default [`DEFAULT_GATE_PLAN_FLOOR`]).
+///
+/// The planner's estimate of what a gate narrows is an UPPER BOUND computed
+/// from sibling gates, not from the walk that will actually run, so it can be
+/// pessimistic. The floor keeps that pessimism away from small gates, where
+/// being wrong costs a slow full-product walk and being right saves a few
+/// megabytes. Only a gate that is both uneconomic AND large is declined.
+pub(crate) fn gate_plan_floor() -> usize {
+    GATE_PLAN_FLOOR.with(|c| match c.get() {
+        Some(v) => v,
+        None => {
+            let v = usize::try_from(env_u128(
+                "ESS_GATE_PLAN_FLOOR",
+                DEFAULT_GATE_PLAN_FLOOR as u128,
+            ))
+            .unwrap_or(usize::MAX);
+            c.set(Some(v));
+            v
+        }
+    })
+}
+
+/// Four: a gate may cost up to four times the tuples it prunes.
+pub(crate) const DEFAULT_GATE_PLAN_RATIO: u128 = 4;
+
+/// One million pairs — about 16 MB of index, below which declining is not
+/// worth the risk of a slower walk.
+pub(crate) const DEFAULT_GATE_PLAN_FLOOR: usize = 1_000_000;
+
+fn env_u128(name: &str, default: u128) -> u128 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u128>().ok())
+        .unwrap_or(default)
+}
+
+thread_local! {
+    static GATE_PLAN_RATIO: Cell<Option<u128>> = const { Cell::new(None) };
+    static GATE_PLAN_FLOOR: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// Set the planner's overshoot ratio and floor for THIS thread, returning the
+/// previous pair so a caller can restore them. Test-only: a release build
+/// configures the planner through `ESS_GATE_PLAN_RATIO` / `ESS_GATE_PLAN_FLOOR`. A floor of 0 with a ratio of 0
+/// declines every gate a sibling has already made redundant, which is the arm
+/// a differential test runs to show that planning changes cost and not answers.
+#[cfg(test)]
+pub(crate) fn set_gate_plan(ratio: u128, floor: usize) -> (u128, usize) {
+    let prev = (gate_plan_ratio(), gate_plan_floor());
+    GATE_PLAN_RATIO.with(|c| c.set(Some(ratio)));
+    GATE_PLAN_FLOOR.with(|c| c.set(Some(floor)));
+    prev
 }
 
 /// Set the resident-pair budget for THIS thread, returning the previous

@@ -101,6 +101,45 @@ def test_parameter_overrides_reach_the_static_fields():
     assert observed_field(prob, "MogiModel.ur") == pytest.approx(2.0 * ur)
 
 
+@pytest.mark.parametrize("kwargs,expected_pathway", PATHWAYS)
+def test_saveat_reads_the_same_on_both_state_free_pathways(kwargs, expected_pathway):
+    """One ``saveat``, one answer, whichever engine a state-free document
+    routes to.
+
+    ``_choose_pathway`` sends a document with no state to the scalar engine or
+    to the NumPy one on content the caller did not choose, so the two must read
+    a ``saveat`` identically or the request means different things for reasons
+    the document cannot see. They did not: the array engine's observed-only
+    path read the sequence literally, while everything else in this package
+    resolves it through ``_saveat_times`` — which reads a ONE-element positive
+    sequence as an output STEP measured from the span start (API_SPEC §4) and
+    clips the result to the span.
+
+    Sabotage check: restore the literal reading in ``_simulate_observeds_only``
+    (``t_out = np.asarray(sorted(saveat_list))``) and the array case of both
+    assertions below fails — the first with the single node ``[2.0]``, the
+    second with the out-of-span times ``[-1.0, 3.0, 99.0]`` returned as asked.
+    """
+    prob = esm_problem(str(ONE_COMPONENT), (0.0, 6.0), **kwargs)
+    assert prob.pathway == expected_pathway
+    assert not prob.flat.state_variables
+
+    # A one-element positive sequence is an output STEP from ``tspan[0]``.
+    stepped = solve(prob, saveat=[2.0])
+    assert stepped.retcode == ReturnCode.Success
+    np.testing.assert_allclose(stepped.t, [0.0, 2.0, 4.0, 6.0])
+
+    # Times outside the span are clipped away, however evaluable the observed
+    # bodies are there: the run was asked for ``tspan``.
+    clipped = solve(prob, saveat=[-1.0, 3.0, 99.0])
+    assert clipped.retcode == ReturnCode.Success
+    np.testing.assert_allclose(clipped.t, [3.0])
+
+    # And the values are the document's static fields at every node.
+    ur, _ = mogi_oracle()
+    np.testing.assert_allclose(stepped["MogiModel.ur"], [ur] * 4, rtol=1e-12)
+
+
 def test_solve_still_samples_the_observed_graph_on_the_scalar_pathway():
     """The scalar engine's observed-only path is unchanged by the name rule:
     it reports Success over a sampled grid, keyed by FLATTENED name."""

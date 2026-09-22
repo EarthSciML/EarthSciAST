@@ -496,6 +496,10 @@ impl ArrayCompiled {
         let params_owned = params;
         let ics_owned = initial_conditions;
         let (t0, t_end) = tspan;
+        // Validated here, at the entry point every array solve shares, so the
+        // non-advancing shortcut in `run_one_segment` and the solver path below
+        // it are never handed a span they would read differently.
+        crate::simulate::reject_nonfinite_span(t0, t_end)?;
 
         // Validate the override names and build the positional param vector
         // and the initial state vector `u0` (loaded-field / coordinate
@@ -690,6 +694,7 @@ impl ArrayCompiled {
             // One-shot materialization: no CSE memo (nothing to amortize the
             // structural analysis over).
             cse: None,
+            const_lits: None,
             const_arrays: &self.const_scope,
             declared: &self.declared_names,
         };
@@ -742,6 +747,7 @@ impl ArrayCompiled {
                         derived_extents: empty_derived_extents(),
                         forcing: &self.forcing,
                         cse: None,
+                        const_lits: None,
                         const_arrays: &self.const_scope,
                         declared: &self.declared_names,
                     },
@@ -989,6 +995,22 @@ impl ArrayCompiled {
         // its fallback indices resolve against. `None` ⇒ legacy interpreter.
         tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode), SimulateError> {
+        // A segment that never advances is answered from its own initial state,
+        // before any closure, scratch buffer or diffsol problem is built
+        // (issue #438): building the solver materializes a dense Jacobian,
+        // which the matrix-free finite-difference Jacobian below pays for in
+        // full right-hand-side evaluations, one pair per state column, each one
+        // materializing every varying observed — recurrence sweeps included —
+        // for a trajectory that is the untouched initial state. See
+        // [`crate::simulate::nonadvancing_trajectory`], which also makes the
+        // step-0 progress report. [`crate::simulate::run_solver`] keeps the same
+        // check as a backstop and produces the identical trajectory, so this is
+        // a cost-only shortcut.
+        if let Some((time, state, retcode)) =
+            crate::simulate::nonadvancing_trajectory(t0, t_end, u0, opts)
+        {
+            return Ok((time, state, SolveStats::default(), retcode));
+        }
         let n_states = self.n_states;
         let rhs_rules = self.rhs_rules.clone();
         let var_shapes = self.var_shapes.clone();
@@ -1034,6 +1056,7 @@ impl ArrayCompiled {
                         derived_extents: empty_derived_extents(),
                         forcing: &self.forcing,
                         cse: None,
+                        const_lits: None,
                         const_arrays: &self.const_scope,
                         declared: &self.declared_names,
                     },
@@ -1388,6 +1411,7 @@ impl ArrayCompiled {
                         derived_extents: empty_derived_extents(),
                         forcing: &self.forcing,
                         cse: Some(&cse),
+                        const_lits: None,
                         const_arrays: &self.const_scope,
                         declared: &self.declared_names,
                     },
@@ -1502,6 +1526,7 @@ impl ArrayCompiled {
                             derived_extents: empty_derived_extents(),
                             forcing: &self.forcing,
                             cse: Some(&cse),
+                            const_lits: None,
                             const_arrays: &self.const_scope,
                             declared: &self.declared_names,
                         },

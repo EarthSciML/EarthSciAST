@@ -1,7 +1,7 @@
 {
     "category": "static_evaluation_assertions",
     "version": "1.0",
-    "description": "Cross-binding conformance for esm-spec §6.6.3's definition of an assertion's `time` — 'Simulation time at which to evaluate the assertion; must lie in [time_span.start, time_span.end]' — on documents whose asserted quantity is an explicit function of `t`. `algebraic_time_dependence.esm` declares NO differential equations at all: §6.3.1 derives `system_kind: \"nonlinear\"` for it, there is nothing to integrate, and the run is the single static evaluation `esm simulate` already performs — yet each assertion must still be evaluated at ITS OWN time, because §6.6.3 says evaluate, not integrate to. `time_dependent_observed_on_an_ode.esm` re-runs the same contract on a document that does integrate, pairing a `t`-dependent observed with the state it is the closed form of so that `gap = x - drive` is zero only when both halves are read at one time. Both fixtures were red somewhere before issue #406: Rust handed the algebraic document's compiled, STATE-FREE right-hand side to diffsol, which reported 'Exceeded maximum number of nonlinear solver failures (51) at time = 0' at every assertion past the start of the span; Julia handed the same document's zero-length state vector to OrdinaryDiffEq, whose dense interpolant threw `BoundsError: attempt to access 0-element Vector{Float64} at index [1]`, and — on BOTH fixtures — its build-time cellwise evaluator bound the time slot to the literal 0.0, so every `t`-dependent observed read zero and reported a plausible wrong number rather than an error. Python was correct on both from the start and is the cross-check that fixes the intended answer; Julia remains the reference binding that mints the goldens.",
+    "description": "Cross-binding conformance for esm-spec §6.6.3's definition of an assertion's `time` — 'Simulation time at which to evaluate the assertion; must lie in [time_span.start, time_span.end]' — on documents whose asserted quantity is an explicit function of `t`. `algebraic_time_dependence.esm` declares NO differential equations at all: §6.3.1 derives `system_kind: \"nonlinear\"` for it, there is nothing to integrate, and the run is the single static evaluation `esm simulate` already performs — yet each assertion must still be evaluated at ITS OWN time, because §6.6.3 says evaluate, not integrate to. `time_dependent_observed_on_an_ode.esm` re-runs the same contract on a document that does integrate, pairing a `t`-dependent observed with the state it is the closed form of so that `gap = x - drive` is zero only when both halves are read at one time. Both fixtures were red somewhere before issue #406: Rust handed the algebraic document's compiled, STATE-FREE right-hand side to diffsol, which reported 'Exceeded maximum number of nonlinear solver failures (51) at time = 0' at every assertion past the start of the span; Julia handed the same document's zero-length state vector to OrdinaryDiffEq, whose dense interpolant threw `BoundsError: attempt to access 0-element Vector{Float64} at index [1]`, and — on BOTH fixtures — its build-time cellwise evaluator bound the time slot to the literal 0.0, so every `t`-dependent observed read zero and reported a plausible wrong number rather than an error. Python was correct on both from the start and is the cross-check that fixes the intended answer; Julia remains the reference binding that mints the goldens. `min_reduction_static_shaped_document.esm` extends the category from \"when is a static document evaluated\" to \"what does it answer\": a column search whose `min` reduction body reads both a SHAPED observed and a SCALAR one, plus a `+` reduction over the same range. Rust answered `+inf` for the `min` and `NaN` for the `+` because its build pipeline fed a scalar observed back into the evaluation namespace as a one-cell field (issue #432, CONFORMANCE_SPEC §5.43.8), and an unreduced identity is indistinguishable from a reduction over zero iterations. That fixture lives in `tests/valid/faq/` and is referenced there in place, because it is a cross-language corpus document first; before this entry its VALUES were checked by Rust and Python only, and no Julia test read it at all.",
     "reference_binding": "julia",
     "bindings_required": [
         "julia",
@@ -185,6 +185,79 @@
                 }
             ],
             "golden": "golden/time_dependent_observed_on_an_ode.json"
+        },
+        {
+            "id": "min_reduction_static_shaped_document",
+            "path": "../../valid/faq/min_reduction_static_shaped_document.esm",
+            "model": "FirstLevelAbove",
+            "tags": [
+                "inline-test",
+                "esm-spec-6.6.3",
+                "esm-spec-6.6.5",
+                "static-evaluation",
+                "shaped-observed",
+                "scalar-observed",
+                "faq",
+                "reduce-min",
+                "parameter-overrides",
+                "coords"
+            ],
+            "shape": {
+                "lev": 6
+            },
+            "note": "The issue #432 regression fixture, referenced in place at `tests/valid/faq/` rather than copied here, so the cross-language contract and this gate cannot drift apart (the same in-place reference `pde_simulation_pipeline` uses). Rust already gated its own numbers in `static_evaluation_assertions_conformance.rs` and Python through the `tests/valid/faq/*.esm` sweep in `test_faq_conformance.py`; the manifest entry is what brings Julia — for which no test checked this fixture's values at all — onto the same goldens. A `min` reduction whose body reads a shaped observed AND a scalar one must answer the level it found; `inf` there is the reduction's identity element leaking out, which is indistinguishable from a reduction over zero iterations. The companion `+` reduction must answer a count rather than NaN, and the `coords` assertions (§6.6.5) pin the shaped operands the two reductions read.",
+            "assertions": [
+                {
+                    "test_id": "a_level_qualifies",
+                    "assertion_idx": 1,
+                    "variable": "kstar",
+                    "expected": 3.0,
+                    "note": "the `min` reduction: the first searched level at or above h_ref = 30 m. `inf` here is the identity element, never a computed level"
+                },
+                {
+                    "test_id": "a_level_qualifies",
+                    "assertion_idx": 2,
+                    "variable": "n_above",
+                    "expected": 2.0,
+                    "note": "the `+` reduction over the same range and the same scalar read: NaN here is the scalar observed reaching the body as a one-cell field"
+                },
+                {
+                    "test_id": "a_level_qualifies",
+                    "assertion_idx": 3,
+                    "variable": "above",
+                    "expected": 1.0,
+                    "note": "§6.6.5 `coords` at lev = 3: the shaped operand both reductions read, at a qualifying level"
+                },
+                {
+                    "test_id": "a_level_qualifies",
+                    "assertion_idx": 4,
+                    "variable": "above",
+                    "expected": 0.0,
+                    "note": "the same operand at lev = 1, which does not reach h_ref"
+                },
+                {
+                    "test_id": "a_level_qualifies",
+                    "assertion_idx": 5,
+                    "variable": "hgt",
+                    "expected": 20.0,
+                    "note": "dz*k at lev = 2: the level height the shaped observed `above` is derived from"
+                },
+                {
+                    "test_id": "no_level_qualifies",
+                    "assertion_idx": 1,
+                    "variable": "kstar",
+                    "expected": 5.0,
+                    "note": "under {h_ref: 55.0} no level qualifies, so every iteration takes the fallback n_search + 1 = 5. The reduction still runs over six iterations, so `inf` is again the identity rather than an empty range"
+                },
+                {
+                    "test_id": "no_level_qualifies",
+                    "assertion_idx": 2,
+                    "variable": "n_above",
+                    "expected": 0.0,
+                    "note": "a genuine zero count, which a NaN term cannot produce"
+                }
+            ],
+            "golden": "golden/min_reduction_static_shaped_document.json"
         }
     ]
 }

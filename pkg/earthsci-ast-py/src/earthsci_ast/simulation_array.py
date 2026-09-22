@@ -86,6 +86,34 @@ def _linear_pos(shape: tuple[int, ...], one_based: list[int]) -> int:
     return lin
 
 
+def _saveat_times(saveat: Any, t0: float, t1: float) -> np.ndarray | None:
+    """The output grid ``saveat`` names (API_SPEC §4), or ``None`` when the
+    caller named none.
+
+    ``saveat`` is either the times themselves or a scalar output STEP measured
+    from ``t0``; either way the result is clipped to ``[t0, t1]``, sorted and
+    de-duplicated. One definition, because every pathway that can honour
+    ``saveat`` has to honour the SAME thing, and the two STATELESS paths did
+    not. The scalar engine's
+    (:func:`~earthsci_ast.simulation_scalar._simulate_scalar`) ignored
+    ``saveat`` outright, so an inline test asserting an algebraic quantity at a
+    time off its 1001-node sampling grid was reported as "no saved state at
+    t=...". The array engine's (:func:`_simulate_observeds_only`) read the
+    request literally instead — a one-element sequence as a time rather than a
+    step, and times outside the span returned as asked — so one ``saveat`` had
+    two answers depending on which engine a document routed to. Both now come
+    through here.
+    """
+    if saveat is None:
+        return None
+    arr = np.atleast_1d(np.asarray(saveat, dtype=float))
+    if arr.size == 1 and float(arr[0]) > 0.0:
+        step = float(arr[0])
+        n_steps = int(np.floor((t1 - t0) / step + 1e-9))
+        arr = t0 + step * np.arange(n_steps + 1, dtype=float)
+    return np.unique(arr[(arr >= t0) & (arr <= t1)])
+
+
 def _densify_solution(
     sol: Any,
     tspan: tuple[float, float],
@@ -106,16 +134,10 @@ def _densify_solution(
         return sol.t, sol.y
     t0, t1 = float(tspan[0]), float(tspan[1])
     if saveat is not None:
-        # ``saveat`` (API_SPEC §4) names the output times explicitly: either the
-        # times themselves, or a scalar output STEP measured from ``tspan[0]``.
-        # The caller asked for these nodes, so the dense-grid heuristic below is
-        # bypassed entirely rather than unioned with them.
-        arr = np.atleast_1d(np.asarray(saveat, dtype=float))
-        if arr.size == 1 and float(arr[0]) > 0.0:
-            step = float(arr[0])
-            n_steps = int(np.floor((t1 - t0) / step + 1e-9))
-            arr = t0 + step * np.arange(n_steps + 1, dtype=float)
-        arr = np.unique(arr[(arr >= t0) & (arr <= t1)])
+        # ``saveat`` names the output times: the caller asked for these nodes,
+        # so the dense-grid heuristic below is bypassed entirely rather than
+        # unioned with them.
+        arr = _saveat_times(saveat, t0, t1)
         if arr.size == 0:
             return np.asarray([], dtype=float), np.empty((sol.y.shape[0], 0), dtype=float)
         return arr, sol.sol(arr)
@@ -3003,7 +3025,10 @@ def _simulate_observeds_only(
     The array engine's counterpart of the scalar engine's observed-only path
     (:func:`earthsci_ast.simulation_scalar.simulate`): sample the observed graph
     over ``tspan`` and expose the SCALAR observeds as rows, exactly as the
-    stateful path does at its output nodes. Array-valued observeds are not
+    stateful path does at its output nodes. The nodes are the ones ``saveat``
+    names, resolved by :func:`_saveat_times` — the same reading of ``saveat``
+    every other pathway uses, including the output-STEP form and the clip to
+    ``tspan`` — and the dense default grid when it names none inside the span. Array-valued observeds are not
     scalar rows on either path — a §6.6.5 assertion reads those from the build
     inspection's ``setup_arrays`` — so materializing them here is what makes
     them available and there is nothing further to expose.
@@ -3017,12 +3042,26 @@ def _simulate_observeds_only(
     no state vector to advance, ``t`` is the only thing that can vary at all.
     """
     t0, t1 = float(tspan[0]), float(tspan[1])
-    saveat_list = [float(t) for t in saveat] if saveat is not None else []
-    if saveat_list:
-        t_out = np.asarray(sorted(saveat_list), dtype=float)
+    # ``saveat`` resolves through the SAME helper as every other pathway that
+    # honours it (:func:`_saveat_times`, and through it the dense path here and
+    # the scalar engine's own stateless path). This branch used to read the
+    # request literally — a one-element sequence as one TIME rather than as the
+    # output STEP API_SPEC §4 defines it, and times outside ``tspan`` returned
+    # as asked — so the answer to one ``saveat`` depended on which engine the
+    # document happened to route to, which is the one thing a document must not
+    # be able to notice. Clipping to the span is the visible part of the
+    # change: an algebraic body can be evaluated at any time at all, but the
+    # run was asked for ``tspan`` and the trajectory it returns is over
+    # ``tspan``.
+    requested = _saveat_times(saveat, t0, t1)
+    if requested is not None and requested.size:
+        t_out = requested
     elif t0 == t1:
         t_out = np.asarray([t0], dtype=float)
     else:
+        # Nothing asked for, or nothing asked for that lies in the span: the
+        # dense default grid, which is what the scalar engine's stateless path
+        # falls back to for the same two cases.
         t_out = np.linspace(t0, t1, DENSE_OUTPUT_MIN_POINTS)
 
     ordered_observed = build.ordered_observed

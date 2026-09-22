@@ -2010,12 +2010,19 @@ impl<'m> TapeBuilder<'m> {
         let const_base = self.const_arrays.is_const_base(base);
         let basev = self.lower_wholesale(base)?;
         let Some((shape, origin)) = self.lv_box(&basev) else {
-            // Scalar base: identity with 0 index args, NaN otherwise.
-            return if idx_args.is_empty() {
-                Ok(basev)
-            } else {
-                Ok(LV::Lit(f64::NAN))
-            };
+            // `index(x)` with no subscript is the identity on a 0-D value.
+            if idx_args.is_empty() {
+                return Ok(basev);
+            }
+            // Subscripts on a 0-D value are a fail-closed fault
+            // (`E_TREEWALK_INDEX_ON_SCALAR`), and only the per-cell oracle can
+            // raise one — the tape has no diagnostic channel. Bail to it, as
+            // the out-of-range const-array arms do, so the refusal does not
+            // depend on which backend ran.
+            bail_tape!(
+                "wholesale: index base is a scalar but has {} subscripts",
+                idx_args.len()
+            );
         };
         if origin.iter().any(|&o| o != 1) {
             bail_tape!("wholesale: index base is not origin-1");

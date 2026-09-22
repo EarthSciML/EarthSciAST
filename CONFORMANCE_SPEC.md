@@ -5978,15 +5978,28 @@ and not the clock. `esm simulate` handled both all along, through
 `Compile::Auto`'s `Backend::Static` selection.
 
 Rust now answers such a document the way `esm simulate` does: from the fields a
-BUILD materializes. When the problem it built has nothing to integrate and no
-scalar observed graph to evaluate, the runner builds it once more with the
-build pipeline on and reads `observed_field` out of the result. The retry is
-conditioned on the BUILT problem rather than on the document's shape — asking
-for the pipeline on the strength of the shape alone broke two builds that were
-working — and a retry that fails changes nothing, because it is an attempt to
-answer more and never a new way to fail. `Compile::Always` is kept throughout,
-so a construct no evaluator supports is still refused at build time in the
-§9.6.6 vocabulary.
+BUILD materializes. When the problem it built has nothing to integrate, and
+`solve` has refused it, the runner reads `observed_field` off the build it
+already has — and only if that build carried NO fields, which a document
+ingesting `data_sources` does not, does it build the document once more with
+the build pipeline on. A retry that fails changes nothing — `solve`'s own
+diagnostic stands — because it is an attempt to answer more and never a new
+way to fail. `Compile::Always` is kept throughout, so a construct no
+evaluator supports is still refused at build time in the §9.6.6 vocabulary.
+
+**The retry is a LAST RESORT, not a preference** (issue #432). It was first
+written to fire ahead of `solve`, on the strength of the built problem alone,
+and to hand its fields back in place of whatever the ordinary path would have
+produced. That is a silent substitution: the build materializes its fields once,
+at `tspan.0`, through a different evaluator from the one the array runtime runs,
+so three documents the runtime had been answering correctly began reporting a
+`min` reduction's identity element (`+inf`) for a search that found a level and
+a tendency wrong in its sixth digit — and every test in the suite paid for a
+second whole-document build besides, which is what stopped the suite
+finishing. A runner reaches for a second opinion when it has NO answer; it does
+not prefer one to an answer it already has. The condition is therefore `solve`
+having failed on a problem with nothing to integrate, which is exactly the dead
+end issue #406 described and nothing wider.
 
 The build materializes those fields ONCE, at `tspan.0`. That single value is
 the answer at every asserted time for an observed that is not a function of
@@ -6007,7 +6020,47 @@ need none of this, because both re-evaluate the observed body per cell at the
 sampled time; the remaining gap between them and Rust is that one refusal, and
 it names itself.
 
-#### 5.43.8 Gate
+#### 5.43.8 A SCALAR observed read from inside an aggregate
+
+The fields a build materializes are only an answer if they are right, and one
+class of them was not. Rust's build pipeline evaluates a document's observeds in
+dependency order, feeding each result back into the namespace the next one is
+evaluated against. A SCALAR observed was fed back as a rank-1, one-cell array,
+which the evaluator reads as a one-cell FIELD rather than as a scalar — so any
+`faq` body that read one collapsed its term to `NaN`. The visible outcome
+depended on the reducer and hid the cause in both directions: a `+` reduction
+answered `NaN`, and a `min` reduction answered `+inf`, because IEEE-754 `min`
+drops a NaN operand and the accumulator came back at the identity it started
+from. An unreduced identity is indistinguishable from a reduction over zero
+iterations, so a search over 44 levels reported the same number an empty range
+would (issue #432, symptom 1).
+
+This was never a divergence — Julia and Python re-evaluate an observed's body
+per cell and never round-trip a scalar through an array namespace — and it
+predates the static-evaluation work: `esm simulate` reported it too, on the same
+documents, before PR #412 gave the inline-test runner the same seam. Rust now
+keeps a scalar observed at rank zero in the evaluation namespace and publishes it
+as the one-element vector `observed_field` has always returned. Pinned by
+`tests/valid/faq/min_reduction_static_shaped_document.esm`, whose `min` search
+must answer the level it found and whose `+` companion must answer a count.
+
+That fixture is a `tests/valid/` corpus document, so every binding parses,
+validates and round-trips it — but only a binding that RUNS it checks the two
+numbers the defect got wrong, and parsing a document that answers `inf` is
+indistinguishable from parsing one that answers `3`. It is therefore listed in
+this category's manifest as `min_reduction_static_shaped_document`, referenced
+in place at `../../valid/faq/…` rather than copied under `fixtures/` so that
+the corpus document and the gated one cannot drift apart (the same in-place
+reference `pde_simulation_pipeline` uses for its two `tests/valid/`
+documents). The entry brings the third executing binding onto the fixture:
+before it, Rust gated these values in
+`static_evaluation_assertions_conformance.rs` and Python through the
+`tests/valid/faq/*.esm` sweep in `test_faq_conformance.py`, and no Julia test
+read the fixture at all — `faq_conformance_test.jl` is a hardcoded roster with
+no directory sweep. All seven actuals are finite by construction, which is the
+whole of what issue #432 was about.
+
+#### 5.43.9 Gate
 
 `tests/conformance/static_evaluation_assertions/` holds the shared fixtures and
 the Julia-minted goldens. Per-binding runners gate every assertion actual
@@ -6017,7 +6070,10 @@ against them: **Julia** —
 `pkg/earthsci-ast-py/tests/test_static_evaluation_assertions_conformance.py`;
 **Rust** —
 `pkg/earthsci-ast-rs/tests/static_evaluation_assertions_conformance.rs`.
-`bindings_required` is `["julia", "python", "rust"]`.
+`bindings_required` is `["julia", "python", "rust"]`. Go and TypeScript are
+`scope_excluded`: neither ships an integrator or an inline-test runner, so
+neither has an execution path that could read an assertion's `time` or evaluate
+a reduction, and adding a fixture to this manifest obligates only the three.
 
 ## 6. CI Integration
 
@@ -6223,6 +6279,7 @@ only "some error was produced" is what let 42 pins drift undetected (audit 2026-
 | `E_TREEWALK_RECUR_UNAVAILABLE` | Runtime | A causal self-read (esm-spec §4.3.1.1) named a position outside the recurrence axis, or a cell the sweep has not published yet. Fail-closed: never the §5.5.5 zero ghost, and never a bare NaN (a `max(x, 0)` in the body would launder one). See §5.19.4. |
 | `E_TREEWALK_UNBOUND_NAME` | Runtime | An expression referenced a name bound in NO resolution scope — not the independent variable, a loop binder, a state, an observed, a parameter or a forcing channel. Fail-closed: never a NaN sentinel, which `max(x, floor)` or any comparison launders by DROPPING the operand rather than propagating it. The general case of the previous row. See §5.23. |
 | `E_TREEWALK_UNRESOLVED_ORDER` | Runtime | An expression referenced a name the model DOES declare — a state, a parameter or an observed — for which no value existed at the point of evaluation. For an observed that means its defining rule had not run: the materialization order stalled, which is what an `observed_cycle` (esm-spec §4.9.6) looks like from inside the evaluator. Split out of `E_TREEWALK_UNBOUND_NAME` because reporting a DECLARED name as bound-by-nothing is a false statement about the document, and the name it lands on is whichever the walk reached first — routinely an innocent one (issue #181). A binding whose evaluator cannot distinguish the two cases MUST NOT claim the stronger one. |
+| `E_TREEWALK_INDEX_ON_SCALAR` | Runtime | A subscript was applied to a value with NO axes: `index(x, i, …)` where `x` is 0-D (esm-spec §4.3.4 — a scalar declares no index sets, so there is no axis for `i` to range over). Fail-closed: never the §5.5.5 zero ghost, which is the boundary convention for a gather that HAS an axis to fall outside of, and never a bare NaN, which `max(x, 0)` or any comparison launders into a plausible number. `index(x)` with no subscript is the identity and is NOT this condition — it is how a body reads an unshaped quantity through the gather spelling. Python raises `index applied to scalar value` for the same input. |
 | `E_NONTRIVIAL_DAE` | DAE | Binding with trivial-DAE-only strategy (Go, Rust) found algebraic equations that could not be factored symbolically — cyclic observed equations, implicit residuals, or genuine algebraic constraints remain after observed-style `y ~ f(...)` substitution (RFC §12, `docs/rfcs/dae-binding-strategies.md`). The error message must name each residual equation path and point the user at a full-DAE-capable binding (Julia). |
 
 ### 7.2 Error Message Format

@@ -78,6 +78,7 @@ use std::sync::Arc;
 use ndarray::{ArrayD, Axis, IxDyn, Slice};
 use serde_json::Value as JsonValue;
 
+use crate::classification::DeclaredRank;
 use crate::faq::resolve_expr_ranges_with_extents;
 use crate::parse::LoadOptions;
 use crate::pushdown_rewrite::{
@@ -762,6 +763,7 @@ fn eval_observed(
     index_sets: &HashMap<String, IndexSet>,
     extents: &HashMap<String, i64>,
     const_arrays: &ConstArrayScope,
+    rank: DeclaredRank,
 ) -> Result<ArrayD<f64>, PrepareError> {
     // The observed is evaluated at the element type of the variable it defines
     // (esm-spec §11.3.1) — the document's unless that variable declared its
@@ -814,7 +816,7 @@ fn eval_observed(
     .map_err(|e| err(format!("evaluate {name}: {e}")))?;
     Ok(match val {
         EvalValue::Array(a) => *a,
-        EvalValue::Scalar(s) => ArrayD::from_elem(IxDyn(&[1]), s),
+        EvalValue::Scalar(s) => ArrayD::from_elem(IxDyn(rank.scalar_shape()), s),
     })
 }
 
@@ -1701,6 +1703,7 @@ impl<'o> BuildState<'o> {
                 &self.index_sets,
                 &no_extents,
                 &self.const_scope,
+                DeclaredRank::of(&self.model, name),
             ) {
                 Ok(a) => {
                     self.log(&format!(
@@ -1909,6 +1912,7 @@ impl<'o> BuildState<'o> {
                 &self.index_sets,
                 &self.extents,
                 &self.const_scope,
+                DeclaredRank::of(&self.model, name),
             )?;
             self.log(&format!(
                 "  [prepare] {name:<24} shape={:?}  {:>7.1} s",

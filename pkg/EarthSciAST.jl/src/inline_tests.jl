@@ -91,12 +91,13 @@ Base.showerror(io::IO, e::InlineTestError) = print(io, "InlineTestError: ", e.ms
 #
 # For results this runner produces, `container_kind` is `:model` or
 # `:reaction_system` after the component the test hangs off (both carry
-# `tests`); `file` is `""` on an assertion row — the runner is handed its
-# documents rather than discovering them, so pass `file=...` to
-# [`write_junit_xml`](@ref) to label the batch — and is the document's path on
-# the `<load>` row a batch emits for an unreadable file; and `reduce` / `rtol` /
-# `atol` carry the assertion's declared reduction and the resolved §6.6.4
-# tolerances.
+# `tests`); `file` is the document's path whenever the document came from one —
+# on an assertion row as well as on the `<load>` row a batch emits for an
+# unreadable file, so every row of a corpus run says which document it is about
+# — and `""` for a document handed over as an in-memory `EsmFile`, which has no
+# path to carry and which `write_junit_xml(...; file=...)` can label instead;
+# and `reduce` / `rtol` / `atol` carry the assertion's declared reduction and
+# the resolved §6.6.4 tolerances.
 
 # ============================================================
 # wall2 Phase D — OPTIONAL BLAS accelerator for the linear mat-vec observed
@@ -2012,7 +2013,10 @@ forcing it to re-implement §6.6 to get at them.
 A document that fails to LOAD throws when `inputs` names a single document,
 exactly as before. In a BATCH — an iterable or a directory — it instead
 contributes one ERROR row naming the path, so one unreadable file cannot cost
-the run every other file's verdicts.
+the run every other file's verdicts. Every OTHER row names its document too:
+`r.file` is the path the document was loaded from (and `""` only for a document
+handed over as an in-memory `EsmFile`, which has no path), so a corpus run's
+rows are attributable one by one rather than only in bulk.
 
 Tolerances resolve per esm-spec §6.6.4 — PER FIELD over four levels
 (assertion > test > model > the implementation default `rel=1e-6`), each of
@@ -2022,9 +2026,18 @@ uses, and the results are the same [`AssertionResult`](@ref) type the MTK
 runner produces — both runners are the SAME frame (`_run_test_frame!` in
 run_tests.jl) with different execution engines plugged in, so tolerance
 resolution, the pass predicate, per-test wall-time accounting, and JUnit
-emission ([`write_junit_xml`](@ref), with `file=...` labeling the batch)
-cannot drift apart. `alg` is REQUIRED (e.g. `Tsit5()` with
-OrdinaryDiffEqTsit5 loaded) — the solve runs in the SciMLBase extension.
+emission ([`write_junit_xml`](@ref)) cannot drift apart. `alg` names the ODE algorithm (e.g. `Tsit5()` with
+OrdinaryDiffEqTsit5 loaded) — the solve runs in the SciMLBase extension. It may
+be left `nothing`, and then each document gets the algorithm
+[`_pick_solver`](@ref) picks for it: the stiff `Rosenbrock23` when the document
+declares `solver.stiffness: "high"` (esm-spec §2.2), else the non-stiff
+`Tsit5`. That is what lets ONE corpus-wide call run a stiff document and a
+non-stiff one — a caller who passes an `alg` is naming it for every document in
+the batch, which a stiff member of that batch cannot survive. Leaving it unset
+does require one of those solver packages to be loaded: with neither available
+and no `alg` named, a document that HAS tests to run throws an `ArgumentError`
+saying so. A document with no tests never reaches the pick, so a corpus of
+mostly test-free documents costs nothing and cannot fail on this.
 `reltol`/`abstol` default to `nothing`, and that is load bearing rather than
 merely tidy: it is what keeps the DOCUMENT's own opinion expressible. Each
 resolves per esm-spec §2.2.2, most-specific first — an `options_for` override,
@@ -2090,7 +2103,30 @@ function _run_document_tests!(results, file::EsmFile, document, o;
     # as-is — no copy — for the documents that declare no tables.
     file = lower_table_lookups(file)
     d_model_name = _opt_or(o, :model_name, model_name)
+    # Resolved BEFORE anything is picked or built for this document, because a
+    # document with no tests is most of a corpus and must cost nothing — and,
+    # more sharply, must not be able to fail: picking a solver for it below can
+    # throw when no OrdinaryDiffEq package is loaded, and a document with
+    # nothing to integrate has no business demanding an integrator.
+    components = _test_components(file, d_model_name)
+    isempty(components) && return results
     d_alg        = _opt_or(o, :alg, alg)
+    if d_alg === nothing
+        # Nobody named an algorithm, so the DOCUMENT's own stiffness
+        # declaration chooses one (esm-spec §2.2: `stiffness` is advisory and a
+        # binding MAY select an implicit / BDF-family integrator on `"high"`;
+        # §2.2.3 is why the document cannot simply name the algorithm itself —
+        # an algorithm name is not portable, so the block has no `alg` field).
+        # The pick goes through the same `_pick_solver` the MTK runner uses, so
+        # the two Julia runners answer a stiff document with the same
+        # integrator instead of one of them hitting `MaxIters`. (Python's
+        # `_method_for` has always done this; this binding required an `alg`
+        # from the caller, and a corpus gate can only pass ONE for every
+        # document, which makes a stiff one unrunnable there.)
+        d_alg, _ = _pick_solver(document isa AbstractString ? String(document) : "";
+                                stiffness=(file.solver === nothing ? nothing :
+                                           file.solver.stiffness))
+    end
     # esm-spec §2.2.2, most-specific first: an `options_for` override, then the
     # keyword, then THIS DOCUMENT's `solver` block, then the runner defaults
     # (which `_test_integration_tolerances` supplies as its own fallback). A
@@ -2104,10 +2140,17 @@ function _run_document_tests!(results, file::EsmFile, document, o;
     seed_u0      = _opt_dict(o, :initial_conditions)
     resolved_base = d_base_dir !== nothing ? String(d_base_dir) :
         (document isa AbstractString ? dirname(abspath(String(document))) : pwd())
-    for (mname, kind, component) in _test_components(file, d_model_name)
+    # The row's `file` is the document it came from, so a BATCH's results say
+    # which document each row is about — the same field the MTK runner fills,
+    # and the only thing that made a corpus run's rows tellable apart. It was
+    # `""` while this entry ran one document at a time; a load failure has
+    # always named its path (`_load_failure_result`), so the empty string also
+    # made the failures of a document inconsistent with each other.
+    source = document isa AbstractString ? String(document) : ""
+    for (mname, kind, component) in components
         engine = SimulateTestEngine(file, document, mname, resolved_base,
                                     d_alg, d_reltol, d_abstol, seed_p, seed_u0)
-        _run_test_frame!(results, engine, "", kind, mname,
+        _run_test_frame!(results, engine, source, kind, mname,
                          component.tolerance, component.tests)
     end
     return results

@@ -1,0 +1,279 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "MinReductionStaticShapedDocument",
+    "description": "A `reduce: \"min\"` search over a vertical index set, in a document that declares NO differential equations and whose observeds are SHAPED. `kstar` is the first level at or above a reference height among the levels actually searched, written the way a column physics component writes it: a `faq` with `reduce: \"min\"`, an empty `output_idx`, and a body that reads both a shaped observed (`above`) and a SCALAR one (`n_search`). Such a document takes the array runtime, has nothing to integrate, and is therefore answered off the static-evaluation path — which is where issue #432 found two ways for this reduction to report a number that was never computed. (1) A scalar observed read from inside an aggregate reached the build-time evaluator as a one-cell FIELD rather than a scalar, so the body's term collapsed to NaN; `min` then returned its identity `+inf` untouched, because IEEE-754 `min` drops a NaN operand, and an unreduced `inf` is indistinguishable from a reduction over zero iterations. (2) The inline-test runner preferred a build's materialized fields to the answer the array runtime had already produced correctly. Both are pinned here: `kstar` must be 3, never `inf`, and the companion `+` reduction `n_above` must be 2, never NaN. The second test drives the case where NO level qualifies, so the fallback `n_search + 1` is the honest answer and `inf` would be the wrong one.",
+    "license": "MIT",
+    "tags": [
+      "faq",
+      "reduce-min",
+      "static-evaluation",
+      "regression"
+    ]
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 6
+    }
+  },
+  "models": {
+    "FirstLevelAbove": {
+      "variables": {
+        "h_ref": {
+          "type": "parameter",
+          "units": "m",
+          "default": 30.0,
+          "description": "Reference height the search is run against."
+        },
+        "dz": {
+          "type": "parameter",
+          "units": "m",
+          "default": 10.0,
+          "description": "Uniform level spacing, so level k sits at dz*k."
+        },
+        "n_search": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Highest level searched. A SCALAR observed, read from inside both aggregates below — the read that used to come back NaN."
+        },
+        "hgt": {
+          "type": "unknown",
+          "units": "m",
+          "shape": [
+            "lev"
+          ],
+          "description": "Height of level k."
+        },
+        "above": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "description": "1 where level k is searched and reaches h_ref, else 0."
+        },
+        "n_above": {
+          "type": "unknown",
+          "units": "1",
+          "description": "How many levels qualify: the `+` reduction over the same range, which reports NaN when the body's term is NaN."
+        },
+        "kstar": {
+          "type": "unknown",
+          "units": "1",
+          "description": "First qualifying level, or n_search + 1 when none qualifies: the `min` reduction, which reports its identity +inf when the body's term is NaN."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "n_search",
+          "rhs": 4.0
+        },
+        {
+          "lhs": "hgt",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                "dz",
+                "k"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "above",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "and",
+                  "args": [
+                    {
+                      "op": "<=",
+                      "args": [
+                        "k",
+                        "n_search"
+                      ]
+                    },
+                    {
+                      "op": ">=",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "hgt",
+                            "k"
+                          ]
+                        },
+                        "h_ref"
+                      ]
+                    }
+                  ]
+                },
+                1.0,
+                0.0
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "n_above",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "above",
+                "k"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "kstar",
+          "rhs": {
+            "op": "faq",
+            "reduce": "min",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": ">",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "above",
+                        "k"
+                      ]
+                    },
+                    0.5
+                  ]
+                },
+                "k",
+                {
+                  "op": "+",
+                  "args": [
+                    "n_search",
+                    1
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "a_level_qualifies",
+          "description": "hgt = 10, 20, 30, 40, 50, 60 m and levels 1..4 are searched, so levels 3 and 4 reach h_ref = 30 m: kstar = 3 and n_above = 2. An `inf` here is the min reduction reporting its identity element, which is what a reduction over zero iterations returns — and this range has six.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "tolerance": {
+            "abs": 1e-12
+          },
+          "assertions": [
+            {
+              "variable": "kstar",
+              "time": 0.0,
+              "expected": 3.0
+            },
+            {
+              "variable": "n_above",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "above",
+              "time": 0.0,
+              "coords": {
+                "lev": 3
+              },
+              "expected": 1.0
+            },
+            {
+              "variable": "above",
+              "time": 0.0,
+              "coords": {
+                "lev": 1
+              },
+              "expected": 0.0
+            },
+            {
+              "variable": "hgt",
+              "time": 0.0,
+              "coords": {
+                "lev": 2
+              },
+              "expected": 20.0
+            }
+          ]
+        },
+        {
+          "id": "no_level_qualifies",
+          "description": "h_ref = 55 m is above every searched level, so the body takes its fallback at every k and the min reduction must answer n_search + 1 = 5. The reduction still runs over six iterations; `inf` would again be the identity leaking out.",
+          "parameter_overrides": {
+            "h_ref": 55.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "tolerance": {
+            "abs": 1e-12
+          },
+          "assertions": [
+            {
+              "variable": "kstar",
+              "time": 0.0,
+              "expected": 5.0
+            },
+            {
+              "variable": "n_above",
+              "time": 0.0,
+              "expected": 0.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

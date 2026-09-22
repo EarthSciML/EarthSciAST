@@ -439,9 +439,12 @@ function _pick_solver(file::AbstractString="";
     tsit = _try_require(_TSIT5_PKGID)
     tsit !== nothing && return (tsit.Tsit5(), :tsit5)
     rb !== nothing && return (rb.Rosenbrock23(), :rosenbrock23)
+    # Named for neither entry point: `run_inline_tests` reaches here too now
+    # that it picks a solver for a caller who named none.
     throw(ArgumentError(
-        "run_esm_tests requires an OrdinaryDiffEq solver to be loaded " *
-        "(`using OrdinaryDiffEqTsit5` or `using OrdinaryDiffEqRosenbrock`)."))
+        "running a document's tests requires an OrdinaryDiffEq solver to be " *
+        "loaded (`using OrdinaryDiffEqTsit5` or `using OrdinaryDiffEqRosenbrock`), " *
+        "or an explicit `alg`."))
 end
 
 # ---------------------------------------------------------------------------
@@ -1046,10 +1049,11 @@ testcase `time` attribute is the sum of its assertions' `duration_s` — each
 assertion carries an even share of its test's wall time, so the sum is the
 test's duration (no N-fold overcount).
 
-`file`, when given, relabels every result's source file before grouping —
-used by [`run_inline_tests`](@ref) callers, whose results carry no per-assertion
-source file (`r.file == ""`), to label the whole batch in the testcase
-classnames.
+`file`, when given, relabels every result's source file before grouping. A
+[`run_inline_tests`](@ref) run over documents loaded from PATHS fills `r.file`
+itself, so a corpus batch needs nothing here; pass `file` when the documents
+were handed over as in-memory `EsmFile`s (whose rows have no path to carry) and
+one label fits the whole batch.
 """
 function write_junit_xml(results::Vector{AssertionResult}, path::AbstractString;
                          file::Union{Nothing,AbstractString}=nothing)

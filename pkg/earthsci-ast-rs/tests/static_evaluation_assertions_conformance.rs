@@ -29,6 +29,10 @@ use std::path::PathBuf;
 
 mod common;
 
+/// The issue #432 regression fixture: a `min` reduction over a shaped,
+/// state-free document (repo-root `tests/` relative).
+const MIN_REDUCTION_FIXTURE: &str = "valid/faq/min_reduction_static_shaped_document.esm";
+
 fn category_dir() -> PathBuf {
     common::repo_fixture("conformance/static_evaluation_assertions")
 }
@@ -417,4 +421,91 @@ fn a_reference_that_mentions_t_is_refused() {
         "{}",
         r.message
     );
+}
+
+/// A `reduce: "min"` over a SHAPED state-free document must answer the level
+/// it found, never its identity element (issue #432).
+///
+/// The fixture is `tests/valid/faq/min_reduction_static_shaped_document.esm`:
+/// a column search whose `min` body reads a shaped observed (`above`) and a
+/// SCALAR one (`n_search`). Two independent defects made it report `inf` — an
+/// unreduced identity, indistinguishable from a reduction over zero
+/// iterations — on a range of six:
+///
+///  1. The build pipeline handed a scalar observed back to the evaluation
+///     namespace as a ONE-CELL FIELD rather than a scalar, so the body's term
+///     collapsed through `Value::as_scalar()` to `NaN`, and IEEE-754 `min`
+///     dropped every NaN operand until the accumulator came back at `+inf`
+///     (`prepare::eval_observed`). The `+` reduction beside it answered `NaN`.
+///  2. The inline-test runner preferred that build's fields to the answer the
+///     array runtime had already produced correctly
+///     (`build_pipeline_fields`, now a last resort).
+///
+/// Both ends are pinned: here through the runner, and in
+/// `a_scalar_observed_inside_an_aggregate_survives_the_build_pipeline` through
+/// the build itself, which is the path `esm simulate` takes.
+#[test]
+fn a_min_reduction_over_a_shaped_static_document_is_not_its_identity() {
+    let path = common::repo_fixture(MIN_REDUCTION_FIXTURE);
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+    let file = load_string(&text).unwrap_or_else(|e| panic!("fixture {path:?} does not load: {e}"));
+    let results =
+        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    assert_eq!(results.len(), 7, "fixture assertion count");
+    for r in &results {
+        assert!(
+            r.passed,
+            "{}#{} ({}): {} (actual {:?})",
+            r.test_id, r.assertion_idx, r.variable, r.message, r.actual
+        );
+        let actual = r
+            .actual
+            .unwrap_or_else(|| panic!("{}#{}: no actual", r.test_id, r.assertion_idx));
+        assert!(
+            actual.is_finite(),
+            "{}#{} ({}) answered {actual}: a non-finite actual is the reduction's \
+             identity element leaking out, not a computed number",
+            r.test_id,
+            r.assertion_idx,
+            r.variable
+        );
+    }
+}
+
+/// The other end of the same defect, at the seam `esm simulate` uses: a
+/// SCALAR observed read from inside an aggregate must reach the build-time
+/// evaluator as a scalar.
+///
+/// This half fails independently of the inline-test runner — it failed before
+/// PR #412 too, and `esm simulate` reported `above = NaN`, `n_above = NaN` and
+/// `kstar = inf` for this document — so it is pinned against the build rather
+/// than against the runner.
+#[test]
+fn a_scalar_observed_inside_an_aggregate_survives_the_build_pipeline() {
+    let path = common::repo_fixture(MIN_REDUCTION_FIXTURE);
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+    let file = load_string(&text).unwrap_or_else(|e| panic!("fixture {path:?} does not load: {e}"));
+    let prob = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            build_pipeline: true,
+            ..Default::default()
+        },
+    )
+    .expect("the fixture builds");
+    let field = |name: &str| -> Vec<f64> {
+        earthsci_ast::observed_field(&prob, name)
+            .unwrap_or_else(|e| panic!("observed_field({name}): {e}"))
+            .iter()
+            .copied()
+            .collect()
+    };
+    // The scalar observed itself was never the problem; READING it from inside
+    // an aggregate was.
+    assert_eq!(field("n_search"), vec![4.0]);
+    assert_eq!(field("above"), vec![0.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
+    // `+` over a NaN term answers NaN; `min` over one answers its identity.
+    assert_eq!(field("n_above"), vec![2.0]);
+    assert_eq!(field("kstar"), vec![3.0]);
 }

@@ -3883,10 +3883,12 @@ fn data_source_providers(
 
 /// One assertion's outcome, tagged with the file it came from.
 ///
-/// The file is not part of [`earthsci_ast::AssertionResult`] (the engine is
-/// handed an already-loaded document), and a file that fails to LOAD produces
-/// a row with no assertion behind it at all — so the runner keeps its own row
-/// type rather than the library's.
+/// [`earthsci_ast::AssertionResult`] now carries a `file` of its own, but it is
+/// empty on every row this command produces: the engine is handed an
+/// already-loaded document, which has no path. This command also has to report
+/// a file that fails to LOAD, and a `Verdict` the library's two-state `passed`
+/// does not carry — so the runner keeps its own row type rather than the
+/// library's.
 struct TestRow {
     file: PathBuf,
     container: String,

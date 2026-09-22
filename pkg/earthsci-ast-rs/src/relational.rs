@@ -372,6 +372,30 @@ pub fn equijoin(left: &[Key], right: &[Key]) -> Vec<(usize, usize)> {
     out
 }
 
+/// How many pairs [`equijoin`] WOULD emit, without emitting them.
+///
+/// `O(|left| + |right|)` in both time and memory — it buckets the right side by
+/// key exactly as [`equijoin`] does, then sums each left key's bucket size
+/// instead of writing out the cross product within the key. The count is the
+/// same number [`equijoin`] reserves its output with.
+///
+/// This exists so a planner can PRICE a gate before paying for it. A match set
+/// costs memory proportional to its size and a join whose key is
+/// low-cardinality can match hundreds of millions of pairs from tables of a few
+/// hundred thousand rows; knowing that before materialising is the difference
+/// between declining the gate and spending gigabytes on one that another clause
+/// has already made redundant.
+#[must_use]
+pub(crate) fn equijoin_match_count(left: &[Key], right: &[Key]) -> usize {
+    let mut buckets: IndexMap<&Key, usize> = IndexMap::with_capacity(right.len());
+    for k in right {
+        *buckets.entry(k).or_default() += 1;
+    }
+    left.iter()
+        .filter_map(|k| buckets.get(k))
+        .fold(0usize, |acc, n| acc.saturating_add(*n))
+}
+
 // ── Primitive 4: rank (dense integer renumbering) ───────────────────────────
 
 /// Result of [`rank`].
@@ -561,6 +585,48 @@ mod tests {
         );
         // Empty input → empty.
         assert_eq!(distinct(&[]), Vec::<Key>::new());
+    }
+
+    // ── Primitive 2: equijoin ───────────────────────────────────────────────
+    #[test]
+    fn match_count_is_what_equijoin_would_emit() {
+        // The planner declines a gate on this number without ever building the
+        // pair list, so the two have to agree exactly — including the cases
+        // that make them easy to get wrong: a many-to-many key (the count is a
+        // product within the key, not a sum), keys matching on one side only,
+        // and either side empty.
+        let cases: Vec<(Vec<Key>, Vec<Key>)> = vec![
+            // Many-to-many: 3 left and 2 right on key 1 is six pairs, not five.
+            (
+                vec![ki(1), ki(1), ki(1), ki(2)],
+                vec![ki(1), ki(1), ki(2), ki(3)],
+            ),
+            // Nothing in common.
+            (vec![ki(1), ki(2)], vec![ki(3), ki(4)]),
+            // One low-cardinality key against many rows — the shape the
+            // planner exists for.
+            (
+                (0..50).map(|i| ki(i % 2)).collect(),
+                (0..200).map(|i| ki(i % 2)).collect(),
+            ),
+            // Mixed key variants, including composites.
+            (
+                vec![ks("a"), t2(1, 2), ki(7), Key::Bool(true)],
+                vec![t2(1, 2), t2(1, 2), ks("a"), Key::Bool(false)],
+            ),
+            // Either side empty.
+            (vec![], vec![ki(1)]),
+            (vec![ki(1)], vec![]),
+            (vec![], vec![]),
+        ];
+        for (left, right) in cases {
+            assert_eq!(
+                equijoin_match_count(&left, &right),
+                equijoin(&left, &right).len(),
+                "count disagrees with the pair list it is standing in for: \
+                 left={left:?} right={right:?}"
+            );
+        }
     }
 
     // ── Primitive 3: skolem ─────────────────────────────────────────────────

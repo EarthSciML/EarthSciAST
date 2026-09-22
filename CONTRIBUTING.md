@@ -136,6 +136,51 @@ EarthSciAST/
    and the manifest must be regenerated in the same commit:
    `python3 scripts/gen-api-surface.py`
 
+### Comment Style
+
+A comment explains the mechanism and what breaks if it is wrong. Three things
+do not belong in one, in any language:
+
+1. **No single-run benchmark figures.** Operation counts, wall times,
+   percentages and throughput tables — "1.27x on the chemistry RHS at CONUS",
+   "45.9% of ops", "a 22 s suite that no longer finished in 900" — come from
+   one model at one grid size and do not generalize to other scales. A later
+   reader takes them for properties of the engine. Keep the qualitative
+   mechanism and direction ("cheaper than rebuilding the index") and drop the
+   figure. Measurements belong in the pull request or issue, where they stay
+   attached to the run that produced them.
+
+2. **No names of code that no longer exists.** A comment citing a deleted
+   `_VecNode` overlay or a retired `_geo_agg_gate_resolved` sends the next
+   reader hunting for something that is gone. When you rename or delete an
+   internal, grep the comments for its old name in the same commit.
+
+3. **No change-log prose.** Not "this used to be...", "an earlier revision
+   preferred its fields", or "byte-identical to the pre-change build". Describe
+   the code as it is, in the present tense. Git history records how it got
+   there.
+
+The same rules apply to checked-in prose that documents behaviour, such as
+[`CONFORMANCE_SPEC.md`](CONFORMANCE_SPEC.md).
+
+When auditing an existing file, three sweeps find most violations. The first
+is a triage aid, not a checker — it also flags unit syntax (`ppb^-1 s^-1`),
+date arithmetic and ordinary numeric literals, so read the hits rather than
+counting them:
+
+```bash
+# 1. Figures inside comments.
+grep -rnE '^\s*(//|#|--)' --include='*.rs' --include='*.jl' --include='*.py' . \
+  | grep -E '[0-9]+(\.[0-9]+)?\s*(x|s|ms|GB|MB|%)\b'
+
+# 2. Backticked identifiers in comments that no longer exist in code:
+#    extract each one, then confirm it still appears outside a comment.
+
+# 3. Every environment-variable default a comment claims, against the default
+#    the code actually reads. A comment saying "=0 declines it" on an opt-in
+#    switch is a capability error, not a typo.
+```
+
 ### Language-Specific Standards
 
 Each language implementation should follow its ecosystem's conventions:

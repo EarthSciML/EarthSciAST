@@ -79,7 +79,7 @@ from .expr_walk import iter_children
 from .flatten import flatten
 from .lower_table_lookup import lower_table_lookups
 from .parse import load_path, load_string
-from .problem import esm_problem, solve
+from .problem import DEFAULT_ALG, esm_problem, solve
 from .simulation import BuildInspection, _eval_buildtime_field, observed_at_state
 from .simulation_common import ReturnCode, dotted_suffixes
 
@@ -110,7 +110,23 @@ TEST_RELTOL = 1e-10
 TEST_ABSTOL = 1e-14
 
 #: The integrator used when neither the caller nor the document says otherwise.
-DEFAULT_METHOD = "RK45"
+#:
+#: It is the LIBRARY's own default (:data:`~earthsci_ast.problem.DEFAULT_ALG`),
+#: not a second opinion held by the runner. A caller who has expressed no
+#: preference and a document that declares no stiffness must get the same
+#: integrator from `solve()` and from an inline-test run, or the run is
+#: asserting something about this module rather than about the model.
+#:
+#: The two DID diverge: this was ``"RK45"`` while ``solve()`` defaulted to
+#: ``"LSODA"``, and the gap is not cosmetic on a stiff document. The
+#: stratospheric Chapman mechanism (EarthSciModels
+#: components/gaschem/stratospheric/chapman.esm, a 3-equation ODE) integrates
+#: its 24-hour span in 0.01 s under LSODA and 74 s under RK45 at the
+#: :data:`TEST_RELTOL` this module runs at — a corpus gate over a few hundred
+#: chemistry documents cannot pay that, and the explicit method buys nothing
+#: for it: LSODA switches to a stiff method by itself, which is the whole
+#: reason it is the library default.
+DEFAULT_METHOD = DEFAULT_ALG
 
 #: The integrator chosen for a document declaring ``solver.stiffness: "high"``
 #: (esm-spec §2.2). BDF is scipy's implicit multistep method; LSODA — which is
@@ -219,6 +235,20 @@ class AssertionResult:
     atol: float
     passed: bool
     message: str
+    #: The document this row is about: the path it was loaded from, or ``""``
+    #: for a document handed to the runner as an already-loaded
+    #: :class:`~earthsci_ast.esm_types.EsmFile`, which has no path to carry.
+    #:
+    #: :func:`run_inline_tests` accepts a DIRECTORY or an iterable of documents
+    #: and concatenates their rows, so without this a corpus run could report a
+    #: failure without saying which document failed — while a LOAD failure
+    #: named its path all along, making the two halves of one run inconsistent
+    #: with each other. The Julia binding's ``AssertionResult`` carries the
+    #: same field under the same name.
+    #:
+    #: It is LAST and defaulted so that the positional construction of the
+    #: first twelve fields, which predates it, still works.
+    file: str = ""
 
 
 @dataclass(frozen=True)
@@ -1110,6 +1140,39 @@ def _scope_to_component(
     return out
 
 
+def _requested_output_times(tspan: tuple[float, float], saveat: Sequence[float]) -> list[float]:
+    """The output times :func:`simulate_states` asks the solve to save: the
+    times the assertions name, plus BOTH ends of the test's time span.
+
+    The assertion times are the point — without them the output grid is
+    whatever the integrator's own step/dense-output schedule produced, and an
+    assertion strictly inside its test's span then has no saved state to read.
+
+    The two span ends are there to disambiguate, and are not cosmetic:
+    ``saveat`` is overloaded (API_SPEC §4) — a sequence of ONE positive number
+    is read as an output STEP measured from ``tspan[0]``, not as a time — and a
+    test whose assertions all sit at one instant (the common shape) reduces to
+    exactly that. Two consequences, both bad. A requested time could vanish:
+    ``[150.0]`` on a 100..200 span became the step grid ``[100.0]``, which is
+    the very "no saved state at t=150.0" this runner is trying to stop
+    reporting. And a small ``tspan[0]`` on a long span made the step grid
+    enormous: a single assertion at ``t = 1e-3`` of a 86400 s span asks for a
+    1 ms step, i.e. 86 million output nodes, for one number. Keeping both ends
+    in the set makes it at least two values wide whenever the span has any
+    width, so the step reading is unreachable and every entry is read as a
+    time. (When the span has no width the step reading is harmless: its grid is
+    the single node ``tspan[0]``.)
+
+    This is a set, sorted: duplicates — an assertion at a span end — collapse.
+
+    The Rust binding composes the same set for its state-free documents
+    (``static_evaluation_times`` in ``pkg/earthsci-ast-rs/src/inline_tests.rs``:
+    the asserted times plus the span's own endpoints), so the two bindings ask
+    their integrators for the same output grid.
+    """
+    return sorted({float(tspan[0]), float(tspan[1]), *(float(t) for t in saveat)})
+
+
 def simulate_states(
     file: EsmFile,
     tspan: tuple[float, float],
@@ -1124,10 +1187,17 @@ def simulate_states(
     inspect: BuildInspection | None = None,
 ) -> SimulatedStates:
     """Run the official :func:`earthsci_ast.problem.solve` pathway
-    and sample the trajectory at each time of ``saveat`` (which must lie on
-    the solver's output grid to within ``1e-9 · max(1, |t|)`` — trajectory
-    output is dense over ``tspan``, so span endpoints always qualify).
-    Raises :class:`RuntimeError` when the solve does not return
+    and sample the trajectory at each time of ``saveat``.
+
+    ``saveat`` is the times the CALLER needs, so it is what the solve is ASKED
+    to save (via :func:`_requested_output_times`) rather than a filter applied
+    to whatever grid the integrator happened to produce. A requested time must
+    still come back on the solution's grid to within
+    ``1e-9 · max(1, |t|)``; that check now guards against a solver that could
+    not honour a requested time — a time outside ``tspan``, say, which the
+    output grid clips away — rather than against the shape of the grid.
+    Raises :class:`RuntimeError` when a requested time is missing, and when the
+    solve does not return
     :attr:`~earthsci_ast.simulation_common.ReturnCode.Success`.
 
     ``inspect`` is forwarded to :func:`~earthsci_ast.problem.esm_problem` — an
@@ -1160,7 +1230,24 @@ def simulate_states(
     # Note this is the INTEGRATION tolerance. The tolerance each assertion is
     # COMPARED at is resolved separately (§6.6.4) and is untouched here.
     eff_rtol, eff_atol = _integration_tolerances(file, rtol, atol)
-    result = solve(prob, alg=_method_for(method, file), reltol=eff_rtol, abstol=eff_atol)
+    # `saveat` is the times the CALLER needs, so it is what the solve is asked
+    # to save. Without it the output grid is whatever the integrator's own
+    # step/dense-output schedule produced, and the match check below then
+    # rejects every assertion whose time is not on that grid — which is any
+    # assertion strictly inside its test's span, since only the endpoints are
+    # guaranteed. (The §6.6.5 PDE runner this frame grew out of asserted at the
+    # span endpoints only, so the omission was invisible until it became the
+    # general §6.6 runner.) The check stays: it now guards against a solver
+    # that could not honour a requested time rather than against the grid.
+    # The span's two ends go in alongside them; the extra nodes are dropped
+    # here, since the rows returned below are the caller's ``saveat``.
+    result = solve(
+        prob,
+        alg=_method_for(method, file),
+        reltol=eff_rtol,
+        abstol=eff_atol,
+        saveat=_requested_output_times(tspan, saveat),
+    )
     if result.retcode is not ReturnCode.Success:
         raise RuntimeError(f"solve returned {result.retcode.value}: {result.message}")
     var_map = {str(name): i for i, name in enumerate(result.vars)}
@@ -1330,11 +1417,15 @@ def _result(
     actual: float | None,
     passed: bool,
     message: str,
+    source: str | None = None,
 ) -> AssertionResult:
     """Build one :class:`AssertionResult`, filling the assertion-identity
     fields (model / test / index / variable / time / reduce / expected) from
     the ``test`` + ``assertion`` and taking the outcome fields verbatim. The
-    three result sites of :func:`run_inline_tests` share this shape."""
+    three result sites of :func:`run_inline_tests` share this shape.
+
+    ``source`` is the document the row came from — the path, or ``None`` for an
+    in-memory document, which becomes the empty ``file``."""
     return AssertionResult(
         str(mname),
         test.id,
@@ -1348,6 +1439,7 @@ def _result(
         a_atol,
         passed,
         message,
+        "" if source is None else str(source),
     )
 
 
@@ -1600,20 +1692,24 @@ def _run_document_tests(
                     run_component.tolerance, t.tolerance, a.tolerance
                 )
                 if sim is None:
-                    results.append(_result(mname, t, i, a, a_rtol, a_atol, None, False, sim_err))
+                    results.append(
+                        _result(mname, t, i, a, a_rtol, a_atol, None, False, sim_err, source)
+                    )
                     continue
                 actual, msg = _evaluate_assertion(
                     a, sim, times, mname, eval_file, insp, resolved_base
                 )
                 if actual is None:
-                    results.append(_result(mname, t, i, a, a_rtol, a_atol, None, False, msg))
+                    results.append(
+                        _result(mname, t, i, a, a_rtol, a_atol, None, False, msg, source)
+                    )
                 else:
                     ok = _check_assertion(actual, a.expected, a_rtol, a_atol)
                     if not ok:
                         msg = (
                             f"actual={actual} expected={a.expected} (rtol={a_rtol}, atol={a_atol})"
                         )
-                    results.append(_result(mname, t, i, a, a_rtol, a_atol, actual, ok, msg))
+                    results.append(_result(mname, t, i, a, a_rtol, a_atol, actual, ok, msg, source))
 
 
 def _esm_files_under(directory: str) -> list[str]:
@@ -1661,7 +1757,12 @@ def _load_failure_result(source: str, err: Exception) -> AssertionResult:
     lose it SILENTLY either — a document that vanishes from the result list
     is indistinguishable from one that passed. So the failure becomes a row,
     the same way every other failure in this runner becomes a row. The shape
-    mirrors the Julia binding's existing ``<parse>`` / ``<load>`` row."""
+    mirrors the Julia binding's existing ``<parse>`` / ``<load>`` row.
+
+    The path goes in ``file``, where every other row of the run now carries its
+    document too. It ALSO stays in ``model``, where it has been since this row
+    existed: that predates the ``file`` field and is what a caller reading
+    these rows today looks at."""
     return AssertionResult(
         source,
         "<load>",
@@ -1675,6 +1776,7 @@ def _load_failure_result(source: str, err: Exception) -> AssertionResult:
         0.0,
         False,
         f"load failed: {err}",
+        str(source),
     )
 
 
@@ -1788,6 +1890,12 @@ def run_inline_tests(
     document, exactly as before. In a BATCH — an iterable or a directory — it
     instead contributes one ERROR row naming the path, so one unreadable file
     cannot cost the run every other file's verdicts.
+
+    Every OTHER row names its document too: ``AssertionResult.file`` is the
+    path the document was loaded from (``""`` only for a document passed in as
+    an already-loaded :class:`EsmFile`, which has no path), so the rows of a
+    corpus run are attributable one by one rather than only in bulk. The Julia
+    binding's rows carry the same field under the same name.
     """
     documents = _expand_inputs(inputs)
     batch = not isinstance(inputs, EsmFile) and not (
