@@ -170,9 +170,7 @@ landed on, and every decline it collected getting there.
   it (a derivative target with its output axes, an observed's name, a setup
   array's name).
 * `kind` — `:equation`, `:observed` or `:setup_array`.
-* `tier` — where it landed: `:affine`, `:scan`, `:array_contraction_codegen`
-  (and `:array_contraction`, its walked form, which only a non-strict compiler
-  keeps),
+* `tier` — where it landed: `:affine`, `:scan`, `:array_contraction_codegen`,
   `:percell_build` (scalarized per output cell at BUILD, then compiled),
   `:codegen`, `:interpreter`, `:setup_compiled`, `:setup_percell`.
 * `declines` — `tier => reason` for every tier that looked at this rule and

@@ -596,10 +596,10 @@ end
 # dropping only this tier and leaving the per-cell loop in play, which is the
 # differential test's oracle.
 #
-# The floor is overridden with ESS_ARRAY_CONTRACTION_MIN: a REFUSAL BOUNDARY
-# under `native`, and the sharpest one in the build — a strict `native` refuses
-# every equation this tier ACCEPTS (its runner walks the tree per output cell),
-# so lowering the floor takes documents OUT of the set that builds.
+# The floor is overridden with ESS_ARRAY_CONTRACTION_MIN. It is a tuning
+# threshold, not a refusal boundary: the tier emits what it accepts
+# (array_contraction.jl), so moving the floor moves an equation between two
+# compiled tiers rather than in or out of the set that builds.
 _array_contraction_enabled() =
     _compiler_plan_now().array_contraction && _contraction_loop_enabled()
 function _array_contraction_min()

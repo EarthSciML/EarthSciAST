@@ -691,7 +691,7 @@ end
 # ---- Op application (mirrors `_eval_acc_op` arm for arm) --------------------
 # `kc` is left unannotated here and on `_cg_emit_fn`: the op ladder is the op
 # REGISTRY rendered as expressions and reads nothing off the evaluation context
-# but the recursion, so the scalar-spine emitter (array_contraction_codegen.jl)
+# but the recursion, so the scalar-spine emitter (array_contraction.jl)
 # shares these two rather than restating every registry row.
 function _cg_emit_op(ctx::_CGCtx, kc, nd::_Node)
     op = nd.op

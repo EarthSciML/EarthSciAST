@@ -4024,10 +4024,6 @@ const _CASCADE_ROUTING_TIER = Dict{Symbol,Symbol}(
     :affine             => :affine,
     :affine_fused_retry => :affine,
     :scan               => :scan,
-    :array_contraction  => :array_contraction,
-    # …and the same tier once its nest is EMITTED rather than walked
-    # (array_contraction_codegen.jl), which is the only form a compiled
-    # compiler accepts.
     :array_contraction_codegen => :array_contraction_codegen,
     # A per-cell SCALARIZE at build whose cell entries then go to the codegen
     # tier as ordinary access kernels — build cost, not right-hand-side cost.
@@ -4345,35 +4341,17 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
                 const_registry=const_registry, pgather=pgather,
                 param_sym_set=param_sym_set, reg_funcs=reg_funcs)
         if ac !== nothing
-            # Which of the tier's two forms took the equation. The GENERATED nest
-            # is a compiled right-hand side like any other kernel; the walker is
-            # one `_eval_node` per output cell per call (array_contraction.jl),
-            # which §2.5.10 does not let a compiled compiler keep — so a strict
-            # compiler has already refused inside
-            # `_try_compile_array_contraction`, and only a non-strict one can be
-            # standing here with `cg === nothing`.
-            _tally_cascade!(ac.cg === nothing ? :array_contraction :
-                            :array_contraction_codegen)
-            get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
-                (println(stderr, "[ess-array-contraction] FIRED: ",
-                         length(ac.outs), " output cells, ",
-                         prod(length(c) for c in contract_const), " contracted");
-                 flush(stderr))
+            _tally_cascade!(:array_contraction_codegen)
             push!(array_contractions, ac)
             return nothing
         end
         # A DECLINE is the interesting event: the gate admitted the equation, so
-        # the body failed to resolve or to lower with its indices symbolic and
-        # the equation silently drops to the per-cell build this tier exists to
-        # avoid. Announced for the same reason the affine tier announces its own
-        # declines — a cascade tally can say which tier won, never which one
-        # nearly did.
-        get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
-            (println(stderr, "[ess-array-contraction] DECLINED ",
-                     "(symbolic body did not lower) -> per-cell: ",
-                     _faq_debug_label(lhs_body, idx_names, range_iters),
-                     " contracted=", prod(length(c) for c in contract_const));
-             flush(stderr))
+        # the body failed to resolve or to lower with its indices symbolic, and
+        # the equation drops to the per-cell build this tier exists to avoid.
+        # Filed against the rule the cascade has open, the way the affine tier
+        # files its own — a tally can say which tier won, never which one nearly
+        # did, and the report is where that belongs.
+        _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
     end
 
     # Anything the affine build cannot model takes the per-cell fallback, whose
@@ -4435,7 +4413,7 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         return nothing
     end
     # The output cells, in `Iterators.product` order (dimension 1 fastest) — the
-    # order `_ac_seek!` reconstructs the loop counters in.
+    # order the emitted odometer reconstructs the loop counters in.
     n_cells = prod(length(r) for r in range_iters)
     outs = Vector{Int}(undef, n_cells)
     c = 0
@@ -4468,25 +4446,21 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     los  = Int[first(r) for r in rngs]
     stps = Int[step(r) for r in rngs]
     lens = Int[length(r) for r in rngs]
-    # Emit the nest (array_contraction_codegen.jl). The whole equation is ONE
-    # body, so the emission is O(1) in both extents like the nest itself. A
-    # `Symbol` back is the emitter's decline reason: the walker would then run
-    # `node` once per output cell on every right-hand-side call, which
-    # §2.5.10 puts under the refusal rule — named here, where the rule the
+    # Emit the nest (array_contraction.jl). The whole equation is ONE body, so
+    # the emission is O(1) in both extents like the nest itself. A `Symbol` back
+    # is the emitter's decline reason, and this tier has no interpreted form to
+    # demote to, so the decline IS the refusal — raised here, where the rule the
     # cascade has open is still this equation, rather than several stages later
     # where only "the assembled right-hand side" is left to name.
     gen = _try_codegen_array_contraction(out_refs, los, stps, lens, outs, node)
-    if gen isa Symbol
-        _compiler_is_strict() && _refuse_rule(
-            _faq_debug_label(lhs_body, idx_names, range_iters),
-            "the whole-array contraction tier accepted this equation, but its " *
-            "generated form declined it ($(gen)), so the nest would walk the " *
-            "expression tree once per output cell on every right-hand-side " *
-            "call. Build with compiler=:interpreter to run it, or grow the " *
-            "emitter to cover this construct")
-        gen = nothing
-    end
-    return _ArrayContraction(out_refs, los, stps, lens, outs, node, gen)
+    gen isa Symbol && _refuse_rule(
+        _faq_debug_label(lhs_body, idx_names, range_iters),
+        "the whole-array contraction tier accepted this equation, but its " *
+        "generated form declined it ($(gen)). Build with " *
+        "compiler=:interpreter, which turns this tier off and takes the " *
+        "equation down the per-cell path, or grow the emitter to cover this " *
+        "construct")
+    return gen
 end
 
 # ---- Stage: faq per-cell fallback ----

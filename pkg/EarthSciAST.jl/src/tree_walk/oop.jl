@@ -774,8 +774,7 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        scan_folds::AbstractVector{_ScanFold}=_ScanFold[],
                        mat_levels::Tuple=(),
                        n_total::Int=n_states,
-                       array_contractions::AbstractVector{_ArrayContraction}=
-                           _ArrayContraction[])
+                       array_contractions::AbstractVector=_ArrayContraction[])
     # Vectorized lane plans for the acc kernels (host index data, built once).
     # The kernel-CLASS merge (oop_merge.jl) no longer runs here: it is hoisted
     # into `_build_evaluator_impl` phase 4 (`_merge_acc_kernel_classes`), before
