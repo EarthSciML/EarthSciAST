@@ -159,6 +159,12 @@ pub mod simulate_array;
 // native-only like the `simulate_array` runtime it drives.
 #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 pub(crate) mod inline_tests;
+/// Core of the INLINE-TEST conformance adapter (CONFORMANCE_SPEC §5.45), on
+/// the same terms as [`compiler_agreement_adapter`]: in the library so a test
+/// drives the binary's exact code path, and hidden from the published rustdoc
+/// surface.
+#[doc(hidden)]
+pub mod inline_tests_adapter;
 
 // `polygon_area` as a sum_product FAQ over the clip ring — evaluated through the
 // array simulator, so native-only like `simulate_array` (the wasm regridder keeps
