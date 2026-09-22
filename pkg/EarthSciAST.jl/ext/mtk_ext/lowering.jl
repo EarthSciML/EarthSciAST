@@ -322,6 +322,26 @@ function _build_const_gather(table::Array{Float64}, name::String,
     return _esm_const_gather(table, name, idxs...)
 end
 
+# Is a lowered operand ARRAY-SHAPED?
+#
+# Testing the Julia type alone gets this wrong, and did: a `Symbolics.Arr` that
+# has been unwrapped — which is what an arrayop body or a whole-array reduction
+# lowers to — is a `BasicSymbolic` carrying an array SYMTYPE, and it is not
+# `<: AbstractArray`. Reading it as a scalar made `_push_lowered_equation!`
+# broadcast a shaped right-hand side over a shaped left-hand side one cell at a
+# time, which Symbolics then refused with "Cannot equate an array of different
+# sizes. Got () and (4,)" on the two `wrt_default_*_shaped` fixtures. SymbolicUtils'
+# own `symtype` is the question actually being asked.
+function _mtk_is_array_shaped(x)
+    (x isa AbstractArray || x isa Symbolics.Arr) && return true
+    st = try
+        SymUtils.symtype(Symbolics.unwrap(x))
+    catch
+        return false
+    end
+    return st <: AbstractArray
+end
+
 # Push `lhs ~ rhs`, or one equation per element when `rhs` is a const array
 # (an observed defined by a `const` array).
 function _push_lowered_equation!(eqs::AbstractVector, lhs, rhs)
@@ -333,8 +353,7 @@ function _push_lowered_equation!(eqs::AbstractVector, lhs, rhs)
         for I in CartesianIndices(rhs)
             push!(eqs, lhs[I] ~ rhs[I])
         end
-    elseif (lhs isa Symbolics.Arr || lhs isa AbstractArray) &&
-           !(rhs isa AbstractArray)
+    elseif _mtk_is_array_shaped(lhs) && !_mtk_is_array_shaped(rhs)
         # esm-spec §4.3.4 / CONFORMANCE_SPEC §5.41: a SCALAR right-hand side on a
         # SHAPED left-hand side replicates along every axis the scalar does not
         # declare. Symbolics' `~` refuses `Arr ~ scalar` outright ("Cannot equate
