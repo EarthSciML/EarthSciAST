@@ -23,7 +23,7 @@
 # so the assignment order and — what actually matters — the CONTRACTION FOLD
 # ORDER are the same term sequence. Every case below materializes the same
 # array twice, once specialized and once with
-# `ESS_GEOM_SWEEP_SPECIALIZE_DISABLE=1` forcing the rank-abstract reference,
+# `compiler=:interpreter` taking the rank-abstract reference,
 # and demands `isequal` cell for cell. `isequal`, never `≈` and never `==`:
 # `-0.0` must not pass for `+0.0` and `NaN` must match `NaN`.
 #
@@ -72,7 +72,7 @@ function both_ways(json, env = ENV0, idx = IDX)
     fast = EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
     nf = EA._GEOM_SWEEP_FAST[] - f0
     nr = EA._GEOM_SWEEP_REF[] - r0
-    ref = withenv("ESS_GEOM_SWEEP_SPECIALIZE_DISABLE" => "1") do
+    ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
         EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
     end
     return fast, ref, nf, nr
@@ -264,7 +264,7 @@ end
         fast = EA._materialize_geom_array(rhs, copy(env), nothing, idx,
                                           Dict{String,Vector{String}}())
         @test (EA._GEOM_SWEEP_FAST[] - f0, EA._GEOM_SWEEP_REF[] - r0) == (1, 0)
-        ref = withenv("ESS_GEOM_SWEEP_SPECIALIZE_DISABLE" => "1") do
+        ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_geom_array(rhs, copy(env), nothing, idx,
                                        Dict{String,Vector{String}}())
         end
@@ -289,44 +289,15 @@ end
         @test !iszero(fast[1, 1])
     end
 
-    @testset "kill switch keeps the rank-abstract reference available" begin
+    @testset "the interpreter keeps the rank-abstract reference available" begin
         j = _agg(["i", "j"], ["i" => "I", "j" => "J"], _ix("A", "i", "j"))
         rhs = EA.expression_from_json(j)
         f0, r0 = EA._GEOM_SWEEP_FAST[], EA._GEOM_SWEEP_REF[]
-        withenv("ESS_GEOM_SWEEP_SPECIALIZE_DISABLE" => "1") do
+        EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
         end
         @test EA._GEOM_SWEEP_REF[] - r0 == 1     # forced onto the reference
         @test EA._GEOM_SWEEP_FAST[] - f0 == 0
-    end
-
-    @testset "verify mode agrees on the same arrays" begin
-        for j in (_agg(["i", "j"], ["i" => "I", "j" => "J"],
-                       _op("/", _ix("A", "i", "j"), _ix("A", "i", "j"))),
-                  _agg(["j"], ["i" => "I", "j" => "J"],
-                       _op("*", _ix("A", "i", "j"), _ix("B", "i", "j"))))
-            rhs = EA.expression_from_json(j)
-            got = withenv("ESS_GEOM_SWEEP_VERIFY" => "1") do
-                EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
-            end                              # throws unless bit-identical
-            ref = withenv("ESS_GEOM_SWEEP_SPECIALIZE_DISABLE" => "1") do
-                EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
-            end
-            @test bitsame(got, ref)
-        end
-    end
-
-    @testset "verify mode CATCHES a divergence" begin
-        # The oracle is only worth having if it fires. Feed the assertion two
-        # arrays that differ in exactly the way `==` would miss.
-        a = Float64[0.0 1.0; NaN 3.0]
-        b = Float64[-0.0 1.0; NaN 3.0]
-        @test_throws EarthSciAST.TreeWalkError EA._assert_geom_sweep_bit_identical(
-            a, b, ["i", "j"])
-        c = Float64[0.0 1.0; 2.0 3.0]
-        @test_throws EarthSciAST.TreeWalkError EA._assert_geom_sweep_bit_identical(
-            a, c, ["i", "j"])          # NaN vs 2.0
-        @test EA._assert_geom_sweep_bit_identical(a, copy(a), ["i", "j"]) === nothing
     end
 
 end

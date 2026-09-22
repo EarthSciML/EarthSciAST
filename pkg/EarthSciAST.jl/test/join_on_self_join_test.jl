@@ -73,10 +73,11 @@ function _run(doc, n::Int; disable::Bool = false)
     file = ESS.coerce_esm_file(JSON3.read(JSON3.write(doc)))
     ca = Dict{String,Any}("row_id" => _ids(n), "row_prior" => _shifted(n, 1),
                           "row_back" => _shifted(n, BACK), "payload" => _payload(n))
-    withenv("ESS_JOIN_ON_GATE_DISABLE" => (disable ? "1" : nothing)) do
+    let
         ESS._VI_ENUM_VISITS[] = 0
         f!, u0, p, _, _ = build_evaluator(file; model_name = "S", const_arrays = ca,
-                                          initial_conditions = Dict("out" => zeros(n)))
+                                          initial_conditions = Dict("out" => zeros(n)),
+                                          compiler = disable ? :interpreter : :native)
         du = similar(u0)
         f!(du, u0, p, 0.0)
         return (Float64[du[i] for i in 1:n], ESS._VI_ENUM_VISITS[])
