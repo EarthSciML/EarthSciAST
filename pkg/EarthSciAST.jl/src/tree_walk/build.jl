@@ -3396,6 +3396,20 @@ function _build_evaluator_impl_inner(model::Model;
     # runs both kinds of event and does not come through here.
     ev = _first_event(model)
     ev === nothing || throw(_event_refusal(ev))
+    # A DATA-FED parameter with nothing bound to it is refused here too, and for
+    # the same reason (esm-spec §9.6.6 `data_source_unbound`, CONFORMANCE_SPEC
+    # §5.46): this build used to bind such a parameter from its `default` and
+    # integrate it, reporting a whole trajectory under the label of a rate the
+    # document says is read from a file. The three registries are every channel a
+    # value can have arrived through by now — the resolved `parameter_overrides`,
+    # `const_arrays` (a CONST provider's materialized field, a gated provider's
+    # fetched slab, and inline array data for a shaped parameter) and
+    # `param_arrays` (the live buffer a DISCRETE provider rewrites). It sits at
+    # the BUILD entry rather than in `esm_problem` so that `build_evaluator` and
+    # `run_inline_tests` answer identically, and before anything is compiled so
+    # that the answer does not depend on the `compiler`.
+    _refuse_unbound_data_feeds(model, parameter_overrides, const_arrays,
+                               param_arrays)
     # Runtime contraction-loop var registry (ess-runtime-contraction) is a
     # build-scoped resolve→compile side channel; clear any stale entries from a
     # prior build so it never accumulates across builds. Loop-var names are
