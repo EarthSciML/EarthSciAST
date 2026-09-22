@@ -513,12 +513,14 @@ what each value MEANS, which is the part a binding must not reinterpret.
   document: a binding that cannot load or start its XLA runtime answers
   `compiler_unavailable` naming what to install, and MUST NOT answer by
   building a different compiler. Where the emitted program does not cover
-  every evaluation the Problem performs — most bindings emit the right-hand
-  side and nothing else — the passes outside it MUST be served from the SAME
-  lowered form the emitter was built from, never from a second evaluator that
-  declines on its own terms, because a second evaluator is what makes the
-  refusal above unenforceable. A binding states in its documentation which
-  passes the emitted program covers.
+  every evaluation the Problem performs — a binding may emit the right-hand
+  side and nothing else — the passes outside it MUST NOT be served by an
+  evaluator that declines on its own terms, because such an evaluator is what
+  makes the refusal below unenforceable: it puts rules back on a per-cell walk
+  with nothing in the report to show for it. Serving them from whatever
+  representation the emitter itself consumed satisfies this, because that
+  representation has already been gated. A binding states in its documentation
+  which passes the emitted program covers.
 - **`mtk`** — *a specialty compiler, and the kind that runs only some
   documents.* A ModelingToolkit system. It is the one compiler that runs
   **events and implicit equations**, the constructs §9.6.6's
