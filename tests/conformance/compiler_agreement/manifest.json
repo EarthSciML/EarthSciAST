@@ -31,11 +31,11 @@
       "note": "Julia needs Reactant loaded; Rust needs the `xla` feature and XLA_EXTENSION_DIR. Unconfigured is `unavailable`, not `refused`."
     },
     "mtk": {
-      "bindings_required": [],
-      "bindings_optional": [
+      "bindings_required": [
         "julia"
       ],
-      "note": "Julia only; needs ModelingToolkit loaded. The one compiler that runs events and implicit equations."
+      "bindings_optional": [],
+      "note": "Julia only; needs ModelingToolkit loaded. The one compiler that runs events and implicit equations. Julia's `esm_problem(...; compiler = :mtk)` has landed and answers for all six fixtures, so julia is required to ANSWER for it; a REFUSAL is still governed by each fixture's `required` map, and this compiler refuses a document fed by loaded data, one with a continuous spatial dimension, a geometry operator, or a time derivative of an expression."
     },
     "sympy": {
       "bindings_required": [

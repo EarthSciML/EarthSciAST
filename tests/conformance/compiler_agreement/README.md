@@ -31,9 +31,26 @@ Design decisions of record (2026-09-21) that this tier implements:
 > and `native` with no refusals on any fixture, and all three are
 > `bindings_required` for each; Python is `bindings_required` for `sympy`,
 > which refuses the four array fixtures by name and runs the two scalar ones.
-> `xla` and `mtk` stay `bindings_optional` until a binding's `esm_problem` can
-> build with them; each crosses to `bindings_required` on the same one-way
-> ratchet.
+> **Julia is `bindings_required` for `mtk`** as of 2026-09-22:
+> `esm_problem(…; compiler = :mtk)` builds every one of the six fixtures
+> through `ModelingToolkit.System` → `mtkcompile` → `ODEProblem` and lands
+> inside each fixture's band, with no refusals — the array fixtures included,
+> because their stencils are already `arrayop` over an index set and so carry no
+> continuous spatial dimension for that compiler to refuse. `xla` stays
+> `bindings_optional` until a binding's `esm_problem` can build with it, on the
+> same one-way ratchet.
+>
+> Two things about the `mtk` stage that are properties of the compiler rather
+> than of this tier. It needs ModelingToolkit **and a nonlinear solver** in the
+> adapter's environment — an implicit equation compiles to a DAE whose
+> consistent initialization is a nonlinear solve — and the adapter loads both
+> for `--compiler mtk` only, at TOP LEVEL: a package loaded by `@eval` inside a
+> running function defines its methods in a new world age that the running frame
+> cannot call, which made every fixture report "method too new to be called from
+> this world context" and read as a broken binding. And `mtk` refuses what the
+> fixtures here do not exercise: a document fed by loaded data, one with a
+> continuous spatial dimension, a geometry operator, or a time derivative of an
+> expression.
 
 ## Shape
 

@@ -5678,9 +5678,11 @@ TypeScript do not simulate; they only register the code.
 never raises the code. Since the `compiler` keyword landed (`API_SPEC.md` §5.8)
 that path is not only the export: `esm_problem(file; compiler = :mtk)` builds
 through it, so **`:mtk` is the compiler that RUNS what this category has the
-others refuse** — `_on_the_scalar_path` documents of all three kinds integrate
-to the values their inline tests name, and the two implicit ones compile to a
-system whose unknown `mtkcompile` solves away into an observed equation
+others refuse** — the `_on_the_scalar_path` documents of all three kinds reach
+the values their inline tests name (the two event ones by integrating; the
+implicit one because `mtkcompile` solves its residual away into an observed
+equation, leaving nothing to integrate), and the implicit ARRAY document reaches
+[1, 2, 4, 8] the same way
 (`pkg/EarthSciAST.jl/test/compiler_mtk_test.jl`). The refusals this category
 gates are therefore refusals BY THE DEFAULT COMPILER: `:native` and
 `:interpreter` share the tree-walk evaluator and raise `unsupported_construct`
@@ -6112,6 +6114,17 @@ fixture tolerances and the requirement ledger live in
 
 Go and TypeScript are **out of scope**: neither has a Problem type, so neither
 has a compiler to name (`API_SPEC.md` §3, capability profiles).
+
+**What answers today.** Julia, Rust and Python each answer for `interpreter` and
+`native` on all six fixtures and are `bindings_required` for both; Python is
+required for `sympy`, which runs the two scalar fixtures and refuses the four
+array ones by name. **Julia is required for `mtk`** as of 2026-09-22 — it runs
+all six, the array fixtures included, because their stencils are already
+`arrayop` over an index set and carry no continuous spatial dimension for that
+compiler to refuse. What `mtk` DOES refuse is not exercised by these fixtures: a
+document fed by loaded data, one with a continuous spatial dimension, a geometry
+operator, and a time derivative of an expression. `xla` remains
+`bindings_optional` for Julia and Rust.
 
 #### 5.44.1 What is compared
 
