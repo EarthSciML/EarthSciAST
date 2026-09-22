@@ -1237,7 +1237,13 @@ fn ab_fallback_ifelse_array_condition_indexed_reader() {
 /// an .esm path (e.g. simpleclimate.esm) and optionally `TAPE_AB_MP` to
 /// `NX=12,NY=7,NZ=7`. Builds the tape, obtains the model's own u0 through a
 /// zero-length solve, and asserts bitwise dy equality at u0 and at perturbed
-/// states.
+/// states — the `native` tape against the `interpreter` per-cell oracle, the
+/// same comparison `CONFORMANCE_SPEC.md` §5.44 runs over the corpus.
+///
+/// The two variables name an INPUT DOCUMENT and its metaparameters, not an
+/// evaluation strategy, so they are not switches `esm-libraries-spec.md`
+/// §2.5.10 retires: a model too large to commit is the one thing a fixture
+/// cannot be.
 #[test]
 fn ab_model_file_if_available() {
     let Ok(path) = std::env::var("TAPE_AB_MODEL") else {
@@ -1258,7 +1264,7 @@ fn ab_model_file_if_available() {
         crate::problem::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: crate::problem::Compile::Always,
+            rhs: crate::problem::Rhs::Always,
             ..Default::default()
         },
     )
@@ -1477,15 +1483,12 @@ fn export_demotion_skips_unread_publishes() {
         );
     };
 
-    // Demoted (production default for a no-fallback model outside check
-    // mode): the export is never published into the observed map.
+    // Demoted (production default for a no-fallback model): the export is
+    // never published into the observed map.
     let mut ctx = super::exec::TapeCtx::new(
         std::rc::Rc::new(prog),
         std::rc::Rc::new(compiled.observed_rules.clone()),
     );
-    if std::env::var("ESS_TAPE_CHECK").is_ok() {
-        return; // check mode legitimately keeps exports on
-    }
     let mut dy = vec![0.0f64; 1];
     run_call(&mut ctx, &mut dy);
     assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
@@ -1494,8 +1497,8 @@ fn export_demotion_skips_unread_publishes() {
         "demoted export must not publish"
     );
 
-    // Re-enabled (fallbacks present / ESS_TAPE_CHECK / explicit request):
-    // the same call publishes the computed value, and dy is unchanged.
+    // Re-enabled (fallbacks present, or an explicit request): the same call
+    // publishes the computed value, and dy is unchanged.
     ctx.set_exports_active(true);
     let mut dy2 = vec![0.0f64; 1];
     run_call(&mut ctx, &mut dy2);
@@ -1732,7 +1735,7 @@ fn ab_superop_bin3_and_extended_pairs() {
         "Bin3 must stay off in the default configuration"
     );
 
-    // The Bin3 arm (`all_superops_cfg`, the `ESS_TAPE_BIN3=1` build): the
+    // The Bin3 arm (`all_superops_cfg`, the `ESS_TAPE_BIN3=1` threshold): the
     // three-op chain must merge, splat registers must be provisioned, and
     // BOTH executors must stay bitwise equal to the production interpreter.
     let compiled = compile(doc);
@@ -2472,15 +2475,20 @@ fn datetime_on_a_literal_time_folds_at_build_time() {
     assert_eq!(dy[0], 2000.0, "datetime.year(946684800) is 2000");
 }
 
-/// What the tape still refuses in the closed-function registry: the `interp.*`
-/// entries, which read a table rather than decomposing a scalar. They must
-/// become a NAMED fallback (so the rule runs in the oracle and the compiled
-/// lane refuses it by name), never a silent wrong answer.
+/// The `interp.*` entries lower to ONE `Instr::Interp` each, whatever the
+/// table's size — the instruction carries an index into `interp_tables`, not
+/// the table — and the per-element answer is the registry's own.
+///
+/// This test used to assert the opposite (a named fallback), which is what the
+/// tape did before the family was lowered. The shape of the assertion is kept:
+/// what is checked is the INSTRUCTION, not just the absence of a fallback,
+/// because a family lowered into a select chain per knot would also report no
+/// fallback while putting a table's worth of instructions on the tape.
 #[test]
-fn interp_closed_functions_still_fall_back_by_name() {
+fn interp_closed_functions_lower_to_one_instruction() {
     let doc = json!({
         "esm": "1.1.0",
-        "metadata": {"name": "tape_interp_fallback"},
+        "metadata": {"name": "tape_interp"},
         "models": {"M": {
             "variables": {"x": {"type": "unknown"}},
             "equations": [
@@ -2491,11 +2499,22 @@ fn interp_closed_functions_still_fall_back_by_name() {
         }}
     });
     let compiled = compile(doc);
-    let (_prog, report) = compiled.build_tape(&HashSet::new());
-    assert_eq!(report.fallbacks.len(), 1, "{:?}", report.fallbacks);
-    assert!(
-        report.fallbacks[0].1.contains("interp.searchsorted"),
-        "the fallback reason must name the function: {:?}",
-        report.fallbacks
-    );
+    let (prog, report) = compiled.build_tape(&HashSet::new());
+    assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
+    assert_eq!(opcount(&prog, "Interp"), 1, "{report}");
+    // The table is on the PROGRAM, and the `const` literal that carried it
+    // into the call is not materialized at all: nothing reads it any more.
+    assert_eq!(prog.interp_tables.len(), 1);
+    assert_eq!(opcount(&prog, "ConstArray"), 0, "{report}");
+
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let mut dy = vec![0.0f64; 1];
+    // `t = 1.5` sits between `xs[2]` and `xs[3]`, so the first entry >= t is
+    // the third, 1-based.
+    run_reference(&prog, &compiled, &[0.0], &param_vec, 1.5, &mut dy);
+    assert_eq!(dy[0], 3.0);
+    // Past the end: N + 1, one past the last index.
+    run_reference(&prog, &compiled, &[0.0], &param_vec, 9.0, &mut dy);
+    assert_eq!(dy[0], 4.0);
 }

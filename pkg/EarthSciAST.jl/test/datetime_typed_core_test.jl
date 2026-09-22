@@ -230,16 +230,14 @@ end
     @testset "kernel bit-identity: interpreter ≡ codegen" begin
         N = 24
         ics = Dict("u[$k]" => 0.2 + 0.15k for k in 1:N)
-        build(; env...) =
-            withenv((String(k) => v for (k, v) in pairs(env))...) do
+        function build(compiler)
             ESM._reset_cascade_tally!()
             f, u0, p, _t, _vm, _d = ESM._build_evaluator_impl(_dtc_model(N);
-                initial_conditions=ics)
-            (f, u0, p, copy(ESM._CASCADE_TALLY))
+                initial_conditions=ics, compiler=compiler)
+            return (f, u0, p, copy(ESM._CASCADE_TALLY))
         end
-        fref, u0, pref, _ = build(; ESS_STENCIL_DISABLE="1", ESS_CODEGEN_DISABLE="1")
-        fint, _, pint, _ = build(; ESS_CODEGEN_DISABLE="1")   # kernel interpreter
-        fcg, _, pcg, cgtally = build()
+        fref, u0, pref, _ = build(:interpreter)
+        fcg, _, pcg, cgtally = build(:native)
         @test get(cgtally, :codegen_kernel, 0) >= 1   # codegen really fired
 
         run!(f!, u, p, t) = (d = zeros(length(u)); f!(d, u, p, t); d)
@@ -250,7 +248,6 @@ end
             u = k == 1 ? copy(u0) :
                 Float64[0.4 + 0.9 * sin(1.3i + 0.7k) for i in 1:N]
             dref = run!(fref, u, pref, t)
-            @test all(run!(fint, u, pint, t) .=== dref)
             @test all(run!(fcg, u, pcg, t) .=== dref)
             # Dates-derived expected values, composed in the spine's own
             # order (`convert(Float64, doy) + jd*1e-3`), so the comparison is
@@ -267,8 +264,8 @@ end
         # the interpreter AND the codegen tier (the boxed route allocated
         # per call before ess-dtcore).
         du = zeros(N); t0 = ts[1]
-        fint(du, u0, pint, t0); fcg(du, u0, pcg, t0)   # warmup
-        @test (@allocated fint(du, u0, pint, t0)) == 0
+        fref(du, u0, pref, t0); fcg(du, u0, pcg, t0)   # warmup
+        @test (@allocated fref(du, u0, pref, t0)) == 0
         @test (@allocated fcg(du, u0, pcg, t0)) == 0
     end
 
@@ -300,10 +297,8 @@ end
         # `_cgT === Float64` branch) vs the scalar reference, bit-identical.
         N = 8
         ics = Dict("u[$k]" => 0.2 + 0.15k for k in 1:N)
-        fref, u0, pref, _t1, _v1, _d1 = withenv("ESS_STENCIL_DISABLE" => "1",
-                                                "ESS_CODEGEN_DISABLE" => "1") do
-            ESM._build_evaluator_impl(_dtc_model(N); initial_conditions=ics)
-        end
+        fref, u0, pref, _t1, _v1, _d1 = ESM._build_evaluator_impl(_dtc_model(N);
+            initial_conditions=ics, compiler=:interpreter)
         fcg, v0, pcg, _t2, _v2, _d2 =
             ESM._build_evaluator_impl(_dtc_model(N); initial_conditions=ics)
         du!(f!, u, p, t) = (d = zeros(eltype(u), length(u)); f!(d, u, p, t); d)

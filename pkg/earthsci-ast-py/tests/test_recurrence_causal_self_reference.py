@@ -167,7 +167,13 @@ def test_fixture_inline_assertions_pass_at_zero_tolerance(stem: str) -> None:
     a missing ``actual`` is reported separately because it is what a variable
     that never materialized looks like.
     """
-    results = run_inline_tests(str(_RECURRENCE_DIR / f"{stem}.esm"))
+    # `interpreter`: CONFORMANCE_SPEC §5.19.2 forbids evaluating a recurrence
+    # "through any path that reorders or batches its cells", so the per-cell
+    # sweep is the ONLY correct path and the strict `native` default refuses a
+    # recurrence outright (API_SPEC §5.8). That refusal is permanent — it is a
+    # correctness requirement, not a tier that could be written — so a
+    # recurrence fixture names the compiler that runs it.
+    results = run_inline_tests(str(_RECURRENCE_DIR / f"{stem}.esm"), compiler="interpreter")
     assert results, f"{stem}: the fixture asserts nothing"
     for r in results:
         assert r.rtol == 0.0 and r.atol == 0.0, (

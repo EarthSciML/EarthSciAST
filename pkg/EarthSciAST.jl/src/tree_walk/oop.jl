@@ -83,14 +83,14 @@
 #
 # SAFETY. Grouping is conservative: a signature mismatch, a singleton group, an
 # unknown node kind, or any congruence check failing in `_oop_batch_lower`
-# leaves the affected entries as singles, unchanged. `ESS_OOP_BATCH=0` disables
-# the whole feature (every entry single). Entries within one batch surface write
+# leaves the affected entries as singles, unchanged. Off, every entry is a
+# single. Entries within one batch surface write
 # DISJOINT slots and never read each other (rhs_list writes `du` reading only the
 # extended state and the cache; a fill level's scalars read only strictly-lower
 # levels — the level scheduler's invariant), so emitting groups after the
 # leftover singles reorders only WRITES to disjoint slots, never a
 # read-after-write.
-_oop_batch_enabled() = get(ENV, "ESS_OOP_BATCH", "1") != "0"
+_oop_batch_enabled() = _compiler_plan_now().oop_batch
 
 # One position of a lane-batched tree. `kind` mirrors the `_NK_*` of every
 # lane's node at this position; which fields are live depends on it:
@@ -341,9 +341,7 @@ end
 # Group one batch surface. Groups (≥2 congruent lanes, lowered successfully)
 # come out in first-appearance order with lanes in original entry order; every
 # other entry stays in `rest`, original relative order preserved. With the
-# feature disabled (`ESS_OOP_BATCH=0`) everything is `rest`, the per-entry
-# surface. `ESS_OOP_PROBE=1` tallies the outcome per entry
-# (`:oop_batch_lane` / `:oop_batch_single`) and per group (`:oop_batch_group`).
+# feature disabled everything is `rest`, the per-entry surface.
 function _oop_batch_scalars(entries::AbstractVector{Tuple{Int,_Node}})
     (!_oop_batch_enabled() || length(entries) < 2) &&
         return _OopScalarBatches(_OopScalarBatch[],
@@ -362,7 +360,6 @@ function _oop_batch_scalars(entries::AbstractVector{Tuple{Int,_Node}})
     groups = _OopScalarBatch[]
     single = trues(length(entries))
     n_batched = 0
-    probe = get(ENV, "ESS_OOP_PROBE", "") == "1"
     for idxs in members
         length(idxs) >= 2 || continue
         root = _oop_batch_lower(_Node[entries[i][2] for i in idxs])
@@ -372,13 +369,8 @@ function _oop_batch_scalars(entries::AbstractVector{Tuple{Int,_Node}})
         for i in idxs
             single[i] = false
         end
-        probe && _tally_cascade!(:oop_batch_group)
     end
     rest = Tuple{Int,_Node}[entries[i] for i in eachindex(entries) if single[i]]
-    if probe
-        for _ in 1:n_batched; _tally_cascade!(:oop_batch_lane); end
-        for _ in 1:length(rest); _tally_cascade!(:oop_batch_single); end
-    end
     return _OopScalarBatches(groups, rest, n_batched)
 end
 
@@ -531,57 +523,6 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel, in_reduce::Bool)
         (n.payload === K.cse.scratch || n.payload === K.cse.inv_scratch) || return false
     end
     return all(c -> _oop_acc_vecable(c, K, in_reduce), n.children)
-end
-
-# Build observability (parallels `_CASCADE_TALLY`): why did an acc kernel decline
-# the vectorized oop plan? Returns `:ok`, or the first blocking reason — a
-# `_NK_REDUCE` / `_AK_STATE_INDIRECT[_COL]` / `_AK_CONST_EDGE` (the last remaining
-# per-cell oop fallback class, a latent IR capability with no production builder).
-# Sub-kernels (`_NK_SUBCALL`) are NOT a decline reason — they now vectorize
-# (gordian subcall-vectorize) — so the walk recurses into each. Read corpus-wide
-# via the `ESS_OOP_PROBE=1` hook in `_make_rhs` (records `:oop_vec` / `:oopdecl_*`
-# into the cascade tally).
-function _oop_decline_reason(K::_AccKernel)
-    r = _oop_decline_walk(K.spine, K)
-    r === :ok || return r
-    for rec in K.cse.recipes
-        rr = _oop_decline_walk(rec, K); rr === :ok || return rr
-    end
-    for rec in K.cse.inv_recipes
-        rr = _oop_decline_walk(rec, K); rr === :ok || return rr
-    end
-    return :ok
-end
-function _oop_decline_walk(n::_Node, K::_AccKernel)
-    k = n.kind
-    if k === _NK_REDUCE
-        _is_contig(K.cells) || return :reduce_noncontig
-        return _oop_decline_walk(n.children[1], K)   # report the real blocker in the body
-    end
-    if k === _NK_SUBCALL
-        S = n.payload::_AccKernel
-        r = _oop_decline_walk(S.spine, S); r === :ok || return r
-        for rec in S.cse.recipes
-            rr = _oop_decline_walk(rec, S); rr === :ok || return rr
-        end
-        for rec in S.cse.inv_recipes
-            rr = _oop_decline_walk(rec, S); rr === :ok || return rr
-        end
-        return :ok
-    end
-    if k === _NK_ACCESS
-        ak = K.acc[n.idx].kind
-        ak === _AK_CONST_EDGE && return :const_edge
-        ak === _AK_STATE_INDIRECT && return :state_indirect
-        ak === _AK_STATE_INDIRECT_COL && return :state_indirect_col
-        (ak === _AK_CONST_CELL && _is_outs(K.cells)) && return :const_cell_outs
-    elseif k === _NK_CACHED
-        (n.payload === K.cse.scratch || n.payload === K.cse.inv_scratch) || return :cached
-    end
-    for c in n.children
-        r = _oop_decline_walk(c, K); r === :ok || return r
-    end
-    return :ok
 end
 
 # Resolve one descriptor table's per-lane host data against a GIVEN lane
@@ -772,8 +713,8 @@ end
 
 # Host evaluation of this form is a compiled backend's job. The in-place `f!`
 # (`form = :inplace`, the default) is the host evaluator, and it is also the
-# reference the compiled backends are gated against; `ESS_UNTIERED=1` gives its
-# untiered variant, which recomputes every prelude slot on every call.
+# reference the compiled backends are gated against; `compiler=:interpreter`
+# gives its untiered variant, which recomputes every prelude slot on every call.
 (f::_OopRHS)(u, p, t) = throw(TreeWalkError("E_TREEWALK_OOP_NOT_EVALUABLE",
     "an out-of-place build (`build_evaluator(model; form = :oop)`) is the " *
     "compiled intermediate representation a backend lowers, not a host " *
@@ -833,8 +774,7 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        scan_folds::AbstractVector{_ScanFold}=_ScanFold[],
                        mat_levels::Tuple=(),
                        n_total::Int=n_states,
-                       array_contractions::AbstractVector{_ArrayContraction}=
-                           _ArrayContraction[])
+                       array_contractions::AbstractVector=_ArrayContraction[])
     # Vectorized lane plans for the acc kernels (host index data, built once).
     # The kernel-CLASS merge (oop_merge.jl) no longer runs here: it is hoisted
     # into `_build_evaluator_impl` phase 4 (`_merge_acc_kernel_classes`), before

@@ -74,3 +74,18 @@ class AmbiguousParameterError(UnknownParameterError):
     that only cares that the key did not resolve can catch the pair with one
     clause.
     """
+
+
+class SimulationError(EarthSciAstError):
+    """Exception raised during the SymPy bridge or simulation.
+
+    Defined in this leaf module (it imports nothing from the package) rather
+    than beside the code that raises it, because the modules that raise it sit
+    on both sides of an import edge: ``expression`` and ``sympy_bridge`` raise
+    it for a malformed expression or a cyclic algebraic system, and
+    :mod:`earthsci_ast.compiler` — which :mod:`earthsci_ast.numpy_interpreter`
+    imports, and which ``expression`` therefore imports transitively — raises
+    its three ``compiler_*`` subclasses. ``expression.py`` re-exports the name,
+    so ``earthsci_ast.simulation.SimulationError`` and every other established
+    spelling are unchanged.
+    """

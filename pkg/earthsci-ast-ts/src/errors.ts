@@ -182,6 +182,18 @@ export const ERROR_CODES = {
   //   This binding does not simulate, so it never raises it; the entry keeps
   //   the §9.6.6 vocabulary uniform across the five registries.
   UNSUPPORTED_CONSTRUCT: 'unsupported_construct',
+  // `compiler_unknown` / `compiler_unavailable` / `compiler_refused_rule` —
+  //   the three ways naming a compiler can fail (API_SPEC §5.8,
+  //   esm-libraries-spec §2.5.10). `esm_problem(..., compiler=...)` draws from a
+  //   closed vocabulary (`interpreter`, `native`, `xla`, `mtk`, `sympy`): the
+  //   value is outside it; it is inside it but this binding, build or process
+  //   cannot provide it; or the chosen compiler cannot run this document and
+  //   names the rule it refused. None is ever answered by running a different
+  //   compiler. This binding does not simulate, so it never raises any of them;
+  //   the entries keep the §9.6.6 vocabulary uniform across the five registries.
+  COMPILER_UNKNOWN: 'compiler_unknown',
+  COMPILER_UNAVAILABLE: 'compiler_unavailable',
+  COMPILER_REFUSED_RULE: 'compiler_refused_rule',
   EQUATION_COUNT_MISMATCH: 'equation_count_mismatch',
   // `event_affects_parameter` — an event `affects` LHS names a PARAMETER
   //   (esm-spec §5.4). From 1.0.0 events affect UNKNOWNS ONLY: a parameter that

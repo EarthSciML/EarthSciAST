@@ -12,7 +12,7 @@ import sympy as sp
 from . import op_registry
 from .classification import ode_states
 from .error_handling import UNSUPPORTED_CONSTRUCT
-from .errors import EarthSciAstError
+from .errors import EarthSciAstError, SimulationError
 from .esm_types import Expr, ExprNode, Model
 from .expr_walk import iter_children, map_children
 from .numpy_interpreter import (
@@ -206,19 +206,6 @@ def simplify(expr: Expr) -> Expr:
         # If no specific simplifications apply, return with simplified children
         return node
     return expr
-
-
-class SimulationError(EarthSciAstError):
-    """Exception raised during the SymPy bridge or simulation.
-
-    Defined here (rather than in ``simulation.py``) because the shared
-    ESM→SymPy converter (:func:`_expr_to_sympy`) raises it for malformed
-    expressions. ``sympy_bridge.py`` (which raises it for cyclic algebraic
-    equations) and ``simulation.py`` re-export the name to keep the public
-    ``earthsci_ast.simulation.SimulationError`` symbol stable.
-    """
-
-    pass
 
 
 class UnsupportedConstructError(SimulationError):

@@ -176,7 +176,7 @@ function _sub_preserving(expr::OpExpr, bindings::Dict{String,ASTExpr}, memo::_Su
     # `gk` is CONTRACTED in the first and an OUTPUT index in the second. In a
     # MATERIALIZING build (the default for both emitters since 66b8e9a6) the sum
     # is materialized, so the mean reads a buffer gather and the two binders
-    # never meet. In an INLINING build (`ESS_ARRAY_OBS_INLINE=1`, or an observed
+    # never meet. In an INLINING build (`compiler=:interpreter`, or an observed
     # excluded from materialization) the sum is spliced into the mean's body, and
     # substituting the outer `gk` used to rewrite the inner sum's own loop
     # variable. The inner body then no longer mentions `gk` while `ranges` still
@@ -592,13 +592,30 @@ function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
     # (3) Coordinate expression over the grid geometry (per-cell field); model
     # parameters (e.g. a free-name geometry `x0`/`dx`) bind via `params`.
     if rhs isa OpExpr
-        try
-            return _eval_cellwise(rhs, cell; const_arrays=const_arrays,
-                                  registered_functions=registered_functions,
-                                  params=params)
+        # THE per-cell step: `_eval_cellwise` re-runs `_index_at_cell` →
+        # `_resolve_indices` → `_compile` for this one cell, so seeding a field
+        # costs one whole lowering per cell. Steps (1) and (2) above do not,
+        # which is why the refusal sits here and not at the caller's loop.
+        v = try
+            _eval_cellwise(rhs, cell; const_arrays=const_arrays,
+                           registered_functions=registered_functions,
+                           params=params)
         catch err
             _is_resource_error(err) && rethrow()
             push!(_errs, "as coordinate expression: $(sprint(showerror, err))")
+            nothing
+        end
+        if v !== nothing
+            # Refused only once this step has been shown to be the one that
+            # SERVES the seed: a document no step can seed is a document
+            # diagnostic (step 4 below), not a compiler refusal, and saying
+            # "your compiler cannot run this" about it would name the wrong
+            # thing entirely.
+            # No cell count: this entry point is called once per cell, so what
+            # it can report is the shape of the cost, not its extent.
+            _refuse_percell_evaluation("ic($(target))",
+                "the coordinate-expression initial-state seed", nothing)
+            return v
         end
     end
     # (4) Unsupported RHS — a clear error, never a silent drop.
@@ -888,7 +905,15 @@ function _cellwise_compile_once_impl(expr::EarthSciAST.ASTExpr, nidx::Int,
                                 params::AbstractDict;
                                 bind_syms::Union{Nothing,Vector{String}}=nothing,
                                 t::Float64=0.0)
-    nidx >= 1 || return nothing
+    # `nidx == 0` is a SHAPELESS (rank-0) target — one cell, no output index to
+    # bind. It compiles exactly like any other: no reserved index parameters, an
+    # empty symbol list for `_index_at_cell_sym` (which then makes the same
+    # `index(producer)` wrap the concrete `_index_at_cell` makes for an empty
+    # cell), and one evaluation. It used to be declined here, which sent every
+    # scalar observed to the per-cell walk — and, once the compiler gained a
+    # strict tier, to a refusal for the one shape that cannot possibly walk
+    # "per cell" more than once.
+    nidx >= 0 || return nothing
     # Reserved output-index parameter names (never authored by a user), one per
     # output dimension. Guard against the (impossible-in-practice) name collision.
     # `bind_syms` overrides them with caller-chosen names (wall2 Phase D reuses
@@ -919,6 +944,55 @@ function _cellwise_compile_once_impl(expr::EarthSciAST.ASTExpr, nidx::Int,
     end
     base = ntuple(i -> Float64(params[pkeys[i]]), length(pkeys))
     return _CellEval{Tuple(psyms),length(pkeys),nidx}(node, base, t)
+end
+
+# Compile a SCALAR term once with `syms` — every loop symbol it reads, output and
+# contracted alike — bound as parameters, or `nothing` if it cannot be compiled.
+#
+# The difference from `_cellwise_compile_once` is only the `_index_at_cell_sym`
+# wrap that one applies first: that one is handed a FIELD expression and has to
+# index each array-producing node at the output cell, while this one is handed a
+# term that is already scalar at a fixed (output, contracted) tuple. Everything
+# after that is the same pipeline — `_resolve_indices` with the symbols declared
+# BOUND, so a const read carrying one lowers to a runtime `_NK_CONST_GATHER`,
+# then `_compile` with the symbols in the parameter set — and the result is the
+# same `_CellEval`, called with a key vector holding the symbols' values in
+# `syms` order.
+#
+# It exists for the join-gated aggregate (Phase E in inline_tests.jl), whose
+# admitted (output, contracted) tuples are chosen by a build-time index and so
+# cannot be enumerated symbolically. Compiling the TERM once and walking the
+# gate's own key sequence keeps the whole field on one compile, which is what
+# `compiler=:native` promises; `:interpreter` remains the oracle it is checked
+# against.
+function _scalarwise_compile_once(expr::EarthSciAST.ASTExpr, syms::Vector{String},
+                                  const_arrays::AbstractDict,
+                                  registered_functions::AbstractDict,
+                                  params::AbstractDict; t::Float64=0.0)
+    isempty(syms) && return nothing
+    length(unique(syms)) == length(syms) || return nothing
+    for s in syms
+        (s == "t" || haskey(params, s)) && return nothing
+    end
+    pkeys = collect(keys(params))
+    psyms = Symbol[Symbol(k) for k in pkeys]
+    for s in syms
+        push!(psyms, Symbol(s))
+    end
+    bound = Set{String}(syms)
+    reg = Dict{String,Any}(String(k) => v for (k, v) in registered_functions)
+    node = try
+        resolved = _resolve_indices(expr,
+                                    Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
+                                    Dict{String,Int}(), const_arrays,
+                                    _EMPTY_PGATHER, nothing, bound)
+        _compile(resolved, Dict{String,Int}(), Set{Symbol}(psyms), reg)
+    catch err
+        _is_resource_error(err) && rethrow()
+        return nothing
+    end
+    base = ntuple(i -> Float64(params[pkeys[i]]), length(pkeys))
+    return _CellEval{Tuple(psyms),length(pkeys),length(syms)}(node, base, t)
 end
 
 # Function barrier: evaluate `ce` at every cell. `ce` arrives concretely typed

@@ -21,8 +21,7 @@
 # shared across every lane, box and equation of the build.
 #
 # This pins BOTH halves as grid-independent, and pins numeric equality against
-# the two kill switches (`ESS_LANE_AFFINE_KEY_DISABLE=1`, `ESS_STATE_BOX_DISABLE=1`)
-# which restore the pre-fix build.
+# the per-cell reference `compiler=:interpreter` builds.
 using Test
 using EarthSciAST
 include("testutils.jl")
@@ -47,7 +46,7 @@ function _cs_model(N)
                                      _idx("u", _v("i"), _v("j"))), nothing))])
 end
 
-function _cs_build(N)
+function _cs_build(N; compiler::Symbol = :native)
     ics = Dict{String,Float64}()
     for j in 1:N
         ics["a[$j]"] = 0.5 + 0.1j
@@ -57,7 +56,7 @@ function _cs_build(N)
     end
     ESM_CS._reset_cascade_tally!()
     f, u0, p, _t, vm, diag = ESM_CS._build_evaluator_impl(_cs_model(N);
-        initial_conditions = ics)
+        initial_conditions = ics, compiler = compiler)
     du = zero(u0); f(du, u0, p, 0.0)
     ks = getfield(getfield(f, :kernel_section), :kernels)
     (u0 = u0, du = du, diag = diag, kernels = ks,
@@ -67,12 +66,11 @@ function _cs_build(N)
                         for K in ks; init = 0))
 end
 
-# `kernel_section.kernels` is complete only with the codegen tier off (the
-# oop_merge/xcse idiom used by grid_invariance_test.jl).
-_cs_run(N) = withenv("ESS_CODEGEN_DISABLE" => "1") do; _cs_build(N); end
-_cs_run_pre(N) = withenv("ESS_CODEGEN_DISABLE" => "1",
-                         "ESS_LANE_AFFINE_KEY_DISABLE" => "1",
-                         "ESS_STATE_BOX_DISABLE" => "1") do; _cs_build(N); end
+# `kernel_section.kernels` is complete only when the primary emission declined
+# everything, which a zero node budget — a retained tuning threshold — forces
+# (the oop_merge/xcse idiom used by grid_invariance_test.jl).
+_cs_run(N) = withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do; _cs_build(N); end
+_cs_run_ref(N) = _cs_build(N; compiler = :interpreter)
 
 @testset "cross-shape state gather is grid-independent" begin
     N1, N2 = 8, 24
@@ -97,11 +95,11 @@ _cs_run_pre(N) = withenv("ESS_CODEGEN_DISABLE" => "1",
         @test B.conn_entries < N2 * N2
     end
 
-    @testset "RHS is bit-identical to the pre-fix build" begin
+    @testset "RHS is bit-identical to the per-cell reference" begin
         for N in (N1, N2)
             post = _cs_run(N)
-            pre  = _cs_run_pre(N)
-            @test post.du == pre.du
+            ref  = _cs_run_ref(N)
+            @test post.du == ref.du
             @test all(isfinite, post.du)
         end
     end
@@ -159,15 +157,15 @@ end
     end
     ca = Dict("conn" => Float64.(perm))
 
-    ev(envs...) = withenv(envs...) do
+    function ev(compiler = :native)
         f, u0, p, _t, vm, _d = ESM_CS._build_evaluator_impl(model;
-            initial_conditions = ics, const_arrays = ca)
+            initial_conditions = ics, const_arrays = ca, compiler = compiler)
         du = fill(NaN, length(u0)); f(du, u0, p, 0.0)
-        (du = du, vm = vm, u0 = u0)
+        return (du = du, vm = vm, u0 = u0)
     end
 
     got = ev()
-    ref = ev("ESS_STENCIL_DISABLE" => "1")        # forced per-cell walk
+    ref = ev(:interpreter)                        # the per-cell walk
     @test got.du == ref.du
     # ... and spelled out around the swap, so a failure names the cell rather
     # than a whole vector (`i0` is the wrong one; its neighbours are the
@@ -184,15 +182,16 @@ end
 # one interior cell has `Δ = 0` at every corner and a different slot inside.
 @testset "same-shape state gather is not licensed by corner agreement" begin
     function check(model, ics, ca, cells; pa = Dict{String,Any}())
-        ev(envs...) = withenv(envs...) do
+        function ev(compiler = :native)
             f, u0, p, _t, vm, _d = ESM_CS._build_evaluator_impl(model;
                 initial_conditions = ics, const_arrays = ca,
-                param_arrays = Dict(k => copy(v) for (k, v) in pa))
+                param_arrays = Dict(k => copy(v) for (k, v) in pa),
+                compiler = compiler)
             du = fill(NaN, length(u0)); f(du, u0, p, 0.0)
-            (du = du, vm = vm)
+            return (du = du, vm = vm)
         end
         got = ev()
-        ref = ev("ESS_STENCIL_DISABLE" => "1")    # forced per-cell walk
+        ref = ev(:interpreter)                    # the per-cell walk
         @test got.du == ref.du
         for c in cells
             @test got.du[got.vm[c]] == ref.du[ref.vm[c]]

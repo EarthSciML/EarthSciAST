@@ -76,16 +76,15 @@ use kernels::copy_strided;
 use resolve::{cm_strides, rm_strides};
 
 // ---------------------------------------------------------------------------
-// Environment switches (read once and cached, matching ESS_VEC_DISABLE /
-// ESS_CSE_DISABLE).
+// Device selection (read once and cached).
 // ---------------------------------------------------------------------------
 
-/// `ESS_TAPE_DISABLE=1`: wholesale kill switch — `simulate` never builds or
-/// installs a tape and every RHS call runs the legacy interpreter path,
-/// byte-identical to the pre-tape driver.
+/// Whether this document must run off the tape whatever the compiler says.
+///
+/// Not a switch: the caller names the compiler (API_SPEC §5.8) and this is the
+/// one document property the tape cannot express, so `native` REFUSES such a
+/// document (`crate::problem::esm_problem`) rather than demoting it quietly.
 pub(crate) fn tape_disabled() -> bool {
-    use std::sync::OnceLock;
-    static OFF: OnceLock<bool> = OnceLock::new();
     // A document with per-variable element types (esm-spec §11.3.1) does not
     // run on the tape. The tape resolves its kernels at EXECUTION from the
     // thread-local precision, and it fuses instructions ACROSS rules, so the
@@ -96,14 +95,7 @@ pub(crate) fn tape_disabled() -> bool {
     // stands. Correctness over throughput, and only for the documents that
     // ask for it: every other document is unaffected, this being a
     // thread-local read on a path that already reads one.
-    if crate::precision::has_variable_overrides() {
-        return true;
-    }
-    *OFF.get_or_init(|| {
-        std::env::var("ESS_TAPE_DISABLE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
+    crate::precision::has_variable_overrides()
 }
 
 /// Runtime-selected SIMD width for the fused-loop kernel clones (Step 4b).
@@ -125,8 +117,14 @@ pub(crate) enum SimdLevel {
     Avx512,
 }
 
-/// Detect the widest supported clone, once. `ESS_TAPE_SIMD_DISABLE=1` forces
-/// the generic codegen (the Step 4b kill switch; bit-identical either way).
+/// Detect the widest supported clone, once.
+///
+/// `ESS_TAPE_SIMD_DISABLE=1` forces the generic codegen and
+/// `ESS_TAPE_SIMD_LEVEL=generic|avx2|avx512` caps the selection below the
+/// detected width: DEVICE selection, not strategy selection — every level runs
+/// the same program and is bit-identical (`simd_clone_bit_identity`), so
+/// neither is a way to reach a different evaluator
+/// (`esm-libraries-spec.md` §2.5.10).
 pub(crate) fn simd_level() -> SimdLevel {
     use std::sync::OnceLock;
     static LEVEL: OnceLock<SimdLevel> = OnceLock::new();
@@ -160,20 +158,6 @@ pub(crate) fn simd_level() -> SimdLevel {
             }
         }
         SimdLevel::Generic
-    })
-}
-
-/// `ESS_TAPE_CHECK=N`: for the first N calls of each taped scratch, run BOTH
-/// the legacy interpreter and the tape and assert bitwise-equal `dy` (then
-/// drop the check buffer). 0 (the default) checks nothing.
-pub(crate) fn tape_check_calls() -> u64 {
-    use std::sync::OnceLock;
-    static N: OnceLock<u64> = OnceLock::new();
-    *N.get_or_init(|| {
-        std::env::var("ESS_TAPE_CHECK")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0)
     })
 }
 
@@ -226,7 +210,7 @@ pub(crate) struct TapeExec {
     fregs: Vec<f64>,
     /// Step 4 export demotion: `Export` instructions only execute when
     /// something can read the published arrays — a fallback rule is present,
-    /// `ESS_TAPE_CHECK` is active, or a caller explicitly requested them
+    /// or a caller explicitly requested them
     /// ([`TapeCtx::set_exports_active`]). With no possible reader they are
     /// skipped (the exported values themselves are still computed — they are
     /// ordinary slots — only the publish memcpy is elided).
@@ -324,7 +308,7 @@ impl TapeExec {
             primed_param_epoch: 0,
             primed_forcing_epoch: 0,
             fregs: vec![0.0f64; max_fregs * FCHUNK],
-            exports_active: n_fallback > 0 || tape_check_calls() > 0,
+            exports_active: n_fallback > 0,
             n_taped: prog.rules.len() - n_fallback,
             n_fallback,
             simd: simd_level(),
@@ -341,10 +325,6 @@ pub(in crate::simulate_array) struct TapeCtx {
     /// `observed_rules` argument is the driver's varying subset).
     pub(in crate::simulate_array) observed_rules: Rc<Vec<AlgebraicRule>>,
     pub(crate) exec: TapeExec,
-    /// Remaining `ESS_TAPE_CHECK` dual-path calls.
-    pub(crate) check_remaining: u64,
-    /// Legacy-arm `dy` buffer for check mode (dropped when the check ends).
-    pub(crate) check_buf: Vec<f64>,
     /// Step 4 epoch counters (see `run_tape_call`). The parameter epoch is
     /// bumped whenever the bit-exact generation hash of the caller's params
     /// slice changes (the slice is the only channel callers have, so the hash
@@ -368,8 +348,6 @@ impl TapeCtx {
             prog,
             observed_rules,
             exec,
-            check_remaining: tape_check_calls(),
-            check_buf: Vec::new(),
             param_epoch: 0,
             forcing_epoch: 1,
             pgen: 0,
@@ -386,11 +364,20 @@ impl TapeCtx {
         self.forcing_epoch += 1;
     }
 
-    /// Force `Export` instructions on/off (test/diagnostic hook — production
-    /// derives this from the fallback count and `ESS_TAPE_CHECK`).
-    #[allow(dead_code)]
+    /// Force `Export` instructions on/off (production derives this from the
+    /// fallback count; a harvesting scratch turns them on because it IS the
+    /// reader).
     pub(crate) fn set_exports_active(&mut self, on: bool) {
         self.exec.exports_active = on;
+    }
+
+    /// The observed arrays the last call published.
+    ///
+    /// Complete only when the program was built to export every observed —
+    /// which a `native` build is (see `compute_exports`) — and when the
+    /// publishes are active.
+    pub(in crate::simulate_array) fn exported_observeds(&self) -> &ArrMap {
+        &self.exec.obs
     }
 }
 

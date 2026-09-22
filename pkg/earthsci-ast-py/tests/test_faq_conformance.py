@@ -130,13 +130,30 @@ def _samples_a_field(raw: dict) -> bool:
     return False
 
 
+def _has_ragged_index_set(raw: dict) -> bool:
+    """Does the document declare a ``kind: "ragged"`` index set? See the note in
+    :func:`test_aggregate_fixture_conformance`."""
+    return any(
+        isinstance(e, dict) and e.get("kind") == "ragged"
+        for e in (raw.get("index_sets") or {}).values()
+    )
+
+
 @pytest.mark.parametrize("fixture_path", _collect_fixtures(), ids=lambda p: p.name)
 def test_aggregate_fixture_conformance(fixture_path: Path) -> None:
     """Run every inline test in an aggregate worked-example fixture."""
     raw = json.loads(fixture_path.read_text())
 
+    # A RAGGED contracted range recomputes its bound per output point through
+    # the `offsets` factor, so there is no dense box and no whole-box tier is
+    # attempted — a refusal under the strict `native` default (API_SPEC §5.8),
+    # and one of the shapes the compiler census lists as needing a whole-box
+    # implementation written. These fixtures check `faq` SEMANTICS, so the ragged
+    # ones run on the reference until that tier exists.
+    compiler = "interpreter" if _has_ragged_index_set(raw) else None
+
     if _samples_a_field(raw):
-        rows = run_inline_tests(fixture_path)
+        rows = run_inline_tests(fixture_path, compiler=compiler)
         assert rows, f"{fixture_path.name}: no assertions were checked"
         failed = [r for r in rows if not r.passed]
         assert not failed, "\n".join(
@@ -160,7 +177,7 @@ def test_aggregate_fixture_conformance(fixture_path: Path) -> None:
             ics = {k: float(v) for k, v in (test.get("initial_conditions") or {}).items()}
             params = {k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()}
 
-            result = solve(esm_problem(esm_file, tspan, u0=ics, p=params))
+            result = solve(esm_problem(esm_file, tspan, u0=ics, p=params, compiler=compiler))
             assert result.retcode is ReturnCode.Success, (
                 f"{fixture_path.name}::{model_name}::{test_id} simulation failed: {result.message}"
             )

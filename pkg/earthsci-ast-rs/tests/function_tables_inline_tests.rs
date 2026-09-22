@@ -26,7 +26,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{SolveOptions, load_path, run_inline_tests_with_base_dir};
+use earthsci_ast::{SolveOptions, load_path};
 
 mod common;
 
@@ -37,8 +37,21 @@ mod common;
 fn a_table_lookup_observed_evaluates_like_its_hand_lowered_twin() {
     let path = common::repo_fixture("conformance/function_tables/inline_test/fixture.esm");
     let file = load_path(&path).expect("fixture loads");
-    let results =
-        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results = earthsci_ast::run_inline_tests_with_options(
+        &file,
+        // `table_lookup` lowers to `interp.linear` / `interp.bilinear`, and
+        // those closed functions have no tape lowering, so `native` refuses
+        // this document by NAME (API_SPEC §5.8). What is pinned here is that
+        // the two carriers AGREE, which is the reference evaluator's answer
+        // to give.
+        &earthsci_ast::InlineTestOptions {
+            solve: SolveOptions::default(),
+            base_dir: path.parent().map(std::path::Path::to_path_buf),
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
+            ..Default::default()
+        },
+        None,
+    );
 
     assert_eq!(results.len(), 3, "three inline assertions: {results:?}");
     for r in &results {
@@ -110,8 +123,19 @@ fn both_problem_carriers_lower_a_table_lookup() {
         ("File", ProblemInput::File(&file)),
         ("Flattened", ProblemInput::Flattened(&flat)),
     ] {
-        let prob = esm_problem(input, (0.0, 1.0), Default::default())
-            .unwrap_or_else(|e| panic!("[{label}] esm_problem: {e}"));
+        let prob = esm_problem(
+            input,
+            (0.0, 1.0),
+            earthsci_ast::ProblemOptions {
+                // `table_lookup` lowers to `interp.linear`, which has no
+                // tape lowering, so `native` refuses both carriers by NAME
+                // (API_SPEC §5.8). What is pinned here is that the two
+                // carriers AGREE.
+                compiler: Some(earthsci_ast::Compiler::Interpreter),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("[{label}] esm_problem: {e}"));
         let sol = solve(&prob, &SolveOptions::default())
             .unwrap_or_else(|e| panic!("[{label}] solve: {e}"));
         let got = sol

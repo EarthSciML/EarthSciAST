@@ -547,23 +547,14 @@ end
 # rewrite, and `geom_sweep_specialize_test.jl` compares the narrowed and generic
 # arms directly by feeding a source type that misses the narrowed ones.
 
-# `ESS_GEOM_SWEEP_SPECIALIZE_DISABLE=1` forces the original rank-abstract
-# loops, keeping them available as the differential oracle (mirroring
-# `ESS_SETUP_MAP_COMPILE_ONCE_DISABLE` / `ESS_STENCIL_DISABLE`).
-_geom_sweep_specialize_disabled() =
-    get(ENV, "ESS_GEOM_SWEEP_SPECIALIZE_DISABLE", "") == "1"
-
-# `ESS_GEOM_SWEEP_VERIFY=1` runs BOTH sweeps on every materialization and
-# throws unless the two arrays are `isequal` cell for cell (`isequal`, not `==`
-# or `≈`: `-0.0`/`+0.0` must not be conflated and `NaN` must match `NaN`). One
-# run over a real model then checks every geometry array in it. Costs a full
-# second sweep, so it is opt-in.
-_geom_sweep_verify() = get(ENV, "ESS_GEOM_SWEEP_VERIFY", "") == "1"
+# Off (`compiler=:interpreter`), the sweep takes the original rank-abstract
+# loops, which is the differential oracle: the same array materialized by the
+# two compilers must be `isequal` cell for cell.
+_geom_sweep_specialize_disabled() = !_compiler_plan_now().geom_sweep_specialize
 
 # ENGAGEMENT DIAGNOSTICS. FAST counts sweeps run rank-specialized, REF those
-# run on the rank-abstract reference (only the kill switch and verify mode
-# produce those). Purely observational — reset (`[] = 0`) around a build to
-# attribute counts to one run.
+# run on the rank-abstract reference. Purely observational — reset (`[] = 0`)
+# around a build to attribute counts to one run.
 const _GEOM_SWEEP_FAST = Ref{Int}(0)
 const _GEOM_SWEEP_REF  = Ref{Int}(0)
 
@@ -612,8 +603,8 @@ function _geom_sweep_contract!(arr::Array{Float64,N}, body, gates, filt,
 end
 
 # The REFERENCE sweeps — the original loops, verbatim, hoisted into functions.
-# They are what `ESS_GEOM_SWEEP_SPECIALIZE_DISABLE=1` runs and what verify mode
-# compares against. Note what they are and are not: a VALUE oracle, not a
+# They are what a build with the specialization off runs, and what the
+# differential compares against. Note what they are and are not: a VALUE oracle, not a
 # perf baseline. Hoisting the loops into a method lets Julia specialize on the
 # concrete `arr` it is handed, so these do not reproduce the old cost exactly —
 # they keep the `Iterators.product((1:e for e in exts)...)` splat (which is
@@ -647,37 +638,6 @@ function _geom_sweep_contract_ref!(arr, exts::Vector{Int}, cexts::Vector{Int},
     return arr
 end
 
-# Overlap verify-mode assertion: the gated/driven array against the historic
-# UNGATED dense sweep, `isequal` per cell. A failure here is not a bug in the
-# drive — it is the honest report that this document's overlap clause CHANGES
-# values, i.e. that a pruned pair would have contributed something other than
-# the fold identity.
-function _assert_geom_overlap_bit_identical(got, ref, out::Vector{String})
-    size(got) == size(ref) || throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-        "overlap-gate verify: shape $(size(got)) ≠ ungated reference $(size(ref))"))
-    for I in CartesianIndices(ref)
-        isequal(got[I], ref[I]) && continue
-        throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "overlap-gate verify: cell $(Tuple(I)) of an array over $(out) gave " *
-            "$(got[I]) with the broad phase applied but $(ref[I]) without it — " *
-            "a non-candidate tuple contributes something other than the fold identity"))
-    end
-    return nothing
-end
-
-# Verify-mode assertion: bitwise agreement, `isequal` per cell.
-function _assert_geom_sweep_bit_identical(fast, ref, out::Vector{String})
-    size(fast) == size(ref) || throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-        "geometry sweep verify: shape $(size(fast)) ≠ reference $(size(ref))"))
-    for I in CartesianIndices(ref)
-        isequal(fast[I], ref[I]) && continue
-        throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "geometry sweep verify: cell $(Tuple(I)) of an array over $(out) " *
-            "gave $(fast[I]) but the rank-abstract reference gave $(ref[I])"))
-    end
-    return nothing
-end
-
 # ---- The OVERLAP broad phase at SETUP (RFC §5.3 / projection-pushdown 2a) ----
 #
 # `_resolve_geo_join_gates` above resolves only bin-EQUALITY clauses; a Phase-2a
@@ -704,8 +664,8 @@ end
 # the conservative-regrid shapes it is also value-NEUTRAL: disjoint envelopes ⇒
 # disjoint polygons ⇒ `_polygon_intersection_area` returns exactly `+0.0`, which is
 # what the `zeros` init already holds, and the applies' `A_ij > atol` filter drops
-# those terms anyway. `ESS_GEOM_OVERLAP_GATE_VERIFY=1` checks that on a real model
-# rather than arguing it. A document where a pruned tuple WOULD have contributed (a
+# those terms anyway. Materializing the same array under both compilers checks
+# that on a real model rather than arguing it. A document where a pruned tuple WOULD have contributed (a
 # `min`/`prod` fold with no sliver filter) is a genuine behavior change — see
 # `geom_overlap_drive_test.jl`, which pins exactly that case so the change is
 # visible rather than silent. Under `reduce: min` the ungated sweep folds in the
@@ -717,20 +677,9 @@ end
 # `_resolve_geo_join_gates`); no shipped template puts an overlap clause on a
 # nested aggregate, and gating one would need its own drive plan.
 
-# `ESS_GEOM_OVERLAP_GATE_DISABLE=1` skips resolution entirely, restoring the
-# historic ungated dense sweep. It is the differential oracle for this change
-# (mirroring `ESS_GEOM_SWEEP_SPECIALIZE_DISABLE` / `ESS_STENCIL_DISABLE`).
-_geom_overlap_gate_disabled() =
-    get(ENV, "ESS_GEOM_OVERLAP_GATE_DISABLE", "") == "1"
-
-# `ESS_GEOM_OVERLAP_GATE_VERIFY=1` materializes every overlap-gated array BOTH
-# ways — driven/gated, and the historic UNGATED dense sweep — and throws unless
-# they are `isequal` cell for cell (`isequal`, not `==` or `≈`: `-0.0` must not
-# pass for `+0.0` and `NaN` must match `NaN`). One run over a real model then
-# checks every gated array in it. It costs a full dense sweep, which is the cost
-# the gate exists to avoid, so it is opt-in.
-_geom_overlap_gate_verify() =
-    get(ENV, "ESS_GEOM_OVERLAP_GATE_VERIFY", "") == "1"
+# Off, resolution is skipped entirely and the sweep is the ungated dense one.
+# That is the differential oracle for this change.
+_geom_overlap_gate_disabled() = !_compiler_plan_now().geom_overlap_gate
 
 # ENGAGEMENT DIAGNOSTICS. DRIVE counts sweeps whose enumeration was driven from
 # the candidate set (the O(#candidates) path); GATE_ONLY those where a gate
@@ -1051,10 +1000,9 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
     # ---- The sweep (see `_geom_sweep_map!` / `_geom_sweep_contract!`) ----
     # The sweep counters describe the DENSE sweeps only; a candidate-driven
     # sweep runs neither of them and is counted by `_GEOM_OVERLAP_DRIVE`.
-    # `ESS_GEOM_SWEEP_SPECIALIZE_DISABLE` therefore selects the loop SHAPE of a
-    # dense sweep; `ESS_GEOM_OVERLAP_GATE_DISABLE` is what returns an
-    # overlap-gated array to the historic ungated dense path (setting both gives
-    # exactly the pre-change code).
+    # The sweep-specialization gate therefore selects the loop SHAPE of a dense
+    # sweep; the overlap gate is what returns an overlap-gated array to the
+    # ungated dense path.
     fast = !_geom_sweep_specialize_disabled()
     bump() = fast ? (_GEOM_SWEEP_FAST[] += 1) : (_GEOM_SWEEP_REF[] += 1)
     if isempty(contract)
@@ -1067,11 +1015,6 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
         elseif fast
             bump()
             _geom_sweep_map!(arr, body, gates, filt, u, ovdense)
-            if _geom_sweep_verify()
-                ref = zeros(Float64, exts...)
-                _geom_sweep_map_ref!(ref, exts, body, gates, filt, zero(u), nout, ovdense)
-                _assert_geom_sweep_bit_identical(arr, ref, out)
-            end
         else
             bump()
             _geom_sweep_map_ref!(arr, exts, body, gates, filt, u, nout, ovdense)
@@ -1092,34 +1035,11 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
             _geom_sweep_contract!(arr, body, gates, filt, u,
                                   CartesianIndices(Tuple(cexts)), Float64(init), fold,
                                   ovdense)
-            if _geom_sweep_verify()
-                ref = zeros(Float64, exts...)
-                _geom_sweep_contract_ref!(ref, exts, cexts, body, gates, filt,
-                                          zero(u), nout, ncon, init, fold, ovdense)
-                _assert_geom_sweep_bit_identical(arr, ref, out)
-            end
         else
             bump()
             _geom_sweep_contract_ref!(arr, exts, cexts, body, gates, filt, u,
                                       nout, ncon, init, fold, ovdense)
         end
-    end
-    # ---- The overlap differential oracle (`ESS_GEOM_OVERLAP_GATE_VERIFY=1`) ----
-    # Re-materialize the SAME array with no gate at all — the historic dense
-    # sweep — and demand bitwise agreement. This is what turns "a pruned pair
-    # contributes exactly 0̄ here" from an argument into a measurement.
-    if ov !== nothing && _geom_overlap_gate_verify()
-        ref = zeros(Float64, exts...)
-        if isempty(contract)
-            _geom_sweep_map_ref!(ref, exts, body, gates, filt, zero(u), nout, nothing)
-        else
-            init2, fold2 = _geo_reduce_fold(faq.reduce, faq.semiring)
-            cexts2 = Int[_geo_index_extent(faq.ranges[c], index_sets, derived_extents)
-                         for c in contract]
-            _geom_sweep_contract_ref!(ref, exts, cexts2, body, gates, filt, zero(u),
-                                      nout, length(contract), init2, fold2, nothing)
-        end
-        _assert_geom_overlap_bit_identical(arr, ref, out)
     end
     return arr
 end
@@ -1225,20 +1145,10 @@ end
 #     gather — so a plain (`:error`) array raises `E_TREEWALK_CONSTARRAY_OOB` on
 #     either. Any non-`:error` const array still declines the fast path.
 
-# `ESS_SETUP_MAP_COMPILE_ONCE_DISABLE=1` forces the per-cell loop, keeping it
-# available as the differential oracle (mirroring `ESS_STENCIL_DISABLE` /
-# `ESS_LANE_INTERN_DISABLE`).
-_setup_map_compile_once_disabled() =
-    get(ENV, "ESS_SETUP_MAP_COMPILE_ONCE_DISABLE", "") == "1"
-
-# `ESS_SETUP_MAP_COMPILE_ONCE_VERIFY=1` runs BOTH paths on every engaged MAP and
-# throws unless the two arrays are `isequal` cell for cell (`isequal`, not `==`
-# or `≈`: `-0.0`/`+0.0` must not be conflated and `NaN` must match `NaN`). It is
-# the differential oracle in ASSERTING form — one run over a real model checks
-# every promoted-physics MAP in it instead of only what a fixture reproduces.
-# Costs a full per-cell materialization on top, so it is opt-in.
-_setup_map_compile_once_verify() =
-    get(ENV, "ESS_SETUP_MAP_COMPILE_ONCE_VERIFY", "") == "1"
+# Off, the MAP takes the per-cell loop, which is the differential oracle. A
+# strict `native` refuses that loop rather than running it (§2.5.10), so the
+# comparison is between the two compilers on the same document.
+_setup_map_compile_once_disabled() = !_compiler_plan_now().setup_map_compile_once
 
 # ENGAGEMENT DIAGNOSTICS. HITS counts MAPs materialized by the compile-once
 # path, MISS those that fell back to the per-cell loop (a decline, or an
@@ -1345,13 +1255,14 @@ function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
         end
         if fast !== nothing
             _SETUP_MAP_FASTPATH_HITS[] += 1
-            _setup_map_compile_once_verify() || return fast
-            ref = _fill_map_percell(rhs, exts, ca, registered_functions, params)
-            _assert_map_bit_identical(rhs, fast, ref)
+            _record_rule!(_current_rule_label(), :setup_array, :setup_compiled)
             return fast
         end
     end
     _SETUP_MAP_FASTPATH_MISS[] += 1
+    _refuse_percell_evaluation(_current_rule_label(),
+        "the setup MAP materializer", prod(exts))
+    _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
     return _fill_map_percell(rhs, exts, ca, registered_functions, params)
 end
 
@@ -1369,8 +1280,8 @@ function _fill_map_fast(ce, exts::Vector{Int}, nd::Int)
 end
 
 # The REFERENCE cell sweep — the original per-cell loop, unchanged. It is both
-# the fallback for anything the fast path declines and the oracle the verify
-# mode (and `ESS_SETUP_MAP_COMPILE_ONCE_DISABLE=1`) compares against.
+# the fallback for anything the fast path declines and the oracle a build with
+# the compile-once tier off runs.
 function _fill_map_percell(rhs::OpExpr, exts::Vector{Int}, ca::AbstractDict,
                            registered_functions::AbstractDict, params::AbstractDict)
     arr = zeros(Float64, exts...)
@@ -1380,21 +1291,6 @@ function _fill_map_percell(rhs::OpExpr, exts::Vector{Int}, ca::AbstractDict,
                                 params=params)
     end
     return arr
-end
-
-# Verify-mode assertion: bitwise agreement, `isequal` per cell.
-function _assert_map_bit_identical(rhs::OpExpr, fast::Array{Float64},
-                                   ref::Array{Float64})
-    size(fast) == size(ref) || throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-        "setup-map compile-once verify: shape $(size(fast)) ≠ reference $(size(ref))"))
-    for I in CartesianIndices(ref)
-        isequal(fast[I], ref[I]) && continue
-        throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "setup-map compile-once verify: cell $(Tuple(I)) of a MAP over " *
-            "$(rhs.output_idx) gave $(fast[I]) but the per-cell reference gave " *
-            "$(ref[I])"))
-    end
-    return nothing
 end
 
 # ============================================================
@@ -1498,6 +1394,11 @@ function _materialize_setup_wholearray(rhs::OpExpr, env::AbstractDict,
         return reshape(Array{Float64}(src), exts...)   # column-major, numpy-parity
     end
     ca, params = _setup_env_split(env)
+    # This materializer has no compile-once form at all: the `makearray` stencil
+    # it serves is resolved and compiled from scratch at every output cell.
+    _refuse_percell_evaluation(_current_rule_label(),
+        "the whole-array setup materializer", prod(exts))
+    _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
     arr = zeros(Float64, exts...)
     for I in CartesianIndices(Tuple(exts))
         arr[I] = _eval_cellwise(rhs, Int[Tuple(I)...]; const_arrays=ca,
@@ -1842,6 +1743,7 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
     ov_cache = Dict{Tuple{Vector{String},Vector{String},Float64},_OverlapIndex}()
     for n in _geom_setup_order(setup, defs)
         rhs = defs[n]
+        _open_rule!(n, :setup_array)
         arr = if _is_ranged_clip(rhs)
             _materialize_ranged_clip(rhs, env, index_sets, derived_extents, var_shapes)
         elseif _is_setup_wholearray_op(rhs)
@@ -2007,6 +1909,7 @@ function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overri
             # (which has no trig): the CALLER supplies only raw `lon`/`lat`, never
             # pre-projected `X`/`Y`. The geometry-vocabulary reduce-projection path
             # is unchanged (`_body_needs_general_eval` is false there).
+            _open_rule!(n, :setup_array)
             env[n] = if _body_needs_general_eval(e)
                 _materialize_setup_general_map(e, env, index_sets, derived_extents,
                                                registered_functions)
@@ -2121,6 +2024,7 @@ function _derive_overlap_env_factors(model, index_sets, const_arrays_kw, param_o
                 ok = false; break                            # unresolved dep — retry / drop
             end
             ok || continue
+            _open_rule!(n, :setup_array)
             arr = _materialize_setup_general_map(e, env, index_sets, derived_extents,
                                                  registered_functions)
             env[n] = arr

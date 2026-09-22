@@ -136,4 +136,5 @@ def test_undeclared_shape_axis_with_indexed_equations_still_builds():
 
     path = _FIXTURES_ROOT_DIR / "conformance" / "pde_simulation" / "fixtures"
     prob = esm_problem(load_path(path / "diffusion_1d_periodic_n4.esm"), (0.0, 1.0))
-    assert prob.pathway == "array"
+    assert prob.compiler == "native"
+    assert prob.build is not None

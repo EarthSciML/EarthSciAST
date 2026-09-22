@@ -246,6 +246,13 @@ fn options(const_arrays: HashMap<String, ArrayD<f64>>) -> ProblemOptions {
         model_name: Some("J".into()),
         const_arrays,
         build_providers: Vec::new(),
+        // The join-gate planner lives INSIDE the per-cell oracle: an
+        // aggregate carrying a driving overlap gate is refused by both tape
+        // lowerings up front, so the gate this file measures is only
+        // reachable under the reference compiler. Under `native` the
+        // document is refused by NAME (API_SPEC §5.8), which is what makes
+        // the gate a property of the interpreter alone.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         ..Default::default()
     }
 }

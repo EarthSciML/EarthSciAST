@@ -67,6 +67,12 @@ pub(crate) mod classification;
 /// without spawning a process. Hidden from the published rustdoc surface.
 #[doc(hidden)]
 pub mod compiled_rhs_adapter;
+/// Core of the `compiler_agreement` conformance adapter (CONFORMANCE_SPEC
+/// §5.44), on the same terms as [`compiled_rhs_adapter`]: in the library so a
+/// test drives the binary's exact code path, and hidden from the published
+/// rustdoc surface.
+#[doc(hidden)]
+pub mod compiler_agreement_adapter;
 pub(crate) mod coupling;
 pub(crate) mod coupling_imports;
 pub(crate) mod dae;
@@ -345,7 +351,7 @@ pub use inline_tests::{
     AssertionResult, BuildProviderFactory, InlineTestOptions, check_assertion,
     ephemeral_injected_file, evaluate_cellwise, field_reduce, resolve_tolerance, run_inline_tests,
     run_inline_tests_filtered, run_inline_tests_paths, run_inline_tests_with_base_dir,
-    run_inline_tests_with_providers, state_cells,
+    run_inline_tests_with_options, run_inline_tests_with_providers, state_cells,
 };
 pub use performance::{CompactExpr, PerformanceError};
 #[cfg(feature = "parallel")]
@@ -357,9 +363,12 @@ pub use simulate::{
 };
 
 // The EsmProblem / `solve` surface. `simulate` is deleted in all its forms.
+#[allow(deprecated)]
+pub use problem::Compile;
 pub use problem::{
-    CallbackFn, CallbackSet, Compile, EnsembleProblem, EsmProblem, ProblemInput, ProblemOptions,
-    Remake, callbacks, compose, esm_problem, observed_field, remake,
+    CallbackFn, CallbackSet, Compiler, CompilerReport, CompilerRuleReport, EnsembleProblem,
+    EsmProblem, ProblemInput, ProblemOptions, Remake, Rhs, callbacks, compose, esm_problem,
+    observed_field, remake,
 };
 #[cfg(feature = "solve")]
 pub use problem::{

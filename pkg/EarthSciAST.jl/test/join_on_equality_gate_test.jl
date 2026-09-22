@@ -11,7 +11,7 @@
 # THE TWO DIFFERENTIAL ARMS. Both halves are pinned against the pre-change
 # behaviour rather than against hand-computed numbers alone:
 #
-#   * `ESS_JOIN_ON_GATE_DISABLE=1` rebuilds the SAME document with the driver
+#   * `compiler=:interpreter` rebuilds the SAME document with the driver
 #     killed — the gate resolves to codes only and filters the full product, the
 #     exact pre-§5.5.8 path. The answer must be bit-identical (BEHAV-10-B-005)
 #     and the visit count must differ, or the gate never fired.
@@ -71,13 +71,14 @@ end
 # the driver declined and the ungated product ran.
 function _run(doc, const_arrays; disable::Bool=false)
     file = ESS.coerce_esm_file(JSON3.read(JSON3.write(doc)))
-    withenv("ESS_JOIN_ON_GATE_DISABLE" => (disable ? "1" : nothing)) do
+    let
         ESS._VI_ENUM_VISITS[] = 0
         du = nothing
         t = @elapsed begin
             f!, u0, p, _, _ = build_evaluator(file; model_name="Rollup",
                 const_arrays=Dict{String,Any}(const_arrays),
-                initial_conditions=Dict("count" => 0.0))
+                initial_conditions=Dict("count" => 0.0),
+                compiler = disable ? :interpreter : :native)
             du = similar(u0)
             f!(du, u0, p, 0.0)
         end
@@ -334,7 +335,7 @@ end
     end
 
     # ---- ARM 3: the DIFFERENTIAL against the driver killed.
-    # Same document, `ESS_JOIN_ON_GATE_DISABLE=1`: the clause resolves to codes
+    # Same document, `compiler=:interpreter`: the clause resolves to codes
     # only and filters the full 5e5-tuple product — the pre-§5.5.8 path. The
     # answer must be bit-identical, and the visit counts must differ, or the
     # gate never fired and the "driven" arm proved nothing.

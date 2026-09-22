@@ -18,7 +18,7 @@
 #      value-NEUTRAL, bit for bit. A pruned pair has disjoint envelopes, hence
 #      disjoint polygons, hence `_polygon_intersection_area` returns exactly
 #      `+0.0`, which is the additive identity the gate says it contributes.
-#      Every case below compares against `ESS_GEOM_OVERLAP_GATE_DISABLE=1` (the
+#      Every case below compares against `compiler=:interpreter` (the
 #      historic ungated dense sweep) with `isequal` — never `≈`, never `==`, so
 #      `-0.0` cannot pass for `+0.0` and `NaN` must match `NaN`.
 #
@@ -31,10 +31,10 @@
 #      `min`/`prod` testset below records the divergence explicitly rather than
 #      leaving it to be discovered.
 #
-# That testset doubles as the NEGATIVE CONTROL: it asserts that
-# `ESS_GEOM_OVERLAP_GATE_VERIFY=1` THROWS there. An oracle that never fires
-# proves nothing, and the neutrality claim in (1) rests on this same oracle
-# staying silent.
+# That testset doubles as the NEGATIVE CONTROL: it asserts that the two
+# compilers DISAGREE there. An oracle that never fires proves nothing, and the
+# neutrality claim in (1) rests on this same comparison agreeing everywhere
+# else.
 #
 # Engagement counters keep every comparison non-vacuous: a case that silently
 # stopped driving would compare the dense path against itself and pass, so each
@@ -107,7 +107,7 @@ const ENV0 = Dict{String,Any}(
     "kk"    => Float64[1.0, 2.0, 3.0])
 
 # Materialize `json` with the broad phase applied and, separately, with
-# `ESS_GEOM_OVERLAP_GATE_DISABLE=1` forcing the historic ungated dense sweep.
+# `compiler=:interpreter` taking the ungated dense sweep.
 # Returns (gated, ungated, Δdrive, Δgate_only, Δnone).
 function both_ways(json, env = ENV0, idx = IDX)
     rhs = EA.expression_from_json(json)
@@ -117,7 +117,7 @@ function both_ways(json, env = ENV0, idx = IDX)
     dd = EA._GEOM_OVERLAP_DRIVE[] - d0
     dg = EA._GEOM_OVERLAP_GATE_ONLY[] - g0
     dn = EA._GEOM_OVERLAP_NONE[] - n0
-    ref = withenv("ESS_GEOM_OVERLAP_GATE_DISABLE" => "1") do
+    ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
         EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
     end
     return got, ref, dd, dg, dn
@@ -132,18 +132,17 @@ function bitsame(a, b)
     return true
 end
 
-# Does verify mode throw on this document?
-function verify_throws(json, env = ENV0, idx = IDX)
+# Do the gated and the ungated sweeps of this document DIFFER? A pruned tuple
+# that would have contributed something other than the fold identity is exactly
+# what makes them differ, and the `min`/`prod` case below is the one document
+# in this file where that happens.
+function gate_changes_values(json, env = ENV0, idx = IDX)
     rhs = EA.expression_from_json(json)
-    try
-        withenv("ESS_GEOM_OVERLAP_GATE_VERIFY" => "1") do
-            EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
-        end
-        return false
-    catch e
-        e isa EarthSciAST.TreeWalkError || rethrow()
-        return true
+    got = EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
+    ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
+        EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
     end
+    return !bitsame(got, ref)
 end
 
 const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
@@ -162,7 +161,7 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
         @test count(!iszero, got) == 4
         @test any(iszero, got)
         @test all(x -> !(x === -0.0), got)
-        @test !verify_throws(A_IJ)             # ... and the oracle agrees
+        @test !gate_changes_values(A_IJ)       # ... and the two agree
     end
 
     @testset "apply contraction: RESTRICT-driven, bit-identical" begin
@@ -184,7 +183,7 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
             @test (nm, dd, dg, dn) == (nm, 1, 0, 0)
             @test (nm, bitsame(got, ref)) == (nm, true)
             @test (nm, length(unique(got)) > 1) == (nm, true)
-            @test (nm, verify_throws(j, env)) == (nm, false)
+            @test (nm, gate_changes_values(j, env)) == (nm, false)
         end
     end
 
@@ -200,7 +199,7 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
             got, ref, dd, _, _ = both_ways(j)
             @test (nm, dd) == (nm, 1)
             @test (nm, bitsame(got, ref)) == (nm, true)
-            @test (nm, verify_throws(j)) == (nm, false)
+            @test (nm, gate_changes_values(j)) == (nm, false)
         end
     end
 
@@ -224,17 +223,17 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
             @test (nm, all(x -> x > 0, got)) == (nm, true) # gated: candidates only
             # The differential oracle FIRES here. Without this the neutrality
             # asserted above would be unfalsifiable.
-            @test (nm, verify_throws(j)) == (nm, true)
+            @test (nm, gate_changes_values(j)) == (nm, true)
         end
     end
 
     # ---- switches, declines and counters ----
 
-    @testset "kill switch restores the ungated dense sweep" begin
+    @testset "the interpreter takes the ungated dense sweep" begin
         rhs = EA.expression_from_json(A_IJ)
         d0, g0, n0 = EA._GEOM_OVERLAP_DRIVE[], EA._GEOM_OVERLAP_GATE_ONLY[],
                      EA._GEOM_OVERLAP_NONE[]
-        withenv("ESS_GEOM_OVERLAP_GATE_DISABLE" => "1") do
+        EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
         end
         @test EA._GEOM_OVERLAP_DRIVE[] - d0 == 0
@@ -295,7 +294,7 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
         got3 = EA._materialize_geom_array(rhs3, env3, nothing, IDX, sh3)
         @test (EA._GEOM_OVERLAP_DRIVE[] - d3, EA._GEOM_OVERLAP_GATE_ONLY[] - g3,
                EA._GEOM_OVERLAP_NONE[] - n3) == (0, 0, 1)
-        ref3 = withenv("ESS_GEOM_OVERLAP_GATE_DISABLE" => "1") do
+        ref3 = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_geom_array(rhs3, env3, nothing, IDX, sh3)
         end
         @test bitsame(got3, ref3)
@@ -327,16 +326,6 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
         @test c.pairs == a.pairs
     end
 
-    @testset "verify-mode assertion catches what `==` would miss" begin
-        a = Float64[0.0 1.0; NaN 3.0]
-        b = Float64[-0.0 1.0; NaN 3.0]
-        @test_throws EarthSciAST.TreeWalkError EA._assert_geom_overlap_bit_identical(
-            a, b, ["i", "j"])
-        c = Float64[0.0 1.0; 2.0 3.0]
-        @test_throws EarthSciAST.TreeWalkError EA._assert_geom_overlap_bit_identical(
-            a, c, ["i", "j"])
-        @test EA._assert_geom_overlap_bit_identical(a, copy(a), ["i", "j"]) === nothing
-    end
 
 end
 

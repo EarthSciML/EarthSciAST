@@ -83,13 +83,19 @@ mutable struct BuildInspection
     # names the build-time consumers actually READ, so it is a record of this
     # build, not a re-reading of the document.
     param_classes::Dict{String,Symbol}
+    # Which tier every rule of this build landed on (API_SPEC §5.8). The same
+    # record `compiler_report(prob)` returns, put here too so a caller who
+    # builds through `build_evaluator` — or whose build REFUSED — can still read
+    # it. Empty until the build that owns this record finishes.
+    compiler_report::CompilerReport
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
                                     Dict{String,Float64}(),
                                     Dict{String,ASTExpr}(),
                                     Dict{String,Int}(),
-                                    Dict{String,Symbol}())
+                                    Dict{String,Symbol}(),
+                                    CompilerReport(:native))
 
 """
     DiscreteMaterializer()
@@ -287,11 +293,6 @@ function _discover_geometry_vars(model::Model, equations::Vector{Equation},
              defs[name] isa OpExpr) || continue
             push!(inline_vars, name)
         end
-        get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
-            (println(stderr, "[geom-inline] has_geometry=", has_geometry,
-                     " has_pia=", has_pia, " inlined=", length(inline_vars),
-                     " (live-tainted ∩ geometry-derived): ",
-                     sort(collect(inline_vars))); flush(stderr))
     end
     return (; has_geometry, has_pia, has_setup_geometry,
             ring_vars, setup_vars, defs, inline_vars)
@@ -368,9 +369,9 @@ end
 #   * an observed whose declared shape does not resolve to concrete extents, or
 #     whose defining aggregate's own output ranges are not the dense `1…n` the
 #     buffer layout addresses;
-#   * every array observed at all with `ESS_ARRAY_OBS_INLINE=1`, which restores
-#     the pre-change build exactly. Both build forms materialize on the same
-#     terms — see the `mat_array_vars` note in `_build_lower_and_classify`.
+#   * every array observed at all under `compiler=:interpreter`, which is the
+#     inlining build. Both build forms materialize on the same terms — see the
+#     `mat_array_vars` note in `_build_lower_and_classify`.
 #
 # GHOST CELLS. A materialized observed is a first-class array field of its
 # declared shape, so a gather OUTSIDE that shape reads the ghost literal 0.0 —
@@ -379,7 +380,7 @@ end
 # that a reader gathers out of range used to beta-reduce its body at the
 # out-of-range index instead; the discretizations' region-split boundary
 # stencils keep their gathers in range, which the conformance goldens pin.)
-_array_obs_inline_forced() = get(ENV, "ESS_ARRAY_OBS_INLINE", "") == "1"
+_array_obs_inline_forced() = _compiler_plan_now().name === :interpreter
 
 # Candidate set: the promoted array observeds (post cadence cut) that are not
 # read by a discrete-cadence fill. `discrete_defs_refs` is the set of names
@@ -452,13 +453,7 @@ function _collect_materialized_array_obs(model::Model, equations::Vector{Equatio
         # esm 1.0.0: an observed's definition is an equation, so the loop above
         # has already seen every one of them.
         setdiff!(out, hits)
-        get(ENV, "ESS_ARRAY_OBS_DEBUG", "") == "1" && !isempty(hits) &&
-            (println(stderr, "[array-obs] structural, kept inline: ",
-                     join(sort(collect(hits)), ", ")); flush(stderr))
     end
-    get(ENV, "ESS_ARRAY_OBS_DEBUG", "") == "1" &&
-        (println(stderr, "[array-obs] materialize candidates: ",
-                 join(sort(collect(out)), ", ")); flush(stderr))
     return out
 end
 
@@ -1484,10 +1479,17 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
             "ic($(target)): scoped-reference target resolves to no array cells; the " *
             "target must name a lifted/array state variable of the flattened system"))
         # Compile the coordinate field ONCE (indices as params) when possible; else
-        # fall back to the per-cell resolve+compile. `ESS_STENCIL_DISABLE` forces the
-        # per-cell path for both this and the symbolic stencil compiler.
+        # fall back to the per-cell resolve+compile. With the affine stencil tier
+        # off, both this and the symbolic stencil compiler take the per-cell path.
         fast = _stencil_disabled() ? nothing :
                _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays)
+        # A `nothing` here is not by itself a refusal: `_resolve_field_ic`'s
+        # first two steps (a loaded const-array field, a broadcast constant)
+        # cost the same per cell whatever the compiler is. Only its third step
+        # — the coordinate expression — resolves and compiles per cell, and it
+        # raises the refusal itself.
+        _record_rule!("ic($(target))", :equation,
+                      fast === nothing ? :setup_percell : :setup_compiled)
         for cell in cells
             idxs = collect(Int, cell)
             eq_ics[_cell_key(target, idxs)] = fast === nothing ?
@@ -2458,7 +2460,7 @@ function _build_lower_and_classify(model::Model;
     # keyed on that set keeps holding): the promoted array observeds that get a
     # dense buffer instead of being spliced into each reader. Phase 3 narrows it
     # again to the ones whose extents actually resolve. Empty (byte-identical)
-    # under `ESS_ARRAY_OBS_INLINE=1` and for any model with no promoted array
+    # under `compiler=:interpreter` and for any model with no promoted array
     # observed.
     #
     # BOTH EMITTERS. This was `:inplace`-only, on the reasoning that the `:oop`
@@ -2980,7 +2982,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # freshly allocated extended vector, whatever the in-place buffer held
     # before — and folds it into an accumulator it then discards.
     # `mat_levels` carries the `:inplace` shape
-    # `(scalars, _KernelSection, scans, array_contractions)` that
+    # `(scalars, _KernelSection, scans, _ContractionSection)` that
     # `_fill_obs_levels!` consumes; `mat_levels_oop` carries the same fills as
     # `(scalars, kernels, oop_plans, scans, array_contractions)` because the
     # out-of-place runners take the kernel and its plan separately rather than a
@@ -3022,7 +3024,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                        lvl_scans, lvl_acs))
             else
                 push!(mat_levels,
-                      (lvl_scalars, _make_kernel_section(merged), lvl_scans, lvl_acs))
+                      (lvl_scalars, _make_kernel_section(merged), lvl_scans,
+                       _make_contraction_section(lvl_acs)))
             end
         end
     end
@@ -3052,10 +3055,9 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # merge signature/clone does not model — merge first, then xcse runs over
     # the (fewer) merged kernels. Bound ONCE to a fresh local (`acc_kernels`),
     # never reassigned, so every downstream closure captures it unboxed.
-    # ESS_OOP_MERGE_DISABLE=1 (or its form-neutral alias
-    # ESS_KERNEL_CLASS_MERGE_DISABLE=1) restores the unmerged build byte for
-    # byte. The ESS_STENCIL_DISABLE per-cell reference is untouched either
-    # way: its trees live on `percell_scalar`, never in the kernel list.
+    # With the class merge off the build is the unmerged one, byte for byte.
+    # The per-cell reference is untouched either way: its trees live on
+    # `percell_scalar`, never in the kernel list.
     acc_kernels, class_merge_diag = @_bench :class_merge _merge_acc_kernel_classes(acc_kernels_pre)
 
     # ---- Common-subexpression elimination on the scalar/indexed-D RHS (ess-r7h) ----
@@ -3079,10 +3081,9 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # shared scalar prelude slot; each kernel's inv def becomes a bare cache
     # read. `:inplace` only — a compiled backend emits the prelude itself and
     # never consults the `_CSECache` the kernel-side reads do. Runs BEFORE
-    # the percell append (the ESS_STENCIL_DISABLE reference trees stay exactly
-    # the `_compile` output) and BEFORE the cadence split (a hoisted
-    # parameter-only def still joins the const tier). ESS_XCSE_DISABLE=1
-    # restores the pre-B4 build byte for byte.
+    # the percell append (the per-cell reference trees stay exactly the
+    # `_compile` output) and BEFORE the cadence split (a hoisted
+    # parameter-only def still joins the const tier).
     xcse_diag = if form === :inplace && !_xcse_disabled()
         _share_kernel_invariants!(rhs_list, scalar_prelude, scalar_cache,
                                   acc_kernels)
@@ -3090,8 +3091,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         _XCSE_NONE_DIAG
     end
 
-    # ---- Forced per-cell reference (ESS_STENCIL_DISABLE=1) ----
-    # The disabled fallback's compiled per-cell nodes join the scalar list —
+    # ---- The per-cell reference, with the affine stencil tier off ----
+    # Its compiled per-cell nodes join the scalar list —
     # each cell evaluated by the plain scalar walker `_eval_node`, with no merge
     # machinery of any kind between it and the equation: the maximally
     # independent oracle the acc≡per-cell differential tests compare against.
@@ -3132,7 +3133,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         _make_rhs_with_obs_buffers(
             _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
                       const_slots, time_slots, dyn_slots, scan_folds,
-                      array_contractions),
+                      _make_contraction_section(array_contractions)),
             _ObsExtVec(n_total), n_states, Tuple(mat_levels))
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
@@ -3247,10 +3248,33 @@ end
 # and every lane-spec `.specs` collection inside this build canonicalizes
 # content-equal interp tables to ONE object. The pool is installed here — the
 # single entry every build path funnels through — and torn down in `finally`,
-# save/restore so a nested build cannot clobber an outer one's pool. With
-# `ESS_LANE_INTERN_DISABLE=1` the pool stays `nothing` and the build is
-# byte-for-byte today's un-interned build (the differential oracle).
-function _build_evaluator_impl(model::Model; kwargs...)
+# save/restore so a nested build cannot clobber an outer one's pool. Under
+# `:interpreter` the pool stays `nothing` and the build is the un-interned one.
+#
+# `compiler` (API_SPEC §5.8) is resolved FIRST, because the plan it expands to
+# is what every tier gate below — starting with the two pool gates on the next
+# lines — reads its own on/off state from.
+function _build_evaluator_impl(model::Model;
+                               compiler::Symbol = :native,
+                               kwargs...)
+    plan = _plan_for(compiler)
+    record = _BuildRecord(plan)
+    insp = get(kwargs, :inspect, nothing)
+    return _with_compiler_plan(plan) do
+        _with_build_record(record) do
+            try
+                return _build_evaluator_impl_pools(model; kwargs...)
+            finally
+                # The report is filled even when the build THREW: a refusal is
+                # exactly the case a caller wants the partial tier record for.
+                insp isa BuildInspection &&
+                    (insp.compiler_report = _finish_report(record))
+            end
+        end
+    end
+end
+
+function _build_evaluator_impl_pools(model::Model; kwargs...)
     prev = _LANE_INTERN_POOL[]
     _LANE_INTERN_POOL[] = _lane_intern_disabled() ? nothing :
                           Dict{_LaneInternKey,Any}()
@@ -3427,8 +3451,8 @@ function _build_evaluator_impl_inner(model::Model;
     # is never mutated. `_template_sites` is keyed by node identity, so its
     # entries are re-keyed through the intern map (a merged key is harmless:
     # the only site consumers are `haskey` boundary checks, see the pre-audit
-    # audits/intern_preaudit_2026-07-19.md). `ESS_INTERN_DISABLE=1` skips the
-    # pass, restoring the pre-interning build exactly.
+    # audits/intern_preaudit_2026-07-19.md). With interning off the pass is
+    # skipped entirely.
     if !_intern_disabled()
         ictx = _InternCtx()
         model = _intern_model(model, ictx)
@@ -3544,8 +3568,8 @@ end
 # eliminated across equations as well as within one RHS (ess-r7h). Array
 # (`faq`) derivative equations compile to whole-array access kernels
 # instead of N per-cell scalar nodes — see `_compile_faq_equation!`.
-# `percell_scalar` carries the ESS_STENCIL_DISABLE=1 reference's compiled
-# per-cell nodes (empty on every default build); the caller appends them to
+# `percell_scalar` carries the per-cell reference's compiled nodes (empty
+# whenever the affine stencil tier is on); the caller appends them to
 # `rhs_list` so they evaluate through the plain scalar walker — the maximally
 # independent differential oracle. Returns
 # `(scalar_entries, percell_scalar, acc_kernels, scan_folds, array_contractions)`.
@@ -3573,16 +3597,14 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
     # compile-once variant / bound-body caches and the shared obs-inline memo
     # move from per-equation to per-build (sound because every compile input
     # threaded below is the same object for every equation; see the _XEqStore
-    # note in stencil.jl). `ESS_XEQ_VARIANT_DISABLE=1` restores the
-    # per-equation caches exactly.
+    # note in stencil.jl). Off, the caches are per equation.
     xeq = _xeq_disabled() ? nothing : _XEqStore()
-    # Cross-equation direct class emission (acc_merge.jl,
-    # ESS_CROSS_EQ_CLASS_EMIT_DISABLE): pool every per-cell equation's cell
-    # entries here and run the scalarizer-level class emitter ONCE, above the
-    # equation loop, so structurally identical cells arising in DIFFERENT
-    # equations share a class kernel directly — no post-hoc repair needed.
-    # `nothing` (the kill switch, or per-equation direct emission itself off)
-    # keeps the per-equation `_acc_from_cell_entries` call byte for byte.
+    # Cross-equation direct class emission (acc_merge.jl): pool every per-cell
+    # equation's cell entries here and run the scalarizer-level class emitter
+    # ONCE, above the equation loop, so structurally identical cells arising in
+    # DIFFERENT equations share a class kernel directly — no post-hoc repair
+    # needed. `nothing` (the stage off, or per-equation direct emission itself
+    # off) keeps the per-equation `_acc_from_cell_entries` call byte for byte.
     pooled_cells = _cross_eq_class_emit_enabled() ? Tuple{Int,_Node}[] : nothing
 
     for eq in derivative_eqs
@@ -3598,6 +3620,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
                   _sub_preserving(eq.rhs, scalar_inline)
             rhs_r = _resolve_indices(rhs, array_var_info, var_map, const_registry, pgather)
             push!(scalar_entries, (idx, rhs_r))
+            _record_rule!(state_name.name, :equation, :scalar)
 
         elseif _is_indexed_D_lhs(eq.lhs)
             # D(index(var, k...)) = expr  — indexed scalar derivative
@@ -3619,6 +3642,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
                   _sub_preserving(eq.rhs, scalar_inline)
             rhs_r = _resolve_indices(rhs, array_var_info, var_map, const_registry, pgather)
             push!(scalar_entries, (idx, rhs_r))
+            _record_rule!(cname, :equation, :scalar)
 
         elseif _is_faq_D_lhs(eq.lhs)
             _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
@@ -3954,7 +3978,8 @@ end
 #                         (ess-scan, scan.jl). Counted instead of `:affine`,
 #                         since the term kernels are what the affine build
 #                         actually produced.
-#   :percell_disabled   — ESS_STENCIL_DISABLE=1 forced the per-cell reference
+#   :percell_disabled   — the affine stencil tier is off, so the equation took
+#                         the per-cell reference
 #                         (plain compiled scalar nodes on `rhs_list`, evaluated
 #                         by `_eval_node` — the differential oracle)
 # One increment per array equation, at the cascade's dispatch below. Cheap
@@ -3990,14 +4015,43 @@ end
 #                           nonzero means genuinely residual work the direct
 #                           stages did not see.
 const _CASCADE_TALLY = Dict{Symbol,Int}()
-_tally_cascade!(k::Symbol) = (_CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1; nothing)
+
+# The ROUTING keys — the ones that say where an array equation finally landed,
+# exactly one per equation. Bumping one of these closes the rule the cascade
+# opened and files it in the build's `CompilerReport`; every other key is a
+# counter and only adds to the per-build tally.
+const _CASCADE_ROUTING_TIER = Dict{Symbol,Symbol}(
+    :affine             => :affine,
+    :affine_fused_retry => :affine,
+    :scan               => :scan,
+    :array_contraction_codegen => :array_contraction_codegen,
+    # A per-cell SCALARIZE at build whose cell entries then go to the codegen
+    # tier as ordinary access kernels — build cost, not right-hand-side cost.
+    :percell_loop       => :percell_build,
+    :percell_acc        => :percell_build,
+    # …except under the forced per-cell reference, where they stay plain scalar
+    # nodes on `rhs_list` and are walked per cell on every call.
+    :percell_disabled   => :interpreter,
+)
+
+function _tally_cascade!(k::Symbol)
+    _CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1
+    rec = _build_record()
+    if rec !== nothing
+        rec.tally[k] = get(rec.tally, k, 0) + 1
+        tier = get(_CASCADE_ROUTING_TIER, k, nothing)
+        tier === nothing || _land_rule!(tier)
+    end
+    return nothing
+end
 _reset_cascade_tally!() = (empty!(_CASCADE_TALLY); nothing)
 
-# One-line identity of a faq equation for the `ESS_STENCIL_DEBUG=1` notices: the
-# derivative target and its output axes with their extents, e.g.
-# `D(conc)[rcv=1024]`. Showing the LHS expression instead prints every field of
-# every node it contains — several hundred characters that identify the equation
-# no better than this does, and that bury the notice they are part of.
+# One-line identity of a faq equation, for the compiler report's rule label and
+# for a refusal's message: the derivative target and its output axes with their
+# extents, e.g. `D(conc)[rcv=1024]`. Showing the LHS expression instead prints
+# every field of every node it contains — several hundred characters that
+# identify the equation no better than this does, and that bury the line they
+# are part of.
 function _faq_debug_label(lhs_body, idx_names::Vector{String}, range_iters)
     name = "?"
     if lhs_body isa OpExpr && lhs_body.op == "D" && !isempty(lhs_body.args)
@@ -4087,8 +4141,8 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # OUTPUT cell (the contracted indices k… kept SYMBOLIC, the output indices i…
     # concrete) instead of unrolling the body into `∏|k…|` terms per cell — so build
     # IR is O(1) in the reduction length per cell (vs O(∏|k…|), quadratic-or-worse).
-    # The loop cells route to `percell_scalar` (→ `rhs_list`, the `ESS_STENCIL_DISABLE`
-    # scalar-walk REFERENCE path), so the loop node NEVER reaches the affine /
+    # The loop cells route to `percell_scalar` (→ `rhs_list`, the scalar-walk
+    # REFERENCE path), so the loop node NEVER reaches the affine /
     # acc-merge / access-kernel / oop-merge / codegen passes, which model unrolled
     # scalar terms — the same safety envelope the scalar-reduction loop uses. Gated
     # exactly as the scalar path (const integer bounds, ⊕∈{+,*,max,min}, no join /
@@ -4152,8 +4206,8 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # (per-cell CSE + loop-invariant hoisting on the access spine), so it is a clean
     # win over the vectorized path it supersedes. Returns `nothing` (covered
     # untouched) for anything it cannot model, falling through to the symbolic /
-    # per-cell chain. `ESS_STENCIL_DISABLE=1` forces the per-cell reference (the
-    # differential-test escape hatch).
+    # per-cell chain. With this tier off the equation takes that per-cell
+    # reference, which is the differential test's oracle.
     #
     # A CONSTANT-bound contraction with no join gate is UNROLLED into a plain
     # ⊕-fold body (`_unrolled_contraction_body`) and lowered by the SAME box
@@ -4167,6 +4221,11 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # body, and a `_ScanFold` accumulates over the result after the kernel
     # section. Both passes are O(N); the unrolled guarded fold below is O(N²).
     # Declining leaves `scan_fold === nothing` and changes nothing.
+    #
+    # Open this rule's report entry first: every tier below either lands it
+    # (through the routing tally) or refuses it, and a refusal raised several
+    # frames deeper reads the label from here so it can name what it refused.
+    _open_rule!(_faq_debug_label(lhs_body, idx_names, range_iters), :equation)
     scan_fold = nothing
     affine_kernels = nothing
     affine_first_try = false
@@ -4217,9 +4276,6 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     if affine_kernels !== nothing
         _tally_cascade!(scan_fold !== nothing ? :scan :
                         affine_first_try ? :affine : :affine_fused_retry)
-        get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
-            (println(stderr, "[ess-affine] FIRED: ", length(affine_kernels),
-                     " access kernels for ", _output_idx_strings(lhs_op)); flush(stderr))
         append!(acc_kernels, affine_kernels)
         scan_fold === nothing || push!(scan_folds, scan_fold)
         return nothing
@@ -4259,9 +4315,9 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # call than any build-time saving. Neither effect is visible in the node
     # lowering counter, so do not re-decide the ordering from that counter alone.
     #
-    # `ESS_STENCIL_DISABLE=1` is excluded deliberately: it is documented as
-    # forcing the per-cell reference, and a reference that routes through this
-    # tier instead is not a reference. The floor stays as a conservative guard on
+    # A build with the affine stencil tier off is excluded deliberately: it is
+    # the per-cell reference, and a reference that routes through this tier
+    # instead is not a reference. The floor stays as a conservative guard on
     # the small-reduction surface, not as a tier-selection knob — above or below
     # it, this tier is now reached only when the alternative is per-cell.
     #
@@ -4285,43 +4341,25 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
                 const_registry=const_registry, pgather=pgather,
                 param_sym_set=param_sym_set, reg_funcs=reg_funcs)
         if ac !== nothing
-            _tally_cascade!(:array_contraction)
-            get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
-                (println(stderr, "[ess-array-contraction] FIRED: ",
-                         length(ac.outs), " output cells, ",
-                         prod(length(c) for c in contract_const), " contracted");
-                 flush(stderr))
+            _tally_cascade!(:array_contraction_codegen)
             push!(array_contractions, ac)
             return nothing
         end
         # A DECLINE is the interesting event: the gate admitted the equation, so
-        # the body failed to resolve or to lower with its indices symbolic and
-        # the equation silently drops to the per-cell build this tier exists to
-        # avoid. Announced for the same reason the affine tier announces its own
-        # declines — a cascade tally can say which tier won, never which one
-        # nearly did.
-        get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
-            (println(stderr, "[ess-array-contraction] DECLINED ",
-                     "(symbolic body did not lower) -> per-cell: ",
-                     _faq_debug_label(lhs_body, idx_names, range_iters),
-                     " contracted=", prod(length(c) for c in contract_const));
-             flush(stderr))
+        # the body failed to resolve or to lower with its indices symbolic, and
+        # the equation drops to the per-cell build this tier exists to avoid.
+        # Filed against the rule the cascade has open, the way the affine tier
+        # files its own — a tally can say which tier won, never which one nearly
+        # did, and the report is where that belongs.
+        _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
     end
 
     # Anything the affine build cannot model takes the per-cell fallback, whose
     # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,
-    # under ESS_STENCIL_DISABLE=1, stay plain per-cell scalar nodes (the
+    # with the affine stencil tier off, stay plain per-cell scalar nodes (the
     # differential reference).
     _tally_cascade!(use_contraction_loop ? :percell_loop :
                     _stencil_disabled() ? :percell_disabled : :percell_acc)
-    # ESS_STENCIL_DEBUG announced every affine FIRE but stayed silent on every
-    # DECLINE — backwards for diagnosis, since the declines are what cost O(cells)
-    # IR and the fires are what you wanted. Name the equation that fell back, so a
-    # cascade tally reading `:percell_acc => 1` can be turned into "which one".
-    get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
-        (println(stderr, "[ess-affine] DECLINED (no affine model) -> per-cell: ",
-                 _faq_debug_label(lhs_body, idx_names, range_iters));
-         flush(stderr))
     _compile_faq_percell!(percell_scalar, acc_kernels, covered, lhs_body, rhs_body;
         idx_names=idx_names, range_iters=range_iters,
         contract_names=contract_names, contract_ranges=contract_ranges,
@@ -4364,11 +4402,18 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     # builds, the same isolation the per-cell loop tier's compile relies on.
     node = try
         _compile(marker, var_map, param_sym_set, reg_funcs)
-    catch
+    catch err
+        # errors.jl: running out of memory, blowing the stack or being
+        # interrupted says nothing about whether this tier can model the
+        # equation, and swallowing one here is worse than elsewhere — this is
+        # the tier that exists because the per-cell alternative exhausts
+        # memory, so the decline would send the build straight back into the
+        # allocation that just failed.
+        _is_resource_error(err) && rethrow()
         return nothing
     end
     # The output cells, in `Iterators.product` order (dimension 1 fastest) — the
-    # order `_ac_seek!` reconstructs the loop counters in.
+    # order the emitted odometer reconstructs the loop counters in.
     n_cells = prod(length(r) for r in range_iters)
     outs = Vector{Int}(undef, n_cells)
     c = 0
@@ -4398,11 +4443,24 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         outs[c] = idx
     end
     rngs = [_expand_int_range(ranges_dict[n]) for n in idx_names]
-    return _ArrayContraction(out_refs,
-                             Int[first(r) for r in rngs],
-                             Int[step(r) for r in rngs],
-                             Int[length(r) for r in rngs],
-                             outs, node)
+    los  = Int[first(r) for r in rngs]
+    stps = Int[step(r) for r in rngs]
+    lens = Int[length(r) for r in rngs]
+    # Emit the nest (array_contraction.jl). The whole equation is ONE body, so
+    # the emission is O(1) in both extents like the nest itself. A `Symbol` back
+    # is the emitter's decline reason, and this tier has no interpreted form to
+    # demote to, so the decline IS the refusal — raised here, where the rule the
+    # cascade has open is still this equation, rather than several stages later
+    # where only "the assembled right-hand side" is left to name.
+    gen = _try_codegen_array_contraction(out_refs, los, stps, lens, outs, node)
+    gen isa Symbol && _refuse_rule(
+        _faq_debug_label(lhs_body, idx_names, range_iters),
+        "the whole-array contraction tier accepted this equation, but its " *
+        "generated form declined it ($(gen)). Build with " *
+        "compiler=:interpreter, which turns this tier off and takes the " *
+        "equation down the per-cell path, or grow the emitter to cover this " *
+        "construct")
+    return gen
 end
 
 # ---- Stage: faq per-cell fallback ----
@@ -4417,8 +4475,8 @@ end
 # boundaries / makearray regions / distinct valences form their own
 # (N-independent) groups. The DEFAULT merge target is the unified access-kernel
 # IR (`_acc_from_cell_entries`, acc_merge.jl → indirect-outs `_AccKernel`s,
-# codegen-compiled or interpreted); `ESS_STENCIL_DISABLE=1` skips the merge and
-# keeps the compiled per-cell nodes as plain scalar entries (`percell_scalar`
+# codegen-compiled or interpreted); with the affine stencil tier off the merge
+# is skipped and the compiled per-cell nodes stay plain scalar entries (`percell_scalar`
 # → `rhs_list`, evaluated by `_eval_node`) — the maximally independent
 # reference the acc≡per-cell differentials compare against. The
 # equation-derived inputs are keyword-only (several share a type, so
@@ -5051,9 +5109,20 @@ keyed by name. `index(name, i)` references in the equations are inlined as
 literal values. Used to inject `__stgfw_` Fornberg weight arrays for
 `stencil_gen` models with `spacing="from_grid"`.
 """
-function build_evaluator(esm::AbstractDict;
-                         model_name::Union{Nothing,AbstractString}=nothing,
-                         kwargs...)
+function build_evaluator(esm::AbstractDict; compiler::Symbol = :native, kwargs...)
+    # The requested plan is installed HERE, not only at `_build_evaluator_impl`:
+    # the binning-coordinate derivation and value invention below run first and
+    # hand their results to the build as const arrays, so a per-cell setup sweep
+    # they perform is never seen again. Outside this scope they would run under
+    # the process default, which is not strict and not the interpreter.
+    return _with_compiler_plan(_plan_for(compiler)) do
+        _build_evaluator_dict(esm; compiler = compiler, kwargs...)
+    end
+end
+
+function _build_evaluator_dict(esm::AbstractDict;
+                               model_name::Union{Nothing,AbstractString}=nothing,
+                               kwargs...)
     kwd = Dict{Symbol,Any}(kwargs)
 
     # ---- Phase 4: AUTOMATIC projection-pushdown desugar (opt-in) ----
@@ -5266,9 +5335,8 @@ function build_evaluator(flat::FlattenedSystem; kwargs...)
     # model's `expression_templates` block), and the tree-walk impl entry
     # expands them with SITE RECORDING so the affine build can compile each body
     # once and call it as a sub-kernel (the RFC's compile-once tier) — the
-    # SINGLE evaluator-side expansion point. `ESS_TEMPLATE_REF_DISABLE=1`
-    # (Expand at load) is the one differential escape hatch (RFC §12 gate 3).
-    # A no-op for a reference-free system.
+    # SINGLE evaluator-side expansion point. A no-op for a reference-free
+    # system.
     #
     # `flattened_to_esm` does not carry events, so they are refused HERE, while
     # the flattened system still holds them (esm-spec §9.6.6).

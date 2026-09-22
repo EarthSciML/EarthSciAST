@@ -555,8 +555,37 @@ pub struct RecurrenceInfo {
     pub lag_proven: bool,
 }
 
+/// Which compiler this compiled model is serving (API_SPEC §5.8).
+///
+/// The array runtime has three evaluation tiers under it — the tape, the
+/// whole-array overlay and the per-cell oracle — and the historical routing
+/// walks down them silently. A named compiler fixes which of them may run, so
+/// that what ran is a property of the NAME and not of the input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum RuntimeMode {
+    /// The historical routing: the tape where it lowers, the overlay and the
+    /// per-cell oracle beneath it. Every entry point that is not
+    /// [`crate::problem::esm_problem`] — `compile_array`, the `debug_*` seams,
+    /// the adapters — builds this.
+    #[default]
+    Legacy,
+    /// [`crate::Compiler::Native`]: the tape and nothing under it. Every rule
+    /// is taped (construction refused otherwise), so the build-time and
+    /// output-time observed passes are served from the tape rather than from
+    /// the overlay.
+    Native,
+    /// [`crate::Compiler::Interpreter`]: no tape and no overlay — the per-cell
+    /// oracle everywhere, as the reference the other compilers are checked
+    /// against.
+    Interpreter,
+}
+
 /// Compiled, parameter-sweep-ready ODE model for array-op models.
 pub struct ArrayCompiled {
+    /// Which compiler this model serves. See [`RuntimeMode`]; set by
+    /// [`crate::problem::esm_problem`] right after the build, and
+    /// [`RuntimeMode::Legacy`] for every other entry point.
+    pub(crate) runtime_mode: RuntimeMode,
     /// Every state spelling an `operator_compose` renaming match DELETED,
     /// mapped onto the survivor (issue #230). Carried from
     /// `FlattenMetadata::merged_variable_renames` by

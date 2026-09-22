@@ -218,6 +218,7 @@ pub(crate) struct TapeBuilder<'m> {
     regions: Vec<RegionSpec>,
     /// Inline array-literal payloads, one per lowered array-valued `const`.
     const_data: Vec<ConstArrayData>,
+    interp_tables: Vec<InterpTable>,
     state_vars: Vec<StateRef>,
     state_ix: FxHashMap<String, u16>,
     obs_reads: Vec<String>,
@@ -252,6 +253,7 @@ struct RuleTxn {
     plans: usize,
     regions: usize,
     const_data: usize,
+    interp_tables: usize,
     dy_writes: usize,
     stream_lens: [usize; 3],
     hoist_journal: usize,
@@ -286,6 +288,7 @@ impl<'m> TapeBuilder<'m> {
             plans: Vec::new(),
             regions: Vec::new(),
             const_data: Vec::new(),
+            interp_tables: Vec::new(),
             state_vars,
             state_ix,
             obs_reads: Vec::new(),
@@ -855,10 +858,14 @@ impl<'m> TapeBuilder<'m> {
     // anyway, so there is no shared answer to reproduce.
 
     /// Lower a §9.2 closed-function call inside an output box. The `datetime.*`
-    /// family is expanded into tape arithmetic; everything else in the registry
-    /// bails by name.
+    /// family is expanded into tape arithmetic, the `interp.*` family into one
+    /// [`Instr::Interp`]; everything else in the registry bails by name.
     fn lower_closed_fn(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
         let name = self.closed_fn_name(node)?;
+        if let Some(kind) = InterpKind::from_name(name) {
+            return self.lower_interp(kind, node, Some(bx));
+        }
+        self.datetime_call_ok(name, node)?;
         let t = self.lower_expr(&node.args[0], bx)?;
         // A value whose box IS the enclosing output box is the vectorization of
         // a per-cell SCALAR, which is what the registry wants; anything else
@@ -880,6 +887,10 @@ impl<'m> TapeBuilder<'m> {
     /// array argument, which the registry rejects.
     fn lower_wholesale_closed_fn(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
         let name = self.closed_fn_name(node)?;
+        if let Some(kind) = InterpKind::from_name(name) {
+            return self.lower_interp(kind, node, None);
+        }
+        self.datetime_call_ok(name, node)?;
         let t = self.lower_wholesale(&node.args[0])?;
         if self.lv_box(&t).is_some() {
             bail_tape!(
@@ -891,8 +902,8 @@ impl<'m> TapeBuilder<'m> {
     }
 
     /// The name of a `fn` node this lowering can expand, or a bail saying why
-    /// not. Arity and the document precision are checked here too, so both
-    /// call sites agree on what they refuse.
+    /// not. Only membership is decided here; each family checks its own arity
+    /// (they differ) in [`Self::datetime_call_ok`] / [`Self::lower_interp`].
     fn closed_fn_name<'n>(&self, node: &'n Arc<ExpressionNode>) -> LResult<&'n str> {
         let Some(name) = node.name.as_deref() else {
             bail_tape!("op: `fn` with no `name`");
@@ -909,9 +920,16 @@ impl<'m> TapeBuilder<'m> {
             "datetime.julian_day",
             "datetime.is_leap_year",
         ];
-        if !DATETIME.contains(&name) {
+        if !DATETIME.contains(&name) && InterpKind::from_name(name).is_none() {
             bail_tape!("op: closed function `{name}` has no tape lowering (esm-spec §9.2)");
         }
+        Ok(name)
+    }
+
+    /// The `datetime.*`-only half of what [`Self::closed_fn_name`] used to
+    /// check: unary arity and the binary64 precision precondition. Both call
+    /// sites run it, so they agree on what they refuse.
+    fn datetime_call_ok(&self, name: &str, node: &Arc<ExpressionNode>) -> LResult<()> {
         if node.args.len() != 1 {
             // The registry answers a wrong arity with `closed_function_arity`,
             // which `eval_fn` turns into its NaN sentinel. Bailing routes the
@@ -928,7 +946,266 @@ impl<'m> TapeBuilder<'m> {
                  resolves its kernels at execution)"
             );
         }
-        Ok(name)
+        Ok(())
+    }
+
+    // -- closed functions (esm-spec §9.2): the `interp.*` family -------------
+    //
+    // Unlike `datetime.*`, this family is NOT expanded into tape arithmetic.
+    // Its cell search is a scan of a table whose length is fixed at build time
+    // but is not small — the corpus runs to 94x49 — and unrolling that into a
+    // select chain would put thousands of instructions on the tape per call
+    // site, times the 460-odd call sites the corpus has. So it gets one
+    // instruction whose element semantics ARE the registry functions
+    // (`Instr::Interp`), which is what `eval_fn` calls: the taped rule and the
+    // per-cell oracle run the same code on the same operands.
+    //
+    // That also removes the reason `datetime.*` bails under a Float32
+    // document. The calendar lowering emits ordinary tape instructions, whose
+    // kernels resolve to binary32 there; this one does not emit any, and
+    // `eval_fn` lifts the registry's binary64 result without rounding it, so
+    // the two agree at either document precision.
+    //
+    // The table and the axes are read at build time, which the format
+    // guarantees: §9.2's argument shape contract requires them to be literal
+    // `const`-op arrays (diagnostics `interp_table_not_const` /
+    // `interp_axis_not_const`), so there is no runtime-table case to lower.
+
+    /// Lower one §9.2 `interp.*` call into a single [`Instr::Interp`].
+    ///
+    /// `bx` is `Some` inside an output box — where an array-valued query is
+    /// the vectorization of a per-cell scalar and must therefore span exactly
+    /// that box — and `None` on the wholesale path, where an array-valued
+    /// query is a genuine array argument.
+    fn lower_interp(
+        &mut self,
+        kind: InterpKind,
+        node: &Arc<ExpressionNode>,
+        bx: Option<&LBox>,
+    ) -> LResult<LV> {
+        let name = kind.name();
+        // §9.2 puts the query LAST for the two tensor entries and FIRST for
+        // the search entry.
+        let (arity, ix, iy) = match kind {
+            InterpKind::Linear => (3, 2, None),
+            InterpKind::Bilinear => (5, 3, Some(4)),
+            InterpKind::SearchSorted => (2, 0, None),
+        };
+        if node.args.len() != arity {
+            bail_tape!(
+                "op: closed function `{name}` with arity {}",
+                node.args.len()
+            );
+        }
+        let table = self.interp_table(kind, node)?;
+        let x = self.lower_interp_query(&node.args[ix], bx)?;
+        let y = match iy {
+            Some(i) => Some(self.lower_interp_query(&node.args[i], bx)?),
+            None => None,
+        };
+
+        // The output box, taken from whichever queries are arrays.
+        let mut obox: Option<(DimU, DimI)> = None;
+        for q in [Some(&x), y.as_ref()].into_iter().flatten() {
+            let Some((shape, origin)) = self.lv_box(q) else {
+                continue;
+            };
+            match &obox {
+                None => obox = Some((shape, origin)),
+                Some((s, o)) => {
+                    if s.as_slice() != shape.as_slice() || o.as_slice() != origin.as_slice() {
+                        bail_tape!(
+                            "op: closed function `{name}` with query arguments in \
+                             different boxes"
+                        );
+                    }
+                }
+            }
+        }
+        if let Some((shape, origin)) = &obox {
+            match bx {
+                // Inside a box, anything that is not THE box is a real array
+                // argument, which the registry rejects with
+                // `closed_function_arg_type`.
+                Some(b)
+                    if shape.as_slice() != b.shape.as_slice()
+                        || origin.as_slice() != b.lo.as_slice() =>
+                {
+                    bail_tape!(
+                        "op: closed function `{name}` on an array-valued query (the \
+                         registry takes a scalar)"
+                    );
+                }
+                // Wholesale, `eval_fn` broadcasts an array query over the
+                // fixed table for `interp.linear` ONLY; the other two entries
+                // reach `expect_scalar` and come back as the NaN sentinel,
+                // which only the oracle produces.
+                None if kind != InterpKind::Linear => {
+                    bail_tape!(
+                        "wholesale: closed function `{name}` on an array-valued query \
+                         (the registry takes a scalar)"
+                    );
+                }
+                Some(_) | None => {}
+            }
+        }
+
+        // A call whose queries are all compile-time known is one number.
+        let lit_y = match &y {
+            None => Some(f64::NAN),
+            Some(LV::Lit(v)) => Some(*v),
+            Some(_) => None,
+        };
+        if let (LV::Lit(xv), Some(yv)) = (&x, lit_y) {
+            return Ok(LV::Lit(table.at(*xv, yv)));
+        }
+
+        let tix = self.interp_tables.len() as u32;
+        self.interp_tables.push(table);
+        let want = self
+            .lv_cadence(&x)
+            .max(y.as_ref().map_or(Cadence::Const, |v| self.lv_cadence(v)));
+        let sec = self.placement(want);
+        let (shape, origin, scalar) = match &obox {
+            None => (DimU::new(), DimI::new(), true),
+            Some((s, o)) => (s.clone(), o.clone(), false),
+        };
+        let out = self.new_slot(&shape, &origin, scalar, sec);
+        let instr = Instr::Interp {
+            table: tix,
+            x: self.op_of(&x),
+            y: y.as_ref().map(|v| self.op_of(v)),
+            out,
+        };
+        self.emit(instr, sec);
+        Ok(if scalar {
+            LV::Scalar(out)
+        } else {
+            LV::Arr(out)
+        })
+    }
+
+    /// Lower one query argument of an `interp.*` call, on whichever of the two
+    /// paths the call arrived by.
+    fn lower_interp_query(&mut self, arg: &Expr, bx: Option<&LBox>) -> LResult<LV> {
+        match bx {
+            Some(b) => self.lower_expr(arg, b),
+            None => self.lower_wholesale(arg),
+        }
+    }
+
+    /// Read and validate the constant table + axes of an `interp.*` call.
+    ///
+    /// Validation is delegated to the registry itself — the table is offered
+    /// to `evaluate_closed_function` with a probe query, and every §9.2
+    /// load-time diagnostic (length mismatch, too-short axis, NaN in an axis,
+    /// non-monotonic axis) is raised there before the query is looked at. So
+    /// the tape's acceptance condition IS the registry's, with no second
+    /// statement of the rules to drift from it, and a table the registry
+    /// rejects bails to the oracle, which is what turns the registry error
+    /// into `eval_fn`'s NaN sentinel.
+    fn interp_table(&self, kind: InterpKind, node: &Arc<ExpressionNode>) -> LResult<InterpTable> {
+        use crate::registered_functions::{ClosedArg, evaluate_closed_function};
+        let name = kind.name();
+        let (table, axis_x, axis_y, probe) = match kind {
+            InterpKind::Linear => {
+                let (_, t) = self.interp_const_arg(name, &node.args[0], "table", 1)?;
+                let (_, ax) = self.interp_const_arg(name, &node.args[1], "axis", 1)?;
+                let probe = vec![
+                    ClosedArg::Array(t.clone()),
+                    ClosedArg::Array(ax.clone()),
+                    ClosedArg::Scalar(0.0),
+                ];
+                (t, ax, Vec::new(), probe)
+            }
+            InterpKind::Bilinear => {
+                let (_, ax) = self.interp_const_arg(name, &node.args[1], "axis_x", 1)?;
+                let (_, ay) = self.interp_const_arg(name, &node.args[2], "axis_y", 1)?;
+                let t = self.interp_const_arg_2d(name, &node.args[0], ay.len())?;
+                let probe = vec![
+                    ClosedArg::Array2D(t.chunks(ay.len().max(1)).map(<[f64]>::to_vec).collect()),
+                    ClosedArg::Array(ax.clone()),
+                    ClosedArg::Array(ay.clone()),
+                    ClosedArg::Scalar(0.0),
+                    ClosedArg::Scalar(0.0),
+                ];
+                (t, ax, ay, probe)
+            }
+            InterpKind::SearchSorted => {
+                let (_, xs) = self.interp_const_arg(name, &node.args[1], "xs", 1)?;
+                let probe = vec![ClosedArg::Scalar(0.0), ClosedArg::Array(xs.clone())];
+                (Vec::new(), xs, Vec::new(), probe)
+            }
+        };
+        if let Err(e) = evaluate_closed_function(name, &probe) {
+            bail_tape!(
+                "op: closed function `{name}` whose table the registry rejects ({}): {}",
+                e.code,
+                e.message
+            );
+        }
+        Ok(InterpTable {
+            kind,
+            table,
+            axis_x,
+            axis_y,
+        })
+    }
+
+    /// One rank-1 `const`-op array argument of an `interp.*` call, flattened
+    /// through `eval_const` — the same walk the oracle's `eval` performs on
+    /// that node, so the two read the same numbers (Float32 ingress rounding
+    /// included).
+    fn interp_const_arg(
+        &self,
+        name: &str,
+        arg: &Expr,
+        label: &str,
+        rank: usize,
+    ) -> LResult<(Vec<usize>, Vec<f64>)> {
+        let Expr::Operator(n) = arg else {
+            bail_tape!(
+                "op: closed function `{name}`'s `{label}` argument is not an inline \
+                 `const` array (esm-spec §9.2 requires a literal `const`)"
+            );
+        };
+        if n.op != "const" {
+            bail_tape!(
+                "op: closed function `{name}`'s `{label}` argument is a `{}` node, not \
+                 an inline `const` array (esm-spec §9.2)",
+                n.op
+            );
+        }
+        match eval_const(n) {
+            // `iter()` is the LOGICAL row-major walk, which for the rank-2
+            // `interp.bilinear` table is §9.2's `table[i][j]` layout.
+            Value::Array(a) if a.ndim() == rank => {
+                Ok((a.shape().to_vec(), a.iter().copied().collect()))
+            }
+            _ => bail_tape!(
+                "op: closed function `{name}`'s `{label}` argument is not a rank-{rank} \
+                 `const` array"
+            ),
+        }
+    }
+
+    /// The rank-2 `table` argument of `interp.bilinear`, flattened ROW-MAJOR.
+    ///
+    /// The inner extent is taken from the LITERAL's own shape and checked
+    /// against `len(axis_y)` here, rather than inferred by dividing the
+    /// element count: the oracle builds its nested `ClosedArg::Array2D` from
+    /// that same shape, so a table whose rows are the wrong length has to be
+    /// refused even when the element count happens to divide.
+    fn interp_const_arg_2d(&self, name: &str, arg: &Expr, ny: usize) -> LResult<Vec<f64>> {
+        let (shape, flat) = self.interp_const_arg(name, arg, "table", 2)?;
+        if shape[1] != ny {
+            bail_tape!(
+                "op: closed function `{name}`'s `table` row length {} != len(axis_y)={ny} \
+                 (interp_axis_length_mismatch)",
+                shape[1]
+            );
+        }
+        Ok(flat)
     }
 
     /// Expand one `datetime.*` entry over an already-lowered `t_utc`.
@@ -2476,7 +2753,7 @@ pub(super) fn build_tape_program(
     seg_invariant_names: &HashSet<String>,
     // Step 4: run the kernel-fusion post-pass with the given superop
     // configuration (`None` = the unfused program, bitwise-identical
-    // results — the `ESS_TAPE_FUSE_DISABLE` arm).
+    // results — the arm `build_tape_opts` gives the fused-vs-unfused tests).
     fuse: Option<super::fuse::SuperopCfg>,
 ) -> (TapeProgram, (usize, usize)) {
     let rhs_rules: &[RhsRule] = &compiled.rhs_rules;
@@ -2539,9 +2816,19 @@ pub(super) fn build_tape_program(
 
     // ---- RHS rules ---------------------------------------------------------
     for (i, rule) in rhs_rules.iter().enumerate() {
+        // The state's NAME, not its slot index. A refusal has to name the
+        // rule an author can find (esm-libraries-spec §2.5.10: "naming the
+        // compiler, the rule — an equation or an observed,
+        // component-qualified — and the reason"), and `D(slot 0)` names
+        // nothing: the flat slot order is an implementation detail that
+        // coupling reorders.
         let name = match rule {
-            RhsRule::Scalar { slot, .. } => format!("D(slot {slot})"),
-            RhsRule::IndexedScalar { slot, .. } => format!("D(slot {slot})"),
+            RhsRule::Scalar { slot, .. } | RhsRule::IndexedScalar { slot, .. } => {
+                match compiled.scalar_state_names.get(*slot) {
+                    Some(var) => format!("D({var})"),
+                    None => format!("D(slot {slot})"),
+                }
+            }
             RhsRule::ArrayLoop { var_name, .. } => format!("D({var_name})"),
         };
         b.begin_rule(RuleInfo {
@@ -2564,7 +2851,12 @@ pub(super) fn build_tape_program(
     }
 
     // ---- exports -----------------------------------------------------------
-    let exports = b.compute_exports(observed_rules, rhs_rules, &observed_names);
+    let exports = b.compute_exports(
+        observed_rules,
+        rhs_rules,
+        &observed_names,
+        compiled.is_native(),
+    );
 
     // ---- flatten + fusion + liveness + coloring ----------------------------
     let vn_hits = b.vn_hits();
@@ -2780,6 +3072,7 @@ impl<'m> TapeBuilder<'m> {
             plans: self.plans.len(),
             regions: self.regions.len(),
             const_data: self.const_data.len(),
+            interp_tables: self.interp_tables.len(),
             dy_writes: self.dy_writes.len(),
             stream_lens: [
                 self.streams[0].len(),
@@ -2796,6 +3089,7 @@ impl<'m> TapeBuilder<'m> {
         self.plans.truncate(txn.plans);
         self.regions.truncate(txn.regions);
         self.const_data.truncate(txn.const_data);
+        self.interp_tables.truncate(txn.interp_tables);
         self.dy_writes.truncate(txn.dy_writes);
         for s in 0..3 {
             let stream = &mut self.streams[s];
@@ -2976,8 +3270,22 @@ impl<'m> TapeBuilder<'m> {
         observed_rules: &[AlgebraicRule],
         rhs_rules: &[RhsRule],
         observed_names: &HashSet<String>,
+        // `native` (API_SPEC §5.8): export EVERY observed, because under it the
+        // build-time hoist, the per-segment seed, the inspection snapshot and
+        // the output-node pass are all served from this program rather than
+        // from the whole-array overlay, and each of them may read an observed
+        // the probe cone below does not reach — a caller-requested array
+        // observed, or a hoisted static field. A publish nothing reads costs
+        // nothing anyway: `Export` only executes when a reader asked for it
+        // (`TapeExec::exports_active`).
+        export_all: bool,
     ) -> Vec<(String, SlotId)> {
         let mut needed: HashSet<String> = HashSet::new();
+        if export_all {
+            for r in observed_rules {
+                needed.insert(observed_rule_var(r).clone());
+            }
+        }
 
         // (a) Direct observed reads of every fallback rule body: the
         // interpreter resolves them through the runtime observed map, so a
@@ -3210,6 +3518,7 @@ impl<'m> TapeBuilder<'m> {
             plans: std::mem::take(&mut self.plans),
             regions: std::mem::take(&mut self.regions),
             const_data: std::mem::take(&mut self.const_data),
+            interp_tables: std::mem::take(&mut self.interp_tables),
             state_vars: std::mem::take(&mut self.state_vars),
             obs_reads: std::mem::take(&mut self.obs_reads),
             dy_writes: std::mem::take(&mut self.dy_writes),

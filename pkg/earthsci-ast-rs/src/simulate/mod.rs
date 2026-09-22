@@ -87,6 +87,33 @@ mod tests {
     use super::*;
     use crate::types::ExpressionNode;
 
+    fn solution_with_rows(names: &[&str], namespace: Option<&str>) -> Solution {
+        Solution {
+            time: vec![0.0],
+            state: names.iter().map(|_| vec![0.0]).collect(),
+            state_variable_names: names.iter().map(|n| n.to_string()).collect(),
+            retcode: ReturnCode::Success,
+            metadata: SolutionMetadata {
+                namespace: namespace.map(str::to_string),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn a_qualified_name_reaches_a_bare_row_only_through_its_own_namespace() {
+        let sol = solution_with_rows(&["x", "North.u"], Some("M"));
+        assert_eq!(sol.index_of("x"), Some(0));
+        assert_eq!(sol.index_of("M.x"), Some(0));
+        assert_eq!(sol.index_of("M.North.u"), Some(1));
+        // Another model's `x`, a typo, or a bare row with no recorded
+        // namespace is not this row.
+        assert_eq!(sol.index_of("Other.x"), None);
+        assert_eq!(sol.index_of("Typo.x"), None);
+        let unnamed = solution_with_rows(&["x"], None);
+        assert_eq!(unnamed.index_of("M.x"), None);
+    }
+
     #[test]
     fn interpret_arithmetic() {
         // 2 * (3 + 4) = 14

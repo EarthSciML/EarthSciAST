@@ -7,10 +7,11 @@
 //! descriptors and observed exports (Step 3a), and executes it as the
 //! DEFAULT production RHS hot path through the fast slab executor in
 //! [`exec`] (Step 3b): `simulate` builds the program once per solve and each
-//! segment's RHS scratch runs it; `ESS_TAPE_DISABLE=1` reverts wholesale to
-//! the legacy interpreter, and `ESS_TAPE_CHECK=N` dual-runs and bit-compares
-//! the first N calls. The `debug_eval_rhs*` oracles, the samples pass and
-//! the FD Jacobian closure stay on the legacy interpreter path.
+//! segment's RHS scratch runs it. Which evaluator runs is the caller's
+//! choice of compiler (API_SPEC §5.8) and nothing else: `native` is this
+//! tape, `interpreter` is the per-cell oracle. The `debug_eval_rhs*` oracles,
+//! the samples pass and the FD Jacobian closure stay on the legacy
+//! interpreter path.
 //!
 //! ## Instruction set
 //!
@@ -73,7 +74,6 @@ pub mod xla_emit;
 
 pub(crate) use exec::tape_disabled;
 pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
-pub(crate) use fuse::fuse_disabled;
 pub(crate) use ir::*;
 use lower::build_tape_program;
 
@@ -186,6 +186,26 @@ impl fmt::Display for TapeBuildReport {
     }
 }
 
+/// Where ONE rule of a model landed, for `compiler_report` (API_SPEC §5.8).
+///
+/// Deliberately plain data rather than a borrow of the program: the program is
+/// built and discarded, and the record outlives it on the Problem.
+#[derive(Clone, Debug)]
+pub(crate) struct TapeRuleRecord {
+    /// The rule's variable name, as the compiled model spells it (the caller
+    /// qualifies it with the component).
+    pub name: String,
+    /// `"observed"` or `"state derivative"`.
+    pub kind: &'static str,
+    /// The cadence tier the rule runs at: `"const"` (once per solve, at
+    /// setup), `"segment"` (once per forcing-refresh segment) or
+    /// `"continuous"` (every right-hand-side call).
+    pub cadence: &'static str,
+    /// `None` when the rule lowered onto the tape; otherwise the DEEPEST
+    /// decline reason reached while trying.
+    pub fallback_reason: Option<String>,
+}
+
 /// Assemble the report from a finished program.
 pub(crate) fn make_report(prog: &TapeProgram, vn_hits: (usize, usize)) -> TapeBuildReport {
     let mut opcode_counts: std::collections::HashMap<&'static str, usize> =
@@ -237,14 +257,11 @@ impl ArrayCompiled {
         &self,
         discrete_forcing: &HashSet<String>,
     ) -> (TapeProgram, TapeBuildReport) {
-        self.build_tape_opts(
-            discrete_forcing,
-            (!fuse_disabled()).then(fuse::SuperopCfg::from_env),
-        )
+        self.build_tape_opts(discrete_forcing, Some(fuse::SuperopCfg::from_env()))
     }
 
     /// [`Self::build_tape`] with the Step 4 fusion pass explicitly on/off
-    /// (the env-independent entry the fused-vs-unfused A/B tests drive).
+    /// (the entry the fused-vs-unfused A/B tests drive).
     pub(crate) fn build_tape_opts(
         &self,
         discrete_forcing: &HashSet<String>,
@@ -262,6 +279,45 @@ impl ArrayCompiled {
     /// discard entry for inspection tooling (`examples/tape_report.rs`).
     pub fn debug_build_tape_report(&self) -> TapeBuildReport {
         self.build_tape(&HashSet::new()).1
+    }
+
+    /// Where every rule of this model LANDS, in program order — the per-rule
+    /// half of `compiler_report` (API_SPEC §5.8).
+    ///
+    /// [`TapeBuildReport::fallbacks`] answers only "which rules did not lower",
+    /// which is the wrong half for a caller asking what a compiler did: a
+    /// document with no fallbacks reports an empty list and says nothing about
+    /// the rules that DID lower, nor at which cadence they run. This walks the
+    /// program's whole rule table instead, so a taped rule is named too.
+    ///
+    /// Build-and-discard, like [`Self::debug_build_tape_report`]: the program
+    /// the solve runs is compiled separately.
+    pub(crate) fn tape_rule_records(
+        &self,
+        discrete_forcing: &HashSet<String>,
+    ) -> (Vec<TapeRuleRecord>, TapeBuildReport) {
+        let (prog, report) = self.build_tape(discrete_forcing);
+        let records = prog
+            .rules
+            .iter()
+            .map(|r| TapeRuleRecord {
+                name: r.name.clone(),
+                kind: match r.kind {
+                    RuleKind::Observed(_) => "observed",
+                    RuleKind::Rhs(_) => "state derivative",
+                },
+                cadence: match r.cadence {
+                    Cadence::Const => "const",
+                    Cadence::Segment => "segment",
+                    Cadence::Continuous => "continuous",
+                },
+                fallback_reason: match &r.status {
+                    RuleStatus::Taped => None,
+                    RuleStatus::Fallback(reason) => Some(reason.clone()),
+                },
+            })
+            .collect();
+        (records, report)
     }
 
     /// Step 4 diagnostic: dump per-group shape statistics of the fused

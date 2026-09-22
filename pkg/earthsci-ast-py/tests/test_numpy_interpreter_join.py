@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 from conftest import VALID_DIR
 
+from earthsci_ast.compiler import CompilerPolicy, use_policy
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.numpy_interpreter import (
     EvalContext,
@@ -556,3 +557,99 @@ def test_join_resolved_through_simulate_pipeline() -> None:
 
     assert final_u(res_join) == pytest.approx(2.0, abs=1e-6)
     assert final_u(res_full) == pytest.approx(4.0, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# The gated PURE MAP: a join/filter with no contracted range
+# ---------------------------------------------------------------------------
+#
+# Every other gated tier needs a contraction, so before `_eval_faq_gated_map`
+# this shape — output indices as the node's ONLY ranges — walked per cell by
+# construction. Each test below compares the whole-box tier against the per-cell
+# walk BITWISE, reaching the walk by naming the compiler that turns every fast
+# tier off rather than by patching a module (esm-libraries-spec §2.5.10).
+#
+# Bitwise, not within tolerance: with no contracted range there is no ⊕-fold, so
+# there is no summation order for a whole-box pass to reassociate. The two paths
+# evaluate the same body at the same cells, and anything else is a defect.
+
+
+def _per_cell(node: ExprNode, ctx: EvalContext) -> np.ndarray:
+    """``node``'s value from the reference evaluator (``compiler='interpreter'``)."""
+    with use_policy(CompilerPolicy(compiler="interpreter", every_tier_off=True)):
+        return np.asarray(eval_expr(node, ctx), dtype=float)
+
+
+def _whole_box(node: ExprNode, ctx: EvalContext) -> tuple[np.ndarray, dict[str, int]]:
+    """``node``'s value under ``compiler='native'``, with the tiers it landed on."""
+    policy = CompilerPolicy(compiler="native")
+    with use_policy(policy):
+        got = np.asarray(eval_expr(node, ctx), dtype=float)
+    return got, policy.report.tiers()
+
+
+def _gated_map_node(semiring: str, *, join: bool, filt: bool) -> ExprNode:
+    """``W[i,j] = w[i,j] * s[i]`` over a 3x3 box, gated by a value equi-join of
+    the two range symbols (the diagonal) and/or a ``j >= i`` filter."""
+    node = ExprNode(
+        op="faq",
+        output_idx=["i", "j"],
+        semiring=semiring,
+        expr=ExprNode(op="*", args=[_index("w", "i", "j"), _index("s", "i")]),
+        ranges={"i": {"from": "county"}, "j": {"from": "county"}},
+    )
+    if join:
+        node.join = [{"on": [["i", "j"]]}]
+    if filt:
+        node.filter = ExprNode(op=">=", args=["j", "i"])
+    return node
+
+
+def _gated_map_ctx() -> EvalContext:
+    idx = {"county": {"kind": "categorical", "members": ["A", "B", "C"]}}
+    rng = np.random.default_rng(20260921)
+    return _ctx({"w": rng.standard_normal((3, 3)), "s": rng.standard_normal(3)}, idx)
+
+
+@pytest.mark.parametrize("semiring", ["sum_product", "max_product", "min_sum", "bool_and_or"])
+@pytest.mark.parametrize(("join", "filt"), [(True, False), (False, True), (True, True)])
+def test_gated_pure_map_is_bitwise_the_per_cell_walk(semiring, join, filt) -> None:
+    node = _gated_map_node(semiring, join=join, filt=filt)
+    got, tiers = _whole_box(node, _gated_map_ctx())
+    want = _per_cell(_gated_map_node(semiring, join=join, filt=filt), _gated_map_ctx())
+    assert tiers.get("gated-map"), f"the gated pure-map tier did not serve the node: {tiers}"
+    assert got.shape == want.shape == (3, 3)
+    assert np.array_equal(got.view(np.uint64), want.view(np.uint64))
+
+
+def test_gated_pure_map_leaves_non_admitted_cells_at_the_semiring_identity() -> None:
+    """A cell the gate rejects gets 0̄ — the same thing the per-cell walk gives
+    it when its one candidate term is skipped (RFC §5.1)."""
+    node = _gated_map_node("sum_product", join=False, filt=True)
+    got, _ = _whole_box(node, _gated_map_ctx())
+    # `j >= i` admits the upper triangle only.
+    lower = np.tril(np.ones((3, 3), dtype=bool), -1)
+    assert np.all(got[lower] == 0.0)
+    assert np.any(got[~lower] != 0.0)
+
+
+def test_a_gate_that_admits_nothing_is_the_whole_identity_box() -> None:
+    node = _gated_map_node("sum_product", join=False, filt=True)
+    node.filter = ExprNode(op="<", args=["j", ExprNode(op="-", args=["i", 99])])
+    got, tiers = _whole_box(node, _gated_map_ctx())
+    want = _per_cell(node, _gated_map_ctx())
+    assert tiers.get("gated-map")
+    assert np.array_equal(got, np.zeros((3, 3)))
+    assert np.array_equal(got.view(np.uint64), want.view(np.uint64))
+
+
+def test_bool_and_or_normalizes_its_single_admitted_term() -> None:
+    """``⊕ = or`` is the one semiring whose FIRST fold step is not the identity:
+    it maps a term to 0.0/1.0. With no contraction that single step is the whole
+    reduction, so the whole-box tier has to reproduce it rather than pass the
+    body's own value through — which for this body is never 0 or 1."""
+    node = _gated_map_node("bool_and_or", join=False, filt=True)
+    got, tiers = _whole_box(node, _gated_map_ctx())
+    assert tiers.get("gated-map")
+    assert set(np.unique(got)) <= {0.0, 1.0}
+    assert np.array_equal(got.view(np.uint64), _per_cell(node, _gated_map_ctx()).view(np.uint64))

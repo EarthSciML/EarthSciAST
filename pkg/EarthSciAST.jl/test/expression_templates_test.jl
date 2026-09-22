@@ -71,11 +71,10 @@ end
     @testset "expansion at load time strips templates and produces inline AST" begin
         # esm-spec §9.6.4 Option B: by DEFAULT references survive into the typed
         # IR (see the reference-preserving assertions elsewhere). This test pins
-        # the Option-A image, so it loads under `ESS_TEMPLATE_REF_DISABLE=1` —
-        # the escape hatch that Expands at load — where the rate is the inline `*`.
-        file = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-            EarthSciAST.load_string(IOBuffer(ARRHENIUS_FIXTURE_JSON))
-        end
+        # the Option-A image, which `expanded_file` produces from the loaded
+        # file — where the rate is the inline `*`.
+        file = EarthSciAST.expanded_file(
+            EarthSciAST.load_string(IOBuffer(ARRHENIUS_FIXTURE_JSON)))
         rs = file.reaction_systems["chem"]
         # Sanity: expanded rate is a `*` with three args.
         rate1 = rs.reactions[1].rate
@@ -256,11 +255,10 @@ end
         ast_bound = replace(ARRHENIUS_FIXTURE_JSON,
             "\"bindings\": {\"A_pre\": 1.8e-12, \"Ea\": 1500}" =>
             "\"bindings\": {\"A_pre\": 1.8e-12, \"Ea\": {\"op\": \"*\", \"args\": [3, \"T\"]}}")
-        # Option B: references survive by default; pin the Option-A expanded image
-        # via the `ESS_TEMPLATE_REF_DISABLE=1` hatch.
-        file = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-            EarthSciAST.load_string(IOBuffer(ast_bound))
-        end
+        # Option B: references survive by default; pin the Option-A expanded
+        # image with `expanded_file`.
+        file = EarthSciAST.expanded_file(
+            EarthSciAST.load_string(IOBuffer(ast_bound)))
         rate = file.reaction_systems["chem"].reactions[1].rate
         @test rate isa OpExpr
         @test rate.op == "*"

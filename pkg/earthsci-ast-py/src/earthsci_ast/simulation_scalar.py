@@ -1,14 +1,19 @@
-"""Scalar-SymPy simulation pathway (0-D / non-array ODE systems).
+"""The ``sympy`` compiler (``API_SPEC.md`` §5.8): a lambdified SymPy SCALAR
+right-hand side.
 
-Implements the scalar-only branch of :func:`earthsci_ast.problem.solve`:
-the flattened system is lowered to a lambdified SymPy RHS (via
-:func:`earthsci_ast.sympy_bridge._compile_flat_rhs`), integrated with
-:func:`scipy.integrate.solve_ivp`, and its algebraic-only states and observed
-bindings are recovered along the output trajectory. This is the pathway used
-when the flattened system is scalar by BOTH of ``_choose_pathway``'s measures —
-no variable declares a resolvable ``shape`` (esm-spec §6.3) and no equation
-carries an array op — and has no data-loader fields and no top-level provider
-injections. It also owns :func:`_create_event_functions`,
+Implements the branch of :func:`earthsci_ast.problem.solve` that
+``compiler="sympy"`` selects: the flattened system is lowered to a lambdified
+SymPy RHS (via :func:`earthsci_ast.sympy_bridge._compile_flat_rhs`), integrated
+with :func:`scipy.integrate.solve_ivp`, and its algebraic-only states and
+observed bindings are recovered along the output trajectory.
+
+A caller reaches this module by NAMING it, never by having a document inspected:
+esm-libraries-spec §2.5.10 makes the choice of compiler the caller's and forbids
+a binding switching strategy on document content. ``sympy`` is a SPECIALTY
+compiler, one of the kind that runs only some documents: it refuses an array
+document (``earthsci_ast.problem._refuse_array_document_under_sympy``) and
+refuses an algebraic constraint it cannot solve, rather than dropping the
+equation. It also owns :func:`_create_event_functions`,
 the scalar continuous-event helper that builds SciPy root-finding callbacks
 from a system's ``continuous_events``. ``earthsci_ast.simulation`` re-exports
 this module's API and :func:`earthsci_ast.problem.solve` routes to

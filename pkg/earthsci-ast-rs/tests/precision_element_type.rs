@@ -39,7 +39,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::precision::{self, Precision};
-use earthsci_ast::{AssertionResult, SolveOptions, load_path, run_inline_tests};
+use earthsci_ast::{AssertionResult, SolveOptions, load_path};
 
 fn fixture(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -49,7 +49,20 @@ fn fixture(name: &str) -> std::path::PathBuf {
 
 fn run(name: &str) -> Vec<AssertionResult> {
     let file = load_path(fixture(name)).expect("fixture parses");
-    run_inline_tests(&file, None, &SolveOptions::default())
+    earthsci_ast::run_inline_tests_with_options(
+        &file,
+        // A per-variable `element_type` (esm-spec §11.3.1) is the one
+        // document condition under which the array runtime installs NO tape
+        // — it resolves its kernels at execution from one thread-local
+        // precision and fuses across rules — so `native` refuses these
+        // fixtures by NAME (API_SPEC §5.8).
+        &earthsci_ast::InlineTestOptions {
+            solve: SolveOptions::default(),
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
+            ..Default::default()
+        },
+        None,
+    )
 }
 
 /// The one assertion of the witness document, with its actual value.

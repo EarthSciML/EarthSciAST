@@ -35,9 +35,9 @@ time (including a constant subtree that raises) declines the WHOLE body:
 compiled closure, which reproduces today's behaviour — including the error —
 at evaluation time.
 
-Kill switch (oracle): ``ESS_NP_CODEGEN_DISABLE=1`` routes every body back to
-the compiled-closure tier (checked at the call sites in
-:mod:`numpy_interpreter`), so the two tiers can be diffed bitwise on any model.
+``compiler="interpreter"`` routes every body back to the compiled-closure tier
+(checked at the call sites in :mod:`numpy_interpreter`), so the two tiers can be
+diffed bitwise on any model by building the same document twice.
 """
 
 from __future__ import annotations
@@ -46,6 +46,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from .compiler import CompilerRefusedRuleError
 from .esm_types import ExprNode
 from .numpy_interpreter import (
     _CMP_UFUNCS,
@@ -402,6 +403,12 @@ def compile_box_body(
         code = compile(src, "<ess-numpy-codegen>", "exec")
         exec(code, em.ns)
         return em.ns["_boxfn"]
+    except CompilerRefusedRuleError:
+        # A compiler refusal is the one thing this catch-all must not swallow.
+        # The closure tier would raise it again on the first call, so declining
+        # here changes no answer — but it would hide WHICH tier the refusal came
+        # from behind a generic decline, and a refusal exists to be read.
+        raise
     except Exception:
         # Decline on ANY codegen-time failure (a folding subtree that raises,
         # recursion depth, the line cap): the closure-tier fallback reproduces

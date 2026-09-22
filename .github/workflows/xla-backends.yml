@@ -308,7 +308,7 @@ jobs:
       - name: compiled_rhs tier — Julia compiled producer
         id: producer
         env:
-          EARTHSCI_COMPILED_RHS_ADAPTER_JULIA: julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl
+          EARTHSCI_COMPILED_RHS_ADAPTER_JULIA: julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl --compiler native
         run: |
           mkdir -p conformance-results/compiled_rhs
           python3 scripts/run-compiled-rhs-conformance.py \

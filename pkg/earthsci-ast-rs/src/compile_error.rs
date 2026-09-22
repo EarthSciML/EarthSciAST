@@ -38,6 +38,36 @@ pub enum CompileError {
         detail: String,
     },
 
+    /// The chosen compiler cannot run one of this document's rules
+    /// (esm-spec §9.6.6 `compiler_refused_rule`, esm-libraries-spec §2.5.10).
+    ///
+    /// Raised at CONSTRUCTION, naming the compiler, the rule — an equation or
+    /// an observed, component-qualified — the cadence tier the rule would have
+    /// run at, and the DEEPEST decline reason reached while trying to lower
+    /// it. A refusal, never a fallback: the compiler does not run that rule on
+    /// a slower path, because a caller who asked for a compiled program and
+    /// got a tree walk has no way to find that out.
+    #[error(
+        "{code}: compiler '{compiler}' cannot run the {tier}-cadence {kind} '{rule}': {reason}. \
+         `native` is strict (esm-libraries-spec §2.5.10) — it refuses rather than demoting the \
+         rule to the per-cell oracle; build with `compiler: Some(Compiler::Interpreter)` to run \
+         this document on the reference evaluator",
+        code = crate::diagnostic::codes::COMPILER_REFUSED_RULE
+    )]
+    CompilerRefusedRule {
+        /// The vocabulary spelling of the compiler that refused.
+        compiler: &'static str,
+        /// `"observed"` or `"state derivative"`.
+        kind: &'static str,
+        /// The rule, component-qualified.
+        rule: String,
+        /// The cadence tier the rule would have run at: `"const"`,
+        /// `"discrete"` or `"continuous"`.
+        tier: &'static str,
+        /// The deepest decline reason reached while trying to lower it.
+        reason: String,
+    },
+
     /// The flattened system contains a feature the v1 simulator does not support
     /// (e.g. a join over data-derived columns).
     #[error("Unsupported feature '{feature}': {message}")]

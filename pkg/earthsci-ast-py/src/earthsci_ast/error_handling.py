@@ -365,6 +365,31 @@ UNSUPPORTED_CONSTRUCT = "unsupported_construct"
 
 
 # ===========================================================================
+# Compiler selection (API_SPEC.md §5.8, esm-libraries-spec.md §2.5.10,
+# esm-spec §9.6.6). ``esm_problem(..., compiler=...)`` names one member of a
+# closed vocabulary; these are the three ways naming one can fail. A binding
+# answers all three by refusing, never by running a different compiler than the
+# one the caller asked for.
+# ===========================================================================
+
+#: The ``compiler`` value is outside the closed vocabulary (``interpreter``,
+#: ``native``, ``xla``, ``mtk``, ``sympy``). Raised at construction, naming the
+#: value and the vocabulary.
+COMPILER_UNKNOWN = "compiler_unknown"
+
+#: The ``compiler`` value is in the vocabulary, but this binding, build or
+#: process cannot provide it -- a compiler the binding does not implement, a
+#: feature not compiled in, an optional package not installed. The message names
+#: what would have to be loaded or built.
+COMPILER_UNAVAILABLE = "compiler_unavailable"
+
+#: The chosen compiler cannot run this document. Raised at BUILD, naming the
+#: compiler, the rule (an equation or an observed, component-qualified) and the
+#: reason. A refusal, never a fallback.
+COMPILER_REFUSED_RULE = "compiler_refused_rule"
+
+
+# ===========================================================================
 # Running an arrayed definition written with a bare-index LHS (esm-spec §6.3.1,
 # CONFORMANCE_SPEC §5.36.2), reported when a model is built for simulation.
 # ===========================================================================

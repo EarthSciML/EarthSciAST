@@ -1,0 +1,351 @@
+{
+  "category": "compiler_agreement",
+  "version": "1.0",
+  "description": "Cross-compiler trajectory conformance (CONFORMANCE_SPEC.md \u00a75.44). Every compiler a binding offers must reproduce the Julia `interpreter` trajectory of the same document within the fixture's written band, or refuse it by name. Fixtures are referenced by path from the existing simulation tiers; nothing is authored here. `golden/<id>.json` is the Julia interpreter's trajectory for each fixture, minted with `--write-golden --bindings julia --compiler interpreter`.",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "compilers": {
+    "interpreter": {
+      "bindings_required": [
+        "julia",
+        "rust",
+        "python"
+      ],
+      "note": "Complete over the evaluable core (esm-libraries-spec \u00a72.5.10), so a refusal here is always red, whatever a fixture's `required` map says."
+    },
+    "native": {
+      "bindings_required": [
+        "julia",
+        "rust",
+        "python"
+      ],
+      "bindings_optional": [],
+      "note": "The strict default. Julia's strict build has landed, so julia must ANSWER for `native`; rust and python stay optional until theirs do and cross on the same one-way ratchet. A REFUSAL is governed by each fixture's `required` map, not by this list."
+    },
+    "xla": {
+      "bindings_required": [],
+      "bindings_optional": [
+        "julia",
+        "rust"
+      ],
+      "note": "Julia needs Reactant loaded; Rust needs the `xla` feature and XLA_EXTENSION_DIR. Unconfigured is `unavailable`, not `refused`."
+    },
+    "mtk": {
+      "bindings_required": [],
+      "bindings_optional": [
+        "julia"
+      ],
+      "note": "Julia only; needs ModelingToolkit loaded. The one compiler that runs events and implicit equations."
+    },
+    "sympy": {
+      "bindings_required": [
+        "python"
+      ],
+      "bindings_optional": [],
+      "note": "Python only; scalar documents only."
+    }
+  },
+  "scope_excluded": {
+    "typescript": "no Problem type, so no compiler to name (API_SPEC.md \u00a73, capability profiles)",
+    "go": "no Problem type, so no compiler to name (API_SPEC.md \u00a73, capability profiles)"
+  },
+  "tolerance_classes": {
+    "algebraic": {
+      "rtol": 1e-13,
+      "atol": 1e-300
+    },
+    "transcendental": {
+      "rtol": 1e-12,
+      "atol": 1e-300
+    },
+    "reduction": {
+      "rtol": 1e-11,
+      "atol_scaled": 1e-14
+    },
+    "float32": {
+      "rtol": 1e-05,
+      "atol": 1e-30
+    }
+  },
+  "excluded": [
+    {
+      "path": "fixtures/recurrence/06_recurrence_float32_state.esm",
+      "reason": "precision-changing; excluded until every compiler lowers a precision change (CONFORMANCE_SPEC \u00a75.38.4, ruling 2026-09-13). The `float32` class is carried above for when it is included."
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "diffusion_1d_dirichlet_n4",
+      "path": "conformance/pde_simulation/fixtures/diffusion_1d_dirichlet_n4.esm",
+      "model": "Diff1D",
+      "tags": [
+        "pde",
+        "diffusion",
+        "dirichlet",
+        "rank1"
+      ],
+      "source_tier": "pde_simulation",
+      "trajectory": {
+        "from": "manifest",
+        "initial_conditions": {
+          "u[1]": 0.8377852522924731,
+          "u[2]": 1.2010565162951536,
+          "u[3]": 1.2010565162951536,
+          "u[4]": 0.8377852522924732
+        },
+        "parameter_overrides": {},
+        "tspan": [
+          0.0,
+          0.05
+        ],
+        "saveat": [
+          0.025,
+          0.05
+        ],
+        "observed": []
+      },
+      "integration": {
+        "reltol": 1e-10,
+        "abstol": 1e-12
+      },
+      "tolerance": {
+        "source": "pde_simulation",
+        "rtol": 1e-06,
+        "atol": 1e-09,
+        "detail": "copied from tests/conformance/pde_simulation/manifest.json `tolerances.traj_golden_rtol` / `traj_golden_atol`, which that tier carries tier-wide"
+      },
+      "anchor": {
+        "source": "pde_simulation",
+        "detail": "that tier's `trajectory.analytic` block at the same save times; gated at its `traj_analytic_rtol` / `traj_analytic_atol`"
+      },
+      "required": {
+        "julia": [],
+        "rust": [],
+        "python": []
+      }
+    },
+    {
+      "id": "diffusion_2d_dirichlet_n3",
+      "path": "conformance/pde_simulation/fixtures/diffusion_2d_dirichlet_n3.esm",
+      "model": "Diff2D",
+      "tags": [
+        "pde",
+        "diffusion",
+        "dirichlet",
+        "rank2"
+      ],
+      "source_tier": "pde_simulation",
+      "trajectory": {
+        "from": "manifest",
+        "initial_conditions": {
+          "u[1,1]": 0.4999999999999999,
+          "u[1,2]": 0.7071067811865475,
+          "u[1,3]": 0.5,
+          "u[2,1]": 0.7071067811865475,
+          "u[2,2]": 1.0,
+          "u[2,3]": 0.7071067811865476,
+          "u[3,1]": 0.5,
+          "u[3,2]": 0.7071067811865476,
+          "u[3,3]": 0.5000000000000001
+        },
+        "parameter_overrides": {},
+        "tspan": [
+          0.0,
+          0.03
+        ],
+        "saveat": [
+          0.015,
+          0.03
+        ],
+        "observed": []
+      },
+      "integration": {
+        "reltol": 1e-10,
+        "abstol": 1e-12
+      },
+      "tolerance": {
+        "source": "pde_simulation",
+        "rtol": 1e-06,
+        "atol": 1e-09
+      },
+      "anchor": {
+        "source": "pde_simulation"
+      },
+      "required": {
+        "julia": [],
+        "rust": [],
+        "python": []
+      }
+    },
+    {
+      "id": "advection_1d_periodic_n4",
+      "path": "conformance/pde_simulation/fixtures/advection_1d_periodic_n4.esm",
+      "model": "Advect1D",
+      "tags": [
+        "pde",
+        "advection",
+        "periodic",
+        "rank1"
+      ],
+      "source_tier": "pde_simulation",
+      "trajectory": {
+        "from": "manifest",
+        "initial_conditions": {
+          "u[1]": 1.5,
+          "u[2]": 1.0,
+          "u[3]": 0.5,
+          "u[4]": 0.9999999999999999
+        },
+        "parameter_overrides": {},
+        "tspan": [
+          0.0,
+          0.1
+        ],
+        "saveat": [
+          0.05,
+          0.1
+        ],
+        "observed": []
+      },
+      "integration": {
+        "reltol": 1e-10,
+        "abstol": 1e-12
+      },
+      "tolerance": {
+        "source": "pde_simulation",
+        "rtol": 1e-06,
+        "atol": 1e-09
+      },
+      "anchor": {
+        "source": "pde_simulation"
+      },
+      "required": {
+        "julia": [],
+        "rust": [],
+        "python": []
+      }
+    },
+    {
+      "id": "faq_discretized_1d_heat",
+      "path": "fixtures/faq/15_discretized_1d_heat.esm",
+      "model": "Heat1D",
+      "tags": [
+        "faq",
+        "makearray",
+        "stencil",
+        "pde",
+        "diffusion"
+      ],
+      "source_tier": "simulate_faq",
+      "trajectory": {
+        "from": "inline_tests",
+        "test_id": "mode1_decay_t0.1",
+        "observed": [],
+        "detail": "`tspan`, `initial_conditions` and the save times come from the model's inline `tests` entry; the assertion times are the save times."
+      },
+      "integration": {
+        "reltol": 1e-10,
+        "abstol": 1e-12
+      },
+      "tolerance": {
+        "source": "derived",
+        "class": "reduction",
+        "rtol_class": 1e-11,
+        "atol_scaled_class": 1e-14,
+        "reltol_integration": 1e-10,
+        "abstol_integration": 1e-12,
+        "integration_factor": 100,
+        "integration_factor_detail": "the \u00a75.44.2 integration safety factor: a solver's reltol/abstol bound its LOCAL error per step, while the value compared here carries the GLOBAL error, which exceeds it by an integrator-dependent factor. Without it the band demands that every binding's integrator beat a promise no integrator makes, and two correct integrators read as a compiler disagreement. 100x on 1e-10 is still six orders below any compiler-level defect.",
+        "detail": "a method-of-lines stencil is a fold, and this fixture's interior rows cancel exactly; the scaled floor is what makes an exact zero comparable (CONFORMANCE_SPEC \u00a75.38.2)"
+      },
+      "anchor": {
+        "source": "inline_tests",
+        "detail": "the inline test's assertions are the discrete eigenvalue solution, computed outside every binding; gated at the assertion's own declared tolerance"
+      },
+      "required": {
+        "julia": [],
+        "rust": [],
+        "python": []
+      }
+    },
+    {
+      "id": "logistic_growth",
+      "path": "valid/tests_analyses_comprehensive.esm",
+      "model": "LogisticGrowth",
+      "tags": [
+        "ode",
+        "unshaped",
+        "transcendental"
+      ],
+      "source_tier": "inline_tests",
+      "trajectory": {
+        "from": "inline_tests",
+        "test_id": "closed_form_trajectory",
+        "observed": []
+      },
+      "integration": {
+        "reltol": 1e-10,
+        "abstol": 1e-12
+      },
+      "tolerance": {
+        "source": "derived",
+        "class": "transcendental",
+        "rtol_class": 1e-12,
+        "atol_class": 1e-300,
+        "reltol_integration": 1e-10,
+        "abstol_integration": 1e-12,
+        "integration_factor": 100,
+        "integration_factor_detail": "the \u00a75.44.2 integration safety factor: a solver's reltol/abstol bound its LOCAL error per step, while the value compared here carries the GLOBAL error, which exceeds it by an integrator-dependent factor. Without it the band demands that every binding's integrator beat a promise no integrator makes, and two correct integrators read as a compiler disagreement. 100x on 1e-10 is still six orders below any compiler-level defect."
+      },
+      "anchor": {
+        "source": "inline_tests",
+        "detail": "the closed-form logistic solution; gated at the assertion's own declared tolerance"
+      },
+      "required": {
+        "julia": [],
+        "rust": [],
+        "python": []
+      }
+    },
+    {
+      "id": "decay_solver_block",
+      "path": "valid/solver_block.esm",
+      "model": "Decay",
+      "tags": [
+        "ode",
+        "unshaped",
+        "transcendental",
+        "solver_block"
+      ],
+      "source_tier": "inline_tests",
+      "trajectory": {
+        "from": "inline_tests",
+        "test_id": "decays_by_half_life",
+        "observed": []
+      },
+      "integration": {
+        "reltol": 1e-10,
+        "abstol": 1e-12
+      },
+      "tolerance": {
+        "source": "derived",
+        "class": "transcendental",
+        "rtol_class": 1e-12,
+        "atol_class": 1e-300,
+        "reltol_integration": 1e-10,
+        "abstol_integration": 1e-12,
+        "integration_factor": 100,
+        "integration_factor_detail": "the \u00a75.44.2 integration safety factor: a solver's reltol/abstol bound its LOCAL error per step, while the value compared here carries the GLOBAL error, which exceeds it by an integrator-dependent factor. Without it the band demands that every binding's integrator beat a promise no integrator makes, and two correct integrators read as a compiler disagreement. 100x on 1e-10 is still six orders below any compiler-level defect."
+      },
+      "anchor": {
+        "source": "inline_tests",
+        "detail": "A(t) = 2 exp(-k t), a closed form outside every binding"
+      },
+      "required": {
+        "julia": [],
+        "rust": [],
+        "python": []
+      }
+    }
+  ]
+}

@@ -193,6 +193,34 @@ pub(super) fn run_reference(
                     .expect("ConstArray payload matches its shape");
                 slots[*out as usize] = Some(RefVal::Arr(arr));
             }
+            Instr::Interp { table, x, y, out } => {
+                let tbl = &prog.interp_tables[*table as usize];
+                let xv = resolve(prog, &slots, &state_arrays, &obs, params, t, x);
+                // `y` is read only by `interp.bilinear`; NaN stands in for the
+                // unread argument of the other two entries.
+                let yv = match y {
+                    Some(y) => resolve(prog, &slots, &state_arrays, &obs, params, t, y),
+                    None => RefVal::Scalar(f64::NAN),
+                };
+                let desc = &prog.slots[*out as usize];
+                let v = if desc.scalar {
+                    let (RefVal::Scalar(a), RefVal::Scalar(b)) = (&xv, &yv) else {
+                        panic!("scalar Interp with array operands");
+                    };
+                    RefVal::Scalar(tbl.at(*a, *b))
+                } else {
+                    let shape: Vec<usize> = desc.shape.to_vec();
+                    let xf = to_shape(&xv, &shape);
+                    let yf = to_shape(&yv, &shape);
+                    let mut o = ArrayD::<f64>::zeros(IxDyn(&shape));
+                    ndarray::Zip::from(&mut o)
+                        .and(&xf)
+                        .and(&yf)
+                        .for_each(|s, &a, &b| *s = tbl.at(a, b));
+                    RefVal::Arr(o)
+                };
+                slots[*out as usize] = Some(v);
+            }
             Instr::Reduce {
                 op,
                 init,

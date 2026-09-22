@@ -16,7 +16,7 @@ the gate a property of the ENGINE rather than of the document:
 * the NumPy array pathway evaluates observeds lazily, so it never reached one
   and the same document built and solved.
 
-Which answer you got therefore depended on which engine ``_choose_pathway``
+Which answer you got therefore depended on which engine the content-based router
 picked — and issue #231's declared-``shape`` routing arm moves documents across
 that line. These tests pin the gate at the document, on both pathways.
 
@@ -170,7 +170,7 @@ def test_a_dead_but_fully_lowered_observed_is_untouched(tmp_path):
 
     prob = esm_problem(path, (0.0, 1.0))
 
-    assert prob.pathway == "scalar"
+    assert prob.compiler == "native"
 
 
 def test_a_structural_time_derivative_under_an_lhs_aggregate_is_still_core(tmp_path):
@@ -180,7 +180,7 @@ def test_a_structural_time_derivative_under_an_lhs_aggregate_is_still_core(tmp_p
 
     prob = esm_problem(path, (0.0, 1.0))
 
-    assert prob.pathway == "array"
+    assert prob.compiler == "native"
 
 
 def test_the_gate_fires_before_any_engine_is_chosen(tmp_path):

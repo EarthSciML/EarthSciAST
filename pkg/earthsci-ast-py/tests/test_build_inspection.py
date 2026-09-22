@@ -17,6 +17,14 @@ Python mirror of the Julia tree-walk seams (EarthSciAST.jl
 3. ``run_inline_tests`` §6.6.5 assertions may target a state-free ARRAY OBSERVED
    (the observed-assertion form): the field is read from the inspection's
    setup arrays.
+
+The ragged document builds under ``compiler="interpreter"``. A ragged contracted
+range recomputes its bound per output point through the ``offsets`` factor, so
+there is no dense box to build and no whole-box tier is even attempted — which
+is a refusal under the strict ``native`` default (``API_SPEC.md`` §5.8), and one
+of the five shapes the compiler census names as needing a whole-box
+implementation written. It is the ragged BINDING these tests are about, so they
+run it where it runs.
 """
 
 from __future__ import annotations
@@ -229,7 +237,15 @@ def test_ragged_csr_simulation_namespaced_factors() -> None:
     """The flattened doc namespaces nedges -> Rag.nedges; the ragged bound and
     the values gather still evaluate (keyed factors bind by bare name)."""
     file = load_string(json.dumps(_RAGGED_DOC))
-    sim = simulate_states(file, (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12, saveat=[1.0])
+    sim = simulate_states(
+        file,
+        (0.0, 1.0),
+        method="LSODA",
+        rtol=1e-10,
+        atol=1e-12,
+        saveat=[1.0],
+        compiler="interpreter",
+    )
     u = [sim.states[-1][sim.var_map[f"Rag.u[{i}]"]] for i in (1, 2)]
     np.testing.assert_allclose(u, [30.0, 120.0], rtol=1e-8)
 
@@ -238,7 +254,14 @@ def test_run_inline_tests_observed_array_assertions() -> None:
     """§6.6.5 assertions on a state-free ARRAY OBSERVED evaluate through the
     build-inspection setup arrays (max/min of `gathered`)."""
     file = load_string(json.dumps(_RAGGED_DOC))
-    results = run_inline_tests(file, model_name="Rag", method="LSODA", rtol=1e-10, atol=1e-12)
+    results = run_inline_tests(
+        file,
+        model_name="Rag",
+        method="LSODA",
+        rtol=1e-10,
+        atol=1e-12,
+        compiler="interpreter",
+    )
     assert len(results) == 3
     for r in results:
         assert r.passed, f"{r.variable} {r.reduce}: {r.message}"
@@ -256,7 +279,10 @@ def test_build_inspection_fills_setup_arrays_and_observed_exprs() -> None:
     file = load_string(json.dumps(_RAGGED_DOC))
     insp = BuildInspection()
     result = solve(
-        esm_problem(file, (0.0, 1.0), inspect=insp), alg="LSODA", reltol=1e-10, abstol=1e-12
+        esm_problem(file, (0.0, 1.0), inspect=insp, compiler="interpreter"),
+        alg="LSODA",
+        reltol=1e-10,
+        abstol=1e-12,
     )
     assert result.retcode is ReturnCode.Success
     # Every state-free array observed is exposed under its flattened name.
@@ -271,9 +297,19 @@ def test_build_inspection_fills_setup_arrays_and_observed_exprs() -> None:
 def test_build_inspection_never_changes_the_simulation() -> None:
     """The returned trajectory is bit-identical with and without `inspect`."""
     file = load_string(json.dumps(_RAGGED_DOC))
-    plain = solve(esm_problem(file, (0.0, 1.0)), alg="LSODA", reltol=1e-10, abstol=1e-12)
+    plain = solve(
+        esm_problem(file, (0.0, 1.0), compiler="interpreter"),
+        alg="LSODA",
+        reltol=1e-10,
+        abstol=1e-12,
+    )
     inspected = solve(
-        esm_problem(load_string(json.dumps(_RAGGED_DOC)), (0.0, 1.0), inspect=BuildInspection()),
+        esm_problem(
+            load_string(json.dumps(_RAGGED_DOC)),
+            (0.0, 1.0),
+            inspect=BuildInspection(),
+            compiler="interpreter",
+        ),
         alg="LSODA",
         reltol=1e-10,
         abstol=1e-12,

@@ -21,7 +21,99 @@ use crate::simulate::{
 use diffsol::{Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, Sdirk, VectorHost};
 use std::collections::HashSet;
 
+/// A taped read-out of every observed, at one state and one time.
+///
+/// Under [`RuntimeMode::Native`] every rule is on the tape — construction
+/// refused the document otherwise — so the observeds a setup or output-time
+/// pass needs are already computed by the tape's own CONST / SEGMENT /
+/// CONTINUOUS sections. This runs the tape with its `Export` publishes forced
+/// on and hands back the published map.
+///
+/// It exists because the passes it replaces evaluated the SAME rules through
+/// the whole-array overlay, with the per-cell oracle beneath it and no entry in
+/// any fallback report — the silent demotion `esm-libraries-spec.md` §2.5.10
+/// refuses, and one that a gate over `Instr::Fallback` alone cannot see,
+/// because the overlay declines on its own terms. Serving them from the tape
+/// makes the gate honest: there is no second evaluator left to disagree.
+///
+/// The production RHS scratch keeps its exports OFF (with no fallback rule
+/// nothing can read them, and the publish is a memcpy per observed per call),
+/// so this carries its own scratch and its own slab.
+#[cfg(feature = "solve")]
+struct TapedObserveds {
+    scratch: RhsScratch,
+    /// The tape writes `dy` whether or not the caller wants it; a setup or
+    /// output-time pass does not, so it lands here and is discarded.
+    dy: Vec<f64>,
+}
+
+#[cfg(feature = "solve")]
+impl TapedObserveds {
+    fn new(compiled: &ArrayCompiled, tape: &(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)) -> Self {
+        let mut scratch = RhsScratch::new(&compiled.var_shapes);
+        scratch.set_const_arrays(Rc::clone(&compiled.const_scope));
+        scratch.install_tape(Rc::clone(&tape.0), Rc::clone(&tape.1));
+        scratch.set_exports_active(true);
+        TapedObserveds {
+            scratch,
+            dy: vec![0.0f64; compiled.n_states],
+        }
+    }
+
+    /// The map the last [`Self::at`] published, without running the tape
+    /// again — so the node-0 values that decided the row layout are recorded
+    /// rather than recomputed.
+    fn scratch_observeds(&self) -> &ArrMap {
+        self.scratch
+            .taped_observeds()
+            .expect("the harvester installs a tape on its own scratch")
+    }
+
+    /// Every observed's value at `state` and `t`, published by the tape.
+    ///
+    /// The CONST and SEGMENT sections prime on the first call and are not
+    /// re-run while the parameter vector is unchanged, so a sweep over output
+    /// nodes pays for the CONTINUOUS section only — the same amortization the
+    /// static hoist existed to provide.
+    fn at(&mut self, compiled: &ArrayCompiled, state: &[f64], params: &[f64], t: f64) -> &ArrMap {
+        for v in self.dy.iter_mut() {
+            *v = 0.0;
+        }
+        evaluate_rhs_with_scratch(
+            &RhsCall {
+                rhs_rules: &compiled.rhs_rules,
+                observed_rules: &compiled.observed_rules,
+                var_shapes: &compiled.var_shapes,
+                param_names: &compiled.param_names,
+                state,
+                params,
+                forcing: &compiled.forcing,
+                t,
+                declared: &compiled.declared_names,
+            },
+            &mut self.dy,
+            false,
+            &mut RhsStats::default(),
+            &mut self.scratch,
+        );
+        self.scratch
+            .taped_observeds()
+            .expect("the harvester installs a tape on its own scratch")
+    }
+}
+
 impl ArrayCompiled {
+    /// Whether this model serves a strict [`crate::Compiler::Native`] build.
+    pub(crate) fn is_native(&self) -> bool {
+        self.runtime_mode == RuntimeMode::Native
+    }
+
+    /// Whether this model serves a [`crate::Compiler::Interpreter`] build: no
+    /// tape, and the whole-array overlay off, so every rule is walked per cell.
+    pub(crate) fn is_interpreter(&self) -> bool {
+        self.runtime_mode == RuntimeMode::Interpreter
+    }
+
     /// The flatten-time merge map (issue #230): every state spelling an
     /// `operator_compose` renaming match DELETED, mapped onto the survivor.
     pub(crate) fn merged_renames(&self) -> &HashMap<String, String> {
@@ -51,6 +143,32 @@ impl ArrayCompiled {
     /// honourable for such a model and not for one with real dynamics.
     pub fn has_differential_equations(&self) -> bool {
         !self.rhs_rules.is_empty()
+    }
+
+    /// The single model's own namespace (the top-level `models` map key), or
+    /// `None` on the flattened path, whose names are already qualified.
+    ///
+    /// The single-model build names its slots BARE (`u[1]`, `k`), because the
+    /// raw `Model` it consumed carries no namespace; the flattened build and
+    /// the scalar interpreter both qualify (`M.u[1]`). Reported here so
+    /// [`crate::problem::EsmProblem`] can present ONE spelling whichever route
+    /// its document took — which matters now that `native` builds this runtime
+    /// for every document, including the 0-D ones the scalar interpreter used
+    /// to name.
+    pub(crate) fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
+    }
+
+    /// The OBSERVED variables this model declares, in dependency order.
+    ///
+    /// The array-runtime twin of `Compiled::observed_variable_names`, so
+    /// [`crate::problem::observed_trajectories`] resolves a caller's name
+    /// against the same §5.8 precedence on either backend.
+    pub fn observed_variable_names(&self) -> Vec<String> {
+        self.observed_rules
+            .iter()
+            .map(|r| observed_rule_var(r).clone())
+            .collect()
     }
 
     pub fn state_variable_names(&self) -> &[String] {
@@ -142,17 +260,17 @@ impl ArrayCompiled {
     }
 
     /// Build a scratch with the compiled tape installed (Step 3b) — what the
-    /// production RHS closure carries. Honors `ESS_TAPE_DISABLE` /
-    /// `ESS_VEC_DISABLE` exactly as `simulate` does (returning a legacy
-    /// scratch), so a kill-switch test can observe the routing through
-    /// [`RhsScratch::has_tape`] / [`RhsStats::taped_rules`]. Exposed for the
-    /// fast-executor A/B, allocation-steady-state and invalidation tests,
-    /// driven through [`Self::debug_eval_rhs_into`].
+    /// production RHS closure carries. A document the tape cannot express at
+    /// all ([`tape_disabled`]) gets a legacy scratch, so a caller can observe
+    /// the routing through [`RhsScratch::has_tape`] /
+    /// [`RhsStats::taped_rules`]. Exposed for the fast-executor A/B,
+    /// allocation-steady-state and invalidation tests, driven through
+    /// [`Self::debug_eval_rhs_into`].
     #[doc(hidden)]
     pub fn debug_new_scratch_taped(&self) -> RhsScratch {
         let mut s = RhsScratch::new(&self.var_shapes);
         s.set_const_arrays(Rc::clone(&self.const_scope));
-        if !tape_disabled() && !vec_disabled() {
+        if !tape_disabled() {
             let (prog, _report) = self.build_tape(&HashSet::new());
             s.install_tape(Rc::new(prog), Rc::new(self.observed_rules.clone()));
         }
@@ -518,11 +636,27 @@ impl ArrayCompiled {
         // first record so the static regrid geometry sees a populated buffer.
         refresh_fn(t0)?;
 
+        // The tape is built BEFORE the static hoist, not after it. Under
+        // `native` the hoist is served FROM the tape (see
+        // [`Self::hoist_static_observeds`]), so the order the two ran in was
+        // itself the defect: the hoist evaluated every CONST-tier observed
+        // through the whole-array overlay, once per solve, before the tape the
+        // caller asked for had been built at all.
+        let (tape, tape_fallbacks) = self.build_solve_tape(discrete_forcing);
+
         let cadence = self.partition_observed_cadence(discrete_forcing);
-        let setup = self.hoist_static_observeds(cadence, &ic_vec, &param_vec, t0);
+        let setup = self.hoist_static_observeds(cadence, &ic_vec, &param_vec, t0, tape.as_ref());
 
         if let Some(insp) = inspect {
-            self.fill_solve_inspection(insp, &setup, &param_vec, t0, boundaries);
+            self.fill_solve_inspection(
+                insp,
+                &setup,
+                &ic_vec,
+                &param_vec,
+                t0,
+                boundaries,
+                tape.as_ref(),
+            );
         }
 
         let solver_name = match opts.alg {
@@ -530,8 +664,6 @@ impl ArrayCompiled {
             Alg::Sdirk => "Sdirk",
             Alg::Erk => "Erk",
         };
-
-        let (tape, tape_fallbacks) = self.build_solve_tape(discrete_forcing);
 
         // CONST / single-segment (or no output grid to align segment samples on):
         // the original un-segmented run — byte-identical to the pre-segmentation
@@ -559,10 +691,12 @@ impl ArrayCompiled {
                     &stats,
                     tape_fallbacks,
                     self.merged_renames.clone(),
+                    self.namespace.clone(),
                 ),
                 &param_vec,
                 &setup,
                 &opts.output_observed,
+                tape.as_ref(),
             );
         }
 
@@ -592,10 +726,12 @@ impl ArrayCompiled {
                 &stats,
                 tape_fallbacks,
                 self.merged_renames.clone(),
+                self.namespace.clone(),
             ),
             &param_vec,
             &setup,
             &opts.output_observed,
+            tape.as_ref(),
         )
     }
 
@@ -675,9 +811,28 @@ impl ArrayCompiled {
         ic_vec: &[f64],
         param_vec: &[f64],
         t0: f64,
+        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) -> SolveSetup {
-        let static_rings_cell: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
         let sa0 = build_state_arrays(&self.var_shapes, ic_vec);
+        // `native` (API_SPEC §5.8): the tape's own CONST section computes
+        // exactly these rules, once per solve, on the same schedule this hoist
+        // used to. Materializing them a SECOND time through the whole-array
+        // overlay would be the off-tape per-cell evaluation
+        // `esm-libraries-spec.md` §2.5.10 refuses — and it would be invisible,
+        // since the overlay declines on its own terms and reports nothing.
+        //
+        // What consumed the hoisted map still gets it: the RHS and Jacobian
+        // scratches read the tape's slots rather than a seeded observed map,
+        // and the inspection snapshot and the output-node pass harvest their
+        // values from the tape ([`TapedObserveds`]).
+        if self.is_native() && tape.is_some() {
+            return SolveSetup {
+                cadence,
+                sa0,
+                static_obs: ArrMap::default(),
+            };
+        }
+        let static_rings_cell: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
         let mut static_obs = ArrMap::default();
         let env = EvalEnv {
             state_arrays: &sa0,
@@ -698,7 +853,18 @@ impl ArrayCompiled {
             const_arrays: &self.const_scope,
             declared: &self.declared_names,
         };
-        materialize_observeds_into(&mut static_obs, &cadence.static_rules, &env);
+        materialize_observeds_pass(
+            &mut static_obs,
+            &cadence.static_rules,
+            &ObsPass {
+                env,
+                // `interpreter` is the reference and carries no performance
+                // promise: every fast tier off, including the whole-array
+                // overlay, at setup as much as on the hot path.
+                force_scalar: self.is_interpreter(),
+            },
+            &mut RhsStats::default(),
+        );
         drop(static_rings_cell);
         SolveSetup {
             cadence,
@@ -712,14 +878,37 @@ impl ArrayCompiled {
     /// terrain, slopes). Nothing downstream consults the sink, so the
     /// integration is unchanged.
     #[cfg(feature = "solve")]
+    #[allow(clippy::too_many_arguments)]
     fn fill_solve_inspection(
         &self,
         insp: &mut BuildInspection,
         setup: &SolveSetup,
+        ic_vec: &[f64],
         param_vec: &[f64],
         t0: f64,
         boundaries: &[f64],
+        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) {
+        // `native`: one taped read-out at t0 answers BOTH halves of this sink
+        // — the static observeds (which the hoist no longer materializes) and,
+        // on a segmented run, the varying ones. The off-tape snapshot below is
+        // what §2.5.10 would otherwise leave un-gated.
+        if self.is_native()
+            && let Some(tape) = tape
+        {
+            let mut harvest = TapedObserveds::new(self, tape);
+            let obs = harvest.at(self, ic_vec, param_vec, t0);
+            self.fill_inspection(insp, obs, &setup.cadence.static_names, param_vec);
+            if !boundaries.is_empty() {
+                for rule in &setup.cadence.varying_rules {
+                    let name = observed_rule_var(rule);
+                    if let Some(a) = obs.get(name) {
+                        insp.setup_arrays.insert(name.clone(), a.clone());
+                    }
+                }
+            }
+            return;
+        }
         self.fill_inspection(
             insp,
             &setup.static_obs,
@@ -751,8 +940,10 @@ impl ArrayCompiled {
                         const_arrays: &self.const_scope,
                         declared: &self.declared_names,
                     },
-                    // Build-time t0 snapshot: vectorized overlay (bit-identical).
-                    force_scalar: false,
+                    // Build-time t0 snapshot: vectorized overlay
+                    // (bit-identical), unless this is the `interpreter`
+                    // reference, which runs every tier off.
+                    force_scalar: self.is_interpreter(),
                 },
                 &mut RhsStats::default(),
             );
@@ -768,10 +959,10 @@ impl ArrayCompiled {
     /// Step 3b: compile the tape program ONCE per solve and share it across
     /// every integration segment (each segment's fresh RHS scratch gets its
     /// own slab and re-runs the CONST/SEGMENT sections — the same cadence as
-    /// the static-observed hoist above). `ESS_TAPE_DISABLE=1` reverts
-    /// wholesale to the legacy interpreter path; `ESS_VEC_DISABLE=1` (the
-    /// pure per-cell oracle reference) implies it, since the tape compiles
-    /// the vectorized overlay's semantics.
+    /// the static-observed hoist above). [`crate::Compiler::Interpreter`]
+    /// builds no tape at all — it IS the per-cell oracle — and neither does a
+    /// document whose per-variable element types the tape cannot express
+    /// ([`tape_disabled`]).
     ///
     /// The build report's fallback list is kept, not dropped: a rule the
     /// tape could not compile is evaluated by the per-cell oracle, whose
@@ -786,7 +977,11 @@ impl ArrayCompiled {
         discrete_forcing: &HashSet<String>,
     ) -> (SolveTape, Vec<(String, String)>) {
         let mut tape_fallbacks: Vec<(String, String)> = Vec::new();
-        let tape: SolveTape = if tape_disabled() || vec_disabled() {
+        // `interpreter` (API_SPEC §5.8) is the reference and nothing else: no
+        // tape, and the whole-array overlay off under it, so every rule is
+        // walked per cell. It is the compiler the caller named, and the only
+        // way to reach the oracle.
+        let tape: SolveTape = if self.is_interpreter() || tape_disabled() {
             None
         } else {
             let (prog, report) = self.build_tape(discrete_forcing);
@@ -935,6 +1130,7 @@ impl ArrayCompiled {
         param_vec: &[f64],
         setup: &SolveSetup,
         output_observed: &[String],
+        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) -> Result<Solution, SimulateError> {
         let mut state_variable_names = self.scalar_state_names.clone();
         self.append_observed_trajectories(
@@ -943,8 +1139,10 @@ impl ArrayCompiled {
             &mut state_variable_names,
             param_vec,
             &setup.static_obs,
+            &setup.cadence.static_names,
             &setup.cadence.varying_rules,
             output_observed,
+            tape,
         );
         if let Some(details) = crate::simulate_array::take_const_array_oob() {
             return Err(
@@ -1037,7 +1235,12 @@ impl ArrayCompiled {
         // coupled-loader profile. They are state-free, so `sa_seg` is only a
         // consistency placeholder; their FAQ rings are produced-and-consumed in
         // this one pass (own transient registry, discarded after).
-        let seg_seed: ArrMap = if segment_static_rules.is_empty() {
+        let seg_seed: ArrMap = if segment_static_rules.is_empty() || self.is_native() {
+            // `native`: the tape's SEGMENT section computes the
+            // segment-invariant observeds itself, on the same once-per-segment
+            // schedule, so seeding them here would be the same rules evaluated
+            // a second time off the tape (§2.5.10). `static_obs` is empty under
+            // `native` for the same reason — see `hoist_static_observeds`.
             static_obs.clone()
         } else {
             let sa_seg = build_state_arrays(&self.var_shapes, u0);
@@ -1094,6 +1297,15 @@ impl ArrayCompiled {
         let jac_seed = Rc::clone(&seg_seed);
         let const_scope_jac = Rc::clone(&self.const_scope);
         let jac_scratch: RefCell<Option<RhsScratch>> = RefCell::new(None);
+        let tape_jac: Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)> =
+            match (self.is_native(), tape) {
+                (true, Some((prog, full_obs))) => Some((Rc::clone(prog), Rc::clone(full_obs))),
+                _ => None,
+            };
+        // `interpreter`: the per-cell oracle for the right-hand side too, not
+        // just for the observeds. `native` and the legacy routing pass `false`
+        // and take the whole-array overlay where the tape is absent.
+        let force_scalar = self.is_interpreter();
 
         // External forcing channel (PR-1, ess-14f.7): clone the `Rc` handle into
         // each closure so both the RHS and the Jacobian read the *same*
@@ -1125,7 +1337,7 @@ impl ArrayCompiled {
                     declared: &declared,
                 },
                 dy_s,
-                false,
+                force_scalar,
                 &mut RhsStats::default(),
                 &mut scratch,
             );
@@ -1159,6 +1371,20 @@ impl ArrayCompiled {
                 let mut s = RhsScratch::new(&var_shapes_jac);
                 s.set_const_arrays(Rc::clone(&const_scope_jac));
                 s.set_static((*jac_seed).clone());
+                // Under `native` the FD Jacobian runs on the TAPE as well.
+                // The two right-hand-side evaluations it differences are the
+                // same rules the production closure runs, so leaving them on
+                // the legacy interpreter meant an implicit solve evaluated the
+                // whole model through the overlay — and, wherever the overlay
+                // declined, per cell — at every Jacobian call: the largest
+                // off-tape evaluation in the driver, and one §2.5.10 covers
+                // ("every evaluation the compiler performs for the Problem").
+                // The tape is bit-identical to the legacy path (that is what
+                // the compiler-agreement tier asserts, CONFORMANCE_SPEC
+                // §5.44), so the differenced Jacobian is unchanged.
+                if let Some((prog, full_obs)) = &tape_jac {
+                    s.install_tape(Rc::clone(prog), Rc::clone(full_obs));
+                }
                 s
             });
             evaluate_rhs_with_scratch(
@@ -1174,7 +1400,7 @@ impl ArrayCompiled {
                     declared: &declared_jac,
                 },
                 &mut f_y,
-                false,
+                force_scalar,
                 &mut RhsStats::default(),
                 scratch,
             );
@@ -1191,7 +1417,7 @@ impl ArrayCompiled {
                     declared: &declared_jac,
                 },
                 &mut f_yp,
-                false,
+                force_scalar,
                 &mut RhsStats::default(),
                 scratch,
             );
@@ -1301,6 +1527,7 @@ impl ArrayCompiled {
     /// Names may be bare or `Model.`-qualified.
     #[cfg(feature = "solve")]
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn append_observed_trajectories(
         &self,
         time: &[f64],
@@ -1308,10 +1535,33 @@ impl ArrayCompiled {
         state_variable_names: &mut Vec<String>,
         param_vec: &[f64],
         static_obs: &ArrMap,
+        static_names: &HashSet<String>,
         varying_rules: &[AlgebraicRule],
         requested: &[String],
+        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) {
         if self.observed_rules.is_empty() || time.is_empty() {
+            return;
+        }
+        // `native`: the observeds reported at output times are read off the
+        // TAPE, one call per saved node, instead of being re-derived through
+        // the whole-array overlay. esm-libraries-spec §2.5.10 names this pass
+        // explicitly — "the observeds reported at output times" are under the
+        // refusal like the right-hand side is — and it is the one that runs
+        // most often, once per saved time point.
+        if self.is_native()
+            && let Some(tape) = tape
+        {
+            self.append_observed_trajectories_taped(
+                time,
+                state,
+                state_variable_names,
+                param_vec,
+                static_names,
+                varying_rules,
+                requested,
+                tape,
+            );
             return;
         }
         let wanted = self.resolve_requested_observeds(requested);
@@ -1366,10 +1616,9 @@ impl ArrayCompiled {
         // couple two rules through the `derived_rings` registry / an `offsets`
         // factor name instead, and a `join` couples them through key COLUMN
         // names. A model using any of those keeps the old un-pruned behaviour.
-        let prune = !outobs_prune_disabled()
-            && varying_rules
-                .iter()
-                .all(|r| !expr_blocks_output_pruning(observed_rule_body(r)));
+        let prune = varying_rules
+            .iter()
+            .all(|r| !expr_blocks_output_pruning(observed_rule_body(r)));
 
         // Probe: the rules that must actually run before 0-D-ness is known. A
         // rule whose value is provably an array needs no probe at all, and a
@@ -1415,8 +1664,9 @@ impl ArrayCompiled {
                         const_arrays: &self.const_scope,
                         declared: &self.declared_names,
                     },
-                    // Output-node observed snapshot: vectorized overlay.
-                    force_scalar: false,
+                    // Output-node observed snapshot: vectorized overlay,
+                    // unless this is the `interpreter` reference.
+                    force_scalar: self.is_interpreter(),
                 },
                 &mut RhsStats::default(),
             );
@@ -1530,7 +1780,7 @@ impl ArrayCompiled {
                             const_arrays: &self.const_scope,
                             declared: &self.declared_names,
                         },
-                        force_scalar: false,
+                        force_scalar: self.is_interpreter(),
                     },
                     &mut RhsStats::default(),
                 );
@@ -1545,6 +1795,165 @@ impl ArrayCompiled {
                 state.push(row);
             }
         }
+    }
+
+    /// [`Self::append_observed_trajectories`] served from the tape — the
+    /// `native` path.
+    ///
+    /// Same rows, same order, same cell-key spelling; the only difference is
+    /// where the numbers come from. One taped call per saved time point
+    /// publishes every observed (a `native` build exports them all, because a
+    /// harvest that covered only the probe cone would silently skip a
+    /// caller-requested array observed and a static one), and the rows are read
+    /// straight off that map.
+    ///
+    /// The dependency-cone pruning the overlay path needs has no counterpart
+    /// here: the tape computes the whole CONTINUOUS section either way, and
+    /// its CONST and SEGMENT sections prime once for the whole sweep rather
+    /// than once per node, which is what the pruning was buying back.
+    #[cfg(feature = "solve")]
+    #[allow(clippy::too_many_arguments)]
+    fn append_observed_trajectories_taped(
+        &self,
+        time: &[f64],
+        state: &mut Vec<Vec<f64>>,
+        state_variable_names: &mut Vec<String>,
+        param_vec: &[f64],
+        static_names: &HashSet<String>,
+        varying_rules: &[AlgebraicRule],
+        requested: &[String],
+        tape: &(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>),
+    ) {
+        let wanted = self.resolve_requested_observeds(requested);
+        // WHICH observeds become rows is decided exactly as the overlay path
+        // decides it, and deliberately not by what the tape happens to
+        // publish: a `native` build exports every observed so the harvest
+        // cannot miss one, and emitting every one of them would put rows in
+        // the solution that the same document did not carry before. The
+        // candidates are the hoisted static observeds plus the probe cone —
+        // the potentially-scalar rules and their transitive dependencies —
+        // which is what `obs` holds at this point on the overlay path.
+        let emitted = self.output_row_candidates(static_names, varying_rules, &wanted);
+        let nt = time.len();
+        let mut harvest = TapedObserveds::new(self, tape);
+        let mut flat = vec![0.0f64; self.n_states];
+
+        for (i, slot) in flat.iter_mut().enumerate() {
+            *slot = state[i][0];
+        }
+        // What becomes rows: every 0-D observed, plus every CALLER-REQUESTED
+        // array-valued one at one row per cell. Decided at node 0 and held
+        // fixed, so a later node cannot shift the row block.
+        let emit: Vec<ObservedRows> = {
+            let obs = harvest.at(self, &flat, param_vec, time[0]);
+            self.observed_rules
+                .iter()
+                .filter_map(|rule| {
+                    let name = observed_rule_var(rule);
+                    if !emitted.contains(name) {
+                        return None;
+                    }
+                    let arr = obs.get(name)?;
+                    if arr.ndim() == 0 {
+                        Some(ObservedRows::scalar(name.clone()))
+                    } else if wanted.contains(name) {
+                        Some(ObservedRows::gridded(name.clone(), arr.shape().to_vec()))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        if emit.is_empty() {
+            return;
+        }
+        let n_rows: usize = emit.iter().map(ObservedRows::n_rows).sum();
+        let mut rows: Vec<Vec<f64>> = vec![Vec::with_capacity(nt); n_rows];
+        let record = |obs: &ArrMap, rows: &mut Vec<Vec<f64>>| {
+            let mut j = 0usize;
+            for e in &emit {
+                match obs.get(&e.name) {
+                    Some(a) if e.shape.is_empty() => {
+                        rows[j].push(a.first().copied().unwrap_or(f64::NAN));
+                        j += 1;
+                    }
+                    Some(a) if a.shape() == e.shape.as_slice() => {
+                        for v in arrayd_to_col_major(a) {
+                            rows[j].push(v);
+                            j += 1;
+                        }
+                    }
+                    // Absent, or a rank node 0 did not see: NaN across the
+                    // block, so the fault shows in the values rather than
+                    // silently shifting every later row.
+                    _ => {
+                        for _ in 0..e.n_rows() {
+                            rows[j].push(f64::NAN);
+                            j += 1;
+                        }
+                    }
+                }
+            }
+        };
+        record(harvest.scratch_observeds(), &mut rows);
+        for k in 1..nt {
+            for (i, slot) in flat.iter_mut().enumerate() {
+                *slot = state[i][k];
+            }
+            let obs = harvest.at(self, &flat, param_vec, time[k]);
+            record(obs, &mut rows);
+        }
+
+        let mut rows = rows.into_iter();
+        for e in &emit {
+            for name in e.row_names() {
+                let Some(row) = rows.next() else { break };
+                state_variable_names.push(name);
+                state.push(row);
+            }
+        }
+    }
+
+    /// The observeds that may become solution rows: the hoisted static ones
+    /// plus the output-node probe cone.
+    ///
+    /// The overlay path's candidate set, named. It materializes the statics
+    /// once and then the PROBE CONE — every potentially-scalar observed and
+    /// its transitive dependencies — and an observed outside both is simply
+    /// not in `obs` when the row set is decided, so it becomes no row. The
+    /// taped path publishes every observed (that is what makes its harvest
+    /// complete), so it has to be told the same rule rather than inferring it
+    /// from what happens to be published.
+    #[cfg(feature = "solve")]
+    fn output_row_candidates(
+        &self,
+        static_names: &HashSet<String>,
+        varying_rules: &[AlgebraicRule],
+        wanted: &HashSet<String>,
+    ) -> HashSet<String> {
+        let mut out: HashSet<String> = static_names.clone();
+        let prune = varying_rules
+            .iter()
+            .all(|r| !expr_blocks_output_pruning(observed_rule_body(r)));
+        let cone: Option<Vec<AlgebraicRule>> = if prune {
+            let unknown: HashSet<String> = self
+                .observed_rules
+                .iter()
+                .filter(|r| {
+                    !observed_rule_is_array_valued(r) || wanted.contains(observed_rule_var(r))
+                })
+                .map(|r| observed_rule_var(r).clone())
+                .collect();
+            dependency_cone(varying_rules, &unknown)
+        } else {
+            None
+        };
+        match cone {
+            Some(rules) => out.extend(rules.iter().map(|r| observed_rule_var(r).clone())),
+            // No cone: the un-pruned behaviour materializes every varying rule.
+            None => out.extend(varying_rules.iter().map(|r| observed_rule_var(r).clone())),
+        }
+        out
     }
 
     /// The observed-rule names `requested` names.
@@ -1763,21 +2172,6 @@ impl ObservedRows {
     }
 }
 
-/// `true` when the observed-trajectory dependency-cone pruning is switched off
-/// by `ESS_OUTOBS_PRUNE_DISABLE=1`. The A/B kill switch for that optimization,
-/// mirroring `ESS_VEC_DISABLE` / `ESS_CSE_DISABLE`: with it set,
-/// [`ArrayCompiled::append_observed_trajectories`] materializes the full
-/// varying rule set at every output node exactly as it did before.
-fn outobs_prune_disabled() -> bool {
-    use std::sync::OnceLock;
-    static OFF: OnceLock<bool> = OnceLock::new();
-    *OFF.get_or_init(|| {
-        std::env::var("ESS_OUTOBS_PRUNE_DISABLE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
-}
-
 /// Is this observed rule's value provably an ARRAY (`ndim ≥ 1`) *without*
 /// evaluating it? Used only to keep a rule out of the 0-D probe in
 /// [`ArrayCompiled::append_observed_trajectories`], so it must never
@@ -1860,6 +2254,7 @@ fn solution_metadata(
     stats: &SolveStats,
     tape_fallbacks: Vec<(String, String)>,
     merged_variable_renames: HashMap<String, String>,
+    namespace: Option<String>,
 ) -> SolutionMetadata {
     SolutionMetadata {
         alg: solver_name.to_string(),
@@ -1871,6 +2266,7 @@ fn solution_metadata(
         // Rides to the caller so a name-keyed read of the result can resolve a
         // spelling the merge deleted (issue #230).
         merged_variable_renames,
+        namespace,
     }
 }
 

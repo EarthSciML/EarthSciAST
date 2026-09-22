@@ -27,10 +27,18 @@ fn manifest() -> Value {
     serde_json::from_str(&raw).expect("the unsupported_construct manifest parses")
 }
 
+/// Which of this binding's evaluators a refusal NAMES.
+///
+/// Always the array one now. `native` and `interpreter` are both the array
+/// runtime, for every document whatever its shape (API_SPEC §5.8), so the
+/// scalar ODE interpreter is no longer reachable from `esm_problem` and cannot
+/// be the one that refuses. The manifest's `evaluator_path` still records
+/// which path each case USED to take — it is read here only to check the
+/// manifest itself is well formed, which is what keeps a typo in it from
+/// passing silently.
 fn evaluator_for(path: &str) -> &'static str {
     match path {
-        "array" => "Rust array evaluator",
-        "scalar" => "Rust scalar ODE interpreter",
+        "array" | "scalar" => "Rust array evaluator",
         other => panic!("unknown evaluator_path {other:?}"),
     }
 }

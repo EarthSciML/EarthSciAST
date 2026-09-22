@@ -1848,9 +1848,10 @@ const _TemplateSites = Union{Nothing,IdDict{OpExpr,OpExpr}}
 # (audits/intern_preaudit_2026-07-19.md) established that merging site keys is
 # harmless because the only site consumers are those `haskey` checks. Output is
 # byte-identical (verified by the differential oracle + the affine/intern
-# oracles); `ESS_EXPAND_MEMO_DISABLE=1` restores the per-site re-expansion.
+# oracles), so the memo is not a choice of evaluator and every compiler keeps
+# it; `nothing` is the per-site re-expansion, for a caller that wants the
+# sharing measured rather than assumed.
 const _ExpandMemo = Union{Nothing,Dict{Tuple{String,String},OpExpr}}
-_expand_memo_disabled() = get(ENV, "ESS_EXPAND_MEMO_DISABLE", "") == "1"
 
 _expand_expr_refs(e::VarExpr, reg, ::_TemplateSites, ::_ExpandMemo=nothing) = e
 _expand_expr_refs(e::NumExpr, reg, ::_TemplateSites, ::_ExpandMemo=nothing) = e
@@ -1904,8 +1905,7 @@ Expand every surviving `apply_expression_template` reference in `file`'s
 component expressions against `file.component_templates`, IN PLACE (the caller
 passes a copy when the reference-preserving original must be kept). Mirrors
 `lower_enums!`'s whole-file expression walk. A no-op when
-`file.component_templates` is `nothing` (no references survived, or
-`ESS_TEMPLATE_REF_DISABLE=1`).
+`file.component_templates` is `nothing` (no references survived).
 """
 function _expand_refs!(file::EsmFile)::EsmFile
     file.component_templates === nothing && return file
@@ -1926,6 +1926,31 @@ function _expand_refs!(file::EsmFile)::EsmFile
     end
     return file
 end
+
+"""
+    expanded_file(file::EsmFile) -> EsmFile
+
+The Option-A image of `file` (esm-spec §9.6.4): every surviving
+`apply_expression_template` reference expanded into the component expressions,
+and the per-component registries dropped, so `save`/`to_json` emit the fused
+document rather than the reference-preserving one. The third half of the
+public expansion seam — [`expanded_model`](@ref) gives one `Model`,
+[`expand_flattened_refs`](@ref) a `FlattenedSystem`, this the whole document.
+
+`flatten` and `build_evaluator` take the reference-preserving file directly and
+expand at their own boundary, so this is for a consumer that wants the expanded
+DOCUMENT: an emitter, a diff against a fused golden, a reader with no template
+handling of its own. `file` is not modified, and a file with no surviving
+references comes back by identity.
+"""
+function expanded_file(file::EsmFile)::EsmFile
+    file.component_templates === nothing && return file
+    out = _expand_refs!(deepcopy(file))
+    return _with_declarations(out, out.expression_templates, out.metaparameters;
+                              component_templates = nothing, esm = out.esm,
+                              coordinates = out.coordinates)
+end
+
 
 # The `update` rules of one variable, expanded. Returns `nothing` when no rule
 # changed, so every caller can pass the variable through BY IDENTITY rather than
@@ -1951,8 +1976,7 @@ function _expand_update_refs(var::ModelVariable, reg, sites::_TemplateSites,
 end
 
 function _expand_model_refs!(model::Model, reg; sites::_TemplateSites=nothing,
-                             memo::_ExpandMemo=_expand_memo_disabled() ? nothing :
-                                   Dict{Tuple{String,String},OpExpr}())
+                             memo::_ExpandMemo=Dict{Tuple{String,String},OpExpr}())
     # esm 1.0.0: the only per-variable expression positions are a parameter
     # update's `when` trigger and `expression` value form (esm-spec §5.4); an
     # observed unknown's body is an equation, expanded just below.
@@ -1999,8 +2023,7 @@ The shared "Expand at your boundary" utility for `FlattenedSystem` consumers
 every surviving `apply_expression_template` reference in the flattened
 equations and observed expressions against the merged `template_registry`,
 returning an Expanded copy, bit-identical to the Expand-at-load image. A no-op
-when the registry is empty (no references survived, or
-`ESS_TEMPLATE_REF_DISABLE=1` expanded at load). `flatten` ALWAYS carries
+when the registry is empty (no references survived). `flatten` ALWAYS carries
 references, so a consumer with no template handling calls this at its entry —
 the MTK `System`/`PDESystem` constructors do; the tree-walk `build_evaluator`
 does NOT (it expands at its own entry with site recording, the compile-once
@@ -2019,13 +2042,12 @@ update for a consumer that had been promised an Option-A image.
 `memo` is the shared expansion memo (`_expand_model_refs!`'s default, ~34% of
 build wall time on the 7×7×7 transport fixture when absent): structurally
 identical apply sites expand once and share the result. Pass `nothing` for the
-per-site re-expansion, or set `ESS_EXPAND_MEMO_DISABLE=1` globally. Sharing is
-safe here for the same reason it is in `_expand_model_refs!` — the expanded set
-becomes a DAG, which is what interning would produce one pass later anyway.
+per-site re-expansion. Sharing is safe here for the same reason it is in
+`_expand_model_refs!` — the expanded set becomes a DAG, which is what interning
+would produce one pass later anyway.
 """
 function expand_flattened_refs(flat::FlattenedSystem;
-        memo::_ExpandMemo = _expand_memo_disabled() ? nothing :
-                            Dict{Tuple{String,String},OpExpr}())::FlattenedSystem
+        memo::_ExpandMemo = Dict{Tuple{String,String},OpExpr}())::FlattenedSystem
     reg = flat.template_registry
     isempty(reg) && return flat
     neweqs = Equation[Equation(_expand_expr_refs(eq.lhs, reg, nothing, memo),

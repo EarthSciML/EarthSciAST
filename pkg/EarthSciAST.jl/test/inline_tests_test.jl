@@ -72,8 +72,15 @@ end
 
 _pit_load(doc) = _PIT_ESS.load_string(IOBuffer(JSON3.write(doc)))
 
+# `compiler=:interpreter`: the fixture's `ic(u) ~ cos(pi x)` is a
+# coordinate expression, which the seed lowers once per cell — a construction-
+# time tree walk per cell that the strict `native` refuses (API_SPEC §5.8).
+# The subject here is assertion semantics (coords sampling, `reduce`, `time`),
+# not which compiler ran, so the reference evaluator is the right one to
+# measure them under; `compiler_selection_test.jl` pins the refusal itself.
 _pit_run(file; kwargs...) = run_inline_tests(file; model_name="M",
-    alg=OrdinaryDiffEqTsit5.Tsit5(), reltol=1e-12, abstol=1e-14, kwargs...)
+    alg=OrdinaryDiffEqTsit5.Tsit5(), reltol=1e-12, abstol=1e-14,
+    compiler=:interpreter, kwargs...)
 
 _pit_coords_assert(coords; time=0.0, expected=0.0, abs_tol=1e-9, var="u") =
     Dict{String,Any}("variable" => var, "time" => time, "expected" => expected,
@@ -223,9 +230,12 @@ _pit_from_file_assert(refdict; reduce="L2_error", abs_tol=1e-12) =
         write(prob, JSON3.write(doc))
 
         # Path input: base_dir defaults to the .esm file's directory.
+        # `compiler=:interpreter` for the same reason `_pit_run` passes it: the
+        # fixture seeds from a coordinate expression.
         results = run_inline_tests(prob; model_name="M",
                                 alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                reltol=1e-12, abstol=1e-14)
+                                reltol=1e-12, abstol=1e-14,
+                                compiler=:interpreter)
         @test length(results) == 2
         # Identical evaluation machinery seeded the ic, so the diff is 0.
         for r in results
@@ -473,9 +483,12 @@ end
     fixture = joinpath(@__DIR__, "..", "..", "..", "tests", "spatial",
                        "pde_inline_assertions_exec.esm")
     @test isfile(fixture)
+    # `compiler=:interpreter`: this fixture seeds from a coordinate expression,
+    # which the strict `native` refuses (API_SPEC §5.8) — see `_pit_run`.
     results = run_inline_tests(fixture; model_name="M",
                             alg=OrdinaryDiffEqTsit5.Tsit5(),
-                            reltol=1e-12, abstol=1e-14)
+                            reltol=1e-12, abstol=1e-14,
+                            compiler=:interpreter)
     @test length(results) == 7
     for r in results
         @test r.passed
@@ -854,7 +867,8 @@ end
     # one the Python binding's `_method_for` has always done.
     doc = _pit_decay_doc(Any[_pit_coords_assert(["x" => 3];
                                                 expected=cos(pi * 2.5 / _PIT_N))])
-    results = run_inline_tests(_pit_load(doc); model_name="M")
+    results = run_inline_tests(_pit_load(doc); model_name="M",
+                               compiler=:interpreter)
     @test !isempty(results)
     @test all(r -> r.status == EarthSciAST.PASS, results)
 
@@ -891,7 +905,8 @@ end
         path = joinpath(dir, "decay.esm")
         write(path, JSON3.write(_pit_decay_doc(Any[
             _pit_coords_assert(["x" => 3]; expected=cos(pi * 2.5 / _PIT_N))])))
-        results = run_inline_tests([path]; model_name="M")
+        results = run_inline_tests([path]; model_name="M",
+                                   compiler=:interpreter)
         @test !isempty(results)
         @test all(r -> r.file == path, results)
 
@@ -899,7 +914,8 @@ end
         # named row rather than ending the run.
         bad = joinpath(dir, "broken.esm")
         write(bad, "{not json")
-        mixed = run_inline_tests([path, bad]; model_name="M")
+        mixed = run_inline_tests([path, bad]; model_name="M",
+                                 compiler=:interpreter)
         @test any(r -> r.file == bad && r.status == EarthSciAST.ERROR, mixed)
         @test any(r -> r.file == path && r.status == EarthSciAST.PASS, mixed)
     end

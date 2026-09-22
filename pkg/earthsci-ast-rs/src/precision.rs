@@ -184,6 +184,12 @@ impl VarPrecisions {
         self.by_name.get(tail).copied()
     }
 
+    /// Every name with a declared element type, in no particular order. Both
+    /// spellings of a namespaced registration appear (see [`Self::insert`]).
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.by_name.keys().map(String::as_str)
+    }
+
     /// Does this document declare any per-variable element type at all?
     ///
     /// False is the fast path every existing document takes: no inference pass
@@ -246,6 +252,19 @@ pub fn of_variable(name: &str) -> Precision {
 #[must_use]
 pub fn has_variable_overrides() -> bool {
     VARS.with(|v| !v.borrow().is_empty())
+}
+
+/// One variable that declares its own element type, or `None` when the
+/// document declares no override at all.
+///
+/// The name is what a refusal has to carry: `has_variable_overrides` answers
+/// "is there one" and a diagnostic that cannot say WHICH variable made the
+/// document unlowerable sends the author looking through the whole file.
+/// Lowest name in sort order, so the diagnostic is deterministic rather than
+/// hash-order.
+#[must_use]
+pub fn first_variable_override() -> Option<String> {
+    VARS.with(|v| v.borrow().names().min().map(str::to_string))
 }
 
 /// The current document's per-variable element types.

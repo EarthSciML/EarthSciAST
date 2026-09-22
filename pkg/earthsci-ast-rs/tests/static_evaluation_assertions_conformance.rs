@@ -10,10 +10,10 @@
 //! ships an integrator or an inline-test runner, so neither has an execution
 //! path that could read an assertion's `time` at all.
 //!
-//! What was wrong here. The inline-test runner builds with `Compile::Always`,
+//! What was wrong here. The inline-test runner builds with `Rhs::Always`,
 //! so an algebraic-only document got a compiled right-hand side over an EMPTY
 //! state vector instead of the `Backend::Static` that `esm simulate` selects
-//! for it with `Compile::Auto`. Handing that to diffsol produced "Exceeded
+//! for it with `Rhs::Auto`. Handing that to diffsol produced "Exceeded
 //! maximum number of nonlinear solver failures (51) at time = 0" — a
 //! diagnostic naming the nonlinear solver rather than the real condition — for
 //! a document `simulate` evaluates without complaint. It passed only when
@@ -261,7 +261,7 @@ fn a_static_assertion_outside_the_declared_span_is_refused() {
 /// `time`" (§5.43.7).
 ///
 /// A SHAPED state-free document takes the ARRAY runtime under
-/// `Compile::Always`, which carries no scalar observed graph, so the static
+/// `Rhs::Always`, which carries no scalar observed graph, so the static
 /// evaluation `static_trajectory` performs cannot serve it. Before the runner
 /// asked for the build that materializes its fields, `solve` handed a
 /// right-hand side over an empty state vector to the integrator and reported

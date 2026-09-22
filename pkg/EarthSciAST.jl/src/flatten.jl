@@ -197,7 +197,7 @@ struct FlattenedSystem
     # (deep-equal dedup, deterministic `<ComponentPath>.<name>` collision rename).
     # Downstream consumers resolve surviving `apply_expression_template`
     # references against it (or `Expand` them; §9.6.4 rule 2). Empty when no
-    # references survived (or `ESS_TEMPLATE_REF_DISABLE=1`).
+    # references survived.
     template_registry::OrderedDict{String, Any}
     # ── esm-libraries-spec §4.7.5 step 4, the canonical field set (esm 1.0.0) ──
     # The three §6.3.1 SUBSET maps. Each is a subset of the map above it and
@@ -1006,8 +1006,7 @@ never survive: they are expanded eagerly at collect (`_collect_reaction_system!`
 before namespacing. Consumers that need the Option-A expanded image call
 [`expand_flattened_refs`](@ref) at their own boundary (RFC
 out-of-line-expression-templates §7.7); the tree-walk build expands at its entry
-with site recording (the compile-once tier). Under `ESS_TEMPLATE_REF_DISABLE=1`
-load already expanded, so no references reach `flatten` at all.
+with site recording (the compile-once tier).
 """
 function flatten(file::EsmFile; base_path::AbstractString=".",
                  load_ref=nothing)::FlattenedSystem

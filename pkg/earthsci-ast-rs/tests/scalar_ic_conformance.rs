@@ -126,10 +126,9 @@ fn scalar_ic_seeding_precedence() {
     };
 
     let at0 = |sol: &earthsci_ast::Solution, name: &str| -> f64 {
+        // See `Solution::index_of`: either spelling resolves.
         let i = sol
-            .state_variable_names
-            .iter()
-            .position(|n| n == name)
+            .index_of(name)
             .unwrap_or_else(|| panic!("no state {name} in {:?}", sol.state_variable_names));
         sol.state[i][0]
     };
@@ -141,7 +140,7 @@ fn scalar_ic_seeding_precedence() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -162,7 +161,7 @@ fn scalar_ic_seeding_precedence() {
             earthsci_ast::ProblemOptions {
                 p: params.clone(),
                 u0: HashMap::new().clone(),
-                compile: earthsci_ast::Compile::Always,
+                rhs: earthsci_ast::Rhs::Always,
                 ..Default::default()
             },
         )
@@ -181,7 +180,7 @@ fn scalar_ic_seeding_precedence() {
             earthsci_ast::ProblemOptions {
                 p: HashMap::new().clone(),
                 u0: ics.clone(),
-                compile: earthsci_ast::Compile::Always,
+                rhs: earthsci_ast::Rhs::Always,
                 ..Default::default()
             },
         )

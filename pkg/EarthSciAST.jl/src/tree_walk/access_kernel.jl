@@ -1021,13 +1021,13 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 # — which is easily more than the parallel speedup. The default is therefore
 # OFF, and the opt-in is LOADING POLYESTER: the batch runner lives in
 # `EarthSciASTPolyesterExt` and is null until the user does `using Polyester`
-# (which activates the extension and calls `_set_batch_runner!`).
-# `ESS_THREADS_DISABLE=1` is the hard kill switch that forces serial even with
-# Polyester loaded (the `ESS_*_DISABLE` convention). Enable it (by loading
-# Polyester) for RHS-dominated workloads with cell counts far above
+# (which activates the extension and calls `_set_batch_runner!`). Enable it (by
+# loading Polyester) for RHS-dominated workloads with cell counts far above
 # `ESS_THREADS_MIN_CELLS`, where per-dispatch work amortizes the wake-up;
-# measure the SOLVE, not the RHS, before trusting it.
-_threads_disabled() = get(ENV, "ESS_THREADS_DISABLE", "") == "1"
+# measure the SOLVE, not the RHS, before trusting it. Raising that floor past a
+# section's cell count is how a serial run is forced without unloading
+# Polyester — chunking changes no bit, so it is not a choice of evaluator and
+# has no `compiler` value of its own.
 
 # The `nchunks`-way static batch runner, supplied by EarthSciASTPolyesterExt when
 # Polyester is loaded. Signature: `runner(chunkbody, nchunks)` calls
@@ -1053,12 +1053,14 @@ _reset_thread_tally!() = (empty!(_THREAD_TALLY); nothing)
 
 # Minimum cells per chunk. Below this a section is not worth a thread dispatch
 # (a whole section below it stays serial), which keeps small models on the
-# untouched serial path.
+# untouched serial path. Override with ESS_THREADS_MIN_CELLS: a tuning
+# threshold, not a refusal boundary — both sides of it evaluate the same bits,
+# so no compiler refuses a rule for crossing it.
 _thread_min_cells() =
     something(tryparse(Int, get(ENV, "ESS_THREADS_MIN_CELLS", "")), 512)
 
 @inline _threads_available() =
-    Threads.nthreads() > 1 && _polyester_loaded() && !_threads_disabled()
+    Threads.nthreads() > 1 && _polyester_loaded()
 
 # Total cells in a cell set, in the runners' own enumeration.
 function _cellset_ncells(cs::_CellSet)

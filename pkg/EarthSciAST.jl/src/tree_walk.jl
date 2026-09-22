@@ -47,7 +47,6 @@ include("tree_walk/unlowered_gate.jl")   #      §9.6.3 c.6 pre-build rewrite-ta
 include("tree_walk/scan.jl")             #      prefix-scan detection + `_ScanFold`
 include("tree_walk/build.jl")            # §2b  build pipeline, `build_evaluator`
 include("tree_walk/compile.jl")          # §3-4 `_Node` IR, scalar CSE, scalar walker
-include("tree_walk/array_contraction.jl") #     whole-array contraction nest
 include("tree_walk/geometry_compile.jl") # §2c  geometry body compiler (needs `_Node`)
 include("tree_walk/access_kernel.jl")    # §4b  unified array-kernel IR (`_AccKernel`)
 include("tree_walk/scalar_ops.jl")       #      op ladder, subscript resolver, forcing args
@@ -57,6 +56,7 @@ include("tree_walk/acc_merge.jl")        # §4e  per-cell merge + `_make_rhs`
 include("tree_walk/oop_merge.jl")        #      kernel-CLASS merge, for both forms
 include("tree_walk/xcse.jl")             #      cross-kernel / kernel↔prelude fn-CSE
 include("tree_walk/codegen_kernel.jl")   # §4f  Julia-codegen tier for access kernels
+include("tree_walk/array_contraction.jl") # §4f  …and for the whole-array contraction nest
 include("tree_walk/const_tier.jl")       # §4g  cadence partition of the scalar prelude
 include("tree_walk/stencil.jl")          # §4c  symbolic stencilizer (spines + recipes)
 include("tree_walk/stencil_affine.jl")   #      affine box processor (the default build)

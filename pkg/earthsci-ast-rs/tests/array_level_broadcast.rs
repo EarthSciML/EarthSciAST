@@ -15,7 +15,6 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::run_inline_tests;
 use earthsci_ast::{Alg, Model, SolveOptions, load_string};
 use earthsci_ast::{StructuralErrorCode, validate};
 use std::collections::HashMap;
@@ -44,7 +43,13 @@ fn run(
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
+            // The array-level `broadcast` node has no WHOLESALE tape
+            // lowering, so `native` refuses these fixtures by NAME (API_SPEC
+            // §5.8). What is pinned here is the BROADCAST SEMANTICS — which
+            // axes lift, and that the two spellings agree bit for bit — and
+            // that is the reference evaluator's answer to give.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )
@@ -67,7 +72,17 @@ fn run_shared_fixture(name: &str) {
         report.structural_errors
     );
 
-    let results = run_inline_tests(&file, None, &opts());
+    let results = earthsci_ast::run_inline_tests_with_options(
+        &file,
+        // As `run` above: the array-level `broadcast` node has no wholesale
+        // tape lowering, so `native` refuses these fixtures by NAME.
+        &earthsci_ast::InlineTestOptions {
+            solve: opts(),
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
+            ..Default::default()
+        },
+        None,
+    );
     assert!(!results.is_empty(), "{name}: no inline assertions ran");
     for r in &results {
         assert!(
@@ -325,7 +340,13 @@ fn anonymous_shapes_keep_positional_broadcast() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
+            // The array-level `broadcast` node has no WHOLESALE tape
+            // lowering, so `native` refuses these fixtures by NAME (API_SPEC
+            // §5.8). What is pinned here is the BROADCAST SEMANTICS — which
+            // axes lift, and that the two spellings agree bit for bit — and
+            // that is the reference evaluator's answer to give.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )
@@ -334,11 +355,10 @@ fn anonymous_shapes_keep_positional_broadcast() {
 
     // result[i, j] = a[i] + b[j] with a = [1,2,3], b = [100,200,300].
     for (name, want) in [("corner", 101.0), ("middle", 302.0), ("far", 203.0)] {
+        // See `Solution::index_of`: either spelling resolves.
         let slot = sol
-            .state_variable_names
-            .iter()
-            .position(|n| n == name)
-            .unwrap_or_else(|| panic!("no state {name}"));
+            .index_of(name)
+            .unwrap_or_else(|| panic!("no state {name} in {:?}", sol.state_variable_names));
         let got = sol.state[slot][sol.state[slot].len() - 1];
         assert!(
             (got - want).abs() < 1e-9,

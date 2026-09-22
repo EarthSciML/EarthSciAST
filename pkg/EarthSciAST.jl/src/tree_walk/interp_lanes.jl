@@ -208,8 +208,8 @@ end
 # collapsed bound meets a lane-invariant scalar query (the `Lq` trap the
 # Reactant ext's `_rx_knot_matrix` guard documents). A mixed column (lanes
 # genuinely differing in their bound) stays a column — exactly today.
-# `ESS_LANE_INTERN_DISABLE=1` turns the collapse off with the rest of the
-# lane-intern feature, restoring today's lane-wide bounds as the oracle.
+# Turning lane interning off turns the collapse off with it, which leaves the
+# lane-wide bounds as the oracle.
 function _lane_bound(col::Vector{Float64})
     _lane_intern_disabled() && return col
     @inbounds v1 = col[1]

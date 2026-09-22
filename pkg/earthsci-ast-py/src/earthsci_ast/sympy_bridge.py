@@ -25,7 +25,6 @@ and are re-imported here so existing ``sympy_bridge`` imports keep working.
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -34,12 +33,18 @@ import sympy as sp
 from sympy.logic.boolalg import Boolean
 from sympy.printing.numpy import NumPyPrinter
 
+from .error_handling import ErrorCode
 from .esm_types import ExprNode
 
 # _ess_numeric_abs is re-exported for existing importers (tests, simulation
 # diagnostics) even though this module only references it by name inside
 # _LAMBDIFY_MODULES.
-from .expression import SimulationError, _ess_numeric_abs, _expr_to_sympy  # noqa: F401
+from .expression import (  # noqa: F401
+    SimulationError,
+    UnsupportedConstructError,
+    _ess_numeric_abs,
+    _expr_to_sympy,
+)
 from .flatten import FlattenedSystem
 
 # Module-mapping handed to every :func:`_lambdify` call in this tier (which is
@@ -47,6 +52,19 @@ from .flatten import FlattenedSystem
 # the ``_ess_numeric_abs`` calls emitted by ``_expr_to_sympy`` resolve to
 # ``numpy.abs`` at runtime.
 _LAMBDIFY_MODULES = [{"_ess_numeric_abs": np.abs}, "numpy"]
+
+
+def _unbalanced(detail: str) -> SimulationError:
+    """An ``equation_count_mismatch`` refusal (esm-spec §4.9.4) as an exception.
+
+    The ``code`` attribute is what tells a caller that this is a DIAGNOSTIC the
+    binding decided to emit, not an accident of lowering: ``problem`` tolerates
+    a state-free document whose body the SymPy tier cannot lower, and must not
+    swallow a refusal along with it.
+    """
+    error = SimulationError(f"{ErrorCode.EQUATION_COUNT_MISMATCH.value}: {detail}")
+    error.code = ErrorCode.EQUATION_COUNT_MISMATCH.value
+    return error
 
 
 def _is_boolean_atom(value: Any) -> bool:
@@ -428,24 +446,44 @@ def _flat_to_sympy_rhs(
                         )
                     except Exception as exc:
                         # sp.solve's failure surface is wide (NotImplementedError,
-                        # PolynomialError, GeneratorsNeeded, …), so keep the broad
-                        # catch — but no longer swallow it silently: the equation
-                        # is about to be dropped, which the author should know.
-                        warnings.warn(
-                            f"Could not solve algebraic constraint "
-                            f"`{lhs} = {rhs_sym}` for `{target_name}` "
-                            f"({type(exc).__name__}: {exc}); skipping it.",
-                            RuntimeWarning,
-                            stacklevel=2,
-                        )
-                        solutions = []
+                        # PolynomialError, GeneratorsNeeded, …), so the catch stays
+                        # broad. What it does with the failure does not: the
+                        # constraint is one the document declares, and a run without
+                        # it leaves `target_name` at its initial value and reports
+                        # that as the answer. esm-libraries-spec §2.5.2 makes an
+                        # unlowerable construct a construction error, so the build
+                        # is refused instead (esm-spec §9.6.6).
+                        raise UnsupportedConstructError(
+                            "algebraic constraint",
+                            f"`{lhs} ~ {rhs_sym}`, which cannot be solved for "
+                            f"`{target_name}` ({type(exc).__name__}: {exc}),",
+                            "Python scalar interpreter",
+                        ) from exc
                     if solutions:
                         alg_rhs[target_name] = sp.sympify(solutions[0])
                         continue
-                # No unbound state variable on the RHS — the equation is
-                # either a redundant restatement or a genuine contradiction.
-                # Skip it; downstream output will surface any inconsistency.
-                continue
+                    # `sp.solve` succeeded and found nothing: the constraint has no
+                    # solution for the unknown it was to determine. Refused for the
+                    # same reason the exception above is.
+                    raise UnsupportedConstructError(
+                        "algebraic constraint",
+                        f"`{lhs} ~ {rhs_sym}`, which has no solution for `{target_name}`,",
+                        "Python scalar interpreter",
+                    )
+                # No unbound state variable on the RHS: every name the constraint
+                # mentions is already determined elsewhere, so this equation binds
+                # nothing and the system carries one more equation than it has
+                # unknowns for (esm-spec §4.9.4). Dropping it runs a model the
+                # document does not describe — either the duplicate is redundant,
+                # in which case it belongs out of the file, or it contradicts the
+                # first definition, in which case no answer here is right.
+                raise _unbalanced(
+                    f"`{lhs} ~ {rhs_sym}` redefines `{lhs}`, which an earlier equation "
+                    f"already defines, and binds no other unknown, so there is nothing "
+                    f"left for it to determine (esm-spec §4.9.4); remove the duplicate "
+                    f"definition, or name on its right-hand side the unknown it is "
+                    f"meant to constrain"
+                )
             if lhs in flat.state_variables:
                 alg_rhs[lhs] = rhs_sym
             # An OBSERVED LHS is handled by `_observed_to_sympy_value_exprs`,
@@ -454,11 +492,21 @@ def _flat_to_sympy_rhs(
             continue
         # Other LHS shapes (e.g. array ops) are handled by the NumPy path.
 
-    # If a state has both an ODE and an algebraic equation, the ODE wins — the
-    # system is overdetermined and we must pick one consistent interpretation.
-    for name in list(alg_rhs.keys()):
-        if name in diff_rhs:
-            del alg_rhs[name]
+    # A state carrying BOTH a derivative equation and an algebraic one binds one
+    # unknown with two equations, which esm-spec §4.9.4 counts as unbalanced.
+    # `esm_problem` refuses such a document at its front door
+    # (`_assert_no_doubly_defined_state`) for every pathway; this is the same
+    # refusal for a hand-built FlattenedSystem that reaches the SymPy compile
+    # directly, where dropping one of the two would integrate a model the system
+    # does not describe.
+    doubly_defined = sorted(set(alg_rhs) & set(diff_rhs))
+    if doubly_defined:
+        name = doubly_defined[0]
+        raise _unbalanced(
+            f"unknown {name!r} is defined both by a derivative equation and by the "
+            f"algebraic equation `{name} ~ {alg_rhs[name]}`; esm-spec §4.9.4 counts "
+            f"an equation whichever form its LHS takes, so one of the two must go"
+        )
 
     algebraic_state_names = [n for n in state_names if n in alg_rhs]
 

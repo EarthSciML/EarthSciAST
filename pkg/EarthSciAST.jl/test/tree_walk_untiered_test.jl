@@ -1,16 +1,16 @@
-# The UNTIERED kill switch (`ESS_UNTIERED=1`, tree_walk/const_tier.jl).
+# `compiler=:interpreter` against `compiler=:native`, on the prelude.
 #
 # WHAT THIS FILE IS FOR. The cadence tiers of the in-place prelude (const_tier.jl)
 # let `f!` SKIP refilling a slot whose inputs provably have not moved. Every test
 # that pins "the skip changed no number" needs a reference evaluator that skips
-# nothing, and `ESS_UNTIERED=1` is it: the switch classifies every prelude slot
-# DYNAMIC, so `f!` refills all of them, in ascending slot order, on every call.
+# nothing, and `:interpreter` is it: it classifies every prelude slot DYNAMIC, so
+# `f!` refills all of them, in ascending slot order, on every call.
 #
-# This file is what makes that reference trustworthy — it pins the switch itself
-# (every slot really is classified dynamic, and the prelude is otherwise unchanged)
-# and then `f!(tiered) == f!(untiered)` bit for bit over the call sequences the
-# tiers are allowed to skip on. The other tiering tests use the switch as their
-# oracle.
+# This file is what makes that reference trustworthy — it pins the interpreter's
+# own prelude (every slot really is classified dynamic, and the prelude is
+# otherwise unchanged) and then `f!(:native) == f!(:interpreter)` bit for bit
+# over the call sequences the tiers are allowed to skip on. The other tiering
+# tests use `:interpreter` as their oracle for the same reason.
 #
 # THE FIXTURES exercise the two tiers separately and then together:
 #
@@ -45,9 +45,7 @@ _ut_same(a, b) = _ut_bits(collect(a)) == _ut_bits(collect(b))
 # The three builds under comparison, from one model-producing thunk.
 _ut_tiered(mk; kw...) = ESM._build_evaluator_impl(mk(); kw...)
 _ut_untiered(mk; kw...) =
-    withenv("ESS_UNTIERED" => "1") do
-        ESM._build_evaluator_impl(mk(); kw...)
-    end
+    ESM._build_evaluator_impl(mk(); compiler=:interpreter, kw...)
 
 # ---------------------------------------------------------------------------
 # Fixture 1 — the parameter-only Arrhenius chain: `k = A*exp(-Ea/(R*Tref))`
@@ -127,7 +125,7 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
     _template_reg=ESM._component_template_reg(file, name),
     _model_name=String(name), kw...)
 
-@testset "untiered kill switch (ESS_UNTIERED) ≡ the tiered prelude" begin
+@testset "compiler=:interpreter ≡ the tiered prelude" begin
 
     # ----------------------------------------------------------------
     # (1) The switch does what it says: no slot is left in a skippable tier,
@@ -234,9 +232,7 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
                 file = _ut_file(rel)
                 fi, u0, p, _ts, _vm, di = _ut_doc_build(file, name)
                 fu, _u2, _p2, _ts2, _vm2, du =
-                    withenv("ESS_UNTIERED" => "1") do
-                        _ut_doc_build(file, name)
-                    end
+                    _ut_doc_build(file, name; compiler=:interpreter)
 
                 # The fixture must actually HAVE a prelude, or this proves nothing.
                 nslots = di.n_const_slots + di.n_time_slots + di.n_dynamic_slots

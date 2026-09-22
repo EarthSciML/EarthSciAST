@@ -27,10 +27,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "form A — subsystem-ref injection (§4.7 / §9.7.10)" begin
         # esm-spec §9.6.4 Option B: by default references survive and
         # `serialize_esm_file` is reference-preserving. The `expanded.esm` golden
-        # is the Option-A image, so this pins it via `ESS_TEMPLATE_REF_DISABLE=1`.
-        f = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-            EarthSciAST.load_path(conf("inject_subsystem_ref", "fixture.esm"))
-        end
+        # is the Option-A image, so this pins it with `expanded_file`.
+        f = EarthSciAST.expanded_file(
+            EarthSciAST.load_path(conf("inject_subsystem_ref", "fixture.esm")))
         # The mounted, agnostic leaf's D(c, wrt: lon) is lowered by the injected
         # rule at the mount; the subsystem resolves to a Model (not a ref).
         runoff = f.models["Assembly"].subsystems["Runoff"]
@@ -57,10 +56,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     end
 
     @testset "form B — coupling-entry injection (§10.8 / §9.7.10)" begin
-        # Option B: pin the Option-A `expanded.esm` golden via the disable hatch.
-        f = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-            EarthSciAST.load_path(conf("inject_coupling_entry", "fixture.esm"))
-        end
+        # Option B: pin the Option-A `expanded.esm` golden with `expanded_file`.
+        f = EarthSciAST.expanded_file(
+            EarthSciAST.load_path(conf("inject_coupling_entry", "fixture.esm")))
         # Advection is discretized by name; its lon-derivative is lowered.
         @test f.models["Advection"].equations[1].rhs.args[2].op == "makearray"
         @test f.index_sets["lon"].size == 288

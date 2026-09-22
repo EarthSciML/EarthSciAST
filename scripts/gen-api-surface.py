@@ -396,6 +396,47 @@ PLANNED = [
         "distinct symbols under the (name, kind) identity rule).",
         "affects": ["julia", "typescript", "python", "go"],
     },
+    {
+        "canonical": "compiler",
+        "issue": "Each simulating binding picks its build strategy by inspecting the "
+        "document; a caller can neither ask for one nor read back which ran. "
+        "Julia's stable entry point always builds the tree walk, so its XLA "
+        "emitter is unreachable from `esm_problem`.",
+        "resolution": "API_SPEC.md §8 item 21: `esm_problem` gains a `compiler` keyword "
+        "over the closed vocabulary `interpreter` / `native` / `xla` / "
+        "`mtk` / `sympy` (§5.8), defaulting to a strict `native`, and every "
+        "Problem exposes `compiler` and `compiler_report`. Julia "
+        "`compiler::Symbol`, Python `compiler: str | None`, Rust "
+        "`ProblemOptions.compiler: Option<Compiler>` over a new `Compiler` "
+        "enum.",
+        "affects": ["julia", "python", "rust"],
+    },
+    {
+        "canonical": "Compile -> Rhs",
+        "issue": "Rust's `Compile::{Auto, Always, Never}` decides whether a right-hand "
+        "side is built AT ALL (static versus dynamic), not which compiler "
+        "builds it. Beside the `Compiler` enum above the two names differ by "
+        "one letter and mean different things, and the entry above puts a "
+        "field `compiler` next to the existing field `compile` on the same "
+        "`ProblemOptions`.",
+        "resolution": "API_SPEC.md §8 item 22: rename the type to "
+        "`Rhs::{Auto, Always, Never}` and the field to `rhs` (working "
+        "proposal), keeping `Compile` as a deprecated type alias for one "
+        "minor.",
+        "affects": ["rust"],
+    },
+    {
+        "canonical": "build_evaluator",
+        "issue": "Kept as an extension seam because it is the way to get a compiled "
+        "right-hand side without a Problem, and because downstream use is "
+        "substantial. `compiler` answers both.",
+        "resolution": "API_SPEC.md §8 item 23: `build_evaluator` goes private behind "
+        "`esm_problem` once `compiler=:xla` lands and the downstream "
+        "migration is done, with a deprecated alias for one minor. The "
+        "forcing-buffer seam re-hangs on `EsmProblem`; `BuildInspection` "
+        "folds into `compiler_report`.",
+        "affects": ["julia"],
+    },
 ]
 
 

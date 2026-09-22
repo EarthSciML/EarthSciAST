@@ -17,7 +17,8 @@
 #     operator, a different parameter symbol or a different pow exponent
 #     separates two entries; a different CELL (a different state slot, a
 #     different value-position literal) does not, which is the whole point;
-#   * `ESS_OOP_BATCH=0` leaves every entry in `rest` with no groups at all.
+#   * with the grouping off (`compiler=:interpreter`) every entry stays in
+#     `rest` and there are no groups at all.
 #
 # The emitted program the groups become is pinned in
 # test/reactant_direct_emit_test.jl ("the lane-batched scalar surface"), under
@@ -35,11 +36,9 @@ const _SB_ESS = EarthSciAST
 # entries to batch. These reductions are far under the shipped floor, but the
 # floor is named rather than inherited so the routing under test is a fact of the
 # fixture and not of the ambient environment.
-_sb_env(batch::Bool, loop::Bool = true) =
-    ("ESS_CONTRACTION_LOOP" => (loop ? "1" : "0"),
-     "ESS_CONTRACTION_LOOP_MIN" => "8",
-     "ESS_ARRAY_CONTRACTION_MIN" => "1024",
-     "ESS_OOP_BATCH" => (batch ? "1" : "0"))
+_sb_env() = ("ESS_CONTRACTION_LOOP_MIN" => "8",
+             "ESS_ARRAY_CONTRACTION_MIN" => "1024")
+_sb_compiler(batch::Bool) = batch ? :native : :interpreter
 
 # The compiled IR behind an out-of-place build.
 _sb_ir(fo) = getfield(fo, :rhs)
@@ -83,7 +82,7 @@ end
 
     @testset "rhs_list contraction loops: one group, every lane in it" begin
         doc, ics, NI, NJ = _sb_halo(8)
-        fo, _, _, _, _ = withenv(_sb_env(true)...) do
+        fo, _, _, _, _ = withenv(_sb_env()...) do
             build_evaluator(doc; initial_conditions = ics, form = :oop)
         end
         ir = _sb_ir(fo)
@@ -104,14 +103,18 @@ end
         @test root.kind == _SB_ESS._NK_CONTRACTION_LOOP ||
               any(c -> c.kind == _SB_ESS._NK_CONTRACTION_LOOP, root.children)
 
-        # Kill switch: every entry stays single, and `rest` is the whole surface.
-        fn, _, _, _, _ = withenv(_sb_env(false)...) do
-            build_evaluator(doc; initial_conditions = ics, form = :oop)
+        # Grouping off: every entry stays single, `rest` is the whole surface.
+        fn, _, _, _, _ = withenv(_sb_env()...) do
+            build_evaluator(doc; initial_conditions = ics, form = :oop,
+                            compiler = :interpreter)
         end
         rn = getfield(_sb_ir(fn), :rhs_batches)
         @test isempty(rn.groups)
         @test rn.n_batched == 0
-        @test length(rn.rest) == NI * NJ
+        # With the contraction loop off too, the reduction unrolls into many
+        # more scalar entries — `rest` is whatever the surface is, entry for
+        # entry, which is the claim.
+        @test length(rn.rest) == length(getfield(_sb_ir(fn), :rhs_list))
         @test sort(first.(rn.rest)) == sort(first.(getfield(_sb_ir(fn), :rhs_list)))
     end
 
@@ -157,9 +160,9 @@ end
         model = _SB_ESS.Model(vars, eqs)
         ics = Dict{String,Any}("v[$j]" => 0.0 for j in 1:N)
         for j in 1:N, k in 1:M; ics["q[$j,$k]"] = Float64(3j + k); end
-        bld(batch) = withenv(_sb_env(batch)...) do
+        bld(batch) = withenv(_sb_env()...) do
             build_evaluator(model; index_sets = isets, initial_conditions = ics,
-                            form = :oop)[1]
+                            form = :oop, compiler = _sb_compiler(batch))[1]
         end
 
         ir = _sb_ir(bld(true))
@@ -205,9 +208,7 @@ end
                    "rhs"=>Dict("op"=>"^","args"=>Any["x",3.0])),
             ])))
         ics = Dict("x"=>1.5,"y"=>-2.5,"a"=>0.0,"b"=>0.0,"c"=>0.0)
-        fo, _, _, _, vm = withenv("ESS_OOP_BATCH"=>"1") do
-            build_evaluator(doc; initial_conditions=ics, form=:oop)
-        end
+        fo, _, _, _, vm = build_evaluator(doc; initial_conditions=ics, form=:oop)
         rb = getfield(_sb_ir(fo), :rhs_batches)
         pow = [g for g in rb.groups if g.root.kind == _SB_ESS._NK_OP &&
                (g.root.op === :^ || g.root.op === :pow)]
@@ -266,9 +267,7 @@ end
             (22, op(:+, par(:k), st(5))),
             (31, op(:*, par(:j), st(6))),
         ]
-        sb = withenv("ESS_OOP_BATCH" => "1") do
-            _SB_ESS._oop_batch_scalars(entries)
-        end
+        sb = _SB_ESS._oop_batch_scalars(entries)
         @test sort(length.(getfield.(sb.groups, :slots))) == [2, 3]
         @test sb.n_batched == 5
         @test first.(sb.rest) == [31]          # the lone one, order preserved
@@ -277,8 +276,9 @@ end
         @test sb.groups[1].slots == [11, 12, 13]
         @test sb.groups[2].slots == [21, 22]
 
-        # Kill switch: no groups, and `rest` is the surface verbatim.
-        off = withenv("ESS_OOP_BATCH" => "0") do
+        # Grouping off: no groups, and `rest` is the surface verbatim.
+        off = _SB_ESS._with_compiler_plan(
+            _SB_ESS._compiler_plan(:interpreter)) do
             _SB_ESS._oop_batch_scalars(entries)
         end
         @test isempty(off.groups)
@@ -286,9 +286,7 @@ end
         @test first.(off.rest) == first.(entries)
 
         # A one-entry surface has nothing to group, and says so the same way.
-        one = withenv("ESS_OOP_BATCH" => "1") do
-            _SB_ESS._oop_batch_scalars(entries[1:1])
-        end
+        one = _SB_ESS._oop_batch_scalars(entries[1:1])
         @test isempty(one.groups) && one.n_batched == 0 && length(one.rest) == 1
     end
 end

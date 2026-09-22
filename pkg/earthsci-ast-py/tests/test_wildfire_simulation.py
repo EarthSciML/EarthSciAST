@@ -21,6 +21,13 @@ Python counterpart of the Julia reference. What this exercises:
 The fixture's OceanDynamics inline ``tests`` block is the source of truth: this
 runner executes every assertion in it (SST at t=0 and t=3600), and additionally
 pins the constant atmosphere / fire states.
+
+Both runs name ``compiler="interpreter"``. The fixture's conservative-regrid
+weight ``OceanDynamics.rg_W`` is a join-gated `faq` with NO contraction, and
+every gated whole-box tier in this binding needs one, so the strict ``native``
+default refuses it (``API_SPEC.md`` §5.8). That shape is the largest structural
+hole the compiler census found, and until a whole-box gated pure map exists the
+document's trajectory is checked on the reference.
 """
 
 from __future__ import annotations
@@ -80,7 +87,7 @@ def test_wildfire_atmosphere_ocean_simulation() -> None:
         tspan = (float(ts["start"]), float(ts["end"]))
         test_tol = test.get("tolerance")
 
-        result = solve(esm_problem(file, tspan), reltol=1e-10, abstol=1e-12)
+        result = solve(esm_problem(file, tspan, compiler="interpreter"), reltol=1e-10, abstol=1e-12)
         assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
         for a in test["assertions"]:
@@ -119,7 +126,9 @@ def test_wildfire_constant_and_regrid_states() -> None:
     SST(t)=290 + t*surface_heat_flux/4.18e6 with the inline conservative
     weights giving surface_heat_flux=[100, 283.333, 350]."""
     file = load_path(FIXTURE)
-    result = solve(esm_problem(file, (0.0, 3600.0)), reltol=1e-10, abstol=1e-12)
+    result = solve(
+        esm_problem(file, (0.0, 3600.0), compiler="interpreter"), reltol=1e-10, abstol=1e-12
+    )
     assert result.retcode is ReturnCode.Success, result.message
 
     def final(name: str) -> float:

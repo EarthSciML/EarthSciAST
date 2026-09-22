@@ -49,18 +49,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use std::collections::BTreeSet;
 
-/// `ESS_TAPE_FUSE_DISABLE=1`: build the unfused program (bitwise-identical
-/// results either way; this is the Step 4 kill switch).
-pub(crate) fn fuse_disabled() -> bool {
-    use std::sync::OnceLock;
-    static OFF: OnceLock<bool> = OnceLock::new();
-    *OFF.get_or_init(|| {
-        std::env::var("ESS_TAPE_FUSE_DISABLE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
-}
-
 /// Maximum simultaneously open groups (oldest is flushed beyond this).
 const MAX_OPEN_GROUPS: usize = 4;
 
@@ -643,12 +631,17 @@ pub(crate) struct SuperopCfg {
     /// through the (L2-resident) register file, not by dispatch, and Bin3's
     /// all-pointer form adds a fourth input stream plus splat-register traffic
     /// that outweighs the two intermediate round-trips it saves. Opt-in via
-    /// `ESS_TAPE_BIN3=1`.
+    /// `ESS_TAPE_BIN3=1`: a TUNING THRESHOLD, and under `native` a refusal
+    /// boundary rather than a fallback trigger — moving it changes which
+    /// program is built, never which evaluator runs
+    /// (`esm-libraries-spec.md` §2.5.10).
     pub bin3: bool,
     /// Extend Bin2 beyond the `+ - * /` square to the mask/clamp pairs of
     /// [`bin2_pair_ok`]. Default ON: faster in the generic build, neutral under
     /// the SIMD clones, and fewer element-ops either way.
-    /// `ESS_TAPE_EXTPAIR_DISABLE=1` reverts.
+    /// `ESS_TAPE_EXTPAIR_DISABLE=1` reverts: a TUNING THRESHOLD like
+    /// `ESS_TAPE_BIN3`, shaping the program a compiler builds and never
+    /// selecting a different evaluator.
     pub ext_pairs: bool,
 }
 
