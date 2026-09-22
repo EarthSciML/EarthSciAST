@@ -596,15 +596,14 @@ build-time materialization of constants and static observeds, the per-segment
 seed, and the observeds reported at output times — from an evaluator that
 declines on its own terms, and says which passes the emitted program covers.
 Serving them from whatever the emitter itself consumed satisfies that, since
-it has already been gated. That is the condition under which the
-refusal above means anything: a second evaluator beside the emitted program
-would decline on its own terms and put rules back on a per-cell walk with
-nothing in the report to show for it. In Rust that lowered form is the tape:
-`Compiler::Xla` runs the right-hand side and the finite-difference Jacobian
-differenced out of it on the compiled executable, and every other pass on the
-tape the emitter consumed — and a rule that did not lower to the tape is
-refused before the emitter is ever reached, so the refusal names the rule and
-its cadence tier rather than an instruction.
+it has already been gated. This is the condition under which the refusal above
+means anything: a second evaluator beside the emitted program would put rules
+back on a per-cell walk with nothing in the report to show for it. In Rust
+what the emitter consumed is the tape — `Compiler::Xla` runs the right-hand
+side and the finite-difference Jacobian differenced out of it on the compiled
+executable, and every other pass on that tape — and a rule that did not lower
+to the tape is refused before the emitter is reached, so the refusal names the
+rule and its cadence tier rather than an instruction.
 
 **Every Problem reports what ran.** `compiler` gives the vocabulary value the
 build actually used, and `compiler_report` gives, per rule, the tier it landed
