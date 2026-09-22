@@ -82,7 +82,7 @@ fixtures and 138 assertions.
 | normative text | `CONFORMANCE_SPEC.md` §5.45 |
 | harness stages | `scripts/test-conformance.sh`: `inline-test self-test`, then `inline-test {interpreter,native} producer ({julia,rust,python})` — 7 stages, each naming `--compiler` explicitly |
 | tier 1 | `tests/conformance/broadcast_alignment/` — 7 fixtures (4 referenced from `tests/valid/array_broadcast/`, 3 authored), 48 assertions |
-| tier 2 | `tests/conformance/scalar_operator_semantics/` — 4 fixtures, 90 assertions: 84 operator rows in one algebraic document, plus three split-out single-operator documents (`pow`, `true`, `false`) |
+| tier 2 | `tests/conformance/scalar_operator_semantics/` — 4 fixtures, 90 assertions: 84 in one algebraic document (70 operators, the `t` row, the override arm and one integrated state), plus three split-out single-operator documents (`pow`, `true`, `false`) |
 
 ## Named refusals, for issue filing
 
@@ -106,7 +106,7 @@ two `broadcast` fixtures are refused only under `native`, so those are ordinary
 `native` coverage gaps of exactly the kind phase 6 exists to make visible.
 
 Each contested operator is split into a fixture of its own precisely so that an
-exclusion costs the 84 operators in the sibling fixture nothing. Nothing was
+exclusion costs the sibling fixture's 84 assertions nothing. Nothing was
 weakened to make a binding pass: every assertion is at the tolerance it was
 authored with, and the scalar tier's default band is EXACT.
 

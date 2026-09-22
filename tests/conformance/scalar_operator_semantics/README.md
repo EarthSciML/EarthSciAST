@@ -62,8 +62,9 @@ Non-vacuity is structural, in three places:
 ## Named exclusions
 
 The tier found **three disagreements on its first run**, and each contested
-operator is split into a fixture of its own so that an exclusion costs the other
-84 operators nothing.
+operator is split into a fixture of its own so that an exclusion costs the
+sibling fixture's 84 assertions — 70 operators, plus the `t` row, the override
+arm and the integrated state — nothing.
 
 | Fixture | Binding / compilers | Code | What it means |
 |---|---|---|---|
