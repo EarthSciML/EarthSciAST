@@ -1,0 +1,105 @@
+{
+  "category": "scalar_operator_semantics",
+  "runner": "inline_tests",
+  "version": "1.0",
+  "description": "What each SCALAR operator of esm-spec \u00a79.2's evaluable core COMPUTES, pinned once for every binding. The op vocabulary is named in the spec and its tiers are gated by the registry corpus, but nothing shared said what `sign(0)`, `7/2`, `atan2(y, x)` or a false comparison is WORTH \u2014 each binding pinned it privately, against its own evaluator, in its own vocabulary: Julia through `build_evaluator` on hand-built AST nodes (tree_walk_test.jl), Rust through `interpret()` on a `ResolvedExpr` tree (interpret.rs), Python through `_expr_to_sympy` unit tests (test_simulation_scalar_ops.py). Three private op tables and no cross-binding gate is exactly the shape in which two bindings disagree for a year. The fixture is ALGEBRAIC: every operator is an observed whose operands are declared PARAMETERS, asserted at a single static evaluation (CONFORMANCE_SPEC \u00a75.43), so no integrator stands between the operator and the number and the band is the arithmetic's alone. A second test re-asserts a subset under `parameter_overrides`, so a binding that folded the declared defaults at build time and ignored the overrides lands on the first test's numbers and fails.",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust"
+  ],
+  "scope_excluded": {
+    "go": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md \u00a73, capability profiles). This is an exclusion from the CATEGORY, not from the rule.",
+    "typescript": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md \u00a73, capability profiles). This is an exclusion from the CATEGORY, not from the rule."
+  },
+  "integrators": {
+    "julia": {
+      "algorithm": "Tsit5",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    },
+    "python": {
+      "method": "LSODA",
+      "rtol": 1e-12,
+      "atol": 1e-14
+    },
+    "rust": {
+      "solver": "Erk",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    }
+  },
+  "tolerances": {
+    "golden_rtol": 1e-13,
+    "golden_atol": 1e-300,
+    "detail": "\u00a75.38.2's `algebraic` class. These are single evaluations of scalar arithmetic, so two correct bindings differ only in the last bits of a transcendental; nothing here carries an integrator's error except the one `probe` assertion, which declares its own looser band in the document."
+  },
+  "fixtures": [
+    {
+      "id": "scalar_operator_semantics",
+      "path": "fixtures/scalar_operator_semantics.esm",
+      "model": "Ops",
+      "golden": "golden/scalar_operator_semantics.json",
+      "tags": [
+        "scalar",
+        "operators",
+        "esm-spec-9.2",
+        "static-evaluation"
+      ],
+      "note": "Authored here. Migrated from tree_walk_test.jl testsets 1-5, interpret.rs and test_simulation_scalar_ops.py.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "boolean_literal_false",
+      "path": "fixtures/boolean_literal_false.esm",
+      "model": "FalseOp",
+      "golden": null,
+      "tags": [
+        "scalar",
+        "operators",
+        "esm-spec-9.2",
+        "boolean-literal"
+      ],
+      "note": "Authored here, SPLIT OUT of `scalar_operator_semantics` because it is the one core operator the three bindings do not agree on.",
+      "required": {
+        "julia": [],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": [
+        {
+          "binding": "julia",
+          "compilers": [
+            "interpreter",
+            "native"
+          ],
+          "code": "unevaluable_operator",
+          "reason": "Julia's tree-walk evaluator carries an evaluation rule for the `true` literal op and NONE for `false`, so the build refuses this document with `unevaluable_operator: operator 'false' is an evaluable-core op with no evaluation rule`. Measured 2026-09-22 on compiler/testmig at 25efca83a, under both `interpreter` and `native`. `false` is in the evaluable core (esm-libraries-spec \u00a72.5.10), so this is a gap to close, not a boundary; it is split into its own fixture precisely so the exclusion costs the other 57 operators nothing."
+        }
+      ],
+      "golden_absent_reason": "The REFERENCE itself refuses this document: the Julia `interpreter` has no evaluation rule for the `false` op, so there is no reference actual to mint and `--write-golden` skips it. The fixture is NOT ungated \u2014 Python and Rust are still held to the DOCUMENT's own `expected` values, which are `false == 0` and the state it drives, an oracle outside every binding. What is missing is the cross-compiler drift check, and it comes back the moment Julia gains the rule and the golden can be minted."
+    }
+  ]
+}

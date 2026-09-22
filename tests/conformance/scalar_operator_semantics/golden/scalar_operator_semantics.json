@@ -1,0 +1,349 @@
+{
+  "fixture": "scalar_operator_semantics",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 1,
+      "variable": "sum_of_three",
+      "actual": 6.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 2,
+      "variable": "difference",
+      "actual": 3.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 3,
+      "variable": "unary_minus",
+      "actual": -4.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 4,
+      "variable": "negated",
+      "actual": -4.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 5,
+      "variable": "product_of_three",
+      "actual": 24.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 6,
+      "variable": "quotient",
+      "actual": 2.5
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 7,
+      "variable": "caret_power",
+      "actual": 8.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 8,
+      "variable": "pow_power",
+      "actual": 8.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 9,
+      "variable": "integer_literal",
+      "actual": 7.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 10,
+      "variable": "integer_sum",
+      "actual": 3.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 11,
+      "variable": "integer_times_float",
+      "actual": 4.5
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 12,
+      "variable": "integer_quotient",
+      "actual": 3.5
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 13,
+      "variable": "less_than",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 14,
+      "variable": "less_equal",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 15,
+      "variable": "greater_than",
+      "actual": 0.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 16,
+      "variable": "greater_equal",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 17,
+      "variable": "equal",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 18,
+      "variable": "not_equal",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 19,
+      "variable": "conjunction",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 20,
+      "variable": "conjunction_false",
+      "actual": 0.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 21,
+      "variable": "disjunction",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 22,
+      "variable": "negation",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 23,
+      "variable": "literal_true",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 24,
+      "variable": "ifelse_taken",
+      "actual": 10.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 25,
+      "variable": "ifelse_untaken",
+      "actual": 20.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 26,
+      "variable": "sign_negative",
+      "actual": -1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 27,
+      "variable": "sign_zero",
+      "actual": 0.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 28,
+      "variable": "sign_positive",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 29,
+      "variable": "minimum_of_three",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 30,
+      "variable": "maximum_of_three",
+      "actual": 5.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 31,
+      "variable": "sine_at_zero",
+      "actual": 0.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 32,
+      "variable": "cosine_at_zero",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 33,
+      "variable": "tangent_at_zero",
+      "actual": 0.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 34,
+      "variable": "exponential_at_zero",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 35,
+      "variable": "logarithm_at_one",
+      "actual": 0.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 36,
+      "variable": "log10_at_hundred",
+      "actual": 2.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 37,
+      "variable": "square_root_of_nine",
+      "actual": 3.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 38,
+      "variable": "absolute_value",
+      "actual": 7.5
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 39,
+      "variable": "floor_value",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 40,
+      "variable": "ceiling_value",
+      "actual": 2.0
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 41,
+      "variable": "arctangent_two_argument",
+      "actual": 0.7853981633974483
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 42,
+      "variable": "arctangent_quadrant",
+      "actual": 2.819842099193151
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 43,
+      "variable": "time_value",
+      "actual": 3.5
+    },
+    {
+      "test_id": "operator_values",
+      "assertion_idx": 44,
+      "variable": "probe",
+      "actual": 20.999999999999982
+    },
+    {
+      "test_id": "operator_values_under_overrides",
+      "assertion_idx": 1,
+      "variable": "sum_of_three",
+      "actual": 9.0
+    },
+    {
+      "test_id": "operator_values_under_overrides",
+      "assertion_idx": 2,
+      "variable": "difference",
+      "actual": 0.0
+    },
+    {
+      "test_id": "operator_values_under_overrides",
+      "assertion_idx": 3,
+      "variable": "product_of_three",
+      "actual": 7.5
+    },
+    {
+      "test_id": "operator_values_under_overrides",
+      "assertion_idx": 4,
+      "variable": "quotient",
+      "actual": 20.0
+    },
+    {
+      "test_id": "operator_values_under_overrides",
+      "assertion_idx": 5,
+      "variable": "caret_power",
+      "actual": 125.0
+    },
+    {
+      "test_id": "operator_values_under_overrides",
+      "assertion_idx": 6,
+      "variable": "pow_power",
+      "actual": 125.0
+    },
+    {
+      "test_id": "operator_values_under_overrides",
+      "assertion_idx": 7,
+      "variable": "unary_minus",
+      "actual": -0.5
+    },
+    {
+      "test_id": "operator_values_under_overrides",
+      "assertion_idx": 8,
+      "variable": "negated",
+      "actual": -0.5
+    },
+    {
+      "test_id": "operator_values_under_overrides",
+      "assertion_idx": 9,
+      "variable": "less_than",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values_under_overrides",
+      "assertion_idx": 10,
+      "variable": "less_equal",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values_under_overrides",
+      "assertion_idx": 11,
+      "variable": "minimum_of_three",
+      "actual": 1.0
+    },
+    {
+      "test_id": "operator_values_under_overrides",
+      "assertion_idx": 12,
+      "variable": "maximum_of_three",
+      "actual": 5.0
+    },
+    {
+      "test_id": "operator_values_under_overrides",
+      "assertion_idx": 13,
+      "variable": "ifelse_taken",
+      "actual": 10.0
+    }
+  ]
+}

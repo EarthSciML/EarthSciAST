@@ -1,0 +1,1127 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ScalarOperatorSemantics",
+    "description": "One algebraic document carrying one observed per EVALUABLE-CORE scalar operator, each reading declared parameters rather than folded literals, with its value pinned in an inline `tests` block. esm-spec \u00a79.2 names the operators; this fixture is what says what each one COMPUTES.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "scalar_operator_semantics",
+      "inline-test"
+    ],
+    "license": "MIT"
+  },
+  "models": {
+    "Ops": {
+      "variables": {
+        "zero": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "description": "0"
+        },
+        "one": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "1"
+        },
+        "two": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "2"
+        },
+        "three": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "3"
+        },
+        "four": {
+          "type": "parameter",
+          "units": "1",
+          "default": 4.0,
+          "description": "4"
+        },
+        "five": {
+          "type": "parameter",
+          "units": "1",
+          "default": 5.0,
+          "description": "5"
+        },
+        "nine": {
+          "type": "parameter",
+          "units": "1",
+          "default": 9.0,
+          "description": "9"
+        },
+        "ten": {
+          "type": "parameter",
+          "units": "1",
+          "default": 10.0,
+          "description": "10"
+        },
+        "twenty": {
+          "type": "parameter",
+          "units": "1",
+          "default": 20.0,
+          "description": "20"
+        },
+        "hundred": {
+          "type": "parameter",
+          "units": "1",
+          "default": 100.0,
+          "description": "100"
+        },
+        "forty_two": {
+          "type": "parameter",
+          "units": "1",
+          "default": 42.0,
+          "description": "42"
+        },
+        "minus_three": {
+          "type": "parameter",
+          "units": "1",
+          "default": -3.0,
+          "description": "-3"
+        },
+        "minus_seven_half": {
+          "type": "parameter",
+          "units": "1",
+          "default": -7.5,
+          "description": "-7.5"
+        },
+        "one_point_seven": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.7,
+          "description": "1.7"
+        },
+        "one_point_three": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.3,
+          "description": "1.3"
+        },
+        "sum_of_three": {
+          "type": "unknown",
+          "units": "1",
+          "description": "n-ary `+` folds left to right over three operands."
+        },
+        "difference": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Binary `-`."
+        },
+        "unary_minus": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`-` with ONE argument is negation, not a parse error."
+        },
+        "negated": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`neg` is canonicalize's spelling of unary minus and must agree with it."
+        },
+        "product_of_three": {
+          "type": "unknown",
+          "units": "1",
+          "description": "n-ary `*`."
+        },
+        "quotient": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`/` is TRUE division, never integer division."
+        },
+        "caret_power": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`^` with an integer-literal exponent."
+        },
+        "pow_power": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`pow` is the same operator as `^` and must give the same number."
+        },
+        "integer_literal": {
+          "type": "unknown",
+          "units": "1",
+          "description": "A bare integer literal evaluates to the real 7, not to an integer type that would then truncate."
+        },
+        "integer_sum": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Two integer literals add as reals."
+        },
+        "integer_times_float": {
+          "type": "unknown",
+          "units": "1",
+          "description": "An integer literal times a float literal is 4.5, NOT 4 \u2014 the arm that catches a binding that keeps integer arithmetic."
+        },
+        "integer_quotient": {
+          "type": "unknown",
+          "units": "1",
+          "description": "7/2 is 3.5, NOT 3 \u2014 the sharpest statement that `/` is not integer division."
+        },
+        "less_than": {
+          "type": "unknown",
+          "units": "1",
+          "description": "A true comparison is 1."
+        },
+        "less_equal": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`<=` is inclusive."
+        },
+        "greater_than": {
+          "type": "unknown",
+          "units": "1",
+          "description": "A false comparison is 0."
+        },
+        "greater_equal": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`>=`."
+        },
+        "equal": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`==`."
+        },
+        "not_equal": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`!=`."
+        },
+        "conjunction": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`and` over two true comparisons."
+        },
+        "conjunction_false": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`and` is 0 as soon as one operand is false \u2014 the arm that catches a binding returning the LAST operand instead of a truth value."
+        },
+        "disjunction": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`or` with a false first operand."
+        },
+        "negation": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`not` of a false comparison."
+        },
+        "literal_true": {
+          "type": "unknown",
+          "units": "1",
+          "description": "The `true` literal op is 1."
+        },
+        "ifelse_taken": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`ifelse` takes the second argument when the predicate holds."
+        },
+        "ifelse_untaken": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`ifelse` takes the third argument when it does not."
+        },
+        "sign_negative": {
+          "type": "unknown",
+          "units": "1",
+          "description": "sign(-3) = -1."
+        },
+        "sign_zero": {
+          "type": "unknown",
+          "units": "1",
+          "description": "sign(0) = 0 \u2014 NOT +1, which is what a `x < 0 ? -1 : 1` spelling gives."
+        },
+        "sign_positive": {
+          "type": "unknown",
+          "units": "1",
+          "description": "sign(42) = 1."
+        },
+        "minimum_of_three": {
+          "type": "unknown",
+          "units": "1",
+          "description": "n-ary `min`."
+        },
+        "maximum_of_three": {
+          "type": "unknown",
+          "units": "1",
+          "description": "n-ary `max`."
+        },
+        "sine_at_zero": {
+          "type": "unknown",
+          "units": "1",
+          "description": "sin(0) = 0."
+        },
+        "cosine_at_zero": {
+          "type": "unknown",
+          "units": "1",
+          "description": "cos(0) = 1."
+        },
+        "tangent_at_zero": {
+          "type": "unknown",
+          "units": "1",
+          "description": "tan(0) = 0."
+        },
+        "exponential_at_zero": {
+          "type": "unknown",
+          "units": "1",
+          "description": "exp(0) = 1."
+        },
+        "logarithm_at_one": {
+          "type": "unknown",
+          "units": "1",
+          "description": "log(1) = 0 \u2014 `log` is the NATURAL logarithm (esm-spec \u00a79.2)."
+        },
+        "log10_at_hundred": {
+          "type": "unknown",
+          "units": "1",
+          "description": "log10(100) = 2."
+        },
+        "square_root_of_nine": {
+          "type": "unknown",
+          "units": "1",
+          "description": "sqrt(9) = 3."
+        },
+        "absolute_value": {
+          "type": "unknown",
+          "units": "1",
+          "description": "abs(-7.5) = 7.5."
+        },
+        "floor_value": {
+          "type": "unknown",
+          "units": "1",
+          "description": "floor(1.7) = 1."
+        },
+        "ceiling_value": {
+          "type": "unknown",
+          "units": "1",
+          "description": "ceil(1.3) = 2."
+        },
+        "arctangent_two_argument": {
+          "type": "unknown",
+          "units": "rad",
+          "description": "atan2(1, 1) = pi/4 \u2014 argument ORDER is (y, x), so a binding that swapped them lands on the same number here ONLY because y == x; `arctangent_quadrant` below is the arm that separates them."
+        },
+        "arctangent_quadrant": {
+          "type": "unknown",
+          "units": "rad",
+          "description": "atan2(1, -3) is in the SECOND quadrant; atan2(-3, 1) is in the fourth. This is the assertion a swapped argument order fails."
+        },
+        "time_value": {
+          "type": "unknown",
+          "units": "1",
+          "description": "The bare name `t` is the simulation time, asserted at a NON-zero time so a binding that evaluates every assertion at the span start cannot pass it."
+        },
+        "probe": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "probe(t) = 6 t. The document's only integrated state."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "sum_of_three",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "one",
+              "two",
+              "three"
+            ]
+          }
+        },
+        {
+          "lhs": "difference",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "five",
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "unary_minus",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "four"
+            ]
+          }
+        },
+        {
+          "lhs": "negated",
+          "rhs": {
+            "op": "neg",
+            "args": [
+              "four"
+            ]
+          }
+        },
+        {
+          "lhs": "product_of_three",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "two",
+              "three",
+              "four"
+            ]
+          }
+        },
+        {
+          "lhs": "quotient",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "ten",
+              "four"
+            ]
+          }
+        },
+        {
+          "lhs": "caret_power",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "two",
+              3
+            ]
+          }
+        },
+        {
+          "lhs": "pow_power",
+          "rhs": {
+            "op": "pow",
+            "args": [
+              "two",
+              3
+            ]
+          }
+        },
+        {
+          "lhs": "integer_literal",
+          "rhs": 7
+        },
+        {
+          "lhs": "integer_sum",
+          "rhs": {
+            "op": "+",
+            "args": [
+              1,
+              2
+            ]
+          }
+        },
+        {
+          "lhs": "integer_times_float",
+          "rhs": {
+            "op": "*",
+            "args": [
+              3,
+              1.5
+            ]
+          }
+        },
+        {
+          "lhs": "integer_quotient",
+          "rhs": {
+            "op": "/",
+            "args": [
+              7,
+              2
+            ]
+          }
+        },
+        {
+          "lhs": "less_than",
+          "rhs": {
+            "op": "<",
+            "args": [
+              "one",
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "less_equal",
+          "rhs": {
+            "op": "<=",
+            "args": [
+              "two",
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "greater_than",
+          "rhs": {
+            "op": ">",
+            "args": [
+              "one",
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "greater_equal",
+          "rhs": {
+            "op": ">=",
+            "args": [
+              "two",
+              "one"
+            ]
+          }
+        },
+        {
+          "lhs": "equal",
+          "rhs": {
+            "op": "==",
+            "args": [
+              "one",
+              "one"
+            ]
+          }
+        },
+        {
+          "lhs": "not_equal",
+          "rhs": {
+            "op": "!=",
+            "args": [
+              "one",
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "conjunction",
+          "rhs": {
+            "op": "and",
+            "args": [
+              {
+                "op": "<",
+                "args": [
+                  "one",
+                  "two"
+                ]
+              },
+              {
+                "op": "<",
+                "args": [
+                  "two",
+                  "three"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "conjunction_false",
+          "rhs": {
+            "op": "and",
+            "args": [
+              {
+                "op": "<",
+                "args": [
+                  "one",
+                  "two"
+                ]
+              },
+              {
+                "op": ">",
+                "args": [
+                  "two",
+                  "three"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "disjunction",
+          "rhs": {
+            "op": "or",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "one",
+                  "two"
+                ]
+              },
+              {
+                "op": "<",
+                "args": [
+                  "two",
+                  "three"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "negation",
+          "rhs": {
+            "op": "not",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "one",
+                  "two"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "literal_true",
+          "rhs": {
+            "op": "true",
+            "args": []
+          }
+        },
+        {
+          "lhs": "ifelse_taken",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": "<",
+                "args": [
+                  "one",
+                  "two"
+                ]
+              },
+              "ten",
+              "twenty"
+            ]
+          }
+        },
+        {
+          "lhs": "ifelse_untaken",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "one",
+                  "two"
+                ]
+              },
+              "ten",
+              "twenty"
+            ]
+          }
+        },
+        {
+          "lhs": "sign_negative",
+          "rhs": {
+            "op": "sign",
+            "args": [
+              "minus_three"
+            ]
+          }
+        },
+        {
+          "lhs": "sign_zero",
+          "rhs": {
+            "op": "sign",
+            "args": [
+              "zero"
+            ]
+          }
+        },
+        {
+          "lhs": "sign_positive",
+          "rhs": {
+            "op": "sign",
+            "args": [
+              "forty_two"
+            ]
+          }
+        },
+        {
+          "lhs": "minimum_of_three",
+          "rhs": {
+            "op": "min",
+            "args": [
+              "three",
+              "one",
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "maximum_of_three",
+          "rhs": {
+            "op": "max",
+            "args": [
+              "three",
+              "five",
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "sine_at_zero",
+          "rhs": {
+            "op": "sin",
+            "args": [
+              "zero"
+            ]
+          }
+        },
+        {
+          "lhs": "cosine_at_zero",
+          "rhs": {
+            "op": "cos",
+            "args": [
+              "zero"
+            ]
+          }
+        },
+        {
+          "lhs": "tangent_at_zero",
+          "rhs": {
+            "op": "tan",
+            "args": [
+              "zero"
+            ]
+          }
+        },
+        {
+          "lhs": "exponential_at_zero",
+          "rhs": {
+            "op": "exp",
+            "args": [
+              "zero"
+            ]
+          }
+        },
+        {
+          "lhs": "logarithm_at_one",
+          "rhs": {
+            "op": "log",
+            "args": [
+              "one"
+            ]
+          }
+        },
+        {
+          "lhs": "log10_at_hundred",
+          "rhs": {
+            "op": "log10",
+            "args": [
+              "hundred"
+            ]
+          }
+        },
+        {
+          "lhs": "square_root_of_nine",
+          "rhs": {
+            "op": "sqrt",
+            "args": [
+              "nine"
+            ]
+          }
+        },
+        {
+          "lhs": "absolute_value",
+          "rhs": {
+            "op": "abs",
+            "args": [
+              "minus_seven_half"
+            ]
+          }
+        },
+        {
+          "lhs": "floor_value",
+          "rhs": {
+            "op": "floor",
+            "args": [
+              "one_point_seven"
+            ]
+          }
+        },
+        {
+          "lhs": "ceiling_value",
+          "rhs": {
+            "op": "ceil",
+            "args": [
+              "one_point_three"
+            ]
+          }
+        },
+        {
+          "lhs": "arctangent_two_argument",
+          "rhs": {
+            "op": "atan2",
+            "args": [
+              "one",
+              "one"
+            ]
+          }
+        },
+        {
+          "lhs": "arctangent_quadrant",
+          "rhs": {
+            "op": "atan2",
+            "args": [
+              "one",
+              "minus_three"
+            ]
+          }
+        },
+        {
+          "lhs": "time_value",
+          "rhs": "t"
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "probe"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "sum_of_three"
+        }
+      ],
+      "tests": [
+        {
+          "id": "operator_values",
+          "description": "Every core scalar operator, at its declared operands.",
+          "time_span": {
+            "start": 0.0,
+            "end": 4.0
+          },
+          "tolerance": {
+            "rel": 1e-12,
+            "abs": 1e-13
+          },
+          "assertions": [
+            {
+              "variable": "sum_of_three",
+              "time": 0.0,
+              "expected": 6.0
+            },
+            {
+              "variable": "difference",
+              "time": 0.0,
+              "expected": 3.0
+            },
+            {
+              "variable": "unary_minus",
+              "time": 0.0,
+              "expected": -4.0
+            },
+            {
+              "variable": "negated",
+              "time": 0.0,
+              "expected": -4.0
+            },
+            {
+              "variable": "product_of_three",
+              "time": 0.0,
+              "expected": 24.0
+            },
+            {
+              "variable": "quotient",
+              "time": 0.0,
+              "expected": 2.5
+            },
+            {
+              "variable": "caret_power",
+              "time": 0.0,
+              "expected": 8.0
+            },
+            {
+              "variable": "pow_power",
+              "time": 0.0,
+              "expected": 8.0
+            },
+            {
+              "variable": "integer_literal",
+              "time": 0.0,
+              "expected": 7.0
+            },
+            {
+              "variable": "integer_sum",
+              "time": 0.0,
+              "expected": 3.0
+            },
+            {
+              "variable": "integer_times_float",
+              "time": 0.0,
+              "expected": 4.5
+            },
+            {
+              "variable": "integer_quotient",
+              "time": 0.0,
+              "expected": 3.5
+            },
+            {
+              "variable": "less_than",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "less_equal",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "greater_than",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "greater_equal",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "equal",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "not_equal",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "conjunction",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "conjunction_false",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "disjunction",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "negation",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "literal_true",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "ifelse_taken",
+              "time": 0.0,
+              "expected": 10.0
+            },
+            {
+              "variable": "ifelse_untaken",
+              "time": 0.0,
+              "expected": 20.0
+            },
+            {
+              "variable": "sign_negative",
+              "time": 0.0,
+              "expected": -1.0
+            },
+            {
+              "variable": "sign_zero",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "sign_positive",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "minimum_of_three",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "maximum_of_three",
+              "time": 0.0,
+              "expected": 5.0
+            },
+            {
+              "variable": "sine_at_zero",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "cosine_at_zero",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "tangent_at_zero",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "exponential_at_zero",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "logarithm_at_one",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "log10_at_hundred",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "square_root_of_nine",
+              "time": 0.0,
+              "expected": 3.0
+            },
+            {
+              "variable": "absolute_value",
+              "time": 0.0,
+              "expected": 7.5
+            },
+            {
+              "variable": "floor_value",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "ceiling_value",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "arctangent_two_argument",
+              "time": 0.0,
+              "expected": 0.7853981633974483
+            },
+            {
+              "variable": "arctangent_quadrant",
+              "time": 0.0,
+              "expected": 2.819842099193151
+            },
+            {
+              "variable": "time_value",
+              "time": 3.5,
+              "expected": 3.5
+            },
+            {
+              "variable": "probe",
+              "time": 3.5,
+              "expected": 21.0,
+              "tolerance": {
+                "rel": 1e-09,
+                "abs": 1e-11
+              }
+            }
+          ]
+        },
+        {
+          "id": "operator_values_under_overrides",
+          "description": "The non-vacuity arm. Every operand is a PARAMETER, so a binding that folded the declared defaults into its answer at build time and ignored `parameter_overrides` lands on the FIRST test's numbers here and fails.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "two": 5.0,
+            "four": 0.5
+          },
+          "tolerance": {
+            "rel": 1e-12,
+            "abs": 1e-13
+          },
+          "assertions": [
+            {
+              "variable": "sum_of_three",
+              "time": 0.0,
+              "expected": 9.0
+            },
+            {
+              "variable": "difference",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "product_of_three",
+              "time": 0.0,
+              "expected": 7.5
+            },
+            {
+              "variable": "quotient",
+              "time": 0.0,
+              "expected": 20.0
+            },
+            {
+              "variable": "caret_power",
+              "time": 0.0,
+              "expected": 125.0
+            },
+            {
+              "variable": "pow_power",
+              "time": 0.0,
+              "expected": 125.0
+            },
+            {
+              "variable": "unary_minus",
+              "time": 0.0,
+              "expected": -0.5
+            },
+            {
+              "variable": "negated",
+              "time": 0.0,
+              "expected": -0.5
+            },
+            {
+              "variable": "less_than",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "less_equal",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "minimum_of_three",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "maximum_of_three",
+              "time": 0.0,
+              "expected": 5.0
+            },
+            {
+              "variable": "ifelse_taken",
+              "time": 0.0,
+              "expected": 10.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

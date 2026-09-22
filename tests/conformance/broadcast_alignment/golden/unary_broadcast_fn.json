@@ -1,0 +1,31 @@
+{
+  "fixture": "unary_broadcast_fn",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "unary_broadcast_applies_its_fn",
+      "assertion_idx": 1,
+      "variable": "dp",
+      "actual": 1.3498588075760074
+    },
+    {
+      "test_id": "unary_broadcast_applies_its_fn",
+      "assertion_idx": 2,
+      "variable": "dp",
+      "actual": 1.3498588075760074
+    },
+    {
+      "test_id": "unary_broadcast_applies_its_fn",
+      "assertion_idx": 3,
+      "variable": "dq",
+      "actual": 1.3498588075760074
+    },
+    {
+      "test_id": "unary_broadcast_applies_its_fn",
+      "assertion_idx": 4,
+      "variable": "dq",
+      "actual": 1.3498588075760074
+    }
+  ]
+}
