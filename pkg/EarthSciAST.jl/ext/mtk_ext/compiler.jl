@@ -159,16 +159,19 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
     # needs `ModelingToolkit.PDESystem` plus a discretizer (MethodOfLines) that
     # this compiler does not run. A DISCRETIZED spatial document — one whose
     # stencil is already `arrayop` over an index set — has no spatial IV and
-    # goes straight through.
-    ivs = [String(iv) for iv in flat.independent_variables if iv != :t]
-    isempty(ivs) || _mtk_refuse(_mtk_first_rule_label(flat),
-        "the document declares the continuous spatial independent variable" *
-        (length(ivs) == 1 ? " " : "s ") * join(ivs, ", ") * ", so it is a PDE. " *
-        "This compiler builds the ODE `ModelingToolkit.System`; a continuous " *
-        "spatial dimension needs `ModelingToolkit.PDESystem` and a " *
-        "discretization, which it does not run. Discretize the document (an " *
-        "`arrayop` stencil over an index set), or hand the flattened system to " *
-        "`ModelingToolkit.PDESystem` yourself. $_MTK_TRY_INSTEAD")
+    # goes straight through. The predicate is `_has_spatial_ivs`, the one
+    # `ModelingToolkit.System(flat)` enforces; the list is only for the message.
+    if _has_spatial_ivs(flat)
+        ivs = [String(iv) for iv in flat.independent_variables if iv != :t]
+        _mtk_refuse(_mtk_first_rule_label(flat),
+            "the document declares the continuous spatial independent variable" *
+            (length(ivs) == 1 ? " " : "s ") * join(ivs, ", ") * ", so it is a PDE. " *
+            "This compiler builds the ODE `ModelingToolkit.System`; a continuous " *
+            "spatial dimension needs `ModelingToolkit.PDESystem` and a " *
+            "discretization, which it does not run. Discretize the document (an " *
+            "`arrayop` stencil over an index set), or hand the flattened system to " *
+            "`ModelingToolkit.PDESystem` yourself. $_MTK_TRY_INSTEAD")
+    end
 
     for eq in flat.equations
         # A GEOMETRY LEAF. `polygon_intersection_area` / `intersect_polygon` are
