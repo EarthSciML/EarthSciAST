@@ -113,9 +113,19 @@ function _symbol_cache(prob::EsmProblem)
     return sys
 end
 
-_ode_problem(prob::EsmProblem, tspan) = SciMLBase.ODEProblem(
-    SciMLBase.ODEFunction(prob.f!; sys = _symbol_cache(prob)),
-    copy(prob.u0), tspan, prob.p)
+# A compiler that built its own SciML program integrates THAT program: `:mtk`
+# compiles a ModelingToolkit `System` whose events, mass matrix and observed
+# equations ride on its own `ODEProblem`, and reassembling one here out of the
+# right-hand side alone would drop every one of them. `nothing` — which is
+# every `:native` / `:interpreter` build — takes the ordinary path below.
+function _ode_problem(prob::EsmProblem, tspan)
+    backend = EarthSciAST._compiler_backend(prob.f!)
+    backend === nothing ||
+        return EarthSciAST._backend_ode_problem(backend, prob, tspan)
+    return SciMLBase.ODEProblem(
+        SciMLBase.ODEFunction(prob.f!; sys = _symbol_cache(prob)),
+        copy(prob.u0), tspan, prob.p)
+end
 
 # --------------------------------------------------------------------------- #
 # Per-run keyword resolution.
@@ -202,8 +212,18 @@ function SciMLBase.__solve(prob::EsmProblem, alg = nothing, args...; kwargs...)
     ls = prob.lifecycle_sinks
     isempty(ls) || foreach(sink_open!, ls)
     try
-        integrator = SciMLBase.__init(prob, alg, args...; kwargs...)
-        return SciMLBase.solve!(integrator)
+        EarthSciAST._prepare_run!(prob, prob.tspan[1])
+        # `solve` on the underlying problem rather than `init` + `solve!`. For
+        # every ordinary problem the two are the same thing — that is what
+        # SciMLBase's own `solve` does — but they differ on a problem with NO
+        # unknown to integrate, which is what a document whose every state the
+        # compiler solved away leaves (a scalar implicit equation under `:mtk`
+        # is exactly that: the residual determines the value and nothing is
+        # integrated). `init` hands back OrdinaryDiffEq's NULL integrator,
+        # whose `solve!` returns `nothing`; `solve` builds the empty solution
+        # the caller can still read observeds off.
+        return SciMLBase.solve(_ode_problem(prob, prob.tspan), alg, args...;
+                               _run_kwargs(prob; kwargs...)...)
     finally
         isempty(ls) || foreach(sink_close!, ls)
     end

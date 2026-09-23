@@ -74,10 +74,16 @@ fn build_rhs(path: &Path, compiler: Compiler, rhs: Rhs) -> Result<EsmProblem, Si
 // 1 + 2: availability, and the vocabulary's edge
 // ---------------------------------------------------------------------------
 
+/// The members this binding never provides, whatever it was built with:
+/// `mtk` is Julia's and `sympy` is Python's.
+///
+/// `xla` is NOT in this list. It is the one member whose availability is a
+/// property of the BUILD — the `xla` Cargo feature plus a usable runtime — so
+/// it has its own pair of tests, one per side of that feature.
 #[test]
 fn a_compiler_this_binding_does_not_provide_is_refused_not_substituted() {
     let path = fixture("tests/simulation/simple_ode.esm");
-    for compiler in [Compiler::Xla, Compiler::Mtk, Compiler::Sympy] {
+    for compiler in [Compiler::Mtk, Compiler::Sympy] {
         let err = match build(&path, compiler) {
             Err(e) => e,
             Ok(_) => panic!("{compiler} must be refused, not built"),
@@ -96,14 +102,30 @@ fn a_compiler_this_binding_does_not_provide_is_refused_not_substituted() {
                 // §2.5.10: the message names what would have to be loaded or
                 // built. A refusal that does not is a dead end.
                 assert!(
-                    details.contains("feature")
-                        || details.contains("Julia")
-                        || details.contains("Python"),
+                    details.contains("Julia") || details.contains("Python"),
                     "{compiler}: {details}"
                 );
             }
             other => panic!("{compiler} must raise CompilerUnavailable, got {other:?}"),
         }
+    }
+}
+
+/// Without the `xla` feature, `xla` is `compiler_unavailable` and the message
+/// says how to get it — never a fallback to `native`, and never `unknown`,
+/// which is a different failure about a different thing.
+#[cfg(not(feature = "xla"))]
+#[test]
+fn xla_is_unavailable_in_a_build_without_the_feature() {
+    let path = fixture("tests/simulation/simple_ode.esm");
+    match build(&path, Compiler::Xla) {
+        Err(SimulateError::CompilerUnavailable { compiler, details }) => {
+            assert_eq!(compiler, "xla");
+            // §2.5.10: the message names what would have to be built.
+            assert!(details.contains("feature"), "{details}");
+            assert!(details.contains("XLA_EXTENSION_DIR"), "{details}");
+        }
+        other => panic!("xla must raise CompilerUnavailable here, got {other:?}"),
     }
 }
 
@@ -212,7 +234,7 @@ fn the_interpreter_takes_the_document_native_refused() {
 /// `models` map at all until flattening), a discretized PDE, and an
 /// aggregate/contraction document.
 const AGREEMENT_FIXTURES: &[&str] = &[
-    // A 0-D ODE — the shape the scalar interpreter used to own outright.
+    // A 0-D ODE.
     "tests/simulation/simple_ode.esm",
     // A `reaction_systems`-only document: no `models` map at all until
     // flattening lowers its reactions, which is the routing the `!= 1` fix
@@ -366,6 +388,161 @@ fn a_const_tier_observed_document_is_served_from_the_tape() {
                 y.to_bits(),
                 "{} at t index {k}",
                 native.state_variable_names[r]
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 8: `xla`, the specialty compiler that needs a heavy external dependency
+// ---------------------------------------------------------------------------
+//
+// These run only in a build that HAS the dependency (`--features xla` against
+// an unpacked `xla_extension`). The other side of the feature is pinned by
+// `xla_is_unavailable_in_a_build_without_the_feature` above; between them, no
+// build of this crate leaves `xla` untested.
+
+/// The trajectory band `xla` is held to against the `interpreter` reference.
+///
+/// NOT bit-for-bit, and that is the standing ruling rather than a slack
+/// tolerance: XLA's `exp`/`log`/`pow` are not Rust's libm, and XLA's `reduce`
+/// does not pin the summation order a reduction's per-cell odometer does
+/// (`simulate_array::tape::xla_emit`'s module docs). Those differences enter
+/// the right-hand side at the last bits and the integrator then amplifies
+/// them over the run, which is what the loose end of this band pays for. The
+/// per-fixture bands the compiler-agreement tier writes (CONFORMANCE_SPEC
+/// §5.44) are the authority; this is a unit-test band over four documents.
+#[cfg(feature = "xla")]
+const XLA_RTOL: f64 = 1e-7;
+#[cfg(feature = "xla")]
+const XLA_ATOL: f64 = 1e-10;
+
+/// The whole deliverable, from the caller's side: naming `xla` builds a
+/// Problem whose right-hand side IS the compiled program, it solves, it
+/// reports itself as `xla`, and it lands where the reference lands.
+#[cfg(feature = "xla")]
+#[test]
+fn xla_solves_and_agrees_with_the_interpreter() {
+    let opts = SolveOptions {
+        saveat: Some(vec![0.0, 0.25, 0.5, 0.75, 1.0]),
+        ..Default::default()
+    };
+    for rel in AGREEMENT_FIXTURES {
+        let path = fixture(rel);
+        let xla = build_rhs(&path, Compiler::Xla, Rhs::Always)
+            .unwrap_or_else(|e| panic!("{rel} must build under xla: {e}"));
+        assert_eq!(xla.compiler(), Compiler::Xla);
+        assert_eq!(xla.backend_kind(), "array", "{rel}");
+
+        // Every rule is in the emitted program: `xla` is strict twice over, so
+        // a rule anywhere else would have been a build refusal.
+        let report = xla.compiler_report();
+        assert_eq!(report.compiler(), Compiler::Xla, "{rel}");
+        assert!(!report.rules().is_empty(), "{rel}");
+        assert_eq!(report.n_oracle(), 0, "{rel}");
+        assert_eq!(report.n_taped(), 0, "{rel}");
+        assert_eq!(report.n_xla(), report.rules().len(), "{rel}");
+        for r in report.rules() {
+            assert_eq!(r.tier, "xla", "{rel}: {}", r.rule);
+            assert!(r.reason.is_none(), "{rel}: {}", r.rule);
+        }
+        assert!(report.to_string().contains("compiler xla"), "{rel}");
+
+        let reference = build_rhs(&path, Compiler::Interpreter, Rhs::Always)
+            .unwrap_or_else(|e| panic!("{rel} must build under the interpreter: {e}"));
+        let a = solve(&xla, &opts).unwrap_or_else(|e| panic!("{rel} xla solve: {e}"));
+        let b = solve(&reference, &opts).unwrap_or_else(|e| panic!("{rel} interpreter solve: {e}"));
+
+        assert_eq!(a.state_variable_names, b.state_variable_names, "{rel}");
+        assert_eq!(a.time.len(), b.time.len(), "{rel}");
+        for (r, (row_a, row_b)) in a.state.iter().zip(b.state.iter()).enumerate() {
+            assert_eq!(row_a.len(), row_b.len(), "{rel}: row {r}");
+            for (k, (x, y)) in row_a.iter().zip(row_b.iter()).enumerate() {
+                assert!(
+                    (x - y).abs() <= XLA_ATOL + XLA_RTOL * y.abs(),
+                    "{rel}: {} at t index {k}: xla {x:e} vs interpreter {y:e}",
+                    a.state_variable_names[r]
+                );
+            }
+        }
+    }
+}
+
+/// `xla` is strict the way `native` is, and refuses the same document for the
+/// same reason — because the FIRST gate it meets is the tape's, which names
+/// the rule and its cadence tier. An emitter that saw the `Instr::Fallback`
+/// instead could only name the instruction.
+#[cfg(feature = "xla")]
+#[test]
+fn xla_refuses_a_rule_the_tape_cannot_lower_and_names_it() {
+    let path = fixture(REFUSED_FIXTURE);
+    match build(&path, Compiler::Xla) {
+        Err(SimulateError::Compile(CompileError::CompilerRefusedRule {
+            compiler,
+            rule,
+            tier,
+            reason,
+            ..
+        })) => {
+            assert_eq!(compiler, "xla");
+            assert!(!rule.is_empty(), "the rule is named");
+            assert!(
+                tier == "const" || tier == "segment" || tier == "continuous",
+                "the cadence tier is reported: {tier}"
+            );
+            assert!(
+                reason.contains("polygon_intersection_area"),
+                "the deepest decline reason is carried: {reason}"
+            );
+        }
+        other => panic!("xla must refuse a polygon_intersection_area rule, got {other:?}"),
+    }
+}
+
+/// The observed passes under `xla`. The emitted program's only output is `du`,
+/// so the observeds reported at output times are served from the same tape the
+/// emitter was built from — and must still agree with the reference, or the
+/// two halves of the build have drifted apart.
+///
+/// Read through `output_observed`, which makes the array-valued CONST
+/// observeds appear as per-cell rows beside the states: that is the pass
+/// esm-libraries-spec §2.5.10 names ("the observeds reported at output
+/// times"), and the one that runs most often.
+#[cfg(feature = "xla")]
+#[test]
+fn xla_reports_observeds_from_the_tape_the_emitter_was_built_from() {
+    // The fixture the `native` arm above uses for the same question: two
+    // CONST-tier observeds, which is the pass that used to run off the tape.
+    let path = fixture(
+        "tests/conformance/shaped_parameter_broadcast/fixtures/shaped_parameter_scalar_default.esm",
+    );
+    let xla = build_rhs(&path, Compiler::Xla, Rhs::Always).expect("builds under xla");
+    let reference =
+        build_rhs(&path, Compiler::Interpreter, Rhs::Always).expect("builds under the interpreter");
+    let names = xla.observed_variable_names();
+    assert!(!names.is_empty(), "the fixture must carry observeds");
+    let opts = SolveOptions {
+        saveat: Some(vec![0.0, 0.5, 1.0]),
+        output_observed: names.clone(),
+        ..Default::default()
+    };
+
+    let a = solve(&xla, &opts).expect("xla solves");
+    let b = solve(&reference, &opts).expect("the interpreter solves");
+    assert_eq!(a.state_variable_names, b.state_variable_names);
+    // The observed rows are the ones the states do not account for; without
+    // them this compares nothing the state comparison did not already.
+    assert!(
+        a.state_variable_names.len() > xla.state_variable_names().len(),
+        "the observeds must reach the solution as rows beside the states, got {:?}",
+        a.state_variable_names
+    );
+    for (r, (row_a, row_b)) in a.state.iter().zip(b.state.iter()).enumerate() {
+        for (k, (x, y)) in row_a.iter().zip(row_b.iter()).enumerate() {
+            assert!(
+                (x - y).abs() <= XLA_ATOL + XLA_RTOL * y.abs(),
+                "{} at t index {k}: xla {x:e} vs interpreter {y:e}",
+                a.state_variable_names[r]
             );
         }
     }

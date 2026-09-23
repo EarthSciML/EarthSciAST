@@ -16,9 +16,17 @@
 # API_SPEC §5.8's closed vocabulary. Its value is passed STRAIGHT to
 # `esm_problem` and never interpreted here: an adapter that read the value and
 # chose a build itself would be reimplementing the thing under test. That is
-# also why `:xla` and `:mtk` are not special-cased below — they answer
-# `unavailable` because `esm_problem` raises `compiler_unavailable` for them,
-# which is the binding's own statement about itself.
+# also why no compiler is special-cased below: a build is never chosen here.
+#
+# THE ONE THING THIS ADAPTER DOES DO PER COMPILER is load the RUNTIME that
+# compiler needs, which is configuration and not a build choice — the Rust
+# adapter's `XLA_EXTENSION_DIR` is the same step spelled as an environment
+# variable. `:mtk` lives in a package EXTENSION, so without ModelingToolkit in
+# the session `esm_problem` answers `compiler_unavailable`, and that answer
+# would be a fact about this adapter rather than about the binding. It is
+# loaded ONLY for `--compiler mtk` (see `load_compiler_runtime`), and it is not
+# even in the environment the other compilers activate (see the bootstrap
+# below), so no other compiler's run pays for it.
 #
 # THE THREE OUTCOMES THIS ADAPTER DECIDES, and the one it must not conflate:
 #
@@ -37,15 +45,35 @@
 # fixture under another compiler.
 
 # Self-contained environment bootstrap, the shape pde_simulation_adapter.jl and
-# compiled_rhs_adapter.jl already use. This tier gets its OWN project
-# (scripts/compiler_agreement_env) rather than reusing scripts/pde_sim_adapter,
-# because a fixture's §2.2 `solver` block may declare `stiffness: "high"` and
-# selecting the stiff algorithm for it needs OrdinaryDiffEqRosenbrock, which the
-# PDE tier's env does not carry. Manifest.toml is gitignored repo-wide, so on a
-# fresh checkout we re-establish the local dev path then instantiate; on warm
-# runs this is a fast resolve check.
+# compiled_rhs_adapter.jl already use. This tier gets its OWN project rather
+# than reusing scripts/pde_sim_adapter, because a fixture's §2.2 `solver` block
+# may declare `stiffness: "high"` and selecting the stiff algorithm for it needs
+# OrdinaryDiffEqRosenbrock, which the PDE tier's env does not carry.
+#
+# TWO ENVIRONMENTS, chosen by the COMPILER — the same shape, and the same
+# reason, as compiled_rhs_adapter.jl choosing by `--engine`. `:mtk` needs
+# ModelingToolkit and OrdinaryDiffEqNonlinearSolve in the session, and those two
+# pull in most of the SciML symbolic stack; left in the shared project they were
+# resolved and precompiled by every `interpreter` and `native` stage, and by the
+# whole inline-test tier, which activates the same project. So `--compiler mtk`
+# gets scripts/compiler_agreement_mtk_env and every other compiler gets the
+# slim scripts/compiler_agreement_env. `--compiler` is therefore read here,
+# straight off ARGS, before anything is loaded; `parse_args` below is still the
+# validating read, and a value this one does not recognise simply falls through
+# to the slim env and then to that error.
+#
+# Manifest.toml is gitignored repo-wide, so on a fresh checkout — for EITHER
+# env — we re-establish the local dev path then instantiate; on warm runs this
+# is a fast resolve check.
 import Pkg
-let env = joinpath(@__DIR__, "compiler_agreement_env"),
+const COMPILER_ARG = let c = ""
+    for i in eachindex(ARGS)
+        ARGS[i] == "--compiler" && i < length(ARGS) && (c = ARGS[i + 1])
+    end
+    c
+end
+let env = joinpath(@__DIR__, COMPILER_ARG == "mtk" ? "compiler_agreement_mtk_env" :
+                             "compiler_agreement_env"),
     manifest = joinpath(env, "Manifest.toml")
     bootstrap() = begin
         Pkg.activate(env; io=devnull)
@@ -61,7 +89,7 @@ let env = joinpath(@__DIR__, "compiler_agreement_env"),
         # has no value, so rebuild rather than fail the gate. `Pkg.develop` only
         # writes the Manifest here — EarthSciAST is already in the Project's
         # [deps], so the tracked Project.toml is not touched.
-        @warn "compiler_agreement_env did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
+        @warn "$(basename(env)) did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
         rm(manifest; force=true)
         bootstrap()
     end
@@ -79,6 +107,30 @@ const BINDING = "julia"
 # value outside it is a broken invocation rather than a compiler this binding
 # happens not to have, and the two must not arrive at the same answer.
 const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
+
+# The runtime a compiler needs in the session, loaded for that compiler alone.
+# `:mtk` needs ModelingToolkit (the extension that implements it) plus a
+# nonlinear solver: an implicit equation compiles to a DAE whose consistent
+# initialization is a nonlinear solve, and OrdinaryDiffEq only carries one when
+# OrdinaryDiffEqNonlinearSolve is loaded. Both are declared by
+# scripts/compiler_agreement_mtk_env, which is the project the bootstrap above
+# activated for exactly this `--compiler` value.
+#
+# CALLED AT TOP LEVEL, not from `main`. A package loaded by `@eval` defines its
+# methods in a NEW world age, and a frame that is already running cannot call
+# them — from inside `main` every fixture failed with "method too new to be
+# called from this world context" naming the extension's own entry point, which
+# reads as a broken binding rather than as this file calling too early. Each
+# top-level statement gets the current world, so loading here and calling `main`
+# on the next line is what makes the extension visible.
+function load_compiler_runtime(compiler)
+    compiler == "mtk" || return nothing
+    @eval begin
+        import ModelingToolkit
+        import OrdinaryDiffEqNonlinearSolve
+    end
+    return nothing
+end
 
 function parse_args(args)
     manifest = nothing
@@ -381,4 +433,5 @@ function main()
     failed && exit(1)
 end
 
+load_compiler_runtime(COMPILER_ARG)
 main()

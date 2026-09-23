@@ -341,7 +341,7 @@ fn scalar_doc() -> String {
     r#"{
  "esm": "1.1.0",
  "metadata": {"name": "Decay", "license": "MIT",
-  "description": "One scalar state, so this document compiles to the scalar backend."},
+  "description": "One scalar state."},
  "models": {
   "M": {
    "variables": {

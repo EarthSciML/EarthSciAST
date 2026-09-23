@@ -269,3 +269,72 @@ fn esm_simulate_evaluates_a_recurrence_and_agrees_with_esm_test() {
          (CONFORMANCE_SPEC §5.19.4)\n{out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `--compiler xla` (API_SPEC §5.8)
+// ---------------------------------------------------------------------------
+
+/// The CLI's `--compiler` reaches the specialty compiler too, and the summary
+/// line names it. Both sides of the `xla` feature are covered — the arm below
+/// pins what a build WITHOUT it says — so no build of this crate leaves the
+/// flag's `xla` value untested.
+#[cfg(feature = "xla")]
+#[test]
+fn esm_simulate_runs_the_xla_compiler_and_names_it() {
+    let doc = "../../tests/simulation/simple_ode.esm";
+    let (ok, out) = esm(&["simulate", "--compiler", "xla", "--time", "1.0", doc]);
+    assert!(ok, "esm simulate --compiler xla must succeed:\n{out}");
+    // The report line: every rule in the emitted program, none on the tape and
+    // none on the oracle.
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("compiler xla:") && l.contains("lowered into the XLA program")),
+        "the summary must name the compiler that ran:\n{out}"
+    );
+
+    // And it lands where the reference lands. The document is a scalar decay,
+    // so this is one multiply per step in either compiler and the agreement is
+    // tight; the compiler-agreement tier is what holds the general case to a
+    // written band.
+    let (ok, reference) = esm(&[
+        "simulate",
+        "--compiler",
+        "interpreter",
+        "--time",
+        "1.0",
+        doc,
+    ]);
+    assert!(ok, "the reference must succeed:\n{reference}");
+    let a = final_state(&out);
+    let b = final_state(&reference);
+    assert_eq!(a.len(), b.len(), "state shape:\n{out}\n{reference}");
+    assert!(!a.is_empty(), "no final state parsed from:\n{out}");
+    for ((na, x), (nb, y)) in a.iter().zip(b.iter()) {
+        assert_eq!(na, nb);
+        assert!(
+            (x - y).abs() <= 1e-9 + 1e-9 * y.abs(),
+            "{na}: xla {x} vs interpreter {y}"
+        );
+    }
+}
+
+/// Built without the feature, `xla` is `compiler_unavailable` from the CLI as
+/// well — a non-zero exit naming what to build, never a quiet run on `native`.
+#[cfg(not(feature = "xla"))]
+#[test]
+fn esm_simulate_refuses_xla_without_the_feature() {
+    let doc = "../../tests/simulation/simple_ode.esm";
+    let out = Command::new(env!("CARGO_BIN_EXE_esm"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args(["simulate", "--compiler", "xla", "--time", "1.0", doc])
+        .output()
+        .expect("could not run the esm binary");
+    assert!(!out.status.success(), "the refusal must exit non-zero");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("compiler_unavailable"), "in:\n{text}");
+    assert!(text.contains("feature"), "in:\n{text}");
+}

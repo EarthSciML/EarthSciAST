@@ -1,0 +1,19 @@
+{
+  "fixture": "pow_alias",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "pow_power_value",
+      "assertion_idx": 1,
+      "variable": "pow_power",
+      "actual": 8.0
+    },
+    {
+      "test_id": "pow_power_value",
+      "assertion_idx": 2,
+      "variable": "probe",
+      "actual": 7.999999999999998
+    }
+  ]
+}

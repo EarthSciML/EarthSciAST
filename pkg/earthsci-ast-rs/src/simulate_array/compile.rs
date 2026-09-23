@@ -67,10 +67,10 @@ pub(crate) fn model_tree_any(model: &Model, pred: &dyn Fn(&Model) -> bool) -> bo
 /// Return true if the file has spatial structure: any model with array-shaped
 /// state variables (`shape` field non-empty).
 ///
-/// Used by [`crate::simulate::simulate`] to route discretized-PDE files to the
-/// ArrayOp runtime even when the equations do not yet contain explicit
-/// `faq`/`index` nodes (e.g. a spatial model whose equations were rewritten
-/// using indexed-scalar D(u[i])=... form rather than the `faq` wrapper).
+/// Used by [`crate::compile_array`] to accept discretized-PDE files even when
+/// the equations do not yet contain explicit `faq`/`index` nodes (e.g. a
+/// spatial model whose equations were rewritten using indexed-scalar
+/// D(u[i])=... form rather than the `faq` wrapper).
 pub fn file_has_spatial_model(file: &EsmFile) -> bool {
     let Some(models) = &file.models else {
         return false;
@@ -450,8 +450,7 @@ impl ArrayCompiled {
         Ok(compiled)
     }
 
-    /// Build from a [`FlattenedSystem`] — the array-runtime analogue of the
-    /// scalar [`crate::simulate::Compiled::from_flattened`].
+    /// Build from a [`FlattenedSystem`].
     ///
     /// [`crate::flatten::flatten`] already merges a coupled, multi-component
     /// file into a single dot-namespaced system (coupling rules applied, every
@@ -473,8 +472,8 @@ impl ArrayCompiled {
     /// inference, faq lowering, the diffsol RHS build — is shared bit-for-bit
     /// with the single-model path.
     pub fn from_flattened(flat: &FlattenedSystem) -> Result<Self, CompileError> {
-        // Reject hybrid dimensionality and model events, mirroring the scalar
-        // `Compiled::from_flattened`. The data-loader refresh path that drives
+        // Reject hybrid dimensionality and model events. The data-loader
+        // refresh path that drives
         // this seam is event-free by design (a driver-level segmented solve,
         // not an in-solver event), so rejecting here loses no in-scope
         // capability while preventing a model that *does* declare events from
@@ -829,9 +828,8 @@ impl ArrayCompiled {
             }
 
             // (0b) Reject a reference to a variable bound in NONE of the model's
-            // binding categories — the array-path analogue of the scalar
-            // interpreter's `resolve_expr` "Unknown variable" gate, and the same
-            // function `crate::prepare` calls on the build-pipeline route
+            // binding categories — the same function `crate::prepare` calls on
+            // the build-pipeline route
             // (CONFORMANCE_SPEC §5.23; `extra_bound` is empty here because this
             // path's evaluation scope is the model's own declarations). Without
             // it a typo'd/undeclared bare name reaches `lookup_variable`'s final
@@ -911,6 +909,8 @@ impl ArrayCompiled {
 
         Ok(ArrayCompiled {
             runtime_mode: crate::simulate_array::RuntimeMode::default(),
+            #[cfg(feature = "xla")]
+            xla_rhs: std::cell::OnceCell::new(),
             var_shapes,
             scalar_state_names,
             scalar_state_index,
@@ -1010,14 +1010,11 @@ fn check_evaluable_side(expr: &Expr) -> Result<(), CompileError> {
 }
 
 /// (0b) Reject a reference to a variable that is bound in NONE of the model's
-/// binding categories — the array-path analogue of the scalar interpreter's
-/// [`crate::simulate`] `resolve_expr` "Unknown variable" gate. Without it a
-/// typo'd or undeclared bare name falls through [`lookup_variable`]'s final arm,
-/// which used to hand back a silent `NaN` sentinel that `max(x, floor)` launders
-/// into a plausible number by dropping the operand, instead of failing loudly at
-/// build time. The error variant and message match the scalar path
-/// (`InterpreterBuildError` / `Unknown variable '{name}' referenced in
-/// expression`).
+/// binding categories. Without it a typo'd or undeclared bare name falls
+/// through [`lookup_variable`]'s final arm, which fails closed only at the
+/// drain, instead of failing loudly at build time. The error is
+/// `InterpreterBuildError` / `Unknown variable '{name}' referenced in
+/// expression`.
 ///
 /// **ONE gate, and EVERY route calls it** (CONFORMANCE_SPEC §5.23). This is not
 /// a compile-path-local check: [`crate::prepare::run_prepare`] — the build
@@ -1236,8 +1233,8 @@ fn collect_dim_symbols(expr: &Expr, out: &mut HashSet<String>) {
 }
 
 /// Reject the first bare (non-dotted) variable reference bound in none of the
-/// categories in `scope`. Mirrors the scalar path's `resolve_expr` "Unknown
-/// variable" error in both variant and message. The full expression-bearing
+/// categories in `scope`, as `Unknown variable '{name}' referenced in
+/// expression`. The full expression-bearing
 /// child set is descended via [`ExpressionNode::for_each_child`] (args plus the
 /// sidecar fields), so a reference hidden in an aggregate body, filter, integral
 /// bound, table axis, aggregate key, or template binding is not missed. A `fn`
@@ -3021,14 +3018,12 @@ pub(super) fn resolve_field_ic_cell(
             ),
         });
     }
-    // (2) Broadcast constant. Finite-only, and `Ok`-only: an op outside the
-    // scalar interpreter's rule set (an `aggregate` grid-geometry node) must
-    // fall through to the coordinate-expression path below — never silently
-    // seed the state vector. `fold_constant_expr` used to render one as `NaN`,
-    // and the `is_finite()` guard is what caught it; since issue #220 it errors
-    // instead, and the `if let Ok(..)` catches it one step earlier. Both arms
-    // are still needed: the guard also rejects a genuine `1.0/0.0`.
-    if let Ok(c) = crate::simulate::fold_constant_expr(rhs, params)
+    // (2) Broadcast constant. Finite-only, and `Ok`-only: an op with no scalar
+    // value (a `faq` grid-geometry node) must fall through to the
+    // coordinate-expression path below — never silently seed the state vector.
+    // `evaluate` refuses one by name, which the `if let Ok(..)` catches; the
+    // `is_finite()` guard rejects a genuine `1.0/0.0`.
+    if let Ok(c) = crate::expression::evaluate(rhs, params)
         && c.is_finite()
     {
         return Ok(c);

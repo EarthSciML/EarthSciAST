@@ -840,8 +840,8 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
 /// why this half converts where the dimensionless-but-scaled half refuses.
 ///
 /// **Why here.** `flatten` is the single funnel every evaluator in this crate
-/// draws from — the scalar interpreter, the array oracle, the vectorized
-/// overlay, the tape and the XLA emitter all consume a [`FlattenedSystem`] — so
+/// draws from — the array oracle, the vectorized overlay, the tape and the XLA
+/// emitter all consume a [`FlattenedSystem`] — so
 /// one phase here converts for all of them, and they cannot diverge. It is NOT
 /// on the validation path (`validate` never flattens), so the checker keeps
 /// seeing the authored spelling: a rewrite visible to the checker would turn
@@ -2627,8 +2627,8 @@ fn build_reaction_block(
 /// `system_name`. Variables already containing a `.` are left alone so that
 /// cross-system references (e.g. an equation explicitly referencing
 /// `GEOSFP.T` in a `SimpleOzone` equation) survive unchanged. The independent
-/// variable `t` is never namespaced — it's a global symbol resolved to
-/// [`ResolvedExpr::Time`] during compile, not a component-scoped name.
+/// variable `t` is never namespaced — it's a global symbol the evaluator
+/// resolves to the current time, not a component-scoped name.
 ///
 /// Array nodes (`faq`/`makearray`/`integral`/…) carry their
 /// body in out-of-band fields (`expr`, `filter`, `lower`, `upper`, `values`,
@@ -4825,8 +4825,8 @@ mod tests {
     // gt-vx74: `t` is the global independent variable and must stay bare
     // after flatten (never `sys.t`). Observed expressions in tests/simulation
     // fixtures — notably python_scipy_integration.esm's ExponentialDecay
-    // analytical_solution — reference `t` directly, and the downstream
-    // resolver only recognizes bare `t` as [`ResolvedExpr::Time`].
+    // analytical_solution — reference `t` directly, and the evaluator only
+    // recognizes bare `t` as the independent variable.
     #[test]
     fn test_namespace_expr_preserves_bare_t() {
         let expr = Expr::operator(ExpressionNode {

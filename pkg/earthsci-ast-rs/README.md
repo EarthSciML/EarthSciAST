@@ -223,15 +223,56 @@ rhs(u: f64[N], p: f64[M], t: f64[]) -> du: f64[N]
 and run through PJRT (`earthsci_ast::xla_runtime`), instead of being
 interpreted by the slab executor.
 
-Two properties are deliberate:
+**A caller reaches it by NAME.** `esm_problem` with `compiler:
+Some(Compiler::Xla)` builds a Problem whose right-hand side is that executable
+(API_SPEC §5.8), and `solve` on it integrates through XLA:
+
+```rust
+let prob = esm_problem(path, (0.0, 1.0), ProblemOptions {
+    compiler: Some(Compiler::Xla),
+    ..Default::default()
+})?;
+assert_eq!(prob.compiler(), Compiler::Xla);
+let sol = solve(&prob, &SolveOptions::default())?;
+```
+
+Which passes go through XLA, and which do not:
+
+| Pass | Under `compiler = Xla` |
+|---|---|
+| the right-hand side `f(u, p, t)` | the emitted XLA executable |
+| the finite-difference Jacobian an implicit solve differences | the same executable, twice per Jacobian call |
+| constants and static observeds materialized at construction | the tape the emitter was built from |
+| the per-segment seed, and the build-inspection snapshot | the same tape |
+| the observeds reported at output times | the same tape |
+
+The emitted program's only output is `du`, which is why the observed passes
+are not in it. They are served from the *same* lowered form rather than from
+the whole-array overlay beneath it, so there is one evaluator and not two —
+and a rule that did not lower to the tape is refused before the emitter is
+reached, so the refusal names the rule and its cadence tier.
+
+Four properties are deliberate:
 
 * **No fallback.** A model carrying any rule the emitter cannot lower is a
   hard error naming the rule and the reason, never a partly-interpreted run.
   The `compiled_rhs` conformance tier records such a model as a named
-  refusal.
+  refusal, and under `compiler = Xla` it is a `compiler_refused_rule` at
+  construction. A Problem that names `xla` and carries no compiled program
+  refuses too; the tape is never run under another compiler's name.
+* **Availability is a fact about the build, not the document.** Without the
+  `xla` feature, or without an XLA runtime this process can start,
+  `esm_problem` answers `SimulateError::CompilerUnavailable` naming what to
+  build — before it looks at the document.
 * **Numerical, not bitwise, agreement.** XLA's `exp`/`log`/`pow` are not
-  Rust's libm. The tier's tolerance classes
-  (`tests/conformance/compiled_rhs/README.md`) are the contract.
+  Rust's libm, and XLA's `reduce` does not pin a summation order. The
+  tolerance classes of `tests/conformance/compiled_rhs/README.md` (one
+  right-hand side) and `tests/conformance/compiler_agreement/README.md` (a
+  whole run) are the contract. Rust is `bindings_required` for `xla` in the
+  latter, on a build that has the feature and the extension.
+* **One compile per Problem.** The executable is emitted and compiled at
+  construction and shared by every segment and every Jacobian call; nothing
+  recompiles per step.
 
 ### Setup
 

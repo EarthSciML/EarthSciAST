@@ -144,12 +144,12 @@ fn test_evaluate() {
 
     // Evaluate simple number
     let expr1 = Expr::Number(42.0);
-    let result1 = fold_constant_expr(&expr1, &context).expect("Failed to evaluate number");
+    let result1 = evaluate(&expr1, &context).expect("Failed to evaluate number");
     assert_eq!(result1, 42.0);
 
     // Evaluate variable
     let expr2 = Expr::Variable("x".to_string());
-    let result2 = fold_constant_expr(&expr2, &context).expect("Failed to evaluate variable");
+    let result2 = evaluate(&expr2, &context).expect("Failed to evaluate variable");
     assert_eq!(result2, 2.0);
 
     // Evaluate addition
@@ -163,7 +163,7 @@ fn test_evaluate() {
         dim: None,
         ..Default::default()
     });
-    let result3 = fold_constant_expr(&expr3, &context).expect("Failed to evaluate addition");
+    let result3 = evaluate(&expr3, &context).expect("Failed to evaluate addition");
     assert_eq!(result3, 5.0);
 
     // Evaluate multiplication
@@ -174,12 +174,12 @@ fn test_evaluate() {
         dim: None,
         ..Default::default()
     });
-    let result4 = fold_constant_expr(&expr4, &context).expect("Failed to evaluate multiplication");
+    let result4 = evaluate(&expr4, &context).expect("Failed to evaluate multiplication");
     assert_eq!(result4, 6.0);
 
     // Test evaluation failure with missing variable
     let expr5 = Expr::Variable("z".to_string());
-    let result5 = fold_constant_expr(&expr5, &context);
+    let result5 = evaluate(&expr5, &context);
     assert!(
         result5.is_err(),
         "Expected evaluation to fail for missing variable"
@@ -291,8 +291,7 @@ fn test_complex_expression_operations() {
     context.insert("c".to_string(), 1.0);
     context.insert("x".to_string(), 2.0);
 
-    let result =
-        fold_constant_expr(&complex_expr, &context).expect("Failed to evaluate complex expression");
+    let result = evaluate(&complex_expr, &context).expect("Failed to evaluate complex expression");
     // Should evaluate to: 1*2^2 + (-2)*2 + 1 = 4 - 4 + 1 = 1
     assert_eq!(result, 1.0);
 
@@ -359,7 +358,7 @@ fn test_special_function_expressions() {
         let mut context = HashMap::new();
         context.insert("x".to_string(), 1.0);
 
-        let _result = fold_constant_expr(&expr, &context); // May succeed or fail depending on implementation
+        let _result = evaluate(&expr, &context); // May succeed or fail depending on implementation
     }
 }
 

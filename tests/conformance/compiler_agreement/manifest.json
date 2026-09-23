@@ -20,22 +20,23 @@
         "python"
       ],
       "bindings_optional": [],
-      "note": "The strict default. Julia's strict build has landed, so julia must ANSWER for `native`; rust and python stay optional until theirs do and cross on the same one-way ratchet. A REFUSAL is governed by each fixture's `required` map, not by this list."
+      "note": "The strict default. All three strict builds have landed and all three crossed the one-way ratchet, so julia, rust and python must each ANSWER for `native`; `bindings_optional` is empty. A REFUSAL is governed by each fixture's `required` map, not by this list."
     },
     "xla": {
-      "bindings_required": [],
-      "bindings_optional": [
-        "julia",
+      "bindings_required": [
         "rust"
       ],
-      "note": "Julia needs Reactant loaded; Rust needs the `xla` feature and XLA_EXTENSION_DIR. Unconfigured is `unavailable`, not `refused`."
-    },
-    "mtk": {
-      "bindings_required": [],
       "bindings_optional": [
         "julia"
       ],
-      "note": "Julia only; needs ModelingToolkit loaded. The one compiler that runs events and implicit equations."
+      "note": "Julia needs Reactant loaded; Rust needs the `xla` feature and XLA_EXTENSION_DIR. Unconfigured is `unavailable`, not `refused`. Rust crossed the one-way ratchet on 2026-09-22: `esm_problem(compiler=xla)` emits the tape through the XLA emitter and runs the compiled right-hand side on the solve path, and all six fixtures agree with the golden with no refusals. `bindings_required` therefore means: a build that HAS the feature and the extension must answer, and a stage that runs this compiler is responsible for providing them -- which is why the DEFAULT run of `scripts/test-conformance.sh` has no `xla` stage. It is gated instead in the `rust-xla` job of the `XLA Compiled Backends` workflow (.github/workflows/xla-backends.yml), which fetches the extension and then runs `./scripts/test-conformance.sh --compiler-agreement-only xla`. Julia is optional there and skips visibly on a runner without Julia."
+    },
+    "mtk": {
+      "bindings_required": [
+        "julia"
+      ],
+      "bindings_optional": [],
+      "note": "Julia only; needs ModelingToolkit loaded. The one compiler that runs events and implicit equations. Julia's `esm_problem(...; compiler = :mtk)` has landed and answers for all six fixtures, so julia is required to ANSWER for it; a REFUSAL is still governed by each fixture's `required` map, and this compiler refuses a document fed by loaded data, one with a continuous spatial dimension, a geometry operator, or a time derivative of an expression. ModelingToolkit and OrdinaryDiffEqNonlinearSolve live in the adapter environment `pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env`, activated for this compiler alone, and the stage is gated in .github/workflows/mtk-compiler.yml -- same triggers as the conformance workflow, so the same frequency -- rather than in the default run of `scripts/test-conformance.sh`."
     },
     "sympy": {
       "bindings_required": [

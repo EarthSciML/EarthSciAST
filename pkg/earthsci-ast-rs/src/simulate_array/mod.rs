@@ -1,11 +1,10 @@
 //! Native array runtime for `faq`, `makearray`, `index`, `reshape`,
 //! `transpose`, `concat`, and `broadcast` expression nodes (gt-oxr).
 //!
-//! This module sits alongside [`crate::simulate`] and handles the subset of
-//! ESM models that use array-shaped state variables and the array-op AST
-//! nodes introduced in gt-t5c. It is invoked from [`crate::simulate`] when
-//! the top-level dispatcher detects array-op nodes in the file; pure-scalar
-//! models continue to go through the existing scalar interpreter.
+//! This is the crate's one evaluator: [`crate::problem::esm_problem`] builds it
+//! for every document, scalar or gridded — its tape under `native` / `xla` and
+//! its per-cell oracle under `interpreter` (API_SPEC §5.8). The solver
+//! plumbing and run vocabulary around it live in [`crate::simulate`].
 //!
 //! ## Approach
 //!
@@ -54,9 +53,9 @@
 // This runtime is compiled for wasm too (EarthSciAST-akz): it reaches
 // s2geometry only through the already-wasm-safe `crate::geometry` API (planar
 // clips work; spherical/geodesic returns a runtime `GeometryError` stub on
-// wasm), and its solver is the same diffsol/Faer path the scalar solver
-// export already runs client-side — so no native-only dependency remains, and
-// planar / geometry-free PDEs run in the browser via `crate::simulate::simulate`.
+// wasm), and its solver is the diffsol/Faer path, which is pure Rust — so no
+// native-only dependency remains, and planar / geometry-free PDEs run in the
+// browser.
 #![allow(
     clippy::type_complexity,
     clippy::collapsible_if,
@@ -83,18 +82,16 @@ pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_inventio
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
 pub(crate) use compile::{model_tree_any, parse_subsystem_model};
-pub(crate) use eval::eval_observed_recurrence;
+pub(crate) use eval::{check_scalar_evaluable, eval_observed_recurrence, eval_scalar_expression};
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
     take_const_array_oob,
 };
 // The scalar-op leaf kernel is defined once here (backs the per-cell oracle and
-// the vectorized overlay); re-exported crate-wide so the scalar interpreter
-// `crate::simulate::eval_op` routes through the SAME definition instead of
-// re-implementing the arithmetic/comparison/logical algebra (knot #3a).
-pub(crate) use eval::{
-    apply_binary, apply_unary, eval_expression_with_extents_and_consts_shared, fold_scalar,
-};
+// the vectorized overlay); re-exported crate-wide so a caller outside the
+// runtime that needs one operator's numeric meaning (the expression
+// simplifier) routes through the SAME definition.
+pub(crate) use eval::{apply_binary, eval_expression_with_extents_and_consts_shared};
 pub use rhs::RhsScratch;
 
 use compile::*;
@@ -578,6 +575,22 @@ pub(crate) enum RuntimeMode {
     /// oracle everywhere, as the reference the other compilers are checked
     /// against.
     Interpreter,
+    /// [`crate::Compiler::Xla`]: the specialty compiler that needs a heavy
+    /// external dependency. The tape is lowered to a StableHLO computation by
+    /// `tape::xla_emit` and run through PJRT (`crate::xla_runtime::CompiledRhs`),
+    /// so the right-hand side — and the
+    /// finite-difference Jacobian built out of it — are the compiled
+    /// executable, not the tape's own interpreter.
+    ///
+    /// It is as STRICT as [`Self::Native`] and strict twice over: every rule
+    /// must lower to the tape (or construction refuses it), and the whole tape
+    /// must lower to XLA (or construction refuses that, naming the rule). The
+    /// passes the tape serves under `native` — the build-time materialization,
+    /// the per-segment seed, the inspection snapshot and the observeds
+    /// reported at output times — are served from the tape here too, because
+    /// the emitted program's only output is `du`. That is one evaluator, not
+    /// two: the same tape both feeds the emitter and answers those passes.
+    Xla,
 }
 
 /// Compiled, parameter-sweep-ready ODE model for array-op models.
@@ -586,6 +599,19 @@ pub struct ArrayCompiled {
     /// [`crate::problem::esm_problem`] right after the build, and
     /// [`RuntimeMode::Legacy`] for every other entry point.
     pub(crate) runtime_mode: RuntimeMode,
+    /// The XLA executable this model's right-hand side runs on under
+    /// [`RuntimeMode::Xla`], installed by
+    /// [`crate::problem::esm_problem`] at CONSTRUCTION — so a model the
+    /// emitter cannot lower is a build refusal rather than a surprise on the
+    /// first step — and empty under every other mode.
+    ///
+    /// A cell rather than a plain field because the program is emitted from a
+    /// finished [`ArrayCompiled`]: the emitter reads the model it is going to
+    /// be installed on. `Rc` so the per-segment RHS and Jacobian closures can
+    /// each hold the ONE executable; compiling it is the expensive step and
+    /// there must never be a second.
+    #[cfg(feature = "xla")]
+    pub(crate) xla_rhs: std::cell::OnceCell<Rc<crate::xla_runtime::CompiledRhs>>,
     /// Every state spelling an `operator_compose` renaming match DELETED,
     /// mapped onto the survivor (issue #230). Carried from
     /// `FlattenMetadata::merged_variable_renames` by
@@ -675,8 +701,8 @@ pub struct ArrayCompiled {
     const_scope: Rc<ConstArrayScope>,
     /// The single-model namespace (the top-level `models` map key), set by
     /// [`Self::from_file`]. The raw single-model path keys params/states by their
-    /// BARE variable names (`R_0`, `psi[i,j]`), but the scalar backend, the
-    /// `flatten` path, and the Julia toolkit all namespace them (`Model.R_0`).
+    /// BARE variable names (`R_0`, `psi[i,j]`), but the `flatten` path and the
+    /// Julia toolkit namespace them (`Model.R_0`).
     /// So a caller's `parameters` / `initial_conditions` override key is accepted
     /// in EITHER form: a `<namespace>.` prefix is stripped before lookup (WS3
     /// cross-toolkit override-naming parity). `None` on the `from_flattened`
