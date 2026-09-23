@@ -452,6 +452,7 @@ impl ArrayCompiled {
     /// document with nothing to integrate. A SHAPED document answers
     /// differently — from the fields its build materialized — so it is told
     /// apart here rather than by what an evaluation happens to produce.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
     pub(crate) fn observeds_are_scalar(&self) -> bool {
         self.observed_rules.iter().all(|rule| match rule {
             AlgebraicRule::Scalar { body, .. } => check_scalar_evaluable(body).is_ok(),
@@ -1742,8 +1743,9 @@ impl ArrayCompiled {
             details: e.to_string(),
         })?;
 
-        // Run the solver, then read the real step/eval counters out of diffsol
-        // before the concrete solver is dropped (see [`SolveStats::from_solver`]).
+        // Mirror the scalar `Compiled::integrate` dispatch: run the solver, then
+        // read the real step/eval counters out of diffsol before the concrete
+        // solver is dropped (see [`SolveStats::from_solver`]).
         //
         // Wrapped in an immediately-invoked closure so a solver failure does
         // not leave the function before the XLA fault channel below is read: a

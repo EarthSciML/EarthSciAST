@@ -1996,8 +1996,8 @@ fn wants_build_pipeline(opts: &ProblemOptions) -> bool {
 /// runner asks the build pipeline for them. `None` again when a DISCRETE
 /// provider feeds the document, whose forcing moves with `t` only through the
 /// segmented refresh a solve drives.
+#[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 pub(crate) fn static_observed_graph(prob: &EsmProblem) -> Option<Rc<ArrayCompiled>> {
-    #[cfg(not(target_arch = "wasm32"))]
     if !prob.discrete_forcing.is_empty() {
         return None;
     }
@@ -2021,6 +2021,7 @@ pub(crate) fn static_observed_graph(prob: &EsmProblem) -> Option<Rc<ArrayCompile
 /// Evaluated by the array runtime on the compiler the problem was built with,
 /// so under `native` the values come off the tape and under `interpreter` off
 /// the per-cell oracle, exactly as a solve's reported observeds would.
+#[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 pub(crate) fn evaluate_static_observeds_over(
     prob: &EsmProblem,
     graph: &ArrayCompiled,
@@ -2051,6 +2052,7 @@ pub(crate) fn evaluate_static_observeds_over(
 /// predicate is what lets the runner tell "nothing to integrate, and no scalar
 /// graph to evaluate here" (a shaped document) apart from "something to
 /// integrate".
+#[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 pub(crate) fn has_nothing_to_integrate(prob: &EsmProblem) -> bool {
     match &*prob.backend {
         Backend::Static(_) => true,
