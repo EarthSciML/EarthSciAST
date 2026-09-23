@@ -613,6 +613,11 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
     flat, doc = _mtk_run_system(input; metaparameters = metaparameters,
                                 base_path = base_path,
                                 renames_out = merged_renames)
+    # `model_name` selects under the SAME rule `:native` applies: its build runs
+    # `_select_model` against the flattened run document, whose one model is
+    # the whole flattened system — so both compilers accept the same names and
+    # raise the same error for any other.
+    EarthSciAST._select_model(EarthSciAST.coerce_esm_file(doc), model_name)
     _mtk_refuse_unsupported_document(flat)
 
     overrides = EarthSciAST._resolve_merged_renames(
@@ -629,11 +634,8 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
     # ESM → ModelingToolkit, then the structural compile. `mtkcompile` is what
     # the installed ModelingToolkit spells this; older versions called it
     # `structural_simplify`, and both names are tried so the compiler tracks the
-    # package rather than one release of it.
-    # `model_name` names the SYSTEM here. `flatten` has already merged the
-    # document into ONE system by the time this compiler sees it, so there is no
-    # model left to select; the keyword survives as the compiled system's name,
-    # which is what ModelingToolkit's own printing shows.
+    # package rather than one release of it. `model_name`, once selected above,
+    # names the compiled system, which is what ModelingToolkit's printing shows.
     name = model_name === nothing ? :esm : Symbol(String(model_name))
     system = ModelingToolkit.System(flat; name = name)
     system = _mtk_compile(system)
