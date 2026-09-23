@@ -291,7 +291,7 @@ end
 
 Registry mapping a forcing variable name to its live buffer — the dense
 `Array{Float64}` bound BY REFERENCE through
-`_build_evaluator(model; param_arrays = …)` (ess-14f.3). The refresh callback's
+`esm_problem(input, tspan; param_arrays = …)` (ess-14f.3). The refresh callback's
 `affect!` writes the freshly sampled forcing into these exact objects in place, so the RHS
 (which gathers the same aliased storage via `_NK_PARAM_GATHER`) sees the update
 on its next evaluation.
@@ -302,7 +302,7 @@ the buffers are shared, not copied:
 
 ```julia
 forcing = Dict("wind" => zeros(nx, ny))
-f!, u0, p, tspan, _ = _build_evaluator(model; param_arrays = forcing, …)
+prob = esm_problem(doc, tspan; param_arrays = forcing, …)
 buffers = RefreshBuffers(forcing)   # same array objects — aliased, not copied
 ```
 """
@@ -343,16 +343,17 @@ Build the discrete-cadence loader-refresh callback and its tstops, WITHOUT
 embedding a solver (`[[library-exposes-rhs-not-solver]]`). The callback is a
 pure function of the `providers` and `buffers` registries — it never reads the
 model (the forcing names and cadences live entirely in those two arguments).
-The caller attaches both to their own problem:
+`esm_problem(…; providers)` composes it for a document's own discrete providers;
+a caller who binds forcing buffers through `param_arrays` instead attaches it
+to the run:
 
 ```julia
 forcing = Dict("wind" => zeros(nx, ny))
-f!, u0, p, tspan, _ = _build_evaluator(model; param_arrays = forcing, …)
+prob = esm_problem(doc, tspan; param_arrays = forcing, …)
 cb, tstops = build_refresh_callback(;
     providers = Dict("wind" => wind_provider),   # var name => data Provider
     buffers   = RefreshBuffers(forcing))         # same array objects as param_arrays
-prob = ODEProblem(f!, u0, tspan, p)              # USER's solver call
-sol  = solve(prob, Tsit5(); callback = cb, tstops = tstops)
+sol = solve(prob, Tsit5(); callback = cb, tstops = tstops)
 ```
 
 `providers` maps each forcing variable to a data provider (the
@@ -373,7 +374,7 @@ seam was removed in v0.8.0), not a refresh-time transform.
   variables need no separate refresh — they are RHS expressions over the buffers,
   so they recompute automatically on the next step.
 * **CONST** providers ([`provider_is_const`](@ref)) are materialized once into
-  `const_arrays` at `build_evaluator` time; they contribute no tstops and are
+  `const_arrays` at build time; they contribute no tstops and are
   absent from the callback.
 
 `post_refresh` is a `() -> nothing` hook the `affect!` calls at each boundary

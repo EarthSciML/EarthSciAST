@@ -3276,6 +3276,7 @@ end
 function _build_evaluator_impl(model::Model;
                                compiler::Symbol = :native,
                                kwargs...)
+    _xla_check_form(compiler, get(kwargs, :form, :inplace))
     plan = _plan_for(compiler)
     record = _BuildRecord(plan)
     insp = get(kwargs, :inspect, nothing)
@@ -4730,20 +4731,19 @@ end
     param_map(p) -> Dict{String,Int}
 
 Parameter NAME → its position in a parameter VECTOR, the `p`-side mirror of the
-`var_map` a build returns for the state (and [`esm_problem`](@ref) hangs on
-its Problem).
+`var_map` an [`esm_problem`](@ref) Problem carries for the state.
 
-Take it from the `p` that `build_evaluator` handed back:
+Take it from the Problem's `p`:
 
 ```julia
-f!, u0, p, tspan, var_map = _build_evaluator(doc)
-pm = param_map(p)                  # "k_diff" => 1, "k_rxn" => 3, …
-θ  = ComponentVector(p)            # the same order, as an AbstractVector
-f!(du, u, θ, t)                    # …and it is accepted as `p`
+prob = esm_problem(doc, tspan)
+pm = param_map(prob.p)             # "k_diff" => 1, "k_rxn" => 3, …
+θ  = ComponentVector(prob.p)       # the same order, as an AbstractVector
+prob.f!(du, u, θ, t)               # …and it is accepted as `p`
 ```
 
-`build_evaluator` keeps returning its 5-tuple — 391 call sites destructure it —
-so this is a FUNCTION OF `p` rather than a sixth return value. That costs nothing
+The Problem already carries `p`, so this is a FUNCTION OF `p` rather than a
+second field that would have to be kept in step with it. That costs nothing
 in fidelity: the order is the build's own (`param_names` is sorted, and the `p`
 NamedTuple is built from it in that order), and `keys(p)` IS that order, so this
 map and the `idx` baked into every `_NK_PARAM` node are the same numbering by
@@ -5130,6 +5130,9 @@ literal values. Used to inject `__stgfw_` Fornberg weight arrays for
 `stencil_gen` models with `spacing="from_grid"`.
 """
 function _build_evaluator(esm::AbstractDict; compiler::Symbol = :native, kwargs...)
+    # Before the pre-build work below, which is not cheap and which a refusal
+    # would throw away.
+    _xla_check_form(compiler, get(kwargs, :form, :inplace))
     # The requested plan is installed HERE, not only at `_build_evaluator_impl`:
     # the binning-coordinate derivation and value invention below run first and
     # hand their results to the build as const arrays, so a per-cell setup sweep

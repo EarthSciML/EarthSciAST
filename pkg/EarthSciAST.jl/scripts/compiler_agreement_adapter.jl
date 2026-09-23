@@ -87,7 +87,6 @@ end
 
 using EarthSciAST
 using JSON3
-import ADTypes
 import OrdinaryDiffEqTsit5
 import OrdinaryDiffEqRosenbrock
 import SciMLBase
@@ -291,26 +290,16 @@ end
 # `stiffness: "high"` is still honoured, which is what the fixture is here to
 # exercise; only the ORDER of the stiff method chosen for it changed.
 #
-# THE JACOBIAN'S DERIVATIVES ARE A PROPERTY OF THE BUILT PROBLEM, NOT OF THE
-# `--compiler` FLAG. A stiff algorithm builds its Jacobian by
-# forward-differentiating the right-hand side, which needs a right-hand side
-# that is a Julia function `Dual` numbers can be pushed through. A Problem built
-# by a compiler that emits a COMPILED DEVICE PROGRAM (`:xla`: StableHLO on an
-# XLA client, Float64 throughout) is not one, and it says so by refusing a
-# non-Float64 call rather than answering a wrong number — so the Jacobian is
-# finite-differenced instead. The question is asked of the PROBLEM, through
-# §5.8's `compiler(prob)`, and never of the command line: an adapter that read
-# `--compiler` and chose a build itself would be reimplementing the thing under
-# test, whereas reading back what built this Problem is the surface the spec
-# makes readable for exactly this. Only the JACOBIAN's derivatives change; the
-# algorithm, its order and the fixture's tolerances do not.
-function solver_alg(doc, prob)
+# The algorithm is the same for every compiler. A stiff one needs a Jacobian,
+# and an `:xla` Problem — whose right-hand side is a compiled device program no
+# `Dual` can be pushed through — carries its own finite-difference one on the
+# `ODEFunction` `solve` builds (src/compiler_xla.jl), so nothing here asks which
+# compiler built the Problem.
+function solver_alg(doc)
     blk = get(doc, :solver, nothing)
     stiff = blk === nothing ? nothing : get(blk, :stiffness, nothing)
     stiff !== nothing && String(stiff) == "high" &&
-        return OrdinaryDiffEqRosenbrock.Rodas5P(
-            autodiff = EarthSciAST.compiler(prob) === :xla ?
-                       ADTypes.AutoFiniteDiff() : ADTypes.AutoForwardDiff())
+        return OrdinaryDiffEqRosenbrock.Rodas5P()
     return OrdinaryDiffEqTsit5.Tsit5()
 end
 
@@ -356,7 +345,7 @@ function fixture_trajectory(fx, base, compiler)
                        compiler = Symbol(compiler))
     slots = model_slots(prob.var_map, mname)
 
-    sol = SciMLBase.solve(prob, solver_alg(doc, prob);
+    sol = SciMLBase.solve(prob, solver_alg(doc);
                           reltol = reltol, abstol = abstol, saveat = saveat)
     SciMLBase.successful_retcode(sol) || error("solve failed: retcode $(sol.retcode)")
 

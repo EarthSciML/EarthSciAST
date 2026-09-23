@@ -186,26 +186,10 @@ _de_dev(::Nothing) = nothing
 _de_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 
 # `@compile` runs the emission inside its own machinery, which may wrap what the
-# trace threw. Dig the `DirectEmitError` out of whatever came back, so a test can
-# assert on its FIELDS (construct, rule) and not on a rendered string.
-function _de_unwrap(e)
-    e isa EarthSciAST.DirectEmitError && return e
-    for f in (:error, :ex, :exception, :task, :captured)
-        if hasproperty(e, f)
-            inner = getproperty(e, f)
-            inner === e && continue
-            r = _de_unwrap(inner)
-            r === nothing || return r
-        end
-    end
-    if e isa CompositeException || e isa AbstractVector
-        for x in e
-            r = _de_unwrap(x)
-            r === nothing || return r
-        end
-    end
-    return nothing
-end
+# trace threw. Dig the `DirectEmitError` out of whatever came back — with the
+# SAME helper `esm_problem(…; compiler = :xla)` uses — so a test can assert on
+# its FIELDS (construct, rule) and not on a rendered string.
+_de_unwrap(e) = EarthSciAST._find_direct_emit_error(e)
 _de_seed(n) = [0.6sin(0.7k) - 0.15 for k in 1:n]
 
 # Count `stablehlo.<op>` / `chlo.<op>` occurrences in a printed module.

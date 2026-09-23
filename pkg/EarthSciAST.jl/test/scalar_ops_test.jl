@@ -141,8 +141,10 @@ end
     @test err isa ESM.TreeWalkError
     @test err.code == "E_TREEWALK_OOP_NOT_EVALUABLE"
     msg = sprint(showerror, err)
-    @test occursin("direct_rhs", msg)
-    @test occursin("form = :inplace", msg)
+    # It names the two PUBLIC ways out, never the private build.
+    @test occursin("compiler = :xla", msg)
+    @test occursin("prob.f!", msg)
+    @test !occursin("_build_evaluator", msg)
 end
 
 end

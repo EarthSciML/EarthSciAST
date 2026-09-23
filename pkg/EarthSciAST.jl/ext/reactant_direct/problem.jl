@@ -57,7 +57,6 @@ struct XlaProblemRHS{D,C,U,P} <: Function
     u_dev::U                    # the program's state input, written per call
     p_host::Base.RefValue{P}    # the `p` currently on the device
     p_dev::Base.RefValue{Any}   # …as device scalars
-    device::String              # "cpu" / "gpu" — what the report row records
     stats::Dict{Symbol,Int}     # the emitter's op census (informational)
 end
 
@@ -75,19 +74,41 @@ end
 # script that spelled the constructors out.
 _xla_compile_barrier(d, u_dev, p_dev, t_dev) =
     Reactant.@compile sync = true d(u_dev, p_dev, t_dev)
-_xla_run_barrier(compiled, u_dev, p_dev, t_dev) =
-    Array(compiled(u_dev, p_dev, t_dev))
+# The result goes straight from the device buffer into the integrator's `du`
+# when `du` is a plain host vector, with no intermediate host array; any other
+# `AbstractVector` takes the one extra copy through `Array`.
+_xla_run_barrier!(du::Vector{Float64}, compiled, u_dev, p_dev, t_dev) =
+    (copyto!(du, compiled(u_dev, p_dev, t_dev)); nothing)
+_xla_run_barrier!(du, compiled, u_dev, p_dev, t_dev) =
+    (copyto!(du, Array(compiled(u_dev, p_dev, t_dev))); nothing)
+
+# `direct_client` raises an ordinary error when the platform asked for has no
+# client in this process — a GPU requested on a host without one. The request
+# was well formed and this process cannot provide it, which is
+# `compiler_unavailable` by definition, so that is what the caller hears, and a
+# conformance adapter records the binding as unavailable rather than as broken.
+function _E._xla_client(device::AbstractString)
+    try
+        return direct_client(device)
+    catch err
+        throw(_E.SimulateError(
+            "compiler=:xla was asked to run on '$device' " *
+            "($(_E.XLA_DEVICE_ENV)), and this process has no XLA client for " *
+            "it: $(sprint(showerror, err)). Run where that device is attached, " *
+            "or set $(_E.XLA_DEVICE_ENV)=cpu",
+            _E.ERROR_CODES.COMPILER_UNAVAILABLE))
+    end
+end
 
 function _E._xla_compile_rhs(f::_E._OopRHS, var_map, u0::AbstractVector,
                              p, device::AbstractString)
-    cl = direct_client(device)
-    d = direct_rhs(f; var_map = var_map, client = cl)
+    d = direct_rhs(f; var_map = var_map, client = _E._xla_client(device))
     u_dev = direct_state(d, Array{Float64,1}(u0))
     p_dev = direct_params(d, _xla_params(p))
     t_dev = direct_time(d, 0.0)
     compiled = _xla_compile_barrier(d, u_dev, p_dev, t_dev)
     return XlaProblemRHS(d, compiled, u_dev, Ref{Any}(p), Ref{Any}(p_dev),
-                         String(device), d.stats)
+                         d.stats)
 end
 
 # The parameter carrier the device builders accept. A parameter-free model
@@ -114,9 +135,8 @@ function (w::XlaProblemRHS)(du::AbstractVector{Float64}, u::AbstractVector{Float
         w.p_host[] = p
         w.p_dev[] = direct_params(w.d, _xla_params(p))
     end
-    out = _xla_run_barrier(w.compiled, w.u_dev, w.p_dev[],
-                           direct_time(w.d, Float64(t)))
-    copyto!(du, out)
+    _xla_run_barrier!(du, w.compiled, w.u_dev, w.p_dev[],
+                      direct_time(w.d, Float64(t)))
     return nothing
 end
 
@@ -132,10 +152,11 @@ _xla_wrong_eltype(::Type{TD}, ::Type{TU}) where {TD,TU} =
     _E._xla_refuse("the right-hand side",
         "the compiled StableHLO program is Float64 throughout, and this call " *
         "carries du::$TD / u::$TU. A compiled device program cannot be " *
-        "differentiated on the host, so an algorithm that builds its Jacobian " *
-        "by forward-differentiating the right-hand side needs a " *
-        "finite-difference Jacobian instead (`autodiff = AutoFiniteDiff()`); a " *
-        "document that changes precision needs compiler=:native")
+        "differentiated on the host. `solve` on the Problem already hands the " *
+        "solver a finite-difference Jacobian through the compiled program; a " *
+        "caller building its own `ODEProblem` from `prob.f!` needs one too " *
+        "(`autodiff = AutoFiniteDiff()`), and a document that changes " *
+        "precision needs compiler=:native")
 
 function Base.show(io::IO, w::XlaProblemRHS)
     print(io, "XlaProblemRHS(", length(w.u_dev), " state elements, direct ",

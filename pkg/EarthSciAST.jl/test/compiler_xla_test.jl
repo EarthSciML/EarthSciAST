@@ -12,8 +12,9 @@
 # keyword reaches the emitter at all, that what comes back is a Problem whose
 # public surface is the one every other compiler produces, that a whole RUN
 # through it agrees with the `interpreter` — the oracle §5.8 keeps for exactly
-# this — and that the three things it refuses are refused BY NAME rather than
-# answered by another evaluator.
+# this — and that the three things it refuses (a non-Float64 call, live
+# forcing buffers, a construct the emitter cannot lower) are refused BY NAME
+# rather than answered by another evaluator.
 #
 # THE TWO BANDS, and where each comes from
 # (tests/conformance/compiler_agreement/manifest.json):
@@ -36,6 +37,7 @@ using EarthSciAST
 using Reactant
 using SciMLBase
 using OrdinaryDiffEqTsit5
+using OrdinaryDiffEqRosenbrock
 
 const CX = EarthSciAST
 const CX_EXT = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
@@ -78,6 +80,32 @@ function _cx_forced(N)
             "equations" => Any[Dict{String,Any}(
                 "lhs" => _cx_ao(_cx_Dt(_cx_ix("c", "i"))),
                 "rhs" => _cx_ao(body))])))
+end
+
+# `D(y) = -(y / 2 / 3)` with the division spelled as ONE three-argument `/`:
+# a document `native` builds and the direct emitter has no lowering for, so it
+# is the emitter's own refusal, not the build's, that `:xla` has to name.
+function _cx_unsupported()
+    Dict{String,Any}(
+        "esm" => "1.1.0", "metadata" => Dict{String,Any}("name" => "U"),
+        "models" => Dict{String,Any}("U" => Dict{String,Any}(
+            "variables" => Dict{String,Any}(
+                "y" => Dict{String,Any}("type" => "unknown", "default" => 2.0)),
+            "equations" => Any[Dict{String,Any}(
+                "lhs" => _cx_Dt("y"),
+                "rhs" => _cx_o("neg", _cx_o("/", "y", 2.0, 3.0)))])))
+end
+
+_cx_catch(f) = try
+    f(); nothing
+catch e
+    e
+end
+
+_cx_has_gpu() = try
+    Reactant.XLA.client("gpu"); true
+catch
+    false
 end
 
 # A deterministic, non-trivial state: a document seeded to zeros would let a
@@ -208,5 +236,95 @@ _cx_du(prob, u, t) = (du = zeros(Float64, length(u));
         @test compiler(esm_problem(_cx_forced(6), (0.0, 1.0);
                                    param_arrays = Dict("wind" => collect(1.0:6.0)))) ===
               :native
+        # …and it is refused BEFORE the build: the build files its report on
+        # the inspection sink even when it throws, so a sink still carrying the
+        # empty default proves no build ran. At continental scale that build is
+        # the expensive part.
+        insp = BuildInspection()
+        err3 = _cx_catch(() -> esm_problem(_cx_forced(6), (0.0, 1.0);
+                                           compiler = :xla, inspect = insp,
+                                           param_arrays = Dict("wind" => collect(1.0:6.0))))
+        @test err3 isa TreeWalkError
+        @test err3.code == CX.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test isempty(insp.compiler_report.rules)
+        @test insp.compiler_report.compiler === :native   # the untouched default
+
+        # A construct the EMITTER cannot lower. `Reactant.@compile` may hand the
+        # emitter's `DirectEmitError` back wrapped; either way it has to come
+        # out as the named refusal, never as an anonymous failure.
+        err4 = _cx_catch(() -> esm_problem(_cx_unsupported(), (0.0, 1.0);
+                                           compiler = :xla))
+        @test err4 isa TreeWalkError
+        @test err4.code == CX.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test occursin("compiler=:xla refuses '", err4.detail)
+        @test occursin("state equation", err4.detail)
+        @test occursin("cannot lower", err4.detail)
+        @test occursin("`/`", err4.detail)
+        # `native` builds the same document, so this is the emitter's refusal.
+        @test compiler(esm_problem(_cx_unsupported(), (0.0, 1.0))) === :native
+    end
+
+    @testset "the device: a typo is a configuration error, a missing GPU is unavailable" begin
+        # A misspelled device is NOT `compiler_unavailable`: a conformance run
+        # reads that as an optional binding to skip, and would pass without
+        # running anything. Refused before the document is loaded.
+        err = withenv(CX.XLA_DEVICE_ENV => "cuda") do
+            _cx_catch(() -> esm_problem("no/such/file.esm", (0.0, 1.0);
+                                        compiler = :xla))
+        end
+        @test err isa ArgumentError
+        @test occursin(CX.XLA_DEVICE_ENV, err.msg)
+        @test occursin("'cuda'", err.msg)
+
+        # A well-formed request this process cannot serve IS unavailable, and
+        # is answered before the load too.
+        if !_cx_has_gpu()
+            err2 = withenv(CX.XLA_DEVICE_ENV => "gpu") do
+                _cx_catch(() -> esm_problem("no/such/file.esm", (0.0, 1.0);
+                                            compiler = :xla))
+            end
+            @test err2 isa SimulateError
+            @test err2.code == CX.ERROR_CODES.COMPILER_UNAVAILABLE
+            @test occursin("'gpu'", err2.msg)
+        end
+    end
+
+    @testset "the build: :xla is the out-of-place product, never the in-place evaluator" begin
+        # The in-place evaluator is `native`'s; handing it back under an `:xla`
+        # report would be a fallback in everything but name.
+        err = _cx_catch(() -> CX._build_evaluator(load_path(CX_SCALAR);
+                                                  compiler = :xla))
+        @test err isa ArgumentError
+        @test occursin("form = :oop", err.msg)
+        insp = BuildInspection()
+        fo, _, _, _, _ = CX._build_evaluator(load_path(CX_SCALAR); compiler = :xla,
+                                             form = :oop, inspect = insp)
+        @test fo isa CX._OopRHS
+        @test insp.compiler_report.compiler === :xla
+    end
+
+    @testset "a stiff algorithm runs on the compiled program, with no setting" begin
+        # A stiff algorithm forward-differentiates the right-hand side for its
+        # Jacobian unless the `ODEFunction` carries one. The Problem carries a
+        # finite-difference one, so `Rosenbrock23()` with its DEFAULTS runs —
+        # which is what `run_inline_tests`' own stiff pick hands it.
+        px = esm_problem(CX_SCALAR, (0.0, 1.0); compiler = :xla)
+        pi_ = esm_problem(CX_SCALAR, (0.0, 1.0); compiler = :interpreter)
+        sx = SciMLBase.solve(px, Rosenbrock23(); reltol = 1e-8, abstol = 1e-10,
+                             saveat = [0.5, 1.0])
+        si = SciMLBase.solve(pi_, Rosenbrock23(); reltol = 1e-8, abstol = 1e-10,
+                             saveat = [0.5, 1.0])
+        @test SciMLBase.successful_retcode(sx)
+        # A finite-difference Jacobian changes the step sequence, not the
+        # solution: agreement at the integration tolerance, not bitwise.
+        for k in eachindex(sx.u)
+            @test all(isapprox(sx.u[k][j], si.u[k][j]; rtol = 1e-6, atol = 1e-9)
+                      for j in eachindex(sx.u[k]))
+        end
+        # The document declares `solver.stiffness: "high"`, so the inline-test
+        # runner picks the stiff algorithm itself.
+        rs = run_inline_tests(CX_SCALAR; compiler = :xla)
+        @test !isempty(rs)
+        @test all(r -> r.passed, rs)
     end
 end

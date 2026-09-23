@@ -113,8 +113,14 @@ function _symbol_cache(prob::EsmProblem)
     return sys
 end
 
+# `_ode_derivatives` is empty for every compiler but `:xla`, whose compiled
+# right-hand side cannot be forward-differentiated and so carries its own
+# finite-difference `jac` / `tgrad` (src/compiler_xla.jl). Hung on the
+# `ODEFunction` here, every `solve` of such a Problem gets a Jacobian it can
+# build, whichever algorithm and `autodiff` setting the caller named.
 _ode_problem(prob::EsmProblem, tspan) = SciMLBase.ODEProblem(
-    SciMLBase.ODEFunction(prob.f!; sys = _symbol_cache(prob)),
+    SciMLBase.ODEFunction(prob.f!; sys = _symbol_cache(prob),
+                          EarthSciAST._ode_derivatives(prob)...),
     copy(prob.u0), tspan, prob.p)
 
 # --------------------------------------------------------------------------- #

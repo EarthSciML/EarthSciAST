@@ -1018,6 +1018,12 @@ function esm_problem(input, tspan;
     # what lets `remake(prob; p = …)` accept the numeric half instead of refusing
     # every override.
     param_classes = Dict{String,Symbol}()
+    # `:xla` refuses live forcing buffers, and every one a caller or a discrete
+    # provider binds is already in `merged_param`: refuse those now rather than
+    # after a build that can take hours. src/compiler_xla.jl keeps the check on
+    # the build product too, for the discrete-materializer caches only the
+    # build creates.
+    compiler === :xla && _xla_refuse_before_build(merged_param)
     # `:xla` is built OUT OF PLACE — the compiled tree-walk intermediate
     # representation is what the direct StableHLO emitter lowers — and the
     # executable is wrapped back into the in-place `f!` this Problem's surface

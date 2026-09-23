@@ -110,12 +110,17 @@ function _compiler_plan(compiler::Symbol)
         # direct StableHLO emitter, which exists only with Reactant in the
         # session. `_xla_extension` raises `compiler_unavailable` when it is
         # not, which is the right failure for a value that IS in the
-        # vocabulary; everything else about the lane is in compiler_xla.jl.
+        # vocabulary, and the device is resolved to a client here too — a
+        # mistyped `EARTHSCI_JULIA_XLA_DEVICE` is an `ArgumentError`, a GPU
+        # this process does not have is `compiler_unavailable` — so neither
+        # waits for a load, a flatten and a build. Everything else about the
+        # lane is in compiler_xla.jl.
         # The PLAN is `native`'s: the emitter lowers the compiled tree-walk
         # intermediate representation, so the tiers that build it all run, and
         # they run strictly — a rule `native` would refuse is a rule `:xla` has
         # no program for either.
         _xla_extension()
+        _xla_client(_xla_device())
         return _plan_all(:xla, true, true)
     elseif compiler === :mtk
         throw(SimulateError(

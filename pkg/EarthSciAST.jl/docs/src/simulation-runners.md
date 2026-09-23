@@ -118,23 +118,38 @@ rather than a right-hand side.
 available) or `gpu` — and the build's `compiler_report` records which one ran,
 as the tier `:xla_direct_cpu` / `:xla_direct_gpu` on the row for the assembled
 program. It is not an evaluation strategy and nothing else reads it: the same
-StableHLO module compiles on either platform.
+StableHLO module compiles on either platform. Both of its failures are answered
+before the document is loaded: any other value is an `ArgumentError` (a typo is
+a configuration error, not a missing compiler), and `gpu` in a process with no
+GPU client is `compiler_unavailable`.
+
+**A stiff algorithm needs no setting.** A compiled device program cannot be
+differentiated on the host, so an `:xla` Problem hands `solve` its own
+finite-difference Jacobian and time derivative through the compiled program
+(n + 1 calls per Jacobian for n states). `solve(prob, Rosenbrock23())` runs as
+written, and so does `run_inline_tests(doc; compiler = :xla)` on a document
+that declares `solver.stiffness: "high"`.
 
 **It refuses rather than falls back**, always with a `compiler_refused_rule`
 naming the rule and the reason:
 
 * anything the emitter cannot lower, with the construct and the rule it came
   from taken straight off the emitter's own hard error;
-* a call whose element type is not `Float64` — which is what a stiff algorithm
-  that forward-differentiates the right-hand side produces. A compiled device
-  program cannot be differentiated on the host, so name a finite-difference
-  Jacobian (`autodiff = AutoFiniteDiff()`) or build `compiler = :native`;
+* a call whose element type is not `Float64`. `solve` on the Problem never
+  makes one, but a caller who builds its own `ODEProblem` from `prob.f!` and
+  lets a stiff algorithm forward-differentiate it does; name a finite-difference
+  Jacobian there (`autodiff = AutoFiniteDiff()`) or build `compiler = :native`;
 * a document binding LIVE FORCING BUFFERS (`param_arrays`, or a discrete data
   provider). The compiled program takes those as arguments and needs them
   re-synced to the device at each cadence boundary, which this entry point does
   not wire yet; the buffer-free form would bake the build-time forcing in as a
   constant and run the whole simulation against it, which is a wrong number with
-  nothing in the result to say so.
+  nothing in the result to say so. Refused before the build starts.
+
+`compiler = :xla` builds only through `esm_problem`. The lower-level build asked
+for `compiler = :xla` in the in-place form is an `ArgumentError`, because the
+in-place evaluator is `native`'s and returning it under an `:xla` report would
+be a fallback.
 
 ### Single-expression entry point — `evaluate_expr`
 

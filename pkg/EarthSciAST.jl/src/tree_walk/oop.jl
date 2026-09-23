@@ -738,17 +738,17 @@ end
 # reference the compiled backends are gated against; `compiler=:interpreter`
 # gives its untiered variant, which recomputes every prelude slot on every call.
 (f::_OopRHS)(u, p, t) = throw(TreeWalkError("E_TREEWALK_OOP_NOT_EVALUABLE",
-    "an out-of-place build (`_build_evaluator(model; form = :oop)`) is the " *
-    "compiled intermediate representation a backend lowers, not a host " *
-    "evaluator. Compile it — `EarthSciASTReactantExt.direct_rhs(f)`, then " *
-    "`Reactant.@compile` — or build `form = :inplace` and call " *
-    "`f!(du, u, p, t)` on the host."))
+    "an out-of-place build product is the compiled intermediate " *
+    "representation a backend lowers, not a host evaluator. For a compiled " *
+    "right-hand side build `esm_problem(input, tspan; compiler = :xla)`; for " *
+    "the host evaluator build `esm_problem(input, tspan)` and call " *
+    "`prob.f!(du, u, prob.p, t)`."))
 
 """
     forcing_buffers(f) -> NamedTuple
 
-The live forcing buffers of an out-of-place RHS from
-`_build_evaluator(model; form = :oop)`, as a NamedTuple in a STABLE order (buffer
+The live forcing buffers of an out-of-place build product (the compiled
+intermediate representation a backend lowers), as a NamedTuple in a STABLE order (buffer
 names sorted): every `param_arrays` entry and every [`DiscreteMaterializer`](@ref)
 cache, each value the aliased flat host view of the exact array the build bound
 — NOT a copy, so a discrete-cadence refresh writing the original array is

@@ -304,13 +304,79 @@ end
                   insp2.compiler_report.rules)
     end
 
-    @testset "build_evaluator has left the public surface" begin
-        # API_SPEC §8 item 23: the extension seam under the runners is retired.
-        # It is not EXPORTED any more — `esm_problem` is the way in — and the
-        # name that remains is a deprecated alias kept for one minor version so
-        # a downstream package keeps running while it migrates.
-        @test !(:build_evaluator in names(EarthSciAST))
+    @testset "compiler = :xla builds only the out-of-place product" begin
+        # The in-place evaluator is `native`'s. Handing it back under a report
+        # that says `:xla` would be a fallback in everything but name, so the
+        # request is refused before anything is loaded or built — and before
+        # the availability check, so this session without Reactant hears it.
+        doc, _ = _csel_contraction_doc()
+        for call in (() -> CSEL._build_evaluator(doc; compiler = :xla),
+                     () -> CSEL._build_evaluator(load_path(_CSEL_AGREE[1]);
+                                                 compiler = :xla),
+                     () -> CSEL.build_evaluator(doc; compiler = :xla,
+                                                form = :inplace))
+            e = try
+                call(); nothing
+            catch err
+                err
+            end
+            @test e isa ArgumentError
+            @test occursin("form = :oop", e.msg)
+            @test occursin("esm_problem", e.msg)
+        end
+    end
+
+    @testset "an emitter refusal is found however @compile wrapped it" begin
+        de = CSEL.DirectEmitError("`/` with 3 arguments", "state equation y", "detail")
+        task = Task(() -> throw(de))
+        schedule(task)
+        wrapped = try
+            wait(task); nothing
+        catch err
+            err
+        end
+        @test wrapped isa TaskFailedException
+        @test CSEL._find_direct_emit_error(de) === de
+        @test CSEL._find_direct_emit_error(wrapped) === de
+        @test CSEL._find_direct_emit_error(CompositeException([ErrorException("x"), wrapped])) === de
+        @test CSEL._find_direct_emit_error(ErrorException("not the emitter's")) === nothing
+    end
+
+    @testset "the :xla finite-difference Jacobian" begin
+        # f(u, t) = [u₁² + t·u₂, sin(u₂)·u₁, 3u₃ − t²]; J and ∂f/∂t in closed form.
+        calls = Ref(0)
+        f! = (du, u, p, t) -> (calls[] += 1;
+                               du[1] = u[1]^2 + t * u[2];
+                               du[2] = sin(u[2]) * u[1];
+                               du[3] = 3u[3] - t^2; nothing)
+        u = [0.7, -1.3, 250.0]; t = 0.4
+        J = zeros(3, 3)
+        CSEL._XlaFdJacobian(f!, 3)(J, u, nothing, t)
+        Jx = [2u[1] t 0.0; sin(u[2]) u[1]*cos(u[2]) 0.0; 0.0 0.0 3.0]
+        @test isapprox(J, Jx; rtol = 1e-6, atol = 1e-6)
+        @test calls[] == 4                  # n + 1: f(u) once, one per column
+        @test u == [0.7, -1.3, 250.0]       # the caller's state is not touched
+        dT = zeros(3)
+        CSEL._XlaFdTgrad(f!, 3)(dT, u, nothing, t)
+        @test isapprox(dT, [u[2], 0.0, -2t]; rtol = 1e-6, atol = 1e-6)
+        # Only an `:xla` Problem carries them; every other compiler's `f!` is a
+        # Julia function the solver differentiates itself.
+        @test CSEL._ode_derivatives(esm_problem(_CSEL_AGREE[1], (0.0, 1.0))) ==
+              NamedTuple()
+    end
+
+    @testset "build_evaluator is deprecated, and exported until it is removed" begin
+        # API_SPEC §8 item 23: the extension seam under the runners is retired
+        # — `esm_problem` is the way in — and the name that remains is a
+        # deprecated alias kept for one minor version so a downstream package
+        # keeps running while it migrates. It stays EXPORTED for that minor: a
+        # downstream that calls the bare name after `using EarthSciAST`
+        # (EarthSciASTDiff does) must hear the warning, not `UndefVarError`.
+        @test :build_evaluator in names(EarthSciAST)
         @test :esm_problem in names(EarthSciAST)
+        # The BARE name, as that downstream spells it: an unexported alias
+        # would make this line an `UndefVarError`.
+        @test_logs (:warn,) match_mode = :any build_evaluator(load_path(_CSEL_AGREE[1]))
         # The alias still builds, and builds the same thing the private entry
         # point does: a deprecation that changed the answer would be a second
         # break hiding inside the first.
