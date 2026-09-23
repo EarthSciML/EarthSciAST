@@ -32,16 +32,21 @@ Design decisions of record (2026-09-21) that this tier implements:
 > `bindings_required` for each; Python is `bindings_required` for `sympy`,
 > which refuses the four array fixtures by name and runs the two scalar ones.
 >
-> **Julia is now `bindings_required` for `xla` as well.**
+> **Julia ANSWERS for `xla`, and `xla` stays `bindings_optional` anyway.**
 > `esm_problem(…; compiler = :xla)` builds the document out of place, lowers the
 > compiled tree-walk intermediate representation to StableHLO and compiles it
 > once per build; all six fixtures pass against the golden AND against their
-> anchors, with **no refusals and no named exclusions**, so julia crosses on the
-> same one-way ratchet `native` used. Its adapter runs in
-> `pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env`, which carries
-> Reactant, so an `unavailable` from julia now means that environment did not
-> instantiate rather than that the compiler is absent. Two things about the run
-> are worth reading here rather than inferring:
+> anchors, with **no refusals and no named exclusions**. The ledger still lists
+> julia as optional, because no `xla` producer stage is wired into
+> `scripts/test-conformance.sh`: the Julia one needs
+> `pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env`, which pulls an
+> XLA runtime into the conformance run, and that is a fleet-wide decision rather
+> than this tier's. `bindings_required` makes an `unavailable` RED, so until the
+> stage runs it would only ever mean red for a checkout whose Reactant
+> environment did not instantiate — a red that says nothing about the compiler.
+> Julia crosses on the same one-way ratchet `native` used when the stage is
+> wired; run it meanwhile with `--bindings julia --compiler xla`. Two things
+> about that run are worth reading here rather than inferring:
 >
 > * **The device is the host CPU client** (`EARTHSCI_JULIA_XLA_DEVICE`, default
 >   `cpu`). The report schema has no field for a platform, and inventing one
@@ -60,7 +65,8 @@ Design decisions of record (2026-09-21) that this tier implements:
 >   band against the golden with room to spare.
 >
 > `mtk` stays `bindings_optional` until a binding's `esm_problem` can build with
-> it, and crosses on the same ratchet.
+> it, and crosses on the same ratchet. `xla` is `bindings_optional` for Rust too:
+> it needs the `xla` feature and `XLA_EXTENSION_DIR`.
 >
 > **What `xla` does not cover yet, on either binding**: a document that binds
 > LIVE FORCING BUFFERS. Julia refuses one by name

@@ -23,13 +23,12 @@
       "note": "The strict default. Julia's strict build has landed, so julia must ANSWER for `native`; rust and python stay optional until theirs do and cross on the same one-way ratchet. A REFUSAL is governed by each fixture's `required` map, not by this list."
     },
     "xla": {
-      "bindings_required": [
-        "julia"
-      ],
+      "bindings_required": [],
       "bindings_optional": [
+        "julia",
         "rust"
       ],
-      "note": "Julia's `esm_problem(\u2026; compiler = :xla)` has landed and answers for all six fixtures with no refusals, so julia crosses to required on the same one-way ratchet `native` used; its adapter runs in scripts/compiler_agreement_reactant_env, which carries Reactant, so an `unavailable` from julia now means that environment did not instantiate rather than that the compiler is missing. Rust needs the `xla` feature and XLA_EXTENSION_DIR and stays optional. Unconfigured is `unavailable`, not `refused`."
+      "note": "OPTIONAL for every binding, because `xla` is the compiler that needs a HEAVY EXTERNAL DEPENDENCY and no producer stage for it is wired into scripts/test-conformance.sh. Julia's `esm_problem(\u2026; compiler = :xla)` has landed and answers for all six fixtures against the golden and their anchors with no refusals \u2014 run it with `--bindings julia --compiler xla`, whose adapter environment is scripts/compiler_agreement_reactant_env \u2014 but `bindings_required` makes an `unavailable` RED, and until the stage runs in the gate that would only mean red for a checkout whose Reactant environment did not instantiate. Julia crosses on the same one-way ratchet `native` used once the stage is wired. Rust needs the `xla` feature and XLA_EXTENSION_DIR. Unconfigured is `unavailable`, not `refused`."
     },
     "mtk": {
       "bindings_required": [],

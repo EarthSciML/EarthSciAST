@@ -6104,12 +6104,15 @@ Go and TypeScript are **out of scope**: neither has a Problem type, so neither
 has a compiler to name (`API_SPEC.md` §3, capability profiles).
 
 **Status.** `interpreter` and `native` are `bindings_required` for Julia, Rust
-and Python; `sympy` is required for Python. **Julia is `bindings_required` for
-`xla`**: `esm_problem(…; compiler = :xla)` reaches the direct StableHLO emitter
-and reproduces all six fixtures against the golden and against their anchors
-with no refusals. `xla` stays `bindings_optional` for Rust, and `mtk` for Julia,
-until each binding's `esm_problem` can build with it; each crosses on the same
-one-way ratchet. The one shape `xla` refuses by name in Julia — a document
+and Python; `sympy` is required for Python. **`xla` is `bindings_optional` for
+every binding**, including Julia: `esm_problem(…; compiler = :xla)` reaches the
+direct StableHLO emitter and reproduces all six fixtures against the golden and
+against their anchors with no refusals, but no `xla` producer stage is wired
+into `scripts/test-conformance.sh` (see below), and `bindings_required` would
+make an `unavailable` red in a gate that never runs the compiler. Julia crosses
+on the same one-way ratchet `native` used when that stage is wired. `mtk` stays
+`bindings_optional` for Julia until its `esm_problem` can build with it, and
+crosses the same way. The one shape `xla` refuses by name in Julia — a document
 binding LIVE FORCING BUFFERS, whose device re-sync is not wired to the refresh
 callback yet — is carried in the tier README's status rather than here, because
 no fixture in the tier binds one and it is therefore a coverage note, not a
@@ -6255,9 +6258,10 @@ compiler, named `compiler-agreement <compiler> producer (<binding>)`:
 `scripts/test-conformance.sh` yet: the Julia one needs the Reactant-bearing
 adapter environment (`pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env`),
 which pulls an XLA runtime into every conformance run, and that is a fleet-wide
-decision rather than this tier's. The ledger records that julia ANSWERS for
-`xla`; running it is `python3 scripts/run-compiler-agreement-conformance.py
---bindings julia --compiler xla`. Adapters are discovered the way §5.38's
+decision rather than this tier's. That is why the ledger keeps julia
+`bindings_optional` for `xla` although it answers: running it is `python3
+scripts/run-compiler-agreement-conformance.py --bindings julia --compiler xla`,
+and the ratchet turns when the stage does. Adapters are discovered the way §5.38's
 are, through `EARTHSCI_COMPILER_AGREEMENT_ADAPTER_<BINDING>`:
 
 | Binding | Adapter |
