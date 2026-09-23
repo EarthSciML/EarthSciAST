@@ -139,7 +139,7 @@ function _census_one(M, path::AbstractString)
                     else
                         M._build_evaluator(file; model_name = names[1])
                     end
-                    entry = "build_evaluator"
+                    entry = "_build_evaluator"
                     ok = true
                 end
             end

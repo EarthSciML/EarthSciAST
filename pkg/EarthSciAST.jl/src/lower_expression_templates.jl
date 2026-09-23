@@ -1937,11 +1937,11 @@ document rather than the reference-preserving one. The third half of the
 public expansion seam — [`expanded_model`](@ref) gives one `Model`,
 [`expand_flattened_refs`](@ref) a `FlattenedSystem`, this the whole document.
 
-`flatten` and `build_evaluator` take the reference-preserving file directly and
-expand at their own boundary, so this is for a consumer that wants the expanded
-DOCUMENT: an emitter, a diff against a fused golden, a reader with no template
-handling of its own. `file` is not modified, and a file with no surviving
-references comes back by identity.
+`flatten` and the build under `esm_problem` take the reference-preserving
+file directly and expand at their own boundary, so this is for a consumer that
+wants the expanded DOCUMENT: an emitter, a diff against a fused golden, a
+reader with no template handling of its own. `file` is not modified, and a
+file with no surviving references comes back by identity.
 """
 function expanded_file(file::EsmFile)::EsmFile
     file.component_templates === nothing && return file
@@ -2025,7 +2025,7 @@ equations and observed expressions against the merged `template_registry`,
 returning an Expanded copy, bit-identical to the Expand-at-load image. A no-op
 when the registry is empty (no references survived). `flatten` ALWAYS carries
 references, so a consumer with no template handling calls this at its entry —
-the MTK `System`/`PDESystem` constructors do; the tree-walk `build_evaluator`
+the MTK `System`/`PDESystem` constructors do; the tree-walk build
 does NOT (it expands at its own entry with site recording, the compile-once
 tier).
 

@@ -3163,7 +3163,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                       array_contractions)
     else
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_FORM",
-            "build_evaluator: `form` must be :inplace or :oop, got :$(form)"))
+            "the build's `form` must be :inplace or :oop, got :$(form)"))
     end
 
     # Diagnostics for the N-independence property: the number of array kernels

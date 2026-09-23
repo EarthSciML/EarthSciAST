@@ -1013,7 +1013,8 @@ end
 function _expand_int_range(r::AbstractVector)
     all(x -> x isa Integer, r) || throw(TreeWalkError("E_TREEWALK_DYNAMIC_RANGE",
         "expression-valued range bounds are not supported in the tree-walk " *
-        "evaluator; use a structured-grid discretization or ESD build_evaluator"))
+        "evaluator; use a structured-grid discretization, whose bounds are " *
+        "concrete integers by construction"))
     length(r) == 2 && return Int(r[1]):Int(r[2])
     length(r) == 3 && return Int(r[1]):Int(r[2]):Int(r[3])
     throw(TreeWalkError("E_TREEWALK_RANGE_ARITY",

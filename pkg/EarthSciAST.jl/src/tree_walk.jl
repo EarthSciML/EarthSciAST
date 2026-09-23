@@ -45,7 +45,7 @@ include("tree_walk/geometry_setup.jl")   # §2   build-time geometry materializa
 include("tree_walk/build_helpers.jl")    #      sentinels, boundary policy, folds
 include("tree_walk/unlowered_gate.jl")   #      §9.6.3 c.6 pre-build rewrite-target walk
 include("tree_walk/scan.jl")             #      prefix-scan detection + `_ScanFold`
-include("tree_walk/build.jl")            # §2b  build pipeline, `build_evaluator`
+include("tree_walk/build.jl")            # §2b  build pipeline, `_build_evaluator`
 include("tree_walk/compile.jl")          # §3-4 `_Node` IR, scalar CSE, scalar walker
 include("tree_walk/geometry_compile.jl") # §2c  geometry body compiler (needs `_Node`)
 include("tree_walk/access_kernel.jl")    # §4b  unified array-kernel IR (`_AccKernel`)

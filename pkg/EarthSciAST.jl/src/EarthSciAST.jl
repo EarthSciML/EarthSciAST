@@ -11,7 +11,7 @@ Deep ModelingToolkit/Catalyst integration is provided by package extensions
 (`EarthSciASTMTKExt`, `EarthSciASTCatalystExt`) that load
 automatically when the user imports `ModelingToolkit` or `Catalyst`. Without
 those packages loaded, `flatten` still produces a pure-Julia `FlattenedSystem`
-snapshot, and the MTK-free tree-walk runtime (`build_evaluator`, `esm_problem`)
+snapshot, and the MTK-free tree-walk runtime (`esm_problem`)
 runs it end to end.
 
 Two features live in namespaced submodules rather than the flat namespace:

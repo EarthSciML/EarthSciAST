@@ -316,7 +316,7 @@ function RefreshBuffers(d::AbstractDict)
         k_str = String(k)
         v isa Array{Float64} || throw(RefreshError(
             "RefreshBuffers['$k_str'] must be a dense Array{Float64} (the SAME object " *
-            "bound to build_evaluator's param_arrays, captured by reference for live " *
+            "bound to `esm_problem`'s `param_arrays`, captured by reference for live " *
             "refresh), got $(typeof(v))"))
         out[k_str] = v
     end
