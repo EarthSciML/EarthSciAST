@@ -2,11 +2,8 @@
 //! `Compiler::Interpreter`, through the public `esm_problem` entry, and record
 //! what each one answered.
 //!
-//! The phase-0 shape of this example forced the array runtime by hand, because
-//! `native` did not exist yet and the default router sent 0-D documents to the
-//! scalar interpreter. It exists now, so the census measures IT: the numbers
-//! below are what a caller gets, not what a reconstruction of the build path
-//! predicts.
+//! The numbers below are what a caller gets, not what a reconstruction of the
+//! build path predicts.
 //!
 //! Per document:
 //!

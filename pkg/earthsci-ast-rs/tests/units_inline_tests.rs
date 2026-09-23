@@ -13,8 +13,8 @@
 //! `pressure_drop` fix from gt-p3v — must cause this suite to fail.
 
 use earthsci_ast::{
-    EsmFile, Expr, Model, ModelTest, VariableType, check_assertion, fold_constant_expr,
-    load_string, resolve_tolerance,
+    EsmFile, Expr, Model, ModelTest, VariableType, check_assertion, evaluate, load_string,
+    resolve_tolerance,
 };
 use std::collections::HashMap;
 
@@ -45,12 +45,11 @@ const UNITS_FIXTURES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Evaluate an expression through the canonical scalar runner
-/// ([`fold_constant_expr`], which reuses `simulate.rs`'s `interpret` /
-/// `eval_op` primitives). Returns `None` when any variable reference is
-/// unbound; the caller uses that signal to defer observed resolution.
+/// Evaluate an expression through the binding's public [`evaluate`]. Returns
+/// `None` when any variable reference is unbound; the caller uses that signal
+/// to defer observed resolution.
 fn eval_expr(expr: &Expr, bindings: &HashMap<String, f64>) -> Option<f64> {
-    fold_constant_expr(expr, bindings).ok()
+    evaluate(expr, bindings).ok()
 }
 
 fn resolve_observed(model: &Model, bindings: &mut HashMap<String, f64>) {

@@ -32,36 +32,23 @@
 //! AUTHOR sees: a document, through the public API, either answering or failing
 //! with a diagnostic.
 //!
-//! # The scalar half (issue #220)
+//! # Scalar documents (issue #220)
 //!
-//! Everything above is about the ARRAY runtime. The SCALAR ODE interpreter
-//! (`Compiled::from_file` / `crate::simulate`) is the crate's other evaluator,
-//! and it had no such gate: its `eval_op` ended in `_ => f64::NAN`, so the same
-//! nine ops came back from it as a NUMBER. The author-visible difference was
-//! stark — the array runtime named the pipeline stage at fault, the scalar one
-//! reported `actual=NaN expected=25`.
-//!
-//! `resolve_expr` — the one funnel through which every expression that
-//! interpreter evaluates becomes a `ResolvedExpr` — now applies the scalar
-//! `is_evaluable_op` the same way stage (0) applies the array one, and the
-//! `NaN` backstop is an `unreachable!` matching the array evaluator's. The
-//! second half of this file asserts the resulting property: **no document both
-//! VALIDATES and silently returns NaN**, over the same op list.
-//!
-//! The scalar rule set is SMALLER than the array one, so the gate covers more
-//! than the nine: the array/tensor + geometry ops have no scalar rule either
-//! (nor does an ARRAY `const`, whose value has no `f64` form) and are refused
-//! by name rather than NaN'd. That wider gap is pinned by a unit test next to
-//! the oracle
-//! (`simulate::tests::the_scalar_evaluable_gap_is_pinned`); the nine are what
-//! this file carries, because they are the ops BOTH evaluators must refuse.
+//! A purely scalar document — no `shape`, no array op — is built by the same
+//! array runtime, so it reaches the same gate; issue #220 was that a separate
+//! scalar evaluator answered the same nine ops with a `NaN` NUMBER. The second
+//! half of this file keeps that property pinned from the author's side: **no
+//! document both VALIDATES and silently returns NaN**, over the same op list,
+//! for the scalar shape too. The public [`evaluate`] of a single expression is
+//! held to it as well (`the_shared_unevaluable_operator_fixture_is_refused_by_evaluate`).
 
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::HashMap;
 
 use earthsci_ast::{
-    Compiled, EsmFile, Expr, SolveOptions, evaluate, load_path, run_inline_tests, validate,
+    EsmFile, Expr, ProblemOptions, SolveOptions, esm_problem, evaluate, load_path,
+    run_inline_tests, solve, validate,
 };
 use serde_json::json;
 
@@ -252,29 +239,22 @@ fn an_ic_equation_lhs_still_builds() {
         }}
     }))
     .expect("typed document");
-    let compiled = Compiled::from_file(&file).expect("an `ic` LHS is not an unevaluable operator");
-    compiled
-        .solve(
-            (0.0, 1.0),
-            &HashMap::new(),
-            &HashMap::new(),
-            &SolveOptions::default(),
-        )
-        .expect("and it still solves");
+    let prob = esm_problem(&file, (0.0, 1.0), ProblemOptions::default())
+        .expect("an `ic` LHS is not an unevaluable operator");
+    solve(&prob, &SolveOptions::default()).expect("and it still solves");
 }
 
 // ============================================================================
-// The scalar interpreter (issue #220)
+// Scalar documents (issue #220)
 // ============================================================================
 
 /// A minimal PURELY SCALAR document — no `shape`, no array op, no bracketed
 /// variable name — whose observed `y` is defined by `body`, with an inline
 /// assertion on `y`.
 ///
-/// Every one of those absences is load-bearing: `simulate::is_array_file`
-/// routes on exactly those signals, and a document carrying any of them would
-/// be answered by the ARRAY runtime, whose gate the first half of this file
-/// already covers. This shape is what reaches the SCALAR interpreter.
+/// The absences are the point: the first half of this file covers the shaped
+/// documents, and this is the 0-D shape a separate scalar evaluator used to
+/// answer.
 fn scalar_probe(body: serde_json::Value) -> EsmFile {
     serde_json::from_value(json!({
         "esm": "1.0.0",
@@ -300,20 +280,13 @@ fn scalar_probe(body: serde_json::Value) -> EsmFile {
     .expect("typed document")
 }
 
-/// No document both VALIDATES and silently returns NaN — the scalar half of
-/// this file's invariant, over the same nine ops (issue #220).
-///
-/// Before the fix every one of these SIMULATED and answered `NaN`: the scalar
-/// `eval_op`'s backstop was `_ => f64::NAN`, and `resolve_expr` gated only the
-/// OPEN tier (`op_registry::check_node`), never the evaluable-core ops with no
-/// rule. The reported symptom was literally
-/// `actual=NaN expected=25 (rtol=0.000001, atol=0)` — a number, from a document
-/// the array runtime refused by name.
+/// No document both VALIDATES and silently returns NaN — this file's
+/// invariant for the scalar document shape, over the same nine ops (issue
+/// #220, whose reported symptom was `actual=NaN expected=25`).
 ///
 /// The two assertions that matter are the NaN one and the naming one. `passed`
 /// being false is not enough: a NaN never compares equal to 25, so a NaN'ing
-/// interpreter fails this assertion too — which is exactly why the bug survived
-/// until someone read the message.
+/// evaluator fails this assertion too.
 #[test]
 fn no_scalar_document_both_validates_and_returns_nan() {
     /// Does the probe carrying this op pass structural validation? Recorded per
@@ -412,12 +385,11 @@ fn no_scalar_document_both_validates_and_returns_nan() {
     }
 }
 
-/// The scalar gate reaches NESTED positions, not just a bare observed body: an
-/// unevaluable op buried in an otherwise ordinary arithmetic expression is
-/// refused too, because `resolve_expr` recurses through every operand before
-/// building the parent node.
+/// The gate reaches NESTED positions, not just a bare observed body: an
+/// unevaluable op buried in an otherwise ordinary arithmetic expression of a
+/// scalar document is refused too.
 #[test]
-fn a_nested_unevaluable_op_is_refused_on_the_scalar_path() {
+fn a_nested_unevaluable_op_is_refused_in_a_scalar_document() {
     let file = scalar_probe(json!({
         "op": "+",
         "args": [
@@ -440,8 +412,8 @@ fn a_nested_unevaluable_op_is_refused_on_the_scalar_path() {
     );
 }
 
-/// The counterweight, so the scalar gate cannot be widened into refusing work
-/// it can do: an ordinary scalar document still SIMULATES and answers. `D` on
+/// The counterweight, so the gate cannot be widened into refusing work it can
+/// do: an ordinary scalar document still SIMULATES and answers. `D` on
 /// an equation LHS, `fn` through the closed-function registry, and a `Pre`
 /// operand are all evaluable-core ops the gate must let through.
 #[test]

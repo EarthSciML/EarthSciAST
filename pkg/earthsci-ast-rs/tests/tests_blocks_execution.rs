@@ -5,8 +5,8 @@
 //! For every model that carries an inline `tests` block the runner:
 //!   1. Builds a single-model subset [`EsmFile`] so unrelated dynamics from
 //!      other components in the same fixture don't couple into the solve.
-//!   2. Compiles it via [`Compiled::from_file`].
-//!   3. Runs [`Compiled::simulate`] with saveat = each assertion's
+//!   2. Builds it via [`esm_problem`] with the test's overrides.
+//!   3. Runs [`solve`] with saveat = each assertion's
 //!      `time`, so state values are interpolated directly at the assertion
 //!      points (no separate np.interp pass).
 //!   4. Verifies each assertion against the resolved tolerance
@@ -23,7 +23,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::{
-    Alg, Compiled, SolveOptions, Tolerance, check_assertion, load_path, resolve_tolerance,
+    Alg, ProblemOptions, SolveOptions, Tolerance, check_assertion, esm_problem, load_path,
+    resolve_tolerance, solve,
 };
 use earthsci_ast::{EsmFile, Metadata};
 use std::collections::HashMap;
@@ -127,18 +128,20 @@ fn execute_component(
     model_tol: Option<&Tolerance>,
     solver: Alg,
 ) {
-    let compiled =
-        Compiled::from_file(subset).unwrap_or_else(|e| panic!("{label}: compile failed: {e}"));
+    let base = esm_problem(subset, (0.0, 1.0), ProblemOptions::default())
+        .unwrap_or_else(|e| panic!("{label}: compile failed: {e}"));
+    let parameter_names = base.parameter_names();
+    let state_variable_names = base.state_variable_names();
 
     for t in tests {
         // Scalar bindings: these fixtures carry no inline array data (esm-spec
-        // §6.6.2), and the scalar backend's `solve` binds one f64 per name.
+        // §6.6.2), so one f64 per name.
         let mut params = HashMap::new();
         for (k, v) in t.scalar_parameter_overrides() {
-            // Rust's simulate validates against namespaced parameter
-            // names, so translate bare names to `component.name`.
+            // Translate a bare name to `component.name` when that is the
+            // parameter it designates.
             let namespaced = format!("{component}.{k}");
-            if compiled.parameter_names().iter().any(|n| n == &namespaced) {
+            if parameter_names.iter().any(|n| n == &namespaced) {
                 params.insert(namespaced, v);
             } else {
                 params.insert(k, v);
@@ -147,11 +150,7 @@ fn execute_component(
         let mut ics = HashMap::new();
         for (k, v) in t.scalar_initial_conditions() {
             let namespaced = format!("{component}.{k}");
-            if compiled
-                .state_variable_names()
-                .iter()
-                .any(|n| n == &namespaced)
-            {
+            if state_variable_names.iter().any(|n| n == &namespaced) {
                 ics.insert(namespaced, v);
             } else {
                 ics.insert(k, v);
@@ -174,9 +173,17 @@ fn execute_component(
         };
 
         let tspan = (t.time_span.start, t.time_span.end);
-        let sol = compiled
-            .solve(tspan, &params, &ics, &opts)
-            .unwrap_or_else(|e| panic!("{label}/{}: simulate failed: {e:?}", t.id));
+        let sol = esm_problem(
+            subset,
+            tspan,
+            ProblemOptions {
+                p: params,
+                u0: ics,
+                ..Default::default()
+            },
+        )
+        .and_then(|prob| solve(&prob, &opts))
+        .unwrap_or_else(|e| panic!("{label}/{}: simulate failed: {e:?}", t.id));
 
         for a in &t.assertions {
             let idx = find_state_index(&sol.state_variable_names, component, &a.variable)
