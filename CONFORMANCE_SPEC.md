@@ -2568,7 +2568,7 @@ As in §5.10 / §5.12, trajectories MUST NOT be asserted byte-identical; the
 integrator is pinned per binding in `manifest.json` (`integrators`). The forcing
 snapshots come from the golden's `forcing.by_anchor` — **no providers, no network,
 no file I/O** — driven by each binding's forcing primitive (Julia
-`build_evaluator(…; param_arrays)` + a `build_refresh_callback` whose
+`esm_problem(…; param_arrays)` + a `build_refresh_callback` whose
 `post_refresh = dm.materialize!` fires per anchor; Python
 `_simulate_with_numpy(…, loader_arrays=…)`; Rust
 `ArrayCompiled::forcing_handle()`), so the suite is deterministic and CI-safe. The
@@ -6137,8 +6137,18 @@ tape as an XLA computation and solves on the compiled right-hand side, and all
 six fixtures agree with the golden with no refusals. That entry carries a BUILD
 condition — `xla` needs the crate's non-default `xla` feature and a separately
 fetched `xla_extension` — so "required" means a build that has both must answer,
-and a stage that runs this compiler owes them. Julia's `xla` remains
-`bindings_optional`.
+and a stage that runs this compiler owes them. **Julia answers for `xla` and
+stays `bindings_optional` for it**: `esm_problem(…; compiler = :xla)` reaches the
+direct StableHLO emitter and reproduces all six fixtures against the golden and
+against their anchors with no refusals, but no stage runs the Julia `xla`
+producer with its Reactant-bearing environment instantiated (see below), and
+`bindings_required` would make an `unavailable` red for a reason that says
+nothing about the compiler. Julia crosses on the same one-way ratchet once such a
+stage exists. The one shape `xla` refuses by name in Julia — a document binding
+LIVE FORCING BUFFERS, whose device re-sync is not wired to the refresh callback
+yet — is carried in the tier README's status rather than here, because no
+fixture in the tier binds one and it is therefore a coverage note, not a
+measured exclusion.
 
 #### 5.44.1 What is compared
 
@@ -6297,7 +6307,7 @@ first. Today:
 |---|---|
 | `interpreter`, `native` | the default run of `scripts/test-conformance.sh` (`.github/workflows/conformance-testing.yml`) |
 | `mtk` | `.github/workflows/mtk-compiler.yml`, same triggers as the conformance workflow, with its own Julia depot cache keyed on `pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env/Project.toml` |
-| `xla` | the `rust-xla` job of `.github/workflows/xla-backends.yml`, after it fetches the `xla_extension` release and exports `XLA_EXTENSION_DIR` |
+| `xla` | the `rust-xla` job of `.github/workflows/xla-backends.yml`, after it fetches the `xla_extension` release and exports `XLA_EXTENSION_DIR`. Julia is `bindings_optional` there; its producer needs `pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env`, and runs meanwhile as `python3 scripts/run-compiler-agreement-conformance.py --bindings julia --compiler xla` |
 | `sympy` | not yet wired |
 
 A compiler that needs a package the other stages do not gets its own adapter
@@ -6306,8 +6316,10 @@ project is resolved and precompiled by every stage that activates that project,
 however few of them name the compiler. `mtk`'s ModelingToolkit and
 OrdinaryDiffEqNonlinearSolve therefore live in
 `scripts/compiler_agreement_mtk_env`, which the Julia adapter activates for
-`--compiler mtk` alone, while every other Julia stage of this tier and of §5.45
-activates the slim `scripts/compiler_agreement_env`.
+`--compiler mtk` alone, and `xla`'s Reactant in
+`scripts/compiler_agreement_reactant_env`, for `--compiler xla` alone, while
+every other Julia stage of this tier and of §5.45 activates the slim
+`scripts/compiler_agreement_env`.
 
 Adapters are discovered the way §5.38's are, through
 `EARTHSCI_COMPILER_AGREEMENT_ADAPTER_<BINDING>`:
@@ -6319,8 +6331,7 @@ Adapters are discovered the way §5.38's are, through
 | Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/compiler_agreement_adapter.py` |
 
 **Every problem-building stage NAMES its compiler.** A stage that calls
-`esm_problem` or `build_evaluator` with no compiler runs whatever the library
-default happens to be, so a change to that default silently changes what the
+`esm_problem` with no compiler runs whatever the library default happens to be, so a change to that default silently changes what the
 stage measures — while its goldens still say what it measured before. Every such
 stage's adapter therefore takes the compiler as an argument and every stage
 passes one explicitly. Which value is the stage's own to state:

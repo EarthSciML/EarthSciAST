@@ -25,7 +25,7 @@ function _uo_build(rhs::_UO.ASTExpr)
         "p" => ModelVariable(ParameterVariable; default=2.0),
     )
     eq = _UO.Equation(OpExpr("D", _UO.ASTExpr[VarExpr("u")]; wrt="t"), rhs)
-    return build_evaluator(_UO.Model(vars, _UO.Equation[eq]))
+    return EarthSciAST._build_evaluator(_UO.Model(vars, _UO.Equation[eq]))
 end
 
 _uo_refusal(f) = try

@@ -8,7 +8,7 @@
 # ========================================================================
 
 # ============================================================
-# 4d. The out-of-place build: `build_evaluator(model; form = :oop)`
+# 4d. The out-of-place build: `_build_evaluator(model; form = :oop)`
 # ============================================================
 #
 # WHAT THIS FILE PRODUCES, and what it does not.
@@ -45,7 +45,7 @@
 #     the vectorized form at all and, when it does not, says why;
 #   * the build product itself (`_OopRHS`, `_CompiledIR`, `_make_rhs_oop`).
 #
-# `build_evaluator(model; form = :oop)` returns the `_OopRHS` in the `f!` slot of
+# `_build_evaluator(model; form = :oop)` returns the `_OopRHS` in the `f!` slot of
 # the usual `(f, u0, p, tspan, var_map)` tuple.
 
 # ---- Lane-batched scalar entries (ess-oop-batch) -----------------------------
@@ -695,7 +695,7 @@ end
 
 # ---- The build's out-of-place product ---------------------------------------
 #
-# `build_evaluator(model; form = :oop)` returns one of these in the `f!` slot: a
+# `_build_evaluator(model; form = :oop)` returns one of these in the `f!` slot: a
 # handle on the compiled intermediate representation (`rhs`) together with the
 # live forcing buffers this build bound. A compiled backend lowers `rhs` into a
 # program of its own; `direct_rhs` (ext/reactant_direct/) is the one in tree.
@@ -705,6 +705,28 @@ end
 # by method applicability gets the right answer. There is deliberately NO 4-arg
 # method: SciMLBase infers in-place-ness from one, so adding it would make
 # `ODEProblem(f, …)` misread this product as an `f!`.
+"""
+    _forcing_buffer_container(pgather) -> (NamedTuple, Dict{String,Int})
+
+Every live forcing buffer a build registered — raw `param_arrays` entries AND
+[`DiscreteMaterializer`](@ref) caches, both of which live in `pgather` by the
+time this runs — as a NamedTuple of the ALIASED flat host views in a stable
+(name-sorted) order, plus the name → position map.
+
+Factored out of `_make_rhs_oop` because BOTH build forms now publish it: the
+out-of-place product carries it as a field (a compiled backend passes an aligned
+container of device arrays to the explicit-buffers form), and every build
+publishes it on the `inspect` sink, which is how it reaches
+[`forcing_buffers`](@ref)`(prob)` on an `EsmProblem` whatever compiler built it.
+"""
+function _forcing_buffer_container(pgather)
+    buf_names = sort!(String[String(k) for k in keys(pgather)])
+    host_bufs = NamedTuple{Tuple(Symbol(n) for n in buf_names)}(
+        Tuple((pgather[n]::_PGatherArray).flat for n in buf_names))
+    buffer_index = Dict{String,Int}(n => i for (i, n) in enumerate(buf_names))
+    return host_bufs, buffer_index
+end
+
 struct _OopRHS{F,B} <: Function
     rhs::F                          # the compiled IR (`_CompiledIR`)
     buffers::B                      # NamedTuple: name => aliased HOST buffer, stable order
@@ -716,17 +738,17 @@ end
 # reference the compiled backends are gated against; `compiler=:interpreter`
 # gives its untiered variant, which recomputes every prelude slot on every call.
 (f::_OopRHS)(u, p, t) = throw(TreeWalkError("E_TREEWALK_OOP_NOT_EVALUABLE",
-    "an out-of-place build (`build_evaluator(model; form = :oop)`) is the " *
-    "compiled intermediate representation a backend lowers, not a host " *
-    "evaluator. Compile it — `EarthSciASTReactantExt.direct_rhs(f)`, then " *
-    "`Reactant.@compile` — or build `form = :inplace` and call " *
-    "`f!(du, u, p, t)` on the host."))
+    "an out-of-place build product is the compiled intermediate " *
+    "representation a backend lowers, not a host evaluator. For a compiled " *
+    "right-hand side build `esm_problem(input, tspan; compiler = :xla)`; for " *
+    "the host evaluator build `esm_problem(input, tspan)` and call " *
+    "`prob.f!(du, u, prob.p, t)`."))
 
 """
     forcing_buffers(f) -> NamedTuple
 
-The live forcing buffers of an out-of-place RHS from
-`build_evaluator(model; form = :oop)`, as a NamedTuple in a STABLE order (buffer
+The live forcing buffers of an out-of-place build product (the compiled
+intermediate representation a backend lowers), as a NamedTuple in a STABLE order (buffer
 names sorted): every `param_arrays` entry and every [`DiscreteMaterializer`](@ref)
 cache, each value the aliased flat host view of the exact array the build bound
 — NOT a copy, so a discrete-cadence refresh writing the original array is
@@ -797,10 +819,7 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # sorted), as a NamedTuple of the aliased flat host views. A backend passes
     # an aligned container of device arrays to the explicit-buffers form, so a
     # discrete-cadence refresh reaches the compiled program (`sync_forcing!`).
-    buf_names = sort!(String[String(k) for k in keys(pgather)])
-    host_bufs = NamedTuple{Tuple(Symbol(n) for n in buf_names)}(
-        Tuple((pgather[n]::_PGatherArray).flat for n in buf_names))
-    buffer_index = Dict{String,Int}(n => i for (i, n) in enumerate(buf_names))
+    host_bufs, buffer_index = _forcing_buffer_container(pgather)
     return _OopRHS(_CompiledIR(rhs_list, cse_prelude, acc_kernels, acc_plans,
                                scan_folds, mat_levels, array_contractions,
                                rhs_batches, mat_batches, n_states, n_total),

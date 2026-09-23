@@ -5,10 +5,20 @@ CurrentModule = EarthSciAST
 # Compiled backend: choosing a device, and sharding across several
 
 The compiled backend (`EarthSciASTReactantExt`, `direct_rhs`) lowers a model's
-compiled tree-walk IR straight into StableHLO. `build_evaluator(doc; form =
-:oop)` is how you get that IR: it returns the build product a backend consumes,
-not a host evaluator — host evaluation is the default in-place `f!`. Nothing in
-the emitted program names a device: the same module compiles on a host CPU or on
+compiled tree-walk IR straight into StableHLO.
+
+**Most callers do not need this page.** `esm_problem(doc, tspan; compiler =
+:xla)` does all of it — build the intermediate representation, emit, compile
+once, and hand back a Problem whose `f!` is the compiled program — and it picks
+the client off `EARTHSCI_JULIA_XLA_DEVICE` (`cpu` / `gpu`). This page is for the
+caller who needs the emitted callable ITSELF: to shard the state across several
+devices, or to compose it into a larger traced program of their own.
+`EarthSciAST._build_evaluator(doc; form = :oop)` is how you get the
+intermediate representation for that — the private builder behind `esm_problem`
+(`build_evaluator` has been retired; see `API_SPEC.md` §8 item 23) — and it
+returns the build product a backend consumes, not a host evaluator: host
+evaluation is the default in-place `f!`. Nothing in the emitted program names a
+device: the same module compiles on a host CPU or on
 an attached GPU, and **which one is fixed by the client of the arrays you feed
 it**. This page is about that choice and about cutting the state across several
 devices of one client.
@@ -29,7 +39,7 @@ the helpers so that they land on the client you asked for, rather than on
 whatever Reactant's default happens to be:
 
 ```julia
-fo, u0, p, _, vmap = build_evaluator(doc; form = :oop)
+fo, u0, p, _, vmap = EarthSciAST._build_evaluator(doc; form = :oop)
 
 d  = ext.direct_rhs(fo; var_map = vmap, client = :gpu)
 ur = ext.direct_state(d, u0)      # ConcreteRArray on that client

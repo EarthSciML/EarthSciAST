@@ -357,17 +357,19 @@ translate, the Problem's name → state-slot map and its build-time observed
 reader remain the portable surface, and the binding MUST say so in the
 compiler's documentation rather than leaving a caller to discover it.
 
-`build_evaluator` (Julia) remains a **tier-2 extension seam**, and is
-**scheduled for retirement**. Two properties argue for keeping it — it is the
-entry point for a caller that wants the compiled right-hand side without a
-Problem around it, and it has substantial downstream use — and `compiler`
-answers both: `esm_problem(…; compiler=:xla)` IS the compiled right-hand side,
-and the downstream use migrates to that call. The Rust binding has that call
-as of 2026-09-22 — `compiler = Xla` builds the emitted program and solves on
-it — so the shape the retirement assumes exists to be copied. It then becomes private behind
-`esm_problem`, with a deprecated alias for one minor; the forcing-buffer seam
-re-hangs on the Problem and the build-inspection record folds into
-`compiler_report`. `API_SPEC.md` §8 item 23 is the reconciliation row.
+`build_evaluator` (Julia) has been **retired from the surface**. Two properties
+argued for keeping it — it was the entry point for a caller that wants the
+compiled right-hand side without a Problem around it, and it has substantial
+downstream use — and `compiler` answers both: `esm_problem(…; compiler = :xla)`
+IS the compiled right-hand side, and the downstream use migrates to that call.
+It is now private behind `esm_problem`, with a deprecated alias — still
+exported, so a bare call keeps working — for one minor that warns and forwards. The forcing-buffer seam re-hangs on the Problem —
+`forcing_buffers(prob)` and `forcing_buffer_index(prob)` answer for EVERY
+compiler rather than only for the out-of-place build the seam used to require —
+and the build-inspection record's compiler half is `compiler_report`, which a
+Problem and a build-inspection record both answer. `API_SPEC.md` §8 item 23 is
+the reconciliation row, and carries the migration note for the one downstream
+package that has not moved yet.
 
 #### 2.5.3 `solve`, and the return code
 

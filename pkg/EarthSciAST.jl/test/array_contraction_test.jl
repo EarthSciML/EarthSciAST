@@ -95,7 +95,7 @@ function _ac_build(doc, ics; compiler=:native, env=Dict{String,String}(),
                    const_arrays=Dict{String,Vector{Float64}}())
     withenv((k => v for (k, v) in _ac_env(env))...) do
         _AC_ESS._reset_cascade_tally!()
-        r = build_evaluator(doc; initial_conditions=ics, compiler=compiler,
+        r = EarthSciAST._build_evaluator(doc; initial_conditions=ics, compiler=compiler,
                             const_arrays=const_arrays)
         (r, copy(_AC_ESS._CASCADE_TALLY))
     end
@@ -126,7 +126,7 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         doc, ics = _ac_doc(16, 16), _ac_ics(16, 16)
         insp = _AC_ESS.BuildInspection()
         withenv((k => v for (k, v) in _ac_env(Dict{String,String}()))...) do
-            build_evaluator(doc; initial_conditions=ics, compiler=:native,
+            EarthSciAST._build_evaluator(doc; initial_conditions=ics, compiler=:native,
                             inspect=insp)
         end
         rep = insp.compiler_report
@@ -266,7 +266,7 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
                 _AC_ESS._bench_reset!()
                 _AC_ESS._BENCH_ON[] = true
                 try
-                    build_evaluator(_ac_doc(NS, NR);
+                    EarthSciAST._build_evaluator(_ac_doc(NS, NR);
                                     initial_conditions=_ac_ics(NS, NR))
                 finally
                     _AC_ESS._BENCH_ON[] = false

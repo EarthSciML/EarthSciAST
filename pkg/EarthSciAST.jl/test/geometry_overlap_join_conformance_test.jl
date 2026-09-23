@@ -89,7 +89,7 @@ function _oj_eval(A_ij, dst_areas; atol::Float64=1e-15)
     ics = Dict("narrow_phase_area" => 0.0,
                ("A_j[$j]" => 0.0 for j in 1:n)...,
                ("F_tgt[$j]" => 0.0 for j in 1:n)...)
-    f!, u0, p, _, vmap = build_evaluator(
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
         raw; model_name="ConservativeRegridOverlapJoin",
         initial_conditions=ics, const_arrays=_oj_const_arrays(A_ij, dst_areas),
         parameter_overrides=Dict("dx" => _DX, "dy" => _DY, "atol" => atol))

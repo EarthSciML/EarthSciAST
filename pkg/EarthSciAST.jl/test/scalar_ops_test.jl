@@ -130,7 +130,7 @@ end
                                                   "args" => Any["a"]),
                                     "rhs" => Dict("op" => "*",
                                                   "args" => Any[-1.0, "a"]))])))
-    fo, u0, p, _, _ = ESM.build_evaluator(doc; form = :oop)
+    fo, u0, p, _, _ = ESM._build_evaluator(doc; form = :oop)
     @test applicable(fo, zeros(1), p, 0.0)              # reads as out-of-place …
     @test !applicable(fo, zeros(1), zeros(1), p, 0.0)   # … and never as in-place
     err = try
@@ -141,8 +141,10 @@ end
     @test err isa ESM.TreeWalkError
     @test err.code == "E_TREEWALK_OOP_NOT_EVALUABLE"
     msg = sprint(showerror, err)
-    @test occursin("direct_rhs", msg)
-    @test occursin("form = :inplace", msg)
+    # It names the two PUBLIC ways out, never the private build.
+    @test occursin("compiler = :xla", msg)
+    @test occursin("prob.f!", msg)
+    @test !occursin("_build_evaluator", msg)
 end
 
 end

@@ -78,7 +78,7 @@ end
 
 _csel_contraction_build(doc, ics; compiler) =
     withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-        build_evaluator(doc; initial_conditions = ics, compiler = compiler)
+        EarthSciAST._build_evaluator(doc; initial_conditions = ics, compiler = compiler)
     end
 
 # `du` at the seeded state, so two builds can be compared element for element.
@@ -110,9 +110,19 @@ end
             @test occursin(":interpreter", e.msg) && occursin(":native", e.msg)
         end
 
-        # In the vocabulary, not provided by this binding / this phase. Each one
-        # names what would have to be loaded or which binding has it — and none
-        # of them silently builds with another compiler.
+        # In the vocabulary, not provided by this binding / this SESSION. Each
+        # one names what would have to be loaded or which binding has it — and
+        # none of them silently builds with another compiler.
+        #
+        # `:xla` is in this list because of what is NOT loaded here, not because
+        # of what is not implemented: it is the specialty compiler that needs a
+        # heavy external dependency, so the answer is `compiler_unavailable`
+        # naming Reactant in a session without it, and a BUILD in a session with
+        # it (test/compiler_xla_test.jl gates that arm, under
+        # `ESM_TEST_REACTANT=1`). The two arms must never trade places — an
+        # unavailable compiler that quietly became `compiler_unknown` would tell
+        # a caller the vocabulary had shrunk.
+        @test Base.get_extension(EarthSciAST, :EarthSciASTReactantExt) === nothing
         for (v, needle) in ((:xla, "Reactant"), (:sympy, "Python"))
             e = try
                 esm_problem(doc, (0.0, 1.0); compiler = v)
@@ -169,7 +179,7 @@ end
         runs = map(((), (; compiler = :native))) do kw
             insp = BuildInspection()
             f!, u0, p, _t, vm = withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-                build_evaluator(doc; initial_conditions = ics, inspect = insp,
+                EarthSciAST._build_evaluator(doc; initial_conditions = ics, inspect = insp,
                                 kw...)
             end
             du = zeros(Float64, length(u0))
@@ -195,7 +205,7 @@ end
                  for r in 1:16]
         insp = BuildInspection()
         f!, u0, p, _t, vm = withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-            build_evaluator(doc; initial_conditions = ics, compiler = :native,
+            EarthSciAST._build_evaluator(doc; initial_conditions = ics, compiler = :native,
                             inspect = insp)
         end
         du = zeros(Float64, length(u0))
@@ -317,12 +327,113 @@ end
         push!(eqs, eqs[2])
         insp2 = BuildInspection()
         @test_throws TreeWalkError withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-            build_evaluator(doc; initial_conditions = ics, inspect = insp2,
+            EarthSciAST._build_evaluator(doc; initial_conditions = ics, inspect = insp2,
                             compiler = :native)
         end
         @test insp2.compiler_report.compiler === :native
         @test any(r -> r.tier === :array_contraction_codegen,
                   insp2.compiler_report.rules)
+    end
+
+    @testset "compiler = :xla builds only the out-of-place product" begin
+        # The in-place evaluator is `native`'s. Handing it back under a report
+        # that says `:xla` would be a fallback in everything but name, so the
+        # request is refused before anything is loaded or built — and before
+        # the availability check, so this session without Reactant hears it.
+        doc, _ = _csel_contraction_doc()
+        for call in (() -> CSEL._build_evaluator(doc; compiler = :xla),
+                     () -> CSEL._build_evaluator(load_path(_CSEL_AGREE[1]);
+                                                 compiler = :xla),
+                     () -> CSEL.build_evaluator(doc; compiler = :xla,
+                                                form = :inplace))
+            e = try
+                call(); nothing
+            catch err
+                err
+            end
+            @test e isa ArgumentError
+            @test occursin("form = :oop", e.msg)
+            @test occursin("esm_problem", e.msg)
+        end
+    end
+
+    @testset "an emitter refusal is found however @compile wrapped it" begin
+        de = CSEL.DirectEmitError("`/` with 3 arguments", "state equation y", "detail")
+        task = Task(() -> throw(de))
+        schedule(task)
+        wrapped = try
+            wait(task); nothing
+        catch err
+            err
+        end
+        @test wrapped isa TaskFailedException
+        @test CSEL._find_direct_emit_error(de) === de
+        @test CSEL._find_direct_emit_error(wrapped) === de
+        @test CSEL._find_direct_emit_error(CompositeException([ErrorException("x"), wrapped])) === de
+        @test CSEL._find_direct_emit_error(ErrorException("not the emitter's")) === nothing
+    end
+
+    @testset "the :xla finite-difference Jacobian" begin
+        # f(u, t) = [u₁² + t·u₂, sin(u₂)·u₁, 3u₃ − t²]; J and ∂f/∂t in closed form.
+        calls = Ref(0)
+        f! = (du, u, p, t) -> (calls[] += 1;
+                               du[1] = u[1]^2 + t * u[2];
+                               du[2] = sin(u[2]) * u[1];
+                               du[3] = 3u[3] - t^2; nothing)
+        u = [0.7, -1.3, 250.0]; t = 0.4
+        J = zeros(3, 3)
+        CSEL._XlaFdJacobian(f!, 3)(J, u, nothing, t)
+        Jx = [2u[1] t 0.0; sin(u[2]) u[1]*cos(u[2]) 0.0; 0.0 0.0 3.0]
+        @test isapprox(J, Jx; rtol = 1e-6, atol = 1e-6)
+        @test calls[] == 4                  # n + 1: f(u) once, one per column
+        @test u == [0.7, -1.3, 250.0]       # the caller's state is not touched
+        # A forward difference cancels to within eps(|f|)/h, so the time
+        # derivative is checked at a state whose f is O(1): the 250 above makes
+        # f₃ ≈ 750, whose cancellation error alone is several 1e-6.
+        v = [0.7, -1.3, 0.25]
+        dT = zeros(3)
+        CSEL._XlaFdTgrad(f!, 3)(dT, v, nothing, t)
+        @test isapprox(dT, [v[2], 0.0, -2t]; rtol = 1e-6, atol = 1e-6)
+        # Only an `:xla` Problem carries them; every other compiler's `f!` is a
+        # Julia function the solver differentiates itself.
+        @test CSEL._ode_derivatives(esm_problem(_CSEL_AGREE[1], (0.0, 1.0))) ==
+              NamedTuple()
+    end
+
+    @testset "build_evaluator is deprecated, and exported until it is removed" begin
+        # API_SPEC §8 item 23: the extension seam under the runners is retired
+        # — `esm_problem` is the way in — and the name that remains is a
+        # deprecated alias kept for one minor version so a downstream package
+        # keeps running while it migrates. It stays EXPORTED for that minor: a
+        # downstream that calls the bare name after `using EarthSciAST`
+        # (EarthSciASTDiff does) must hear the warning, not `UndefVarError`.
+        @test :build_evaluator in names(EarthSciAST)
+        @test :esm_problem in names(EarthSciAST)
+        # The BARE name, as that downstream spells it: an unexported alias
+        # would make this line an `UndefVarError`.
+        @test_logs (:warn,) match_mode = :any build_evaluator(load_path(_CSEL_AGREE[1]))
+        # The alias still builds, and builds the same thing the private entry
+        # point does: a deprecation that changed the answer would be a second
+        # break hiding inside the first.
+        file = load_path(_CSEL_AGREE[1])
+        dep = @test_logs (:warn,) match_mode = :any CSEL.build_evaluator(file)
+        priv = CSEL._build_evaluator(load_path(_CSEL_AGREE[1]))
+        @test isequal(dep[2], priv[2])          # u0
+        @test dep[5] == priv[5]                 # var_map
+        du_dep = zeros(length(dep[2])); dep[1](du_dep, dep[2], dep[3], 0.0)
+        du_priv = zeros(length(priv[2])); priv[1](du_priv, priv[2], priv[3], 0.0)
+        @test isequal(du_dep, du_priv)
+
+        # What the seam used to publish now hangs on the Problem, for every
+        # compiler rather than only for the out-of-place build form.
+        prob = esm_problem(_CSEL_AGREE[1], (0.0, 1.0))
+        @test forcing_buffers(prob) isa NamedTuple
+        @test forcing_buffer_index(prob) isa Dict{String,Int}
+        @test length(forcing_buffers(prob)) == length(forcing_buffer_index(prob))
+        insp = BuildInspection()
+        esm_problem(_CSEL_AGREE[1], (0.0, 1.0); inspect = insp)
+        @test compiler_report(insp) === insp.compiler_report
+        @test compiler_report(insp).compiler === :native
     end
 
     @testset "run_inline_tests takes a compiler" begin

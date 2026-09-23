@@ -26,7 +26,7 @@
 # side: the clamp-bound collapse (`_lane_bound`) must land as SCALAR
 # constants (lane-wide splat columns with the collapse off,
 # oracle), and the module must hold ONE table payload per distinct CONTENT —
-# under both env settings, and through `build_evaluator(form=:oop)` itself.
+# under both env settings, and through `EarthSciAST._build_evaluator(form=:oop)` itself.
 
 using Test
 using EarthSciAST
@@ -262,7 +262,7 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
     end
 
     # The same claims through the FRONT DOOR: a model built by
-    # `build_evaluator(doc; form=:oop)` and emitted by the compiled backend — so
+    # `EarthSciAST._build_evaluator(doc; form=:oop)` and emitted by the compiled backend — so
     # the build-time intern pool, the kernel-class merge and the knot-addressing
     # seams are all in the pipeline, not just a hand-built lane spec.
     # Four members over one axis: u/v/w carry two distinct table CONTENTS in
@@ -307,8 +307,8 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
                         "args" => Any[2.0, bil("z", ta_f)]))])))
 
         RXE = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
-        fo, _, p, _, _ = ESM.build_evaluator(doc; form = :oop)
-        fi, _, _, _, _ = ESM.build_evaluator(doc)
+        fo, _, p, _, _ = ESM._build_evaluator(doc; form = :oop)
+        fi, _, _, _, _ = ESM._build_evaluator(doc)
         Lm = 3N                                # the merged u/v/w class's lanes
         u = Float64[4.2 + 0.23(k % 17) for k in 1:(4N)]
         ur, tr = RX.ConcreteRArray(u), RX.ConcreteRNumber(0.0)
@@ -329,7 +329,7 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
         # collapse off: `_lane_bound` reads the compiler in force where it is
         # called, which is at trace time, so the class merge that produced
         # these lanes stays exactly as it was.
-        g, _, _, _, _ = ESM.build_evaluator(doc; form = :oop)
+        g, _, _, _, _ = ESM._build_evaluator(doc; form = :oop)
         d_off = RXE.direct_rhs(g)
         s_off = ESM._with_compiler_plan(ESM._compiler_plan(:interpreter)) do
             repr(RX.@code_hlo optimize = false d_off(ur, pr, tr))

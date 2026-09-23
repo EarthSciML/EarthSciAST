@@ -118,7 +118,7 @@ const ONE_EQ_VARIANTS = Ref(0)
     @testset "compile-once fixture (7³, one equation)" begin
         # Single equation: no cross-equation sharing possible — the hoist must
         # be a pure no-op (same variant count, same bits).
-        build(compiler) = ESM.build_evaluator(ESM.flatten(ESM.load_path(FIX));
+        build(compiler) = ESM._build_evaluator(ESM.flatten(ESM.load_path(FIX));
                                               compiler=compiler)
         on, _off = _xeq_oracle(build)
         @test length(on[2]) == 343
@@ -128,7 +128,7 @@ const ONE_EQ_VARIANTS = Ref(0)
 
     @testset "two equations sharing template roots" begin
         FIX2 = _xeq_two_eq_fixture(FIX)
-        build(compiler) = ESM.build_evaluator(ESM.flatten(ESM.load_path(FIX2));
+        build(compiler) = ESM._build_evaluator(ESM.flatten(ESM.load_path(FIX2));
                                               compiler=compiler)
         on, off = _xeq_oracle(build)
         @test length(on[2]) == 2 * 343
@@ -152,7 +152,7 @@ const ONE_EQ_VARIANTS = Ref(0)
             ics["u[$k]"] = sin(0.3k) + 0.1k
             ics["v[$k]"] = cos(0.2k) + 0.05k
         end
-        build(compiler) = ESM.build_evaluator(model; initial_conditions=ics,
+        build(compiler) = ESM._build_evaluator(model; initial_conditions=ics,
                                               compiler=compiler)
         # `:native` is what the shared obs memo runs on, and its du must be
         # non-trivial or the memo was never reached. There is no interpreter
@@ -171,7 +171,7 @@ const ONE_EQ_VARIANTS = Ref(0)
         P27 = joinpath(TESTUTILS_REPO_ROOT, "scripts", "bench", "fixtures",
                        "proxy27.esm")
         if isfile(P27)
-            build(compiler) = ESM.build_evaluator(ESM.load_path(P27);
+            build(compiler) = ESM._build_evaluator(ESM.load_path(P27);
                                                   compiler=compiler)
             _xeq_oracle(build)
         else

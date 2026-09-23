@@ -8,7 +8,7 @@
 #
 # Public API:
 #
-#     build_evaluator(model::Model; kwargs...)
+#     _build_evaluator(model::Model; kwargs...)
 #         → (f!, u0::Vector{Float64}, p::NamedTuple, tspan::Tuple{Float64,Float64},
 #            var_map::Dict{String,Int})
 #
@@ -20,7 +20,7 @@
 # eltype-generic, so ForwardDiff runs through it over the state or the parameters
 # (a stiff solve gets an exact AD Jacobian for free).
 #
-# `build_evaluator(model; form = :oop)` returns the COMPILED INTERMEDIATE
+# `_build_evaluator(model; form = :oop)` returns the COMPILED INTERMEDIATE
 # REPRESENTATION in the same slot (tree_walk/oop.jl) rather than a second
 # evaluator: the same node spines and access kernels `f!` is lowered from, as
 # data, for a compiled backend to emit a program from. `direct_rhs`
@@ -45,7 +45,7 @@ include("tree_walk/geometry_setup.jl")   # §2   build-time geometry materializa
 include("tree_walk/build_helpers.jl")    #      sentinels, boundary policy, folds
 include("tree_walk/unlowered_gate.jl")   #      §9.6.3 c.6 pre-build rewrite-target walk
 include("tree_walk/scan.jl")             #      prefix-scan detection + `_ScanFold`
-include("tree_walk/build.jl")            # §2b  build pipeline, `build_evaluator`
+include("tree_walk/build.jl")            # §2b  build pipeline, `_build_evaluator`
 include("tree_walk/compile.jl")          # §3-4 `_Node` IR, scalar CSE, scalar walker
 include("tree_walk/geometry_compile.jl") # §2c  geometry body compiler (needs `_Node`)
 include("tree_walk/access_kernel.jl")    # §4b  unified array-kernel IR (`_AccKernel`)

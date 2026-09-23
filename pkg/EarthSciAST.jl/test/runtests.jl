@@ -218,6 +218,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
         include("reactant_locate_test.jl")           # count-locate ≢ a reduction, and bit-exact
         include("reactant_direct_emit_test.jl")      # the COMPILED backend: StableHLO built directly from the _Node IR
         include("reactant_direct_sharding_test.jl") # multi-device: needs ESM_TEST_REACTANT_GPU=1 too, else self-skips
+        include("compiler_xla_test.jl")              # esm_problem(; compiler = :xla): the emitter on the SOLVE path
     else
         @info "skipping the reactant_*_test.jl files (set ESM_TEST_REACTANT=1, " *
               "with Reactant in the environment, to run the compiled backend)"

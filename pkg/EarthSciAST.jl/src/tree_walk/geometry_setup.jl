@@ -10,7 +10,7 @@
 # ============================================================
 # 2. Build — entry points
 # ============================================================
-# The public `build_evaluator(model::Model; kwargs...)` method (and its full
+# The public `_build_evaluator(model::Model; kwargs...)` method (and its full
 # docstring) lives after `_build_evaluator_impl` below; this section starts
 # with the build-time geometry helpers it depends on.
 

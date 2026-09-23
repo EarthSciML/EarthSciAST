@@ -76,7 +76,7 @@ _cl_doc_weighted(W::Vector{Float64}) = Dict{String,Any}(
 _cl_build(doc; loop::Bool) =
     withenv("ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int))),
             "ESS_ARRAY_CONTRACTION_MIN" => string(typemax(Int))) do
-        build_evaluator(doc; initial_conditions = Dict("x" => 2.0, "s" => 0.0))
+        EarthSciAST._build_evaluator(doc; initial_conditions = Dict("x" => 2.0, "s" => 0.0))
     end
 
 _cl_du_s(doc; loop::Bool) = begin
@@ -201,7 +201,7 @@ _cl_ics2d_a() = merge(_cl_ics2d_w(), Dict("x[1,1]"=>1.0,"x[1,2]"=>2.0,"x[2,1]"=>
 _cl_build2d(doc, ics; loop::Bool) =
     withenv("ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int))),
             "ESS_ARRAY_CONTRACTION_MIN" => string(typemax(Int))) do
-        build_evaluator(doc; initial_conditions=ics)
+        EarthSciAST._build_evaluator(doc; initial_conditions=ics)
     end
 _cl_du2d(doc, ics; loop::Bool) = begin
     f!,u0,p,_,vm = _cl_build2d(doc, ics; loop=loop)
@@ -278,7 +278,7 @@ end
         for k in 1:N, l in 1:N; ics["src[$k,$l]"] = Float64(k + l); end
         du(loop) = withenv("ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int))),
             "ESS_ARRAY_CONTRACTION_MIN" => string(typemax(Int))) do
-            f!,u0,p,_,vm = build_evaluator(doc; initial_conditions=ics)
+            f!,u0,p,_,vm = EarthSciAST._build_evaluator(doc; initial_conditions=ics)
             d=similar(u0); f!(d,u0,p,0.0); (d,vm)
         end
         dl,vml = du(true); dr,vmr = du(false)
@@ -331,7 +331,7 @@ end
 function _cl_halo_du(doc, ics; loop::Bool)
     withenv("ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int))),
             "ESS_ARRAY_CONTRACTION_MIN" => string(typemax(Int))) do
-        f!,u0,p,_,vm = build_evaluator(doc; initial_conditions=ics)
+        f!,u0,p,_,vm = EarthSciAST._build_evaluator(doc; initial_conditions=ics)
         (f!,u0,p,vm)
     end
 end

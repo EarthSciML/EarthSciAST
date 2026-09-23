@@ -36,9 +36,7 @@ Design decisions of record (2026-09-21) that this tier implements:
 > through `ModelingToolkit.System` → `mtkcompile` → `ODEProblem` and lands
 > inside each fixture's band, with no refusals — the array fixtures included,
 > because their stencils are already `arrayop` over an index set and so carry no
-> continuous spatial dimension for that compiler to refuse. Julia's `xla` stays
-> `bindings_optional` until its `esm_problem` can build with it, on the same
-> one-way ratchet.
+> continuous spatial dimension for that compiler to refuse.
 >
 > Two things about the `mtk` stage that are properties of the compiler rather
 > than of this tier. It needs ModelingToolkit **and a nonlinear solver** — an
@@ -68,6 +66,45 @@ Design decisions of record (2026-09-21) that this tier implements:
 > in the `rust-xla` job of the `XLA Compiled Backends` workflow, which fetches
 > the extension first and then runs
 > `./scripts/test-conformance.sh --compiler-agreement-only xla`.
+>
+> **Julia ANSWERS for `xla`, and `xla` stays `bindings_optional` for Julia
+> anyway.** `esm_problem(…; compiler = :xla)` builds the document out of place,
+> lowers the compiled tree-walk intermediate representation to StableHLO and
+> compiles it once per build; all six fixtures pass against the golden AND
+> against their anchors, with **no refusals and no named exclusions**. The
+> ledger still lists julia as optional because no stage runs the Julia `xla`
+> producer with its environment
+> (`pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env`, which pulls an
+> XLA runtime in) instantiated: `bindings_required` makes an `unavailable` RED,
+> and until such a stage exists that would only ever mean red for a checkout
+> whose Reactant environment did not instantiate — a red that says nothing
+> about the compiler. Julia crosses on the same one-way ratchet once the stage
+> is wired; run it meanwhile with `--bindings julia --compiler xla`. Two things
+> about that run are worth reading here rather than inferring:
+>
+> * **The device is the host CPU client** (`EARTHSCI_JULIA_XLA_DEVICE`, default
+>   `cpu`). The report schema has no field for a platform, and inventing one
+>   would make it a field every binding had to reproduce, so the compiler that
+>   ran is in the trajectory's provenance and the device is in the Julia
+>   Problem's own `compiler_report`.
+> * **`decay_solver_block`'s stiff Jacobian is finite-differenced under `xla`.**
+>   A Rosenbrock method builds its Jacobian by forward-differentiating the
+>   right-hand side unless the problem carries one, and a compiled device
+>   program is not a Julia function a `Dual` can be pushed through. The Julia
+>   `:xla` Problem therefore carries its own finite-difference Jacobian and time
+>   derivative through the compiled program, so the adapter names the same
+>   `Rodas5P` for every compiler and asks nothing about which one built the
+>   Problem. The fixture lands inside its 2.8e-11 band against the golden.
+>
+> **What `xla` does not cover yet in Julia**: a document that binds LIVE
+> FORCING BUFFERS. Julia refuses one by name, before the build
+> (`compiler_refused_rule`, "live forcing buffers (…)"), because the compiled
+> program takes such buffers as arguments and needs them re-synced to the device
+> at each cadence boundary, and the buffer-free form would bake the build-time
+> forcing in as a constant and run the whole simulation against it. No fixture
+> in this tier binds one, so nothing here is skipped for it; the refusal is
+> recorded so that a fixture added later is read as a coverage gap rather than a
+> defect.
 
 ## Shape
 

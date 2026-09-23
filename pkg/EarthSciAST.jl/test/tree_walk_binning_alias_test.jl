@@ -153,7 +153,7 @@ end
     @testset "GAP 1: aggregate-constructed coordinate is an admissible skolem-bin index target" begin
         doc = _twb_gap1_doc()
         insp = _TWB.BuildInspection()
-        f!, u0, p, tspan, vmap = build_evaluator(doc; model_name="M", inspect=insp)
+        f!, u0, p, tspan, vmap = EarthSciAST._build_evaluator(doc; model_name="M", inspect=insp)
         du = similar(u0); f!(du, u0, p, 0.0)
         F_tgt = [du[vmap["regrid_state[$j]"]] for j in 1:2]
         pou   = [du[vmap["pou_state[$j]"]] for j in 1:2]
@@ -197,7 +197,7 @@ end
             h0 = _TWB._SETUP_MAP_FASTPATH_HITS[]
             m0 = _TWB._SETUP_MAP_FASTPATH_MISS[]
             insp = _TWB.BuildInspection()
-            build_evaluator(projected_doc(); model_name="M", compiler=compiler, inspect=insp)
+            EarthSciAST._build_evaluator(projected_doc(); model_name="M", compiler=compiler, inspect=insp)
             sweeps[compiler] = (_TWB._SETUP_MAP_FASTPATH_HITS[] - h0,
                                 _TWB._SETUP_MAP_FASTPATH_MISS[] - m0)
             @test insp.const_arrays["tgt_lon"] ≈ [0.0, 10.0]
@@ -249,7 +249,7 @@ end
             ]))))
 
         insp = _TWB.BuildInspection()
-        f!, u0, p, tspan, vmap = build_evaluator(doc; model_name="M", inspect=insp)
+        f!, u0, p, tspan, vmap = EarthSciAST._build_evaluator(doc; model_name="M", inspect=insp)
         du = similar(u0); f!(du, u0, p, 0.0)
         # The alias resolved: A_ij over the aliased rings is the full unit overlap.
         @test du[vmap["s[1]"]] ≈ 1.0

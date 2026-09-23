@@ -42,13 +42,13 @@ end
 """
     built_rhs_alloc_bytes(model; t=0.0, kwargs...) -> Int
 
-Build `model`'s evaluator with `build_evaluator(model; kwargs...)` and return the
+Build `model`'s evaluator with `EarthSciAST._build_evaluator(model; kwargs...)` and return the
 steady-state per-call allocation of its RHS (see [`rhs_alloc_bytes`](@ref)). The
 state is the model's own initial condition; `kwargs` are forwarded verbatim
 (`initial_conditions`, `const_arrays`, …).
 """
 function built_rhs_alloc_bytes(model; t=0.0, kwargs...)
-    f!, u0, p, _tspan, _vmap = build_evaluator(model; kwargs...)
+    f!, u0, p, _tspan, _vmap = EarthSciAST._build_evaluator(model; kwargs...)
     du = similar(u0)
     return rhs_alloc_bytes(f!, du, u0, p, t)
 end

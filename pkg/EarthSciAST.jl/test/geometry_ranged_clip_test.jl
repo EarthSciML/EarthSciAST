@@ -98,7 +98,7 @@ end
     tgt_poly[2, :, :] = [0.5 0; 1.5 0; 1.5 1; 0.5 1]   # [0.5,1.5]×[0,1]
     F_src = [10.0, 20.0]
 
-    f!, u0, p, _tspan, vmap = build_evaluator(esm;
+    f!, u0, p, _tspan, vmap = EarthSciAST._build_evaluator(esm;
         const_arrays = Dict("src_poly" => src_poly, "tgt_poly" => tgt_poly, "F_src" => F_src),
         initial_conditions = Dict("A11" => 0.0, "A12" => 0.0, "A21" => 0.0,
                                   "A22" => 0.0, "FT1" => 0.0, "FT2" => 0.0))
@@ -193,7 +193,7 @@ end
     tgt_poly[2, :, :] = [0.5 0; 1.5 0; 1.5 1; 0.5 1]   # [0.5,1.5]×[0,1]
     F_src = [10.0, 20.0]
 
-    f!, u0, p, _tspan, vmap = build_evaluator(esm;
+    f!, u0, p, _tspan, vmap = EarthSciAST._build_evaluator(esm;
         const_arrays = Dict("src_poly" => src_poly, "tgt_poly" => tgt_poly, "F_src" => F_src),
         initial_conditions = Dict("A11" => 0.0, "A12" => 0.0, "A21" => 0.0,
                                   "A22" => 0.0, "FT1" => 0.0, "FT2" => 0.0))
@@ -279,7 +279,7 @@ end
     sp = zeros(3, 4, 2); tp = zeros(2, 4, 2)
     sp[1, :, :] = [0 0; 1 0; 1 1; 0 1]; sp[2, :, :] = [1 0; 2 0; 2 1; 1 1]; sp[3, :, :] = [10 0; 11 0; 11 1; 10 1]
     tp[1, :, :] = [0 0; 1 0; 1 1; 0 1]; tp[2, :, :] = [0.5 0; 1.5 0; 1.5 1; 0.5 1]
-    f!, u0, p, _t, vmap = build_evaluator(esm;
+    f!, u0, p, _t, vmap = EarthSciAST._build_evaluator(esm;
         const_arrays = Dict("src_poly" => sp, "tgt_poly" => tp,
                             "src_cx" => [0.5, 1.5, 10.5], "tgt_cx" => [0.5, 1.0], "F_src" => [10.0, 20.0, 99.0]),
         initial_conditions = Dict("AJ1" => 0.0, "AJ2" => 0.0, "FT1" => 0.0, "FT2" => 0.0))
@@ -354,7 +354,7 @@ end
 @testset "Constructed geometry + live F_src field through the regrid (M4+)" begin
     esm = _constructed_live_regrid_esm()
     F_src = [10.0, 20.0, 30.0, 40.0]               # a LIVE buffer
-    f!, u0, p, _t, vmap = build_evaluator(esm; param_arrays = Dict("F_src" => F_src),
+    f!, u0, p, _t, vmap = EarthSciAST._build_evaluator(esm; param_arrays = Dict("F_src" => F_src),
         initial_conditions = Dict("F_tgt[1]" => 0.0, "F_tgt[2]" => 0.0))
     du = similar(u0); f!(du, u0, p, 0.0)
     # nothing injected but grid params + the field — polygons are CONSTRUCTED.
@@ -426,7 +426,7 @@ end
 @testset "Coupled-array bridge: consumer ODE reads a live regrid F_tgt observed (met→fire)" begin
     esm = _coupled_bridge_esm()
     F_src = [10.0, 20.0, 30.0, 40.0]               # a LIVE buffer
-    f!, u0, p, _t, vmap = build_evaluator(esm; param_arrays = Dict("F_src" => F_src),
+    f!, u0, p, _t, vmap = EarthSciAST._build_evaluator(esm; param_arrays = Dict("F_src" => F_src),
         initial_conditions = Dict("u[1]" => 0.0, "u[2]" => 0.0))
     du = similar(u0); f!(du, u0, p, 0.0)
     # F_tgt = [15,35] (the regrid of the live field); k=2 ⇒ the consumer RHS reads it.
@@ -473,7 +473,7 @@ end
 @testset "Multi-hop chain: consumer reads a DERIVED field over a live regrid (level-set shape)" begin
     esm = _chain_bridge_esm()
     F_src = [10.0, 20.0, 30.0, 40.0]
-    f!, u0, p, _t, vmap = build_evaluator(esm; param_arrays = Dict("F_src" => F_src),
+    f!, u0, p, _t, vmap = EarthSciAST._build_evaluator(esm; param_arrays = Dict("F_src" => F_src),
         initial_conditions = Dict("u[1]" => 0.0, "u[2]" => 0.0))
     du = similar(u0); f!(du, u0, p, 0.0)
     @test du[vmap["u[1]"]] ≈ 16.0 atol = 1e-12     # 1 + mean(10,20)

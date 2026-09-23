@@ -117,13 +117,20 @@ end
 # compiles a ModelingToolkit `System` whose events, mass matrix and observed
 # equations ride on its own `ODEProblem`, and reassembling one here out of the
 # right-hand side alone would drop every one of them. `nothing` — which is
-# every `:native` / `:interpreter` build — takes the ordinary path below.
+# every `:native` / `:interpreter` / `:xla` build — takes the ordinary path below.
+#
+# `_ode_derivatives` is empty for every compiler but `:xla`, whose compiled
+# right-hand side cannot be forward-differentiated and so carries its own
+# finite-difference `jac` / `tgrad` (src/compiler_xla.jl). Hung on the
+# `ODEFunction` here, every `solve` of such a Problem gets a Jacobian it can
+# build, whichever algorithm and `autodiff` setting the caller named.
 function _ode_problem(prob::EsmProblem, tspan)
     backend = EarthSciAST._compiler_backend(prob.f!)
     backend === nothing ||
         return EarthSciAST._backend_ode_problem(backend, prob, tspan)
     return SciMLBase.ODEProblem(
-        SciMLBase.ODEFunction(prob.f!; sys = _symbol_cache(prob)),
+        SciMLBase.ODEFunction(prob.f!; sys = _symbol_cache(prob),
+                              EarthSciAST._ode_derivatives(prob)...),
         copy(prob.u0), tspan, prob.p)
 end
 

@@ -12,7 +12,7 @@ function _de_param(ctx::_DECtx, sym::Symbol)::_DEVal
     p isa NamedTuple ||
         _de_refuse("a parameter read on a `p` of type $(typeof(p))",
             "the emitter reads parameters by NAME out of a NamedTuple, the " *
-            "shape `build_evaluator` hands back. A vector `p` (`ComponentVector`, " *
+            "shape a build hands back as `p`. A vector `p` (`ComponentVector`, " *
             "`Vector`) reaches parameters by flat index and is not wired here.")
     hasproperty(p, sym) ||
         _de_refuse("the parameter `$(sym)`",

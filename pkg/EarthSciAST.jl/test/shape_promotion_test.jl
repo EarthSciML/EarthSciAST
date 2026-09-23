@@ -45,7 +45,7 @@ end
 
     @testset "equations rewritten to faqs; evaluates per-cell" begin
         doc = E.flattened_to_esm(prom)
-        f!, u0, p, _t, vmap = E.build_evaluator(doc;
+        f!, u0, p, _t, vmap = E._build_evaluator(doc;
             const_arrays=Dict("M.f"=>[1.0,2.0,3.0]), initial_conditions=Dict("M.s"=>0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
         # f=[1,2,3] → a=[2,4,6], b=[3,6,9], s=Σb=18
@@ -65,7 +65,7 @@ end
         f2 = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(sc))))
         p2 = E.promote_downstream_shapes(f2)
         @test all(v -> v.shape === nothing || isempty(v.shape), values(p2.observed_variables))
-        f!, u0, p, _t, vmap = E.build_evaluator(E.flattened_to_esm(p2); initial_conditions=Dict("M.z"=>0.0))
+        f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(p2); initial_conditions=Dict("M.z"=>0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["M.z"]] ≈ 6.0           # y = x*3 = 6, unchanged
     end
@@ -87,7 +87,7 @@ end
         @test !haskey(norm.state_variables, "M.a")
         @test haskey(norm.state_variables, "M.z")        # ODE state preserved
         # runs: a = x*2 = 6, D(z) = a = 6
-        f!, u0, p, _t, vmap = E.build_evaluator(E.flattened_to_esm(norm); initial_conditions=Dict("M.z"=>0.0))
+        f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(norm); initial_conditions=Dict("M.z"=>0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["M.z"]] ≈ 6.0
     end
@@ -160,7 +160,7 @@ end
           Dict{String,Any}(
           "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["psi"],"wrt"=>"t"),
           "rhs"=>op("-","b"))])))
-    f!, u0, p, _t, vmap = E.build_evaluator(d;
+    f!, u0, p, _t, vmap = E._build_evaluator(d;
         initial_conditions=Dict("psi[1]"=>1.0, "psi[2]"=>2.0, "psi[3]"=>3.0))
     # The elementwise array observeds are gone from the ODE partition (folded).
     @test !any(k -> occursin(r"^[ab]\[", k), keys(vmap))

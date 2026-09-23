@@ -9,10 +9,9 @@
 """
     BuildInspection()
 
-Observability record for [`build_evaluator`](@ref): pass one via the `inspect`
-keyword (`build_evaluator(doc; inspect=BuildInspection())`; [`esm_problem`](@ref)
-forwards its own `inspect` keyword) and the build fills it with named
-BUILD-TIME products that are otherwise internal to the evaluator closure:
+Observability record for a build: pass one via [`esm_problem`](@ref)'s
+`inspect` keyword and the build fills it with named BUILD-TIME products that
+are otherwise internal to the evaluator closure:
 
 * `setup_arrays::Dict{String,Array{Float64}}` — the materialized setup-time
   geometry arrays (RFC §8.1 / esm-spec §8.6.1), keyed by (flattened) observed
@@ -85,9 +84,18 @@ mutable struct BuildInspection
     param_classes::Dict{String,Symbol}
     # Which tier every rule of this build landed on (API_SPEC §5.8). The same
     # record `compiler_report(prob)` returns, put here too so a caller who
-    # builds through `build_evaluator` — or whose build REFUSED — can still read
-    # it. Empty until the build that owns this record finishes.
+    # builds through the private builder — or whose build REFUSED, leaving no
+    # Problem to read it off — can still read it. [`compiler_report`](@ref)
+    # takes this record as well as an `EsmProblem`. Empty until the build that
+    # owns this record finishes.
     compiler_report::CompilerReport
+    # The live forcing buffers this build bound, in the stable (name-sorted)
+    # NamedTuple order a compiled backend's buffers argument is aligned with,
+    # and the name → position map. Published by EVERY build form, which is what
+    # lets `forcing_buffers(prob)` answer on an `EsmProblem` whatever compiler
+    # built it — the seam used to hang off the out-of-place build product alone.
+    forcing_buffers::NamedTuple
+    forcing_buffer_index::Dict{String,Int}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -95,14 +103,15 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,ASTExpr}(),
                                     Dict{String,Int}(),
                                     Dict{String,Symbol}(),
-                                    CompilerReport(:native))
+                                    CompilerReport(:native),
+                                    NamedTuple(), Dict{String,Int}())
 
 """
     DiscreteMaterializer()
 
 The **discrete-cadence materialization** sink — the middle phase of the
 three-phase cadence partition (`const ⊏ discrete ⊏ continuous`, `cadence.jl`).
-Pass one via the `materialize_out` keyword of [`build_evaluator`](@ref) to
+Pass one via the `materialize_out` keyword of [`esm_problem`](@ref) to
 OPT IN to the cut; without it, discrete-cadence derived fields stay inlined into
 the per-step RHS (the pre-cut behavior; every existing build is byte-identical).
 
@@ -3117,6 +3126,16 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # ---- Default tspan ----
     tspan_default = _pick_tspan(tspan, model)
 
+    # ---- Build observability: the live forcing buffers (see BuildInspection) --
+    # Published for BOTH forms, from the same `pgather` the out-of-place product
+    # carries as a field, so that `forcing_buffers(prob)` is a question about
+    # the PROBLEM rather than about which build form happened to produce it.
+    if inspect !== nothing
+        _fb, _fbi = _forcing_buffer_container(pgather)
+        inspect.forcing_buffers = _fb
+        inspect.forcing_buffer_index = _fbi
+    end
+
     # ---- The RHS slot ----
     # Two products of the SAME compiled IR (tree_walk/oop.jl explains why both
     # exist): `:inplace` is the zero-alloc, eltype-generic Float64 evaluator
@@ -3144,7 +3163,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                       array_contractions)
     else
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_FORM",
-            "build_evaluator: `form` must be :inplace or :oop, got :$(form)"))
+            "the build's `form` must be :inplace or :oop, got :$(form)"))
     end
 
     # Diagnostics for the N-independence property: the number of array kernels
@@ -3257,6 +3276,7 @@ end
 function _build_evaluator_impl(model::Model;
                                compiler::Symbol = :native,
                                kwargs...)
+    _xla_check_form(compiler, get(kwargs, :form, :inplace))
     plan = _plan_for(compiler)
     record = _BuildRecord(plan)
     insp = get(kwargs, :inspect, nothing)
@@ -3389,9 +3409,9 @@ function _build_evaluator_impl_inner(model::Model;
     # An event, continuous or discrete, is refused before anything is built
     # (esm-spec §9.6.6): this evaluator has no event handling, so a model built
     # without its events would report a wrong answer. This check covers a model
-    # handed to `build_evaluator` directly. A FLATTENED system reaches this entry
+    # handed to the builder directly. A FLATTENED system reaches this entry
     # through `flattened_to_esm`, which does not carry events, so `simulate` (and
-    # with it `run_inline_tests`) and `build_evaluator(::FlattenedSystem)` refuse
+    # with it `run_inline_tests`) and `_build_evaluator(::FlattenedSystem)` refuse
     # it earlier, while the events are still in hand. The ModelingToolkit export
     # runs both kinds of event and does not come through here.
     ev = _first_event(model)
@@ -4632,7 +4652,7 @@ function _compile_faq_percell!(percell_scalar, acc_kernels, covered::BitVector,
 end
 
 """
-    build_evaluator(model::Model; initial_conditions=Dict(),
+    _build_evaluator(model::Model; initial_conditions=Dict(),
                     parameter_overrides=Dict(), tspan=nothing,
                     registered_functions=Dict(), kwargs...)
 
@@ -4702,7 +4722,7 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
   program receives them as real inputs and an in-place refresh
   ([`sync_forcing!`](@ref)) stays visible to it.
 """
-function build_evaluator(model::Model; kwargs...)
+function _build_evaluator(model::Model; kwargs...)
     f!, u0, p, tspan_default, var_map, _diag = _build_evaluator_impl(model; kwargs...)
     return f!, u0, p, tspan_default, var_map
 end
@@ -4711,19 +4731,19 @@ end
     param_map(p) -> Dict{String,Int}
 
 Parameter NAME → its position in a parameter VECTOR, the `p`-side mirror of the
-`var_map` [`build_evaluator`](@ref) returns for the state.
+`var_map` an [`esm_problem`](@ref) Problem carries for the state.
 
-Take it from the `p` that `build_evaluator` handed back:
+Take it from the Problem's `p`:
 
 ```julia
-f!, u0, p, tspan, var_map = build_evaluator(doc)
-pm = param_map(p)                  # "k_diff" => 1, "k_rxn" => 3, …
-θ  = ComponentVector(p)            # the same order, as an AbstractVector
-f!(du, u, θ, t)                    # …and it is accepted as `p`
+prob = esm_problem(doc, tspan)
+pm = param_map(prob.p)             # "k_diff" => 1, "k_rxn" => 3, …
+θ  = ComponentVector(prob.p)       # the same order, as an AbstractVector
+prob.f!(du, u, θ, t)               # …and it is accepted as `p`
 ```
 
-`build_evaluator` keeps returning its 5-tuple — 391 call sites destructure it —
-so this is a FUNCTION OF `p` rather than a sixth return value. That costs nothing
+The Problem already carries `p`, so this is a FUNCTION OF `p` rather than a
+second field that would have to be kept in step with it. That costs nothing
 in fidelity: the order is the build's own (`param_names` is sorted, and the `p`
 NamedTuple is built from it in that order), and `keys(p)` IS that order, so this
 map and the `idx` baked into every `_NK_PARAM` node are the same numbering by
@@ -4780,11 +4800,11 @@ solve(remake(prob; p = Dict(θ[1] => 2.0)), Tsit5())
 parameter_classes(insp::BuildInspection) = insp.param_classes
 
 """
-    build_evaluator(file::EsmFile; model_name=nothing, kwargs...)
+    _build_evaluator(file::EsmFile; model_name=nothing, kwargs...)
 
 Delegate to the typed entry point after selecting the model.
 """
-function build_evaluator(file::EsmFile;
+function _build_evaluator(file::EsmFile;
                          model_name::Union{Nothing,AbstractString}=nothing,
                          kwargs...)
     model = _select_model(file, model_name)
@@ -4792,7 +4812,7 @@ function build_evaluator(file::EsmFile;
     # typed evaluator, which no longer reads it off the `Model`. `_model_name`
     # rides along for the §6.6.2 rule-2 namespace scope: the selected model's
     # own name is the one namespace its (bare) variable names cannot show.
-    return build_evaluator(model; index_sets=file.index_sets,
+    return _build_evaluator(model; index_sets=file.index_sets,
                            _template_reg=_component_template_reg(file, model_name),
                            _model_name=(model_name === nothing ?
                                         _sole_model_name(file) : String(model_name)),
@@ -4823,7 +4843,7 @@ performs before compiling, exposed as a public seam so downstream tools
 (e.g. EarthSciASTDiff, which differentiates the tree) analyze the SAME tree
 the evaluator compiles. `file` is not mutated.
 
-Model selection matches [`build_evaluator`](@ref): `model_name = nothing`
+Model selection matches the build's: `model_name = nothing`
 selects the document's only model, or throws `E_TREEWALK_AMBIGUOUS_MODEL`
 when there are several; an unknown name throws `E_TREEWALK_NO_MODEL`.
 A document with no surviving references returns the plain copy.
@@ -5098,7 +5118,7 @@ function _unbundle_gated(entry)
 end
 
 """
-    build_evaluator(esm::AbstractDict; model_name=nothing, kwargs...)
+    _build_evaluator(esm::AbstractDict; model_name=nothing, kwargs...)
 
 Parse a raw ESM dict, then delegate. This is the signature from the
 bead description; the typed entry point is faster for callers that
@@ -5109,7 +5129,10 @@ keyed by name. `index(name, i)` references in the equations are inlined as
 literal values. Used to inject `__stgfw_` Fornberg weight arrays for
 `stencil_gen` models with `spacing="from_grid"`.
 """
-function build_evaluator(esm::AbstractDict; compiler::Symbol = :native, kwargs...)
+function _build_evaluator(esm::AbstractDict; compiler::Symbol = :native, kwargs...)
+    # Before the pre-build work below, which is not cheap and which a refusal
+    # would throw away.
+    _xla_check_form(compiler, get(kwargs, :form, :inplace))
     # The requested plan is installed HERE, not only at `_build_evaluator_impl`:
     # the binning-coordinate derivation and value invention below run first and
     # hand their results to the build as const arrays, so a per-cell setup sweep
@@ -5311,7 +5334,7 @@ function _build_evaluator_dict(esm::AbstractDict;
     delete!(kwd, :_gated_providers)
     delete!(kwd, :_sample_time)
 
-    return build_evaluator(file; model_name=model_name,
+    return _build_evaluator(file; model_name=model_name,
                            _vi_extents=(_vi === nothing ? Dict{String,Int}() : _vi.extents),
                            _vi_vars=(_vi === nothing ? Set{String}() : _vi.vi_var_names),
                            _vi_maps=(_vi === nothing ? _EMPTY_VI_MAPS :
@@ -5320,7 +5343,7 @@ function _build_evaluator_dict(esm::AbstractDict;
 end
 
 """
-    build_evaluator(flat::FlattenedSystem; kwargs...)
+    _build_evaluator(flat::FlattenedSystem; kwargs...)
 
 Build an evaluator directly from a `FlattenedSystem` by reconstituting it into a
 single-model native ESM document (`flattened_to_esm`) and running the
@@ -5328,7 +5351,7 @@ single-model native ESM document (`flattened_to_esm`) and running the
 materialized. Use this for a 0-D / array flattened system; for one carrying a
 spatial PDE, `discretize(flat; …)` first.
 """
-function build_evaluator(flat::FlattenedSystem; kwargs...)
+function _build_evaluator(flat::FlattenedSystem; kwargs...)
     # esm-spec §9.6.4 Option B / RFC §7.7: surviving `apply_expression_template`
     # references carried by `flatten` (a non-empty `template_registry`) ride the
     # reconstituted document (`flattened_to_esm` emits the registry as the
@@ -5341,7 +5364,7 @@ function build_evaluator(flat::FlattenedSystem; kwargs...)
     # `flattened_to_esm` does not carry events, so they are refused HERE, while
     # the flattened system still holds them (esm-spec §9.6.6).
     _refuse_flat_events(flat)
-    return build_evaluator(flattened_to_esm(flat); kwargs...)
+    return _build_evaluator(flattened_to_esm(flat); kwargs...)
 end
 
 # Does any equation / variable expression of `model` (or a subsystem) carry a
@@ -5378,7 +5401,7 @@ function _model_has_surviving_refs(model::Model)
 end
 
 # The single model's name when the document declares exactly one, else
-# `nothing` — the name `build_evaluator(file)` selects by default, needed for
+# `nothing` — the name `_build_evaluator(file)` selects by default, needed for
 # the esm-spec §6.6.2 rule-2 namespace scope (a bare-named single-model build
 # admits the §4.6 spelling `M.A` for its parameter `A` only if `M` is known to
 # name the model).
@@ -5405,7 +5428,7 @@ end
 
 Evaluate a single AST expression at the supplied numeric `bindings` by
 running it through the same compile + walker pipeline as
-[`build_evaluator`](@ref). All keys of `bindings` are exposed as readable
+the evaluator build. All keys of `bindings` are exposed as readable
 state variables; the special name `"t"` (if present) is bound to the
 walker's time argument as well. Adding an op to the tree-walk evaluator
 transparently extends this entry point — there is no separate dispatch

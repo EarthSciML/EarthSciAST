@@ -41,7 +41,7 @@ function _group_discrete_providers(providers::AbstractDict, buffers::RefreshBuff
         provider_is_const(prov) && continue
         haskey(buffers, var) || throw(RefreshError(
             "build_refresh_callback: no buffer for refreshed variable '$var'; add it to " *
-            "`buffers` (the same Array{Float64} passed to build_evaluator's param_arrays)"))
+            "`buffers` (the same Array{Float64} passed to `esm_problem`'s `param_arrays`)"))
         i = get(slot, prov, 0)
         if i == 0
             push!(groups, (prov, String[var]))

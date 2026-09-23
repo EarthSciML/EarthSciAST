@@ -144,8 +144,8 @@ _gi_pcall(f!, u, p, t, ::Type{V}) where {V} =
 # The `:native` `f!` and its `:interpreter` twin (tree_walk/const_tier.jl): the
 # same emitter with every prelude slot classified dynamic, so it refills the whole
 # prelude on every call and takes no cadence skip. That is the Float64 oracle below.
-_gi_both(doc) = (ESM.build_evaluator(doc)[1],
-                 ESM.build_evaluator(doc; compiler=:interpreter)[1])
+_gi_both(doc) = (ESM._build_evaluator(doc)[1],
+                 ESM._build_evaluator(doc; compiler=:interpreter)[1])
 
 # Central-difference Jacobian of the TRUSTED Float64 `f!` w.r.t. the state.
 function _gi_fd_state_jac(f!, u, p, t; h = 1e-6)
@@ -177,7 +177,7 @@ end
         for (name, doc) in cases
             @testset "$name" begin
                 fi, fo = _gi_both(doc)
-                _, u0, p, _, _ = ESM.build_evaluator(doc)
+                _, u0, p, _, _ = ESM._build_evaluator(doc)
                 u = length(u0) == 1 ? [1.5] : _gi_seed(length(u0))
                 for t in (0.0, 0.37, 1.9)
                     @test _gi_call(fi, u, p, t) == _gi_call(fo, u, p, t)
@@ -193,7 +193,7 @@ end
         # wider model battery; here it is re-pinned on models that ALSO go Dual below,
         # so the two properties are asserted of the same evaluator object.)
         for doc in (_gi_rd(64), _gi_zerod(), _gi_tv(64), _gi_interp())
-            f!, u0, p, _, _ = ESM.build_evaluator(doc)
+            f!, u0, p, _, _ = ESM._build_evaluator(doc)
             u = length(u0) == 1 ? [1.5] : _gi_seed(length(u0))
             du = zero(u)
             @test rhs_alloc_bytes(f!, du, u, p, 0.0) == 0
@@ -207,7 +207,7 @@ end
         # would show up as bytes here).
         doc = _gi_rd(32)
         fi, fo = _gi_both(doc)
-        _, u0, p, _, _ = ESM.build_evaluator(doc)
+        _, u0, p, _, _ = ESM._build_evaluator(doc)
         u = _gi_seed(length(u0))
         want = _gi_call(fo, u, p, 0.0)
 
@@ -222,7 +222,7 @@ end
 
     @testset "ForwardDiff: Jacobian w.r.t. the STATE" begin
         doc = _gi_rd(24)
-        f!, u0, p, _, _ = ESM.build_evaluator(doc)
+        f!, u0, p, _, _ = ESM._build_evaluator(doc)
         u = _gi_seed(length(u0))
         @test any(<(0), u)                              # the `^` trap is armed
 
@@ -237,7 +237,7 @@ end
 
         # And it must agree bit for bit with the per-cell reference's Jacobian:
         # the two walk the same IR, so a divergence means one of them is lying.
-        fr! = ESM.build_evaluator(doc; compiler=:interpreter)[1]
+        fr! = ESM._build_evaluator(doc; compiler=:interpreter)[1]
         @test J == ForwardDiff.jacobian(
             uu -> (d = similar(uu, eltype(uu)); fill!(d, 0); fr!(d, uu, p, 0.0); d), u)
     end
@@ -246,7 +246,7 @@ end
         # `_NK_CACHED` reads the CSE scratch, the second of the two eltype-hardwired
         # buffers. A model with an empty prelude cannot exercise it.
         doc = _gi_zerod()
-        f!, u0, p, _, _ = ESM.build_evaluator(doc)
+        f!, u0, p, _, _ = ESM._build_evaluator(doc)
         @test !isempty(getfield(f!, :cse_prelude))      # the prelude is real
         u = [0.7, -0.4]
 
@@ -259,7 +259,7 @@ end
         # `Vector{Float64}` and only the parameter values go Dual, so any buffer sized
         # from `eltype(u)` alone compiles and then throws `Float64(::Dual)` on store.
         for doc in (_gi_rd(24), _gi_zerod())
-            f!, u0, p, _, _ = ESM.build_evaluator(doc)
+            f!, u0, p, _, _ = ESM._build_evaluator(doc)
             u = length(u0) == 2 ? [0.7, -0.4] : _gi_seed(length(u0))
             syms = keys(p)
             pv = collect(Float64, values(p))
@@ -287,7 +287,7 @@ end
         # with only the parameter NamedTuple carrying Duals. Every internal buffer must
         # be sized from the PROMOTED type or this throws.
         doc = _gi_rd(16)
-        f!, u0, p, _, _ = ESM.build_evaluator(doc)
+        f!, u0, p, _, _ = ESM._build_evaluator(doc)
         u = _gi_seed(length(u0))
         D = ForwardDiff.Dual{Nothing,Float64,1}
         pd = NamedTuple{keys(p)}(Tuple(ForwardDiff.Dual{Nothing}(v, 1.0)
@@ -310,7 +310,7 @@ end
         # the trap is armed, or this testset silently tests nothing.
         for N in (16, 33)
             doc = _gi_rd(N)
-            f!, u0, p, _, _ = ESM.build_evaluator(doc)
+            f!, u0, p, _, _ = ESM._build_evaluator(doc)
             u = _gi_seed(length(u0))
             @test any(<(0), u)                          # the trap is ARMED
             J = ForwardDiff.jacobian((d, uu) -> f!(d, uu, p, 0.0), zeros(length(u)), u)
@@ -323,7 +323,7 @@ end
             Dict{String,Any}("x" => _gi_state(default = -1.3), "k" => _gi_param(2.0)),
             Any[Dict{String,Any}("lhs" => _gi_Dt("x"),
                                  "rhs" => _gi_o("*", "k", _gi_o("^", "x", 2.0)))])
-        f!, _, p, _, _ = ESM.build_evaluator(doc)
+        f!, _, p, _, _ = ESM._build_evaluator(doc)
         d = ForwardDiff.derivative(x -> _gi_call(f!, [x], p, 0.0)[1], -1.3)
         @test !isnan(d)
         @test d ≈ 2 * 2 * (-1.3)                        # d/dx (k·x²) = 2kx
@@ -331,7 +331,7 @@ end
 
     @testset "interp tables differentiate, and clamp to zero slope outside" begin
         # The table/axis are `Vector{Float64}` DATA and stay so; only the QUERY is Dual.
-        f!, _, p, _, _ = ESM.build_evaluator(_gi_interp())
+        f!, _, p, _, _ = ESM._build_evaluator(_gi_interp())
         for (y, want) in ((1.5, 2 * 3.0),    # between knots (1,1) and (2,4): slope 3
                           (2.5, 2 * 5.0),    # between knots (2,4) and (3,9): slope 5
                           (-1.0, 0.0),       # below the table: flat extrapolation
@@ -349,7 +349,7 @@ end
         # the SAME `f!` with Dual state, which is exactly what used to throw
         # `MethodError: Float64(::Dual)` and forced a finite-difference fallback.
         doc = _gi_rd(24)
-        f!, u0, p, _, _ = ESM.build_evaluator(doc)
+        f!, u0, p, _, _ = ESM._build_evaluator(doc)
         u = _gi_seed(length(u0))
         prob = ODEProblem(f!, u, (0.0, 2.0), p)
 
@@ -360,7 +360,7 @@ end
 
         # Against the same problem solved through the per-cell reference build
         # (a different lowering, same IR): the two trajectories must agree.
-        fr! = ESM.build_evaluator(doc; compiler=:interpreter)[1]
+        fr! = ESM._build_evaluator(doc; compiler=:interpreter)[1]
         solr = OrdinaryDiffEqRosenbrock.solve(
             ODEProblem(fr!, u, (0.0, 2.0), p), OrdinaryDiffEqRosenbrock.Rosenbrock23();
             abstol = 1e-10, reltol = 1e-10)
@@ -388,7 +388,7 @@ end
         # would silently compute in Float64 anyway — slower than Float64 state.
         # The runner refuses it with a loud TreeWalkError instead (both forms).
         doc = _gi_rd(8)
-        f!, u0, p, _, _ = ESM.build_evaluator(doc)
+        f!, u0, p, _, _ = ESM._build_evaluator(doc)
         u32 = Float32.(_gi_seed(length(u0)))
         du32 = similar(u32)
         err = try

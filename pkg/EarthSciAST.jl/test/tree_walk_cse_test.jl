@@ -493,7 +493,7 @@ end
         # `(p, t, epoch)` and warm same-`t` calls skip it entirely — this probe
         # wants the per-CALL evaluation cost, not the memoized one. The same-`t`
         # skip has its own suite (tree_walk_tcadence_test.jl).
-        f!, u0, p, _ts, _vm = build_evaluator(_fanout_model(K, M);
+        f!, u0, p, _ts, _vm = EarthSciAST._build_evaluator(_fanout_model(K, M);
                                               compiler=:interpreter)
         du = similar(u0)
         rhs_alloc_bytes(f!, du, u0, p, t)
@@ -548,7 +548,7 @@ end
     # ----------------------------------------------------------------
     @testset "hoisting through `fn` is bit-identical" begin
         K, M = 8, 6
-        f!, u0, p, _ts, var_map = build_evaluator(_fanout_model(K, M))
+        f!, u0, p, _ts, var_map = EarthSciAST._build_evaluator(_fanout_model(K, M))
         du = similar(u0)
         for t in (0.0, 3600.0, 43200.0, 86400.0)
             f!(du, u0, p, t)

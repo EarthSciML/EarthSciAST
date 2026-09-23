@@ -27,7 +27,7 @@ const ESM = EarthSciAST
         model = ESM.Model(Dict("y" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_op("D", _v("y"); wrt="t"), _idx("forcing", _i(2)))])
         buf = [3.0, 7.0, 11.0]
-        f!, u0, p, _t, _vm = build_evaluator(model;
+        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(model;
             initial_conditions=Dict("y" => 0.0), param_arrays=Dict("forcing" => buf))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[1] == 7.0
@@ -45,7 +45,7 @@ const ESM = EarthSciAST
                           _ao1(_op("+", _idx("forcing", _v("i")), _idx("u", _v("i"))), "i", 1, N))])
         buf = collect(10.0:10.0:10.0 * N)
         ics = Dict("u[$k]" => 0.0 for k in 1:N)
-        f!, u0, p, _t, _vm = build_evaluator(model;
+        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(model;
             initial_conditions=ics, param_arrays=Dict("forcing" => buf))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du == buf                       # u0 == 0 ⇒ du == forcing
@@ -63,7 +63,7 @@ const ESM = EarthSciAST
             [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, nx),
                           _ao1(_idx("forcing2d", _v("i"), _i(3)), "i", 1, nx))])
         ics = Dict("u[$k]" => 0.0 for k in 1:nx)
-        f!, u0, p, _t, _vm = build_evaluator(model;
+        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(model;
             initial_conditions=ics, param_arrays=Dict("forcing2d" => f2d))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du == Float64[f2d[i, 3] for i in 1:nx]
@@ -81,7 +81,7 @@ const ESM = EarthSciAST
         wsrc = collect(1.0:Float64(N))         # const source (will be inlined)
         fbuf = fill(100.0, N)                   # live forcing buffer
         ics = Dict("u[$k]" => 0.0 for k in 1:N)
-        f!, u0, p, _t, _vm = build_evaluator(model; initial_conditions=ics,
+        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(model; initial_conditions=ics,
             const_arrays=Dict("w" => wsrc), param_arrays=Dict("forcing" => fbuf))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du == Float64[wsrc[i] + 100.0 for i in 1:N]
@@ -111,7 +111,7 @@ const ESM = EarthSciAST
                           _ao1(_op("*", _v("a"), _idx("forcing", _v("i"))), "i", 1, N))])
         buf = collect(1.0:Float64(N))
         ics = Dict("u[$k]" => 0.0 for k in 1:N)
-        f!, u0, p, _t, _vm = build_evaluator(model;
+        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(model;
             initial_conditions=ics, param_arrays=Dict("forcing" => buf))
         # `p` carries the scalar `a` but NOT the array `forcing`.
         @test haskey(p, :a)
@@ -177,7 +177,7 @@ const ESM = EarthSciAST
 
         # Out-of-range index → E_TREEWALK_PGATHER_OOB.
         err = try
-            build_evaluator(mk(_idx("forcing", _i(9)));
+            EarthSciAST._build_evaluator(mk(_idx("forcing", _i(9)));
                 initial_conditions=ics, param_arrays=Dict("forcing" => fill(0.0, N)))
             nothing
         catch e; e end
@@ -185,7 +185,7 @@ const ESM = EarthSciAST
 
         # ndim mismatch (2 indices into a 1-D buffer) → E_TREEWALK_PGATHER_NDIM.
         err = try
-            build_evaluator(mk(_idx("forcing", _v("i"), _i(1)));
+            EarthSciAST._build_evaluator(mk(_idx("forcing", _v("i"), _i(1)));
                 initial_conditions=ics, param_arrays=Dict("forcing" => fill(0.0, N)))
             nothing
         catch e; e end
@@ -193,7 +193,7 @@ const ESM = EarthSciAST
 
         # Non-Float64 buffer → E_TREEWALK_PARAM_ARRAY_TYPE.
         err = try
-            build_evaluator(mk(_idx("forcing", _v("i")));
+            EarthSciAST._build_evaluator(mk(_idx("forcing", _v("i")));
                 initial_conditions=ics, param_arrays=Dict("forcing" => [1, 2, 3]))
             nothing
         catch e; e end

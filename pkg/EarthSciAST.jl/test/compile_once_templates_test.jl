@@ -15,7 +15,7 @@
 using Test
 using JSON3
 using EarthSciAST
-using EarthSciAST: load_path, flatten, build_evaluator, coerce_esm_file, TreeWalkError,
+using EarthSciAST: load_path, flatten, coerce_esm_file, TreeWalkError,
     expand_flattened_refs,
     ExpressionTemplateError,
     _BENCH_ON, _BENCH_BODY_VARIANTS, _BENCH_BRANCH_TEMPLATES, _BENCH_COMPILE_CALLS,
@@ -43,7 +43,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             atload && (flat = expand_flattened_refs(flat))
             _BENCH_ON[] = true
             _bench_reset!()
-            f, u0, p, _, _ = build_evaluator(flat; compiler=compiler)
+            f, u0, p, _, _ = EarthSciAST._build_evaluator(flat; compiler=compiler)
             counters = (branches=_BENCH_BRANCH_TEMPLATES[],
                         variants=_BENCH_BODY_VARIANTS[],
                         compiles=_BENCH_COMPILE_CALLS[])
@@ -93,7 +93,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # per-cell fallback kernel outright.
         FIX = bench("transport_3axis_7cubed_fullrank.esm")
         flat = flatten(load_path(FIX))
-        fo, u0, p, _, _ = build_evaluator(flat; form=:oop)
+        fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form=:oop)
         # `fo` is the `_OopRHS` wrapper; the compiled IR — and its lane plans —
         # is its `rhs` field.
         oplans = getfield(getfield(fo, :rhs), :acc_plans)
@@ -227,7 +227,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         )
         file = coerce_esm_file(JSON3.read(JSON3.write(doc)))
         err = try
-            build_evaluator(file)
+            EarthSciAST._build_evaluator(file)
             nothing
         catch e
             e

@@ -62,7 +62,7 @@ consume the canonical-form AST emitted by [`discretize`](@ref):
 
 - **ModelingToolkit (MTK)** — the default. Production runtime via the
   `EarthSciASTMTKExt` package extension.
-- **`tree_walk`** — alternate runtime ([`build_evaluator`](@ref)) for very
+- **`tree_walk`** — alternate runtime ([`esm_problem`](@ref)) for very
   large discretized PDE systems whose scalar count exceeds MTK's
   `structural_simplify` / tearing / codegen ceiling. Compile time is
   independent of system size.
@@ -80,8 +80,8 @@ types are defined in package extensions (`EarthSciASTMTKExt`,
 
 Without these packages loaded, the package is still fully usable:
 [`flatten`](@ref) produces a pure-Julia [`FlattenedSystem`](@ref) snapshot,
-and the MTK-free tree-walk runtime ([`build_evaluator`](@ref),
-[`esm_problem`](@ref) + SciML's `solve`) runs models end to end. Only the symbolic
+and the MTK-free tree-walk runtime ([`esm_problem`](@ref) + SciML's `solve`)
+runs models end to end. Only the symbolic
 `ModelingToolkit`/`Catalyst` constructors require the weak dependencies —
 calling one without its package loaded throws an `ArgumentError` naming
 what to load.
