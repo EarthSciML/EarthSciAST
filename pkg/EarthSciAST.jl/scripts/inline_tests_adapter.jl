@@ -32,8 +32,13 @@
 #                to answer at all). Per fixture; the run continues.
 #   unavailable  a `compiler_unavailable`: this compiler does not exist in this
 #                binding, or its runtime is not configured here. A fact about
-#                the BINDING, so it is the whole output and the remaining
-#                fixtures are not attempted.
+#                the BINDING, so it is the whole output and no fixture is
+#                reported. `run_inline_tests` catches a build failure per
+#                assertion, so the answer never arrives as an exception here:
+#                it is asked for UP FRONT (`compiler_unavailable_reason`), and a
+#                fixture whose every assertion failed on `compiler_unavailable`
+#                alone reaches the same whole-output answer — the rule the Rust
+#                adapter applies.
 #   error        anything else the load, the build or the run threw. Per
 #                fixture, and RED whatever the fixture's `required` map says.
 #
@@ -157,7 +162,35 @@ function solver_alg(file)
     return OrdinaryDiffEqTsit5.Tsit5()
 end
 
-# One fixture's answer, or `:unavailable` with its reason.
+# Why this binding cannot answer for `compiler` at all, or `nothing` if it can.
+# The question goes to the library's own first step — `esm_problem` resolves
+# the compiler's plan before it loads anything — so the adapter never decides
+# availability itself, and a compiler that is unavailable here is reported once
+# rather than once per assertion of every fixture.
+function compiler_unavailable_reason(compiler)
+    try
+        EarthSciAST._plan_for(Symbol(compiler))
+    catch err
+        err isa SimulateError && err.code == ERROR_CODES.COMPILER_UNAVAILABLE &&
+            return sprint(showerror, err)
+        rethrow()
+    end
+    return nothing
+end
+
+# The whole-output `unavailable` answer.
+unavailable_payload(compiler, reason) = Dict{String,Any}(
+    "binding" => BINDING, "compiler" => compiler,
+    "status" => "unavailable", "reason" => first(reason, 400))
+
+# Thrown out of `run_fixture` when a fixture's run says the COMPILER is
+# unavailable, so `main` can replace the whole output.
+struct CompilerUnavailable <: Exception
+    reason::String
+end
+
+# One fixture's answer. Throws `CompilerUnavailable` for a run in which the
+# compiler, not the document, was what failed.
 function run_fixture(manifest, fx, manifest_path, compiler)
     path = fixture_path(manifest_path, fx)
     isfile(path) || error("fixture document not found at $path")
@@ -189,6 +222,8 @@ function run_fixture(manifest, fx, manifest_path, compiler)
     codes = [refusal_code(r.message) for r in results if !r.passed]
     if length(codes) == length(results) && !isempty(codes) &&
        all(c -> c !== nothing, codes) && length(unique(codes)) == 1
+        codes[1] == "compiler_unavailable" &&
+            throw(CompilerUnavailable(results[1].message))
         return Dict{String,Any}(
             "status" => "refused",
             "code" => codes[1],
@@ -198,9 +233,23 @@ function run_fixture(manifest, fx, manifest_path, compiler)
     return Dict{String,Any}("assertions" => entries)
 end
 
+function write_payload(output_path, payload)
+    mkpath(dirname(abspath(output_path)))
+    open(output_path, "w") do io
+        JSON3.write(io, payload)
+        write(io, "\n")
+    end
+end
+
 function main(argv)
     manifest_path, output_path, compiler = parse_args(argv)
     manifest = JSON3.read(read(manifest_path, String))
+
+    reason = compiler_unavailable_reason(compiler)
+    if reason !== nothing
+        write_payload(output_path, unavailable_payload(compiler, reason))
+        return 0
+    end
 
     fixtures = Dict{String,Any}()
     failed = String[]
@@ -209,19 +258,15 @@ function main(argv)
         entry = try
             run_fixture(manifest, fx, manifest_path, compiler)
         catch err
-            msg = sprint(showerror, err)
-            if occursin("compiler_unavailable", msg)
+            if err isa CompilerUnavailable ||
+               (err isa SimulateError && err.code == ERROR_CODES.COMPILER_UNAVAILABLE)
                 # A fact about the BINDING, not about a document: it is the
                 # whole output and the remaining fixtures are not attempted.
-                result = Dict{String,Any}(
-                    "binding" => BINDING, "compiler" => compiler,
-                    "status" => "unavailable", "reason" => first(msg, 400))
-                mkpath(dirname(abspath(output_path)))
-                open(output_path, "w") do io
-                    JSON3.write(io, result); write(io, "\n")
-                end
+                why = err isa CompilerUnavailable ? err.reason : sprint(showerror, err)
+                write_payload(output_path, unavailable_payload(compiler, why))
                 return 0
             end
+            msg = sprint(showerror, err)
             code = refusal_code(msg)
             if code !== nothing
                 Dict{String,Any}("status" => "refused", "code" => code,
@@ -234,13 +279,8 @@ function main(argv)
         fixtures[id] = entry
     end
 
-    result = Dict{String,Any}("binding" => BINDING, "compiler" => compiler,
-                              "fixtures" => fixtures)
-    mkpath(dirname(abspath(output_path)))
-    open(output_path, "w") do io
-        JSON3.write(io, result)
-        write(io, "\n")
-    end
+    write_payload(output_path, Dict{String,Any}("binding" => BINDING, "compiler" => compiler,
+                                                "fixtures" => fixtures))
     # A non-zero exit WITH a parsable report is legal and is how a run that
     # broke on one fixture still hands the runner the rest.
     isempty(failed) && return 0
