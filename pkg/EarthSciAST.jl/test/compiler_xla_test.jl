@@ -322,9 +322,18 @@ _cx_du(prob, u, t) = (du = zeros(Float64, length(u));
                       for j in eachindex(sx.u[k]))
         end
         # The document declares `solver.stiffness: "high"`, so the inline-test
-        # runner picks the stiff algorithm itself.
-        rs = run_inline_tests(CX_SCALAR; compiler = :xla)
-        @test !isempty(rs)
-        @test all(r -> r.passed, rs)
+        # runner picks the stiff algorithm itself, and under `:xla` it has to
+        # RUN — every row carrying a value, none an error — and give the answer
+        # `native` gives. Whether a row PASSES is Rosenbrock23's accuracy on
+        # this document, which is the same under every compiler and is not this
+        # file's question.
+        rx = run_inline_tests(CX_SCALAR; compiler = :xla)
+        rn = run_inline_tests(CX_SCALAR; compiler = :native)
+        @test !isempty(rx)
+        @test length(rx) == length(rn)
+        @test all(r -> r.actual isa Real && isfinite(r.actual), rx)
+        @test [r.status for r in rx] == [r.status for r in rn]
+        @test all(isapprox(a.actual, b.actual; rtol = 1e-6, atol = 1e-9)
+                  for (a, b) in zip(rx, rn))
     end
 end

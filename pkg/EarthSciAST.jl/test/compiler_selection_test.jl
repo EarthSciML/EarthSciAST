@@ -387,9 +387,13 @@ end
         @test isapprox(J, Jx; rtol = 1e-6, atol = 1e-6)
         @test calls[] == 4                  # n + 1: f(u) once, one per column
         @test u == [0.7, -1.3, 250.0]       # the caller's state is not touched
+        # A forward difference cancels to within eps(|f|)/h, so the time
+        # derivative is checked at a state whose f is O(1): the 250 above makes
+        # f₃ ≈ 750, whose cancellation error alone is several 1e-6.
+        v = [0.7, -1.3, 0.25]
         dT = zeros(3)
-        CSEL._XlaFdTgrad(f!, 3)(dT, u, nothing, t)
-        @test isapprox(dT, [u[2], 0.0, -2t]; rtol = 1e-6, atol = 1e-6)
+        CSEL._XlaFdTgrad(f!, 3)(dT, v, nothing, t)
+        @test isapprox(dT, [v[2], 0.0, -2t]; rtol = 1e-6, atol = 1e-6)
         # Only an `:xla` Problem carries them; every other compiler's `f!` is a
         # Julia function the solver differentiates itself.
         @test CSEL._ode_derivatives(esm_problem(_CSEL_AGREE[1], (0.0, 1.0))) ==
