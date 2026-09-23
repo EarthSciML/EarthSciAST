@@ -11,9 +11,8 @@
 //! spatial field — `reduce: L2_error | Linf_error` against a `reference`,
 //! or the pure collapsers `integral | mean | max | min` — or point-sample it
 //! via `coords`. This module drives the official
-//! [`crate::simulate::simulate`] pipeline (which dispatches array/spatial
-//! files to the vectorized `simulate_array` runtime) and collapses fields
-//! per assertion.
+//! [`crate::problem::esm_problem`] / [`crate::problem::solve`] pipeline (the
+//! `simulate_array` runtime) and collapses fields per assertion.
 //!
 //! Cross-binding pinned conventions (identical in the Julia / Python / Rust
 //! bindings; the esm-spec leaves these open, so determinism requires
@@ -1479,9 +1478,7 @@ pub fn ephemeral_injected_file(
 ///   errored with "has no cells in var_map".
 ///
 /// Kept to exactly what will be read, because naming something here is not
-/// free: on the scalar backend it walks the observed graph over the output grid
-/// (`crate::problem::observed_trajectories`), and on the array backend a
-/// requested array observed joins the output-node dependency cone. So a
+/// free: a requested array observed joins the output-node dependency cone. So a
 /// declared variable that is NOT an observed — a state, whose row the
 /// trajectory already carries, or a parameter — is left out, and so is one
 /// whose declared rank does not match the assertion form. A name this component
@@ -1661,8 +1658,8 @@ fn time_dependent_observeds(model: &Model) -> std::collections::BTreeSet<String>
 /// The ordinary answer for a state-free document is
 /// [`crate::problem::static_observed_graph`], which evaluates the observed
 /// graph at each asserted time and needs none of this. This guard covers what
-/// is left: a document with nothing to integrate that could not be flattened
-/// or compiled into such a graph — a data-ingesting one, whose content IS its
+/// is left: a document with nothing to integrate whose observeds are not a
+/// scalar graph — a shaped or data-ingesting one, whose content IS its
 /// build-time fields. Answering a `t`-dependent assertion out of those fields
 /// would report the value at `tspan.0` for a question asked at another time,
 /// which is exactly the outcome issue #406 is about, so it is refused by name
@@ -1744,8 +1741,8 @@ fn static_evaluation_times(saveat: &[f64], start: f64, end: f64) -> Vec<f64> {
 /// This is the path `esm simulate` already takes — a document with no
 /// differential equations is EVALUATED rather than solved (`✓ Static
 /// evaluation complete: N field(s)`) — reached here through the primitive that
-/// command's own static path runs,
-/// [`crate::problem::evaluate_static_observeds_at`].
+/// command's own static path runs, the array runtime's stateless evaluation
+/// ([`crate::problem::evaluate_static_observeds_over`]).
 /// Before issue #406 the runner had no such branch: it handed the compiled,
 /// STATE-FREE right-hand side to diffsol, which reported "Exceeded maximum
 /// number of nonlinear solver failures (51) at time = 0" for a document that
@@ -1753,10 +1750,9 @@ fn static_evaluation_times(saveat: &[f64], start: f64, end: f64) -> Vec<f64> {
 /// tested, and the diagnostic named the nonlinear solver rather than the real
 /// condition.
 ///
-/// A SHAPED state-free document takes the array runtime under
-/// `Rhs::Always` and carries no scalar observed graph on its backend;
-/// [`crate::problem::static_observed_graph`] hands back the one compiled at
-/// construction for it, exactly the graph `simulate` evaluates.
+/// A SHAPED state-free document is not answered here
+/// ([`crate::problem::static_observed_graph`] is `None` for it): its answers
+/// are the fields its build materialized.
 ///
 /// **Why one evaluation PER TIME rather than one at `t = 0`.** esm-spec §6.6.3
 /// defines an assertion's `time` as "Simulation time at which to evaluate the
@@ -1783,22 +1779,11 @@ fn static_trajectory(prob: &EsmProblem, times: &[f64]) -> Option<Result<Solution
     if times.is_empty() {
         return None;
     }
-    let mut columns = Vec::with_capacity(times.len());
-    for &t in times {
-        match crate::problem::evaluate_static_observeds_at(prob, &graph, t) {
-            Ok(v) => columns.push(v),
-            Err(e) => return Some(Err(format!("simulate failed: {e}"))),
-        }
-    }
-
-    let state_variable_names: Vec<String> = columns[0].iter().map(|(n, _)| n.clone()).collect();
-    let mut state: Vec<Vec<f64>> =
-        vec![Vec::with_capacity(times.len()); state_variable_names.len()];
-    for column in columns {
-        for (row, (_, v)) in column.into_iter().enumerate() {
-            state[row].push(v);
-        }
-    }
+    let rows = match crate::problem::evaluate_static_observeds_over(prob, &graph, times) {
+        Ok(rows) => rows,
+        Err(e) => return Some(Err(format!("simulate failed: {e}"))),
+    };
+    let (state_variable_names, state): (Vec<String>, Vec<Vec<f64>>) = rows.into_iter().unzip();
     Some(Ok(Solution {
         time: times.to_vec(),
         state,
@@ -2473,15 +2458,11 @@ fn run_component_tests(
         // esm-spec §6.6.3 / §6.6.5: an assertion reads an OBSERVED, and an
         // observed has no ODE slot. The array runtime exposes every 0-D
         // observed as a trajectory row unasked, but an ARRAY-valued one only
-        // when it is REQUESTED, and the SCALAR backend exposes only what the
-        // caller NAMES. So the runner names them — exactly the observeds this
-        // test's assertions read, at the rank the assertion form reads them,
-        // and nothing else. Without this an algebraic scalar was unassertable
-        // in any component that carried no array (the model then takes the
-        // scalar backend, whose trajectory holds states only) and in any
-        // component that integrates, and a STATE-DEPENDENT array observed was
-        // unassertable anywhere (the build inspection hoists only the
-        // state-free ones).
+        // when it is REQUESTED. So the runner names them — exactly the
+        // observeds this test's assertions read, at the rank the assertion
+        // form reads them, and nothing else. Without this a STATE-DEPENDENT
+        // array observed would be unassertable (the build inspection hoists
+        // only the state-free ones).
         for name in assertion_observed_requests(run_file, model_name, t) {
             // Additive: a caller's own request stands.
             if !run_opts.output_observed.contains(&name) {
@@ -2674,8 +2655,8 @@ fn run_component_tests(
 
 /// Run every inline test (esm-spec §6.6, including the §6.6.5 PDE
 /// assertions) of the selected model(s) of `file` through the official
-/// simulation pathway ([`crate::simulate::simulate`], which routes
-/// array/spatial files to the vectorized array runtime), and return one
+/// simulation pathway ([`crate::problem::esm_problem`] /
+/// [`crate::problem::solve`], the array runtime), and return one
 /// [`AssertionResult`] per assertion — carrying the ACTUAL reduction
 /// value alongside pass/fail, so conformance harnesses can record and
 /// cross-compare the numbers.

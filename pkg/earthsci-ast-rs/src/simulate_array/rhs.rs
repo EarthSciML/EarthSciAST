@@ -133,6 +133,12 @@ impl RhsScratch {
         }
     }
 
+    /// The observeds the last untaped call materialized. On a scratch that
+    /// carries a tape, read [`Self::taped_observeds`] instead.
+    pub(super) fn observed_arrays(&self) -> &ArrMap {
+        &self.observed_arrays
+    }
+
     /// The observeds the tape published on the last call, or `None` on a
     /// scratch that carries no tape.
     pub(super) fn taped_observeds(&self) -> Option<&ArrMap> {

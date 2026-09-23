@@ -1,11 +1,10 @@
 //! Native array runtime for `faq`, `makearray`, `index`, `reshape`,
 //! `transpose`, `concat`, and `broadcast` expression nodes (gt-oxr).
 //!
-//! This module sits alongside [`crate::simulate`] and handles the subset of
-//! ESM models that use array-shaped state variables and the array-op AST
-//! nodes introduced in gt-t5c. It is invoked from [`crate::simulate`] when
-//! the top-level dispatcher detects array-op nodes in the file; pure-scalar
-//! models continue to go through the existing scalar interpreter.
+//! This is the crate's one evaluator: [`crate::problem::esm_problem`] builds it
+//! for every document, scalar or gridded — its tape under `native` / `xla` and
+//! its per-cell oracle under `interpreter` (API_SPEC §5.8). The solver
+//! plumbing and run vocabulary around it live in [`crate::simulate`].
 //!
 //! ## Approach
 //!
@@ -54,9 +53,9 @@
 // This runtime is compiled for wasm too (EarthSciAST-akz): it reaches
 // s2geometry only through the already-wasm-safe `crate::geometry` API (planar
 // clips work; spherical/geodesic returns a runtime `GeometryError` stub on
-// wasm), and its solver is the same diffsol/Faer path the scalar solver
-// export already runs client-side — so no native-only dependency remains, and
-// planar / geometry-free PDEs run in the browser via `crate::simulate::simulate`.
+// wasm), and its solver is the diffsol/Faer path, which is pure Rust — so no
+// native-only dependency remains, and planar / geometry-free PDEs run in the
+// browser.
 #![allow(
     clippy::type_complexity,
     clippy::collapsible_if,
@@ -83,18 +82,16 @@ pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_inventio
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
 pub(crate) use compile::{model_tree_any, parse_subsystem_model};
-pub(crate) use eval::eval_observed_recurrence;
+pub(crate) use eval::{check_scalar_evaluable, eval_observed_recurrence, eval_scalar_expression};
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
     take_const_array_oob,
 };
 // The scalar-op leaf kernel is defined once here (backs the per-cell oracle and
-// the vectorized overlay); re-exported crate-wide so the scalar interpreter
-// `crate::simulate::eval_op` routes through the SAME definition instead of
-// re-implementing the arithmetic/comparison/logical algebra (knot #3a).
-pub(crate) use eval::{
-    apply_binary, apply_unary, eval_expression_with_extents_and_consts_shared, fold_scalar,
-};
+// the vectorized overlay); re-exported crate-wide so a caller outside the
+// runtime that needs one operator's numeric meaning (the expression
+// simplifier) routes through the SAME definition.
+pub(crate) use eval::{apply_binary, eval_expression_with_extents_and_consts_shared};
 pub use rhs::RhsScratch;
 
 use compile::*;
@@ -704,8 +701,8 @@ pub struct ArrayCompiled {
     const_scope: Rc<ConstArrayScope>,
     /// The single-model namespace (the top-level `models` map key), set by
     /// [`Self::from_file`]. The raw single-model path keys params/states by their
-    /// BARE variable names (`R_0`, `psi[i,j]`), but the scalar backend, the
-    /// `flatten` path, and the Julia toolkit all namespace them (`Model.R_0`).
+    /// BARE variable names (`R_0`, `psi[i,j]`), but the `flatten` path and the
+    /// Julia toolkit namespace them (`Model.R_0`).
     /// So a caller's `parameters` / `initial_conditions` override key is accepted
     /// in EITHER form: a `<namespace>.` prefix is stripped before lookup (WS3
     /// cross-toolkit override-naming parity). `None` on the `from_flattened`

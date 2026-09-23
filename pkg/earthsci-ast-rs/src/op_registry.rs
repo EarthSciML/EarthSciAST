@@ -526,11 +526,7 @@ pub const STRUCTURAL_DERIVATIVE_WRT: &str = "t";
 /// Every consumer of a `D` node reads its axis through this one function. The
 /// default is a property of the FORMAT, not of any one pipeline, and spelling
 /// it out per call site is what let it be applied on some paths and dropped on
-/// others: `simulate::lhs::state_lhs_name` matched `Some("t")` and therefore
-/// did not recognize `D(z)` as the derivative of `z` at all, so a document that
-/// is correct per §4.2 built a system whose state had no derivative equation
-/// and was refused at interpreter build with a diagnostic naming the missing
-/// equation rather than the unapplied default (EarthSciAST#407).
+/// others (EarthSciAST#407).
 #[must_use]
 pub fn derivative_wrt(node: &ExpressionNode) -> &str {
     node.wrt.as_deref().unwrap_or(STRUCTURAL_DERIVATIVE_WRT)

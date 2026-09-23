@@ -234,7 +234,7 @@ fn the_interpreter_takes_the_document_native_refused() {
 /// `models` map at all until flattening), a discretized PDE, and an
 /// aggregate/contraction document.
 const AGREEMENT_FIXTURES: &[&str] = &[
-    // A 0-D ODE — the shape the scalar interpreter used to own outright.
+    // A 0-D ODE.
     "tests/simulation/simple_ode.esm",
     // A `reaction_systems`-only document: no `models` map at all until
     // flattening lowers its reactions, which is the routing the `!= 1` fix

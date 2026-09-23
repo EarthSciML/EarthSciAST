@@ -310,6 +310,101 @@ fn check_evaluable_ops(expr: &Expr) -> Result<(), CompileError> {
     }
 }
 
+/// Evaluate a standalone SCALAR expression to one number — the evaluator
+/// behind [`crate::expression::evaluate`].
+///
+/// `params` / `param_names` are the scalar bindings, positionally; `t` is the
+/// independent variable. The per-cell oracle does the work, gated first by
+/// [`check_scalar_evaluable`], so an operator with no scalar value is refused
+/// by name before any of the expression is evaluated.
+///
+/// # Errors
+///
+/// Everything [`check_scalar_evaluable`] reports, and the evaluator's own
+/// fail-closed faults (an unbound name, an out-of-range const-array gather) as
+/// [`CompileError::InterpreterBuildError`].
+pub(crate) fn eval_scalar_expression(
+    expr: &Expr,
+    params: &[f64],
+    param_names: &[String],
+    t: f64,
+) -> Result<f64, CompileError> {
+    check_scalar_evaluable(expr)?;
+    let value = eval_expression(expr, &HashMap::new(), params, param_names, t)?;
+    value
+        .as_scalar()
+        .ok_or_else(|| CompileError::InterpreterBuildError {
+            details: "the expression is array-valued; a scalar evaluation has one number \
+                      to return"
+                .to_string(),
+        })
+}
+
+/// [`check_evaluable`] for an entry point whose answer is ONE NUMBER computed
+/// from scalar bindings ([`eval_scalar_expression`]).
+///
+/// On top of the runtime gate it refuses, naming the operator, what has no
+/// scalar value over scalar operands: the array / tensor ops, the geometry
+/// ops, an array-valued `const` (except as a `fn` argument, where it is the
+/// `interp.*` table or axis), and a structural `D`, which [`eval_op_named`]
+/// answers with the `NaN` sentinel because a right-hand-side `D` never
+/// legitimately reaches evaluation (esm-spec §4.2).
+///
+/// The layers run in [`check_evaluable`]'s order with this one before the
+/// Float32 layer, so an op that trips both (`intersect_polygon`) is reported as
+/// `unevaluable_operator`: declaring `Float64` would not make it evaluable here.
+pub(crate) fn check_scalar_evaluable(expr: &Expr) -> Result<(), CompileError> {
+    check_no_spatial_ops(expr)?;
+    check_evaluable_ops(expr)?;
+    check_scalar_ops(expr)?;
+    crate::precision::check_f32_supported(expr)
+}
+
+/// The [`check_scalar_evaluable`] layer that refuses the ops with no scalar
+/// value, applied over the whole tree.
+fn check_scalar_ops(expr: &Expr) -> Result<(), CompileError> {
+    let Expr::Operator(node) = expr else {
+        return Ok(());
+    };
+    let no_scalar_value = match node.op.as_str() {
+        "D"
+        | "index"
+        | "faq"
+        | "makearray"
+        | "reshape"
+        | "transpose"
+        | "concat"
+        | "broadcast"
+        | "intersect_polygon"
+        | "polygon_intersection_area" => true,
+        "const" => !node
+            .value
+            .as_ref()
+            .is_some_and(serde_json::Value::is_number),
+        _ => false,
+    };
+    if no_scalar_value {
+        return Err(CompileError::UnevaluableOperatorError {
+            op: node.op.clone(),
+        });
+    }
+    let is_fn = node.op == "fn";
+    let mut first_err: Option<CompileError> = None;
+    node.for_each_child(&mut |child| {
+        let table_arg = is_fn && matches!(child, Expr::Operator(c) if c.op == "const");
+        if first_err.is_none()
+            && !table_arg
+            && let Err(e) = check_scalar_ops(child)
+        {
+            first_err = Some(e);
+        }
+    });
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
 pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     eval_op_named(node.op.as_str(), node, ctx)
 }
@@ -400,15 +495,13 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         //
         // A right-hand-side `D` is resolved to a tendency by `flatten`'s phase
         // 5b′, or refused with `unlowered_operator` before any build (esm-spec
-        // §4.2). It used to answer `0.0` "for parity with the scalar
-        // interpreter" — the parity was real and all three evaluators were
-        // wrong together, which is how four shipped documents came to compute
-        // silent zeros. §4.2 forbids inventing a value here, IN PARTICULAR `0`,
-        // which passes an `expected: 0` assertion silently where `NaN` fails
-        // every finite one.
+        // §4.2). §4.2 forbids inventing a value here, IN PARTICULAR `0`, which
+        // passes an `expected: 0` assertion silently where `NaN` fails every
+        // finite one.
         //
-        // Unlike the scalar interpreter, `D` must STAY in `is_evaluable_op`
-        // here: `check_evaluable_side` walks an equation's LHS and unwraps only
+        // `D` must STAY in `is_evaluable_op` here (the single-expression
+        // `check_scalar_evaluable` refuses it by name instead):
+        // `check_evaluable_side` walks an equation's LHS and unwraps only
         // `ic`, so delisting `D` would reject every document that states a
         // differential equation. Teaching that gate to unwrap a structural `D`
         // LHS as it unwraps `ic` would let this arm go too.

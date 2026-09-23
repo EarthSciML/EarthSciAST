@@ -1,26 +1,27 @@
-//! Native ODE simulation via [`diffsol`] (gt-5ws, v1).
+//! The solver plumbing and the run vocabulary around the array runtime.
 //!
-//! This module provides a *correctness-first* simulation API for the Rust
-//! Core tier. It consumes a [`FlattenedSystem`] (the canonical output of
-//! [`crate::flatten`]) and runs it through diffsol's BDF / SDIRK / explicit
-//! Runge-Kutta solvers.
+//! The one Rust interpreter is [`crate::simulate_array`] — its tape under
+//! `native` / `xla` and its per-cell oracle under `interpreter` (API_SPEC
+//! §5.8). This module holds what every solve of it shares: the public option
+//! and result vocabulary ([`Alg`], [`SolveOptions`], [`Solution`]), the
+//! [`SimulateError`] surface, the diffsol step loop, esm-spec §6.6.2
+//! caller-key canonicalization, and the routing that builds the runtime from a
+//! document.
 //!
 //! ## Scope
 //!
-//! - **ODE only.** [`FlattenedSystem::independent_variables`] must equal `["t"]`.
-//!   Hybrid PDE / spatial systems return [`CompileError::UnsupportedDimensionalityError`].
+//! - **ODE only.** A system still carrying a spatial independent variable
+//!   holds an undiscretized operator and is refused with
+//!   [`CompileError::UnsupportedDimensionalityError`].
 //! - **No event handling.** Models with non-empty `continuous_events` /
 //!   `discrete_events` return [`CompileError::UnsupportedConstruct`]
 //!   (esm-spec §9.6.6 `unsupported_construct`).
 //! - **Both targets.** diffsol's Faer backend is pure Rust and cross-compiles to
-//!   wasm32 (spike S1), so this module is compiled for the browser too. The one
-//!   native-only seam is the dispatch into [`crate::simulate_array`] for
-//!   array-op / spatial files, which is `cfg`-gated off wasm.
+//!   wasm32 (spike S1), so this module is compiled for the browser too.
 //!
 //! ## Usage
 //!
-//! This module is the compiled right-hand side and the solver plumbing around
-//! it. The public entry point is the EsmProblem/`solve` surface in
+//! The public entry point is the EsmProblem/`solve` surface in
 //! [`crate::problem`] (`esm-libraries-spec.md` §2.5):
 //!
 //! ```no_run
@@ -33,20 +34,15 @@
 //!
 //! ## Module layout
 //!
-//! The module is split along the stages a solve passes through: `errors`
-//! (the [`SimulateError`] surface), `api` (the public option and result
-//! vocabulary — [`Alg`], [`SolveOptions`], [`Solution`]), `compiled` (the
-//! [`Compiled`] interpreter and its solve entry points), `build_phases` (the
-//! named phases [`Compiled::from_flattened`] runs), `driver` (the solver step
-//! loop and the array/spatial routing), `override_keys` (esm-spec §6.6.2
-//! caller-key canonicalization), `resolve` ([`ResolvedExpr`] and the pass that
-//! builds it), `interpret` (the hot evaluation loop), and `lhs` (equation
-//! left-hand-side classification). Every item is re-exported here, so all
-//! existing `crate::simulate::*` paths resolve unchanged.
+//! `errors` (the [`SimulateError`] surface), `api` (the public option and
+//! result vocabulary), `driver` (the solver step loop and the routing into
+//! [`crate::simulate_array`]), `override_keys` (esm-spec §6.6.2 caller-key
+//! canonicalization), and `lhs` (the observed-unknown report hosts build a run
+//! UI from). Every item is re-exported here, so `crate::simulate::*` paths
+//! resolve unchanged.
 
-use crate::flatten::{FlattenedSystem, flatten, flatten_model};
-use crate::simulate_array::{apply_binary, apply_unary, fold_scalar};
-use crate::types::{EsmFile, Expr, Model};
+use crate::flatten::{FlattenedSystem, flatten};
+use crate::types::EsmFile;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
@@ -54,29 +50,19 @@ use thiserror::Error;
 // never needs it, so `diffsol` sits behind the `solve` Cargo feature and every
 // item that touches it is gated the same way.
 #[cfg(feature = "solve")]
-use diffsol::{
-    Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, OdeSolverMethod, Op, Sdirk, VectorHost,
-};
+use diffsol::{OdeSolverMethod, Op, VectorHost};
 
 mod api;
-mod build_phases;
-mod compiled;
 mod driver;
 mod errors;
-mod interpret;
 mod lhs;
 pub(crate) mod override_keys;
-mod resolve;
 
 pub use api::*;
-use build_phases::*;
-pub use compiled::*;
 pub use driver::*;
 pub use errors::*;
-pub use interpret::*;
 pub use lhs::*;
 pub(crate) use override_keys::*;
-pub use resolve::*;
 
 // ============================================================================
 // Inline unit tests
@@ -85,7 +71,21 @@ pub use resolve::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ExpressionNode;
+    use crate::problem::{EsmProblem, ProblemOptions, esm_problem, solve};
+
+    /// Build `json` into an [`EsmProblem`] over `[0, 1]` with the parameter
+    /// overrides `p` — the one route every document takes.
+    fn problem_of(json: &str, p: HashMap<String, f64>) -> Result<EsmProblem, SimulateError> {
+        let file = crate::parse::load_string(json).expect("parse fixture");
+        esm_problem(
+            &file,
+            (0.0, 1.0),
+            ProblemOptions {
+                p,
+                ..Default::default()
+            },
+        )
+    }
 
     fn solution_with_rows(names: &[&str], namespace: Option<&str>) -> Solution {
         Solution {
@@ -114,438 +114,9 @@ mod tests {
         assert_eq!(unnamed.index_of("M.x"), None);
     }
 
-    #[test]
-    fn interpret_arithmetic() {
-        // 2 * (3 + 4) = 14
-        let e = ResolvedExpr::Op {
-            op: "*".to_string(),
-            args: vec![
-                ResolvedExpr::Number(2.0),
-                ResolvedExpr::Op {
-                    op: "+".to_string(),
-                    args: vec![ResolvedExpr::Number(3.0), ResolvedExpr::Number(4.0)],
-                },
-            ],
-        };
-        assert!((interpret(&e, &[], &[], &[], 0.0) - 14.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn interpret_state_param_time() {
-        // state[0] * param[0] + t  with state=[2], params=[3], t=10 -> 16
-        let e = ResolvedExpr::Op {
-            op: "+".to_string(),
-            args: vec![
-                ResolvedExpr::Op {
-                    op: "*".to_string(),
-                    args: vec![ResolvedExpr::State(0), ResolvedExpr::Param(0)],
-                },
-                ResolvedExpr::Time,
-            ],
-        };
-        assert!((interpret(&e, &[2.0], &[3.0], &[], 10.0) - 16.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn interpret_unary_minus_and_pow() {
-        // (-x)^2 with x=4 -> 16
-        let e = ResolvedExpr::Op {
-            op: "^".to_string(),
-            args: vec![
-                ResolvedExpr::Op {
-                    op: "-".to_string(),
-                    args: vec![ResolvedExpr::State(0)],
-                },
-                ResolvedExpr::Number(2.0),
-            ],
-        };
-        assert!((interpret(&e, &[4.0], &[], &[], 0.0) - 16.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn interpret_transcendentals_and_relational() {
-        // ifelse(x > 0, log(x), 0)
-        let e = ResolvedExpr::Op {
-            op: "ifelse".to_string(),
-            args: vec![
-                ResolvedExpr::Op {
-                    op: ">".to_string(),
-                    args: vec![ResolvedExpr::State(0), ResolvedExpr::Number(0.0)],
-                },
-                ResolvedExpr::Op {
-                    op: "log".to_string(),
-                    args: vec![ResolvedExpr::State(0)],
-                },
-                ResolvedExpr::Number(0.0),
-            ],
-        };
-        let x_pos = std::f64::consts::E;
-        // ifelse(true, log(e^1), 0) = 1
-        assert!((interpret(&e, &[x_pos], &[], &[], 0.0) - 1.0).abs() < 1e-12);
-        assert_eq!(interpret(&e, &[-1.0], &[], &[], 0.0), 0.0);
-    }
-
-    /// Resolve a bare operator node against empty scopes — the one funnel every
-    /// expression this interpreter evaluates passes through.
-    fn resolve_it(expr: &Expr) -> Result<ResolvedExpr, CompileError> {
-        resolve_expr(
-            expr,
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-        )
-    }
-
-    /// A WELL-FORMED operator node for `op`: the minimum arity the registry
-    /// admits, plus the sidecar fields `op_registry::check_node` insists on for
-    /// the two ops whose operator is data. Both are supplied so the registry's
-    /// own checks cannot mask the evaluability check under test.
-    fn node_with_legal_arity(op: &str) -> Expr {
-        let arity = crate::op_registry::arity_of(op).expect("registry-legal op");
-        let n = (0..=3)
-            .find(|n| arity.admits(*n))
-            .expect("some arity in 0..=3 is admitted");
-        Expr::Operator(std::sync::Arc::new(ExpressionNode {
-            op: op.to_string(),
-            args: (0..n).map(|_| Expr::Number(1.0)).collect(),
-            // `broadcast`'s arithmetic is named by a sibling string, and
-            // `check_node` rejects a node without one before evaluability is
-            // ever consulted.
-            broadcast_fn: (op == "broadcast").then(|| "+".to_string()),
-            ..Default::default()
-        }))
-    }
-
-    /// `is_evaluable_op` must agree with `eval_op`'s arms for every op the
-    /// registry admits: any registry op NOT listed as evaluable must be
-    /// REJECTED by `resolve_expr`, so `eval_op`'s `unreachable!` backstop stays
-    /// unreachable. The array evaluator pins the same property next to its own
-    /// oracle (`simulate_array::eval`'s
-    /// `every_registry_op_is_either_evaluable_or_gated`); this is the scalar
-    /// half, and it is what makes the invariant structural rather than a
-    /// property of who happens to call in (issue #220).
-    #[test]
-    fn every_registry_op_is_either_evaluable_or_gated() {
-        for op in [
-            "+",
-            "-",
-            "*",
-            "/",
-            "^",
-            "neg",
-            "exp",
-            "log",
-            "sqrt",
-            "min",
-            "max",
-            "ifelse",
-            "and",
-            "or",
-            "not",
-            "atan2",
-            "==",
-            "!=",
-            "<",
-            "<=",
-            ">",
-            ">=",
-            "D",
-            "Pre",
-            "const",
-            "true",
-            "fn",
-            "index",
-            "faq",
-            "makearray",
-            "broadcast",
-            "reshape",
-            "transpose",
-            "concat",
-            "skolem",
-            "rank",
-            "distinct",
-            "argmin",
-            "argmax",
-            "ic",
-            "enum",
-            "table_lookup",
-            "apply_expression_template",
-            "intersect_polygon",
-            "polygon_intersection_area",
-        ] {
-            assert!(
-                crate::op_registry::is_core_op(op),
-                "{op} is listed here but the registry does not carry it"
-            );
-            if is_evaluable_op(op) {
-                continue;
-            }
-            let err = resolve_it(&node_with_legal_arity(op))
-                .expect_err("an op with no rule must not resolve");
-            assert!(
-                matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == op),
-                "{op} is registry-legal and has no scalar rule, so it must be gated BY NAME: \
-                 {err:?}"
-            );
-        }
-    }
-
-    /// The §4.2 core set minus THIS evaluator's rules, pinned member by member
-    /// so a rule added or lost is a test diff and not a silent behaviour change.
-    ///
-    /// It is a superset of the array runtime's nine-op gap: the scalar
-    /// interpreter's values are `f64`, so the array/tensor and geometry ops are
-    /// unevaluable here too — every one of which used to come back from
-    /// `eval_op` as a `NaN` NUMBER. `const` is in the gap because its value
-    /// lives on the node rather than in `args`; `resolve_expr` folds a SCALAR
-    /// `const` to a `Number` before the oracle is consulted, so only an ARRAY
-    /// one is actually refused.
-    ///
-    /// `D` is in the gap and the ARRAY evaluator's is not, which is the one
-    /// asymmetry here: `simulate_array`'s `check_evaluable_side` walks an
-    /// equation's LHS and unwraps only `ic`, so delisting `D` there would
-    /// reject every document that states a differential equation. Nothing is
-    /// lost by the asymmetry — both routes refuse an unresolved right-hand-side
-    /// `D` upstream, at `flatten::first_unresolved_rhs_time_derivative` — and
-    /// closing it means teaching that gate to unwrap a structural `D` LHS too.
-    #[test]
-    fn the_scalar_evaluable_gap_is_pinned() {
-        const CORE: &[&str] = &[
-            "+",
-            "-",
-            "*",
-            "/",
-            "^",
-            "neg",
-            "exp",
-            "log",
-            "ln",
-            "log10",
-            "sqrt",
-            "abs",
-            "sign",
-            "floor",
-            "ceil",
-            "sin",
-            "cos",
-            "tan",
-            "asin",
-            "acos",
-            "atan",
-            "sinh",
-            "cosh",
-            "tanh",
-            "asinh",
-            "acosh",
-            "atanh",
-            "atan2",
-            "min",
-            "max",
-            "ifelse",
-            "==",
-            "!=",
-            "<",
-            "<=",
-            ">",
-            ">=",
-            "and",
-            "or",
-            "not",
-            "D",
-            "ic",
-            "Pre",
-            "const",
-            "true",
-            "fn",
-            "enum",
-            "table_lookup",
-            "apply_expression_template",
-            "faq",
-            "makearray",
-            "index",
-            "broadcast",
-            "reshape",
-            "transpose",
-            "concat",
-            "skolem",
-            "rank",
-            "distinct",
-            "argmin",
-            "argmax",
-            "intersect_polygon",
-            "polygon_intersection_area",
-        ];
-        for op in CORE {
-            assert!(
-                crate::op_registry::is_core_op(op),
-                "{op} is listed here but the registry does not carry it"
-            );
-        }
-        let mut gap: Vec<&str> = CORE
-            .iter()
-            .copied()
-            .filter(|op| !is_evaluable_op(op))
-            .collect();
-        gap.sort_unstable();
-        assert_eq!(
-            gap,
-            vec![
-                // esm-spec §4.2: a right-hand-side structural `D` is resolved
-                // to its operand's tendency by `flatten`'s phase 5b′, or
-                // refused with `unlowered_operator` before any build; a `D` on
-                // an equation LHS never reaches `resolve_expr`, which runs only
-                // over right-hand sides, observed bodies and event bodies. So
-                // the only `D` that could arrive here is a pipeline bug, and it
-                // is refused by name rather than answered — it used to have a
-                // `0.0` rule "for legacy parity" with the array evaluators,
-                // which is how four shipped documents computed silent zeros.
-                "D",
-                "apply_expression_template",
-                "argmax",
-                "argmin",
-                "broadcast",
-                "concat",
-                "const",
-                "distinct",
-                "enum",
-                "faq",
-                "ic",
-                "index",
-                "intersect_polygon",
-                "makearray",
-                "polygon_intersection_area",
-                "rank",
-                "reshape",
-                "skolem",
-                "table_lookup",
-                "transpose",
-            ]
-        );
-    }
-
-    /// The gate is not merely top-level: an unevaluable op NESTED inside an
-    /// otherwise-fine expression is still refused, because `resolve_expr`
-    /// recurses through every operand before building the parent node.
-    #[test]
-    fn a_nested_unevaluable_op_is_gated_too() {
-        let inner = node_with_legal_arity("rank");
-        let outer = Expr::Operator(std::sync::Arc::new(ExpressionNode {
-            op: "+".to_string(),
-            args: vec![Expr::Number(1.0), inner],
-            ..Default::default()
-        }));
-        let err = resolve_it(&outer).expect_err("a nested unevaluable op must not resolve");
-        assert!(
-            matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == "rank"),
-            "{err:?}"
-        );
-    }
-
-    /// `neg`, `true` and a scalar `const` are §4.2 core ops that the ARRAY
-    /// evaluator, Python, Julia and Go all answer for, and that the public
-    /// stable-tier `evaluate` (esm `api-surface.json`) must therefore answer
-    /// for here too. This interpreter had no rule for any of the three, so each
-    /// came back as a silent `NaN` — including the equation RHS
-    /// `{"op":"const","value":0.0}` in the shared conformance fixture
-    /// `tests/conformance/function_tables/inline_test/fixture.esm`. Gating them
-    /// instead of NaN-ing them would have been a diagnostic where four other
-    /// bindings return a number, so they are evaluated.
-    #[test]
-    fn neg_true_and_a_scalar_const_evaluate_as_the_other_bindings_do() {
-        let eval = |e: &Expr| {
-            let r = resolve_it(e).expect("core op with a rule must resolve");
-            interpret(&r, &[], &[], &[], 0.0)
-        };
-        let node = |op: &str, args: Vec<Expr>, value: Option<serde_json::Value>| {
-            Expr::Operator(std::sync::Arc::new(ExpressionNode {
-                op: op.to_string(),
-                args,
-                value,
-                ..Default::default()
-            }))
-        };
-
-        assert_eq!(eval(&node("neg", vec![Expr::Number(3.5)], None)), -3.5);
-        assert_eq!(eval(&node("true", Vec::new(), None)), 1.0);
-        assert_eq!(
-            eval(&node("const", Vec::new(), Some(serde_json::json!(2.5)))),
-            2.5
-        );
-
-        // An ARRAY `const` has no `f64` representation, so it stays gated —
-        // by name, not as a NaN.
-        let err = resolve_it(&node(
-            "const",
-            Vec::new(),
-            Some(serde_json::json!([1.0, 2.0])),
-        ))
-        .expect_err("an array `const` has no scalar value");
-        assert!(
-            matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == "const"),
-            "{err:?}"
-        );
-    }
-
-    /// The evaluability gate runs BEFORE the §11.3 Float32 gate, and that
-    /// ordering is pinned rather than incidental.
-    ///
-    /// `intersect_polygon` and `polygon_intersection_area` are the two ops that
-    /// trip both: `precision::f32_unsupported_reason` names them (their
-    /// geometry kernels are binary64-only), and this interpreter has no rule
-    /// for them in ANY precision. `unevaluable_operator` is therefore the more
-    /// fundamental answer — telling the author to declare `Float64` would send
-    /// them to fix the wrong thing, since the scalar path still could not
-    /// evaluate the op. Under Float64 the ordering is unobservable; this asks
-    /// the question where it is observable.
-    #[test]
-    fn the_evaluability_gate_precedes_the_float32_gate() {
-        for op in ["intersect_polygon", "polygon_intersection_area"] {
-            assert!(
-                crate::precision::f32_unsupported_reason(op, None).is_some(),
-                "{op} must be one of the ops that trips BOTH gates, or this pins nothing"
-            );
-            let _f32 = crate::precision::enter(crate::precision::Precision::Float32);
-            let err = resolve_it(&node_with_legal_arity(op))
-                .expect_err("an op with no scalar rule must not resolve under Float32 either");
-            assert!(
-                matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == op),
-                "{op} must report `unevaluable_operator`, not `float32_unsupported`: {err:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn topo_sort_empty_and_simple() {
-        // No deps -> any order is fine, but length matches.
-        let deps = vec![HashSet::new(), HashSet::new(), HashSet::new()];
-        let order = topo_sort(&deps).unwrap();
-        assert_eq!(order.len(), 3);
-
-        // 0 -> 1 -> 2 (2 depends on 1, 1 depends on 0)
-        let mut s1 = HashSet::new();
-        s1.insert(0);
-        let mut s2 = HashSet::new();
-        s2.insert(1);
-        let deps = vec![HashSet::new(), s1, s2];
-        let order = topo_sort(&deps).unwrap();
-        assert_eq!(order, vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn topo_sort_cycle_detected() {
-        // 0 -> 1 -> 0
-        let mut s0 = HashSet::new();
-        s0.insert(1);
-        let mut s1 = HashSet::new();
-        s1.insert(0);
-        let deps = vec![s0, s1];
-        assert!(topo_sort(&deps).is_err());
-    }
-
-    /// Cyclic algebraic-state systems must be rejected at compile time
-    /// (esm-0kt). `from_flattened` should return an `InterpreterBuildError`
-    /// whose message names the offending variables.
+    /// A cycle among the unknowns bare-LHS equations define must be rejected at
+    /// construction (esm-0kt, esm-spec §4.9.6), with a diagnostic naming the
+    /// variables on it.
     #[test]
     fn algebraic_cycle_rejected() {
         // Two algebraic states a, b form a cycle: a = b + 1, b = a * 2.
@@ -608,23 +179,23 @@ mod tests {
               }
             }
             "#;
-        let file = crate::parse::load_string(json).expect("parse fixture");
-        let err = Compiled::from_file(&file).expect_err("cycle must be rejected");
-        let msg = err.to_string();
-        assert!(msg.contains("Cyclic"), "expected cycle error, got: {msg}");
+        let err = problem_of(json, HashMap::new()).expect_err("cycle must be rejected");
+        let SimulateError::Compile(CompileError::ObservedCycle { cycle }) = &err else {
+            panic!("expected an observed cycle, got: {err:?}");
+        };
         assert!(
-            msg.contains("a") && msg.contains("b"),
-            "cycle error should name both vars: {msg}"
+            cycle.iter().any(|v| v.ends_with('a')) && cycle.iter().any(|v| v.ends_with('b')),
+            "the cycle should name both vars: {cycle:?}"
         );
     }
 
-    /// A `fn`-op observed (`interp.linear` fuel-table lookup) must evaluate
-    /// through the closed-function registry on the scalar path — not NaN out.
-    /// Regression for the coupled-fire blocker: `resolve_expr` used to drop the
-    /// `fn` op's `name` and its inline array args, so `interp.linear` fell
-    /// through `eval_op`'s `_ => NaN` arm and poisoned every downstream state.
+    /// A `fn`-op observed (`interp.linear` fuel-table lookup) of a 0-D model
+    /// must evaluate through the closed-function registry — not NaN out.
+    /// Regression for the coupled-fire blocker, where the callee `name` and the
+    /// inline array arguments were dropped on the way to evaluation, so
+    /// `interp.linear` poisoned every downstream state.
     #[test]
-    fn fn_op_interp_linear_scalar_path() {
+    fn fn_op_interp_linear_in_a_scalar_model() {
         // looked_up = interp.linear([10,20,40,80,160], [0,1,2,3,4], code);
         // dx/dt = looked_up, x(0) = 0. At code = 2.0 the lookup is the exact
         // knot 40.0, so x(1) = 40.0.
@@ -697,8 +268,7 @@ mod tests {
               }
             }
             "#;
-        let file = crate::parse::load_string(json).expect("parse fixture");
-        let compiled = Compiled::from_file(&file).expect("compile succeeds");
+        let prob = problem_of(json, HashMap::new()).expect("build succeeds");
         // Explicit tolerances, not the defaults. The assertion below pins
         // D(1) to exp(-1) within 1e-6, which is a statement about the RHS
         // seeing the right G — not about how tightly the production default
@@ -711,9 +281,7 @@ mod tests {
             saveat: Some(vec![0.0, 1.0]),
             ..Default::default()
         };
-        let sol = compiled
-            .solve((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
-            .expect("simulate succeeds");
+        let sol = solve(&prob, &opts).expect("simulate succeeds");
         let x_idx = sol
             .state_variable_names
             .iter()
@@ -729,9 +297,8 @@ mod tests {
         // code = 0.5 the lookup is 0.5*(10+20)... = 15.0.
         let mut params = HashMap::new();
         params.insert("M.code".to_string(), 0.5);
-        let sol2 = compiled
-            .solve((0.0, 1.0), &params, &HashMap::new(), &opts)
-            .expect("simulate succeeds");
+        let prob2 = problem_of(json, params).expect("build succeeds");
+        let sol2 = solve(&prob2, &opts).expect("simulate succeeds");
         assert!(
             (sol2.state[x_idx][1] - 15.0).abs() < 1e-6,
             "x(1) should be 15.0 at code=0.5, got {}",
@@ -788,8 +355,7 @@ mod tests {
               }
             }
             "#;
-        let file = crate::parse::load_string(json).expect("parse fixture");
-        let compiled = Compiled::from_file(&file).expect("compile succeeds");
+        let prob = problem_of(json, HashMap::new()).expect("build succeeds");
         // Explicit tolerances, not the defaults. The assertion below pins
         // D(1) to exp(-1) within 1e-6, which is a statement about the RHS
         // seeing the right G — not about how tightly the production default
@@ -802,9 +368,7 @@ mod tests {
             saveat: Some(vec![0.0, 1.0]),
             ..Default::default()
         };
-        let sol = compiled
-            .solve((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
-            .expect("simulate succeeds");
+        let sol = solve(&prob, &opts).expect("simulate succeeds");
         let x_idx = sol
             .state_variable_names
             .iter()
@@ -990,17 +554,11 @@ mod tests {
 
     #[test]
     fn an_observed_unknown_needs_no_default() {
-        // The same shape as `algebraic_ic_reconciled_to_constraint`, except G
+        // The same shape as `an_observed_unknowns_default_is_ignored`, except G
         // declares NO default at all — as `NOx = NO + NO2` does in real
         // chemistry, where the sum is defined by its parts and there is nothing
-        // sensible to seed it with.
-        //
-        // This used to fail with `Invalid initial condition 'M.G'`, which was
-        // wrong twice over: the value is overwritten by `apply_algebraic_ics`
-        // before the solve starts, and the model is perfectly well posed. It
-        // also split the ecosystem — the TypeScript binding injected a
-        // placeholder before calling simulate, so a model that ran in a browser
-        // failed on a server calling this function directly.
+        // sensible to seed it with. The model is perfectly well posed, and a
+        // demand for G's initial condition would say otherwise.
         let json = r#"
             {
               "esm": "1.0.0",
@@ -1053,31 +611,34 @@ mod tests {
               }
             }
             "#;
-        let file = crate::parse::load_string(json).expect("parse fixture");
-        let compiled = Compiled::from_file(&file).expect("compile succeeds");
+        let prob = problem_of(json, HashMap::new()).expect("build succeeds");
         let opts = SolveOptions {
             saveat: Some(vec![0.0, 1.0]),
             ..Default::default()
         };
-        let sol = compiled
-            .solve((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
+        let sol = solve(&prob, &opts)
             .expect("a defaultless OBSERVED unknown must not block a simulation");
 
         // `G` is DEFINED by `G = D`, so esm 1.0.0 makes it an observed unknown:
-        // it is eliminated rather than integrated, and has no state row and no
-        // initial condition to supply. `D` is the only thing solved for.
+        // it is eliminated rather than integrated, and has no state slot and no
+        // initial condition to supply. `D` is the only thing solved for. (The
+        // solution still reports `G`, as an observed row after the states.)
         assert!(
-            !sol.state_variable_names.iter().any(|n| n.ends_with("G")),
+            !prob.state_variable_names().iter().any(|n| n.ends_with("G")),
             "an observed unknown is eliminated, not integrated: {:?}",
+            prob.state_variable_names()
+        );
+        assert!(
+            sol.state_variable_names.iter().any(|n| n.ends_with("D")),
+            "{:?}",
             sol.state_variable_names
         );
         assert!(
-            compiled
-                .observed_variable_names()
+            prob.observed_variable_names()
                 .iter()
                 .any(|n| n.ends_with("G")),
             "G must be reported as an observed: {:?}",
-            compiled.observed_variable_names()
+            prob.observed_variable_names()
         );
     }
 
@@ -1130,15 +691,8 @@ mod tests {
               }
             }
             "#;
-        let file = crate::parse::load_string(json).expect("parse fixture");
-        let compiled = Compiled::from_file(&file).expect("compile succeeds");
-        let err = compiled
-            .solve(
-                (0.0, 1.0),
-                &HashMap::new(),
-                &HashMap::new(),
-                &SolveOptions::default(),
-            )
+        let err = problem_of(json, HashMap::new())
+            .and_then(|prob| solve(&prob, &SolveOptions::default()))
             .expect_err("a differential state with no initial value must be refused");
         assert!(
             matches!(err, SimulateError::InvalidInitialCondition { .. }),
@@ -1208,8 +762,7 @@ mod tests {
               }
             }
             "#;
-        let file = crate::parse::load_string(json).expect("parse fixture");
-        let compiled = Compiled::from_file(&file).expect("compile succeeds");
+        let prob = problem_of(json, HashMap::new()).expect("build succeeds");
         // Explicit tolerances, not the defaults. The assertion below pins
         // D(1) to exp(-1) within 1e-6, which is a statement about the RHS
         // seeing the right G — not about how tightly the production default
@@ -1222,9 +775,7 @@ mod tests {
             saveat: Some(vec![0.0, 1.0]),
             ..Default::default()
         };
-        let sol = compiled
-            .solve((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
-            .expect("simulate succeeds");
+        let sol = solve(&prob, &opts).expect("simulate succeeds");
 
         let d_idx = sol
             .state_variable_names
@@ -1232,9 +783,9 @@ mod tests {
             .position(|n| n.ends_with("D"))
             .expect("D in solution");
         assert!(
-            !sol.state_variable_names.iter().any(|n| n.ends_with("G")),
+            !prob.state_variable_names().iter().any(|n| n.ends_with("G")),
             "G is observed, so it is eliminated rather than integrated: {:?}",
-            sol.state_variable_names
+            prob.state_variable_names()
         );
 
         assert!(

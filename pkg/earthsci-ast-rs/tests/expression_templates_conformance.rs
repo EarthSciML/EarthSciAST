@@ -120,7 +120,7 @@ fn unlowered_spatial_d_loads_but_is_gated_before_evaluation() {
 
     // (2) Reaching compilation, the spatial `D` is rejected with the uniform
     //     `unlowered_operator` code.
-    let err = earthsci_ast::Compiled::from_file(&file)
+    let err = earthsci_ast::esm_problem(&file, (0.0, 1.0), Default::default())
         .expect_err("spatial D must be rejected before evaluation");
     assert!(
         err.to_string().contains("unlowered_operator"),
@@ -147,7 +147,7 @@ fn unlowered_integral_loads_but_is_gated_before_evaluation() {
         earthsci_ast::load_path(&fixture_path).expect("fixture must load under open namespace");
 
     // (2) Reaching compilation, it is rejected with the uniform code.
-    let err = earthsci_ast::Compiled::from_file(&file)
+    let err = earthsci_ast::esm_problem(&file, (0.0, 1.0), Default::default())
         .expect_err("integral must be rejected before evaluation");
     assert!(
         err.to_string().contains("unlowered_operator"),

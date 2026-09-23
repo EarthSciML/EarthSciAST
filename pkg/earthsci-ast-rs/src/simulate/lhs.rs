@@ -1,48 +1,8 @@
 use super::*;
 
 // ============================================================================
-// LHS classification helpers
+// Observed-unknown report
 // ============================================================================
-
-/// If `lhs` is `D(state_var, t)`, return the state variable name.
-///
-/// The axis is read through [`crate::op_registry::is_rewrite_target_derivative`],
-/// which applies esm-spec §4.2's default: an ABSENT `wrt` MEANS `t`. Matching
-/// `Some("t")` here instead dropped that default on the scalar interpreter's
-/// path while the array path — which classifies its LHS through
-/// [`crate::classification::lhs_form`] — kept it, so `{"op":"D","args":["z"]}`
-/// over a SCALAR state built a system with no derivative equation for `z` and
-/// was refused at interpreter build, while the shaped spelling of the same
-/// document simulated (EarthSciAST#407).
-pub(super) fn state_lhs_name(lhs: &Expr) -> Option<String> {
-    let Expr::Operator(node) = lhs else {
-        return None;
-    };
-    if node.op != "D" {
-        return None;
-    }
-    if node.args.len() != 1 {
-        return None;
-    }
-    if crate::op_registry::is_rewrite_target_derivative(node) {
-        // A SPATIAL `D` on an LHS is a rewrite target, not a state's tendency.
-        return None;
-    }
-    match &node.args[0] {
-        Expr::Variable(name) => Some(name.clone()),
-        _ => None,
-    }
-}
-
-/// If `lhs` is a plain variable reference, return its name (used for
-/// observed-variable algebraic equations).
-pub(super) fn observed_lhs_name(lhs: &Expr) -> Option<String> {
-    if let Expr::Variable(name) = lhs {
-        Some(name.clone())
-    } else {
-        None
-    }
-}
 
 /// Flattened names of the unknowns whose value is fixed by a bare-LHS equation
 /// `x = …` (e.g. `NOx = NO + NO2`) rather than by a derivative `D(x, t) = …` —

@@ -360,21 +360,18 @@ impl ArrayCompiled {
     /// `None` on the flattened path, whose names are already qualified.
     ///
     /// The single-model build names its slots BARE (`u[1]`, `k`), because the
-    /// raw `Model` it consumed carries no namespace; the flattened build and
-    /// the scalar interpreter both qualify (`M.u[1]`). Reported here so
+    /// raw `Model` it consumed carries no namespace; the flattened build
+    /// qualifies them (`M.u[1]`). Reported here so
     /// [`crate::problem::EsmProblem`] can present ONE spelling whichever route
-    /// its document took — which matters now that `native` builds this runtime
-    /// for every document, including the 0-D ones the scalar interpreter used
-    /// to name.
+    /// its document took.
     pub(crate) fn namespace(&self) -> Option<&str> {
         self.namespace.as_deref()
     }
 
     /// The OBSERVED variables this model declares, in dependency order.
     ///
-    /// The array-runtime twin of `Compiled::observed_variable_names`, so
-    /// [`crate::problem::observed_trajectories`] resolves a caller's name
-    /// against the same §5.8 precedence on either backend.
+    /// What [`crate::problem::observed_trajectories`] resolves a caller's name
+    /// against, with the §5.8 precedence.
     pub fn observed_variable_names(&self) -> Vec<String> {
         self.observed_rules
             .iter()
@@ -539,6 +536,116 @@ impl ArrayCompiled {
         );
     }
 
+    /// Whether every observed rule is a plain scalar expression: a
+    /// [`AlgebraicRule::Scalar`] whose body [`check_scalar_evaluable`] admits
+    /// (no array, tensor or geometry op).
+    ///
+    /// The precondition under which a stateless evaluation
+    /// ([`Self::evaluate_stateless_observeds`]) is the whole answer for a
+    /// document with nothing to integrate. A SHAPED document answers
+    /// differently — from the fields its build materialized — so it is told
+    /// apart here rather than by what an evaluation happens to produce.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
+    pub(crate) fn observeds_are_scalar(&self) -> bool {
+        self.observed_rules.iter().all(|rule| match rule {
+            AlgebraicRule::Scalar { body, .. } => check_scalar_evaluable(body).is_ok(),
+            _ => false,
+        })
+    }
+
+    /// Every 0-D observed of a model with NO state vector, evaluated at each of
+    /// `times` — `(name, values)` in dependency order, one value per time.
+    ///
+    /// The answer for a document with nothing to integrate: its observeds are
+    /// pure functions of the parameters and `t`, so one evaluation per time is
+    /// the whole of it, and no integrator is involved. Each evaluation is one
+    /// right-hand-side call over the empty state, on the evaluator this model
+    /// serves — the tape under `native` / `xla`, the per-cell oracle under
+    /// `interpreter` — so the values are the ones a solve would report.
+    ///
+    /// Names are the rules' own (flattened on the `from_flattened` path, bare
+    /// with [`Self::namespace`] on the single-model one). An observed with more
+    /// than one cell is not reported; it has no scalar value per time. One
+    /// declared with a single cell (`[1]`) is, and the caller decides its rank
+    /// from the declaration.
+    ///
+    /// # Errors
+    ///
+    /// A parameter override that designates nothing, a parameter with neither
+    /// an override nor a default, and any fault the evaluator latched (an
+    /// out-of-range const-array gather, an unbound name) — all as a solve would
+    /// report them. A model that HAS state is refused rather than read at a
+    /// state nobody supplied.
+    pub(crate) fn evaluate_stateless_observeds(
+        &self,
+        params: &HashMap<String, f64>,
+        times: &[f64],
+    ) -> Result<Vec<(String, Vec<f64>)>, SimulateError> {
+        if self.n_states != 0 {
+            return Err(SimulateError::Compile(
+                crate::compile_error::CompileError::InterpreterBuildError {
+                    details: format!(
+                        "a stateless evaluation was asked of a model with {} state slot(s)",
+                        self.n_states
+                    ),
+                },
+            ));
+        }
+        let _precision_guard = self.precision.enter();
+        let param_vec = self.build_param_vec(params)?;
+        let mut scratch = RhsScratch::new(&self.var_shapes);
+        scratch.set_const_arrays(Rc::clone(&self.const_scope));
+        if self.tape_serves_passes() && !tape_disabled() {
+            let (prog, _report) = self.build_tape(&HashSet::new());
+            scratch.install_tape(Rc::new(prog), Rc::new(self.observed_rules.clone()));
+            scratch.set_exports_active(true);
+        }
+        let mut dy: Vec<f64> = Vec::new();
+        let mut out: Vec<(String, Vec<f64>)> = Vec::new();
+        crate::simulate_array::take_const_array_oob();
+        for (k, &t) in times.iter().enumerate() {
+            evaluate_rhs_with_scratch(
+                &RhsCall {
+                    rhs_rules: &self.rhs_rules,
+                    observed_rules: &self.observed_rules,
+                    var_shapes: &self.var_shapes,
+                    param_names: &self.param_names,
+                    state: &[],
+                    params: &param_vec,
+                    forcing: &self.forcing,
+                    t,
+                    declared: &self.declared_names,
+                },
+                &mut dy,
+                self.is_interpreter(),
+                &mut RhsStats::default(),
+                &mut scratch,
+            );
+            if let Some(details) = crate::simulate_array::take_const_array_oob() {
+                return Err(
+                    crate::compile_error::CompileError::InterpreterBuildError { details }.into(),
+                );
+            }
+            let obs = scratch
+                .taped_observeds()
+                .unwrap_or_else(|| scratch.observed_arrays());
+            if k == 0 {
+                out = self
+                    .observed_rules
+                    .iter()
+                    .map(observed_rule_var)
+                    .filter(|name| obs.get(*name).is_some_and(|a| a.len() == 1))
+                    .map(|name| (name.clone(), Vec::with_capacity(times.len())))
+                    .collect();
+            }
+            for (name, values) in &mut out {
+                let v = obs.get(name).and_then(|a| a.first().copied());
+                values.push(v.unwrap_or(f64::NAN));
+            }
+        }
+        Ok(out)
+    }
+
     /// Resolve the deferred scoped-reference / array `ic` equations
     /// (esm-spec §11.4.1) into per-slot initial values keyed by flat state slot.
     /// A loaded-field RHS (`InitialConditions.O3_init`) is read from the
@@ -641,7 +748,6 @@ impl ArrayCompiled {
     /// supplies the one namespace the names CANNOT show: the enclosing model's
     /// own, which the single-model path does not qualify its variables with —
     /// it is exactly what makes `P.sub.g` a legal spelling of `sub.g`.
-    #[cfg(feature = "solve")]
     fn override_namespaces(&self) -> std::collections::HashSet<String> {
         crate::simulate::namespace_scope(
             self.param_names
@@ -657,7 +763,6 @@ impl ArrayCompiled {
     /// vector (override > variable default; a parameter with neither is an
     /// [`SimulateError::InvalidParameter`]). The strict simulate-time
     /// counterpart of the lenient [`Self::debug_resolve_params`].
-    #[cfg(feature = "solve")]
     fn build_param_vec(&self, params: &HashMap<String, f64>) -> Result<Vec<f64>, SimulateError> {
         // esm-spec §6.6.2 caller-key canonicalization (see
         // `crate::simulate::canonicalize_override_keys`). This subsumes the

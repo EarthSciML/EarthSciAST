@@ -143,10 +143,8 @@ pub mod performance;
 // `faq` / `join` passes, so it cannot live inside the gated solver module.
 pub(crate) mod compile_error;
 
-// Scalar ODE simulation (gt-5ws). Compiled for wasm too: its diffsol/Faer path
-// is pure Rust (spike S1). The `simulate_array` (spatial) backend it dispatches
-// into stays native-only, so the wasm build runs pure-ODE / 0-D box models and
-// the array/spatial dispatch branch in `simulate::simulate` is `cfg`-gated off.
+// The solver plumbing and run vocabulary (gt-5ws). Compiled for wasm too: its
+// diffsol/Faer path is pure Rust (spike S1).
 pub(crate) mod simulate;
 
 // Compiled for wasm too (EarthSciAST-akz): the array/PDE runtime is
@@ -369,9 +367,8 @@ pub use performance::{CompactExpr, PerformanceError};
 #[cfg(feature = "parallel")]
 pub use reactions::stoichiometric_matrix_parallel;
 pub use simulate::{
-    Alg, Compiled, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, Progress, ProgressFn, ResolvedExpr,
-    ReturnCode, SimulateError, Solution, SolutionMetadata, SolveOptions, compile_array,
-    fold_constant_expr, interpret,
+    Alg, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, Progress, ProgressFn, ReturnCode, SimulateError,
+    Solution, SolutionMetadata, SolveOptions, compile_array,
 };
 
 // The EsmProblem / `solve` surface. `simulate` is deleted in all its forms.
