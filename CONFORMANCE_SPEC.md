@@ -6315,7 +6315,7 @@ Adapters are discovered the way §5.38's are, through
 | Binding | Adapter |
 |---|---|
 | Julia (reference) | `pkg/EarthSciAST.jl/scripts/compiler_agreement_adapter.jl` |
-| Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-compiler-agreement-adapter-rust.rs`, feature `conformance-adapters` — plus `xla` when, and only when, `--compiler xla` is requested, which the runner's own planned command adds |
+| Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-compiler-agreement-adapter-rust.rs`, feature `conformance-adapters` — plus `xla` when, and only when, `--compiler xla` is requested and `XLA_EXTENSION_DIR` is set, which the runner adds to the adapter command (the one place that choice is made) |
 | Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/compiler_agreement_adapter.py` |
 
 **Every problem-building stage NAMES its compiler.** A stage that calls
