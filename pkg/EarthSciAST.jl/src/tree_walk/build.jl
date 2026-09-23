@@ -6375,7 +6375,46 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
   program receives them as real inputs and an in-place refresh
   ([`sync_forcing!`](@ref)) stays visible to it.
 """
+# CONFORMANCE_SPEC §5.18.2: this evaluator computes in binary64 only, so a
+# variable whose working precision is binary32 — its own `element_type`, else the
+# document's `domain.element_type` — is refused rather than evaluated in another
+# precision. After esm-spec §4.7 "Working precision crosses a mount" a mounted
+# binary32 leaf reaches here as exactly such per-variable declarations.
+function _refuse_float32(model::Model, document::AbstractString, name::AbstractString)
+    for (vname, v) in model.variables
+        something(v.element_type, document) == "Float32" || continue
+        throw(TreeWalkError(ERROR_CODES.FLOAT32_UNSUPPORTED,
+            "variable '$(isempty(name) ? vname : "$(name).$(vname)")' is declared binary32 " *
+            "(element_type \"Float32\"), but the Julia tree-walk evaluator computes in " *
+            "binary64; refusing the build rather than returning a binary64 answer " *
+            "(CONFORMANCE_SPEC §5.18.2)"))
+    end
+    for (sname, sub) in model.subsystems
+        sub isa Model && _refuse_float32(sub, document, isempty(name) ? sname : "$(name).$(sname)")
+    end
+    return nothing
+end
+
+function _refuse_float32(file::EsmFile, model_name)
+    document = something(file.domain === nothing ? nothing : file.domain.element_type,
+                         "Float64")
+    models = file.models === nothing ? Dict{String,Model}() : file.models
+    for (name, model) in models
+        (model_name === nothing || name == model_name) || continue
+        model isa Model && _refuse_float32(model, document, name)
+    end
+    if document == "Float32" && file.reaction_systems !== nothing &&
+       !isempty(file.reaction_systems)
+        throw(TreeWalkError(ERROR_CODES.FLOAT32_UNSUPPORTED,
+            "the document declares `domain.element_type: \"Float32\"`, but the Julia " *
+            "tree-walk evaluator computes in binary64; refusing the build rather than " *
+            "returning a binary64 answer (CONFORMANCE_SPEC §5.18.2)"))
+    end
+    return nothing
+end
+
 function _build_evaluator(model::Model; kwargs...)
+    _refuse_float32(model, "Float64", "")
     f!, u0, p, tspan_default, var_map, _diag = _build_evaluator_impl(model; kwargs...)
     return f!, u0, p, tspan_default, var_map
 end
@@ -6460,6 +6499,7 @@ Delegate to the typed entry point after selecting the model.
 function _build_evaluator(file::EsmFile;
                          model_name::Union{Nothing,AbstractString}=nothing,
                          kwargs...)
+    _refuse_float32(file, model_name)
     model = _select_model(file, model_name)
     # Thread the document-scoped index-set registry (esm-spec v0.8.0) into the
     # typed evaluator, which no longer reads it off the `Model`. `_model_name`
@@ -6817,6 +6857,7 @@ function _build_evaluator_dict(esm::AbstractDict;
     # `coerce_esm_file` normalizes every dict-like carrier (JSON3 object,
     # native Dict, JSONLikeDict) itself — no JSON-string round-trip.
     file = coerce_esm_file(esm)
+    _refuse_float32(file, model_name)
 
     # ---- Value-invention front-door (RFC §6.1), on the TYPED IR ----
     # `OpExpr` preserves the full value-invention vocabulary (`id`, `distinct`,
