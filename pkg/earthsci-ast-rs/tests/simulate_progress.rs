@@ -60,8 +60,7 @@ const DECAY: &str = r#"
     }
     "#;
 
-/// `D(y[i])/dt = Σ_{j∈1..3} i*j` over `i ∈ 1..2` — a constant-RHS contraction
-/// that routes through the array runtime rather than the scalar interpreter.
+/// `D(y[i])/dt = Σ_{j∈1..3} i*j` over `i ∈ 1..2` — a constant-RHS contraction.
 const ARRAY: &str = r#"
     {
       "esm": "1.1.0",

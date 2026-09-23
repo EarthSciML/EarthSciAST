@@ -1088,8 +1088,7 @@ fn test_error_grad_in_array_simulator_rejected() {
 #[test]
 fn test_error_unknown_variable_in_array_model_rejected() {
     // The array-op build path (`ArrayCompiled::from_model`) must reject a
-    // reference to a genuinely-undeclared variable at BUILD time — the same
-    // contract the scalar interpreter enforces in `resolve_expr` (mirrors
+    // reference to a genuinely-undeclared variable at BUILD time (mirrors
     // tests/invalid/unknown_variable_ref.esm, whose RHS is `undefined_var * 2`).
     // Without the free-variable gate this name would fall through
     // `lookup_variable` to a silent `NaN`, poisoning the trajectory instead of
