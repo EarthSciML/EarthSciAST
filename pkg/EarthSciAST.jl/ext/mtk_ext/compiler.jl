@@ -159,16 +159,19 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
     # needs `ModelingToolkit.PDESystem` plus a discretizer (MethodOfLines) that
     # this compiler does not run. A DISCRETIZED spatial document — one whose
     # stencil is already `arrayop` over an index set — has no spatial IV and
-    # goes straight through.
-    ivs = [String(iv) for iv in flat.independent_variables if iv != :t]
-    isempty(ivs) || _mtk_refuse(_mtk_first_rule_label(flat),
-        "the document declares the continuous spatial independent variable" *
-        (length(ivs) == 1 ? " " : "s ") * join(ivs, ", ") * ", so it is a PDE. " *
-        "This compiler builds the ODE `ModelingToolkit.System`; a continuous " *
-        "spatial dimension needs `ModelingToolkit.PDESystem` and a " *
-        "discretization, which it does not run. Discretize the document (an " *
-        "`arrayop` stencil over an index set), or hand the flattened system to " *
-        "`ModelingToolkit.PDESystem` yourself. $_MTK_TRY_INSTEAD")
+    # goes straight through. The predicate is `_has_spatial_ivs`, the one
+    # `ModelingToolkit.System(flat)` enforces; the list is only for the message.
+    if _has_spatial_ivs(flat)
+        ivs = [String(iv) for iv in flat.independent_variables if iv != :t]
+        _mtk_refuse(_mtk_first_rule_label(flat),
+            "the document declares the continuous spatial independent variable" *
+            (length(ivs) == 1 ? " " : "s ") * join(ivs, ", ") * ", so it is a PDE. " *
+            "This compiler builds the ODE `ModelingToolkit.System`; a continuous " *
+            "spatial dimension needs `ModelingToolkit.PDESystem` and a " *
+            "discretization, which it does not run. Discretize the document (an " *
+            "`arrayop` stencil over an index set), or hand the flattened system to " *
+            "`ModelingToolkit.PDESystem` yourself. $_MTK_TRY_INSTEAD")
+    end
 
     for eq in flat.equations
         # A GEOMETRY LEAF. `polygon_intersection_area` / `intersect_polygon` are
@@ -329,18 +332,28 @@ end
 # `ic` on an algebraically determined variable IS a guess: the number to start
 # the consistent-initialization solve from, not a constraint on its answer.
 #
-# So: every initial condition whose variable is not an unknown of the COMPILED
-# system moves to `guesses`, where the initialization uses it and the residual
-# decides the value. A state the system still integrates keeps its initial
-# condition untouched, which is every ordinary document.
+# So: an initial condition whose variable is the left-hand side of an OBSERVED
+# equation of the COMPILED system — the variables `mtkcompile` eliminated —
+# moves to `guesses`, where the initialization uses it and the residual decides
+# the value. Nothing else moves. `initial_conditions` also holds every
+# parameter's default and a state the system still integrates, and both stay
+# exactly where they are, which is every ordinary document.
+#
+# An ARRAY is keyed by the whole array while the observed equations name its
+# cells, so an array moves when every one of its cells was eliminated. One
+# that was only partly eliminated keeps its initial condition: moving it would
+# silently start the integrated cells from nothing, where keeping it lets an
+# inconsistent eliminated cell fail the initialization loudly.
 function _mtk_ics_to_guesses!(system)
     ics = getfield(system, :initial_conditions)
     (ics isa AbstractDict && !isempty(ics)) || return String[]
-    kept = Set{Any}(Symbolics.unwrap(u) for u in ModelingToolkit.unknowns(system))
+    eliminated = Set{Any}(Symbolics.unwrap(oe.lhs)
+                          for oe in ModelingToolkit.observed(system))
+    isempty(eliminated) && return String[]
     guesses = getfield(system, :guesses)
     moved = Any[]
     for (var, val) in collect(pairs(ics))
-        Symbolics.unwrap(var) in kept && continue
+        _mtk_eliminated(Symbolics.unwrap(var), eliminated) || continue
         push!(moved, (var, val))
     end
     isempty(moved) && return String[]
@@ -349,6 +362,14 @@ function _mtk_ics_to_guesses!(system)
         guesses isa AbstractDict && (guesses[var] = val)
     end
     return String[string(var) for (var, _) in moved]
+end
+
+function _mtk_eliminated(v, eliminated::Set{Any})
+    v in eliminated && return true
+    SymUtils.symtype(v) <: AbstractArray || return false
+    cells = Symbolics.scalarize(v)
+    return !isempty(cells) &&
+           all(c -> Symbolics.unwrap(c) in eliminated, cells)
 end
 
 # ---------------------------------------------------------------------------
@@ -610,6 +631,11 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
     flat, doc = _mtk_run_system(input; metaparameters = metaparameters,
                                 base_path = base_path,
                                 renames_out = merged_renames)
+    # `model_name` selects under the SAME rule `:native` applies: its build runs
+    # `_select_model` against the flattened run document, whose one model is
+    # the whole flattened system — so both compilers accept the same names and
+    # raise the same error for any other.
+    EarthSciAST._select_model(EarthSciAST.coerce_esm_file(doc), model_name)
     _mtk_refuse_unsupported_document(flat)
 
     overrides = EarthSciAST._resolve_merged_renames(
@@ -626,11 +652,8 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
     # ESM → ModelingToolkit, then the structural compile. `mtkcompile` is what
     # the installed ModelingToolkit spells this; older versions called it
     # `structural_simplify`, and both names are tried so the compiler tracks the
-    # package rather than one release of it.
-    # `model_name` names the SYSTEM here. `flatten` has already merged the
-    # document into ONE system by the time this compiler sees it, so there is no
-    # model left to select; the keyword survives as the compiled system's name,
-    # which is what ModelingToolkit's own printing shows.
+    # package rather than one release of it. `model_name`, once selected above,
+    # names the compiled system, which is what ModelingToolkit's printing shows.
     name = model_name === nothing ? :esm : Symbol(String(model_name))
     system = ModelingToolkit.System(flat; name = name)
     system = _mtk_compile(system)
