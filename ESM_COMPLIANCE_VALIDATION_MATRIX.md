@@ -1379,6 +1379,23 @@ capability and no binding is exempt.
 | PREC-11-A-015 | An exempt variable MUST stay exempt through ARITHMETIC, not only through ingress: `floor(scc/1000)*1000` is `2260007000` in binary64 and `2260006912` in binary32 | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
 | PREC-11-A-016 | A compiled artifact MUST carry the per-variable table and re-arm it at every run entry, not only at build | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
 | PREC-11-A-017 | A document in which no variable declares an `element_type` MUST be bit-unchanged, on the same code path, from PREC-11-A-001…010 alone | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
+| PREC-11-A-018 | A mount MUST carry a mounted document's declared `domain.element_type` onto every variable of the spliced component that declares none, whenever it differs from the mounting document's effective precision (its own declaration, else inherited, else `"Float64"` at a root); a leaf declaring none adopts its mounter's; exactly those fields are written, at both mount forms and through nested mounts, and they survive load → emit | esm-spec §4.7 "Working precision crosses a mount"; CONFORMANCE_SPEC §5.18.2b | Yes | parsing |
+| PREC-11-A-019 | A component that would need the field but is, or carries, a reaction system MUST be refused at load (`element_type_uncarried`) | esm-spec §4.7; CONFORMANCE_SPEC §5.18.2b | Yes | validation |
+| PREC-11-A-020 | Mixing a mounted binary32 variable with a binary64 one of the mounting document, by an equation or by a coupling, MUST be `mixed_element_type` | CONFORMANCE_SPEC §5.18.2, §5.18.2b | Yes | validation |
+
+**Mounts (PREC-11-A-018…020).** All five bindings implement -018 and -019 at
+every mount form they implement, gated by the shared fixtures in
+`tests/conformance/mount_element_type/` (each binding's own suite asserts
+`expected.json`). Go and Julia gained `ModelVariable.element_type` for it — both
+had dropped the field at load, so every per-variable override vanished on
+load → emit. Rust implements -020: the flattened equations are checked for
+`mixed_element_type` before either runtime builds (the per-model inference runs
+before flattening and never saw a coupling). Rust refuses a written `element_type` inside a
+`subsystems.<k>` component at problem build (`element_type_uncarried`), because
+its precision table and inference read top-level model variables only. **Julia**
+now refuses every binary32 variable at tree-walk build (`float32_unsupported`),
+and **Python** every binary32 variable except a recurrence's carried cell, rather
+than evaluate them in binary64.
 
 **Binding status.** Rust implements PREC-11-A-001…017
 (`pkg/earthsci-ast-rs/src/precision.rs`, gated by
@@ -1386,8 +1403,10 @@ capability and no binding is exempt.
 `pkg/earthsci-ast-rs/tests/fixtures/precision/`; the per-variable half in
 `pkg/earthsci-ast-rs/src/precision_infer.rs`). **Julia, Python, Go and
 TypeScript parse and round-trip `domain.element_type` but do not honour it**: a
-`"Float32"` document evaluates in binary64 there, which is the divergence this
-row exists to record. To match PREC-11-A-001…010, each needs (a) an
+`"Float32"` document evaluated in binary64 there, which is the divergence this
+row exists to record. Julia and Python now REFUSE it at build instead
+(`float32_unsupported`; Python keeps the recurrence carry it implements), which
+satisfies §5.18.2's no-silent-fallback clause without implementing binary32. To match PREC-11-A-001…010, each needs (a) an
 active-precision mode threaded to wherever it evaluates expressions, (b)
 per-operation rounding at every such site — including any monomorphized /
 vectorized fast path, which in Rust was four of the five arithmetic definitions

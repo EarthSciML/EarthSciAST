@@ -3178,7 +3178,9 @@ Obligations, per binding:
    honours the written fields with no mount-specific code. One that cannot
    carry a written field at some construct MUST refuse it
    (`element_type_uncarried`) — Rust does so for a field written into a
-   `subsystems.<k>` component. Mixing a mounted binary32 variable with a
+   `subsystems.<k>` component — and one that does not evaluate binary32 at all
+   MUST refuse the variable (`float32_unsupported`, §5.18.2), as Julia and
+   Python do. Mixing a mounted binary32 variable with a
    binary64 one of the mounting document, by an equation or by a coupling, is
    `mixed_element_type` (§5.18.2a).
 4. **Time integration.** A mounted binary32 leaf's states integrate as any
