@@ -911,6 +911,8 @@ impl ArrayCompiled {
 
         Ok(ArrayCompiled {
             runtime_mode: crate::simulate_array::RuntimeMode::default(),
+            #[cfg(feature = "xla")]
+            xla_rhs: std::cell::OnceCell::new(),
             var_shapes,
             scalar_state_names,
             scalar_state_index,

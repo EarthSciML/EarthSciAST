@@ -362,7 +362,9 @@ compiler's documentation rather than leaving a caller to discover it.
 entry point for a caller that wants the compiled right-hand side without a
 Problem around it, and it has substantial downstream use — and `compiler`
 answers both: `esm_problem(…; compiler=:xla)` IS the compiled right-hand side,
-and the downstream use migrates to that call. It then becomes private behind
+and the downstream use migrates to that call. The Rust binding has that call
+as of 2026-09-22 — `compiler = Xla` builds the emitted program and solves on
+it — so the shape the retirement assumes exists to be copied. It then becomes private behind
 `esm_problem`, with a deprecated alias for one minor; the forcing-buffer seam
 re-hangs on the Problem and the build-inspection record folds into
 `compiler_report`. `API_SPEC.md` §8 item 23 is the reconciliation row.
@@ -525,7 +527,19 @@ what each value MEANS, which is the part a binding must not reinterpret.
   whole value is being a second implementation. It is what the other compilers
   are checked against, and a caller selects it to check them.
 - **`xla`** — *a specialty compiler, and the kind that needs a heavy external
-  dependency.* A program lowered to StableHLO and executed through XLA.
+  dependency.* A program lowered to StableHLO and executed through XLA. Its
+  availability is a property of the BUILD and of the process, not of the
+  document: a binding that cannot load or start its XLA runtime answers
+  `compiler_unavailable` naming what to install, and MUST NOT answer by
+  building a different compiler. Where the emitted program does not cover
+  every evaluation the Problem performs — a binding may emit the right-hand
+  side and nothing else — the passes outside it MUST NOT be served by an
+  evaluator that declines on its own terms, because such an evaluator is what
+  makes the refusal below unenforceable: it puts rules back on a per-cell walk
+  with nothing in the report to show for it. Serving them from whatever
+  representation the emitter itself consumed satisfies this, because that
+  representation has already been gated. A binding states in its documentation
+  which passes the emitted program covers.
 - **`mtk`** — *a specialty compiler, and the kind that runs only some
   documents.* A ModelingToolkit system, structurally compiled and run through
   its own problem. It is the one compiler that runs **events and implicit

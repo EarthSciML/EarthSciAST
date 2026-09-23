@@ -20,15 +20,16 @@
         "python"
       ],
       "bindings_optional": [],
-      "note": "The strict default. Julia's strict build has landed, so julia must ANSWER for `native`; rust and python stay optional until theirs do and cross on the same one-way ratchet. A REFUSAL is governed by each fixture's `required` map, not by this list."
+      "note": "The strict default. All three strict builds have landed and all three crossed the one-way ratchet, so julia, rust and python must each ANSWER for `native`; `bindings_optional` is empty. A REFUSAL is governed by each fixture's `required` map, not by this list."
     },
     "xla": {
-      "bindings_required": [],
-      "bindings_optional": [
-        "julia",
+      "bindings_required": [
         "rust"
       ],
-      "note": "Julia needs Reactant loaded; Rust needs the `xla` feature and XLA_EXTENSION_DIR. Unconfigured is `unavailable`, not `refused`."
+      "bindings_optional": [
+        "julia"
+      ],
+      "note": "Julia needs Reactant loaded; Rust needs the `xla` feature and XLA_EXTENSION_DIR. Unconfigured is `unavailable`, not `refused`. Rust crossed the one-way ratchet on 2026-09-22: `esm_problem(compiler=xla)` emits the tape through the XLA emitter and runs the compiled right-hand side on the solve path, and all six fixtures agree with the golden with no refusals. `bindings_required` therefore means: a build that HAS the feature and the extension must answer, and a stage that runs this compiler is responsible for providing them -- which is why `scripts/test-conformance.sh` has no `xla` stage and the dedicated `XLA Compiled Backends` workflow, which fetches the extension, is where one belongs."
     },
     "mtk": {
       "bindings_required": [

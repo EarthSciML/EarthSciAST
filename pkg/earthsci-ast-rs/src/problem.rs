@@ -248,10 +248,31 @@ pub enum Compiler {
     /// performance promise of any kind. A caller selects it to CHECK another
     /// compiler, not to run a model.
     Interpreter,
-    /// StableHLO through XLA. Not yet reachable from `esm_problem`; the
-    /// emitter over the tape exists behind the `xla` feature
-    /// ([`crate::simulate_array`]'s XLA path) and is wired here in a later
-    /// phase. Refused with `compiler_unavailable` until then.
+    /// StableHLO through XLA: the specialty compiler that needs a heavy
+    /// external dependency to exist at all.
+    ///
+    /// The tape is lowered to an `rhs(u, p, t) -> du` XLA computation
+    /// (`crate::simulate_array::tape::xla_emit`) and run through PJRT
+    /// (`crate::xla_runtime`), so the Problem's right-hand side — and the
+    /// finite-difference Jacobian an implicit solve differences out of it —
+    /// ARE the compiled executable. The passes that are not the right-hand
+    /// side (the build-time materialization of constants and static
+    /// observeds, the per-segment seed, the inspection snapshot, and the
+    /// observeds reported at output times) are served from the SAME tape the
+    /// emitter was built from, because the emitted program's only output is
+    /// `du`. That is one evaluator, not two.
+    ///
+    /// **Strict twice over, and never a fallback.** A rule the tape cannot
+    /// lower and an instruction the emitter cannot lower are both
+    /// [`crate::compile_error::CompileError::CompilerRefusedRule`] at
+    /// construction, naming the rule and the reason; neither demotes to the
+    /// tape interpreter or to the per-cell oracle.
+    ///
+    /// It needs the `xla` Cargo feature AND a usable XLA runtime in this
+    /// process (an unpacked `xla_extension` release — see
+    /// `scripts/fetch-xla-extension.sh`). Without either, `esm_problem`
+    /// answers [`crate::SimulateError::CompilerUnavailable`], never a quiet
+    /// substitution.
     Xla,
     /// A ModelingToolkit system. Julia only; refused here with
     /// `compiler_unavailable`.
@@ -310,6 +331,20 @@ impl Compiler {
         })
     }
 
+    /// Whether this compiler is STRICT: a rule it cannot express is a
+    /// construction error naming the rule, never a quiet demotion to a slower
+    /// evaluator (API_SPEC §5.8, "The default is `native`, and it is strict").
+    ///
+    /// Both of the values this binding implements over the tape are strict —
+    /// `native`, which is the tape, and `xla`, which is the emitter over it —
+    /// and they are strict for the same reason: a compiler either runs the
+    /// whole document or names what it refused. `interpreter` is not strict
+    /// because it declines nothing it can evaluate; it IS the fallback the
+    /// other two refuse to take.
+    pub fn is_strict(self) -> bool {
+        matches!(self, Compiler::Native | Compiler::Xla)
+    }
+
     /// Every member, in the order API_SPEC §5.8 tabulates them.
     pub fn vocabulary() -> &'static [Compiler] {
         &[
@@ -342,9 +377,11 @@ pub struct CompilerRuleReport {
     /// (every right-hand-side call). The tier is the cost story: a decline at
     /// `const` costs once, the same decline at `continuous` costs per step.
     pub cadence: &'static str,
-    /// Where the rule landed: `"taped"`, `"fallback"` (the per-cell oracle
-    /// beneath the tape, reachable only outside a strict `native`), or
-    /// `"oracle"` (every rule under [`Compiler::Interpreter`], by design).
+    /// Where the rule landed: `"taped"`, `"xla"` (lowered from the tape into
+    /// the compiled XLA program, under [`Compiler::Xla`]), `"fallback"` (the
+    /// per-cell oracle beneath the tape, reachable only outside a strict
+    /// compiler), or `"oracle"` (every rule under [`Compiler::Interpreter`],
+    /// by design).
     pub tier: &'static str,
     /// For a `"fallback"`, the DEEPEST decline reason reached while trying to
     /// lower the rule. `None` otherwise.
@@ -400,10 +437,24 @@ impl CompilerReport {
         self.rules.iter().filter(|r| r.tier == "taped").count()
     }
 
+    /// How many rules were lowered out of the tape into the compiled XLA
+    /// program. Non-zero only under [`Compiler::Xla`], where it is every rule
+    /// — the build refuses the document otherwise.
+    pub fn n_xla(&self) -> usize {
+        self.rules.iter().filter(|r| r.tier == "xla").count()
+    }
+
     /// How many rules landed on the per-cell oracle — as a fallback beneath
     /// the tape, or, under [`Compiler::Interpreter`], by design.
+    ///
+    /// Counts the two oracle tiers by NAME rather than everything that is not
+    /// `"taped"`: an `"xla"` rule is compiled, and counting it here would
+    /// report the fastest tier in the crate as the slowest.
     pub fn n_oracle(&self) -> usize {
-        self.rules.iter().filter(|r| r.tier != "taped").count()
+        self.rules
+            .iter()
+            .filter(|r| matches!(r.tier, "oracle" | "fallback"))
+            .count()
     }
 
     /// Fused instruction groups in the compiled program. `0` under
@@ -428,6 +479,9 @@ impl std::fmt::Display for CompilerReport {
             self.n_taped(),
             self.n_oracle()
         )?;
+        if self.n_xla() > 0 {
+            write!(f, ", {} lowered into the XLA program", self.n_xla())?;
+        }
         if self.fused_groups > 0 {
             write!(
                 f,
@@ -1832,6 +1886,15 @@ pub fn esm_problem<'a>(
         &std::collections::HashSet::new(),
     )?;
 
+    // ---- (5c) `xla`: emit and compile, here, once. ------------------------
+    // AFTER the gate above, so a rule that never reached the tape is refused
+    // by name (with its cadence tier) rather than as whatever `Instr::Fallback`
+    // the emitter would have met. At construction rather than at the first
+    // step, because §2.5.10 puts the refusal at construction and because XLA
+    // compilation is the expensive step: a Problem pays it once, and every
+    // segment and every Jacobian call reuses the one executable.
+    install_xla_program(&backend, model_name.as_deref(), compiler)?;
+
     let prob = EsmProblem {
         doc: Rc::new(owned_json.unwrap_or(JsonValue::Null)),
         solver: doc_solver,
@@ -2166,22 +2229,28 @@ fn static_observed_fields(
         .collect()
 }
 
-/// Build the per-rule record, and — under a strict [`Compiler::Native`] —
-/// REFUSE the document when any rule failed to lower (esm-libraries-spec
-/// §2.5.10).
+/// Build the per-rule record, and — under a STRICT compiler ([`Compiler::Native`]
+/// or [`Compiler::Xla`]) — REFUSE the document when any rule failed to lower
+/// (esm-libraries-spec §2.5.10).
 ///
-/// This is the whole of `native`'s strictness, and it lives at construction
-/// for the reason §2.5.2 gives: a document that never became a Problem has no
-/// run to describe, so a build failure must be raised where the build happens.
+/// This is the whole of that strictness, and it lives at construction for the
+/// reason §2.5.2 gives: a document that never became a Problem has no run to
+/// describe, so a build failure must be raised where the build happens.
 ///
 /// **It gates more than the right-hand side.** §2.5.10 puts "the
 /// materialization of constants and static observeds at construction, the
 /// per-segment seed, the right-hand side, and the observeds reported at output
 /// times" all under the refusal. In this binding every one of those is an
 /// evaluation of the SAME rule set, so one gate over the rule set covers them
-/// all — and the driver then SERVES those passes from the tape under `native`
-/// (`simulate_array::driver`) instead of from the whole-array overlay, which
-/// is what makes the gate honest rather than merely necessary.
+/// all — and the driver then SERVES those passes from the tape under both
+/// strict compilers (`simulate_array::driver`) instead of from the whole-array
+/// overlay, which is what makes the gate honest rather than merely necessary.
+///
+/// `xla` is gated HERE as well as by its emitter, and the order matters: this
+/// gate names the rule and its cadence tier, while an emitter refusal can only
+/// name the instruction it choked on. A rule that never reached the tape is
+/// therefore reported as itself rather than as whatever `Instr::Fallback` the
+/// emitter would have met.
 fn build_compiler_report(
     backend: &Backend,
     model_name: Option<&str>,
@@ -2204,7 +2273,7 @@ fn build_compiler_report(
     // A per-variable element type is the one condition under which the array
     // runtime installs no tape at all, so under `native` it is a refusal
     // rather than a silent demotion to the overlay-then-oracle pair.
-    if compiler == Compiler::Native
+    if compiler.is_strict()
         && let Some(var) = crate::precision::first_variable_override()
     {
         return Err(SimulateError::Compile(
@@ -2228,7 +2297,7 @@ fn build_compiler_report(
     let mut rules = Vec::with_capacity(records.len());
     for r in records {
         let qualified = qualify(model, &r.name);
-        if compiler == Compiler::Native
+        if compiler.is_strict()
             && let Some(reason) = &r.fallback_reason
         {
             return Err(SimulateError::Compile(
@@ -2247,6 +2316,12 @@ fn build_compiler_report(
             // tape build above ran only to classify each rule's cadence and is
             // discarded; it evaluates nothing.
             (Compiler::Interpreter, _) => "oracle",
+            // Under `xla` the gate above has already refused anything that did
+            // not lower, so every rule reaching here is in the emitted
+            // program. It is reported as `"xla"` rather than as `"taped"`
+            // because the tape is where it was lowered FROM, not what
+            // evaluates it.
+            (Compiler::Xla, _) => "xla",
             (_, None) => "taped",
             (_, Some(_)) => "fallback",
         };
@@ -2284,22 +2359,125 @@ fn build_compiler_report(
 /// A refusal, never a substitution — answering `xla` by building `native`
 /// would make the compiler's name describe nothing, which is the failure
 /// §2.5.10 exists to prevent.
-fn unavailable_reason(compiler: Compiler) -> Option<&'static str> {
+fn unavailable_reason(compiler: Compiler) -> Option<String> {
     match compiler {
         Compiler::Native | Compiler::Interpreter => None,
-        Compiler::Xla => Some(
-            "this binding's StableHLO emitter over the tape exists behind the `xla` Cargo \
-             feature, but is not yet reachable from `esm_problem`; it is wired to this \
-             keyword in a later phase of the compiler-selection work",
-        ),
+        Compiler::Xla => xla_unavailable_reason(),
         Compiler::Mtk => Some(
             "a ModelingToolkit system needs Julia and ModelingToolkit.jl, and this binding has \
-             no ModelingToolkit runtime to load; `mtk` is provided by the Julia binding",
+             no ModelingToolkit runtime to load; `mtk` is provided by the Julia binding"
+                .to_string(),
         ),
         Compiler::Sympy => Some(
             "a lambdified SymPy right-hand side needs Python and SymPy, and this binding has \
-             neither; `sympy` is provided by the Python binding",
+             neither; `sympy` is provided by the Python binding"
+                .to_string(),
         ),
+    }
+}
+
+/// Whether `xla` can be provided by THIS build and THIS process, and what is
+/// missing when it cannot.
+///
+/// `xla` is the specialty compiler that needs a heavy external dependency, and
+/// the dependency can be absent in two different places: the crate can be
+/// built without the `xla` feature, or it can have the feature and still find
+/// no usable XLA runtime to start (no unpacked `xla_extension`, no device for
+/// the requested platform). Both are `compiler_unavailable` and neither says
+/// anything about what the emitter can lower, so both are answered here —
+/// BEFORE any document is looked at, so the answer is a property of the build
+/// and not of the input.
+///
+/// The client is a process-wide singleton and caches its own failure, so
+/// probing it per Problem costs one atomic read after the first.
+#[cfg(feature = "xla")]
+fn xla_unavailable_reason() -> Option<String> {
+    crate::xla_runtime::client().err().map(|e| {
+        format!(
+            "this build has the `xla` feature, but no usable XLA runtime in this process: {e}. \
+             Point XLA_EXTENSION_DIR at an unpacked xla_extension release \
+             (scripts/fetch-xla-extension.sh) and rebuild against it"
+        )
+    })
+}
+
+#[cfg(not(feature = "xla"))]
+fn xla_unavailable_reason() -> Option<String> {
+    Some(
+        "this binding's StableHLO emitter over the tape is behind the `xla` Cargo feature, \
+         which this build does not have: rebuild with `--features xla` and XLA_EXTENSION_DIR \
+         pointing at an unpacked xla_extension release (scripts/fetch-xla-extension.sh)"
+            .to_string(),
+    )
+}
+
+/// Emit and compile the right-hand side for [`Compiler::Xla`], once, on the
+/// backend the build just produced.
+///
+/// A no-op for every other compiler, and for a backend with no right-hand side
+/// to emit: a state-free document is not integrated, so no compiler is chosen
+/// for it and there is nothing to lower.
+///
+/// The two failures are kept apart, because they say different things:
+///
+///   * the emitter REFUSED this model — a named
+///     [`CompileError::CompilerRefusedRule`], the same failure a rule the tape
+///     could not lower raises, so a caller (and the compiler-agreement tier)
+///     reads one shape whichever half declined;
+///   * the XLA runtime broke — [`SimulateError::CompilerUnavailable`], which
+///     is a fact about this process and says nothing about the document.
+fn install_xla_program(
+    backend: &Backend,
+    model_name: Option<&str>,
+    compiler: Compiler,
+) -> Result<(), SimulateError> {
+    // `model_name` is read only on the `xla` build; without the feature the
+    // whole body is the early return, and `compiler` is already known to be
+    // something this build provides.
+    let _ = (backend, model_name);
+    if compiler != Compiler::Xla {
+        return Ok(());
+    }
+    #[cfg(feature = "xla")]
+    {
+        use crate::xla_runtime::CompileRhsError;
+        let Backend::Array(compiled) = backend else {
+            return Ok(());
+        };
+        if !compiled.has_differential_equations() {
+            return Ok(());
+        }
+        match compiled.install_xla_rhs() {
+            Ok(()) => Ok(()),
+            Err(CompileRhsError::Refused(e)) => {
+                Err(SimulateError::Compile(
+                    crate::compile_error::CompileError::CompilerRefusedRule {
+                        compiler: Compiler::Xla.as_str(),
+                        // The emitter refuses per INSTRUCTION, and an instruction
+                        // belongs to a rule whose kind it does not carry, so the
+                        // kind is the neutral one rather than a guess between
+                        // "observed" and "state derivative".
+                        kind: "rule",
+                        rule: qualify(model_name.unwrap_or(""), &e.rule),
+                        // The emitted program computes every cadence section on
+                        // every call (`xla_emit`'s module docs), so a refusal
+                        // anywhere in it costs on the continuous schedule.
+                        tier: "continuous",
+                        reason: e.reason,
+                    },
+                ))
+            }
+            Err(CompileRhsError::Runtime(details)) => Err(SimulateError::CompilerUnavailable {
+                compiler: Compiler::Xla.as_str(),
+                details,
+            }),
+        }
+    }
+    #[cfg(not(feature = "xla"))]
+    {
+        // Unreachable: `compile_backend` answered `compiler_unavailable` for
+        // `xla` before any backend existed.
+        Ok(())
     }
 }
 
@@ -2313,7 +2491,7 @@ fn compile_backend(
     if let Some(details) = unavailable_reason(compiler) {
         return Err(SimulateError::CompilerUnavailable {
             compiler: compiler.as_str(),
-            details: details.to_string(),
+            details,
         });
     }
     if mode == Rhs::Never {
@@ -2326,6 +2504,7 @@ fn compile_backend(
     // call (`crate::simulate_array::RuntimeMode`).
     let runtime_mode = match compiler {
         Compiler::Interpreter => crate::simulate_array::RuntimeMode::Interpreter,
+        Compiler::Xla => crate::simulate_array::RuntimeMode::Xla,
         _ => crate::simulate_array::RuntimeMode::Native,
     };
     if let Some(flat) = flat {

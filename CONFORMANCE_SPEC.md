@@ -6124,15 +6124,21 @@ Go and TypeScript are **out of scope**: neither has a Problem type, so neither
 has a compiler to name (`API_SPEC.md` §3, capability profiles).
 
 **What answers today.** Julia, Rust and Python each answer for `interpreter` and
-`native` on all six fixtures and are `bindings_required` for both; Python is
-required for `sympy`, which runs the two scalar fixtures and refuses the four
-array ones by name. **Julia is required for `mtk`** as of 2026-09-22 — it runs
+`native` on all six fixtures with no refusals and are `bindings_required` for both;
+Python is required for `sympy`, which runs the two scalar fixtures and refuses the
+four array ones by name. **Julia is required for `mtk`** as of 2026-09-22 — it runs
 all six, the array fixtures included, because their stencils are already
 `arrayop` over an index set and carry no continuous spatial dimension for that
 compiler to refuse. What `mtk` DOES refuse is not exercised by these fixtures: a
 document fed by loaded data, one with a continuous spatial dimension, a geometry
-operator, and a time derivative of an expression. `xla` remains
-`bindings_optional` for Julia and Rust.
+operator, and a time derivative of an expression. **Rust is `bindings_required`
+for `xla` as of 2026-09-22**: `esm_problem(…, compiler = Xla)` emits the model's
+tape as an XLA computation and solves on the compiled right-hand side, and all
+six fixtures agree with the golden with no refusals. That entry carries a BUILD
+condition — `xla` needs the crate's non-default `xla` feature and a separately
+fetched `xla_extension` — so "required" means a build that has both must answer,
+and a stage that runs this compiler owes them. Julia's `xla` remains
+`bindings_optional`.
 
 #### 5.44.1 What is compared
 
@@ -6269,14 +6275,19 @@ reporting an unrequired refusal as a named exclusion.
 
 The producer stages in `scripts/test-conformance.sh` are one per binding per
 compiler, named `compiler-agreement <compiler> producer (<binding>)`:
-`interpreter` and `native` for Julia, Rust and Python; `xla` for Julia and Rust;
-`mtk` for Julia; `sympy` for Python. Adapters are discovered the way §5.38's
-are, through `EARTHSCI_COMPILER_AGREEMENT_ADAPTER_<BINDING>`:
+`interpreter` and `native` for Julia, Rust and Python; `mtk` for Julia; `sympy`
+for Python. An **`xla` stage does not belong there**, and that is a rule rather
+than a gap: `test-conformance.sh` is what a plain checkout runs, `xla` needs a
+separately fetched extension a plain checkout does not have, and an
+unconfigured build answers `unavailable` — which for a `bindings_required`
+binding is RED. The `xla` stages belong in the workflow that fetches the
+extension first. Adapters are discovered the way §5.38's are, through
+`EARTHSCI_COMPILER_AGREEMENT_ADAPTER_<BINDING>`:
 
 | Binding | Adapter |
 |---|---|
 | Julia (reference) | `pkg/EarthSciAST.jl/scripts/compiler_agreement_adapter.jl` |
-| Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-compiler-agreement-adapter-rust.rs`, feature `conformance-adapters` |
+| Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-compiler-agreement-adapter-rust.rs`, feature `conformance-adapters` — plus `xla` when, and only when, `--compiler xla` is requested, which the runner's own planned command adds |
 | Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/compiler_agreement_adapter.py` |
 
 **Every problem-building stage NAMES its compiler.** A stage that calls
