@@ -332,18 +332,28 @@ end
 # `ic` on an algebraically determined variable IS a guess: the number to start
 # the consistent-initialization solve from, not a constraint on its answer.
 #
-# So: every initial condition whose variable is not an unknown of the COMPILED
-# system moves to `guesses`, where the initialization uses it and the residual
-# decides the value. A state the system still integrates keeps its initial
-# condition untouched, which is every ordinary document.
+# So: an initial condition whose variable is the left-hand side of an OBSERVED
+# equation of the COMPILED system — the variables `mtkcompile` eliminated —
+# moves to `guesses`, where the initialization uses it and the residual decides
+# the value. Nothing else moves. `initial_conditions` also holds every
+# parameter's default and a state the system still integrates, and both stay
+# exactly where they are, which is every ordinary document.
+#
+# An ARRAY is keyed by the whole array while the observed equations name its
+# cells, so an array moves when every one of its cells was eliminated. One
+# that was only partly eliminated keeps its initial condition: moving it would
+# silently start the integrated cells from nothing, where keeping it lets an
+# inconsistent eliminated cell fail the initialization loudly.
 function _mtk_ics_to_guesses!(system)
     ics = getfield(system, :initial_conditions)
     (ics isa AbstractDict && !isempty(ics)) || return String[]
-    kept = Set{Any}(Symbolics.unwrap(u) for u in ModelingToolkit.unknowns(system))
+    eliminated = Set{Any}(Symbolics.unwrap(oe.lhs)
+                          for oe in ModelingToolkit.observed(system))
+    isempty(eliminated) && return String[]
     guesses = getfield(system, :guesses)
     moved = Any[]
     for (var, val) in collect(pairs(ics))
-        Symbolics.unwrap(var) in kept && continue
+        _mtk_eliminated(Symbolics.unwrap(var), eliminated) || continue
         push!(moved, (var, val))
     end
     isempty(moved) && return String[]
@@ -352,6 +362,14 @@ function _mtk_ics_to_guesses!(system)
         guesses isa AbstractDict && (guesses[var] = val)
     end
     return String[string(var) for (var, _) in moved]
+end
+
+function _mtk_eliminated(v, eliminated::Set{Any})
+    v in eliminated && return true
+    SymUtils.symtype(v) <: AbstractArray || return false
+    cells = Symbolics.scalarize(v)
+    return !isempty(cells) &&
+           all(c -> Symbolics.unwrap(c) in eliminated, cells)
 end
 
 # ---------------------------------------------------------------------------

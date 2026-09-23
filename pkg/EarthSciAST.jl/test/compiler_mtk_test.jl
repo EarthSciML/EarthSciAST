@@ -93,6 +93,73 @@ _mtkc_obs_doc() = Dict{String,Any}(
                              "rhs" => Dict{String,Any}("op" => "*",
                                                        "args" => Any[3.0, "x"]))])))
 
+# `D(x) = -k*x` with a DEFAULTED parameter `k`, as one model of a document.
+_mtkc_decay_model(x0, k) = Dict{String,Any}(
+    "variables" => Dict{String,Any}(
+        "x" => Dict{String,Any}("type" => "unknown", "default" => x0),
+        "k" => Dict{String,Any}("type" => "parameter", "default" => k)),
+    "equations" => Any[Dict{String,Any}(
+        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
+        "rhs" => Dict{String,Any}("op" => "neg", "args" => Any[
+            Dict{String,Any}("op" => "*", "args" => Any["k", "x"])]))])
+_mtkc_doc(models; index_sets = nothing) = begin
+    d = Dict{String,Any}("esm" => "1.1.0",
+                         "metadata" => Dict{String,Any}("name" => "MtkDoc"),
+                         "models" => Dict{String,Any}(models))
+    index_sets === nothing || (d["index_sets"] = index_sets)
+    d
+end
+
+# An ARRAY state over three cells decaying at a defaulted rate,
+# `D(u[i]) = -k*u[i]`. `init` is how its initial value is written: an `ic`
+# equation with a per-cell `faq` value, an `ic` equation with one broadcast
+# number, or the variable's own `default`.
+function _mtkc_array_doc(init::Symbol)
+    faq(body) = Dict{String,Any}("op" => "faq", "args" => Any[],
+        "output_idx" => Any["i"],
+        "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "cells")),
+        "expr" => body)
+    cell(v) = Dict{String,Any}("op" => "index", "args" => Any[v, "i"])
+    u = Dict{String,Any}("type" => "unknown", "shape" => Any["cells"])
+    init === :default && (u["default"] = 1.5)
+    eqs = Any[Dict{String,Any}(
+        "lhs" => faq(Dict{String,Any}("op" => "D", "args" => Any[cell("u")],
+                                      "wrt" => "t")),
+        "rhs" => faq(Dict{String,Any}("op" => "neg", "args" => Any[
+            Dict{String,Any}("op" => "*", "args" => Any["k", cell("u")])])))]
+    ic_lhs = Dict{String,Any}("op" => "ic", "args" => Any["u"])
+    init === :ic_per_cell && push!(eqs, Dict{String,Any}("lhs" => ic_lhs,
+        "rhs" => faq(Dict{String,Any}("op" => "+", "args" => Any[1.0, "i"]))))
+    init === :ic_broadcast && push!(eqs, Dict{String,Any}("lhs" => ic_lhs,
+                                                        "rhs" => 2.5))
+    return _mtkc_doc(["M" => Dict{String,Any}(
+            "variables" => Dict{String,Any}(
+                "u" => u,
+                "k" => Dict{String,Any}("type" => "parameter", "default" => 0.5)),
+            "equations" => eqs)];
+        index_sets = Dict{String,Any}(
+            "cells" => Dict{String,Any}("kind" => "interval", "size" => 3)))
+end
+
+# `:mtk` and `:native` integrate the same states to the same values, compared by
+# NAME because the two compilers order the state vector differently.
+function _mtkc_same_trajectory(doc, span)
+    pm = esm_problem(doc, span; compiler = :mtk)
+    pn = esm_problem(doc, span; compiler = :native)
+    @test Set(keys(pm.var_map)) == Set(keys(pn.var_map))
+    for (nm, i) in pn.var_map
+        @test pm.u0[pm.var_map[nm]] ≈ pn.u0[i] rtol = 1e-12
+    end
+    sm = solve(pm, Rodas5P(); reltol = 1e-10, abstol = 1e-12, saveat = [span[2]])
+    sn = solve(pn, Rodas5P(); reltol = 1e-10, abstol = 1e-12, saveat = [span[2]])
+    @test SciMLBase.successful_retcode(sm)
+    for (nm, i) in pn.var_map
+        @test isapprox(sm.u[end][pm.var_map[nm]], sn.u[end][i];
+                       rtol = _MTKC_RTOL, atol = _MTKC_ATOL)
+    end
+    return pm, pn
+end
+
 # The smallest sink that satisfies the producer protocol: it records `(t, state)`
 # at every output tick and tracks the lifecycle calls.
 mutable struct _MtkcSink
@@ -327,6 +394,60 @@ end
             want = si.u[end][i]
             @test isapprox(got, want; rtol = _MTKC_RTOL, atol = _MTKC_ATOL)
         end
+    end
+
+    # ── Model selection ─────────────────────────────────────────────────────
+    #
+    # `model_name` means what it means under `:native`, which runs
+    # `_select_model` against the FLATTENED run document: with no name both
+    # models build together, and a name that is not the flattened system's is
+    # the same `E_TREEWALK_NO_MODEL` from both compilers — never a build of the
+    # whole document under a borrowed name.
+    @testset "model_name selects as it does under :native" begin
+        two = _mtkc_doc(["A" => _mtkc_decay_model(2.0, 0.5),
+                         "B" => _mtkc_decay_model(3.0, 0.25)])
+        pm, pn = _mtkc_same_trajectory(two, (0.0, 1.0))
+        @test Set(keys(pm.var_map)) == Set(["A.x", "B.x"])
+        for mn in ("A", "B", "Nope")
+            em = _mtkc_raise(esm_problem, two, (0.0, 1.0); model_name = mn,
+                             compiler = :mtk)
+            en = _mtkc_raise(esm_problem, two, (0.0, 1.0); model_name = mn,
+                             compiler = :native)
+            @test en isa TreeWalkError && en.code == "E_TREEWALK_NO_MODEL"
+            @test em isa TreeWalkError && em.code == en.code
+            @test em !== nothing && en !== nothing && em.detail == en.detail
+        end
+        # The one name the run document has is accepted by both.
+        pf = esm_problem(two, (0.0, 1.0); model_name = "Flattened", compiler = :mtk)
+        @test Set(keys(pf.var_map)) ==
+              Set(keys(esm_problem(two, (0.0, 1.0); model_name = "Flattened").var_map))
+    end
+
+    # ── Initial values reach the compiled system ────────────────────────────
+    #
+    # Only a variable `mtkcompile` ELIMINATED has its initial condition turned
+    # into a guess. A parameter's default and an integrated state's initial
+    # value are left alone — moved, the first would stop being a value and the
+    # second would leave the state to the initialization to invent.
+    @testset "a parameter default stays a value, not a guess" begin
+        prob = esm_problem(_mtkc_doc(["A" => _mtkc_decay_model(2.0, 0.5)]),
+                           (0.0, 1.0); compiler = :mtk)
+        sys = prob.f!.system
+        @test !any(k -> occursin("A_k", string(k)),
+                   keys(getfield(sys, :guesses)))
+        @test any(k -> occursin("A_k", string(k)),
+                  keys(getfield(sys, :initial_conditions)))
+        _mtkc_same_trajectory(_mtkc_doc(["A" => _mtkc_decay_model(2.0, 0.5)]),
+                              (0.0, 1.0))
+    end
+
+    @testset "an array state's initial value: $init" for init in
+            (:ic_per_cell, :ic_broadcast, :default)
+        pm, pn = _mtkc_same_trajectory(_mtkc_array_doc(init), (0.0, 1.0))
+        want = init === :ic_per_cell ? [2.0, 3.0, 4.0] :
+               init === :ic_broadcast ? fill(2.5, 3) : fill(1.5, 3)
+        @test [pm.u0[pm.var_map["M.u[$i]"]] for i in 1:3] == want
+        @test isempty(getfield(pm.f!.system, :guesses))
     end
 
     # ── The problem surface ─────────────────────────────────────────────────

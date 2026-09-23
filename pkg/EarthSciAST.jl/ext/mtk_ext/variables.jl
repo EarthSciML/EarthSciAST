@@ -238,6 +238,11 @@ function _build_var_dict(flat::FlattenedSystem)
             var_dict[vname] = v_num
         else
             array_var = _make_array_dep_var(sym_name, iv_syms_any, shape)
+            # A scalar `default` on a shaped state is every cell's (esm-spec
+            # §6.3). It goes on the ARRAY, which is where ModelingToolkit reads
+            # a cell's default from, so the cells are built after it.
+            mvar.default === nothing || (array_var = Symbolics.setdefaultval(
+                array_var, fill(Float64(mvar.default), size(array_var))))
             var_dict[vname] = array_var
             # Enumerate the individual scalar elements for the dvs vector.
             # Description metadata is attached per-element because
