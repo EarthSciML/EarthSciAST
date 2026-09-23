@@ -43,6 +43,63 @@ function _refuse_flat_events(flat::FlattenedSystem)
     return nothing
 end
 
+# The first unknown carrying BOTH a derivative equation and a bare-LHS one, as
+# `(name, derivative_equation, bare_equation)`; `nothing` when there is none.
+#
+# The search is over EQUATION SHAPES, not over any state/observed split. The
+# derivative side accepts every spelling `_lhs_role` credits as `:derivative`
+# (`D(x)`, `D(x[i])`, a `faq` whose body is a `D`); the competing definition
+# must be a BARE variable LHS. An indexed LHS writes one cell rather than
+# redefining the whole unknown and is not counted, which keeps this to the shape
+# the Python and Rust builds refuse, so the three bindings refuse the same
+# documents.
+#
+# First in equation order, so a document with several gets a stable message.
+function _first_doubly_defined_unknown(equations)
+    diff_eqs = Dict{String,Equation}()
+    bare_eqs = Dict{String,Equation}()
+    for eq in equations
+        role, name = _lhs_role(eq.lhs)
+        if role === :derivative
+            get!(diff_eqs, name, eq)
+        elseif eq.lhs isa VarExpr
+            get!(bare_eqs, (eq.lhs::VarExpr).name, eq)
+        end
+    end
+    for eq in equations
+        role, name = _lhs_role(eq.lhs)
+        role === :derivative || continue
+        haskey(bare_eqs, name) || continue
+        return (name, diff_eqs[name], bare_eqs[name])
+    end
+    return nothing
+end
+
+# The refusal of a doubly-defined unknown (esm-spec §4.9.4), naming the unknown
+# and both equations.
+_doubly_defined_refusal(name::AbstractString, diff_eq::Equation, bare_eq::Equation) =
+    TreeWalkError(
+        ERROR_CODES.EQUATION_COUNT_MISMATCH,
+        "unknown '$name' is defined twice — by `$(to_ascii(diff_eq))` and by " *
+        "`$(to_ascii(bare_eq))`. esm-spec §4.9.4 counts an equation whichever form " *
+        "its LHS takes, so this system has one more equation than it has unknowns " *
+        "to bind; keeping the derivative and dropping the constraint would run a " *
+        "model the document does not describe. Remove one of the two definitions.")
+
+# Throw that refusal when `equations` doubly-defines an unknown.
+#
+# `validate` reports the same document as `equation_count_mismatch`, and the
+# build is the other place it arrives. Tie-breaking in favour of the derivative
+# — which is what `algebraic_states_to_observeds` leaves standing, since it
+# keeps a doubly-defined name a STATE and drops nothing — integrates a system
+# free of a constraint the file declares and reports the trajectory as the
+# answer.
+function _refuse_doubly_defined_unknown(equations)
+    found = _first_doubly_defined_unknown(equations)
+    found === nothing || throw(_doubly_defined_refusal(found...))
+    return nothing
+end
+
 # The first event `model` or any of its subsystems declares, a continuous one
 # before a discrete one; `nothing` when there is none.
 function _first_event(model::Model)::Union{Nothing,ContinuousEvent,DiscreteEvent}
@@ -52,6 +109,106 @@ function _first_event(model::Model)::Union{Nothing,ContinuousEvent,DiscreteEvent
         sub isa Model || continue
         found = _first_event(sub)
         found === nothing || return found
+    end
+    return nothing
+end
+
+# ============================================================
+# 5a. Data-fed parameters with nothing bound (esm-spec §9.6.6
+#     `data_source_unbound`, CONFORMANCE_SPEC §5.46)
+# ============================================================
+
+# One data-fed parameter: the name the build addresses it by, and the
+# `data_sources` key its `update` names.
+struct _DataFeed
+    name::String
+    source::String
+end
+
+# Every data-fed parameter of `model` and, by recursion, of its subsystems, in
+# declaration order. A parameter is data-fed when some `update` rule is
+# `kind == "data"` and carries a `from` binding (esm-spec §5.4/§8.5) — the same
+# predicate `_collect_loader_fields!` applies, MINUS its requirement that the
+# named source resolve: a source the document does not declare is not a source
+# that is bound either, and dropping the parameter here is exactly how it used
+# to reach the build looking ordinary and run at its `default`.
+#
+# `prefix` is empty for the flattened single model `esm_problem` builds, whose
+# variable names already carry their component (`"Forcing.k"`), and grows for a
+# raw model handed to `build_evaluator` directly.
+function _collect_data_feeds!(out::Vector{_DataFeed}, model::Model,
+                              prefix::AbstractString)
+    for (var_name, var) in model.variables
+        var.type == ParameterVariable || continue
+        var.update === nothing && continue
+        for rule in var.update
+            (rule.kind == "data" && rule.from !== nothing) || continue
+            push!(out, _DataFeed(isempty(prefix) ? String(var_name) :
+                                 "$(prefix).$(var_name)",
+                                 rule.source === nothing ? "(unnamed)" :
+                                 String(rule.source)))
+            break                      # one parameter is fed by one source
+        end
+    end
+    for (sub_name, sub) in model.subsystems
+        sub isa Model || continue
+        _collect_data_feeds!(out, sub,
+                             isempty(prefix) ? String(sub_name) :
+                             "$(prefix).$(sub_name)")
+    end
+    return out
+end
+
+# Does any of `bindings` (the build's override / const-array / forcing-buffer
+# registries) bind `name`? A key matches EXACTLY, or by the final dotted
+# segment — the same bare-name spelling esm-spec §6.6.2 admits for a
+# `parameter_overrides` key, and the spelling `esm_problem` keys a provider by.
+function _data_feed_is_bound(name::AbstractString, bindings)
+    leaf = String(last(split(name, '.')))
+    for d in bindings
+        for k in keys(d)
+            ks = String(k)
+            (ks == name || ks == leaf || String(last(split(ks, '.'))) == leaf) &&
+                return true
+        end
+    end
+    return false
+end
+
+"""
+    _refuse_unbound_data_feeds(model, bindings...)
+
+Refuse the build when a data-fed parameter has NOTHING bound to it — no
+provider, no loaded array, no caller-supplied `p` value (esm-spec §9.6.6
+`data_source_unbound`, CONFORMANCE_SPEC §5.46).
+
+The alternative is not a missing number, it is a plausible-looking wrong
+answer: the tree-walk build bound such a parameter from its `default` and
+integrated it, so a document that says a rate is read from a file reported a
+complete trajectory computed from a placeholder, with nothing in the result
+recording that the file was never opened.
+
+`bindings` are the registries a value can arrive through by the time the build
+runs — the resolved `parameter_overrides`, `const_arrays` (which is where
+`esm_problem` puts a CONST provider's materialized field and a gated
+provider's fetched slab) and `param_arrays` (the live buffer a DISCRETE
+provider rewrites). Checked at the build entry, before any right-hand side
+exists, so the answer is the same under every `compiler`.
+"""
+function _refuse_unbound_data_feeds(model::Model, bindings...)
+    feeds = _collect_data_feeds!(_DataFeed[], model, "")
+    isempty(feeds) && return nothing
+    for feed in feeds
+        _data_feed_is_bound(feed.name, bindings) && continue
+        throw(TreeWalkError(ERROR_CODES.DATA_SOURCE_UNBOUND,
+            "parameter '$(feed.name)' is fed by the data source " *
+            "'$(feed.source)' (an `update` of kind \"data\"), and nothing " *
+            "bound it: no provider, no loaded array, and no `p` value. Pass " *
+            "`providers = Dict(\"$(feed.name)\" => <provider>)` to supply the " *
+            "data, or `p = Dict(\"$(feed.name)\" => <value>)` to pin a value. " *
+            "The build will not fall back to the parameter's `default`: a " *
+            "forcing at its default produces a whole trajectory that looks " *
+            "like an answer"))
     end
     return nothing
 end

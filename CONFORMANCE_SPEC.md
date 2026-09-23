@@ -6269,6 +6269,120 @@ Either way the compiler is an argument and never an inheritance, and this tier
 remains the only place `native`'s coverage is measured. Without that, the whole
 harness goes red for reasons unrelated to what each stage tests.
 
+### 5.45 A Doubly-Defined Unknown Is Refused, Never Tie-Broken (normative)
+
+**Decision pinned.** An unknown that carries BOTH a derivative equation
+(`D(x, t) ~ f`) and a whole-variable algebraic one (`x ~ g`) MUST be refused at
+BUILD by every simulating binding, with the esm-spec §4.9.4 diagnostic
+`equation_count_mismatch`, and the message MUST name the unknown and BOTH
+equations. §4.9.4 counts an equation against the unknowns whichever form its LHS
+takes, so the two together are one more equation than the model has unknowns to
+bind — which is exactly what each binding's `validate` already reports at
+`/models/<M>`. The build is the other place that same document arrives, and it
+says the same thing.
+
+**Reason.** The alternative is to tie-break, and there is no defensible winner.
+Rust did it on purpose — "differential wins over algebraic when both are
+present" — on the grounds that reporting the name as algebraic would hide a
+genuinely settable initial condition from a Run UI. But the document declares a
+constraint, and integrating the derivative alone runs a model the file does not
+describe while saying nothing about the equation dropped to do it. A refused
+document has no run, so there is no Run UI left to mislead. Julia, for its part,
+kept both equations and failed later, deep in classification, with a
+Julia-local code naming neither the unknown nor either equation — a refusal, but
+not one an author can act on.
+
+**Shape.** Golden-free; it pins no numbers. Two refusal cases — the same defect
+on a scalar document and on one whose shaped unknown takes a binding's ARRAY
+compile, because the scalar and array routes are separate code in Rust and
+Python and both must refuse. Each has its own CONTROL: the same document with
+the algebraic equation removed, which takes the same evaluator and MUST still
+run. The controls are the non-vacuity anchor: a binding that refused every
+document would otherwise satisfy the refusal cases. Both refusal fixtures give
+the two equations DIFFERING right-hand sides (`k` against `k * 3`), so no
+binding can argue the pair is a harmless duplicate; an IDENTICAL pair is left to
+each binding's own structural validator, which is where a duplicate definition
+is decided.
+
+The manifest and fixtures live in `tests/conformance/doubly_defined_state/`.
+Adapters: `pkg/EarthSciAST.jl/test/doubly_defined_state_conformance_test.jl`;
+`pkg/earthsci-ast-py/tests/test_doubly_defined_state_conformance.py`;
+`pkg/earthsci-ast-rs/tests/doubly_defined_state_conformance.rs`. Each adapter
+also asserts that its binding's `validate` reports the same code on the same
+file, which is what makes the refusal a property of the document rather than of
+the evaluator. Go and TypeScript do not simulate; they only register the code.
+
+**Out of scope.** Julia's ModelingToolkit route is a code GENERATOR
+(`to_julia_code`), not a build, so it never raises the code; a generated script
+hands both equations to `mtkcompile`, which reports the imbalance in its own
+vocabulary.
+
+
+### 5.46 A Data-Fed Parameter Nothing Bound Is Refused, Not Defaulted (normative)
+
+A **data-fed parameter** is one whose `update` is `{kind: "data", source: …,
+from: {file_variable: …}}` (esm-spec §5.4, §8.5). From esm 1.0.0 that parameter
+IS the loaded field — a data source is not a component and has no coupling edge
+— so the `update` block is the whole of the document's statement that this
+number comes from a file.
+
+**The rule.** When a binding is asked to build a document and a data-fed
+parameter has **nothing bound to it** — no provider object for it, no array
+loaded for it, and no caller-supplied `p` value for it — the build MUST FAIL at
+construction with `data_source_unbound` (esm-spec §9.6.6). The message MUST name
+the parameter, the `data_sources` entry its `update` names, and what the caller
+can pass. It MUST fail before any right-hand side is built, and it MUST NOT bind
+the parameter from its `default`, from zero, or from a NaN sentinel. This binds
+`esm_problem`, `build_evaluator` and `run_inline_tests` alike.
+
+**Why.** The alternative is not a missing number, it is a plausible-looking
+wrong answer. A scalar forcing with a `default` of 0.1 integrates to a complete,
+smooth, reproducible trajectory; it is reported under the label of a rate the
+document says is read from a file, and nothing in the result records that the
+file was never opened. Refusing costs the caller one argument. Defaulting costs
+them the result, and costs the reader any way of telling. The shaped case makes
+the same point from the other side: a data-fed FIELD carries no `default` at
+all, so whatever a binding produces for it is a property of how it seeded an
+array and not of the document.
+
+**It is a document contract, not a compiler capability.** The refusal MUST be
+identical in shape under `compiler=native` and under `compiler=interpreter`.
+Whether a particular compiler can LOWER a read of the forcing channel is a
+separate question, answered separately by `compiler_refused_rule`; whether
+anything BOUND the forcing is decided before any right-hand side exists, and has
+the same answer for every compiler. A binding whose two compilers disagree here
+— one refusing and one running — is reporting a compiler property in place of a
+document property.
+
+**The `p` escape hatch is required to keep working.** A caller who passes an
+explicit `p` value for the parameter HAS bound it. That is how a data-fed
+document is run offline, and it is how its own inline tests run at all:
+`Test.parameter_overrides` (esm-spec §6.6) is the `p` argument of `esm_problem`
+by another name. Such a build MUST succeed, and the pinned value MUST reach the
+right-hand side — a binding that merely suppressed the refusal and then
+integrated the `default` would pass a refusal test and fail its purpose.
+
+**An unresolvable source is not a bound source.** A parameter whose
+`update.source` names no declared `data_sources` entry is a validation defect
+with its own code (`data_source_undefined`, esm-spec §8.5). A binding whose
+simulation front door runs structural validation reports that and never reaches
+the build; one whose front door does not MUST still refuse, with
+`data_source_unbound`. Either code satisfies this tier for that case. What no
+binding may do is drop the loader field because its source did not resolve,
+leave the parameter looking ordinary, and integrate it at its `default`.
+
+#### 5.46.1 Gate
+
+`tests/conformance/data_source_unbound/` — a manifest, three refusal fixtures
+and two controls, with no goldens: the category pins a refusal and two
+trajectories, not a numeric agreement. Consumed by
+`pkg/EarthSciAST.jl/test/data_source_unbound_conformance_test.jl`,
+`pkg/earthsci-ast-py/tests/test_data_source_unbound_conformance.py` and
+`pkg/earthsci-ast-rs/tests/data_source_unbound_conformance.rs`, each of which
+asserts the refusal under BOTH compilers, asserts that the message names the
+parameter, and runs the two controls. Go and TypeScript do not simulate and only
+register the code.
+
 
 ## 6. CI Integration
 

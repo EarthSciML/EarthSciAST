@@ -1,0 +1,75 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ControlPlainParameter",
+    "description": "unbound_scalar_forcing with the `update` block removed: `Forcing.k` is an ordinary parameter and 0.1 is its value, not a placeholder for data. It takes the same evaluator and MUST still build and run, which is what attributes the refusals in this category to the UNBOUND DATA FEED and not to the document's shape.",
+    "authors": [
+      "Test Suite"
+    ],
+    "tags": [
+      "conformance",
+      "data_source_unbound",
+      "control"
+    ]
+  },
+  "data_sources": {
+    "Wind": {
+      "kind": "static",
+      "source": {
+        "url_template": "file:///data/wind_that_is_never_read.nc"
+      }
+    }
+  },
+  "models": {
+    "Forcing": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1.0,
+              "k",
+              "x"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "an_ordinary_parameter_still_runs",
+          "description": "0.1 is this parameter's value, not a placeholder for data, so exp(-0.1) is the document's own answer.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "x",
+              "time": 1.0,
+              "expected": 0.9048374180359595
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

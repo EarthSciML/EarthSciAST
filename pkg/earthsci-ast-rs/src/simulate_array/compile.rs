@@ -418,6 +418,7 @@ impl ArrayCompiled {
         // (the scalar/flatten/Julia convention) as well as the raw `param` this
         // single-model path builds (WS3 override-naming parity).
         compiled.namespace = Some(model_name.clone());
+        compiled.qualify_data_fed(model_name);
         Ok(compiled)
     }
 
@@ -446,6 +447,7 @@ impl ArrayCompiled {
             resolve_self_qualified_references(&mut model, &hits);
         }
         let mut compiled = Self::from_model_owned(model, &index_sets)?;
+        compiled.qualify_data_fed(&model_name);
         compiled.namespace = Some(model_name);
         Ok(compiled)
     }
@@ -811,6 +813,7 @@ impl ArrayCompiled {
             param_names,
             param_index,
             param_defaults,
+            data_fed,
         ) = {
             let model = &model_owned;
 
@@ -828,6 +831,22 @@ impl ArrayCompiled {
                 ));
             }
 
+            // (0a′) Reject an unknown carrying BOTH a derivative equation and a
+            // bare-LHS one. esm-spec §4.9.4 counts both, so the document has one
+            // more equation than it has unknowns and `validate` reports
+            // `equation_count_mismatch`; the build says the same rather than
+            // integrating a system free of the constraint the file declares.
+            // After mounting, so a pair inside a subsystem is seen under its
+            // mounted names, and ahead of `partition_states`, which would
+            // otherwise pick one of the two without saying so.
+            if let Some((name, diff, alg)) =
+                crate::compile_error::first_doubly_defined_unknown(&model.equations)
+            {
+                return Err(crate::compile_error::doubly_defined_unknown_refusal(
+                    &name, diff, alg,
+                ));
+            }
+
             // (0b) Reject a reference to a variable bound in NONE of the model's
             // binding categories — the array-path analogue of the scalar
             // interpreter's `resolve_expr` "Unknown variable" gate, and the same
@@ -840,7 +859,7 @@ impl ArrayCompiled {
             check_free_variables(model, index_sets, &[])?;
 
             // (1) Collect state / parameter / observed variables.
-            let (state_vars, param_vars, observed_vars) = classify_variables(model)?;
+            let (state_vars, param_vars, observed_vars, data_fed) = classify_variables(model)?;
 
             // (2)+(2b) Infer state shapes from every equation usage, seeding
             // declared array shapes where the index-usage inference left an
@@ -869,6 +888,7 @@ impl ArrayCompiled {
                 param_names,
                 param_index,
                 param_defaults,
+                data_fed,
             )
         };
 
@@ -923,6 +943,7 @@ impl ArrayCompiled {
             n_states,
             declared_names,
             forcing: Rc::new(RefCell::new(HashMap::new())),
+            data_fed,
             field_ics,
             ic_scope_defs,
             index_sets: index_sets.clone(),
@@ -1493,12 +1514,28 @@ fn dense_to_json(shape: &[usize], values: &[f64]) -> JsonValue {
 /// defines it, and a parameter is Brownian or discrete according to its
 /// `update`. A Brownian parameter is an explicit unsupported-feature error,
 /// never a silent drop, and so is a discrete one.
+#[allow(clippy::type_complexity)]
 fn classify_variables(
     model: &Model,
-) -> Result<(Vec<&String>, Vec<&String>, Vec<(&String, &ModelVariable)>), CompileError> {
+) -> Result<
+    (
+        Vec<&String>,
+        Vec<&String>,
+        Vec<(&String, &ModelVariable)>,
+        Vec<(String, String)>,
+    ),
+    CompileError,
+> {
     let mut state_vars: Vec<&String> = Vec::new();
     let mut param_vars: Vec<&String> = Vec::new();
     let mut observed_vars: Vec<(&String, &ModelVariable)> = Vec::new();
+    // The DATA-FED parameters this classification routes to the forcing
+    // channel, each with the `data_sources` key its `update` names
+    // (esm-spec §9.6.6 `data_source_unbound`). Recorded here because this is
+    // the point that decides a parameter's fate, so the list carries exactly
+    // the names the runtime will look up in the forcing buffer — no second
+    // flatten, and no re-derivation of the document's namespacing.
+    let mut data_fed: Vec<(String, String)> = Vec::new();
 
     let class = crate::classification::Classification::of(model);
 
@@ -1538,6 +1575,13 @@ fn classify_variables(
                     // HAVE a definition, and `lookup_variable`'s forcing arm
                     // resolves the name at evaluation time.
                     if externally_refreshed(var) {
+                        if let Some(source) = var
+                            .update
+                            .as_ref()
+                            .and_then(|u| u.rules().iter().find_map(|r| r.data_source()))
+                        {
+                            data_fed.push((name.clone(), source.to_string()));
+                        }
                         observed_vars.push((name, var));
                         continue;
                     }
@@ -1559,7 +1603,7 @@ fn classify_variables(
             }
         }
     }
-    Ok((state_vars, param_vars, observed_vars))
+    Ok((state_vars, param_vars, observed_vars, data_fed))
 }
 
 /// (2) Infer shapes for state variables from all equation usages, then (2b)

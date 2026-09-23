@@ -1759,6 +1759,24 @@ pub fn esm_problem<'a>(
         crate::lower_table_lookup::lower_table_lookups(f).map_err(SimulateError::Compile)?;
     }
 
+    // ---- (3d) A `p` pin BINDS a data-fed parameter (esm-spec §9.6.6). -----
+    // The caller passed a value for a parameter the document says is read from
+    // a file, so for THIS build it is not read from a file — that is the
+    // documented escape hatch for running a data-fed document offline, and for
+    // its own inline tests (`Test.parameter_overrides`, esm-spec §6.6, is this
+    // argument by another name). Stripping the `update` here, before the
+    // backend is built, is what makes the pin REACH the right-hand side: a
+    // parameter that still carries a `data` update is routed to the external
+    // forcing channel, where a `p` binding never lands and which the tape
+    // cannot lower at all, so the pin used to change nothing and `native`
+    // refused the document anyway.
+    #[cfg(not(target_arch = "wasm32"))]
+    if !opts.p.is_empty()
+        && let Some(file) = owned_file.as_mut()
+    {
+        crate::data_fed::pin_data_fed_parameters(file, opts.p.keys());
+    }
+
     // ---- (4) Compile the right-hand side. ---------------------------------
     let compiler = opts.compiler.unwrap_or_default();
     let backend = compile_backend(
@@ -1792,6 +1810,19 @@ pub fn esm_problem<'a>(
     #[cfg(not(target_arch = "wasm32"))]
     let (refresh, discrete_forcing, refresh_boundaries) =
         bind_providers(&backend, &mut opts, tspan)?;
+
+    // ---- (5c) Refuse a data-fed parameter nothing bound (§9.6.6). ---------
+    // After the providers are bound and BEFORE the compiler's gate below builds
+    // the tape, so the refusal is the same under `native` and `interpreter`:
+    // this asks whether the DOCUMENT's inputs are bound, not what a compiler
+    // can lower. Without it `native` reported the same document as
+    // `compiler_refused_rule` ("wholesale: unresolved symbol"), naming the
+    // tape's limits in place of the defect, while `interpreter` built and then
+    // failed inside the run with an uncoded treewalk fault.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Backend::Array(compiled) = &backend {
+        crate::data_fed::refuse_unbound(compiled, &opts.const_arrays, &discrete_forcing)?;
+    }
 
     // esm-spec §2.2: the document's own solver hints. Read from whichever
     // carrier survived to here — the raw JSON when there is one, else the typed

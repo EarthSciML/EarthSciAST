@@ -133,6 +133,26 @@ impl ArrayCompiled {
         Rc::clone(&self.forcing)
     }
 
+    /// Every DATA-FED parameter this build routed to the forcing channel, as
+    /// `(name, data_sources key)` — see [`crate::data_fed::refuse_unbound`],
+    /// which is the only reader.
+    pub(crate) fn data_fed(&self) -> &[(String, String)] {
+        &self.data_fed
+    }
+
+    /// Prefix each recorded data-fed name with the single model's namespace.
+    ///
+    /// The single-model build keeps variable names BARE (`k`), while the
+    /// coupled build namespaces them (`Forcing.k`) — and a refusal that named
+    /// `k` would name something the caller cannot find in a document with two
+    /// components. Applied where `namespace` itself is recorded, so the two
+    /// never disagree.
+    pub(crate) fn qualify_data_fed(&mut self, namespace: &str) {
+        for (name, _) in self.data_fed.iter_mut() {
+            *name = format!("{namespace}.{name}");
+        }
+    }
+
     /// Whether this model has anything for the ODE solver to integrate — at
     /// least one `D(var, t) = …` rule.
     ///

@@ -58,6 +58,34 @@ pub enum SimulateError {
         details: String,
     },
 
+    /// A DATA-FED parameter — one whose `update` is `kind: "data"` (esm-spec
+    /// §5.4, §8.5) — reached a build with NOTHING bound to it: no provider,
+    /// no loaded array, and no caller-supplied `p` value (esm-spec §9.6.6
+    /// `data_source_unbound`, CONFORMANCE_SPEC §5.46).
+    ///
+    /// Raised at CONSTRUCTION, before any right-hand side is built, so the
+    /// answer does not depend on the compiler: this asks whether the
+    /// DOCUMENT's inputs are bound, not what a compiler can lower. A compiler
+    /// that additionally cannot lower a read of the forcing channel reports
+    /// that separately as [`SimulateError::CompilerRefusedRule`].
+    ///
+    /// Refused rather than evaluated at the parameter's `default`, which is
+    /// not a fallback value but a placeholder: a forcing at its default
+    /// integrates to a complete, smooth trajectory reported under the label of
+    /// a quantity the document says is read from a file.
+    #[error(
+        "{code}: parameter '{parameter}' is fed by the data source '{data_source}' (an `update` of kind \"data\"), and nothing bound it: no provider, no loaded array, and no `p` value. Pass a `providers` entry for '{parameter}' to supply the data, or `p` to pin a value. The build will not fall back to the parameter's `default`: a forcing at its default produces a whole trajectory that looks like an answer",
+        code = crate::diagnostic::codes::DATA_SOURCE_UNBOUND
+    )]
+    DataSourceUnbound {
+        /// The flattened parameter nothing bound.
+        parameter: String,
+        /// The `data_sources` key its `update` names. Spelled `data_source`
+        /// rather than `source`, which `thiserror` reserves for an error's
+        /// CAUSE — a `String` cannot be one.
+        data_source: String,
+    },
+
     /// A build progress observer asked [`crate::problem::esm_problem`] to
     /// stop (returned [`Flow::Cancel`]).
     ///

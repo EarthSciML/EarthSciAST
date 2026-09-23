@@ -45,6 +45,7 @@ and CONSTRUCTING a EsmProblem never needs SciPy. Only :func:`solve`, :func:`init
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from collections.abc import Iterable
@@ -66,7 +67,7 @@ from .compiler import (
 )
 from .esm_types import EsmFile, ExprNode
 from .expr_walk import iter_children
-from .expression import UnsupportedConstructError
+from .expression import DataSourceUnboundError, UnsupportedConstructError
 from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
@@ -797,6 +798,31 @@ def _esm_problem_under(
         else:
             merged[k] = np.asarray(_provider_sample_field(prov, t0), dtype=float)
 
+    # ---- data-fed parameters: refuse one with nothing bound (§9.6.6) -------
+    # Before the engine is chosen and before anything is compiled, so the answer
+    # is the same under every `compiler` — this asks whether the DOCUMENT's
+    # inputs are bound, not what a compiler can lower (CONFORMANCE_SPEC §5.46).
+    deferred_feeds = _refuse_unbound_data_feeds(
+        flat,
+        p,
+        merged,
+        gated,
+        discrete_providers,
+        loader_provider=loader_provider,
+        provider_factory=provider_factory,
+    )
+    # A parameter the caller PINNED is no longer fed by data for this build, so
+    # it leaves the loader machinery entirely: with the field still listed,
+    # `_segmenting_engine` sent the document down the cadence-segmented path to
+    # fetch a source nothing was going to read, and the pin never reached a
+    # right-hand side. The copy is shallow and is taken only when a pin actually
+    # removes a field, so the ordinary path keeps the caller's own object (and
+    # its compile cache).
+    pinned_feeds = [f for f in flat.loader_fields if _binds(f.name, p)]
+    if pinned_feeds:
+        flat = copy.copy(flat)
+        flat.loader_fields = [f for f in flat.loader_fields if f not in pinned_feeds]
+
     # ---- pushdown-path name aliasing (same objects, no copies) ----
     if pushdown_rewrite:
         all_var_names = (
@@ -910,6 +936,11 @@ def _esm_problem_under(
             discrete_providers=discrete_providers,
             static_cache=static_cache,
         )
+        # The seed is where the in-tree default provider actually opens the
+        # source. A seed that failed means no array was loaded for the feeds it
+        # was going to bind, which is the §9.6.6 condition (see
+        # `_refuse_unloaded_data_feeds`).
+        _refuse_unloaded_data_feeds(flat, segment_seed, deferred_feeds)
 
     return EsmProblem(
         flat=flat,
@@ -994,6 +1025,118 @@ def _seed_segmented_engine(
         raise
     except Exception:  # noqa: BLE001 — a non-refusal failure stays a run failure
         return None
+
+
+def _data_fed_parameters(flat: FlattenedSystem) -> list[tuple[str, str]]:
+    """Every data-fed parameter of ``flat``: ``(namespaced name, source key)``.
+
+    Read from ``flat.parameters`` rather than from ``flat.loader_fields``,
+    because the two differ in exactly the case this gate exists for: flatten
+    SKIPS a parameter whose ``update.source`` names no declared source (see
+    :func:`~earthsci_ast.flatten._data_source_fields`), and a parameter dropped
+    there reaches the build looking like an ordinary one and runs at its
+    ``default``. A source that does not resolve is not a source that is bound.
+    """
+    out: list[tuple[str, str]] = []
+    for name, var in flat.parameters.items():
+        update = getattr(var, "update", None)
+        if update is None:
+            continue
+        for rule in update if isinstance(update, list) else [update]:
+            if getattr(rule, "kind", None) != "data" or rule.from_source is None:
+                continue
+            out.append((str(name), str(rule.source)))
+            break  # one parameter is fed by one source
+    return out
+
+
+def _binds(name: str, *registries: Iterable[str]) -> bool:
+    """Does any key in ``registries`` bind the parameter ``name``?
+
+    A key matches EXACTLY, or by its final dotted segment — the same bare-name
+    spelling esm-spec §6.6.2 admits for a ``p`` key, and the spelling a
+    ``providers`` entry uses.
+    """
+    leaf = name.rsplit(".", 1)[-1]
+    return any(
+        k == name or k == leaf or str(k).rsplit(".", 1)[-1] == leaf
+        for reg in registries
+        for k in reg
+    )
+
+
+def _refuse_unbound_data_feeds(
+    flat: FlattenedSystem,
+    p: dict[str, float],
+    merged: dict[str, Any],
+    gated: dict[str, Any],
+    discrete_providers: dict[str, Any],
+    *,
+    loader_provider: Any,
+    provider_factory: Any,
+) -> set[str]:
+    """Refuse a data-fed parameter with nothing bound, and report the ones the
+    in-tree default provider still owes (esm-spec §9.6.6, CONFORMANCE_SPEC §5.46).
+
+    Four things count as bound, and the first three settle the question here:
+
+    * a caller ``providers`` entry — already classified into ``merged`` (a CONST
+      field materialised at construction), ``gated`` (deferred) or
+      ``discrete_providers`` (re-sampled per segment);
+    * a caller ``const_arrays`` entry, which is the same channel as ``merged``;
+    * a caller ``p`` value, which is the documented escape hatch: pinning the
+      parameter IS binding it, and it is how a data-fed document runs offline
+      and how its own inline tests run at all (esm-spec §6.6
+      ``parameter_overrides``);
+    * a ``loader_provider`` / ``provider_factory`` seam, which serves EVERY
+      loader field, so either one binds them all.
+
+    What is left is a loader field the in-tree default provider will try to
+    fetch. Whether it is bound depends on whether that fetch produces an array,
+    which is not known until the construction-time seed runs — those names come
+    back in the returned set, and :func:`_refuse_unloaded_data_feeds` answers for
+    them once the seed has an answer. A parameter that is not even a loader field
+    (its source resolves to nothing) has no fetch coming and is refused now.
+
+    Returns the set of names left to the default provider.
+    """
+    feeds = _data_fed_parameters(flat)
+    if not feeds:
+        return set()
+    if loader_provider is not None or provider_factory is not None:
+        return set()
+    loader_names = {f.name for f in flat.loader_fields}
+    deferred: set[str] = set()
+    for name, source in feeds:
+        if _binds(name, merged, gated, discrete_providers, p):
+            continue
+        if name in loader_names:
+            deferred.add(name)
+            continue
+        raise DataSourceUnboundError(
+            name, source, "its `update.source` names no declared data source"
+        )
+    return deferred
+
+
+def _refuse_unloaded_data_feeds(flat: FlattenedSystem, seed: Any, deferred: set[str]) -> None:
+    """Refuse when the construction-time seed loaded no data for a deferred feed.
+
+    The in-tree default provider is an attempt to bind, not a binding: it opens
+    the URL the source declares, and when that URL is not there the parameter is
+    as unbound as if no provider had been named. Before this, the failure was
+    stashed on the problem as a ``Failure`` :class:`Solution` and ``solve``
+    tripped over it with an ``AttributeError`` from inside the loader driver —
+    an uncoded crash where the answer is a registered refusal.
+    """
+    if not deferred:
+        return
+    if seed is not None and getattr(seed, "retcode", None) is not ReturnCode.Failure:
+        return
+    name = sorted(deferred)[0]
+    source = next((f.subkey for f in flat.loader_fields if f.name == name), "(unnamed)")
+    detail = getattr(seed, "message", None) if seed is not None else None
+    raise DataSourceUnboundError(name, source, detail or "the source loaded no data")
 
 
 def _segmenting_engine(
