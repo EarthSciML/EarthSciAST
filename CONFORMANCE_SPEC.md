@@ -4628,7 +4628,7 @@ document declares. Without the check the widened rule is a silent typo swallower
 `Missng.M.pert_amp` quietly drives `M.pert_amp` — an accepted override pointed at
 a name the author never wrote. A binding therefore carries the component /
 subsystem scope alongside the resolvable-name set (Rust `namespace_scope` on
-`Compiled::namespaces` / `ArrayCompiled::override_namespaces`, Python
+`ArrayCompiled::override_namespaces`, Python
 `namespace_scope` / `flat_namespace_scope`, Julia `_override_namespaces`); the
 scope is every namespace segment the build's own names carry, plus the enclosing
 model's name where the build does not qualify its variables with it, plus the
@@ -5648,8 +5648,8 @@ non-zero.
 (`discrete_events`) and an implicit equation (an LHS that is an expression rather
 than an unknown, a time derivative of one, or `ic` of one) are three constructs
 none of the three executing bindings' simulators runs: not Julia's tree-walk
-evaluator, not Python's SymPy or NumPy pathways, not Rust's scalar interpreter
-or array runtime. Each of those evaluators MUST refuse a document carrying any
+evaluator, not Python's SymPy or NumPy pathways, not Rust's array runtime.
+Each of those evaluators MUST refuse a document carrying any
 of them at BUILD with the esm-spec §9.6.6 diagnostic `unsupported_construct`,
 and the message MUST name the construct and the evaluator. Before issues #264
 and #356 most of them built the model without the construct: the event never

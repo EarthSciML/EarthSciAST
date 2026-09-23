@@ -2392,35 +2392,41 @@ esm convert model.esm --to=messagepack  # future binary format
 
 #### 5.4.6 Native Simulation (`simulate()`, gt-5ws)
 
-The Rust crate exposes a native, correctness-first simulator: a `diffsol`-backed ODE integrator plus a vectorized array-op runtime that integrates discretized PDEs. v1 is intentionally limited in these ways:
+The Rust crate exposes a native, correctness-first simulator: a `diffsol`-backed ODE integrator driving ONE evaluator, the array runtime, which builds every document — 0-D or a discretized PDE — and evaluates it on its tape under `native` / `xla` and on its per-cell oracle under `interpreter` (API_SPEC §5.8). v1 is intentionally limited in these ways:
 
 - **Time-integration domain.** The simulator consumes a `FlattenedSystem` whose `independent_variables` is exactly `["t"]` — which *includes* discretized PDEs, whose spatial axis is folded into `faq` dimensions and integrated natively by the array-op runtime (see §5.9). A system that still carries a spatial independent variable holds an *undiscretized* spatial operator and returns `CompileError::UnsupportedDimensionalityError`; discretize it first (apply the `expression_templates` stencil rewrite).
-- **No event handling.** Models with non-empty `continuous_events` or `discrete_events`, on the model itself or on any inline subsystem, return `CompileError::UnsupportedConstruct`, the esm-spec §9.6.6 `unsupported_construct` diagnostic, from BOTH the scalar interpreter and the array runtime (single-model and coupled routes alike).
-- **No algebraic solve.** An implicit equation — an LHS that is an expression rather than an unknown, `D(unknown)` or `ic(unknown)` — returns `CompileError::UnsupportedConstruct` from both evaluators. Trivial algebraic equations (`var ~ expr`) are still eliminated.
+- **No event handling.** Models with non-empty `continuous_events` or `discrete_events`, on the model itself or on any inline subsystem, return `CompileError::UnsupportedConstruct`, the esm-spec §9.6.6 `unsupported_construct` diagnostic, from the array runtime (single-model and coupled routes alike).
+- **No algebraic solve.** An implicit equation — an LHS that is an expression rather than an unknown, `D(unknown)` or `ic(unknown)` — returns `CompileError::UnsupportedConstruct`. Trivial algebraic equations (`var ~ expr`) are still eliminated.
 - **Future work, not yet in any binding's array evaluator.** Running continuous and discrete events and solving implicit equations on the array path is unimplemented in Julia (tree-walk), Python (NumPy interpreter) and Rust alike; each refuses all three with `unsupported_construct` instead (conformance category `tests/conformance/unsupported_construct/`). Julia's ModelingToolkit export is the one runner that executes them today.
 - **No coupling beyond Core flatten.** Anything `flatten()` itself rejects (`slice` / `project` / `regrid`, *undiscretized* spatial operators, mismatched dimension mappings) is rejected upstream and never reaches the simulator.
 - **Native only.** The whole `simulate` module is gated behind `cfg(not(target_arch = "wasm32"))`, so the WASM build (which has a separate follow-up bead for simulator exposure) does not pull in `diffsol`.
-- **Compiled API for parameter sweeps.** A `Compiled` value is built once via `Compiled::from_flattened` / `from_model` / `from_file` and then reused across many `Compiled::simulate(...)` calls with different `params` and `initial_conditions` HashMaps. A one-shot `simulate(file, tspan, params, ic, opts)` convenience wrapper exists for the common single-run case.
-- **Solver options.** `SimulateOptions` selects between `SolverChoice::Bdf` (default — implicit BDF, the canonical stiff solver), `SolverChoice::Sdirk` (TR-BDF2 SDIRK), and `SolverChoice::Erk` (explicit Tsitouras 5(4) for non-stiff problems), plus tolerances (`abstol` / `reltol`), `max_steps`, and an optional dense `output_times` grid.
-- **Interpreted RHS, finite-difference Jacobian.** The interpreter walks an internal `ResolvedExpr` tree (variable references resolved to typed indices into the state, parameter, observed, and `t` slots). The Jacobian-vector product handed to diffsol is forward-difference; v1 deliberately does not generate symbolic or compiled-WASM Jacobians, since the bead is correctness-focused.
+- **Build once, re-parameterize for sweeps.** An `EsmProblem` is built once by `esm_problem(file, tspan, ProblemOptions)` and re-bound to new `p` / `u0` without recompiling by `remake` (§2.5.5); `solve(&prob, &SolveOptions)` runs it.
+- **Solver options.** `SolveOptions` selects between `Alg::Bdf` (default — implicit BDF, the canonical stiff solver), `Alg::Sdirk` (TR-BDF2 SDIRK), and `Alg::Erk` (explicit Tsitouras 5(4) for non-stiff problems), plus tolerances (`abstol` / `reltol`), `maxiters`, and an optional `saveat` output grid.
+- **Finite-difference Jacobian.** The Jacobian-vector product handed to diffsol is forward-difference over the right-hand side the chosen compiler built; v1 deliberately does not generate symbolic Jacobians, since the bead is correctness-focused.
 
 ```rust
-use earthsci_ast::{Compiled, SimulateOptions, SolverChoice, simulate};
+use earthsci_ast::{Alg, ProblemOptions, Remake, SolveOptions, esm_problem, remake, solve};
 use std::collections::HashMap;
 
-let compiled = Compiled::from_file(&file)?;
-let mut params = HashMap::new();
-params.insert("Decay.k".to_string(), 0.1);
-let mut ic = HashMap::new();
-ic.insert("Decay.N".to_string(), 1.0);
-let opts = SimulateOptions {
-    solver: SolverChoice::Bdf,
-    abstol: 1e-10,
-    reltol: 1e-8,
-    max_steps: 10_000,
-    output_times: Some(vec![0.0, 1.0, 10.0, 100.0]),
+let mut p = HashMap::new();
+p.insert("Decay.k".to_string(), 0.1);
+let mut u0 = HashMap::new();
+u0.insert("Decay.N".to_string(), 1.0);
+let prob = esm_problem(&file, (0.0, 100.0), ProblemOptions { p, u0, ..Default::default() })?;
+let opts = SolveOptions {
+    alg: Alg::Bdf,
+    abstol: Some(1e-10),
+    reltol: Some(1e-8),
+    maxiters: Some(10_000),
+    saveat: Some(vec![0.0, 1.0, 10.0, 100.0]),
+    ..Default::default()
 };
-let solution = compiled.simulate((0.0, 100.0), &params, &ic, &opts)?;
+let solution = solve(&prob, &opts)?;
+
+// A sweep re-binds the parameter; the compiled right-hand side is shared.
+let mut k = HashMap::new();
+k.insert("Decay.k".to_string(), 0.2);
+let faster = solve(&remake(&prob, &Remake { p: k, ..Default::default() })?, &opts)?;
 ```
 
 The v1 acceptance harness includes the Robertson stiff problem (verified against Hairer & Wanner Table 1.4 reference values), an exponential-decay analytical comparison, mass-conservation invariants for autocatalysis, and round-trips from the canonical `tests/simulation/*.esm` fixtures. WASM exposure, event handling, hybrid PDE coupling, symbolic Jacobians, and sensitivity analysis are all explicit follow-up beads.

@@ -113,13 +113,12 @@ EARTHSCI_INLINE_TESTS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/inline_tes
 The per-binding op-table tests keep everything that is not a value claim a
 document can make:
 
-* the **refusals**: `ResolvedExpr::op("grad", …)` cannot be built,
-  `unevaluable_operator` names the op, a structural `D` on the scalar evaluator
-  is refused rather than answered `0`. Those are diagnostics with a code, and
-  `tests/conformance/unevaluable_operator/` and `unsupported_construct/` are
-  where they belong.
-* the **slot-addressed** evaluation tests (`ResolvedExpr::State(1)`,
-  `Param(0)`, `Observed(0)`), which assert an internal calling convention.
+* the **refusals**: `grad` is refused before evaluation,
+  `unevaluable_operator` names the op, a structural `D` handed to a
+  single-expression evaluation is refused rather than answered `0`. Those are
+  diagnostics with a code, and `tests/conformance/unevaluable_operator/` and
+  `unsupported_construct/` are where they belong. (Rust:
+  `tests/evaluate_leaf_ops.rs`, through the public `evaluate`.)
 * the inverse-trigonometric and hyperbolic leaves, already gated by
   `tests/conformance/inverse_trig/`, and the degree/radian scale rule, already
   gated by `tests/conformance/` transcendental-scale fixtures. This tier does
