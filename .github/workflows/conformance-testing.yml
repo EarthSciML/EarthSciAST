@@ -716,7 +716,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             pkg/earthsci-ast-ts/node_modules
-          key: ${{ runner.os }}-conformance-${{ hashFiles('pkg/*/Project.toml', 'pkg/*/package*.json', 'pkg/*/pyproject.toml', 'pkg/*/Cargo.lock') }}
+          # The adapter environments are hashed as well as the packages. The
+          # compiler-agreement and inline-test adapters share
+          # pkg/EarthSciAST.jl/scripts/compiler_agreement_env, which carries
+          # ModelingToolkit and a nonlinear solver for `--compiler mtk`. That
+          # file is not under `pkg/*/Project.toml`, so without it here the key
+          # does not move when those dependencies are added: the run restores a
+          # depot that predates them, resolves and precompiles them, then hits
+          # the exact key and saves nothing — paying the same precompile on
+          # every run, forever.
+          key: ${{ runner.os }}-conformance-${{ hashFiles('pkg/*/Project.toml', 'pkg/EarthSciAST.jl/scripts/compiler_agreement_env/Project.toml', 'pkg/*/package*.json', 'pkg/*/pyproject.toml', 'pkg/*/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-conformance-
 
