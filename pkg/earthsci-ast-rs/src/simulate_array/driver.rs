@@ -135,9 +135,9 @@ fn run_xla_rhs(
     params: &[f64],
     t: f64,
     out: &mut [f64],
-) {
-    match program.eval(state, params, t) {
-        Ok(du) => out.copy_from_slice(&du),
+) -> bool {
+    match program.eval_into(state, params, t, out) {
+        Ok(()) => true,
         Err(e) => {
             let mut slot = fault.borrow_mut();
             if slot.is_none() {
@@ -146,8 +146,101 @@ fn run_xla_rhs(
             for v in out.iter_mut() {
                 *v = f64::NAN;
             }
+            false
         }
     }
+}
+
+/// The finite-difference Jacobian-vector product `J v ≈ (f(y + εv) − f(y)) / ε`
+/// the XLA arm of the integrator's Jacobian closure computes, with the
+/// evaluation at the base point shared across calls and every buffer
+/// allocated once.
+///
+/// diffsol assembles a Jacobian by calling the product once per column, all
+/// at ONE `(y, p, t)`. Only `f(y + εv)` depends on the column, so keeping
+/// `f(y)` makes a Jacobian of `n` states cost `n + 1` right-hand-side
+/// evaluations instead of `2n` — and under [`crate::Compiler::Xla`] each one
+/// is a host-to-device-to-host round trip. The kept `f(y)` is reused only
+/// when `y`, `p` and `t` are bit-for-bit the ones it was computed at, and the
+/// forcing buffer the right-hand side may read is fixed for the segment the
+/// closure lives in, so the product is bit-identical to recomputing both
+/// evaluations every call.
+#[cfg(all(feature = "solve", any(test, feature = "xla")))]
+struct FdJvp {
+    base_y: Vec<f64>,
+    base_p: Vec<f64>,
+    base_t: f64,
+    /// `f(base_y, base_p, base_t)`; meaningful only while `base_valid`.
+    f_y: Vec<f64>,
+    base_valid: bool,
+    y_perturbed: Vec<f64>,
+    f_yp: Vec<f64>,
+}
+
+#[cfg(all(feature = "solve", any(test, feature = "xla")))]
+impl FdJvp {
+    fn new(n_states: usize) -> Self {
+        FdJvp {
+            base_y: vec![0.0; n_states],
+            base_p: Vec::new(),
+            base_t: 0.0,
+            f_y: vec![0.0; n_states],
+            base_valid: false,
+            y_perturbed: vec![0.0; n_states],
+            f_yp: vec![0.0; n_states],
+        }
+    }
+
+    /// Write `J(y, p, t) v` into `jv`. `eval(state, params, t, out)` fills
+    /// `out` with the right-hand side and reports whether it succeeded; a
+    /// failed evaluation of `f(y)` is not kept, so the next call tries again.
+    fn apply(
+        &mut self,
+        y: &[f64],
+        p: &[f64],
+        t: f64,
+        v: &[f64],
+        jv: &mut [f64],
+        mut eval: impl FnMut(&[f64], &[f64], f64, &mut [f64]) -> bool,
+    ) {
+        let n = y.len();
+        let mut y_norm = 0.0f64;
+        for &yi in y {
+            y_norm += yi * yi;
+        }
+        let y_norm = y_norm.sqrt().max(1.0);
+        let eps = f64::EPSILON.sqrt() * y_norm;
+
+        let same_point = self.base_valid
+            && self.base_t.to_bits() == t.to_bits()
+            && same_bits(&self.base_y, y)
+            && same_bits(&self.base_p, p);
+        if !same_point {
+            self.base_y.clear();
+            self.base_y.extend_from_slice(y);
+            self.base_p.clear();
+            self.base_p.extend_from_slice(p);
+            self.base_t = t;
+            self.f_y.resize(n, 0.0);
+            self.base_valid = eval(y, p, t, &mut self.f_y);
+        }
+
+        self.y_perturbed.clear();
+        self.y_perturbed
+            .extend(y.iter().zip(v).map(|(&yi, &vi)| yi + eps * vi));
+        self.f_yp.resize(n, 0.0);
+        eval(&self.y_perturbed, p, t, &mut self.f_yp);
+        for ((out, &fp), &f0) in jv.iter_mut().zip(&self.f_yp).zip(&self.f_y) {
+            *out = (fp - f0) / eps;
+        }
+    }
+}
+
+/// Bitwise slice equality: `-0.0` and `0.0` differ, and a `NaN` equals the
+/// same `NaN`, which is what reusing a function value requires.
+#[cfg(all(feature = "solve", any(test, feature = "xla")))]
+fn same_bits(a: &[f64], b: &[f64]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
 }
 
 impl ArrayCompiled {
@@ -1389,44 +1482,6 @@ impl ArrayCompiled {
             seed
         };
 
-        // Per-closure reusable scratch (ess-mro), pre-seeded ONCE with the
-        // CONST + per-segment DISCRETE observeds (retained in place across steps,
-        // never re-cloned) so each RHS eval materializes only the CONTINUOUS
-        // observeds. `RefCell` gives the interior mutability diffsol's `Fn` RHS
-        // requires; the Jacobian closure carries its own so the two never alias.
-        let seg_seed = Rc::new(seg_seed);
-        let mut rhs_scratch_val = RhsScratch::new(&var_shapes);
-        rhs_scratch_val.set_const_arrays(Rc::clone(&self.const_scope));
-        rhs_scratch_val.set_static((*seg_seed).clone());
-        // Step 3b: the production RHS closure's scratch gets the compiled
-        // tape (fresh slab per segment; CONST/SEGMENT sections prime on the
-        // segment's first call). The Jacobian scratch below deliberately does
-        // NOT — the FD Jacobian stays on the legacy path.
-        if let Some((prog, full_obs)) = tape {
-            rhs_scratch_val.install_tape(Rc::clone(prog), Rc::clone(full_obs));
-        }
-        let rhs_scratch = RefCell::new(rhs_scratch_val);
-        // The Jacobian scratch is built LAZILY on the first Jacobian call:
-        // diffsol's `rhs_implicit` builder demands a Jacobian closure even for
-        // the explicit (ERK) solver, which then never invokes it — so an eager
-        // scratch (state-array buffers + a full copy of the seeded observed map)
-        // was memory spent on a closure that never runs. The implicit solvers
-        // (BDF/SDIRK) build it on their first Jacobian evaluation instead;
-        // construction is deterministic, so results are bit-identical either way.
-        let jac_seed = Rc::clone(&seg_seed);
-        let const_scope_jac = Rc::clone(&self.const_scope);
-        let jac_scratch: RefCell<Option<RhsScratch>> = RefCell::new(None);
-        let tape_jac: Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)> =
-            match (self.tape_serves_passes(), tape) {
-                (true, Some((prog, full_obs))) => Some((Rc::clone(prog), Rc::clone(full_obs))),
-                _ => None,
-            };
-        // `interpreter`: the per-cell oracle for the right-hand side too, not
-        // just for the observeds. The strict compilers and the legacy routing
-        // pass `false` and take the whole-array overlay where the tape is
-        // absent.
-        let force_scalar = self.is_interpreter();
-
         // `xla` (API_SPEC §5.8): the right-hand side is the XLA executable the
         // build installed, not the tape's own interpreter. The FD Jacobian
         // goes through it too — it differences two right-hand-side evaluations
@@ -1456,8 +1511,58 @@ impl ArrayCompiled {
             // argument.
             return Err(xla_not_installed());
         }
+        // Per-closure reusable scratch (ess-mro), pre-seeded ONCE with the
+        // CONST + per-segment DISCRETE observeds (retained in place across steps,
+        // never re-cloned) so each RHS eval materializes only the CONTINUOUS
+        // observeds. `RefCell` gives the interior mutability diffsol's `Fn` RHS
+        // requires; the Jacobian closure carries its own so the two never alias.
+        // Under `xla` the tape never evaluates the right-hand side, so this
+        // scratch (state-array buffers plus a copy of the seeded observed map)
+        // is not built at all.
         #[cfg(feature = "xla")]
-        let xla_jac = xla_rhs.clone();
+        let tape_rhs = xla_rhs.is_none();
+        #[cfg(not(feature = "xla"))]
+        let tape_rhs = true;
+        let seg_seed = Rc::new(seg_seed);
+        let rhs_scratch: RefCell<Option<RhsScratch>> = RefCell::new(tape_rhs.then(|| {
+            let mut s = RhsScratch::new(&var_shapes);
+            s.set_const_arrays(Rc::clone(&self.const_scope));
+            s.set_static((*seg_seed).clone());
+            // Step 3b: the production RHS closure's scratch gets the compiled
+            // tape (fresh slab per segment; CONST/SEGMENT sections prime on the
+            // segment's first call).
+            if let Some((prog, full_obs)) = tape {
+                s.install_tape(Rc::clone(prog), Rc::clone(full_obs));
+            }
+            s
+        }));
+        // The Jacobian scratch is built LAZILY on the first Jacobian call:
+        // diffsol's `rhs_implicit` builder demands a Jacobian closure even for
+        // the explicit (ERK) solver, which then never invokes it — so an eager
+        // scratch (state-array buffers + a full copy of the seeded observed map)
+        // was memory spent on a closure that never runs. The implicit solvers
+        // (BDF/SDIRK) build it on their first Jacobian evaluation instead;
+        // construction is deterministic, so results are bit-identical either way.
+        let jac_seed = Rc::clone(&seg_seed);
+        let const_scope_jac = Rc::clone(&self.const_scope);
+        let jac_scratch: RefCell<Option<RhsScratch>> = RefCell::new(None);
+        let tape_jac: Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)> =
+            match (self.tape_serves_passes(), tape) {
+                (true, Some((prog, full_obs))) => Some((Rc::clone(prog), Rc::clone(full_obs))),
+                _ => None,
+            };
+        // `interpreter`: the per-cell oracle for the right-hand side too, not
+        // just for the observeds. The strict compilers and the legacy routing
+        // pass `false` and take the whole-array overlay where the tape is
+        // absent.
+        let force_scalar = self.is_interpreter();
+
+        // The XLA Jacobian's buffers and kept base-point evaluation (see
+        // [`FdJvp`]), built on its first call for the same reason the tape's
+        // Jacobian scratch is.
+        #[cfg(feature = "xla")]
+        let xla_jac: Option<(Rc<crate::xla_runtime::CompiledRhs>, RefCell<Option<FdJvp>>)> =
+            xla_rhs.clone().map(|program| (program, RefCell::new(None)));
         // Where an XLA execution failure goes. diffsol's right-hand side is
         // `Fn(..) -> ()`, so a device failure has no return channel: it lands
         // here, the derivative is filled with NaN so the solver stops rather
@@ -1465,8 +1570,9 @@ impl ArrayCompiled {
         // after the run as `compiler_unavailable` — which is what a device
         // that stopped working mid-solve IS (esm-spec §9.6.6: this binding,
         // build or PROCESS cannot provide the compiler). The lengths that
-        // `CompiledRhs::eval` would otherwise report here were already checked
-        // at install time, so nothing about the MODEL can reach this channel.
+        // `CompiledRhs::eval_into` would otherwise report here were already
+        // checked at install time, so nothing about the MODEL can reach this
+        // channel.
         #[cfg(feature = "xla")]
         let xla_fault: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         #[cfg(feature = "xla")]
@@ -1495,7 +1601,10 @@ impl ArrayCompiled {
                 run_xla_rhs(program, &xla_fault_rhs, y_s, p_s, t, dy_s);
                 return;
             }
-            let mut scratch = rhs_scratch.borrow_mut();
+            let mut scratch_slot = rhs_scratch.borrow_mut();
+            let scratch = scratch_slot
+                .as_mut()
+                .expect("the tape scratch is built whenever no XLA program serves the rhs");
             evaluate_rhs_with_scratch(
                 &RhsCall {
                     rhs_rules: &rhs_rules,
@@ -1511,7 +1620,7 @@ impl ArrayCompiled {
                 dy_s,
                 force_scalar,
                 &mut RhsStats::default(),
-                &mut scratch,
+                scratch,
             );
         };
 
@@ -1520,6 +1629,22 @@ impl ArrayCompiled {
                                 t: f64,
                                 v: &diffsol::FaerVec<f64>,
                                 jv: &mut diffsol::FaerVec<f64>| {
+            #[cfg(feature = "xla")]
+            if let Some((program, jvp)) = &xla_jac {
+                let mut jvp = jvp.borrow_mut();
+                let jvp = jvp.get_or_insert_with(|| FdJvp::new(n_states));
+                jvp.apply(
+                    y.as_slice(),
+                    p.as_slice(),
+                    t,
+                    v.as_slice(),
+                    jv.as_mut_slice(),
+                    |state, params, t, out| {
+                        run_xla_rhs(program, &xla_fault_jac, state, params, t, out)
+                    },
+                );
+                return;
+            }
             let n = y.as_slice().len();
             let v_s = v.as_slice();
             let p_s = p.as_slice();
@@ -1538,16 +1663,6 @@ impl ArrayCompiled {
 
             let mut f_y = vec![0.0f64; n];
             let mut f_yp = vec![0.0f64; n];
-            #[cfg(feature = "xla")]
-            if let Some(program) = &xla_jac {
-                run_xla_rhs(program, &xla_fault_jac, y_s, p_s, t, &mut f_y);
-                run_xla_rhs(program, &xla_fault_jac, &y_perturbed, p_s, t, &mut f_yp);
-                let jv_s = jv.as_mut_slice();
-                for i in 0..n {
-                    jv_s[i] = (f_yp[i] - f_y[i]) / eps;
-                }
-                return;
-            }
             let mut scratch_slot = jac_scratch.borrow_mut();
             let scratch = scratch_slot.get_or_insert_with(|| {
                 let mut s = RhsScratch::new(&var_shapes_jac);
@@ -2961,5 +3076,135 @@ mod forcing_channel_tests {
         params.insert("code".to_string(), 0.5);
         let (dy2, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
         assert_eq!(dy2, vec![15.0, 15.0], "interp.linear(...,0.5)=15");
+    }
+}
+
+#[cfg(all(test, feature = "solve"))]
+mod fd_jvp_tests {
+    //! The finite-difference Jacobian-vector product the XLA arm of the
+    //! integrator's Jacobian closure runs ([`FdJvp`]): how many right-hand-side
+    //! evaluations a Jacobian costs, when the kept `f(y)` is thrown away, and
+    //! that keeping it changes no bit of the product.
+    use super::*;
+    use std::cell::Cell;
+
+    /// A nonlinear right-hand side reading every argument, so a stale `f(y)`
+    /// kept across a change of `y`, `p` or `t` would show in the product.
+    fn f(y: &[f64], p: &[f64], t: f64, out: &mut [f64]) {
+        let n = y.len();
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = p[0] * y[i] * y[(i + 1) % n] - (t * y[i]).sin() + 1.0 / y[i];
+        }
+    }
+
+    /// The product with both evaluations made every call: the reference a
+    /// kept `f(y)` must match bit for bit.
+    fn uncached(y: &[f64], p: &[f64], t: f64, v: &[f64]) -> Vec<f64> {
+        let n = y.len();
+        let mut y_norm = 0.0f64;
+        for &yi in y {
+            y_norm += yi * yi;
+        }
+        let y_norm = y_norm.sqrt().max(1.0);
+        let eps = f64::EPSILON.sqrt() * y_norm;
+        let yp: Vec<f64> = (0..n).map(|i| y[i] + eps * v[i]).collect();
+        let (mut fy, mut fyp) = (vec![0.0; n], vec![0.0; n]);
+        f(y, p, t, &mut fy);
+        f(&yp, p, t, &mut fyp);
+        (0..n).map(|i| (fyp[i] - fy[i]) / eps).collect()
+    }
+
+    fn unit(n: usize, j: usize) -> Vec<f64> {
+        (0..n).map(|i| if i == j { 1.0 } else { 0.0 }).collect()
+    }
+
+    fn bits(v: &[f64]) -> Vec<u64> {
+        v.iter().map(|x| x.to_bits()).collect()
+    }
+
+    /// Run one product through `jvp`, returning it and how many evaluations
+    /// it took.
+    fn apply(jvp: &mut FdJvp, y: &[f64], p: &[f64], t: f64, v: &[f64]) -> (Vec<f64>, usize) {
+        let calls = Cell::new(0usize);
+        let mut jv = vec![0.0; y.len()];
+        jvp.apply(y, p, t, v, &mut jv, |s, q, t, out| {
+            calls.set(calls.get() + 1);
+            f(s, q, t, out);
+            true
+        });
+        (jv, calls.get())
+    }
+
+    /// A dense Jacobian of `n` states, one product per column at one point,
+    /// costs `n + 1` evaluations rather than `2n`, and every column is
+    /// bit-identical to evaluating both points every call.
+    #[test]
+    fn a_jacobian_at_one_point_evaluates_the_base_once() {
+        let (y, p, t) = (vec![0.7, 1.3, 2.9, 0.4], vec![1.5], 0.25);
+        let n = y.len();
+        let mut jvp = FdJvp::new(n);
+        let mut total = 0;
+        for j in 0..n {
+            let v = unit(n, j);
+            let (jv, calls) = apply(&mut jvp, &y, &p, t, &v);
+            total += calls;
+            assert_eq!(bits(&jv), bits(&uncached(&y, &p, t, &v)), "column {j}");
+        }
+        assert_eq!(total, n + 1);
+    }
+
+    /// Any change to the point — one state, the parameters, the time, or
+    /// only the sign of a zero — evaluates the base again, and the product
+    /// still matches the uncached one bit for bit.
+    #[test]
+    fn a_new_point_evaluates_the_base_again() {
+        let (y, p, t) = (vec![0.7, 1.3, 0.0], vec![1.5], 0.25);
+        let v = vec![0.3, -1.1, 0.8];
+        let mut jvp = FdJvp::new(y.len());
+        assert_eq!(apply(&mut jvp, &y, &p, t, &v).1, 2);
+        assert_eq!(apply(&mut jvp, &y, &p, t, &v).1, 1, "same point");
+
+        let mut y2 = y.clone();
+        y2[1] = 1.3000000000000003;
+        let mut signed_zero = y.clone();
+        signed_zero[2] = -0.0;
+        let points: [(&[f64], &[f64], f64, &str); 4] = [
+            (&y2, &p, t, "one state"),
+            (&y, &[2.5], t, "the parameters"),
+            (&y, &p, 0.5, "the time"),
+            (&signed_zero, &p, t, "the sign of a zero"),
+        ];
+        for (yk, pk, tk, what) in points {
+            // Start each from the original point so each change is the only one.
+            apply(&mut jvp, &y, &p, t, &v);
+            let (jv, calls) = apply(&mut jvp, yk, pk, tk, &v);
+            assert_eq!(calls, 2, "{what}");
+            assert_eq!(bits(&jv), bits(&uncached(yk, pk, tk, &v)), "{what}");
+        }
+    }
+
+    /// A failed evaluation of `f(y)` — a device error under `xla` — is not
+    /// kept: the next product at the same point tries it again.
+    #[test]
+    fn a_failed_base_evaluation_is_not_kept() {
+        let (y, p, t) = (vec![0.7, 1.3], vec![1.5], 0.25);
+        let v = vec![1.0, 0.0];
+        let mut jvp = FdJvp::new(y.len());
+        let mut jv = vec![0.0; 2];
+        let calls = Cell::new(0usize);
+        jvp.apply(&y, &p, t, &v, &mut jv, |s, q, t, out| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                out.fill(f64::NAN);
+                return false;
+            }
+            f(s, q, t, out);
+            true
+        });
+        assert_eq!(calls.get(), 2);
+        assert!(jv.iter().all(|x| x.is_nan()));
+        let (jv, calls) = apply(&mut jvp, &y, &p, t, &v);
+        assert_eq!(calls, 2, "the base is evaluated again");
+        assert_eq!(bits(&jv), bits(&uncached(&y, &p, t, &v)));
     }
 }
