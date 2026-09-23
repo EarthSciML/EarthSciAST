@@ -72,7 +72,10 @@ fn a_mount_writes_exactly_the_leafs_differing_precision() {
             .and_then(|d| d.get("element_type"))
             .cloned()
             .unwrap_or(Value::Null);
-        assert_eq!(domain, want["domain_element_type"], "{fixture}: domain.element_type");
+        assert_eq!(
+            domain, want["domain_element_type"],
+            "{fixture}: domain.element_type"
+        );
         let got = carried(&doc);
         let want = want["element_types"].as_object().expect("element_types");
         assert_eq!(
@@ -207,6 +210,10 @@ fn the_written_fields_round_trip() {
         let file = earthsci_ast::load_string(&serde_json::to_string(&once).unwrap())
             .unwrap_or_else(|e| panic!("{fixture}: emitted form does not reload: {e}"));
         let twice: Value = serde_json::from_str(&to_json(&file).unwrap()).unwrap();
-        assert_eq!(carried(&once), carried(&twice), "{fixture}: load → emit → load");
+        assert_eq!(
+            carried(&once),
+            carried(&twice),
+            "{fixture}: load → emit → load"
+        );
     }
 }

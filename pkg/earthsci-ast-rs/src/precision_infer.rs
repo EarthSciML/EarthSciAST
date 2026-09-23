@@ -289,7 +289,9 @@ pub fn env_of_file(file: &crate::types::EsmFile) -> Result<Env, CompileError> {
     let document =
         Precision::from_element_type(file.domain.as_ref().and_then(|d| d.element_type.as_deref()))?;
     let vars = match file.models.as_ref() {
-        Some(models) => VarPrecisions::from_declarations(&model_declarations(models), document, None)?,
+        Some(models) => {
+            VarPrecisions::from_declarations(&model_declarations(models), document, None)?
+        }
         None => VarPrecisions::default(),
     };
     Ok(Env {
@@ -383,9 +385,8 @@ pub fn check_flattened(flat: &crate::flatten::FlattenedSystem) -> Result<(), Com
     {
         return Ok(());
     }
-    let document = Precision::from_element_type(
-        flat.domain.as_ref().and_then(|d| d.element_type.as_deref()),
-    )?;
+    let document =
+        Precision::from_element_type(flat.domain.as_ref().and_then(|d| d.element_type.as_deref()))?;
     let mut env: HashMap<String, Precision> = HashMap::new();
     for r in registries {
         for (name, var) in r {

@@ -326,7 +326,9 @@ impl VarPrecisions {
 /// `Model.subsystems` map), at any depth, as `(Sub.path.variable, declared
 /// element_type)` — the input [`VarPrecisions::from_declarations`] checks.
 #[must_use]
-pub fn subsystem_declarations(subsystems: Option<&serde_json::Value>) -> Vec<(String, Option<String>)> {
+pub fn subsystem_declarations(
+    subsystems: Option<&serde_json::Value>,
+) -> Vec<(String, Option<String>)> {
     fn walk(subs: &serde_json::Value, prefix: &str, out: &mut Vec<(String, Option<String>)>) {
         let Some(subs) = subs.as_object() else {
             return;

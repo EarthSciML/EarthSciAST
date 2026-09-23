@@ -1990,7 +1990,7 @@ def _stamp_element_type(system: Any, leaf: str, enclosing: str, where: str, path
     if isinstance(system, ReactionSystem):
         at = f" (subsystem '{path}')" if path else ""
         raise SubsystemRefError(
-            f"{where}: the mounted document declares `domain.element_type: \"{leaf}\"` "
+            f'{where}: the mounted document declares `domain.element_type: "{leaf}"` '
             f"but the document mounting it evaluates in {enclosing}, and the component "
             f"carries a reaction system{at} whose species and parameters cannot declare a "
             f"per-variable `element_type`; the mount cannot keep the leaf's precision "

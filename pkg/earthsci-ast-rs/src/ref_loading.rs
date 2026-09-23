@@ -416,6 +416,7 @@ fn refuse_toplevel_reaction_system_refs(obj: &Map<String, Value>) -> Result<(), 
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk_top_level(
     value: &mut Value,
     base_path: &Path,
@@ -603,6 +604,7 @@ fn walk_top_level(
 /// falling back to its own defaults. Explicit edge `bindings` win; names the
 /// leaf does not declare are never forwarded, so they cannot raise
 /// `template_import_unknown_name` against the leaf.
+#[allow(clippy::too_many_arguments)]
 fn inline_toplevel_model_refs(
     obj: &mut Map<String, Value>,
     base_path: &Path,
@@ -1057,6 +1059,7 @@ fn absolutize_nested_refs(value: &mut Value, base_dir: &Path) {
 /// the top-level `models.<k>` form ([`walk_top_level`]): edge `bindings`
 /// EXPRESSIONS fold against `parent_meta`, while only `api_meta` (the loader-API
 /// bindings, §9.7.6 site 4) backfills the leaf's own close.
+#[allow(clippy::too_many_arguments)]
 fn walk_subsystems(
     value: &mut Value,
     base_path: &Path,
@@ -1155,6 +1158,7 @@ fn read_edge_bindings(
 /// [`crate::lower_expression_templates::ExpressionTemplateError`] (a
 /// [`DiagnosticError`]), carrying their stable `code`, matching how `load_string()`
 /// surfaces them.
+#[allow(clippy::too_many_arguments)]
 fn resolve_value(
     value: Value,
     base_path: &Path,
