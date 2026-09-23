@@ -302,6 +302,36 @@ jobs:
             include("reactant_direct_emit_test.jl")
           '
 
+      # A SECOND Reactant environment, and the reason is the same one that gave
+      # the compiled_rhs adapter its own: the file below drives the SOLVE path,
+      # so it needs SciMLBase and an integrator, which
+      # compiled_rhs_reactant_env deliberately does not carry (it exists for the
+      # adapter and nothing else). compiler_agreement_reactant_env already
+      # carries both, plus Reactant, so it is instantiated here rather than a
+      # third env being invented. The depot is shared, so Reactant itself is
+      # already precompiled by the step above and this resolve is cheap.
+      - name: Instantiate the compiler-agreement Reactant environment
+        run: |
+          julia --project=pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env -e '
+            using Pkg
+            Pkg.develop(path="pkg/EarthSciAST.jl")
+            Pkg.instantiate()
+            Pkg.precompile()
+          '
+
+      # `esm_problem(…; compiler = :xla)` — the emitter reached from the Problem
+      # surface rather than from the emitter's own entry point. Run HERE and
+      # nowhere else, for the same reason the step above is: it is the only job
+      # that carries Reactant. Without this step the compiler keyword's whole
+      # Julia lane would ship with no CI coverage, since conformance-testing.yml
+      # never sets ESM_TEST_REACTANT and so takes runtests.jl's skip branch.
+      - name: compiler = :xla on the solve path
+        run: |
+          julia --project=pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env -e '
+            cd("pkg/EarthSciAST.jl/test")
+            include("compiler_xla_test.jl")
+          '
+
       - name: compiled_rhs harness self-test
         run: python3 scripts/run-compiled-rhs-conformance.py --self-test
 
