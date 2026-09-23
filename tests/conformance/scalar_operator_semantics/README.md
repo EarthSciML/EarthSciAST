@@ -34,7 +34,7 @@ divergences on its first run (see **Named exclusions** below).
 
 | Comparison | Shape (see [`../README.md`](../README.md)) |
 |---|---|
-| each binding's §6.6.3 verdict vs the document's `expected` | **reference-comparing** — the authored value is arithmetic, computed outside every binding |
+| each binding's `actual` vs the document's `expected`, by the runner's own §6.6.3 predicate, and the binding's `passed` agreeing with it | **reference-comparing** — the authored value is arithmetic, computed outside every binding |
 | each binding's `actual` vs `golden/<id>.json` | **reference-comparing** — the golden is the Julia `interpreter` |
 | Rust / Python `actual` vs the golden | additionally **cross-binding-agreeing** |
 
@@ -87,8 +87,9 @@ the bindings that refuses it. Its `golden_absent_reason` says so, and the
 manifest validator requires a named exclusion for the reference binding before
 it will accept a null golden: the only reason a fixture may carry no golden is
 that the reference cannot produce one. Python is still held to the DOCUMENT's
-own expectation, which is an oracle outside every binding; what is missing is
-only the cross-compiler drift check.
+own expectation, which is an oracle outside every binding — checked by the
+runner itself, so Python's own `passed` is not the whole gate — and what is
+missing is only the cross-compiler drift check.
 
 The manifest records each as a **named exclusion**: the refusal is reported
 with the binding, the compiler and the code on every run, and it is green only

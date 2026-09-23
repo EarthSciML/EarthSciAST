@@ -41,7 +41,7 @@ wrong sign, still finite.
 
 | Comparison | Shape (see [`../README.md`](../README.md)) |
 |---|---|
-| each binding's §6.6.3 verdict vs the document's `expected` | **reference-comparing** — the authored expectation is hand-computed from §4.3.4 and lives outside every binding |
+| each binding's `actual` vs the document's `expected`, by the runner's own §6.6.3 predicate, and the binding's `passed` agreeing with it | **reference-comparing** — the authored expectation is hand-computed from §4.3.4 and lives outside every binding |
 | each binding's `actual` vs `golden/<id>.json` | **reference-comparing** — the golden is the Julia `interpreter`, which shares no code with the compiled or vectorized tiers it gates |
 | Rust / Python `actual` vs the golden | additionally **cross-binding-agreeing** |
 
@@ -86,8 +86,9 @@ cell and no integrator stands between the rule and the number. The exception is
 `tolerances.golden_rtol` / `golden_atol` bound a producer's `actual` against the
 Julia-interpreter golden. They are **separate from, and tighter than**, each
 assertion's own §6.6.4 band: the assertion states what the PHYSICS is and is
-gated at the document's tolerance by each binding's own §6.6.3 predicate, while
-the golden band states how far two evaluations of the same arithmetic may drift.
+gated at the document's tolerance — by the runner's own §6.6.3 predicate over
+the reported `actual`, with the binding's `passed` required to agree — while the
+golden band states how far two evaluations of the same arithmetic may drift.
 
 ## The two ledgers
 

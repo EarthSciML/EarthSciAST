@@ -7,9 +7,12 @@ documents through its OWN §6.6 runner under a NAMED compiler and reports, per
 assertion, whether it passed and what the actual reduction value was. The runner
 then gates two things that are not the same thing:
 
-  * **the authored expectation** — `passed`, which is each binding's own §6.6.3
-    predicate over the value the document declares. The document is the oracle
-    here, and it is outside every binding.
+  * **the authored expectation** — `actual` against the value the document
+    declares, by this runner's OWN §6.6.3 predicate at the resolved §6.6.4
+    band, with the binding's `passed` required to agree. The document is the
+    oracle here, and it is outside every binding; checking it here rather than
+    taking `passed` on trust is what keeps a binding with a broken predicate
+    from vouching for its own number.
   * **the reference actual** — `actual` against `golden/<id>.json`, the Julia
     `interpreter`'s number for the same assertion. The interpreter shares no
     code with the compiled or vectorized tiers it gates, so a compiled path that
@@ -39,7 +42,9 @@ Three modes, one harness (mirrors `run-compiler-agreement-conformance.py`):
     REPORTING an unrequired refusal as a named exclusion. The always-on guard.
   * ``--write-golden --bindings julia --compiler interpreter`` — mint
     ``golden/<id>.json``. It refuses to mint from any other binding or compiler:
-    the reference is a decision of record, not a flag.
+    the reference is a decision of record, not a flag. It also refuses — and
+    writes nothing — if any reference assertion failed or has a ``null`` or
+    non-finite ``actual``.
   * producers (``--bindings julia,rust,python --compiler native``) — dispatch
     each binding's adapter once and gate every fixture.
 

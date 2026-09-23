@@ -6371,9 +6371,13 @@ Per assertion, an adapter reports **both** `passed` — its binding's own §6.6.
 verdict — and `actual`, the reduction value that verdict was reached on. The
 runner gates both:
 
-* `passed` is gated against the **document's authored `expected`**, at the
-  assertion's resolved §6.6.4 band. The document is the oracle, it is outside
-  every binding, and it travels with the physics it is about.
+* `actual` is gated against the **document's authored `expected`**, at the
+  assertion's resolved §6.6.4 band, by the RUNNER's own application of the
+  §6.6.3 predicate — and the binding's `passed` must agree with that verdict.
+  The document is the oracle, it is outside every binding, and it travels with
+  the physics it is about; the runner checking it itself is what keeps a
+  binding whose predicate is wrong from vouching for its own number, which for
+  a fixture with no golden would otherwise be the whole gate.
 * `actual` is gated against **`golden/<id>.json`**, the reference's number for
   the same assertion, at the tier's own band.
 
@@ -6400,6 +6404,13 @@ A golden carries its provenance (`reference_binding`, `reference_compiler`) and
 one entry per `(test_id, assertion_idx)`. The self-test rejects a golden whose
 key set does not match the document's, which is what keeps a golden from
 silently surviving an edit to the fixture it is about.
+
+`--write-golden` mints only from an assertion the reference itself PASSED with a
+finite `actual`. If any assertion of any fixture failed, or carries a `null` or
+non-finite `actual`, it names each one and writes NO golden at all, so a broken
+reference run cannot half-replace the committed set. A committed golden whose
+`actual` is not a finite number is a gated failure of the fixture that reads it,
+never a crash of the runner.
 
 **When the reference itself refuses a fixture** there is no reference actual to
 mint, and the fixture's `golden` is `null`. That is a statement, not an
@@ -6433,9 +6444,12 @@ named exclusion.
 
 The gate:
 
-* a **failed assertion** is RED, for every compiler and every binding — and it
-  is red on the BINDING's own verdict, which is the assertion the document
-  authored. Nothing weakens an assertion to make a binding pass;
+* a **failed assertion** is RED, for every compiler and every binding — on the
+  BINDING's own verdict, and on the runner's own §6.6.3 verdict over the
+  reported `actual`. A binding that reports `passed` on a value outside the
+  document's band is RED, and so is a `passed` that is not a JSON boolean or an
+  `actual` that is not a number. Nothing weakens an assertion to make a binding
+  pass;
 * a value **outside the golden band** is RED even where the assertion passed;
 * a **refusal** is a **named exclusion** — reported with the binding, the
   compiler, the fixture and the code, in the report and on the console, and
@@ -6444,7 +6458,13 @@ The gate:
   code has drifted from the ledger, is RED. It is never a pass and never a
   silent skip;
 * an **`unavailable`** is RED for a binding the manifest lists in
-  `bindings_required`, and a reported skip otherwise;
+  `bindings_required`, and a reported skip otherwise. It is only ever the WHOLE
+  output: a binding's inline-test runner catches a build failure per assertion,
+  so an adapter asks whether the compiler is available before running any
+  fixture, and a fixture whose every assertion failed on `compiler_unavailable`
+  alone also ends the run as `unavailable`. A PER-FIXTURE refusal carrying
+  `compiler_unavailable` is a broken adapter and RED, whatever the ledger says,
+  and a `named_exclusions` entry recording that code is a manifest error;
 * an **`error`** is RED unconditionally: unlike a refusal it says nothing about
   what a compiler can run, so no ledger excuses it.
 
@@ -6479,7 +6499,14 @@ ledgers, holds every committed golden to the DOCUMENT's own expectation at each
 assertion's resolved band, and asserts the harness rejects a value moved off its
 band, a missing assertion, an assertion the binding itself failed, an error, an
 unnamed refusal and a refusal whose code drifted — while reporting a ledgered
-refusal as a named exclusion.
+refusal as a named exclusion. It also asserts the runner's own §6.6.3 verdict
+(the predicate on esm-spec §6.6.3's worked examples, a `passed` on a value off
+the document's band, a non-boolean `passed`, a boolean, `null` or non-finite
+`actual`, and an exact `{rel: 0, abs: 0}` band) with and without a golden; that a
+malformed golden is a failure rather than a crash; that `--write-golden` refuses
+a failed, `null` or non-finite reference assertion by name; and that
+`unavailable` is RED only where required while a per-fixture
+`compiler_unavailable` is rejected.
 
 The producer stages in `scripts/test-conformance.sh` are one per tier per
 binding per compiler, named `inline-tests <tier> <compiler> producer
