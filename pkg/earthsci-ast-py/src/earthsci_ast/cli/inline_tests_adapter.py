@@ -25,6 +25,12 @@ them that is load-bearing:
   compiler -- as a failure.
 * ``unavailable`` -- the whole output, when the compiler does not exist in this
   binding at all. A fact about this BUILD, never about a document.
+  :func:`~earthsci_ast.inline_tests.run_inline_tests` catches a build failure
+  per assertion, so the answer never arrives as an exception here: it is asked
+  for UP FRONT, through the same :func:`~earthsci_ast.compiler.resolve_compiler`
+  ``esm_problem`` calls first, and a fixture whose every assertion failed on
+  ``compiler_unavailable`` alone reaches the same whole-output answer -- the
+  rule the Rust adapter applies.
 * ``error`` -- anything else the load, the build or the run threw. It says
   nothing about what a compiler can run, so ``required`` does not excuse it.
 
@@ -47,7 +53,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from earthsci_ast.compiler import CompilerRefusedRuleError, CompilerUnavailableError
+from earthsci_ast.compiler import (
+    COMPILERS,
+    CompilerRefusedRuleError,
+    CompilerUnavailableError,
+    CompilerUnknownError,
+    resolve_compiler,
+)
 from earthsci_ast.inline_tests import run_inline_tests
 
 #: The binding name this adapter reports under.
@@ -100,6 +112,24 @@ def refusal_code(message: str) -> str | None:
     return m.group(0) if m else None
 
 
+class _RunSaysUnavailable(Exception):
+    """A fixture's run in which the COMPILER, not the document, was what
+    failed: every assertion carried ``compiler_unavailable`` and nothing else."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _unavailable(compiler: str, reason: str) -> dict[str, Any]:
+    return {
+        "binding": BINDING,
+        "compiler": compiler,
+        "status": "unavailable",
+        "reason": reason[:400],
+    }
+
+
 def run_fixture(
     fixture: dict[str, Any], manifest: dict[str, Any], manifest_path: Path, compiler: str
 ) -> dict[str, Any]:
@@ -140,12 +170,56 @@ def run_fixture(
         and all(c is not None for c in codes)
         and len(set(codes)) == 1
     ):
+        if codes[0] == "compiler_unavailable":
+            raise _RunSaysUnavailable(results[0].message)
         return {
             "status": "refused",
             "code": codes[0],
             "reason": results[0].message[:400],
         }
     return {"assertions": entries}
+
+
+def run_manifest(
+    manifest: dict[str, Any], manifest_path: Path, compiler: str
+) -> tuple[dict[str, Any], list[str]]:
+    """The whole adapter payload for one manifest and one compiler, plus the ids
+    of the fixtures that answered with an ``error``.
+
+    A compiler this binding does not provide short-circuits to the contract's
+    whole-output ``unavailable`` form before any fixture runs. Otherwise every
+    fixture runs, and a refusal or an error is recorded per fixture and the next
+    one is attempted."""
+    try:
+        resolve_compiler(compiler)
+    except CompilerUnavailableError as exc:
+        return _unavailable(compiler, str(exc)), []
+
+    fixtures: dict[str, Any] = {}
+    failed: list[str] = []
+    for fixture in manifest["fixtures"]:
+        fid = fixture["id"]
+        try:
+            fixtures[fid] = run_fixture(fixture, manifest, manifest_path, compiler)
+        except (CompilerUnavailableError, _RunSaysUnavailable) as exc:
+            # A fact about the BINDING, not about a document: it is the whole
+            # output and the remaining fixtures are not attempted.
+            return _unavailable(compiler, str(exc)), []
+        except CompilerRefusedRuleError as exc:
+            fixtures[fid] = {
+                "status": "refused",
+                "code": "compiler_refused_rule",
+                "reason": str(exc)[:400],
+            }
+        except Exception as exc:  # noqa: BLE001 - surface per-fixture failure to the runner
+            message = f"{type(exc).__name__}: {exc}"
+            code = refusal_code(message)
+            if code is not None:
+                fixtures[fid] = {"status": "refused", "code": code, "reason": message[:400]}
+            else:
+                failed.append(fid)
+                fixtures[fid] = {"error": message[:800]}
+    return {"binding": BINDING, "compiler": compiler, "fixtures": fixtures}, failed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -162,43 +236,12 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+    if args.compiler not in COMPILERS:
+        # Outside the vocabulary is a broken invocation, not a compiler this
+        # binding happens not to have, and the two must not look alike.
+        parser.error(str(CompilerUnknownError(args.compiler)))
     manifest = json.loads(args.manifest.read_text())
-
-    fixtures: dict[str, Any] = {}
-    failed: list[str] = []
-    payload: dict[str, Any] = {
-        "binding": BINDING,
-        "compiler": args.compiler,
-        "fixtures": fixtures,
-    }
-    for fixture in manifest["fixtures"]:
-        fid = fixture["id"]
-        try:
-            fixtures[fid] = run_fixture(fixture, manifest, args.manifest, args.compiler)
-        except CompilerUnavailableError as exc:
-            # A fact about the BINDING, not about a document: it is the whole
-            # output and the remaining fixtures are not attempted.
-            payload = {
-                "binding": BINDING,
-                "compiler": args.compiler,
-                "status": "unavailable",
-                "reason": str(exc)[:400],
-            }
-            break
-        except CompilerRefusedRuleError as exc:
-            fixtures[fid] = {
-                "status": "refused",
-                "code": "compiler_refused_rule",
-                "reason": str(exc)[:400],
-            }
-        except Exception as exc:  # noqa: BLE001 - surface per-fixture failure to the runner
-            message = f"{type(exc).__name__}: {exc}"
-            code = refusal_code(message)
-            if code is not None:
-                fixtures[fid] = {"status": "refused", "code": code, "reason": message[:400]}
-            else:
-                failed.append(fid)
-                fixtures[fid] = {"error": message[:800]}
+    payload, failed = run_manifest(manifest, args.manifest, args.compiler)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
