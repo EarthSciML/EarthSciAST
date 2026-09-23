@@ -379,6 +379,13 @@ export const ERROR_CODES = {
    * unresolved stub.
    */
   MOUNT_FORM_UNSUPPORTED: 'mount_form_unsupported',
+  /**
+   * A declared working precision reaches a construct that cannot carry it
+   * (esm-spec §4.7 "Working precision crosses a mount", §11.3.1): a mounted
+   * leaf's `domain.element_type` that must be written onto a reaction system,
+   * whose species and parameters have no per-variable `element_type`.
+   */
+  ELEMENT_TYPE_UNCARRIED: 'element_type_uncarried',
   SUBSYSTEM_REF_IS_COUPLING_LIBRARY: 'subsystem_ref_is_coupling_library',
   SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY: 'subsystem_ref_is_template_library',
 

@@ -213,6 +213,10 @@ export function resolveSubsystemRefsSync(
   // re-lowered at the end (see `relowerThroughInlinedMounts`).
   const mountingComponents = componentsWithSubsystemRefs(file)
 
+  // esm-spec §4.7 "Working precision crosses a mount": the root's effective
+  // precision, which every edge it carries compares its leaf against.
+  const precision = declaredElementType(file) ?? DEFAULT_ELEMENT_TYPE
+
   // Process all models. A top-level `models.<k>` that is a bare `{ ref }` is a
   // MOUNT EDGE in its own right (esm-spec §4.7 "Two mount forms, one
   // mechanism"), not a component with subsystems to walk, so it is inlined
@@ -232,6 +236,8 @@ export function resolveSubsystemRefsSync(
           pointer,
           apiMeta,
           rootEnv,
+          [],
+          precision,
         )
       } else {
         resolveModelRefs(
@@ -244,6 +250,7 @@ export function resolveSubsystemRefsSync(
           pointer,
           apiMeta,
           rootEnv,
+          precision,
         )
       }
     }
@@ -286,6 +293,7 @@ export function resolveSubsystemRefsSync(
         `/reaction_systems/${name}`,
         apiMeta,
         rootEnv,
+        precision,
       )
     }
   }
@@ -847,6 +855,78 @@ interface RefEdge {
  * has already established `sub.ref` is present), so no non-null assertion on
  * the optional `RefEdge.ref` field is needed here.
  */
+/**
+ * The working precision a ROOT that declares no `domain.element_type` evaluates
+ * in (esm-spec §11.3). A MOUNTED document that declares none adopts its
+ * mounter's instead (esm-spec §4.7 "Working precision crosses a mount").
+ */
+const DEFAULT_ELEMENT_TYPE = 'Float64'
+
+/** The `domain.element_type` a document declares, if it declares one. */
+function declaredElementType(doc: unknown): string | undefined {
+  const domain = (doc as { domain?: { element_type?: unknown } } | null)?.domain
+  const et = domain?.element_type
+  return typeof et === 'string' ? et : undefined
+}
+
+/**
+ * Carry a mounted document's declared working precision onto the components it
+ * splices in (esm-spec §4.7 "Working precision crosses a mount").
+ *
+ * Nothing is written for a leaf that declares no precision (it adopts the
+ * mounting document's), nor for one whose declaration equals the mounting
+ * document's EFFECTIVE precision. Otherwise every variable of the component,
+ * and of every subsystem it carries at any depth, that declares no
+ * `element_type` of its own gets the leaf's; a reaction system cannot carry it
+ * and is refused with `element_type_uncarried`.
+ */
+function carryMountedElementType(
+  parsed: EsmFile,
+  leaf: string | undefined,
+  enclosing: string,
+  ref: string,
+  pointer: string,
+): void {
+  if (leaf === undefined || leaf === enclosing) return
+  const stamp = (system: unknown, path: string): void => {
+    if (system === null || typeof system !== 'object' || Array.isArray(system)) return
+    const sys = system as {
+      species?: unknown
+      reactions?: unknown
+      variables?: Record<string, Record<string, unknown>>
+      subsystems?: Record<string, unknown>
+    }
+    if (sys.species !== undefined || sys.reactions !== undefined) {
+      const at = path ? ` (subsystem '${path}')` : ''
+      throw new RefLoadError(
+        ref,
+        undefined,
+        ERROR_CODES.ELEMENT_TYPE_UNCARRIED,
+        `mount of '${ref}': the mounted document declares \`domain.element_type: "${leaf}"\` ` +
+          `but the document mounting it evaluates in ${enclosing}, and the component carries a ` +
+          `reaction system${at} whose species and parameters cannot declare a per-variable ` +
+          `\`element_type\`; the mount cannot keep the leaf's precision (esm-spec §4.7 ` +
+          `"Working precision crosses a mount"). Declare the same \`domain.element_type\` on ` +
+          `the mounting document, or remove it from the leaf`,
+        pointer,
+      )
+    }
+    for (const decl of Object.values(sys.variables ?? {})) {
+      if (decl && typeof decl === 'object' && decl.element_type === undefined) {
+        decl.element_type = leaf
+      }
+    }
+    for (const [name, sub] of Object.entries(sys.subsystems ?? {})) {
+      stamp(sub, path ? `${path}.${name}` : name)
+    }
+  }
+  for (const section of ['models', 'reaction_systems'] as const) {
+    const comps = (parsed as unknown as Record<string, unknown>)[section]
+    if (comps === null || typeof comps !== 'object' || Array.isArray(comps)) continue
+    for (const comp of Object.values(comps as Record<string, unknown>)) stamp(comp, '')
+  }
+}
+
 function resolveRefEdge(
   sub: RefEdge,
   ref: string,
@@ -864,8 +944,10 @@ function resolveRefEdge(
     leafRegistry: Record<string, unknown>,
     refBasePath: string,
     leafEnv: Readonly<Record<string, number>>,
+    leafPrecision: string,
   ) => void,
   enclosingEnv: Readonly<Record<string, number>> = {},
+  precision: string = DEFAULT_ELEMENT_TYPE,
 ): void {
   const chainKey = normalizeRef(ref, basePath)
 
@@ -890,6 +972,11 @@ function resolveRefEdge(
     const refDoc = JSON.parse(content) as EsmFile
     // Same wire boundary as the root (docs/content/rfcs/faq-node-rename.md §5.2).
     prepareDocumentOps(refDoc)
+    // esm-spec §4.7 "Working precision crosses a mount": read before resolution
+    // can consume the leaf's `domain`. The leaf's own edges compare against ITS
+    // effective precision; this edge compares against the mounting document's.
+    const leafPrecision = declaredElementType(refDoc)
+    const leafEffective = leafPrecision ?? precision
     const parsed = resolveRefDocument(
       refDoc,
       ref,
@@ -901,10 +988,11 @@ function resolveRefEdge(
       mountForm,
       resolveNestedMounts
         ? (leaf, leafRegistry, leafEnv) =>
-            resolveNestedMounts(leaf, leafRegistry, refBasePath, leafEnv)
+            resolveNestedMounts(leaf, leafRegistry, refBasePath, leafEnv, leafEffective)
         : undefined,
       enclosingEnv,
     )
+    carryMountedElementType(parsed, leafPrecision, precision, ref, pointer)
     inline(parsed, refBasePath)
   } finally {
     resolving.delete(chainKey)
@@ -935,6 +1023,7 @@ function walkSubsystemRefs(
   onRecurse: (subsystem: unknown, subName: string, pointer: string) => void,
   apiMeta: Readonly<Record<string, number>>,
   rootEnv: Readonly<Record<string, number>>,
+  precision: string,
 ): void {
   // `rootEnv` is the ENCLOSING environment for each leaf mounted here: the base
   // its own nested contributions fold against, overlaid with the leaf's closed
@@ -971,7 +1060,7 @@ function walkSubsystemRefs(
         // an UNRESOLVED `{ ref }` edge and splice it in as the component.
         // `leafEnv` is this leaf's fold environment — the enclosing one
         // overlaid with the leaf's closed one (see `childFoldEnv`).
-        (leaf, leafRegistry, leafBasePath, leafEnv) =>
+        (leaf, leafRegistry, leafBasePath, leafEnv, leafPrecision) =>
           resolveLeafNestedMounts(
             leaf,
             leafRegistry,
@@ -982,8 +1071,10 @@ function walkSubsystemRefs(
             subPointer,
             apiMeta,
             leafEnv,
+            leafPrecision,
           ),
         rootEnv,
+        precision,
       )
     } else {
       // Even without a ref, recurse into nested subsystems.
@@ -1043,6 +1134,7 @@ function inlineTopLevelModelRef(
   apiMeta: Readonly<Record<string, number>>,
   rootEnv: Readonly<Record<string, number>>,
   refChain: readonly string[] = [],
+  precision: string = DEFAULT_ELEMENT_TYPE,
 ): void {
   const ref = expandRefEnv(edge.ref as string) // esm-spec §4.7 `${VAR}` expansion
   resolveRefEdge(
@@ -1089,7 +1181,7 @@ function inlineTopLevelModelRef(
     apiMeta,
     'top-level model',
     // `leafEnv` is this leaf's fold environment, as for the subsystem form.
-    (leaf, leafRegistry, leafBasePath, leafEnv) =>
+    (leaf, leafRegistry, leafBasePath, leafEnv, leafPrecision) =>
       resolveLeafNestedMounts(
         leaf,
         leafRegistry,
@@ -1100,8 +1192,10 @@ function inlineTopLevelModelRef(
         pointer,
         apiMeta,
         leafEnv,
+        leafPrecision,
       ),
     rootEnv,
+    precision,
   )
 }
 
@@ -1222,6 +1316,7 @@ function inlineNestedTopLevelMounts(
   apiMeta: Readonly<Record<string, number>>,
   rootEnv: Readonly<Record<string, number>>,
   registry: Record<string, unknown>,
+  precision: string,
 ): void {
   if (!leaf.models) return
   for (const [name, model] of Object.entries(leaf.models)) {
@@ -1238,6 +1333,7 @@ function inlineNestedTopLevelMounts(
       apiMeta,
       rootEnv,
       refChain,
+      precision,
     )
   }
 }
@@ -1263,6 +1359,7 @@ function resolveLeafNestedMounts(
   pointer: string,
   apiMeta: Readonly<Record<string, number>>,
   rootEnv: Readonly<Record<string, number>>,
+  precision: string,
 ): void {
   inlineNestedTopLevelMounts(
     leaf,
@@ -1274,6 +1371,7 @@ function resolveLeafNestedMounts(
     apiMeta,
     rootEnv,
     leafRegistry,
+    precision,
   )
   for (const model of Object.values(leaf.models ?? {})) {
     resolveModelRefs(
@@ -1286,6 +1384,7 @@ function resolveLeafNestedMounts(
       pointer,
       apiMeta,
       rootEnv,
+      precision,
     )
   }
   for (const rs of Object.values(leaf.reaction_systems ?? {})) {
@@ -1298,6 +1397,7 @@ function resolveLeafNestedMounts(
       pointer,
       apiMeta,
       rootEnv,
+      precision,
     )
   }
 }
@@ -1315,6 +1415,7 @@ function resolveModelRefs(
   pointer: string,
   apiMeta: Readonly<Record<string, number>>,
   rootEnv: Readonly<Record<string, number>>,
+  precision: string = DEFAULT_ELEMENT_TYPE,
 ): void {
   // A bare `{ ref }` stub (SubsystemRef) has no subsystems to walk; the
   // top-level model union admits it under v0.8.0, but only a full Model
@@ -1369,9 +1470,11 @@ function resolveModelRefs(
         subPointer,
         apiMeta,
         rootEnv,
+        precision,
       ),
     apiMeta,
     rootEnv,
+    precision,
   )
 }
 
@@ -1387,6 +1490,7 @@ function resolveReactionSystemRefs(
   pointer: string,
   apiMeta: Readonly<Record<string, number>>,
   rootEnv: Readonly<Record<string, number>>,
+  precision: string = DEFAULT_ELEMENT_TYPE,
 ): void {
   // A bare `{ ref }` stub (SubsystemRef) carries no subsystems to walk; only a
   // full ReactionSystem does.
@@ -1426,9 +1530,11 @@ function resolveReactionSystemRefs(
         subPointer,
         apiMeta,
         rootEnv,
+        precision,
       ),
     apiMeta,
     rootEnv,
+    precision,
   )
 }
 
