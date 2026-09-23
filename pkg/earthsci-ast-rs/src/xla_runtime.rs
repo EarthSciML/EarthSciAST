@@ -285,28 +285,55 @@ impl CompiledRhs {
     /// silently ignoring a trailing parameter would evaluate a different
     /// model than the caller asked for.
     pub fn eval(&self, state: &[f64], params: &[f64], t: f64) -> Result<Vec<f64>, CompileRhsError> {
-        let pv = self.check_and_pad(state, params)?;
-        let args = [Literal::vec1(state), Literal::vec1(&pv), Literal::scalar(t)];
-        let out = self
-            .exe
-            .execute::<Literal>(&args)
-            .map_err(|e| CompileRhsError::Runtime(format!("execute failed: {e}")))?;
-        let buf = out
-            .first()
-            .and_then(|replica| replica.first())
-            .ok_or_else(|| CompileRhsError::Runtime("execute returned no buffer".into()))?;
-        let du = buf
-            .to_literal_sync()
-            .and_then(|l| l.to_vec::<f64>())
-            .map_err(|e| CompileRhsError::Runtime(format!("copy back failed: {e}")))?;
-        if du.len() != self.n_states {
+        let mut du = vec![0.0f64; self.n_states];
+        self.eval_into(state, params, t, &mut du)?;
+        Ok(du)
+    }
+
+    /// [`eval`](Self::eval) into a buffer the caller keeps, for a caller that
+    /// evaluates many times and would otherwise allocate the result each
+    /// call — the integrator's right-hand side and its finite-difference
+    /// Jacobian. `out` must be [`n_states`](Self::n_states) long.
+    pub fn eval_into(
+        &self,
+        state: &[f64],
+        params: &[f64],
+        t: f64,
+        out: &mut [f64],
+    ) -> Result<(), CompileRhsError> {
+        if out.len() != self.n_states {
             return Err(CompileRhsError::Runtime(format!(
-                "compiled program returned {} elements, expected {}",
-                du.len(),
+                "output buffer has {} elements, the compiled program returns {}",
+                out.len(),
                 self.n_states
             )));
         }
-        Ok(du)
+        let pv = self.check_and_pad(state, params)?;
+        let args = [Literal::vec1(state), Literal::vec1(&pv), Literal::scalar(t)];
+        let result = self
+            .exe
+            .execute::<Literal>(&args)
+            .map_err(|e| CompileRhsError::Runtime(format!("execute failed: {e}")))?;
+        let buf = result
+            .first()
+            .and_then(|replica| replica.first())
+            .ok_or_else(|| CompileRhsError::Runtime("execute returned no buffer".into()))?;
+        // The raw copy refuses a wrong element type and a device buffer
+        // SHORTER than `out`, but would copy the leading prefix of a longer
+        // one without complaint.
+        let returned = buf
+            .on_device_shape()
+            .and_then(|s| xla::ArrayShape::try_from(&s))
+            .map_err(|e| CompileRhsError::Runtime(format!("copy back failed: {e}")))?
+            .element_count();
+        if returned != self.n_states {
+            return Err(CompileRhsError::Runtime(format!(
+                "compiled program returned {returned} elements, expected {}",
+                self.n_states
+            )));
+        }
+        buf.copy_raw_to_host_sync(out, 0)
+            .map_err(|e| CompileRhsError::Runtime(format!("copy back failed: {e}")))
     }
 }
 
