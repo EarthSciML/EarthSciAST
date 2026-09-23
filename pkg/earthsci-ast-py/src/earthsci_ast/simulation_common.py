@@ -503,8 +503,7 @@ def flat_namespace_scope(flat: Any) -> set[str]:
     The namespace segments of every flattened name (which is where a mounted
     subsystem shows up at all) plus ``metadata.source_systems``, the contributing
     component names — a component that declares no variable of its own still
-    names a legal §4.6 qualifier. The Rust mirror reads the same two sources in
-    ``Compiled::from_flattened``.
+    names a legal §4.6 qualifier.
     """
     names = [
         *flat.state_variables,

@@ -66,6 +66,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import os
 import subprocess
 import sys
 import tempfile
@@ -146,6 +147,44 @@ PLANNED_ADAPTERS: dict[str, tuple[str, list[str]]] = {
 # === Adapter dispatch =====================================================
 
 
+def with_compiler_features(binding: str, compiler: str, argv: list[str]) -> list[str]:
+    """``argv`` with the Cargo features ``compiler`` needs added to its
+    ``--features`` list.
+
+    Only Rust and only ``xla``: the emitter over the tape and the PJRT runtime
+    it executes on are both behind the non-default ``xla`` feature
+    (``pkg/earthsci-ast-rs/Cargo.toml``), whose build script also needs
+    ``XLA_EXTENSION_DIR`` pointing at an unpacked ``xla_extension`` release.
+    Every other compiler is built WITHOUT it, so the always-available stages
+    neither depend on a 144 MB download nor recompile the crate graph for a
+    feature they never use.
+
+    Without ``XLA_EXTENSION_DIR`` the feature is not added either: the build
+    would fail in the ``xla`` crate's build script, and the feature-less adapter
+    instead answers ``unavailable`` naming exactly what is missing. For a
+    binding the ledger lists in ``bindings_required`` that is RED either way;
+    this only decides which of the two reasons the report prints."""
+    if binding != "rust" or compiler != "xla":
+        return argv
+    try:
+        i = argv.index("--features")
+    except ValueError:
+        return argv
+    if i + 1 >= len(argv):
+        return argv
+    if not os.environ.get("XLA_EXTENSION_DIR"):
+        _eprint(
+            "compiler-agreement: XLA_EXTENSION_DIR is unset, so the rust adapter is built "
+            "WITHOUT the `xla` feature and will answer `unavailable` "
+            "(run scripts/fetch-xla-extension.sh and export XLA_EXTENSION_DIR)"
+        )
+        return argv
+    argv = list(argv)
+    if "xla" not in argv[i + 1].split(","):
+        argv[i + 1] = f"{argv[i + 1]},xla"
+    return argv
+
+
 class CompilerAgreementHarness(AdapterHarness):
     """``AdapterHarness`` with the three shape differences this tier's adapter
     contract requires.
@@ -161,6 +200,17 @@ class CompilerAgreementHarness(AdapterHarness):
     3. A non-zero exit WITH a parsable report is read and gated anyway: the
        per-fixture entries are what say which fixture broke, and throwing them
        away would collapse "one fixture errored" into "the adapter fell over".
+    4. The Rust command's Cargo features depend on the COMPILER, because
+       ``xla`` is the one member whose availability is a property of the build:
+       it needs the crate's non-default ``xla`` Cargo feature and an unpacked
+       ``xla_extension``. Built without it, the adapter answers ``unavailable``
+       for ``xla`` and can say nothing about any document, so the command asks
+       for the feature when — and only when — ``xla`` is what was requested.
+       This is the ONE place that choice is made: it is applied to a ``cargo
+       run --features …`` command wherever discovery found it, including the
+       one ``scripts/test-conformance.sh`` exports, so the harness and a direct
+       invocation cannot choose differently. A command with no ``--features``
+       (a prebuilt binary, say) is run as given.
     """
 
     def __init__(self, compiler: str) -> None:
@@ -169,12 +219,12 @@ class CompilerAgreementHarness(AdapterHarness):
 
     def discover(self, binding: str) -> list[str] | None:
         argv = super().discover(binding)
-        if argv is not None:
-            return argv
-        planned = PLANNED_ADAPTERS.get(binding)
-        if planned is not None and (REPO_ROOT / planned[0]).exists():
-            return list(planned[1])
-        return None
+        if argv is None:
+            planned = PLANNED_ADAPTERS.get(binding)
+            if planned is None or not (REPO_ROOT / planned[0]).exists():
+                return None
+            argv = list(planned[1])
+        return with_compiler_features(binding, self.compiler, argv)
 
     def run(
         self, binding: str, argv: list[str], manifest_path: Path, timeout: float | None
@@ -1141,6 +1191,50 @@ def _report_control(rc: int, ok: bool, label: str, message: str) -> int:
     return 1
 
 
+def _feature_controls(rc: int) -> int:
+    """`xla` is added to the Rust adapter's Cargo features for `--compiler xla`
+    alone, and to whichever `cargo run` command discovery found."""
+    base = ["cargo", "run", "--features", "conformance-adapters", "--bin", "x", "--"]
+    saved = os.environ.get("XLA_EXTENSION_DIR")
+    try:
+        os.environ["XLA_EXTENSION_DIR"] = "/nonexistent/xla_extension"
+        cases = [
+            ("rust", "xla", "conformance-adapters,xla"),
+            ("rust", "native", "conformance-adapters"),
+            ("rust", "interpreter", "conformance-adapters"),
+            ("python", "xla", "conformance-adapters"),
+        ]
+        for binding, compiler, want in cases:
+            got = with_compiler_features(binding, compiler, list(base))[3]
+            rc = _report_control(
+                rc,
+                got == want,
+                f"features/{binding}-{compiler}",
+                f"--features {got!r} (want {want!r})",
+            )
+        prebuilt = ["/opt/earthsci-compiler-agreement-adapter-rust"]
+        rc = _report_control(
+            rc,
+            with_compiler_features("rust", "xla", list(prebuilt)) == prebuilt,
+            "features/command-without-features-is-run-as-given",
+            "a command with no --features was left alone",
+        )
+        del os.environ["XLA_EXTENSION_DIR"]
+        got = with_compiler_features("rust", "xla", list(base))[3]
+        rc = _report_control(
+            rc,
+            got == "conformance-adapters",
+            "features/rust-xla-without-extension-builds-feature-less",
+            f"--features {got!r} with XLA_EXTENSION_DIR unset (want the feature-less build)",
+        )
+    finally:
+        if saved is None:
+            os.environ.pop("XLA_EXTENSION_DIR", None)
+        else:
+            os.environ["XLA_EXTENSION_DIR"] = saved
+    return rc
+
+
 def _negative_controls(fixture: dict, classes: dict, rc: int) -> int:
     """The harness must REJECT bad output and REPORT an unrequired refusal. Every
     one of the five outcomes and both ledgers get an arm here."""
@@ -1504,6 +1598,7 @@ def self_test(manifest_path: Path) -> int:
 
     # --- 3. The harness must reject bad output and report an exclusion -------
     rc = _negative_controls(fixtures[0], classes, rc)
+    rc = _feature_controls(rc)
     rc = _availability_controls(manifest, rc)
     rc = _tolerance_controls(manifest, classes, rc)
 

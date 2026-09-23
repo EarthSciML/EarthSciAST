@@ -4628,7 +4628,7 @@ document declares. Without the check the widened rule is a silent typo swallower
 `Missng.M.pert_amp` quietly drives `M.pert_amp` — an accepted override pointed at
 a name the author never wrote. A binding therefore carries the component /
 subsystem scope alongside the resolvable-name set (Rust `namespace_scope` on
-`Compiled::namespaces` / `ArrayCompiled::override_namespaces`, Python
+`ArrayCompiled::override_namespaces`, Python
 `namespace_scope` / `flat_namespace_scope`, Julia `_override_namespaces`); the
 scope is every namespace segment the build's own names carry, plus the enclosing
 model's name where the build does not qualify its variables with it, plus the
@@ -5648,8 +5648,8 @@ non-zero.
 (`discrete_events`) and an implicit equation (an LHS that is an expression rather
 than an unknown, a time derivative of one, or `ic` of one) are three constructs
 none of the three executing bindings' simulators runs: not Julia's tree-walk
-evaluator, not Python's SymPy or NumPy pathways, not Rust's scalar interpreter
-or array runtime. Each of those evaluators MUST refuse a document carrying any
+evaluator, not Python's SymPy or NumPy pathways, not Rust's array runtime.
+Each of those evaluators MUST refuse a document carrying any
 of them at BUILD with the esm-spec §9.6.6 diagnostic `unsupported_construct`,
 and the message MUST name the construct and the evaluator. Before issues #264
 and #356 most of them built the model without the construct: the event never
@@ -5674,10 +5674,30 @@ Adapters: `pkg/EarthSciAST.jl/test/unsupported_construct_conformance_test.jl`;
 `pkg/earthsci-ast-rs/tests/unsupported_construct_conformance.rs`. Go and
 TypeScript do not simulate; they only register the code.
 
-**Out of scope.** Julia's ModelingToolkit export runs both kinds of event and
-hands implicit equations to `mtkcompile`, so it never raises the code. Running
-any of the three constructs on an array evaluator is future work in every
-binding.
+**Out of scope.** Julia's ModelingToolkit path runs all three constructs, so it
+never raises the code. Since the `compiler` keyword landed (`API_SPEC.md` §5.8)
+that path is not only the export: `esm_problem(file; compiler = :mtk)` builds
+through it, so **`:mtk` is the compiler that RUNS what this category has the
+others refuse** — **fourteen of this category's fifteen documents build and run
+under it**, on the scalar path and the array path, on an inline subsystem, on a
+coupled two-model document and on a reaction system alike. The event ones reach
+the values their inline tests name by integrating; the implicit ones reach
+theirs because `mtkcompile` solves the residual away into an observed equation,
+leaving nothing to integrate. The fifteenth,
+`implicit_equation_as_the_derivative_of_an_expression`, is refused BY NAME with
+`compiler_refused_rule`: `D(a + b) ~ 3` is a time derivative of an EXPRESSION,
+credits no state, and is an implicit equation spelled wrong rather than a
+derivative — no compiler in any binding runs it, which is why that refusal
+points at no other compiler and says how to rewrite the equation instead. All
+fifteen are driven from this category's own manifest by
+`pkg/EarthSciAST.jl/test/compiler_mtk_test.jl`, so a case added here is covered
+there the day it lands. The refusals this category
+gates are therefore refusals BY THE DEFAULT COMPILER: `:native` and
+`:interpreter` share the tree-walk evaluator and raise `unsupported_construct`
+exactly as before, and a document carrying one of the three constructs is run by
+naming `:mtk`, not by a fallback. Running any of the three on an ARRAY evaluator
+is still future work in every binding; `:mtk` reaches the array fixtures through
+its own symbolic lowering rather than through an array evaluator.
 
 ### 5.40 An Out-of-Range Const-Array Gather Fails, on Every Axis and in Both Spellings (normative)
 
@@ -6103,19 +6123,31 @@ fixture tolerances and the requirement ledger live in
 Go and TypeScript are **out of scope**: neither has a Problem type, so neither
 has a compiler to name (`API_SPEC.md` §3, capability profiles).
 
-**Status.** `interpreter` and `native` are `bindings_required` for Julia, Rust
-and Python; `sympy` is required for Python. **`xla` is `bindings_optional` for
-every binding**, including Julia: `esm_problem(…; compiler = :xla)` reaches the
+**What answers today.** Julia, Rust and Python each answer for `interpreter` and
+`native` on all six fixtures with no refusals and are `bindings_required` for both;
+Python is required for `sympy`, which runs the two scalar fixtures and refuses the
+four array ones by name. **Julia is required for `mtk`** as of 2026-09-22 — it runs
+all six, the array fixtures included, because their stencils are already
+`arrayop` over an index set and carry no continuous spatial dimension for that
+compiler to refuse. What `mtk` DOES refuse is not exercised by these fixtures: a
+document fed by loaded data, one with a continuous spatial dimension, a geometry
+operator, and a time derivative of an expression. **Rust is `bindings_required`
+for `xla` as of 2026-09-22**: `esm_problem(…, compiler = Xla)` emits the model's
+tape as an XLA computation and solves on the compiled right-hand side, and all
+six fixtures agree with the golden with no refusals. That entry carries a BUILD
+condition — `xla` needs the crate's non-default `xla` feature and a separately
+fetched `xla_extension` — so "required" means a build that has both must answer,
+and a stage that runs this compiler owes them. **Julia answers for `xla` and
+stays `bindings_optional` for it**: `esm_problem(…; compiler = :xla)` reaches the
 direct StableHLO emitter and reproduces all six fixtures against the golden and
-against their anchors with no refusals, but no `xla` producer stage is wired
-into `scripts/test-conformance.sh` (see below), and `bindings_required` would
-make an `unavailable` red in a gate that never runs the compiler. Julia crosses
-on the same one-way ratchet `native` used when that stage is wired. `mtk` stays
-`bindings_optional` for Julia until its `esm_problem` can build with it, and
-crosses the same way. The one shape `xla` refuses by name in Julia — a document
-binding LIVE FORCING BUFFERS, whose device re-sync is not wired to the refresh
-callback yet — is carried in the tier README's status rather than here, because
-no fixture in the tier binds one and it is therefore a coverage note, not a
+against their anchors with no refusals, but no stage runs the Julia `xla`
+producer with its Reactant-bearing environment instantiated (see below), and
+`bindings_required` would make an `unavailable` red for a reason that says
+nothing about the compiler. Julia crosses on the same one-way ratchet once such a
+stage exists. The one shape `xla` refuses by name in Julia — a document binding
+LIVE FORCING BUFFERS, whose device re-sync is not wired to the refresh callback
+yet — is carried in the tier README's status rather than here, because no
+fixture in the tier binds one and it is therefore a coverage note, not a
 measured exclusion.
 
 #### 5.44.1 What is compared
@@ -6253,21 +6285,49 @@ reporting an unrequired refusal as a named exclusion.
 
 The producer stages in `scripts/test-conformance.sh` are one per binding per
 compiler, named `compiler-agreement <compiler> producer (<binding>)`:
-`interpreter` and `native` for Julia, Rust and Python; `xla` for Julia and Rust;
-`mtk` for Julia; `sympy` for Python. The `xla` stages are not wired into
-`scripts/test-conformance.sh` yet: the Julia one needs the Reactant-bearing
-adapter environment (`pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env`),
-which pulls an XLA runtime into every conformance run, and that is a fleet-wide
-decision rather than this tier's. That is why the ledger keeps julia
-`bindings_optional` for `xla` although it answers: running it is `python3
-scripts/run-compiler-agreement-conformance.py --bindings julia --compiler xla`,
-and the ratchet turns when the stage does. Adapters are discovered the way §5.38's
-are, through `EARTHSCI_COMPILER_AGREEMENT_ADAPTER_<BINDING>`:
+`interpreter` and `native` for Julia, Rust and Python; `xla` for Rust and
+Julia; `mtk` for Julia; `sympy` for Python.
+
+**Not every stage runs in the DEFAULT run of that script, and which ones do not
+is a rule rather than a gap.** `test-conformance.sh` with no options is what a
+plain checkout runs, and a compiler whose runtime a plain checkout does not have
+would answer `unavailable` there — which for a `bindings_required` binding is
+RED. Such a compiler is gated instead by
+`scripts/test-conformance.sh --compiler-agreement-only <compiler>`, which runs
+the harness self-test and that compiler's producer stages and nothing else,
+taking the bindings to run from the ledger's `bindings_required` plus
+`bindings_optional` so that the option cannot drift from the manifest. A binding
+that is only `bindings_optional` for the compiler and whose toolchain is absent
+on that runner skips visibly; a `bindings_required` one still fails. A compiler
+gated that way MUST be gated at the same frequency as the default run — a
+separate workflow, not a rarer one — and that workflow provides the runtime
+first. Today:
+
+| Compiler | Where it is gated |
+|---|---|
+| `interpreter`, `native` | the default run of `scripts/test-conformance.sh` (`.github/workflows/conformance-testing.yml`) |
+| `mtk` | `.github/workflows/mtk-compiler.yml`, same triggers as the conformance workflow, with its own Julia depot cache keyed on `pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env/Project.toml` |
+| `xla` | the `rust-xla` job of `.github/workflows/xla-backends.yml`, after it fetches the `xla_extension` release and exports `XLA_EXTENSION_DIR`. Julia is `bindings_optional` there; its producer needs `pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env`, and runs meanwhile as `python3 scripts/run-compiler-agreement-conformance.py --bindings julia --compiler xla` |
+| `sympy` | not yet wired |
+
+A compiler that needs a package the other stages do not gets its own adapter
+ENVIRONMENT as well as its own workflow: a dependency left in a shared adapter
+project is resolved and precompiled by every stage that activates that project,
+however few of them name the compiler. `mtk`'s ModelingToolkit and
+OrdinaryDiffEqNonlinearSolve therefore live in
+`scripts/compiler_agreement_mtk_env`, which the Julia adapter activates for
+`--compiler mtk` alone, and `xla`'s Reactant in
+`scripts/compiler_agreement_reactant_env`, for `--compiler xla` alone, while
+every other Julia stage of this tier and of §5.45 activates the slim
+`scripts/compiler_agreement_env`.
+
+Adapters are discovered the way §5.38's are, through
+`EARTHSCI_COMPILER_AGREEMENT_ADAPTER_<BINDING>`:
 
 | Binding | Adapter |
 |---|---|
 | Julia (reference) | `pkg/EarthSciAST.jl/scripts/compiler_agreement_adapter.jl` |
-| Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-compiler-agreement-adapter-rust.rs`, feature `conformance-adapters` |
+| Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-compiler-agreement-adapter-rust.rs`, feature `conformance-adapters` — plus `xla` when, and only when, `--compiler xla` is requested and `XLA_EXTENSION_DIR` is set, which the runner adds to the adapter command (the one place that choice is made) |
 | Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/compiler_agreement_adapter.py` |
 
 **Every problem-building stage NAMES its compiler.** A stage that calls
@@ -6289,6 +6349,191 @@ passes one explicitly. Which value is the stage's own to state:
 Either way the compiler is an argument and never an inheritance, and this tier
 remains the only place `native`'s coverage is measured. Without that, the whole
 harness goes red for reasons unrelated to what each stage tests.
+
+
+### 5.45 Inline-Test Conformance Tiers (normative)
+
+§5.38 governs one right-hand side at fixed probe states; §5.44 governs a whole
+RUN, compared as a state trajectory keyed by bare column-major element name.
+This section governs the third shape, and it is the one most SEMANTICS fixtures
+need: a **document that carries its own `tests` block** (esm-spec §6.6), run
+through each binding's OWN inline-test runner under a NAMED compiler.
+
+The difference from §5.44 is not stylistic. A §6.6.5 `coords` assertion, a
+`reduce` assertion and an assertion on an OBSERVED each name something that is
+not a state element, so §5.44's trajectory comparison cannot carry them as
+anchors — and those are most of what a semantics fixture asserts. Delegating the
+assertion to each binding's §6.6 runner is also what makes the comparison
+meaningful, because that runner is part of what is under test.
+
+The contract — manifest schema, adapter CLI, outcomes, golden format, stage
+names — is each tier's own `README.md`. The runner is
+`scripts/run-inline-tests-conformance.py`, and a manifest it drives declares
+`"runner": "inline_tests"`.
+
+Go and TypeScript are **out of scope** for every tier of this family: neither
+has a simulator or an inline-test runner, so neither can drive one
+(`API_SPEC.md` §3, capability profiles). That is an exclusion from the
+CATEGORY, never from the rule the category gates.
+
+#### 5.45.1 What is compared, and why it is two things
+
+Per assertion, an adapter reports **both** `passed` — its binding's own §6.6.3
+verdict — and `actual`, the reduction value that verdict was reached on. The
+runner gates both:
+
+* `actual` is gated against the **document's authored `expected`**, at the
+  assertion's resolved §6.6.4 band, by the RUNNER's own application of the
+  §6.6.3 predicate — and the binding's `passed` must agree with that verdict.
+  The document is the oracle, it is outside every binding, and it travels with
+  the physics it is about; the runner checking it itself is what keeps a
+  binding whose predicate is wrong from vouching for its own number, which for
+  a fixture with no golden would otherwise be the whole gate.
+* `actual` is gated against **`golden/<id>.json`**, the reference's number for
+  the same assertion, at the tier's own band.
+
+Neither alone is enough. An assertion whose declared band is loose enough to
+admit two different answers PASSES for two bindings that disagree; the golden is
+what makes the disagreement visible. And a golden alone says only that a number
+did not move — it is the authored `expected` that says the number was right in
+the first place, which is why the always-on self-test holds every committed
+golden to the document's own expectation before any binding runs.
+
+Nothing here inspects an emitted program. Agreement is numerical, exactly as
+§5.38.1 requires.
+
+#### 5.45.2 The reference
+
+The reference is the **Julia `interpreter`**, and `--write-golden` refuses to
+mint from any other binding or any other compiler. It is the same reference
+§5.38 and §5.44 use and for the same reason: the interpreter is complete over
+the evaluable core (`esm-libraries-spec.md` §2.5.10) and shares no code with the
+compiled or vectorized tiers it gates, so a compiled path that reproduces it has
+been checked against something it does not share code with.
+
+A golden carries its provenance (`reference_binding`, `reference_compiler`) and
+one entry per `(test_id, assertion_idx)`. The self-test rejects a golden whose
+key set does not match the document's, which is what keeps a golden from
+silently surviving an edit to the fixture it is about.
+
+`--write-golden` mints only from an assertion the reference itself PASSED with a
+finite `actual`. If any assertion of any fixture failed, or carries a `null` or
+non-finite `actual`, it names each one and writes NO golden at all, so a broken
+reference run cannot half-replace the committed set. A committed golden whose
+`actual` is not a finite number is a gated failure of the fixture that reads it,
+never a crash of the runner.
+
+**When the reference itself refuses a fixture** there is no reference actual to
+mint, and the fixture's `golden` is `null`. That is a statement, not an
+omission, so it is written down: the manifest MUST carry a
+`golden_absent_reason`, AND a `named_exclusions` entry naming the REFERENCE
+binding — if the reference can run the document, there is no excuse for not
+minting from it. Such a fixture is still gated: the bindings that DO run it are
+held to the document's authored `expected`, which is an oracle outside every
+binding. What it loses is the cross-compiler drift check, and that returns the
+moment the reference gains the rule and the golden can be minted.
+
+#### 5.45.3 Outcomes and gate
+
+Per fixture, per binding, per compiler, an adapter answers exactly one of:
+
+| Outcome | Meaning |
+|---|---|
+| assertions | a list of `{test_id, assertion_idx, variable, passed, actual, message}` |
+| `refused` | this compiler cannot evaluate this document; carries the `code` it declined with and the `reason` |
+| `unavailable` | this compiler does not exist in this binding, or its runtime is not configured here; the WHOLE output, because it is a fact about the binding rather than about a document |
+| `error` | the load, the build or the run threw something that names no coded diagnostic |
+
+**A refusal has two shapes and both are refusals.** One is thrown out of the
+build. The other is a run in which EVERY assertion failed carrying ONE coded
+diagnostic — an operator with no evaluation rule declines at EVALUATION rather
+than at build, and reporting that as "every number is wrong" would file a
+refusal in the same bucket as a numeric defect. An adapter therefore classifies
+a whole-fixture, single-code failure as `refused`, and a message naming NO code
+can never reach that classification: a wrong answer must never become a green
+named exclusion.
+
+The gate:
+
+* a **failed assertion** is RED, for every compiler and every binding — on the
+  BINDING's own verdict, and on the runner's own §6.6.3 verdict over the
+  reported `actual`. A binding that reports `passed` on a value outside the
+  document's band is RED, and so is a `passed` that is not a JSON boolean or an
+  `actual` that is not a number. Nothing weakens an assertion to make a binding
+  pass;
+* a value **outside the golden band** is RED even where the assertion passed;
+* a **refusal** is a **named exclusion** — reported with the binding, the
+  compiler, the fixture and the code, in the report and on the console, and
+  green — only where the fixture's `named_exclusions` ledger names that
+  `(binding, compiler)` AND the code matches. An unnamed refusal, or one whose
+  code has drifted from the ledger, is RED. It is never a pass and never a
+  silent skip;
+* an **`unavailable`** is RED for a binding the manifest lists in
+  `bindings_required`, and a reported skip otherwise. It is only ever the WHOLE
+  output: a binding's inline-test runner catches a build failure per assertion,
+  so an adapter asks whether the compiler is available before running any
+  fixture, and a fixture whose every assertion failed on `compiler_unavailable`
+  alone also ends the run as `unavailable`. A PER-FIXTURE refusal carrying
+  `compiler_unavailable` is a broken adapter and RED, whatever the ledger says,
+  and a `named_exclusions` entry recording that code is a manifest error;
+* an **`error`** is RED unconditionally: unlike a refusal it says nothing about
+  what a compiler can run, so no ledger excuses it.
+
+**The two ledgers are never merged.** `bindings_required` says a binding must be
+able to ANSWER at all; a fixture's `required` map (binding → the compilers that
+must run THIS document) says which compilers must not refuse it. Merging them
+would make a coverage gap indistinguishable from a missing runtime. A fixture
+that both REQUIRES and EXCLUDES the same `(binding, compiler)` is a manifest
+error the self-test rejects, because it says two things at once.
+
+An exclusion that no longer excludes anything — the binding ran the fixture
+cleanly — is reported as a **stale-exclusion note**, not a failure. Failing the
+binding that got better is the one way a ratchet can run backwards.
+
+#### 5.45.4 The tiers of this family
+
+| Tier | What it gates |
+|---|---|
+| `broadcast_alignment` | esm-spec §4.3.4 name-based operand alignment in an array-level equation, its ANONYMOUS-shape boundary, and the one-operand `broadcast` node |
+| `scalar_operator_semantics` | what each scalar operator of esm-spec §9.2's evaluable core COMPUTES |
+
+Each tier's `README.md` is its contract and records what did NOT move into it.
+A tier is added by writing that README, a manifest with `"runner":
+"inline_tests"`, its fixtures, its goldens, and one stage per binding per
+compiler in `scripts/test-conformance.sh`.
+
+#### 5.45.5 Gate wiring
+
+`scripts/run-inline-tests-conformance.py --manifest <m> --self-test` is the
+always-on guard and needs no live binding: it validates the manifest and both
+ledgers, holds every committed golden to the DOCUMENT's own expectation at each
+assertion's resolved band, and asserts the harness rejects a value moved off its
+band, a missing assertion, an assertion the binding itself failed, an error, an
+unnamed refusal and a refusal whose code drifted — while reporting a ledgered
+refusal as a named exclusion. It also asserts the runner's own §6.6.3 verdict
+(the predicate on esm-spec §6.6.3's worked examples, a `passed` on a value off
+the document's band, a non-boolean `passed`, a boolean, `null` or non-finite
+`actual`, and an exact `{rel: 0, abs: 0}` band) with and without a golden; that a
+malformed golden is a failure rather than a crash; that `--write-golden` refuses
+a failed, `null` or non-finite reference assertion by name; and that
+`unavailable` is RED only where required while a per-fixture
+`compiler_unavailable` is rejected.
+
+The producer stages in `scripts/test-conformance.sh` are one per tier per
+binding per compiler, named `inline-tests <tier> <compiler> producer
+(<binding>)`. Adapters are discovered the way §5.38's and §5.44's are, through
+`EARTHSCI_INLINE_TESTS_ADAPTER_<BINDING>`:
+
+| Binding | Adapter |
+|---|---|
+| Julia (reference) | `pkg/EarthSciAST.jl/scripts/inline_tests_adapter.jl` |
+| Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-inline-tests-adapter-rust.rs`, feature `conformance-adapters` |
+| Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/inline_tests_adapter.py` |
+
+**Every stage NAMES its compiler**, on §5.44.5's terms and for §5.44.5's reason:
+`--compiler` is required by the runner and by every adapter, and a run that
+omits it is a configuration error rather than a run under whatever the library
+default happens to be.
 
 
 ## 6. CI Integration

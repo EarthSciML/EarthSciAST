@@ -1,20 +1,9 @@
 //! esm-spec §4.2: on a `D` node an ABSENT `wrt` MEANS `t`.
 //!
-//! Regression for EarthSciAST#407. `simulate::lhs::state_lhs_name` matched
-//! `wrt == Some("t")`, so it did not recognize `{"op": "D", "args": ["z"]}` as
-//! the derivative of `z` at all. The ARRAY pathway classifies its LHS through
-//! [`earthsci_ast::classification`], which had always applied the default, so a
-//! SHAPED state written in the short form simulated while the SCALAR one built
-//! a system with no derivative equation and was refused at interpreter build:
-//!
-//! ```text
-//! State variable 'WrtProbe.z' has no D(WrtProbe.z, t) = ... equation
-//! in flat.equations. Cannot simulate.
-//! ```
-//!
-//! The diagnostic names a missing equation, which is downstream of the
-//! unapplied default, so the failure read as an authoring error in a document
-//! that is correct per §4.2.
+//! Regression for EarthSciAST#407: `{"op": "D", "args": ["z"]}` is the
+//! derivative of `z`, for a SCALAR state as for a SHAPED one. When one shape
+//! dropped the default, a document correct per §4.2 was refused with a
+//! diagnostic naming a missing equation, which read as an authoring error.
 //!
 //! Both shapes are exercised, each against its explicitly-spelled twin, so the
 //! asymmetry cannot come back in either direction. The numbers live in shared
@@ -24,9 +13,8 @@
 //! `29_wrt_default_explicit_shaped.esm` (both registered in the `simulate_faq`
 //! conformance manifest) hold the shaped pair. The shaped pair is two FILES
 //! because each runner binds the per-cell initial conditions by bare name, so
-//! two models both declaring `x` in one document is ambiguous; and it is out of
-//! `tests/simulation/` because its sum-`faq` observed has no evaluator in the
-//! scalar backend that corpus's generic runner drives.
+//! two models both declaring `x` in one document is ambiguous; and it lives with
+//! the other `faq` fixtures rather than in `tests/simulation/`.
 
 #![cfg(not(target_arch = "wasm32"))]
 

@@ -71,17 +71,70 @@ end
 # keyword. MTK then wires the default into ODEProblem u0 construction, and a
 # caller-supplied initial condition still overrides it. Must run before the
 # dynamic equations are lowered.
+#
+# An ARRAY state is in `states` as its scalar cells, not as the array, and
+# ModelingToolkit reads a cell's default off the array the cell indexes. So
+# the cells are rebuilt out of the DEFAULTED array; left as they were, they
+# still index the array without one, and the initial condition never reaches
+# the system (the initialization then solves for the whole state from
+# nothing).
 function _apply_ic_defaults!(var_dict::Dict{String,Any}, states,
                              ic_values::Vector{Tuple{String,Any}})
     for (vn, val) in ic_values
         old = var_dict[vn]
-        new = Symbolics.setdefaultval(old, val)
-        var_dict[vn] = new
-        for i in eachindex(states)
-            states[i] === old && (states[i] = new)
+        if old isa Num
+            new = Symbolics.setdefaultval(old, val)
+            for i in eachindex(states)
+                states[i] === old && (states[i] = new)
+            end
+        else
+            new = Symbolics.setdefaultval(old, _fold_constant_array(val, size(old)))
+            _reindex_cells!(states, old, new)
         end
+        var_dict[vn] = new
     end
     return nothing
+end
+
+# Replace every cell of `old` in `states` with the same cell of `new`, keeping
+# the cell's description. Cells are matched by the array's NAME, which is what
+# `setdefaultval` leaves unchanged.
+function _reindex_cells!(states, old, new)
+    base = ModelingToolkit.getname(Symbolics.unwrap(old))
+    for i in eachindex(states)
+        u = Symbolics.unwrap(states[i])
+        (SymUtils.iscall(u) && SymUtils.operation(u) === getindex) || continue
+        args = SymUtils.arguments(u)
+        ModelingToolkit.getname(args[1]) == base || continue
+        idx = Int[Int(SymUtils.unwrap_const(Symbolics.value(a))) for a in args[2:end]]
+        cell = Num(new[idx...])
+        desc = Symbolics.getmetadata(u, ModelingToolkit.VariableDescription, nothing)
+        desc === nothing ||
+            (cell = Symbolics.setmetadata(cell, ModelingToolkit.VariableDescription, desc))
+        states[i] = cell
+    end
+    return states
+end
+
+# An array initial value whose every cell is a NUMBER, as that numeric array.
+# ModelingToolkit files a numeric default as an initial condition and anything
+# symbolic as a binding, and a `faq` initial value lowers to an array
+# expression whose cells are constants only once it is scalarized. A scalar
+# number is broadcast over the array's `dims` (esm-spec §6.3). A value with a
+# cell that reads a variable is returned unchanged.
+function _fold_constant_array(val, dims)
+    cells = Symbolics.scalarize(val)
+    if !(cells isa AbstractArray)
+        c = SymUtils.unwrap_const(Symbolics.value(cells))
+        return c isa Real ? fill(Float64(c), dims) : val
+    end
+    out = Array{Float64}(undef, size(cells))
+    for i in eachindex(cells)
+        c = SymUtils.unwrap_const(Symbolics.value(cells[i]))
+        c isa Real || return val
+        out[i] = Float64(c)
+    end
+    return out
 end
 
 # ---- Close a state that NO equation mentions ----

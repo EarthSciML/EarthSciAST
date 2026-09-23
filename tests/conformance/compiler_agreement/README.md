@@ -31,21 +31,55 @@ Design decisions of record (2026-09-21) that this tier implements:
 > and `native` with no refusals on any fixture, and all three are
 > `bindings_required` for each; Python is `bindings_required` for `sympy`,
 > which refuses the four array fixtures by name and runs the two scalar ones.
+> **Julia is `bindings_required` for `mtk`** as of 2026-09-22:
+> `esm_problem(…; compiler = :mtk)` builds every one of the six fixtures
+> through `ModelingToolkit.System` → `mtkcompile` → `ODEProblem` and lands
+> inside each fixture's band, with no refusals — the array fixtures included,
+> because their stencils are already `arrayop` over an index set and so carry no
+> continuous spatial dimension for that compiler to refuse.
 >
-> **Julia ANSWERS for `xla`, and `xla` stays `bindings_optional` anyway.**
-> `esm_problem(…; compiler = :xla)` builds the document out of place, lowers the
-> compiled tree-walk intermediate representation to StableHLO and compiles it
-> once per build; all six fixtures pass against the golden AND against their
-> anchors, with **no refusals and no named exclusions**. The ledger still lists
-> julia as optional, because no `xla` producer stage is wired into
-> `scripts/test-conformance.sh`: the Julia one needs
-> `pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env`, which pulls an
-> XLA runtime into the conformance run, and that is a fleet-wide decision rather
-> than this tier's. `bindings_required` makes an `unavailable` RED, so until the
-> stage runs it would only ever mean red for a checkout whose Reactant
-> environment did not instantiate — a red that says nothing about the compiler.
-> Julia crosses on the same one-way ratchet `native` used when the stage is
-> wired; run it meanwhile with `--bindings julia --compiler xla`. Two things
+> Two things about the `mtk` stage that are properties of the compiler rather
+> than of this tier. It needs ModelingToolkit **and a nonlinear solver** — an
+> implicit equation compiles to a DAE whose consistent initialization is a
+> nonlinear solve — which live in an adapter environment of their own
+> (`scripts/compiler_agreement_mtk_env`) that the adapter activates, and whose
+> packages it loads, for `--compiler mtk` only, at TOP LEVEL: a package loaded
+> by `@eval` inside a running function defines its methods in a new world age
+> that the running frame cannot call, which made every fixture report "method
+> too new to be called from this world context" and read as a broken binding.
+> And `mtk` refuses what the fixtures here do not exercise: a document fed by
+> loaded data, one with a continuous spatial dimension, a geometry operator, or
+> a time derivative of an expression. The stage is gated in
+> `.github/workflows/mtk-compiler.yml` rather than in the default conformance
+> run — same triggers, so the same frequency.
+>
+> **Rust crossed the ratchet for `xla` on 2026-09-22**: `esm_problem(…,
+> compiler = Xla)` emits the model's tape as an XLA computation and runs the
+> compiled right-hand side (and the finite-difference Jacobian differenced out
+> of it) on the solve path, and all six fixtures agree with the golden with no
+> refusals — so rust is `bindings_required` for `xla`. Read that entry with its
+> build condition: `xla` is the member whose availability is a property of the
+> BUILD, so "required" means a build that HAS the `xla` Cargo feature and an
+> unpacked `xla_extension` must answer. A stage that runs this compiler is
+> responsible for providing both, which is why the default run of
+> `scripts/test-conformance.sh` registers no `xla` stage and the producer lives
+> in the `rust-xla` job of the `XLA Compiled Backends` workflow, which fetches
+> the extension first and then runs
+> `./scripts/test-conformance.sh --compiler-agreement-only xla`.
+>
+> **Julia ANSWERS for `xla`, and `xla` stays `bindings_optional` for Julia
+> anyway.** `esm_problem(…; compiler = :xla)` builds the document out of place,
+> lowers the compiled tree-walk intermediate representation to StableHLO and
+> compiles it once per build; all six fixtures pass against the golden AND
+> against their anchors, with **no refusals and no named exclusions**. The
+> ledger still lists julia as optional because no stage runs the Julia `xla`
+> producer with its environment
+> (`pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env`, which pulls an
+> XLA runtime in) instantiated: `bindings_required` makes an `unavailable` RED,
+> and until such a stage exists that would only ever mean red for a checkout
+> whose Reactant environment did not instantiate — a red that says nothing
+> about the compiler. Julia crosses on the same one-way ratchet once the stage
+> is wired; run it meanwhile with `--bindings julia --compiler xla`. Two things
 > about that run are worth reading here rather than inferring:
 >
 > * **The device is the host CPU client** (`EARTHSCI_JULIA_XLA_DEVICE`, default
@@ -53,23 +87,17 @@ Design decisions of record (2026-09-21) that this tier implements:
 >   would make it a field every binding had to reproduce, so the compiler that
 >   ran is in the trajectory's provenance and the device is in the Julia
 >   Problem's own `compiler_report`.
-> * **`decay_solver_block`'s stiff Jacobian is finite-differenced under `xla`,
->   and only under `xla`.** A Rosenbrock method builds its Jacobian by
->   forward-differentiating the right-hand side, and a compiled device program
->   is not a Julia function a `Dual` can be pushed through — it refuses such a
->   call rather than answer a wrong derivative. The adapter asks the PROBLEM
->   which compiler built it (§5.8's `compiler(prob)`) rather than reading its
->   own `--compiler` flag, and finite-differences the Jacobian when the answer
->   is `:xla`. The algorithm stays `Rodas5P`, its order is unchanged and the
->   fixture's tolerances are untouched; the fixture lands inside its 2.8e-11
->   band against the golden with room to spare.
+> * **`decay_solver_block`'s stiff Jacobian is finite-differenced under `xla`.**
+>   A Rosenbrock method builds its Jacobian by forward-differentiating the
+>   right-hand side unless the problem carries one, and a compiled device
+>   program is not a Julia function a `Dual` can be pushed through. The Julia
+>   `:xla` Problem therefore carries its own finite-difference Jacobian and time
+>   derivative through the compiled program, so the adapter names the same
+>   `Rodas5P` for every compiler and asks nothing about which one built the
+>   Problem. The fixture lands inside its 2.8e-11 band against the golden.
 >
-> `mtk` stays `bindings_optional` until a binding's `esm_problem` can build with
-> it, and crosses on the same ratchet. `xla` is `bindings_optional` for Rust too:
-> it needs the `xla` feature and `XLA_EXTENSION_DIR`.
->
-> **What `xla` does not cover yet, on either binding**: a document that binds
-> LIVE FORCING BUFFERS. Julia refuses one by name
+> **What `xla` does not cover yet in Julia**: a document that binds LIVE
+> FORCING BUFFERS. Julia refuses one by name, before the build
 > (`compiler_refused_rule`, "live forcing buffers (…)"), because the compiled
 > program takes such buffers as arguments and needs them re-synced to the device
 > at each cadence boundary, and the buffer-free form would bake the build-time
@@ -390,7 +418,7 @@ looks for it:
 
 | Binding | Adapter |
 |---|---|
-| Julia (reference) | `pkg/EarthSciAST.jl/scripts/compiler_agreement_adapter.jl` — on disk; bootstraps `scripts/compiler_agreement_env` |
+| Julia (reference) | `pkg/EarthSciAST.jl/scripts/compiler_agreement_adapter.jl` — on disk; bootstraps `scripts/compiler_agreement_env`, or `scripts/compiler_agreement_mtk_env` for `--compiler mtk` |
 | Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-compiler-agreement-adapter-rust.rs`, feature `conformance-adapters` |
 | Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/compiler_agreement_adapter.py` |
 
@@ -566,6 +594,51 @@ Stages in `scripts/test-conformance.sh` are one per binding per compiler, named
 for Julia, Rust and Python; `xla` for Julia and Rust; `mtk` for Julia; `sympy`
 for Python. `compiler-agreement self-test` is the always-on guard and needs no
 live binding.
+
+**Where each compiler is gated.** The DEFAULT run of `test-conformance.sh` is
+what a plain checkout runs, so it registers only the compilers a plain checkout
+can answer for: `interpreter` and `native`. The others have runtimes that must
+be provisioned first — an unconfigured one answers `unavailable`, which for a
+`bindings_required` binding is RED — so each is gated by
+`./scripts/test-conformance.sh --compiler-agreement-only <compiler>` in a
+workflow that provisions it, at the same frequency as the main conformance run:
+
+| Compiler | Where it is gated |
+|---|---|
+| `interpreter`, `native` | the default run (`.github/workflows/conformance-testing.yml`) |
+| `mtk` | `.github/workflows/mtk-compiler.yml` — Julia only, same triggers as the conformance workflow, its own depot cache keyed on `scripts/compiler_agreement_mtk_env/Project.toml` |
+| `xla` | the `rust-xla` job of `.github/workflows/xla-backends.yml`, which fetches the 144 MB `xla_extension` and exports `XLA_EXTENSION_DIR` first |
+| `sympy` | not yet wired |
+
+`--compiler-agreement-only` runs the self-test plus that compiler's producer
+stages and nothing else — not the per-binding test suites, not another tier.
+Which bindings it runs comes from THIS manifest (`bindings_required` plus
+`bindings_optional`), so the option cannot drift from the ledger; a binding that
+is only optional for the compiler and whose toolchain is missing on that runner
+skips with a warning, which is what `bindings_optional` means, while a required
+one with no toolchain still fails. An unrecognised compiler exits 2.
+
+For Rust, the runner adds the `xla` Cargo feature to the adapter's `cargo run
+--features …` command when, and only when, `--compiler xla` is what was asked
+for and `XLA_EXTENSION_DIR` is set. That choice is made in ONE place, the
+runner's `with_compiler_features`, and it applies to the command wherever
+discovery found it — the planned one, or the one `scripts/test-conformance.sh`
+exports as `EARTHSCI_COMPILER_AGREEMENT_ADAPTER_RUST`, which names only
+`conformance-adapters`. So the `interpreter` and `native` stages never build the
+`xla` crate graph, and an `xla` run without `XLA_EXTENSION_DIR` builds the
+feature-less adapter, which answers `unavailable` naming what is missing; rust
+is `bindings_required` for `xla`, so that is RED. That is why the workflow step
+exports `XLA_EXTENSION_DIR`. An override command with no `--features` (a
+prebuilt binary) is run as given.
+
+For Julia and `mtk`, the two packages that compiler needs — ModelingToolkit and
+OrdinaryDiffEqNonlinearSolve — are in an adapter environment of their own,
+`pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env`, which the adapter
+activates for that `--compiler` value alone. They are deliberately NOT in the
+sibling `scripts/compiler_agreement_env`: that project is activated by every
+other Julia stage of this tier and by the whole inline-test tier, all of which
+were resolving and precompiling the SciML symbolic stack for a compiler none of
+them names.
 
 A producer stage **declines to start**, with a warning naming exactly what is
 missing, when its binding's adapter is not on disk or when `golden/` holds no

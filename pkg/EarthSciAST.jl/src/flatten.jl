@@ -761,9 +761,8 @@ function _negate_expr(a::ASTExpr)::ASTExpr
     _is_zero_expr(a) && return _zero_expr()
     a isa NumExpr && return NumExpr(-(a::NumExpr).value)
     a isa IntExpr && return IntExpr(-(a::IntExpr).value)
-    # Unary `-`, not `neg`: both spell negation, but the Rust scalar interpreter
-    # has an arm for the first and none for the second, so emitting `neg` here
-    # would make one backend answer NaN.
+    # Unary `-`, not `neg`: both spell negation, and `-` is the spelling every
+    # binding's evaluator has a rule for.
     return OpExpr("-", ASTExpr[a])
 end
 

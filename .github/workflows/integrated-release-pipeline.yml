@@ -303,6 +303,18 @@ jobs:
       ref: v${{ needs.release-analysis.outputs.new_version }}
     secrets: inherit
 
+  # The `mtk` leg of the compiler-agreement tier. It used to ride along inside
+  # conformance-testing.yml, so release validation covered it; moving it to its
+  # own workflow would have quietly dropped it from every release unless it were
+  # called here too.
+  run-mtk-compiler-agreement:
+    needs: [release-analysis, security-scan, create-release]
+    if: needs.release-analysis.outputs.needs_release == 'true' && needs.security-scan.outputs.security_status == 'passed'
+    uses: ./.github/workflows/mtk-compiler.yml
+    with:
+      ref: v${{ needs.release-analysis.outputs.new_version }}
+    secrets: inherit
+
   # Update release with final assets and status
   finalize-release:
     needs: [
@@ -310,7 +322,8 @@ jobs:
       security-scan,
       create-release,
       build-binaries,
-      run-conformance-tests
+      run-conformance-tests,
+      run-mtk-compiler-agreement
     ]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -328,7 +341,8 @@ jobs:
         # Determine final release status
         RELEASE_STATUS="success"
         if [ "${{ needs.build-binaries.result }}" != "success" ] || \
-           [ "${{ needs.run-conformance-tests.result }}" != "success" ]; then
+           [ "${{ needs.run-conformance-tests.result }}" != "success" ] || \
+           [ "${{ needs.run-mtk-compiler-agreement.result }}" != "success" ]; then
           RELEASE_STATUS="partial"
         fi
 

@@ -33,7 +33,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: conformance-${{ github.ref }}
+  # `github.workflow` is in the key because this workflow is ALSO called, via
+  # `workflow_call`, from integrated-release-pipeline.yml, which runs on the
+  # same push to main. A called workflow sees the CALLER's `github` context —
+  # its `github.ref` and `github.event_name` are the caller's too — so with the
+  # ref alone the release call and this workflow's own push run resolved to one
+  # group and each cancelled the other, and a cancelled release call marks the
+  # release `partial`. `github.workflow` is this file's name on its own run and
+  # the caller's name on a called one, so the two groups differ; the literal
+  # prefix keeps the called group distinct from any group the caller declares.
+  # `inputs.ref` (the release tag, set only on a call) keeps two releases apart.
+  group: conformance-${{ github.workflow }}-${{ inputs.ref || github.ref }}
   # Cancel superseded runs everywhere, main included. The julia matrix runs
   # ~55 min, so queueing meant each push to main waited out the previous
   # commit's full matrix before testing the code anyone actually cares about.
@@ -716,7 +726,24 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             pkg/earthsci-ast-ts/node_modules
-          key: ${{ runner.os }}-conformance-${{ hashFiles('pkg/*/Project.toml', 'pkg/*/package*.json', 'pkg/*/pyproject.toml', 'pkg/*/Cargo.lock') }}
+          # The adapter environments are hashed as well as the packages. The
+          # compiler-agreement and inline-test adapters share
+          # pkg/EarthSciAST.jl/scripts/compiler_agreement_env. That file is not
+          # under `pkg/*/Project.toml`, so without it here the key does not move
+          # when a dependency is added to it: the run restores a depot that
+          # predates that dependency, resolves and precompiles it, then hits the
+          # exact key and saves nothing — paying the same precompile on every
+          # run, forever.
+          #
+          # Its `mtk` sibling (scripts/compiler_agreement_mtk_env) is NOT hashed
+          # here, and must not be: `--compiler mtk` is not run by this workflow
+          # any more. It has its own job, its own depot cache and its own key in
+          # .github/workflows/mtk-compiler.yml, which is also where
+          # ModelingToolkit and OrdinaryDiffEqNonlinearSolve now live. Taking
+          # those two out of the shared project is what stopped every Julia
+          # stage here precompiling the SciML symbolic stack for a compiler none
+          # of them names.
+          key: ${{ runner.os }}-conformance-${{ hashFiles('pkg/*/Project.toml', 'pkg/EarthSciAST.jl/scripts/compiler_agreement_env/Project.toml', 'pkg/*/package*.json', 'pkg/*/pyproject.toml', 'pkg/*/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-conformance-
 

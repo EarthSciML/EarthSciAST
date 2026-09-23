@@ -179,12 +179,10 @@ pub enum CompileError {
     /// into the solution, whereas the pipeline stage that should have eliminated
     /// the op is the actual defect.
     ///
-    /// BOTH interpreters raise it. The message names no particular one because
-    /// the two have different rule sets — the scalar ODE interpreter
-    /// ([`crate::simulate`]) additionally has no rule for the array/tensor and
-    /// geometry ops the array runtime ([`crate::simulate_array`]) evaluates —
-    /// and the invariant is the same either way: an unevaluable op is a
-    /// diagnostic, never a number.
+    /// Raised by the array runtime's build gate and by the single-expression
+    /// [`crate::expression::evaluate`], whose scalar bindings additionally give
+    /// the array / tensor and geometry ops no value. The invariant is the same
+    /// either way: an unevaluable op is a diagnostic, never a number.
     #[error(
         "unevaluable_operator: operator '{op}' is an evaluable-core op with no evaluation rule \
          in the interpreter this model was built for — it must be eliminated by an earlier \
@@ -376,8 +374,6 @@ pub const DISCRETE_EVENT: &str = "discrete event";
 /// [`CompileError::UnsupportedConstruct`]'s `construct` for an equation whose
 /// LHS is an expression ([`crate::classification::LhsForm::Expression`]).
 pub const IMPLICIT_EQUATION: &str = "implicit equation";
-/// The scalar ODE interpreter (`crate::simulate`), as a refusal names it.
-pub const SCALAR_EVALUATOR: &str = "Rust scalar ODE interpreter";
 /// The array runtime (`crate::simulate_array`), as a refusal names it.
 pub const ARRAY_EVALUATOR: &str = "Rust array evaluator";
 

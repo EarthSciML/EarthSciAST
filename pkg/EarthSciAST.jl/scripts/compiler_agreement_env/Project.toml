@@ -1,3 +1,8 @@
+# The SHARED compiler-agreement / inline-test adapter environment: every Julia
+# stage of both tiers except `--compiler mtk`, which has its own project next
+# door (scripts/compiler_agreement_mtk_env) carrying ModelingToolkit and
+# OrdinaryDiffEqNonlinearSolve on top of these. Keep this one minimal — anything
+# added here is resolved and precompiled by every one of those stages.
 [deps]
 EarthSciAST = "c7bf5e87-b31b-4281-bdce-ffb8a46ec87c"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"

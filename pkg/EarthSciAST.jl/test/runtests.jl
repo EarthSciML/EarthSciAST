@@ -90,6 +90,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # The ModelingToolkit export honours a continuous event's `affect_neg` and
     # `root_find` (esm-spec §5.2, issue #356).
     include("mtk_continuous_event_options_test.jl")
+    # `esm_problem(...; compiler = :mtk)` — the specialty compiler that RUNS the
+    # three constructs CONFORMANCE_SPEC §5.39 has every other evaluator refuse,
+    # and refuses by name the document content it cannot express (API_SPEC §5.8).
+    include("compiler_mtk_test.jl")
     include("run_esm_tests_test.jl")
     include("container_in_document_test.jl")
     include("units_fixture_consumption_test.jl")

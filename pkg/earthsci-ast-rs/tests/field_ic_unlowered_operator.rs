@@ -7,7 +7,7 @@
 //! stage-(0) walk therefore never saw an initial-condition right-hand side: an
 //! unlowered op there compiled, and surfaced only at `solve`, as a generic
 //! "invalid field initial condition" rather than `unlowered_operator`. The
-//! scalar interpreter and the single-model array entry both refuse it at build.
+//! single-model array entry refuses it at build.
 
 use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{flatten, load_string};

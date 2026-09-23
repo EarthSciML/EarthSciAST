@@ -111,6 +111,60 @@ pub(crate) fn nonadvancing_trajectory(
     Some((times, state_rows, ReturnCode::Success))
 }
 
+/// Best-effort solver step / evaluation counters read out of diffsol after a
+/// solve, surfaced through [`SolutionMetadata`].
+///
+/// RHS and Jacobian evaluation counts come from the equations' per-op
+/// [`diffsol::OpStatistics`] (`number_of_calls` / `number_of_matrix_evals`),
+/// which any [`OdeSolverMethod`] exposes via `problem().eqn.rhs()`. Accepted and
+/// rejected step counts come from each concrete solver's `get_statistics()`
+/// (a `BdfStatistics`, shared by the Bdf/Sdirk/Erk solvers): `number_of_steps`
+/// for accepted steps, and error-test + nonlinear-solver failures for rejected
+/// steps. `get_statistics()` is not on the `OdeSolverMethod` trait, so the
+/// caller reads those two counts off the concrete solver and passes them in.
+#[cfg(feature = "solve")]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SolveStats {
+    pub n_rhs_calls: usize,
+    pub n_jacobian_calls: usize,
+    pub n_accepted_steps: usize,
+    pub n_rejected_steps: usize,
+}
+
+#[cfg(feature = "solve")]
+impl SolveStats {
+    /// Assemble from a solver's equation-eval statistics (`problem().eqn.rhs()`)
+    /// plus the accepted/rejected step counts the caller pulled from the
+    /// concrete solver's `get_statistics()`.
+    pub(crate) fn from_solver<'a, S, Eqn>(
+        solver: &S,
+        n_accepted_steps: usize,
+        n_rejected_steps: usize,
+    ) -> Self
+    where
+        S: OdeSolverMethod<'a, Eqn>,
+        Eqn: diffsol::OdeEquations<T = f64, V = diffsol::FaerVec<f64>> + 'a,
+    {
+        let op = solver.problem().eqn.rhs().statistics();
+        Self {
+            n_rhs_calls: op.number_of_calls,
+            n_jacobian_calls: op.number_of_matrix_evals,
+            n_accepted_steps,
+            n_rejected_steps,
+        }
+    }
+}
+
+#[cfg(feature = "solve")]
+impl std::ops::AddAssign for SolveStats {
+    fn add_assign(&mut self, rhs: Self) {
+        self.n_rhs_calls += rhs.n_rhs_calls;
+        self.n_jacobian_calls += rhs.n_jacobian_calls;
+        self.n_accepted_steps += rhs.n_accepted_steps;
+        self.n_rejected_steps += rhs.n_rejected_steps;
+    }
+}
+
 /// Run the configured solver from `t0` to `t_end`, honoring `opts.maxiters`
 /// and `opts.saveat`. Returns `(time_vec, state_matrix_rows)` where
 /// `state_matrix_rows[i]` is the trajectory of state variable `i`.
@@ -339,11 +393,8 @@ fn whole_document_is_one_model(file: &EsmFile) -> bool {
     one_model && !has_reactions
 }
 
-/// Whether `file` must route to the array/spatial runtime
-/// ([`crate::simulate_array`]) rather than the scalar ODE interpreter: it has
-/// array-op nodes or spatial model structure. EsmProblem construction
-/// ([`crate::problem::esm_problem`]) is the single caller, so the routing is
-/// decided exactly once, at build time.
+/// Whether `file` has array-op nodes or spatial model structure — the
+/// documents [`compile_array`] accepts.
 pub(crate) fn is_array_file(file: &EsmFile) -> bool {
     crate::simulate_array::file_has_array_ops(file)
         || crate::simulate_array::file_has_spatial_model(file)
@@ -417,14 +468,14 @@ pub(crate) fn build_array_compiled(
 /// coupled (multi-model) file is flattened first (the file is dropped right
 /// after flattening); a single-model file compiles directly. Errors with
 /// [`SimulateError`] if `file` has no array-op or spatial structure — a
-/// pure-scalar file belongs to [`Compiled::from_file`], whose build is cheap
-/// enough that a two-step split buys nothing.
+/// pure-scalar file is built by [`crate::problem::esm_problem`], whose build
+/// is cheap enough for it that a two-step split buys nothing.
 pub fn compile_array(file: EsmFile) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
     if !is_array_file(&file) {
         return Err(SimulateError::Compile(
             CompileError::InterpreterBuildError {
                 details: "compile_array requires an array/spatial model (this file has none); \
-                      use Compiled::from_file for pure-scalar files"
+                      use esm_problem for pure-scalar files"
                     .to_string(),
             },
         ));

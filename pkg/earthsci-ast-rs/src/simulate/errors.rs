@@ -9,8 +9,8 @@ use super::*;
 // to preserve the native `crate::simulate::CompileError` path.
 pub use crate::compile_error::CompileError;
 
-/// Errors raised when running [`Compiled::simulate`] or the convenience
-/// [`crate::problem::solve`] entry point.
+/// Errors raised building an [`crate::problem::EsmProblem`] or running
+/// [`crate::problem::solve`].
 #[derive(Error, Debug)]
 pub enum SimulateError {
     /// Wraps a CompileError raised by [`crate::problem::esm_problem`]
@@ -91,7 +91,7 @@ pub enum SimulateError {
     ///
     /// A document cannot spell one: the schema's `TimeSpan` bounds are JSON
     /// numbers, and esm-spec §6.6.4 records that "JSON has no infinite
-    /// literal". So this is a caller-supplied argument of [`Compiled::solve`],
+    /// literal". So this is a caller-supplied argument of a solve,
     /// validated alongside the parameter and initial-condition maps of the same
     /// call.
     ///

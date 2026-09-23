@@ -16,9 +16,18 @@
 # API_SPEC §5.8's closed vocabulary. Its value is passed STRAIGHT to
 # `esm_problem` and never interpreted here: an adapter that read the value and
 # chose a build itself would be reimplementing the thing under test. That is
-# also why `:xla` and `:mtk` are not special-cased below — they answer
-# `unavailable` because `esm_problem` raises `compiler_unavailable` for them,
-# which is the binding's own statement about itself.
+# also why no compiler is special-cased below: a build is never chosen here.
+#
+# THE ONE THING THIS ADAPTER DOES DO PER COMPILER is load the RUNTIME that
+# compiler needs, which is configuration and not a build choice — the Rust
+# adapter's `XLA_EXTENSION_DIR` is the same step spelled as an environment
+# variable. `:mtk` and `:xla` each live in a package EXTENSION, so without
+# ModelingToolkit (or Reactant) in the session `esm_problem` answers
+# `compiler_unavailable`, and that answer would be a fact about this adapter
+# rather than about the binding. Each is loaded ONLY for its own `--compiler`
+# value (see `load_compiler_runtime`), and neither is even in the environment
+# the other compilers activate (see the bootstrap below), so no other
+# compiler's run pays for it.
 #
 # THE THREE OUTCOMES THIS ADAPTER DECIDES, and the one it must not conflate:
 #
@@ -37,23 +46,35 @@
 # fixture under another compiler.
 
 # Self-contained environment bootstrap, the shape pde_simulation_adapter.jl and
-# compiled_rhs_adapter.jl already use. This tier gets its OWN project
-# (scripts/compiler_agreement_env) rather than reusing scripts/pde_sim_adapter,
-# because a fixture's §2.2 `solver` block may declare `stiffness: "high"` and
-# selecting the stiff algorithm for it needs OrdinaryDiffEqRosenbrock, which the
-# PDE tier's env does not carry. Manifest.toml is gitignored repo-wide, so on a
-# fresh checkout we re-establish the local dev path then instantiate; on warm
-# runs this is a fast resolve check.
+# compiled_rhs_adapter.jl already use. This tier gets its OWN project rather
+# than reusing scripts/pde_sim_adapter, because a fixture's §2.2 `solver` block
+# may declare `stiffness: "high"` and selecting the stiff algorithm for it needs
+# OrdinaryDiffEqRosenbrock, which the PDE tier's env does not carry.
 #
-# TWO ENVIRONMENTS, CHOSEN BY `--compiler`. `xla` is the specialty compiler that
-# needs a HEAVY EXTERNAL DEPENDENCY — Reactant, which bundles an XLA runtime —
-# so it gets scripts/compiler_agreement_reactant_env and every other compiler
-# keeps scripts/compiler_agreement_env. The split is the one
-# compiled_rhs_adapter.jl already makes for its two engines, and for the same
-# reason: the REFERENCE compiler of this tier is the `interpreter`, and an
-# environment the reference lane instantiates must not depend on the runtime the
-# lane under test is built on. So `--compiler` is read HERE, straight off ARGS,
-# before anything is loaded.
+# THREE ENVIRONMENTS, chosen by the COMPILER — the same shape, and the same
+# reason, as compiled_rhs_adapter.jl choosing by `--engine`. Each specialty
+# compiler that needs a heavy external dependency gets its own, so the
+# `interpreter` and `native` stages, and the whole inline-test tier, which
+# activates the same project, never resolve or precompile it:
+#
+#   --compiler mtk   scripts/compiler_agreement_mtk_env — ModelingToolkit and
+#                    OrdinaryDiffEqNonlinearSolve, which pull in most of the
+#                    SciML symbolic stack;
+#   --compiler xla   scripts/compiler_agreement_reactant_env — Reactant, which
+#                    bundles an XLA runtime. The REFERENCE compiler of this tier
+#                    is the `interpreter`, and an environment the reference lane
+#                    instantiates must not depend on the runtime the lane under
+#                    test is built on;
+#   anything else    the slim scripts/compiler_agreement_env.
+#
+# `--compiler` is therefore read here, straight off ARGS, before anything is
+# loaded; `parse_args` below is still the validating read, and a value this one
+# does not recognise simply falls through to the slim env and then to that
+# error.
+#
+# Manifest.toml is gitignored repo-wide, so on a fresh checkout — for ANY of
+# the three — we re-establish the local dev path then instantiate; on warm runs
+# this is a fast resolve check.
 import Pkg
 const COMPILER_ARG = let c = ""
     for i in eachindex(ARGS)
@@ -61,8 +82,8 @@ const COMPILER_ARG = let c = ""
     end
     c
 end
-let env = joinpath(@__DIR__, COMPILER_ARG == "xla" ?
-                             "compiler_agreement_reactant_env" :
+let env = joinpath(@__DIR__, COMPILER_ARG == "mtk" ? "compiler_agreement_mtk_env" :
+                             COMPILER_ARG == "xla" ? "compiler_agreement_reactant_env" :
                              "compiler_agreement_env"),
     manifest = joinpath(env, "Manifest.toml")
     bootstrap() = begin
@@ -91,27 +112,48 @@ import OrdinaryDiffEqTsit5
 import OrdinaryDiffEqRosenbrock
 import SciMLBase
 
-# `compiler = "xla"` is the one value whose build needs a package in the
-# SESSION rather than only in the environment: `esm_problem` answers
-# `compiler_unavailable` until the Reactant extension is loaded. Loading it here
-# is not the adapter deciding anything about the build — the availability answer
-# is still the library's, and a Reactant that cannot load leaves `esm_problem`
-# to raise the `unavailable` this adapter reports verbatim.
-if COMPILER_ARG == "xla"
-    try
-        @eval import Reactant
-    catch err
-        @warn "Reactant could not be loaded; esm_problem will report " *
-              "compiler=:xla unavailable" exception = (err, catch_backtrace())
-    end
-end
-
 const BINDING = "julia"
 
 # API_SPEC §5.8's closed vocabulary, checked here as well as in the runner. A
 # value outside it is a broken invocation rather than a compiler this binding
 # happens not to have, and the two must not arrive at the same answer.
 const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
+
+# The runtime a compiler needs in the session, loaded for that compiler alone.
+# `:mtk` needs ModelingToolkit (the extension that implements it) plus a
+# nonlinear solver: an implicit equation compiles to a DAE whose consistent
+# initialization is a nonlinear solve, and OrdinaryDiffEq only carries one when
+# OrdinaryDiffEqNonlinearSolve is loaded. Both are declared by
+# scripts/compiler_agreement_mtk_env, which is the project the bootstrap above
+# activated for exactly this `--compiler` value. `:xla` needs Reactant, from
+# scripts/compiler_agreement_reactant_env. Loading a runtime is not the adapter
+# deciding anything about the build: the availability answer is still the
+# library's, so a Reactant that cannot load is logged and left to `esm_problem`,
+# which then raises the `compiler_unavailable` this adapter reports verbatim.
+#
+# CALLED AT TOP LEVEL, not from `main`. A package loaded by `@eval` defines its
+# methods in a NEW world age, and a frame that is already running cannot call
+# them — from inside `main` every fixture failed with "method too new to be
+# called from this world context" naming the extension's own entry point, which
+# reads as a broken binding rather than as this file calling too early. Each
+# top-level statement gets the current world, so loading here and calling `main`
+# on the next line is what makes the extension visible.
+function load_compiler_runtime(compiler)
+    if compiler == "mtk"
+        @eval begin
+            import ModelingToolkit
+            import OrdinaryDiffEqNonlinearSolve
+        end
+    elseif compiler == "xla"
+        try
+            @eval import Reactant
+        catch err
+            @warn "Reactant could not be loaded; esm_problem will report " *
+                  "compiler=:xla unavailable" exception = (err, catch_backtrace())
+        end
+    end
+    return nothing
+end
 
 function parse_args(args)
     manifest = nothing
@@ -420,4 +462,5 @@ function main()
     failed && exit(1)
 end
 
+load_compiler_runtime(COMPILER_ARG)
 main()

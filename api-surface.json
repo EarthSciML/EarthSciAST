@@ -75,6 +75,7 @@
         "compiler_agreement_adapter",
         "esio_provider",
         "extension",
+        "inline_tests_adapter",
         "intern",
         "performance",
         "precision",
@@ -94,17 +95,17 @@
     }
   },
   "counts": {
-    "symbols": 932,
+    "symbols": 928,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 309,
       "typescript": 239,
       "python": 257,
-      "rust": 346,
+      "rust": 342,
       "go": 439
     },
     "by_tier": {
-      "extension": 657,
+      "extension": 653,
       "stable": 275
     }
   },
@@ -1946,14 +1947,6 @@
       "tier": "extension",
       "bindings": {
         "typescript": "compileExpression"
-      }
-    },
-    {
-      "name": "compiled",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "Compiled"
       }
     },
     {
@@ -4155,14 +4148,6 @@
       }
     },
     {
-      "name": "fold_constant_expr",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "fold_constant_expr"
-      }
-    },
-    {
       "name": "forcing_buffer_index",
       "kind": "function",
       "tier": "extension",
@@ -4532,14 +4517,6 @@
       "tier": "extension",
       "bindings": {
         "typescript": "interpLinear"
-      }
-    },
-    {
-      "name": "interpret",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "interpret"
       }
     },
     {
@@ -6476,14 +6453,6 @@
         "python": "resolve_tolerances",
         "rust": "resolve_tolerances",
         "typescript": "resolveTolerances"
-      }
-    },
-    {
-      "name": "resolved_expr",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "ResolvedExpr"
       }
     },
     {

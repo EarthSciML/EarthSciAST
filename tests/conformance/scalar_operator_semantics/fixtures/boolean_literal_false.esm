@@ -1,0 +1,83 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "FalseOp",
+    "description": "The `false` literal operator of esm-spec \u00a79.2's evaluable core, on its own. It is split out of `scalar_operator_semantics` because two of the three bindings do not carry an evaluation rule for it: Julia's tree-walk evaluator has one for `true` and none for `false`, and Rust classes it as a rewrite target that must be lowered before evaluation. Only Python answers it. Keeping it here makes each refusal a NAMED EXCLUSION of ONE operator instead of an exclusion from every operator the sibling fixture pins.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "scalar_operator_semantics",
+      "inline-test",
+      "boolean-literal"
+    ],
+    "license": "MIT"
+  },
+  "models": {
+    "FalseOp": {
+      "variables": {
+        "literal_false": {
+          "type": "unknown",
+          "units": "1",
+          "description": "The operator under test: The `false` literal operator of esm-spec \u00a79.2's evaluable core, on its own. It is split out of `scalar_operator_semantics` because two of the three bindings do not carry an evaluation rule for it: Julia's tree-walk evaluator has one for `true` and none for `false`, and Rust classes it as a rewrite target that must be lowered before evaluation. Only Python answers it. Keeping it here makes each refusal a NAMED EXCLUSION of ONE operator instead of an exclusion from every operator the sibling fixture pins."
+        },
+        "probe": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Integrates the observed, so the value is read as well as computed."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "literal_false",
+          "rhs": {
+            "op": "false",
+            "args": []
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "probe"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "literal_false"
+        }
+      ],
+      "tests": [
+        {
+          "id": "literal_false_value",
+          "description": "The `false` literal operator of esm-spec \u00a79.2's evaluable core, on its own. It is split out of `scalar_operator_semantics` because two of the three bindings do not carry an evaluation rule for it: Julia's tree-walk evaluator has one for `true` and none for `false`, and Rust classes it as a rewrite target that must be lowered before evaluation. Only Python answers it. Keeping it here makes each refusal a NAMED EXCLUSION of ONE operator instead of an exclusion from every operator the sibling fixture pins.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "tolerance": {
+            "rel": 0.0,
+            "abs": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "literal_false",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "probe",
+              "time": 1.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-09,
+                "abs": 1e-11
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -2855,7 +2855,7 @@ pub(super) fn build_tape_program(
         observed_rules,
         rhs_rules,
         &observed_names,
-        compiled.is_native(),
+        compiled.tape_serves_passes(),
     );
 
     // ---- flatten + fusion + liveness + coloring ----------------------------
@@ -3270,11 +3270,12 @@ impl<'m> TapeBuilder<'m> {
         observed_rules: &[AlgebraicRule],
         rhs_rules: &[RhsRule],
         observed_names: &HashSet<String>,
-        // `native` (API_SPEC §5.8): export EVERY observed, because under it the
-        // build-time hoist, the per-segment seed, the inspection snapshot and
-        // the output-node pass are all served from this program rather than
-        // from the whole-array overlay, and each of them may read an observed
-        // the probe cone below does not reach — a caller-requested array
+        // The STRICT compilers, `native` and `xla` (API_SPEC §5.8): export
+        // EVERY observed, because under them the build-time hoist, the
+        // per-segment seed, the inspection snapshot and the output-node pass
+        // are all served from this program rather than from the whole-array
+        // overlay, and each of them may read an observed the probe cone below
+        // does not reach — a caller-requested array
         // observed, or a hoisted static field. A publish nothing reads costs
         // nothing anyway: `Export` only executes when a reader asked for it
         // (`TapeExec::exports_active`).
