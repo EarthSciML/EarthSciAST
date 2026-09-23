@@ -1,5 +1,5 @@
 {
-  "description": "What each fixture loads to, and evaluates to (esm-spec §4.7 'Working precision crosses a mount'; CONFORMANCE_SPEC §5.18.2b). `loads` gives, for every variable of every model (subsystems as Model.Sub.var), the `element_type` it carries after load — a string, or null for a variable that carries none — and the document's own `domain.element_type` (null when absent). ALL FIVE bindings assert `loads` and `load_errors`. `values` (zero tolerance, compared bit for bit) and `build_errors` are asserted by the bindings listed in `evaluated_by`: they evaluate per-variable precision; the others carry it.",
+  "description": "What each fixture loads to, and evaluates to (esm-spec §4.7 'Working precision crosses a mount'; CONFORMANCE_SPEC §5.18.2b). `loads` gives, for every variable of every model (subsystems as Model.Sub.var), the `element_type` it carries after load — a string, or null for a variable that carries none — and the document's own `domain.element_type` (null when absent). ALL FIVE bindings assert `loads`. `load_errors` maps a fixture to {code: [bindings]}: each listed binding MUST refuse the fixture at load with that code, and a binding listed under none MUST still refuse it (with any error). `values` (zero tolerance, compared bit for bit) and `build_errors` are asserted by the bindings listed in `evaluated_by`: they evaluate per-variable precision; the others carry it.",
   "loads": {
     "leaf_f32.esm": {
       "domain_element_type": "Float32",
@@ -84,7 +84,25 @@
     }
   },
   "load_errors": {
-    "reaction_mount.esm": "element_type_uncarried"
+    "reaction_mount.esm": {
+      "element_type_uncarried": [
+        "go",
+        "python",
+        "rust",
+        "typescript"
+      ]
+    },
+    "reaction_toplevel.esm": {
+      "element_type_uncarried": [
+        "julia"
+      ],
+      "mount_form_unsupported": [
+        "go",
+        "python",
+        "rust",
+        "typescript"
+      ]
+    }
   },
   "evaluated_by": [
     "rust"
@@ -120,6 +138,7 @@
   },
   "notes": {
     "subsystems.esm": "The build error is a Rust limitation, not a format rule: its precision inference reads top-level model variables only, so a written element_type inside a subsystems.<k> component is refused rather than ignored. A binding that evaluates subsystem precision would assert values here instead.",
-    "values": "key_next = key + 5 with key = 2265007010 declared Float64 inside the Float32 leaf: 2265007015 exactly, where binary32 would give 2265007104."
+    "values": "key_next = key + 5 with key = 2265007010 declared Float64 inside the Float32 leaf: 2265007015 exactly, where binary32 would give 2265007104.",
+    "load_errors": "The reaction-system refusal is reached through whichever reaction-system mount form a binding implements. Rust, Python, TypeScript and Go mount a reaction system at a reaction system's subsystems.<k> {ref} and refuse the top-level reaction_systems.<k> {ref} form (mount_form_unsupported, esm-spec §4.7); Julia is the reverse — it mounts the top-level form and refuses a reaction-system subsystems.<k> {ref} at parse."
   }
 }

@@ -1,0 +1,12 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_reaction_toplevel",
+    "description": "Mounts the Float32 reaction-system leaf at a top-level reaction_systems.<k> {ref}, under a document that evaluates in Float64. A binding that implements this mount form refuses it with element_type_uncarried (species and reaction parameters have no element_type); one that does not implement the form refuses the entry with mount_form_unsupported."
+  },
+  "reaction_systems": {
+    "Chem": {
+      "ref": "./reaction_leaf_f32.esm"
+    }
+  }
+}

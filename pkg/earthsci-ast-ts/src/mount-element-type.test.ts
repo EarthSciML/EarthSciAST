@@ -25,7 +25,7 @@ const expected = JSON.parse(readFileSync(path.join(dir, 'expected.json'), 'utf8'
     string,
     { domain_element_type: string | null; element_types: Record<string, string | null> }
   >
-  load_errors: Record<string, string>
+  load_errors: Record<string, Record<string, string[]>>
 }
 
 type System = {
@@ -70,16 +70,20 @@ describe('mount_element_type (esm-spec §4.7 "Working precision crosses a mount"
     })
   }
 
-  for (const [fixture, code] of Object.entries(expected.load_errors)) {
+  for (const [fixture, want] of Object.entries(expected.load_errors)) {
+    // `load_errors` maps a fixture to `{code: [bindings]}`; a binding listed
+    // under none must still refuse it.
+    const code = Object.entries(want).find(([, bindings]) => bindings.includes('typescript'))?.[0]
     it(`${fixture}: a reaction system cannot carry a mounted precision`, async () => {
-      const file = loadPath(path.join(dir, fixture))
       let err: unknown
       try {
+        const file = loadPath(path.join(dir, fixture))
         await resolveSubsystemRefs(file, dir)
       } catch (e) {
         err = e
       }
-      expect((err as { code?: string } | undefined)?.code).toBe(code)
+      expect(err).toBeDefined()
+      if (code !== undefined) expect((err as { code?: string }).code).toBe(code)
     })
   }
 })

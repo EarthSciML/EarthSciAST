@@ -59,8 +59,16 @@ def test_the_written_fields_round_trip(fixture):
     assert _carried(twice) == _carried(once)
 
 
+def _expected_load_error(want: dict, binding: str):
+    """The code ``binding`` must refuse a fixture with, or ``None`` when it must
+    only refuse (``load_errors`` maps a fixture to ``{code: [bindings]}``)."""
+    return next((code for code, bindings in want.items() if binding in bindings), None)
+
+
 @pytest.mark.parametrize("fixture", sorted(EXPECTED["load_errors"]))
 def test_a_reaction_system_cannot_carry_a_mounted_precision(fixture):
+    code = _expected_load_error(EXPECTED["load_errors"][fixture], "python")
     with pytest.raises(Exception) as info:
         load_path(str(FIXTURES / fixture))
-    assert getattr(info.value, "code", None) == EXPECTED["load_errors"][fixture], info.value
+    if code is not None:
+        assert getattr(info.value, "code", None) == code, info.value

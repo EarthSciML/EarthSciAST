@@ -82,17 +82,33 @@ fn a_mount_writes_exactly_the_leafs_differing_precision() {
     }
 }
 
+/// The code `binding` must refuse `fixture` with, or `None` when it must only
+/// refuse (`load_errors` maps a fixture to `{code: [bindings]}`).
+pub(crate) fn expected_load_error(want: &Value, binding: &str) -> Option<String> {
+    want.as_object()?.iter().find_map(|(code, bindings)| {
+        bindings
+            .as_array()?
+            .iter()
+            .any(|b| b == binding)
+            .then(|| code.clone())
+    })
+}
+
 #[test]
 fn a_reaction_system_cannot_carry_a_mounted_precision() {
     let exp = expected();
-    for (fixture, code) in exp["load_errors"].as_object().expect("load_errors") {
-        let code = code.as_str().expect("code");
+    for (fixture, want) in exp["load_errors"].as_object().expect("load_errors") {
+        let code = expected_load_error(want, "rust");
         match load_path(dir().join(fixture)) {
-            Ok(_) => panic!("{fixture} loaded; expected `{code}`"),
-            Err(e) => assert!(
-                e.to_string().contains(code),
-                "{fixture}: expected `{code}`, got {e}"
-            ),
+            Ok(_) => panic!("{fixture} loaded; expected a refusal ({code:?})"),
+            Err(e) => {
+                if let Some(code) = code {
+                    assert!(
+                        e.to_string().contains(&code),
+                        "{fixture}: expected `{code}`, got {e}"
+                    );
+                }
+            }
         }
     }
 }

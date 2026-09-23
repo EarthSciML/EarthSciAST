@@ -1089,8 +1089,11 @@ struct ModelVariable
     location::Union{String,Nothing}
     distribution::Union{Distribution,Nothing}
     update::Union{Vector{ParameterUpdate},Nothing}
-    # The variable's own floating-point precision (esm-spec §6.3, §11.3.1):
-    # "Float32" or "Float64", or `nothing` for the document's.
+    # `"Float32"` / `"Float64"`: the precision of THIS variable and of the
+    # arithmetic over it, overriding `domain.element_type` (esm-spec §11.3.1);
+    # `nothing` means the declaring document's. A §4.7 mount writes a leaf's
+    # `domain.element_type` here ("Working precision crosses a mount"), so this is
+    # also where a mounted document's precision survives load -> emit.
     element_type::Union{String,Nothing}
 
     # Constructor with optional parameters

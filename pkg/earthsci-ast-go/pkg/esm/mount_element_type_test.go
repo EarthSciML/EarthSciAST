@@ -24,7 +24,7 @@ type mountElementTypeExpected struct {
 		DomainElementType *string            `json:"domain_element_type"`
 		ElementTypes      map[string]*string `json:"element_types"`
 	} `json:"loads"`
-	LoadErrors map[string]string `json:"load_errors"`
+	LoadErrors map[string]map[string][]string `json:"load_errors"`
 }
 
 func readMountElementTypeExpected(t *testing.T) mountElementTypeExpected {
@@ -134,10 +134,23 @@ func TestMountElementType_WritesExactlyTheLeafsDifferingPrecision(t *testing.T) 
 
 func TestMountElementType_AReactionSystemCannotCarryIt(t *testing.T) {
 	exp := readMountElementTypeExpected(t)
-	for fixture, code := range exp.LoadErrors {
+	for fixture, want := range exp.LoadErrors {
 		t.Run(fixture, func(t *testing.T) {
+			// `load_errors` maps a fixture to {code: [bindings]}; a binding
+			// listed under none must still refuse it.
+			code := ""
+			for c, bindings := range want {
+				for _, b := range bindings {
+					if b == "go" {
+						code = c
+					}
+				}
+			}
 			_, err := LoadPath(filepath.Join(mountElementTypeDir, fixture))
-			if err == nil || !strings.Contains(err.Error(), "["+code+"]") {
+			if err == nil {
+				t.Fatalf("loaded; want a refusal (%q)", code)
+			}
+			if code != "" && !strings.Contains(err.Error(), "["+code+"]") {
 				t.Fatalf("want [%s], got %v", code, err)
 			}
 		})
