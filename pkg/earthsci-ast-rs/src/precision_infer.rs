@@ -288,19 +288,40 @@ fn annotate_model_with(
 pub fn env_of_file(file: &crate::types::EsmFile) -> Result<Env, CompileError> {
     let document =
         Precision::from_element_type(file.domain.as_ref().and_then(|d| d.element_type.as_deref()))?;
-    let mut vars = VarPrecisions::default();
-    for (mname, model) in file.models.iter().flatten() {
-        for (vname, var) in &model.variables {
-            let Some(et) = var.element_type.as_deref() else {
-                continue;
-            };
-            vars.insert(Some(mname), vname, Precision::from_element_type(Some(et))?);
-        }
-    }
+    let vars = match file.models.as_ref() {
+        Some(models) => VarPrecisions::from_declarations(&model_declarations(models), document, None)?,
+        None => VarPrecisions::default(),
+    };
     Ok(Env {
         document,
         variables: Rc::new(vars),
     })
+}
+
+/// The per-model variable declarations [`VarPrecisions::from_declarations`]
+/// reads, off a typed document's models.
+#[must_use]
+pub fn model_declarations(
+    models: &indexmap::IndexMap<String, crate::types::Model>,
+) -> Vec<crate::precision::ModelDeclarations<'_>> {
+    models
+        .iter()
+        .map(|(mname, model)| {
+            let subs = model
+                .subsystems
+                .as_ref()
+                .map(|s| serde_json::to_value(s).unwrap_or(serde_json::Value::Null));
+            crate::precision::ModelDeclarations {
+                model: mname,
+                variables: model
+                    .variables
+                    .iter()
+                    .map(|(v, d)| (v.as_str(), d.element_type.as_deref()))
+                    .collect(),
+                subsystem_variables: crate::precision::subsystem_declarations(subs.as_ref()),
+            }
+        })
+        .collect()
 }
 
 /// `file` with every equation annotated, or `None` when it declares no

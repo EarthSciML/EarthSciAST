@@ -285,6 +285,20 @@ pub enum CompileError {
         reason: String,
     },
 
+    /// A declared working precision reaches a construct this evaluator cannot
+    /// carry it through (esm-spec §11.3.1, §4.7 "Working precision crosses a
+    /// mount").
+    ///
+    /// Refused rather than evaluated in another precision: the declaration
+    /// would otherwise be accepted and ignored.
+    #[error("element_type_uncarried: {construct} — {reason} (esm-spec §11.3.1)")]
+    ElementTypeUncarried {
+        /// The construct whose declared precision cannot be carried.
+        construct: String,
+        /// Why this evaluator cannot carry it.
+        reason: String,
+    },
+
     /// One operator's operands carry DIFFERENT declared element types
     /// (`ModelVariable.element_type`, esm-spec §11.3.1).
     ///

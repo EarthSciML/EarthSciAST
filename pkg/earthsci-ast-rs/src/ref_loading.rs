@@ -174,6 +174,7 @@ pub fn resolve_subsystem_refs_with_metaparameters(
         api_meta,
         true,
         &root_meta,
+        DEFAULT_ELEMENT_TYPE,
     )
 }
 
@@ -423,7 +424,13 @@ fn walk_top_level(
     api_meta: &BTreeMap<String, i64>,
     defer: bool,
     caller_env: &BTreeMap<String, i64>,
+    enclosing_precision: &str,
 ) -> Result<Map<String, Value>, DiagnosticError> {
+    // esm-spec §4.7 "Working precision crosses a mount": THIS document's
+    // effective precision is its own `domain.element_type`, else the one it
+    // inherits from the document mounting it (`"Float64"` at a root). Every
+    // edge this document carries compares its leaf's declaration against it.
+    let precision = effective_element_type(value, enclosing_precision);
     // esm-spec §4.7 "Which environment a contribution folds against": the
     // registry a contribution lands in here belongs to THIS document, so the
     // fold environment is this document's own CLOSED one — not the caller's.
@@ -495,6 +502,7 @@ fn walk_top_level(
         api_meta,
         if defer { Some(&mut staged) } else { None },
         &merge_env,
+        &precision,
     )?;
 
     // The importing document's index-set registry starts from its own
@@ -524,6 +532,7 @@ fn walk_top_level(
                 parent_meta,
                 api_meta,
                 &merge_env,
+                &precision,
             )?;
         }
     }
@@ -540,6 +549,7 @@ fn walk_top_level(
                 parent_meta,
                 api_meta,
                 &merge_env,
+                &precision,
             )?;
         }
     }
@@ -601,6 +611,7 @@ fn inline_toplevel_model_refs(
     api_meta: &BTreeMap<String, i64>,
     mut staged: Option<&mut Map<String, Value>>,
     merge_env: &BTreeMap<String, i64>,
+    precision: &str,
 ) -> Result<(), DiagnosticError> {
     let edge_names: Vec<String> = match obj.get("models").and_then(|v| v.as_object()) {
         Some(models) => models
@@ -637,6 +648,8 @@ fn inline_toplevel_model_refs(
         let mount_noun = format!("top-level model ref '{ref_str}'");
         let (canonical, mut comp) =
             load_ref_document(ref_str, base_path, visited, &TOPLEVEL_MODEL_REF)?;
+        // Read before anything below can consume the leaf's `domain`.
+        let leaf_precision = declared_element_type(&comp);
         let leaf_dir = canonical.parent().unwrap_or(base_path).to_path_buf();
 
         // `comp` stays owned here; the closure only borrows it (so the visited
@@ -731,6 +744,7 @@ fn inline_toplevel_model_refs(
                 // edge's binding EXPRESSIONS still name the leaf's metaparameters.
                 walk_top_level(
                     &mut comp, &leaf_dir, visited, &leaf_env, api_meta, true, &bindings,
+                    precision,
                 )?;
 
             // §9.7.10 form A: the edge's `expression_template_imports` inject a
@@ -825,6 +839,15 @@ fn inline_toplevel_model_refs(
             if let Some(model_obj) = model.as_object_mut() {
                 model_obj.remove("tests");
             }
+            // esm-spec §4.7 "Working precision crosses a mount": the leaf's
+            // declared `domain.element_type` does not merge (one document, one
+            // domain), so it travels on the variables it governs.
+            carry_mounted_element_type(
+                &mut model,
+                leaf_precision.as_deref(),
+                precision,
+                &mount_noun,
+            )?;
             // Any relative `{ref}` the resolution above did not consume anchors
             // at the LEAF's directory, not at the parent it is about to land in.
             absolutize_nested_refs(&mut model, &leaf_dir);
@@ -1042,6 +1065,7 @@ fn walk_subsystems(
     parent_meta: &BTreeMap<String, i64>,
     api_meta: &BTreeMap<String, i64>,
     merge_env: &BTreeMap<String, i64>,
+    precision: &str,
 ) -> Result<(), DiagnosticError> {
     let obj = match value.as_object_mut() {
         Some(o) => o,
@@ -1069,6 +1093,7 @@ fn walk_subsystems(
             parent_meta,
             api_meta,
             merge_env,
+            precision,
         )?;
         subs.insert(name, resolved);
     }
@@ -1138,6 +1163,7 @@ fn resolve_value(
     parent_meta: &BTreeMap<String, i64>,
     api_meta: &BTreeMap<String, i64>,
     merge_env: &BTreeMap<String, i64>,
+    precision: &str,
 ) -> Result<Value, DiagnosticError> {
     if let Some(obj) = value.as_object()
         && let Some(ref_val) = obj.get("ref")
@@ -1148,6 +1174,8 @@ fn resolve_value(
 
         let (canonical, mut parsed) =
             load_ref_document(ref_str, base_path, visited, &SUBSYSTEM_REF)?;
+        // Read before anything below can consume the leaf's `domain`.
+        let leaf_precision = declared_element_type(&parsed);
 
         // A §4.7 subsystem ref MUST NOT target a template-library file — the
         // two reference mechanisms are disjoint (esm-spec §9.7.1).
@@ -1244,6 +1272,7 @@ fn resolve_value(
                 api_meta,
                 true,
                 &bindings,
+                precision,
             )?;
             // esm-spec §9.7.10 form A: the edge's `expression_template_imports`
             // inject a discretization into the referenced component's own
@@ -1348,7 +1377,15 @@ fn resolve_value(
         visited.remove(&canonical);
         nested_result?;
 
-        return extract_single_system(parsed, &canonical);
+        let mut system = extract_single_system(parsed, &canonical)?;
+        // esm-spec §4.7 "Working precision crosses a mount", at this form too.
+        carry_mounted_element_type(
+            &mut system,
+            leaf_precision.as_deref(),
+            precision,
+            &format!("subsystem ref '{ref_str}'"),
+        )?;
+        return Ok(system);
     }
 
     let mut value = value;
@@ -1360,8 +1397,108 @@ fn resolve_value(
         parent_meta,
         api_meta,
         merge_env,
+        precision,
     )?;
     Ok(value)
+}
+
+/// The working precision a document that declares none evaluates in
+/// (esm-spec §11.3: `domain.element_type` defaults to `"Float64"`).
+const DEFAULT_ELEMENT_TYPE: &str = "Float64";
+
+/// The `domain.element_type` a document declares, if it declares one.
+fn declared_element_type(doc: &Value) -> Option<String> {
+    doc.get("domain")
+        .and_then(|d| d.get("element_type"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// A document's EFFECTIVE working precision (esm-spec §4.7 "Working precision
+/// crosses a mount"): its own declaration, else the one it inherits from the
+/// document that mounts it. A root inherits [`DEFAULT_ELEMENT_TYPE`].
+fn effective_element_type(doc: &Value, enclosing: &str) -> String {
+    declared_element_type(doc).unwrap_or_else(|| enclosing.to_string())
+}
+
+/// Carry a mounted document's declared working precision onto the component
+/// it splices in (esm-spec §4.7 "Working precision crosses a mount").
+///
+/// A leaf that declares no `domain.element_type` declares no precision and
+/// adopts the mounting document's, so nothing is written. A leaf whose
+/// declaration equals the mounting document's EFFECTIVE precision needs
+/// nothing written either. Otherwise every `ModelVariable` of the component —
+/// and of every subsystem it carries, at any depth — that does not declare its
+/// own `element_type` gets the leaf's; a variable that does declare one keeps
+/// it. The result is exactly the set of overrides an author writing the
+/// assembly inline would have had to write, so `emit ∘ load` stays a fixed
+/// point and the evaluator needs no mount-specific path.
+fn carry_mounted_element_type(
+    component: &mut Value,
+    leaf: Option<&str>,
+    enclosing: &str,
+    mount_noun: &str,
+) -> Result<(), DiagnosticError> {
+    let Some(leaf) = leaf else {
+        return Ok(());
+    };
+    if leaf == enclosing {
+        return Ok(());
+    }
+    stamp_element_type(component, leaf, enclosing, mount_noun, "")
+}
+
+fn stamp_element_type(
+    system: &mut Value,
+    leaf: &str,
+    enclosing: &str,
+    mount_noun: &str,
+    path: &str,
+) -> Result<(), DiagnosticError> {
+    let Some(obj) = system.as_object_mut() else {
+        return Ok(());
+    };
+    // A reaction system's species and parameters have no `element_type`, so
+    // the format cannot state its precision per component. Refused rather than
+    // evaluated in the mounting document's precision (esm-spec §11.3.1).
+    if obj.contains_key("species") || obj.contains_key("reactions") {
+        let at = if path.is_empty() {
+            String::new()
+        } else {
+            format!(" (subsystem '{path}')")
+        };
+        return Err(err(
+            codes::ELEMENT_TYPE_UNCARRIED,
+            format!(
+                "{mount_noun}: the mounted document declares `domain.element_type: \"{leaf}\"` \
+                 but the document mounting it evaluates in {enclosing}, and the component \
+                 carries a reaction system{at} whose species and parameters cannot declare a \
+                 per-variable `element_type`; the mount cannot keep the leaf's precision \
+                 (esm-spec §4.7 \"Working precision crosses a mount\"). Declare the same \
+                 `domain.element_type` on the mounting document, or remove it from the leaf"
+            ),
+        ));
+    }
+    if let Some(vars) = obj.get_mut("variables").and_then(Value::as_object_mut) {
+        for var in vars.values_mut() {
+            if let Some(v) = var.as_object_mut()
+                && !v.contains_key("element_type")
+            {
+                v.insert("element_type".to_string(), Value::String(leaf.to_string()));
+            }
+        }
+    }
+    if let Some(subs) = obj.get_mut("subsystems").and_then(Value::as_object_mut) {
+        for (name, sub) in subs.iter_mut() {
+            let sub_path = if path.is_empty() {
+                name.clone()
+            } else {
+                format!("{path}.{name}")
+            };
+            stamp_element_type(sub, leaf, enclosing, mount_noun, &sub_path)?;
+        }
+    }
+    Ok(())
 }
 
 /// A referenced file must contain exactly one top-level model, reaction
