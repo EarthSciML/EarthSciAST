@@ -48,6 +48,12 @@ fn simulation_skip(name: &str) -> Option<&'static str> {
         "bouncing_ball.esm" => Some("gt-2ta2"),
         // Discrete events similarly rejected.
         "periodic_dosing.esm" => Some("gt-2ta2"),
+        // `ic(dose_counter)` / `ic(heating_active)` name PARAMETERS, and the
+        // Rust runtime refuses an `ic` whose target is not a state (esm-spec
+        // §4.2: `ic`'s operand is the ODE state) with
+        // `InvalidFieldInitialCondition`. Python runs the fixture. Not yet
+        // ruled on.
+        "event_chain.esm" => Some("an `ic` on a parameter (not yet ruled on)"),
         _ => None,
     }
 }

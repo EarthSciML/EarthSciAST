@@ -620,11 +620,17 @@ mod tests {
             .expect("a defaultless OBSERVED unknown must not block a simulation");
 
         // `G` is DEFINED by `G = D`, so esm 1.0.0 makes it an observed unknown:
-        // it is eliminated rather than integrated, and has no state row and no
-        // initial condition to supply. `D` is the only thing solved for.
+        // it is eliminated rather than integrated, and has no state slot and no
+        // initial condition to supply. `D` is the only thing solved for. (The
+        // solution still reports `G`, as an observed row after the states.)
         assert!(
-            !sol.state_variable_names.iter().any(|n| n.ends_with("G")),
+            !prob.state_variable_names().iter().any(|n| n.ends_with("G")),
             "an observed unknown is eliminated, not integrated: {:?}",
+            prob.state_variable_names()
+        );
+        assert!(
+            sol.state_variable_names.iter().any(|n| n.ends_with("D")),
+            "{:?}",
             sol.state_variable_names
         );
         assert!(
@@ -777,9 +783,9 @@ mod tests {
             .position(|n| n.ends_with("D"))
             .expect("D in solution");
         assert!(
-            !sol.state_variable_names.iter().any(|n| n.ends_with("G")),
+            !prob.state_variable_names().iter().any(|n| n.ends_with("G")),
             "G is observed, so it is eliminated rather than integrated: {:?}",
-            sol.state_variable_names
+            prob.state_variable_names()
         );
 
         assert!(
