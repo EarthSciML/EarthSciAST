@@ -1858,9 +1858,8 @@ impl ArrayCompiled {
             details: e.to_string(),
         })?;
 
-        // Mirror the scalar `Compiled::integrate` dispatch: run the solver, then
-        // read the real step/eval counters out of diffsol before the concrete
-        // solver is dropped (see [`SolveStats::from_solver`]).
+        // Run the solver, then read the real step/eval counters out of diffsol
+        // before the concrete solver is dropped (see [`SolveStats::from_solver`]).
         //
         // Wrapped in an immediately-invoked closure so a solver failure does
         // not leave the function before the XLA fault channel below is read: a
