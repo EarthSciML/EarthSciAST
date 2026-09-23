@@ -5132,9 +5132,20 @@ keyed by name. `index(name, i)` references in the equations are inlined as
 literal values. Used to inject `__stgfw_` Fornberg weight arrays for
 `stencil_gen` models with `spacing="from_grid"`.
 """
-function build_evaluator(esm::AbstractDict;
-                         model_name::Union{Nothing,AbstractString}=nothing,
-                         kwargs...)
+function build_evaluator(esm::AbstractDict; compiler::Symbol = :native, kwargs...)
+    # The requested plan is installed HERE, not only at `_build_evaluator_impl`:
+    # the binning-coordinate derivation and value invention below run first and
+    # hand their results to the build as const arrays, so a per-cell setup sweep
+    # they perform is never seen again. Outside this scope they would run under
+    # the process default, which is not strict and not the interpreter.
+    return _with_compiler_plan(_plan_for(compiler)) do
+        _build_evaluator_dict(esm; compiler = compiler, kwargs...)
+    end
+end
+
+function _build_evaluator_dict(esm::AbstractDict;
+                               model_name::Union{Nothing,AbstractString}=nothing,
+                               kwargs...)
     kwd = Dict{Symbol,Any}(kwargs)
 
     # ---- Phase 4: AUTOMATIC projection-pushdown desugar (opt-in) ----

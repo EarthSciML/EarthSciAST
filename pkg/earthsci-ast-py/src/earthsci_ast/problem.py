@@ -835,6 +835,7 @@ def _esm_problem_under(
     # is the document's. `_segmenting_engine` answers only the second question.
     if policy.compiler == "sympy":
         _refuse_array_document_under_sympy(flat)
+        _refuse_bound_data_under_sympy(flat, discrete_providers, merged, gated)
         engine = "scalar"
     else:
         engine = _segmenting_engine(flat, discrete_providers, merged, gated)
@@ -1168,6 +1169,37 @@ def _segmenting_engine(
     if flat.loader_fields:
         return "loaders"
     return "array"
+
+
+def _refuse_bound_data_under_sympy(
+    flat: FlattenedSystem,
+    discrete_providers: dict[str, Any],
+    merged: dict[str, Any],
+    gated: dict[str, Any],
+) -> None:
+    """``compiler="sympy"`` binds no data; a problem that carries some is refused.
+
+    The lambdified scalar right-hand side reads parameters and nothing else: it
+    has no seam for a ``providers`` entry, a caller ``const_arrays``, a gated
+    fetch, or the document's own ``loader_fields``. Running such a problem would
+    integrate against the parameters' defaults and report success, so it is
+    refused at construction instead, naming the first unbound field.
+    """
+    for what, names in (
+        ("a time-varying provider", discrete_providers),
+        ("an injected array (a provider or const_arrays)", merged),
+        ("a gated provider", gated),
+        ("an in-document data loader", flat.loader_fields),
+    ):
+        if names:
+            first = sorted(str(getattr(n, "name", n)) for n in names)[0]
+            raise CompilerRefusedRuleError(
+                "sympy",
+                f"field {first}",
+                f"it is bound by {what}, and this compiler lambdifies a scalar "
+                "right-hand side with no seam for bound data",
+                phase="construction",
+            )
 
 
 def _refuse_array_document_under_sympy(flat: FlattenedSystem) -> None:

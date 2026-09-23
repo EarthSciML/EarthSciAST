@@ -2580,6 +2580,8 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
             // and the scalar interpreter qualify. See `qualify_array_names`.
             let mut sol = sol;
             sol.state_variable_names = qualify_array_names(compiled, &sol.state_variable_names);
+            // Every row now carries the namespace, so none is reached through it.
+            sol.metadata.namespace = None;
             Ok(sol)
         }
     }

@@ -711,6 +711,7 @@ impl ArrayCompiled {
                     &stats,
                     tape_fallbacks,
                     self.merged_renames.clone(),
+                    self.namespace.clone(),
                 ),
                 &param_vec,
                 &setup,
@@ -745,6 +746,7 @@ impl ArrayCompiled {
                 &stats,
                 tape_fallbacks,
                 self.merged_renames.clone(),
+                self.namespace.clone(),
             ),
             &param_vec,
             &setup,
@@ -2272,6 +2274,7 @@ fn solution_metadata(
     stats: &SolveStats,
     tape_fallbacks: Vec<(String, String)>,
     merged_variable_renames: HashMap<String, String>,
+    namespace: Option<String>,
 ) -> SolutionMetadata {
     SolutionMetadata {
         alg: solver_name.to_string(),
@@ -2283,6 +2286,7 @@ fn solution_metadata(
         // Rides to the caller so a name-keyed read of the result can resolve a
         // spelling the merge deleted (issue #230).
         merged_variable_renames,
+        namespace,
     }
 }
 

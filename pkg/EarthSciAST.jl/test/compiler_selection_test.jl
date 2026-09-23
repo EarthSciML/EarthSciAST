@@ -203,6 +203,41 @@ end
         @test pn.var_map == pi.var_map
     end
 
+    # ── observed_field, native vs the interpreter oracle ────────────────────
+    # Reading an observed is one of the evaluations §2.5.10 puts under the
+    # refusal rule, so `native` must compile it rather than walk it per cell —
+    # and a SHAPELESS observed, whose single cell has no output index to bind,
+    # is the shape whose compile-once form used to be declined outright.
+    # `:interpreter` is the simple oracle: it walks, deliberately, and it is
+    # not written to agree with the compiled path, which is what makes the
+    # comparison worth making. `:native` is the universally available default;
+    # `sympy`/`mtk` take only some documents and `xla` needs heavy dependencies,
+    # so `native` is the one that has to cover everything.
+    @testset "native and interpreter read the same observed field: $(basename(f))" for
+            (f, names) in [
+        (_csel_fixture("valid", "nonlinear_mogi_shape.esm"),
+         ["MogiModel.ur", "MogiModel.uz", "ur", "uz"]),
+        (_csel_fixture("valid", "nonlinear_two_component_static.esm"),
+         ["Sites.North.u", "Sites.North.ur", "Sites.South.u"]),
+    ]
+        if isfile(f)
+            pn = esm_problem(f, (0.0, 1.0))
+            pi = esm_problem(f, (0.0, 1.0); compiler = :interpreter)
+            @test compiler(pn) === :native
+            @test compiler(pi) === :interpreter
+            for n in names
+                a = observed_field(pn, n)
+                b = observed_field(pi, n)
+                @test length(a) == length(b)
+                # Exact, or within 1e-12 relative. The two paths compile the
+                # same resolved body, so exact is what is expected; the
+                # tolerance is the margin, not the claim.
+                @test all(isequal(x, y) || abs(x - y) <= 1e-12 * max(abs(x), abs(y))
+                          for (x, y) in zip(a, b))
+            end
+        end
+    end
+
     @testset "the report names every rule and a tier" begin
         for f in _CSEL_AGREE
             rep = compiler_report(esm_problem(f, (0.0, 1.0)))
