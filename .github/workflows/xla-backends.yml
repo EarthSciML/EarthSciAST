@@ -263,11 +263,12 @@ jobs:
       # exactly what `bindings_optional` means. Julia's `xla` stays optional.
       #
       # XLA_EXTENSION_DIR has to be in this step's environment, not only the
-      # build's: the script chooses the adapter's cargo feature set from it and
-      # builds WITHOUT the `xla` feature when it is unset, which would make this
-      # gate report `unavailable`. The export step above wrote it to $GITHUB_ENV,
-      # so every later step in this job already has it; restating it here keeps
-      # that dependency visible on the step that needs it.
+      # build's: the runner adds the `xla` cargo feature to the adapter for
+      # `--compiler xla` only when it is set, and builds WITHOUT the feature
+      # otherwise, which would make this gate report `unavailable` (RED). The
+      # export step above wrote it to $GITHUB_ENV, so every later step in this
+      # job already has it; restating it here keeps that dependency visible on
+      # the step that needs it.
       #
       # No extra assert step, unlike the compiled_rhs producer above: rust is
       # `bindings_required` for `xla`, so the runner's own exit code is already

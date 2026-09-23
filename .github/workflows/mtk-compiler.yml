@@ -54,7 +54,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: mtk-compiler-${{ github.ref }}
+  # `github.workflow` is in the key because this workflow is ALSO called, via
+  # `workflow_call`, from integrated-release-pipeline.yml, which runs on the
+  # same push to main. A called workflow sees the CALLER's `github` context —
+  # its `github.ref` and `github.event_name` are the caller's too — so with the
+  # ref alone the release call and this workflow's own push run resolved to one
+  # group and each cancelled the other, and a cancelled release call marks the
+  # release `partial`. `github.workflow` is this file's name on its own run and
+  # the caller's name on a called one, so the two groups differ; the literal
+  # prefix keeps the called group distinct from any group the caller declares.
+  # `inputs.ref` (the release tag, set only on a call) keeps two releases apart.
+  group: mtk-compiler-${{ github.workflow }}-${{ inputs.ref || github.ref }}
   # Same reasoning as the conformance workflow: a superseded run must not hold a
   # runner while HEAD queues behind it.
   cancel-in-progress: true

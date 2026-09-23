@@ -1047,14 +1047,15 @@ _run_compiler_agreement_stage() {
                     --bindings "$binding" --compiler "$compiler" --output "$report" || rc=$?
             ;;
         rust)
-            # The `xla` compiler needs the prebuilt XLA extension at
+            # Only the base feature set is named here. The runner adds `xla` to
+            # it for `--compiler xla` and for nothing else
+            # (`with_compiler_features` in the runner, the one place that choice
+            # is made), so the `interpreter` and `native` stages never build the
+            # `xla` crate graph. The `xla` stage needs the prebuilt extension at
             # $XLA_EXTENSION_DIR (scripts/fetch-xla-extension.sh); without it the
-            # feature-less binary answers `unavailable` and the stage skips visibly.
-            local features="conformance-adapters"
-            if [ -n "${XLA_EXTENSION_DIR:-}" ]; then
-                features="conformance-adapters,xla"
-            fi
-            env EARTHSCI_COMPILER_AGREEMENT_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features $features --bin earthsci-compiler-agreement-adapter-rust --" \
+            # adapter is built without the feature and answers `unavailable`,
+            # which is RED, because rust is `bindings_required` for `xla`.
+            env EARTHSCI_COMPILER_AGREEMENT_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-compiler-agreement-adapter-rust --" \
                 python3 "$COMPILER_AGREEMENT_RUNNER" \
                     --bindings "$binding" --compiler "$compiler" --output "$report" || rc=$?
             ;;

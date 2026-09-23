@@ -581,11 +581,18 @@ is only optional for the compiler and whose toolchain is missing on that runner
 skips with a warning, which is what `bindings_optional` means, while a required
 one with no toolchain still fails. An unrecognised compiler exits 2.
 
-For Rust and `xla`, the runner's own planned command adds the `xla` Cargo
-feature when, and only when, `--compiler xla` is what was asked for; an explicit
-`EARTHSCI_COMPILER_AGREEMENT_ADAPTER_RUST` still wins, and
-`scripts/test-conformance.sh` picks the feature set from whether
-`XLA_EXTENSION_DIR` is set, which is why the workflow step exports it.
+For Rust, the runner adds the `xla` Cargo feature to the adapter's `cargo run
+--features …` command when, and only when, `--compiler xla` is what was asked
+for and `XLA_EXTENSION_DIR` is set. That choice is made in ONE place, the
+runner's `with_compiler_features`, and it applies to the command wherever
+discovery found it — the planned one, or the one `scripts/test-conformance.sh`
+exports as `EARTHSCI_COMPILER_AGREEMENT_ADAPTER_RUST`, which names only
+`conformance-adapters`. So the `interpreter` and `native` stages never build the
+`xla` crate graph, and an `xla` run without `XLA_EXTENSION_DIR` builds the
+feature-less adapter, which answers `unavailable` naming what is missing; rust
+is `bindings_required` for `xla`, so that is RED. That is why the workflow step
+exports `XLA_EXTENSION_DIR`. An override command with no `--features` (a
+prebuilt binary) is run as given.
 
 For Julia and `mtk`, the two packages that compiler needs — ModelingToolkit and
 OrdinaryDiffEqNonlinearSolve — are in an adapter environment of their own,
