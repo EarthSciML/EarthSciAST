@@ -285,6 +285,12 @@ const (
 	// §4.7 "Two mount forms, one mechanism"). Refused at load, pointing at the
 	// entry, rather than decoded as an empty reaction system.
 	CodeMountFormUnsupported = "mount_form_unsupported"
+	// CodeElementTypeUncarried: a declared working precision reaches a construct
+	// that cannot carry it (esm-spec §4.7 "Working precision crosses a mount",
+	// §11.3.1) — a mounted leaf's `domain.element_type` that must be written onto
+	// a reaction system, whose species and parameters have no per-variable
+	// `element_type`.
+	CodeElementTypeUncarried = "element_type_uncarried"
 )
 
 // --- Diagnostic codes: running an arrayed definition (esm-spec §6.3.1). ---

@@ -165,9 +165,16 @@ type AffectEquation struct {
 // constant -- is DERIVED by the classification functions in classify.go
 // (esm-spec 6.3.1) and MUST NOT be read off a declared type.
 type ModelVariable struct {
-	Type    string  `json:"type"` // "unknown" or "parameter"
-	Units   *string `json:"units,omitempty"`
-	Default any     `json:"default,omitempty"`
+	Type string `json:"type"` // "unknown" or "parameter"
+	// ElementType is the floating-point precision of THIS variable and of the
+	// arithmetic over it, overriding `domain.element_type` (esm-spec §11.3.1).
+	// Nil means the declaring document's. This binding does not evaluate
+	// precision; it carries the declaration so it survives load -> emit — and a
+	// §4.7 mount writes a leaf's `domain.element_type` here ("Working precision
+	// crosses a mount"), so dropping the field would discard that at the edge.
+	ElementType *string `json:"element_type,omitempty"`
+	Units       *string `json:"units,omitempty"`
+	Default     any     `json:"default,omitempty"`
 	// DefaultUnits declares the units the scalar `default` is expressed in when
 	// they differ from `units`. The value is converted at load. A conversion that
 	// is AFFINE (degC<->K) cannot be expressed as a scalar factor, so declaring
