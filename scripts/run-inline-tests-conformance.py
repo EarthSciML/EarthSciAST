@@ -101,6 +101,10 @@ REFERENCE_COMPILER = "interpreter"
 # a typo must not read like a missing runtime.
 COMPILERS = ("interpreter", "native", "xla", "mtk", "sympy")
 
+# The diagnostic code that says a COMPILER is missing here, as opposed to one
+# that cannot run a document. It is only ever the whole-output `unavailable`.
+UNAVAILABLE_CODE = "compiler_unavailable"
+
 # The §6.6.4 default when no level supplies a bound.
 DEFAULT_ASSERTION_REL = 1e-6
 DEFAULT_ASSERTION_ABS = 0.0
@@ -260,6 +264,13 @@ def _validate_ledgers(path: Path, fid: str, fx: dict, bindings_required: list) -
                 raise ManifestError(
                     f"{path}: fixtures[{fid}] named exclusion for {b!r} needs a {key}"
                 )
+        if ex["code"] == UNAVAILABLE_CODE:
+            raise ManifestError(
+                f"{path}: fixtures[{fid}] named exclusion for {b!r} records "
+                f"{UNAVAILABLE_CODE!r}. That is a fact about the BINDING, answered as the "
+                f"whole-output `unavailable` and gated by `bindings_required`; a "
+                f"per-fixture ledger entry for it would merge the two ledgers."
+            )
         for c in compilers:
             if c not in COMPILERS:
                 raise ManifestError(
@@ -303,9 +314,13 @@ def golden_path(manifest_path: Path, fx: dict) -> Path:
 def _num(v: Any) -> float:
     """A number the way an adapter may have written it. A non-finite travels as
     the string `float()` parses, so a regression fails its own assertion by name
-    instead of arriving as a silent `null`."""
-    if isinstance(v, str):
-        return float(v)
+    instead of arriving as a silent `null`.
+
+    A JSON `null` and a JSON boolean are NOT numbers and raise `TypeError`:
+    Python would read `true` as `1.0`, and a value that is the wrong KIND must
+    not be graded as though it were the right number."""
+    if v is None or isinstance(v, bool):
+        raise TypeError(f"{v!r} is not a number")
     return float(v)
 
 
@@ -333,22 +348,24 @@ def authored_assertions(manifest_path: Path, fx: dict) -> list[dict]:
         test_tol = test.get("tolerance") or {}
         for i, a in enumerate(test.get("assertions") or [], start=1):
             a_tol = a.get("tolerance") or {}
+            where = f"fixture {fx['id']}: {test.get('id')}#{i}"
+            try:
+                expected = _num(a.get("expected"))
+                rtol = _num(_resolve_bound("rel", a_tol, test_tol, model_tol))
+                atol = _num(_resolve_bound("abs", a_tol, test_tol, model_tol))
+            except (TypeError, ValueError) as e:
+                raise ManifestError(
+                    f"{where}: `expected` and every tolerance bound must be numbers "
+                    f"(esm-schema `Assertion`): {e}"
+                ) from e
             out.append(
                 {
                     "test_id": str(test.get("id")),
                     "assertion_idx": i,
                     "variable": str(a.get("variable")),
-                    "expected": _num(a.get("expected")),
-                    "rtol": float(
-                        a_tol.get(
-                            "rel", test_tol.get("rel", model_tol.get("rel", DEFAULT_ASSERTION_REL))
-                        )
-                    ),
-                    "atol": float(
-                        a_tol.get(
-                            "abs", test_tol.get("abs", model_tol.get("abs", DEFAULT_ASSERTION_ABS))
-                        )
-                    ),
+                    "expected": expected,
+                    "rtol": rtol,
+                    "atol": atol,
                 }
             )
     if not out:
@@ -359,19 +376,37 @@ def authored_assertions(manifest_path: Path, fx: dict) -> list[dict]:
     return out
 
 
+def _resolve_bound(field: str, a_tol: dict, test_tol: dict, model_tol: dict) -> Any:
+    """One §6.6.4 bound, resolved PER FIELD through assertion -> test -> model
+    -> the implementation default. Only an ABSENT key falls through: an explicit
+    `0` is a declaration ("no bound of this kind") and stops the chain, and a
+    JSON `null` is read as absent, which §6.6.4 requires of a runtime that
+    accepts one."""
+    for level in (a_tol, test_tol, model_tol):
+        if level.get(field) is not None:
+            return level[field]
+    return DEFAULT_ASSERTION_REL if field == "rel" else DEFAULT_ASSERTION_ABS
+
+
 def _key(entry: dict) -> tuple[str, int]:
     return (str(entry["test_id"]), int(entry["assertion_idx"]))
 
 
 def within(got: float, want: float, rtol: float, atol: float) -> bool:
-    """The §6.6.3 band: either bound passing counts as a pass, and a NaN on
-    either side never does."""
-    if math.isnan(got) or math.isnan(want):
+    """The esm-spec §6.6.3 pass predicate, as the spec states it:
+
+        actual == expected  OR  (both finite AND |a - e| <= max(abs, rel * max(|a|, |e|)))
+
+    Finiteness is judged BEFORE tolerance, so no bound admits an infinity or a
+    NaN; the equality clause is what lets the same infinity match, and what
+    makes a `{rel: 0, abs: 0}` band an exact comparison. The relative scale is
+    symmetric in the two values and carries no epsilon floor. The golden band
+    uses the same predicate at the tier's own `golden_rtol` / `golden_atol`."""
+    if got == want:
+        return True
+    if not (math.isfinite(got) and math.isfinite(want)):
         return False
-    if math.isinf(got) or math.isinf(want):
-        return got == want
-    diff = abs(got - want)
-    return diff <= atol or diff <= rtol * max(abs(want), abs(got))
+    return abs(got - want) <= max(atol, rtol * max(abs(got), abs(want)))
 
 
 # === Gating ===============================================================
@@ -402,6 +437,19 @@ def compare_fixture(
         ex = excluded_reason(fx, binding, compiler)
         code = str(produced.get("code") or "")
         reason = str(produced.get("reason") or "")
+        if code == UNAVAILABLE_CODE:
+            return {
+                "status": "invalid",
+                "problems": [
+                    f"{binding}/{compiler} answered {UNAVAILABLE_CODE!r} for this ONE fixture "
+                    f"({reason}). A missing compiler is a fact about the binding and is the "
+                    f"WHOLE adapter output `unavailable` (CONFORMANCE_SPEC §5.45.3), which is "
+                    f"what the `bindings_required` ledger is consulted on; the adapter is "
+                    f"broken."
+                ],
+                "code": code,
+                "reason": reason,
+            }
         if ex is None:
             return {
                 "status": "refused_unnamed",
@@ -447,30 +495,50 @@ def compare_fixture(
             continue
         by_key[_key(e)] = e
 
-    golden_by_key = {_key(g): g for g in (golden or {}).get("assertions") or []}
+    golden_by_key = {}
+    for g in (golden or {}).get("assertions") or []:
+        if isinstance(g, dict) and "test_id" in g and "assertion_idx" in g:
+            golden_by_key[_key(g)] = g
+        else:
+            problems.append(f"malformed golden entry {g!r}")
     authored_by_key = {_key(a): a for a in authored}
 
     checked = 0
     for key, want in authored_by_key.items():
+        label = f"{key[0]}#{key[1]} ({want['variable']})"
         got = by_key.get(key)
         if got is None:
             problems.append(f"{key[0]}#{key[1]}: the adapter reported no result")
             continue
-        if not got.get("passed"):
-            problems.append(
-                f"{key[0]}#{key[1]} ({want['variable']}): the binding's own §6.6.3 predicate "
-                f"FAILED — actual {got.get('actual')!r} vs the document's expected "
-                f"{want['expected']!r}: {got.get('message', '')}"
-            )
+        passed = got.get("passed")
+        if not isinstance(passed, bool):
+            problems.append(f"{label}: `passed` is {passed!r}, not a JSON boolean")
             continue
         raw = got.get("actual")
+        if not passed:
+            problems.append(
+                f"{label}: the binding's own §6.6.3 predicate FAILED — actual {raw!r} vs "
+                f"the document's expected {want['expected']!r}: {got.get('message', '')}"
+            )
+            continue
         if raw is None:
-            problems.append(f"{key[0]}#{key[1]}: passed with no `actual` recorded")
+            problems.append(f"{label}: passed with no `actual` recorded")
             continue
         try:
             actual = _num(raw)
         except (TypeError, ValueError):
-            problems.append(f"{key[0]}#{key[1]}: `actual` {raw!r} is not a number")
+            problems.append(f"{label}: `actual` {raw!r} is not a number")
+            continue
+        # The runner's OWN verdict on the authored expectation. `passed` is the
+        # binding's word for it, and a binding whose predicate is broken would
+        # otherwise be trusted by the one gate a no-golden fixture has.
+        if not within(actual, want["expected"], want["rtol"], want["atol"]):
+            problems.append(
+                f"{label}: the binding reported PASSED, but actual {actual!r} is outside "
+                f"the document's band around expected {want['expected']!r} "
+                f"(rel {want['rtol']!r}, abs {want['atol']!r}); the binding's §6.6.3 "
+                f"predicate disagrees with the spec's"
+            )
             continue
         if golden is None:
             checked += 1
@@ -481,11 +549,20 @@ def compare_fixture(
                 f"{key[0]}#{key[1]}: no golden entry — the golden is stale against the document"
             )
             continue
-        if not within(actual, _num(g["actual"]), rtol, atol):
+        try:
+            reference = _num(g.get("actual"))
+        except (TypeError, ValueError):
+            reference = None
+        if reference is None or not math.isfinite(reference):
             problems.append(
-                f"{key[0]}#{key[1]} ({want['variable']}): actual {actual!r} is outside the "
-                f"band around the {REFERENCE_BINDING} {REFERENCE_COMPILER} golden "
-                f"{_num(g['actual'])!r}"
+                f"{label}: the committed golden's `actual` is {g.get('actual')!r}, which is "
+                f"not a finite number — the golden is malformed; re-mint it"
+            )
+            continue
+        if not within(actual, reference, rtol, atol):
+            problems.append(
+                f"{label}: actual {actual!r} is outside the band around the "
+                f"{REFERENCE_BINDING} {REFERENCE_COMPILER} golden {reference!r}"
             )
             continue
         checked += 1
@@ -659,66 +736,81 @@ def run_suite(
     }
     overall_ok = True
     for b in bindings:
-        ar = adapters[b]
-        b_report: dict[str, Any] = {
-            "adapter_status": ar.get("adapter_status"),
-            "error": ar.get("error"),
-            "fixtures": {},
-        }
-        if ar.get("adapter_status") == "unavailable":
-            b_report["reason"] = ar.get("reason")
-            # Availability and refusal are two ledgers. A binding the manifest
-            # REQUIRES must be able to ANSWER for the compiler the stage names;
-            # "this build has no such compiler" is a coverage gap, not a fact
-            # about any document, so it must not read like a refusal.
-            b_report["status"] = "fail" if b in required else "skipped"
-            if b in required:
-                overall_ok = False
-            report["bindings"][b] = b_report
-            continue
-        if ar.get("adapter_status") != "ok":
-            if ar.get("stderr"):
-                b_report["stderr"] = ar["stderr"]
-            b_report["status"] = "fail" if b in required else "skipped"
-            if b in required:
-                overall_ok = False
-            report["bindings"][b] = b_report
-            continue
-        b_ok = True
-        for fx in fixtures:
-            produced = ar.get("fixtures", {}).get(fx["id"])
-            if produced is None:
-                b_report["fixtures"][fx["id"]] = {
-                    "status": "missing",
-                    "problems": ["the adapter reported nothing for this fixture"],
-                }
-                b_ok = False
-                continue
-            fr = compare_fixture(
-                fx, produced, goldens[fx["id"]], authored[fx["id"]], rtol, atol, b, compiler
-            )
-            b_report["fixtures"][fx["id"]] = fr
-            if fr.get("outcome") == "named_exclusion":
-                report["named_exclusions"].append(
-                    {
-                        "binding": b,
-                        "compiler": compiler,
-                        "fixture": fx["id"],
-                        "code": fr.get("code"),
-                        "reason": fr.get("reason"),
-                    }
-                )
-            if fr.get("status") != "ok":
-                b_ok = False
-        b_report["status"] = "ok" if b_ok else "fail"
-        if not b_ok:
-            overall_ok = False
+        b_report, exclusions = gate_binding(
+            b, adapters[b], fixtures, goldens, authored, rtol, atol, compiler, b in required
+        )
         report["bindings"][b] = b_report
+        report["named_exclusions"].extend(exclusions)
+        if b_report["status"] == "fail":
+            overall_ok = False
 
     report["status"] = "ok" if overall_ok else "fail"
     write_report(report, output_path)
     print_report(report)
     return 1 if report["status"] == "fail" else 0
+
+
+def gate_binding(
+    binding: str,
+    ar: dict,
+    fixtures: list[dict],
+    goldens: dict[str, dict | None],
+    authored: dict[str, list[dict]],
+    rtol: float,
+    atol: float,
+    compiler: str,
+    required: bool,
+) -> tuple[dict, list[dict]]:
+    """Gate one binding's whole adapter answer: its report entry, and the named
+    exclusions it recorded. `required` is whether the manifest lists the binding
+    in `bindings_required`."""
+    b_report: dict[str, Any] = {
+        "adapter_status": ar.get("adapter_status"),
+        "error": ar.get("error"),
+        "fixtures": {},
+    }
+    exclusions: list[dict] = []
+    if ar.get("adapter_status") == "unavailable":
+        b_report["reason"] = ar.get("reason")
+        # Availability and refusal are two ledgers. A binding the manifest
+        # REQUIRES must be able to ANSWER for the compiler the stage names;
+        # "this build has no such compiler" is a coverage gap, not a fact
+        # about any document, so it must not read like a refusal.
+        b_report["status"] = "fail" if required else "skipped"
+        return b_report, exclusions
+    if ar.get("adapter_status") != "ok":
+        if ar.get("stderr"):
+            b_report["stderr"] = ar["stderr"]
+        b_report["status"] = "fail" if required else "skipped"
+        return b_report, exclusions
+    b_ok = True
+    for fx in fixtures:
+        produced = ar.get("fixtures", {}).get(fx["id"])
+        if produced is None:
+            b_report["fixtures"][fx["id"]] = {
+                "status": "missing",
+                "problems": ["the adapter reported nothing for this fixture"],
+            }
+            b_ok = False
+            continue
+        fr = compare_fixture(
+            fx, produced, goldens[fx["id"]], authored[fx["id"]], rtol, atol, binding, compiler
+        )
+        b_report["fixtures"][fx["id"]] = fr
+        if fr.get("outcome") == "named_exclusion":
+            exclusions.append(
+                {
+                    "binding": binding,
+                    "compiler": compiler,
+                    "fixture": fx["id"],
+                    "code": fr.get("code"),
+                    "reason": fr.get("reason"),
+                }
+            )
+        if fr.get("status") != "ok":
+            b_ok = False
+    b_report["status"] = "ok" if b_ok else "fail"
+    return b_report, exclusions
 
 
 def print_report(report: dict) -> None:
@@ -778,41 +870,90 @@ def write_golden_mode(args: Any) -> int | None:
         if payload.get("stderr"):
             _eprint(payload["stderr"])
         return 1
-    written = 0
+    # Every golden is built and checked BEFORE any is written, so a reference
+    # run that is wrong anywhere leaves the committed goldens exactly as they
+    # were rather than half-replaced.
+    minted: list[tuple[dict, dict]] = []
+    problems: list[str] = []
     for fx in manifest["fixtures"]:
-        entry = payload.get("fixtures", {}).get(fx["id"])
         if not has_golden(fx):
             # The manifest already says the reference cannot produce this one,
             # and the self-test checked that a named exclusion backs the claim.
             # Minting is a no-op here, not a failure.
             print(f"skipped {fx['id']}: {fx.get('golden_absent_reason')}")
             continue
-        if not isinstance(entry, dict) or "assertions" not in entry:
-            _eprint(f"error: reference produced no assertions for {fx['id']}: {entry!r}")
-            return 1
-        golden = {
-            "fixture": fx["id"],
-            "reference_binding": REFERENCE_BINDING,
-            "reference_compiler": REFERENCE_COMPILER,
-            "assertions": [
-                {
-                    "test_id": e["test_id"],
-                    "assertion_idx": e["assertion_idx"],
-                    "variable": e.get("variable"),
-                    "actual": e["actual"],
-                }
-                for e in sorted(entry["assertions"], key=_key)
-            ],
-        }
+        golden, why = mint_golden(fx, payload.get("fixtures", {}).get(fx["id"]))
+        if golden is None:
+            problems.extend(why)
+        else:
+            minted.append((fx, golden))
+    if problems:
+        for p in problems:
+            _eprint(f"error: {p}")
+        _eprint(
+            f"error: refusing to write any golden — {len(problems)} problem(s) above. A "
+            f"golden is the number every other compiler is held to, so it is minted only "
+            f"from an assertion the reference itself PASSED with a finite value."
+        )
+        return 1
+    for fx, golden in minted:
         gp = golden_path(args.manifest, fx)
         gp.parent.mkdir(parents=True, exist_ok=True)
         with gp.open("w") as f:
             json.dump(golden, f, indent=2)
             f.write("\n")
-        written += 1
         print(f"minted {gp}")
-    print(f"{written} golden(s) written from {REFERENCE_BINDING} {REFERENCE_COMPILER}")
+    print(f"{len(minted)} golden(s) written from {REFERENCE_BINDING} {REFERENCE_COMPILER}")
     return 0
+
+
+def mint_golden(fx: dict, entry: Any) -> tuple[dict | None, list[str]]:
+    """The golden for one fixture from the reference's adapter entry, or `None`
+    and every reason it cannot be minted.
+
+    Only an assertion the reference PASSED, with a FINITE `actual`, is minted: a
+    failed one would commit a number the document itself says is wrong, and a
+    `null` or a non-finite one is not a value any band can be drawn around."""
+    fid = fx["id"]
+    if not isinstance(entry, dict) or not isinstance(entry.get("assertions"), list):
+        return None, [f"{fid}: the reference produced no assertions: {entry!r}"]
+    problems: list[str] = []
+    rows: list[dict] = []
+    for e in entry["assertions"]:
+        if not isinstance(e, dict) or "test_id" not in e or "assertion_idx" not in e:
+            problems.append(f"{fid}: malformed assertion entry {e!r}")
+            continue
+        where = f"{fid} {e['test_id']}#{e['assertion_idx']} ({e.get('variable')})"
+        if e.get("passed") is not True:
+            problems.append(
+                f"{where}: the reference did not pass this assertion "
+                f"(passed={e.get('passed')!r}, actual={e.get('actual')!r}: "
+                f"{e.get('message', '')})"
+            )
+            continue
+        try:
+            actual = _num(e.get("actual"))
+        except (TypeError, ValueError):
+            actual = None
+        if actual is None or not math.isfinite(actual):
+            problems.append(f"{where}: `actual` is {e.get('actual')!r}, not a finite number")
+            continue
+        rows.append(
+            {
+                "test_id": e["test_id"],
+                "assertion_idx": e["assertion_idx"],
+                "variable": e.get("variable"),
+                "actual": actual,
+            }
+        )
+    if problems:
+        return None, problems
+    return {
+        "fixture": fid,
+        "reference_binding": REFERENCE_BINDING,
+        "reference_compiler": REFERENCE_COMPILER,
+        "assertions": sorted(rows, key=_key),
+    }, []
 
 
 # === Self-test ============================================================
@@ -914,12 +1055,19 @@ def self_test(manifest_path: Path) -> int:
         # minted from a broken build would sit there being reproduced by
         # everyone.
         by_key = {_key(g): g for g in golden["assertions"]}
-        off = [
-            f"{a['test_id']}#{a['assertion_idx']} ({a['variable']}): golden "
-            f"{_num(by_key[_key(a)]['actual'])!r} vs document expected {a['expected']!r}"
-            for a in authored
-            if not within(_num(by_key[_key(a)]["actual"]), a["expected"], a["rtol"], a["atol"])
-        ]
+        off = []
+        for a in authored:
+            raw = by_key[_key(a)].get("actual")
+            where = f"{a['test_id']}#{a['assertion_idx']} ({a['variable']})"
+            try:
+                value = _num(raw)
+            except (TypeError, ValueError):
+                off.append(f"{where}: golden `actual` {raw!r} is not a number")
+                continue
+            if not math.isfinite(value):
+                off.append(f"{where}: golden `actual` {raw!r} is not finite")
+            elif not within(value, a["expected"], a["rtol"], a["atol"]):
+                off.append(f"{where}: golden {value!r} vs document expected {a['expected']!r}")
         check(
             not off,
             f"{fid}/golden-matches-authored-expectation",
@@ -947,13 +1095,16 @@ def self_test(manifest_path: Path) -> int:
         "a clean answer did not pass",
     )
 
+    # The golden band on its own: the DOCUMENT's band is opened wide so that
+    # only the golden can reject the moved value.
     moved = copy.deepcopy(good)
     base = _num(moved["assertions"][0]["actual"])
     moved["assertions"][0]["actual"] = (base + 1.0) * 1e3 + 7.0
+    wide = [{**a, "atol": math.inf} for a in authored]
     check(
-        compare_fixture(fx, moved, *args)["status"] == "fail",
+        compare_fixture(fx, moved, golden, wide, rtol, atol, "julia", "native")["status"] == "fail",
         "control/value-off-the-golden-rejected",
-        "a value far outside the band was accepted",
+        "a value far outside the golden band was accepted",
     )
 
     dropped = copy.deepcopy(good)
@@ -1010,11 +1161,230 @@ def self_test(manifest_path: Path) -> int:
         "a refusal whose code moved away from the ledger was accepted",
     )
 
+    _authored_verdict_controls(check, manifest, manifest_path, fx, authored, good, rtol, atol)
+    _golden_controls(check, fx, authored, golden, good, rtol, atol)
+    _availability_controls(check, manifest, fx, golden, authored, good, rtol, atol)
+
     if failures:
         print(f"\nself-test: {len(failures)} FAILURE(S)")
         return 1
     print("\nself-test: OK")
     return 0
+
+
+def _authored_verdict_controls(
+    check: Any,
+    manifest: dict,
+    manifest_path: Path,
+    fx: dict,
+    authored: list[dict],
+    good: dict,
+    rtol: float,
+    atol: float,
+) -> None:
+    """The runner's OWN §6.6.3 verdict on the document's `expected`, which it
+    must reach whatever the binding's `passed` says. Run with NO golden, the
+    shape a fixture the reference refuses has, where this is the whole gate."""
+    no_golden = (None, authored, rtol, atol, "python", "native")
+
+    # The predicate itself, on esm-spec §6.6.3's own worked examples.
+    cases = [
+        ((1.6, 1.0, 0.5, 0.0), True, "the relative scale is max(|a|, |e|), not |e|"),
+        ((1e-320, 0.0, 0.5, 0.0), False, "no epsilon floor under the relative bound"),
+        ((0.0, 0.0, 0.0, 0.0), True, "an exact band admits the exact value"),
+        ((math.nextafter(1.0, 2.0), 1.0, 0.0, 0.0), False, "an exact band is exact"),
+        ((-0.0, 0.0, 0.0, 0.0), True, "a signed zero equals zero"),
+        ((math.inf, 1.0, 0.5, 1e300), False, "no bound admits an infinity"),
+        ((math.inf, math.inf, 0.0, 0.0), True, "the same infinity matches itself"),
+        ((math.nan, math.nan, 1.0, 1.0), False, "NaN never passes"),
+        ((1.0 + 1e-10, 1.0, 0.0, 1e-9), True, "either bound is sufficient"),
+    ]
+    for (a, e, rel, ab), want, why in cases:
+        check(
+            within(a, e, rel, ab) is want,
+            f"control/predicate/{why}",
+            f"within({a!r}, {e!r}, rel={rel!r}, abs={ab!r}) should be {want}",
+        )
+
+    check(
+        compare_fixture(fx, good, *no_golden)["status"] == "ok",
+        "control/no-golden/clean-answer-passes",
+        "a clean answer did not pass on the authored expectation alone",
+    )
+    lie = copy.deepcopy(good)
+    first = authored[0]
+    lie["assertions"][0]["actual"] = (abs(first["expected"]) + 1.0) * 1e3 + 7.0
+    r = compare_fixture(fx, lie, *no_golden)
+    check(
+        r["status"] == "fail",
+        "control/no-golden/passed-with-wrong-actual-rejected",
+        f"a binding that reported PASSED on a value outside the document's band was accepted: {r}",
+    )
+    for label, patch in (
+        ("non-boolean-passed-rejected", {"passed": "true"}),
+        ("boolean-actual-rejected", {"actual": True}),
+        ("non-finite-actual-rejected", {"actual": "inf"}),
+        ("null-actual-rejected", {"actual": None}),
+    ):
+        bad = copy.deepcopy(good)
+        bad["assertions"][0].update(patch)
+        check(
+            compare_fixture(fx, bad, *no_golden)["status"] == "fail",
+            f"control/no-golden/{label}",
+            f"{patch} was accepted",
+        )
+    exact = [{**a, "rtol": 0.0, "atol": 0.0} for a in authored]
+    at = copy.deepcopy(good)
+    for row, a in zip(at["assertions"], exact):
+        row["actual"] = a["expected"]
+    nudged = copy.deepcopy(at)
+    nudged["assertions"][0]["actual"] = math.nextafter(exact[0]["expected"], math.inf)
+    exact_args = (None, exact, rtol, atol, "python", "native")
+    check(
+        compare_fixture(fx, at, *exact_args)["status"] == "ok"
+        and compare_fixture(fx, nudged, *exact_args)["status"] == "fail",
+        "control/no-golden/exact-band-is-exact",
+        "a `{rel: 0, abs: 0}` band did not admit exactly the expected value and nothing else",
+    )
+
+    # The fixtures that really carry no golden: the authored expectation is
+    # their whole gate, so the same lie must fail there too.
+    for nfx in (f for f in manifest["fixtures"] if not has_golden(f)):
+        n_authored = authored_assertions(manifest_path, nfx)
+        honest = {
+            "assertions": [
+                {
+                    "test_id": a["test_id"],
+                    "assertion_idx": a["assertion_idx"],
+                    "variable": a["variable"],
+                    "passed": True,
+                    "actual": a["expected"],
+                    "message": "",
+                }
+                for a in n_authored
+            ]
+        }
+        n_args = (None, n_authored, rtol, atol, "python", "native")
+        dishonest = copy.deepcopy(honest)
+        dishonest["assertions"][0]["actual"] = (abs(n_authored[0]["expected"]) + 1.0) * 1e3 + 7.0
+        check(
+            compare_fixture(nfx, honest, *n_args)["status"] == "ok"
+            and compare_fixture(nfx, dishonest, *n_args)["status"] == "fail",
+            f"control/{nfx['id']}/no-golden-fixture-holds-to-the-document",
+            "the document's own expectation did not gate a fixture that carries no golden",
+        )
+
+
+def _golden_controls(
+    check: Any,
+    fx: dict,
+    authored: list[dict],
+    golden: dict,
+    good: dict,
+    rtol: float,
+    atol: float,
+) -> None:
+    """A malformed committed golden is a gated failure, never a crash; and
+    `--write-golden` mints only from an assertion the reference passed with a
+    finite value."""
+    for label, bad_value in (("null", None), ("string", "abc"), ("non-finite", "nan")):
+        broken = copy.deepcopy(golden)
+        broken["assertions"][0]["actual"] = bad_value
+        try:
+            r = compare_fixture(fx, good, broken, authored, rtol, atol, "julia", "native")
+            ok = r["status"] == "fail"
+            detail = f"a {label} golden `actual` was accepted: {r}"
+        except Exception as e:  # noqa: BLE001 - the control is that nothing raises
+            ok, detail = False, f"a {label} golden `actual` crashed the gate: {e!r}"
+        check(ok, f"control/malformed-golden-{label}-is-a-failure", detail)
+
+    reference = copy.deepcopy(good)
+    minted, why = mint_golden(fx, reference)
+    check(
+        minted is not None
+        and {_key(g) for g in minted["assertions"]} == {_key(a) for a in authored},
+        "control/mint/clean-reference-mints",
+        f"a clean reference answer did not mint a golden covering the document: {why}",
+    )
+    for label, patch in (
+        ("failed", {"passed": False, "message": "synthetic"}),
+        ("null", {"actual": None}),
+        ("non-finite", {"actual": "inf"}),
+        ("non-boolean-passed", {"passed": 1}),
+    ):
+        bad = copy.deepcopy(good)
+        bad["assertions"][0].update(patch)
+        first = bad["assertions"][0]
+        minted, why = mint_golden(fx, bad)
+        named = f"{first['test_id']}#{first['assertion_idx']}"
+        check(
+            minted is None and any(fx["id"] in w and named in w for w in why),
+            f"control/mint/{label}-assertion-refused",
+            f"minting from a {label} assertion was not refused by name: {minted!r} {why}",
+        )
+    minted, why = mint_golden(fx, {"status": "refused", "code": "x", "reason": "y"})
+    check(minted is None and why, "control/mint/refusal-refused", "a refusal minted a golden")
+
+
+def _availability_controls(
+    check: Any,
+    manifest: dict,
+    fx: dict,
+    golden: dict,
+    authored: list[dict],
+    good: dict,
+    rtol: float,
+    atol: float,
+) -> None:
+    """`unavailable` is the WHOLE adapter output and is gated by
+    `bindings_required`; a per-fixture `compiler_unavailable` is an adapter
+    that broke that contract, and must not reach the refusal ledger."""
+    fixtures = [fx]
+    goldens = {fx["id"]: golden}
+    authored_by_id = {fx["id"]: authored}
+    whole = {"adapter_status": "unavailable", "reason": "synthetic", "fixtures": {}}
+    req, _ = gate_binding(
+        "julia", whole, fixtures, goldens, authored_by_id, rtol, atol, "xla", True
+    )
+    opt, _ = gate_binding(
+        "julia", whole, fixtures, goldens, authored_by_id, rtol, atol, "xla", False
+    )
+    check(
+        req["status"] == "fail" and opt["status"] == "skipped",
+        "control/unavailable-is-red-only-where-required",
+        f"a whole-output `unavailable` gated as {req['status']} (required) / "
+        f"{opt['status']} (optional); want fail / skipped",
+    )
+    per_fixture = {
+        "status": "refused",
+        "code": UNAVAILABLE_CODE,
+        "reason": "synthetic",
+    }
+    ledgered = copy.deepcopy(fx)
+    ledgered["required"] = {b: [] for b in manifest["bindings_required"]}
+    ledgered["named_exclusions"] = [
+        {"binding": "julia", "compilers": ["xla"], "code": UNAVAILABLE_CODE, "reason": "x"}
+    ]
+    r_plain = compare_fixture(fx, per_fixture, golden, authored, rtol, atol, "julia", "xla")
+    r_ledgered = compare_fixture(
+        ledgered, per_fixture, golden, authored, rtol, atol, "julia", "xla"
+    )
+    check(
+        r_plain["status"] == "invalid" and r_ledgered["status"] == "invalid",
+        "control/per-fixture-unavailable-is-a-broken-adapter",
+        f"a per-fixture {UNAVAILABLE_CODE!r} gated as {r_plain['status']} / "
+        f"{r_ledgered['status']} (ledgered); want invalid for both",
+    )
+    try:
+        _validate_ledgers(Path("<self-test>"), fx["id"], ledgered, manifest["bindings_required"])
+        rejected = False
+    except ManifestError:
+        rejected = True
+    check(
+        rejected,
+        "control/unavailable-named-exclusion-is-a-manifest-error",
+        f"a named exclusion recording {UNAVAILABLE_CODE!r} was accepted by the manifest",
+    )
 
 
 # === CLI ==================================================================
