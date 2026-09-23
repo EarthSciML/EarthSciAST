@@ -163,6 +163,12 @@ pub(crate) mod inline_tests;
 /// the same terms as [`compiler_agreement_adapter`]: in the library so a test
 /// drives the binary's exact code path, and hidden from the published rustdoc
 /// surface.
+///
+/// Gated exactly like the `inline_tests` module it drives. The agreement
+/// adapter above needs no gate because nothing it imports is configured out;
+/// this one imports the runner directly, so without the gate the wasm32 build
+/// fails on an unresolved import rather than simply omitting the adapter.
+#[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 #[doc(hidden)]
 pub mod inline_tests_adapter;
 
