@@ -1,0 +1,28 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_reaction_mount",
+    "description": "Mounts the Float32 reaction-system leaf under a document that evaluates in Float64: element_type_uncarried at load."
+  },
+  "models": {
+    "Host": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": 2
+        }
+      ],
+      "subsystems": {
+        "Chem": {
+          "ref": "./reaction_leaf_f32.esm"
+        }
+      }
+    }
+  }
+}

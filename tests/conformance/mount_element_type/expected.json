@@ -1,0 +1,125 @@
+{
+  "description": "What each fixture loads to, and evaluates to (esm-spec §4.7 'Working precision crosses a mount'; CONFORMANCE_SPEC §5.18.2b). `loads` gives, for every variable of every model (subsystems as Model.Sub.var), the `element_type` it carries after load — a string, or null for a variable that carries none — and the document's own `domain.element_type` (null when absent). ALL FIVE bindings assert `loads` and `load_errors`. `values` (zero tolerance, compared bit for bit) and `build_errors` are asserted by the bindings listed in `evaluated_by`: they evaluate per-variable precision; the others carry it.",
+  "loads": {
+    "leaf_f32.esm": {
+      "domain_element_type": "Float32",
+      "element_types": {
+        "Rows.a": null,
+        "Rows.x": null,
+        "Rows.key": "Float64",
+        "Rows.key_next": "Float64"
+      }
+    },
+    "toplevel.esm": {
+      "domain_element_type": null,
+      "element_types": {
+        "Leaf.a": "Float32",
+        "Leaf.x": "Float32",
+        "Leaf.key": "Float64",
+        "Leaf.key_next": "Float64",
+        "Host.a": null,
+        "Host.x": null
+      }
+    },
+    "subsystems.esm": {
+      "domain_element_type": null,
+      "element_types": {
+        "Host.y": null,
+        "Host.Leaf.a": "Float32",
+        "Host.Leaf.x": "Float32",
+        "Host.Leaf.key": "Float64",
+        "Host.Leaf.key_next": "Float64"
+      }
+    },
+    "root_f32.esm": {
+      "domain_element_type": "Float32",
+      "element_types": {
+        "Leaf.a": null,
+        "Leaf.x": null,
+        "Leaf.key": "Float64",
+        "Leaf.key_next": "Float64",
+        "Plain.a": null,
+        "Plain.x": null,
+        "Wide.a": "Float64",
+        "Wide.x": "Float64"
+      }
+    },
+    "mid_none.esm": {
+      "domain_element_type": null,
+      "element_types": {
+        "Leaf.a": "Float32",
+        "Leaf.x": "Float32",
+        "Leaf.key": "Float64",
+        "Leaf.key_next": "Float64"
+      }
+    },
+    "nested_f32.esm": {
+      "domain_element_type": "Float32",
+      "element_types": {
+        "Mid.a": null,
+        "Mid.x": null,
+        "Mid.key": "Float64",
+        "Mid.key_next": "Float64"
+      }
+    },
+    "nested_none.esm": {
+      "domain_element_type": null,
+      "element_types": {
+        "Mid.a": "Float32",
+        "Mid.x": "Float32",
+        "Mid.key": "Float64",
+        "Mid.key_next": "Float64"
+      }
+    },
+    "mixed_coupling.esm": {
+      "domain_element_type": null,
+      "element_types": {
+        "Leaf.a": "Float32",
+        "Leaf.x": "Float32",
+        "Leaf.key": "Float64",
+        "Leaf.key_next": "Float64",
+        "Host.px": null,
+        "Host.y": null
+      }
+    }
+  },
+  "load_errors": {
+    "reaction_mount.esm": "element_type_uncarried"
+  },
+  "evaluated_by": [
+    "rust"
+  ],
+  "values": {
+    "toplevel.esm": {
+      "Leaf.x": 0.9999999403953552,
+      "Leaf.key_next": 2265007015,
+      "Host.x": 1.0
+    },
+    "root_f32.esm": {
+      "Leaf.x": 0.9999999403953552,
+      "Leaf.key_next": 2265007015,
+      "Plain.x": 0.9999999403953552,
+      "Wide.x": 1.0
+    },
+    "mid_none.esm": {
+      "Leaf.x": 0.9999999403953552,
+      "Leaf.key_next": 2265007015
+    },
+    "nested_f32.esm": {
+      "Mid.x": 0.9999999403953552,
+      "Mid.key_next": 2265007015
+    },
+    "nested_none.esm": {
+      "Mid.x": 0.9999999403953552,
+      "Mid.key_next": 2265007015
+    }
+  },
+  "build_errors": {
+    "mixed_coupling.esm": "mixed_element_type",
+    "subsystems.esm": "element_type_uncarried"
+  },
+  "notes": {
+    "subsystems.esm": "The build error is a Rust limitation, not a format rule: its precision inference reads top-level model variables only, so a written element_type inside a subsystems.<k> component is refused rather than ignored. A binding that evaluates subsystem precision would assert values here instead.",
+    "values": "key_next = key + 5 with key = 2265007010 declared Float64 inside the Float32 leaf: 2265007015 exactly, where binary32 would give 2265007104."
+  }
+}

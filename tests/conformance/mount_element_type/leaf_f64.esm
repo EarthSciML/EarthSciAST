@@ -1,0 +1,63 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_leaf_f64",
+    "description": "A leaf that declares Float64 explicitly. Mounted into a Float32 document it stays binary64."
+  },
+  "domain": {
+    "element_type": "Float64"
+  },
+  "models": {
+    "Wide": {
+      "variables": {
+        "a": {
+          "type": "parameter",
+          "default": 73.5,
+          "units": "1",
+          "description": "The operand of the witness ratio."
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "description": "100*((100-a)/100)/(100-a): 0.99999994 in binary32, exactly 1 in binary64."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "x",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  100,
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          100,
+                          "a"
+                        ]
+                      },
+                      100
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  100,
+                  "a"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
