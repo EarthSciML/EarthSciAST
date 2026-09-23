@@ -402,6 +402,40 @@ def test_sympy_refuses_an_array_document(fixture: Path) -> None:
     assert "SCALAR" in err.reason
 
 
+class _DiscreteForcing:
+    """A time-varying provider: non-empty ``refresh_times`` makes it DISCRETE."""
+
+    def refresh_times(self) -> list[float]:
+        return [0.0, 0.5]
+
+    def refresh(self, t: float) -> np.ndarray:
+        return np.array(0.01 * (1.0 + t))
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "what"),
+    [
+        pytest.param(
+            {"const_arrays": {"j_NO2": np.array(0.01)}}, "const_arrays", id="const-arrays"
+        ),
+        pytest.param({"providers": {"j_NO2": lambda t: 0.01}}, "a provider", id="provider"),
+        pytest.param(
+            {"providers": {"j_NO2": _DiscreteForcing()}}, "time-varying", id="discrete-provider"
+        ),
+    ],
+)
+def test_sympy_refuses_a_problem_with_bound_data(kwargs: dict, what: str) -> None:
+    # The lambdified right-hand side reads parameters only: bound data would be
+    # ignored and the run would integrate against the default, so it is refused.
+    with pytest.raises(CompilerRefusedRuleError) as excinfo:
+        esm_problem(str(SCALAR_ODE), (0.0, 1.0), compiler="sympy", **kwargs)
+    err = excinfo.value
+    assert err.compiler == "sympy"
+    assert err.phase == "construction"
+    assert err.rule == "field j_NO2"
+    assert what in err.reason
+
+
 # --------------------------------------------------------------------------- #
 # The report
 # --------------------------------------------------------------------------- #
