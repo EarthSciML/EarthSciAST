@@ -41,16 +41,19 @@ Design decisions of record (2026-09-21) that this tier implements:
 > one-way ratchet.
 >
 > Two things about the `mtk` stage that are properties of the compiler rather
-> than of this tier. It needs ModelingToolkit **and a nonlinear solver** in the
-> adapter's environment — an implicit equation compiles to a DAE whose
-> consistent initialization is a nonlinear solve — and the adapter loads both
-> for `--compiler mtk` only, at TOP LEVEL: a package loaded by `@eval` inside a
-> running function defines its methods in a new world age that the running frame
-> cannot call, which made every fixture report "method too new to be called from
-> this world context" and read as a broken binding. And `mtk` refuses what the
-> fixtures here do not exercise: a document fed by loaded data, one with a
-> continuous spatial dimension, a geometry operator, or a time derivative of an
-> expression.
+> than of this tier. It needs ModelingToolkit **and a nonlinear solver** — an
+> implicit equation compiles to a DAE whose consistent initialization is a
+> nonlinear solve — which live in an adapter environment of their own
+> (`scripts/compiler_agreement_mtk_env`) that the adapter activates, and whose
+> packages it loads, for `--compiler mtk` only, at TOP LEVEL: a package loaded
+> by `@eval` inside a running function defines its methods in a new world age
+> that the running frame cannot call, which made every fixture report "method
+> too new to be called from this world context" and read as a broken binding.
+> And `mtk` refuses what the fixtures here do not exercise: a document fed by
+> loaded data, one with a continuous spatial dimension, a geometry operator, or
+> a time derivative of an expression. The stage is gated in
+> `.github/workflows/mtk-compiler.yml` rather than in the default conformance
+> run — same triggers, so the same frequency.
 >
 > **Rust crossed the ratchet for `xla` on 2026-09-22**: `esm_problem(…,
 > compiler = Xla)` emits the model's tape as an XLA computation and runs the
@@ -60,9 +63,11 @@ Design decisions of record (2026-09-21) that this tier implements:
 > build condition: `xla` is the member whose availability is a property of the
 > BUILD, so "required" means a build that HAS the `xla` Cargo feature and an
 > unpacked `xla_extension` must answer. A stage that runs this compiler is
-> responsible for providing both, which is why `scripts/test-conformance.sh`
-> registers no `xla` stage and the dedicated `XLA Compiled Backends` workflow —
-> which fetches the extension — is where one belongs.
+> responsible for providing both, which is why the default run of
+> `scripts/test-conformance.sh` registers no `xla` stage and the producer lives
+> in the `rust-xla` job of the `XLA Compiled Backends` workflow, which fetches
+> the extension first and then runs
+> `./scripts/test-conformance.sh --compiler-agreement-only xla`.
 
 ## Shape
 
@@ -376,7 +381,7 @@ looks for it:
 
 | Binding | Adapter |
 |---|---|
-| Julia (reference) | `pkg/EarthSciAST.jl/scripts/compiler_agreement_adapter.jl` — on disk; bootstraps `scripts/compiler_agreement_env` |
+| Julia (reference) | `pkg/EarthSciAST.jl/scripts/compiler_agreement_adapter.jl` — on disk; bootstraps `scripts/compiler_agreement_env`, or `scripts/compiler_agreement_mtk_env` for `--compiler mtk` |
 | Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-compiler-agreement-adapter-rust.rs`, feature `conformance-adapters` |
 | Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/compiler_agreement_adapter.py` |
 
@@ -553,14 +558,43 @@ for Julia, Rust and Python; `xla` for Julia and Rust; `mtk` for Julia; `sympy`
 for Python. `compiler-agreement self-test` is the always-on guard and needs no
 live binding.
 
-The `xla` stages are the exception and are deliberately NOT registered in
-`scripts/test-conformance.sh`: that script is what a plain checkout runs, and
-`xla` needs a separately fetched 144 MB `xla_extension` that a plain checkout
-does not have. An unconfigured build answers `unavailable`, which for a
-`bindings_required` binding is RED — so the stage belongs in the workflow that
-fetches the extension first. For Rust, the runner's own planned command adds
-the `xla` Cargo feature when, and only when, `--compiler xla` is what was
-asked for; an explicit `EARTHSCI_COMPILER_AGREEMENT_ADAPTER_RUST` still wins.
+**Where each compiler is gated.** The DEFAULT run of `test-conformance.sh` is
+what a plain checkout runs, so it registers only the compilers a plain checkout
+can answer for: `interpreter` and `native`. The others have runtimes that must
+be provisioned first — an unconfigured one answers `unavailable`, which for a
+`bindings_required` binding is RED — so each is gated by
+`./scripts/test-conformance.sh --compiler-agreement-only <compiler>` in a
+workflow that provisions it, at the same frequency as the main conformance run:
+
+| Compiler | Where it is gated |
+|---|---|
+| `interpreter`, `native` | the default run (`.github/workflows/conformance-testing.yml`) |
+| `mtk` | `.github/workflows/mtk-compiler.yml` — Julia only, same triggers as the conformance workflow, its own depot cache keyed on `scripts/compiler_agreement_mtk_env/Project.toml` |
+| `xla` | the `rust-xla` job of `.github/workflows/xla-backends.yml`, which fetches the 144 MB `xla_extension` and exports `XLA_EXTENSION_DIR` first |
+| `sympy` | not yet wired |
+
+`--compiler-agreement-only` runs the self-test plus that compiler's producer
+stages and nothing else — not the per-binding test suites, not another tier.
+Which bindings it runs comes from THIS manifest (`bindings_required` plus
+`bindings_optional`), so the option cannot drift from the ledger; a binding that
+is only optional for the compiler and whose toolchain is missing on that runner
+skips with a warning, which is what `bindings_optional` means, while a required
+one with no toolchain still fails. An unrecognised compiler exits 2.
+
+For Rust and `xla`, the runner's own planned command adds the `xla` Cargo
+feature when, and only when, `--compiler xla` is what was asked for; an explicit
+`EARTHSCI_COMPILER_AGREEMENT_ADAPTER_RUST` still wins, and
+`scripts/test-conformance.sh` picks the feature set from whether
+`XLA_EXTENSION_DIR` is set, which is why the workflow step exports it.
+
+For Julia and `mtk`, the two packages that compiler needs — ModelingToolkit and
+OrdinaryDiffEqNonlinearSolve — are in an adapter environment of their own,
+`pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env`, which the adapter
+activates for that `--compiler` value alone. They are deliberately NOT in the
+sibling `scripts/compiler_agreement_env`: that project is activated by every
+other Julia stage of this tier and by the whole inline-test tier, all of which
+were resolving and precompiling the SciML symbolic stack for a compiler none of
+them names.
 
 A producer stage **declines to start**, with a warning naming exactly what is
 missing, when its binding's adapter is not on disk or when `golden/` holds no

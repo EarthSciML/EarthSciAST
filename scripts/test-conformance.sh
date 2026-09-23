@@ -90,9 +90,38 @@ SKIP_BINDING_SUITES="${ESM_CONFORMANCE_SKIP_BINDING_SUITES:-0}"
 # guessed at from the log's own [HH:MM:SS] prefixes (issue #224).
 declare -a STAGE_TIMINGS=()
 
+# `--compiler-agreement-only <compiler>`: the whole run is the compiler-agreement
+# harness self-test plus that ONE compiler's producer stages, and nothing else.
+#
+# It exists because two members of API_SPEC §5.8's compiler vocabulary cost more
+# than the main conformance run should pay, each for its own reason, and each
+# therefore gets a workflow of its own:
+#
+#   * `mtk` needs ModelingToolkit and a nonlinear solver — most of the SciML
+#     symbolic stack — resolved and precompiled into a Julia depot
+#     (.github/workflows/mtk-compiler.yml);
+#   * `xla` needs a separately fetched 144 MB `xla_extension` and a Rust build
+#     carrying the non-default `xla` Cargo feature
+#     (.github/workflows/xla-backends.yml).
+#
+# ONE option rather than one bespoke escape hatch per compiler, and WHICH
+# BINDINGS it runs comes out of the tier's own ledger
+# (tests/conformance/compiler_agreement/manifest.json: `bindings_required` plus
+# `bindings_optional`) rather than out of a second list kept here. A list here
+# would be a copy of the ledger that nothing keeps honest, and the ledger is what
+# CONFORMANCE_SPEC §5.44.3 makes normative.
+COMPILER_AGREEMENT_ONLY=""
+
+# API_SPEC §5.8's closed vocabulary. A value outside it is a BROKEN INVOCATION,
+# not a compiler nobody implements, and the two must not arrive at the same
+# answer — so an unknown value exits 2 rather than running zero stages and
+# reporting a green empty run.
+COMPILER_AGREEMENT_VOCABULARY="interpreter native xla mtk sympy"
+
 usage() {
     cat <<'USAGE'
 Usage: test-conformance.sh [--skip-binding-suites]
+       test-conformance.sh --compiler-agreement-only <compiler>
 
   --skip-binding-suites   Do not re-run each binding's own test suite before
                           generating its conformance outputs. Use this only
@@ -100,6 +129,19 @@ Usage: test-conformance.sh [--skip-binding-suites]
                           because `needs:` holds the harness behind all five
                           per-language jobs. Equivalent to setting
                           ESM_CONFORMANCE_SKIP_BINDING_SUITES=1.
+  --compiler-agreement-only <compiler>
+                          Run ONLY the compiler-agreement harness self-test and
+                          that one compiler's producer stages; skip every other
+                          stage, the per-binding test suites included.
+                          <compiler> is one of: interpreter, native, xla, mtk,
+                          sympy. Which bindings run is read from the tier's
+                          manifest (`bindings_required` + `bindings_optional`),
+                          so this option cannot drift from the ledger. A binding
+                          that is only OPTIONAL for the compiler and whose
+                          toolchain is absent skips visibly; a REQUIRED one with
+                          no toolchain still fails. Used by the workflows that
+                          own one expensive compiler each: mtk-compiler.yml and
+                          xla-backends.yml.
   -h, --help              Show this message.
 USAGE
 }
@@ -906,12 +948,19 @@ run_compiled_rhs_conformance_compiled_rust() {
 # committed, so only a missing adapter can make a stage decline now. A decline is
 # never a silent pass: the stage prints a warning naming exactly what is missing.
 #
-# CONFORMANCE_SPEC §5.44.5 also names `xla` (julia, rust), `mtk` (julia) and
-# `sympy` (python) producer stages. Each is one more `_run_compiler_agreement_stage`
-# line and lands with the adapter that can answer for it; `mtk` (julia) has.
+# WHERE EACH COMPILER IS GATED. `interpreter` and `native` are registered in the
+# default run below, in julia, rust and python. The other two that have a working
+# producer are gated at the same frequency but in workflows of their own, each
+# reached by `--compiler-agreement-only <compiler>`, because each carries a cost
+# the default run should not pay: `mtk` needs most of the SciML symbolic stack
+# (.github/workflows/mtk-compiler.yml) and `xla` needs a 144 MB `xla_extension`
+# a plain checkout does not fetch (.github/workflows/xla-backends.yml). The
+# stage functions for both live here all the same, beside the rest. `sympy`
+# (python), which CONFORMANCE_SPEC §5.44.5 also names, is still unwired.
 # Contract: tests/conformance/compiler_agreement/README.md. Normative: CONFORMANCE_SPEC §5.44.
 COMPILER_AGREEMENT_RUNNER="$SCRIPT_DIR/run-compiler-agreement-conformance.py"
 COMPILER_AGREEMENT_GOLDEN_DIR="$TESTS_DIR/conformance/compiler_agreement/golden"
+COMPILER_AGREEMENT_MANIFEST="$TESTS_DIR/conformance/compiler_agreement/manifest.json"
 
 run_compiler_agreement_conformance_self_test() {
     log "Running compiler-agreement conformance harness self-test..."
@@ -1190,12 +1239,110 @@ run_compiler_agreement_native_python() { _run_compiler_agreement_stage python na
 
 # `mtk` is the SPECIALTY compiler that runs events and implicit equations — the
 # constructs §5.39 has every other evaluator refuse. Julia only, and it needs
-# ModelingToolkit plus a nonlinear solver in the adapter's environment
-# (scripts/compiler_agreement_env carries both); the adapter loads them for this
-# compiler alone, so no other stage pays for them. Julia is `bindings_required`
-# for it, so an `unavailable` here is RED — the packages are declared, and a
-# missing one is a broken environment rather than an optional runtime.
+# ModelingToolkit plus a nonlinear solver, which live in an environment of their
+# OWN: pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env, activated by the
+# adapter for this `--compiler` value alone. The sibling
+# scripts/compiler_agreement_env — which every other Julia stage of this tier
+# and the whole inline-test tier activates — no longer carries them, so no other
+# stage resolves or precompiles that stack.
+#
+# This stage is NOT registered in the default run below. It is gated at the same
+# frequency, in a workflow of its own (.github/workflows/mtk-compiler.yml, same
+# triggers as the conformance workflow) that runs
+# `--compiler-agreement-only mtk` against its own Julia depot cache. Julia is
+# `bindings_required` for `mtk`, so an `unavailable` there is RED — the packages
+# are declared, and a missing one is a broken environment rather than an
+# optional runtime.
 run_compiler_agreement_mtk_julia() { _run_compiler_agreement_stage julia mtk; }
+
+# `xla` is the compiler whose availability is a property of the BUILD: Rust needs
+# the non-default `xla` Cargo feature and an unpacked `xla_extension` at
+# XLA_EXTENSION_DIR, and Julia needs Reactant. Neither is present in a plain
+# checkout, and for the `bindings_required` rust an `unavailable` is RED — so
+# like `mtk` these stages are not in the default run. `XLA Compiled Backends`
+# (.github/workflows/xla-backends.yml) fetches the extension and then runs
+# `--compiler-agreement-only xla`. Julia is `bindings_optional` for this
+# compiler and stays that way: on a runner without Julia the gate skips it
+# visibly, and where Julia IS present an unconfigured Reactant is a legal
+# `unavailable`.
+run_compiler_agreement_xla_rust()  { _run_compiler_agreement_stage rust xla; }
+run_compiler_agreement_xla_julia() { _run_compiler_agreement_stage julia xla; }
+
+# The bindings the ledger names for one compiler, `<binding> required` or
+# `<binding> optional` per line, required first. Reading the manifest is what
+# keeps `--compiler-agreement-only` from carrying a second, silently stale copy
+# of the ledger. python3 is already a hard dependency of this script.
+_compiler_agreement_ledger_bindings() {
+    python3 - "$COMPILER_AGREEMENT_MANIFEST" "$1" <<'PY'
+import json, sys
+path, compiler = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f:
+        manifest = json.load(f)
+except (OSError, ValueError) as e:
+    sys.stderr.write(f"cannot read {path}: {e}\n")
+    sys.exit(1)
+block = (manifest.get("compilers") or {}).get(compiler)
+if block is None:
+    sys.stderr.write(f"{path} carries no `compilers.{compiler}` block\n")
+    sys.exit(1)
+seen = set()
+for tier in ("required", "optional"):
+    for binding in block.get(f"bindings_{tier}") or []:
+        if binding not in seen:
+            seen.add(binding)
+            print(f"{binding} {tier}")
+PY
+}
+
+# The `--compiler-agreement-only` run: the always-on self-test, then one producer
+# stage per binding the ledger names for this compiler. Nothing else — not the
+# corpus manifest, not the per-binding suites, not another tier. It deliberately
+# does NOT call setup_output_dirs either: that wipes $OUTPUT_DIR, and the XLA
+# workflow runs this AFTER a compiled_rhs report has been written there. The
+# runner creates its own report directory.
+run_compiler_agreement_only() {
+    local compiler="$1"
+    local ledger binding tier dir fn
+    if ! ledger="$(_compiler_agreement_ledger_bindings "$compiler")"; then
+        error "compiler-agreement: could not read the bindings for '$compiler' from the tier manifest"
+        exit 2
+    fi
+    if [ -z "$ledger" ]; then
+        error "compiler-agreement: the ledger names no binding for '$compiler' — there is nothing to gate, which is a manifest error rather than a green run"
+        exit 2
+    fi
+
+    run_stage "compiler-agreement self-test" run_compiler_agreement_conformance_self_test
+    while read -r binding tier; do
+        [ -n "$binding" ] || continue
+        # `bindings_optional` means the binding need not ANSWER for this
+        # compiler, and a runner provisioned for one binding's expensive
+        # compiler is exactly where the other's toolchain is absent. Skipping it
+        # visibly is the ledger's own semantics; a `bindings_required` binding
+        # falls through and the stage FAILS on the missing toolchain, as it must.
+        if [ "$tier" = "optional" ]; then
+            dir="$(_compiler_agreement_binding_dir "$binding")"
+            if ! check_language_availability "$binding" "$dir" >/dev/null 2>&1; then
+                warning "compiler-agreement $compiler producer ($binding): SKIPPED — $binding is bindings_optional for '$compiler' and its toolchain is not on this machine"
+                continue
+            fi
+        fi
+        # Go through the named stage function where this file defines one, so
+        # every stage of the tier is a `run_compiler_agreement_*` a reader can
+        # grep for, whether the default run registers it or only this gate
+        # reaches it. The generic helper is the fallback for a
+        # (compiler, binding) pair with no wrapper yet — `sympy` / python, whose
+        # producer is still unwired.
+        fn="run_compiler_agreement_${compiler}_${binding}"
+        if declare -F "$fn" > /dev/null; then
+            run_stage "compiler-agreement $compiler producer ($binding)" "$fn"
+        else
+            run_stage "compiler-agreement $compiler producer ($binding)" \
+                _run_compiler_agreement_stage "$binding" "$compiler"
+        fi
+    done <<< "$ledger"
+}
 
 run_property_corpus() {
     log "Running property-corpus round-trip across bindings..."
@@ -1294,15 +1441,62 @@ print_timing_summary() {
     printf '%s\n' "${STAGE_TIMINGS[@]}" | sort -rn | awk -F'\t' '{printf "  %6ds  %s\n", $1, $2}'
 }
 
+# The end of every run, whichever run it was: the timing table, then the verdict
+# naming each failed stage, then the exit code. Shared so the `--compiler-
+# agreement-only` gate cannot grow a second, subtly different way to report red.
+finish_run() {
+    local what="$1"
+    print_timing_summary
+    echo
+    if [ ${#FAILED_STAGES[@]} -eq 0 ]; then
+        success "$what PASSED"
+        log "Results available in: $OUTPUT_DIR"
+        exit 0
+    fi
+    error "$what FAILED — ${#FAILED_STAGES[@]} stage(s):"
+    local stage
+    for stage in "${FAILED_STAGES[@]}"; do
+        error "  · $stage"
+    done
+    log "Results available in: $OUTPUT_DIR"
+    exit 1
+}
+
 main() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --skip-binding-suites) SKIP_BINDING_SUITES=1 ;;
+            --compiler-agreement-only)
+                shift
+                if [ $# -eq 0 ]; then
+                    error "--compiler-agreement-only needs a compiler: $COMPILER_AGREEMENT_VOCABULARY"
+                    usage >&2
+                    exit 2
+                fi
+                case " $COMPILER_AGREEMENT_VOCABULARY " in
+                    *" $1 "*) COMPILER_AGREEMENT_ONLY="$1" ;;
+                    *)
+                        error "--compiler-agreement-only: '$1' is not an API_SPEC §5.8 compiler. Expected one of: $COMPILER_AGREEMENT_VOCABULARY"
+                        exit 2
+                        ;;
+                esac
+                ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option: $1"; usage >&2; exit 2 ;;
         esac
         shift
     done
+
+    # The single-compiler gate is the WHOLE run when it is asked for: the
+    # compiler-agreement self-test and that compiler's producer stages, and
+    # nothing below this block.
+    if [ -n "$COMPILER_AGREEMENT_ONLY" ]; then
+        log "Starting compiler-agreement conformance for '$COMPILER_AGREEMENT_ONLY' only..."
+        log "Project root: $PROJECT_ROOT"
+        log "Every other stage is SKIPPED, the per-binding test suites included."
+        run_compiler_agreement_only "$COMPILER_AGREEMENT_ONLY"
+        finish_run "Compiler-agreement conformance ($COMPILER_AGREEMENT_ONLY)"
+    fi
 
     log "Starting cross-language conformance testing..."
     log "Project root: $PROJECT_ROOT"
@@ -1398,7 +1592,8 @@ main() {
     run_stage "compiler-agreement native producer (julia)" run_compiler_agreement_native_julia
     run_stage "compiler-agreement native producer (rust)" run_compiler_agreement_native_rust
     run_stage "compiler-agreement native producer (python)" run_compiler_agreement_native_python
-    run_stage "compiler-agreement mtk producer (julia)" run_compiler_agreement_mtk_julia
+    # No `mtk` and no `xla` stage here on purpose — each is gated just as often,
+    # in its own workflow, via `--compiler-agreement-only`. See the tier header.
 
     run_stage "inline-test self-test" run_inline_tests_conformance_self_test
     run_stage "inline-test interpreter producer (julia)" run_inline_tests_interpreter_julia
@@ -1408,21 +1603,7 @@ main() {
     run_stage "inline-test native producer (rust)" run_inline_tests_native_rust
     run_stage "inline-test native producer (python)" run_inline_tests_native_python
 
-    print_timing_summary
-
-    echo
-    if [ ${#FAILED_STAGES[@]} -eq 0 ]; then
-        success "Cross-language conformance testing PASSED"
-        log "Results available in: $OUTPUT_DIR"
-        exit 0
-    fi
-
-    error "Cross-language conformance testing FAILED — ${#FAILED_STAGES[@]} stage(s):"
-    for stage in "${FAILED_STAGES[@]}"; do
-        error "  · $stage"
-    done
-    log "Results available in: $OUTPUT_DIR"
-    exit 1
+    finish_run "Cross-language conformance testing"
 }
 
 # Check if script is being run directly

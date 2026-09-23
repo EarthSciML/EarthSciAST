@@ -6275,13 +6275,41 @@ reporting an unrequired refusal as a named exclusion.
 
 The producer stages in `scripts/test-conformance.sh` are one per binding per
 compiler, named `compiler-agreement <compiler> producer (<binding>)`:
-`interpreter` and `native` for Julia, Rust and Python; `mtk` for Julia; `sympy`
-for Python. An **`xla` stage does not belong there**, and that is a rule rather
-than a gap: `test-conformance.sh` is what a plain checkout runs, `xla` needs a
-separately fetched extension a plain checkout does not have, and an
-unconfigured build answers `unavailable` — which for a `bindings_required`
-binding is RED. The `xla` stages belong in the workflow that fetches the
-extension first. Adapters are discovered the way §5.38's are, through
+`interpreter` and `native` for Julia, Rust and Python; `xla` for Rust and
+Julia; `mtk` for Julia; `sympy` for Python.
+
+**Not every stage runs in the DEFAULT run of that script, and which ones do not
+is a rule rather than a gap.** `test-conformance.sh` with no options is what a
+plain checkout runs, and a compiler whose runtime a plain checkout does not have
+would answer `unavailable` there — which for a `bindings_required` binding is
+RED. Such a compiler is gated instead by
+`scripts/test-conformance.sh --compiler-agreement-only <compiler>`, which runs
+the harness self-test and that compiler's producer stages and nothing else,
+taking the bindings to run from the ledger's `bindings_required` plus
+`bindings_optional` so that the option cannot drift from the manifest. A binding
+that is only `bindings_optional` for the compiler and whose toolchain is absent
+on that runner skips visibly; a `bindings_required` one still fails. A compiler
+gated that way MUST be gated at the same frequency as the default run — a
+separate workflow, not a rarer one — and that workflow provides the runtime
+first. Today:
+
+| Compiler | Where it is gated |
+|---|---|
+| `interpreter`, `native` | the default run of `scripts/test-conformance.sh` (`.github/workflows/conformance-testing.yml`) |
+| `mtk` | `.github/workflows/mtk-compiler.yml`, same triggers as the conformance workflow, with its own Julia depot cache keyed on `pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env/Project.toml` |
+| `xla` | the `rust-xla` job of `.github/workflows/xla-backends.yml`, after it fetches the `xla_extension` release and exports `XLA_EXTENSION_DIR` |
+| `sympy` | not yet wired |
+
+A compiler that needs a package the other stages do not gets its own adapter
+ENVIRONMENT as well as its own workflow: a dependency left in a shared adapter
+project is resolved and precompiled by every stage that activates that project,
+however few of them name the compiler. `mtk`'s ModelingToolkit and
+OrdinaryDiffEqNonlinearSolve therefore live in
+`scripts/compiler_agreement_mtk_env`, which the Julia adapter activates for
+`--compiler mtk` alone, while every other Julia stage of this tier and of §5.45
+activates the slim `scripts/compiler_agreement_env`.
+
+Adapters are discovered the way §5.38's are, through
 `EARTHSCI_COMPILER_AGREEMENT_ADAPTER_<BINDING>`:
 
 | Binding | Adapter |

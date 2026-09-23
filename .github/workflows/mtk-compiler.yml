@@ -1,0 +1,141 @@
+name: ModelingToolkit Compiler
+
+# The `mtk` leg of the compiler-agreement tier (CONFORMANCE_SPEC §5.44), kept
+# OUT of `conformance-testing.yml` but gated JUST AS OFTEN: the trigger set
+# below is the same one that workflow carries, so every push and every pull
+# request that could move this verdict still moves it.
+#
+# Why it is separate at all. `mtk` is Julia-only and needs ModelingToolkit plus
+# OrdinaryDiffEqNonlinearSolve in the adapter's session — between them most of
+# the SciML symbolic stack. While those two sat in the SHARED adapter project
+# (pkg/EarthSciAST.jl/scripts/compiler_agreement_env) every OTHER Julia stage
+# that activates it — the `interpreter` and `native` compiler-agreement
+# producers and the whole inline-test tier — resolved and precompiled them too,
+# for a compiler none of them ever asks for. They now live in a project of their
+# own, pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env, which the adapter
+# activates for `--compiler mtk` alone, and this job is the one place it is
+# instantiated. The depot cache key below hashes THAT file, so adding a
+# dependency to it moves the key and the run that pays the precompile is also
+# the run that saves it.
+#
+# Julia is `bindings_required` for `mtk`
+# (tests/conformance/compiler_agreement/manifest.json), so an `unavailable` here
+# is RED on the runner's own exit code: this job needs no extra assert step the
+# way the XLA workflow's optional engines do.
+
+on:
+  # The same trigger set as conformance-testing.yml, deliberately. Keep the two
+  # path lists in sync by hand: GitHub Actions has no YAML anchors, so they
+  # cannot be shared.
+  push:
+    branches: [ main ]
+    paths:
+      - 'pkg/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - '.github/workflows/mtk-compiler.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'pkg/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - '.github/workflows/mtk-compiler.yml'
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to check out (e.g. a release tag)'
+        required: false
+        type: string
+        default: ''
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mtk-compiler-${{ github.ref }}
+  # Same reasoning as the conformance workflow: a superseded run must not hold a
+  # runner while HEAD queues behind it.
+  cancel-in-progress: true
+
+env:
+  # The version conformance-testing.yml runs its harness job at, so this stage is
+  # gated at the same Julia as the `interpreter` and `native` ones it left.
+  JULIA_VERSION: '1.10'
+
+jobs:
+  mtk-compiler-agreement:
+    name: ModelingToolkit compiler agreement (julia)
+    runs-on: ubuntu-latest
+    # Cold, this is dominated by resolving and precompiling the SciML symbolic
+    # stack; warm, by six `mtkcompile` builds and their solves. A budget, not a
+    # measurement.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || '' }}
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ env.JULIA_VERSION }}
+
+      # The runner and the harness are pure-stdlib python3; nothing is pip
+      # installed here. Pinned anyway so a runner image bump cannot change what
+      # this job runs.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # This job's OWN depot cache, keyed on the `mtk` environment's
+      # Project.toml. It must not share a key with the conformance workflow's:
+      # that one restores a depot with no ModelingToolkit in it, and if this job
+      # then saved under the same key the two would evict each other's work on
+      # every run.
+      - name: Cache the Julia depot
+        uses: actions/cache@v4
+        with:
+          path: ~/.julia
+          key: ${{ runner.os }}-mtk-compiler-${{ env.JULIA_VERSION }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml', 'pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env/Project.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-mtk-compiler-${{ env.JULIA_VERSION }}-
+
+      # The adapter self-bootstraps this env on first use (activate,
+      # `Pkg.develop` the package when Manifest.toml is absent, instantiate), so
+      # this step is not strictly required. Doing it here anyway means the
+      # precompile happens in a step whose log is ABOUT the precompile, instead
+      # of inside the producer step where a timeout would read as a conformance
+      # failure. Manifest.toml is gitignored repo-wide, which is why
+      # `Pkg.develop` is what points the env at THIS checkout rather than at a
+      # registered EarthSciAST.
+      - name: Instantiate the ModelingToolkit adapter environment
+        run: |
+          julia --project=pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env -e '
+            using Pkg
+            Pkg.develop(path="pkg/EarthSciAST.jl")
+            Pkg.instantiate()
+            Pkg.precompile()
+          '
+
+      # The harness self-test plus the `mtk` producer stages the tier ledger
+      # names, and nothing else — no per-binding suite, no other tier, no other
+      # compiler. Which bindings run is read from
+      # tests/conformance/compiler_agreement/manifest.json, so this job cannot
+      # drift from the ledger.
+      - name: Compiler-agreement tier — mtk
+        run: ./scripts/test-conformance.sh --compiler-agreement-only mtk
+
+      - name: Upload the compiler-agreement reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-agreement-mtk-${{ github.run_number }}
+          path: conformance-results/compiler_agreement/
+          # `warn`, not `error`: the producer writes a report even when it
+          # fails, so a missing one means something broke earlier — and a second
+          # red step saying "no artifact" would only bury the real one.
+          if-no-files-found: warn
+          retention-days: 30

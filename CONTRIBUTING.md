@@ -357,17 +357,18 @@ compilation provider is available" unless `XLA_FLAGS` carries
 The crate README has the device-resident API (`CompiledRhs::on_device`) and
 why multi-device sharding is not reachable through `xla` 0.4.4.
 
-#### The two workflows, and which one gates XLA
+#### The workflows, and which one gates XLA
 
 The compiled backends are tested by a workflow of their own, and the split is
 deliberate:
 
 | | `.github/workflows/conformance-testing.yml` | `.github/workflows/xla-backends.yml` |
 |---|---|---|
-| Runs on | every push/PR touching `pkg/**`, `tests/**`, `scripts/**` | only pushes/PRs touching the Rust crate, the Julia package, `tests/conformance/compiled_rhs/**`, the tier runner, or the fetch script |
+| Runs on | every push/PR touching `pkg/**`, `tests/**`, `scripts/**` | only pushes/PRs touching the Rust crate, the Julia package, `tests/conformance/compiled_rhs/**` or `tests/conformance/compiler_agreement/**`, either tier runner, `scripts/test-conformance.sh`, or the fetch script |
 | `xla` cargo feature | **never** — every `--features` list there names its features explicitly and omits `xla` (and `--all-features` is likewise avoided) | `conformance-adapters,xla`, with `XLA_EXTENSION_DIR` exported from a cached fetch |
 | Reactant | never — `ESM_TEST_REACTANT` is unset, which skips both the `reactant_*_test.jl` files in `runtests.jl` and the julia compiled stage of `test-conformance.sh` | `ESM_TEST_REACTANT=1`, job-wide |
 | `compiled-RHS compiled producer` stages | **skip visibly** | required: `scripts/assert-compiled-rhs-available.py` fails the job unless the binding's status in the report JSON is `ok` |
+| `compiler-agreement <compiler> producer` stages | `interpreter` and `native` only | additionally `xla`, via `./scripts/test-conformance.sh --compiler-agreement-only xla` in the `rust-xla` job. Rust is `bindings_required` for `xla`, so no assert step is needed: the runner's own exit code is non-zero on an `unavailable`. Julia is `bindings_optional` and skips visibly, that job having no Julia |
 | Cost | minutes | a 144 MB XLA download (cached per pinned version), a full `xla`-feature crate build, and a Reactant precompile — the Julia job budgets 120 minutes |
 
 The skip in the main workflow is legal because
@@ -431,6 +432,35 @@ python3 scripts/assert-compiled-rhs-available.py \
 the full target is heavy, and `reactant_direct_emit_test.jl` is written to run
 standalone from the adapter's Reactant environment (its own header documents
 the invocation above). Everything runs from the repository root.
+
+#### The third workflow: `mtk-compiler.yml`
+
+The compiler-agreement tier's `mtk` compiler (Julia only) is gated in
+`.github/workflows/mtk-compiler.yml` rather than in the conformance run, for the
+same shape of reason as XLA and with the same trigger set as
+`conformance-testing.yml`, so it is gated just as often. ModelingToolkit and
+OrdinaryDiffEqNonlinearSolve — between them most of the SciML symbolic stack —
+live in an adapter environment of their own,
+`pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env`, which the Julia adapter
+activates for `--compiler mtk` alone; the sibling
+`scripts/compiler_agreement_env` that every other Julia stage of that tier and
+of the inline-test tier activates no longer carries them. That workflow keeps
+its own Julia depot cache, keyed on the `mtk` environment's `Project.toml`.
+
+Locally:
+
+```bash
+# --- what the mtk-compiler job does -------------------------------------
+menv=pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env
+julia --project=$menv -e 'using Pkg; Pkg.develop(path="pkg/EarthSciAST.jl"); Pkg.instantiate(); Pkg.precompile()'
+./scripts/test-conformance.sh --compiler-agreement-only mtk
+```
+
+`--compiler-agreement-only <compiler>` runs the compiler-agreement harness
+self-test plus that one compiler's producer stages and nothing else — no
+per-binding test suite, no other tier. Which bindings it runs is read from
+`tests/conformance/compiler_agreement/manifest.json`, so the option cannot drift
+from the ledger.
 
 ### Go (earthsci-ast-go)
 

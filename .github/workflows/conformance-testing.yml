@@ -718,13 +718,21 @@ jobs:
             pkg/earthsci-ast-ts/node_modules
           # The adapter environments are hashed as well as the packages. The
           # compiler-agreement and inline-test adapters share
-          # pkg/EarthSciAST.jl/scripts/compiler_agreement_env, which carries
-          # ModelingToolkit and a nonlinear solver for `--compiler mtk`. That
-          # file is not under `pkg/*/Project.toml`, so without it here the key
-          # does not move when those dependencies are added: the run restores a
-          # depot that predates them, resolves and precompiles them, then hits
-          # the exact key and saves nothing — paying the same precompile on
-          # every run, forever.
+          # pkg/EarthSciAST.jl/scripts/compiler_agreement_env. That file is not
+          # under `pkg/*/Project.toml`, so without it here the key does not move
+          # when a dependency is added to it: the run restores a depot that
+          # predates that dependency, resolves and precompiles it, then hits the
+          # exact key and saves nothing — paying the same precompile on every
+          # run, forever.
+          #
+          # Its `mtk` sibling (scripts/compiler_agreement_mtk_env) is NOT hashed
+          # here, and must not be: `--compiler mtk` is not run by this workflow
+          # any more. It has its own job, its own depot cache and its own key in
+          # .github/workflows/mtk-compiler.yml, which is also where
+          # ModelingToolkit and OrdinaryDiffEqNonlinearSolve now live. Taking
+          # those two out of the shared project is what stopped every Julia
+          # stage here precompiling the SciML symbolic stack for a compiler none
+          # of them names.
           key: ${{ runner.os }}-conformance-${{ hashFiles('pkg/*/Project.toml', 'pkg/EarthSciAST.jl/scripts/compiler_agreement_env/Project.toml', 'pkg/*/package*.json', 'pkg/*/pyproject.toml', 'pkg/*/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-conformance-
