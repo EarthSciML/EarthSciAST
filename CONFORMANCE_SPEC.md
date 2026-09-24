@@ -6264,7 +6264,8 @@ The gate:
   and on the console, and green for now. It is never a pass and never a silent
   skip. The manifest's per-fixture `required` map (binding → the compilers that
   MUST run it) flips it to RED as coverage lands, a one-way ratchet exactly as
-  §5.38.3's `compiled_required` is;
+  §5.38.3's `compiled_required` is. Every fixture requires `native` of Julia,
+  Rust and Python, the three bindings that answer it on all six;
 * an **`unavailable`** compiler is reported with its reason and skipped, but
   only for a binding the manifest lists in that compiler's `bindings_optional`;
   an unavailable compiler in a `bindings_required` binding is RED. Availability

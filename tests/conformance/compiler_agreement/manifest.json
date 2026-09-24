@@ -120,9 +120,15 @@
         "detail": "that tier's `trajectory.analytic` block at the same save times; gated at its `traj_analytic_rtol` / `traj_analytic_atol`"
       },
       "required": {
-        "julia": [],
-        "rust": [],
-        "python": []
+        "julia": [
+          "native"
+        ],
+        "rust": [
+          "native"
+        ],
+        "python": [
+          "native"
+        ]
       }
     },
     {
@@ -173,9 +179,15 @@
         "source": "pde_simulation"
       },
       "required": {
-        "julia": [],
-        "rust": [],
-        "python": []
+        "julia": [
+          "native"
+        ],
+        "rust": [
+          "native"
+        ],
+        "python": [
+          "native"
+        ]
       }
     },
     {
@@ -221,9 +233,15 @@
         "source": "pde_simulation"
       },
       "required": {
-        "julia": [],
-        "rust": [],
-        "python": []
+        "julia": [
+          "native"
+        ],
+        "rust": [
+          "native"
+        ],
+        "python": [
+          "native"
+        ]
       }
     },
     {
@@ -264,9 +282,15 @@
         "detail": "the inline test's assertions are the discrete eigenvalue solution, computed outside every binding; gated at the assertion's own declared tolerance"
       },
       "required": {
-        "julia": [],
-        "rust": [],
-        "python": []
+        "julia": [
+          "native"
+        ],
+        "rust": [
+          "native"
+        ],
+        "python": [
+          "native"
+        ]
       }
     },
     {
@@ -303,9 +327,15 @@
         "detail": "the closed-form logistic solution; gated at the assertion's own declared tolerance"
       },
       "required": {
-        "julia": [],
-        "rust": [],
-        "python": []
+        "julia": [
+          "native"
+        ],
+        "rust": [
+          "native"
+        ],
+        "python": [
+          "native"
+        ]
       }
     },
     {
@@ -343,9 +373,15 @@
         "detail": "A(t) = 2 exp(-k t), a closed form outside every binding"
       },
       "required": {
-        "julia": [],
-        "rust": [],
-        "python": []
+        "julia": [
+          "native"
+        ],
+        "rust": [
+          "native"
+        ],
+        "python": [
+          "native"
+        ]
       }
     }
   ]
