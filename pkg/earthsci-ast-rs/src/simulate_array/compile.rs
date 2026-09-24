@@ -1488,8 +1488,8 @@ fn dense_to_json(shape: &[usize], values: &[f64]) -> JsonValue {
 /// Every category is DERIVED (esm-spec §6.3.1), never read off a declared type:
 /// an unknown is an ODE state or an observed according to the equation that
 /// defines it, and a parameter is Brownian or discrete according to its
-/// `update`. A Brownian parameter is an explicit unsupported-feature error,
-/// never a silent drop, and so is a discrete one.
+/// `update`. A Brownian parameter is refused (`unsupported_construct`), never
+/// a silent drop, and so is a discrete one this backend cannot refresh.
 fn classify_variables(
     model: &Model,
 ) -> Result<(Vec<&String>, Vec<&String>, Vec<(&String, &ModelVariable)>), CompileError> {
@@ -1516,11 +1516,10 @@ fn classify_variables(
             }
             VariableType::Parameter => {
                 if class.is_brownian(name) {
-                    return Err(CompileError::UnsupportedFeatureError {
-                        feature: "brownian".to_string(),
-                        message: format!(
-                            "Rust simulation backend does not support SDE models; parameter '{name}' carries a wiener update"
-                        ),
+                    return Err(CompileError::UnsupportedConstruct {
+                        construct: crate::compile_error::WIENER_NOISE,
+                        evaluator: crate::compile_error::ARRAY_EVALUATOR,
+                        detail: format!("parameter '{name}'"),
                     });
                 }
                 if class.is_discrete_parameter(name) {
