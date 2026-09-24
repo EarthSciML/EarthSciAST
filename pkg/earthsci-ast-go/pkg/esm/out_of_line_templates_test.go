@@ -647,3 +647,19 @@ func mustRead(t *testing.T, parts ...string) string {
 	}
 	return string(data)
 }
+
+// The relational ops of the §4.2 array/query core are evaluable-core, not
+// rewrite targets: a template body that uses them is not target-bearing. This
+// is the classification the Julia, Python and Rust registries give them.
+func TestOpInTRelationalCoreOps(t *testing.T) {
+	for _, op := range []string{"skolem", "rank", "argmin", "argmax", "pow", "true", "false"} {
+		if opInT(op) {
+			t.Errorf("opInT(%q) = true, want false (evaluable core)", op)
+		}
+	}
+	for _, op := range []string{"grad", "godunov_hamiltonian", "D", "integral"} {
+		if !opInT(op) {
+			t.Errorf("opInT(%q) = false, want true (rewrite target)", op)
+		}
+	}
+}
