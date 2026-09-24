@@ -47,9 +47,9 @@ python3 tests/conformance/scaling/generate.py --write-fixtures   # after changin
 # Rust adapter (one child process per document, so a timeout or an
 # out-of-memory kill is recorded and the run carries on):
 cd pkg/earthsci-ast-rs
-cargo run --release --features conformance-adapters --bin earthsci-scaling-adapter-rust -- \
+cargo run --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust -- \
     --index ../../tests/conformance/scaling/fixtures/index.json --output rust-serial.json
-cargo run --release --features conformance-adapters --bin earthsci-scaling-adapter-rust -- \
+cargo run --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust -- \
     --index "$BUILD/scaling/index.json" --output rust-threaded.json --threads 16
 
 # Gates:
@@ -139,6 +139,12 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
 | `hand_loop_max_abs_diff` | max over the state of `abs(dy_hand - dy_compiler)` |
 | `dy_max_abs` | max over the state of `abs(dy_compiler)`, the scale for the hand-loop check |
 | `interpreter_max_abs_diff` | max `abs(dy_compiler - dy_interpreter)` at the same point, or `null` when the adapter did not run the interpreter (it does so only up to a size cap, since the interpreter walks per cell) |
+| `hand_loop_threads` | threads the hand loop used (a prefix scan's running sum is sequential, so its threaded reference is the serial loop) |
+| `hand_loop_checked_against` | `"native"`, or `"interpreter"` when native refused the document: the hand loop is then checked against the interpreter's `dy` (up to the size cap), so the reference is known good before native learns the construct |
+
+Adapters may add fields of their own (the Rust adapter adds `code_size_detail`,
+`hand_loop_error`, `interpreter_error`); the checker ignores fields it does not
+know.
 
 ## Gates
 
@@ -149,7 +155,7 @@ Thresholds live in `manifest.json` under `gates`.
 | `builds` | deterministic | `status` is `"ok"`. A refusal or error fails it, and the other gates are then unmeasurable for that (family, N) |
 | `code_size_flat` | deterministic | `code_size` is identical at every N that built (slack 0: no measure has a legitimate wobble yet) |
 | `no_steady_alloc` | deterministic | `allocs_per_call` is 0 where measurable |
-| `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast |
+| `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast. Checked against the interpreter when native refused |
 | `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns, over the smallest and largest N that built with at most 10^6 cells |
 | `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise) |
 

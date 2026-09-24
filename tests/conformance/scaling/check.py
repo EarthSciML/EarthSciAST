@@ -101,7 +101,7 @@ def per_result_checks(run, r, gates, family_spec):
                 n,
                 "hand_loop_agrees",
                 DETERMINISTIC,
-                None if (not ok or d is None) else d <= tol,
+                None if d is None else d <= tol,
                 d,
                 f"tol {tol:.3g}",
             )
