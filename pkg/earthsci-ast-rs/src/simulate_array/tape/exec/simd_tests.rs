@@ -98,14 +98,14 @@ fn drive(with_nan: bool) {
             shifted_ix: None,
             src_shape: DimU::from_elem(N, 1),
             elem_stride: 1,
-            load_reg: u16::MAX,
+            load_reg: u32::MAX,
         },
         FusedInput {
             src: SrcRef::Slot(1),
             shifted_ix: None,
             src_shape: DimU::from_elem(N, 1),
             elem_stride: 1,
-            load_reg: u16::MAX,
+            load_reg: u32::MAX,
         },
         // 2: shifted stride-1 read (ghost over the last run).
         FusedInput {
@@ -113,7 +113,7 @@ fn drive(with_nan: bool) {
             shifted_ix: Some(0),
             src_shape: DimU::from_elem(N + 16, 1),
             elem_stride: 1,
-            load_reg: u16::MAX,
+            load_reg: u32::MAX,
         },
         // 3: strided (elem_stride 2) read through a pre-load register.
         FusedInput {
@@ -121,7 +121,7 @@ fn drive(with_nan: bool) {
             shifted_ix: Some(1),
             src_shape: DimU::from_elem(2 * N + 8, 1),
             elem_stride: 2,
-            load_reg: u16::MAX, // patched below once n_regs is known
+            load_reg: u32::MAX, // patched below once n_regs is known
         },
     ];
 
@@ -148,10 +148,10 @@ fn drive(with_nan: bool) {
         let (a, b) = match i % 4 {
             0 => (MRef::In(0), MRef::In(1)),
             1 => (MRef::In(2), MRef::In(0)),
-            2 => (MRef::Scal(i as u16 % 5), MRef::In(3)),
-            _ => (MRef::In(1), MRef::Scal((i as u16 + 2) % 5)),
+            2 => (MRef::Scal(i as u32 % 5), MRef::In(3)),
+            _ => (MRef::In(1), MRef::Scal((i as u32 + 2) % 5)),
         };
-        let out = micro.len() as u16;
+        let out = micro.len() as u32;
         micro.push(MicroOp::Bin { op: *op, a, b, out });
     }
     let uns = [
@@ -171,38 +171,38 @@ fn drive(with_nan: bool) {
         let a = match i % 3 {
             0 => MRef::In(0),
             1 => MRef::In(2),
-            _ => MRef::Reg(i as u16), // an earlier Bin result
+            _ => MRef::Reg(i as u32), // an earlier Bin result
         };
-        let out = micro.len() as u16;
+        let out = micro.len() as u32;
         micro.push(MicroOp::Un { op: *op, a, out });
     }
-    let out = micro.len() as u16;
+    let out = micro.len() as u32;
     micro.push(MicroOp::Neg {
         a: MRef::In(3),
         out,
     });
-    let out = micro.len() as u16;
+    let out = micro.len() as u32;
     micro.push(MicroOp::Select {
         cond: MRef::Reg(9), // an Lt mask
         a: MRef::In(0),
         b: MRef::In(1),
         out,
     });
-    let out = micro.len() as u16;
+    let out = micro.len() as u32;
     micro.push(MicroOp::Select {
         cond: MRef::In(2),
         a: MRef::Reg(0),
         b: MRef::Scal(1),
         out,
     });
-    let out = micro.len() as u16;
+    let out = micro.len() as u32;
     micro.push(MicroOp::Select {
         cond: MRef::Scal(2),
         a: MRef::In(1),
         b: MRef::In(0),
         out,
     });
-    let out = micro.len() as u16;
+    let out = micro.len() as u32;
     micro.push(MicroOp::Mov {
         a: MRef::In(3),
         out,
@@ -211,7 +211,7 @@ fn drive(with_nan: bool) {
     for op1 in arith {
         for op2 in arith {
             for swap in [false, true] {
-                let out = micro.len() as u16;
+                let out = micro.len() as u32;
                 micro.push(MicroOp::Bin2 {
                     op1,
                     a: MRef::In(0),
@@ -239,7 +239,7 @@ fn drive(with_nan: bool) {
     ];
     for (i, (op1, op2)) in ext.iter().enumerate() {
         for swap in [false, true] {
-            let out = micro.len() as u16;
+            let out = micro.len() as u32;
             micro.push(MicroOp::Bin2 {
                 op1: *op1,
                 a: MRef::In(1),
@@ -248,7 +248,7 @@ fn drive(with_nan: bool) {
                 c: if i % 2 == 0 {
                     MRef::In(0)
                 } else {
-                    MRef::Scal(i as u16 % 5)
+                    MRef::Scal(i as u32 % 5)
                 },
                 swap,
                 out,
@@ -270,7 +270,7 @@ fn drive(with_nan: bool) {
                         _ => (MRef::In(1), MRef::In(0), MRef::Reg(0), MRef::In(2)),
                     };
                     pat += 1;
-                    let out = micro.len() as u16;
+                    let out = micro.len() as u32;
                     micro.push(MicroOp::Bin3 {
                         op1,
                         a,
@@ -288,7 +288,7 @@ fn drive(with_nan: bool) {
         }
     }
     let n_ops = micro.len();
-    let n_regs = n_ops as u16;
+    let n_regs = n_ops as u32;
     let mut inputs = inputs;
     inputs[3].load_reg = n_regs; // one strided pre-load register
 
@@ -323,10 +323,10 @@ fn drive(with_nan: bool) {
     let bases: Vec<*const f64> = vec![a.as_ptr(), b.as_ptr(), shifted.as_ptr(), strided.as_ptr()];
     let run_level = |wider: u8| -> Vec<Vec<f64>> {
         let mut outbufs: Vec<Vec<f64>> = (0..n_ops).map(|_| vec![0.0f64; N]).collect();
-        let outs: Vec<(u16, *mut f64)> = outbufs
+        let outs: Vec<(u32, *mut f64)> = outbufs
             .iter_mut()
             .enumerate()
-            .map(|(i, buf)| (i as u16, buf.as_mut_ptr()))
+            .map(|(i, buf)| (i as u32, buf.as_mut_ptr()))
             .collect();
         let mut fregs = vec![0.0f64; (n_regs as usize + 1 + 6) * FCHUNK];
         match wider {

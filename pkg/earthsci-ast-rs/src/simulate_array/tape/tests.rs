@@ -2518,3 +2518,96 @@ fn interp_closed_functions_lower_to_one_instruction() {
     run_reference(&prog, &compiled, &[0.0], &param_vec, 9.0, &mut dy);
     assert_eq!(dy[0], 4.0);
 }
+
+// ---------------------------------------------------------------------------
+// Index widths (#474): every table the IR indexes can outgrow 16 bits.
+// ---------------------------------------------------------------------------
+
+/// More entries than a 16-bit index can name. Each fixture below puts
+/// something past this bound, so an index narrowed anywhere in the IR reads
+/// another entry's value and the bitwise comparison fails.
+const PAST_U16: usize = 70_000;
+
+/// `PAST_U16` scalar state variables, each with its own equation (a scalar
+/// diffusion chain, so every derivative reads its neighbours), and as many
+/// parameters, of which the equations near both ends of the chain read ones
+/// past the 16-bit bound. State, parameter and `dy` indices all exceed
+/// 65,535.
+#[test]
+fn ab_state_and_parameter_indices_past_u16() {
+    let n = PAST_U16;
+    let mut vars = serde_json::Map::new();
+    for k in 1..=n {
+        vars.insert(format!("u{k}"), json!({"type": "unknown", "default": 1.0}));
+        vars.insert(
+            format!("c{k}"),
+            json!({"type": "parameter", "default": 1.0 + k as f64 * 1e-3}),
+        );
+    }
+    let coeff = |k: usize| {
+        if k <= 3 || k > n - 3 {
+            json!(format!("c{}", n + 1 - k))
+        } else {
+            json!(0.1)
+        }
+    };
+    let eqs: Vec<serde_json::Value> = (1..=n)
+        .map(|k| {
+            let mut nb = Vec::new();
+            if k > 1 {
+                nb.push(json!(format!("u{}", k - 1)));
+            }
+            if k < n {
+                nb.push(json!(format!("u{}", k + 1)));
+            }
+            let sum = if nb.len() == 1 {
+                nb.pop().unwrap()
+            } else {
+                json!({"op": "+", "args": nb})
+            };
+            json!({
+                "lhs": {"op": "D", "args": [format!("u{k}")], "wrt": "t"},
+                "rhs": {"op": "*", "args": [coeff(k), {"op": "-", "args": [
+                    sum, {"op": "*", "args": [2, format!("u{k}")]}]}]}
+            })
+        })
+        .collect();
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_wide_state_indices"},
+        "models": {"M": {"variables": vars, "equations": eqs}}
+    });
+    let prog = ab_check(doc, 0, -1.0, 1.0);
+    assert_eq!(prog.state_vars.len(), n);
+}
+
+/// One fused group with more than 65,535 micro-ops and as many distinct
+/// scalar operands: `D(u[i]) = Σ_j j·u[i]` over `PAST_U16` terms, all on the
+/// same box. Register, scalar-input and output indices inside the group all
+/// exceed 65,535.
+#[test]
+fn ab_fused_group_indices_past_u16() {
+    let n = 8;
+    let terms: Vec<serde_json::Value> = (1..=PAST_U16)
+        .map(|j| json!({"op": "*", "args": [j as f64 * 0.5, idx("u", json!("i"))]}))
+        .collect();
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_wide_fused_indices"},
+        "models": {"M": {
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
+            "equations": [d_eq("u", n, agg(n, json!({"op": "+", "args": terms})))]
+        }}
+    });
+    let prog = ab_check(doc, 0, -1.0, 1.0);
+    let widest = prog
+        .fused
+        .iter()
+        .map(|f| f.scalars.len())
+        .max()
+        .unwrap_or(0);
+    assert!(
+        widest > u16::MAX as usize,
+        "the fixture must put one group's scalar table past 16 bits (widest {widest})"
+    );
+}
