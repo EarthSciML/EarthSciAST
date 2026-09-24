@@ -118,13 +118,13 @@ struct GBuilder {
     inputs: Vec<FusedInput>,
     /// Per SHIFTED input: its fold geometry.
     shifted_segs: Vec<ShiftedGeom>,
-    aligned_ix: FxHashMap<SrcKey, u32>,
+    aligned_ix: FxHashMap<SrcKey, GroupIx>,
     scalars: Vec<Operand>,
-    scalar_ix: FxHashMap<ScalKey, u32>,
+    scalar_ix: FxHashMap<ScalKey, GroupIx>,
     /// Computed member slots in definition order: `(slot, ssa register)`.
-    defs: Vec<(SlotId, u32)>,
+    defs: Vec<(SlotId, GroupIx)>,
     /// Folded gathers: `(original instr index, out slot, input index)`.
-    folded: Vec<(u32, SlotId, u32)>,
+    folded: Vec<(u32, SlotId, GroupIx)>,
     /// Rule ordinal of the first member (provenance of the emitted Fused).
     prov: u32,
 }
@@ -159,15 +159,17 @@ impl GBuilder {
         self.val_of.contains_key(&s)
     }
 
-    /// Whether one more member keeps every group-local index inside `u32`.
-    /// The register file (`n_regs + n_load_regs + n_splat_regs`) is bounded
-    /// by `micro + inputs + scalars + 1`, one member adds at most one
-    /// micro-op, three inputs and three scalars, and `u32::MAX` itself is the
-    /// `load_reg` sentinel. A full group is flushed and a fresh one opened,
-    /// which only moves where the slab is written.
+    /// Whether one more member keeps every group-local index inside
+    /// [`GroupIx`]. The register file (`n_regs + n_load_regs +
+    /// n_splat_regs`) is bounded by `micro + inputs + scalars + 1`, one
+    /// member adds at most one micro-op, three inputs and three scalars, and
+    /// `GroupIx::MAX` itself is the `load_reg` sentinel. A full group is
+    /// flushed and a fresh one opened, which only moves where the slab is
+    /// written.
     fn has_room(&self) -> bool {
         const PER_MEMBER: usize = 8;
-        self.micro.len() + self.inputs.len() + self.scalars.len() + PER_MEMBER < u32::MAX as usize
+        self.micro.len() + self.inputs.len() + self.scalars.len() + PER_MEMBER
+            < GroupIx::MAX as usize
     }
 
     /// Resolve an operand for use inside the group; `None` = unfusable
@@ -226,19 +228,19 @@ impl GBuilder {
         match r {
             ResOp::Existing(m) => m,
             ResOp::NewScalar(key, op) => {
-                let i = self.scalars.len() as u32;
+                let i = self.scalars.len() as GroupIx;
                 self.scalars.push(op);
                 self.scalar_ix.insert(key, i);
                 MRef::Scal(i)
             }
             ResOp::NewAligned(key, src) => {
-                let i = self.inputs.len() as u32;
+                let i = self.inputs.len() as GroupIx;
                 self.inputs.push(FusedInput {
                     src,
                     shifted_ix: None,
                     src_shape: self.shape.clone(),
                     elem_stride: 1,
-                    load_reg: u32::MAX,
+                    load_reg: GroupIx::MAX,
                 });
                 self.aligned_ix.insert(key, i);
                 MRef::In(i)
@@ -269,7 +271,7 @@ impl GBuilder {
         for r in resolved {
             mrefs.push(self.commit(r));
         }
-        let ssa = self.micro.len() as u32;
+        let ssa = self.micro.len() as GroupIx;
         let mop = match ins {
             Instr::Bin { op, .. } => MicroOp::Bin {
                 op: *op,
@@ -315,8 +317,8 @@ impl GBuilder {
         geom: ShiftedGeom,
         out: SlotId,
     ) {
-        let input_ix = self.inputs.len() as u32;
-        let shifted_ix = self.shifted_segs.len() as u32;
+        let input_ix = self.inputs.len() as GroupIx;
+        let shifted_ix = self.shifted_segs.len() as GroupIx;
         let elem_stride = match &geom {
             ShiftedGeom::Segs(..) => 1,
             ShiftedGeom::Linear { a, .. } => *a,
@@ -326,7 +328,7 @@ impl GBuilder {
             shifted_ix: Some(shifted_ix),
             src_shape: plan.src_shape.clone(),
             elem_stride,
-            load_reg: u32::MAX,
+            load_reg: GroupIx::MAX,
         });
         self.shifted_segs.push(geom);
         self.val_of.insert(out, MRef::In(input_ix));
@@ -726,7 +728,7 @@ fn for_each_operand(op: &MicroOp, mut f: impl FnMut(&MRef)) {
 
 /// SSA register use counts (live-outs count as a use). Valid only while the
 /// micro-program is in SSA form (op `i` defines register `i`).
-fn ssa_uses(micro: &[MicroOp], outputs: &[(u32, SlotId)]) -> Vec<u32> {
+fn ssa_uses(micro: &[MicroOp], outputs: &[(GroupIx, SlotId)]) -> Vec<u32> {
     let mut uses = vec![0u32; micro.len()];
     for op in micro {
         for_each_operand(op, |m| {
@@ -742,7 +744,7 @@ fn ssa_uses(micro: &[MicroOp], outputs: &[(u32, SlotId)]) -> Vec<u32> {
 }
 
 /// `true` when `op` reads SSA register `r`.
-fn reads_reg(op: &MicroOp, r: u32) -> bool {
+fn reads_reg(op: &MicroOp, r: GroupIx) -> bool {
     let mut hit = false;
     for_each_operand(op, |m| {
         if *m == MRef::Reg(r) {
@@ -775,7 +777,7 @@ fn mop_label(op: &MicroOp) -> String {
 /// dispatch fewer per element, with the identical two kernels applied in the
 /// identical order (bit-identity is untouched). Restricted to the
 /// `+ - * /` kernels the executor monomorphizes.
-fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(u32, SlotId)], cfg: SuperopCfg) {
+fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(GroupIx, SlotId)], cfg: SuperopCfg) {
     let n_ssa = micro.len();
     // Use counts per SSA register (live-outs count as a use).
     let mut uses = vec![0u32; n_ssa];
@@ -808,7 +810,7 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(u32, SlotId)], cfg: 
     /// How the SSA register `t` is consumed by a `Bin` op: `Some((swap,
     /// other))` when exactly one operand is `t` (`swap` = `t` is the RIGHT
     /// operand), `None` when neither or both are `t`.
-    fn consumes<'a>(ca: &'a MRef, cb: &'a MRef, t: u32) -> Option<(bool, &'a MRef)> {
+    fn consumes<'a>(ca: &'a MRef, cb: &'a MRef, t: GroupIx) -> Option<(bool, &'a MRef)> {
         let t = MRef::Reg(t);
         if *ca == t && *cb != t {
             Some((false, cb))
@@ -821,8 +823,8 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(u32, SlotId)], cfg: 
 
     let mut merged: Vec<MicroOp> = Vec::with_capacity(micro.len());
     // old SSA id -> new SSA id (None = merged away, never referenced again).
-    let mut new_of: Vec<Option<u32>> = vec![None; n_ssa];
-    let remap = |m: &MRef, new_of: &[Option<u32>]| -> MRef {
+    let mut new_of: Vec<Option<GroupIx>> = vec![None; n_ssa];
+    let remap = |m: &MRef, new_of: &[Option<GroupIx>]| -> MRef {
         match m {
             MRef::Reg(r) => MRef::Reg(new_of[*r as usize].expect("operand defined")),
             other => *other,
@@ -865,7 +867,7 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(u32, SlotId)], cfg: 
                         && bin2_arith(*op3)
                         && *other3 != MRef::Reg(*t1)
                     {
-                        let new_id = merged.len() as u32;
+                        let new_id = merged.len() as GroupIx;
                         let mop = MicroOp::Bin3 {
                             op1: *op1,
                             a: remap(a, &new_of),
@@ -905,7 +907,7 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(u32, SlotId)], cfg: 
             {
                 if let Some((swap, other)) = consumes(ca, cb, *t) {
                     if uses[*t as usize] == 1 && bin2_pair_ok(*op1, *op2, cfg.ext_pairs) {
-                        let new_id = merged.len() as u32;
+                        let new_id = merged.len() as GroupIx;
                         let mop = MicroOp::Bin2 {
                             op1: *op1,
                             a: remap(a, &new_of),
@@ -923,7 +925,7 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(u32, SlotId)], cfg: 
                 }
             }
         }
-        let new_id = merged.len() as u32;
+        let new_id = merged.len() as GroupIx;
         let mut op = micro[i].clone();
         match &mut op {
             MicroOp::Bin { a, b, out, .. } => {
@@ -961,7 +963,7 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(u32, SlotId)], cfg: 
 /// An op's `out` register is allocated BEFORE its dying operands are freed,
 /// so `out` never aliases an operand register (which lets the executor's
 /// chunk loops use disjoint slices).
-fn allocate_registers(micro: &mut [MicroOp], outputs: &mut [(u32, SlotId)]) -> u32 {
+fn allocate_registers(micro: &mut [MicroOp], outputs: &mut [(GroupIx, SlotId)]) -> GroupIx {
     let n_ssa = micro.len();
     let mut last_use = vec![usize::MAX; n_ssa]; // MAX = never used
     let use_at = |m: &MRef, i: usize, last_use: &mut Vec<usize>| {
@@ -987,9 +989,9 @@ fn allocate_registers(micro: &mut [MicroOp], outputs: &mut [(u32, SlotId)]) -> u
         v
     };
 
-    let mut phys_of = vec![u32::MAX; n_ssa];
-    let mut free: Vec<u32> = Vec::new();
-    let mut n_phys: u32 = 0;
+    let mut phys_of = vec![GroupIx::MAX; n_ssa];
+    let mut free: Vec<GroupIx> = Vec::new();
+    let mut n_phys: GroupIx = 0;
     for i in 0..n_ssa {
         // Allocate out.
         let p = free.pop().unwrap_or_else(|| {
@@ -998,7 +1000,7 @@ fn allocate_registers(micro: &mut [MicroOp], outputs: &mut [(u32, SlotId)]) -> u
         });
         phys_of[i] = p;
         // Free operands dying at i (after allocation, so out != operand).
-        let free_if_dies = |m: &MRef, free: &mut Vec<u32>| {
+        let free_if_dies = |m: &MRef, free: &mut Vec<GroupIx>| {
             if let MRef::Reg(r) = m {
                 let r = *r as usize;
                 if last_use[r] == i && !is_output[r] {
@@ -1210,7 +1212,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
                 shifted_ix: None,
                 src_shape: shape.clone(),
                 elem_stride: 1,
-                load_reg: u32::MAX,
+                load_reg: GroupIx::MAX,
             };
         } else {
             fx.sink.stats.n_gathers_folded += 1;
@@ -1218,10 +1220,10 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     }
     // Compact the shifted-input table.
     let mut new_segs: Vec<ShiftedGeom> = Vec::new();
-    let mut new_ix: Vec<u32> = vec![u32::MAX; kept_shifted.len()];
+    let mut new_ix: Vec<GroupIx> = vec![GroupIx::MAX; kept_shifted.len()];
     for (i, segs) in shifted_segs.into_iter().enumerate() {
         if kept_shifted[i] {
-            new_ix[i] = new_segs.len() as u32;
+            new_ix[i] = new_segs.len() as GroupIx;
             new_segs.push(segs);
         }
     }
@@ -1232,7 +1234,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     }
 
     // Live-outs.
-    let mut outputs: SmallVec<[(u32, SlotId); 2]> = SmallVec::new();
+    let mut outputs: SmallVec<[(GroupIx, SlotId); 2]> = SmallVec::new();
     for &(slot, ssa) in &defs {
         let external = fx.readers[slot as usize]
             .iter()
@@ -1249,7 +1251,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     {
         let uses = ssa_uses(&micro, &outputs);
         for i in 0..micro.len().saturating_sub(1) {
-            if uses[i] == 1 && reads_reg(&micro[i + 1], i as u32) {
+            if uses[i] == 1 && reads_reg(&micro[i + 1], i as GroupIx) {
                 let key = format!("{}>{}", mop_label(&micro[i]), mop_label(&micro[i + 1]));
                 *fx.sink.adj_hist.entry(key).or_insert(0) += n_elems;
             }
@@ -1262,7 +1264,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
                 while i + len < micro.len()
                     && arith(&micro[i + len])
                     && uses[i + len - 1] == 1
-                    && reads_reg(&micro[i + len], (i + len - 1) as u32)
+                    && reads_reg(&micro[i + len], (i + len - 1) as GroupIx)
                 {
                     len += 1;
                 }
@@ -1285,14 +1287,14 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     // splat registers and ghost reads from a trailing zero register, all
     // appended after the load registers and filled once per call.
     let n_splat_regs = if micro.iter().any(|m| matches!(m, MicroOp::Bin3 { .. })) {
-        scalars.len() as u32 + 1
+        scalars.len() as GroupIx + 1
     } else {
         0
     };
     let runs = build_runs(&shape, &new_segs);
     // Strided shifted inputs are pre-loaded into dedicated chunk registers
     // appended after the micro register file.
-    let mut n_load_regs: u32 = 0;
+    let mut n_load_regs: GroupIx = 0;
     for inp in inputs.iter_mut() {
         if inp.shifted_ix.is_some() && inp.elem_stride != 1 {
             inp.load_reg = n_regs + n_load_regs;

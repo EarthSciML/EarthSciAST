@@ -2520,11 +2520,12 @@ fn interp_closed_functions_lower_to_one_instruction() {
 }
 
 // ---------------------------------------------------------------------------
-// Index widths (#474): every table the IR indexes can outgrow 16 bits.
+// Index widths (#474).
 // ---------------------------------------------------------------------------
 
 /// More entries than a 16-bit index can name. Each fixture below puts
-/// something past this bound, so an index narrowed anywhere in the IR reads
+/// something past this bound, so a program-table index narrowed to 16 bits,
+/// or a fused group allowed to outgrow its 16-bit local indices, reads
 /// another entry's value and the bitwise comparison fails.
 const PAST_U16: usize = 70_000;
 
@@ -2581,33 +2582,43 @@ fn ab_state_and_parameter_indices_past_u16() {
     assert_eq!(prog.state_vars.len(), n);
 }
 
-/// One fused group with more than 65,535 micro-ops and as many distinct
-/// scalar operands: `D(u[i]) = Σ_j j·u[i]` over `PAST_U16` terms, all on the
-/// same box. Register, scalar-input and output indices inside the group all
-/// exceed 65,535.
+/// More micro-ops and distinct scalar operands on one box than a fused
+/// group's 16-bit local indices can name: `D(u[i]) = Σ_j j·u[i]` over
+/// `PAST_U16` terms. The fusion pass has to split the box into several
+/// groups, each within [`GroupIx`], and the split program must still match
+/// the interpreter bit for bit.
 #[test]
-fn ab_fused_group_indices_past_u16() {
+fn ab_fused_box_past_u16_splits_into_groups() {
     let n = 8;
     let terms: Vec<serde_json::Value> = (1..=PAST_U16)
         .map(|j| json!({"op": "*", "args": [j as f64 * 0.5, idx("u", json!("i"))]}))
         .collect();
     let doc = json!({
         "esm": "1.1.0",
-        "metadata": {"name": "tape_wide_fused_indices"},
+        "metadata": {"name": "tape_wide_fused_box"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [d_eq("u", n, agg(n, json!({"op": "+", "args": terms})))]
         }}
     });
     let prog = ab_check(doc, 0, -1.0, 1.0);
-    let widest = prog
-        .fused
-        .iter()
-        .map(|f| f.scalars.len())
-        .max()
-        .unwrap_or(0);
     assert!(
-        widest > u16::MAX as usize,
-        "the fixture must put one group's scalar table past 16 bits (widest {widest})"
+        prog.fused.len() > 1,
+        "the box must be split across groups, got {}",
+        prog.fused.len()
     );
+    let scalars: usize = prog.fused.iter().map(|f| f.scalars.len()).sum();
+    assert!(
+        scalars > GroupIx::MAX as usize,
+        "the fixture must put more scalar operands on the box than one group can index ({scalars})"
+    );
+    for f in &prog.fused {
+        let regs = f.n_regs as usize + f.n_load_regs as usize + f.n_splat_regs as usize;
+        assert!(
+            f.micro.len() < GroupIx::MAX as usize
+                && f.scalars.len() < GroupIx::MAX as usize
+                && regs < GroupIx::MAX as usize,
+            "a group outgrew its local indices"
+        );
+    }
 }
