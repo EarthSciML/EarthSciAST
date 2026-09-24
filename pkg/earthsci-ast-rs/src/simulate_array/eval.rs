@@ -4732,6 +4732,51 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         }
     }
 
+    // ---- Rank-0 contraction as a whole-array map, then one fold -----------
+    // A fully contracted node (`total = Σ_r x[r]`) has no output box for the
+    // overlay above to evaluate over, so it used to be folded term by term,
+    // one tree walk per term. Its body is a pure map over the CONTRACTION box
+    // instead: evaluate that once through the overlay, with the contracted
+    // symbols bound as the box's axes, and fold the resulting array. The fold
+    // visits the terms in row-major order — the order `CartesianTuples` walks
+    // the contraction odometer, last index fastest — starting from the
+    // identity with the same `combine`, so the result is bit-identical to the
+    // loop below. Declined (to that loop) for a filter, which the loop SKIPS
+    // rather than folding the identity (not bit-identical for signed zeros),
+    // for bounds that vary, and wherever the overlay above is declined.
+    if shape.is_empty()
+        && !contract_names.is_empty()
+        && filter.is_none()
+        && scan.is_none()
+        && gates.is_empty()
+        && ctx.recur.is_none()
+        && let Some(box_ranges) = static_ranges.as_deref()
+    {
+        let terms = with_faq_pool(|pool| {
+            try_eval_faq_vectorized(
+                &contract_names,
+                box_ranges,
+                body,
+                &[],
+                &[],
+                reduce,
+                None,
+                &*ctx,
+                pool,
+            )
+            .map(|(vv, _ops)| {
+                let out = vv.view().expect("vectorized faq has a view").to_owned();
+                vv.release(pool);
+                out
+            })
+        });
+        if let Some(terms) = terms {
+            let acc = terms
+                .iter()
+                .fold(reduce.identity(), |acc, &t| reduce.combine(acc, t));
+            return Value::Scalar(acc);
+        }
+    }
     // An EMPTY output box (a size-0 index set) has no cell to evaluate: the
     // result is the empty array of that box. The buffer below is sized
     // `max(1)` for the rank-0 case, and reshaping its one element into a box
