@@ -36,6 +36,7 @@ _dm_k(offset)  = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
         dm = _DM_ESS.DiscreteMaterializer()
         f!, u0, p, _, vm = _DM_ESS._build_evaluator(file; initial_conditions=ics,
             const_arrays=Dict("W" => _DM_W), param_arrays=Dict("src" => srcB),
+            compiler=:interpreter,  # the discrete-cadence materializer is per cell
             materialize_out=dm)
         @test haskey(dm.caches, "g")             # param-tainted, state-free -> cached
         @test !haskey(dm.caches, "k")            # const-fed -> NOT cached (regression guard)
@@ -49,6 +50,7 @@ _dm_k(offset)  = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
         dm = _DM_ESS.DiscreteMaterializer()
         f!, u0, p, _, vm = _DM_ESS._build_evaluator(file; initial_conditions=ics,
             const_arrays=Dict("W" => _DM_W), param_arrays=Dict("src" => srcB),
+            compiler=:interpreter,  # the discrete-cadence materializer is per cell
             materialize_out=dm)
         du = zero(u0); f!(du, u0, p, 0.0)
         initial = [du[vm["c[$j]"]] for j in 1:3]

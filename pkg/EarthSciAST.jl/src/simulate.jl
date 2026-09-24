@@ -1070,11 +1070,12 @@ function esm_problem(input, tspan;
         _inject_pushdown_aliases!(merged_param, doc, pd_coupling)
     end
 
-    # Discrete-cadence materialization sink (the middle cadence phase): opt IN so a
-    # state-free derived field over a live forcing buffer (a regrid→physics stack) is
-    # cut out of the per-step RHS into a cache filled once per refresh, not recomputed
-    # on every continuous step. Empty (no discrete-materialize var) ⇒ no effect. A
-    # caller-supplied `materialize_out` is reused (and thus inspectable), else fresh.
+    # Discrete-cadence materialization sink (the middle cadence phase), ALWAYS
+    # passed, so a state-free derived field over a live forcing buffer (a
+    # regrid→physics stack) is cut out of the per-step RHS into a cache filled once
+    # per refresh, not recomputed on every continuous step. Empty (no
+    # discrete-materialize var) ⇒ no effect. A caller-supplied `materialize_out` is
+    # reused (and thus inspectable), else fresh.
     dm = materialize_out === nothing ? DiscreteMaterializer() : materialize_out
     # Build observability is a CONSTRUCTION-time seam now (§5.8): the problem
     # always owns a `BuildInspection`, so `observed_field(prob, name)` is two

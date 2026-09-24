@@ -111,9 +111,15 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
 
 The **discrete-cadence materialization** sink — the middle phase of the
 three-phase cadence partition (`const ⊏ discrete ⊏ continuous`, `cadence.jl`).
-Pass one via the `materialize_out` keyword of [`esm_problem`](@ref) to
-OPT IN to the cut; without it, discrete-cadence derived fields stay inlined into
-the per-step RHS (the pre-cut behavior; every existing build is byte-identical).
+[`esm_problem`](@ref) ALWAYS makes the cut: it creates one of these when the
+`materialize_out` keyword is not given, and passing your own only makes it
+inspectable. A direct `build_evaluator` call without the keyword makes no cut,
+so its discrete-cadence derived fields stay inlined into the per-step RHS.
+
+The fills are resolved, compiled and evaluated once per cell, so a strict
+`compiler = :native` refuses a document that has any discrete-cadence field
+(`compiler_refused_rule`, naming the field); `compiler = :interpreter` runs it.
+Each field is recorded in the compiler report as `:discrete_percell`.
 
 A derived ARRAY observed whose value depends (transitively) on a live
 `param_arrays` forcing buffer but NOT on any continuous `state` (nor the
@@ -2142,6 +2148,23 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
     #    vars are excluded from `resolved_obs`).
     fills = Tuple{Vector{Float64},Int,_Node}[]
     for name in order
+        # Every fill below is resolved and compiled once per cell here and then
+        # walked per cell by `materialize!` — at build, at every refresh boundary
+        # and at every run's `t0`. There is no compiled form of this stage yet
+        # (the fill bodies gather live forcing buffers at the output index, which
+        # the symbolic resolve cannot keep symbolic), so a strict compiler refuses
+        # the discrete variable by name.
+        if _compiler_is_strict()
+            ncells = prod(length(r) for r in cells_of[name][2]; init=1)
+            _refuse_rule(name,
+                "the discrete-cadence materializer resolves and compiles this " *
+                "forcing-derived field once per cell ($ncells cell" *
+                (ncells == 1 ? "" : "s") * ") and re-evaluates every cell as a " *
+                "tree walk at each data refresh and at each run's start — a " *
+                "per-cell evaluation that esm-libraries-spec §2.5.10 puts under " *
+                "the same rule as the right-hand side. Build with " *
+                "compiler=:interpreter to run it")
+        end
         rop = discrete_defs[name]::OpExpr
         rop_res = isempty(resolved_obs) ? rop : _sub_preserving(rop, resolved_obs)
         rop_res isa OpExpr ||
@@ -2162,6 +2185,7 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
             l = isempty(idx_tuple) ? 1 : lin[idx_tuple...]
             push!(fills, (cvec, l, node))
         end
+        _record_rule!(name, :observed, :discrete_percell)
     end
     # 3. `materialize!`: eval every fill into its cache (dep order preserved by the
     #    build order). Every fill node was CHECKED state-free above, so the zero `u` /

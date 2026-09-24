@@ -71,6 +71,7 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         dm = _ESS_DM.DiscreteMaterializer()
         f!, u0, p, _ts, vm = _ESS_DM._build_evaluator(_ESS_DM.load_path(fixture);
             initial_conditions = ics, param_arrays = Dict("src" => srcbuf),
+            compiler = :interpreter,  # the discrete-cadence materializer is per cell
             materialize_out = dm)
         @test haskey(dm.caches, "g")     # forcing-tainted, state-free -> DISCRETE cache
         @test !haskey(dm.caches, "k")    # const/parameter-fed -> CONST-cadence (regression guard)
@@ -88,6 +89,7 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         dm2 = _ESS_DM.DiscreteMaterializer()
         f2!, u02, p2, _ts2, vm2 = _ESS_DM._build_evaluator(_ESS_DM.load_path(fixture);
             initial_conditions = ics, param_arrays = Dict("src" => srcbuf2),
+            compiler = :interpreter,  # the discrete-cadence materializer is per cell
             materialize_out = dm2)
         interior = [t for t in anchors if t > 0.0]
         prov = _DMConfProvider(interior, Dict(t => Dict("src" => src_at(t)) for t in interior))
