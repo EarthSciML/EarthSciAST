@@ -728,6 +728,11 @@ pub struct ArrayCompiled {
     /// document never declared from one it declared but had not produced a
     /// value for yet. See [`EvalCtx::declared`]; issue #181.
     declared_names: HashSet<String>,
+    /// The field initial conditions construction resolved
+    /// ([`Self::field_ic_records`]), held for the first solve to take instead
+    /// of resolving them again. See [`driver::FieldIcMemo`].
+    #[cfg(feature = "solve")]
+    field_ic_memo: RefCell<Option<driver::FieldIcMemo>>,
 }
 
 /// A reuse pool of `f64` backing buffers for vectorized kernel intermediates.

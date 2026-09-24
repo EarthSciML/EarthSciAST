@@ -256,6 +256,49 @@ pub(crate) struct FieldIcRecord {
     pub per_cell: bool,
 }
 
+/// The field initial conditions construction resolved, held for the first
+/// solve ([`ArrayCompiled::field_ic_records`] fills it, the first
+/// `build_initial_state` takes it).
+///
+/// Construction has to evaluate every field `ic` — a strict compiler refuses
+/// one it would walk per cell, and the report names the route of each — and
+/// the first solve needs exactly those values, so resolving them twice was a
+/// second full evaluation of every `ic` field on every Problem. The resolution
+/// reads two inputs, and the memo answers only when neither has moved:
+///
+/// * the parameters, checked here bit for bit against the positional vector
+///   the solve resolved (a [`crate::remake`] with new `p` shares this model and
+///   misses);
+/// * the provider forcing buffer, which is final by the time construction
+///   records (the CONST providers are bound before the compiler gate runs) and
+///   first refreshed AFTER the initial state is built. Taking the memo, rather
+///   than keeping it, is what holds that: only the first solve can read it,
+///   and every later one resolves from the buffer as it stands.
+///
+/// Initial-condition overrides are applied over the result, not read by it.
+#[cfg(feature = "solve")]
+pub(crate) struct FieldIcMemo {
+    params: Vec<u64>,
+    slots: HashMap<usize, f64>,
+}
+
+#[cfg(all(test, feature = "solve"))]
+thread_local! {
+    static FIELD_IC_RESOLUTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Test hook: how many times this thread has resolved a model's field initial
+/// conditions.
+#[cfg(all(test, feature = "solve"))]
+pub(crate) fn field_ic_resolutions() -> u64 {
+    FIELD_IC_RESOLUTIONS.with(std::cell::Cell::get)
+}
+
+#[cfg(feature = "solve")]
+fn param_bits(param_vec: &[f64]) -> Vec<u64> {
+    param_vec.iter().map(|x| x.to_bits()).collect()
+}
+
 impl ArrayCompiled {
     /// Whether the TAPE serves this Problem's passes other than the right-hand
     /// side — the build-time materialization of constants and static
@@ -719,6 +762,8 @@ impl ArrayCompiled {
         if self.field_ics.is_empty() {
             return Ok(out);
         }
+        #[cfg(test)]
+        FIELD_IC_RESOLUTIONS.with(|c| c.set(c.get() + 1));
         let walks = crate::simulate_array::per_cell_walks;
         // `interpreter` runs these on the per-cell oracle like every other
         // evaluation it performs; the other compilers leave the overlay on.
@@ -826,8 +871,17 @@ impl ArrayCompiled {
     /// Empty for a model with no field `ic`, and — deliberately — for one whose
     /// initial conditions cannot be resolved yet: `solve` resolves them again
     /// and raises the diagnostic there, where it always has been.
+    ///
+    /// `strict` is the compiler's: the first per-cell walk then stops at its
+    /// first cell (see `StopAtFirstCell`), because its record is a refusal and
+    /// the rest of the walk would buy nothing. A resolution that walked no cell
+    /// is kept for the first solve ([`FieldIcMemo`]).
     #[cfg(feature = "solve")]
-    pub(crate) fn field_ic_records(&self, params: &HashMap<String, f64>) -> Vec<FieldIcRecord> {
+    pub(crate) fn field_ic_records(
+        &self,
+        params: &HashMap<String, f64>,
+        strict: bool,
+    ) -> Vec<FieldIcRecord> {
         if self.field_ics.is_empty() {
             return Vec::new();
         }
@@ -842,7 +896,16 @@ impl ArrayCompiled {
             .collect();
         let _precision_guard = self.precision.enter();
         let mut records = Vec::new();
-        let _ = self.resolve_field_ics(&resolved, Some(&mut records));
+        let stop = strict.then(crate::simulate_array::StopAtFirstCell::arm);
+        let result = self.resolve_field_ics(&resolved, Some(&mut records));
+        if let Ok(slots) = result
+            && !stop.as_ref().is_some_and(|s| s.stopped())
+        {
+            *self.field_ic_memo.borrow_mut() = Some(FieldIcMemo {
+                params: param_bits(&param_vec),
+                slots,
+            });
+        }
         records
     }
 
@@ -918,16 +981,29 @@ impl ArrayCompiled {
             &self.merged_renames,
         )
         .map_err(crate::simulate::ic_key_error)?;
-        // Resolved scalar-parameter scope (load-time constants) for the ic
-        // coordinate-expression path — a parameter-dependent grid-geometry
-        // template (`x0 + (i − 1/2)·dx`) binds here; STATE is not in scope.
-        let resolved_params: HashMap<String, f64> = self
-            .param_names
-            .iter()
-            .cloned()
-            .zip(param_vec.iter().copied())
-            .collect();
-        let field_ic_map = self.resolve_field_ics(&resolved_params, None)?;
+        // What construction resolved, when it resolved it under these
+        // parameters ([`FieldIcMemo`]).
+        let memo = self
+            .field_ic_memo
+            .borrow_mut()
+            .take()
+            .filter(|m| m.params == param_bits(param_vec));
+        let field_ic_map = match memo {
+            Some(m) => m.slots,
+            None => {
+                // Resolved scalar-parameter scope (load-time constants) for the
+                // ic coordinate-expression path — a parameter-dependent
+                // grid-geometry template (`x0 + (i − 1/2)·dx`) binds here; STATE
+                // is not in scope.
+                let resolved_params: HashMap<String, f64> = self
+                    .param_names
+                    .iter()
+                    .cloned()
+                    .zip(param_vec.iter().copied())
+                    .collect();
+                self.resolve_field_ics(&resolved_params, None)?
+            }
+        };
         let mut ic_vec = vec![0.0f64; self.n_states];
         for (i, name) in self.scalar_state_names.iter().enumerate() {
             if let Some(&v) = initial_conditions.get(name) {
@@ -3417,5 +3493,164 @@ mod fd_jvp_tests {
         let (jv, calls) = apply(&mut jvp, &y, &p, t, &v);
         assert_eq!(calls, 2, "the base is evaluated again");
         assert_eq!(bits(&jv), bits(&uncached(&y, &p, t, &v)));
+    }
+}
+
+#[cfg(all(test, feature = "solve"))]
+mod field_ic_memo_tests {
+    //! Construction resolves every field initial condition (the compiler gate
+    //! and the report need it), and the first solve takes that resolution
+    //! instead of computing it again. Counted with the resolver's test hook.
+    use super::field_ic_resolutions;
+    use crate::compile_error::CompileError;
+    use crate::problem::{Compiler, ProblemOptions, Remake, esm_problem, remake, solve};
+    use crate::simulate::SimulateError;
+    use crate::simulate_array::per_cell_cells;
+    use crate::{SolveOptions, load_string};
+    use serde_json::{Value, json};
+
+    /// `u` over `n` cells with `D(u) = -u` and `ic(u) = rhs_ic`, and a
+    /// parameter `a = 0.5` the `ic` may read.
+    fn with_ic(n: usize, rhs_ic: Value) -> crate::EsmFile {
+        let doc = json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "FieldIcMemo"},
+            "index_sets": {"x": {"kind": "interval", "size": n}},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "unknown", "units": "1", "shape": ["x"]},
+                    "a": {"type": "parameter", "units": "1", "default": 0.5}
+                },
+                "equations": [
+                    {"lhs": {"op": "ic", "args": ["u"]}, "rhs": rhs_ic},
+                    {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                             "ranges": {"i": {"from": "x"}},
+                             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}],
+                                      "wrt": "t"}},
+                     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                             "ranges": {"i": {"from": "x"}},
+                             "expr": {"op": "-", "args": [{"op": "index", "args": ["u", "i"]}]}}},
+                ],
+            }},
+        });
+        load_string(&doc.to_string()).expect("loads")
+    }
+
+    /// `ic(u)[i] = a · i`: a coordinate expression over the grid.
+    fn scaled_index() -> Value {
+        json!({"op": "faq", "args": [], "output_idx": ["i"],
+               "ranges": {"i": {"from": "x"}},
+               "expr": {"op": "*", "args": ["a", "i"]}})
+    }
+
+    fn opts(compiler: Compiler) -> ProblemOptions {
+        ProblemOptions {
+            compiler: Some(compiler),
+            ..Default::default()
+        }
+    }
+
+    fn first_column(sol: &crate::Solution) -> Vec<f64> {
+        sol.state.iter().map(|r| r[0]).collect()
+    }
+
+    fn bits(sol: &crate::Solution) -> Vec<Vec<u64>> {
+        sol.state
+            .iter()
+            .map(|r| r.iter().map(|x| x.to_bits()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn the_first_solve_takes_the_resolution_construction_made() {
+        let file = with_ic(3, scaled_index());
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            let before = field_ic_resolutions();
+            let prob = esm_problem(&file, (0.0, 1.0), opts(compiler))
+                .unwrap_or_else(|e| panic!("[{compiler}] {e}"));
+            assert_eq!(
+                field_ic_resolutions() - before,
+                1,
+                "[{compiler}] construction"
+            );
+            assert!(
+                prob.compiler_report()
+                    .rules()
+                    .iter()
+                    .any(|r| r.kind == "initial condition"),
+                "[{compiler}] the report keeps its row"
+            );
+
+            let first = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(
+                field_ic_resolutions() - before,
+                1,
+                "[{compiler}] the first solve must not resolve the ics again"
+            );
+            assert_eq!(first_column(&first), [0.5, 1.0, 1.5], "[{compiler}]");
+
+            // A later solve resolves from the buffer as it stands, to the same
+            // bits.
+            let second = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(field_ic_resolutions() - before, 2, "[{compiler}]");
+            assert_eq!(bits(&first), bits(&second), "[{compiler}]");
+        }
+    }
+
+    #[test]
+    fn a_remake_with_new_parameters_resolves_again() {
+        let file = with_ic(3, scaled_index());
+        let prob = esm_problem(&file, (0.0, 1.0), opts(Compiler::Native)).expect("builds");
+        let before = field_ic_resolutions();
+        let changed = remake(
+            &prob,
+            &Remake {
+                p: [("a".to_string(), 2.0)].into_iter().collect(),
+                ..Default::default()
+            },
+        )
+        .expect("remakes");
+        let sol = solve(&changed, &SolveOptions::default()).expect("solves");
+        assert_eq!(
+            field_ic_resolutions() - before,
+            1,
+            "new parameters, new ics"
+        );
+        assert_eq!(first_column(&sol), [2.0, 4.0, 6.0]);
+        // The memo was keyed to the construction's parameters, and a miss
+        // spends it: the original resolves too, to its own values.
+        let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+        assert_eq!(field_ic_resolutions() - before, 2);
+        assert_eq!(first_column(&sol), [0.5, 1.0, 1.5]);
+    }
+
+    /// A strict compiler refuses an `ic` the reference evaluator walks per
+    /// cell, and refuses it after one cell of the walk.
+    #[test]
+    fn a_large_per_cell_initial_condition_is_refused_after_one_cell() {
+        let cumulative = json!({"op": "faq", "args": [], "output_idx": ["i"],
+                                "ranges": {"i": {"from": "x"}, "j": {"from": "x"}},
+                                "filter": {"op": "<=", "args": ["j", "i"]},
+                                "expr": 1.0});
+        let refusal = |n: usize| {
+            let file = with_ic(n, cumulative.clone());
+            let before = per_cell_cells();
+            let err = esm_problem(&file, (0.0, 1.0), opts(Compiler::Native)).expect_err("per cell");
+            let cells = per_cell_cells() - before;
+            match err {
+                SimulateError::Compile(CompileError::CompilerRefusedRule {
+                    kind,
+                    rule,
+                    reason,
+                    ..
+                }) => ((kind, rule, reason), cells),
+                other => panic!("expected compiler_refused_rule, got {other:?}"),
+            }
+        };
+        let (small, _) = refusal(3);
+        let (large, cells) = refusal(100_000);
+        assert_eq!(large, small);
+        assert_eq!(large.0, "initial condition");
+        assert_eq!(cells, 1, "the walk must stop at its first cell");
     }
 }

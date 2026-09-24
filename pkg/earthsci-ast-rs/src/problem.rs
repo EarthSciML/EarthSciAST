@@ -2368,7 +2368,7 @@ fn build_compiler_report(
     {
         let model = model_name.unwrap_or("");
         let mut ic_rows = Vec::new();
-        for r in compiled.field_ic_records(p) {
+        for r in compiled.field_ic_records(p, compiler.is_strict()) {
             let reason = r.per_cell.then(|| {
                 "evaluated by the reference evaluator at setup, and a `faq` in it is not one \
                  the whole-array overlay takes, so it was walked once per cell"
