@@ -2603,6 +2603,12 @@ fn run_simulate(
         // would be the silent-empty twin of the silent zero. The pipeline has
         // already run whenever the document ingests data. The report printed
         // is the one for the build whose fields are written.
+        //
+        // Some fields cannot mean "some are missing": the first build's
+        // state-free evaluation is all or nothing (one stateless pass over
+        // EVERY observed rule of the flattened system, or no fields at all),
+        // and the pipeline evaluates a subset of those rules — one model's
+        // observed definitions, value-invention assignments excluded.
         let prob = if ingesting || !prob.observed_fields().is_empty() {
             prob
         } else {
