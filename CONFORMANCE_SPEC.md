@@ -6009,9 +6009,13 @@ and not the clock. `esm simulate` handled both all along, through
 Rust now answers such a document the way `esm simulate` does: from the fields a
 BUILD materializes. When the problem it built has nothing to integrate, and
 `solve` has refused it, the runner reads `observed_field` off the build it
-already has — and only if that build carried NO fields, which a document
-ingesting `data_sources` does not, does it build the document once more with
-the build pipeline on. A retry that fails changes nothing — `solve`'s own
+already has. If that build carried NO fields, which a document ingesting
+`data_sources` does not, a strict compiler (`native`, `xla`) next evaluates the
+observeds of the problem's OWN compiled model over its empty state — the tape —
+because the alternative is a pipeline build through the reference evaluator,
+which is the route such a compiler refuses (esm-libraries-spec §2.5.10). Only
+then does the runner build the document once more with the build pipeline on,
+under the compiler the caller named. A retry that fails changes nothing — `solve`'s own
 diagnostic stands — because it is an attempt to answer more and never a new
 way to fail. `Compile::Always` is kept throughout, so a construct no
 evaluator supports is still refused at build time in the §9.6.6 vocabulary.

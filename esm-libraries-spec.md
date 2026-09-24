@@ -571,7 +571,18 @@ covers every evaluation the compiler performs for the Problem**, not the
 right-hand side alone: the materialization of constants and static observeds at
 construction, the per-segment seed, the right-hand side, and the observeds
 reported at output times are all under it, because each of those is a place a
-binding evaluates rules and each can walk the tree per cell. A binding whose
+binding evaluates rules and each can walk the tree per cell. So are the
+evaluations construction performs OUTSIDE the compiled rule set: a document
+with nothing to integrate still has its observed graph evaluated, and by the
+compiler the caller named, not by an evaluator chosen because there is no
+right-hand side; a build pipeline that materializes a relational or ingesting
+document's observeds evaluates them for the Problem; and so does a field
+initial condition. Each appears in the per-rule record below, and one a strict
+compiler could only walk per cell is refused like any other rule. An inline
+test's analytic `reference` (esm-spec §6.6.5) is not under the rule: it is the
+test's oracle — the expected value the model is checked against — and not an
+evaluation of the model, so a binding evaluates it with its reference
+evaluator whatever compiler built the model. A binding whose
 ladder decides at evaluation time rather than at build time MUST exercise every
 such evaluation at construction so that the refusal is a construction error, as
 §2.5.2 requires of every build failure. The reason a silent demotion
