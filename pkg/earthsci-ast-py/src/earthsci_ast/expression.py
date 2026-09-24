@@ -209,12 +209,13 @@ def simplify(expr: Expr) -> Expr:
 
 
 class UnsupportedConstructError(SimulationError):
-    """A continuous event, a discrete event or an implicit equation reached an
-    evaluator that cannot run it (esm-spec §9.6.6 ``unsupported_construct``).
+    """A continuous event, a discrete event, an implicit equation or a
+    Wiener-noise parameter reached an evaluator that cannot run it (esm-spec
+    §9.6.6 ``unsupported_construct``).
 
     Neither the SymPy scalar pathway nor the NumPy array interpreter has event
-    handling or an algebraic solve, and skipping the construct would report a
-    wrong answer, so the build is refused instead.
+    handling, an algebraic solve or a stochastic integrator, and skipping the
+    construct would report a wrong answer, so the build is refused instead.
     """
 
     #: Stable cross-binding diagnostic code (esm-spec §9.6.6).
@@ -515,6 +516,12 @@ def _expr_to_sympy(
         # positions (table / axis data) that have no sensible SymPy
         # representation, and the bare ``const`` op carries the value in
         # ``expr.value`` rather than ``expr.args``. (esm-6ka)
+        # The nullary boolean literals (esm-spec §4.2), in the numeric 1.0 / 0.0
+        # encoding every comparison here already produces.
+        if expr.op == "true":
+            return sp.Float(1.0)
+        if expr.op == "false":
+            return sp.Float(0.0)
         if expr.op == "const":
             v = expr.value
             if isinstance(v, bool):

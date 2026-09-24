@@ -5645,21 +5645,26 @@ non-zero.
 ### 5.39 Unsupported Constructs Are Refused, Not Dropped (normative)
 
 **Decision pinned.** A continuous event (`continuous_events`), a discrete event
-(`discrete_events`) and an implicit equation (an LHS that is an expression rather
-than an unknown, a time derivative of one, or `ic` of one) are three constructs
-none of the three executing bindings' simulators runs: not Julia's tree-walk
-evaluator, not Python's SymPy or NumPy pathways, not Rust's array runtime.
+(`discrete_events`), an implicit equation (an LHS that is an expression rather
+than an unknown, a time derivative of one, or `ic` of one) and Wiener noise (a
+parameter whose `update.kind` is `wiener`, which makes the document an SDE) are
+four constructs none of the three executing bindings' simulators runs: not
+Julia's tree-walk evaluator, not Python's SymPy or NumPy pathways, not Rust's
+array runtime.
 Each of those evaluators MUST refuse a document carrying any
 of them at BUILD with the esm-spec §9.6.6 diagnostic `unsupported_construct`,
 and the message MUST name the construct and the evaluator. Before issues #264
 and #356 most of them built the model without the construct: the event never
 fired, the residual was never solved, and an inline test reported a number the
-document does not describe.
+document does not describe. Before issue #475 Julia's tree-walk evaluator and
+Python's pathways built a Wiener-noise document as an ODE, reading the noise as a
+constant.
 
-**Shape.** Golden-free. Twelve refusal cases: one per construct per evaluator
+**Shape.** Golden-free. Sixteen refusal cases: one per construct per evaluator
 path (scalar and array); an event of each kind owned by an inline SUBSYSTEM on
-each path; a continuous event on a coupled two-model array document, which takes
-Rust's flattened route; and an implicit equation spelled as a time derivative of
+each path; an event of each kind on a REACTION SYSTEM; a continuous event on a
+coupled two-model array document, which takes Rust's flattened route; and an
+implicit equation spelled as a time derivative of
 an expression (`D(a + b) ~ 3`), which credits no state and so is implicit, not a
 derivative. The subsystem cases pin that the refusal does not depend on where
 the event is declared: a binding whose `flatten` does not lift a subsystem's
@@ -5674,28 +5679,32 @@ Adapters: `pkg/EarthSciAST.jl/test/unsupported_construct_conformance_test.jl`;
 `pkg/earthsci-ast-rs/tests/unsupported_construct_conformance.rs`. Go and
 TypeScript do not simulate; they only register the code.
 
-**Out of scope.** Julia's ModelingToolkit path runs all three constructs, so it
-never raises the code. Since the `compiler` keyword landed (`API_SPEC.md` §5.8)
+**Out of scope.** Julia's ModelingToolkit path runs both kinds of event and
+implicit equations, so it never raises the code. Since the `compiler` keyword landed (`API_SPEC.md` §5.8)
 that path is not only the export: `esm_problem(file; compiler = :mtk)` builds
 through it, so **`:mtk` is the compiler that RUNS what this category has the
-others refuse** — **fourteen of this category's fifteen documents build and run
+others refuse** — **fourteen of this category's seventeen documents build and run
 under it**, on the scalar path and the array path, on an inline subsystem, on a
 coupled two-model document and on a reaction system alike. The event ones reach
 the values their inline tests name by integrating; the implicit ones reach
 theirs because `mtkcompile` solves the residual away into an observed equation,
-leaving nothing to integrate. The fifteenth,
-`implicit_equation_as_the_derivative_of_an_expression`, is refused BY NAME with
+leaving nothing to integrate. Of the other three,
+`implicit_equation_as_the_derivative_of_an_expression` is refused BY NAME with
 `compiler_refused_rule`: `D(a + b) ~ 3` is a time derivative of an EXPRESSION,
 credits no state, and is an implicit equation spelled wrong rather than a
 derivative — no compiler in any binding runs it, which is why that refusal
-points at no other compiler and says how to rewrite the equation instead. All
-fifteen are driven from this category's own manifest by
+points at no other compiler and says how to rewrite the equation instead. The
+two Wiener-noise documents are refused BY NAME with `compiler_refused_rule` as
+well, naming the noise parameter: the lowering builds the ODE
+`ModelingToolkit.System` and has no SDE form, so it would read the noise as a
+constant, and no compiler in any binding integrates an SDE. All
+seventeen are driven from this category's own manifest by
 `pkg/EarthSciAST.jl/test/compiler_mtk_test.jl`, so a case added here is covered
 there the day it lands. The refusals this category
 gates are therefore refusals BY THE DEFAULT COMPILER: `:native` and
 `:interpreter` share the tree-walk evaluator and raise `unsupported_construct`
-exactly as before, and a document carrying one of the three constructs is run by
-naming `:mtk`, not by a fallback. Running any of the three on an ARRAY evaluator
+exactly as before, and a document carrying an event or an implicit equation is
+run by naming `:mtk`, not by a fallback. Running any of those on an ARRAY evaluator
 is still future work in every binding; `:mtk` reaches the array fixtures through
 its own symbolic lowering rather than through an array evaluator.
 

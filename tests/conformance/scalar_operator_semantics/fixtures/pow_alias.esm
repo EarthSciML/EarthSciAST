@@ -2,7 +2,7 @@
   "esm": "1.1.0",
   "metadata": {
     "name": "PowAlias",
-    "description": "The `pow` spelling of exponentiation, on its own. esm-spec \u00a79.2 lists `pow` in the evaluable core alongside `^`, and Julia and Python evaluate it to the same number as `^`; Rust classes it as a REWRITE TARGET and refuses it with `unlowered_operator` before evaluation. The sibling fixture pins `^(2, 3) = 8` under the caret spelling, so the two documents together say exactly what is and is not agreed: the arithmetic is, the ALIAS is not.",
+    "description": "The `pow` spelling of exponentiation, on its own. esm-spec \u00a74.2 lists `pow` beside `^` as its word spelling, and every binding evaluates it to the same number as `^` (Rust used to class it as a rewrite target and refuse it, issue #461). The sibling fixture pins `^(2, 3) = 8` under the caret spelling, so the two documents together pin that the two spellings agree.",
     "authors": [
       "EarthSciML Authors and Contributors"
     ],
@@ -20,7 +20,7 @@
         "pow_power": {
           "type": "unknown",
           "units": "1",
-          "description": "The operator under test: The `pow` spelling of exponentiation, on its own. esm-spec \u00a79.2 lists `pow` in the evaluable core alongside `^`, and Julia and Python evaluate it to the same number as `^`; Rust classes it as a REWRITE TARGET and refuses it with `unlowered_operator` before evaluation. The sibling fixture pins `^(2, 3) = 8` under the caret spelling, so the two documents together say exactly what is and is not agreed: the arithmetic is, the ALIAS is not."
+          "description": "The operator under test: The `pow` spelling of exponentiation, on its own. esm-spec \u00a74.2 lists `pow` beside `^` as its word spelling, and every binding evaluates it to the same number as `^` (Rust used to class it as a rewrite target and refuse it, issue #461). The sibling fixture pins `^(2, 3) = 8` under the caret spelling, so the two documents together pin that the two spellings agree."
         },
         "probe": {
           "type": "unknown",
@@ -60,7 +60,7 @@
       "tests": [
         {
           "id": "pow_power_value",
-          "description": "The `pow` spelling of exponentiation, on its own. esm-spec \u00a79.2 lists `pow` in the evaluable core alongside `^`, and Julia and Python evaluate it to the same number as `^`; Rust classes it as a REWRITE TARGET and refuses it with `unlowered_operator` before evaluation. The sibling fixture pins `^(2, 3) = 8` under the caret spelling, so the two documents together say exactly what is and is not agreed: the arithmetic is, the ALIAS is not.",
+          "description": "The `pow` spelling of exponentiation, on its own. esm-spec \u00a74.2 lists `pow` beside `^` as its word spelling, and every binding evaluates it to the same number as `^` (Rust used to class it as a rewrite target and refuse it, issue #461). The sibling fixture pins `^(2, 3) = 8` under the caret spelling, so the two documents together pin that the two spellings agree.",
           "time_span": {
             "start": 0.0,
             "end": 1.0

@@ -173,6 +173,20 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
             "`ModelingToolkit.PDESystem` yourself. $_MTK_TRY_INSTEAD")
     end
 
+    # A WIENER-NOISE PARAMETER (`update.kind = "wiener"`) makes the document an
+    # SDE. The lowering here builds the ODE `ModelingToolkit.System` and has no
+    # `@brownians` form, so it would read the noise as an ordinary constant
+    # parameter. No compiler in this binding integrates an SDE, so the message
+    # points at none.
+    if !isempty(flat.brownian_parameters)
+        _mtk_refuse(String(first(keys(flat.brownian_parameters))),
+            "it is a Wiener-noise parameter (`update.kind = \"wiener\"`), so the " *
+            "document is an SDE. This compiler builds the ODE " *
+            "`ModelingToolkit.System` and has no lowering of a noise source to an " *
+            "SDE system, so it would integrate the noise as a constant. No " *
+            "compiler in this binding runs an SDE")
+    end
+
     for eq in flat.equations
         # A GEOMETRY LEAF. `polygon_intersection_area` / `intersect_polygon` are
         # evaluated against loaded geometry at BUILD by the native setup pass;

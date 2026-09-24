@@ -62,40 +62,30 @@ Non-vacuity is structural, in three places:
 ## Named exclusions
 
 The tier found **three disagreements on its first run**, and each contested
-operator is split into a fixture of its own so that an exclusion costs the
+operator was split into a fixture of its own so that an exclusion cost the
 sibling fixture's 84 assertions — 70 operators, plus the `t` row, the override
 arm and the integrated state — nothing.
 
-| Fixture | Binding / compilers | Code | What it means |
+| Fixture | Binding / compilers | What it was | Fixed by |
 |---|---|---|---|
-| `boolean_literal_false` | julia / `interpreter`, `native` | `unevaluable_operator` | Julia's tree-walk evaluator carries a rule for the `true` literal op and **none** for `false` |
-| `boolean_literal_false` | rust / `interpreter`, `native` | `unlowered_operator` | Rust classes `false` as a REWRITE TARGET and refuses it before evaluation |
-| `pow_alias` | rust / `interpreter`, `native` | `unlowered_operator` | Rust classes `pow` as a rewrite target; Julia and Python evaluate it, and to the same number `^` gives |
-| `boolean_literal_true` | rust / `native` | `compiler_refused_rule` | Rust's strict `native` has no wholesale lowering for the `true` leaf; its `interpreter` runs it |
+| `boolean_literal_false` | julia / `interpreter`, `native` | Julia's tree-walk evaluator carried a rule for the `true` literal op and **none** for `false` (`unevaluable_operator`) | issue #460 |
+| `boolean_literal_false` | rust / `interpreter`, `native` | Rust classed `false` as a REWRITE TARGET and refused it before evaluation (`unlowered_operator`) | issue #461 |
+| `pow_alias` | rust / `interpreter`, `native` | Rust classed `pow` as a rewrite target; Julia and Python evaluated it, to the same number `^` gives (`unlowered_operator`) | issue #461 |
+| `boolean_literal_true` | rust / `native` | Rust's strict `native` had no wholesale lowering for the `true` leaf; its `interpreter` ran it (`compiler_refused_rule`) | issue #462 |
 
-The three are not the same KIND of gap, and the ledger keeps them apart. `pow`
-and `false` are refused by Rust under `interpreter` too, so they are
-disagreements about what the evaluable-core VOCABULARY is
-(`esm-libraries-spec.md` §2.5.10 says both are in it). `true` is refused only
-by Rust's `native`, so it is an ordinary `native` coverage gap on one leaf.
-`pow_alias` is deliberately paired with the sibling fixture's `^(2, 3) = 8`, so
-the two documents together say exactly what is and is not agreed — the
-arithmetic is, the **alias** is not.
+All three are fixed, so the ledger is **empty** and every fixture is required
+under `interpreter` and `native` in all three executing bindings.
+`boolean_literal_false` carries a golden minted from the Julia `interpreter`
+like the others. `esm-spec.md` §4.2 lists both literals and both power
+spellings, so the vocabulary the bindings now agree on is the one the spec
+states. The split fixtures stay: `pow_alias` beside the sibling fixture's
+`^(2, 3) = 8` is what pins that the two spellings agree.
 
-`boolean_literal_false` carries **no golden**, because the reference is one of
-the bindings that refuses it. Its `golden_absent_reason` says so, and the
-manifest validator requires a named exclusion for the reference binding before
-it will accept a null golden: the only reason a fixture may carry no golden is
-that the reference cannot produce one. Python is still held to the DOCUMENT's
-own expectation, which is an oracle outside every binding — checked by the
-runner itself, so Python's own `passed` is not the whole gate — and what is
-missing is only the cross-compiler drift check.
-
-The manifest records each as a **named exclusion**: the refusal is reported
-with the binding, the compiler and the code on every run, and it is green only
+The manifest records a refusal as a **named exclusion**: it is reported with
+the binding, the compiler and the code on every run, and it is green only
 because the ledger names it. If a binding gains the rule, the runner prints a
 "stale exclusion" note rather than failing the binding that got better, and the
-entry should then be trimmed by hand and `required` widened.
+entry is then trimmed by hand and `required` widened — exclusions only go away.
 
 ## Running it
 

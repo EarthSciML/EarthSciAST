@@ -656,6 +656,7 @@ impl<'m> TapeBuilder<'m> {
                 Value::Scalar(s) => Ok(LV::Lit(s)),
                 Value::Array(_) => bail_tape!("op: array-valued `const`"),
             },
+            VecOp::BoolLit(b) => Ok(LV::Lit(if b { 1.0 } else { 0.0 })),
             VecOp::Cmp(code) => {
                 if node.args.len() != 2 {
                     bail_tape!(
@@ -2184,14 +2185,20 @@ impl<'m> TapeBuilder<'m> {
     }
 
     fn lower_wholesale_op(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
-        let op = node.op.as_str();
+        self.lower_wholesale_op_named(node.op.as_str(), node)
+    }
+
+    /// [`Self::lower_wholesale_op`] with the operator name given separately, so
+    /// the `broadcast` arm can re-enter with its `fn` against the SAME node —
+    /// the oracle's `eval_broadcast` → `eval_op_named` (esm-spec §4.3.4).
+    fn lower_wholesale_op_named(&mut self, op: &str, node: &Arc<ExpressionNode>) -> LResult<LV> {
         match op {
             // n-ary arithmetic + logical connectives: `eval_arith` is a left
             // fold of `apply_binary` over scalars AND arrays (the all-scalar
             // `fold_scalar` and the `and`/`or` all/any forms agree with the
             // left fold at every legal arity), so a chained `Bin` reproduces
             // it bit for bit — for equal-shape operands.
-            "+" | "-" | "*" | "/" | "^" | "min" | "max" | "and" | "or" => {
+            "+" | "-" | "*" | "/" | "^" | "pow" | "min" | "max" | "and" | "or" => {
                 let Some((first, rest)) = node.args.split_first() else {
                     return Ok(LV::Lit(f64::NAN)); // fold_scalar's empty-arity sentinel
                 };
@@ -2284,6 +2291,17 @@ impl<'m> TapeBuilder<'m> {
                 // 1-origin box. `Instr::ConstArray` stores it once per solve.
                 Value::Array(a) => self.emit_const_array(&a),
             },
+            "true" => Ok(LV::Lit(1.0)),
+            "false" => Ok(LV::Lit(0.0)),
+            "broadcast" => {
+                let Some(fn_name) = node.broadcast_fn.as_deref() else {
+                    bail_tape!("wholesale: `broadcast` with no `fn`");
+                };
+                if !crate::op_registry::is_scalar_operator(fn_name) {
+                    bail_tape!("wholesale: broadcast fn `{fn_name}` is not a scalar operator");
+                }
+                self.lower_wholesale_op_named(fn_name, node)
+            }
             "fn" => self.lower_wholesale_closed_fn(node),
             "index" => self.lower_wholesale_index(node),
             "faq" => self.lower_wholesale_aggregate(node),
@@ -2974,10 +2992,23 @@ impl<'m> TapeBuilder<'m> {
     }
 
     fn wholesale_op_shape(&self, node: &Arc<ExpressionNode>) -> Option<DimU> {
-        let op = node.op.as_str();
+        self.wholesale_op_shape_named(node.op.as_str(), node)
+    }
+
+    /// [`Self::wholesale_op_shape`] with the operator name given separately,
+    /// for the `broadcast` re-entry [`Self::lower_wholesale_op_named`] makes.
+    fn wholesale_op_shape_named(&self, op: &str, node: &Arc<ExpressionNode>) -> Option<DimU> {
         match op {
-            "+" | "-" | "*" | "/" | "^" | "min" | "max" | "and" | "or" | "atan2" | "==" | "!="
-            | "<" | "<=" | ">" | ">=" => {
+            "broadcast" => {
+                let fn_name = node.broadcast_fn.as_deref()?;
+                if !crate::op_registry::is_scalar_operator(fn_name) {
+                    return None;
+                }
+                self.wholesale_op_shape_named(fn_name, node)
+            }
+            "true" | "false" => Some(DimU::new()),
+            "+" | "-" | "*" | "/" | "^" | "pow" | "min" | "max" | "and" | "or" | "atan2" | "=="
+            | "!=" | "<" | "<=" | ">" | ">=" => {
                 let mut acc = self.wholesale_shape(node.args.first()?)?;
                 for a in &node.args[1..] {
                     acc = Self::broadcast_shape(Some(acc), self.wholesale_shape(a))?;

@@ -223,8 +223,8 @@ pub(super) fn set_bind(binds: &mut IdxMap, name: &str, val: i64) {
 pub fn is_evaluable_op(op: &str) -> bool {
     matches!(
         op,
-        // Arithmetic.
-        "+" | "-" | "*" | "/" | "^" | "neg"
+        // Arithmetic. `pow` is the word spelling of `^`.
+        "+" | "-" | "*" | "/" | "^" | "pow" | "neg"
         // Elementary functions.
         | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
         | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
@@ -239,7 +239,7 @@ pub fn is_evaluable_op(op: &str) -> bool {
         // for a semi-join, and the one op in the §4.2 table this evaluator used
         // to have no answer for while `value_invention::vi_eval`, Python's
         // `numpy_interpreter` and Julia's `_geo_compile` all evaluated it.
-        | "D" | "Pre" | "const" | "true"
+        | "D" | "Pre" | "const" | "true" | "false"
         // Array / geometry ops.
         | "index" | "faq" | "makearray" | "reshape" | "transpose" | "concat"
         | "broadcast" | "intersect_polygon" | "polygon_intersection_area"
@@ -427,6 +427,8 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // Elementwise / scalar arithmetic. If any operand is an array,
         // return an array (with ndarray broadcasting).
         "+" | "-" | "*" | "/" | "^" => eval_arith(op, &node.args, ctx),
+        // The word spelling of `^`, folded through the `^` kernel itself.
+        "pow" => eval_arith("^", &node.args, ctx),
 
         // Canonical unary negation: `canonicalize.rs` emits `neg`, so a
         // canonicalized expression can reach this oracle, and the vectorized
@@ -564,6 +566,8 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // identity, so `faq{expr: true}` COUNTS the admitted tuples —
         // which is exactly what a semi-join wants to say.
         "true" => Value::Scalar(1.0),
+        // Its counterpart, in the same encoding (a false comparison is 0.0).
+        "false" => Value::Scalar(0.0),
 
         // Unreachable by construction: EVERY path into this evaluator is gated.
         // The compiled-model path gates in `from_model` (`check_no_spatial_ops`),
@@ -848,7 +852,7 @@ pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
         "-" => x - y,
         "*" => x * y,
         "/" => x / y,
-        "^" => x.powf(y),
+        "^" | "pow" => x.powf(y),
         "atan2" => x.atan2(y),
         "min" => x.min(y),
         "max" => x.max(y),
@@ -924,7 +928,7 @@ impl BinCode {
             "-" => BinCode::Sub,
             "*" => BinCode::Mul,
             "/" => BinCode::Div,
-            "^" => BinCode::Pow,
+            "^" | "pow" => BinCode::Pow,
             "atan2" => BinCode::Atan2,
             "min" => BinCode::Min,
             "max" => BinCode::Max,

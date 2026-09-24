@@ -16,8 +16,9 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum CompileError {
     /// A model construct this evaluator cannot run: a continuous or discrete
-    /// event, or an implicit equation (an equation whose LHS is an expression
-    /// rather than an unknown, `D(unknown)` or `ic(unknown)`). esm-spec §9.6.6
+    /// event, an implicit equation (an equation whose LHS is an expression
+    /// rather than an unknown, `D(unknown)` or `ic(unknown)`), or a Wiener-noise
+    /// parameter. esm-spec §9.6.6
     /// `unsupported_construct`.
     ///
     /// Refused at build rather than skipped: a model run without its event, or
@@ -29,8 +30,8 @@ pub enum CompileError {
         code = crate::diagnostic::codes::UNSUPPORTED_CONSTRUCT
     )]
     UnsupportedConstruct {
-        /// Which construct: [`CONTINUOUS_EVENT`], [`DISCRETE_EVENT`] or
-        /// [`IMPLICIT_EQUATION`].
+        /// Which construct: [`CONTINUOUS_EVENT`], [`DISCRETE_EVENT`],
+        /// [`IMPLICIT_EQUATION`] or [`WIENER_NOISE`].
         construct: &'static str,
         /// Which evaluator refused it, e.g. `"Rust array evaluator"`.
         evaluator: &'static str,
@@ -374,6 +375,10 @@ pub const DISCRETE_EVENT: &str = "discrete event";
 /// [`CompileError::UnsupportedConstruct`]'s `construct` for an equation whose
 /// LHS is an expression ([`crate::classification::LhsForm::Expression`]).
 pub const IMPLICIT_EQUATION: &str = "implicit equation";
+/// [`CompileError::UnsupportedConstruct`]'s `construct` for a parameter whose
+/// `update.kind` is `"wiener"`: it makes the document an SDE, which no Rust
+/// evaluator integrates.
+pub const WIENER_NOISE: &str = "Wiener noise";
 /// The array runtime (`crate::simulate_array`), as a refusal names it.
 pub const ARRAY_EVALUATOR: &str = "Rust array evaluator";
 

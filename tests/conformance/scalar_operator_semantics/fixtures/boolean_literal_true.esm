@@ -2,7 +2,7 @@
   "esm": "1.1.0",
   "metadata": {
     "name": "TrueOp",
-    "description": "The `true` literal operator of esm-spec \u00a79.2's evaluable core, on its own. It is split out of `scalar_operator_semantics` because Rust's strict `native` has no wholesale lowering for it and refuses the whole document with `compiler_refused_rule` \u2014 while Rust's `interpreter` runs it, and Julia and Python run it under both compilers. The split is what keeps one unlowered leaf from costing the other 84 operators their `native` coverage.",
+    "description": "The `true` literal operator of esm-spec \u00a74.2's evaluable core, on its own. It was split out of `scalar_operator_semantics` when Rust's strict `native` had no wholesale lowering for it and refused the whole document with `compiler_refused_rule` (issue #462). Every binding runs it under both compilers now.",
     "authors": [
       "EarthSciML Authors and Contributors"
     ],
@@ -20,7 +20,7 @@
         "literal_true": {
           "type": "unknown",
           "units": "1",
-          "description": "The operator under test: The `true` literal operator of esm-spec \u00a79.2's evaluable core, on its own. It is split out of `scalar_operator_semantics` because Rust's strict `native` has no wholesale lowering for it and refuses the whole document with `compiler_refused_rule` \u2014 while Rust's `interpreter` runs it, and Julia and Python run it under both compilers. The split is what keeps one unlowered leaf from costing the other 84 operators their `native` coverage."
+          "description": "The operator under test: The `true` literal operator of esm-spec \u00a74.2's evaluable core, on its own. It was split out of `scalar_operator_semantics` when Rust's strict `native` had no wholesale lowering for it and refused the whole document with `compiler_refused_rule` (issue #462). Every binding runs it under both compilers now."
         },
         "probe": {
           "type": "unknown",
@@ -51,7 +51,7 @@
       "tests": [
         {
           "id": "literal_true_value",
-          "description": "The `true` literal operator of esm-spec \u00a79.2's evaluable core, on its own. It is split out of `scalar_operator_semantics` because Rust's strict `native` has no wholesale lowering for it and refuses the whole document with `compiler_refused_rule` \u2014 while Rust's `interpreter` runs it, and Julia and Python run it under both compilers. The split is what keeps one unlowered leaf from costing the other 84 operators their `native` coverage.",
+          "description": "The `true` literal operator of esm-spec \u00a74.2's evaluable core, on its own. It was split out of `scalar_operator_semantics` when Rust's strict `native` had no wholesale lowering for it and refused the whole document with `compiler_refused_rule` (issue #462). Every binding runs it under both compilers now.",
           "time_span": {
             "start": 0.0,
             "end": 1.0
