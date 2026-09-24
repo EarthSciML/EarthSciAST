@@ -85,7 +85,8 @@ pub(crate) use compile::{model_tree_any, parse_subsystem_model};
 #[cfg(test)]
 pub(crate) use eval::per_cell_cells;
 pub(crate) use eval::{
-    StopAtFirstCell, eval_observed_recurrence, eval_scalar_expression, per_cell_walks,
+    StopAtFirstCell, eval_observed_recurrence, eval_scalar_expression, per_cell_walk_refused,
+    per_cell_walks,
 };
 // Read only by `crate::expression`'s tests.
 #[cfg(test)]

@@ -1854,8 +1854,7 @@ impl StopAtFirstCell {
     /// Whether a per-cell walk stopped under this guard with no document
     /// error pending: the evaluation's value is a placeholder, to be refused.
     pub(crate) fn refused(&self) -> bool {
-        let s = FIRST_CELL_STOP.with(std::cell::Cell::get);
-        s.stopped && !s.with_error
+        per_cell_walk_refused()
     }
 
     /// Whether any per-cell walk stopped under this guard, error or not: what
@@ -1869,6 +1868,15 @@ impl Drop for StopAtFirstCell {
     fn drop(&mut self) {
         FIRST_CELL_STOP.with(|c| c.set(self.0));
     }
+}
+
+/// [`StopAtFirstCell::refused`], for a caller that does not hold the guard:
+/// whether a per-cell walk on this thread stopped with no document error
+/// pending, so that what was computed since — a value, or an error raised by
+/// reading a placeholder — is not the document's.
+pub(crate) fn per_cell_walk_refused() -> bool {
+    let s = FIRST_CELL_STOP.with(std::cell::Cell::get);
+    s.stopped && !s.with_error
 }
 
 /// Whether a per-cell walk has already stopped on this thread, so the next

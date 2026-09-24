@@ -794,9 +794,23 @@ impl ArrayCompiled {
                         continue;
                     }
                     let before = walks();
-                    if let Ok(Value::Array(arr)) =
-                        eval_buildtime_field_in_scope(body, &self.index_sets, params, &built)
-                    {
+                    let value =
+                        eval_buildtime_field_in_scope(body, &self.index_sets, params, &built);
+                    if per_cell_walk_refused() {
+                        // A strict caller's walk stopped at its first cell
+                        // (`StopAtFirstCell`): this evaluation is the refusal,
+                        // and nothing computed from its placeholder counts —
+                        // not even a failure. Only construction arms the stop.
+                        if let Some(sink) = records.as_deref_mut() {
+                            sink.push(FieldIcRecord {
+                                name: name.clone(),
+                                kind: "initial-condition scope",
+                                per_cell: true,
+                            });
+                        }
+                        return Ok(out);
+                    }
+                    if let Ok(Value::Array(arr)) = value {
                         built.insert(name.clone(), *arr);
                         if let Some(sink) = records.as_deref_mut() {
                             sink.push(FieldIcRecord {
@@ -838,18 +852,27 @@ impl ArrayCompiled {
             for flat in 0..total {
                 let multi = flat_to_multi_col_major(flat, &vs.shape);
                 let slot = vs.flat_offset + flat;
-                out.insert(
-                    slot,
-                    resolve_field_ic_cell(
-                        target,
-                        rhs,
-                        &multi,
-                        forcing,
-                        &self.index_sets,
-                        params,
-                        &mut cached_field,
-                    )?,
+                let value = resolve_field_ic_cell(
+                    target,
+                    rhs,
+                    &multi,
+                    forcing,
+                    &self.index_sets,
+                    params,
+                    &mut cached_field,
                 );
+                if per_cell_walk_refused() {
+                    // As for the scope above: the stopped walk is the refusal.
+                    if let Some(sink) = records.as_deref_mut() {
+                        sink.push(FieldIcRecord {
+                            name: target.clone(),
+                            kind: "initial condition",
+                            per_cell: true,
+                        });
+                    }
+                    return Ok(out);
+                }
+                out.insert(slot, value?);
             }
             if let Some(sink) = records.as_deref_mut() {
                 sink.push(FieldIcRecord {
@@ -3632,8 +3655,8 @@ mod field_ic_memo_tests {
                                 "ranges": {"i": {"from": "x"}, "j": {"from": "x"}},
                                 "filter": {"op": "<=", "args": ["j", "i"]},
                                 "expr": 1.0});
-        let refusal = |n: usize| {
-            let file = with_ic(n, cumulative.clone());
+        let refusal = |n: usize, ic: Value| {
+            let file = with_ic(n, ic);
             let before = per_cell_cells();
             let err = esm_problem(&file, (0.0, 1.0), opts(Compiler::Native)).expect_err("per cell");
             let cells = per_cell_cells() - before;
@@ -3647,10 +3670,19 @@ mod field_ic_memo_tests {
                 other => panic!("expected compiler_refused_rule, got {other:?}"),
             }
         };
-        let (small, _) = refusal(3);
-        let (large, cells) = refusal(100_000);
+        let (small, _) = refusal(3, cumulative.clone());
+        let (large, cells) = refusal(100_000, cumulative.clone());
         assert_eq!(large, small);
         assert_eq!(large.0, "initial condition");
         assert_eq!(cells, 1, "the walk must stop at its first cell");
+
+        // What the rest of the expression makes of the stopped walk's
+        // placeholder is not the document's either: `1 / Σ` over a walk that
+        // stopped reads a zero, and the infinity that follows must not turn
+        // the refusal into an unresolvable-ic failure.
+        let reciprocal = json!({"op": "/", "args": [1.0, cumulative]});
+        let (large, cells) = refusal(100_000, reciprocal);
+        assert_eq!(large, small);
+        assert_eq!(cells, 1);
     }
 }
