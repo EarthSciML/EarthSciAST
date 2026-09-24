@@ -346,3 +346,150 @@ fn native_refuses_a_per_cell_initial_condition() {
         [1.0, 2.0, 3.0]
     );
 }
+
+// ---------------------------------------------------------------------------
+// (d) Value invention
+// ---------------------------------------------------------------------------
+
+/// `value_invention_materialize/composite_key_axis.esm` with a one-column key,
+/// the form the build pipeline's member ids take: four rows carrying the
+/// process ids `[101, 201, 101, 101]`, a `distinct` producer over them, and a
+/// count over the derived axis it sizes.
+fn one_key_value_invention() -> Value {
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "OneKeyValueInvention"},
+        "index_sets": {
+            "rows": {"kind": "interval", "size": 4},
+            "processes": {"kind": "derived", "from_faq": "process_set"}
+        },
+        "models": {"Vi": {
+            "variables": {
+                "polProcessID": {"type": "unknown", "shape": ["rows"]},
+                "present": {"type": "unknown", "shape": ["processes"]},
+                "nProcesses": {"type": "unknown"}
+            },
+            "equations": [
+                {"lhs": "polProcessID",
+                 "rhs": {"op": "const", "args": [], "value": [101, 201, 101, 101]}},
+                {"lhs": {"op": "index", "args": ["present", "e"]},
+                 "rhs": {"op": "faq", "id": "process_set", "args": [],
+                         "semiring": "bool_and_or", "distinct": true,
+                         "output_idx": ["e"], "ranges": {"n": {"from": "rows"}},
+                         "key": {"op": "skolem", "label": "process",
+                                 "args": [{"op": "index", "args": ["polProcessID", "n"]}]},
+                         "filter": {"op": "true", "args": []},
+                         "expr": {"op": "true", "args": []}}},
+                {"lhs": "nProcesses",
+                 "rhs": {"op": "faq", "args": [], "output_idx": [],
+                         "ranges": {"e": {"from": "processes"}}, "expr": 1.0}}
+            ]
+        }}
+    })
+}
+
+/// A value-invention producer's member set is computed once at setup by the
+/// relational engine, under every compiler. It is neither the per-cell oracle
+/// nor a fallback, so its row is `"relational"`, and a native build of the
+/// document has nothing on the oracle.
+#[test]
+fn value_invention_is_reported_relational_under_every_compiler() {
+    let doc = one_key_value_invention();
+    let mut members = Vec::new();
+    for compiler in [Compiler::Native, Compiler::Interpreter] {
+        let prob = build_json(&doc, with_pipeline(compiler))
+            .unwrap_or_else(|e| panic!("[{compiler}] {e}"));
+        let report = prob.compiler_report();
+        let row = report
+            .rules()
+            .iter()
+            .find(|r| r.kind == "value invention")
+            .unwrap_or_else(|| panic!("[{compiler}] no value-invention row: {report}"));
+        assert_eq!(row.rule, "Vi.process_set", "[{compiler}]");
+        assert_eq!(row.tier, "relational", "[{compiler}]");
+        assert_eq!(row.cadence, "const", "[{compiler}]");
+        assert!(row.reason.is_none(), "[{compiler}]");
+        let line = report.to_string();
+        assert!(
+            line.contains("1 by the relational engine at setup"),
+            "[{compiler}] {line}"
+        );
+        if compiler == Compiler::Native {
+            assert_eq!(report.n_oracle(), 0, "{report}");
+            assert!(line.contains(" 0 on the per-cell oracle"), "{line}");
+        }
+        assert_eq!(values(&prob, "Vi.nProcesses"), vec![2.0], "[{compiler}]");
+        members.push(prob.members().clone());
+    }
+    assert_eq!(members[0]["process_set"], vec![101, 201]);
+    assert_eq!(members[0], members[1]);
+}
+
+/// Every `.esm` under the repository's `tests/` that carries a `distinct`
+/// producer, invalid fixtures excepted.
+fn distinct_producer_fixtures() -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if p.file_name().is_some_and(|n| n == "invalid") {
+                    continue;
+                }
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "esm")
+                && std::fs::read_to_string(&p).is_ok_and(|t| t.contains("\"distinct\""))
+            {
+                out.push(p);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&fixture("tests"), &mut out);
+    out.sort();
+    out
+}
+
+/// The invariant over every fixture with a `distinct` producer, with the build
+/// pipeline on and off: a native build that succeeds has nothing on the
+/// oracle, and value invention is never what a native build refuses.
+#[test]
+fn a_native_build_of_a_distinct_producer_fixture_has_nothing_on_the_oracle() {
+    let fixtures = distinct_producer_fixtures();
+    assert!(
+        fixtures.iter().any(|p| p
+            .ends_with("conformance/value_invention_materialize/fixtures/composite_key_axis.esm")),
+        "the value_invention_materialize fixtures must be among {fixtures:?}"
+    );
+    let mut built = 0;
+    for path in &fixtures {
+        for pipeline in [true, false] {
+            let o = ProblemOptions {
+                build_pipeline: pipeline,
+                ..opts(Compiler::Native)
+            };
+            match esm_problem(path.as_path(), (0.0, 1.0), o) {
+                Ok(prob) => {
+                    let report = prob.compiler_report();
+                    assert_eq!(report.n_oracle(), 0, "{}: {report}", path.display());
+                    built += 1;
+                }
+                Err(SimulateError::Compile(CompileError::CompilerRefusedRule {
+                    kind,
+                    rule,
+                    ..
+                })) => assert_ne!(
+                    kind,
+                    "value invention",
+                    "{}: {rule} is reported, never refused",
+                    path.display()
+                ),
+                // A document this build cannot take for a reason of its own.
+                Err(_) => {}
+            }
+        }
+    }
+    assert!(built > 0, "no fixture built, so this proves nothing");
+}

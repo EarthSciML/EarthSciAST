@@ -82,7 +82,12 @@ pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_inventio
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
 pub(crate) use compile::{model_tree_any, parse_subsystem_model};
-pub(crate) use eval::{eval_observed_recurrence, eval_scalar_expression, per_cell_walks};
+#[cfg(test)]
+pub(crate) use eval::per_cell_cells;
+pub(crate) use eval::{
+    StopAtFirstCell, eval_observed_recurrence, eval_scalar_expression, per_cell_walk_refused,
+    per_cell_walks,
+};
 // Read only by `crate::expression`'s tests.
 #[cfg(test)]
 pub(crate) use eval::check_scalar_evaluable;
@@ -724,6 +729,11 @@ pub struct ArrayCompiled {
     /// document never declared from one it declared but had not produced a
     /// value for yet. See [`EvalCtx::declared`]; issue #181.
     declared_names: HashSet<String>,
+    /// The field initial conditions construction resolved
+    /// ([`Self::field_ic_records`]), held for the first solve to take instead
+    /// of resolving them again. See [`driver::FieldIcMemo`].
+    #[cfg(feature = "solve")]
+    field_ic_memo: RefCell<Option<driver::FieldIcMemo>>,
 }
 
 /// A reuse pool of `f64` backing buffers for vectorized kernel intermediates.
