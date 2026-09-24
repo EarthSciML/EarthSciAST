@@ -35,7 +35,8 @@ fn with_pipeline(compiler: Compiler) -> ProblemOptions {
 
 /// `left[i] = 10 i` over three rows and, when `with_total`, the rank-0
 /// `total = Σ_i left[i]` — which the tape folds with its `Reduce`
-/// instruction and the reference evaluator folds term by term.
+/// instruction and the reference evaluator folds over one whole-array map of
+/// its terms.
 fn relational(with_total: bool) -> Value {
     let mut variables = json!({
         "left": {"type": "unknown", "units": "1", "shape": ["rows"]},
@@ -55,6 +56,36 @@ fn relational(with_total: bool) -> Value {
                     "expr": {"op": "index", "args": ["left", "i"]}}
         }));
     }
+    relational_doc(variables, equations)
+}
+
+/// [`relational`] with the running sum `cum[i] = Σ_{j ≤ i} left[j]` beside
+/// `left`: a prefix scan, which the reference evaluator sweeps cell by cell.
+fn relational_cumulative() -> Value {
+    relational_doc(
+        json!({
+            "left": {"type": "unknown", "units": "1", "shape": ["rows"]},
+            "cum": {"type": "unknown", "units": "1", "shape": ["rows"]},
+        }),
+        vec![
+            json!({
+                "lhs": "left",
+                "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                        "ranges": {"i": {"from": "rows"}},
+                        "expr": {"op": "*", "args": [10, "i"]}}
+            }),
+            json!({
+                "lhs": "cum",
+                "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                        "ranges": {"i": {"from": "rows"}, "j": {"from": "rows"}},
+                        "filter": {"op": "<=", "args": ["j", "i"]},
+                        "expr": {"op": "index", "args": ["left", "j"]}}
+            }),
+        ],
+    )
+}
+
+fn relational_doc(variables: Value, equations: Vec<Value>) -> Value {
     json!({
         "esm": "1.1.0",
         "metadata": {"name": "GateRelational"},
@@ -153,16 +184,16 @@ fn native_refuses_a_state_free_rule_the_tape_cannot_lower() {
 
 /// The pipeline evaluates the observed graph through the reference evaluator
 /// whatever the compiler. Its rows say so, and a strict compiler refuses the
-/// first observed it would have to walk per cell — here the term-by-term fold
-/// of `total`.
+/// first observed it would have to walk per cell — here the prefix-scan sweep
+/// of `cum`.
 #[test]
 fn the_build_pipeline_refuses_a_per_cell_observed_under_native() {
-    let doc = relational(true);
+    let doc = relational_cumulative();
     let err = build_json(&doc, with_pipeline(Compiler::Native)).expect_err("per cell");
     let (compiler, kind, rule, reason) = refusal(err);
     assert_eq!(compiler, "native");
     assert_eq!(kind, "build-time observed");
-    assert_eq!(rule, "Rel.total");
+    assert_eq!(rule, "Rel.cum");
     assert!(reason.contains("per cell"), "{reason}");
 
     // The interpreter takes it, and its rows say which evaluator served each
@@ -185,8 +216,35 @@ fn the_build_pipeline_refuses_a_per_cell_observed_under_native() {
         r.tier
     };
     assert_eq!(tier_of("Rel.left"), "vectorized");
-    assert_eq!(tier_of("Rel.total"), "oracle");
-    assert_eq!(values(&prob, "Rel.total"), vec![60.0]);
+    assert_eq!(tier_of("Rel.cum"), "oracle");
+    assert_eq!(values(&prob, "Rel.cum"), vec![10.0, 30.0, 60.0]);
+}
+
+/// A rank-0 reduction — the shape of every total over ingested rows — is not a
+/// per-cell walk: its terms are one whole-array map folded once, so native
+/// builds it through the pipeline, reports it vectorized, and agrees bit for
+/// bit with the interpreter's pipeline and with the tape.
+#[test]
+fn a_rank0_reduction_in_the_pipeline_is_vectorized() {
+    let doc = relational(true);
+    let native = build_json(&doc, with_pipeline(Compiler::Native)).expect("native builds");
+    let row = native
+        .compiler_report()
+        .rules()
+        .iter()
+        .find(|r| r.rule == "Rel.total")
+        .unwrap_or_else(|| panic!("no row: {}", native.compiler_report()))
+        .clone();
+    assert_eq!(row.kind, "build-time observed");
+    assert_eq!(row.tier, "vectorized");
+    let interp = build_json(&doc, with_pipeline(Compiler::Interpreter)).expect("interpreter");
+    let taped = build_json(&doc, opts(Compiler::Native)).expect("the tape");
+    let bits = |p: &EsmProblem| -> Vec<u64> {
+        values(p, "Rel.total").iter().map(|x| x.to_bits()).collect()
+    };
+    assert_eq!(values(&native, "Rel.total"), vec![60.0]);
+    assert_eq!(bits(&native), bits(&interp));
+    assert_eq!(bits(&native), bits(&taped));
 }
 
 /// An observed the whole-array overlay serves is not a per-cell walk: it is

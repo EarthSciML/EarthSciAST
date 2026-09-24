@@ -5075,30 +5075,31 @@ mod tests {
         );
     }
 
-    /// A shaped state-free document with a rank-0 contraction beside its
-    /// field — `total = Σ_i g[i]`, which the build pipeline's reference
-    /// evaluator folds term by term.
-    fn shaped_static_with_total() -> serde_json::Value {
+    /// A shaped state-free document with a running sum beside its field —
+    /// `cum[i] = Σ_{j ≤ i} g[j]`, a prefix scan the build pipeline's reference
+    /// evaluator sweeps cell by cell.
+    fn shaped_static_with_cumulative() -> serde_json::Value {
         json!({
             "esm": "1.1.0",
-            "metadata": {"name": "ShapedStaticTotal", "license": "MIT",
-                         "description": "state-free, shaped, with a total"},
+            "metadata": {"name": "ShapedStaticCumulative", "license": "MIT",
+                         "description": "state-free, shaped, with a running sum"},
             "index_sets": {"x": {"kind": "interval", "size": 3}},
-            "models": {"ShapedStaticTotal": {
+            "models": {"ShapedStaticCumulative": {
                 "variables": {
                     "a": {"type": "parameter", "units": "1", "default": 2.0},
                     "g": {"type": "unknown", "units": "1", "shape": ["x"]},
-                    "total": {"type": "unknown", "units": "1"},
+                    "cum": {"type": "unknown", "units": "1", "shape": ["x"]},
                 },
                 "equations": [
                     {"lhs": "g",
                      "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                              "ranges": {"i": {"from": "x"}},
                              "expr": {"op": "*", "args": ["a", "i"]}}},
-                    {"lhs": "total",
-                     "rhs": {"op": "faq", "args": [], "output_idx": [],
-                             "ranges": {"i": {"from": "x"}},
-                             "expr": {"op": "index", "args": ["g", "i"]}}},
+                    {"lhs": "cum",
+                     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                             "ranges": {"i": {"from": "x"}, "j": {"from": "x"}},
+                             "filter": {"op": "<=", "args": ["j", "i"]},
+                             "expr": {"op": "index", "args": ["g", "j"]}}},
                 ],
                 "tests": [{
                     "id": "values",
@@ -5107,7 +5108,8 @@ mod tests {
                     "assertions": [
                         {"variable": "g", "time": 5.0, "coords": {"x": 2},
                          "expected": 4.0},
-                        {"variable": "total", "time": 5.0, "expected": 12.0},
+                        {"variable": "cum", "time": 5.0, "coords": {"x": 3},
+                         "expected": 12.0},
                     ],
                 }],
             }},
@@ -5120,7 +5122,7 @@ mod tests {
     /// built at all.
     #[test]
     fn a_strict_compiler_answers_a_shaped_static_document_from_its_own_model() {
-        let file = load_string(&shaped_static_with_total().to_string()).expect("loads");
+        let file = load_string(&shaped_static_with_cumulative().to_string()).expect("loads");
         let before = BUILD_PIPELINE_BUILDS.with(std::cell::Cell::get);
         let results = run_inline_tests_with_options(
             &file,
@@ -5143,12 +5145,12 @@ mod tests {
     }
 
     /// The retry carries the caller's compiler (issue #484), whatever the
-    /// default is. Asked directly, a strict
-    /// compiler refuses the pipeline's term-by-term fold of `total`, so the
-    /// retry has nothing to hand back, while the interpreter's retry answers.
+    /// default is. Asked directly, a strict compiler refuses the pipeline's
+    /// cell-by-cell sweep of `cum`, so the retry has nothing to hand back,
+    /// while the interpreter's retry answers.
     #[test]
     fn the_pipeline_retry_is_built_on_the_named_compiler() {
-        let file = load_string(&shaped_static_with_total().to_string()).expect("loads");
+        let file = load_string(&shaped_static_with_cumulative().to_string()).expect("loads");
         let bindings = |c| Some((HashMap::new(), HashMap::new(), Some(c)));
         let interp = build_pipeline_fields(
             &file,
@@ -5158,7 +5160,7 @@ mod tests {
         assert!(
             interp
                 .as_ref()
-                .is_some_and(|f| f.iter().any(|(k, _)| k == "total")),
+                .is_some_and(|f| f.iter().any(|(k, _)| k == "cum")),
             "{interp:?}"
         );
         let native = build_pipeline_fields(
