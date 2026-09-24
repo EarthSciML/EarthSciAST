@@ -96,6 +96,10 @@ mutable struct BuildInspection
     # built it — the seam used to hang off the out-of-place build product alone.
     forcing_buffers::NamedTuple
     forcing_buffer_index::Dict{String,Int}
+    # `observed_field(prob, name)` answers, keyed by the requested name, each
+    # with the forcing epoch it was computed at (`_FORCING_EPOCH`): the field is
+    # state-free, so it moves only when a live buffer is refreshed in place.
+    observed_memo::Dict{String,Tuple{UInt64,Any}}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -104,7 +108,8 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Int}(),
                                     Dict{String,Symbol}(),
                                     CompilerReport(:native),
-                                    NamedTuple(), Dict{String,Int}())
+                                    NamedTuple(), Dict{String,Int}(),
+                                    Dict{String,Tuple{UInt64,Any}}())
 
 """
     DiscreteMaterializer()
@@ -1498,22 +1503,66 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
         # off, both this and the symbolic stencil compiler take the per-cell path.
         fast = _stencil_disabled() ? nothing :
                _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays)
-        # A `nothing` here is not by itself a refusal: `_resolve_field_ic`'s
-        # first two steps (a loaded const-array field, a broadcast constant)
-        # cost the same per cell whatever the compiler is. Only its third step
-        # — the coordinate expression — resolves and compiles per cell, and it
-        # raises the refusal itself.
-        _record_rule!("ic($(target))", :equation,
-                      fast === nothing ? :setup_percell : :setup_compiled)
+        if fast !== nothing
+            _record_rule!("ic($(target))", :equation, :setup_compiled)
+            for cell in cells
+                idxs = collect(Int, cell)
+                eq_ics[_cell_key(target, idxs)] = fast(idxs)
+            end
+            continue
+        end
+        # The first two forms `_resolve_field_ic` serves do not depend on the
+        # cell, so they are answered once for the whole field: a LOADED FIELD is
+        # read straight out of its array, a BROADCAST CONSTANT is evaluated once
+        # and filled. Only what neither covers goes per cell, where the
+        # coordinate-expression step raises the refusal itself.
+        whole = _stencil_disabled() ? nothing :
+                _field_ic_whole(rhs, cells, const_arrays, registered_functions,
+                                param_scope)
+        if whole !== nothing
+            tier, val = whole
+            _record_rule!("ic($(target))", :equation, tier)
+            for cell in cells
+                idxs = collect(Int, cell)
+                eq_ics[_cell_key(target, idxs)] = val(idxs)
+            end
+            continue
+        end
+        _record_rule!("ic($(target))", :equation, :setup_percell)
         for cell in cells
             idxs = collect(Int, cell)
-            eq_ics[_cell_key(target, idxs)] = fast === nothing ?
+            eq_ics[_cell_key(target, idxs)] =
                 _resolve_field_ic(target, rhs, idxs, const_arrays, registered_functions;
-                                  params=param_scope) :
-                fast(idxs)
+                                  params=param_scope)
         end
     end
     return nothing
+end
+
+# `(tier, cell -> value)` for a field `ic` whose value `_resolve_field_ic` would
+# give without reference to the cell — its steps (1) and (2), in its order — or
+# `nothing` for everything else, which then takes that function per cell. A
+# loaded field whose rank matches neither the grid nor a single element is left
+# to it too, so the diagnostic is the one it raises.
+function _field_ic_whole(rhs, cells, const_arrays::AbstractDict,
+                         registered_functions::AbstractDict, params::AbstractDict)
+    if rhs isa VarExpr && haskey(const_arrays, rhs.name)
+        arr = const_arrays[rhs.name]
+        rank = length(first(cells))
+        ndims(arr) == rank && return (:setup_loaded, idxs -> Float64(arr[idxs...]))
+        if length(arr) == 1
+            v = Float64(first(arr))
+            return (:setup_loaded, _ -> v)
+        end
+        return nothing
+    end
+    v = try
+        Float64(evaluate_expr(rhs, params; registered_functions=registered_functions))
+    catch err
+        _is_resource_error(err) && rethrow()
+        return nothing
+    end
+    return (:setup_constant, _ -> v)
 end
 
 # ---- Stage: flat state-vector cell names ----
@@ -1897,15 +1946,20 @@ end
 
 # ---- Stage: faq-valued initialization_equations → u0 ----
 # When discretize() materializes an IC equation as a faq (coord-subst
-# x→index(coord_x,i)), we evaluate it per-cell here using the same
-# index-substitution + _resolve_indices + _compile pattern used by the ODE
-# faq path. The coord_<dim> const_array must be provided by the caller.
-# Explicit initial_conditions values take precedence (already seeded in u0).
+# x→index(coord_x,i)), its body is compiled ONCE with the output indices kept
+# symbolic — the same symbolic resolve the whole-array contraction tier uses, so
+# a const or state read at an output index becomes a runtime gather — and then
+# evaluated at each cell by setting the index counters. Only a body that will
+# not resolve symbolically takes the per-cell substitute → resolve → compile,
+# which a strict compiler refuses. The coord_<dim> const_array must be provided
+# by the caller. Explicit initial_conditions values take precedence (already
+# seeded in u0).
 function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
                                 initial_conditions::AbstractDict,
                                 var_map::Dict{String,Int}, array_var_info,
                                 const_arrays::AbstractDict,
                                 pgather::AbstractDict, param_sym_set, reg_funcs, p)
+    pp = isnothing(p) ? NamedTuple() : p
     for eq in init_equations
         eq.lhs isa VarExpr || continue
         eq.rhs isa OpExpr && _is_faq_op((eq.rhs::OpExpr).op) || continue
@@ -1916,20 +1970,65 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
         body = rhs_op.expr_body
         body === nothing && continue
         range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
+        todo = Tuple{Any,Int}[]
         for idx_tuple in Iterators.product(range_iters...)
-            idx_exprs = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(idx_tuple[d]))
-                                          for d in 1:length(idx_names))
             cname = _cell_key(var_name, [idx_tuple[d] for d in 1:length(idx_names)])
             slot = get(var_map, cname, 0)
             slot == 0 && continue
             haskey(initial_conditions, cname) && continue   # explicit override wins
+            push!(todo, (idx_tuple, slot))
+        end
+        isempty(todo) && continue
+        rule = "init($(var_name))"
+        # With the affine stencil tier off (`compiler = :interpreter`) the seed
+        # is the per-cell reference, as the field-`ic` fast path is.
+        once = _stencil_disabled() ? nothing :
+               _compile_init_once(body, idx_names, array_var_info, var_map,
+                                  const_arrays, pgather, param_sym_set, reg_funcs)
+        if once !== nothing
+            _record_rule!(rule, :equation, :setup_compiled)
+            refs, node = once
+            for (idx_tuple, slot) in todo
+                for d in eachindex(refs)
+                    refs[d][] = idx_tuple[d]
+                end
+                u0[slot] = _eval_node(node, u0, pp, 0.0)
+            end
+            continue
+        end
+        _refuse_percell_evaluation(rule, "the faq-valued initialization-equation seed",
+                                   length(todo))
+        _record_rule!(rule, :equation, :setup_percell)
+        for (idx_tuple, slot) in todo
+            idx_exprs = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(idx_tuple[d]))
+                                          for d in 1:length(idx_names))
             sub_body = _sub_preserving(body, idx_exprs)
             body_r   = _resolve_indices(sub_body, array_var_info, var_map, const_arrays, pgather)
             node     = _compile(body_r, var_map, param_sym_set, reg_funcs)
-            u0[slot] = _eval_node(node, u0, isnothing(p) ? NamedTuple() : p, 0.0)
+            u0[slot] = _eval_node(node, u0, pp, 0.0)
         end
     end
     return nothing
+end
+
+# `(refs, node)` — the output-index counters, in `idx_names` order, and the body
+# compiled once against them — or `nothing` when the body does not resolve or
+# compile with its indices symbolic.
+function _compile_init_once(body::ASTExpr, idx_names::Vector{String}, array_var_info,
+                            var_map::Dict{String,Int}, const_arrays::AbstractDict,
+                            pgather::AbstractDict, param_sym_set, reg_funcs)
+    isempty(idx_names) && return nothing
+    built = _try_build_array_contraction(body, idx_names, String[], Any[], "+", 0.0,
+                                         array_var_info, var_map, const_arrays, pgather)
+    built === nothing && return nothing
+    refs, resolved = built
+    node = try
+        _compile(resolved, var_map, param_sym_set, reg_funcs)
+    catch err
+        _is_resource_error(err) && rethrow()
+        return nothing
+    end
+    return (refs, node)
 end
 
 # True if `e` contains a gather `index(arr, sub…)` whose SUBSCRIPT references a scalar
