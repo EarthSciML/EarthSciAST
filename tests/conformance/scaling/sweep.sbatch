@@ -13,8 +13,9 @@ fam=$SCALING_FAMILY
 t=$SCALING_RUN_THREADS
 docs=$SCALING_BUILD/docs/$fam-t$t
 echo "host $(hostname), $(nproc) cpus, family $fam, $t thread(s), commit $(cat "$SCALING_BUILD/commit")"
+echo "exclusive node; load at start: $(cut -d' ' -f1-3 /proc/loadavg)"
 python3 "$SCALING_REPO/tests/conformance/scaling/generate.py" --out "$docs" --family "$fam"
-"$SCALING_BIN" --index "$docs/index.json" --output "$SCALING_BUILD/results/rust-$fam-t$t.json" \
+SCALING_COMMIT=$(cat "$SCALING_BUILD/commit") "$SCALING_BIN" --index "$docs/index.json" --output "$SCALING_BUILD/results/rust-$fam-t$t.json" \
     --threads "$t" --timeout-s "${SCALING_TIMEOUT_S:-1200}"
 # The generated documents are reproducible from the generator; keep only the results.
 rm -rf "$docs"

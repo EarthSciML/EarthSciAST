@@ -774,7 +774,15 @@ fn run_child(run: &Run, doc: &Path, entry: &Value) -> Value {
     )
 }
 
+/// The commit measured: `SCALING_COMMIT` when the caller built this binary
+/// from a commit it recorded (the Slurm driver does, since the checkout may
+/// move on while a queued job waits), else the working tree's `HEAD`.
 fn git_commit() -> Value {
+    if let Ok(c) = std::env::var("SCALING_COMMIT")
+        && !c.trim().is_empty()
+    {
+        return json!(c.trim());
+    }
     Command::new("git")
         .args(["rev-parse", "HEAD"])
         .output()
@@ -809,6 +817,21 @@ fn run_all(run: &Run) -> Result<(), String> {
     header.insert("threads".into(), json!(run.threads));
     header.insert("commit".into(), git_commit());
     header.insert("host".into(), hostname());
+    // Timings want a machine nothing else shares: record how busy this one
+    // was when the run started (the 1-, 5- and 15-minute load averages).
+    header.insert(
+        "load_average".into(),
+        std::fs::read_to_string("/proc/loadavg")
+            .ok()
+            .map(|s| json!(s.split_whitespace().take(3).collect::<Vec<_>>().join(" ")))
+            .unwrap_or(Value::Null),
+    );
+    header.insert(
+        "cpus".into(),
+        std::thread::available_parallelism()
+            .map(|n| json!(n.get()))
+            .unwrap_or(Value::Null),
+    );
     header.insert(
         "target".into(),
         json!(format!(

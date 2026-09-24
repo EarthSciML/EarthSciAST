@@ -115,7 +115,7 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
 
 ```json
 {"binding": "rust", "compiler": "native", "threads": 1, "commit": "<sha>", "host": "<hostname>",
- "target": "x86_64-unknown-linux-gnu",
+ "target": "x86_64-unknown-linux-gnu", "load_average": "0.02 0.10 0.31", "cpus": 128,
  "results": [
    {"family": "stencil_2d", "n": 10000, "n_cells": 10000, "n_states": 10000,
     "status": "ok",
@@ -134,6 +134,7 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
 
 | field | meaning |
 |---|---|
+| `load_average`, `cpus` (file level) | how busy the machine was when the run started, and its core count: a timing run wants a machine nothing else shares (an exclusive Slurm node, or an idle one) |
 | `status` | `"ok"`, `"refused"` (the compiler refused the document by name; `reason` is its text) or `"error"` (anything else, including a timeout or a killed child process; `reason` says which) |
 | `n`, `n_cells`, `n_states` | the nominal ladder size, the actual cell count, the state-vector length |
 | `build_s` | wall seconds of `esm_problem` (reading and parsing the file included), after a warm-up build of a trivial document in the same process |
