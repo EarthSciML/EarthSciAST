@@ -1527,15 +1527,17 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
             continue
         end
         # The first two forms `_resolve_field_ic` serves do not depend on the
-        # cell, so they are answered once for the whole field: a LOADED FIELD is
-        # read straight out of its array, a BROADCAST CONSTANT is evaluated once
-        # and filled. Only what neither covers goes per cell, where the
-        # coordinate-expression step raises the refusal itself.
-        whole = _stencil_disabled() ? nothing :
-                _field_ic_whole(rhs, cells, const_arrays, registered_functions,
-                                param_scope)
-        if whole !== nothing
-            tier, val = whole
+        # cell, so they are answered once for the whole field, under every
+        # compiler: a LOADED FIELD is read straight out of its array, a
+        # BROADCAST CONSTANT is evaluated once and filled. Only what neither
+        # covers goes per cell, handed this verdict so no cell re-runs the
+        # failed constant attempt, and there the coordinate-expression step
+        # raises the refusal itself.
+        uniform = _field_ic_uniform(target, rhs, length(first(cells)), const_arrays,
+                                    registered_functions; params=param_scope)
+        hit = uniform[1]
+        if hit !== nothing
+            tier, val = hit
             _record_rule!("ic($(target))", :equation, tier)
             for cell in cells
                 idxs = collect(Int, cell)
@@ -1548,36 +1550,10 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
             idxs = collect(Int, cell)
             eq_ics[_cell_key(target, idxs)] =
                 _resolve_field_ic(target, rhs, idxs, const_arrays, registered_functions;
-                                  params=param_scope)
+                                  params=param_scope, uniform=uniform)
         end
     end
     return nothing
-end
-
-# `(tier, cell -> value)` for a field `ic` whose value `_resolve_field_ic` would
-# give without reference to the cell — its steps (1) and (2), in its order — or
-# `nothing` for everything else, which then takes that function per cell. A
-# loaded field whose rank matches neither the grid nor a single element is left
-# to it too, so the diagnostic is the one it raises.
-function _field_ic_whole(rhs, cells, const_arrays::AbstractDict,
-                         registered_functions::AbstractDict, params::AbstractDict)
-    if rhs isa VarExpr && haskey(const_arrays, rhs.name)
-        arr = const_arrays[rhs.name]
-        rank = length(first(cells))
-        ndims(arr) == rank && return (:setup_loaded, idxs -> Float64(arr[idxs...]))
-        if length(arr) == 1
-            v = Float64(first(arr))
-            return (:setup_loaded, _ -> v)
-        end
-        return nothing
-    end
-    v = try
-        Float64(evaluate_expr(rhs, params; registered_functions=registered_functions))
-    catch err
-        _is_resource_error(err) && rethrow()
-        return nothing
-    end
-    return (:setup_constant, _ -> v)
 end
 
 # ---- Stage: flat state-vector cell names ----

@@ -451,4 +451,27 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
                               nothing, idx, ["X"], Dict{String,Function}())),
                           "the whole-array setup materializer")
     end
+
+    # ── Field initial conditions: the cell-independent forms, once ────────────
+    @testset "a broadcast-constant field ic under the interpreter" begin
+        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "scalar_ic",
+                        "fixtures", "scalar_ic_in_array_model.esm")
+        pi_ = esm_problem(path, (0.0, 1.0); compiler = :interpreter)
+        rows = [r for r in compiler_report(pi_).rules if startswith(r.rule, "ic(")]
+        @test !isempty(rows)
+        @test all(r -> r.tier === :setup_constant, rows)
+    end
+
+    @testset "the per-cell field ic step does not re-run the constant step" begin
+        # Every form fails for this RHS. Handed the cell-independent verdict
+        # computed once, the per-cell resolve reports THAT attempt rather than
+        # evaluating the constant again at this cell.
+        rhs = _op("+", _v("nope"), _n(1.0))
+        e = err_of(() -> _PR._resolve_field_ic("u", rhs, [1], Dict{String,Any}(),
+                                               Dict{String,Any}();
+                                               uniform = (nothing, ["as constant: SENTINEL"])))
+        @test code_of(e) == "E_TREEWALK_UNSUPPORTED_EQUATION"
+        @test occursin("SENTINEL", e.detail)
+        @test count("as constant:", e.detail) == 1
+    end
 end
