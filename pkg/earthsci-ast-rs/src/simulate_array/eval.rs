@@ -1833,8 +1833,8 @@ thread_local! {
 /// diagnostic only (a body no route can evaluate is the document's error, and
 /// an out-of-range gather in it must still say so), and stops; every walk
 /// after it stops before its first cell. The evaluation's value is then a
-/// placeholder, and [`Self::refused`] tells the caller to discard it and
-/// refuse.
+/// placeholder, and [`per_cell_walk_refused`] tells the caller to discard it
+/// and refuse.
 ///
 /// The stop is taken exactly where [`per_cell_walks`] counts a walk, so
 /// whether a refusal happens, and its reason, are what a full walk would have
@@ -1851,12 +1851,6 @@ impl StopAtFirstCell {
         }))
     }
 
-    /// Whether a per-cell walk stopped under this guard with no document
-    /// error pending: the evaluation's value is a placeholder, to be refused.
-    pub(crate) fn refused(&self) -> bool {
-        per_cell_walk_refused()
-    }
-
     /// Whether any per-cell walk stopped under this guard, error or not: what
     /// was computed is not the whole answer.
     pub(crate) fn stopped(&self) -> bool {
@@ -1870,10 +1864,10 @@ impl Drop for StopAtFirstCell {
     }
 }
 
-/// [`StopAtFirstCell::refused`], for a caller that does not hold the guard:
-/// whether a per-cell walk on this thread stopped with no document error
-/// pending, so that what was computed since — a value, or an error raised by
-/// reading a placeholder — is not the document's.
+/// Whether a per-cell walk on this thread stopped under a [`StopAtFirstCell`]
+/// with no document error pending, so that what was computed since — a value,
+/// or an error raised by reading a placeholder — is not the document's, and
+/// the evaluation is refused.
 pub(crate) fn per_cell_walk_refused() -> bool {
     let s = FIRST_CELL_STOP.with(std::cell::Cell::get);
     s.stopped && !s.with_error

@@ -874,7 +874,7 @@ fn eval_observed(
     // `max(x, 0)` in the body laundered it to 0.0, so the answer came back
     // finite, plausible and wrong with nothing logged.
     let stop = refuse_per_cell.then(crate::simulate_array::StopAtFirstCell::arm);
-    let refused = || stop.as_ref().is_some_and(|s| s.refused());
+    let refused = || stop.is_some() && crate::simulate_array::per_cell_walk_refused();
     if let Some(res) = crate::simulate_array::eval_observed_recurrence(
         name,
         &expr,
