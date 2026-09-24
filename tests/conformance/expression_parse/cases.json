@@ -451,6 +451,34 @@
       "reprint": "true"
     },
     {
+      "text": "false",
+      "tier": "array",
+      "ast": {
+        "op": "false",
+        "args": []
+      },
+      "reprint": "false"
+    },
+    {
+      "text": "ifelse(false, a, true)",
+      "tier": "array",
+      "ast": {
+        "op": "ifelse",
+        "args": [
+          {
+            "op": "false",
+            "args": []
+          },
+          "a",
+          {
+            "op": "true",
+            "args": []
+          }
+        ]
+      },
+      "reprint": "ifelse(false, a, true)"
+    },
+    {
       "text": "integral(f, x, 0, 1)",
       "tier": "array",
       "ast": {

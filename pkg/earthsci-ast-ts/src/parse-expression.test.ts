@@ -141,8 +141,14 @@ describe('array & call-shaped tier: reconstructs exact node shapes', () => {
       args: ['t'],
     })
   })
-  it('true literal', () => {
+  it('true and false literals', () => {
     expect(parseExpression('true')).toEqual({ op: 'true', args: [] })
+    expect(parseExpression('false')).toEqual({ op: 'false', args: [] })
+    expect(toAscii(parseExpression('false'))).toBe('false')
+    expect(parseExpression('ifelse(false, a, b)')).toEqual({
+      op: 'ifelse',
+      args: [{ op: 'false', args: [] }, 'a', 'b'],
+    })
   })
   it('integral / reshape / transpose / concat', () => {
     expect(parseExpression('integral(f, x, 0, 1)')).toEqual({
