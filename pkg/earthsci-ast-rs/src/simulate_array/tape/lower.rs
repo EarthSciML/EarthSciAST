@@ -2992,8 +2992,8 @@ impl<'m> TapeBuilder<'m> {
                 self.wholesale_op_shape_named(fn_name, node)
             }
             "true" | "false" => Some(DimU::new()),
-            "+" | "-" | "*" | "/" | "^" | "pow" | "min" | "max" | "and" | "or" | "atan2" | "==" | "!="
-            | "<" | "<=" | ">" | ">=" => {
+            "+" | "-" | "*" | "/" | "^" | "pow" | "min" | "max" | "and" | "or" | "atan2" | "=="
+            | "!=" | "<" | "<=" | ">" | ">=" => {
                 let mut acc = self.wholesale_shape(node.args.first()?)?;
                 for a in &node.args[1..] {
                     acc = Self::broadcast_shape(Some(acc), self.wholesale_shape(a))?;
