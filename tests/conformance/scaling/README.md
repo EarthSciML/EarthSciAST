@@ -21,7 +21,8 @@ tests/conformance/scaling/
 ├── manifest.json        # families, size ladders, gates and thresholds, the ledger
 ├── check.py             # applies the gates and the ledger to result files
 ├── test_check.py        # the checker's own test, on canned result files
-├── sweep.sbatch         # the Slurm driver for the full ladder
+├── sweep.sh             # the Slurm driver for the full ladder (submits sweep.sbatch jobs)
+├── sweep.sbatch         # one sweep job: one family, every size, one thread mode
 ├── vendor/
 │   └── pollu_reaction_system.json   # the Pollu mechanism, so generation needs no EarthSciModels
 └── fixtures/            # the generated documents at the PR sizes (N = 10^2, 10^3), committed
@@ -57,8 +58,13 @@ python3 tests/conformance/scaling/check.py rust-serial.json --gates deterministi
 python3 tests/conformance/scaling/check.py rust-serial.json rust-threaded.json      # sweep
 ```
 
-`sweep.sbatch` runs the whole Rust ladder, serial and threaded, on an
-exclusive Slurm node and then the checker; its header says how to submit it.
+`sweep.sh` runs the whole Rust ladder on Slurm: one exclusive job per family
+and thread mode, then one job running `check.py` over every result. Its header
+lists the environment it reads (`SCALING_BUILD` is required):
+
+```bash
+SCALING_BUILD=/scratch/$USER/scaling tests/conformance/scaling/sweep.sh
+```
 
 ## Families
 
@@ -159,9 +165,17 @@ Thresholds live in `manifest.json` under `gates`.
 | `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns, over the smallest and largest N that built with at most 10^6 cells |
 | `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise) |
 
-The deterministic gates run in PR CI at the PR sizes. The timing gates need a
-clean machine and the big sizes: they run on the scheduled workflow and through
-`sweep.sbatch`, and are reported but do not block merges until plan phase 6.
+The deterministic gates run in PR CI at the PR sizes (the Rust leg of
+`conformance-testing.yml`; `generate.py --check` runs in its lint job). The
+timing gates need a clean machine and the big sizes: they run on the scheduled
+`scaling-sweep.yml` (with `check.py --report-timing`, so they print but never
+go red) and through `sweep.sh`, and do not block merges until plan phase 6.
+The ledger's timing entries come from `sweep.sh` on an exclusive node.
+
+The Rust wasm suite (`pkg/earthsci-ast-rs/tests/wasm_suite.rs`) also builds
+every committed fixture here under native and the interpreter on wasm32 and
+requires bit-identical right-hand sides; a native refusal passes there only
+where the Rust ledger has a `builds` entry for it.
 
 ## The known-failure ledger
 
