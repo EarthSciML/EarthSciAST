@@ -188,6 +188,9 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
     });
 
     let opts = ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         model_name: Some("Mirror".into()),
         ..Default::default()
     };
@@ -196,6 +199,9 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
         &doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: geom_arrays(&g),
             build_providers: Vec::new(),
             ..opts
@@ -331,6 +337,9 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
     );
 
     let opts = ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         model_name: Some("Fwd".into()),
         pushdown_rewrite: true,
         ..Default::default()
@@ -340,6 +349,9 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
         &doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: arrays,
             build_providers: Vec::new(),
             ..opts
@@ -472,6 +484,9 @@ fn both_gated_symbols_contracted_drives_from_the_candidate_pairs() {
         "models": {"Pairs": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}
     });
     let opts = ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         model_name: Some("Pairs".into()),
         ..Default::default()
     };
@@ -480,6 +495,9 @@ fn both_gated_symbols_contracted_drives_from_the_candidate_pairs() {
         &doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: pir_arrays(),
             build_providers: Vec::new(),
             ..opts
@@ -532,6 +550,9 @@ fn both_gated_symbols_bound_is_a_membership_test_with_identity_fill() {
         "models": {"Member": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}
     });
     let opts = ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         model_name: Some("Member".into()),
         ..Default::default()
     };
@@ -540,6 +561,9 @@ fn both_gated_symbols_bound_is_a_membership_test_with_identity_fill() {
         &doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: pir_arrays(),
             build_providers: Vec::new(),
             ..opts

@@ -3,9 +3,9 @@
 //! left-hand side — and not by the top-level operator alone (issue #476).
 //!
 //! The arrayed spelling `faq{expr: D(index(u, i))}` is how every array-op PDE
-//! is written and what the pointwise lift produces. Reading only a bare `D`
-//! routed every such document to the static backend, where `solve` answered
-//! `NotDynamic` for a model that plainly integrates.
+//! is written and what the pointwise lift produces, so it must make the
+//! document dynamic: on the static backend `solve` answers `NotDynamic` for a
+//! model that plainly integrates.
 
 use std::path::Path;
 

@@ -370,7 +370,12 @@ pub struct CompilerRuleReport {
     /// The rule — an equation or an observed — component-qualified, the same
     /// spelling [`observed_field`] resolves and a refusal names.
     pub rule: String,
-    /// `"observed"` or `"state derivative"`.
+    /// `"observed"` or `"state derivative"` for a rule of the compiled model.
+    /// The evaluations construction performs OUTSIDE that rule set are
+    /// reported too, under their own kinds: `"build-time observed"` and
+    /// `"value invention"` (the build pipeline), and `"initial condition"` and
+    /// `"initial-condition scope"` (a field `ic` and the state-free observeds
+    /// it reads).
     pub kind: &'static str,
     /// The cadence tier the rule runs at: `"const"` (once per solve, at
     /// setup), `"discrete"` (once per refresh segment) or `"continuous"`
@@ -381,10 +386,15 @@ pub struct CompilerRuleReport {
     /// the compiled XLA program, under [`Compiler::Xla`]), `"fallback"` (the
     /// per-cell oracle beneath the tape, reachable only outside a strict
     /// compiler), or `"oracle"` (every rule under [`Compiler::Interpreter`],
-    /// by design).
+    /// by design). An evaluation outside the compiled rule set is
+    /// `"vectorized"` when the whole-array overlay served it and `"oracle"`
+    /// when it was walked per cell — which a strict compiler refuses, except
+    /// for `"value invention"`, which the array runtime's own build performs
+    /// under every compiler and which is reported rather than refused.
     pub tier: &'static str,
     /// For a `"fallback"`, the DEEPEST decline reason reached while trying to
-    /// lower the rule. `None` otherwise.
+    /// lower the rule; for an `"oracle"` evaluation outside the compiled rule
+    /// set, why it was walked per cell. `None` otherwise.
     pub reason: Option<String>,
 }
 
@@ -424,10 +434,13 @@ impl CompilerReport {
         self.compiler
     }
 
-    /// Every rule, in program order: the observed rules in dependency order,
-    /// then the state derivatives. EMPTY for a Problem with no right-hand side
-    /// (a state-free document — no compiler is chosen for one, because there
-    /// is nothing to compile).
+    /// Every rule, in program order: the evaluations construction performs
+    /// outside the compiled model (the build pipeline's, then a state-free
+    /// document's observeds, then the field initial conditions), then the
+    /// compiled model's observed rules in dependency order, then its state
+    /// derivatives. A state-free document's observeds are here too: it has no
+    /// right-hand side, but its observed graph is still evaluated by the
+    /// compiler the Problem names.
     pub fn rules(&self) -> &[CompilerRuleReport] {
         &self.rules
     }
@@ -457,6 +470,12 @@ impl CompilerReport {
             .count()
     }
 
+    /// How many evaluations outside the compiled rule set the whole-array
+    /// overlay served (tier `"vectorized"`).
+    pub fn n_vectorized(&self) -> usize {
+        self.rules.iter().filter(|r| r.tier == "vectorized").count()
+    }
+
     /// Fused instruction groups in the compiled program. `0` under
     /// [`Compiler::Interpreter`], which compiles no program.
     pub fn fused_groups(&self) -> usize {
@@ -481,6 +500,9 @@ impl std::fmt::Display for CompilerReport {
         )?;
         if self.n_xla() > 0 {
             write!(f, ", {} lowered into the XLA program", self.n_xla())?;
+        }
+        if self.n_vectorized() > 0 {
+            write!(f, ", {} on the whole-array overlay", self.n_vectorized())?;
         }
         if self.fused_groups > 0 {
             write!(
@@ -1654,6 +1676,21 @@ pub fn esm_problem<'a>(
     let mut build = BuildProducts::default();
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut model_name = opts.model_name.clone();
+    let compiler = opts.compiler.unwrap_or_default();
+    // A compiler this build or process cannot provide is refused before
+    // anything is evaluated for it: that failure says nothing about the
+    // document, so no document-level refusal may pre-empt it.
+    if let Some(details) = unavailable_reason(compiler) {
+        return Err(SimulateError::CompilerUnavailable {
+            compiler: compiler.as_str(),
+            details,
+        });
+    }
+    // What construction evaluates OUTSIDE the compiled model's rule set — the
+    // build pipeline, a state-free document's observed graph — reported ahead
+    // of that rule set (API_SPEC §5.8, "Every Problem reports what ran").
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut route_rows: Vec<CompilerRuleReport> = Vec::new();
 
     // A TYPED document is a legitimate input to the build pipeline, and it used
     // to be the one input shape that silently was not: the pipeline reads raw
@@ -1683,6 +1720,32 @@ pub fn esm_problem<'a>(
     if let Some(raw) = owned_json.as_mut().filter(|_| wants_build_pipeline(&opts)) {
         {
             let prepared = crate::prepare::run_build_pipeline(raw, &mut opts)?;
+            // The pipeline evaluates the observed graph through the reference
+            // evaluator whatever the compiler, and under a strict one it
+            // stopped at the first observed it had to walk per cell.
+            if let Some(r) = &prepared.refused {
+                return Err(SimulateError::Compile(
+                    crate::compile_error::CompileError::CompilerRefusedRule {
+                        compiler: compiler.as_str(),
+                        kind: r.kind,
+                        rule: qualify(&prepared.model_name, &r.name),
+                        tier: "const",
+                        reason: r.per_cell.clone().unwrap_or_default(),
+                    },
+                ));
+            }
+            // The pipeline keeps the whole-array overlay under every compiler,
+            // `interpreter` included, so its rows say which observeds the
+            // overlay served.
+            route_rows.extend(prepared.rules.iter().map(|r| {
+                outside_rule_row(
+                    compiler,
+                    qualify(&prepared.model_name, &r.name),
+                    r.kind,
+                    r.per_cell.clone(),
+                    false,
+                )
+            }));
             *raw = prepared.doc;
             model_name = Some(prepared.model_name);
             build.fields = prepared.fields;
@@ -1744,7 +1807,6 @@ pub fn esm_problem<'a>(
     }
 
     // ---- (4) Compile the right-hand side. ---------------------------------
-    let compiler = opts.compiler.unwrap_or_default();
     let backend = compile_backend(
         owned_file.as_ref(),
         flat_only,
@@ -1765,11 +1827,23 @@ pub fn esm_problem<'a>(
     //
     // Skipped when the build pipeline already produced fields, so the ISRM /
     // pushdown path keeps its own (model-local) keys untouched.
+    //
+    // Evaluated by the compiler the Problem names, and gated by it: the tape
+    // under `native` / `xla`, the per-cell oracle under `interpreter`.
     if build.fields.is_empty()
         && let Backend::Static(_) = &backend
     {
         let t0 = opts.sample_time.unwrap_or(tspan.0);
-        build.fields = static_observed_fields(owned_file.as_ref(), flat_only, &opts.p, t0);
+        let (fields, rows) = static_observed_fields(
+            owned_file.as_ref(),
+            flat_only,
+            &opts.p,
+            t0,
+            model_name.as_deref(),
+            compiler,
+        )?;
+        build.fields = fields;
+        route_rows.extend(rows);
     }
 
     // ---- (5) Bind and CONST-materialize the run-time providers. -----------
@@ -1792,7 +1866,7 @@ pub fn esm_problem<'a>(
     // alone. Both need the tape, so the tape is built HERE rather than inside
     // `solve`, and with the DISCRETE forcing set step (5) just resolved, which
     // is what decides a rule's cadence tier.
-    let compiler_report = build_compiler_report(
+    let mut compiler_report = build_compiler_report(
         &backend,
         model_name.as_deref(),
         compiler,
@@ -1800,7 +1874,9 @@ pub fn esm_problem<'a>(
         &discrete_forcing,
         #[cfg(target_arch = "wasm32")]
         &std::collections::HashSet::new(),
+        &opts.p,
     )?;
+    compiler_report.rules.splice(0..0, route_rows);
 
     // ---- (5c) `xla`: emit and compile, here, once. ------------------------
     // AFTER the gate above, so a rule that never reached the tape is refused
@@ -2036,6 +2112,35 @@ pub(crate) fn evaluate_static_observeds_over(
         .collect())
 }
 
+/// Every observed field of a problem with **nothing to integrate** whose
+/// compiled model is state-free, evaluated at `tspan.0` on the compiler the
+/// problem was built with — `(name, field)` in dependency order, named as the
+/// model's rules are.
+///
+/// The inline-test runner's answer for a SHAPED state-free document, which
+/// [`static_observed_graph`] does not serve: the same array runtime the
+/// problem already built, so under `native` the fields come off the tape
+/// rather than from a second, pipeline build through the reference evaluator.
+/// `None` when there is state or something to integrate, when a DISCRETE
+/// provider feeds the document (its forcing moves only through a solve's
+/// refresh), or when the evaluation fails or produces nothing.
+#[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
+pub(crate) fn stateless_fields(prob: &EsmProblem) -> Option<Vec<(String, ArrayD<f64>)>> {
+    if !prob.discrete_forcing.is_empty() {
+        return None;
+    }
+    let Backend::Array(c) = &*prob.backend else {
+        return None;
+    };
+    if c.has_differential_equations() || !c.state_variable_names().is_empty() {
+        return None;
+    }
+    let _precision_guard = prob.precision.enter();
+    c.evaluate_stateless_fields(&prob.p, prob.tspan.0)
+        .ok()
+        .filter(|f| !f.is_empty())
+}
+
 /// Whether this problem has **nothing to integrate**: no backend at all, or a
 /// backend that declares no differential equation (esm-spec §6.3.1 derives
 /// `system_kind: "nonlinear"` for such a document).
@@ -2060,7 +2165,8 @@ pub(crate) fn has_nothing_to_integrate(prob: &EsmProblem) -> bool {
     }
 }
 
-/// Evaluate a state-free system's observed graph at `t0`.
+/// Evaluate a state-free system's observed graph at `t0`, on the compiler the
+/// Problem names, and report every rule it evaluated.
 ///
 /// The build-time half of [`observed_field`] for a document with no
 /// differential equations: one stateless evaluation of the array runtime
@@ -2078,32 +2184,48 @@ pub(crate) fn has_nothing_to_integrate(prob: &EsmProblem) -> bool {
 /// here would give one document two spellings, `Rel.total` or `Rel.total[1]`,
 /// picked by a backend choice the author cannot see.
 ///
-/// **Not under `native`'s refusal, and this is why.** This runs only on
-/// [`Backend::Static`] — a document with no differential equations — where no
-/// right-hand side is compiled and therefore no compiler was chosen
-/// (esm-libraries-spec §2.5.10 governs "every evaluation the compiler performs
-/// for the Problem"; there is no compiler here). Its evaluation is the
-/// document's whole answer, not a demotion from a faster tier.
+/// **Under the compiler's refusal.** esm-libraries-spec §2.5.10 puts "the
+/// materialization of constants and static observeds at construction" under
+/// the refusal, and this IS that materialization for a document with nothing
+/// to integrate: it has no right-hand side, but its observed graph is its
+/// whole answer and something evaluates it. So the runtime is built in the
+/// named compiler's mode and the SAME per-rule gate a dynamic document meets
+/// ([`build_compiler_report`]) runs over it: under `native` / `xla` every rule
+/// must lower to the tape, which then evaluates them, and a rule that does not
+/// is a `compiler_refused_rule` naming it; under `interpreter` every rule is
+/// the per-cell oracle's. `xla` emits no program here — there is no
+/// right-hand side to emit — so its rules are reported as `"taped"`, which is
+/// what evaluates them.
 ///
-/// **Scalar observeds only, and tolerant by construction.** A system whose
-/// equations are not all scalar expressions ([`check_scalar_evaluable`]), or
-/// that the runtime cannot build — a `v1`-unsupported feature, a parameter
-/// with no default — yields NO fields rather than failing the build. The
-/// scalar gate runs on the flattened equations BEFORE anything is compiled, so
-/// a large shaped document is not built here only to be discarded.
-/// Construction was not asked to compile anything here (`Rhs::Auto` chose
-/// `Backend::Static`), so a failure to evaluate must surface as
-/// `observed_field` reporting the name it cannot answer, not as a document that
-/// will not build. Python makes the same call for the same reason
-/// (`problem.py`, the scalar no-state branch).
+/// **Every observed, scalar or shaped.** A shaped state-free document — a
+/// relational row set, a grid-geometry table — is evaluated here as a scalar
+/// one is: its observeds are rules of the same array runtime, so the compiler
+/// that answers a scalar observed answers a shaped one, rather than leaving it
+/// to the build pipeline's reference evaluator. A 0-D or one-cell observed takes its rank from the declaration; a
+/// shaped one is the field the runtime materialized, reported only when the
+/// document declares it an observed (a shaped parameter the runtime lowered to
+/// a `const` rule is not one).
 ///
-/// [`check_scalar_evaluable`]: crate::simulate_array::check_scalar_evaluable
+/// **Tolerant of what no compiler can build.** A system the runtime cannot
+/// build or evaluate — a `v1`-unsupported feature, a parameter with no default
+/// — yields NO fields rather than failing the build, under every compiler
+/// alike. Construction was not asked to compile a right-hand side
+/// (`Rhs::Auto` chose `Backend::Static`), so a failure to evaluate must surface
+/// as `observed_field` reporting the name it cannot answer, not as a document
+/// that will not build. Python makes the same call for the same reason
+/// (`problem.py`, the scalar no-state branch). Only the compiler's own refusal is
+/// raised: that one says the document evaluates under `interpreter` and not
+/// under the compiler the caller named.
+#[allow(clippy::type_complexity)]
 fn static_observed_fields(
     file: Option<&EsmFile>,
     flat_only: Option<&FlattenedSystem>,
     p: &HashMap<String, f64>,
     t0: f64,
-) -> HashMap<String, ArrayD<f64>> {
+    model_name: Option<&str>,
+    compiler: Compiler,
+) -> Result<(HashMap<String, ArrayD<f64>>, Vec<CompilerRuleReport>), SimulateError> {
+    let nothing = || Ok((HashMap::new(), Vec::new()));
     let owned_flat;
     let flat = match (flat_only, file) {
         (Some(f), _) => f,
@@ -2112,40 +2234,71 @@ fn static_observed_fields(
                 owned_flat = f;
                 &owned_flat
             }
-            Err(_) => return HashMap::new(),
+            Err(_) => return nothing(),
         },
-        (None, None) => return HashMap::new(),
+        (None, None) => return nothing(),
     };
     // A system WITH state is not state-free evaluable: an observed may read
     // state, and there is none to read. Reachable when `model_name` selects an
     // ODE-free model out of a document that has ODEs elsewhere, since
     // `flatten` is document-wide.
     if !flat.state_variables.is_empty() {
-        return HashMap::new();
+        return nothing();
     }
-    if !flat
-        .equations
-        .iter()
-        .all(|eq| crate::simulate_array::check_scalar_evaluable(&eq.rhs).is_ok())
+    // An ill-formed document is not a compiler's to refuse: a name declared
+    // nowhere fails the same free-variable gate the array build and the build
+    // pipeline run (CONFORMANCE_SPEC §5.23), and like any build failure here it
+    // yields no fields — so the pipeline, which runs that gate before
+    // evaluating anything, is what names it — rather than surfacing as a
+    // strict compiler "declining" a rule no compiler could evaluate.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(file) = file
+        && crate::simulate::whole_document_is_one_model(file)
+        && let Some((_, model)) = file.models.as_ref().and_then(|m| m.iter().next())
     {
-        return HashMap::new();
+        let index_sets: HashMap<String, crate::types::IndexSet> = file
+            .index_sets
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        if crate::simulate_array::check_free_variables(model, &index_sets, &[]).is_err() {
+            return nothing();
+        }
     }
-    let Ok(compiled) = ArrayCompiled::from_flattened(flat) else {
-        return HashMap::new();
+    let Ok(mut compiled) = ArrayCompiled::from_flattened(flat) else {
+        return nothing();
     };
-    let Ok(values) = compiled.evaluate_stateless_observeds(p, &[t0]) else {
-        return HashMap::new();
+    compiled.runtime_mode = match compiler {
+        Compiler::Interpreter => crate::simulate_array::RuntimeMode::Interpreter,
+        _ => crate::simulate_array::RuntimeMode::Native,
     };
-    values
+    let compiled = Rc::new(compiled);
+    let report = rule_report(
+        &compiled,
+        model_name,
+        compiler,
+        &std::collections::HashSet::new(),
+        false,
+    )?;
+    let Ok(values) = compiled.evaluate_stateless_fields(p, t0) else {
+        return Ok((HashMap::new(), report.rules));
+    };
+    let fields = values
         .into_iter()
-        .map(|(name, v)| {
-            let shape =
-                DeclaredRank::of_declaration(flat.observed_variables.get(&name)).scalar_shape();
-            let arr = ArrayD::from_shape_vec(ndarray::IxDyn(shape), v)
-                .expect("`scalar_shape` is `[]` or `[1]`, and both hold exactly one element");
-            (name, arr)
+        .filter_map(|(name, arr)| {
+            let declared = flat.observed_variables.get(&name);
+            if arr.len() == 1 {
+                let shape = DeclaredRank::of_declaration(declared).scalar_shape();
+                let v = arr.iter().copied().next().expect("one element");
+                let arr = ArrayD::from_shape_vec(ndarray::IxDyn(shape), vec![v])
+                    .expect("`scalar_shape` is `[]` or `[1]`, and both hold exactly one element");
+                return Some((name, arr));
+            }
+            declared.map(|_| (name, arr))
         })
-        .collect()
+        .collect();
+    Ok((fields, report.rules))
 }
 
 /// Build the per-rule record, and — under a STRICT compiler ([`Compiler::Native`]
@@ -2175,16 +2328,105 @@ fn build_compiler_report(
     model_name: Option<&str>,
     compiler: Compiler,
     discrete_forcing: &std::collections::HashSet<String>,
+    #[cfg_attr(not(feature = "solve"), allow(unused_variables))] p: &HashMap<String, f64>,
 ) -> Result<CompilerReport, SimulateError> {
     let compiled = match backend {
-        // A state-free document has no right-hand side, so no compiler is
-        // chosen for it and there is nothing to report or refuse. Its observed
-        // graph is evaluated by `static_observed_fields` below, which is a
-        // BUILD-TIME product read, not a compiled evaluation.
+        // No compiled model. A state-free document's observed graph was
+        // evaluated — and gated — by `static_observed_fields`, whose rows the
+        // caller adds.
         Backend::Static(_) => return Ok(CompilerReport::empty(compiler)),
         Backend::Array(c) => c,
     };
+    #[cfg_attr(not(feature = "solve"), allow(unused_mut))]
+    let mut report = rule_report(compiled, model_name, compiler, discrete_forcing, true)?;
+    // The field initial conditions are evaluated by the reference evaluator
+    // under every compiler — no tier has a form for initial-state assembly —
+    // so they are exercised HERE, where a strict compiler refuses one it would
+    // have to walk per cell, and reported ahead of the model's rules.
+    #[cfg(feature = "solve")]
+    {
+        let model = model_name.unwrap_or("");
+        let mut ic_rows = Vec::new();
+        for r in compiled.field_ic_records(p) {
+            let reason = r.per_cell.then(|| {
+                "evaluated by the reference evaluator at setup, and a `faq` in it is not one \
+                 the whole-array overlay takes, so it was walked once per cell"
+                    .to_string()
+            });
+            if compiler.is_strict()
+                && let Some(reason) = reason
+            {
+                return Err(SimulateError::Compile(
+                    crate::compile_error::CompileError::CompilerRefusedRule {
+                        compiler: compiler.as_str(),
+                        kind: r.kind,
+                        rule: qualify(model, &r.name),
+                        tier: "const",
+                        reason,
+                    },
+                ));
+            }
+            ic_rows.push(outside_rule_row(
+                compiler,
+                qualify(model, &r.name),
+                r.kind,
+                reason,
+                compiler == Compiler::Interpreter,
+            ));
+        }
+        report.rules.splice(0..0, ic_rows);
+    }
+    Ok(report)
+}
 
+/// The report row of one evaluation construction performs OUTSIDE the
+/// compiled model's rule set, at setup (`"const"`). `per_cell` is why it was
+/// walked per cell, if it was; `overlay_off` says the evaluation ran with the
+/// whole-array overlay off, as a field `ic` does under
+/// [`Compiler::Interpreter`].
+///
+/// The tier says what happened: the per-cell oracle, or the whole-array
+/// overlay. Under the interpreter a per-cell walk is that compiler's design
+/// rather than a decline, so its rows carry no reason, exactly as its rule
+/// rows do.
+fn outside_rule_row(
+    compiler: Compiler,
+    rule: String,
+    kind: &'static str,
+    per_cell: Option<String>,
+    overlay_off: bool,
+) -> CompilerRuleReport {
+    let tier = if overlay_off || per_cell.is_some() {
+        "oracle"
+    } else {
+        "vectorized"
+    };
+    let reason = match compiler {
+        Compiler::Interpreter => None,
+        _ => per_cell,
+    };
+    CompilerRuleReport {
+        rule,
+        kind,
+        cadence: "const",
+        tier,
+        reason,
+    }
+}
+
+/// The per-rule record of one compiled model, refusing under a strict compiler
+/// the first rule that did not lower ([`build_compiler_report`]).
+///
+/// `xla_emitted` says whether the model's right-hand side is the emitted XLA
+/// program. A state-free model has none, so under [`Compiler::Xla`] its rules
+/// are reported as the tape's, which is what evaluates them.
+fn rule_report(
+    compiled: &ArrayCompiled,
+    model_name: Option<&str>,
+    compiler: Compiler,
+    discrete_forcing: &std::collections::HashSet<String>,
+    xla_emitted: bool,
+) -> Result<CompilerReport, SimulateError> {
     // A per-variable element type is the one condition under which the array
     // runtime installs no tape at all, so under `native` it is a refusal
     // rather than a silent demotion to the overlay-then-oracle pair.
@@ -2236,7 +2478,7 @@ fn build_compiler_report(
             // program. It is reported as `"xla"` rather than as `"taped"`
             // because the tape is where it was lowered FROM, not what
             // evaluates it.
-            (Compiler::Xla, _) => "xla",
+            (Compiler::Xla, _) if xla_emitted => "xla",
             (_, None) => "taped",
             (_, Some(_)) => "fallback",
         };
@@ -2505,11 +2747,11 @@ pub(crate) fn has_differential_equations(file: &EsmFile, model_name: Option<&str
 ///
 /// A bare top-level `D` is not the only spelling. The arrayed form
 /// `faq{expr: D(index(u, i))}` is how every array-op PDE is written and what
-/// the pointwise lift produces, and `index(D(u), i)` also names a derivative;
-/// reading only the top-level operator routed all of them to
-/// [`Backend::Static`], where `solve` answered `NotDynamic` for a document
-/// that plainly integrates (issue #476). The array runtime then either
-/// compiles such an equation or refuses it by name.
+/// the pointwise lift produces, and `index(D(u), i)` also names a derivative.
+/// Each of them makes the document dynamic (issue #476): the array runtime
+/// then either compiles the equation or refuses it by name, where
+/// [`Backend::Static`] would have `solve` answer `NotDynamic` for a document
+/// that plainly integrates.
 fn model_has_derivative(model: &crate::types::Model) -> bool {
     model
         .equations

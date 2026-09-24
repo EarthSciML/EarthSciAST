@@ -235,6 +235,9 @@ fn run(t: &Tables, gate: Gate) -> (Vec<f64>, u64) {
         &doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             model_name: Some("J".into()),
             const_arrays: t.const_arrays(),
             build_providers: Vec::new(),
@@ -507,6 +510,9 @@ fn categorical_member_key_columns_join_many_to_many() {
         &doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             model_name: Some("J".into()),
             const_arrays: [
                 ("activity".to_string(), arr1(&activity)),
@@ -592,6 +598,9 @@ fn scalar_reduction_drives_both_contracted_symbols_from_the_pairs() {
             &make(gated),
             (0.0, 0.0),
             ProblemOptions {
+                // The pipeline's per-cell walk is refused by a strict native (#484), so
+                // these semantics are checked on the reference evaluator.
+                compiler: Some(earthsci_ast::Compiler::Interpreter),
                 model_name: Some("J".into()),
                 const_arrays: t.const_arrays(),
                 build_providers: Vec::new(),
@@ -736,6 +745,9 @@ fn extra_contracted_axis_still_drives_the_later_gated_symbol() {
             &doc,
             (0.0, 0.0),
             ProblemOptions {
+                // The pipeline's per-cell walk is refused by a strict native (#484), so
+                // these semantics are checked on the reference evaluator.
+                compiler: Some(earthsci_ast::Compiler::Interpreter),
                 model_name: Some("J".into()),
                 const_arrays: t.const_arrays(),
                 build_providers: Vec::new(),
