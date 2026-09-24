@@ -258,6 +258,9 @@ fn run(
             .expect("parse pushdown_l1.esm");
 
     let mut opts = ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         model_name: Some("ISRM".to_string()),
         pushdown_rewrite: true,
         ..Default::default()
@@ -267,6 +270,9 @@ fn run(
         &doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: ca,
             build_providers: providers,
             ..opts
@@ -533,6 +539,9 @@ fn observing_does_not_change_the_result() {
 fn prepare_options_still_debug_prints() {
     let log: Log = Arc::new(Mutex::new(Vec::new()));
     let opts = ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         pushdown_rewrite: true,
         gated_fetch_batch: Some(64),
         progress: Some(recorder(&log)),

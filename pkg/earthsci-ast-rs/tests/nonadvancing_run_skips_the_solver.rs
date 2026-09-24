@@ -285,9 +285,9 @@ fn a_span_that_must_be_crossed_is_still_integrated() {
 
 /// The output SHAPE the shortcut owns: under an empty span the caller's whole
 /// requested grid is answered, verbatim and in order, from the initial state —
-/// including a time beyond the span, which is the courtesy extrapolation the
-/// solver loop's `saveat` tail performs for a run that does step. Every row is
-/// constant across the grid, because nothing moved.
+/// including a time beyond the span, since a run that never moves has only the
+/// initial state to report. Every row is constant across the grid, because
+/// nothing moved.
 #[test]
 fn an_empty_span_answers_the_whole_requested_grid() {
     let sol = run_span(&doc(8, 4, true), (0.0, 0.0), Some(vec![0.0, 0.5, 1.0]));

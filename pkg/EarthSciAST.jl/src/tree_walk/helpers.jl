@@ -43,6 +43,36 @@ function _refuse_flat_events(flat::FlattenedSystem)
     return nothing
 end
 
+# The tree-walk evaluator's refusal of a Wiener-noise parameter (`update.kind =
+# "wiener"`, esm-spec §9.6.6). Such a parameter makes the document an SDE, and
+# this evaluator integrates ODEs only: building it anyway reads the noise as a
+# constant and reports the trajectory of a different, deterministic model.
+_wiener_refusal(name::AbstractString) = TreeWalkError(
+    ERROR_CODES.UNSUPPORTED_CONSTRUCT,
+    "Wiener noise parameter '$name' is not supported by the Julia tree-walk " *
+    "evaluator; refusing the build rather than running the model without it")
+
+# Throw the refusal when a flattened system carries a Wiener-noise parameter.
+# Called next to `_refuse_flat_events`, while the flattened system is in hand.
+function _refuse_flat_wiener_noise(flat::FlattenedSystem)
+    isempty(flat.brownian_parameters) ||
+        throw(_wiener_refusal(first(keys(flat.brownian_parameters))))
+    return nothing
+end
+
+# The first Wiener-noise parameter `model` or any of its subsystems declares;
+# `nothing` when there is none.
+function _first_wiener_parameter(model::Model)::Union{Nothing,String}
+    names = brownian_parameters(model)
+    isempty(names) || return first(names)
+    for sub in values(model.subsystems)
+        sub isa Model || continue
+        found = _first_wiener_parameter(sub)
+        found === nothing || return found
+    end
+    return nothing
+end
+
 # The first event `model` or any of its subsystems declares, a continuous one
 # before a discrete one; `nothing` when there is none.
 function _first_event(model::Model)::Union{Nothing,ContinuousEvent,DiscreteEvent}

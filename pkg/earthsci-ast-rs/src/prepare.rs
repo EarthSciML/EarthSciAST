@@ -440,6 +440,12 @@ pub(crate) struct PrepareOptions {
     /// chunk straddling each boundary, so `batches - 1` extra chunk reads —
     /// which is why the library does not pick a size on the caller's behalf.
     pub gated_fetch_batch: Option<usize>,
+
+    /// Stop at the first evaluation that is interpreted PER CELL and hand it
+    /// back as [`PreparedBuild::refused`] — set when the Problem's compiler is
+    /// strict (esm-libraries-spec §2.5.10), so a `native` build refuses the
+    /// document naming the observed instead of walking it.
+    pub refuse_per_cell: bool,
 }
 
 // Hand-written because `PrepareProgressFn` is a trait object: it cannot derive
@@ -464,6 +470,7 @@ impl fmt::Debug for PrepareOptions {
                     .unwrap_or("None"),
             )
             .field("gated_fetch_batch", &self.gated_fetch_batch)
+            .field("refuse_per_cell", &self.refuse_per_cell)
             .finish()
     }
 }
@@ -484,7 +491,43 @@ pub struct PreparedBuild {
     pub extents: HashMap<String, i64>,
     /// Provider keys that were deferred + fetched pre-sliced (sorted).
     pub gated_provider_keys: Vec<String>,
+    /// Every evaluation the pipeline performed, in the order it performed
+    /// them — what the Problem's compiler report shows for this route.
+    pub rules: Vec<PipelineRule>,
+    /// The per-cell evaluation that stopped the build, when
+    /// [`PrepareOptions::refuse_per_cell`] was set. `fields` then holds only
+    /// what was evaluated before it.
+    pub refused: Option<PipelineRule>,
 }
+
+/// One evaluation the build pipeline performed, and HOW: through the
+/// whole-array overlay, or interpreted per cell by the oracle.
+///
+/// The pipeline evaluates the document's observed graph with the reference
+/// evaluator whatever compiler the Problem names, so these records are how
+/// that route reaches the compiler report (esm-libraries-spec §2.5.10: "the
+/// materialization of constants and static observeds at construction" is
+/// under the refusal).
+#[derive(Clone, Debug)]
+pub(crate) struct PipelineRule {
+    /// The observed (model-local), or the value-invention producer id.
+    pub name: String,
+    /// `"build-time observed"` or `"value invention"`.
+    pub kind: &'static str,
+    /// `Some(why)` when the evaluation walked cells one at a time.
+    pub per_cell: Option<String>,
+}
+
+/// Why an observed the overlay did not take was walked per cell.
+const PER_CELL_FAQ: &str = "the build pipeline evaluated it through the reference evaluator, \
+    and a `faq` in it is not one the whole-array overlay takes, so its body was walked \
+    once per cell";
+/// Why a causal self-reference is walked per cell.
+const PER_CELL_RECURRENCE: &str = "a causal self-reference (esm-spec §4.3.1.1), which the \
+    build pipeline sweeps cell by cell through the reference evaluator";
+/// Why a value-invention producer is recorded as interpreted.
+const PER_TUPLE_VALUE_INVENTION: &str = "value invention mints its members by evaluating the \
+    producer's key expression tuple by tuple through its own relational evaluator";
 
 // --------------------------------------------------------------------------- //
 // Dependency order over the observeds (shared with the pushdown-era runner).
@@ -764,7 +807,7 @@ fn eval_observed(
     extents: &HashMap<String, i64>,
     const_arrays: &ConstArrayScope,
     rank: DeclaredRank,
-) -> Result<ArrayD<f64>, PrepareError> {
+) -> Result<(ArrayD<f64>, Option<String>), PrepareError> {
     // The observed is evaluated at the element type of the variable it defines
     // (esm-spec §11.3.1) — the document's unless that variable declared its
     // own. This is where the build pipeline materializes a relational
@@ -802,8 +845,11 @@ fn eval_observed(
         extents,
         const_arrays,
     ) {
-        return res.map_err(|e| err(format!("evaluate {name}: {e}")));
+        return res
+            .map(|a| (a, Some(PER_CELL_RECURRENCE.to_string())))
+            .map_err(|e| err(format!("evaluate {name}: {e}")));
     }
+    let walks_before = crate::simulate_array::per_cell_walks();
     let val = eval_expression_with_extents_and_consts_shared(
         &expr,
         arrays,
@@ -814,10 +860,13 @@ fn eval_observed(
         const_arrays,
     )
     .map_err(|e| err(format!("evaluate {name}: {e}")))?;
-    Ok(match val {
+    let per_cell =
+        (crate::simulate_array::per_cell_walks() != walks_before).then(|| PER_CELL_FAQ.to_string());
+    let field = match val {
         EvalValue::Array(a) => *a,
         EvalValue::Scalar(s) => ArrayD::from_elem(IxDyn(rank.scalar_shape()), s),
-    })
+    };
+    Ok((field, per_cell))
 }
 
 // --------------------------------------------------------------------------- //
@@ -1133,6 +1182,9 @@ pub(crate) fn run_prepare(
     st.check_free_names()?;
     st.collect_observed_defs()?;
     st.eval_buildtime_coordinates()?;
+    if st.refused.is_some() {
+        return Ok(st.finish(rw.rewritten.into_owned()));
+    }
     st.invent_values()?;
     st.feed_member_factors()?;
     st.fetch_gated_providers(gated, &rw.pd_coupling)?;
@@ -1379,6 +1431,9 @@ struct BuildState<'o> {
     extents: HashMap<String, i64>,
     /// The gated providers' keys, sorted — [`PreparedBuild::gated_provider_keys`].
     gated_keys: Vec<String>,
+    /// [`PreparedBuild::rules`] / [`PreparedBuild::refused`].
+    rules: Vec<PipelineRule>,
+    refused: Option<PipelineRule>,
 }
 
 impl<'o> BuildState<'o> {
@@ -1467,7 +1522,21 @@ impl<'o> BuildState<'o> {
             members: HashMap::new(),
             extents: HashMap::new(),
             gated_keys: Vec::new(),
+            rules: Vec::new(),
+            refused: None,
         })
+    }
+
+    /// Record one evaluation. Under [`PrepareOptions::refuse_per_cell`] a
+    /// per-cell one also stops the build, and the caller returns as soon as
+    /// this answers `true`.
+    fn record(&mut self, rule: PipelineRule) -> bool {
+        let stop = self.opts.refuse_per_cell && rule.per_cell.is_some();
+        if stop {
+            self.refused = Some(rule.clone());
+        }
+        self.rules.push(rule);
+        stop
     }
 
     /// Provider injection: eager CONST materialization; gated deferral.
@@ -1690,28 +1759,40 @@ impl<'o> BuildState<'o> {
         }
         let needed = producer_seed_closure(&seeds, &self.defs, &self.join_free);
         let no_extents: HashMap<String, i64> = HashMap::new();
-        let coords: Vec<&String> = self.order.iter().filter(|n| needed.contains(*n)).collect();
+        let coords: Vec<String> = self
+            .order
+            .iter()
+            .filter(|n| needed.contains(*n))
+            .cloned()
+            .collect();
         let n_coords = coords.len();
         for (i, name) in coords.into_iter().enumerate() {
             self.report(PreparePhase::Coordinates, i, Some(n_coords), name.as_str())?;
             match eval_observed(
-                name,
-                &self.defs[name],
+                &name,
+                &self.defs[&name],
                 &self.arrays,
                 &self.param_vals,
                 &self.param_names,
                 &self.index_sets,
                 &no_extents,
                 &self.const_scope,
-                DeclaredRank::of(&self.model, name),
+                DeclaredRank::of(&self.model, &name),
             ) {
-                Ok(a) => {
+                Ok((a, per_cell)) => {
                     self.log(&format!(
                         "  [prepare] build-time coordinate {name} -> {:?}",
                         a.shape()
                     ));
                     self.arrays.insert(name.clone(), a.clone());
                     self.fields.insert(name.clone(), a);
+                    if self.record(PipelineRule {
+                        name,
+                        kind: "build-time observed",
+                        per_cell,
+                    }) {
+                        return Ok(());
+                    }
                 }
                 Err(e) => {
                     // Tolerant (mirrors Python's skip_unresolved=True): the
@@ -1745,6 +1826,18 @@ impl<'o> BuildState<'o> {
                 })
                 .collect::<Result<_, _>>()?;
             members.insert(faq.clone(), ids);
+        }
+        // Recorded, not refused: the array runtime's own build runs the same
+        // relational pass for every compiler, so refusing it here alone would
+        // make the pipeline stricter than the route it feeds.
+        let mut producers: Vec<&String> = members.keys().collect();
+        producers.sort();
+        for faq in producers {
+            self.rules.push(PipelineRule {
+                name: faq.clone(),
+                kind: "value invention",
+                per_cell: Some(PER_TUPLE_VALUE_INVENTION.to_string()),
+            });
         }
         self.members = members;
         self.extents = vi.extents.clone();
@@ -1894,18 +1987,19 @@ impl<'o> BuildState<'o> {
     /// includes the coordinate pre-pass's products, and a `total` that a `continue`
     /// silently makes unreachable is a bar that never fills.
     fn eval_observed_graph(&mut self) -> Result<(), PrepareError> {
-        let pending: Vec<&String> = self
+        let pending: Vec<String> = self
             .order
             .iter()
             .filter(|n| !self.fields.contains_key(*n))
+            .cloned()
             .collect();
         let n_pending = pending.len();
         for (i, name) in pending.iter().enumerate() {
             self.report(PreparePhase::Observeds, i, Some(n_pending), name.as_str())?;
             let t = std::time::Instant::now();
-            let a = eval_observed(
+            let (a, per_cell) = eval_observed(
                 name,
-                &self.defs[*name],
+                &self.defs[name],
                 &self.arrays,
                 &self.param_vals,
                 &self.param_names,
@@ -1922,12 +2016,22 @@ impl<'o> BuildState<'o> {
             // Into the evaluation namespace ONLY while later observeds may still
             // read it; each is MOVED into `fields` after the loop rather than held
             // in both maps at once.
-            self.arrays.insert((*name).clone(), a);
+            self.arrays.insert(name.clone(), a);
+            if self.record(PipelineRule {
+                name: name.clone(),
+                kind: "build-time observed",
+                per_cell,
+            }) {
+                break;
+            }
         }
-        for name in pending {
+        for name in &pending {
             if let Some(a) = self.arrays.remove(name) {
                 self.fields.insert(name.clone(), a);
             }
+        }
+        if self.refused.is_some() {
+            return Ok(());
         }
         self.report(PreparePhase::Observeds, n_pending, Some(n_pending), "")?;
         Ok(())
@@ -1942,6 +2046,8 @@ impl<'o> BuildState<'o> {
             members: self.members,
             extents: self.extents,
             gated_provider_keys: self.gated_keys,
+            rules: self.rules,
+            refused: self.refused,
         }
     }
 }
@@ -1969,6 +2075,7 @@ pub(crate) fn run_build_pipeline(
         verbose: opts.verbose,
         progress: opts.progress.clone(),
         gated_fetch_batch: opts.gated_fetch_batch,
+        refuse_per_cell: opts.compiler.unwrap_or_default().is_strict(),
     };
     let const_arrays = std::mem::take(&mut opts.const_arrays);
     let providers = std::mem::take(&mut opts.build_providers);

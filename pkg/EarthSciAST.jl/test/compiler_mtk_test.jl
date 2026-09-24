@@ -270,15 +270,16 @@ end
     # ── The WHOLE §5.39 category, driven from its own manifest ─────────────
     #
     # The three testsets above assert the VALUES on three documents. This one
-    # asserts the COVERAGE on all fifteen: every document that category says the
+    # asserts the COVERAGE on all seventeen: every document that category says the
     # tree-walk evaluator must refuse either RUNS under `:mtk` or is refused BY
     # NAME, and nothing errors. It is data-driven off the shared manifest, so a
     # case added there is covered here the day it lands rather than the day
     # someone remembers this file.
     #
-    # One case refuses, and it is named: `D(a + b) ~ 3` is a time derivative of
-    # an EXPRESSION, which credits no state — an implicit equation spelled
-    # wrong, and one no compiler in any binding runs.
+    # Three cases refuse, and each is named: `D(a + b) ~ 3` is a time derivative
+    # of an EXPRESSION, which credits no state — an implicit equation spelled
+    # wrong, and one no compiler in any binding runs; and the two Wiener-noise
+    # documents are SDEs, which this compiler has no lowering for (#475).
     @testset "every §5.39 fixture runs or refuses by name" begin
         uc_dir = _mtkc_fixture("conformance", "unsupported_construct")
         manifest = JSON3.read(read(joinpath(uc_dir, "manifest.json"), String))
@@ -311,9 +312,11 @@ end
                 end
             end
         end
-        # Exactly one case refuses, and it is the one that is not really an
-        # event or a solvable residual.
-        @test refused == ["implicit_equation_as_the_derivative_of_an_expression"]
+        # Exactly these refuse: the one that is not really an event or a
+        # solvable residual, and the two SDEs.
+        @test refused == ["implicit_equation_as_the_derivative_of_an_expression",
+                          "wiener_noise_on_the_scalar_path",
+                          "wiener_noise_on_the_array_path"]
     end
 
     # ── What it refuses, by name ────────────────────────────────────────────

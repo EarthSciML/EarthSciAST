@@ -163,6 +163,7 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         # emit events, so the tree-walk build never sees one and would run the
         # model without it.
         _refuse_flat_events(input)
+        _refuse_flat_wiener_noise(input)
         # esm-spec §9.5.3: lower `table_lookup` to its `interp.*` form HERE —
         # the one point every input kind (path, native Dict, EsmFile,
         # already-flattened system) has funnelled into, and the first point
@@ -375,6 +376,12 @@ node's coordinates and written into `u0` at `var_map["var_name[i,j,…]"]`.
 
 Used to seed the level-set's signed-distance `psi` from the domain's declared
 IC over the real (projected) fire grid — no per-cell loop in the runner.
+
+`expr` is compiled ONCE with the dimension names bound as parameters and then
+evaluated at each cell of `var_name` that `var_map` holds; the cells are read
+off `var_map` itself, so no key is built per grid node. An expression the
+compiler does not accept is evaluated per cell by `evaluate_expr` instead,
+which a strict compiler plan in force refuses.
 """
 function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
                              var_name::AbstractString, expr::ASTExpr, coords)
@@ -382,16 +389,87 @@ function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
     dims = String[String(first(p)) for p in pairs_]
     axes_ = [collect(Float64, last(p)) for p in pairs_]
     sizes = Tuple(length.(axes_))
-    for I in CartesianIndices(sizes)
-        t = Tuple(I)
-        key = string(var_name, "[", join(t, ","), "]")
-        k = get(var_map, key, nothing)
-        k === nothing && continue
-        binding = Dict{String,Any}(dims[d] => axes_[d][t[d]] for d in eachindex(dims))
-        u0[k] = evaluate_expr(expr, binding)
+    # The cells to seed: every `var_name[i,j,…]` entry of `var_map` inside the
+    # grid, as (indices, slot) — `idx` holds the indices of cell `c` at
+    # `(c-1)*nd+1 : c*nd`.
+    nd = length(sizes)
+    idx = Int[]
+    slots = Int[]
+    buf = zeros(Int, nd)
+    for (key, slot) in var_map
+        _seed_cell_indices!(buf, String(key), var_name, sizes) || continue
+        append!(idx, buf)
+        push!(slots, Int(slot))
+    end
+    ce = _stencil_disabled() ? nothing : _seed_expression_compile(expr, dims)
+    if ce !== nothing
+        vals = Vector{Float64}(undef, nd)
+        @inbounds for c in eachindex(slots)
+            for d in 1:nd
+                vals[d] = axes_[d][idx[(c - 1) * nd + d]]
+            end
+            u0[slots[c]] = ce(vals)
+        end
+        return u0
+    end
+    _refuse_percell_evaluation("seed_expression_ic!($(var_name))",
+        "the expression initial-state seed", length(slots))
+    for c in eachindex(slots)
+        binding = Dict{String,Any}(dims[d] => axes_[d][idx[(c - 1) * nd + d]]
+                                   for d in eachindex(dims))
+        u0[slots[c]] = evaluate_expr(expr, binding)
     end
     return u0
 end
+
+# Read the indices of a `name[i,j,…]` key into `buf` without allocating; false
+# when the key is another variable's, has another rank, or lies off the grid.
+function _seed_cell_indices!(buf::Vector{Int}, key::String, name::AbstractString,
+                             sizes::Tuple)
+    n = ncodeunits(name)
+    (ncodeunits(key) > n + 2 && startswith(key, name) &&
+     codeunit(key, n + 1) == UInt8('[') && codeunit(key, ncodeunits(key)) == UInt8(']')) ||
+        return false
+    d = 1; v = 0; seen = false
+    @inbounds for i in (n + 2):(ncodeunits(key) - 1)
+        b = codeunit(key, i)
+        if UInt8('0') <= b <= UInt8('9')
+            v = 10v + Int(b - UInt8('0')); seen = true
+        elseif b == UInt8(',') && seen && d < length(buf)
+            buf[d] = v; d += 1; v = 0; seen = false
+        else
+            return false
+        end
+    end
+    (seen && d == length(buf)) || return false
+    buf[d] = v
+    for k in eachindex(buf)
+        1 <= buf[k] <= sizes[k] || return false
+    end
+    return true
+end
+
+# The seed's expression compiled once with the dimension names as parameters:
+# a `_CellEval` whose "cell" is the vector of coordinate values, or `nothing`
+# when a name collides with the time symbol or the expression does not compile.
+function _seed_expression_compile(expr::ASTExpr, dims::Vector{String})
+    any(==("t"), dims) && return nothing
+    allunique(dims) || return nothing
+    psyms = Symbol[Symbol(d) for d in dims]
+    node = try
+        _compile(expr, Dict{String,Int}(), Set{Symbol}(psyms), Dict{String,Any}())
+    catch err
+        _is_resource_error(err) && rethrow()
+        return nothing
+    end
+    return _CoordEval{Tuple(psyms),length(dims)}(node)
+end
+
+struct _CoordEval{syms,N}
+    node::_Node
+end
+@inline (ce::_CoordEval{syms,N})(vals::AbstractVector{Float64}) where {syms,N} =
+    _eval_node(ce.node, _NO_STATE_U, NamedTuple{syms}(ntuple(d -> @inbounds(vals[d]), Val(N))), 0.0)
 
 # --------------------------------------------------------------------------- #
 # CONST-provider materialization: pull one forcing variable's field out of a
@@ -1070,11 +1148,12 @@ function esm_problem(input, tspan;
         _inject_pushdown_aliases!(merged_param, doc, pd_coupling)
     end
 
-    # Discrete-cadence materialization sink (the middle cadence phase): opt IN so a
-    # state-free derived field over a live forcing buffer (a regrid→physics stack) is
-    # cut out of the per-step RHS into a cache filled once per refresh, not recomputed
-    # on every continuous step. Empty (no discrete-materialize var) ⇒ no effect. A
-    # caller-supplied `materialize_out` is reused (and thus inspectable), else fresh.
+    # Discrete-cadence materialization sink (the middle cadence phase), ALWAYS
+    # passed, so a state-free derived field over a live forcing buffer (a
+    # regrid→physics stack) is cut out of the per-step RHS into a cache filled once
+    # per refresh, not recomputed on every continuous step. Empty (no
+    # discrete-materialize var) ⇒ no effect. A caller-supplied `materialize_out` is
+    # reused (and thus inspectable), else fresh.
     dm = materialize_out === nothing ? DiscreteMaterializer() : materialize_out
     # Build observability is a CONSTRUCTION-time seam now (§5.8): the problem
     # always owns a `BuildInspection`, so `observed_field(prob, name)` is two
@@ -1118,7 +1197,12 @@ function esm_problem(input, tspan;
     end
 
     # ---- initial state: the document's own ICs, then the caller's -----------
-    u0_run = _seed_u0(u0_built, var_map, u0, seed_ic!)
+    # Under the build's plan: a `seed_ic!` hook (`seed_expression_ic!`) is an
+    # evaluation for this problem, and §2.5.10 puts the seed under the same
+    # refusal rule as the right-hand side.
+    u0_run = _with_compiler_plan(_plan_for(compiler)) do
+        _seed_u0(u0_built, var_map, u0, seed_ic!)
+    end
 
     # ---- the problem's callback set (§2.5.4) --------------------------------
     # Composed HERE, at construction, because a callback that refreshes provider
@@ -1258,8 +1342,33 @@ function observed_field(prob::EsmProblem, name::AbstractString)
     # runs under the plan that BUILT the problem rather than under whatever
     # plan (if any) happens to be in scope on the reader's task.
     return _with_compiler_plan(_compiler_plan(compiler(prob))) do
-        _observed_field_impl(prob, name)
+        _observed_field_memo(prob, String(name))
     end
+end
+
+# The output-time route, memoized on the problem and reported in its compiler
+# report. The first read of a name evaluates it — through the compile-once
+# cellwise sweep, or, where that declines, the per-cell resolve-and-compile
+# fallback that a strict compiler refuses — and files one `:observed` row saying
+# which. Later reads at the same forcing epoch return the stored field without
+# evaluating anything: the observed is state-free, so only an in-place refresh of
+# a live buffer (which bumps the epoch) can move it.
+function _observed_field_memo(prob::EsmProblem, name::String)
+    insp = prob.inspection
+    epoch = _FORCING_EPOCH[]
+    hit = get(insp.observed_memo, name, nothing)
+    hit !== nothing && hit[1] == epoch && return copy(hit[2])
+    percell0 = get(_CASCADE_TALLY, :cellwise_percell, 0)
+    v = _observed_field_impl(prob, name)
+    if hit === nothing
+        percell = get(_CASCADE_TALLY, :cellwise_percell, 0) > percell0
+        push!(insp.compiler_report.rules,
+              CompilerRuleRecord(name, :observed,
+                                 percell ? :output_percell : :output_compiled_once,
+                                 Pair{Symbol,Symbol}[]))
+    end
+    insp.observed_memo[name] = (epoch, copy(v))
+    return v
 end
 
 function _observed_field_impl(prob::EsmProblem, name::AbstractString)

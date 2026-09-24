@@ -763,6 +763,7 @@ end
         dm = ESM.DiscreteMaterializer()
         f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(_pg_discrete_model();
             const_arrays=Dict("W" => _PG_W), param_arrays=Dict("src" => src),
+            compiler=:interpreter,  # the discrete-cadence materializer is per cell
             materialize_out=dm)
         @test haskey(dm.caches, "g") && haskey(dm.caches, "h")
 

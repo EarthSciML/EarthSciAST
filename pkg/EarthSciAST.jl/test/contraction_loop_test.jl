@@ -14,10 +14,14 @@
 #   * the conservative GATE: a reduction whose body indexes STATE at a
 #     loop-var-dependent slot (no static per-k node) FALLS BACK to unrolling and
 #     still gives the right answer;
-#   * the WHOLE-ARRAY contraction tier is held off throughout by pinning its
-#     admission floor above every reduction here, so the tier under test is
-#     the per-cell contraction loop and not the nest above it (both floors are
-#     retained tuning thresholds, and refusal boundaries under `native`);
+#   * the ARRAY einsums below go through the in-place build, which has retired
+#     the per-cell contraction loop (its cells would be walked per output cell
+#     on every call): an equation the loop gate admits takes the whole-array
+#     contraction nest instead, whatever the nest's own floor — so pinning that
+#     floor above every reduction here no longer holds the nest off, and the
+#     same identities now pin the nest. The per-cell loop itself survives only
+#     in the out-of-place build, whose emitters compile it
+#     (test/reactant_direct_emit_test.jl, test/scalar_batch_test.jl);
 #   * raising the per-cell tier's own floor above the reduction length then
 #     forces the pure-unroll reference.
 
@@ -140,10 +144,9 @@ end
 end
 
 # ── Array-einsum path (ess-runtime-contraction): out[i,j] = Σ_{k,l} body ──────
-# The per-output-cell inner reduction compiles to ONE `_NK_CONTRACTION_LOOP`
-# (contracted k,l symbolic, output i,j concrete) routed to the scalar-walk
-# reference path, instead of unrolling ∏|k,l| terms per cell. Mirrors the
-# cubed-sphere halo-tent shape.
+# The loop gate admits these, so in place they take the whole-array contraction
+# nest (contracted k,l AND output i,j symbolic, one emitted loop nest) instead of
+# unrolling ∏|k,l| terms per cell. Mirrors the cubed-sphere halo-tent shape.
 
 # Weighted: out[i,j] = Σ_{k,l=1..M} W[i,j,k,l]·F[k,l] (INLINE const weight × const
 # field — the const-gather-in-loop path). Integer-valued so grouped (nested-loop)

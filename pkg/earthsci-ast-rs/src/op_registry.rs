@@ -217,7 +217,9 @@ pub fn arity_of(op: &str) -> Option<Arity> {
         // `/` and `^` are strictly binary.
         "+" | "*" => Arity::AtLeast(1),
         "-" => Arity::Between(1, 2),
-        "/" | "^" => Arity::Exact(2),
+        // `pow` is the word spelling of `^` — the same binary power, evaluated
+        // by the same kernel — as the Julia and Python registries list it.
+        "/" | "^" | "pow" => Arity::Exact(2),
         // `neg` is the canonical unary negation `canonicalize.rs` emits.
         "neg" => Arity::Exact(1),
         // The engine-internal precision-boundary marker
@@ -256,8 +258,10 @@ pub fn arity_of(op: &str) -> Option<Arity> {
 
         // --- Inline constants (§4.2): "`args` MUST be empty `[]`".
         "const" => Arity::Exact(0),
-        // Nullary boolean literal — an always-true join/`filter` predicate (§4.3).
-        "true" => Arity::Exact(0),
+        // Nullary boolean literals — `true` is an always-true join/`filter`
+        // predicate (§4.3); `false` is its counterpart, 0 in the evaluators'
+        // 1.0 / 0.0 boolean encoding.
+        "true" | "false" => Arity::Exact(0),
 
         // --- Closed-registry invocation (§4.2 / §9.2). The registry checks the
         // per-function signature itself (`unknown_closed_function`), so arity is
@@ -815,6 +819,7 @@ mod tests {
         "Pre",
         "const",
         "true",
+        "false",
         "fn",
         "enum",
         "table_lookup",
@@ -895,19 +900,27 @@ mod tests {
         }
     }
 
-    /// The registry has NO alias mechanism and no alias entries. `pow`, `**` and
-    /// `power` are not spellings of `^`; `=` is not a spelling of `==`; `false`
-    /// is not the counterpart of the nullary `true`. None of them is an operator
-    /// in this format — they are open-tier names, rejected as
-    /// `unlowered_operator` when a model carrying one is built.
+    /// `pow` and `false` are evaluable-core ops: `pow` is the word spelling of
+    /// `^` and `false` the nullary counterpart of `true`, as the Julia and
+    /// Python registries list them. Neither is a `broadcast.fn` — the §4.3.4
+    /// scalar-operator list names `^`, not `pow`, and a literal has no operands.
     ///
-    /// This is pinned because the obvious "fix" — adding them to
-    /// [`is_scalar_operator`] so array-level alignment covers them — would
-    /// invent operators the spec's §4.2 table does not have, and would not make
-    /// them runnable either.
+    /// `**`, `power` and `=` are still not operators in this format: they are
+    /// open-tier names, rejected as `unlowered_operator` when a model carrying
+    /// one is built. Adding them to [`is_scalar_operator`] so array-level
+    /// alignment covers them would invent operators the spec's §4.2 table does
+    /// not have, and would not make them runnable either.
     #[test]
-    fn the_registry_has_no_operator_aliases() {
-        for op in ["pow", "**", "power", "=", "false"] {
+    fn pow_and_false_are_core_and_the_other_spellings_are_not() {
+        assert_eq!(arity_of("pow"), Some(Arity::Exact(2)));
+        assert_eq!(arity_of("false"), Some(Arity::Exact(0)));
+        for op in ["pow", "false"] {
+            assert!(
+                !is_scalar_operator(op),
+                "`{op}` must not be a scalar operator"
+            );
+        }
+        for op in ["**", "power", "="] {
             assert!(!is_core_op(op), "`{op}` must not be a registry op");
             assert!(
                 !is_scalar_operator(op),

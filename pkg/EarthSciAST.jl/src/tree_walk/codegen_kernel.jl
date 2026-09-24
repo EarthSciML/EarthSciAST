@@ -1897,6 +1897,18 @@ function _refuse_interpreted_kernels(kernels::AbstractVector{_AccKernel},
         "this construct")
 end
 
+# The same promise for the per-cell scalar entries that ride `rhs_list`: each is
+# a compiled `_Node` tree that the in-place `f!` walks with `_eval_node`, one per
+# output cell, on every right-hand-side call. No emission is attempted for them,
+# so there is no deeper reason to carry than the count.
+function _refuse_interpreted_cells(cells::AbstractVector)
+    (_compiler_is_strict() && !isempty(cells)) || return nothing
+    _refuse_rule(_current_rule_label("the assembled right-hand side"),
+        "$(length(cells)) array cell" * (length(cells) == 1 ? "" : "s") *
+        " would run as per-cell trees on the scalar walker (`_eval_node`) on " *
+        "every right-hand-side call. Build with compiler=:interpreter to run it")
+end
+
 function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
                               shared_cache::Union{Nothing,_CSECache}=nothing)
     cg = _codegen_disabled() ? nothing :

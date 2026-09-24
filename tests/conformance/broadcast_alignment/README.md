@@ -101,18 +101,16 @@ A refusal is a **named exclusion** — reported with the binding, the compiler,
 the fixture and the code, and green — or a **failure**. It is never a silent
 skip and never a fallback.
 
-The ledger as measured on 2026-09-22:
+The ledger is **empty**. It first held two entries, measured on 2026-09-22:
+Rust's strict `native` refused `broadcast_node_mixed_rank` and
+`unary_broadcast_fn` with `compiler_refused_rule`, because its tape had no
+wholesale lowering for the array-level `broadcast` node. The tape now lowers a
+`broadcast` node as the bare `{op: fn, args}` node it means (issue #462), both
+fixtures are required under `native`, and Rust's `tests/array_level_broadcast.rs`
+no longer forces `Compiler::Interpreter`.
 
-| Binding / compiler | Fixture | Code | Why |
-|---|---|---|---|
-| rust / `native` | `broadcast_node_mixed_rank` | `compiler_refused_rule` | Rust's strict `native` has no wholesale lowering for the array-level `broadcast` node and declines rather than demoting the rule to the per-cell oracle |
-| rust / `native` | `unary_broadcast_fn` | `compiler_refused_rule` | the same rule, on the one-operand spelling |
-
-Everything else is `required` for `interpreter` and `native` in all three
-executing bindings. Rust's own `tests/array_level_broadcast.rs` already forced
-`Compiler::Interpreter` on exactly these documents; this ledger is the first
-place that refusal is NAMED rather than worked around, and it is what a
-`native` coverage issue would be filed from.
+Everything is `required` for `interpreter` and `native` in all three executing
+bindings.
 
 ## Running it
 

@@ -143,19 +143,11 @@
           "native"
         ],
         "rust": [
-          "interpreter"
+          "interpreter",
+          "native"
         ]
       },
-      "named_exclusions": [
-        {
-          "binding": "rust",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Rust's `native` compiler has no wholesale lowering for the array-level `broadcast` node: the build refuses with `compiler_refused_rule` \u2014 \"compiler 'native' cannot run the continuous-cadence state derivative 'D(dp[1,1,1])': wholesale: unsupported op `broadcast`\" \u2014 and, being strict (esm-libraries-spec \u00a72.5.10), declines rather than demoting the rule to the per-cell oracle. Measured 2026-09-22 on compiler/testmig at 25efca83a. Rust's own `tests/array_level_broadcast.rs` already forced `Compiler::Interpreter` for exactly this reason; this ledger is the first place the refusal is NAMED rather than worked around. `interpreter` runs the fixture and is required."
-        }
-      ]
+      "named_exclusions": []
     },
     {
       "id": "anonymous_shape_positional",
@@ -208,19 +200,11 @@
           "native"
         ],
         "rust": [
-          "interpreter"
+          "interpreter",
+          "native"
         ]
       },
-      "named_exclusions": [
-        {
-          "binding": "rust",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Rust's `native` compiler has no wholesale lowering for the array-level `broadcast` node: the build refuses with `compiler_refused_rule` \u2014 \"compiler 'native' cannot run the continuous-cadence state derivative 'D(dp[1,1,1])': wholesale: unsupported op `broadcast`\" \u2014 and, being strict (esm-libraries-spec \u00a72.5.10), declines rather than demoting the rule to the per-cell oracle. Measured 2026-09-22 on compiler/testmig at 25efca83a. Rust's own `tests/array_level_broadcast.rs` already forced `Compiler::Interpreter` for exactly this reason; this ledger is the first place the refusal is NAMED rather than worked around. `interpreter` runs the fixture and is required."
-        }
-      ]
+      "named_exclusions": []
     },
     {
       "id": "observed_expression_aligned",

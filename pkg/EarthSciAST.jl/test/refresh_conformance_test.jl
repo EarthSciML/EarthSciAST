@@ -85,6 +85,7 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
             initial_conditions = ics,
             const_arrays = Dict("scale_src" => scale_native),
             param_arrays = Dict("F_src" => fsrc_buf),
+            compiler = :interpreter,  # the discrete-cadence materializer is per cell
             materialize_out = dm)
 
         # (b) regrid band — the in-model regrid reproduces the golden regridded
@@ -114,6 +115,7 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
             initial_conditions = ics,
             const_arrays = Dict("scale_src" => scale_native),
             param_arrays = Dict("F_src" => fsrc_buf2),
+            compiler = :interpreter,  # the discrete-cadence materializer is per cell
             materialize_out = dm2)
         interior = [t for t in anchors if t > 0.0]
         prov = _RGConfProvider(interior, Dict(t => Dict("F_src" => fsrc_anchor(t)) for t in interior))

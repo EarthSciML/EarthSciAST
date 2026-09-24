@@ -1113,24 +1113,30 @@ pub(crate) fn check_free_variables(
     }
 
     // ---- Check every equation (skipping `ic`) and observed expression. -------
+    // Each check sees the shared bound set plus its own expression's binders,
+    // added for the check and taken back out after it (see `with_binders`).
+    let mut binders: HashSet<String> = HashSet::new();
     for eq in &model.equations {
         if is_ic_lhs(&eq.lhs) {
             continue;
         }
-        let mut scope = bound.clone();
-        collect_binders(&eq.lhs, &mut scope);
-        collect_binders(&eq.rhs, &mut scope);
-        check_expr_free_vars(&eq.lhs, &scope)?;
-        check_expr_free_vars(&eq.rhs, &scope)?;
+        collect_binders(&eq.lhs, &mut binders);
+        collect_binders(&eq.rhs, &mut binders);
+        with_binders(&mut bound, &mut binders, |scope| {
+            check_expr_free_vars(&eq.lhs, scope)?;
+            check_expr_free_vars(&eq.rhs, scope)
+        })?;
     }
     for var in model.variables.values() {
         let mut failure = None;
         var.for_each_expression(&mut |expr| {
-            let mut scope = bound.clone();
-            collect_binders(expr, &mut scope);
-            if failure.is_none()
-                && let Err(e) = check_expr_free_vars(expr, &scope)
-            {
+            if failure.is_some() {
+                return;
+            }
+            collect_binders(expr, &mut binders);
+            if let Err(e) = with_binders(&mut bound, &mut binders, |scope| {
+                check_expr_free_vars(expr, scope)
+            }) {
                 failure = Some(e);
             }
         });
@@ -1139,6 +1145,30 @@ pub(crate) fn check_free_variables(
         }
     }
     Ok(())
+}
+
+/// Run `check` against `bound` widened by `binders`, then restore `bound`:
+/// only the binders it did not already hold are inserted, and exactly those
+/// are removed again. `binders` is left empty for the next expression. The
+/// cost is the expression's own binders, not the size of the bound set, so
+/// the whole check stays linear in the model.
+fn with_binders<T>(
+    bound: &mut HashSet<String>,
+    binders: &mut HashSet<String>,
+    check: impl FnOnce(&HashSet<String>) -> T,
+) -> T {
+    let mut added: Vec<String> = Vec::new();
+    for name in binders.drain() {
+        if !bound.contains(&name) {
+            bound.insert(name.clone());
+            added.push(name);
+        }
+    }
+    let out = check(bound);
+    for name in &added {
+        bound.remove(name);
+    }
+    out
 }
 
 /// Is this LHS an initial-condition marker (`{"op": "ic", …}`)?
@@ -1488,8 +1518,8 @@ fn dense_to_json(shape: &[usize], values: &[f64]) -> JsonValue {
 /// Every category is DERIVED (esm-spec §6.3.1), never read off a declared type:
 /// an unknown is an ODE state or an observed according to the equation that
 /// defines it, and a parameter is Brownian or discrete according to its
-/// `update`. A Brownian parameter is an explicit unsupported-feature error,
-/// never a silent drop, and so is a discrete one.
+/// `update`. A Brownian parameter is refused (`unsupported_construct`), never
+/// a silent drop, and so is a discrete one this backend cannot refresh.
 fn classify_variables(
     model: &Model,
 ) -> Result<(Vec<&String>, Vec<&String>, Vec<(&String, &ModelVariable)>), CompileError> {
@@ -1516,11 +1546,10 @@ fn classify_variables(
             }
             VariableType::Parameter => {
                 if class.is_brownian(name) {
-                    return Err(CompileError::UnsupportedFeatureError {
-                        feature: "brownian".to_string(),
-                        message: format!(
-                            "Rust simulation backend does not support SDE models; parameter '{name}' carries a wiener update"
-                        ),
+                    return Err(CompileError::UnsupportedConstruct {
+                        construct: crate::compile_error::WIENER_NOISE,
+                        evaluator: crate::compile_error::ARRAY_EVALUATOR,
+                        detail: format!("parameter '{name}'"),
                     });
                 }
                 if class.is_discrete_parameter(name) {
@@ -2925,15 +2954,16 @@ fn check_state_slots_covered(
 /// coordinate-expression `ic` RHSs, §6.6.5 analytic `reference`s) through the
 /// official array evaluator.
 ///
-/// **Outside `native`'s refusal, deliberately.** esm-libraries-spec §2.5.10
-/// puts four evaluations under the refusal — the constants and static
-/// observeds materialized at construction, the per-segment seed, the
-/// right-hand side, and the observeds reported at output times — and this is
-/// none of them: it evaluates an INITIAL CONDITION or a piece of grid
-/// geometry, not one of the document's rules. No compiler tier in any binding
-/// has a form for initial-state assembly, so a refusal here would refuse the
-/// documents rather than name a gap that could be closed. Recorded rather than
-/// gated. Array-producing `faq`/`makearray` nodes
+/// **The reference evaluator, under every compiler.** No compiler tier has a
+/// form for initial-state assembly, so a field `ic` is evaluated here whatever
+/// the Problem names. What keeps that honest is that construction EXERCISES
+/// every such evaluation ([`ArrayCompiled::field_ic_records`]): one the
+/// whole-array overlay serves is reported as vectorized, and one that walks a
+/// `faq` per cell is refused by a strict compiler, naming the target
+/// (esm-libraries-spec §2.5.10). An inline test's analytic `reference` also
+/// comes here, and stays here under every compiler: it is the test's oracle,
+/// not the model (`crate::inline_tests::evaluate_cellwise`).
+/// Array-producing `faq`/`makearray` nodes
 /// yield arrays; elementwise ops broadcast over them. Any `{ "from": <set> }`
 /// range references are resolved against `index_sets` first, so a raw
 /// (pre-compile) expression evaluates exactly as an equation expression does
@@ -2995,9 +3025,10 @@ pub(super) fn resolve_field_ic_cell(
     forcing: &HashMap<String, ArrayD<f64>>,
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
-    // Per-target memo of the case-(3) whole-field evaluation (cell-independent),
-    // so the coordinate expression is evaluated once per target rather than once
-    // per cell. `None` on entry for the first cell; filled on first use.
+    // Per-target memo of the case-(2) constant and the case-(3) whole-field
+    // evaluation (both cell-independent), so the expression is evaluated once
+    // per target rather than once per cell. `None` on entry for the first cell;
+    // filled on first use.
     cached_field: &mut Option<Value>,
 ) -> Result<f64, SimulateError> {
     // (1) Loaded field served through the provider forcing buffer.
@@ -3023,9 +3054,20 @@ pub(super) fn resolve_field_ic_cell(
     // coordinate-expression path below — never silently seed the state vector.
     // `evaluate` refuses one by name, which the `if let Ok(..)` catches; the
     // `is_finite()` guard rejects a genuine `1.0/0.0`.
-    if let Ok(c) = crate::expression::evaluate(rhs, params)
+    //
+    // Evaluated ONCE per target and memoized with the case-(3) field: the
+    // value does not depend on the cell, so walking the expression again for
+    // each cell would be a per-cell tree walk producing one number.
+    if let Some(Value::Scalar(c)) = cached_field.as_ref()
         && c.is_finite()
     {
+        return Ok(*c);
+    }
+    if cached_field.is_none()
+        && let Ok(c) = crate::expression::evaluate(rhs, params)
+        && c.is_finite()
+    {
+        *cached_field = Some(Value::Scalar(c));
         return Ok(c);
     }
     // (3) Coordinate expression over grid-geometry aggregates (model

@@ -582,8 +582,19 @@ function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector
                                          registered_functions, params, t)
         gated === nothing || return gated
     end
-    _refuse_percell_evaluation("(build-time observed / reference)",
-        "the build-time cellwise evaluator", length(cells))
+    _tally_cascade!(:cellwise_percell)
+    if _compiler_is_strict()
+        # A body NO form can evaluate is the document's error, not a compiler's
+        # refusal — an out-of-range const gather must still say
+        # `E_TREEWALK_CONSTARRAY_OOB` — so the first cell is evaluated once,
+        # for its diagnostic only, and the refusal is raised when it succeeds.
+        _eval_cellwise(expr, collect(Int, first(cells));
+                       const_arrays=const_arrays,
+                       registered_functions=registered_functions,
+                       params=params, t=t)
+        _refuse_percell_evaluation("(build-time observed / reference)",
+            "the build-time cellwise evaluator", length(cells))
+    end
     return Float64[_eval_cellwise(expr, collect(Int, c);
                                   const_arrays=const_arrays,
                                   registered_functions=registered_functions,
@@ -1822,9 +1833,18 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
             # index set is a name the reference could already read and the
             # wrap would silently rebind it to the cell index (issue #226).
             arrays = _array_scope_names(insp.const_arrays, insp.setup_arrays)
-            ref = evaluate_cellwise(bind_dimension_names(a.reference, dims, scope, arrays),
-                                    cell_tuples;
-                                    const_arrays=insp.const_arrays, params=scope)
+            # THE SPLIT between the model and the test's oracle. Everything above
+            # is a value OF THE MODEL and runs under the plan of the compiler that
+            # built it. An analytic `reference` is not: it is the expected value
+            # the assertion compares against, written as an expression, so it is
+            # evaluated by the interpreter whatever compiler is under test — an
+            # oracle has no reason to be compiled, and a strict compiler refusing
+            # the test's own answer key would be refusing nothing of the model's.
+            ref = _with_compiler_plan(_compiler_plan(:interpreter)) do
+                evaluate_cellwise(bind_dimension_names(a.reference, dims, scope, arrays),
+                                  cell_tuples;
+                                  const_arrays=insp.const_arrays, params=scope)
+            end
         elseif a.reference isa AbstractDict &&
                string(get(a.reference, "type", "")) == "from_file"
             ref = _from_file_reference(a.reference, resolved_base, cell_tuples)
@@ -1903,6 +1923,11 @@ struct _SimulateHandle
     # survivors (issue #230). An assertion names its component's LOCAL variable,
     # which a merge may have folded onto another component's.
     merged_renames::Dict{String,String}
+    # The compiler that built the problem. Every model-side value an assertion
+    # reads is evaluated under this compiler's plan (esm-libraries-spec
+    # §2.5.10), so a strict build refuses here exactly what it refuses at
+    # `observed_field(prob, name)`.
+    compiler::Symbol
 end
 
 # The §6.6 stand-in for a solution when the document has NOTHING TO INTEGRATE:
@@ -2067,12 +2092,18 @@ function _engine_setup(e::SimulateTestEngine, t)
     Symbol(sim.retcode) === :Success ||
         return "solver retcode $(sim.retcode)"
     return _SimulateHandle(sim, prob.var_map, insp, target,
-                           Dict{String,String}(prob.merged_renames))
+                           Dict{String,String}(prob.merged_renames),
+                           compiler(prob))
 end
 
+# Under the plan of the compiler that BUILT the problem, not the process default:
+# the observeds and states an assertion reads are evaluations of the model, and
+# §2.5.10 puts every one of them under that compiler's refusal rule.
 _engine_actual(e::SimulateTestEngine, h::_SimulateHandle, a) =
-    _evaluate_assertion(a, h.sim, h.var_map, h.insp, h.eval_file, e.mname,
-                        e.resolved_base, h.merged_renames)
+    _with_compiler_plan(_compiler_plan(h.compiler)) do
+        _evaluate_assertion(a, h.sim, h.var_map, h.insp, h.eval_file, e.mname,
+                            e.resolved_base, h.merged_renames)
+    end
 
 _engine_error_message(::SimulateTestEngine, err) =
     "assertion evaluation failed: $(sprint(showerror, err))"

@@ -392,7 +392,7 @@ pub(super) unsafe fn exec_fused(
         bases.push(p);
     }
     // Output slab pointers.
-    let mut outs: SmallVec<[(u16, *mut f64); 2]> = SmallVec::new();
+    let mut outs: SmallVec<[(GroupIx, *mut f64); 2]> = SmallVec::new();
     for &(reg, slot) in &fs.outputs {
         outs.push((reg, unsafe { slab_ptr.add(slot_off[slot as usize]) }));
     }
@@ -418,7 +418,7 @@ unsafe fn exec_fused_runs(
     fs: &FusedSpec,
     svals: &[f64],
     bases: &[*const f64],
-    outs: &[(u16, *mut f64)],
+    outs: &[(GroupIx, *mut f64)],
     fregs: &mut [f64],
 ) {
     let rp = fregs.as_mut_ptr();
@@ -452,7 +452,7 @@ unsafe fn exec_fused_runs(
             // Pre-load strided shifted inputs into their dedicated chunk
             // registers (a ghost run needs no load — reads resolve to 0.0).
             for (i, inp) in fs.inputs.iter().enumerate() {
-                if inp.load_reg == u16::MAX {
+                if inp.load_reg == GroupIx::MAX {
                     continue;
                 }
                 let sx = inp.shifted_ix.expect("load_reg implies shifted");
@@ -481,7 +481,7 @@ unsafe fn exec_fused_runs(
                                 let o = run.in_off[s as usize];
                                 if o == GHOST_OFF {
                                     MSrc::C(0.0)
-                                } else if inp.load_reg != u16::MAX {
+                                } else if inp.load_reg != GroupIx::MAX {
                                     MSrc::P(unsafe {
                                         rp.add(inp.load_reg as usize * FCHUNK) as *const f64
                                     })
@@ -769,7 +769,7 @@ pub(super) unsafe fn exec_fused_runs_generic(
     fs: &FusedSpec,
     svals: &[f64],
     bases: &[*const f64],
-    outs: &[(u16, *mut f64)],
+    outs: &[(GroupIx, *mut f64)],
     fregs: &mut [f64],
 ) {
     unsafe { exec_fused_runs(fs, svals, bases, outs, fregs) }
@@ -785,7 +785,7 @@ pub(super) unsafe fn exec_fused_runs_avx2(
     fs: &FusedSpec,
     svals: &[f64],
     bases: &[*const f64],
-    outs: &[(u16, *mut f64)],
+    outs: &[(GroupIx, *mut f64)],
     fregs: &mut [f64],
 ) {
     unsafe { exec_fused_runs(fs, svals, bases, outs, fregs) }
@@ -805,7 +805,7 @@ pub(super) unsafe fn exec_fused_runs_avx512(
     fs: &FusedSpec,
     svals: &[f64],
     bases: &[*const f64],
-    outs: &[(u16, *mut f64)],
+    outs: &[(GroupIx, *mut f64)],
     fregs: &mut [f64],
 ) {
     unsafe { exec_fused_runs(fs, svals, bases, outs, fregs) }

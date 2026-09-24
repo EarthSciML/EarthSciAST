@@ -235,9 +235,14 @@ end
     # §6.6.5 end to end (flatten prefixes every name with "Div.", so this also
     # exercises the model-scope suffix resolution of the registry's bare
     # "nEdgesOnCell" offsets factor) — including the DIRECT observed assertion.
+    #
+    # The observed's contracted bound varies per output cell, so the output-time
+    # evaluator has no compile-once form for it and takes the per-cell resolve
+    # and compile — which the assertion runs under the problem's own compiler, so
+    # it passes under `:interpreter` and is refused under the strict default.
     file = EarthSciAST.load_string(IOBuffer(JSON3.write(doc)))
     results = run_inline_tests(file; model_name="Div", alg=OrdinaryDiffEqTsit5.Tsit5(),
-                            reltol=1e-10, abstol=1e-12)
+                            reltol=1e-10, abstol=1e-12, compiler=:interpreter)
     @test length(results) == 3
     for r in results
         @test r.passed
@@ -246,4 +251,11 @@ end
     div_min = only(r for r in results if r.reduce == "min")
     @test div_max.actual == 20.0
     @test div_min.actual == -10.0
+    native = run_inline_tests(file; model_name="Div", alg=OrdinaryDiffEqTsit5.Tsit5(),
+                              reltol=1e-10, abstol=1e-12)
+    @test only(r for r in native if r.variable == "u").passed
+    for r in native
+        r.variable == "div" || continue
+        @test !r.passed && occursin("compiler_refused_rule", r.message)
+    end
 end

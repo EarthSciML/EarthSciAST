@@ -571,7 +571,18 @@ covers every evaluation the compiler performs for the Problem**, not the
 right-hand side alone: the materialization of constants and static observeds at
 construction, the per-segment seed, the right-hand side, and the observeds
 reported at output times are all under it, because each of those is a place a
-binding evaluates rules and each can walk the tree per cell. A binding whose
+binding evaluates rules and each can walk the tree per cell. So are the
+evaluations construction performs OUTSIDE the compiled rule set: a document
+with nothing to integrate still has its observed graph evaluated, and by the
+compiler the caller named, not by an evaluator chosen because there is no
+right-hand side; a build pipeline that materializes a relational or ingesting
+document's observeds evaluates them for the Problem; and so does a field
+initial condition. Each appears in the per-rule record below, and one a strict
+compiler could only walk per cell is refused like any other rule. An inline
+test's analytic `reference` (esm-spec §6.6.5) is not under the rule: it is the
+test's oracle — the expected value the model is checked against — and not an
+evaluation of the model, so a binding evaluates it with its reference
+evaluator whatever compiler built the model. A binding whose
 ladder decides at evaluation time rather than at build time MUST exercise every
 such evaluation at construction so that the refusal is a construction error, as
 §2.5.2 requires of every build failure. The reason a silent demotion
@@ -2399,6 +2410,7 @@ The Rust crate exposes a native, correctness-first simulator: a `diffsol`-backed
 - **Time-integration domain.** The simulator consumes a `FlattenedSystem` whose `independent_variables` is exactly `["t"]` — which *includes* discretized PDEs, whose spatial axis is folded into `faq` dimensions and integrated natively by the array-op runtime (see §5.9). A system that still carries a spatial independent variable holds an *undiscretized* spatial operator and returns `CompileError::UnsupportedDimensionalityError`; discretize it first (apply the `expression_templates` stencil rewrite).
 - **No event handling.** Models with non-empty `continuous_events` or `discrete_events`, on the model itself or on any inline subsystem, return `CompileError::UnsupportedConstruct`, the esm-spec §9.6.6 `unsupported_construct` diagnostic, from the array runtime (single-model and coupled routes alike).
 - **No algebraic solve.** An implicit equation — an LHS that is an expression rather than an unknown, `D(unknown)` or `ic(unknown)` — returns `CompileError::UnsupportedConstruct`. Trivial algebraic equations (`var ~ expr`) are still eliminated.
+- **No SDEs.** A parameter whose `update.kind` is `wiener` returns `CompileError::UnsupportedConstruct` naming the parameter, rather than integrating the noise as a constant; no binding's evaluator integrates an SDE.
 - **Future work, not yet in any binding's array evaluator.** Running continuous and discrete events and solving implicit equations on the array path is unimplemented in Julia (tree-walk), Python (NumPy interpreter) and Rust alike; each refuses all three with `unsupported_construct` instead (conformance category `tests/conformance/unsupported_construct/`). Julia's ModelingToolkit export is the one runner that executes them today.
 - **No coupling beyond Core flatten.** Anything `flatten()` itself rejects (`slice` / `project` / `regrid`, *undiscretized* spatial operators, mismatched dimension mappings) is rejected upstream and never reaches the simulator.
 - **Native only.** The whole `simulate` module is gated behind `cfg(not(target_arch = "wasm32"))`, so the WASM build (which has a separate follow-up bead for simulator exposure) does not pull in `diffsol`.

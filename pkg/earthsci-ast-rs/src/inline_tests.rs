@@ -263,6 +263,13 @@ pub struct AssertionResult {
 /// [`BuildInspection::params`]) and a parameter-dependent expression resolves
 /// (esm-spec §6.6.5). A scalar (const-folded) result broadcasts. Mirrors the
 /// Julia `evaluate_cellwise` / Python `evaluate_cellwise` 1:1.
+///
+/// Always the reference evaluator, whatever compiler built the model: the
+/// runner calls this for an assertion's analytic `reference`, which is the
+/// test's oracle rather than the model, and so is outside the compiler's
+/// refusal. The same kind of expression seeding a model's `ic` is the model's,
+/// and is exercised and gated at construction instead
+/// ([`crate::problem::esm_problem`]).
 pub fn evaluate_cellwise(
     expr: &Expr,
     cells: &[Vec<i64>],
@@ -1377,6 +1384,14 @@ fn eval_assertion(
     let reference = match &assertion.reference {
         None => None,
         Some(AssertionReference::Expression(expr)) => {
+            // The analytic reference is the TEST'S oracle — the expected value
+            // an assertion compares the model against — not an evaluation of
+            // the model, so it is evaluated by the reference evaluator under
+            // every compiler and is outside the compiler's refusal
+            // (esm-libraries-spec §2.5.10 governs what the compiler evaluates
+            // for the Problem). Serving it from the compiler under test would
+            // let a compiler grade its own answer.
+            //
             // Model parameters (load-time constants) are in scope for a §6.6.5
             // analytic reference; state is not. `insp.params` carries the
             // build's resolved scalar params. The field's dimension names are
@@ -1880,11 +1895,17 @@ enum Built {
     BuildFailed(String),
 }
 
-/// The `(p, u0)` a test's problem was built from: the scalar parameter
-/// overrides and the scalar initial conditions, on the canonical SciML
-/// channels. Kept so a build can be redone from exactly the same bindings
-/// ([`build_pipeline_fields`]).
-type RetryBindings = (HashMap<String, f64>, HashMap<String, f64>);
+/// The `(p, u0, compiler)` a test's problem was built from: the scalar
+/// parameter overrides and the scalar initial conditions, on the canonical
+/// SciML channels, and the compiler the caller named. Kept so a build can be
+/// redone from exactly the same bindings ([`build_pipeline_fields`]) — the
+/// compiler included, because a retry on a compiler the caller did not name
+/// would answer the test from an evaluation that compiler never gated.
+type RetryBindings = (
+    HashMap<String, f64>,
+    HashMap<String, f64>,
+    Option<crate::problem::Compiler>,
+);
 
 /// The fields one build MATERIALIZED, in the order they were produced: the
 /// `(name, array)` pairs `observed_field` reads back
@@ -2259,7 +2280,7 @@ fn build_for_test(
     // asks for the pipeline itself, just below.
     let retry_bindings = build_providers
         .is_none()
-        .then(|| (scalar_params.clone(), u0.clone()));
+        .then(|| (scalar_params.clone(), u0.clone(), seeds.compiler));
     let mut popts = ProblemOptions {
         p: scalar_params,
         u0,
@@ -2356,13 +2377,14 @@ fn build_pipeline_fields(
     tspan: (f64, f64),
     bindings: Option<&RetryBindings>,
 ) -> Option<BuiltFields> {
-    let (p, u0) = bindings?;
+    let (p, u0, compiler) = bindings?;
     let popts = ProblemOptions {
         p: p.clone(),
         u0: u0.clone(),
         inspect: true,
         rhs: crate::problem::Rhs::Always,
         build_pipeline: true,
+        compiler: *compiler,
         ..Default::default()
     };
     #[cfg(test)]
@@ -2552,11 +2574,22 @@ fn run_component_tests(
                             // because the merge below is `or_insert`.
                             prob.reset_inspection();
                             // The fields this build already carries (a
-                            // data-ingesting document), else the ones a build
-                            // with the pipeline on can materialize. At most
-                            // ONE such build per `BuildKey`, however many of
-                            // its tests reach here
-                            // (`BuiltModel::retry_fields`).
+                            // data-ingesting document). Else, under a strict
+                            // compiler, the ones this problem's OWN compiled
+                            // model evaluates over its empty state — the tape
+                            // under `native` — because a pipeline rebuild would
+                            // answer through the reference evaluator, which is
+                            // the route such a compiler refuses to take. Else
+                            // the ones a build with the pipeline on can
+                            // materialize, on the same compiler: at most ONE
+                            // such build per `BuildKey`, however many of its
+                            // tests reach here (`BuiltModel::retry_fields`).
+                            if fields.is_empty()
+                                && seeds.compiler.unwrap_or_default().is_strict()
+                                && let Some(f) = crate::problem::stateless_fields(prob)
+                            {
+                                fields = f;
+                            }
                             if fields.is_empty()
                                 && let Some(f) = cached
                                     .retry_fields(run_file, (t.time_span.start, t.time_span.end))
@@ -4966,6 +4999,10 @@ mod tests {
     /// overrides — and the fourth differs only in its span, which the key
     /// covers. Two builds, not four, and not one: a key that changed must
     /// still rebuild, because the fields are materialized at `tspan.0`.
+    ///
+    /// Under the interpreter, which is where the retry is still the route: a
+    /// strict compiler answers from the problem's own compiled model first
+    /// (`a_strict_compiler_answers_a_shaped_static_document_from_its_own_model`).
     #[test]
     fn the_last_resort_retry_is_built_once_per_build_key() {
         let test = |id: &str, end: f64| {
@@ -5011,7 +5048,14 @@ mod tests {
         });
         let file = load_string(&doc.to_string()).expect("document loads");
         let before = BUILD_PIPELINE_BUILDS.with(std::cell::Cell::get);
-        let results = run_inline_tests(&file, None, &SolveOptions::default());
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                compiler: Some(crate::problem::Compiler::Interpreter),
+                ..Default::default()
+            },
+            None,
+        );
         let builds = BUILD_PIPELINE_BUILDS.with(std::cell::Cell::get) - before;
         // Non-vacuity: every test must actually have reached the dead end and
         // been answered from the retry's fields. A document answered some
@@ -5029,5 +5073,101 @@ mod tests {
             "four tests over two `BuildKey`s must pay two whole-document \
              builds: one per key, reused by the tests sharing it"
         );
+    }
+
+    /// A shaped state-free document with a running sum beside its field —
+    /// `cum[i] = Σ_{j ≤ i} g[j]`, a prefix scan the build pipeline's reference
+    /// evaluator sweeps cell by cell.
+    fn shaped_static_with_cumulative() -> serde_json::Value {
+        json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "ShapedStaticCumulative", "license": "MIT",
+                         "description": "state-free, shaped, with a running sum"},
+            "index_sets": {"x": {"kind": "interval", "size": 3}},
+            "models": {"ShapedStaticCumulative": {
+                "variables": {
+                    "a": {"type": "parameter", "units": "1", "default": 2.0},
+                    "g": {"type": "unknown", "units": "1", "shape": ["x"]},
+                    "cum": {"type": "unknown", "units": "1", "shape": ["x"]},
+                },
+                "equations": [
+                    {"lhs": "g",
+                     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                             "ranges": {"i": {"from": "x"}},
+                             "expr": {"op": "*", "args": ["a", "i"]}}},
+                    {"lhs": "cum",
+                     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                             "ranges": {"i": {"from": "x"}, "j": {"from": "x"}},
+                             "filter": {"op": "<=", "args": ["j", "i"]},
+                             "expr": {"op": "index", "args": ["g", "j"]}}},
+                ],
+                "tests": [{
+                    "id": "values",
+                    "time_span": {"start": 0.0, "end": 10.0},
+                    "tolerance": {"rel": 1e-9, "abs": 1e-11},
+                    "assertions": [
+                        {"variable": "g", "time": 5.0, "coords": {"x": 2},
+                         "expected": 4.0},
+                        {"variable": "cum", "time": 5.0, "coords": {"x": 3},
+                         "expected": 12.0},
+                    ],
+                }],
+            }},
+        })
+    }
+
+    /// Under `native`, a shaped state-free document is answered from the
+    /// problem's OWN compiled model — the tape — and never from a pipeline
+    /// rebuild through the reference evaluator (issue #484), so no retry is
+    /// built at all.
+    #[test]
+    fn a_strict_compiler_answers_a_shaped_static_document_from_its_own_model() {
+        let file = load_string(&shaped_static_with_cumulative().to_string()).expect("loads");
+        let before = BUILD_PIPELINE_BUILDS.with(std::cell::Cell::get);
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                compiler: Some(crate::problem::Compiler::Native),
+                ..Default::default()
+            },
+            None,
+        );
+        let builds = BUILD_PIPELINE_BUILDS.with(std::cell::Cell::get) - before;
+        assert_eq!(results.len(), 2, "{results:?}");
+        for r in &results {
+            assert!(
+                r.passed,
+                "{}: {} (actual {:?})",
+                r.variable, r.message, r.actual
+            );
+        }
+        assert_eq!(builds, 0, "native must not fall back to a pipeline rebuild");
+    }
+
+    /// The retry carries the caller's compiler (issue #484), whatever the
+    /// default is. Asked directly, a strict compiler refuses the pipeline's
+    /// cell-by-cell sweep of `cum`, so the retry has nothing to hand back,
+    /// while the interpreter's retry answers.
+    #[test]
+    fn the_pipeline_retry_is_built_on_the_named_compiler() {
+        let file = load_string(&shaped_static_with_cumulative().to_string()).expect("loads");
+        let bindings = |c| Some((HashMap::new(), HashMap::new(), Some(c)));
+        let interp = build_pipeline_fields(
+            &file,
+            (0.0, 10.0),
+            bindings(crate::problem::Compiler::Interpreter).as_ref(),
+        );
+        assert!(
+            interp
+                .as_ref()
+                .is_some_and(|f| f.iter().any(|(k, _)| k == "cum")),
+            "{interp:?}"
+        );
+        let native = build_pipeline_fields(
+            &file,
+            (0.0, 10.0),
+            bindings(crate::problem::Compiler::Native).as_ref(),
+        );
+        assert!(native.is_none(), "{native:?}");
     }
 }

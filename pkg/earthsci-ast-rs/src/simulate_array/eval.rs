@@ -223,8 +223,8 @@ pub(super) fn set_bind(binds: &mut IdxMap, name: &str, val: i64) {
 pub fn is_evaluable_op(op: &str) -> bool {
     matches!(
         op,
-        // Arithmetic.
-        "+" | "-" | "*" | "/" | "^" | "neg"
+        // Arithmetic. `pow` is the word spelling of `^`.
+        "+" | "-" | "*" | "/" | "^" | "pow" | "neg"
         // Elementary functions.
         | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
         | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
@@ -239,7 +239,7 @@ pub fn is_evaluable_op(op: &str) -> bool {
         // for a semi-join, and the one op in the §4.2 table this evaluator used
         // to have no answer for while `value_invention::vi_eval`, Python's
         // `numpy_interpreter` and Julia's `_geo_compile` all evaluated it.
-        | "D" | "Pre" | "const" | "true"
+        | "D" | "Pre" | "const" | "true" | "false"
         // Array / geometry ops.
         | "index" | "faq" | "makearray" | "reshape" | "transpose" | "concat"
         | "broadcast" | "intersect_polygon" | "polygon_intersection_area"
@@ -427,6 +427,8 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // Elementwise / scalar arithmetic. If any operand is an array,
         // return an array (with ndarray broadcasting).
         "+" | "-" | "*" | "/" | "^" => eval_arith(op, &node.args, ctx),
+        // The word spelling of `^`, folded through the `^` kernel itself.
+        "pow" => eval_arith("^", &node.args, ctx),
 
         // Canonical unary negation: `canonicalize.rs` emits `neg`, so a
         // canonicalized expression can reach this oracle, and the vectorized
@@ -564,6 +566,8 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // identity, so `faq{expr: true}` COUNTS the admitted tuples —
         // which is exactly what a semi-join wants to say.
         "true" => Value::Scalar(1.0),
+        // Its counterpart, in the same encoding (a false comparison is 0.0).
+        "false" => Value::Scalar(0.0),
 
         // Unreachable by construction: EVERY path into this evaluator is gated.
         // The compiled-model path gates in `from_model` (`check_no_spatial_ops`),
@@ -848,7 +852,7 @@ pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
         "-" => x - y,
         "*" => x * y,
         "/" => x / y,
-        "^" => x.powf(y),
+        "^" | "pow" => x.powf(y),
         "atan2" => x.atan2(y),
         "min" => x.min(y),
         "max" => x.max(y),
@@ -924,7 +928,7 @@ impl BinCode {
             "-" => BinCode::Sub,
             "*" => BinCode::Mul,
             "/" => BinCode::Div,
-            "^" => BinCode::Pow,
+            "^" | "pow" => BinCode::Pow,
             "atan2" => BinCode::Atan2,
             "min" => BinCode::Min,
             "max" => BinCode::Max,
@@ -1754,6 +1758,32 @@ pub(super) fn lookup_array_ref<'a>(name: &str, ctx: &'a EvalCtx) -> Option<&'a A
     // Params (scalars) and forcing (a `RefCell` — no plain `&` to hand back)
     // fall through to the normal evaluate-then-index path.
     None
+}
+
+thread_local! {
+    /// How many `faq` nodes this thread has evaluated by walking the body once
+    /// per cell (or once per contracted term) rather than through the
+    /// whole-array overlay. See [`per_cell_walks`].
+    static PER_CELL_WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The running count of per-cell `faq` walks on this thread: the number of
+/// times [`eval_faq`] took its per-cell branch (a prefix scan, the output-tuple
+/// loop, or a rank-0 contraction folded term by term) because the whole-array
+/// overlay did not take the node.
+///
+/// The routes that evaluate a document through this evaluator OUTSIDE the
+/// compiled rule set — the build pipeline's observed graph, a field initial
+/// condition — read the delta across one evaluation to learn whether it was
+/// interpreted per cell, which is what a strict compiler refuses
+/// (esm-libraries-spec §2.5.10). A counter rather than a flag, so a nested
+/// evaluation cannot clear what an enclosing one recorded.
+pub(crate) fn per_cell_walks() -> u64 {
+    PER_CELL_WALKS.with(std::cell::Cell::get)
+}
+
+fn note_per_cell_walk() {
+    PER_CELL_WALKS.with(|c| c.set(c.get().wrapping_add(1)));
 }
 
 thread_local! {
@@ -4706,6 +4736,63 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         }
     }
 
+    // ---- Rank-0 contraction as a whole-array map, then one fold -----------
+    // A fully contracted node (`total = Σ_r x[r]`) has no output box for the
+    // overlay above to evaluate over, so it used to be folded term by term,
+    // one tree walk per term. Its body is a pure map over the CONTRACTION box
+    // instead: evaluate that once through the overlay, with the contracted
+    // symbols bound as the box's axes, and fold the resulting array. The fold
+    // visits the terms in row-major order — the order `CartesianTuples` walks
+    // the contraction odometer, last index fastest — starting from the
+    // identity with the same `combine`, so the result is bit-identical to the
+    // loop below. Declined (to that loop) for a filter, which the loop SKIPS
+    // rather than folding the identity (not bit-identical for signed zeros),
+    // for bounds that vary, and wherever the overlay above is declined.
+    if shape.is_empty()
+        && !contract_names.is_empty()
+        && filter.is_none()
+        && scan.is_none()
+        && gates.is_empty()
+        && ctx.recur.is_none()
+        && let Some(box_ranges) = static_ranges.as_deref()
+    {
+        let terms = with_faq_pool(|pool| {
+            try_eval_faq_vectorized(
+                &contract_names,
+                box_ranges,
+                body,
+                &[],
+                &[],
+                reduce,
+                None,
+                &*ctx,
+                pool,
+            )
+            .map(|(vv, _ops)| {
+                let out = vv.view().expect("vectorized faq has a view").to_owned();
+                vv.release(pool);
+                out
+            })
+        });
+        if let Some(terms) = terms {
+            let acc = terms
+                .iter()
+                .fold(reduce.identity(), |acc, &t| reduce.combine(acc, t));
+            return Value::Scalar(acc);
+        }
+    }
+    // An EMPTY output box (a size-0 index set) has no cell to evaluate: the
+    // result is the empty array of that box. The buffer below is sized
+    // `max(1)` for the rank-0 case, and reshaping its one element into a box
+    // with a zero extent is not a value but a panic.
+    if shape.contains(&0) {
+        return Value::Array(Box::new(ArrayD::zeros(IxDyn(&shape))));
+    }
+    // From here on the node is walked per cell. A rank-0 node with nothing to
+    // contract is a single scalar evaluation, not a walk.
+    if !shape.is_empty() || !contract_names.is_empty() {
+        note_per_cell_walk();
+    }
     let mut buf = vec![0.0f64; total];
     let saved_binds: Vec<(String, Option<i64>)> = idx_names
         .iter()
@@ -6315,6 +6402,10 @@ mod gate_plan_tests {
                 model_name: Some("J".into()),
                 const_arrays: t.const_arrays(),
                 build_providers: Vec::new(),
+                // A gate-driven join is walked per cell by the pipeline, which
+                // a strict native refuses (#484); the gate planner is what is
+                // under test here, on the reference evaluator.
+                compiler: Some(crate::Compiler::Interpreter),
                 ..Default::default()
             },
         )
