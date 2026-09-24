@@ -332,6 +332,11 @@ fn anonymous_shapes_keep_positional_broadcast() {
             p: HashMap::new().clone(),
             u0: ics.clone(),
             rhs: earthsci_ast::Rhs::Always,
+            // The tape has no wholesale lowering for `reshape`, so `native`
+            // refuses this fixture by NAME (API_SPEC §5.8). What is pinned
+            // here is the positional broadcast, and that is the reference
+            // evaluator's answer to give.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )
