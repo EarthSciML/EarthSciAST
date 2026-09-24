@@ -2499,12 +2499,22 @@ pub(crate) fn has_differential_equations(file: &EsmFile, model_name: Option<&str
         .any(|(_, m)| crate::simulate_array::model_tree_any(m, &model_has_derivative))
 }
 
+/// Whether any equation of `model` has a TIME derivative in its LHS — the
+/// esm-spec §6.3.1 derivation of `system_kind`, which is what "declares no
+/// differential equations" means (API_SPEC §5.8).
+///
+/// A bare top-level `D` is not the only spelling. The arrayed form
+/// `faq{expr: D(index(u, i))}` is how every array-op PDE is written and what
+/// the pointwise lift produces, and `index(D(u), i)` also names a derivative;
+/// reading only the top-level operator routed all of them to
+/// [`Backend::Static`], where `solve` answered `NotDynamic` for a document
+/// that plainly integrates (issue #476). The array runtime then either
+/// compiles such an equation or refuses it by name.
 fn model_has_derivative(model: &crate::types::Model) -> bool {
-    model.equations.iter().any(|eq| expr_is_derivative(&eq.lhs))
-}
-
-fn expr_is_derivative(e: &crate::types::Expr) -> bool {
-    matches!(e, crate::types::Expr::Operator(node) if node.op == "D")
+    model
+        .equations
+        .iter()
+        .any(|eq| crate::classification::has_time_derivative(&eq.lhs))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
