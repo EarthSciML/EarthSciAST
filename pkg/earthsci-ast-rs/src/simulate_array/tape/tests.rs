@@ -2518,3 +2518,107 @@ fn interp_closed_functions_lower_to_one_instruction() {
     run_reference(&prog, &compiled, &[0.0], &param_vec, 9.0, &mut dy);
     assert_eq!(dy[0], 4.0);
 }
+
+// ---------------------------------------------------------------------------
+// Index widths (#474).
+// ---------------------------------------------------------------------------
+
+/// More entries than a 16-bit index can name. Each fixture below puts
+/// something past this bound, so a program-table index narrowed to 16 bits,
+/// or a fused group allowed to outgrow its 16-bit local indices, reads
+/// another entry's value and the bitwise comparison fails.
+const PAST_U16: usize = 70_000;
+
+/// `PAST_U16` scalar state variables, each with its own equation (a scalar
+/// diffusion chain, so every derivative reads its neighbours), and as many
+/// parameters, of which the equations near both ends of the chain read ones
+/// past the 16-bit bound. State, parameter and `dy` indices all exceed
+/// 65,535.
+#[test]
+fn ab_state_and_parameter_indices_past_u16() {
+    let n = PAST_U16;
+    let mut vars = serde_json::Map::new();
+    for k in 1..=n {
+        vars.insert(format!("u{k}"), json!({"type": "unknown", "default": 1.0}));
+        vars.insert(
+            format!("c{k}"),
+            json!({"type": "parameter", "default": 1.0 + k as f64 * 1e-3}),
+        );
+    }
+    let coeff = |k: usize| {
+        if k <= 3 || k > n - 3 {
+            json!(format!("c{}", n + 1 - k))
+        } else {
+            json!(0.1)
+        }
+    };
+    let eqs: Vec<serde_json::Value> = (1..=n)
+        .map(|k| {
+            let mut nb = Vec::new();
+            if k > 1 {
+                nb.push(json!(format!("u{}", k - 1)));
+            }
+            if k < n {
+                nb.push(json!(format!("u{}", k + 1)));
+            }
+            let sum = if nb.len() == 1 {
+                nb.pop().unwrap()
+            } else {
+                json!({"op": "+", "args": nb})
+            };
+            json!({
+                "lhs": {"op": "D", "args": [format!("u{k}")], "wrt": "t"},
+                "rhs": {"op": "*", "args": [coeff(k), {"op": "-", "args": [
+                    sum, {"op": "*", "args": [2, format!("u{k}")]}]}]}
+            })
+        })
+        .collect();
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_wide_state_indices"},
+        "models": {"M": {"variables": vars, "equations": eqs}}
+    });
+    let prog = ab_check(doc, 0, -1.0, 1.0);
+    assert_eq!(prog.state_vars.len(), n);
+}
+
+/// More micro-ops and distinct scalar operands on one box than a fused
+/// group's 16-bit local indices can name: `D(u[i]) = Σ_j j·u[i]` over
+/// `PAST_U16` terms. The fusion pass has to split the box into several
+/// groups, each within [`GroupIx`], and the split program must still match
+/// the interpreter bit for bit.
+#[test]
+fn ab_fused_box_past_u16_splits_into_groups() {
+    let n = 8;
+    let terms: Vec<serde_json::Value> = (1..=PAST_U16)
+        .map(|j| json!({"op": "*", "args": [j as f64 * 0.5, idx("u", json!("i"))]}))
+        .collect();
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_wide_fused_box"},
+        "models": {"M": {
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
+            "equations": [d_eq("u", n, agg(n, json!({"op": "+", "args": terms})))]
+        }}
+    });
+    let prog = ab_check(doc, 0, -1.0, 1.0);
+    assert!(
+        prog.fused.len() > 1,
+        "the box must be split across groups, got {}",
+        prog.fused.len()
+    );
+    let scalars: usize = prog.fused.iter().map(|f| f.scalars.len()).sum();
+    assert!(
+        scalars > GroupIx::MAX as usize,
+        "the fixture must put more scalar operands on the box than one group can index ({scalars})"
+    );
+    for f in &prog.fused {
+        let regs = f.n_regs as usize + f.n_load_regs as usize + f.n_splat_regs as usize;
+        assert!(
+            f.micro.len() < GroupIx::MAX as usize
+                && f.scalars.len() < GroupIx::MAX as usize
+                && regs < GroupIx::MAX as usize,
+            "a group outgrew its local indices"
+        );
+    }
+}

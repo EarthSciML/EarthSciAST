@@ -84,25 +84,25 @@ pub(crate) enum Operand {
     /// contraction-index values).
     Lit(f64),
     /// The scalar parameter at this index of the positional parameter vector.
-    Param(u16),
+    Param(u32),
     /// The current solver time `t`.
     Time,
     /// The whole persistent array of state variable `state_vars[i]`, read from
     /// the current state vector (origin all-1s). A 0-d state variable reads as
     /// a scalar — exactly `eval_vec_variable`'s state arm.
-    State(u16),
+    State(u32),
     /// The whole persistent observed array `obs_reads[i]`, resolved BY NAME in
     /// the runtime observed map (origin all-1s; 0-d reads as a scalar). Used
     /// for observeds produced by fallback rules or seeded static observeds.
-    Obs(u16),
+    Obs(u32),
 }
 
 /// An array source for [`Instr::Gather`] / [`Instr::LoadElem`].
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum SrcRef {
     Slot(SlotId),
-    State(u16),
-    Obs(u16),
+    State(u32),
+    Obs(u32),
 }
 
 /// One tape instruction. See the module docs for the semantics contract.
@@ -376,16 +376,24 @@ impl Instr {
 // Step 4: fused elementwise groups.
 // ---------------------------------------------------------------------------
 
+/// An index local to one fused group: a register, an array input, a scalar
+/// input or a shifted input. It stays 16-bit because the executor walks the
+/// micro-program once per chunk and a compact op is part of that loop's
+/// cost; the fusion pass closes a group before any of its tables could
+/// outgrow it (`GBuilder::has_room`). Indices into the program's own tables
+/// (states, observed reads, parameters, slots) are 32-bit.
+pub(crate) type GroupIx = u16;
+
 /// Reference to a value inside a fused micro-program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MRef {
     /// Temporary register defined by an earlier micro-op of the same group.
-    Reg(u16),
+    Reg(GroupIx),
     /// Array input `FusedSpec::inputs[i]`, read at the current element (for a
     /// folded gather: at the current element plus the run's source offset).
-    In(u16),
+    In(GroupIx),
     /// Scalar input `FusedSpec::scalars[i]`, broadcast over the box.
-    Scal(u16),
+    Scal(GroupIx),
 }
 
 /// One micro-op of a fused group. Element semantics are EXACTLY the scalar
@@ -401,27 +409,27 @@ pub(crate) enum MicroOp {
         op: BinCode,
         a: MRef,
         b: MRef,
-        out: u16,
+        out: GroupIx,
     },
     Un {
         op: UnCode,
         a: MRef,
-        out: u16,
+        out: GroupIx,
     },
     Neg {
         a: MRef,
-        out: u16,
+        out: GroupIx,
     },
     Select {
         cond: MRef,
         a: MRef,
         b: MRef,
-        out: u16,
+        out: GroupIx,
     },
     /// `out = a` (a fused `Fill`/`Copy`).
     Mov {
         a: MRef,
-        out: u16,
+        out: GroupIx,
     },
     /// Superop: `t = kernel(op1)(a, b); out = swap ? kernel(op2)(c, t)
     /// : kernel(op2)(t, c)` — two adjacent Bin micro-ops whose intermediate
@@ -436,7 +444,7 @@ pub(crate) enum MicroOp {
         op2: BinCode,
         c: MRef,
         swap: bool,
-        out: u16,
+        out: GroupIx,
     },
     /// Step 4b superop: a three-op `+ - * /` chain whose two intermediates
     /// each have exactly one consumer (the next op):
@@ -457,7 +465,7 @@ pub(crate) enum MicroOp {
         op3: BinCode,
         d: MRef,
         swap3: bool,
-        out: u16,
+        out: GroupIx,
     },
 }
 
@@ -468,7 +476,7 @@ pub(crate) struct FusedInput {
     /// `Some(i)`: a folded shifted-read gather — the source flat offset for a
     /// run lives at `FusedRun::in_off[i]`. `None`: aligned (the source is read
     /// at the same flat offset as the output).
-    pub shifted_ix: Option<u16>,
+    pub shifted_ix: Option<GroupIx>,
     /// The source array's expected shape (equals the group box for aligned
     /// inputs; a folded gather's source box may differ — its run offsets are
     /// flat in THIS shape's row-major layout). Validated at execution.
@@ -478,8 +486,8 @@ pub(crate) struct FusedInput {
     /// constant stride). Meaningful only for shifted inputs.
     pub elem_stride: i64,
     /// For a shifted input with `elem_stride != 1`: the chunk register the
-    /// executor pre-loads this input into (`u16::MAX` otherwise).
-    pub load_reg: u16,
+    /// executor pre-loads this input into (`GroupIx::MAX` otherwise).
+    pub load_reg: GroupIx,
 }
 
 /// Sentinel source offset: the input reads the gather's Dirichlet ghost
@@ -512,18 +520,18 @@ pub(crate) struct FusedSpec {
     pub micro: Vec<MicroOp>,
     /// Physical register count after last-use recycling. An op's `out`
     /// register never aliases one of its operand registers.
-    pub n_regs: u16,
+    pub n_regs: GroupIx,
     /// Additional registers appended after `n_regs` for strided-input
     /// pre-loads (`FusedInput::load_reg` indexes into `n_regs..n_regs +
     /// n_load_regs`).
-    pub n_load_regs: u16,
+    pub n_load_regs: GroupIx,
     /// Step 4b: registers appended after the load registers for the
     /// all-pointer superops ([`MicroOp::Bin3`]): one splat register per
     /// entry of `scalars` (filled once per call) plus a trailing zero
     /// register (the ghost read). 0 when the micro-program has no Bin3.
-    pub n_splat_regs: u16,
+    pub n_splat_regs: GroupIx,
     /// `(register, slot)` live-outs stored back to the slab.
-    pub outputs: SmallVec<[(u16, SlotId); 2]>,
+    pub outputs: SmallVec<[(GroupIx, SlotId); 2]>,
     /// Precompiled run schedule (see [`FusedRun`]); a group with no shifted
     /// inputs has the single run `(0, n_elems, [])`.
     pub runs: Vec<FusedRun>,
@@ -732,7 +740,7 @@ pub(crate) struct StateRef {
 pub(crate) struct DyWrite {
     pub slot: SlotId,
     /// Index into [`TapeProgram::state_vars`].
-    pub var: u16,
+    pub var: u32,
     /// 0-based sub-block start per axis (from `subblock_dest`).
     pub dest_lo: SmallVec<[usize; 4]>,
     /// Single flat slot for scalar rules (`RhsRule::Scalar`/`IndexedScalar`):

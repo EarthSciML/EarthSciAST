@@ -1113,24 +1113,30 @@ pub(crate) fn check_free_variables(
     }
 
     // ---- Check every equation (skipping `ic`) and observed expression. -------
+    // Each check sees the shared bound set plus its own expression's binders,
+    // added for the check and taken back out after it (see `with_binders`).
+    let mut binders: HashSet<String> = HashSet::new();
     for eq in &model.equations {
         if is_ic_lhs(&eq.lhs) {
             continue;
         }
-        let mut scope = bound.clone();
-        collect_binders(&eq.lhs, &mut scope);
-        collect_binders(&eq.rhs, &mut scope);
-        check_expr_free_vars(&eq.lhs, &scope)?;
-        check_expr_free_vars(&eq.rhs, &scope)?;
+        collect_binders(&eq.lhs, &mut binders);
+        collect_binders(&eq.rhs, &mut binders);
+        with_binders(&mut bound, &mut binders, |scope| {
+            check_expr_free_vars(&eq.lhs, scope)?;
+            check_expr_free_vars(&eq.rhs, scope)
+        })?;
     }
     for var in model.variables.values() {
         let mut failure = None;
         var.for_each_expression(&mut |expr| {
-            let mut scope = bound.clone();
-            collect_binders(expr, &mut scope);
-            if failure.is_none()
-                && let Err(e) = check_expr_free_vars(expr, &scope)
-            {
+            if failure.is_some() {
+                return;
+            }
+            collect_binders(expr, &mut binders);
+            if let Err(e) = with_binders(&mut bound, &mut binders, |scope| {
+                check_expr_free_vars(expr, scope)
+            }) {
                 failure = Some(e);
             }
         });
@@ -1139,6 +1145,30 @@ pub(crate) fn check_free_variables(
         }
     }
     Ok(())
+}
+
+/// Run `check` against `bound` widened by `binders`, then restore `bound`:
+/// only the binders it did not already hold are inserted, and exactly those
+/// are removed again. `binders` is left empty for the next expression. The
+/// cost is the expression's own binders, not the size of the bound set, so
+/// the whole check stays linear in the model.
+fn with_binders<T>(
+    bound: &mut HashSet<String>,
+    binders: &mut HashSet<String>,
+    check: impl FnOnce(&HashSet<String>) -> T,
+) -> T {
+    let mut added: Vec<String> = Vec::new();
+    for name in binders.drain() {
+        if !bound.contains(&name) {
+            bound.insert(name.clone());
+            added.push(name);
+        }
+    }
+    let out = check(bound);
+    for name in &added {
+        bound.remove(name);
+    }
+    out
 }
 
 /// Is this LHS an initial-condition marker (`{"op": "ic", …}`)?

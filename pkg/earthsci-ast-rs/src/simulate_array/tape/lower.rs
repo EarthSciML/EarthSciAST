@@ -73,6 +73,19 @@ macro_rules! bail_tape {
     };
 }
 
+/// The IR index of entry `n` of one of the program's operand tables (state
+/// variables, observed reads, parameters). The IR stores these as `u32`; a
+/// table that outgrows that refuses the rule by name rather than wrapping onto
+/// another entry.
+fn tape_index(n: usize, table: &str) -> LResult<u32> {
+    u32::try_from(n).map_err(|_| Bail {
+        reason: format!(
+            "tape index overflow: the program has more than {} {table}",
+            u32::MAX
+        ),
+    })
+}
+
 type LResult<T> = Result<T, Bail>;
 
 // ---------------------------------------------------------------------------
@@ -85,7 +98,7 @@ type LResult<T> = Result<T, Bail>;
 #[derive(Clone, Debug)]
 enum LV {
     Lit(f64),
-    Param(u16),
+    Param(u32),
     Time,
     /// A scalar slot.
     Scalar(SlotId),
@@ -93,11 +106,11 @@ enum LV {
     Arr(SlotId),
     /// Whole persistent state array `state_vars[ix]` (origin all-1s; 0-d ⇒
     /// scalar semantics) — the zero-copy `VecValue::View` analogue.
-    State(u16),
+    State(u32),
     /// Whole observed array resolved by name at run time (`obs_reads[ix]`),
     /// with its statically known shape (empty ⇒ 0-d scalar semantics).
     Obs {
-        ix: u16,
+        ix: u32,
         shape: DimU,
         tier: Cadence,
     },
@@ -220,9 +233,11 @@ pub(crate) struct TapeBuilder<'m> {
     const_data: Vec<ConstArrayData>,
     interp_tables: Vec<InterpTable>,
     state_vars: Vec<StateRef>,
-    state_ix: FxHashMap<String, u16>,
+    /// Position in `state_vars`; narrowed to the IR's `u32` by [`tape_index`]
+    /// where it is emitted.
+    state_ix: FxHashMap<String, usize>,
     obs_reads: Vec<String>,
-    obs_read_ix: FxHashMap<String, u16>,
+    obs_read_ix: FxHashMap<String, u32>,
     dy_writes: Vec<DyWrite>,
     rules: Vec<RuleInfo>,
     /// Per-section chunk streams (index = Cadence as usize).
@@ -270,7 +285,7 @@ impl<'m> TapeBuilder<'m> {
         let mut state_vars = Vec::with_capacity(var_shapes.len());
         let mut state_ix = FxHashMap::default();
         for (name, vs) in var_shapes {
-            state_ix.insert(name.clone(), state_vars.len() as u16);
+            state_ix.insert(name.clone(), state_vars.len());
             state_vars.push(StateRef {
                 name: name.clone(),
                 shape: vs.shape.iter().copied().collect(),
@@ -419,14 +434,14 @@ impl<'m> TapeBuilder<'m> {
         }
     }
 
-    fn obs_read(&mut self, name: &str) -> u16 {
+    fn obs_read(&mut self, name: &str) -> LResult<u32> {
         if let Some(&ix) = self.obs_read_ix.get(name) {
-            return ix;
+            return Ok(ix);
         }
-        let ix = self.obs_reads.len() as u16;
+        let ix = tape_index(self.obs_reads.len(), "observed reads")?;
         self.obs_reads.push(name.to_string());
         self.obs_read_ix.insert(name.to_string(), ix);
-        ix
+        Ok(ix)
     }
 
     // -- scopes / VN ----------------------------------------------------------
@@ -554,7 +569,7 @@ impl<'m> TapeBuilder<'m> {
             return Ok(lv);
         }
         if let Some(&ix) = self.state_ix.get(name) {
-            return Ok(LV::State(ix));
+            return Ok(LV::State(tape_index(ix, "state variables")?));
         }
         if let Some(ov) = self.obs_defined.get(name).cloned() {
             return match ov {
@@ -563,7 +578,7 @@ impl<'m> TapeBuilder<'m> {
                     shape: Some(shape),
                     tier,
                 } => {
-                    let ix = self.obs_read(name);
+                    let ix = self.obs_read(name)?;
                     Ok(LV::Obs { ix, shape, tier })
                 }
                 ObsVal::External { shape: None, .. } => {
@@ -574,7 +589,7 @@ impl<'m> TapeBuilder<'m> {
             };
         }
         if let Some(i) = self.param_names.iter().position(|p| p == name) {
-            return Ok(LV::Param(i as u16));
+            return Ok(LV::Param(tape_index(i, "parameters")?));
         }
         bail_tape!("variable: unresolved symbol (forcing/loop-bind?): {name}")
     }
@@ -2145,7 +2160,7 @@ impl<'m> TapeBuilder<'m> {
             return Ok(LV::Time);
         }
         if let Some(&ix) = self.state_ix.get(name) {
-            return Ok(LV::State(ix));
+            return Ok(LV::State(tape_index(ix, "state variables")?));
         }
         if let Some(ov) = self.obs_defined.get(name).cloned() {
             return match ov {
@@ -2154,7 +2169,7 @@ impl<'m> TapeBuilder<'m> {
                     shape: Some(shape),
                     tier,
                 } => {
-                    let ix = self.obs_read(name);
+                    let ix = self.obs_read(name)?;
                     Ok(LV::Obs { ix, shape, tier })
                 }
                 ObsVal::External { shape: None, .. } => bail_tape!(
@@ -2163,7 +2178,7 @@ impl<'m> TapeBuilder<'m> {
             };
         }
         if let Some(i) = self.param_names.iter().position(|p| p == name) {
-            return Ok(LV::Param(i as u16));
+            return Ok(LV::Param(tape_index(i, "parameters")?));
         }
         bail_tape!("wholesale: unresolved symbol (forcing/NaN sentinel?) `{name}`")
     }
@@ -2925,7 +2940,7 @@ impl<'m> TapeBuilder<'m> {
             return Some(DimU::new());
         }
         if let Some(&ix) = self.state_ix.get(name) {
-            return Some(self.state_vars[ix as usize].shape.clone());
+            return Some(self.state_vars[ix].shape.clone());
         }
         if let Some(ov) = self.obs_defined.get(name) {
             return match ov {
@@ -3248,7 +3263,10 @@ impl<'m> TapeBuilder<'m> {
                     filter.as_deref(),
                 )?;
                 let s = self.ensure_slot(&v);
-                let var_ix = *self.state_ix.get(var_name).expect("state var known");
+                let var_ix = tape_index(
+                    *self.state_ix.get(var_name).expect("state var known"),
+                    "state variables",
+                )?;
                 let w = self.dy_writes.len() as u32;
                 self.dy_writes.push(DyWrite {
                     slot: s,
