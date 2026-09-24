@@ -75,6 +75,9 @@ struct CompilerPlan
     tcadence::Bool
     # ---- build-once machinery whose OFF state is a reference path ----
     intern::Bool
+    # Every construction-time compile-once form: the setup MAP materializer and
+    # the initial-state seeds (field `ic`, faq `initialization_equations`,
+    # `seed_expression_ic!`). Off, each takes its per-cell reference form.
     setup_map_compile_once::Bool
     geom_sweep_specialize::Bool
     geom_overlap_gate::Bool
@@ -93,6 +96,15 @@ _plan_all(name::Symbol, strict::Bool, on::Bool) =
                  on, on, on, on, on, on, on,
                  on, on,
                  on, on, on, on)
+
+# `plan` with the named fields replaced.
+_plan_with(plan::CompilerPlan; kw...) =
+    CompilerPlan((get(kw, f, getfield(plan, f)) for f in fieldnames(CompilerPlan))...)
+
+# True when the construction-time compile-once forms may run (see the plan
+# field). A compile-once form is not a per-cell route, so it is gated on this
+# and never on a right-hand-side tier: `:mtk` turns every one of those off.
+_setup_compile_once_enabled() = _compiler_plan_now().setup_map_compile_once
 
 """
     _compiler_plan(compiler::Symbol) -> CompilerPlan
@@ -142,12 +154,19 @@ function _compiler_plan(compiler::Symbol)
                 "events and implicit equations); compiler=:native is the " *
                 "universally fast default",
                 ERROR_CODES.COMPILER_UNAVAILABLE))
-        # Every `native` tier is OFF: this compiler emits nothing of this
-        # package's own, so a tier flag would describe a cascade that never
-        # runs. `strict` stays TRUE — `:mtk` refuses a document it cannot
+        # Every right-hand-side tier is OFF: this compiler emits nothing of
+        # this package's own, so a tier flag would describe a cascade that
+        # never runs. `strict` stays TRUE — `:mtk` refuses a document it cannot
         # express by name (`compiler_refused_rule`) rather than building part
         # of it, which is what `_refuse_rule` reads off the plan in force.
-        return _plan_all(:mtk, true, false)
+        #
+        # The construction-time compile-once forms stay ON. ModelingToolkit
+        # owns the right-hand side, not the evaluations this package still
+        # performs for the problem — a `seed_ic!` hook's `seed_expression_ic!`
+        # above all. Those run under this plan, strictly, so they need the
+        # compiled-once form `native` gives them: with it off every seed would
+        # take the per-cell route, which a strict plan refuses.
+        return _plan_with(_plan_all(:mtk, true, false); setup_map_compile_once = true)
     elseif compiler === :sympy
         throw(SimulateError(
             "compiler=:sympy is a Python-binding compiler (a lambdified SymPy " *

@@ -401,7 +401,7 @@ function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
         append!(idx, buf)
         push!(slots, Int(slot))
     end
-    ce = _stencil_disabled() ? nothing : _seed_expression_compile(expr, dims)
+    ce = _setup_compile_once_enabled() ? _seed_expression_compile(expr, dims) : nothing
     if ce !== nothing
         vals = Vector{Float64}(undef, nd)
         @inbounds for c in eachindex(slots)

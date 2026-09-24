@@ -1499,10 +1499,12 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
             "ic($(target)): scoped-reference target resolves to no array cells; the " *
             "target must name a lifted/array state variable of the flattened system"))
         # Compile the coordinate field ONCE (indices as params) when possible; else
-        # fall back to the per-cell resolve+compile. With the affine stencil tier
-        # off, both this and the symbolic stencil compiler take the per-cell path.
-        fast = _stencil_disabled() ? nothing :
-               _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays)
+        # fall back to the per-cell resolve+compile. With the construction-time
+        # compile-once forms off (`compiler = :interpreter`) this takes the
+        # per-cell path.
+        fast = _setup_compile_once_enabled() ?
+               _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays) :
+               nothing
         if fast !== nothing
             _record_rule!("ic($(target))", :equation, :setup_compiled)
             for cell in cells
@@ -1980,11 +1982,13 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
         end
         isempty(todo) && continue
         rule = "init($(var_name))"
-        # With the affine stencil tier off (`compiler = :interpreter`) the seed
-        # is the per-cell reference, as the field-`ic` fast path is.
-        once = _stencil_disabled() ? nothing :
+        # With the construction-time compile-once forms off
+        # (`compiler = :interpreter`) the seed is the per-cell reference, as the
+        # field-`ic` fast path is.
+        once = _setup_compile_once_enabled() ?
                _compile_init_once(body, idx_names, array_var_info, var_map,
-                                  const_arrays, pgather, param_sym_set, reg_funcs)
+                                  const_arrays, pgather, param_sym_set, reg_funcs) :
+               nothing
         if once !== nothing
             _record_rule!(rule, :equation, :setup_compiled)
             refs, node = once

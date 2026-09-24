@@ -160,11 +160,15 @@ end
             @test occursin("ModelingToolkit", e.msg)
         else
             @test CSEL._compiler_plan(:mtk).name === :mtk
-            # Strict, and every `native` tier off: this compiler emits none of
-            # this package's own kernels, and it refuses what it cannot express
-            # rather than building part of a document.
+            # Strict, and every right-hand-side tier off: this compiler emits
+            # none of this package's own kernels, and it refuses what it cannot
+            # express rather than building part of a document. The
+            # construction-time compile-once forms stay on — the initial-state
+            # seed is still this package's evaluation.
             @test CSEL._compiler_plan(:mtk).strict
             @test !CSEL._compiler_plan(:mtk).codegen
+            @test !CSEL._compiler_plan(:mtk).stencil
+            @test CSEL._compiler_plan(:mtk).setup_map_compile_once
         end
     end
 

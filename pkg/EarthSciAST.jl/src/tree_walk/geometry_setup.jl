@@ -1148,7 +1148,7 @@ end
 # Off, the MAP takes the per-cell loop, which is the differential oracle. A
 # strict `native` refuses that loop rather than running it (§2.5.10), so the
 # comparison is between the two compilers on the same document.
-_setup_map_compile_once_disabled() = !_compiler_plan_now().setup_map_compile_once
+_setup_map_compile_once_disabled() = !_setup_compile_once_enabled()
 
 # ENGAGEMENT DIAGNOSTICS. HITS counts MAPs materialized by the compile-once
 # path, MISS those that fell back to the per-cell loop (a decline, or an

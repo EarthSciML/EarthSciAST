@@ -453,6 +453,35 @@ end
         @test isempty(getfield(pm.f!.system, :guesses))
     end
 
+    # ModelingToolkit owns the right-hand side, not the initial-state seed: a
+    # `seed_ic!` hook's `seed_expression_ic!` is this package's evaluation, and
+    # it takes the same compiled-once form under `:mtk` that it takes under
+    # `:native`. Only the per-cell route is refused, under both.
+    @testset "a seed_ic! hook seeds the array state" begin
+        expr = _MTKC.expression_from_json(Dict{String,Any}("op" => "+", "args" => Any[
+            Dict{String,Any}("op" => "*", "args" => Any["x", "x"]), 0.25]))
+        hook(dim) = (u, vm) -> seed_expression_ic!(u, vm, "M.u", expr,
+                                                   [dim => [0.1, 0.2, 0.3]])
+        pm = esm_problem(_mtkc_array_doc(:default), (0.0, 1.0); compiler = :mtk,
+                         seed_ic! = hook("x"))
+        pn = esm_problem(_mtkc_array_doc(:default), (0.0, 1.0); compiler = :native,
+                         seed_ic! = hook("x"))
+        @test all(pm.u0[pm.var_map["M.u[$i]"]] === pn.u0[pn.var_map["M.u[$i]"]]
+                  for i in 1:3)
+        @test [pm.u0[pm.var_map["M.u[$i]"]] for i in 1:3] ==
+              [0.1 * 0.1 + 0.25, 0.2 * 0.2 + 0.25, 0.3 * 0.3 + 0.25]
+        # A dimension named `t` has no compiled-once form (the name is the time
+        # slot), so the seed would walk per cell — which both compilers refuse.
+        for c in (:mtk, :native)
+            err = _mtkc_raise(esm_problem, _mtkc_array_doc(:default), (0.0, 1.0);
+                              compiler = c, seed_ic! = hook("t"))
+            @test err isa _MTKC.TreeWalkError &&
+                  err.code == _MTKC.ERROR_CODES.COMPILER_REFUSED_RULE &&
+                  occursin("compiler=:$c refuses 'seed_expression_ic!(M.u)'",
+                           err.detail)
+        end
+    end
+
     # ── The problem surface ─────────────────────────────────────────────────
     @testset "the report, the readbacks and remake" begin
         prob = esm_problem(_mtkc_fixture("valid", "solver_block.esm"), (0.0, 1.0);
