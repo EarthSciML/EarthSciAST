@@ -154,6 +154,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # of `native` with the `:interpreter` oracle — the whole point of the
     # compiler keyword, and this file was never on the list, so none of it ran.
     include("compiler_selection_test.jl")
+    # Every per-cell route under a strict `native`: refused by name, or compiled
+    # once and reported under a tier that says so.
+    include("percell_route_refusal_test.jl")
 
     # ---- Tree-walk evaluator (src/tree_walk.jl) + discrete-cadence data refresh ----
     include("tree_walk_test.jl")
