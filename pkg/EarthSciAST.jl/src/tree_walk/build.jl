@@ -6,6 +6,18 @@
 # build_evaluator entry points, and evaluate_expr.
 # ========================================================================
 
+# One `observed_field` answer: the build it belongs to, the forcing epoch it was
+# computed at (`_FORCING_EPOCH`) and the field. The field is state-free, so it
+# moves only when a live buffer is refreshed in place. The build is named by the
+# problem's `run_file` slot — each build allocates its own and `remake` shares
+# it — so a record reused for a second build, or a second problem, never
+# answers with the first one's field.
+struct _ObservedMemo
+    build::Base.RefValue{Any}
+    epoch::UInt64
+    value::Any
+end
+
 """
     BuildInspection()
 
@@ -96,10 +108,11 @@ mutable struct BuildInspection
     # built it — the seam used to hang off the out-of-place build product alone.
     forcing_buffers::NamedTuple
     forcing_buffer_index::Dict{String,Int}
-    # `observed_field(prob, name)` answers, keyed by the requested name, each
-    # with the forcing epoch it was computed at (`_FORCING_EPOCH`): the field is
-    # state-free, so it moves only when a live buffer is refreshed in place.
-    observed_memo::Dict{String,Tuple{UInt64,Any}}
+    # `observed_field(prob, name)` answers, keyed by the requested name (see
+    # `_ObservedMemo`). Emptied when a build starts, and read and written under
+    # `observed_lock`, since two tasks may read one problem at once.
+    observed_memo::Dict{String,_ObservedMemo}
+    observed_lock::ReentrantLock
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -109,7 +122,7 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Symbol}(),
                                     CompilerReport(:native),
                                     NamedTuple(), Dict{String,Int}(),
-                                    Dict{String,Tuple{UInt64,Any}}())
+                                    Dict{String,_ObservedMemo}(), ReentrantLock())
 
 """
     DiscreteMaterializer()
@@ -1499,10 +1512,12 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
             "ic($(target)): scoped-reference target resolves to no array cells; the " *
             "target must name a lifted/array state variable of the flattened system"))
         # Compile the coordinate field ONCE (indices as params) when possible; else
-        # fall back to the per-cell resolve+compile. With the affine stencil tier
-        # off, both this and the symbolic stencil compiler take the per-cell path.
-        fast = _stencil_disabled() ? nothing :
-               _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays)
+        # fall back to the per-cell resolve+compile. With the construction-time
+        # compile-once forms off (`compiler = :interpreter`) this takes the
+        # per-cell path.
+        fast = _setup_compile_once_enabled() ?
+               _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays) :
+               nothing
         if fast !== nothing
             _record_rule!("ic($(target))", :equation, :setup_compiled)
             for cell in cells
@@ -1512,15 +1527,17 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
             continue
         end
         # The first two forms `_resolve_field_ic` serves do not depend on the
-        # cell, so they are answered once for the whole field: a LOADED FIELD is
-        # read straight out of its array, a BROADCAST CONSTANT is evaluated once
-        # and filled. Only what neither covers goes per cell, where the
-        # coordinate-expression step raises the refusal itself.
-        whole = _stencil_disabled() ? nothing :
-                _field_ic_whole(rhs, cells, const_arrays, registered_functions,
-                                param_scope)
-        if whole !== nothing
-            tier, val = whole
+        # cell, so they are answered once for the whole field, under every
+        # compiler: a LOADED FIELD is read straight out of its array, a
+        # BROADCAST CONSTANT is evaluated once and filled. Only what neither
+        # covers goes per cell, handed this verdict so no cell re-runs the
+        # failed constant attempt, and there the coordinate-expression step
+        # raises the refusal itself.
+        uniform = _field_ic_uniform(target, rhs, length(first(cells)), const_arrays,
+                                    registered_functions; params=param_scope)
+        hit = uniform[1]
+        if hit !== nothing
+            tier, val = hit
             _record_rule!("ic($(target))", :equation, tier)
             for cell in cells
                 idxs = collect(Int, cell)
@@ -1533,36 +1550,10 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
             idxs = collect(Int, cell)
             eq_ics[_cell_key(target, idxs)] =
                 _resolve_field_ic(target, rhs, idxs, const_arrays, registered_functions;
-                                  params=param_scope)
+                                  params=param_scope, uniform=uniform)
         end
     end
     return nothing
-end
-
-# `(tier, cell -> value)` for a field `ic` whose value `_resolve_field_ic` would
-# give without reference to the cell — its steps (1) and (2), in its order — or
-# `nothing` for everything else, which then takes that function per cell. A
-# loaded field whose rank matches neither the grid nor a single element is left
-# to it too, so the diagnostic is the one it raises.
-function _field_ic_whole(rhs, cells, const_arrays::AbstractDict,
-                         registered_functions::AbstractDict, params::AbstractDict)
-    if rhs isa VarExpr && haskey(const_arrays, rhs.name)
-        arr = const_arrays[rhs.name]
-        rank = length(first(cells))
-        ndims(arr) == rank && return (:setup_loaded, idxs -> Float64(arr[idxs...]))
-        if length(arr) == 1
-            v = Float64(first(arr))
-            return (:setup_loaded, _ -> v)
-        end
-        return nothing
-    end
-    v = try
-        Float64(evaluate_expr(rhs, params; registered_functions=registered_functions))
-    catch err
-        _is_resource_error(err) && rethrow()
-        return nothing
-    end
-    return (:setup_constant, _ -> v)
 end
 
 # ---- Stage: flat state-vector cell names ----
@@ -1980,11 +1971,13 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
         end
         isempty(todo) && continue
         rule = "init($(var_name))"
-        # With the affine stencil tier off (`compiler = :interpreter`) the seed
-        # is the per-cell reference, as the field-`ic` fast path is.
-        once = _stencil_disabled() ? nothing :
+        # With the construction-time compile-once forms off
+        # (`compiler = :interpreter`) the seed is the per-cell reference, as the
+        # field-`ic` fast path is.
+        once = _setup_compile_once_enabled() ?
                _compile_init_once(body, idx_names, array_var_info, var_map,
-                                  const_arrays, pgather, param_sym_set, reg_funcs)
+                                  const_arrays, pgather, param_sym_set, reg_funcs) :
+               nothing
         if once !== nothing
             _record_rule!(rule, :equation, :setup_compiled)
             refs, node = once
@@ -1996,16 +1989,26 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
             end
             continue
         end
-        _refuse_percell_evaluation(rule, "the faq-valued initialization-equation seed",
-                                   length(todo))
-        _record_rule!(rule, :equation, :setup_percell)
-        for (idx_tuple, slot) in todo
+        percell(idx_tuple) = begin
             idx_exprs = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(idx_tuple[d]))
                                           for d in 1:length(idx_names))
             sub_body = _sub_preserving(body, idx_exprs)
             body_r   = _resolve_indices(sub_body, array_var_info, var_map, const_arrays, pgather)
             node     = _compile(body_r, var_map, param_sym_set, reg_funcs)
-            u0[slot] = _eval_node(node, u0, pp, 0.0)
+            _eval_node(node, u0, pp, 0.0)
+        end
+        if _compiler_is_strict()
+            # A body no form can evaluate — an undeclared name, an out-of-range
+            # const gather — is the document's error, not a compiler's refusal,
+            # so the first cell is evaluated once, for its diagnostic only,
+            # before the refusal is raised.
+            percell(first(todo)[1])
+            _refuse_percell_evaluation(rule, "the faq-valued initialization-equation seed",
+                                       length(todo))
+        end
+        _record_rule!(rule, :equation, :setup_percell)
+        for (idx_tuple, slot) in todo
+            u0[slot] = percell(idx_tuple)
         end
     end
     return nothing
@@ -2252,18 +2255,10 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
         # and at every run's `t0`. There is no compiled form of this stage yet
         # (the fill bodies gather live forcing buffers at the output index, which
         # the symbolic resolve cannot keep symbolic), so a strict compiler refuses
-        # the discrete variable by name.
-        if _compiler_is_strict()
-            ncells = prod(length(r) for r in cells_of[name][2]; init=1)
-            _refuse_rule(name,
-                "the discrete-cadence materializer resolves and compiles this " *
-                "forcing-derived field once per cell ($ncells cell" *
-                (ncells == 1 ? "" : "s") * ") and re-evaluates every cell as a " *
-                "tree walk at each data refresh and at each run's start — a " *
-                "per-cell evaluation that esm-libraries-spec §2.5.10 puts under " *
-                "the same rule as the right-hand side. Build with " *
-                "compiler=:interpreter to run it")
-        end
+        # the discrete variable by name — once its first cell has resolved,
+        # compiled and evaluated, so that a fill no form can evaluate (an
+        # undeclared name, an out-of-range const gather) raises the document's
+        # own error rather than a refusal.
         rop = discrete_defs[name]::OpExpr
         rop_res = isempty(resolved_obs) ? rop : _sub_preserving(rop, resolved_obs)
         rop_res isa OpExpr ||
@@ -2281,6 +2276,19 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
             # The cadence cut is CHECKED, not assumed: a fill kernel that reads `u` or
             # `t` would freeze at u = 0 (see `_check_discrete_fill_state_free`).
             _check_discrete_fill_state_free(node, name)
+            if _compiler_is_strict()
+                _eval_node(node, zeros(Float64, n_states),
+                           isnothing(p) ? NamedTuple() : p, 0.0)
+                ncells = prod(dims)
+                _refuse_rule(name,
+                    "the discrete-cadence materializer resolves and compiles this " *
+                    "forcing-derived field once per cell ($ncells cell" *
+                    (ncells == 1 ? "" : "s") * ") and re-evaluates every cell as a " *
+                    "tree walk at each data refresh and at each run's start — a " *
+                    "per-cell evaluation that esm-libraries-spec §2.5.10 puts under " *
+                    "the same rule as the right-hand side. Build with " *
+                    "compiler=:interpreter to run it")
+            end
             l = isempty(idx_tuple) ? 1 : lin[idx_tuple...]
             push!(fills, (cvec, l, node))
         end
@@ -3405,6 +3413,10 @@ function _build_evaluator_impl(model::Model;
     plan = _plan_for(compiler)
     record = _BuildRecord(plan)
     insp = get(kwargs, :inspect, nothing)
+    # A record passed to a second build describes that build from here on, so
+    # nothing the previous one answered may be served out of it.
+    insp isa BuildInspection &&
+        lock(() -> empty!(insp.observed_memo), insp.observed_lock)
     return _with_compiler_plan(plan) do
         _with_build_record(record) do
             try
@@ -4175,6 +4187,8 @@ end
 #                           nonzero means genuinely residual work the direct
 #                           stages did not see.
 const _CASCADE_TALLY = Dict{Symbol,Int}()
+# Builds and output-time reads on different tasks all bump the one Dict.
+const _CASCADE_TALLY_LOCK = ReentrantLock()
 
 # The ROUTING keys — the ones that say where an array equation finally landed,
 # exactly one per equation. Bumping one of these closes the rule the cascade
@@ -4212,7 +4226,9 @@ function _has_contract_loop(e)
 end
 
 function _tally_cascade!(k::Symbol)
-    _CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1
+    lock(_CASCADE_TALLY_LOCK) do
+        _CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1
+    end
     rec = _build_record()
     if rec !== nothing
         rec.tally[k] = get(rec.tally, k, 0) + 1
@@ -4221,7 +4237,7 @@ function _tally_cascade!(k::Symbol)
     end
     return nothing
 end
-_reset_cascade_tally!() = (empty!(_CASCADE_TALLY); nothing)
+_reset_cascade_tally!() = (lock(() -> empty!(_CASCADE_TALLY), _CASCADE_TALLY_LOCK); nothing)
 
 # One-line identity of a faq equation, for the compiler report's rule label and
 # for a refusal's message: the derivative target and its output axes with their
@@ -4562,14 +4578,31 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # A retired loop candidate that neither the nest nor the affine tier took has
     # only the per-cell loop left, which is interpreted on every call: a strict
     # compiler refuses it by name. (A non-strict build keeps the loop, filed as
-    # `:interpreter` by the routing table.)
-    retire_loop && _compiler_is_strict() && _refuse_rule(
-        _faq_debug_label(lhs_body, idx_names, range_iters),
-        "this constant-bound contraction declined the whole-array contraction " *
-        "tier and the affine tier, and the only tier left is the per-cell " *
-        "contraction loop, whose cells the right-hand side walks as trees " *
-        "(`_eval_node`, one per output cell) on every call. Build with " *
-        "compiler=:interpreter to run it")
+    # `:interpreter` by the routing table.) The first output cell is built
+    # first, the way the interpreter builds every cell — unrolled — so that a
+    # body no form can build (an out-of-range const gather, an undeclared name)
+    # raises the document's own error rather than a refusal.
+    if retire_loop && _compiler_is_strict()
+        if all(!isempty, range_iters)
+            _compile_faq_percell!(Tuple{Int,_Node}[], _AccKernel[], copy(covered),
+                lhs_body, rhs_body;
+                idx_names=idx_names, range_iters=[r[1:1] for r in range_iters],
+                contract_names=contract_names, contract_ranges=contract_ranges,
+                contract_const=contract_const, rhs_oplus=rhs_oplus,
+                rhs_zerobar=rhs_zerobar, agg_gates=agg_gates, agg_filter=agg_filter,
+                resolved_obs=resolved_obs, array_var_info=array_var_info,
+                var_map=var_map, const_registry=const_registry, pgather=pgather,
+                param_sym_set=param_sym_set, reg_funcs=reg_funcs,
+                contraction_loop=false, pooled_cells=Tuple{Int,_Node}[])
+        end
+        _refuse_rule(
+            _faq_debug_label(lhs_body, idx_names, range_iters),
+            "this constant-bound contraction declined the whole-array contraction " *
+            "tier and the affine tier, and the only tier left is the per-cell " *
+            "contraction loop, whose cells the right-hand side walks as trees " *
+            "(`_eval_node`, one per output cell) on every call. Build with " *
+            "compiler=:interpreter to run it")
+    end
     # Anything the affine build cannot model takes the per-cell fallback, whose
     # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,
     # with the affine stencil tier off, stay plain per-cell scalar nodes (the

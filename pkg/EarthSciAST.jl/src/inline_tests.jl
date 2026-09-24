@@ -595,11 +595,13 @@ function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector
         _refuse_percell_evaluation("(build-time observed / reference)",
             "the build-time cellwise evaluator", length(cells))
     end
-    return Float64[_eval_cellwise(expr, collect(Int, c);
+    vals = Float64[_eval_cellwise(expr, collect(Int, c);
                                   const_arrays=const_arrays,
                                   registered_functions=registered_functions,
                                   params=params, t=t)
                    for c in cells]
+    _note_percell!()
+    return vals
 end
 
 """
@@ -1182,6 +1184,7 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # simply stays un-materialized and its reader inlines it, and any failure
     # still falls through to the self-contained body below.
     if raw !== nothing
+        n0 = _percell_mark()
         try
             ca = _materialized_obs_scope(insp, file, mname, String(variable), params;
                                          base=const_scope, t=tval)
@@ -1191,7 +1194,9 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
                         cells)
             end
         catch
-            # fall through to the inlined form below
+            # fall through to the inlined form below; whatever the abandoned
+            # attempt walked per cell served nothing
+            _percell_restore!(n0)
         end
     end
     field = evaluate_cellwise(expr, cells; const_arrays=const_scope, params=params,
@@ -1346,6 +1351,7 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
         # A producer neither form can evaluate here (one reading STATE, say) just
         # stays un-materialized, and its readers inline it exactly as before.
         vals = nothing
+        n0 = _percell_mark()
         for cand in (raw_def(n), res_def(n))
             cand === nothing && continue
             vals = try
@@ -1355,7 +1361,9 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
             end
             vals === nothing || break
         end
-        (vals !== nothing && length(vals) == length(cells)) || continue
+        # A producer left un-materialized served nothing, however it was tried.
+        (vals !== nothing && length(vals) == length(cells)) ||
+            (_percell_restore!(n0); continue)
         buf = Array{Float64}(undef, Tuple(ex)...)
         @inbounds for (i, c) in enumerate(cells)
             buf[CartesianIndex(Tuple(c))] = vals[i]

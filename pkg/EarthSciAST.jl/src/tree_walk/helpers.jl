@@ -566,6 +566,50 @@ function _parse_cell_key(key::AbstractString)
 end
 
 """
+    _field_ic_uniform(target, rhs, rank, const_arrays, registered_functions; params)
+        -> ((tier, cell -> value) or nothing, attempts)
+
+Steps (1) and (2) of [`_resolve_field_ic`](@ref), the two forms whose value does
+not depend on the cell, answered once for a field of rank `rank`: a LOADED FIELD
+(`:setup_loaded`) or a BROADCAST CONSTANT (`:setup_constant`). `nothing` when
+neither serves, with `attempts` recording why the constant form failed, for the
+diagnostic step (4) raises if no later form serves either. A loaded field whose
+rank matches neither the grid nor a single element raises here.
+"""
+function _field_ic_uniform(target::AbstractString, rhs::EarthSciAST.ASTExpr,
+                           rank::Int, const_arrays, registered_functions;
+                           params::AbstractDict=_EMPTY_PARAMS)
+    # (1) Loaded field supplied as a const array over the lifted grid.
+    if rhs isa VarExpr && haskey(const_arrays, rhs.name)
+        arr = const_arrays[rhs.name]
+        ndims(arr) == rank && return ((:setup_loaded, cell -> Float64(arr[cell...])),
+                                      String[])
+        if length(arr) == 1
+            v = Float64(first(arr))
+            return ((:setup_loaded, _ -> v), String[])
+        end
+        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
+            "ic($(target)): loaded field '$(rhs.name)' has ndims=$(ndims(arr)) " *
+            "which does not match the $(rank)-D lifted target grid"))
+    end
+    # (2) Broadcast constant (scalar model PARAMETERS in scope as load-time
+    # constants; STATE is not — `params` carries only resolved scalar params).
+    # A failure here is a fall-through attempt, not final: it is recorded and
+    # attached to the step-(4) diagnostic so the reason the form was rejected is
+    # never silently swallowed.
+    try
+        v = Float64(evaluate_expr(rhs, params; registered_functions=registered_functions))
+        return ((:setup_constant, _ -> v), String[])
+    catch err
+        # A resource error is not a reason to try the NEXT form — the next form
+        # allocates too — and step (4) would rebrand it as a statement about
+        # this RHS. Out, unwrapped.
+        _is_resource_error(err) && rethrow()
+        return (nothing, String["as constant: $(sprint(showerror, err))"])
+    end
+end
+
+"""
     _resolve_field_ic(target, rhs, cell, const_arrays, registered_functions) -> Float64
 
 Resolve one grid cell's initial value for a scoped-reference / array `ic`
@@ -589,36 +633,15 @@ dropped.
 """
 function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
                            cell::Vector{Int}, const_arrays, registered_functions;
-                           params::AbstractDict=_EMPTY_PARAMS)::Float64
-    # (1) Loaded field supplied as a const array over the lifted grid.
-    if rhs isa VarExpr && haskey(const_arrays, rhs.name)
-        arr = const_arrays[rhs.name]
-        if ndims(arr) == length(cell)
-            return Float64(arr[cell...])
-        elseif length(arr) == 1
-            return Float64(first(arr))
-        else
-            throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
-                "ic($(target)): loaded field '$(rhs.name)' has ndims=$(ndims(arr)) " *
-                "which does not match the $(length(cell))-D lifted target grid"))
-        end
-    end
-    # (2) Broadcast constant (scalar model PARAMETERS in scope as load-time
-    # constants; STATE is not — `params` carries only resolved scalar params).
-    # Failures here and in (3) are fall-through attempts, not final: each error
-    # is recorded and attached to the step-(4) diagnostic so the reason a form
-    # was rejected is never silently swallowed.
-    _errs = String[]
-    try
-        return Float64(evaluate_expr(rhs, params;
-                                     registered_functions=registered_functions))
-    catch err
-        # A resource error is not a reason to try the NEXT form — the next form
-        # allocates too — and step (4) would rebrand it as a statement about
-        # this RHS. Out, unwrapped.
-        _is_resource_error(err) && rethrow()
-        push!(_errs, "as constant: $(sprint(showerror, err))")
-    end
+                           params::AbstractDict=_EMPTY_PARAMS,
+                           uniform=_field_ic_uniform(target, rhs, length(cell),
+                                                     const_arrays, registered_functions;
+                                                     params=params))::Float64
+    # (1) and (2) do not depend on the cell: `uniform` is their verdict, which a
+    # caller seeding a whole field computes once and passes for every cell.
+    hit, attempts = uniform
+    hit === nothing || return Float64(hit[2](cell))
+    _errs = copy(attempts)
     # (3) Coordinate expression over the grid geometry (per-cell field); model
     # parameters (e.g. a free-name geometry `x0`/`dx`) bind via `params`.
     if rhs isa OpExpr
