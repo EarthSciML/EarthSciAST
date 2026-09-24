@@ -294,3 +294,87 @@ fn component_graph_and_version() {
     assert!(!earthsci_ast::LIBRARY_VERSION.is_empty());
     assert!(!earthsci_ast::SCHEMA_VERSION.is_empty());
 }
+
+// --- native against the interpreter, on wasm32 -------------------------------
+//
+// Rust native must stay portable: every tape change has to compile AND agree
+// with the interpreter here, serially, as it does on the host. The checks and
+// the embedded documents live in `tests/portable/mod.rs`, which
+// `tests/portable_native_interpreter.rs` also runs on the host; the two runs
+// compare native with their OWN interpreter, because bit-identity is a
+// per-target rule.
+
+mod portable;
+
+/// One wasm test per scaling family, over its committed small fixtures.
+macro_rules! scaling_family {
+    ($test:ident, $family:literal) => {
+        #[wasm_bindgen_test]
+        fn $test() {
+            let mut seen = 0;
+            for (f, n, text) in portable::SCALING_FIXTURES {
+                if *f == $family {
+                    portable::check_scaling_fixture(f, *n, text);
+                    seen += 1;
+                }
+            }
+            assert!(seen > 0, "no committed fixture for {}", $family);
+        }
+    };
+}
+
+scaling_family!(scaling_stencil_1d, "stencil_1d");
+scaling_family!(scaling_stencil_2d, "stencil_2d");
+scaling_family!(scaling_stencil_3d, "stencil_3d");
+scaling_family!(scaling_stencil_4d, "stencil_4d");
+scaling_family!(scaling_transport_3d, "transport_3d");
+scaling_family!(scaling_chemistry_grid, "chemistry_grid");
+scaling_family!(scaling_prefix_scan, "prefix_scan");
+scaling_family!(scaling_source_receptor, "source_receptor");
+scaling_family!(scaling_regrid, "regrid");
+scaling_family!(scaling_unstructured_gather, "unstructured_gather");
+scaling_family!(scaling_scalar_chemistry, "scalar_chemistry");
+
+/// One wasm test per inline-test tier, over its documents.
+macro_rules! inline_tier {
+    ($test:ident, $tier:literal) => {
+        #[wasm_bindgen_test]
+        fn $test() {
+            let prefix = concat!($tier, "/");
+            let mut seen = 0;
+            for (id, model, text) in portable::INLINE_TIER_DOCS {
+                if id.starts_with(prefix) {
+                    portable::check_inline_tier_doc(id, model, text);
+                    seen += 1;
+                }
+            }
+            assert!(seen > 0, "no document for {}", $tier);
+        }
+    };
+}
+
+inline_tier!(inline_broadcast_alignment, "broadcast_alignment");
+inline_tier!(
+    inline_scalar_operator_semantics,
+    "scalar_operator_semantics"
+);
+inline_tier!(inline_pde_array_overrides, "pde_inline_array_overrides");
+inline_tier!(inline_pde_dead_observed, "pde_inline_dead_observed");
+inline_tier!(inline_pde_ic_param_override, "pde_inline_ic_param_override");
+inline_tier!(
+    inline_pde_observed_indexed_lhs,
+    "pde_inline_observed_indexed_lhs"
+);
+inline_tier!(
+    inline_pde_observed_param_rank2,
+    "pde_inline_observed_param_rank2"
+);
+inline_tier!(inline_pde_observed_rank2, "pde_inline_observed_rank2");
+inline_tier!(
+    inline_pde_observed_state_dependent,
+    "pde_inline_observed_state_dependent"
+);
+inline_tier!(
+    inline_pde_reference_dimension_names,
+    "pde_inline_reference_dimension_names"
+);
