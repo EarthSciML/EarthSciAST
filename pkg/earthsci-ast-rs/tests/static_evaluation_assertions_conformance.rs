@@ -489,6 +489,9 @@ fn a_scalar_observed_inside_an_aggregate_survives_the_build_pipeline() {
         &file,
         (0.0, 1.0),
         earthsci_ast::ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             build_pipeline: true,
             ..Default::default()
         },

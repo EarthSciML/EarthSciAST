@@ -781,6 +781,9 @@ fn a_two_variable_cycle_is_not_a_recurrence_and_still_produces_nothing() {
 fn pipeline_fields(name: &str) -> std::collections::HashMap<String, ndarray::ArrayD<f64>> {
     let file = load_path(fixture(name)).expect("fixture parses");
     let opts = earthsci_ast::ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         // The two settings that make this the pipeline path rather than the
         // per-step one. `Auto` because these documents integrate nothing, so
         // asking for a compiled right-hand side would compile one with nothing

@@ -390,6 +390,9 @@ fn rewritten_polygon_allocation_matches_the_dense_evaluation() {
         &doc(),
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: const_arrays(),
             build_providers: Vec::new(),
             ..ProblemOptions {
@@ -421,6 +424,9 @@ fn rewritten_polygon_allocation_matches_the_dense_evaluation() {
         &doc(),
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: ca,
             build_providers: providers,
             ..ProblemOptions {

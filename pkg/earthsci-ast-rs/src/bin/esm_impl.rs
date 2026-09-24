@@ -2572,13 +2572,13 @@ fn run_simulate(
     };
 
     let prob = build(false)?;
-    // API_SPEC §5.8, "Every Problem reports what ran": one line, so a number
-    // in the output below is tied to the way it was produced.
-    println!("{}", prob.compiler_report());
     // Filled only on the static path: `--format csv` writes from the FIELDS,
     // not from flattened cell keys.
     let mut evaluated: Vec<(String, ndarray::ArrayD<f64>)> = Vec::new();
     let sol = if prob.is_dynamic() {
+        // API_SPEC §5.8, "Every Problem reports what ran": one line, so a
+        // number in the output below is tied to the way it was produced.
+        println!("{}", prob.compiler_report());
         let sol = earthsci_ast::solve(&prob, &opts).map_err(|e| format!("solve failed: {e}"))?;
         println!(
             "✓ Simulation complete: {} output points, alg {}, retcode {}",
@@ -2592,12 +2592,23 @@ fn run_simulate(
         // nothing. Its answers are the fields the build materialized, so it is
         // EVALUATED ONCE rather than solved.
         //
-        // The rebuild turns the build pipeline on, which is what materializes
-        // an ARRAY observed: the scalar fallback cannot lower one, and a
-        // command that wrote an empty file would be the silent-empty twin of
-        // the silent zero. Skipped when the first build already ran the
-        // pipeline, which it does whenever the document ingests data.
-        let prob = if ingesting { prob } else { build(true)? };
+        // The first build already evaluated its observed graph on the named
+        // compiler — the tape under `native` — and those fields are the
+        // answer. Only when it produced none (a document the array runtime
+        // cannot build on its own: value invention, a derived index set) is
+        // the document rebuilt with the build pipeline on, and that rebuild is
+        // under the named compiler like any other build: the pipeline reports
+        // each observed it evaluates, and a strict compiler refuses one it
+        // would have to walk per cell. A command that wrote an empty file
+        // would be the silent-empty twin of the silent zero. The pipeline has
+        // already run whenever the document ingests data. The report printed
+        // is the one for the build whose fields are written.
+        let prob = if ingesting || !prob.observed_fields().is_empty() {
+            prob
+        } else {
+            build(true)?
+        };
+        println!("{}", prob.compiler_report());
         evaluated = static_fields(&prob, &observed)?;
         println!(
             "✓ Static evaluation complete: {} field(s). The document declares no \

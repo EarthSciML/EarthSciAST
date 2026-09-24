@@ -326,6 +326,9 @@ fn prepare_pushdown_l1_matches_the_step0_oracle_with_presliced_gated_fetch() {
     .collect();
 
     let opts = ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         model_name: Some("ISRM".to_string()),
         pushdown_rewrite: true,
         ..Default::default()
@@ -334,6 +337,9 @@ fn prepare_pushdown_l1_matches_the_step0_oracle_with_presliced_gated_fetch() {
         &doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: ca,
             build_providers: providers,
             ..opts
@@ -565,6 +571,9 @@ fn prepare_pushdown_l1_single_member_support_set() {
     .collect();
 
     let opts = ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         model_name: Some("ISRM".to_string()),
         pushdown_rewrite: true,
         ..Default::default()
@@ -573,6 +582,9 @@ fn prepare_pushdown_l1_single_member_support_set() {
         &doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: ca,
             build_providers: providers,
             ..opts

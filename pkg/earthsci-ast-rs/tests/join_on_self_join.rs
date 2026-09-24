@@ -195,6 +195,9 @@ fn run(t: &Table, key_col: &str, spelling: Spelling, gate: bool) -> (Vec<f64>, u
         &d,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             model_name: Some("S".into()),
             const_arrays: t.const_arrays(),
             build_providers: Vec::new(),
@@ -216,6 +219,9 @@ fn build_err(d: &Value, n: usize) -> String {
         d,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             model_name: Some("S".into()),
             const_arrays: t.const_arrays(),
             build_providers: Vec::new(),
@@ -414,6 +420,9 @@ fn the_answer_is_invariant_under_a_permutation_of_the_stored_rows() {
             &d,
             (0.0, 0.0),
             ProblemOptions {
+                // The pipeline's per-cell walk is refused by a strict native (#484), so
+                // these semantics are checked on the reference evaluator.
+                compiler: Some(earthsci_ast::Compiler::Interpreter),
                 model_name: Some("S".into()),
                 const_arrays: arrays,
                 build_providers: Vec::new(),
@@ -474,6 +483,9 @@ fn three_ranges_are_spellable_with_explicit_syms() {
         &d,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             model_name: Some("S".into()),
             const_arrays: t.const_arrays(),
             build_providers: Vec::new(),

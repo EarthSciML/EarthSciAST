@@ -651,7 +651,12 @@ pub fn has_spatial_derivative(expr: &Expr) -> bool {
 }
 
 /// True when the expression contains a TIME derivative anywhere.
-fn has_time_derivative(expr: &Expr) -> bool {
+///
+/// Asked of an equation's LHS, this is the §6.3.1 test for whether a document
+/// declares a differential equation at all, and it has to see through every
+/// wrapper an LHS can carry: `D(u)`, `faq{expr: D(u[i])}` (the arrayed
+/// spelling, and what the pointwise lift writes), and `index(D(u), i)`.
+pub(crate) fn has_time_derivative(expr: &Expr) -> bool {
     match expr {
         Expr::Operator(node) => {
             let here = node.op == "D" && node.wrt.as_deref().unwrap_or(TIME) == TIME;

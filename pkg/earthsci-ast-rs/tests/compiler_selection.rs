@@ -52,12 +52,9 @@ fn build(path: &Path, compiler: Compiler) -> Result<EsmProblem, SimulateError> {
     build_rhs(path, compiler, Rhs::Auto)
 }
 
-/// `Rhs::Always` for the fixtures whose `D` equations only become an
-/// integrable system once a harness asks for one: a discretized PDE fixture
-/// declares its derivative through a `faq` stencil, and `Rhs::Auto` reads the
-/// undiscretized document as having nothing to integrate and hands back a
-/// static Problem — with no right-hand side, no compiler and nothing to
-/// compare.
+/// `Rhs::Always` for the fixtures a harness integrates as the conformance
+/// adapters do, forcing a right-hand side rather than letting the routing
+/// decide.
 fn build_rhs(path: &Path, compiler: Compiler, rhs: Rhs) -> Result<EsmProblem, SimulateError> {
     esm_problem(
         path,
@@ -331,13 +328,30 @@ fn the_report_names_every_rule_not_only_the_declines() {
 }
 
 #[test]
-fn a_static_document_reports_no_compiler_rules() {
-    // A document with nothing to integrate has no right-hand side, so no
-    // compiler was chosen for it and it can refuse nothing.
+fn a_static_document_reports_its_observeds_on_the_named_compiler() {
+    // A document with nothing to integrate has no right-hand side, but its
+    // observed graph is still evaluated at construction, and §2.5.10 puts that
+    // evaluation under the compiler the caller named (issue #484): the tape
+    // under `native`, the per-cell oracle under `interpreter`.
     let path = fixture("tests/valid/nonlinear_two_component_static.esm");
-    let prob = build(&path, Compiler::Native).expect("a static document still builds");
-    assert_eq!(prob.backend_kind(), "static");
-    assert!(prob.compiler_report().rules().is_empty());
+    for (compiler, tier) in [
+        (Compiler::Native, "taped"),
+        (Compiler::Interpreter, "oracle"),
+    ] {
+        let prob = build(&path, compiler).expect("a static document still builds");
+        assert_eq!(prob.backend_kind(), "static");
+        let report = prob.compiler_report();
+        assert!(!report.rules().is_empty(), "[{compiler}] {report}");
+        for r in report.rules() {
+            assert_eq!(r.kind, "observed", "[{compiler}] {}", r.rule);
+            assert_eq!(r.tier, tier, "[{compiler}] {}", r.rule);
+            assert!(r.reason.is_none(), "[{compiler}] {}", r.rule);
+        }
+        assert!(
+            !prob.observed_field_names().is_empty(),
+            "[{compiler}] the observeds were evaluated"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -434,16 +448,27 @@ fn xla_solves_and_agrees_with_the_interpreter() {
         assert_eq!(xla.compiler(), Compiler::Xla);
         assert_eq!(xla.backend_kind(), "array", "{rel}");
 
-        // Every rule is in the emitted program: `xla` is strict twice over, so
-        // a rule anywhere else would have been a build refusal.
+        // Every rule of the model is in the emitted program: `xla` is strict
+        // twice over, so a rule anywhere else would have been a build refusal.
+        // The setup evaluations outside the rule set — a field initial
+        // condition — are reported beside them, served by the whole-array
+        // overlay rather than walked per cell.
         let report = xla.compiler_report();
         assert_eq!(report.compiler(), Compiler::Xla, "{rel}");
         assert!(!report.rules().is_empty(), "{rel}");
         assert_eq!(report.n_oracle(), 0, "{rel}");
         assert_eq!(report.n_taped(), 0, "{rel}");
-        assert_eq!(report.n_xla(), report.rules().len(), "{rel}");
+        assert_eq!(
+            report.n_xla() + report.n_vectorized(),
+            report.rules().len(),
+            "{rel}"
+        );
         for r in report.rules() {
-            assert_eq!(r.tier, "xla", "{rel}: {}", r.rule);
+            let want = match r.kind {
+                "observed" | "state derivative" => "xla",
+                _ => "vectorized",
+            };
+            assert_eq!(r.tier, want, "{rel}: {}", r.rule);
             assert!(r.reason.is_none(), "{rel}: {}", r.rule);
         }
         assert!(report.to_string().contains("compiler xla"), "{rel}");

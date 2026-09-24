@@ -226,6 +226,9 @@ fn run(doc: &Value, consts: HashMap<String, ArrayD<f64>>, driver: bool) -> (Vec<
         doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             model_name: Some("J".into()),
             const_arrays: consts,
             build_providers: Vec::new(),

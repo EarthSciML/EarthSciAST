@@ -141,6 +141,9 @@ fn axis_of_one() -> (Value, Option<Value>) {
 /// rebuilds this way, and the inline-test runner retries this way).
 fn opts() -> ProblemOptions {
     ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         build_pipeline: true,
         ..Default::default()
     }

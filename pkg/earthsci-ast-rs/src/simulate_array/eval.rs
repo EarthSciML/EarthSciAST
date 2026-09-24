@@ -1757,6 +1757,32 @@ pub(super) fn lookup_array_ref<'a>(name: &str, ctx: &'a EvalCtx) -> Option<&'a A
 }
 
 thread_local! {
+    /// How many `faq` nodes this thread has evaluated by walking the body once
+    /// per cell (or once per contracted term) rather than through the
+    /// whole-array overlay. See [`per_cell_walks`].
+    static PER_CELL_WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The running count of per-cell `faq` walks on this thread: the number of
+/// times [`eval_faq`] took its per-cell branch (a prefix scan, the output-tuple
+/// loop, or a rank-0 contraction folded term by term) because the whole-array
+/// overlay did not take the node.
+///
+/// The routes that evaluate a document through this evaluator OUTSIDE the
+/// compiled rule set — the build pipeline's observed graph, a field initial
+/// condition — read the delta across one evaluation to learn whether it was
+/// interpreted per cell, which is what a strict compiler refuses
+/// (esm-libraries-spec §2.5.10). A counter rather than a flag, so a nested
+/// evaluation cannot clear what an enclosing one recorded.
+pub(crate) fn per_cell_walks() -> u64 {
+    PER_CELL_WALKS.with(std::cell::Cell::get)
+}
+
+fn note_per_cell_walk() {
+    PER_CELL_WALKS.with(|c| c.set(c.get().wrapping_add(1)));
+}
+
+thread_local! {
     /// First `E_TREEWALK_CONSTARRAY_OOB` raised during the current evaluation.
     ///
     /// The tree walk returns a bare [`Value`] with no error channel, so an
@@ -4706,6 +4732,18 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         }
     }
 
+    // An EMPTY output box (a size-0 index set) has no cell to evaluate: the
+    // result is the empty array of that box. The buffer below is sized
+    // `max(1)` for the rank-0 case, and reshaping its one element into a box
+    // with a zero extent is not a value but a panic.
+    if shape.contains(&0) {
+        return Value::Array(Box::new(ArrayD::zeros(IxDyn(&shape))));
+    }
+    // From here on the node is walked per cell. A rank-0 node with nothing to
+    // contract is a single scalar evaluation, not a walk.
+    if !shape.is_empty() || !contract_names.is_empty() {
+        note_per_cell_walk();
+    }
     let mut buf = vec![0.0f64; total];
     let saved_binds: Vec<(String, Option<i64>)> = idx_names
         .iter()
@@ -6315,6 +6353,10 @@ mod gate_plan_tests {
                 model_name: Some("J".into()),
                 const_arrays: t.const_arrays(),
                 build_providers: Vec::new(),
+                // A gate-driven join is walked per cell by the pipeline, which
+                // a strict native refuses (#484); the gate planner is what is
+                // under test here, on the reference evaluator.
+                compiler: Some(crate::Compiler::Interpreter),
                 ..Default::default()
             },
         )
