@@ -120,6 +120,67 @@
         "measured": "refused: compiler 'native' cannot run the continuous-cadence state derivative 'D(u)': index: axis 0 is neither an affine/wrap map of an unclaimed output symbol nor a constant select",
         "reason": "indirect gather u[nbr[i,k]] has no tape lowering",
         "phase": 3
+      },
+      {
+        "family": "transport_3d",
+        "gate": "code_size_flat",
+        "measured": {
+          "100": 47,
+          "1000": 71
+        },
+        "reason": "the tape's instruction count changes with the grid side (cause not yet traced)",
+        "phase": 2
+      },
+      {
+        "family": "prefix_scan",
+        "gate": "code_size_flat",
+        "measured": {
+          "100": 507,
+          "1000": 5007
+        },
+        "reason": "a prefix scan is unrolled into one region write per step: 5N + 7 instructions",
+        "phase": 2
+      },
+      {
+        "family": "source_receptor",
+        "gate": "code_size_flat",
+        "measured": {
+          "100": 208,
+          "1000": 2008
+        },
+        "reason": "a contraction is unrolled once per output tuple: 2N + 8 instructions",
+        "phase": 2
+      },
+      {
+        "family": "stencil_4d",
+        "gate": "no_steady_alloc",
+        "measured": 128,
+        "reason": "each steady right-hand-side call allocates (not yet traced; ranks 1 to 3 of the same stencil do not)",
+        "phase": 5
+      },
+      {
+        "family": "transport_3d",
+        "gate": "no_steady_alloc",
+        "measured": 384,
+        "reason": "each steady right-hand-side call allocates (not yet traced)",
+        "phase": 5
+      },
+      {
+        "family": "chemistry_grid",
+        "gate": "no_steady_alloc",
+        "measured": 1152,
+        "reason": "each steady right-hand-side call allocates (not yet traced)",
+        "phase": 5
+      },
+      {
+        "family": "source_receptor",
+        "gate": "no_steady_alloc",
+        "measured": {
+          "100": 3840,
+          "1000": 32512
+        },
+        "reason": "each steady right-hand-side call allocates, growing with N (not yet traced)",
+        "phase": 5
       }
     ],
     "julia": []

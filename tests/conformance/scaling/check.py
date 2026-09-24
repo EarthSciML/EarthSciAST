@@ -238,6 +238,8 @@ def main(argv=None):
 
     checks = []
     red = []
+    have = {}
+    first_run = {}
     for path in a.results:
         run = load(path)
         run["_path"] = path
@@ -250,12 +252,18 @@ def main(argv=None):
             checks += per_result_checks(run, r, gates, fams[r["family"]])
         for fam, rs in by_family.items():
             checks += family_checks(run, fam, rs, gates, fams[fam])
-        if a.require:
-            have = {(r["family"], r.get("n")) for r in run["results"]}
+        group = (run.get("binding"), run.get("compiler"), threads_label(run))
+        first_run.setdefault(group, run)
+        have.setdefault(group, set()).update((r["family"], r.get("n")) for r in run["results"])
+
+    # --require is per (binding, compiler, thread mode) across every file,
+    # since a sweep writes one file per family.
+    if a.require:
+        for group, got in have.items():
             for fam, spec in fams.items():
                 for n in spec["pr_sizes" if a.require == "pr" else "sizes"]:
-                    if (fam, n) not in have:
-                        c = Check(run, fam, n, "present", DETERMINISTIC, False, None)
+                    if (fam, n) not in got:
+                        c = Check(first_run[group], fam, n, "present", DETERMINISTIC, False, None)
                         c.outcome = "MISSING"
                         checks.append(c)
 
