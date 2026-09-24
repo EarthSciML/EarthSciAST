@@ -1307,7 +1307,8 @@ def _assert_no_redundant_definition(flat: FlattenedSystem) -> None:
 
 def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:
     """esm-spec §9.6.6 ``unsupported_construct`` — refuse an event (continuous or
-    discrete) or an implicit equation before any pathway is built.
+    discrete), an implicit equation or a Wiener-noise parameter before any
+    pathway is built.
 
     Neither the SymPy scalar pathway nor the NumPy array interpreter runs an
     event, and neither solves an equation whose LHS is an expression. Both used
@@ -1350,6 +1351,12 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) 
                 f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}`",
                 evaluator,
             )
+    # A Wiener-noise parameter (``update.kind = "wiener"``) makes the document an
+    # SDE. Neither pathway integrates one: both read the noise as a constant and
+    # report the trajectory of a different, deterministic model.
+    if flat.brownian_parameters:
+        name = next(iter(flat.brownian_parameters))
+        raise UnsupportedConstructError("Wiener noise", f"parameter '{name}'", evaluator)
 
 
 def _first_subsystem_event(file: EsmFile) -> tuple[str, Any] | None:
