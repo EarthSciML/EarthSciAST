@@ -3416,6 +3416,10 @@ function _build_evaluator_impl_inner(model::Model;
     # runs both kinds of event and does not come through here.
     ev = _first_event(model)
     ev === nothing || throw(_event_refusal(ev))
+    # A Wiener-noise parameter makes the document an SDE, which this evaluator
+    # does not integrate (esm-spec §9.6.6); refused on the same terms.
+    wiener = _first_wiener_parameter(model)
+    wiener === nothing || throw(_wiener_refusal(wiener))
     # Runtime contraction-loop var registry (ess-runtime-contraction) is a
     # build-scoped resolve→compile side channel; clear any stale entries from a
     # prior build so it never accumulates across builds. Loop-var names are
@@ -5364,6 +5368,7 @@ function _build_evaluator(flat::FlattenedSystem; kwargs...)
     # `flattened_to_esm` does not carry events, so they are refused HERE, while
     # the flattened system still holds them (esm-spec §9.6.6).
     _refuse_flat_events(flat)
+    _refuse_flat_wiener_noise(flat)
     return _build_evaluator(flattened_to_esm(flat); kwargs...)
 end
 

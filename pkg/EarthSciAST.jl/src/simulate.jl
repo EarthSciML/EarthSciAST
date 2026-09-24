@@ -163,6 +163,7 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         # emit events, so the tree-walk build never sees one and would run the
         # model without it.
         _refuse_flat_events(input)
+        _refuse_flat_wiener_noise(input)
         # esm-spec §9.5.3: lower `table_lookup` to its `interp.*` form HERE —
         # the one point every input kind (path, native Dict, EsmFile,
         # already-flattened system) has funnelled into, and the first point
