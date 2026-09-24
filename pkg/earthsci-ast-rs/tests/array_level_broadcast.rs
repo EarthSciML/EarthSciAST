@@ -44,12 +44,6 @@ fn run(
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
             rhs: earthsci_ast::Rhs::Always,
-            // The array-level `broadcast` node has no WHOLESALE tape
-            // lowering, so `native` refuses these fixtures by NAME (API_SPEC
-            // §5.8). What is pinned here is the BROADCAST SEMANTICS — which
-            // axes lift, and that the two spellings agree bit for bit — and
-            // that is the reference evaluator's answer to give.
-            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )
@@ -74,11 +68,8 @@ fn run_shared_fixture(name: &str) {
 
     let results = earthsci_ast::run_inline_tests_with_options(
         &file,
-        // As `run` above: the array-level `broadcast` node has no wholesale
-        // tape lowering, so `native` refuses these fixtures by NAME.
         &earthsci_ast::InlineTestOptions {
             solve: opts(),
-            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
         None,
@@ -341,12 +332,6 @@ fn anonymous_shapes_keep_positional_broadcast() {
             p: HashMap::new().clone(),
             u0: ics.clone(),
             rhs: earthsci_ast::Rhs::Always,
-            // The array-level `broadcast` node has no WHOLESALE tape
-            // lowering, so `native` refuses these fixtures by NAME (API_SPEC
-            // §5.8). What is pinned here is the BROADCAST SEMANTICS — which
-            // axes lift, and that the two spellings agree bit for bit — and
-            // that is the reference evaluator's answer to give.
-            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )

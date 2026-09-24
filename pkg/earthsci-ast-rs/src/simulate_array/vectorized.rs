@@ -800,6 +800,8 @@ pub(super) enum VecOp {
     Aggregate,
     Makearray,
     Const,
+    /// The nullary boolean literals `true` / `false` (1.0 / 0.0).
+    BoolLit(bool),
     Ifelse,
     Broadcast,
     /// The precision-boundary marker (`crate::precision_infer::MARKER_OP`).
@@ -817,7 +819,7 @@ pub(super) fn vec_op_code(op: &str) -> VecOp {
         "-" => VecOp::Arith(BinCode::Sub),
         "*" => VecOp::Arith(BinCode::Mul),
         "/" => VecOp::Arith(BinCode::Div),
-        "^" => VecOp::Arith(BinCode::Pow),
+        "^" | "pow" => VecOp::Arith(BinCode::Pow),
         "min" => VecOp::Arith(BinCode::Min),
         "max" => VecOp::Arith(BinCode::Max),
         "atan2" => VecOp::Arith(BinCode::Atan2),
@@ -855,6 +857,8 @@ pub(super) fn vec_op_code(op: &str) -> VecOp {
         "faq" => VecOp::Aggregate,
         "makearray" => VecOp::Makearray,
         "const" => VecOp::Const,
+        "true" => VecOp::BoolLit(true),
+        "false" => VecOp::BoolLit(false),
         "ifelse" => VecOp::Ifelse,
         "broadcast" => VecOp::Broadcast,
         _ => VecOp::Unsupported,
@@ -946,6 +950,7 @@ fn eval_vec_op_code<'a>(
             // Array-valued constants are not part of the stencil fast path.
             Value::Array(_) => None,
         },
+        VecOp::BoolLit(b) => Some(VecValue::Scalar(if b { 1.0 } else { 0.0 })),
         // Scalar comparisons and `ifelse` over *scalar* operands — the einsum
         // weight idiom `ifelse(k==0,-2,1)` folds to a constant per contraction
         // tuple. Bit-identical to the oracle's `eval_op` (same exact-equality
@@ -2536,6 +2541,9 @@ mod op_dispatch_equivalence {
         assert_eq!(vec_op_code("faq"), VecOp::Aggregate);
         assert_eq!(vec_op_code("makearray"), VecOp::Makearray);
         assert_eq!(vec_op_code("const"), VecOp::Const);
+        assert_eq!(vec_op_code("true"), VecOp::BoolLit(true));
+        assert_eq!(vec_op_code("false"), VecOp::BoolLit(false));
+        assert_eq!(vec_op_code("pow"), VecOp::Arith(BinCode::Pow));
         assert_eq!(vec_op_code("ifelse"), VecOp::Ifelse);
         assert_eq!(vec_op_code("broadcast"), VecOp::Broadcast);
     }
