@@ -1547,10 +1547,20 @@ impl<'o> BuildState<'o> {
             None if models.len() == 1 => models.keys().next().unwrap().clone(),
             None => return Err(err("document holds several models; pass model_name")),
         };
-        let model = models
+        let mut model = models
             .get(&model_name)
             .ok_or_else(|| err(format!("model '{model_name}' not found in the document")))?
             .clone();
+        // This route reads the AUTHORED model, not a flattened one, so it makes
+        // the rewrites `flatten` would have made, exactly as the array
+        // runtime's single-model route does: a self-qualified `M.a` resolves
+        // to `a`, a right-hand-side `D` to the tendency it names (or a refusal,
+        // never a `NaN`), and a `sin` of a `deg` angle takes radians — without
+        // that last one `sin(40 deg)` evaluated as `sin(40)` here and nowhere
+        // else.
+        crate::simulate_array::resolve_model_self_references(&mut model, &model_name);
+        crate::simulate_array::apply_flatten_rewrites(&mut model)
+            .map_err(|e| err(format!("model '{model_name}': {e}")))?;
 
         let (param_vals, param_names) = scalar_params(&model, &opts.parameters);
 
