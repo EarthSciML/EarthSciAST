@@ -412,6 +412,27 @@ function git_commit()
     end
 end
 
+# Where the timings were taken, since they are only worth reading from a
+# machine nothing else shares: a Slurm job that holds its node exclusively, or
+# the local node (whose load the header records).
+function machine_note()
+    id = get(ENV, "SLURM_JOB_ID", "")
+    isempty(id) && return "local node (not a Slurm job)"
+    excl = try
+        m = match(r"OverSubscribe=(\w+)", read(`scontrol show job $id`, String))
+        m === nothing ? "unknown" : (m.captures[1] == "NO" ? "exclusive" : "shared")
+    catch
+        "unknown"
+    end
+    return "Slurm job $id, node $excl"
+end
+
+load_average() = try
+    parse.(Float64, split(read("/proc/loadavg", String))[1:3])
+catch
+    nothing
+end
+
 function write_results(path, header, results)
     tmp = path * ".tmp"
     open(tmp, "w") do io
@@ -454,7 +475,8 @@ function main(args)
         "binding" => "julia", "compiler" => String(compiler), "threads" => Threads.nthreads(),
         "commit" => git_commit(), "host" => gethostname(),
         "target" => string(Sys.MACHINE), "julia_version" => string(VERSION),
-        "polyester_loaded" => ESA._polyester_loaded())
+        "polyester_loaded" => ESA._polyester_loaded(),
+        "machine" => machine_note(), "load_average_at_start" => load_average())
     results = Any[]
     for fam in fams
         ladder = sort([e for e in entries if e["family"] == fam]; by = e -> e["n"])
