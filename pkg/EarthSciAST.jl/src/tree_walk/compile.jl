@@ -584,9 +584,11 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         throw(_unevaluable_operator(expr.op,
             "a non-scalar `const` is consumed only by an array-consuming position"))
     elseif op_sym === Symbol("true")
-        # The boolean literal (esm-spec §4.2), in the evaluator's float encoding.
+        # The boolean literals (esm-spec §4.2), in the evaluator's float encoding.
         # (`:true` is the Bool `true`, not a Symbol, so it cannot be compared here.)
         return _mknode(kind=_NK_LITERAL, literal=1.0)
+    elseif op_sym === Symbol("false")
+        return _mknode(kind=_NK_LITERAL, literal=0.0)
     elseif op_sym === :enum
         throw(_unevaluable_operator(expr.op,
             "`enum` must be lowered to `const` at load — call `lower_enums!` before compile"))
