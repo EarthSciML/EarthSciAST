@@ -39,11 +39,11 @@ fn a_table_lookup_observed_evaluates_like_its_hand_lowered_twin() {
     let file = load_path(&path).expect("fixture loads");
     let results = earthsci_ast::run_inline_tests_with_options(
         &file,
-        // `table_lookup` lowers to `interp.linear` / `interp.bilinear`, and
-        // those closed functions have no tape lowering, so `native` refuses
-        // this document by NAME (API_SPEC §5.8). What is pinned here is that
-        // the two carriers AGREE, which is the reference evaluator's answer
-        // to give.
+        // `table_lookup` lowers to `interp.linear` / `interp.bilinear`, which
+        // the tape lowers too (`tape_interp_lowering.rs` pins it bit for bit
+        // against the oracle), so `native` tapes this document. What is
+        // pinned here is that the two carriers AGREE, which is the reference
+        // evaluator's answer to give.
         &earthsci_ast::InlineTestOptions {
             solve: SolveOptions::default(),
             base_dir: path.parent().map(std::path::Path::to_path_buf),
@@ -127,10 +127,10 @@ fn both_problem_carriers_lower_a_table_lookup() {
             input,
             (0.0, 1.0),
             earthsci_ast::ProblemOptions {
-                // `table_lookup` lowers to `interp.linear`, which has no
-                // tape lowering, so `native` refuses both carriers by NAME
-                // (API_SPEC §5.8). What is pinned here is that the two
-                // carriers AGREE.
+                // `table_lookup` lowers to `interp.linear`, which the tape
+                // lowers too, so `native` tapes both carriers. What is pinned
+                // here is that the two carriers AGREE, which is the reference
+                // evaluator's answer to give.
                 compiler: Some(earthsci_ast::Compiler::Interpreter),
                 ..Default::default()
             },

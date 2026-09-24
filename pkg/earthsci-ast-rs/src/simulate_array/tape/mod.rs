@@ -9,9 +9,11 @@
 //! [`exec`] (Step 3b): `simulate` builds the program once per solve and each
 //! segment's RHS scratch runs it. Which evaluator runs is the caller's
 //! choice of compiler (API_SPEC §5.8) and nothing else: `native` is this
-//! tape, `interpreter` is the per-cell oracle. The `debug_eval_rhs*` oracles,
-//! the samples pass and the FD Jacobian closure stay on the legacy
-//! interpreter path.
+//! tape, `interpreter` is the per-cell oracle. Under `native` the tape also
+//! serves the finite-difference Jacobian closure and the observed passes
+//! (the build-time materialization of static observeds, the per-segment seed
+//! and the observeds reported at output times; see `tape_serves_passes`).
+//! `debug_eval_rhs` is the oracle and never runs the tape.
 //!
 //! ## Instruction set
 //!
