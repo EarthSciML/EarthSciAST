@@ -388,9 +388,13 @@ pub struct CompilerRuleReport {
     /// compiler), or `"oracle"` (every rule under [`Compiler::Interpreter`],
     /// by design). An evaluation outside the compiled rule set is
     /// `"vectorized"` when the whole-array overlay served it and `"oracle"`
-    /// when it was walked per cell — which a strict compiler refuses, except
-    /// for `"value invention"`, which the array runtime's own build performs
-    /// under every compiler and which is reported rather than refused.
+    /// when it was walked per cell, which a strict compiler refuses. A
+    /// `"value invention"` row is `"relational"`: the producer's member set,
+    /// computed once at setup by the relational engine from build-time factors
+    /// (CONFORMANCE_SPEC §5.7.6 keeps that engine off the hot path), under
+    /// every compiler alike. It is neither the oracle nor a fallback, so a
+    /// build that succeeds under a strict compiler still has
+    /// [`CompilerReport::n_oracle`] `== 0`.
     pub tier: &'static str,
     /// For a `"fallback"`, the DEEPEST decline reason reached while trying to
     /// lower the rule; for an `"oracle"` evaluation outside the compiled rule
@@ -503,6 +507,10 @@ impl std::fmt::Display for CompilerReport {
         }
         if self.n_vectorized() > 0 {
             write!(f, ", {} on the whole-array overlay", self.n_vectorized())?;
+        }
+        let n_relational = self.rules.iter().filter(|r| r.tier == "relational").count();
+        if n_relational > 0 {
+            write!(f, ", {n_relational} by the relational engine at setup")?;
         }
         if self.fused_groups > 0 {
             write!(
@@ -1724,13 +1732,17 @@ pub fn esm_problem<'a>(
             // evaluator whatever the compiler, and under a strict one it
             // stopped at the first observed it had to walk per cell.
             if let Some(r) = &prepared.refused {
+                let reason = match &r.route {
+                    crate::prepare::Route::PerCell(why) => why.clone(),
+                    _ => String::new(),
+                };
                 return Err(SimulateError::Compile(
                     crate::compile_error::CompileError::CompilerRefusedRule {
                         compiler: compiler.as_str(),
                         kind: r.kind,
                         rule: qualify(&prepared.model_name, &r.name),
                         tier: "const",
-                        reason: r.per_cell.clone().unwrap_or_default(),
+                        reason,
                     },
                 ));
             }
@@ -1738,13 +1750,22 @@ pub fn esm_problem<'a>(
             // `interpreter` included, so its rows say which observeds the
             // overlay served.
             route_rows.extend(prepared.rules.iter().map(|r| {
-                outside_rule_row(
-                    compiler,
-                    qualify(&prepared.model_name, &r.name),
-                    r.kind,
-                    r.per_cell.clone(),
-                    false,
-                )
+                let rule = qualify(&prepared.model_name, &r.name);
+                match &r.route {
+                    crate::prepare::Route::Relational => CompilerRuleReport {
+                        rule,
+                        kind: r.kind,
+                        cadence: "const",
+                        tier: "relational",
+                        reason: None,
+                    },
+                    crate::prepare::Route::Overlay => {
+                        outside_rule_row(compiler, rule, r.kind, None, false)
+                    }
+                    crate::prepare::Route::PerCell(why) => {
+                        outside_rule_row(compiler, rule, r.kind, Some(why.clone()), false)
+                    }
+                }
             }));
             *raw = prepared.doc;
             model_name = Some(prepared.model_name);
