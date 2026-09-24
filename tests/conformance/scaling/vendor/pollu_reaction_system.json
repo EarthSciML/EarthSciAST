@@ -1,0 +1,740 @@
+{
+ "_provenance": "Vendored from EarthSciModels components/gaschem/pollu.esm (commit eb2a54f), reaction_systems.Pollu without its inline tests. The scaling tier's generator reads this copy so that generation never depends on an EarthSciModels checkout.",
+ "reference": {
+  "doi": "10.1137/0915076",
+  "citation": "Verwer, J. G.: Gauss-Seidel iteration for stiff ODEs from chemical kinetics, SIAM Journal on Scientific Computing, 15(5), 1243-1250, 1994.",
+  "url": "https://epubs.siam.org/doi/10.1137/0915076",
+  "notes": "Source: GasChem.jl src/Pollu.jl @ 8c12c048482b515fb8eb2110bf8ab4b4f4e71309 (esm-4sxf). Hand-translated from the upstream Catalyst @reaction_network. POLLU is a classic stiff-ODE air-pollution benchmark: 20 species, 25 reactions (15 thermal + 10 photolytic). Reactions are numbered R1..R25 following the canonical POLLU ordering -- the upstream rate-constant names (k2, k3, k6, ...) already encode these indices, and the j-prefixed photolysis constants fill the remaining indices. Every reaction rate is a single rate-constant parameter and every substrate stoichiometry is 1, so the ESM mass-action rate law v = k * prod(S_i) reproduces the upstream ReactionSystem exactly regardless of combinatoric_ratelaws (src/Pollu.jl builds the model with combinatoric_ratelaws=false). The rate constants are the pre-scaled per-second / per-ppb values from src/Pollu.jl (k3 updated to match Fontana pollu.f upstream). Inline-test expected values are an upstream reference run of GasChem.jl Pollu() (Rosenbrock23, abstol=reltol=1e-12); the pollu_benchmark O3 values at 60 s and 3600 s reproduce the published POLLU reference solution to ~1e-8. POLLU's deliberately extreme stiffness (rate constants spanning k23~8e-7 to k19~7e9 1/s) is why this document declares solver.stiffness = \"high\" (esm-spec 2.2): an explicit non-stiff method cannot integrate it -- Julia's Tsit5 gives up with retcode MaxIters on every assertion of every test in this file -- while each binding's implicit pick (scipy BDF, Rosenbrock23) integrates the full 3600 s benchmark in well under a second and reproduces the upstream Rosenbrock23 trajectory. The declaration is what carries that fact to all three bindings; the inline-test gates used to carry a per-file solver table each instead, and no longer do."
+ },
+ "parameters": {
+  "jNO2_O3P": {
+   "units": "1/s",
+   "default": 0.005833333333333333,
+   "description": "Photolysis rate constant for NO2 -> NO + O3P (POLLU reaction 1)"
+  },
+  "k2": {
+   "units": "1/(ppb*s)",
+   "default": 0.00044333333333333334,
+   "description": "Rate constant for NO + O3 -> NO2 (POLLU reaction 2)"
+  },
+  "k3": {
+   "units": "1/(ppb*s)",
+   "default": 0.205,
+   "description": "Rate constant for HO2 + NO -> NO2 + OH (POLLU reaction 3)"
+  },
+  "jH2COa": {
+   "units": "1/s",
+   "default": 1.4333333333333332e-05,
+   "description": "Photolysis rate constant for CH2O -> 2 HO2 + CO (POLLU reaction 4)"
+  },
+  "jH2COb": {
+   "units": "1/s",
+   "default": 1.3666666666666666e-05,
+   "description": "Photolysis rate constant for CH2O -> CO (POLLU reaction 5)"
+  },
+  "k6": {
+   "units": "1/(ppb*s)",
+   "default": 0.25,
+   "description": "Rate constant for CH2O + OH -> HO2 + CO (POLLU reaction 6)"
+  },
+  "jALD": {
+   "units": "1/s",
+   "default": 2.1666666666666665e-06,
+   "description": "Photolysis rate constant for ALD -> MEO2 + HO2 + CO (POLLU reaction 7)"
+  },
+  "k8": {
+   "units": "1/(ppb*s)",
+   "default": 0.4,
+   "description": "Rate constant for ALD + OH -> C2O3 (POLLU reaction 8)"
+  },
+  "k9": {
+   "units": "1/(ppb*s)",
+   "default": 0.275,
+   "description": "Rate constant for C2O3 + NO -> NO2 + MEO2 + CO2 (POLLU reaction 9)"
+  },
+  "k10": {
+   "units": "1/(ppb*s)",
+   "default": 0.15,
+   "description": "Rate constant for C2O3 + NO2 -> PAN (POLLU reaction 10)"
+  },
+  "jPAN": {
+   "units": "1/s",
+   "default": 0.00036666666666666667,
+   "description": "First-order decomposition rate constant for PAN -> C2O3 + NO2 (POLLU reaction 11)"
+  },
+  "k12": {
+   "units": "1/(ppb*s)",
+   "default": 0.2,
+   "description": "Rate constant for MEO2 + NO -> CH3O + NO2 (POLLU reaction 12)"
+  },
+  "k13": {
+   "units": "1/s",
+   "default": 0.03133333333333333,
+   "description": "Rate constant for CH3O -> CH2O + HO2 (POLLU reaction 13)"
+  },
+  "k14": {
+   "units": "1/(ppb*s)",
+   "default": 0.27166666666666667,
+   "description": "Rate constant for NO2 + OH -> HNO3 (POLLU reaction 14)"
+  },
+  "k15": {
+   "units": "1/s",
+   "default": 80000.0,
+   "description": "Pseudo-first-order rate constant for O3P -> O3 (POLLU reaction 15)"
+  },
+  "jO3_O1D": {
+   "units": "1/s",
+   "default": 5.833333333333333e-06,
+   "description": "Photolysis rate constant for O3 -> O1D (POLLU reaction 16)"
+  },
+  "jO3_O3P": {
+   "units": "1/s",
+   "default": 0.0002916666666666667,
+   "description": "Photolysis rate constant for O3 -> O3P (POLLU reaction 17)"
+  },
+  "k18": {
+   "units": "1/s",
+   "default": 1666666.6666666667,
+   "description": "Rate constant for O1D -> 2 OH (POLLU reaction 18)"
+  },
+  "k19": {
+   "units": "1/s",
+   "default": 7400000000.0,
+   "description": "Rate constant for O1D -> O3P (POLLU reaction 19)"
+  },
+  "k20": {
+   "units": "1/(ppb*s)",
+   "default": 0.020666666666666667,
+   "description": "Rate constant for SO2 + OH -> SO4 + HO2 (POLLU reaction 20)"
+  },
+  "jNO3_NO": {
+   "units": "1/s",
+   "default": 0.035,
+   "description": "Photolysis rate constant for NO3 -> NO (POLLU reaction 21)"
+  },
+  "jNO3_NO2": {
+   "units": "1/s",
+   "default": 0.09633333333333334,
+   "description": "Photolysis rate constant for NO3 -> NO2 + O3P (POLLU reaction 22)"
+  },
+  "k23": {
+   "units": "1/(ppb*s)",
+   "default": 7.9e-07,
+   "description": "Rate constant for NO2 + O3 -> NO3 (POLLU reaction 23)"
+  },
+  "k24": {
+   "units": "1/(ppb*s)",
+   "default": 0.029666666666666668,
+   "description": "Rate constant for NO3 + NO2 -> N2O5 (POLLU reaction 24)"
+  },
+  "jN2O5": {
+   "units": "1/s",
+   "default": 0.052000000000000005,
+   "description": "First-order decomposition rate constant for N2O5 -> NO3 + NO2 (POLLU reaction 25)"
+  }
+ },
+ "species": {
+  "NO2": {
+   "units": "ppb",
+   "default": 0.0004,
+   "description": "Nitrogen dioxide"
+  },
+  "NO": {
+   "units": "ppb",
+   "default": 0.0004,
+   "description": "Nitric oxide"
+  },
+  "O3P": {
+   "units": "ppb",
+   "default": 0.0,
+   "description": "Ground-state atomic oxygen O(3P)"
+  },
+  "O3": {
+   "units": "ppb",
+   "default": 40.0,
+   "description": "Ozone"
+  },
+  "HO2": {
+   "units": "ppb",
+   "default": 4e-06,
+   "description": "Hydroperoxyl radical"
+  },
+  "OH": {
+   "units": "ppb",
+   "default": 4e-06,
+   "description": "Hydroxyl radical"
+  },
+  "CH2O": {
+   "units": "ppb",
+   "default": 4e-06,
+   "description": "Formaldehyde"
+  },
+  "CO": {
+   "units": "ppb",
+   "default": 100.0,
+   "description": "Carbon monoxide"
+  },
+  "ALD": {
+   "units": "ppb",
+   "default": 1e-11,
+   "description": "Lumped non-formaldehyde aldehydes"
+  },
+  "MEO2": {
+   "units": "ppb",
+   "default": 4e-06,
+   "description": "Methyl peroxy radical CH3O2"
+  },
+  "C2O3": {
+   "units": "ppb",
+   "default": 0.0,
+   "description": "Acetyl peroxy radical CH3C(O)O2"
+  },
+  "CO2": {
+   "units": "ppb",
+   "default": 355000.0,
+   "description": "Carbon dioxide"
+  },
+  "PAN": {
+   "units": "ppb",
+   "default": 1e-11,
+   "description": "Peroxyacetyl nitrate CH3C(O)O2NO2"
+  },
+  "CH3O": {
+   "units": "ppb",
+   "default": 0.0,
+   "description": "Methoxy radical CH3O"
+  },
+  "HNO3": {
+   "units": "ppb",
+   "default": 4e-06,
+   "description": "Nitric acid"
+  },
+  "O1D": {
+   "units": "ppb",
+   "default": 0.0,
+   "description": "Excited-state atomic oxygen O(1D)"
+  },
+  "SO2": {
+   "units": "ppb",
+   "default": 1e-11,
+   "description": "Sulfur dioxide"
+  },
+  "SO4": {
+   "units": "ppb",
+   "default": 1e-11,
+   "description": "Sulfate SO4"
+  },
+  "NO3": {
+   "units": "ppb",
+   "default": 4e-06,
+   "description": "Nitrate radical"
+  },
+  "N2O5": {
+   "units": "ppb",
+   "default": 4e-06,
+   "description": "Dinitrogen pentoxide"
+  }
+ },
+ "reactions": [
+  {
+   "id": "R1",
+   "substrates": [
+    {
+     "species": "NO2",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "NO",
+     "stoichiometry": 1
+    },
+    {
+     "species": "O3P",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "jNO2_O3P"
+  },
+  {
+   "id": "R2",
+   "substrates": [
+    {
+     "species": "NO",
+     "stoichiometry": 1
+    },
+    {
+     "species": "O3",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "NO2",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k2"
+  },
+  {
+   "id": "R3",
+   "substrates": [
+    {
+     "species": "HO2",
+     "stoichiometry": 1
+    },
+    {
+     "species": "NO",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "NO2",
+     "stoichiometry": 1
+    },
+    {
+     "species": "OH",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k3"
+  },
+  {
+   "id": "R4",
+   "substrates": [
+    {
+     "species": "CH2O",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "HO2",
+     "stoichiometry": 2
+    },
+    {
+     "species": "CO",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "jH2COa"
+  },
+  {
+   "id": "R5",
+   "substrates": [
+    {
+     "species": "CH2O",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "CO",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "jH2COb"
+  },
+  {
+   "id": "R6",
+   "substrates": [
+    {
+     "species": "CH2O",
+     "stoichiometry": 1
+    },
+    {
+     "species": "OH",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "HO2",
+     "stoichiometry": 1
+    },
+    {
+     "species": "CO",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k6"
+  },
+  {
+   "id": "R7",
+   "substrates": [
+    {
+     "species": "ALD",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "MEO2",
+     "stoichiometry": 1
+    },
+    {
+     "species": "HO2",
+     "stoichiometry": 1
+    },
+    {
+     "species": "CO",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "jALD"
+  },
+  {
+   "id": "R8",
+   "substrates": [
+    {
+     "species": "ALD",
+     "stoichiometry": 1
+    },
+    {
+     "species": "OH",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "C2O3",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k8"
+  },
+  {
+   "id": "R9",
+   "substrates": [
+    {
+     "species": "C2O3",
+     "stoichiometry": 1
+    },
+    {
+     "species": "NO",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "NO2",
+     "stoichiometry": 1
+    },
+    {
+     "species": "MEO2",
+     "stoichiometry": 1
+    },
+    {
+     "species": "CO2",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k9"
+  },
+  {
+   "id": "R10",
+   "substrates": [
+    {
+     "species": "C2O3",
+     "stoichiometry": 1
+    },
+    {
+     "species": "NO2",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "PAN",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k10"
+  },
+  {
+   "id": "R11",
+   "substrates": [
+    {
+     "species": "PAN",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "C2O3",
+     "stoichiometry": 1
+    },
+    {
+     "species": "NO2",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "jPAN"
+  },
+  {
+   "id": "R12",
+   "substrates": [
+    {
+     "species": "MEO2",
+     "stoichiometry": 1
+    },
+    {
+     "species": "NO",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "CH3O",
+     "stoichiometry": 1
+    },
+    {
+     "species": "NO2",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k12"
+  },
+  {
+   "id": "R13",
+   "substrates": [
+    {
+     "species": "CH3O",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "CH2O",
+     "stoichiometry": 1
+    },
+    {
+     "species": "HO2",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k13"
+  },
+  {
+   "id": "R14",
+   "substrates": [
+    {
+     "species": "NO2",
+     "stoichiometry": 1
+    },
+    {
+     "species": "OH",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "HNO3",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k14"
+  },
+  {
+   "id": "R15",
+   "substrates": [
+    {
+     "species": "O3P",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "O3",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k15"
+  },
+  {
+   "id": "R16",
+   "substrates": [
+    {
+     "species": "O3",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "O1D",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "jO3_O1D"
+  },
+  {
+   "id": "R17",
+   "substrates": [
+    {
+     "species": "O3",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "O3P",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "jO3_O3P"
+  },
+  {
+   "id": "R18",
+   "substrates": [
+    {
+     "species": "O1D",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "OH",
+     "stoichiometry": 2
+    }
+   ],
+   "rate": "k18"
+  },
+  {
+   "id": "R19",
+   "substrates": [
+    {
+     "species": "O1D",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "O3P",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k19"
+  },
+  {
+   "id": "R20",
+   "substrates": [
+    {
+     "species": "SO2",
+     "stoichiometry": 1
+    },
+    {
+     "species": "OH",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "SO4",
+     "stoichiometry": 1
+    },
+    {
+     "species": "HO2",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k20"
+  },
+  {
+   "id": "R21",
+   "substrates": [
+    {
+     "species": "NO3",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "NO",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "jNO3_NO"
+  },
+  {
+   "id": "R22",
+   "substrates": [
+    {
+     "species": "NO3",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "NO2",
+     "stoichiometry": 1
+    },
+    {
+     "species": "O3P",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "jNO3_NO2"
+  },
+  {
+   "id": "R23",
+   "substrates": [
+    {
+     "species": "NO2",
+     "stoichiometry": 1
+    },
+    {
+     "species": "O3",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "NO3",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k23"
+  },
+  {
+   "id": "R24",
+   "substrates": [
+    {
+     "species": "NO3",
+     "stoichiometry": 1
+    },
+    {
+     "species": "NO2",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "N2O5",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "k24"
+  },
+  {
+   "id": "R25",
+   "substrates": [
+    {
+     "species": "N2O5",
+     "stoichiometry": 1
+    }
+   ],
+   "products": [
+    {
+     "species": "NO3",
+     "stoichiometry": 1
+    },
+    {
+     "species": "NO2",
+     "stoichiometry": 1
+    }
+   ],
+   "rate": "jN2O5"
+  }
+ ]
+}

@@ -1,0 +1,214 @@
+{
+ "documents": [
+  {
+   "family": "stencil_1d",
+   "n": 100,
+   "path": "stencil_1d/stencil_1d_N100.esm",
+   "n_cells": 100,
+   "n_states": 100,
+   "shape": {
+    "side": 100
+   }
+  },
+  {
+   "family": "stencil_1d",
+   "n": 1000,
+   "path": "stencil_1d/stencil_1d_N1000.esm",
+   "n_cells": 1000,
+   "n_states": 1000,
+   "shape": {
+    "side": 1000
+   }
+  },
+  {
+   "family": "stencil_2d",
+   "n": 100,
+   "path": "stencil_2d/stencil_2d_N100.esm",
+   "n_cells": 100,
+   "n_states": 100,
+   "shape": {
+    "side": 10
+   }
+  },
+  {
+   "family": "stencil_2d",
+   "n": 1000,
+   "path": "stencil_2d/stencil_2d_N1000.esm",
+   "n_cells": 1024,
+   "n_states": 1024,
+   "shape": {
+    "side": 32
+   }
+  },
+  {
+   "family": "stencil_3d",
+   "n": 100,
+   "path": "stencil_3d/stencil_3d_N100.esm",
+   "n_cells": 125,
+   "n_states": 125,
+   "shape": {
+    "side": 5
+   }
+  },
+  {
+   "family": "stencil_3d",
+   "n": 1000,
+   "path": "stencil_3d/stencil_3d_N1000.esm",
+   "n_cells": 1000,
+   "n_states": 1000,
+   "shape": {
+    "side": 10
+   }
+  },
+  {
+   "family": "stencil_4d",
+   "n": 100,
+   "path": "stencil_4d/stencil_4d_N100.esm",
+   "n_cells": 81,
+   "n_states": 81,
+   "shape": {
+    "side": 3
+   }
+  },
+  {
+   "family": "stencil_4d",
+   "n": 1000,
+   "path": "stencil_4d/stencil_4d_N1000.esm",
+   "n_cells": 1296,
+   "n_states": 1296,
+   "shape": {
+    "side": 6
+   }
+  },
+  {
+   "family": "transport_3d",
+   "n": 100,
+   "path": "transport_3d/transport_3d_N100.esm",
+   "n_cells": 125,
+   "n_states": 125,
+   "shape": {
+    "side": 5
+   }
+  },
+  {
+   "family": "transport_3d",
+   "n": 1000,
+   "path": "transport_3d/transport_3d_N1000.esm",
+   "n_cells": 1000,
+   "n_states": 1000,
+   "shape": {
+    "side": 10
+   }
+  },
+  {
+   "family": "chemistry_grid",
+   "n": 100,
+   "path": "chemistry_grid/chemistry_grid_N100.esm",
+   "n_cells": 100,
+   "n_states": 2000,
+   "shape": {
+    "nlon": 10,
+    "nlat": 10
+   }
+  },
+  {
+   "family": "chemistry_grid",
+   "n": 1000,
+   "path": "chemistry_grid/chemistry_grid_N1000.esm",
+   "n_cells": 992,
+   "n_states": 19840,
+   "shape": {
+    "nlon": 32,
+    "nlat": 31
+   }
+  },
+  {
+   "family": "prefix_scan",
+   "n": 100,
+   "path": "prefix_scan/prefix_scan_N100.esm",
+   "n_cells": 100,
+   "n_states": 100,
+   "shape": {}
+  },
+  {
+   "family": "prefix_scan",
+   "n": 1000,
+   "path": "prefix_scan/prefix_scan_N1000.esm",
+   "n_cells": 1000,
+   "n_states": 1000,
+   "shape": {}
+  },
+  {
+   "family": "source_receptor",
+   "n": 100,
+   "path": "source_receptor/source_receptor_N100.esm",
+   "n_cells": 100,
+   "n_states": 200,
+   "shape": {}
+  },
+  {
+   "family": "source_receptor",
+   "n": 1000,
+   "path": "source_receptor/source_receptor_N1000.esm",
+   "n_cells": 1000,
+   "n_states": 2000,
+   "shape": {}
+  },
+  {
+   "family": "regrid",
+   "n": 100,
+   "path": "regrid/regrid_N100.esm",
+   "n_cells": 100,
+   "n_states": 200,
+   "shape": {}
+  },
+  {
+   "family": "regrid",
+   "n": 1000,
+   "path": "regrid/regrid_N1000.esm",
+   "n_cells": 1000,
+   "n_states": 2000,
+   "shape": {}
+  },
+  {
+   "family": "unstructured_gather",
+   "n": 100,
+   "path": "unstructured_gather/unstructured_gather_N100.esm",
+   "n_cells": 100,
+   "n_states": 100,
+   "shape": {
+    "side": 10
+   }
+  },
+  {
+   "family": "unstructured_gather",
+   "n": 1000,
+   "path": "unstructured_gather/unstructured_gather_N1000.esm",
+   "n_cells": 1024,
+   "n_states": 1024,
+   "shape": {
+    "side": 32
+   }
+  },
+  {
+   "family": "scalar_chemistry",
+   "n": 100,
+   "path": "scalar_chemistry/scalar_chemistry_N100.esm",
+   "n_cells": 5,
+   "n_states": 100,
+   "shape": {
+    "boxes": 5
+   }
+  },
+  {
+   "family": "scalar_chemistry",
+   "n": 1000,
+   "path": "scalar_chemistry/scalar_chemistry_N1000.esm",
+   "n_cells": 50,
+   "n_states": 1000,
+   "shape": {
+    "boxes": 50
+   }
+  }
+ ]
+}
