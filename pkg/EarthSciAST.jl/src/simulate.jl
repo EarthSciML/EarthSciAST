@@ -1196,7 +1196,12 @@ function esm_problem(input, tspan;
     end
 
     # ---- initial state: the document's own ICs, then the caller's -----------
-    u0_run = _seed_u0(u0_built, var_map, u0, seed_ic!)
+    # Under the build's plan: a `seed_ic!` hook (`seed_expression_ic!`) is an
+    # evaluation for this problem, and §2.5.10 puts the seed under the same
+    # refusal rule as the right-hand side.
+    u0_run = _with_compiler_plan(_plan_for(compiler)) do
+        _seed_u0(u0_built, var_map, u0, seed_ic!)
+    end
 
     # ---- the problem's callback set (§2.5.4) --------------------------------
     # Composed HERE, at construction, because a callback that refreshes provider
