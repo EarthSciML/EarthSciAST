@@ -96,10 +96,10 @@ pub(crate) fn nonadvancing_trajectory(
     }
 
     // With a grid, every requested time gets the initial state — including a
-    // time BEYOND an empty interval, which is the courtesy extrapolation the
-    // tail of [`run_solver`]'s `saveat` branch performs, and for a run that
-    // never moves the initial state is what it extrapolates. Without a grid,
-    // the single point the run produces is `t0` itself.
+    // time BEYOND an empty interval: a run that never moves has only the
+    // initial state to report. (A run that does step leaves a time past its
+    // end out instead; see the tail of [`run_solver`]'s `saveat` branch.)
+    // Without a grid, the single point the run produces is `t0` itself.
     let natural = [t0];
     let grid: &[f64] = opts.saveat.as_deref().unwrap_or(&natural);
     for &t in grid {
@@ -314,21 +314,13 @@ where
                 break;
             }
         }
-        // Anything after the solver's tstop is interpolated by extrapolation
-        // — strictly speaking out-of-range, but accept it as a courtesy if
-        // the user asked for it. A run that stopped early (max iterations, an
-        // unstable state, a cancel) is NOT extrapolated past where it got to:
-        // the trajectory ends where the integration ended.
-        while retcode.is_success() && next_idx < t_eval.len() {
-            let t = t_eval[next_idx];
-            let y = solver
-                .interpolate(t)
-                .map_err(|e| SimulateError::DiffsolError {
-                    details: e.to_string(),
-                })?;
-            push_state(&mut times, &mut state_rows, t, y.as_slice());
-            next_idx += 1;
-        }
+        // Whatever is left of the grid lies past `t_end`, or past where a run
+        // that stopped early (max iterations, an unstable state, a cancel)
+        // got to, and is not part of the trajectory: the trajectory ends where
+        // the integration ended. diffsol cannot interpolate past its stop time
+        // — every method refuses (issue #478) — so such times are left out,
+        // as the segmented path in `simulate_array` leaves them out of its
+        // per-segment grids.
         let _ = t_prev;
     } else {
         // Native step grid: record the initial point, then every step.
