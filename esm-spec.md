@@ -374,6 +374,7 @@ Every `op` string belongs to one of **two tiers**:
 | `*` | n-ary | `{"op": "*", "args": ["k", "A", "B"]}` | k·A·B |
 | `/` | binary | `{"op": "/", "args": ["a", "b"]}` | a / b |
 | `^` | binary | `{"op": "^", "args": ["x", 2]}` | x² |
+| `pow` | binary | `{"op": "pow", "args": ["x", 2]}` | x² — the word spelling of `^`, with the same meaning and the same value |
 
 #### Calculus
 
@@ -671,6 +672,7 @@ These accompany `faq` in Functional Aggregate Query expressions (RFC semiring-fa
 | `intersect_polygon` | `manifold` | Geometry kernel leaf: the clipped intersection polygon of two cells (a ring of data-dependent length), composed with a `polygon_area` `sum_product` FAQ for conservative regridding (§8.6). |
 | `polygon_intersection_area` | `manifold` | Geometry kernel leaf returning the **scalar** overlap area of two cells — the fused `polygon_area ∘ intersect_polygon`. Exposes no ragged clip ring, so a per-pair overlap-area factor `A_ij = polygon_intersection_area(src_i, tgt_j)` is a dense, evaluable `faq` (§8.6.1). |
 | `true` | — (`args: []`) | Nullary boolean-literal constant — e.g. an always-true join / `filter` predicate. |
+| `false` | — (`args: []`) | Nullary boolean-literal constant, the counterpart of `true`. In a numeric position the literals are `1` and `0`, the encoding every comparison produces. |
 
 ### 4.3 Array / Tensor Semantics
 

@@ -69,43 +69,29 @@
       "id": "boolean_literal_false",
       "path": "fixtures/boolean_literal_false.esm",
       "model": "FalseOp",
-      "golden": null,
+      "golden": "golden/boolean_literal_false.json",
       "tags": [
         "scalar",
         "operators",
         "esm-spec-9.2",
         "boolean-literal"
       ],
-      "note": "Authored here, SPLIT OUT of `scalar_operator_semantics` because it is the one core operator the three bindings do not agree on.",
+      "note": "Authored here, SPLIT OUT of `scalar_operator_semantics` when it was the one core operator the three bindings did not agree on (issues #460, #461); all three now evaluate it.",
       "required": {
-        "julia": [],
+        "julia": [
+          "interpreter",
+          "native"
+        ],
         "python": [
           "interpreter",
           "native"
         ],
-        "rust": []
+        "rust": [
+          "interpreter",
+          "native"
+        ]
       },
-      "named_exclusions": [
-        {
-          "binding": "julia",
-          "compilers": [
-            "interpreter",
-            "native"
-          ],
-          "code": "unevaluable_operator",
-          "reason": "Julia's tree-walk evaluator carries an evaluation rule for the `true` literal op and NONE for `false`, so the build refuses this document with `unevaluable_operator`: \"operator 'false' is an evaluable-core op with no evaluation rule in the tree-walk evaluator\". Measured 2026-09-22 on compiler/testmig at 25efca83a, under both `interpreter` and `native`."
-        },
-        {
-          "binding": "rust",
-          "compilers": [
-            "interpreter",
-            "native"
-          ],
-          "code": "unlowered_operator",
-          "reason": "Rust classes `false` as a REWRITE TARGET and refuses it before evaluation with `unlowered_operator`: \"rewrite-target operator 'false' reached evaluation without being lowered to a stencil by a rewrite rule\". Only Python answers this operator today. Measured 2026-09-22 on compiler/testmig at 25efca83a, under both `interpreter` and `native`."
-        }
-      ],
-      "golden_absent_reason": "The REFERENCE itself refuses this document: the Julia `interpreter` has no evaluation rule for the `false` op, so there is no reference actual to mint and `--write-golden` skips it. The fixture is NOT ungated \u2014 Python, the one binding that answers `false` today, is still held to the DOCUMENT's own `expected` values (`false == 0`, and the state it drives reaching 0 at t = 1), which is an oracle outside every binding. What is missing is the cross-compiler drift check, and it comes back the moment Julia gains the rule and the golden can be minted."
+      "named_exclusions": []
     },
     {
       "id": "pow_alias",
@@ -118,7 +104,7 @@
         "esm-spec-9.2",
         "power-alias"
       ],
-      "note": "Authored here, SPLIT OUT of `scalar_operator_semantics` because Rust refuses the `pow` spelling that Julia and Python evaluate.",
+      "note": "Authored here, SPLIT OUT of `scalar_operator_semantics` when Rust refused the `pow` spelling that Julia and Python evaluate (issue #461); all three now evaluate it.",
       "required": {
         "julia": [
           "interpreter",
@@ -128,19 +114,12 @@
           "interpreter",
           "native"
         ],
-        "rust": []
+        "rust": [
+          "interpreter",
+          "native"
+        ]
       },
-      "named_exclusions": [
-        {
-          "binding": "rust",
-          "compilers": [
-            "interpreter",
-            "native"
-          ],
-          "code": "unlowered_operator",
-          "reason": "Rust classes `pow` as a REWRITE TARGET rather than an evaluable-core operator and refuses it before evaluation with `unlowered_operator`: \"rewrite-target operator 'pow' reached evaluation without being lowered to a stencil by a rewrite rule\". Julia and Python both evaluate it, and both give the same number as `^`, which the sibling fixture pins under the caret spelling. Measured 2026-09-22 on compiler/testmig at 25efca83a, under both `interpreter` and `native` \u2014 so this is not a `native` strictness question but a disagreement about what the core vocabulary IS."
-        }
-      ]
+      "named_exclusions": []
     },
     {
       "id": "boolean_literal_true",
@@ -153,7 +132,7 @@
         "esm-spec-9.2",
         "boolean-literal"
       ],
-      "note": "Authored here, SPLIT OUT of `scalar_operator_semantics` because Rust's strict `native` has no wholesale lowering for the `true` leaf.",
+      "note": "Authored here, SPLIT OUT of `scalar_operator_semantics` when Rust's strict `native` had no wholesale lowering for the `true` leaf (issue #462); it has one now.",
       "required": {
         "julia": [
           "interpreter",
@@ -164,19 +143,11 @@
           "native"
         ],
         "rust": [
-          "interpreter"
+          "interpreter",
+          "native"
         ]
       },
-      "named_exclusions": [
-        {
-          "binding": "rust",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Rust's strict `native` has no wholesale lowering for the `true` literal op: \u201ccompiler 'native' cannot run the const-cadence observed 'literal_true': wholesale: unsupported op `true`\u201d. Rust's `interpreter` runs it, and Julia and Python run it under both compilers, so this is a `native` coverage gap on ONE leaf rather than a disagreement about the vocabulary \u2014 unlike `pow` and `false`, which Rust refuses under `interpreter` too. Measured 2026-09-22 on compiler/testmig at 25efca83a."
-        }
-      ]
+      "named_exclusions": []
     }
   ]
 }
