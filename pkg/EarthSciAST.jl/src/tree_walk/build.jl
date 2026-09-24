@@ -3013,7 +3013,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                 se, pcs, aks, sfs, acs = _compile_derivative_equations(Equation[feq],
                     resolved_obs, array_var_info, var_map, const_registry,
                     pgather, param_sym_set, reg_funcs, n_total;
-                    template_sites=template_sites)
+                    template_sites=template_sites,
+                    rhs_list_compiled=form === :oop)
                 for (slot, ex) in se
                     push!(lvl_scalars,
                           (slot, _compile(ex, var_map, param_sym_set, reg_funcs)))
@@ -3049,7 +3050,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         @_bench :compile_deriv_eqs _compile_derivative_equations(derivative_eqs,
             resolved_obs, array_var_info, var_map, const_registry, pgather,
             param_sym_set, reg_funcs, n_states; template_sites=template_sites,
-            scalar_obs_inline=obs_plan.inline)
+            scalar_obs_inline=obs_plan.inline,
+            rhs_list_compiled=form === :oop)
     # States without a D(...) equation get du=0 (integrator leaves them
     # at their initial value — a common pattern for reified constants).
 
@@ -3603,7 +3605,13 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         # bare `VarExpr` for `_compile_cse` to lower onto its slot. `nothing`
         # (no slots) ⇔ the full map — byte-identical to the pre-slot build. The
         # ARRAY (`faq`) arm always inlines the FULL map.
-        scalar_obs_inline::Union{Nothing,Dict{String,ASTExpr}}=nothing)
+        scalar_obs_inline::Union{Nothing,Dict{String,ASTExpr}}=nothing,
+        # Whether whatever consumes `rhs_list` COMPILES it. True only for the
+        # out-of-place form, whose emitters (`:xla`) lower the per-cell
+        # contraction loop's nodes into their own program; the in-place `f!`
+        # walks `rhs_list` with `_eval_node`, so there the loop tier is an
+        # interpreter and is retired (see `_compile_faq_equation!`).
+        rhs_list_compiled::Bool=false)
     scalar_inline = scalar_obs_inline === nothing ? resolved_obs : scalar_obs_inline
     scalar_entries = Tuple{Int,ASTExpr}[]
     percell_scalar = Tuple{Int,_Node}[]
@@ -3640,7 +3648,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
                   _sub_preserving(eq.rhs, scalar_inline)
             rhs_r = _resolve_indices(rhs, array_var_info, var_map, const_registry, pgather)
             push!(scalar_entries, (idx, rhs_r))
-            _record_rule!(state_name.name, :equation, :scalar)
+            _record_rule!(state_name.name, :equation, _scalar_rule_tier(rhs_r))
 
         elseif _is_indexed_D_lhs(eq.lhs)
             # D(index(var, k...)) = expr  — indexed scalar derivative
@@ -3662,7 +3670,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
                   _sub_preserving(eq.rhs, scalar_inline)
             rhs_r = _resolve_indices(rhs, array_var_info, var_map, const_registry, pgather)
             push!(scalar_entries, (idx, rhs_r))
-            _record_rule!(cname, :equation, :scalar)
+            _record_rule!(cname, :equation, _scalar_rule_tier(rhs_r))
 
         elseif _is_faq_D_lhs(eq.lhs)
             _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
@@ -3670,7 +3678,8 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
                                        array_var_info, var_map, const_registry,
                                        pgather, param_sym_set, reg_funcs;
                                        template_sites=template_sites, xeq=xeq,
-                                       pooled_cells=pooled_cells)
+                                       pooled_cells=pooled_cells,
+                                       rhs_list_compiled=rhs_list_compiled)
         end
     end
     # The pooled scalarizer-level emitter: one grouping over EVERY per-cell
@@ -3680,6 +3689,10 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
     # deterministic. Empty whenever no equation took the per-cell path.
     pooled_cells === nothing || isempty(pooled_cells) ||
         append!(acc_kernels, _acc_from_cell_entries(pooled_cells))
+    # Per-cell trees the in-place `f!` will walk on every call. Only the
+    # per-cell reference fills this list today (no strict plan runs it), so this
+    # is the invariant's guard rather than a live route.
+    rhs_list_compiled || _refuse_interpreted_cells(percell_scalar)
     return scalar_entries, percell_scalar, acc_kernels, scan_folds, array_contractions
 end
 
@@ -4047,12 +4060,29 @@ const _CASCADE_ROUTING_TIER = Dict{Symbol,Symbol}(
     :array_contraction_codegen => :array_contraction_codegen,
     # A per-cell SCALARIZE at build whose cell entries then go to the codegen
     # tier as ordinary access kernels — build cost, not right-hand-side cost.
-    :percell_loop       => :percell_build,
     :percell_acc        => :percell_build,
+    # The per-cell contraction loop is NOT that: its cells stay `_Node` trees on
+    # `rhs_list` and `_eval_node` walks one per output cell on every call.
+    :percell_loop       => :interpreter,
     # …except under the forced per-cell reference, where they stay plain scalar
     # nodes on `rhs_list` and are walked per cell on every call.
     :percell_disabled   => :interpreter,
 )
+
+# A scalar equation lands on the scalar walker: interpreted, once per slot, on
+# every right-hand-side call. `:scalar_loop` marks one whose resolved body keeps
+# a reduction as a runtime loop (`_resolve_scalar_faq`), so each of those calls
+# also walks that loop over its whole contracted length — per slot rather than
+# per cell, which is why it is reported rather than refused.
+_scalar_rule_tier(e) = _has_contract_loop(e) ? :scalar_loop : :scalar
+function _has_contract_loop(e)
+    e isa OpExpr || return false
+    e.op == "__contract_loop" && return true
+    for a in e.args
+        _has_contract_loop(a) && return true
+    end
+    return e.expr_body !== nothing && _has_contract_loop(e.expr_body)
+end
 
 function _tally_cascade!(k::Symbol)
     _CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1
@@ -4102,7 +4132,9 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         # See `_compile_derivative_equations`: per-cell entries are APPENDED
         # here instead of being merged per equation, and the caller runs
         # `_acc_from_cell_entries` once after the whole equation loop.
-        pooled_cells=nothing)
+        pooled_cells=nothing,
+        # See `_compile_derivative_equations`.
+        rhs_list_compiled::Bool=false)
     lhs_op = eq.lhs::OpExpr
     idx_names = _output_idx_strings(lhs_op)
     ranges_dict = _ranges_dict(lhs_op)
@@ -4219,6 +4251,20 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
             loop_preempts_affine = use_contraction_loop && n_out_cells < total_contract
         end
     end
+    # RETIRED WHERE `rhs_list` IS INTERPRETED. The loop tier's cells are `_Node`
+    # trees on `rhs_list`, which the in-place `f!` walks with `_eval_node` — one
+    # tree walk per output cell on every right-hand-side call, the thing a
+    # compiled compiler promises not to do. There its candidates go to the
+    # whole-array contraction nest instead, whatever the nest's length floor:
+    # the nest has the same admission (constant bounds, no join gate or filter,
+    # ⊕ ∈ {+,*,max,min}), the same fold order, and it is emitted code with a
+    # build that does not grow with either extent. The out-of-place form keeps
+    # the loop, because its emitters compile `rhs_list` and have no arm for the
+    # nest's section.
+    retire_loop = use_contraction_loop && !rhs_list_compiled
+    # Where the loop would have PREEMPTED the affine tier, the nest takes that
+    # place: it is offered first, and affine only if it declines.
+    nest_first = retire_loop && loop_preempts_affine
 
     # Affine polyhedral build (ess-affine, stencil_affine.jl): O(#structural
     # groups), producing `_AccKernel`s that resolve gathers at runtime. This is the
@@ -4246,13 +4292,30 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # (through the routing tally) or refuses it, and a refusal raised several
     # frames deeper reads the label from here so it can name what it refused.
     _open_rule!(_faq_debug_label(lhs_body, idx_names, range_iters), :equation)
+    ac_kwargs = (idx_names=idx_names, ranges_dict=ranges_dict,
+                 range_iters=range_iters, contract_names=contract_names,
+                 contract_ranges=contract_ranges, rhs_oplus=rhs_oplus,
+                 rhs_zerobar=rhs_zerobar, resolved_obs=resolved_obs,
+                 array_var_info=array_var_info, var_map=var_map,
+                 const_registry=const_registry, pgather=pgather,
+                 param_sym_set=param_sym_set, reg_funcs=reg_funcs,
+                 loop_fallback=retire_loop && !_compiler_is_strict())
+    if nest_first && _array_contraction_enabled()
+        ac = _try_compile_array_contraction(lhs_body, rhs_body, covered; ac_kwargs...)
+        if ac !== nothing
+            _tally_cascade!(:array_contraction_codegen)
+            push!(array_contractions, ac)
+            return nothing
+        end
+    end
     scan_fold = nothing
     affine_kernels = nothing
     affine_first_try = false
     # A viable contraction loop preempts this block only when it is the cheaper
     # tier (see the PREEMPTION note above); otherwise it waits behind it as the
-    # fallback, which is the `use_contraction_loop` read below.
-    if !_stencil_disabled() && !loop_preempts_affine
+    # fallback, which is the `use_contraction_loop` read below. A retired loop
+    # preempts nothing: the nest above took its place.
+    if !_stencil_disabled() && (!loop_preempts_affine || retire_loop)
         scan = _detect_prefix_scan(idx_names, range_iters, contract_names,
                                    contract_const, agg_gates, agg_filter, rhs_body)
         affine_body =
@@ -4345,35 +4408,41 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # compile the `_Node` lowering declines) falls through to the per-cell path
     # with `covered` untouched — correctness first, exactly as the per-cell loop
     # probe does.
-    if _array_contraction_enabled() && !_stencil_disabled() &&
+    #
+    # The floor does not apply to a RETIRED loop candidate: below it the
+    # alternative is the per-cell loop, which is interpreted on every call.
+    if !nest_first && _array_contraction_enabled() && !_stencil_disabled() &&
        !isempty(contract_names) &&
        agg_gates === nothing && agg_filter === nothing &&
        all(c -> c !== nothing, contract_const) &&
        (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
        !isempty(range_iters) && all(!isempty, range_iters) &&
-       prod(length(c) for c in contract_const) >= _array_contraction_min()
-        ac = _try_compile_array_contraction(lhs_body, rhs_body, covered;
-                idx_names=idx_names, ranges_dict=ranges_dict,
-                range_iters=range_iters, contract_names=contract_names,
-                contract_ranges=contract_ranges, rhs_oplus=rhs_oplus,
-                rhs_zerobar=rhs_zerobar, resolved_obs=resolved_obs,
-                array_var_info=array_var_info, var_map=var_map,
-                const_registry=const_registry, pgather=pgather,
-                param_sym_set=param_sym_set, reg_funcs=reg_funcs)
+       (retire_loop || prod(length(c) for c in contract_const) >= _array_contraction_min())
+        ac = _try_compile_array_contraction(lhs_body, rhs_body, covered; ac_kwargs...)
         if ac !== nothing
             _tally_cascade!(:array_contraction_codegen)
             push!(array_contractions, ac)
             return nothing
         end
-        # A DECLINE is the interesting event: the gate admitted the equation, so
-        # the body failed to resolve or to lower with its indices symbolic, and
-        # the equation drops to the per-cell build this tier exists to avoid.
-        # Filed against the rule the cascade has open, the way the affine tier
-        # files its own — a tally can say which tier won, never which one nearly
-        # did, and the report is where that belongs.
-        _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
+        # A DECLINE is the interesting event: the gate admitted the equation, and
+        # it drops to the per-cell build this tier exists to avoid.
+        # `_try_compile_array_contraction` files the reason against the rule the
+        # cascade has open, the way the affine tier files its own — a tally can
+        # say which tier won, never which one nearly did, and the report is
+        # where that belongs.
     end
 
+    # A retired loop candidate that neither the nest nor the affine tier took has
+    # only the per-cell loop left, which is interpreted on every call: a strict
+    # compiler refuses it by name. (A non-strict build keeps the loop, filed as
+    # `:interpreter` by the routing table.)
+    retire_loop && _compiler_is_strict() && _refuse_rule(
+        _faq_debug_label(lhs_body, idx_names, range_iters),
+        "this constant-bound contraction declined the whole-array contraction " *
+        "tier and the affine tier, and the only tier left is the per-cell " *
+        "contraction loop, whose cells the right-hand side walks as trees " *
+        "(`_eval_node`, one per output cell) on every call. Build with " *
+        "compiler=:interpreter to run it")
     # Anything the affine build cannot model takes the per-cell fallback, whose
     # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,
     # with the affine stencil tier off, stay plain per-cell scalar nodes (the
@@ -4410,13 +4479,19 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         rhs_oplus::String, rhs_zerobar::Float64,
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
         var_map::Dict{String,Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs)
+        pgather::AbstractDict, param_sym_set, reg_funcs,
+        # True when a non-strict build has the per-cell loop behind this tier:
+        # an emitter decline then falls back to it instead of refusing.
+        loop_fallback::Bool=false)
     body = isempty(resolved_obs) ? rhs_body : _sub_preserving(rhs_body, resolved_obs)
     pranges = [_expand_int_range(contract_ranges[d]) for d in eachindex(contract_names)]
     built = _try_build_array_contraction(body, idx_names, contract_names, pranges,
                 rhs_oplus, rhs_zerobar, array_var_info, var_map,
                 const_registry, pgather)
-    built === nothing && return nothing
+    if built === nothing
+        _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
+        return nothing
+    end
     out_refs, marker = built
     # `memo=nothing`: the symbolic body shares nothing with the concrete per-cell
     # builds, the same isolation the per-cell loop tier's compile relies on.
@@ -4430,6 +4505,7 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         # memory, so the decline would send the build straight back into the
         # allocation that just failed.
         _is_resource_error(err) && rethrow()
+        _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
         return nothing
     end
     # The output cells, in `Iterators.product` order (dimension 1 fastest) — the
@@ -4473,6 +4549,13 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     # cascade has open is still this equation, rather than several stages later
     # where only "the assembled right-hand side" is left to name.
     gen = _try_codegen_array_contraction(out_refs, los, stps, lens, outs, node)
+    if gen isa Symbol && loop_fallback
+        # Hand the cells back untouched: every one was unclaimed on entry (the
+        # loop above throws on a second claim), so clearing restores `covered`.
+        covered[outs] .= false
+        _note_decline!(:array_contraction, gen)
+        return nothing
+    end
     gen isa Symbol && _refuse_rule(
         _faq_debug_label(lhs_body, idx_names, range_iters),
         "the whole-array contraction tier accepted this equation, but its " *

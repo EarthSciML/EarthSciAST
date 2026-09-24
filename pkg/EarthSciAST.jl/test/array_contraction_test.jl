@@ -22,8 +22,11 @@
 #     node-lowering count is identical across a 64× range of each;
 #   * ForwardDiff through the nest;
 #   * the FLOOR (`ESS_ARRAY_CONTRACTION_MIN`, a tuning threshold): a reduction
-#     under it is left to the existing loop-vs-affine order, unchanged, and
-#     still answers exactly;
+#     under it that is no per-cell contraction-loop candidate either is left to
+#     the existing affine / per-cell order, unchanged, and still answers
+#     exactly; one that IS a loop candidate takes the nest whatever the floor,
+#     because the in-place build has retired the loop (its cells would be
+#     walked per cell on every call);
 #   * the DECLINE: a reduction this tier cannot model (a per-cell variable bound)
 #     falls through to that order and still gives the right answer.
 
@@ -287,12 +290,29 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
     end
 
     @testset "under the floor the existing tier order is unchanged" begin
-        # ∏|k…| = 16 < 32: the tier must not engage, and the answer must be the
-        # one the pre-existing cascade gives.
+        # ∏|k…| = 16 < 32, and under the per-cell loop's floor too: the tier must
+        # not engage, and the answer must be the one the pre-existing cascade
+        # gives.
         NS, NR = 16, 16
         doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
-        dl, vl, tl = _ac_du(doc, ics; env=Dict("ESS_ARRAY_CONTRACTION_MIN" => "32"))
+        dl, vl, tl = _ac_du(doc, ics; env=Dict("ESS_ARRAY_CONTRACTION_MIN" => "32",
+                                               "ESS_CONTRACTION_LOOP_MIN" => "32"))
         @test _ac_fired(tl) == 0
+        do_, vo, _ = _ac_du(doc, ics; compiler=:interpreter)
+        @test all(_ac_outs(dl, vl, NR)[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
+        @test all(_ac_outs(dl, vl, NR)[r] === _ac_exact(NS, NR)[r] for r in 1:NR)
+    end
+
+    @testset "under the floor, a per-cell loop candidate still takes the nest" begin
+        # Same reduction, now at or above the per-cell loop's floor: the loop's
+        # cells would be walked per cell on every call, so the in-place build
+        # hands the equation to the nest instead, whatever the nest's floor says.
+        NS, NR = 16, 16
+        doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
+        dl, vl, tl = _ac_du(doc, ics; env=Dict("ESS_ARRAY_CONTRACTION_MIN" => "32",
+                                               "ESS_CONTRACTION_LOOP_MIN" => "8"))
+        @test _ac_fired(tl) == 1
+        @test _ac_tally(tl, :percell_loop) == 0
         do_, vo, _ = _ac_du(doc, ics; compiler=:interpreter)
         @test all(_ac_outs(dl, vl, NR)[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
         @test all(_ac_outs(dl, vl, NR)[r] === _ac_exact(NS, NR)[r] for r in 1:NR)
