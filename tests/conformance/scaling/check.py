@@ -14,7 +14,8 @@ Prints one row per (file, family, N, gate) with the measured value and one of
               reported, not red, because timing noise can flip it
     skip      not measurable (the document did not build, or a field is null)
     MISSING   --require named a (family, N) no result file covers   (red)
-Exit status 0 when nothing is red, 1 otherwise. The gates, thresholds and the
+Exit status 0 when nothing is red, 1 otherwise. With --report-timing the
+timing gates are printed but never red. The gates, thresholds and the
 ledger live in manifest.json; README.md says what each gate means.
 """
 
@@ -220,6 +221,12 @@ def main(argv=None):
         choices=["pr", "sweep"],
         help="every (family, N) of this size list must have a result",
     )
+    ap.add_argument(
+        "--report-timing",
+        action="store_true",
+        help="evaluate and print the timing gates, but never go red on one "
+        "(the scheduled sweep, until plan phase 6 makes them block)",
+    )
     ap.add_argument("--json", help="also write the rows as JSON here")
     a = ap.parse_args(argv)
 
@@ -319,6 +326,8 @@ def main(argv=None):
         )
 
     for r in rows:
+        if a.report_timing and r["kind"] == TIMING:
+            continue
         if r["outcome"] == "FAIL":
             red.append(
                 f"{r['family']} N={r['n']} {r['gate']}: fails and is not in the ledger ({fmt(r['measured'])})"

@@ -108,6 +108,8 @@ def main():
     slow = [result("stencil_1d", 10000), result("stencil_1d", 100000, steady_rhs_s=1.0)]
     code, o = run(slow, [])
     assert code == 1 and o[("stencil_1d", 100000, "speed")] == "FAIL", o
+    code, o = run(slow, [], "--report-timing")
+    assert code == 0 and o[("stencil_1d", 100000, "speed")] == "FAIL", o
     code, o = run(slow, [], "--gates", "deterministic")
     assert code == 0 and ("stencil_1d", 100000, "speed") not in o, o
 

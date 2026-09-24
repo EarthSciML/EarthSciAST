@@ -106,7 +106,22 @@
     }
   },
   "ledger": {
-    "rust": [],
+    "rust": [
+      {
+        "family": "regrid",
+        "gate": "builds",
+        "measured": "refused: compiler 'native' cannot run the const-cadence observed 'A_ij': op: unsupported operator `polygon_intersection_area`/2",
+        "reason": "geometry leaf ops (polygon_intersection_area) have no tape lowering",
+        "phase": 3
+      },
+      {
+        "family": "unstructured_gather",
+        "gate": "builds",
+        "measured": "refused: compiler 'native' cannot run the continuous-cadence state derivative 'D(u)': index: axis 0 is neither an affine/wrap map of an unclaimed output symbol nor a constant select",
+        "reason": "indirect gather u[nbr[i,k]] has no tape lowering",
+        "phase": 3
+      }
+    ],
     "julia": []
   }
 }
