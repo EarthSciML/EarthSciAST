@@ -243,6 +243,19 @@ fn same_bits(a: &[f64], b: &[f64]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
 }
 
+/// One evaluation a model's field initial conditions performed
+/// ([`ArrayCompiled::field_ic_records`]).
+#[cfg(feature = "solve")]
+#[derive(Clone, Debug)]
+pub(crate) struct FieldIcRecord {
+    /// The `ic` target, or the state-free observed materialized for its scope.
+    pub name: String,
+    /// `"initial condition"` or `"initial-condition scope"`.
+    pub kind: &'static str,
+    /// Whether the reference evaluator walked a `faq` in it cell by cell.
+    pub per_cell: bool,
+}
+
 impl ArrayCompiled {
     /// Whether the TAPE serves this Problem's passes other than the right-hand
     /// side — the build-time materialization of constants and static
@@ -576,11 +589,64 @@ impl ArrayCompiled {
     /// out-of-range const-array gather, an unbound name) — all as a solve would
     /// report them. A model that HAS state is refused rather than read at a
     /// state nobody supplied.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
     pub(crate) fn evaluate_stateless_observeds(
         &self,
         params: &HashMap<String, f64>,
         times: &[f64],
     ) -> Result<Vec<(String, Vec<f64>)>, SimulateError> {
+        let mut out: Vec<(String, Vec<f64>)> = Vec::new();
+        self.stateless_pass(params, times, |k, obs| {
+            if k == 0 {
+                out = self
+                    .observed_rules
+                    .iter()
+                    .map(observed_rule_var)
+                    .filter(|name| obs.get(*name).is_some_and(|a| a.len() == 1))
+                    .map(|name| (name.clone(), Vec::with_capacity(times.len())))
+                    .collect();
+            }
+            for (name, values) in &mut out {
+                let v = obs.get(name).and_then(|a| a.first().copied());
+                values.push(v.unwrap_or(f64::NAN));
+            }
+        })?;
+        Ok(out)
+    }
+
+    /// Every observed of a model with NO state vector, whatever its shape,
+    /// evaluated once at `t` — `(name, field)` in dependency order.
+    ///
+    /// [`Self::evaluate_stateless_observeds`]'s single-time sibling for the
+    /// build-time fields of a state-free document (`observed_field`): the same
+    /// one right-hand-side call over the empty state, on the evaluator this
+    /// model serves, so a shaped observed comes off the tape under `native`
+    /// exactly as a scalar one does. Errors as that method's.
+    pub(crate) fn evaluate_stateless_fields(
+        &self,
+        params: &HashMap<String, f64>,
+        t: f64,
+    ) -> Result<Vec<(String, ArrayD<f64>)>, SimulateError> {
+        let mut out: Vec<(String, ArrayD<f64>)> = Vec::new();
+        self.stateless_pass(params, &[t], |_, obs| {
+            out = self
+                .observed_rules
+                .iter()
+                .map(observed_rule_var)
+                .filter_map(|name| obs.get(name).map(|a| (name.clone(), a.clone())))
+                .collect();
+        })?;
+        Ok(out)
+    }
+
+    /// One right-hand-side call over the empty state per entry of `times`,
+    /// handing `visit` the observeds each call published.
+    fn stateless_pass(
+        &self,
+        params: &HashMap<String, f64>,
+        times: &[f64],
+        mut visit: impl FnMut(usize, &ArrMap),
+    ) -> Result<(), SimulateError> {
         if self.n_states != 0 {
             return Err(SimulateError::Compile(
                 crate::compile_error::CompileError::InterpreterBuildError {
@@ -601,7 +667,6 @@ impl ArrayCompiled {
             scratch.set_exports_active(true);
         }
         let mut dy: Vec<f64> = Vec::new();
-        let mut out: Vec<(String, Vec<f64>)> = Vec::new();
         crate::simulate_array::take_const_array_oob();
         for (k, &t) in times.iter().enumerate() {
             evaluate_rhs_with_scratch(
@@ -629,21 +694,9 @@ impl ArrayCompiled {
             let obs = scratch
                 .taped_observeds()
                 .unwrap_or_else(|| scratch.observed_arrays());
-            if k == 0 {
-                out = self
-                    .observed_rules
-                    .iter()
-                    .map(observed_rule_var)
-                    .filter(|name| obs.get(*name).is_some_and(|a| a.len() == 1))
-                    .map(|name| (name.clone(), Vec::with_capacity(times.len())))
-                    .collect();
-            }
-            for (name, values) in &mut out {
-                let v = obs.get(name).and_then(|a| a.first().copied());
-                values.push(v.unwrap_or(f64::NAN));
-            }
+            visit(k, obs);
         }
-        Ok(out)
+        Ok(())
     }
 
     /// Resolve the deferred scoped-reference / array `ic` equations
@@ -652,15 +705,24 @@ impl ArrayCompiled {
     /// provider-seeded forcing buffer and folded into the lifted grid state's cells
     /// (column-major, matching the slot enumeration in [`Self::from_model`]); a
     /// constant RHS broadcasts to every cell. Empty on the non-`ic` path.
+    ///
+    /// `records`, when given, receives one [`FieldIcRecord`] per evaluation
+    /// this performs — each state-free observed materialized for the `ic`
+    /// scope, then each target — saying whether it was walked per cell.
     #[cfg(feature = "solve")]
     fn resolve_field_ics(
         &self,
         params: &HashMap<String, f64>,
+        mut records: Option<&mut Vec<FieldIcRecord>>,
     ) -> Result<HashMap<usize, f64>, SimulateError> {
         let mut out: HashMap<usize, f64> = HashMap::new();
         if self.field_ics.is_empty() {
             return Ok(out);
         }
+        let walks = crate::simulate_array::per_cell_walks;
+        // `interpreter` runs these on the per-cell oracle like every other
+        // evaluation it performs; the other compilers leave the overlay on.
+        let _overlay = OverlayGuard::armed(self.is_interpreter());
         // esm-spec §6.6.5 build-time scope: materialize the STATE-FREE array
         // observeds an `ic` RHS may read (a `const` gather, a parameter-only
         // expression) and overlay them on the provider forcing buffer. A
@@ -686,10 +748,18 @@ impl ArrayCompiled {
                     if built.contains_key(name) {
                         continue;
                     }
+                    let before = walks();
                     if let Ok(Value::Array(arr)) =
                         eval_buildtime_field_in_scope(body, &self.index_sets, params, &built)
                     {
                         built.insert(name.clone(), *arr);
+                        if let Some(sink) = records.as_deref_mut() {
+                            sink.push(FieldIcRecord {
+                                name: name.clone(),
+                                kind: "initial-condition scope",
+                                per_cell: walks() != before,
+                            });
+                        }
                     }
                 }
                 if built.len() == before {
@@ -719,6 +789,7 @@ impl ArrayCompiled {
             // once per target and let every cell index the cached field. The
             // cell-independent cases (1 loaded field / 2 constant) ignore it.
             let mut cached_field: Option<Value> = None;
+            let before = walks();
             for flat in 0..total {
                 let multi = flat_to_multi_col_major(flat, &vs.shape);
                 let slot = vs.flat_offset + flat;
@@ -735,8 +806,44 @@ impl ArrayCompiled {
                     )?,
                 );
             }
+            if let Some(sink) = records.as_deref_mut() {
+                sink.push(FieldIcRecord {
+                    name: target.clone(),
+                    kind: "initial condition",
+                    per_cell: walks() != before,
+                });
+            }
         }
         Ok(out)
+    }
+
+    /// Every evaluation the field initial conditions perform, exercised at
+    /// CONSTRUCTION against `params` so a strict compiler can refuse a per-cell
+    /// one there (esm-libraries-spec §2.5.10 asks that every evaluation a
+    /// compiler performs for the Problem be exercised at construction) and the
+    /// compiler report can show the route.
+    ///
+    /// Empty for a model with no field `ic`, and — deliberately — for one whose
+    /// initial conditions cannot be resolved yet: `solve` resolves them again
+    /// and raises the diagnostic there, where it always has been.
+    #[cfg(feature = "solve")]
+    pub(crate) fn field_ic_records(&self, params: &HashMap<String, f64>) -> Vec<FieldIcRecord> {
+        if self.field_ics.is_empty() {
+            return Vec::new();
+        }
+        let Ok(param_vec) = self.build_param_vec(params) else {
+            return Vec::new();
+        };
+        let resolved: HashMap<String, f64> = self
+            .param_names
+            .iter()
+            .cloned()
+            .zip(param_vec.iter().copied())
+            .collect();
+        let _precision_guard = self.precision.enter();
+        let mut records = Vec::new();
+        let _ = self.resolve_field_ics(&resolved, Some(&mut records));
+        records
     }
 
     /// The component / subsystem names a rule-2 override key may spell in its
@@ -820,7 +927,7 @@ impl ArrayCompiled {
             .cloned()
             .zip(param_vec.iter().copied())
             .collect();
-        let field_ic_map = self.resolve_field_ics(&resolved_params)?;
+        let field_ic_map = self.resolve_field_ics(&resolved_params, None)?;
         let mut ic_vec = vec![0.0f64; self.n_states];
         for (i, name) in self.scalar_state_names.iter().enumerate() {
             if let Some(&v) = initial_conditions.get(name) {

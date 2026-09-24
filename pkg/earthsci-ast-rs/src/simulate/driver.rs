@@ -384,7 +384,7 @@ fn refuse_coupled_subsystem_event(file: &EsmFile) -> Result<(), CompileError> {
 /// to `D(species, t) = …` during flattening, and a build that skipped them
 /// would drop every species from the compiled system. A system with NO
 /// reactions lowers to nothing, so it is not content.
-fn whole_document_is_one_model(file: &EsmFile) -> bool {
+pub(crate) fn whole_document_is_one_model(file: &EsmFile) -> bool {
     let one_model = file.models.as_ref().map_or(0, |m| m.len()) == 1;
     let has_reactions = file
         .reaction_systems

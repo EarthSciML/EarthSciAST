@@ -2925,15 +2925,16 @@ fn check_state_slots_covered(
 /// coordinate-expression `ic` RHSs, §6.6.5 analytic `reference`s) through the
 /// official array evaluator.
 ///
-/// **Outside `native`'s refusal, deliberately.** esm-libraries-spec §2.5.10
-/// puts four evaluations under the refusal — the constants and static
-/// observeds materialized at construction, the per-segment seed, the
-/// right-hand side, and the observeds reported at output times — and this is
-/// none of them: it evaluates an INITIAL CONDITION or a piece of grid
-/// geometry, not one of the document's rules. No compiler tier in any binding
-/// has a form for initial-state assembly, so a refusal here would refuse the
-/// documents rather than name a gap that could be closed. Recorded rather than
-/// gated. Array-producing `faq`/`makearray` nodes
+/// **The reference evaluator, under every compiler.** No compiler tier has a
+/// form for initial-state assembly, so a field `ic` is evaluated here whatever
+/// the Problem names. What keeps that honest is that construction EXERCISES
+/// every such evaluation ([`ArrayCompiled::field_ic_records`]): one the
+/// whole-array overlay serves is reported as vectorized, and one that walks a
+/// `faq` per cell is refused by a strict compiler, naming the target
+/// (esm-libraries-spec §2.5.10). An inline test's analytic `reference` also
+/// comes here, and stays here under every compiler: it is the test's oracle,
+/// not the model (`crate::inline_tests::evaluate_cellwise`).
+/// Array-producing `faq`/`makearray` nodes
 /// yield arrays; elementwise ops broadcast over them. Any `{ "from": <set> }`
 /// range references are resolved against `index_sets` first, so a raw
 /// (pre-compile) expression evaluates exactly as an equation expression does
@@ -2995,9 +2996,10 @@ pub(super) fn resolve_field_ic_cell(
     forcing: &HashMap<String, ArrayD<f64>>,
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
-    // Per-target memo of the case-(3) whole-field evaluation (cell-independent),
-    // so the coordinate expression is evaluated once per target rather than once
-    // per cell. `None` on entry for the first cell; filled on first use.
+    // Per-target memo of the case-(2) constant and the case-(3) whole-field
+    // evaluation (both cell-independent), so the expression is evaluated once
+    // per target rather than once per cell. `None` on entry for the first cell;
+    // filled on first use.
     cached_field: &mut Option<Value>,
 ) -> Result<f64, SimulateError> {
     // (1) Loaded field served through the provider forcing buffer.
@@ -3023,9 +3025,20 @@ pub(super) fn resolve_field_ic_cell(
     // coordinate-expression path below — never silently seed the state vector.
     // `evaluate` refuses one by name, which the `if let Ok(..)` catches; the
     // `is_finite()` guard rejects a genuine `1.0/0.0`.
-    if let Ok(c) = crate::expression::evaluate(rhs, params)
+    //
+    // Evaluated ONCE per target and memoized with the case-(3) field: the
+    // value does not depend on the cell, so walking the expression again for
+    // each cell would be a per-cell tree walk producing one number.
+    if let Some(Value::Scalar(c)) = cached_field.as_ref()
         && c.is_finite()
     {
+        return Ok(*c);
+    }
+    if cached_field.is_none()
+        && let Ok(c) = crate::expression::evaluate(rhs, params)
+        && c.is_finite()
+    {
+        *cached_field = Some(Value::Scalar(c));
         return Ok(c);
     }
     // (3) Coordinate expression over grid-geometry aggregates (model

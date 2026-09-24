@@ -82,7 +82,10 @@ pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_inventio
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
 pub(crate) use compile::{model_tree_any, parse_subsystem_model};
-pub(crate) use eval::{check_scalar_evaluable, eval_observed_recurrence, eval_scalar_expression};
+pub(crate) use eval::{eval_observed_recurrence, eval_scalar_expression, per_cell_walks};
+// Read only by `crate::expression`'s tests.
+#[cfg(test)]
+pub(crate) use eval::check_scalar_evaluable;
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
     take_const_array_oob,
