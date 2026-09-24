@@ -17,11 +17,18 @@
 # optimistic (`#groups == 1`) form of "the unroll cannot be cheaper" — so:
 #
 #   * a NARROW output over a LONG reduction (what the loop exists for, and every
-#     shape in `contraction_loop_test.jl`) takes the loop;
+#     shape in `contraction_loop_test.jl`) takes the loop's place;
 #   * a WIDE output over a SHORT reduction — the column-sum shape
 #     `out[i,j] = Σ_k dp[i,j,k]·c[i,j,k]` — is offered to the affine tier first
 #     and lands there, so its build IR does not grow with the grid;
-#   * an equation the affine tier DECLINES falls back to the loop.
+#   * an equation the affine tier DECLINES falls back to the loop's place.
+#
+# In the IN-PLACE build that place belongs to the whole-array contraction nest,
+# whatever the nest's length floor: the loop's cells are `_Node` trees the
+# in-place `f!` walks per output cell on every call, so the loop is retired
+# there and the nest — same admission, same fold order, emitted code — takes
+# every equation the loop would have. The out-of-place build keeps the loop,
+# because its emitters compile it (test/reactant_direct_emit_test.jl).
 #
 # Numerically nothing may move, whichever tier takes the equation: every case is
 # pinned bit-for-bit against `compiler=:interpreter` — which turns the nest, the
@@ -136,15 +143,20 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
     end
 
     # ── The shape the contraction loop exists for. 4 output cells against 8
-    # terms — the unroll cannot be cheaper, so the loop keeps the equation, the
-    # reduction being far under the whole-array nest's floor.
-    @testset "narrow output, long reduction → contraction loop (under the floor)" begin
+    # terms — the unroll cannot be cheaper, so the loop's place keeps the
+    # equation, and in place that is the nest, although the reduction is far
+    # under the nest's floor.
+    @testset "narrow output, long reduction → the nest (under its floor)" begin
         NI, NJ, NK = 2, 2, 8
         @test NI * NJ < NK                  # the admission condition, stated
         du, vm, tally, _ = _cto_build(NI, NJ, NK)
-        @test _cto_get(tally, :percell_loop) == 1
-        @test _cto_get(tally, :array_contraction_codegen) == 0
+        @test _cto_get(tally, :percell_loop) == 0
+        @test _cto_get(tally, :array_contraction_codegen) == 1
+        @test _cto_get(tally, :affine) == 1     # only the D(c) = 0 equation
         @test _cto_outs(du, vm, NI, NJ) == _cto_exact(NI, NJ, NK)
+        du_i, vm_i, _, _ = _cto_build(NI, NJ, NK; compiler = :interpreter)
+        A = _cto_outs(du, vm, NI, NJ)
+        @test all(A[i] === _cto_outs(du_i, vm_i, NI, NJ)[i] for i in eachindex(A))
     end
 
     # ── …and the SAME shape once the reduction clears the nest's floor. The
@@ -160,11 +172,10 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
         @test _cto_get(tally, :array_contraction_codegen) == 1
         @test _cto_get(tally, :percell_loop) == 0
         @test _cto_get(tally, :percell_acc) == 0
-        # Numerics do not move with the tier. The same fixture BELOW the floor is
-        # the per-cell loop's own answer, bit for bit — the two tiers checked
-        # against each other, which only this file can do.
+        # Numerics do not move with the floor: the same fixture BELOW it is the
+        # same nest, bit for bit.
         du_l, vm_l, tally_l, _ = _cto_build(NI, NJ, NK)
-        @test _cto_get(tally_l, :percell_loop) == 1        # the oracle is the loop
+        @test _cto_get(tally_l, :array_contraction_codegen) == 1
         A = _cto_outs(du, vm, NI, NJ)
         @test all(A[i] === _cto_outs(du_l, vm_l, NI, NJ)[i] for i in eachindex(A))
         @test A == _cto_exact(NI, NJ, NK)

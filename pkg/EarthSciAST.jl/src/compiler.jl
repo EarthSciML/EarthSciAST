@@ -201,11 +201,25 @@ landed on, and every decline it collected getting there.
 * `kind` — `:equation`, `:observed`, `:setup_array`, or `:rhs_program` for a
   compiler that emits ONE program for the whole assembled right-hand side
   (`:xla`) rather than lowering it rule by rule.
-* `tier` — where it landed: `:affine`, `:scan`, `:array_contraction_codegen`,
-  `:percell_build` (scalarized per output cell at BUILD, then compiled),
-  `:codegen`, `:interpreter`, `:setup_compiled`, `:setup_percell`; and, on the
-  `:rhs_program` row an `:xla` build adds, `:xla_direct_cpu` /
-  `:xla_direct_gpu`, which name the emitter and the device together.
+* `tier` — where it landed:
+  - right-hand side: `:affine`, `:scan`, `:array_contraction_codegen`,
+    `:percell_build` (scalarized per output cell at BUILD, then compiled),
+    `:codegen`, `:interpreter` (walked per cell as trees on every call);
+    `:scalar` (a scalar equation, walked once per slot on every call by the
+    scalar walker) and `:scalar_loop` (the same, with a reduction kept as a
+    runtime loop the walker runs over its whole length on every call);
+  - construction: `:setup_compiled` (compiled once, evaluated per cell),
+    `:setup_loaded` (copied out of a supplied array), `:setup_constant`
+    (evaluated once and filled), `:setup_percell` (resolved and compiled per
+    cell), and `:discrete_percell` (a discrete-cadence field, resolved and
+    compiled per cell at build and walked per cell at every data refresh);
+  - output time, added by `observed_field` the first time it reads a name:
+    `:output_compiled_once` or `:output_percell`;
+  - and, on the `:rhs_program` row an `:xla` build adds, `:xla_direct_cpu` /
+    `:xla_direct_gpu`, which name the emitter and the device together.
+  Under a strict compiler `:interpreter`, `:setup_percell`,
+  `:discrete_percell` and `:output_percell` are refusals instead, so a
+  `native` report never shows them.
 * `declines` — `tier => reason` for every tier that looked at this rule and
   passed, deepest reason last.
 """
