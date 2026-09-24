@@ -237,4 +237,89 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         @test all(uc[k] === ur[k] for k in 1:6)
         @test uc[vm["M.u[2,2]"]] == 0.2 * 0.2 + sin(2.0)
     end
+
+    # ── observed_field's memo and report row (review of #485) ────────────────
+    # `y[i] = s·i` compiles once and reads the parameter `s`, which the
+    # right-hand side reads too. `T[i] = h[1]·i` compiles once as well, but its
+    # un-inlined definition names the makearray observed `h`, so reading it
+    # first tries to materialize `h` — which only the per-cell route can do.
+    obs_doc() = Dict{String,Any}("esm" => "1.1.0",
+        "metadata" => Dict("name" => "pr_observed_memo"),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
+        "models" => Dict("M" => Dict{String,Any}(
+            "variables" => Dict(
+                "c" => Dict("type" => "unknown", "default" => 1.0),
+                "s" => Dict("type" => "parameter", "default" => 1.0),
+                "y" => Dict("type" => "unknown", "shape" => Any["x"]),
+                "h" => Dict("type" => "unknown", "shape" => Any["x"]),
+                "T" => Dict("type" => "unknown", "shape" => Any["x"])),
+            "equations" => Any[
+                Dict("lhs" => Dict("op" => "D", "args" => Any["c"], "wrt" => "t"),
+                     "rhs" => Dict("op" => "*", "args" => Any[
+                         Dict("op" => "neg", "args" => Any["s"]), "c"])),
+                Dict("lhs" => "y", "rhs" => Dict("op" => "faq", "args" => Any[],
+                    "output_idx" => Any["i"],
+                    "ranges" => Dict("i" => Dict("from" => "x")),
+                    "expr" => Dict("op" => "*", "args" => Any["s", "i"]))),
+                Dict("lhs" => "h", "rhs" => Dict("op" => "makearray", "args" => Any[],
+                    "regions" => Any[Any[Any[1, 1]], Any[Any[2, 3]]],
+                    "values" => Any[5.0, 7.0])),
+                Dict("lhs" => "T", "rhs" => Dict("op" => "faq", "args" => Any[],
+                    "output_idx" => Any["i"],
+                    "ranges" => Dict("i" => Dict("from" => "x")),
+                    "expr" => Dict("op" => "*", "args" => Any[
+                        Dict("op" => "index", "args" => Any["h", 1]), "i"])))])))
+    obs_rows(prob, name) = [r for r in compiler_report(prob).rules
+                            if r.kind === :observed && r.rule == name]
+
+    @testset "observed_field: a reused BuildInspection answers for its own build" begin
+        insp = _PR.BuildInspection()
+        p1 = esm_problem(obs_doc(), (0.0, 1.0); inspect = insp)
+        @test observed_field(p1, "y") == [1.0, 2.0, 3.0]
+        p2 = esm_problem(obs_doc(), (0.0, 1.0); p = Dict("s" => 2.0), inspect = insp)
+        @test observed_field(p2, "y") == [2.0, 4.0, 6.0]
+        @test length(obs_rows(p2, "y")) == 1
+    end
+
+    @testset "observed_field: a remade problem reads its build's field" begin
+        # `observed_field` reports what the BUILD materialized (API_SPEC §5.8),
+        # and `remake` shares the build, so a `p` or `u0` swap does not move it.
+        # What the memo must never do is answer with anything other than what
+        # the unmemoized read of the same problem would.
+        p2 = esm_problem(obs_doc(), (0.0, 1.0); p = Dict("s" => 2.0))
+        @test observed_field(p2, "y") == [2.0, 4.0, 6.0]
+        for pr in (remake(p2; p = Dict("s" => 5.0)), remake(p2; u0 = Dict("c" => 9.0)))
+            @test observed_field(pr, "y") == _PR._observed_field_impl(pr, "y") ==
+                  [2.0, 4.0, 6.0]
+        end
+        @test length(obs_rows(p2, "y")) == 1
+    end
+
+    @testset "observed_field: the report row says what this read did" begin
+        # Under `native` the attempt to materialize `h` walks per cell and is
+        # refused, the refusal is swallowed, and the value comes from the
+        # compiled-once body. The row names that route, not the failed attempt.
+        pn = esm_problem(obs_doc(), (0.0, 1.0))
+        @test observed_field(pn, "T") == [5.0, 10.0, 15.0]
+        @test [r.tier for r in obs_rows(pn, "T")] == [:output_compiled_once]
+        # Under `interpreter` `h` IS materialized per cell and served the value.
+        pi_ = esm_problem(obs_doc(), (0.0, 1.0); compiler = :interpreter)
+        @test observed_field(pi_, "T") == [5.0, 10.0, 15.0]
+        @test [r.tier for r in obs_rows(pi_, "T")] == [:output_percell]
+    end
+
+    @testset "the per-cell signal counts this task's evaluations only" begin
+        h = _PR.expression_from_json(Dict{String,Any}("op" => "makearray",
+            "args" => Any[], "regions" => Any[Any[Any[1, 1]], Any[Any[2, 3]]],
+            "values" => Any[5.0, 7.0]))
+        cells = [[1], [2], [3]]
+        v, n = _PR._counting_percell() do
+            fetch(Threads.@spawn _PR.evaluate_cellwise(h, cells))
+        end
+        @test v == [5.0, 7.0, 7.0]
+        @test n == 0
+        v, n = _PR._counting_percell(() -> _PR.evaluate_cellwise(h, cells))
+        @test v == [5.0, 7.0, 7.0]
+        @test n == 1
+    end
 end

@@ -6,6 +6,18 @@
 # build_evaluator entry points, and evaluate_expr.
 # ========================================================================
 
+# One `observed_field` answer: the build it belongs to, the forcing epoch it was
+# computed at (`_FORCING_EPOCH`) and the field. The field is state-free, so it
+# moves only when a live buffer is refreshed in place. The build is named by the
+# problem's `run_file` slot — each build allocates its own and `remake` shares
+# it — so a record reused for a second build, or a second problem, never
+# answers with the first one's field.
+struct _ObservedMemo
+    build::Base.RefValue{Any}
+    epoch::UInt64
+    value::Any
+end
+
 """
     BuildInspection()
 
@@ -96,10 +108,11 @@ mutable struct BuildInspection
     # built it — the seam used to hang off the out-of-place build product alone.
     forcing_buffers::NamedTuple
     forcing_buffer_index::Dict{String,Int}
-    # `observed_field(prob, name)` answers, keyed by the requested name, each
-    # with the forcing epoch it was computed at (`_FORCING_EPOCH`): the field is
-    # state-free, so it moves only when a live buffer is refreshed in place.
-    observed_memo::Dict{String,Tuple{UInt64,Any}}
+    # `observed_field(prob, name)` answers, keyed by the requested name (see
+    # `_ObservedMemo`). Emptied when a build starts, and read and written under
+    # `observed_lock`, since two tasks may read one problem at once.
+    observed_memo::Dict{String,_ObservedMemo}
+    observed_lock::ReentrantLock
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -109,7 +122,7 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Symbol}(),
                                     CompilerReport(:native),
                                     NamedTuple(), Dict{String,Int}(),
-                                    Dict{String,Tuple{UInt64,Any}}())
+                                    Dict{String,_ObservedMemo}(), ReentrantLock())
 
 """
     DiscreteMaterializer()
@@ -3409,6 +3422,10 @@ function _build_evaluator_impl(model::Model;
     plan = _plan_for(compiler)
     record = _BuildRecord(plan)
     insp = get(kwargs, :inspect, nothing)
+    # A record passed to a second build describes that build from here on, so
+    # nothing the previous one answered may be served out of it.
+    insp isa BuildInspection &&
+        lock(() -> empty!(insp.observed_memo), insp.observed_lock)
     return _with_compiler_plan(plan) do
         _with_build_record(record) do
             try
@@ -4179,6 +4196,8 @@ end
 #                           nonzero means genuinely residual work the direct
 #                           stages did not see.
 const _CASCADE_TALLY = Dict{Symbol,Int}()
+# Builds and output-time reads on different tasks all bump the one Dict.
+const _CASCADE_TALLY_LOCK = ReentrantLock()
 
 # The ROUTING keys — the ones that say where an array equation finally landed,
 # exactly one per equation. Bumping one of these closes the rule the cascade
@@ -4216,7 +4235,9 @@ function _has_contract_loop(e)
 end
 
 function _tally_cascade!(k::Symbol)
-    _CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1
+    lock(_CASCADE_TALLY_LOCK) do
+        _CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1
+    end
     rec = _build_record()
     if rec !== nothing
         rec.tally[k] = get(rec.tally, k, 0) + 1
@@ -4225,7 +4246,7 @@ function _tally_cascade!(k::Symbol)
     end
     return nothing
 end
-_reset_cascade_tally!() = (empty!(_CASCADE_TALLY); nothing)
+_reset_cascade_tally!() = (lock(() -> empty!(_CASCADE_TALLY), _CASCADE_TALLY_LOCK); nothing)
 
 # One-line identity of a faq equation, for the compiler report's rule label and
 # for a refusal's message: the derivative target and its output axes with their

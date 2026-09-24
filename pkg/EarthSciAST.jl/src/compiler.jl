@@ -397,6 +397,36 @@ function _finish_report(rec::_BuildRecord)
 end
 
 # ---------------------------------------------------------------------------
+# What one output-time read did
+# ---------------------------------------------------------------------------
+#
+# `observed_field` files one report row per name, saying whether the read walked
+# per cell. That is a question about ONE CALL, which the process-global
+# `_CASCADE_TALLY` cannot answer: another task's evaluations add into it, and so
+# does an attempt the read made and then abandoned. So the read installs a
+# task-local counter, the per-cell cellwise route bumps it once it has SERVED a
+# value, and a caller that swallows a failed attempt drops what the attempt
+# counted (`_percell_mark` / `_percell_restore!`).
+const _PERCELL_COUNT_KEY = :earthsci_percell_count
+
+_percell_counter()::Union{Nothing,Base.RefValue{Int}} =
+    get(task_local_storage(), _PERCELL_COUNT_KEY, nothing)
+
+# `(f(), n)`: the value and the number of per-cell evaluations that served it.
+# A nested count also adds into the enclosing one.
+function _counting_percell(f)
+    outer = _percell_counter()
+    r = Ref(0)
+    v = task_local_storage(f, _PERCELL_COUNT_KEY, r)
+    outer === nothing || (outer[] += r[])
+    return v, r[]
+end
+
+_note_percell!() = (r = _percell_counter(); r === nothing || (r[] += 1); nothing)
+_percell_mark() = (r = _percell_counter(); r === nothing ? 0 : r[])
+_percell_restore!(n::Int) = (r = _percell_counter(); r === nothing || (r[] = n); nothing)
+
+# ---------------------------------------------------------------------------
 # The refusal
 # ---------------------------------------------------------------------------
 

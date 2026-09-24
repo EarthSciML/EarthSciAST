@@ -1346,28 +1346,35 @@ function observed_field(prob::EsmProblem, name::AbstractString)
     end
 end
 
-# The output-time route, memoized on the problem and reported in its compiler
-# report. The first read of a name evaluates it — through the compile-once
-# cellwise sweep, or, where that declines, the per-cell resolve-and-compile
-# fallback that a strict compiler refuses — and files one `:observed` row saying
-# which. Later reads at the same forcing epoch return the stored field without
+# The output-time route, memoized on the problem's build and reported in its
+# compiler report. The first read of a name evaluates it — through the
+# compile-once cellwise sweep, or, where that declines, the per-cell
+# resolve-and-compile fallback that a strict compiler refuses — and files one
+# `:observed` row saying which, from what THIS call did (`_counting_percell`).
+# Later reads at the same forcing epoch return the stored field without
 # evaluating anything: the observed is state-free, so only an in-place refresh of
-# a live buffer (which bumps the epoch) can move it.
+# a live buffer (which bumps the epoch) can move it. A `remake` of the problem
+# shares the build and so the memo: `observed_field` reports what the build
+# materialized (API_SPEC §5.8), which a `p` or `u0` swap does not change.
 function _observed_field_memo(prob::EsmProblem, name::String)
     insp = prob.inspection
     epoch = _FORCING_EPOCH[]
-    hit = get(insp.observed_memo, name, nothing)
-    hit !== nothing && hit[1] == epoch && return copy(hit[2])
-    percell0 = get(_CASCADE_TALLY, :cellwise_percell, 0)
-    v = _observed_field_impl(prob, name)
-    if hit === nothing
-        percell = get(_CASCADE_TALLY, :cellwise_percell, 0) > percell0
-        push!(insp.compiler_report.rules,
-              CompilerRuleRecord(name, :observed,
-                                 percell ? :output_percell : :output_compiled_once,
-                                 Pair{Symbol,Symbol}[]))
+    hit = lock(() -> get(insp.observed_memo, name, nothing), insp.observed_lock)
+    hit !== nothing && hit.build === prob.run_file && hit.epoch == epoch &&
+        return copy(hit.value)
+    v, percell = _counting_percell() do
+        _observed_field_impl(prob, name)
     end
-    insp.observed_memo[name] = (epoch, copy(v))
+    lock(insp.observed_lock) do
+        # One row per name per build: the memo is emptied when a build starts,
+        # so an absent entry is this build's first read of the name.
+        haskey(insp.observed_memo, name) ||
+            push!(insp.compiler_report.rules,
+                  CompilerRuleRecord(name, :observed,
+                                     percell > 0 ? :output_percell : :output_compiled_once,
+                                     Pair{Symbol,Symbol}[]))
+        insp.observed_memo[name] = _ObservedMemo(prob.run_file, epoch, copy(v))
+    end
     return v
 end
 
