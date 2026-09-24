@@ -458,9 +458,9 @@ end
     # it takes the same compiled-once form under `:mtk` that it takes under
     # `:native`. Only the per-cell route is refused, under both.
     @testset "a seed_ic! hook seeds the array state" begin
-        expr = _MTKC.expression_from_json(Dict{String,Any}("op" => "+", "args" => Any[
-            Dict{String,Any}("op" => "*", "args" => Any["x", "x"]), 0.25]))
-        hook(dim) = (u, vm) -> seed_expression_ic!(u, vm, "M.u", expr,
+        sq(dim) = _MTKC.expression_from_json(Dict{String,Any}("op" => "+", "args" => Any[
+            Dict{String,Any}("op" => "*", "args" => Any[dim, dim]), 0.25]))
+        hook(dim) = (u, vm) -> seed_expression_ic!(u, vm, "M.u", sq(dim),
                                                    [dim => [0.1, 0.2, 0.3]])
         pm = esm_problem(_mtkc_array_doc(:default), (0.0, 1.0); compiler = :mtk,
                          seed_ic! = hook("x"))
@@ -480,6 +480,10 @@ end
                   occursin("compiler=:$c refuses 'seed_expression_ic!(M.u)'",
                            err.detail)
         end
+        # An expression no form can evaluate is the caller's error, not a refusal.
+        bad = (u, vm) -> seed_expression_ic!(u, vm, "M.u", sq("q"), ["x" => [0.1, 0.2, 0.3]])
+        @test _mtkc_raise(esm_problem, _mtkc_array_doc(:default), (0.0, 1.0);
+                          compiler = :mtk, seed_ic! = bad) isa _MTKC.UnboundVariableError
     end
 
     # ── The problem surface ─────────────────────────────────────────────────
