@@ -1236,9 +1236,12 @@ function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
     # `nothing`) or ANY eval-time error keeps the untouched per-cell loop below,
     # so both the values and the error behaviour stay exactly as before.
     ce = _setup_map_compile_once(rhs, nd, ca, registered_functions, params)
+    # The cell the compiled sweep failed at, if it failed: the one cell a strict
+    # compiler checks against the per-cell reference before refusing.
+    failed_at = Ref{Union{Nothing,Vector{Int}}}(nothing)
     if ce !== nothing
         fast = try
-            _fill_map_fast(ce, exts, nd)
+            _fill_map_fast(ce, exts, nd; failed_at = failed_at)
         catch err
             # Anything the compiled tree cannot evaluate (a gather the guards did
             # not anticipate, an unsupported leaf) → the per-cell reference below,
@@ -1260,21 +1263,37 @@ function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
         end
     end
     _SETUP_MAP_FASTPATH_MISS[] += 1
+    if _compiler_is_strict() && all(>(0), exts)
+        # A map no form can evaluate is the document's error, not a compiler's
+        # refusal, so the per-cell reference is run at one cell, for its
+        # diagnostic only, before the refusal is raised: the cell the compiled
+        # sweep failed at, or else the first.
+        at = something(failed_at[], ones(Int, length(exts)))
+        _eval_cellwise(rhs, at; const_arrays=ca,
+                       registered_functions=registered_functions, params=params)
+    end
     _refuse_percell_evaluation(_current_rule_label(),
         "the setup MAP materializer", prod(exts))
     _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
     return _fill_map_percell(rhs, exts, ca, registered_functions, params)
 end
 
-# Compile-once cell sweep: one preallocated `cell` buffer, rebound per cell.
-function _fill_map_fast(ce, exts::Vector{Int}, nd::Int)
+# Compile-once cell sweep: one preallocated `cell` buffer, rebound per cell. On
+# a throw, `failed_at` holds the cell it was evaluating.
+function _fill_map_fast(ce, exts::Vector{Int}, nd::Int;
+                        failed_at::Base.RefValue = Ref{Any}(nothing))
     arr = zeros(Float64, exts...)
     cell = Vector{Int}(undef, nd)
-    for I in CartesianIndices(Tuple(exts))
-        @inbounds for d in 1:nd
-            cell[d] = I[d]
+    try
+        for I in CartesianIndices(Tuple(exts))
+            @inbounds for d in 1:nd
+                cell[d] = I[d]
+            end
+            arr[I] = ce(cell)
         end
-        arr[I] = ce(cell)
+    catch
+        failed_at[] = copy(cell)
+        rethrow()
     end
     return arr
 end
@@ -1395,7 +1414,13 @@ function _materialize_setup_wholearray(rhs::OpExpr, env::AbstractDict,
     end
     ca, params = _setup_env_split(env)
     # This materializer has no compile-once form at all: the `makearray` stencil
-    # it serves is resolved and compiled from scratch at every output cell.
+    # it serves is resolved and compiled from scratch at every output cell. A
+    # strict compiler refuses it once its first cell has evaluated, so that a
+    # stencil no form can evaluate raises the document's own error instead.
+    if _compiler_is_strict() && all(>(0), exts)
+        _eval_cellwise(rhs, ones(Int, length(exts)); const_arrays=ca,
+                       registered_functions=registered_functions, params=params)
+    end
     _refuse_percell_evaluation(_current_rule_label(),
         "the whole-array setup materializer", prod(exts))
     _record_rule!(_current_rule_label(), :setup_array, :setup_percell)

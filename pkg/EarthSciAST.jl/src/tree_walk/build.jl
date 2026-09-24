@@ -2013,16 +2013,26 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
             end
             continue
         end
-        _refuse_percell_evaluation(rule, "the faq-valued initialization-equation seed",
-                                   length(todo))
-        _record_rule!(rule, :equation, :setup_percell)
-        for (idx_tuple, slot) in todo
+        percell(idx_tuple) = begin
             idx_exprs = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(idx_tuple[d]))
                                           for d in 1:length(idx_names))
             sub_body = _sub_preserving(body, idx_exprs)
             body_r   = _resolve_indices(sub_body, array_var_info, var_map, const_arrays, pgather)
             node     = _compile(body_r, var_map, param_sym_set, reg_funcs)
-            u0[slot] = _eval_node(node, u0, pp, 0.0)
+            _eval_node(node, u0, pp, 0.0)
+        end
+        if _compiler_is_strict()
+            # A body no form can evaluate — an undeclared name, an out-of-range
+            # const gather — is the document's error, not a compiler's refusal,
+            # so the first cell is evaluated once, for its diagnostic only,
+            # before the refusal is raised.
+            percell(first(todo)[1])
+            _refuse_percell_evaluation(rule, "the faq-valued initialization-equation seed",
+                                       length(todo))
+        end
+        _record_rule!(rule, :equation, :setup_percell)
+        for (idx_tuple, slot) in todo
+            u0[slot] = percell(idx_tuple)
         end
     end
     return nothing
@@ -2269,18 +2279,10 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
         # and at every run's `t0`. There is no compiled form of this stage yet
         # (the fill bodies gather live forcing buffers at the output index, which
         # the symbolic resolve cannot keep symbolic), so a strict compiler refuses
-        # the discrete variable by name.
-        if _compiler_is_strict()
-            ncells = prod(length(r) for r in cells_of[name][2]; init=1)
-            _refuse_rule(name,
-                "the discrete-cadence materializer resolves and compiles this " *
-                "forcing-derived field once per cell ($ncells cell" *
-                (ncells == 1 ? "" : "s") * ") and re-evaluates every cell as a " *
-                "tree walk at each data refresh and at each run's start — a " *
-                "per-cell evaluation that esm-libraries-spec §2.5.10 puts under " *
-                "the same rule as the right-hand side. Build with " *
-                "compiler=:interpreter to run it")
-        end
+        # the discrete variable by name — once its first cell has resolved,
+        # compiled and evaluated, so that a fill no form can evaluate (an
+        # undeclared name, an out-of-range const gather) raises the document's
+        # own error rather than a refusal.
         rop = discrete_defs[name]::OpExpr
         rop_res = isempty(resolved_obs) ? rop : _sub_preserving(rop, resolved_obs)
         rop_res isa OpExpr ||
@@ -2298,6 +2300,19 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
             # The cadence cut is CHECKED, not assumed: a fill kernel that reads `u` or
             # `t` would freeze at u = 0 (see `_check_discrete_fill_state_free`).
             _check_discrete_fill_state_free(node, name)
+            if _compiler_is_strict()
+                _eval_node(node, zeros(Float64, n_states),
+                           isnothing(p) ? NamedTuple() : p, 0.0)
+                ncells = prod(dims)
+                _refuse_rule(name,
+                    "the discrete-cadence materializer resolves and compiles this " *
+                    "forcing-derived field once per cell ($ncells cell" *
+                    (ncells == 1 ? "" : "s") * ") and re-evaluates every cell as a " *
+                    "tree walk at each data refresh and at each run's start — a " *
+                    "per-cell evaluation that esm-libraries-spec §2.5.10 puts under " *
+                    "the same rule as the right-hand side. Build with " *
+                    "compiler=:interpreter to run it")
+            end
             l = isempty(idx_tuple) ? 1 : lin[idx_tuple...]
             push!(fills, (cvec, l, node))
         end
@@ -4587,14 +4602,31 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # A retired loop candidate that neither the nest nor the affine tier took has
     # only the per-cell loop left, which is interpreted on every call: a strict
     # compiler refuses it by name. (A non-strict build keeps the loop, filed as
-    # `:interpreter` by the routing table.)
-    retire_loop && _compiler_is_strict() && _refuse_rule(
-        _faq_debug_label(lhs_body, idx_names, range_iters),
-        "this constant-bound contraction declined the whole-array contraction " *
-        "tier and the affine tier, and the only tier left is the per-cell " *
-        "contraction loop, whose cells the right-hand side walks as trees " *
-        "(`_eval_node`, one per output cell) on every call. Build with " *
-        "compiler=:interpreter to run it")
+    # `:interpreter` by the routing table.) The first output cell is built
+    # first, the way the interpreter builds every cell — unrolled — so that a
+    # body no form can build (an out-of-range const gather, an undeclared name)
+    # raises the document's own error rather than a refusal.
+    if retire_loop && _compiler_is_strict()
+        if all(!isempty, range_iters)
+            _compile_faq_percell!(Tuple{Int,_Node}[], _AccKernel[], copy(covered),
+                lhs_body, rhs_body;
+                idx_names=idx_names, range_iters=[r[1:1] for r in range_iters],
+                contract_names=contract_names, contract_ranges=contract_ranges,
+                contract_const=contract_const, rhs_oplus=rhs_oplus,
+                rhs_zerobar=rhs_zerobar, agg_gates=agg_gates, agg_filter=agg_filter,
+                resolved_obs=resolved_obs, array_var_info=array_var_info,
+                var_map=var_map, const_registry=const_registry, pgather=pgather,
+                param_sym_set=param_sym_set, reg_funcs=reg_funcs,
+                contraction_loop=false, pooled_cells=Tuple{Int,_Node}[])
+        end
+        _refuse_rule(
+            _faq_debug_label(lhs_body, idx_names, range_iters),
+            "this constant-bound contraction declined the whole-array contraction " *
+            "tier and the affine tier, and the only tier left is the per-cell " *
+            "contraction loop, whose cells the right-hand side walks as trees " *
+            "(`_eval_node`, one per output cell) on every call. Build with " *
+            "compiler=:interpreter to run it")
+    end
     # Anything the affine build cannot model takes the per-cell fallback, whose
     # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,
     # with the affine stencil tier off, stay plain per-cell scalar nodes (the
