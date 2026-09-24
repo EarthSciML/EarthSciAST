@@ -515,6 +515,12 @@ def _expr_to_sympy(
         # positions (table / axis data) that have no sensible SymPy
         # representation, and the bare ``const`` op carries the value in
         # ``expr.value`` rather than ``expr.args``. (esm-6ka)
+        # The nullary boolean literals (esm-spec §4.2), in the numeric 1.0 / 0.0
+        # encoding every comparison here already produces.
+        if expr.op == "true":
+            return sp.Float(1.0)
+        if expr.op == "false":
+            return sp.Float(0.0)
         if expr.op == "const":
             v = expr.value
             if isinstance(v, bool):
