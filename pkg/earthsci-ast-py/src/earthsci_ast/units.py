@@ -1024,9 +1024,9 @@ _INVERSE_CIRCULAR_FUNCS = frozenset({"asin", "acos", "atan"})
 #: boolean.
 _COMPARISON_OPS = frozenset({">", "<", ">=", "<=", "==", "!="})
 
-#: Booleans (and `sign`, whose result is a dimensionless ±1) yield a
-#: dimensionless result regardless of operand dimensions.
-_DIMENSIONLESS_RESULT_OPS = frozenset({"and", "or", "not", "sign", "true"})
+#: Booleans, the boolean literals, and `sign` (whose result is a dimensionless
+#: ±1) yield a dimensionless result regardless of operand dimensions.
+_DIMENSIONLESS_RESULT_OPS = frozenset({"and", "or", "not", "sign", "true", "false"})
 
 
 #: The unit-finding vocabulary -- the SECOND, smaller unit code set, shared

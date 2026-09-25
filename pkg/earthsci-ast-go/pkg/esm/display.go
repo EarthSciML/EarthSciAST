@@ -1793,8 +1793,8 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 	case "const":
 		return formatConstValue(node.Value, format), true
 
-	case "true":
-		return "true", true
+	case "true", "false":
+		return op, true
 
 	case "fn":
 		name := ""

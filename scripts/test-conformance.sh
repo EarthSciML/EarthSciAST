@@ -973,6 +973,22 @@ run_compiler_agreement_conformance_self_test() {
     fi
 }
 
+# The native coverage ledger (tests/conformance/native_coverage/, CONFORMANCE_SPEC
+# §5.44.6). The census itself sweeps the whole corpus and EarthSciModels twice per
+# binding, so it runs weekly in .github/workflows/native-coverage.yml, not here.
+# What runs here is the always-on guard: the check's every arm on synthetic
+# records, and both committed ledgers' shape.
+run_native_coverage_self_test() {
+    log "Running native-coverage ledger self-test..."
+    if python3 "$SCRIPT_DIR/native-coverage.py" self-test; then
+        success "Native-coverage ledger self-test passed"
+        return 0
+    else
+        error "Native-coverage ledger self-test failed"
+        return 1
+    fi
+}
+
 # Report the refusals and the unavailable compilers a run recorded, so a producer
 # that legitimately skipped or legitimately refused says so in the stage log rather
 # than passing in silence. The named-exclusion list IS the coverage backlog.
@@ -1595,6 +1611,8 @@ main() {
     run_stage "compiler-agreement native producer (python)" run_compiler_agreement_native_python
     # No `mtk` and no `xla` stage here on purpose — each is gated just as often,
     # in its own workflow, via `--compiler-agreement-only`. See the tier header.
+
+    run_stage "native-coverage self-test" run_native_coverage_self_test
 
     run_stage "inline-test self-test" run_inline_tests_conformance_self_test
     run_stage "inline-test interpreter producer (julia)" run_inline_tests_interpreter_julia

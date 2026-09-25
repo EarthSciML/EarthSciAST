@@ -69,6 +69,8 @@ const ARRAY_TIER = [
   'u[i, j]',
   'datetime.year(t)',
   'true',
+  'false',
+  'ifelse(false, a, true)',
   'integral(f, x, 0, 1)',
   'reshape(a, [3, 4])',
   'transpose(a)',

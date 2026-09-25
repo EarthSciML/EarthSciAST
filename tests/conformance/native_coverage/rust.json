@@ -1,0 +1,473 @@
+{
+  "category": "native_coverage",
+  "version": "1.0",
+  "binding": "rust",
+  "compiler": "native",
+  "reference_compiler": "interpreter",
+  "$comment": "Every corpus document the interpreter builds through esm_problem and native does not, with native's refusal. The list only shrinks: a document missing from it that native refuses is RED, and an entry native now builds is RED until it is removed. See README.md in this directory.",
+  "measured": {
+    "date": "2026-09-25",
+    "earthsciast_commit": "b36fe61a351a5beac96af8514a861a086ac5c2a2",
+    "earthsciast_dirty": true,
+    "earthscimodels_commit": "e298021cd5dc02149c291e64600feb786d76612b",
+    "documents": 1226,
+    "counts": {
+      "both build": 817,
+      "both fail": 130,
+      "invalid fixture (excluded)": 204,
+      "native gap": 75
+    }
+  },
+  "entries": [
+    {
+      "path": "EarthSciModels/components/earthsci_data/edgar_v81_monthly.esm",
+      "code": "compiler_refused_rule",
+      "rule": "EDGARv81MonthlyEmis.emission",
+      "reason": "[const] wholesale: unresolved symbol (forcing/NaN sentinel?) `EDGARv81MonthlyEmis.flx`"
+    },
+    {
+      "path": "EarthSciModels/components/earthsci_data/geosfp.esm",
+      "code": "compiler_refused_rule",
+      "rule": "GEOSFP.P",
+      "reason": "[const] wholesale: unresolved symbol (forcing/NaN sentinel?) `GEOSFP.PS`"
+    },
+    {
+      "path": "EarthSciModels/components/earthsci_data/nei2016_monthly.esm",
+      "code": "compiler_refused_rule",
+      "rule": "NEI2016MonthlyEmis.ACET",
+      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `NEI2016MonthlyEmis.flux_ACET`"
+    },
+    {
+      "path": "EarthSciModels/components/earthsci_data/wrf.esm",
+      "code": "compiler_refused_rule",
+      "rule": "WRF.P_total",
+      "reason": "[const] wholesale: unresolved symbol (forcing/NaN sentinel?) `WRF.P`"
+    },
+    {
+      "path": "tests/bench/transport_3axis_7cubed.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(q)",
+      "reason": "[continuous] makearray: region value box does not match the region"
+    },
+    {
+      "path": "tests/conformance/build_once_spatial_field/fixtures/build_once_spatial_ode.esm",
+      "code": "compiler_refused_rule",
+      "rule": "area",
+      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
+    },
+    {
+      "path": "tests/conformance/const_array_gather_bounds/fixtures/inline_1d_index_zero.esm",
+      "code": "compiler_refused_rule",
+      "rule": "g",
+      "reason": "[const] index: const-array gather out of range (§5.5.5)"
+    },
+    {
+      "path": "tests/conformance/const_array_gather_bounds/fixtures/inline_1d_past_end.esm",
+      "code": "compiler_refused_rule",
+      "rule": "g",
+      "reason": "[const] index: const-array gather out of range (§5.5.5)"
+    },
+    {
+      "path": "tests/conformance/const_array_gather_bounds/fixtures/inline_2d_column_past_end.esm",
+      "code": "compiler_refused_rule",
+      "rule": "g",
+      "reason": "[const] index: const-array gather out of range (§5.5.5)"
+    },
+    {
+      "path": "tests/conformance/const_array_gather_bounds/fixtures/inline_2d_row_past_end.esm",
+      "code": "compiler_refused_rule",
+      "rule": "g",
+      "reason": "[const] index: const-array gather out of range (§5.5.5)"
+    },
+    {
+      "path": "tests/conformance/const_array_gather_bounds/fixtures/named_1d_index_zero.esm",
+      "code": "compiler_refused_rule",
+      "rule": "g",
+      "reason": "[const] index: const-array gather out of range (§5.5.5)"
+    },
+    {
+      "path": "tests/conformance/const_array_gather_bounds/fixtures/named_1d_past_end.esm",
+      "code": "compiler_refused_rule",
+      "rule": "g",
+      "reason": "[const] index: const-array gather out of range (§5.5.5)"
+    },
+    {
+      "path": "tests/conformance/const_array_gather_bounds/fixtures/named_2d_column_past_end.esm",
+      "code": "compiler_refused_rule",
+      "rule": "g",
+      "reason": "[const] index: const-array gather out of range (§5.5.5)"
+    },
+    {
+      "path": "tests/conformance/const_array_gather_bounds/fixtures/named_2d_row_past_end.esm",
+      "code": "compiler_refused_rule",
+      "rule": "g",
+      "reason": "[const] index: const-array gather out of range (§5.5.5)"
+    },
+    {
+      "path": "tests/conformance/discrete_materialize/fixtures/discrete_materialize_contraction.esm",
+      "code": "compiler_refused_rule",
+      "rule": "g",
+      "reason": "[const] variable: unresolved symbol (forcing/loop-bind?): src"
+    },
+    {
+      "path": "tests/conformance/expression_templates/eager_target_bearing/emitted.esm",
+      "code": "compiler_refused_rule",
+      "rule": "d_eager",
+      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `i`"
+    },
+    {
+      "path": "tests/conformance/expression_templates/eager_target_bearing/fixture.esm",
+      "code": "compiler_refused_rule",
+      "rule": "d_eager",
+      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `i`"
+    },
+    {
+      "path": "tests/conformance/expression_templates/emit_materialized_registry/emitted.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(c)",
+      "reason": "[continuous] makearray: region value box does not match the region"
+    },
+    {
+      "path": "tests/conformance/expression_templates/import_rebind_keyed_factors/expanded.esm",
+      "code": "compiler_refused_rule",
+      "rule": "total",
+      "reason": "[continuous] contracted: non-static contraction dim (Ragged { offsets: \"meshA_count\", of: [\"i\"] })"
+    },
+    {
+      "path": "tests/conformance/expression_templates/import_smoke/expanded.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(c)",
+      "reason": "[continuous] makearray: region value box does not match the region"
+    },
+    {
+      "path": "tests/conformance/expression_templates/inject_coupling_entry/expanded.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(Advection.c)",
+      "reason": "[continuous] makearray: region value box does not match the region"
+    },
+    {
+      "path": "tests/conformance/expression_templates/inject_subsystem_ref/expanded.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(Runoff.c)",
+      "reason": "[continuous] makearray: region value box does not match the region"
+    },
+    {
+      "path": "tests/conformance/expression_templates/scalar_field_param/expanded.esm",
+      "code": "compiler_refused_rule",
+      "rule": "area_planar",
+      "reason": "[const] wholesale: unsupported op `polygon_intersection_area`"
+    },
+    {
+      "path": "tests/conformance/expression_templates/scalar_field_param/fixture.esm",
+      "code": "compiler_refused_rule",
+      "rule": "area_planar",
+      "reason": "[const] wholesale: unsupported op `polygon_intersection_area`"
+    },
+    {
+      "path": "tests/conformance/operator_compose_merge/fixtures/owner_rename_state_wins_observed_first.esm",
+      "code": "compiler_refused_rule",
+      "rule": "Sink.O3",
+      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `Sink.O3`"
+    },
+    {
+      "path": "tests/conformance/pushdown/fixtures/isrm.esm",
+      "code": "compiler_refused_rule",
+      "rule": "ISRM.X",
+      "reason": "[const] faq: empty output box"
+    },
+    {
+      "path": "tests/conformance/pushdown/fixtures/pushdown_l1.esm",
+      "code": "compiler_refused_rule",
+      "rule": "ISRM.X",
+      "reason": "[const] variable: unresolved symbol (forcing/loop-bind?): ISRM.emis_lat"
+    },
+    {
+      "path": "tests/conformance/pushdown/fixtures/pushdown_polygon_area.esm",
+      "code": "compiler_refused_rule",
+      "rule": "Binned.E_PM25",
+      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
+    },
+    {
+      "path": "tests/conformance/refresh/fixtures/coupled_refresh_regrid.esm",
+      "code": "compiler_refused_rule",
+      "rule": "scale_tgt",
+      "reason": "[const] variable: unresolved symbol (forcing/loop-bind?): scale_src"
+    },
+    {
+      "path": "tests/conformance/shaped_observed_scalar_broadcast/fixtures/scalar_rhs_broadcast.esm",
+      "code": "compiler_refused_rule",
+      "rule": "folded",
+      "reason": "[const] ifelse: branch value boxes differ under a runtime scalar condition"
+    },
+    {
+      "path": "tests/conformance/subsystem_loader/fixtures/subsystem_loader_ode.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(c)",
+      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `k`"
+    },
+    {
+      "path": "tests/coupling/callback_examples.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(WeatherModel.temperature)",
+      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `WeatherModel.external_temperature_forcing`"
+    },
+    {
+      "path": "tests/coupling/cross_domain_coupling.esm",
+      "code": "compiler_refused_rule",
+      "rule": "Ocean3D.rg_A",
+      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
+    },
+    {
+      "path": "tests/coupling/interfaces.esm",
+      "code": "compiler_refused_rule",
+      "rule": "LowerAtmosphere.rg_A",
+      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
+    },
+    {
+      "path": "tests/fixtures/data_source_extent_scope/extent_axis_leaf.esm",
+      "code": "compiler_refused_rule",
+      "rule": "Ingest.annual_obs",
+      "reason": "[const] faq: empty output box"
+    },
+    {
+      "path": "tests/fixtures/data_source_extent_scope/extent_resolved_shape.esm",
+      "code": "compiler_refused_rule",
+      "rule": "Ingest.annual_obs",
+      "reason": "[const] variable: unresolved symbol (forcing/loop-bind?): Ingest.annual"
+    },
+    {
+      "path": "tests/fixtures/faq/11_reshape_roundtrip.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(diff)",
+      "reason": "[continuous] wholesale: unsupported op `reshape`"
+    },
+    {
+      "path": "tests/fixtures/faq/12_transpose_2d.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(diff)",
+      "reason": "[continuous] wholesale: unsupported op `transpose`"
+    },
+    {
+      "path": "tests/fixtures/faq/13_concat_1d.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(head)",
+      "reason": "[continuous] wholesale: unsupported op `concat`"
+    },
+    {
+      "path": "tests/fixtures/faq/14_broadcast_elementwise.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(corner)",
+      "reason": "[continuous] wholesale: unsupported op `reshape`"
+    },
+    {
+      "path": "tests/fixtures/recurrence/01_recurrence_doubling.esm",
+      "code": "compiler_refused_rule",
+      "rule": "RecurrenceDoubling.s",
+      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
+    },
+    {
+      "path": "tests/fixtures/recurrence/02_recurrence_cancellation_ladder.esm",
+      "code": "compiler_refused_rule",
+      "rule": "RecurrenceCancellationLadder.s",
+      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
+    },
+    {
+      "path": "tests/fixtures/recurrence/03_recurrence_multi_lag.esm",
+      "code": "compiler_refused_rule",
+      "rule": "RecurrenceMultiLag.s",
+      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
+    },
+    {
+      "path": "tests/fixtures/recurrence/04_recurrence_banded_lag_fold.esm",
+      "code": "compiler_refused_rule",
+      "rule": "RecurrenceBandedLagFold.r",
+      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
+    },
+    {
+      "path": "tests/fixtures/recurrence/05_recurrence_two_axes.esm",
+      "code": "compiler_refused_rule",
+      "rule": "RecurrenceOnOneOfTwoAxes.m",
+      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
+    },
+    {
+      "path": "tests/fixtures/recurrence/06_recurrence_float32_state.esm",
+      "code": "compiler_refused_rule",
+      "rule": "RecurrenceFloat32State.s",
+      "reason": "[const] the variable declares its own `element_type` (esm-spec §11.3.1), and the tape resolves its kernels at execution from ONE thread-local precision and fuses ACROSS rules, so a subtree in a precision its neighbours are not is the one thing it cannot express"
+    },
+    {
+      "path": "tests/fixtures/recurrence/07_recurrence_thirty_eight_lags.esm",
+      "code": "compiler_refused_rule",
+      "rule": "RecurrenceThirtyEightLags.r",
+      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
+    },
+    {
+      "path": "tests/fixtures/recurrence/08_recurrence_parameter_valued_lag.esm",
+      "code": "compiler_refused_rule",
+      "rule": "RecurrenceParameterValuedLag.s",
+      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
+    },
+    {
+      "path": "tests/fixtures/recurrence/09_recurrence_through_expression_template.esm",
+      "code": "compiler_refused_rule",
+      "rule": "RecurrenceThroughExpressionTemplate.s",
+      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
+    },
+    {
+      "path": "tests/scoping/hierarchical_scoped_references.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(SubsystemA.local_state)",
+      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `ParentSystem.SubsystemA.DeepSubA.deep_variable`"
+    },
+    {
+      "path": "tests/valid/advection_reaction_loaded_ic_bc.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(Chemistry.O3)",
+      "reason": "[continuous] variable: unresolved symbol (forcing/loop-bind?): Advection.u_wind"
+    },
+    {
+      "path": "tests/valid/cadence/discrete_remesh_stencil.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(u)",
+      "reason": "[continuous] variable: unresolved symbol (forcing/loop-bind?): coeff"
+    },
+    {
+      "path": "tests/valid/cadence/loader_const_seed.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(c)",
+      "reason": "[continuous] variable: unresolved symbol (forcing/loop-bind?): bc"
+    },
+    {
+      "path": "tests/valid/cadence/loader_temporal_seed.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(c)",
+      "reason": "[continuous] variable: unresolved symbol (forcing/loop-bind?): bc"
+    },
+    {
+      "path": "tests/valid/cadence/mixed_stencil.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(u)",
+      "reason": "[continuous] variable: unresolved symbol (forcing/loop-bind?): Kdiff"
+    },
+    {
+      "path": "tests/valid/cadence/observed_leaf_seeds.esm",
+      "code": "compiler_refused_rule",
+      "rule": "k_scaled",
+      "reason": "[const] wholesale: unresolved symbol (forcing/NaN sentinel?) `Kdiff`"
+    },
+    {
+      "path": "tests/valid/data_sources_comprehensive.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(O3)",
+      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `wind_u`"
+    },
+    {
+      "path": "tests/valid/faq/join_disaggregation_m2m.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(count)",
+      "reason": "[continuous] aggregate: carries an overlap join gate that drives enumeration"
+    },
+    {
+      "path": "tests/valid/faq/join_disaggregation_m2m_permuted.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(count)",
+      "reason": "[continuous] aggregate: carries an overlap join gate that drives enumeration"
+    },
+    {
+      "path": "tests/valid/faq/join_filter.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(emissions)",
+      "reason": "[continuous] reduction: rank-0 reduction with a filter (the oracle SKIPS excluded tuples; a mask-to-identity fold is not bit-identical)"
+    },
+    {
+      "path": "tests/valid/faq/join_on_data_columns.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(count)",
+      "reason": "[continuous] aggregate: carries an overlap join gate that drives enumeration"
+    },
+    {
+      "path": "tests/valid/faq/join_on_self_join.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(priorSum)",
+      "reason": "[continuous] aggregate: carries an overlap join gate that drives enumeration"
+    },
+    {
+      "path": "tests/valid/faq/join_on_self_join_syms.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(priorSum)",
+      "reason": "[continuous] aggregate: carries an overlap join gate that drives enumeration"
+    },
+    {
+      "path": "tests/valid/faq/ragged_member_gather.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(perParentTotal)",
+      "reason": "[continuous] contracted: non-static contraction dim (Ragged { offsets: \"parentMemberCount\", of: [\"i\"] })"
+    },
+    {
+      "path": "tests/valid/geometry/conservative_regrid_assembly.esm",
+      "code": "compiler_refused_rule",
+      "rule": "A_ij",
+      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
+    },
+    {
+      "path": "tests/valid/geometry/intersect_polygon_clip_area.esm",
+      "code": "compiler_refused_rule",
+      "rule": "clip",
+      "reason": "[const] wholesale: unsupported op `intersect_polygon`"
+    },
+    {
+      "path": "tests/valid/geometry/intersect_polygon_planar_area.esm",
+      "code": "compiler_refused_rule",
+      "rule": "clip",
+      "reason": "[const] wholesale: unsupported op `intersect_polygon`"
+    },
+    {
+      "path": "tests/valid/geometry/intersect_polygon_planar_ode.esm",
+      "code": "compiler_refused_rule",
+      "rule": "clip",
+      "reason": "[const] wholesale: unsupported op `intersect_polygon`"
+    },
+    {
+      "path": "tests/valid/geometry/polygon_intersection_area_padded_ring.esm",
+      "code": "compiler_refused_rule",
+      "rule": "overlap_area",
+      "reason": "[const] wholesale: unsupported op `polygon_intersection_area`"
+    },
+    {
+      "path": "tests/valid/geometry/polygon_intersection_area_planar.esm",
+      "code": "compiler_refused_rule",
+      "rule": "overlap_area",
+      "reason": "[const] wholesale: unsupported op `polygon_intersection_area`"
+    },
+    {
+      "path": "tests/valid/makearray_empty_region_min_extent.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(c)",
+      "reason": "[continuous] makearray: empty region"
+    },
+    {
+      "path": "tests/valid/reaction_system_only.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(PureChemistry.O)",
+      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `PureChemistry.jO3`"
+    },
+    {
+      "path": "tests/valid/recurrence_causal_self_reference.esm",
+      "code": "compiler_refused_rule",
+      "rule": "RecurrenceCausalSelfReference.r",
+      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
+    },
+    {
+      "path": "tests/valid/scoped_refs_nested.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(system_energy)",
+      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `EarthSystem.Ocean.Surface.sst`"
+    },
+    {
+      "path": "tests/valid/wildfire_atmosphere_ocean.esm",
+      "code": "compiler_refused_rule",
+      "rule": "OceanDynamics.rg_A",
+      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
+    }
+  ]
+}

@@ -13,7 +13,7 @@
 //!    functions, derivatives (`D(x)/Dt` and `D(x, t)`), open/user function calls;
 //!  - array & call-shaped tier: array literals `[…]` (`const`), indexing
 //!    `a[i, j]` (`index`), dotted closed-function calls `datetime.year(t)` (`fn`),
-//!    the `true` literal, and `integral` / `reshape` / `transpose` / `concat`;
+//!    the `true` and `false` literals, and `integral` / `reshape` / `transpose` / `concat`;
 //!  - reduction & array-query tier: `faq` reductions
 //!    `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
 //!    key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax` arg-witnesses,
@@ -538,8 +538,8 @@ impl Parser {
             }
             Kind::Name => {
                 let name = t.text;
-                if name == "true" {
-                    return Ok(node("true", Vec::new()));
+                if name == "true" || name == "false" {
+                    return Ok(node(&name, Vec::new()));
                 }
                 // `makearray(region = value, …)` — a piecewise-region array. Its
                 // arguments are `[lo:hi, …] = value` pairs, not plain call args,

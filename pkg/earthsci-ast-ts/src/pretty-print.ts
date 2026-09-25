@@ -1037,7 +1037,7 @@ function formatStructuralOpMathML(node: ExprNode): string | undefined {
     if (Array.isArray(v)) return `<mtext>${escapeMathMLText(formatConstValue(v, 'ascii'))}</mtext>`
     return `<mn>${formatConstValue(v, 'ascii')}</mn>`
   }
-  if (op === 'true') return `<mi>true</mi>`
+  if (op === 'true' || op === 'false') return `<mi>${op}</mi>`
   if (op === 'broadcast') {
     const fn = n.fn
     if (typeof fn !== 'string') return undefined
@@ -1678,7 +1678,8 @@ function formatStructuralOp(node: ExprNode, format: TextFormat): string | undefi
       return formatConstValue(n.value, format)
 
     case 'true':
-      return 'true'
+    case 'false':
+      return op
 
     case 'fn': {
       const name = String(n.name ?? '')
