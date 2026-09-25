@@ -43,6 +43,9 @@
 //!   fastest) from the reduction identity, which is what makes a scalar
 //!   reduction bit-identical to `reduce_contraction`'s `acc = combine(acc,
 //!   term)` loop.
+//! * [`Instr::Scan`] is `run_prefix_scan` over a whole box: a running fold
+//!   along one axis, ascending, independently for every position of the
+//!   other axes, writing the inclusive or exclusive partial result.
 //!
 //! Array operands within one instruction share one box (shape + 1-based
 //! origin), checked at lowering time — the same precondition `vec_combine`
@@ -217,6 +220,32 @@ pub(crate) enum Instr {
         src_shape: DimU,
         out: SlotId,
     },
+    /// Forward prefix scan (esm-spec §4.3.1) of `src` along `axis`, with
+    /// `op`'s kernel from `init`, independently for every position of the
+    /// other axes:
+    ///
+    /// ```text
+    /// acc = init
+    /// for k in 0..len(axis), ascending:
+    ///     inclusive:  acc = kernel(op)(acc, src[k]);  out[k] = acc
+    ///     exclusive:  out[k] = acc;  acc = kernel(op)(acc, src[k])
+    /// ```
+    ///
+    /// `out`'s box is `src_shape`. This is `run_prefix_scan`'s sweep, folding
+    /// each window in the same association (`init` is the reduction identity
+    /// and the first combine is NOT elided: `0.0 + (-0.0)` is `0.0`), so a
+    /// scan is bit-identical to the per-cell oracle. One instruction, whatever
+    /// the scanned length.
+    Scan {
+        op: BinCode,
+        init: f64,
+        src: SrcRef,
+        axis: u8,
+        inclusive: bool,
+        /// The expected source (and output) box (validation).
+        src_shape: DimU,
+        out: SlotId,
+    },
     /// Scalar-`ifelse` short circuit: if `cond != 0`, execute the next
     /// `n_true` instructions then skip the following `n_false`; else skip
     /// `n_true` and execute the following `n_false`. The untaken branch is
@@ -262,7 +291,8 @@ impl Instr {
             | Instr::Region { out, .. }
             | Instr::ConstArray { out, .. }
             | Instr::Interp { out, .. }
-            | Instr::Reduce { out, .. } => Some(*out),
+            | Instr::Reduce { out, .. }
+            | Instr::Scan { out, .. } => Some(*out),
             Instr::JmpIfZero { .. }
             | Instr::Fallback { .. }
             | Instr::Export { .. }
@@ -276,8 +306,12 @@ impl Instr {
     pub(crate) fn for_each_def(&self, fused: &[FusedSpec], mut f: impl FnMut(SlotId)) {
         match self {
             Instr::Fused { spec } => {
-                for &(_, slot) in &fused[*spec as usize].outputs {
+                let fs = &fused[*spec as usize];
+                for &(_, slot) in &fs.outputs {
                     f(slot);
+                }
+                if let Some(r) = &fs.reduce {
+                    f(r.out);
                 }
             }
             other => {
@@ -311,7 +345,10 @@ impl Instr {
                 op(a);
                 op(b);
             }
-            Instr::Gather { src, .. } | Instr::LoadElem { src, .. } | Instr::Reduce { src, .. } => {
+            Instr::Gather { src, .. }
+            | Instr::LoadElem { src, .. }
+            | Instr::Reduce { src, .. }
+            | Instr::Scan { src, .. } => {
                 if let SrcRef::Slot(s) = src {
                     f(*s);
                 }
@@ -363,6 +400,7 @@ impl Instr {
             Instr::ConstArray { .. } => "ConstArray",
             Instr::Interp { .. } => "Interp",
             Instr::Reduce { .. } => "Reduce",
+            Instr::Scan { .. } => "Scan",
             Instr::JmpIfZero { .. } => "JmpIfZero",
             Instr::Fallback { .. } => "Fallback",
             Instr::Export { .. } => "Export",
@@ -535,10 +573,39 @@ pub(crate) struct FusedSpec {
     /// Precompiled run schedule (see [`FusedRun`]); a group with no shifted
     /// inputs has the single run `(0, n_elems, [])`.
     pub runs: Vec<FusedRun>,
+    /// An absorbed [`Instr::Reduce`] over the group box, folding one register
+    /// instead of storing it (see [`FusedReduce`]).
+    pub reduce: Option<FusedReduce>,
     /// Diagnostics: original instructions replaced (members incl. deleted
     /// folded gathers).
     pub n_fused_instrs: u32,
     pub n_folded_gathers: u32,
+}
+
+/// The fold of a fused group's value over its box's LEADING axes — an
+/// [`Instr::Reduce`] whose source only the group produced and only the
+/// reduction reads, so the source never materializes:
+///
+/// ```text
+/// out[*] = init
+/// for k in ROW-MAJOR order of the group box:
+///     out[k % n_inner] = kernel(op)(out[k % n_inner], reg[k])
+/// ```
+///
+/// Runs and their chunks execute in ascending flat order, which is the
+/// `Reduce` visiting order, so every output cell folds the same terms in the
+/// same association as the unfused instruction.
+#[derive(Clone, Debug)]
+pub(crate) struct FusedReduce {
+    /// The register holding the folded value (physical, after allocation).
+    pub reg: GroupIx,
+    pub op: BinCode,
+    pub init: f64,
+    /// The reduction's output slot: the group box with the leading axes
+    /// dropped (a scalar slot when every axis is folded).
+    pub out: SlotId,
+    /// Elements per leading-axes position (the output's element count).
+    pub n_inner: usize,
 }
 
 impl FusedSpec {
@@ -563,6 +630,9 @@ pub struct FuseStats {
     /// the gathered value are counted as folded — this counts kept Gather
     /// instructions in the fused program).
     pub n_gathers_kept: usize,
+    /// Reductions absorbed into the group producing their source
+    /// ([`FusedReduce`]; the `Reduce` instruction is deleted).
+    pub n_reduces_folded: usize,
     /// Group size histogram buckets: [2-3, 4-7, 8-15, 16-31, 32-63, 64+]
     /// member instructions.
     pub group_size_hist: [usize; 6],

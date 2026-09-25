@@ -316,6 +316,7 @@ fn drive(with_nan: bool) {
         n_splat_regs: 6,          // 5 scalars + the zero register
         outputs: SmallVec::new(), // outs are passed directly
         runs,
+        reduce: None,
         n_fused_instrs: 0,
         n_folded_gathers: 0,
     };
@@ -330,11 +331,24 @@ fn drive(with_nan: bool) {
             .collect();
         let mut fregs = vec![0.0f64; (n_regs as usize + 1 + 6) * FCHUNK];
         match wider {
-            0 => unsafe { exec_fused_runs_generic(&fs, &svals, &bases, &outs, &mut fregs) },
+            0 => unsafe {
+                exec_fused_runs_generic(
+                    &fs,
+                    &svals,
+                    &bases,
+                    &outs,
+                    std::ptr::null_mut(),
+                    &mut fregs,
+                )
+            },
             #[cfg(target_arch = "x86_64")]
-            1 => unsafe { exec_fused_runs_avx2(&fs, &svals, &bases, &outs, &mut fregs) },
+            1 => unsafe {
+                exec_fused_runs_avx2(&fs, &svals, &bases, &outs, std::ptr::null_mut(), &mut fregs)
+            },
             #[cfg(target_arch = "x86_64")]
-            2 => unsafe { exec_fused_runs_avx512(&fs, &svals, &bases, &outs, &mut fregs) },
+            2 => unsafe {
+                exec_fused_runs_avx512(&fs, &svals, &bases, &outs, std::ptr::null_mut(), &mut fregs)
+            },
             _ => panic!("level unavailable in this build"),
         }
         outbufs

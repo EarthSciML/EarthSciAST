@@ -396,16 +396,57 @@ pub(super) unsafe fn exec_fused(
     for &(reg, slot) in &fs.outputs {
         outs.push((reg, unsafe { slab_ptr.add(slot_off[slot as usize]) }));
     }
+    // An absorbed reduction's accumulator, seeded with its identity.
+    let red: *mut f64 = match &fs.reduce {
+        Some(r) => unsafe {
+            let p = slab_ptr.add(slot_off[r.out as usize]);
+            std::slice::from_raw_parts_mut(p, r.n_inner).fill(r.init);
+            p
+        },
+        None => std::ptr::null_mut(),
+    };
 
     // Step 4b: run the chunked micro-program through the SIMD clone selected
     // at executor construction. Same source, same scalar semantics — the
     // `#[target_feature]` wrappers only widen the auto-vectorized lanes.
     match simd {
-        SimdLevel::Generic => unsafe { exec_fused_runs_generic(fs, &svals, &bases, &outs, fregs) },
+        SimdLevel::Generic => unsafe {
+            exec_fused_runs_generic(fs, &svals, &bases, &outs, red, fregs)
+        },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 => unsafe { exec_fused_runs_avx2(fs, &svals, &bases, &outs, fregs) },
+        SimdLevel::Avx2 => unsafe { exec_fused_runs_avx2(fs, &svals, &bases, &outs, red, fregs) },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx512 => unsafe { exec_fused_runs_avx512(fs, &svals, &bases, &outs, fregs) },
+        SimdLevel::Avx512 => unsafe {
+            exec_fused_runs_avx512(fs, &svals, &bases, &outs, red, fregs)
+        },
+    }
+}
+
+/// Fold one chunk (`c` values at flat box offset `at`) into an absorbed
+/// reduction's accumulator: `acc[(at + k) % n_inner] = f(acc[..], v[k])`,
+/// ascending in `k` — contiguous pieces of the accumulator, one per crossing
+/// of a leading-axes position.
+#[inline(always)]
+unsafe fn fold_chunk(
+    acc: *mut f64,
+    n_inner: usize,
+    at: usize,
+    v: *const f64,
+    c: usize,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    let mut k = 0usize;
+    while k < c {
+        let o = (at + k) % n_inner;
+        let len = (c - k).min(n_inner - o);
+        unsafe {
+            let a = std::slice::from_raw_parts_mut(acc.add(o), len);
+            let x = std::slice::from_raw_parts(v.add(k), len);
+            for (y, &t) in a.iter_mut().zip(x) {
+                *y = f(*y, t);
+            }
+        }
+        k += len;
     }
 }
 
@@ -419,6 +460,7 @@ unsafe fn exec_fused_runs(
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
+    red: *mut f64,
     fregs: &mut [f64],
 ) {
     let rp = fregs.as_mut_ptr();
@@ -758,6 +800,15 @@ unsafe fn exec_fused_runs(
                     );
                 }
             }
+            if let Some(r) = &fs.reduce {
+                let v = unsafe { rp.add(r.reg as usize * FCHUNK) as *const f64 };
+                macro_rules! fold {
+                    ($f:expr) => {
+                        unsafe { fold_chunk(red, r.n_inner, at, v, c, $f) }
+                    };
+                }
+                dispatch_bin_kernel!(&r.op, fold);
+            }
             done += c;
         }
     }
@@ -770,9 +821,10 @@ pub(super) unsafe fn exec_fused_runs_generic(
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
+    red: *mut f64,
     fregs: &mut [f64],
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, fregs) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs) }
 }
 
 /// AVX2 clone: identical Rust source compiled under `avx2` (+`fma` is NOT
@@ -786,9 +838,10 @@ pub(super) unsafe fn exec_fused_runs_avx2(
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
+    red: *mut f64,
     fregs: &mut [f64],
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, fregs) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs) }
 }
 
 /// AVX-512 clone (f+vl+dq+bw, all runtime-checked). Note LLVM keeps its
@@ -806,9 +859,10 @@ pub(super) unsafe fn exec_fused_runs_avx512(
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
+    red: *mut f64,
     fregs: &mut [f64],
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, fregs) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs) }
 }
 
 /// The SINGLE definition of micro-op scalar semantics: one element of one

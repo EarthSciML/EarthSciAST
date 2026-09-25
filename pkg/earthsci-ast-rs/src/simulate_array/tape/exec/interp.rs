@@ -6,7 +6,9 @@
 //! strides and nothing about the program.
 
 use super::fused::{dispatch_bin_kernel, dispatch_un_kernel, exec_fused};
-use super::kernels::{copy_strided, ew_select, ew1, ew2, exec_gather, fill_strided};
+use super::kernels::{
+    copy_strided, ew_select, ew1, ew2, exec_gather, fill_strided, reduce_rows, scan_axis,
+};
 use super::oracle::run_rhs_oracle;
 use super::resolve::{Rv, cm_strides, resolve_rv, resolve_scalar, resolve_src, rm_strides};
 use super::*;
@@ -311,9 +313,26 @@ pub(super) fn run_range(
                         *dst.add(k) = *init;
                     }
                 }
+                // Folding the LEADING axes of a row-major source (the promoted
+                // contraction box) is one contiguous row per leading position,
+                // in the same row-major visiting order.
+                let nd = sv.shape.len();
+                if axes.iter().enumerate().all(|(k, &a)| a as usize == k)
+                    && sv.strides[..] == rm_strides(&sv.shape)[..]
+                {
+                    let src = sv.ptr;
+                    let rows: usize = sv.shape[..axes.len()].iter().product();
+                    macro_rules! fold_rows {
+                        ($f:expr) => {
+                            unsafe { reduce_rows(dst, n_out, src, rows, $f) }
+                        };
+                    }
+                    dispatch_bin_kernel!(op, fold_rows);
+                    pc += 1;
+                    continue;
+                }
                 // Kept (un-reduced) source axes, in order; their row-major
                 // strides in the OUTPUT box line up positionally.
-                let nd = sv.shape.len();
                 let keep: SmallVec<[usize; 4]> =
                     (0..nd).filter(|d| !axes.contains(&(*d as u8))).collect();
                 let out_rm = rm_strides(&desc.shape);
@@ -344,6 +363,26 @@ pub(super) fn run_range(
                         idx[d] = 0;
                     }
                 }
+            }
+            Instr::Scan {
+                op,
+                init,
+                src,
+                axis,
+                inclusive,
+                src_shape,
+                out,
+            } => {
+                let sv = resolve_src(src, env, slab_ptr, slot_off, obs);
+                debug_assert_eq!(&sv.shape[..], &src_shape[..], "Scan source box");
+                let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+                let (a, init, inclusive) = (*axis as usize, *init, *inclusive);
+                macro_rules! scan {
+                    ($f:expr) => {
+                        unsafe { scan_axis(dst, &sv, a, init, inclusive, $f) }
+                    };
+                }
+                dispatch_bin_kernel!(op, scan);
             }
             Instr::JmpIfZero {
                 cond,

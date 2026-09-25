@@ -168,14 +168,15 @@ impl fmt::Display for TapeBuildReport {
             writeln!(
                 f,
                 "  fusion: {} -> {} instructions; {} groups absorbing {} \
-                 ({} gathers folded, {} kept); group sizes [2-3]={} [4-7]={} \
-                 [8-15]={} [16-31]={} [32-63]={} [64+]={}",
+                 ({} gathers folded, {} kept, {} reductions folded); group sizes \
+                 [2-3]={} [4-7]={} [8-15]={} [16-31]={} [32-63]={} [64+]={}",
                 self.fuse.instrs_before,
                 self.fuse.instrs_after,
                 self.fuse.n_groups,
                 self.fuse.n_member_instrs,
                 self.fuse.n_gathers_folded,
                 self.fuse.n_gathers_kept,
+                self.fuse.n_reduces_folded,
                 self.fuse.group_size_hist[0],
                 self.fuse.group_size_hist[1],
                 self.fuse.group_size_hist[2],
