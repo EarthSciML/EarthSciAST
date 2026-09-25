@@ -4096,13 +4096,76 @@ function _scan_term_iters(range_iters, axis::Int, citer, inclusive::Bool)
     return term_iters
 end
 
+# The affine reading of an equation LHS `D(index(var, a...))`: `(var, forms)`
+# with one `_lhs_index_affine` form `(pos, coef, c)` per subscript, so the cell
+# a binding of the loop indices writes is `coef * loop[pos] + c` per subscript
+# with no substitution into the tree. `nothing` when the LHS is not that shape,
+# a subscript is not affine, or the variable shares a loop index's name; the
+# caller then substitutes cell by cell, which raises the shape's own error.
+function _lhs_affine_target(lhs_body, idx_names::Vector{String})
+    (lhs_body isa OpExpr && lhs_body.op == "D" && !isempty(lhs_body.args)) || return nothing
+    inner = lhs_body.args[1]
+    (inner isa OpExpr && inner.op == "index" && !isempty(inner.args)) || return nothing
+    ve = inner.args[1]
+    (ve isa VarExpr && !(ve.name in idx_names)) || return nothing
+    forms = Tuple{Int,Int,Int}[]
+    for a in @view inner.args[2:end]
+        t = _lhs_index_affine(a, idx_names)
+        t === nothing && return nothing
+        push!(forms, t)
+    end
+    return (ve.name, forms)
+end
+
+# The cell `forms` (from `_lhs_affine_target`) name at loop-index values
+# `loop`, written into `cell`.
+@inline function _lhs_affine_cell!(cell::Vector{Int}, forms::Vector{Tuple{Int,Int,Int}}, loop)
+    @inbounds for k in eachindex(forms)
+        pos, coef, c = forms[k]
+        cell[k] = pos == 0 ? c : coef * loop[pos] + c
+    end
+    return cell
+end
+
+# The slot of the cell `forms` name at loop values `loop`: arithmetic on the
+# array's block when there is one, the map lookup otherwise; 0 for no state.
+@inline function _lhs_cell_slot(blk, var_map, vname::String, cell::Vector{Int},
+                                forms::Vector{Tuple{Int,Int,Int}}, loop)
+    _lhs_affine_cell!(cell, forms, loop)
+    return blk === nothing ? _vm_slot(var_map, vname, cell) : _block_slot(blk, cell)
+end
+
+# The scan fold's slots in lane order (see `_build_scan_fold`), for an LHS whose
+# subscripts are affine.
+function _scan_fold_slots!(slots::Vector{Int}, blk, var_map, vname::String,
+                           forms::Vector{Tuple{Int,Int,Int}}, axis::Int,
+                           outer_iters, scan_range)
+    nd = length(outer_iters)
+    cell = Vector{Int}(undef, length(forms))
+    loop = Vector{Int}(undef, nd)
+    for outer in Iterators.product(outer_iters...)
+        for d in 1:nd
+            loop[d] = outer[d]
+        end
+        for s in scan_range
+            loop[axis] = s
+            slot = _lhs_cell_slot(blk, var_map, vname, cell, forms, loop)
+            slot == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE",
+                                             _cell_key(vname, cell)))
+            push!(slots, slot)
+        end
+    end
+    return slots
+end
+
 # Resolve the output slots a prefix-scan equation owns, grouped into lanes
 # along the scanned axis (see `_ScanFold`). One lane per combination of the
 # NON-scanned output indices; within a lane the slots ascend.
 #
-# Slots come from the same `lhs_body` → `_cell_key` → `var_map` path the
-# per-cell build uses (`_compile_faq_percell!`), deliberately: the state
+# Slots come from `var_map` for the cell the LHS names, deliberately: the state
 # ordering is a derived fact, not a convention, and this must not re-derive it.
+# The cell is read off the LHS's affine subscripts when they are affine, else by
+# the per-cell substitution the per-cell build uses (`_compile_faq_percell!`).
 function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
         range_iters, lhs_body::OpExpr, var_map::AbstractDict{String,Int},
         oplus::String, zerobar::Float64)
@@ -4124,6 +4187,13 @@ function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
     end
     slots = Int[]
     sizehint!(slots, len * prod(length(it) for it in outer_iters; init=1))
+    target = _lhs_affine_target(lhs_body, idx_names)
+    if target !== nothing
+        vname, forms = target
+        _scan_fold_slots!(slots, _vm_block(var_map, vname), var_map, vname, forms,
+                          axis, outer_iters, scan_range)
+        return _ScanFold(slots, len, Symbol(oplus), zerobar, inclusive)
+    end
     idx_exprs = Dict{String,ASTExpr}()
     for outer in Iterators.product(outer_iters...)
         for s in scan_range
@@ -4688,30 +4758,47 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     n_cells = prod(length(r) for r in range_iters)
     outs = Vector{Int}(undef, n_cells)
     c = 0
-    for idx_tuple in Iterators.product(range_iters...)
-        c += 1
-        idx_exprs = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(idx_tuple[d]))
-                                         for d in eachindex(idx_names))
-        sub_lhs = _sub_preserving(lhs_body, idx_exprs)
-        sub_lhs isa OpExpr && sub_lhs.op == "D" ||
-            throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
-                                "expected D(index(...)) in faq body"))
-        inner = sub_lhs.args[1]
-        inner isa OpExpr && inner.op == "index" ||
-            throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
-                                "expected index(var,...) inside D"))
-        ve = inner.args[1]
-        ve isa VarExpr ||
-            throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
-                                "index first arg must be a variable name"))
-        cname = _cell_key(ve.name, [_eval_const_int(a, _EMPTY_IDX_ENV)
-                                    for a in inner.args[2:end]])
-        idx = get(var_map, cname, 0)
-        idx == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE", cname))
-        covered[idx] &&
-            throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE", cname))
-        covered[idx] = true
-        outs[c] = idx
+    target = _lhs_affine_target(lhs_body, idx_names)
+    if target !== nothing
+        vname, forms = target
+        cell = Vector{Int}(undef, length(forms))
+        blk = _vm_block(var_map, vname)
+        for idx_tuple in Iterators.product(range_iters...)
+            c += 1
+            idx = _lhs_cell_slot(blk, var_map, vname, cell, forms, idx_tuple)
+            idx == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE",
+                                            _cell_key(vname, cell)))
+            covered[idx] && throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE",
+                                                _cell_key(vname, cell)))
+            covered[idx] = true
+            outs[c] = idx
+        end
+    else
+        for idx_tuple in Iterators.product(range_iters...)
+            c += 1
+            idx_exprs = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(idx_tuple[d]))
+                                             for d in eachindex(idx_names))
+            sub_lhs = _sub_preserving(lhs_body, idx_exprs)
+            sub_lhs isa OpExpr && sub_lhs.op == "D" ||
+                throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                                    "expected D(index(...)) in faq body"))
+            inner = sub_lhs.args[1]
+            inner isa OpExpr && inner.op == "index" ||
+                throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                                    "expected index(var,...) inside D"))
+            ve = inner.args[1]
+            ve isa VarExpr ||
+                throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                                    "index first arg must be a variable name"))
+            cname = _cell_key(ve.name, [_eval_const_int(a, _EMPTY_IDX_ENV)
+                                        for a in inner.args[2:end]])
+            idx = get(var_map, cname, 0)
+            idx == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE", cname))
+            covered[idx] &&
+                throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE", cname))
+            covered[idx] = true
+            outs[c] = idx
+        end
     end
     rngs = [_expand_int_range(ranges_dict[n]) for n in idx_names]
     los  = Int[first(r) for r in rngs]

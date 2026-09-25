@@ -284,6 +284,17 @@ The slot of cell `idx` of array `name` in any name → slot map: arithmetic on a
 _vm_slot(var_map::AbstractDict, name::AbstractString, idx) =
     get(var_map, _cell_key(String(name), idx), 0)
 
+"""
+    _vm_block(var_map, name) -> Union{_ArrayBlock,Nothing}
+
+The block of array `name` when `var_map` is a layout (or an overlay on one),
+so a caller walking many cells of one array can use `_block_slot` directly;
+`nothing` otherwise (and for a name with no block), when `_vm_slot` is the
+answer.
+"""
+_vm_block(L::StateLayout, name::AbstractString) = _layout_block(L, name)
+_vm_block(::AbstractDict, ::AbstractString) = nothing
+
 # ---------------------------------------------------------------------------
 # Discovered cell sets
 # ---------------------------------------------------------------------------
@@ -592,3 +603,4 @@ function Base.iterate(o::_VarMapOverlay, state=(true, nothing))
     end
 end
 @inline _vm_slot(o::_VarMapOverlay, name::AbstractString, idx) = _vm_slot(o.base, name, idx)
+_vm_block(o::_VarMapOverlay, name::AbstractString) = _vm_block(o.base, name)
