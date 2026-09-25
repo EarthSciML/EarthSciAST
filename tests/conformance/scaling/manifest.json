@@ -524,7 +524,8 @@
         "gate": "build_slope",
         "threads": "serial",
         "measured": "6551 ns per state (ns/state over N=100..1000000)",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
         "phase": 2
       },
       {
@@ -532,7 +533,8 @@
         "gate": "build_slope",
         "threads": "serial",
         "measured": "9412 ns per state (ns/state over N=100..1000000)",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
         "phase": 2
       },
       {
@@ -540,7 +542,8 @@
         "gate": "build_slope",
         "threads": "serial",
         "measured": "1.108e+04 ns per state (ns/state over N=100..1000000)",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
         "phase": 2
       },
       {
@@ -548,7 +551,8 @@
         "gate": "build_slope",
         "threads": "serial",
         "measured": "9.767e+04 ns per state (ns/state over N=100..100000)",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. rank 4 misses the affine tier (rank-3 cap) and lands on the per-cell build",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "rank 4 misses the affine tier (rank-3 cap) and lands on the per-cell build",
         "phase": 2
       },
       {
@@ -556,7 +560,8 @@
         "gate": "build_slope",
         "threads": "serial",
         "measured": "1.488e+04 ns per state (ns/state over N=100..1000000)",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
         "phase": 2
       },
       {
@@ -564,7 +569,8 @@
         "gate": "build_slope",
         "threads": "serial",
         "measured": "1.264e+04 ns per state (ns/state over N=100..100000)",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. per-state string layout plus the per-template var_map copies in the affine cut scan",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "per-state string layout plus the per-template var_map copies in the affine cut scan",
         "phase": 2
       },
       {
@@ -572,7 +578,8 @@
         "gate": "build_slope",
         "threads": "serial",
         "measured": "1.306e+04 ns per state (ns/state over N=100..1000000)",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. per-cell state layout, and the scan fold is built by rewriting the syntax tree per cell",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "per-cell state layout, and the scan fold is built by rewriting the syntax tree per cell",
         "phase": 2
       },
       {
@@ -580,7 +587,8 @@
         "gate": "build_slope",
         "threads": "serial",
         "measured": "5.708e+06 ns per state (ns/state over N=100..3162)",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the contraction is unrolled into every receptor's kernel body, so the emitted code, and its compile, grow with N",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the contraction is unrolled into every receptor's kernel body, so the emitted code, and its compile, grow with N",
         "phase": 2
       },
       {
@@ -588,7 +596,8 @@
         "gate": "build_slope",
         "threads": "serial",
         "measured": "1.251e+06 ns per state (ns/state over N=100..3162)",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the join-gated contractions land on the per-cell build, and the geometry setup and value-invention join sweep the source x target product",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the join-gated contractions land on the per-cell build, and the geometry setup and value-invention join sweep the source x target product",
         "phase": 2
       },
       {
@@ -596,7 +605,8 @@
         "gate": "build_slope",
         "threads": "serial",
         "measured": "1.076e+06 ns per state (ns/state over N=100..100000)",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the build grows as N^2 (107 s at 10^5 cells)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the build grows as N^2 (107 s at 10^5 cells)",
         "phase": 2
       },
       {
@@ -604,7 +614,8 @@
         "gate": "build_slope",
         "threads": "serial",
         "measured": "2.117e+07 ns per state (ns/state over N=100..10000)",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. one scalar equation per state, and the scalar build grows faster than linearly (210 s at 10^4 states)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "one scalar equation per state, and the scalar build grows faster than linearly (210 s at 10^4 states)",
         "phase": 2
       },
       {
@@ -613,7 +624,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 1.32",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the affine kernel runs slower than the plain loop at this size",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the affine kernel runs slower than the plain loop at this size",
         "phase": 5
       },
       {
@@ -622,7 +634,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 1.36",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the affine kernel runs slower than the plain loop at this size",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the affine kernel runs slower than the plain loop at this size",
         "phase": 5
       },
       {
@@ -631,7 +644,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 1.81",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. rank 4 runs the per-cell build's gather-table kernel, not an affine box",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "rank 4 runs the per-cell build's gather-table kernel, not an affine box",
         "phase": 5
       },
       {
@@ -640,7 +654,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 2.66",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. rank 4 runs the per-cell build's gather-table kernel, not an affine box",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "rank 4 runs the per-cell build's gather-table kernel, not an affine box",
         "phase": 5
       },
       {
@@ -649,7 +664,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 4.69",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. rank 4 runs the per-cell build's gather-table kernel, not an affine box",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "rank 4 runs the per-cell build's gather-table kernel, not an affine box",
         "phase": 5
       },
       {
@@ -658,7 +674,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 3.53",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
         "phase": 5
       },
       {
@@ -667,7 +684,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 3.03",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
         "phase": 5
       },
       {
@@ -676,7 +694,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 2.52",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
         "phase": 5
       },
       {
@@ -685,7 +704,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 1.66",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. one kernel per species, with no sharing of per-cell rates across the species equations",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "one kernel per species, with no sharing of per-cell rates across the species equations",
         "phase": 5
       },
       {
@@ -694,7 +714,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 9.52",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the scan fold walks a per-cell slot table on every call",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the scan fold walks a per-cell slot table on every call",
         "phase": 5
       },
       {
@@ -703,7 +724,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 12.8",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the scan fold walks a per-cell slot table on every call",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the scan fold walks a per-cell slot table on every call",
         "phase": 5
       },
       {
@@ -712,7 +734,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 13.4",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the scan fold walks a per-cell slot table on every call",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the scan fold walks a per-cell slot table on every call",
         "phase": 5
       },
       {
@@ -721,7 +744,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 20.2",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the unrolled contraction body; at 3162 it also loses type stability and allocates on every call",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the unrolled contraction body; at 3162 it also loses type stability and allocates on every call",
         "phase": 5
       },
       {
@@ -730,7 +754,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 356",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the unrolled contraction body; at 3162 it also loses type stability and allocates on every call",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the unrolled contraction body; at 3162 it also loses type stability and allocates on every call",
         "phase": 5
       },
       {
@@ -739,7 +764,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 1.36",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. the gather reads the neighbour table through a per-cell table lookup",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "the gather reads the neighbour table through a per-cell table lookup",
         "phase": 5
       },
       {
@@ -748,7 +774,8 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 123",
-        "reason": "PROVISIONAL, measured on a shared, loaded node (local, load average about 20 on 20 cores, serial run, 2026-09-24); the scheduled sweep re-measures it. scalar equations are walked as trees, once per slot, on every call",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "scalar equations are walked as trees, once per slot, on every call",
         "phase": 5
       }
     ]

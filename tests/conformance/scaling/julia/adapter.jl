@@ -409,6 +409,8 @@ end
 # ---------------------------------------------------------------------------
 
 function git_commit()
+    c = get(ENV, "SCALING_COMMIT", "")
+    isempty(c) || return c
     try
         return readchomp(`git -C $(@__DIR__) rev-parse HEAD`)
     catch
@@ -428,11 +430,14 @@ function machine_note()
     catch
         "unknown"
     end
+    # An exclusive job keeps other jobs off the node, not other processes of
+    # the same job; the load average says whether anything else was running.
     return "Slurm job $id, node $excl"
 end
 
+# The 1, 5 and 15 minute load averages when the run started, as one string.
 load_average() = try
-    parse.(Float64, split(read("/proc/loadavg", String))[1:3])
+    join(split(read("/proc/loadavg", String))[1:3], " ")
 catch
     nothing
 end
@@ -480,7 +485,8 @@ function main(args)
         "commit" => git_commit(), "host" => gethostname(),
         "target" => string(Sys.MACHINE), "julia_version" => string(VERSION),
         "polyester_loaded" => ESA._polyester_loaded(),
-        "machine" => machine_note(), "load_average_at_start" => load_average())
+        "machine" => machine_note(), "load_average" => load_average(),
+        "cpus" => Sys.CPU_THREADS)
     results = Any[]
     for fam in fams
         ladder = sort([e for e in entries if e["family"] == fam]; by = e -> e["n"])
