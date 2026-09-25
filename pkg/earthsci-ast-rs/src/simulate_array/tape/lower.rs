@@ -224,6 +224,11 @@ pub(crate) struct TapeBuilder<'m> {
     /// EXECUTION, so under Float32 they would be binary32 kernels running on
     /// day counts and Julian day numbers that binary32 cannot hold.
     f32_document: bool,
+    /// The shaped parameters whose declared default the compiler lowered into
+    /// a `const` observed, as the dense row-major data that literal was
+    /// written from ([`ArrayCompiled::inline_param_arrays`]), so the tape takes
+    /// the numbers directly rather than reading the literal's JSON back.
+    inline_params: Option<&'m HashMap<String, (Vec<usize>, Vec<f64>)>>,
 
     // Program under construction -------------------------------------------
     slots: Vec<SlotDesc>,
@@ -299,6 +304,7 @@ impl<'m> TapeBuilder<'m> {
             obs_tier,
             const_arrays,
             f32_document,
+            inline_params: None,
             slots: Vec::new(),
             plans: Vec::new(),
             regions: Vec::new(),
@@ -2818,6 +2824,7 @@ pub(super) fn build_tape_program(
         const_arrays,
         compiled.precision.is_f32(),
     );
+    b.inline_params = Some(&compiled.inline_param_arrays);
 
     // ---- observed rules, in dependency order -------------------------------
     for (i, rule) in observed_rules.iter().enumerate() {
@@ -3199,16 +3206,19 @@ impl<'m> TapeBuilder<'m> {
                 Ok(ObsVal::Taped(v))
             }
             AlgebraicRule::Scalar {
+                var,
                 body,
                 declared_shape,
-                ..
             } => {
                 // The whole-body `eval` mirror: covers scalar algebra, whole-
                 // array elementwise algebra, top-level aggregates (incl. the
                 // prefix-scan sweep) and makearrays. Readers see materialized
                 // arrays at origin 1s. A scalar on a shaped variable fills its
                 // declared box, as the interpreter does.
-                let v = self.lower_wholesale(body)?;
+                let v = match self.inline_param_literal(var, body) {
+                    Some(a) => self.emit_const_array(&a)?,
+                    None => self.lower_wholesale(body)?,
+                };
                 let v = match declared_shape {
                     Some(shape) if self.lv_box(&v).is_none() => {
                         let origin = DimI::from_elem(1, shape.len());
@@ -3219,6 +3229,33 @@ impl<'m> TapeBuilder<'m> {
                 Ok(ObsVal::Taped(v))
             }
         }
+    }
+
+    /// The array a lowered shaped-parameter default (`var := const(...)`)
+    /// evaluates to, built from its dense data: the value `json_to_value`
+    /// reads back from the literal, rounded to the precision in force the
+    /// same way. `None` for any other rule, and for data the literal does
+    /// NOT read back as that array — a non-finite value (written as `null`)
+    /// or an empty extent — which then takes the literal's own path.
+    fn inline_param_literal(&self, var: &str, body: &Expr) -> Option<ndarray::ArrayD<f64>> {
+        let Expr::Operator(node) = body else {
+            return None;
+        };
+        if node.op != "const" {
+            return None;
+        }
+        let (shape, values) = self.inline_params?.get(var)?;
+        // The literal is the one written from this data: same outer extent.
+        let outer = node.value.as_ref()?.as_array()?.len();
+        if shape.first() != Some(&outer)
+            || values.is_empty()
+            || values.iter().any(|v| !v.is_finite())
+        {
+            return None;
+        }
+        let prec = crate::precision::active();
+        let data: Vec<f64> = values.iter().map(|&v| prec.round(v)).collect();
+        ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(shape), data).ok()
     }
 
     /// Copy an array LV into a slot whose origin is all-1s (the convention

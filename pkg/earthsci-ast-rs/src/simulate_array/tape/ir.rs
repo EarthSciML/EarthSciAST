@@ -638,8 +638,10 @@ pub(crate) struct GatherPlan {
 #[derive(Clone, Debug)]
 pub(crate) struct ConstArrayData {
     pub shape: DimU,
-    /// Row-major elements, exactly as `json_to_value` produced them
-    /// (precision-rounded at ingress under `element_type: "Float32"`).
+    /// Row-major elements, exactly as `json_to_value` produces them from the
+    /// literal (precision-rounded at ingress under `element_type: "Float32"`)
+    /// — taken from the declared data directly for a lowered shaped-parameter
+    /// default.
     pub values: Vec<f64>,
 }
 

@@ -756,6 +756,11 @@ pub struct ArrayCompiled {
     /// of resolving them again. See [`driver::FieldIcMemo`].
     #[cfg(feature = "solve")]
     field_ic_memo: RefCell<Option<driver::FieldIcMemo>>,
+    /// Each shaped parameter whose declared default the build lowered into a
+    /// `const` observed, with the dense row-major `(shape, values)` it was
+    /// lowered from. The literal's JSON is the per-cell oracle's form; the tape
+    /// reads these numbers instead of parsing it back.
+    inline_param_arrays: HashMap<String, (Vec<usize>, Vec<f64>)>,
     /// The tape programs this model has built ([`tape::TapeCache`], which says
     /// what a kept program depends on).
     tape_cache: tape::TapeCache,

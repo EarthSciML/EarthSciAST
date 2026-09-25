@@ -712,7 +712,8 @@ impl ArrayCompiled {
         // is lowered under its namespaced name too; `vi_arrays` is passed so a
         // caller-supplied factor array stays authoritative over a declared
         // default.
-        lower_inline_array_parameters(&mut model_owned, &index_sets_owned, vi_arrays)?;
+        let inline_param_arrays =
+            lower_inline_array_parameters(&mut model_owned, &index_sets_owned, vi_arrays)?;
         apply_ragged_factor_scope(&mut index_sets_owned, &model_owned.variables)?;
         // Under `element_type: "Float32"`, reject an index set whose subscripts
         // binary32 cannot address exactly. Index expressions share the value
@@ -930,6 +931,7 @@ impl ArrayCompiled {
             merged_renames: HashMap::new(),
             #[cfg(feature = "solve")]
             field_ic_memo: RefCell::new(None),
+            inline_param_arrays,
             tape_cache: tape::TapeCache::new(),
             shared_observed: std::cell::OnceCell::new(),
         })
@@ -1407,8 +1409,9 @@ fn lower_inline_array_parameters(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
     external: Option<&HashMap<String, ArrayD<f64>>>,
-) -> Result<(), CompileError> {
+) -> Result<HashMap<String, (Vec<usize>, Vec<f64>)>, CompileError> {
     let mut lowered: Vec<(String, JsonValue)> = Vec::new();
+    let mut dense: HashMap<String, (Vec<usize>, Vec<f64>)> = HashMap::new();
     for (name, var) in &mut model.variables {
         if var.var_type != VariableType::Parameter {
             continue;
@@ -1442,6 +1445,7 @@ fn lower_inline_array_parameters(
             var.var_type = VariableType::Unknown;
             var.default = None;
             lowered.push((name.clone(), dense_to_json(&want, &values)));
+            dense.insert(name.clone(), (want, values));
             continue;
         }
         let (shape, values) = default.to_dense().map_err(|e| {
@@ -1466,6 +1470,7 @@ fn lower_inline_array_parameters(
         var.var_type = VariableType::Unknown;
         var.default = None;
         lowered.push((name.clone(), dense_to_json(&shape, &values)));
+        dense.insert(name.clone(), (shape, values));
     }
     for (name, value) in lowered {
         // A bare-variable LHS makes it an OBSERVED (esm-spec §6.3.1), and a
@@ -1482,7 +1487,7 @@ fn lower_inline_array_parameters(
             comment: None,
         });
     }
-    Ok(())
+    Ok(dense)
 }
 
 /// Re-nest a row-major dense buffer into the nested JSON array a `const` node
