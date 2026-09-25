@@ -13,7 +13,7 @@
 #      rank-2/3 nests) with no threads involved — under Polyester the chunks
 #      only ever run concurrently, which cannot change per-cell values when
 #      the out-slots are disjoint (the build-time check below).
-#   3. DISJOINTNESS — `_cellset_outs_disjoint!` catches duplicates within an
+#   3. DISJOINTNESS — `_cellsets_outs_unique` catches duplicates within an
 #      outs set AND across cell sets (contiguous ranges included); real builds
 #      carry `outs_disjoint == true` into the section caches, and a poisoned
 #      cache yields the permanent `:cg_serial_shared_outs` verdict.
@@ -262,21 +262,28 @@ else
             end
         end
 
-        @testset "_cellset_outs_disjoint! (within and across cell sets)" begin
-            seen = Set{Int}()
-            @test ESM._cellset_outs_disjoint!(seen, ESM._outs_cells([4, 9, 2]))
-            @test !ESM._cellset_outs_disjoint!(Set{Int}(),
-                                               ESM._outs_cells([4, 9, 4]))
+        @testset "_cellsets_outs_unique (within and across cell sets)" begin
+            U = ESM._cellsets_outs_unique
+            @test U([ESM._outs_cells([4, 9, 2])])
+            @test !U([ESM._outs_cells([4, 9, 4])])
             # contig vs box overlap ACROSS sets (the case a per-kernel check
             # would never see): contig 1:6, then a stride-2 box hitting slot 4.
-            @test !ESM._cellset_outs_disjoint!(copy(seen), ESM._contig_cells(6))
-            seen2 = Set{Int}()
-            @test ESM._cellset_outs_disjoint!(seen2, ESM._contig_cells(6))
+            @test !U([ESM._outs_cells([4, 9, 2]), ESM._contig_cells(6)])
             box = ESM._CellSet([2], [UnitRange{Int}(1, 3)], 2)  # slots 4, 6, 8
-            @test !ESM._cellset_outs_disjoint!(seen2, box)
-            seen3 = Set{Int}()
-            @test ESM._cellset_outs_disjoint!(seen3, ESM._contig_cells(3))
-            @test ESM._cellset_outs_disjoint!(seen3, box)       # 1..3 vs 4,6,8
+            @test !U([ESM._contig_cells(6), box])
+            @test U([ESM._contig_cells(3), box])                # 1..3 vs 4,6,8
+            # Boxes of one layout map (a 10x10 column-major block at slot 1):
+            # decided box against box, with no slot enumerated.
+            b2(r1, r2) = ESM._CellSet([1, 10], [r1, r2], -10)
+            @test U([b2(1:10, 1:1), b2(1:1, 2:10), b2(2:10, 2:10)])
+            @test !U([b2(1:10, 1:1), b2(1:1, 1:10)])            # share cell (1,1)
+            # A map that is not one-to-one on its box goes to the bit map.
+            @test !U([ESM._CellSet([1, 1], [1:3, 1:3], 0)])
+            @test U([ESM._CellSet([1, 3], [1:3, 1:3], 0)])
+            # Rank 4, one box per corner slab of a 3^4 block.
+            b4(r) = ESM._CellSet([1, 3, 9, 27], r, 0)
+            @test U([b4([1:3, 1:3, 1:3, 1:1]), b4([1:3, 1:3, 1:3, 2:3])])
+            @test !U([b4([1:3, 1:3, 1:3, 1:2]), b4([1:3, 1:3, 1:3, 2:3])])
         end
 
         @testset "chunk instances reproduce the serial du ($(name))" for (name, model, ics, wantrank) in (

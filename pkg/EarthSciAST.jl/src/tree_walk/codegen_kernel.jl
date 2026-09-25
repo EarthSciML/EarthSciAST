@@ -1130,53 +1130,6 @@ struct _CGBuilt{F,TB}
     outs_disjoint::Bool
 end
 
-# Every output slot of `cs` pushed into `seen`; false on the first duplicate.
-# Cross-KERNEL by design: a per-kernel check could short-circuit a contiguous
-# set as disjoint-by-construction (it only compares a set against itself),
-# while here a contiguous range must also collide with the OTHER kernels'
-# slots, so every kind enumerates. Same slot arithmetic as the runners,
-# exact Int.
-function _cellset_outs_disjoint!(seen::Set{Int}, cs::_CellSet)
-    if _is_outs(cs)
-        for o in cs.outs
-            o in seen && return false
-            push!(seen, o)
-        end
-        return true
-    end
-    if _is_contig(cs)
-        for o in cs.ranges[1]
-            o in seen && return false
-            push!(seen, o)
-        end
-        return true
-    end
-    st = cs.strides; rg = cs.ranges; b = cs.base; nd = length(st)
-    if nd == 1
-        s1 = st[1]
-        for i in rg[1]
-            o = b + i*s1
-            o in seen && return false
-            push!(seen, o)
-        end
-    elseif nd == 2
-        s1 = st[1]; s2 = st[2]
-        for j in rg[2], i in rg[1]
-            o = b + i*s1 + j*s2
-            o in seen && return false
-            push!(seen, o)
-        end
-    else
-        s1 = st[1]; s2 = st[2]; s3 = st[3]
-        for k in rg[3], j in rg[2], i in rg[1]
-            o = b + i*s1 + j*s2 + k*s3
-            o in seen && return false
-            push!(seen, o)
-        end
-    end
-    return true
-end
-
 # Build-time SECTION-chunking safety check: are the emitted kernels' output
 # slots globally pairwise-distinct ACROSS the whole generated function? Only
 # then may one chunk run ALL kernels' cell sub-ranges without a barrier —
@@ -1192,13 +1145,8 @@ function _cg_covered_outs_disjoint(acc_kernels::AbstractVector{_AccKernel},
         covered[j] || continue
         ncells += _cellset_ncells(K.cells)
     end
-    seen = Set{Int}()
-    sizehint!(seen, ncells)
-    for (j, K) in enumerate(acc_kernels)
-        covered[j] || continue
-        _cellset_outs_disjoint!(seen, K.cells) || return ncells, false
-    end
-    return ncells, true
+    return ncells, _cellsets_outs_unique(K.cells for (j, K) in enumerate(acc_kernels)
+                                         if covered[j])
 end
 
 # Per-generated-FUNCTION emitted-node cap. The node budget above bounds total

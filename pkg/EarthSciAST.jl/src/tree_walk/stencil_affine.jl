@@ -1249,9 +1249,56 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
     push!(kernels, _AccKernel(cs, spine, acc, _FixedBound(0), 0.0, cse, subs))
 end
 
-# Mark every output slot a box owns (cheap O(box cells) bit-ops — the sole
-# remaining O(#cells) step, no tree-walk), detecting duplicate derivatives.
+# Mark every output slot a box owns (O(box cells) bit-ops — the sole remaining
+# O(#cells) step, no tree-walk), detecting duplicate derivatives. When the slot
+# map is one-to-one on the box, the box is checked and then marked a run of the
+# first loop index at a time, word-wise; a box that finds a slot already taken,
+# or whose map is not shown one-to-one, takes the cell-by-cell walk, which
+# raises the error at the first duplicate in loop order.
 function _mark_box_covered!(covered, box, base, strides, D, lhs_var, lhs_idx_args, idx_names)
+    if D >= 1 && strides[1] == 1 && _affine_injective_on(Int[strides[d] for d in 1:D], box)
+        rngs = ntuple(d -> UnitRange{Int}(box[d]), D)
+        _mark_box_runs!(covered, rngs, base, strides) && return nothing
+    end
+    _mark_box_cells!(covered, box, base, strides, D, lhs_var, lhs_idx_args, idx_names)
+end
+
+# `false`, with `covered` untouched, when a slot of the box is already set.
+function _mark_box_runs!(covered::BitVector, rngs::NTuple{N,UnitRange{Int}}, base::Int,
+                         strides) where {N}
+    st = ntuple(d -> Int(strides[d]), N)
+    r1 = rngs[1]
+    outer = CartesianIndices(Base.tail(rngs))
+    run_start(J) = (o = base + first(r1); @inbounds for d in 2:N; o += J[d-1] * st[d]; end; o)
+    for J in outer
+        lo = run_start(J)
+        _bits_any(covered, lo, lo + length(r1) - 1) && return false
+    end
+    for J in outer
+        lo = run_start(J)
+        fill!(view(covered, lo:(lo + length(r1) - 1)), true)
+    end
+    return true
+end
+
+# Whether any bit of `B[lo:hi]` is set, a 64-bit word at a time.
+function _bits_any(B::BitVector, lo::Int, hi::Int)
+    lo > hi && return false
+    checkbounds(B, lo:hi)
+    ch = B.chunks
+    w1 = (lo - 1) >>> 6 + 1
+    w2 = (hi - 1) >>> 6 + 1
+    m1 = typemax(UInt64) << ((lo - 1) & 63)
+    m2 = typemax(UInt64) >>> (63 - ((hi - 1) & 63))
+    w1 == w2 && return (@inbounds(ch[w1]) & m1 & m2) != 0
+    (@inbounds(ch[w1]) & m1) != 0 && return true
+    @inbounds for w in (w1 + 1):(w2 - 1)
+        ch[w] != 0 && return true
+    end
+    return (@inbounds(ch[w2]) & m2) != 0
+end
+
+function _mark_box_cells!(covered, box, base, strides, D, lhs_var, lhs_idx_args, idx_names)
     env = Dict{String,Int}()
     @inbounds for loop in Iterators.product((box[d] for d in 1:D)...)
         o = _box_oln(base, strides, loop, D)

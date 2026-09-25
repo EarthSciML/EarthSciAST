@@ -439,19 +439,24 @@ function _oop_acc_lanes(cs::_CellSet)
         out = collect(Int, rng)
         return out, copy(out), fill(1, length(out)), fill(1, length(out))
     end
-    st = cs.strides; rg = cs.ranges; b = cs.base; nd = length(st)
+    nd = length(cs.strides)
+    return _oop_box_lanes(cs.base, ntuple(d -> cs.strides[d], nd),
+                          ntuple(d -> cs.ranges[d], nd))
+end
+
+function _oop_box_lanes(b::Int, st::NTuple{N,Int}, rg::NTuple{N,UnitRange{Int}}) where {N}
     L = prod(length, rg)
     out = Vector{Int}(undef, L); m1 = Vector{Int}(undef, L)
     m2 = fill(1, L); m3 = fill(1, L)
     q = 0
-    @inbounds for idxs in Iterators.product(rg...)
+    @inbounds for I in CartesianIndices(rg)
         q += 1
         oln = b
-        for d in 1:nd; oln += idxs[d]*st[d]; end
+        for d in 1:N; oln += I[d]*st[d]; end
         out[q] = oln
-        m1[q] = idxs[1]
-        nd >= 2 && (m2[q] = idxs[2])
-        nd >= 3 && (m3[q] = idxs[3])
+        m1[q] = I[1]
+        N >= 2 && (m2[q] = I[2])
+        N >= 3 && (m3[q] = I[3])
     end
     return out, m1, m2, m3
 end
@@ -648,11 +653,15 @@ function _build_oop_acc_plan(K::_AccKernel)
     _bench_phase!(:oop_plan, _t0)
     return r
 end
+# Whether `K` has a vectorized lane plan (else `_build_oop_acc_plan` returns
+# `_OOP_ACC_FALLBACK`): a structural test, with no lane built.
+_oop_plan_vecable(K::_AccKernel) =
+    _oop_acc_vecable(K.spine, K) &&
+    all(r -> _oop_acc_vecable(r, K), K.cse.recipes) &&
+    all(r -> _oop_acc_vecable(r, K), K.cse.inv_recipes)
+
 function _build_oop_acc_plan_inner(K::_AccKernel)
-    ok = _oop_acc_vecable(K.spine, K) &&
-         all(r -> _oop_acc_vecable(r, K), K.cse.recipes) &&
-         all(r -> _oop_acc_vecable(r, K), K.cse.inv_recipes)
-    ok || return _OOP_ACC_FALLBACK
+    _oop_plan_vecable(K) || return _OOP_ACC_FALLBACK
     out, m1, m2, m3 = _oop_acc_lanes(K.cells)
     gathers, consts, forc, ghost = _build_oop_desc_vectors(K.acc, out, m1, m2, m3)
     # Template-body sub-kernels (`K.subs`, transitive/nested-first): each is
