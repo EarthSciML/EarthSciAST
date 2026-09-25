@@ -84,8 +84,9 @@ const _BLOCK = 4096
 #
 # Out-of-range neighbours read the zero ghost `Z`. The sum runs axis by axis in
 # declaration order, +1 neighbour then -1 neighbour, left to right, which is the
-# document's order. The innermost axis is peeled at its two ends; an outer
-# axis's missing neighbour is a test that does not change along the row.
+# document's order. The innermost axis is peeled at its two ends. An outer
+# axis's missing neighbour row is read from a row of zeros, chosen once per
+# row, so no inner loop tests a boundary.
 
 const Z = 0.0
 
@@ -95,18 +96,23 @@ function _stencil_setup(rank)
         o = _block_offset(prob.var_map, "Diffusion.u", ntuple(_ -> s, rank))
         kappa = _param(prob.p, "Diffusion.kappa")
         nrows = rank == 1 ? cld(s, _BLOCK) : s
-        return (; o, s, kappa, c = Float64(2 * rank), nrows)
+        return (; o, s, kappa, c = Float64(2 * rank), zrow = zeros(s), nrows)
     end
 end
 
-# One cell of an innermost row whose cell i is slot `b + i`, given its two
-# inner-axis neighbours. `outer` holds, per outer axis in order, (stride, has a
-# +1 neighbour, has a -1 neighbour).
+# The two neighbour rows along an outer axis of stride `st`, for the row whose
+# cell i is slot `b + i`: (array, offset) pairs whose element `offset + i` is
+# the neighbour, the zero row where the neighbour is out of range.
+@inline _nbrows(u, zrow, b, st, hasp, hasm) =
+    (hasp ? u : zrow, hasp ? b + st : 0, hasm ? u : zrow, hasm ? b - st : 0)
+
+# One cell, given its two inner-axis neighbours; `outer` holds the neighbour
+# rows of each outer axis in order.
 @inline function _stencil_cell!(du, u, b, i, ip, im, kappa, c, outer)
     acc = ip + im
     @inbounds begin
-        for (st, hp, hm) in outer
-            acc = (acc + (hp ? u[b+st+i] : Z)) + (hm ? u[b-st+i] : Z)
+        for (P, op, M, om) in outer
+            acc = (acc + P[op+i]) + M[om+i]
         end
         du[b+i] = kappa * (acc - c * u[b+i])
     end
@@ -137,29 +143,33 @@ end
 end
 
 @inline function _st2_row!(du, u, t, st, r)
-    (; o, s, kappa, c) = st
+    (; o, s, kappa, c, zrow) = st
     j = r
-    _stencil_inner!(du, u, o + (j - 1) * s, s, 1, s, kappa, c, ((s, j < s, j > 1),))
+    b = o + (j - 1) * s
+    _stencil_inner!(du, u, b, s, 1, s, kappa, c, (_nbrows(u, zrow, b, s, j < s, j > 1),))
 end
 
 @inline function _st3_row!(du, u, t, st, r)
-    (; o, s, kappa, c) = st
+    (; o, s, kappa, c, zrow) = st
     k = r
     s2 = s * s
     for j in 1:s
-        _stencil_inner!(du, u, o + (j - 1) * s + (k - 1) * s2, s, 1, s, kappa, c,
-                        ((s, j < s, j > 1), (s2, k < s, k > 1)))
+        b = o + (j - 1) * s + (k - 1) * s2
+        _stencil_inner!(du, u, b, s, 1, s, kappa, c,
+                        (_nbrows(u, zrow, b, s, j < s, j > 1), _nbrows(u, zrow, b, s2, k < s, k > 1)))
     end
 end
 
 @inline function _st4_row!(du, u, t, st, r)
-    (; o, s, kappa, c) = st
+    (; o, s, kappa, c, zrow) = st
     l = r
     s2 = s * s
     s3 = s2 * s
     for k in 1:s, j in 1:s
-        _stencil_inner!(du, u, o + (j - 1) * s + (k - 1) * s2 + (l - 1) * s3, s, 1, s, kappa, c,
-                        ((s, j < s, j > 1), (s2, k < s, k > 1), (s3, l < s, l > 1)))
+        b = o + (j - 1) * s + (k - 1) * s2 + (l - 1) * s3
+        _stencil_inner!(du, u, b, s, 1, s, kappa, c,
+                        (_nbrows(u, zrow, b, s, j < s, j > 1), _nbrows(u, zrow, b, s2, k < s, k > 1),
+                         _nbrows(u, zrow, b, s3, l < s, l > 1)))
     end
 end
 
@@ -380,7 +390,8 @@ end
 HAND_LOOPS["scalar_chemistry"] = HandLoop(_scalarchem_setup, _scalarchem_row!)
 
 # ---------------------------------------------------------------------------
-# Prefix scan: D(u[i]) = -0.001 * sum_{j <= i} u[j] * dz[j]
+# Prefix scan: D(u[i]) = -0.001 * sum_{j <= i} u[j] * dz[j],
+# dz[j] = 100 (1 + 0.5 sin(j))
 # ---------------------------------------------------------------------------
 #
 # A running sum: each row depends on the one before, so there is one row.
@@ -388,7 +399,7 @@ HAND_LOOPS["scalar_chemistry"] = HandLoop(_scalarchem_setup, _scalarchem_row!)
 function _scan_setup(prob, doc, entry)
     n = Int(entry["n_cells"])
     o = _block_offset(prob.var_map, "Column.u", (n,))
-    dz = Float64(doc["models"]["Column"]["variables"]["dz"]["default"])
+    dz = [100.0 * (1 + 0.5 * sin(i)) for i in 1:n]      # the document's dz equation
     return (; o, n, dz, nrows = 1)
 end
 
@@ -396,7 +407,7 @@ end
     (; o, n, dz) = st
     acc = 0.0
     @inbounds for i in 1:n
-        acc += u[o+i] * dz
+        acc += u[o+i] * dz[i]
         du[o+i] = -0.001 * acc
     end
     return nothing
@@ -405,7 +416,8 @@ end
 HAND_LOOPS["prefix_scan"] = HandLoop(_scan_setup, _scan_row!)
 
 # ---------------------------------------------------------------------------
-# Dense source-receptor: D(c[i]) = sum_j K[i,j] * e[j], D(e[j]) = -kd * e[j]
+# Dense source-receptor: D(c[i]) = sum_j K[i,j] * e[j], D(e[j]) = -kd * e[j],
+# K[i,j] = 0.001 (1 + sin(i j))
 # ---------------------------------------------------------------------------
 #
 # K is stored transposed so a receptor's row is contiguous, the layout a
@@ -416,8 +428,10 @@ function _sr_setup(prob, doc, entry)
     n = Int(entry["n_cells"])
     oc = _block_offset(prob.var_map, "SourceReceptor.c", (n,))
     oe = _block_offset(prob.var_map, "SourceReceptor.e", (n,))
-    Kd = Float64(doc["models"]["SourceReceptor"]["variables"]["K"]["default"])
-    KT = fill(Kd, n, n)
+    KT = Matrix{Float64}(undef, n, n)                   # KT[j, i] = K[i, j], the document's K equation
+    for i in 1:n, j in 1:n
+        KT[j, i] = 0.001 * (1 + sin(i * j))
+    end
     kd = _param(prob.p, "SourceReceptor.kd")
     return (; n, oc, oe, KT, kd, nrows = n)
 end
