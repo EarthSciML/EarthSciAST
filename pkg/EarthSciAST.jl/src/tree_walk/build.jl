@@ -4259,6 +4259,10 @@ function _faq_debug_label(lhs_body, idx_names::Vector{String}, range_iters)
     return "D($(name))[$(axes)]"
 end
 
+# The most contraction terms the diagnostic build ahead of a retired-loop
+# refusal unrolls in full (see `_compile_faq_equation!`).
+const _REFUSAL_DIAGNOSTIC_TERMS = 1024
+
 function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         array_contractions, covered::BitVector,
         eq::Equation, resolved_obs::Dict{String,ASTExpr},
@@ -4581,14 +4585,20 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # `:interpreter` by the routing table.) The first output cell is built
     # first, the way the interpreter builds every cell — unrolled — so that a
     # body no form can build (an out-of-range const gather, an undeclared name)
-    # raises the document's own error rather than a refusal.
+    # raises the document's own error rather than a refusal. Unrolling costs
+    # a tree per term, so past `_REFUSAL_DIAGNOSTIC_TERMS` terms only the first
+    # and last value of each contracted index are built: an undeclared name
+    # shows in any term, and an affine gather is out of range at an end if
+    # anywhere.
     if retire_loop && _compiler_is_strict()
         if all(!isempty, range_iters)
+            diag_const = prod(length(c) for c in contract_const) <= _REFUSAL_DIAGNOSTIC_TERMS ?
+                contract_const : [unique!([first(c), last(c)]) for c in contract_const]
             _compile_faq_percell!(Tuple{Int,_Node}[], _AccKernel[], copy(covered),
                 lhs_body, rhs_body;
                 idx_names=idx_names, range_iters=[r[1:1] for r in range_iters],
                 contract_names=contract_names, contract_ranges=contract_ranges,
-                contract_const=contract_const, rhs_oplus=rhs_oplus,
+                contract_const=diag_const, rhs_oplus=rhs_oplus,
                 rhs_zerobar=rhs_zerobar, agg_gates=agg_gates, agg_filter=agg_filter,
                 resolved_obs=resolved_obs, array_var_info=array_var_info,
                 var_map=var_map, const_registry=const_registry, pgather=pgather,
