@@ -443,6 +443,21 @@ impl ArrayCompiled {
             .get_or_init(|| super::layout::slot_names(&self.var_shapes))
     }
 
+    /// [`Self::state_variable_names`] under this model's single-model
+    /// namespace (`M.u[2,3]`), the spelling the Problem reports (API_SPEC
+    /// §5.8's qualification rule, `crate::problem::qualify`, applied to each
+    /// variable's name; the cell suffix carries no `.`, so qualifying the
+    /// variable and qualifying the slot name agree). The same names as
+    /// [`Self::state_variable_names`] when the model has no namespace.
+    pub(crate) fn qualified_state_names(&self) -> &[String] {
+        let Some(ns) = self.namespace.as_deref() else {
+            return self.state_variable_names();
+        };
+        self.qualified_state_names.get_or_init(|| {
+            super::layout::slot_names_with(&self.var_shapes, |v| crate::problem::qualify(ns, v))
+        })
+    }
+
     /// The length of the flat state vector.
     pub fn n_states(&self) -> usize {
         self.n_states
@@ -544,8 +559,8 @@ impl ArrayCompiled {
         let mut s = RhsScratch::new(&self.var_shapes);
         s.set_const_arrays(Rc::clone(&self.const_scope));
         if !tape_disabled() {
-            let (prog, _report) = self.build_tape(&HashSet::new());
-            s.install_tape(Rc::new(prog), Rc::new(self.observed_rules.clone()));
+            let (prog, _report) = self.tape(&HashSet::new());
+            s.install_tape(prog, self.shared_observed_rules());
         }
         s
     }
@@ -714,8 +729,8 @@ impl ArrayCompiled {
         let mut scratch = RhsScratch::new(&self.var_shapes);
         scratch.set_const_arrays(Rc::clone(&self.const_scope));
         if self.tape_serves_passes() && !tape_disabled() {
-            let (prog, _report) = self.build_tape(&HashSet::new());
-            scratch.install_tape(Rc::new(prog), Rc::new(self.observed_rules.clone()));
+            let (prog, _report) = self.tape(&HashSet::new());
+            scratch.install_tape(prog, self.shared_observed_rules());
             scratch.set_exports_active(true);
         }
         let mut dy: Vec<f64> = Vec::new();
@@ -1539,9 +1554,9 @@ impl ArrayCompiled {
         let tape: SolveTape = if self.is_interpreter() || tape_disabled() {
             None
         } else {
-            let (prog, report) = self.build_tape(discrete_forcing);
-            tape_fallbacks = report.fallbacks;
-            Some((Rc::new(prog), Rc::new(self.observed_rules.clone())))
+            let (prog, report) = self.tape(discrete_forcing);
+            tape_fallbacks = report.fallbacks.clone();
+            Some((prog, self.shared_observed_rules()))
         };
         (tape, tape_fallbacks)
     }

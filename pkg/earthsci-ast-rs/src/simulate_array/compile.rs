@@ -911,6 +911,7 @@ impl ArrayCompiled {
             xla_rhs: std::cell::OnceCell::new(),
             var_shapes,
             state_names: std::cell::OnceCell::new(),
+            qualified_state_names: std::cell::OnceCell::new(),
             state_defaults,
             param_names,
             param_index,
@@ -929,6 +930,8 @@ impl ArrayCompiled {
             merged_renames: HashMap::new(),
             #[cfg(feature = "solve")]
             field_ic_memo: RefCell::new(None),
+            tape_cache: tape::TapeCache::new(),
+            shared_observed: std::cell::OnceCell::new(),
         })
     }
 }

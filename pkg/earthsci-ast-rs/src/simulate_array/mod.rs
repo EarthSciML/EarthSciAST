@@ -652,6 +652,9 @@ pub struct ArrayCompiled {
     /// time [`Self::state_variable_names`] is asked. Nothing inside the build
     /// or a solve's setup reads it; it is the public surface's spelling.
     state_names: std::cell::OnceCell<Vec<String>>,
+    /// The same names qualified by `namespace`, built on first ask
+    /// ([`Self::qualified_state_names`]).
+    qualified_state_names: std::cell::OnceCell<Vec<String>>,
     /// Each state variable's default, parallel to `var_shapes`.
     state_defaults: Vec<StateDefault>,
     param_names: Vec<String>,
@@ -753,6 +756,12 @@ pub struct ArrayCompiled {
     /// of resolving them again. See [`driver::FieldIcMemo`].
     #[cfg(feature = "solve")]
     field_ic_memo: RefCell<Option<driver::FieldIcMemo>>,
+    /// The tape programs this model has built ([`tape::TapeCache`], which says
+    /// what a kept program depends on).
+    tape_cache: tape::TapeCache,
+    /// `observed_rules` behind one `Rc`, for the taped scratches that carry
+    /// them beside the program.
+    shared_observed: std::cell::OnceCell<Rc<Vec<AlgebraicRule>>>,
 }
 
 /// A reuse pool of `f64` backing buffers for vectorized kernel intermediates.
