@@ -7,7 +7,7 @@
 These utilities have overlapping implementations in multiple languages:
 
 | Package | Language | Directory |
-|---|---|---|---|
+|---|---|---|
 | **EarthSciAST.jl** | Julia | [`pkg/EarthSciAST.jl/`](pkg/EarthSciAST.jl/) 
 | **@earthsciml/ast** | TypeScript | [`pkg/earthsci-ast-ts/`](pkg/earthsci-ast-ts/) 
 | **earthsci-ast** | Python | [`pkg/earthsci-ast-py/`](pkg/earthsci-ast-py/) 
