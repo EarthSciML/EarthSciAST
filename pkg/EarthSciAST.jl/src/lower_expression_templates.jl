@@ -1243,9 +1243,11 @@ the manifold parameter to a non-member literal). Throws
 function _validate_geometry_manifolds(x, path::String="",
                                        seen::IdDict{Any,Nothing}=IdDict{Any,Nothing}())
     if _is_array(x)
+        _may_hold_object(x) || return
         haskey(seen, x) && return
         seen[x] = nothing
         for (i, child) in enumerate(x)
+            (_is_array(child) || _is_object(child)) || continue
             _validate_geometry_manifolds(child, "$path/$(i-1)", seen)
         end
         return
@@ -1297,9 +1299,13 @@ code `makearray_region_inverted`.
 function _validate_makearray_regions(x, path::String="",
                                      seen::IdDict{Any,Nothing}=IdDict{Any,Nothing}())
     if _is_array(x)
+        _may_hold_object(x) || return
         haskey(seen, x) && return
         seen[x] = nothing
         for (i, child) in enumerate(x)
+            # A scalar holds no region; skipping it spares a path string per
+            # element of a large inline number array.
+            (_is_array(child) || _is_object(child)) || continue
             _validate_makearray_regions(child, "$path/$(i-1)", seen)
         end
         return
