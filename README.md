@@ -218,7 +218,7 @@ This project is licensed under the [GNU Affero General Public License v3.0](LICE
 If you use EarthSciAST in your research, please cite:
 
 ```bibtex
-@software{earthsciserialization,
+@software{earthsciast,
   title = {EarthSciAST: An Abstract Syntax Tree Format and },
   author = {EarthSciML Authors and Contributors},
   year = {2026},
