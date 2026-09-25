@@ -55,7 +55,10 @@ pub(crate) fn visit_values(root: &Value, f: &mut impl FnMut(&str, &Value)) {
 /// For the load-time checks that look for one offending node: the path is
 /// assembled in one reused buffer as the walk descends, and only the hit's is
 /// copied out, so a clean document costs no string per node.
-pub(crate) fn find_value_path(root: &Value, hit: &mut impl FnMut(&Value) -> bool) -> Option<String> {
+pub(crate) fn find_value_path(
+    root: &Value,
+    hit: &mut impl FnMut(&Value) -> bool,
+) -> Option<String> {
     fn go(v: &Value, path: &mut String, hit: &mut impl FnMut(&Value) -> bool) -> bool {
         if hit(v) {
             return true;
@@ -164,7 +167,10 @@ mod tests {
         let doc = json!({"b": [1, {"op": "x"}], "a": {"op": "x"}});
         let mut is_x = |v: &Value| v.get("op").and_then(|o| o.as_str()) == Some("x");
         assert_eq!(find_value_path(&doc, &mut is_x), Some("/b/1".to_string()));
-        assert_eq!(find_value_path(&json!({"op": "x"}), &mut is_x), Some(String::new()));
+        assert_eq!(
+            find_value_path(&json!({"op": "x"}), &mut is_x),
+            Some(String::new())
+        );
         assert_eq!(find_value_path(&json!([1, 2]), &mut is_x), None);
     }
 

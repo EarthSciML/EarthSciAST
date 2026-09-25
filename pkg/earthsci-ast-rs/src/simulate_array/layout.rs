@@ -168,7 +168,10 @@ fn push_cell_suffix(out: &mut String, vs: &VarShape, flat: usize) {
 
 /// The variable owning `slot`, with the slot's position inside it. The
 /// variables are in slot order, so this is a binary search.
-fn owner_of(var_shapes: &IndexMap<String, VarShape>, slot: usize) -> Option<(&str, &VarShape, usize)> {
+fn owner_of(
+    var_shapes: &IndexMap<String, VarShape>,
+    slot: usize,
+) -> Option<(&str, &VarShape, usize)> {
     let k = var_shapes.partition_point(|_, vs| vs.flat_offset <= slot);
     let (name, vs) = var_shapes.get_index(k.checked_sub(1)?)?;
     let local = slot - vs.flat_offset;

@@ -1432,7 +1432,10 @@ pub fn validate_geometry_manifolds(
     validate_geometry_manifolds_at(tree, &mut path.to_string())
 }
 
-fn validate_geometry_manifolds_at(tree: &Value, path: &mut String) -> Result<(), ExpressionTemplateError> {
+fn validate_geometry_manifolds_at(
+    tree: &Value,
+    path: &mut String,
+) -> Result<(), ExpressionTemplateError> {
     match tree {
         Value::Array(arr) => {
             for (i, child) in arr.iter().enumerate() {
@@ -1509,7 +1512,10 @@ pub fn validate_makearray_regions(tree: &Value, path: &str) -> Result<(), Expres
     validate_makearray_regions_at(tree, &mut path.to_string())
 }
 
-fn validate_makearray_regions_at(tree: &Value, path: &mut String) -> Result<(), ExpressionTemplateError> {
+fn validate_makearray_regions_at(
+    tree: &Value,
+    path: &mut String,
+) -> Result<(), ExpressionTemplateError> {
     match tree {
         Value::Array(arr) => {
             for (i, child) in arr.iter().enumerate() {

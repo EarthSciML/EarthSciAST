@@ -2686,7 +2686,14 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
     let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
     let mut scratch = compiled.debug_new_scratch_taped();
     let mut dy = vec![0.0f64; n];
-    compiled.debug_eval_rhs_into(&state, 0.0, &param_vec, &mut dy, &mut scratch, &mut RhsStats::default());
+    compiled.debug_eval_rhs_into(
+        &state,
+        0.0,
+        &param_vec,
+        &mut dy,
+        &mut scratch,
+        &mut RhsStats::default(),
+    );
     let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
     assert_eq!(bits(&dy), bits(&dy_oracle));
 }

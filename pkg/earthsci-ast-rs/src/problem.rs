@@ -2933,9 +2933,9 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
                 // The state rows' names are the model's (kept, already
                 // qualified); only the observed rows after them are spelled here.
                 let states = compiled.qualified_state_names();
-                let observed = sol.state_variable_names.split_off(states.len().min(
-                    sol.state_variable_names.len(),
-                ));
+                let observed = sol
+                    .state_variable_names
+                    .split_off(states.len().min(sol.state_variable_names.len()));
                 let mut names = states.to_vec();
                 names.extend(qualify_array_names(compiled, &observed));
                 sol.state_variable_names = names;

@@ -82,8 +82,8 @@ use lower::build_tape_program;
 use super::{AlgebraicRule, ArrayCompiled};
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::rc::Rc;
 use std::fmt;
+use std::rc::Rc;
 
 /// Human-readable summary of one tape build. Public so external diagnostics
 /// (the `tape_report` example) can print it; the program itself stays

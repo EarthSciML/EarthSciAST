@@ -583,11 +583,7 @@ fn count_runs_upto(shape: &[usize], shifted: &[ShiftedGeom], limit: usize) -> us
 /// each row of the box (every coordinate on the leading axes) then crosses
 /// the inner axis's intervals in order, which is ascending output order, so
 /// adjacent pieces are coalesced as they are produced.
-fn for_each_run(
-    shape: &[usize],
-    shifted: &[ShiftedGeom],
-    mut sink: impl FnMut(FusedRun) -> bool,
-) {
+fn for_each_run(shape: &[usize], shifted: &[ShiftedGeom], mut sink: impl FnMut(FusedRun) -> bool) {
     let n_elems: usize = shape.iter().product::<usize>().max(1);
     if shifted.is_empty() {
         sink(FusedRun {
@@ -744,14 +740,17 @@ fn for_each_run(
             let len = (*len * rows) as u32;
             if let Some(prev) = last.as_mut() {
                 let contiguous = prev.out_off as i64 + prev.len as i64 == off
-                    && prev.in_off.iter().zip(piece.iter()).enumerate().all(
-                        |(j, (&a, &b))| {
+                    && prev
+                        .in_off
+                        .iter()
+                        .zip(piece.iter())
+                        .enumerate()
+                        .all(|(j, (&a, &b))| {
                             (a == GHOST_OFF && b == GHOST_OFF)
                                 || (a != GHOST_OFF
                                     && b != GHOST_OFF
                                     && a + prev.len as i64 * elem_stride[j] == b)
-                        },
-                    );
+                        });
                 if contiguous {
                     prev.len += len;
                     continue;
@@ -1724,7 +1723,8 @@ mod run_schedule_tests {
         let strides = rm_strides(shape);
         let n_shift = shifted.len();
         // Per-input element stride (coalescing contiguity is offset + len*stride).
-        let elem_stride: SmallVec<[i64; 2]> = shifted.iter().map(ShiftedGeom::elem_stride).collect();
+        let elem_stride: SmallVec<[i64; 2]> =
+            shifted.iter().map(ShiftedGeom::elem_stride).collect();
         let seg_strides: SmallVec<[Option<&[i64]>; 2]> = shifted
             .iter()
             .map(|g| match g {
@@ -1869,18 +1869,16 @@ mod run_schedule_tests {
         let mut out: Vec<FusedRun> = Vec::with_capacity(runs.len());
         for r in runs {
             if let Some(last) = out.last_mut() {
-                let contiguous = last.out_off + last.len == r.out_off
-                    && last
-                        .in_off
-                        .iter()
-                        .zip(r.in_off.iter())
-                        .enumerate()
-                        .all(|(j, (&a, &b))| {
-                            (a == GHOST_OFF && b == GHOST_OFF)
-                                || (a != GHOST_OFF
-                                    && b != GHOST_OFF
-                                    && a + last.len as i64 * elem_stride[j] == b)
-                        });
+                let contiguous =
+                    last.out_off + last.len == r.out_off
+                        && last.in_off.iter().zip(r.in_off.iter()).enumerate().all(
+                            |(j, (&a, &b))| {
+                                (a == GHOST_OFF && b == GHOST_OFF)
+                                    || (a != GHOST_OFF
+                                        && b != GHOST_OFF
+                                        && a + last.len as i64 * elem_stride[j] == b)
+                            },
+                        );
                 if contiguous {
                     last.len += r.len;
                     continue;
@@ -1900,7 +1898,10 @@ mod run_schedule_tests {
     struct Lcg(u64);
     impl Lcg {
         fn next(&mut self, n: u64) -> u64 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (self.0 >> 33) % n
         }
     }
