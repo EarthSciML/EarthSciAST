@@ -35,8 +35,24 @@ Options: `--family F` (repeatable), `--max-n N`, `--budget S` (the least
 seconds each steady measurement samples, default 0.25), `--max-build S` (stop
 a family's ladder once a build takes longer, or once the next one is projected
 to from the last two; default 1800), `--interpreter-max-states N` (build the
-interpreter too, as an oracle, up to this many states; default 10^4, 0 turns
-it off).
+interpreter too, as an oracle, up to this many states; default 2000, 0 turns
+it off; the interpreter's per-cell expansion of a prefix scan or a dense
+contraction grows as N^2 in memory, past 12 GB at prefix_scan's 10^4 cells), `--max-rss-gb G` and `--timeout-s S` (see below; defaults 12 and
+1800), `--in-process` (measure in this process, without either guard).
+
+Each family's ladder runs in a child Julia process that the adapter watches.
+A child whose resident memory passes `--max-rss-gb`, or that finishes no
+document for `--timeout-s`, is killed, and a child that dies on its own (the
+kernel's out-of-memory killer, a crash) is noticed: the document it was on is
+recorded as an `error` whose `reason` says which (`out of memory: ...`,
+`timeout: ...`, `the child process was killed by signal ...`), and the
+family's larger sizes as `not attempted`. So a document too big for the
+machine is a ledgerable result, and the rest of the run carries on. The cap
+is the same on every machine by default (12 GB, which fits a hosted runner's
+16 GB with room for the runner) and is passed to the child as its GC
+`--heap-size-hint`, so whether a document fits does not depend on how much
+memory the machine happens to have. It reads `/proc`, so it is enforced on
+Linux only.
 
 ## What each field is, in Julia
 
@@ -70,6 +86,7 @@ is known good before native reaches it), and adds these fields of its own:
 | `code_size_parts` | the code-size measure's two terms and the number of generated functions |
 | `hand_loop_serial_s` | the serial hand loop's time (equal to `hand_loop_s` in a serial run) |
 | `interpreter_note` | why the interpreter oracle did not run, when it did not |
+| `peak_rss_bytes` | the highest resident memory the adapter sampled (every 0.1 s) in the child process while it worked on this document; memory the child held from a smaller size counts, as it would in any run of the ladder |
 
 ## The code-size measure
 
