@@ -481,22 +481,6 @@
     ],
     "julia": [
       {
-        "family": "unstructured_gather",
-        "n": 1000000,
-        "gate": "builds",
-        "measured": "error: not attempted: the build grew as n_states^1.99 up to n = 100000 (107.3 s), which projects 10582.0 s at n = 1000000, over this run's --max-build of 1200.0 s",
-        "reason": "the adapter stops the ladder when the next build is projected past --max-build: the build grows as N^2 (107 s at 10^5 cells)",
-        "phase": 2
-      },
-      {
-        "family": "scalar_chemistry",
-        "n": 100000,
-        "gate": "builds",
-        "measured": "error: not attempted: the build grew as n_states^1.79 up to n = 10000 (209.7 s), which projects 12877.0 s at n = 100000, over this run's --max-build of 1200.0 s",
-        "reason": "the adapter stops the ladder when the next build is projected past --max-build: one scalar equation per state, and the scalar build grows faster than linearly (210 s at 10^4 states)",
-        "phase": 2
-      },
-      {
         "family": "stencil_4d",
         "gate": "code_size_flat",
         "measured": "code size (emitted expression nodes + walked nodes) by N: 100:10132, 1000:19137, 10000:19137, 100000:19137, 1000000:19137",
@@ -595,27 +579,27 @@
         "family": "regrid",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "1.251e+06 ns per state (ns/state over N=100..3162)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "the join-gated contractions land on the per-cell build, and the geometry setup and value-invention join sweep the source x target product",
+        "measured": "1.085e+05 ns per state (ns/state over N=100..3162)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average 29 at the start of the run and 9 at its end on its 20 cores, serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "the join-gated contractions land on the per-cell build, and the overlap arrays are declared dense over source x target, so zero-filling them is O(N^2)",
         "phase": 2
       },
       {
         "family": "unstructured_gather",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "1.076e+06 ns per state (ns/state over N=100..100000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "the build grows as N^2 (107 s at 10^5 cells)",
+        "measured": "2.845e+04 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average 29 at the start of the run and 9 at its end on its 20 cores, serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "the affine tier builds the non-affine neighbour lane's index table by interpreting the index expression once per cell, and the state layout keeps per-cell bookkeeping",
         "phase": 2
       },
       {
         "family": "scalar_chemistry",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "2.117e+07 ns per state (ns/state over N=100..10000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "one scalar equation per state, and the scalar build grows faster than linearly (210 s at 10^4 states)",
+        "measured": "1.608e+06 ns per state (ns/state over N=100..100000)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average 29 at the start of the run and 9 at its end on its 20 cores, serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "one scalar equation per state, each resolved and compiled on its own",
         "phase": 2
       },
       {
@@ -775,6 +759,16 @@
         "threads": "serial",
         "measured": "native / hand loop = 123",
         "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "reason": "scalar equations are walked as trees, once per slot, on every call",
+        "phase": 5
+      },
+      {
+        "family": "scalar_chemistry",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": "native / hand loop = 157",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average 29 at the start of the run and 9 at its end on its 20 cores, serial run, 2026-09-25; the scheduled sweep re-measures it",
         "reason": "scalar equations are walked as trees, once per slot, on every call",
         "phase": 5
       }
