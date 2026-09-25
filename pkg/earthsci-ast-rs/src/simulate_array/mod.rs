@@ -82,6 +82,10 @@ pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_inventio
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
 pub(crate) use compile::{model_tree_any, parse_subsystem_model};
+// The build pipeline reads the authored model, as the single-model route does,
+// so it applies the same stand-ins for `flatten`'s rewrites.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use compile::{apply_flatten_rewrites, resolve_model_self_references};
 #[cfg(test)]
 pub(crate) use eval::per_cell_cells;
 pub(crate) use eval::{

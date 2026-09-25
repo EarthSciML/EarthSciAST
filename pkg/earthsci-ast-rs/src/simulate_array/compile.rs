@@ -356,15 +356,47 @@ pub(super) fn apply_ragged_factor_scope(
     Ok(())
 }
 
+/// The rewrites `flatten` makes to a model's equations that a route reading
+/// the AUTHORED model — the array runtime's single-model route, and the build
+/// pipeline (`crate::prepare`) — must make itself, so every route answers one
+/// document with one number.
+///
+/// * esm-spec §4.2, the two halves of the right-hand-side `D` rule (`flatten`'s
+///   phase 5b′): each RHS structural `D` resolves into the tendency the model
+///   defines for it, and one that resolves to nothing is refused rather than
+///   answered with `0` (or, through a reference evaluator, `NaN`). The same two
+///   functions, in the same order, as [`ArrayCompiled::from_flattened`].
+/// * esm-spec §4.8.3 "Angles are the ONE exception" (phase 5g): see
+///   [`normalize_model_angle_arguments`]. Without it `sin(theta)` with `theta`
+///   declared `deg` evaluated `sin(90 radians)` = 0.894 where the scalar and
+///   coupled routes, and the other bindings, returned 1.
+pub(crate) fn apply_flatten_rewrites(model: &mut Model) -> Result<(), CompileError> {
+    let time_invariant: std::collections::HashSet<String> = model
+        .variables
+        .iter()
+        .filter(|(_, v)| v.var_type == crate::types::VariableType::Parameter)
+        .map(|(name, _)| name.clone())
+        .collect();
+    crate::flatten::resolve_rhs_time_derivatives(&mut model.equations, &time_invariant);
+    if crate::flatten::first_unresolved_rhs_time_derivative_in(&model.equations).is_some() {
+        return Err(CompileError::UnloweredOperatorError {
+            op: "D".to_string(),
+        });
+    }
+    normalize_model_angle_arguments(model);
+    Ok(())
+}
+
 /// Fold a declared angle's scale into every `sin`/`cos`/`tan` argument of
 /// `model`, so the argument reaches the evaluator in RADIANS (esm-spec §4.8.3,
 /// issue #409).
 ///
 /// The array runtime's SINGLE-MODEL route deliberately never flattens
-/// (`ArrayCompiled::from_file`), so `flatten`'s phase 5g
-/// (`crate::flatten::normalize_angle_arguments`) never runs for it. This is that
-/// phase, against the authored model's own declarations, so the two array routes
-/// and the scalar route answer one document with one number.
+/// (`ArrayCompiled::from_file`), and neither does the build pipeline
+/// (`crate::prepare`), so `flatten`'s phase 5g
+/// (`crate::flatten::normalize_angle_arguments`) never runs for either. This is
+/// that phase, against the authored model's own declarations, so every route
+/// answers one document with one number.
 fn normalize_model_angle_arguments(model: &mut Model) {
     let (env, _) = crate::units::build_unit_env(&model.variables);
     // A document that declares no angle at a scale other than 1 cannot be
@@ -669,42 +701,10 @@ impl ArrayCompiled {
         }
         let mut index_sets_owned = index_sets.clone();
         mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
-        // esm-spec §4.2, the two halves of the right-hand-side `D` rule, applied
-        // here because this SINGLE-MODEL route deliberately never flattens (see
-        // `from_file_owned`) and so does not get them from `flatten`'s phase
-        // 5b′: resolve each RHS structural `D` over an unknown that carries a
-        // differential equation into that unknown's tendency, then refuse any
-        // that resolved to nothing rather than letting `eval`/the tape lowering
-        // answer it with `0`. Runs after mounting so a subsystem's equations are
-        // in scope under their mounted names. Same two functions, in the same
-        // order, as `Self::from_flattened` — the two array routes must not
-        // answer one document differently.
-        let time_invariant: std::collections::HashSet<String> = model_owned
-            .variables
-            .iter()
-            .filter(|(_, v)| v.var_type == crate::types::VariableType::Parameter)
-            .map(|(name, _)| name.clone())
-            .collect();
-        crate::flatten::resolve_rhs_time_derivatives(&mut model_owned.equations, &time_invariant);
-        if crate::flatten::first_unresolved_rhs_time_derivative_in(&model_owned.equations).is_some()
-        {
-            return Err(CompileError::UnloweredOperatorError {
-                op: "D".to_string(),
-            });
-        }
-        // esm-spec §4.8.3 "Angles are the ONE exception", applied here for the
-        // same reason as the `D` rule above: this SINGLE-MODEL route never
-        // flattens, so it does not get `flatten`'s phase 5g either — and this
-        // route is what every array/PDE document with one model compiles
-        // through (the array oracle, the vectorized overlay, the tape and the
-        // XLA emitter all read the `ArrayCompiled` it builds). Without this
-        // mirror, `sin(theta)` with `theta` declared `deg` evaluated
-        // `sin(90 radians)` = 0.894 here while the scalar and coupled routes,
-        // and the other four bindings, returned 1 — the same document
-        // answering two different numbers. Runs after mounting so a
-        // subsystem's declarations are in scope, and the rewrite is a no-op on
-        // a document declaring no angle at a scale other than 1.
-        normalize_model_angle_arguments(&mut model_owned);
+        // `flatten`'s rewrites, which this SINGLE-MODEL route never gets
+        // (see `from_file_owned`). Runs after mounting so a subsystem's
+        // equations and declarations are in scope under their mounted names.
+        apply_flatten_rewrites(&mut model_owned)?;
         // Lower every SHAPED parameter whose value the document supplies —
         // inline array data, or one scalar broadcast over the grid (esm-spec
         // §6.3 / §6.6.2) — into the `const`-observed channel this runtime
@@ -3909,6 +3909,17 @@ pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
             node.args.iter().any(rhs_has_array_producer)
         }
         _ => false,
+    }
+}
+
+/// Resolve every self-qualified reference in `model` (`M.a` written inside
+/// model `M`) to its local name, as the single-model route does before it
+/// compiles — for the build pipeline, which reads the same authored model.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn resolve_model_self_references(model: &mut Model, model_name: &str) {
+    let hits = self_qualified_references(model, model_name);
+    if !hits.is_empty() {
+        resolve_self_qualified_references(model, &hits);
     }
 }
 
