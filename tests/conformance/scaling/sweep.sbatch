@@ -3,7 +3,7 @@
 # Submitted by sweep.sh, which sets the environment below; see its header.
 #SBATCH --exclusive
 #SBATCH --mem=0
-#SBATCH --time=04:00:00
+#SBATCH --time=01:30:00
 set -euo pipefail
 : "${SCALING_REPO:?}" "${SCALING_BUILD:?}" "${SCALING_BIN:?}" "${SCALING_FAMILY:?}" "${SCALING_RUN_THREADS:?}"
 export TMPDIR=${TMPDIR:-$SCALING_BUILD/tmp}

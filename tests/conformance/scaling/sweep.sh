@@ -12,7 +12,8 @@
 #   SCALING_THREADS     thread count of the threaded run (default: 16)
 #   SCALING_FAMILIES    space-separated families (default: every family in manifest.json)
 #   SCALING_TIMEOUT_S   per-document timeout inside a job (default: 1200)
-#   SCALING_TIME        wall-clock limit of each job (default: 04:00:00)
+#   SCALING_TIME        wall-clock limit of each job (default: 01:30:00; a short limit
+#                       backfills sooner, and results are written after every document)
 #   CARGO_TARGET_DIR    where the adapter is built (default: the crate's target/)
 #
 # The adapter is built once here, in release, and copied into SCALING_BUILD,
@@ -26,7 +27,7 @@ TIER=$REPO/tests/conformance/scaling
 PARTITION=${SCALING_PARTITION:-secondary}
 THREADS=${SCALING_THREADS:-16}
 TIMEOUT_S=${SCALING_TIMEOUT_S:-1200}
-WALL=${SCALING_TIME:-04:00:00}
+WALL=${SCALING_TIME:-01:30:00}
 FAMILIES=${SCALING_FAMILIES:-$(python3 -c "import json,sys; print(' '.join(json.load(open(sys.argv[1]))['families']))" "$TIER/manifest.json")}
 
 mkdir -p "$SCALING_BUILD"/{docs,results,logs}
