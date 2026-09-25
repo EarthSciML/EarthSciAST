@@ -6,14 +6,13 @@
 # build_evaluator entry points, and evaluate_expr.
 # ========================================================================
 
-# One `observed_field` answer: the build it belongs to, the forcing epoch it was
-# computed at (`_FORCING_EPOCH`) and the field. The field is state-free, so it
-# moves only when a live buffer is refreshed in place. The build is named by the
-# problem's `run_file` slot — each build allocates its own and `remake` shares
-# it — so a record reused for a second build, or a second problem, never
-# answers with the first one's field.
+# One `observed_field` answer: the forcing epoch it was computed at
+# (`_FORCING_EPOCH`) and the field. The field is state-free, so it moves only
+# when a live buffer is refreshed in place. It is filed under the build it
+# belongs to, named by the problem's `run_file` slot — each build allocates its
+# own and `remake` shares it — so a record reused for a second build, or a
+# second problem, never answers with the first one's field.
 struct _ObservedMemo
-    build::Base.RefValue{Any}
     epoch::UInt64
     value::Any
 end
@@ -108,11 +107,18 @@ mutable struct BuildInspection
     # built it — the seam used to hang off the out-of-place build product alone.
     forcing_buffers::NamedTuple
     forcing_buffer_index::Dict{String,Int}
-    # `observed_field(prob, name)` answers, keyed by the requested name (see
-    # `_ObservedMemo`). Emptied when a build starts, and read and written under
-    # `observed_lock`, since two tasks may read one problem at once.
-    observed_memo::Dict{String,_ObservedMemo}
+    # `observed_field(prob, name)` answers, keyed by the build (the problem's
+    # `run_file` slot) and the requested name (see `_ObservedMemo`), so two
+    # problems sharing this record do not evict each other's. Emptied when a
+    # build starts, and read and written under `observed_lock`, since two tasks
+    # may read one problem at once.
+    observed_memo::Dict{Tuple{Base.RefValue{Any},String},_ObservedMemo}
     observed_lock::ReentrantLock
+    # The `run_file` slot of the problem whose build this record describes:
+    # the one whose reads file `:observed` rows into `compiler_report`. A
+    # problem built earlier with the same record still reads through it, but
+    # its rows would land in another build's report.
+    observed_build::Base.RefValue{Any}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -122,7 +128,8 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Symbol}(),
                                     CompilerReport(:native),
                                     NamedTuple(), Dict{String,Int}(),
-                                    Dict{String,_ObservedMemo}(), ReentrantLock())
+                                    Dict{Tuple{Base.RefValue{Any},String},_ObservedMemo}(),
+                                    ReentrantLock(), Ref{Any}(nothing))
 
 """
     DiscreteMaterializer()
@@ -3415,8 +3422,10 @@ function _build_evaluator_impl(model::Model;
     insp = get(kwargs, :inspect, nothing)
     # A record passed to a second build describes that build from here on, so
     # nothing the previous one answered may be served out of it.
-    insp isa BuildInspection &&
-        lock(() -> empty!(insp.observed_memo), insp.observed_lock)
+    insp isa BuildInspection && lock(insp.observed_lock) do
+        empty!(insp.observed_memo)
+        insp.observed_build = Ref{Any}(nothing)
+    end
     return _with_compiler_plan(plan) do
         _with_build_record(record) do
             try

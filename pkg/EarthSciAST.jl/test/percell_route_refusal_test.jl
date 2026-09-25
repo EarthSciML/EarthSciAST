@@ -281,6 +281,24 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         @test length(obs_rows(p2, "y")) == 1
     end
 
+    @testset "observed_field: a record shared by two problems files the latest build's row" begin
+        # The record describes its latest build, so its report is p2's. A read
+        # through the earlier p1 files no row there, and neither problem's read
+        # evicts the other's memo entry or decides whether p2's row is filed.
+        insp = _PR.BuildInspection()
+        p1 = esm_problem(obs_doc(), (0.0, 1.0); inspect = insp)
+        p2 = esm_problem(obs_doc(), (0.0, 1.0); p = Dict("s" => 2.0), inspect = insp)
+        y1 = observed_field(p1, "y")
+        @test isempty(obs_rows(p2, "y"))
+        @test observed_field(p2, "y") == [2.0, 4.0, 6.0]
+        @test [r.tier for r in obs_rows(p2, "y")] == [:output_compiled_once]
+        hits = _PR._CELLWISE_FASTPATH_HITS[]
+        @test observed_field(p1, "y") == y1
+        @test observed_field(p2, "y") == [2.0, 4.0, 6.0]
+        @test _PR._CELLWISE_FASTPATH_HITS[] == hits
+        @test length(obs_rows(p2, "y")) == 1
+    end
+
     @testset "observed_field: a remade problem reads its build's field" begin
         # `observed_field` reports what the BUILD materialized (API_SPEC §5.8),
         # and `remake` shares the build, so a `p` or `u0` swap does not move it.
