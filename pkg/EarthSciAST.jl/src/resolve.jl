@@ -2248,25 +2248,9 @@ end
 
 Path of the first node carrying `"op" => op`, or `nothing`.
 """
-function _find_op_path(node, op::AbstractString, at::AbstractString="")
-    if node isa AbstractDict
-        for key in (:op, "op")
-            if haskey(node, key) && get(node, key, nothing) == op
-                return at
-            end
-        end
-        for (k, v) in node
-            hit = _find_op_path(v, op, string(at, "/", k))
-            hit === nothing || return hit
-        end
-    elseif node isa AbstractVector
-        for (i, v) in enumerate(node)
-            hit = _find_op_path(v, op, string(at, "/", i - 1))
-            hit === nothing || return hit
-        end
-    end
-    return nothing
-end
+_find_op_path(node, op::AbstractString, at::AbstractString="") =
+    _find_json_path(n -> any(k -> haskey(n, k) && get(n, k, nothing) == op, (:op, "op")),
+                    node, at)
 
 """
     _declared_below_v11(doc) -> Bool

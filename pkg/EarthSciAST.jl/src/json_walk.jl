@@ -55,8 +55,12 @@ SHARING-PRESERVING: an identity memo maps each input container to its single
 normalized counterpart, so a shared subtree — e.g. a template body composed
 as a DAG by `_substitute` — normalizes to ONE shared output object instead of
 being expanded into an exponential tree. Fresh-parsed JSON3 views are trees
-(no aliasing is expressible in JSON text), so the memo only ever fires on the
-native nodes the lowering passes themselves create.
+(no aliasing is expressible in JSON text), so only the native nodes the
+lowering passes themselves create can be shared. A JSON3 view is memoized
+where the input reaches it (a native node may hold one view twice), and the
+tree beneath it converts without the memo (`_json3_to_ordered`): each view is
+an immutable value over the parsed text, and its identity hash reads that
+whole text, so memoizing every view makes a load quadratic in document size.
 
 Always returns fresh containers (a deep, sharing-preserving copy), so callers
 may mutate the result without touching the input.
@@ -64,7 +68,13 @@ may mutate the result without touching the input.
 _to_ordered(x) = _to_ordered_memo(x, IdDict{Any,Any}())
 
 function _to_ordered_memo(x, memo::IdDict{Any,Any})
-    if _is_object(x)
+    if x isa JSON3.Object || x isa JSON3.Array
+        r = get(memo, x, nothing)
+        r === nothing || return r
+        out = _json3_to_ordered(x)
+        memo[x] = out
+        return out
+    elseif _is_object(x)
         r = get(memo, x, nothing)
         r === nothing || return r
         out = OrderedDict{String,Any}()
@@ -86,9 +96,67 @@ function _to_ordered_memo(x, memo::IdDict{Any,Any})
     return x
 end
 
+# The memo-free conversion of the tree under one JSON3 view: every child is a
+# view of the same parsed text or a scalar leaf, so nothing below can alias.
+function _json3_to_ordered(x::JSON3.Object)
+    out = OrderedDict{String,Any}()
+    for (k, v) in pairs(x)
+        out[string(k)] = _json3_to_ordered(v)
+    end
+    return out
+end
+function _json3_to_ordered(x::JSON3.Array)
+    out = Vector{Any}(undef, length(x))
+    for (i, v) in enumerate(x)
+        out[i] = _json3_to_ordered(v)
+    end
+    return out
+end
+_json3_to_ordered(x) = x
+
 # ---------------------------------------------------------------------------
 # Traversal combinators
 # ---------------------------------------------------------------------------
+
+"""
+    _find_json_path(hit, node, at="") -> Union{String,Nothing}
+
+The path of the first OBJECT node, depth-first in document order, for which
+`hit(n)` is true: `at` followed by one `/<key>` or `/<0-based index>` segment
+per level, or `nothing` when no object matches. The path string is assembled
+only for the hit, so a search through a document of large inline arrays costs
+no string per visited element.
+"""
+function _find_json_path(hit, node, at::AbstractString="")
+    segs = _find_json_segs(hit, node)
+    segs === nothing && return nothing
+    return string(at, (string("/", s) for s in Iterators.reverse(segs))...)
+end
+
+# The path segments of the first hit, innermost first, or `nothing`.
+function _find_json_segs(hit, node)
+    if _is_object(node)
+        hit(node) && return Any[]
+        for (k, v) in pairs(node)
+            h = _find_json_segs(hit, v)
+            h === nothing || return push!(h, string(k))
+        end
+    elseif _is_array(node)
+        for (i, v) in enumerate(node)
+            h = _find_json_segs(hit, v)
+            h === nothing || return push!(h, i - 1)
+        end
+    end
+    return nothing
+end
+
+# False when a JSON array can hold no object: its elements are scalars, or
+# arrays of scalars (an inline number array, a ring of coordinate pairs). A
+# validator walking for object nodes has nothing to do in such an array, so it
+# can return before registering it in its identity memo. Looks two levels down
+# only, so the check itself never recurses through a shared tree.
+_may_hold_object(x) =
+    any(c -> _is_object(c) || (_is_array(c) && any(g -> _is_array(g) || _is_object(g), c)), x)
 
 # Sentinel returned by a `_map_json` visitor to mean "no rewrite here — recurse
 # structurally into my children". A singleton type (not `nothing`) so that

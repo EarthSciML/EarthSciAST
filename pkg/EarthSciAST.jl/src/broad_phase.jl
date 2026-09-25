@@ -362,3 +362,70 @@ function _overlap_drive_plan(gate, free_syms, bound, valuesof)
         return (Int(bound[l]), Int(bound[r])) in oi ? (:none,) : (:reject,)
     end
 end
+
+# =========================================================================== #
+# VALUE-EQUALITY candidate index for the build-time joins that test `==`.
+#
+# The setup-time geometry sweep (`_geo_gate_ok`) and the value-invention join
+# (`_vi_join_ok`) admit a tuple on a bin-equality gate iff `key_l(pos_l) ==
+# key_r(pos_r)`. `_equality_match_index` builds the `(pos_l, pos_r)` pairs that
+# can pass that test by hashing the two key columns, so the same drive plan the
+# overlap gate uses (`_overlap_drive_plan`) can enumerate them instead of the
+# product. The index is only an ENUMERATION EXTENT: both consumers still apply
+# their own `==` test to every driven tuple, so the index must be a superset of
+# the admitted pairs and may hold pairs the test then rejects.
+#
+# `_eq_match_key` maps a key to a hash key that is `isequal` whenever the two
+# values are `==`: a real number becomes its Float64 value with zero signless
+# (equal numbers of any type convert to the same Float64; distinct ones that
+# collide are rejected by the test), a string stays itself, and a tuple maps
+# element by element. A NaN never compares equal, so it has no partner
+# (`_EQ_KEY_NEVER`). Any other value (a vector, `missing`, a complex number)
+# makes the index decline (`_EQ_KEY_DECLINE`), and the caller keeps its
+# product.
+# =========================================================================== #
+
+struct _EqKeyNever end
+struct _EqKeyDecline end
+const _EQ_KEY_NEVER = _EqKeyNever()
+const _EQ_KEY_DECLINE = _EqKeyDecline()
+
+_eq_match_key(v::Real) = isnan(v) ? _EQ_KEY_NEVER : (iszero(v) ? 0.0 : Float64(v))
+_eq_match_key(v::AbstractString) = String(v)
+function _eq_match_key(v::Tuple)
+    ks = map(_eq_match_key, v)
+    any(k -> k === _EQ_KEY_DECLINE, ks) && return _EQ_KEY_DECLINE
+    any(k -> k === _EQ_KEY_NEVER, ks) && return _EQ_KEY_NEVER
+    return ks
+end
+_eq_match_key(v) = _EQ_KEY_DECLINE
+
+# The `(pos_l, pos_r)` pairs whose keys can compare equal, as an `_OverlapIndex`
+# with its sorted view filled in, or `nothing` when a key is of a kind
+# `_eq_match_key` declines. `pos_*` are the integer positions (the values the
+# gated range symbols bind) and `key_*(p)` the key read at position `p`. Cost
+# O(|L| + |R| + |pairs|).
+function _equality_match_index(pos_l, key_l, pos_r, key_r)
+    right = Dict{Any,Vector{Int}}()
+    for p in pos_r
+        k = _eq_match_key(key_r(p))
+        k === _EQ_KEY_DECLINE && return nothing
+        k === _EQ_KEY_NEVER && continue
+        push!(get!(() -> Int[], right, k), Int(p))
+    end
+    for v in values(right)
+        sort!(v)
+    end
+    pairs = Tuple{Int,Int}[]
+    for p in sort!(Int[Int(q) for q in pos_l])
+        k = _eq_match_key(key_l(p))
+        k === _EQ_KEY_DECLINE && return nothing
+        k === _EQ_KEY_NEVER && continue
+        for q in get(right, k, _NO_PARTNERS)
+            push!(pairs, (p, q))
+        end
+    end
+    oi = _OverlapIndex(Set{Tuple{Int,Int}}(pairs))
+    oi.sorted = pairs
+    return oi
+end

@@ -1886,21 +1886,8 @@ function reject_const_units_pre_v12(raw_data)
         "file declares $(string(esm_raw)). Offending path: $path"))
 end
 
-function _find_units_bearing_node(node, at::String)
-    if _is_object(node)
-        (_raw_haskey(node, "op") && _raw_haskey(node, "units")) && return at
-        for (k, v) in pairs(node)
-            hit = _find_units_bearing_node(v, "$at/$(string(k))")
-            hit === nothing || return hit
-        end
-    elseif node isa AbstractVector
-        for (i, v) in enumerate(node)
-            hit = _find_units_bearing_node(v, "$at/$(i - 1)")
-            hit === nothing || return hit
-        end
-    end
-    return nothing
-end
+_find_units_bearing_node(node, at::String) =
+    _find_json_path(n -> _raw_haskey(n, "op") && _raw_haskey(n, "units"), node, at)
 
 """
     unresolvable_const_units(expr::ASTExpr) -> Vector{String}
