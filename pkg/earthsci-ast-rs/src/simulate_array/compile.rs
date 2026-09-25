@@ -2824,6 +2824,7 @@ fn lower_bare_derivative(
             &shape,
             target_axes,
             array_axes,
+            var_shapes,
             covered_slots,
             rhs_rules,
         )?;
@@ -2883,21 +2884,57 @@ fn lower_wholearray_producer_lift(
 }
 
 /// Whole-array `D(var) = <array-valued rhs>` over a declared
-/// array shape: enumerate cells and emit one per-cell scalar
-/// rule, indexing each array-shaped RHS leaf by that cell
-/// (elementwise semantics). This is the array-runtime analog
-/// of the Julia `_lift_wholearray_deriv_equations` lift.
+/// array shape, with elementwise semantics: each array-shaped
+/// RHS leaf is indexed by the output cell. This is the
+/// array-runtime analog of the Julia
+/// `_lift_wholearray_deriv_equations` lift.
+///
+/// The rule is ONE [`RhsRule::ArrayLoop`] over the whole shape, its body
+/// gathering every leaf by the loop symbols ([`CellCoords::Loops`]) — the
+/// same rewrite the per-cell form applies with integer coordinates, so each
+/// cell evaluates the identical scalar expression. Only a body
+/// [`wholearray_body_loops_as_percell`] rejects keeps the per-cell form, one
+/// [`RhsRule::IndexedScalar`] per cell.
+#[allow(clippy::too_many_arguments)]
 fn lower_wholearray_percell(
     var: String,
     rhs: &Expr,
     shape: &VarShape,
     target_axes: Option<&[String]>,
     array_axes: &HashMap<String, Vec<String>>,
+    var_shapes: &IndexMap<String, VarShape>,
     covered_slots: &mut HashSet<usize>,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     let plan = build_gather_plan(rhs, array_axes, &var, target_axes, true)?;
     let total = shape.shape.iter().copied().product::<usize>().max(1);
+    if wholearray_body_loops_as_percell(rhs, array_axes, var_shapes) {
+        let ndim = shape.shape.len();
+        let loops: Vec<String> = (0..ndim).map(|d| format!("_lp{d}_{var}")).collect();
+        let output_ranges: Vec<(i64, i64)> = shape
+            .shape
+            .iter()
+            .zip(shape.origin.iter())
+            .map(|(sz, o)| (*o, *o + *sz as i64 - 1))
+            .collect();
+        let lhs_idx_exprs: Vec<Expr> = loops.iter().map(|l| Expr::Variable(l.clone())).collect();
+        let body = index_array_leaves(rhs, array_axes, Some(&plan), CellCoords::Loops(&loops));
+        for flat in 0..total {
+            covered_slots.insert(shape.flat_offset + flat);
+        }
+        rhs_rules.push(RhsRule::ArrayLoop {
+            var_name: var,
+            output_idx_names: loops,
+            output_ranges,
+            lhs_idx_exprs,
+            body: Box::new(body),
+            contract_names: Vec::new(),
+            contract_dims: Vec::new(),
+            reduce: ReduceKind::Sum,
+            filter: None,
+        });
+        return Ok(());
+    }
     for flat in 0..total {
         let multi0 = flat_to_multi_col_major(flat, &shape.shape);
         let cell: Vec<i64> = multi0
@@ -2905,7 +2942,7 @@ fn lower_wholearray_percell(
             .zip(shape.origin.iter())
             .map(|(m, o)| *m as i64 + *o)
             .collect();
-        let body = index_array_leaves(rhs, array_axes, Some(&plan), &cell);
+        let body = index_array_leaves(rhs, array_axes, Some(&plan), CellCoords::Ints(&cell));
         let slot = shape.flat_offset + flat;
         covered_slots.insert(slot);
         rhs_rules.push(RhsRule::IndexedScalar {
@@ -4415,10 +4452,35 @@ pub(super) fn index_array_leaves_by_loops(
     }
 }
 
+/// The coordinates [`index_array_leaves`] gathers each leaf at: one concrete
+/// 1-based cell, or the loop symbols of an [`RhsRule::ArrayLoop`] over the
+/// whole shape (which bind, cell by cell, to exactly those integers).
+#[derive(Clone, Copy)]
+pub(super) enum CellCoords<'a> {
+    Ints(&'a [i64]),
+    Loops(&'a [String]),
+}
+
+impl CellCoords<'_> {
+    fn len(&self) -> usize {
+        match self {
+            CellCoords::Ints(c) => c.len(),
+            CellCoords::Loops(l) => l.len(),
+        }
+    }
+
+    fn coord(&self, d: usize) -> Expr {
+        match self {
+            CellCoords::Ints(c) => Expr::Integer(c[d]),
+            CellCoords::Loops(l) => Expr::Variable(l[d].clone()),
+        }
+    }
+}
+
 /// Rewrite each bare array-shaped `Variable` leaf of a whole-array `D(state)` RHS
-/// into an `index(var, cell…)` gather at the given 1-based cell, so the
-/// elementwise array equation compiles to one per-cell scalar rule. The array
-/// target of an existing `index` node is left untouched (it is already a gather).
+/// into an `index(var, cell…)` gather at the given cell, so the elementwise
+/// array equation compiles to a scalar body per cell. The array target of an
+/// existing `index` node is left untouched (it is already a gather).
 ///
 /// A declared leaf listed in `plan` is gathered at the cell coordinates of ITS
 /// OWN axes (esm-spec §4.3.4) — a `[lat]` operand under a `[lon,lat,lev]`
@@ -4431,7 +4493,7 @@ pub(super) fn index_array_leaves(
     expr: &Expr,
     array_axes: &HashMap<String, Vec<String>>,
     plan: Option<&GatherPlan>,
-    cell: &[i64],
+    cell: CellCoords<'_>,
 ) -> Expr {
     match expr {
         Expr::Variable(v) => {
@@ -4441,11 +4503,11 @@ pub(super) fn index_array_leaves(
                     // `positions` is built against this same result, so every
                     // entry indexes `cell`.
                     Some(positions) => {
-                        args.extend(positions.iter().map(|&p| Expr::Integer(cell[p])));
+                        args.extend(positions.iter().map(|&p| cell.coord(p)));
                     }
                     None => {
                         let n = axes.len().min(cell.len());
-                        args.extend(cell[..n].iter().map(|&c| Expr::Integer(c)));
+                        args.extend((0..n).map(|d| cell.coord(d)));
                     }
                 }
                 Expr::operator(ExpressionNode {
@@ -4474,6 +4536,54 @@ pub(super) fn index_array_leaves(
             Expr::operator(out)
         }
         other => other.clone(),
+    }
+}
+
+/// Whether a whole-array `D(state)` RHS may be lowered as one loop over the
+/// state's shape ([`CellCoords::Loops`]) instead of one rule per cell.
+///
+/// The two forms evaluate the same scalar expression at every cell, so the
+/// oracle cannot tell them apart. The loop form is refused where the TAPE
+/// lowers the two differently: a leaf the rewrite would gather inside an
+/// `index` argument (a data-dependent index), any aggregate (a per-cell body
+/// folds a scalar reduction wholesale, while one nested in a loop's box stays
+/// per-cell), and a state leaf whose shape was inferred rather than declared,
+/// which the rewrite leaves whole.
+fn wholearray_body_loops_as_percell(
+    expr: &Expr,
+    array_axes: &HashMap<String, Vec<String>>,
+    var_shapes: &IndexMap<String, VarShape>,
+) -> bool {
+    fn rewrites_a_leaf(e: &Expr, array_axes: &HashMap<String, Vec<String>>) -> bool {
+        match e {
+            Expr::Variable(v) => array_axes.contains_key(v),
+            Expr::Operator(node) if node.op == "index" => node
+                .args
+                .iter()
+                .skip(1)
+                .any(|a| rewrites_a_leaf(a, array_axes)),
+            Expr::Operator(node) => node.any_child(&mut |c| rewrites_a_leaf(c, array_axes)),
+            _ => false,
+        }
+    }
+    match expr {
+        Expr::Variable(v) => {
+            array_axes.contains_key(v) || var_shapes.get(v).is_none_or(|vs| vs.shape.is_empty())
+        }
+        Expr::Operator(node) => {
+            if node.op == "index" {
+                return !node
+                    .args
+                    .iter()
+                    .skip(1)
+                    .any(|a| rewrites_a_leaf(a, array_axes));
+            }
+            if is_faq_op(&node.op) {
+                return false;
+            }
+            !node.any_child(&mut |c| !wholearray_body_loops_as_percell(c, array_axes, var_shapes))
+        }
+        _ => true,
     }
 }
 
