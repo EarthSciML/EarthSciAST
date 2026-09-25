@@ -3874,6 +3874,30 @@ function _unrolled_contraction_body(rhs_body::ASTExpr, contract_names::Vector{St
     return OpExpr(oplus, ASTExpr[NumExpr(zerobar); terms])
 end
 
+# The loop form of a contraction for the affine tier (`_AffineReduce`), or
+# `nothing` when it has none: every contracted bound constant and contiguous
+# with unit step (the box's dims are unit ranges), no join gate (a join drops
+# terms per output cell, so cells would not share one fold), and a ⊕ the fold
+# node has an arm for. The same admission `_unrolled_contraction_body` has,
+# less the ranges an axis cannot be. A single-term contraction is left to the
+# unroll, whose one term is no larger than the loop's body and keeps the kernel
+# an ordinary one that the kernel-class merge can batch.
+function _affine_reduce_form(contract_names::Vector{String}, contract_const,
+                             agg_gates, oplus::String, zerobar::Float64)
+    isempty(contract_names) && return nothing
+    agg_gates === nothing || return nothing
+    (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") || return nothing
+    rngs = UnitRange{Int}[]
+    for c in contract_const
+        (c === nothing || isempty(c)) && return nothing
+        r = first(c):last(c)
+        c == collect(r) || return nothing
+        push!(rngs, r)
+    end
+    prod(length, rngs) >= 2 || return nothing
+    return _AffineReduce(copy(contract_names), rngs, Symbol(oplus), zerobar)
+end
+
 # ess-scan: recognize a CUMULATIVE (prefix) reduction — an aggregate whose
 # filter admits the monotone window `j ⋚ i` against one output index — so the
 # equation can be evaluated as a term pass plus an O(N) accumulation instead of
@@ -4405,9 +4429,19 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # the loop, because its emitters compile `rhs_list` and have no arm for the
     # nest's section.
     retire_loop = use_contraction_loop && !rhs_list_compiled
-    # Where the loop would have PREEMPTED the affine tier, the nest takes that
-    # place: it is offered first, and affine only if it declines.
-    nest_first = retire_loop && loop_preempts_affine
+    # The affine tier's LOOP form of the contraction (`_AffineReduce`, below):
+    # it keeps the contracted indices as loop dims and folds them at run time,
+    # so its build is O(#structural groups) whatever the contraction length —
+    # the preemption rule's premise, an unroll of ∏|k…| terms, does not hold
+    # for it. Only the in-place form has it.
+    areduce0 = (rhs_list_compiled || _stencil_disabled()) ? nothing :
+        _affine_reduce_form(contract_names, contract_const, agg_gates,
+                            rhs_oplus, rhs_zerobar)
+    # Where the loop would have PREEMPTED an unrolling affine tier, the nest
+    # takes that place: it is offered first, and affine only if it declines.
+    # With the loop form on offer the affine tier goes first, and the nest is
+    # what a decline leaves (the block after it).
+    nest_first = retire_loop && loop_preempts_affine && areduce0 === nothing
 
     # Affine polyhedral build (ess-affine, stencil_affine.jl): O(#structural
     # groups), producing `_AccKernel`s that resolve gathers at runtime. This is the
@@ -4461,7 +4495,38 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     if !_stencil_disabled() && (!loop_preempts_affine || retire_loop)
         scan = _detect_prefix_scan(idx_names, range_iters, contract_names,
                                    contract_const, agg_gates, agg_filter, rhs_body)
-        affine_body =
+        # A contraction the affine tier would UNROLL is offered to it as a loop
+        # first: the contracted indices stay symbolic, as extra loop dims of the
+        # box, and the kernel folds the body over them at run time
+        # (`_AffineReduce`). The unroll emits one term per contracted index, so
+        # its kernel grows with the contraction; the loop's does not, at any
+        # length, and its fold is the unroll's term order with the same seed
+        # and the same filter guard. So the loop is the form whenever it builds,
+        # and the unroll below is what is left for the shapes it declines (a
+        # contracted axis the cut scan splits, a body the lanes cannot model).
+        # The out-of-place form keeps the unroll: its whole-array emitters have
+        # no lowering of the run-time fold.
+        areduce = scan !== nothing ? nothing : areduce0
+        if areduce !== nothing
+            loop_body = agg_filter === nothing ? rhs_body :
+                OpExpr("ifelse", ASTExpr[agg_filter, rhs_body, NumExpr(rhs_zerobar)])
+            affine_kernels =
+                @_bench :affine_tier _try_affine_stencil(loop_body, idx_names, range_iters,
+                                lhs_body, resolved_obs, array_var_info, var_map,
+                                const_registry, pgather, param_sym_set, reg_funcs,
+                                covered; template_sites=template_sites, xeq=xeq,
+                                reduce=areduce)
+            affine_first_try = affine_kernels !== nothing
+            if affine_kernels === nothing && template_sites !== nothing
+                affine_kernels =
+                    _try_affine_stencil(loop_body, idx_names, range_iters, lhs_body,
+                                        resolved_obs, array_var_info, var_map,
+                                        const_registry, pgather, param_sym_set,
+                                        reg_funcs, covered; xeq=xeq, reduce=areduce)
+            end
+            affine_kernels === nothing || _tally_cascade!(:affine_reduce)
+        end
+        affine_body = affine_kernels !== nothing ? nothing :
             isempty(contract_names) ? rhs_body :
             scan !== nothing ?
                 _sub_preserving(rhs_body,
@@ -4475,12 +4540,14 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         # (`scan[4]`, see `_scan_term_iters`). The FOLD below always walks the
         # full output axis. Identical object on every pre-existing shape.
         term_iters = (scan === nothing || scan[4] === nothing) ? range_iters : scan[4]
-        affine_kernels = affine_body === nothing ? nothing :
-            @_bench :affine_tier _try_affine_stencil(affine_body, idx_names, term_iters, lhs_body,
-                                resolved_obs, array_var_info, var_map,
-                                const_registry, pgather, param_sym_set, reg_funcs,
-                                covered; template_sites=template_sites, xeq=xeq)
-        affine_first_try = affine_kernels !== nothing
+        if affine_kernels === nothing
+            affine_kernels = affine_body === nothing ? nothing :
+                @_bench :affine_tier _try_affine_stencil(affine_body, idx_names, term_iters, lhs_body,
+                                    resolved_obs, array_var_info, var_map,
+                                    const_registry, pgather, param_sym_set, reg_funcs,
+                                    covered; template_sites=template_sites, xeq=xeq)
+            affine_first_try = affine_kernels !== nothing
+        end
         # Compile-once tier declined (a body construct the sub-kernel split cannot
         # model): retry the SAME expanded body fused — exactly the pre-tier build.
         # Rarely taken; `covered` is untouched on a `nothing` return.

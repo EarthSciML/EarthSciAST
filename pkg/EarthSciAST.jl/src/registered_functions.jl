@@ -1158,7 +1158,7 @@ end
 
 # The lane a per-lane spec serves at cell multi-index `midx` — byte-for-byte
 # the `_AccStateTblBox`/`_AccConstBox` box addressing in `_fetch`.
-@inline _interp_lane(h, midx::NTuple{3,Int}) =
+@inline _interp_lane(h, midx::Tuple{Vararg{Int}}) =
     h.off + (midx[1]-1)*h.s1 + (midx[2]-1)*h.s2 + (midx[3]-1)*h.s3
 
 @inline function _expect_arity(name::String, args::AbstractVector, n::Int)

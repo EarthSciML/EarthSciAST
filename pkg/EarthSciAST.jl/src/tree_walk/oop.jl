@@ -426,34 +426,44 @@ const _OOP_ACC_FALLBACK =
         "parent's transitive K.subs list — a `_collect_subkernels` invariant break."))
 end
 
-# Lane enumeration mirroring `_run_acc_kernel!` / `_run_box_kernel!` order.
+# Lane enumeration mirroring `_run_acc_kernel!` / `_run_box_kernel!` order:
+# the out slot of every lane, and the lane's loop multi-index as one vector per
+# dim (at least three, the padded dims all 1s — the runners' padded `midx`).
 function _oop_acc_lanes(cs::_CellSet)
     if _is_outs(cs)
         # Indirect out slots: the cell ORDINAL rides m1 (the box-addressed
         # per-cell tables index by it, s1=1/off=1), `out` is the slot list.
         L = length(cs.outs)
-        return copy(cs.outs), collect(1:L), fill(1, L), fill(1, L)
+        return copy(cs.outs), [collect(1:L), fill(1, L), fill(1, L)]
     end
     if _is_contig(cs)
         rng = cs.ranges[1]
         out = collect(Int, rng)
-        return out, copy(out), fill(1, length(out)), fill(1, length(out))
+        return out, [copy(out), fill(1, length(out)), fill(1, length(out))]
     end
     st = cs.strides; rg = cs.ranges; b = cs.base; nd = length(st)
     L = prod(length, rg)
-    out = Vector{Int}(undef, L); m1 = Vector{Int}(undef, L)
-    m2 = fill(1, L); m3 = fill(1, L)
+    out = Vector{Int}(undef, L)
+    mis = [fill(1, L) for _ in 1:max(nd, 3)]
     q = 0
     @inbounds for idxs in Iterators.product(rg...)
         q += 1
         oln = b
         for d in 1:nd; oln += idxs[d]*st[d]; end
         out[q] = oln
-        m1[q] = idxs[1]
-        nd >= 2 && (m2[q] = idxs[2])
-        nd >= 3 && (m3[q] = idxs[3])
+        for d in 1:nd; mis[d][q] = idxs[d]; end
     end
-    return out, m1, m2, m3
+    return out, mis
+end
+
+# Lane `l`'s box address `off + Σ_d (m_d[l] - 1)·s_d` — `_acc_boxaddr` over the
+# lane multi-index vectors.
+@inline function _oop_boxaddr(a::_AccDesc, mis::Vector{Vector{Int}}, l::Int)
+    x = a.off + (mis[1][l]-1)*a.s1 + (mis[2][l]-1)*a.s2 + (mis[3][l]-1)*a.s3
+    @inbounds for d in eachindex(a.sx)
+        x += (mis[d + 3][l] - 1) * a.sx[d]
+    end
+    return x
 end
 
 # The descriptor kinds the E-lane (in-reduce) plan builder can resolve per entry
@@ -479,6 +489,9 @@ end
 _oop_acc_vecable(n::_Node, K::_AccKernel) = _oop_acc_vecable(n, K, false)
 function _oop_acc_vecable(n::_Node, K::_AccKernel, in_reduce::Bool)
     k = n.kind
+    # An affine reduction's body is evaluated at lanes of (cell, contracted
+    # index) that the lane enumeration does not carry.
+    k === _NK_AREDUCE && return false
     if k === _NK_REDUCE
         # A reduce vectorizes as a CSR segment fold iff its OUTPUT set is
         # contiguous (so cell ordinal == out slot == lane, the only layout a
@@ -526,13 +539,12 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel, in_reduce::Bool)
 end
 
 # Resolve one descriptor table's per-lane host data against a GIVEN lane
-# enumeration (`out`/`m1`/`m2`/`m3`). Split out of `_build_oop_acc_plan` so a
+# enumeration (`out`/`mis`). Split out of `_build_oop_acc_plan` so a
 # template-body sub-kernel — evaluated at the PARENT's lanes — resolves its own
 # descriptors against those same parent lanes (its `_contig_cells(0)` carries no
 # lanes of its own). Returns the four aligned per-descriptor vectors.
 function _build_oop_desc_vectors(acc::Vector{_AccDesc},
-                                 out::Vector{Int}, m1::Vector{Int},
-                                 m2::Vector{Int}, m3::Vector{Int})
+                                 out::Vector{Int}, mis::Vector{Vector{Int}})
     L = length(out)
     nacc = length(acc)
     gathers = [Int[] for _ in 1:nacc]
@@ -549,8 +561,7 @@ function _build_oop_desc_vectors(acc::Vector{_AccDesc},
             # runners read as 0.0 — is gathered at a SAFE index (1, always valid)
             # and masked: the eval selects 0.0 on those lanes, so the trace still
             # sees ONE whole-array gather plus a select against a constant mask.
-            raw = Int[@inbounds a.conn[a.off + (m1[l]-1)*a.s1 +
-                      (m2[l]-1)*a.s2 + (m3[l]-1)*a.s3] for l in 1:L]
+            raw = Int[@inbounds a.conn[_oop_boxaddr(a, mis, l)] for l in 1:L]
             if any(==(0), raw)
                 ghost[i]   = Bool[s == 0 for s in raw]
                 gathers[i] = Int[s == 0 ? 1 : s for s in raw]
@@ -561,19 +572,15 @@ function _build_oop_desc_vectors(acc::Vector{_AccDesc},
             gathers_i = out .+ a.delta
             consts[i] = a.arr[gathers_i]
         elseif k === _AK_CONST_BOX
-            consts[i] = Float64[@inbounds a.arr[a.off + (m1[l]-1)*a.s1 +
-                                (m2[l]-1)*a.s2 + (m3[l]-1)*a.s3] for l in 1:L]
+            consts[i] = Float64[@inbounds a.arr[_oop_boxaddr(a, mis, l)] for l in 1:L]
         elseif k === _AK_FORCING_BOX
-            forc[i] = Int[a.off + (m1[l]-1)*a.s1 + (m2[l]-1)*a.s2 + (m3[l]-1)*a.s3
-                          for l in 1:L]
+            forc[i] = Int[_oop_boxaddr(a, mis, l) for l in 1:L]
         elseif k === _AK_ARR_TBL_BOX
             # LIVE forcing through a per-cell index table: freeze the INDICES
             # (host data), re-gather the aliased buffer per call.
-            forc[i] = Int[@inbounds a.conn[a.off + (m1[l]-1)*a.s1 +
-                          (m2[l]-1)*a.s2 + (m3[l]-1)*a.s3] for l in 1:L]
+            forc[i] = Int[@inbounds a.conn[_oop_boxaddr(a, mis, l)] for l in 1:L]
         elseif k === _AK_LOOP_IDX
-            mi = a.dim === 1 ? m1 : a.dim === 2 ? m2 : m3
-            consts[i] = Float64.(mi)
+            consts[i] = Float64.(mis[a.dim])
         elseif k === _AK_CONST_CELL
             consts[i] = a.arr[out]        # cell ordinal == oln (see _run_box_kernel!)
         end
@@ -653,8 +660,8 @@ function _build_oop_acc_plan_inner(K::_AccKernel)
          all(r -> _oop_acc_vecable(r, K), K.cse.recipes) &&
          all(r -> _oop_acc_vecable(r, K), K.cse.inv_recipes)
     ok || return _OOP_ACC_FALLBACK
-    out, m1, m2, m3 = _oop_acc_lanes(K.cells)
-    gathers, consts, forc, ghost = _build_oop_desc_vectors(K.acc, out, m1, m2, m3)
+    out, mis = _oop_acc_lanes(K.cells)
+    gathers, consts, forc, ghost = _build_oop_desc_vectors(K.acc, out, mis)
     # Template-body sub-kernels (`K.subs`, transitive/nested-first): each is
     # evaluated at the parent's `(c,n,oln,midx)`, so resolve its descriptor tables
     # against the PARENT's lane enumeration. `_oop_acc_vecable` already accepted
@@ -667,7 +674,7 @@ function _build_oop_acc_plan_inner(K::_AccKernel)
         sub_plans = Vector{_OopAccPlan}(undef, length(subs))
         for j in eachindex(subs)
             S = subs[j]
-            sg, sc, sf, sgh = _build_oop_desc_vectors(S.acc, out, m1, m2, m3)
+            sg, sc, sf, sgh = _build_oop_desc_vectors(S.acc, out, mis)
             # A sub carries no cells of its own; `out_slots` is unused for a sub
             # (only the top-level plan scatters), so reuse the parent lane slots.
             sub_plans[j] = _OopAccPlan(true, out, sg, sc, sf, sgh,

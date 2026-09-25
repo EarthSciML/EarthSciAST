@@ -242,13 +242,17 @@ end
         @test (@allocated f!(du, u0, p, 0.0)) == 0
     end
 
-    @testset "einsum build size is ~flat in M (loop) vs ~M² (unroll)" begin
+    # Flat in M on both routes: the loop tier's, and the affine tier's, which no
+    # longer unrolls the reduction (its kernel folds it at run time) — an unroll
+    # would grow ~20× from M=8 (81 terms per cell) to M=40 (1681).
+    @testset "einsum build size is ~flat in M (loop, and the affine run-time fold)" begin
         _cl_build2d(_cl_doc2d_arith(8), _cl_ics2d_a(); loop=true)     # warm
         _cl_build2d(_cl_doc2d_arith(8), _cl_ics2d_a(); loop=false)
         tl(M) = @elapsed _cl_build2d(_cl_doc2d_arith(M), _cl_ics2d_a(); loop=true)
         tu(M) = @elapsed _cl_build2d(_cl_doc2d_arith(M), _cl_ics2d_a(); loop=false)
         big = 40
-        @test min(tl(big), tl(big)) < min(tu(big), tu(big)) / 10   # ≥10× at M=40 (~1681 terms/cell)
+        @test min(tl(big), tl(big)) < 5 * min(tl(8), tl(8))
+        @test min(tu(big), tu(big)) < 5 * min(tu(8), tu(8))
     end
 
     # A contraction that indexes STATE at a contracted index (`src[k,l]`) now
