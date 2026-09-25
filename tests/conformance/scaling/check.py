@@ -59,6 +59,7 @@ class Check:
         self.note = note
         self.entry = None
         self.outcome = None
+        self.max_n = n
 
 
 def per_result_checks(run, r, gates, family_spec):
@@ -201,6 +202,11 @@ def entry_matches(e, c):
         return False
     if e.get("n") is not None and e.get("n") != c.n:
         return False
+    # A failure that only appears from `n_min` up is not exercised by a run
+    # that stops below it (the PR sizes), so it can be neither ledgered nor
+    # stale there.
+    if e.get("n_min") is not None and (c.max_n or 0) < e["n_min"]:
+        return False
     return True
 
 
@@ -251,7 +257,10 @@ def main(argv=None):
             by_family.setdefault(r["family"], []).append(r)
             checks += per_result_checks(run, r, gates, fams[r["family"]])
         for fam, rs in by_family.items():
-            checks += family_checks(run, fam, rs, gates, fams[fam])
+            top = max((r.get("n") or r.get("n_cells") or 0) for r in rs)
+            for c in family_checks(run, fam, rs, gates, fams[fam]):
+                c.max_n = top
+                checks.append(c)
         group = (run.get("binding"), run.get("compiler"), threads_label(run))
         first_run.setdefault(group, run)
         have.setdefault(group, set()).update((r["family"], r.get("n")) for r in run["results"])

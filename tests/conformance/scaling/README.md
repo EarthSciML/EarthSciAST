@@ -189,7 +189,10 @@ where the Rust ledger has a `builds` entry for it.
 ```
 
 `n` omitted means every N of the family (and the family-level gates, which
-have no N); `threads` (`"serial"` or `"threaded"`) omitted means both;
+have no N); `n_min` says a family-level failure appears only from that N up,
+so a run that stops below it (the PR sizes) neither matches the entry nor
+marks it stale; `provisional` says a timing entry was measured on a machine
+that was not clean; `threads` (`"serial"` or `"threaded"`) omitted means both;
 `compiler` defaults to `"native"`. `phase` is the plan phase expected to fix
 it: 2 for build time and code size, 3 or 4 for refusals, 5 for speed and
 threading.

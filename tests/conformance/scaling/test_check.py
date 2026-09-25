@@ -121,6 +121,14 @@ def main():
     # --require names what is missing.
     code, o = run(ok, [], "--require", "pr")
     assert code == 1 and o[("stencil_2d", 100, "present")] == "MISSING", o
+    # An entry with n_min is not exercised by a run that stops below it.
+    late = [{"family": "stencil_1d", "gate": "code_size_flat", "n_min": 100000, "phase": 2}]
+    code, o = run(ok, late)
+    assert code == 0 and o[("stencil_1d", None, "code_size_flat")] == "pass", o
+    grown = ok + [result("stencil_1d", 100000, code_size=2)]
+    code, o = run(grown, late)
+    assert code == 0 and o[("stencil_1d", None, "code_size_flat")] == "ledgered", o
+
     # --require looks across files: one file per family is a complete sweep.
     with open(os.path.join(HERE, "manifest.json")) as fh:
         fams = json.load(fh)["families"]
