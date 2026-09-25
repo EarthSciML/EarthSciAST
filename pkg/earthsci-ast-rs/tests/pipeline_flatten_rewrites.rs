@@ -164,3 +164,69 @@ fn the_build_pipeline_refuses_an_unresolved_right_hand_side_derivative() {
     let err = with_pipeline(&d, true).expect_err("an unresolved `D` has no value");
     assert!(err.to_string().contains("'D'"), "{err}");
 }
+
+/// A `deg` argument of a circular function inside a `makearray` region value
+/// and inside a `table_lookup` axis input: `ma = [sin 30°, cos 30°, cos 30°]`
+/// and `tl = T(sin 30°)` with `T(x) = 10 x`, so 5.
+fn nested_doc() -> Value {
+    let sin30 = json!({"op": "sin", "args": ["latitude"]});
+    let cos30 = json!({"op": "cos", "args": ["latitude"]});
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "DegreeArgumentsNested"},
+        "index_sets": {"cells": {"kind": "interval", "size": 3}},
+        "function_tables": {"T": {
+            "axes": [{"name": "x", "values": [0.0, 1.0]}],
+            "interpolation": "linear",
+            "out_of_bounds": "clamp",
+            "data": [0.0, 10.0]
+        }},
+        "models": {"Deg": {
+            "variables": {
+                "latitude": {"type": "parameter", "units": "deg", "default": 30.0},
+                "ma": {"type": "unknown", "units": "1", "shape": ["cells"]},
+                "tl": {"type": "unknown", "units": "1"}
+            },
+            "equations": [
+                {"lhs": "ma",
+                 "rhs": {"op": "makearray", "args": [],
+                         "regions": [[[1, 1]], [[2, 3]]],
+                         "values": [sin30, cos30]}},
+                {"lhs": "tl",
+                 "rhs": {"op": "table_lookup", "table": "T", "axes": {"x": sin30}, "args": []}}
+            ]
+        }}
+    })
+}
+
+#[test]
+fn a_degree_argument_inside_makearray_and_table_lookup_takes_radians() {
+    let d = nested_doc();
+    let (s, c) = (30f64.to_radians().sin(), 30f64.to_radians().cos());
+    for pipeline in [false, true] {
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            let prob = esm_problem(
+                &d,
+                (0.0, 1.0),
+                ProblemOptions {
+                    compiler: Some(compiler),
+                    build_pipeline: pipeline,
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_else(|e| panic!("[{compiler}] pipeline={pipeline}: {e}"));
+            let ma = values(&prob, "Deg.ma");
+            for (got, want) in ma.iter().zip([s, c, c]) {
+                assert!(
+                    (got - want).abs() < 1e-15,
+                    "[{compiler}] pipeline={pipeline}: ma = {ma:?}"
+                );
+            }
+            let tl = values(&prob, "Deg.tl");
+            assert!(
+                (tl[0] - 10.0 * s).abs() < 1e-12,
+                "[{compiler}] pipeline={pipeline}: tl = {tl:?}"
+            );
+        }
+    }
+}

@@ -1,0 +1,31 @@
+{
+  "fixture": "angle_nested_fields",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "angle_nested_fields_values",
+      "assertion_idx": 1,
+      "variable": "v",
+      "actual": 0.4999999999999999
+    },
+    {
+      "test_id": "angle_nested_fields_values",
+      "assertion_idx": 2,
+      "variable": "v",
+      "actual": 0.8660254037844386
+    },
+    {
+      "test_id": "angle_nested_fields_values",
+      "assertion_idx": 3,
+      "variable": "v",
+      "actual": 0.8660254037844386
+    },
+    {
+      "test_id": "angle_nested_fields_values",
+      "assertion_idx": 4,
+      "variable": "tl",
+      "actual": 4.999999999999999
+    }
+  ]
+}
