@@ -676,6 +676,10 @@ pub struct ArrayCompiled {
     /// `ModelVariable.refresh` field (plan PR-2) is deferred: forcing resolves
     /// by name at runtime and does not need it.
     forcing: Rc<RefCell<HashMap<String, ArrayD<f64>>>>,
+    /// How many times [`Self::forcing_handle`] has handed out the buffer: a
+    /// host holding a handle can have written it since, which is what
+    /// [`driver::FieldIcMemo`] checks.
+    forcing_generation: std::cell::Cell<u64>,
     /// Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1),
     /// classified out of the equation list by [`Self::from_model`] (single-model
     /// path) or carried from [`crate::flatten::FlattenedSystem::field_ics`]

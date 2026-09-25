@@ -923,6 +923,7 @@ impl ArrayCompiled {
             n_states,
             declared_names,
             forcing: Rc::new(RefCell::new(HashMap::new())),
+            forcing_generation: std::cell::Cell::new(0),
             field_ics,
             ic_scope_defs,
             index_sets: index_sets.clone(),

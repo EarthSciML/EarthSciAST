@@ -2832,7 +2832,7 @@ fn bind_providers(
     // where §2.5.2 puts the gated fetch — and never again.
     let providers = std::mem::take(&mut opts.providers);
     let mut exec = crate::provider::RefreshExecutor::from_providers(providers);
-    let forcing = compiled.forcing_handle();
+    let forcing = compiled.forcing_buffer();
     exec.materialize_const(&forcing)
         .map_err(|e| SimulateError::ProviderError {
             name: "<const-loader>".into(),
@@ -2891,7 +2891,7 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
             let sol = {
                 match (&prob.refresh, prob.discrete_forcing.is_empty()) {
                     (Some(exec), false) => {
-                        let forcing = compiled.forcing_handle();
+                        let forcing = compiled.forcing_buffer();
                         let mut exec = exec.borrow_mut();
                         let refresh_fn = |t: f64| -> Result<(), SimulateError> {
                             exec.refresh_at(t, &forcing).map(|_| ()).map_err(|e| {
