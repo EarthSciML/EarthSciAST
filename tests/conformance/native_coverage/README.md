@@ -76,8 +76,7 @@ document instead of by fixture: `path` is relative to the repository root, or
 `EarthSciModels/…` for a document in that repository; `code` is native's error
 code (`compiler_refused_rule` for a refusal, the error's own code or type
 otherwise, `rhs_call_failed` for a Julia build whose first right-hand-side call
-threw, `timeout` / `crashed` / `killed` for a document the census could not
-finish); `rule` is the refused rule where the refusal names one; `reason` is the
+threw); `rule` is the refused rule where the refusal names one; `reason` is the
 message, squashed to one line. Entries are sorted by path and unique.
 `measured` records what the baseline ran on and is not compared.
 
@@ -96,6 +95,18 @@ It is RED when:
 
 The `reason` text is not compared: messages are reworded without the refusal
 changing.
+
+**A document the census could not finish is inconclusive.** A Julia worker
+that runs past the timeout (`timeout`) or dies (`crashed`), and a Rust process
+that is killed (`killed`), finish or not depending on the machine's load, so
+they say nothing about native's coverage. Such a document is reported
+(`INCONCLUSIVE` in the check's output, `inconclusive` in its JSON report, and
+`inconclusive (excluded)` in the counts) and kept out of the comparison
+whichever compiler it was: it is never a new refusal, a ledger entry for it is
+neither confirmed nor stale and its code is not compared, and `write-ledger`
+keeps such an entry as it was. The ledger therefore never holds a `timeout`,
+`crashed` or `killed` entry. The census still has a record for the document,
+so it is not "census incomplete".
 
 **The one-way rule is enforced on the file too.** `write-ledger` rewrites a
 ledger from a census and refuses to add an entry the committed ledger lacks; it

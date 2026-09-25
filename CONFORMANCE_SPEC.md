@@ -6386,8 +6386,11 @@ the same one-way rule as `required` above. `scripts/native-coverage.py check`
 compares a census against it and is RED on a document native newly refuses; on
 a ledgered document native now builds, until the entry is removed; on an entry
 that stopped being a gap in any other way; on an entry whose code drifted; and
-on a census missing a corpus document. Regenerating a ledger may drop entries
-and never add one, except for a first measurement.
+on a census missing a corpus document. A document the census could not finish
+(a timeout, a crash, a killed process) is inconclusive: the check reports it
+and leaves it out of the comparison, so it is never a new refusal and a ledger
+entry for it is neither confirmed nor stale. Regenerating a ledger may drop
+entries and never add one, except for a first measurement.
 
 `scripts/native-coverage.py self-test` drives every one of those arms on
 synthetic records and validates both committed ledgers; it is the

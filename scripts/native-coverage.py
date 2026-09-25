@@ -148,6 +148,15 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def inconclusive(code: str, reason: str) -> dict[str, Any]:
+    """An outcome the census could not finish: a timeout, a crash, a kill.
+
+    Whether a document finishes inside the census's wall clock depends on the
+    machine's load, so such an outcome says nothing about native's coverage: it
+    is reported, and kept out of the comparison with the ledger."""
+    return {"ok": False, "inconclusive": True, "code": code, "rule": None, "reason": reason}
+
+
 def julia_outcome(rec: dict[str, Any]) -> dict[str, Any]:
     """One Julia census record (compiler_census.jl) as an outcome.
 
@@ -171,7 +180,7 @@ def julia_outcome(rec: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True}
     status = rec.get("status")
     if status in ("timeout", "crashed", "worker_load_failure"):
-        return {"ok": False, "code": status, "rule": None, "reason": _squash(rec.get("error_type"))}
+        return inconclusive(status, _squash(rec.get("error_message") or rec.get("error_type")))
     code = (
         rec.get("esm_problem_error_code")
         or rec.get("error_code")
@@ -187,12 +196,9 @@ def julia_outcome(rec: dict[str, Any]) -> dict[str, Any]:
 def rust_outcome(rec: dict[str, Any], tag: str) -> dict[str, Any]:
     """One compiler's half of a Rust census record (examples/compiler_census.rs)."""
     if rec.get("killed"):
-        return {
-            "ok": False,
-            "code": "killed",
-            "rule": None,
-            "reason": _squash(f"exit {rec.get('rc')}: {rec.get('stderr_tail', '')}"),
-        }
+        return inconclusive(
+            "killed", _squash(f"exit {rec.get('rc')}: {rec.get('stderr_tail', '')}")
+        )
     if rec.get(f"{tag}_ok"):
         return {"ok": True}
     variant = rec.get(f"{tag}_err_variant") or "error"
@@ -256,9 +262,16 @@ def outcomes(
     return out
 
 
+def is_inconclusive(o: dict[str, dict[str, Any]] | None) -> bool:
+    """Whether either compiler's half of a document's record is inconclusive."""
+    return o is not None and any(r.get("inconclusive") for r in o.values())
+
+
 def classify(outs: dict[str, dict[str, dict[str, Any]]]) -> dict[str, Any]:
-    """Split the census into the native gap and everything else, with counts."""
+    """Split the census into the native gap, the inconclusive documents and
+    everything else, with counts."""
     gaps: dict[str, dict[str, Any]] = {}
+    unfinished: dict[str, dict[str, Any]] = {}
     counts: Counter[str] = Counter()
     for rel, o in outs.items():
         n, i = o.get("native"), o.get("interpreter")
@@ -266,6 +279,14 @@ def classify(outs: dict[str, dict[str, dict[str, Any]]]) -> dict[str, Any]:
             continue
         if is_invalid_fixture(rel):
             counts["invalid fixture (excluded)"] += 1
+            continue
+        if is_inconclusive(o):
+            counts["inconclusive (excluded)"] += 1
+            unfinished[rel] = {
+                c: f"{r['code']}: {r.get('reason') or ''}".rstrip(": ")
+                for c, r in sorted(o.items())
+                if r.get("inconclusive")
+            }
             continue
         if not n["ok"] and LIBRARY_FRAGMENT.search(n.get("reason") or ""):
             counts["library fragment (excluded)"] += 1
@@ -284,7 +305,7 @@ def classify(outs: dict[str, dict[str, dict[str, Any]]]) -> dict[str, Any]:
                 "rule": n.get("rule"),
                 "reason": n.get("reason") or "",
             }
-    return {"gaps": gaps, "counts": dict(counts)}
+    return {"gaps": gaps, "inconclusive": unfinished, "counts": dict(counts)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -372,6 +393,9 @@ def compare(
         if rel in gaps:
             continue
         o = outs.get(rel)
+        if is_inconclusive(o) and not is_invalid_fixture(rel):
+            # Neither a gap nor a build: the entry is neither confirmed nor stale.
+            continue
         if o is None or "native" not in o or "interpreter" not in o:
             why = "the document is not in the census"
         elif is_invalid_fixture(rel):
@@ -384,6 +408,18 @@ def compare(
             why = "it is excluded from the gap list (library fragment)"
         red.append(f"stale entry: {rel}: {why}. Remove this entry from {ledger_name}.")
     return red
+
+
+def ledger_gaps(cls: dict[str, Any], old: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """The entries a rewritten ledger holds: the census's gaps, plus every entry
+    of the ``old`` ledger whose document the census could not finish. An
+    inconclusive outcome neither confirms such an entry nor makes it stale, so
+    the rewrite leaves it as it was."""
+    entries = dict(cls["gaps"])
+    for e in (old or {}).get("entries", []):
+        if e["path"] in cls["inconclusive"]:
+            entries[e["path"]] = e
+    return entries
 
 
 def render_ledger(
@@ -480,6 +516,10 @@ def cmd_check(args) -> int:
         f"  ledger {ledger_path}: {len(ledger['entries'])} entries; "
         f"census: {len(cls['gaps'])} native gaps"
     )
+    listed = {e["path"] for e in ledger["entries"]}
+    for rel, why in sorted(cls["inconclusive"].items()):
+        held = " (ledgered; neither confirmed nor stale)" if rel in listed else ""
+        print(f"  INCONCLUSIVE  {rel}{held}: " + "; ".join(f"{c} {w}" for c, w in why.items()))
     if args.report:
         Path(args.report).parent.mkdir(parents=True, exist_ok=True)
         Path(args.report).write_text(
@@ -488,6 +528,7 @@ def cmd_check(args) -> int:
                     "binding": args.binding,
                     "counts": counts,
                     "gaps": [cls["gaps"][p] for p in sorted(cls["gaps"])],
+                    "inconclusive": cls["inconclusive"],
                     "ledger_entries": len(ledger["entries"]),
                     "findings": red,
                     "passed": not red,
@@ -528,11 +569,11 @@ def cmd_write_ledger(args) -> int:
     if args.note:
         measured["note"] = args.note
     ledger_path = Path(args.ledger) if args.ledger else TIER_DIR / f"{args.binding}.json"
-    if ledger_path.is_file() and not args.baseline:
+    old = load_ledger(ledger_path, args.binding) if ledger_path.is_file() else None
+    if old is not None and not args.baseline:
         # The one-way rule holds for a regenerated ledger too: rewriting it may
         # drop entries and update the ones it keeps, never add one.
-        old = {e["path"] for e in load_ledger(ledger_path, args.binding)["entries"]}
-        added = sorted(set(cls["gaps"]) - old)
+        added = sorted(set(cls["gaps"]) - {e["path"] for e in old["entries"]})
         if added:
             print(
                 f"refusing to grow {ledger_path}: {len(added)} document(s) native now "
@@ -540,8 +581,12 @@ def cmd_write_ledger(args) -> int:
                 f"--baseline is for measuring a new one."
             )
             return 1
-    ledger_path.write_text(render_ledger(args.binding, cls["gaps"], cls["counts"], measured))
-    print(f"wrote {ledger_path}: {len(cls['gaps'])} entries")
+    entries = ledger_gaps(cls, old)
+    for rel in sorted(cls["inconclusive"]):
+        kept = "its entry is kept as it was" if rel in entries else "it is not listed"
+        print(f"  inconclusive: {rel}: {kept}")
+    ledger_path.write_text(render_ledger(args.binding, entries, cls["counts"], measured))
+    print(f"wrote {ledger_path}: {len(entries)} entries")
     return 0
 
 
@@ -676,8 +721,13 @@ def _self_test() -> list[str]:
         "[continuous] wholesale: unsupported op",
     ):
         fails.append(f"rust_outcome: {r}")
-    if rust_outcome({"killed": True, "rc": 124}, "interpreter")["code"] != "killed":
-        fails.append("rust_outcome: a killed document must not read as a build")
+    killed = rust_outcome({"killed": True, "rc": 124}, "interpreter")
+    if killed["ok"] or not killed.get("inconclusive") or killed["code"] != "killed":
+        fails.append(f"rust_outcome: a killed document must read as inconclusive: {killed}")
+    for status in ("timeout", "crashed"):
+        o = julia_outcome({"ok": False, "status": status, "error_type": "exceeded 180s"})
+        if o["ok"] or not o.get("inconclusive"):
+            fails.append(f"julia_outcome: a {status} must read as inconclusive: {o}")
     # A build whose right-hand side then fails is not a build.
     rhs_failed = julia_outcome(
         {"ok": True, "entry": "esm_problem", "rhs_ok": False, "rhs_error": "MethodError: …"}
@@ -701,6 +751,28 @@ def _self_test() -> list[str]:
     both_rhs = copy.deepcopy(rhs)
     both_rhs["tests/valid/b.esm"]["interpreter"] = rhs_failed
     expect("both right-hand sides fail", both_rhs, None)
+    # A timeout, a crash or a kill is inconclusive: never a new refusal, never
+    # a stale entry, never a code drift.
+    timeout = julia_outcome({"ok": False, "status": "timeout", "error_type": "exceeded 180s"})
+    for label, rel, compiler in (
+        ("native times out on a document it built", "tests/valid/b.esm", "native"),
+        ("native times out on a ledgered document", "tests/valid/a.esm", "native"),
+        ("the interpreter times out on a ledgered document", "tests/valid/a.esm", "interpreter"),
+        ("native is killed on a ledgered document", MODELS_PREFIX + "components/f.esm", "native"),
+    ):
+        outs = copy.deepcopy(base)
+        outs[rel][compiler] = killed if "killed" in label else timeout
+        expect(label, outs, None)
+        c = classify(outs)
+        if rel in c["gaps"] or rel not in c["inconclusive"]:
+            fails.append(f"classify: {label}: must be inconclusive, not a gap: {c}")
+        if c["counts"].get("inconclusive (excluded)") != 1:
+            fails.append(f"classify: {label}: counts {c['counts']}")
+        # A rewrite keeps the ledgered entry as it was, and adds nothing.
+        kept = ledger_gaps(c, ledger)
+        want = {e["path"] for e in ledger["entries"]}
+        if set(kept) != want:
+            fails.append(f"ledger_gaps: {label}: wrote {sorted(kept)}, want {sorted(want)}")
     return fails
 
 
