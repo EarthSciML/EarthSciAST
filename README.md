@@ -6,7 +6,7 @@
 
 These utilities have overlapping implementations in multiple languages:
 
-| Package | Language | Directory | Notes |
+| Package | Language | Directory |
 |---|---|---|---|
 | **EarthSciAST.jl** | Julia | [`pkg/EarthSciAST.jl/`](pkg/EarthSciAST.jl/) 
 | **@earthsciml/ast** | TypeScript | [`pkg/earthsci-ast-ts/`](pkg/earthsci-ast-ts/) 
@@ -28,7 +28,7 @@ These utilities have overlapping implementations in multiple languages:
 
 ## Format
 
-Models are primarily and canonically specified in files with the extension `.esm`, which is a subset of the [JSON](https://www.json.org/json-en.html) format. 
+Models are primarily and canonically specified in files with the extension `.esm`, using a subset of the [JSON](https://www.json.org/json-en.html) format. 
 However, it isn't necessarily expected that humans should be reading and writing the .esm files directly.
 Instead, you can write something like:
 
