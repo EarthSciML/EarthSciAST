@@ -2686,7 +2686,7 @@ function _build_partition_and_materialize(model::Model, cls;
     geom_setup_arrays = Dict{String,AbstractArray{Float64}}()
     if !isempty(cls.geom_setup_vars)
         geom_setup_arrays = _with_param_reads(param_reads) do
-            _materialize_geometry_setup(cls.geom_setup_vars,
+            @_bench :geometry_setup _materialize_geometry_setup(cls.geom_setup_vars,
                 cls.geom_defs, model, const_arrays, index_sets, derived_extents;
                 vi_maps=vi_maps.maps, param_overrides=parameter_overrides,
                 const_obs_arrays=cls.const_obs_arrays,
@@ -5515,7 +5515,8 @@ function _build_evaluator_dict(esm::AbstractDict;
     end
     _vi = model === nothing ? nothing :
           _with_param_reads(_preads) do
-              materialize_value_invention(model, file.index_sets, _vi_ca, _params)
+              @_bench :value_invention materialize_value_invention(model, file.index_sets,
+                                                                   _vi_ca, _params)
           end
 
     # ---- Phase 2b Hook 1: value-invention MEMBERS fed back as const factors ----
