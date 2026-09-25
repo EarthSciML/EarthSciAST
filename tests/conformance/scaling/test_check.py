@@ -162,6 +162,19 @@ def main():
     code, o = run(grown, late)
     assert code == 0 and o[("stencil_1d", None, "code_size_flat")] == "ledgered", o
 
+    # A family's stated code-size slack, per binding: stencil_2d's fused tape
+    # may lose two instructions at a larger N under Rust, and not three; a
+    # binding the slack does not name keeps slack 0.
+    wobble = [result("stencil_2d", 100), result("stencil_2d", 1000, code_size=2)]
+    code, o = run(wobble, [])
+    assert code == 0 and o[("stencil_2d", None, "code_size_flat")] == "pass", o
+    code, o = run([result("stencil_2d", 100), result("stencil_2d", 1000, code_size=1)], [])
+    assert code == 1 and o[("stencil_2d", None, "code_size_flat")] == "FAIL", o
+    code, o = run([result("stencil_1d", 100), result("stencil_1d", 1000, code_size=2)], [])
+    assert code == 1 and o[("stencil_1d", None, "code_size_flat")] == "FAIL", o
+    assert check.code_size_slack({"binding": "julia"}, {"code_size_flat": {"slack": 0}},
+                                 {"gate_overrides": {"code_size_flat": {"slack": {"rust": 2}}}}) == 0
+
     # --require looks across files: one file per family is a complete sweep.
     with open(os.path.join(HERE, "manifest.json")) as fh:
         fams = json.load(fh)["families"]

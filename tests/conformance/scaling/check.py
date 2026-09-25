@@ -153,6 +153,18 @@ def per_result_checks(run, r, gates, family_spec):
     return out
 
 
+def code_size_slack(run, gates, family_spec):
+    """The spread `code_size_flat` tolerates for this run: the gate's own
+    `slack`, unless the family's `gate_overrides` states one. A stated slack is
+    a number, or a map from binding to number (a binding it does not name gets
+    0), since each binding measures its code size its own way."""
+    g = {**gates["code_size_flat"], **family_spec.get("gate_overrides", {}).get("code_size_flat", {})}
+    slack = g.get("slack", 0)
+    if isinstance(slack, dict):
+        slack = slack.get(run.get("binding"), 0)
+    return slack
+
+
 def family_checks(run, fam, results, gates, family_spec):
     excl = family_spec.get("gate_exclusions", {})
     built = sorted((r for r in results if r.get("status") == "ok"), key=lambda r: r["n_states"])
@@ -175,6 +187,7 @@ def family_checks(run, fam, results, gates, family_spec):
             )
         else:
             spread = max(sizes.values()) - min(sizes.values())
+            slack = code_size_slack(run, gates, family_spec)
             out.append(
                 Check(
                     run,
@@ -182,8 +195,9 @@ def family_checks(run, fam, results, gates, family_spec):
                     None,
                     "code_size_flat",
                     DETERMINISTIC,
-                    spread <= gates["code_size_flat"].get("slack", 0),
+                    spread <= slack,
                     sizes,
+                    f"slack {slack}" if slack else "",
                 )
             )
     if "build_slope" in gates and "build_slope" not in excl:
