@@ -817,6 +817,41 @@ function _state_slot_block(rec::_LaneRecipe)
     return (lo0, hi0)
 end
 
+# One recipe value per cell of `box`, in box-local (first index fastest) order:
+# the compiled lane evaluator where it answers, `_eval_recipe` where it does
+# not (see "Compiled lane evaluation", stencil.jl).
+function _fill_box_table!(tbl::Vector, rec::_LaneRecipe, idx_names, box, D,
+                          var_map, const_arrays)
+    le = _lane_evaluator(rec, collect(String, idx_names), var_map, const_arrays)
+    _fill_box_table_nt!(tbl, rec, le, idx_names, ntuple(d -> UnitRange{Int}(box[d]), D),
+                        var_map, const_arrays)
+    return tbl
+end
+
+function _fill_box_table_nt!(tbl::Vector{T}, rec::_LaneRecipe, le, idx_names,
+                             rngs::NTuple{N,UnitRange{Int}}, var_map,
+                             const_arrays) where {T,N}
+    env = Dict{String,Int}()
+    loop = Vector{Int}(undef, N)
+    j = 0
+    for I in CartesianIndices(rngs)
+        j += 1
+        @inbounds for d in 1:N
+            loop[d] = I[d]
+        end
+        if le !== nothing
+            v, ok = _lane_eval(le, loop)
+            if ok
+                @inbounds tbl[j] = v
+                continue
+            end
+        end
+        tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, loop), var_map,
+                              const_arrays)::T
+    end
+    return tbl
+end
+
 # Materialize a NON-AFFINE state lane as a per-box slot table (Stage 2 of the
 # array-IR unification): one `_eval_recipe` per box cell — the SAME resolution
 # the per-cell fallback would run — stored densely in box-local layout, with 0
@@ -836,13 +871,7 @@ function _materialize_state_tbl_inner(rec::_LaneRecipe, idx_names, box, D,
                                 var_map, const_arrays)
     s, off, len = _box_local_addr(box, D)
     tbl = Vector{Int}(undef, len)
-    env = Dict{String,Int}()
-    j = 0
-    for loop in Iterators.product((box[d] for d in 1:D)...)
-        j += 1
-        tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
-                              var_map, const_arrays)::Int
-    end
+    _fill_box_table!(tbl, rec, idx_names, box, D, var_map, const_arrays)
     return _AccRepl(_AccStateTblBox(tbl, s[1], s[2], s[3], off))
 end
 
@@ -881,13 +910,7 @@ function _materialize_pgather_tbl_inner(rec::_LaneRecipe, idx_names, box, D,
     pg = rec.arr::_PGatherArray
     s, off, len = _box_local_addr(box, D)
     tbl = Vector{Int}(undef, len)
-    env = Dict{String,Int}()
-    j = 0
-    for loop in Iterators.product((box[d] for d in 1:D)...)
-        j += 1
-        tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
-                              var_map, const_arrays)::Int
-    end
+    _fill_box_table!(tbl, rec, idx_names, box, D, var_map, const_arrays)
     return _AccRepl(_AccArrTblBox(pg.flat, tbl, s[1], s[2], s[3], off))
 end
 
@@ -914,13 +937,7 @@ function _materialize_const_box_inner(rec::_LaneRecipe, idx_names, box, D,
                                 var_map, const_arrays)
     s, off, len = _box_local_addr(box, D)
     vals = Vector{Float64}(undef, len)
-    env = Dict{String,Int}()
-    j = 0
-    for loop in Iterators.product((box[d] for d in 1:D)...)
-        j += 1
-        vals[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
-                               var_map, const_arrays)::Float64
-    end
+    _fill_box_table!(vals, rec, idx_names, box, D, var_map, const_arrays)
     v1 = vals[1]
     all(==(v1), vals) && return _LitRepl(v1)   # exhaustively verified invariant
     return _AccRepl(_AccConstBox(vals, s[1], s[2], s[3], off))
