@@ -165,10 +165,11 @@ the guards the run used); the checker ignores fields it does not know.
 A document the machine cannot hold is a result, not a lost run: each adapter
 measures in child processes, kills a child past `--max-rss-gb` (12 GB by
 default on every machine, so whether a document fits is a property of the
-document and the compiler, not of the machine) or `--timeout-s`, and records that document as `"error"` with a `reason` that
-starts `out of memory:`, `timeout:` or `the child process ...`, and the
-family's larger sizes as `not attempted: ...`. Such a `builds` failure goes in
-the ledger like any other.
+document and the compiler, not of the machine) or `--timeout-s`, and records
+that document as `"error"` with a `reason` that starts `out of memory:`,
+`timeout:` or `the child process ...`, and the family's larger sizes as
+`not attempted: ...`. Such a `builds` failure goes in the ledger like any
+other; since the document did not build, its other gates skip (below).
 
 **A null measure on a document that built is a missing measurement.** For a
 result with `status: "ok"`, a null `allocs_per_call` or `hand_loop_max_abs_diff`
