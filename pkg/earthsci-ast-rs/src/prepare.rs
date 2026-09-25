@@ -1537,7 +1537,7 @@ impl<'o> BuildState<'o> {
         // evaluator has no rule for the node itself.
         crate::lower_table_lookup::lower_table_lookups(&mut file)
             .map_err(|e| err(format!("lower table lookups: {e}")))?;
-        let index_sets: HashMap<String, IndexSet> = file
+        let mut index_sets: HashMap<String, IndexSet> = file
             .index_sets
             .clone()
             .unwrap_or_default()
@@ -1562,8 +1562,13 @@ impl<'o> BuildState<'o> {
         // to `a`, a right-hand-side `D` to the tendency it names (or a refusal,
         // never a `NaN`), and a `sin` of a `deg` angle takes radians — without
         // that last one `sin(40 deg)` evaluated as `sin(40)` here and nowhere
-        // else.
+        // else. The rewrites run after the subsystems are mounted, as on the
+        // array runtime, so a mounted subsystem's equations and declarations
+        // are in scope under their mounted names (`D(North.u)`, a `deg`
+        // `North.theta`).
         crate::simulate_array::resolve_model_self_references(&mut model, &model_name);
+        crate::simulate_array::mount_subsystems(&mut model, &mut index_sets)
+            .map_err(|e| err(format!("model '{model_name}': {e}")))?;
         crate::simulate_array::apply_flatten_rewrites(&mut model)
             .map_err(|e| err(format!("model '{model_name}': {e}")))?;
 
@@ -2483,6 +2488,119 @@ mod first_cell_stop_tests {
                 "[{compiler}] {err}"
             );
             assert!(err.to_string().contains("OOB"), "[{compiler}] {err}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod mounted_subsystem_tests {
+    //! The build pipeline makes `flatten`'s rewrites on the authored model, and
+    //! a mounted subsystem's equations and declarations must be in scope for
+    //! them, as they are on the array runtime.
+    use crate::problem::{Compiler, ProblemOptions, esm_problem, observed_field, solve};
+    use serde_json::{Value, json};
+
+    /// `P` holds a state `c` with `D(c) = -c` and the observed `name = rhs`;
+    /// its subsystem `North` holds a state `u` with `D(u) = k` and an angle
+    /// `theta = 40 deg`.
+    fn doc(name: &str, units: &str, rhs: Value) -> Value {
+        json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "Mounted"},
+            "models": {"P": {
+                "variables": {
+                    "c": {"type": "unknown", "units": "1", "default": 1.0},
+                    name: {"type": "unknown", "units": units}
+                },
+                "equations": [
+                    {"lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                     "rhs": {"op": "-", "args": ["c"]}},
+                    {"lhs": name, "rhs": rhs}
+                ],
+                "subsystems": {"North": {
+                    "variables": {
+                        "u": {"type": "unknown", "units": "1", "default": 2.0},
+                        "k": {"type": "parameter", "units": "1/s", "default": 0.5},
+                        "theta": {"type": "parameter", "units": "deg", "default": 40.0}
+                    },
+                    "equations": [
+                        {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                         "rhs": "k"}
+                    ]
+                }}
+            }}
+        })
+    }
+
+    /// The document through the build pipeline (which takes the raw JSON), or
+    /// straight to the array runtime (the typed document).
+    fn built(d: &Value, compiler: Compiler, build_pipeline: bool) -> crate::problem::EsmProblem {
+        let opts = ProblemOptions {
+            compiler: Some(compiler),
+            build_pipeline,
+            ..Default::default()
+        };
+        let prob = if build_pipeline {
+            esm_problem(d, (0.0, 1.0), opts)
+        } else {
+            let file = crate::load_string(&d.to_string()).expect("loads");
+            esm_problem(&file, (0.0, 1.0), opts)
+        };
+        prob.unwrap_or_else(|e| panic!("[{compiler}, pipeline {build_pipeline}] {e}"))
+    }
+
+    /// `name` at `t = 0`, from a solve that reports it.
+    fn at_t0(prob: &crate::problem::EsmProblem, name: &str) -> f64 {
+        let sol = solve(
+            prob,
+            &crate::SolveOptions {
+                saveat: Some(vec![0.0]),
+                output_observed: vec![name.to_string()],
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        sol.get(name)
+            .unwrap_or_else(|| panic!("no {name} row: {:?}", sol.state_variable_names))[0]
+    }
+
+    #[test]
+    fn a_degree_angle_in_a_subsystem_takes_radians() {
+        let d = doc("y", "1", json!({"op": "sin", "args": ["North.theta"]}));
+        let want = 40.0f64.to_radians().sin();
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            for pipeline in [false, true] {
+                let prob = built(&d, compiler, pipeline);
+                assert_eq!(at_t0(&prob, "y"), want, "[{compiler}, pipeline {pipeline}]");
+            }
+            // What the pipeline materialized at build time.
+            let prob = built(&d, compiler, true);
+            let y = observed_field(&prob, "y").expect("y");
+            assert_eq!(
+                y.iter().copied().collect::<Vec<_>>(),
+                [want],
+                "[{compiler}]"
+            );
+        }
+    }
+
+    /// `D(North.u)` is the subsystem's tendency, `North.k`: state-free, so the
+    /// pipeline materializes it at build time.
+    #[test]
+    fn a_time_derivative_of_a_subsystem_state_resolves() {
+        let d = doc(
+            "z",
+            "1/s",
+            json!({"op": "D", "args": ["North.u"], "wrt": "t"}),
+        );
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            for pipeline in [false, true] {
+                let prob = built(&d, compiler, pipeline);
+                assert_eq!(at_t0(&prob, "z"), 0.5, "[{compiler}, pipeline {pipeline}]");
+            }
+            let prob = built(&d, compiler, true);
+            let z = observed_field(&prob, "z").expect("z");
+            assert_eq!(z.iter().copied().collect::<Vec<_>>(), [0.5], "[{compiler}]");
         }
     }
 }
