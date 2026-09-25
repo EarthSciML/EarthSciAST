@@ -497,29 +497,6 @@
         "phase": 2
       },
       {
-        "family": "stencil_4d",
-        "gate": "code_size_flat",
-        "measured": "code size (emitted expression nodes + walked nodes) by N: 100:10132, 1000:19137, 10000:19137, 100000:19137, 1000000:19137",
-        "reason": "rank 4 misses the affine tier (rank-3 cap) and lands on the per-cell build, whose emitted code at N = 100 (side 3) differs from the code at N = 1000 and up; the measure is flat from 1000 to 10^6",
-        "phase": 2
-      },
-      {
-        "family": "source_receptor",
-        "gate": "code_size_flat",
-        "measured": "code size (emitted expression nodes + walked nodes) by N: 100:1641, 1000:13341, 3162:41505",
-        "reason": "the affine tier unrolls the contraction, one term per source in every receptor's kernel body",
-        "phase": 2
-      },
-      {
-        "family": "source_receptor",
-        "n": 3162,
-        "gate": "no_steady_alloc",
-        "threads": "serial",
-        "measured": "778400608 bytes per steady call",
-        "reason": "the fully unrolled contraction body loses type stability above some size",
-        "phase": 2
-      },
-      {
         "family": "stencil_1d",
         "gate": "build_slope",
         "threads": "serial",
@@ -550,9 +527,9 @@
         "family": "stencil_4d",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "9.767e+04 ns per state (ns/state over N=100..100000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "rank 4 misses the affine tier (rank-3 cap) and lands on the per-cell build",
+        "measured": "2.22e+04 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 25.48 36.09 34.64), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "rank 4 lands on the affine tier now; what grows is the affine build's per-cell bookkeeping (the string-keyed state layout and the class merge's per-kernel lane plans, over 81 boundary boxes)",
         "phase": 2
       },
       {
@@ -586,18 +563,18 @@
         "family": "source_receptor",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "5.708e+06 ns per state (ns/state over N=100..3162)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "the contraction is unrolled into every receptor's kernel body, so the emitted code, and its compile, grow with N",
+        "measured": "7.26e+06 ns per state (ns/state over N=100..3162)",
+        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 25.48 36.09 34.64), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "the N x N array K is a materialized observed, so the build keeps per-cell bookkeeping for N^2 cells (the string-keyed layout of its fill, its affine box), against 2N states",
         "phase": 2
       },
       {
         "family": "regrid",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "1.251e+06 ns per state (ns/state over N=100..3162)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "the join-gated contractions land on the per-cell build, and the geometry setup and value-invention join sweep the source x target product",
+        "measured": "1.60e+06 ns per state (ns/state over N=100..3162)",
+        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 25.48 36.09 34.64), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "the geometry setup and the value-invention join sweep the source x target product; the join-gated contractions compile once now (the whole-array contraction nest, with the admitted pairs as data)",
         "phase": 2
       },
       {
@@ -636,36 +613,6 @@
         "measured": "native / hand loop = 1.36",
         "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
         "reason": "the affine kernel runs slower than the plain loop at this size",
-        "phase": 5
-      },
-      {
-        "family": "stencil_4d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 1.81",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "rank 4 runs the per-cell build's gather-table kernel, not an affine box",
-        "phase": 5
-      },
-      {
-        "family": "stencil_4d",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 2.66",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "rank 4 runs the per-cell build's gather-table kernel, not an affine box",
-        "phase": 5
-      },
-      {
-        "family": "stencil_4d",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 4.69",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "rank 4 runs the per-cell build's gather-table kernel, not an affine box",
         "phase": 5
       },
       {
@@ -743,9 +690,9 @@
         "n": 1000,
         "gate": "speed",
         "threads": "serial",
-        "measured": "native / hand loop = 20.2",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "the unrolled contraction body; at 3162 it also loses type stability and allocates on every call",
+        "measured": "native / hand loop = 28.1",
+        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 25.48 36.09 34.64), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "the materialized N x N observed K is refilled on every call (N^2 sin evaluations), where the hand loop builds it once; the contraction itself is a run-time fold now",
         "phase": 5
       },
       {
@@ -753,9 +700,9 @@
         "n": 3162,
         "gate": "speed",
         "threads": "serial",
-        "measured": "native / hand loop = 356",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "the unrolled contraction body; at 3162 it also loses type stability and allocates on every call",
+        "measured": "native / hand loop = 32.7",
+        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 25.48 36.09 34.64), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "the materialized N x N observed K is refilled on every call (N^2 sin evaluations), where the hand loop builds it once; the contraction itself is a run-time fold now",
         "phase": 5
       },
       {
