@@ -318,12 +318,14 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("setup_map_compile_once_test.jl")  # promoted-physics MAP: compile-once == per-cell, bitwise
     include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == rank-abstract, bitwise
     include("geom_overlap_drive_test.jl")     # setup overlap broad phase: candidate-DRIVEN, and what it changes
+    include("geom_on_drive_test.jl")          # setup bin-equality broad phase: key matches DRIVE the sweep
     include("broad_phase_conformance_test.jl")   # projection-pushdown Phase 3a
     include("overlap_gate_conformance_test.jl")   # projection-pushdown Phase 2a
     include("join_namespacing_test.jl")           # §5.5.6 join names under flattening
     include("join_on_equality_gate_test.jl")      # §5.5.8 value-equality gate: data columns + DRIVING
     include("join_on_self_join_test.jl")          # §5.5.8 a relation joined to ITSELF: two ranges, one index set
     include("vi_overlap_scaling_test.jl")         # projection-pushdown Wall #1 (candidate-driven)
+    include("vi_on_drive_test.jl")                # value invention: bin-equality key matches DRIVE the join
     include("pushdown_edge_test.jl")              # projection-pushdown Phase 2b (L1 milestone)
     include("auto_pushdown_rewrite_test.jl")      # projection-pushdown Phase 4 (auto desugar)
     include("pushdown_template_ref_test.jl")      # the desugar THROUGH surviving template refs (§9.6.4 Option B)
