@@ -101,9 +101,7 @@ def list_corpus(repo_root: Path, models_root: Path | None) -> list[Path]:
     """Every ``.esm`` under ``<repo>/tests`` and under the EarthSciModels checkout."""
     docs = sorted(p.resolve() for p in (repo_root / "tests").rglob("*.esm"))
     if models_root is not None:
-        docs += sorted(
-            p.resolve() for p in models_root.rglob("*.esm") if ".git" not in p.parts
-        )
+        docs += sorted(p.resolve() for p in models_root.rglob("*.esm") if ".git" not in p.parts)
     return docs
 
 
@@ -161,37 +159,50 @@ def julia_outcome(rec: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True}
     status = rec.get("status")
     if status in ("timeout", "crashed", "worker_load_failure"):
-        return {"ok": False, "code": status, "rule": None,
-                "reason": _squash(rec.get("error_type"))}
-    code = rec.get("esm_problem_error_code") or rec.get("error_code") or \
-        rec.get("esm_problem_error_type") or rec.get("error_type") or "error"
+        return {"ok": False, "code": status, "rule": None, "reason": _squash(rec.get("error_type"))}
+    code = (
+        rec.get("esm_problem_error_code")
+        or rec.get("error_code")
+        or rec.get("esm_problem_error_type")
+        or rec.get("error_type")
+        or "error"
+    )
     msg = rec.get("esm_problem_error_message") or rec.get("error_message") or ""
     m = re.search(r"refuses '([^']*)'", msg)
-    return {"ok": False, "code": code, "rule": m.group(1) if m else None,
-            "reason": _squash(msg)}
+    return {"ok": False, "code": code, "rule": m.group(1) if m else None, "reason": _squash(msg)}
 
 
 def rust_outcome(rec: dict[str, Any], tag: str) -> dict[str, Any]:
     """One compiler's half of a Rust census record (examples/compiler_census.rs)."""
     if rec.get("killed"):
-        return {"ok": False, "code": "killed", "rule": None,
-                "reason": _squash(f"exit {rec.get('rc')}: {rec.get('stderr_tail', '')}")}
+        return {
+            "ok": False,
+            "code": "killed",
+            "rule": None,
+            "reason": _squash(f"exit {rec.get('rc')}: {rec.get('stderr_tail', '')}"),
+        }
     if rec.get(f"{tag}_ok"):
         return {"ok": True}
     variant = rec.get(f"{tag}_err_variant") or "error"
     if variant == "CompilerRefusedRule":
         tier = rec.get(f"{tag}_refused_tier")
         reason = rec.get(f"{tag}_refused_reason") or ""
-        return {"ok": False, "code": "compiler_refused_rule",
-                "rule": rec.get(f"{tag}_refused_rule"),
-                "reason": _squash(f"[{tier}] {reason}" if tier else reason)}
-    return {"ok": False, "code": variant, "rule": None,
-            "reason": _squash(rec.get(f"{tag}_err"))}
+        return {
+            "ok": False,
+            "code": "compiler_refused_rule",
+            "rule": rec.get(f"{tag}_refused_rule"),
+            "reason": _squash(f"[{tier}] {reason}" if tier else reason),
+        }
+    return {"ok": False, "code": variant, "rule": None, "reason": _squash(rec.get(f"{tag}_err"))}
 
 
-def outcomes(binding: str, census: Path, census_interpreter: Path | None,
-             repo_root: Path, models_root: Path | None
-             ) -> dict[str, dict[str, dict[str, Any]]]:
+def outcomes(
+    binding: str,
+    census: Path,
+    census_interpreter: Path | None,
+    repo_root: Path,
+    models_root: Path | None,
+) -> dict[str, dict[str, dict[str, Any]]]:
     """``{relative path: {"native": outcome, "interpreter": outcome}}``."""
     out: dict[str, dict[str, dict[str, Any]]] = {}
     if binding == "julia":
@@ -203,8 +214,10 @@ def outcomes(binding: str, census: Path, census_interpreter: Path | None,
                     continue
                 c = rec.get("compiler")
                 if c is not None and c != compiler:
-                    raise InputError(f"{path}: a record answers for compiler {c!r}, "
-                                     f"not {compiler!r}: the two census files are swapped")
+                    raise InputError(
+                        f"{path}: a record answers for compiler {c!r}, "
+                        f"not {compiler!r}: the two census files are swapped"
+                    )
                 rel = relativize(rec["path"], repo_root, models_root)
                 out.setdefault(rel, {})[compiler] = julia_outcome(rec)
     elif binding == "rust":
@@ -212,8 +225,10 @@ def outcomes(binding: str, census: Path, census_interpreter: Path | None,
             if not rec.get("path"):
                 continue
             rel = relativize(rec["path"], repo_root, models_root)
-            out[rel] = {"native": rust_outcome(rec, "native"),
-                        "interpreter": rust_outcome(rec, "interpreter")}
+            out[rel] = {
+                "native": rust_outcome(rec, "native"),
+                "interpreter": rust_outcome(rec, "interpreter"),
+            }
     else:
         raise InputError(f"unknown binding {binding!r}")
     # A message that quotes a document's path quotes the census machine's
@@ -243,12 +258,20 @@ def classify(outs: dict[str, dict[str, dict[str, Any]]]) -> dict[str, Any]:
         if not n["ok"] and LIBRARY_FRAGMENT.search(n.get("reason") or ""):
             counts["library fragment (excluded)"] += 1
             continue
-        key = {(True, True): "both build", (False, True): "native gap",
-               (True, False): "native only", (False, False): "both fail"}[(n["ok"], i["ok"])]
+        key = {
+            (True, True): "both build",
+            (False, True): "native gap",
+            (True, False): "native only",
+            (False, False): "both fail",
+        }[(n["ok"], i["ok"])]
         counts[key] += 1
         if key == "native gap":
-            gaps[rel] = {"path": rel, "code": n["code"], "rule": n.get("rule"),
-                         "reason": n.get("reason") or ""}
+            gaps[rel] = {
+                "path": rel,
+                "code": n["code"],
+                "rule": n.get("rule"),
+                "reason": n.get("reason") or "",
+            }
     return {"gaps": gaps, "counts": dict(counts)}
 
 
@@ -275,8 +298,12 @@ def validate_ledger(led: Any, path: Path | str, binding: str) -> None:
     by path, unique, each carrying the four fields."""
     if not isinstance(led, dict):
         raise InputError(f"{path}: the ledger must be a JSON object")
-    for key, want in (("category", "native_coverage"), ("binding", binding),
-                      ("compiler", "native"), ("reference_compiler", "interpreter")):
+    for key, want in (
+        ("category", "native_coverage"),
+        ("binding", binding),
+        ("compiler", "native"),
+        ("reference_compiler", "interpreter"),
+    ):
         if led.get(key) != want:
             raise InputError(f"{path}: {key!r} must be {want!r}, not {led.get(key)!r}")
     entries = led.get("entries")
@@ -289,8 +316,9 @@ def validate_ledger(led: Any, path: Path | str, binding: str) -> None:
         if not isinstance(e["path"], str) or not isinstance(e["code"], str) or not e["code"]:
             raise InputError(f"{path}: entries[{k}] needs a string path and a non-empty code")
         if is_invalid_fixture(e["path"]):
-            raise InputError(f"{path}: entries[{k}] names an invalid fixture, which the "
-                             f"ledger never lists")
+            raise InputError(
+                f"{path}: entries[{k}] names an invalid fixture, which the ledger never lists"
+            )
         paths.append(e["path"])
     if paths != sorted(paths):
         raise InputError(f"{path}: entries must be sorted by path")
@@ -299,9 +327,13 @@ def validate_ledger(led: Any, path: Path | str, binding: str) -> None:
         raise InputError(f"{path}: duplicate entries for {dup}")
 
 
-def compare(gaps: dict[str, dict[str, Any]], outs: dict[str, dict[str, dict[str, Any]]],
-            ledger: dict[str, Any], ledger_name: str,
-            corpus: list[str] | None) -> list[str]:
+def compare(
+    gaps: dict[str, dict[str, Any]],
+    outs: dict[str, dict[str, dict[str, Any]]],
+    ledger: dict[str, Any],
+    ledger_name: str,
+    corpus: list[str] | None,
+) -> list[str]:
     """Every way the census and the ledger disagree, as a list of RED findings."""
     red: list[str] = []
     if corpus is not None:
@@ -317,11 +349,13 @@ def compare(gaps: dict[str, dict[str, Any]], outs: dict[str, dict[str, dict[str,
             red.append(
                 f"NEW native refusal: {rel} builds under interpreter and not under native "
                 f"({g['code']}{', rule ' + repr(g['rule']) if g['rule'] else ''}): {g['reason']}. "
-                f"The ledger only shrinks; fix native rather than add an entry.")
+                f"The ledger only shrinks; fix native rather than add an entry."
+            )
         elif listed[rel]["code"] != g["code"]:
             red.append(
                 f"code drift: {rel} is ledgered as {listed[rel]['code']!r} but native now "
-                f"answers {g['code']!r}: {g['reason']}. Update the entry's code and reason.")
+                f"answers {g['code']!r}: {g['reason']}. Update the entry's code and reason."
+            )
     for rel in sorted(listed):
         if rel in gaps:
             continue
@@ -340,8 +374,9 @@ def compare(gaps: dict[str, dict[str, Any]], outs: dict[str, dict[str, dict[str,
     return red
 
 
-def render_ledger(binding: str, gaps: dict[str, dict[str, Any]], counts: dict[str, int],
-                  measured: dict[str, Any]) -> str:
+def render_ledger(
+    binding: str, gaps: dict[str, dict[str, Any]], counts: dict[str, int], measured: dict[str, Any]
+) -> str:
     led = {
         "category": "native_coverage",
         "version": "1.0",
@@ -352,7 +387,8 @@ def render_ledger(binding: str, gaps: dict[str, dict[str, Any]], counts: dict[st
             "Every corpus document the interpreter builds through esm_problem and native "
             "does not, with native's refusal. The list only shrinks: a document missing "
             "from it that native refuses is RED, and an entry native now builds is RED "
-            "until it is removed. See README.md in this directory."),
+            "until it is removed. See README.md in this directory."
+        ),
         "measured": dict(measured, counts=dict(sorted(counts.items()))),
         "entries": [{k: gaps[p][k] for k in ENTRY_KEYS} for p in sorted(gaps)],
     }
@@ -361,8 +397,12 @@ def render_ledger(binding: str, gaps: dict[str, dict[str, Any]], counts: dict[st
 
 def _git_head(path: Path) -> str | None:
     try:
-        return subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"], check=True,
-                              capture_output=True, text=True).stdout.strip()
+        return subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return None
 
@@ -383,8 +423,11 @@ def _roots(args) -> tuple[Path, Path | None]:
 def _load_corpus(args, repo: Path, models: Path | None) -> list[str] | None:
     if not args.corpus:
         return None
-    return [relativize(ln.strip(), repo, models)
-            for ln in Path(args.corpus).read_text().splitlines() if ln.strip()]
+    return [
+        relativize(ln.strip(), repo, models)
+        for ln in Path(args.corpus).read_text().splitlines()
+        if ln.strip()
+    ]
 
 
 def cmd_corpus(args) -> int:
@@ -401,9 +444,13 @@ def cmd_corpus(args) -> int:
 
 def _census(args):
     repo, models = _roots(args)
-    outs = outcomes(args.binding, Path(args.census),
-                    Path(args.census_interpreter) if args.census_interpreter else None,
-                    repo, models)
+    outs = outcomes(
+        args.binding,
+        Path(args.census),
+        Path(args.census_interpreter) if args.census_interpreter else None,
+        repo,
+        models,
+    )
     return repo, models, outs, classify(outs)
 
 
@@ -413,17 +460,30 @@ def cmd_check(args) -> int:
     ledger = load_ledger(ledger_path, args.binding)
     red = compare(cls["gaps"], outs, ledger, str(ledger_path), _load_corpus(args, repo, models))
     counts = cls["counts"]
-    print(f"native coverage ({args.binding}): {len(outs)} documents in the census; "
-          + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
-    print(f"  ledger {ledger_path}: {len(ledger['entries'])} entries; "
-          f"census: {len(cls['gaps'])} native gaps")
+    print(
+        f"native coverage ({args.binding}): {len(outs)} documents in the census; "
+        + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
+    )
+    print(
+        f"  ledger {ledger_path}: {len(ledger['entries'])} entries; "
+        f"census: {len(cls['gaps'])} native gaps"
+    )
     if args.report:
         Path(args.report).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.report).write_text(json.dumps({
-            "binding": args.binding, "counts": counts,
-            "gaps": [cls["gaps"][p] for p in sorted(cls["gaps"])],
-            "ledger_entries": len(ledger["entries"]), "findings": red,
-            "passed": not red}, indent=2) + "\n")
+        Path(args.report).write_text(
+            json.dumps(
+                {
+                    "binding": args.binding,
+                    "counts": counts,
+                    "gaps": [cls["gaps"][p] for p in sorted(cls["gaps"])],
+                    "ledger_entries": len(ledger["entries"]),
+                    "findings": red,
+                    "passed": not red,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
     for r in red:
         print(f"  RED  {r}")
     if red:
@@ -439,8 +499,10 @@ def cmd_write_ledger(args) -> int:
     if corpus is not None:
         missing = [r for r in corpus if len(outs.get(r, {})) < 2]
         if missing:
-            print(f"refusing to write a ledger from an incomplete census: "
-                  f"{len(missing)} corpus documents lack a record, e.g. {missing[:3]}")
+            print(
+                f"refusing to write a ledger from an incomplete census: "
+                f"{len(missing)} corpus documents lack a record, e.g. {missing[:3]}"
+            )
             return 1
     if args.provenance:
         measured = json.loads(Path(args.provenance).read_text())
@@ -460,9 +522,11 @@ def cmd_write_ledger(args) -> int:
         old = {e["path"] for e in load_ledger(ledger_path, args.binding)["entries"]}
         added = sorted(set(cls["gaps"]) - old)
         if added:
-            print(f"refusing to grow {ledger_path}: {len(added)} document(s) native now "
-                  f"refuses are not in it, e.g. {added[:3]}. The ledger only shrinks; "
-                  f"--baseline is for measuring a new one.")
+            print(
+                f"refusing to grow {ledger_path}: {len(added)} document(s) native now "
+                f"refuses are not in it, e.g. {added[:3]}. The ledger only shrinks; "
+                f"--baseline is for measuring a new one."
+            )
             return 1
     ledger_path.write_text(render_ledger(args.binding, cls["gaps"], cls["counts"], measured))
     print(f"wrote {ledger_path}: {len(cls['gaps'])} entries")
@@ -485,15 +549,20 @@ def _self_test() -> list[str]:
     base = {
         "tests/valid/a.esm": {"native": refused(), "interpreter": ok},
         "tests/valid/b.esm": {"native": ok, "interpreter": ok},
-        "tests/valid/c.esm": {"native": refused("parse_error"), "interpreter": refused("parse_error")},
+        "tests/valid/c.esm": {
+            "native": refused("parse_error"),
+            "interpreter": refused("parse_error"),
+        },
         "tests/invalid/d.esm": {"native": refused(), "interpreter": ok},
         "tests/lib/e.esm": {"native": refused("error", "nothing to flatten"), "interpreter": ok},
         MODELS_PREFIX + "components/f.esm": {"native": refused(), "interpreter": ok},
     }
     cls = classify(base)
     if sorted(cls["gaps"]) != ["EarthSciModels/components/f.esm", "tests/valid/a.esm"]:
-        fails.append(f"classify: gaps {sorted(cls['gaps'])}; the invalid fixture and the "
-                     f"library fragment must be excluded")
+        fails.append(
+            f"classify: gaps {sorted(cls['gaps'])}; the invalid fixture and the "
+            f"library fragment must be excluded"
+        )
     ledger = json.loads(render_ledger("rust", cls["gaps"], cls["counts"], {}))
     try:
         validate_ledger(ledger, "<synthetic>", "rust")
@@ -517,19 +586,27 @@ def _self_test() -> list[str]:
     expect("a new refusal", new, "NEW native refusal: tests/valid/b.esm")
     fixed = copy.deepcopy(base)
     fixed["tests/valid/a.esm"]["native"] = ok
-    expect("native now builds a ledgered document", fixed,
-           "native now builds it. Remove this entry")
+    expect(
+        "native now builds a ledgered document", fixed, "native now builds it. Remove this entry"
+    )
     both = copy.deepcopy(base)
     both["tests/valid/a.esm"]["interpreter"] = refused()
-    expect("the interpreter stops building a ledgered document", both,
-           "the interpreter no longer builds it either. Remove this entry")
+    expect(
+        "the interpreter stops building a ledgered document",
+        both,
+        "the interpreter no longer builds it either. Remove this entry",
+    )
     drift = copy.deepcopy(base)
     drift["tests/valid/a.esm"]["native"] = refused("unbound_variable")
     expect("a drifted refusal code", drift, "code drift: tests/valid/a.esm")
     gone = copy.deepcopy(base)
     del gone["tests/valid/a.esm"]
-    expect("a ledgered document leaves the corpus", gone,
-           "not in the census. Remove this entry", corp=sorted(gone))
+    expect(
+        "a ledgered document leaves the corpus",
+        gone,
+        "not in the census. Remove this entry",
+        corp=sorted(gone),
+    )
     lost = copy.deepcopy(base)
     del lost["tests/valid/b.esm"]["interpreter"]
     expect("a census that lost a record", lost, "census incomplete: no interpreter record")
@@ -538,12 +615,16 @@ def _self_test() -> list[str]:
     expect("a reworded reason alone", reason, None)
     # The shape guard.
     for label, mutate in (
-        ("unsorted entries", lambda l: l["entries"].reverse()),
-        ("a duplicate entry", lambda l: l["entries"].append(dict(l["entries"][-1]))),
-        ("an invalid fixture", lambda l: l["entries"].__setitem__(
-            0, dict(l["entries"][0], path="tests/invalid/x.esm"))),
-        ("a missing field", lambda l: l["entries"][0].pop("rule")),
-        ("the wrong binding", lambda l: l.__setitem__("binding", "julia")),
+        ("unsorted entries", lambda led: led["entries"].reverse()),
+        ("a duplicate entry", lambda led: led["entries"].append(dict(led["entries"][-1]))),
+        (
+            "an invalid fixture",
+            lambda led: led["entries"].__setitem__(
+                0, dict(led["entries"][0], path="tests/invalid/x.esm")
+            ),
+        ),
+        ("a missing field", lambda led: led["entries"][0].pop("rule")),
+        ("the wrong binding", lambda led: led.__setitem__("binding", "julia")),
     ):
         bad = copy.deepcopy(ledger)
         mutate(bad)
@@ -553,17 +634,35 @@ def _self_test() -> list[str]:
         except InputError:
             pass
     # The two census readers.
-    j = julia_outcome({"ok": False, "entry": None, "esm_problem_error_code": "compiler_refused_rule",
-                       "esm_problem_error_message": "TreeWalkError: compiler=:native refuses 'M.y': why"})
+    j = julia_outcome(
+        {
+            "ok": False,
+            "entry": None,
+            "esm_problem_error_code": "compiler_refused_rule",
+            "esm_problem_error_message": "TreeWalkError: compiler=:native refuses 'M.y': why",
+        }
+    )
     if (j["code"], j["rule"]) != ("compiler_refused_rule", "M.y"):
         fails.append(f"julia_outcome: {j}")
     if julia_outcome({"ok": True, "entry": "_build_evaluator"})["ok"]:
-        fails.append("julia_outcome: a build only the fallback entry reaches counted as native building")
-    r = rust_outcome({"native_ok": False, "native_err_variant": "CompilerRefusedRule",
-                      "native_refused_rule": "M.z", "native_refused_tier": "continuous",
-                      "native_refused_reason": "wholesale: unsupported op"}, "native")
-    if (r["code"], r["rule"], r["reason"]) != ("compiler_refused_rule", "M.z",
-                                              "[continuous] wholesale: unsupported op"):
+        fails.append(
+            "julia_outcome: a build only the fallback entry reaches counted as native building"
+        )
+    r = rust_outcome(
+        {
+            "native_ok": False,
+            "native_err_variant": "CompilerRefusedRule",
+            "native_refused_rule": "M.z",
+            "native_refused_tier": "continuous",
+            "native_refused_reason": "wholesale: unsupported op",
+        },
+        "native",
+    )
+    if (r["code"], r["rule"], r["reason"]) != (
+        "compiler_refused_rule",
+        "M.z",
+        "[continuous] wholesale: unsupported op",
+    ):
         fails.append(f"rust_outcome: {r}")
     if rust_outcome({"killed": True, "rc": 124}, "interpreter")["code"] != "killed":
         fails.append("rust_outcome: a killed document must not read as a build")
@@ -581,8 +680,9 @@ def cmd_self_test(args) -> int:
             continue
         for e in led["entries"]:
             if e["path"].startswith("tests/") and not (REPO_ROOT / e["path"]).is_file():
-                fails.append(f"{path}: entry {e['path']} names a file that does not exist; "
-                             f"remove this entry")
+                fails.append(
+                    f"{path}: entry {e['path']} names a file that does not exist; remove this entry"
+                )
         print(f"native coverage: {path.name} holds {len(led['entries'])} entries")
     for f in fails:
         print(f"  FAIL  {f}")
@@ -594,15 +694,22 @@ def cmd_self_test(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def roots(p):
-        p.add_argument("--repo-root", default=str(REPO_ROOT),
-                       help="the EarthSciAST checkout the corpus's tests/ comes from")
-        p.add_argument("--earthscimodels", default=None,
-                       help="the EarthSciModels checkout (omit to leave it out)")
+        p.add_argument(
+            "--repo-root",
+            default=str(REPO_ROOT),
+            help="the EarthSciAST checkout the corpus's tests/ comes from",
+        )
+        p.add_argument(
+            "--earthscimodels",
+            default=None,
+            help="the EarthSciModels checkout (omit to leave it out)",
+        )
 
     p = sub.add_parser("corpus", help="list the corpus")
     roots(p)
@@ -613,25 +720,36 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(name)
         roots(p)
         p.add_argument("--binding", required=True, choices=BINDINGS)
-        p.add_argument("--census", required=True,
-                       help="Rust: the census JSON Lines; Julia: the native sweep")
-        p.add_argument("--census-interpreter", default=None,
-                       help="Julia: the interpreter sweep")
-        p.add_argument("--corpus", default=None,
-                       help="the corpus list the census ran over; every document in it "
-                            "must have a record")
-        p.add_argument("--ledger", default=None,
-                       help="default: tests/conformance/native_coverage/<binding>.json")
+        p.add_argument(
+            "--census", required=True, help="Rust: the census JSON Lines; Julia: the native sweep"
+        )
+        p.add_argument("--census-interpreter", default=None, help="Julia: the interpreter sweep")
+        p.add_argument(
+            "--corpus",
+            default=None,
+            help="the corpus list the census ran over; every document in it must have a record",
+        )
+        p.add_argument(
+            "--ledger",
+            default=None,
+            help="default: tests/conformance/native_coverage/<binding>.json",
+        )
         if name == "check":
             p.add_argument("--report", default=None, help="write a JSON report here")
         else:
             p.add_argument("--note", default=None, help="a note for the ledger's 'measured' block")
-            p.add_argument("--baseline", action="store_true",
-                           help="write the ledger even if it gains entries (a first "
-                                "measurement); without it a rewrite may only shrink it")
-            p.add_argument("--provenance", default=None,
-                           help="the census's provenance.json (the commits it ran on); "
-                                "default: the checkouts' current HEADs")
+            p.add_argument(
+                "--baseline",
+                action="store_true",
+                help="write the ledger even if it gains entries (a first "
+                "measurement); without it a rewrite may only shrink it",
+            )
+            p.add_argument(
+                "--provenance",
+                default=None,
+                help="the census's provenance.json (the commits it ran on); "
+                "default: the checkouts' current HEADs",
+            )
         p.set_defaults(fn=fn)
 
     p = sub.add_parser("self-test")
