@@ -1268,7 +1268,7 @@ end
 function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
                              range_iters, lhs_body::OpExpr,
                              resolved_obs::Dict{String,ASTExpr},
-                             array_var_info, var_map::Dict{String,Int},
+                             array_var_info, var_map::AbstractDict{String,Int},
                              const_arrays::AbstractDict, pgather::AbstractDict,
                              param_sym_set, reg_funcs, covered::BitVector;
                              template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,

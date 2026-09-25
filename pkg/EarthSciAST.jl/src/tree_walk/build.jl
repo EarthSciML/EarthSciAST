@@ -932,15 +932,17 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
     return merged
 end
 
-# Expand every INLINE ARRAY `initial_conditions` entry into the per-cell keys
-# (`u[1]`, `u[2,3]`, …) the u0 seeding reads, leaving scalar entries untouched.
-# A per-cell key the caller wrote explicitly WINS: it is the more specific
-# binding. Returns the ORIGINAL map when nothing was expanded.
+# Read every INLINE ARRAY `initial_conditions` entry as the per-cell keys
+# (`u[1]`, `u[2,3]`, …) the u0 seeding reads, leaving scalar entries untouched:
+# an `_InlineICs` view that holds each profile as an array rather than a key per
+# cell. A per-cell key the caller wrote explicitly WINS: it is the more specific
+# binding. Returns the ORIGINAL map when there is no inline profile.
 function _expand_inline_array_ics(model::Model, initial_conditions::AbstractDict,
                                   index_sets::AbstractDict)
     any(is_inline_array(v) for (_, v) in initial_conditions) || return initial_conditions
     out = Dict{String,Any}(String(k) => v for (k, v) in initial_conditions
                            if !is_inline_array(v))
+    arrays = Pair{String,Array{Float64}}[]
     for (k, v) in initial_conditions
         is_inline_array(v) || continue
         name = String(k)
@@ -949,12 +951,13 @@ function _expand_inline_array_ics(model::Model, initial_conditions::AbstractDict
             "initial_conditions[$(name)]: inline array data names no variable of this " *
             "model (esm-spec §6.6.2)"))
         _check_inline_shape(name, v, var.shape, index_sets, "initial_conditions")
+        vals = Array{Float64}(undef, size(v))
         for I in CartesianIndices(v)
-            key = _cell_key(name, collect(Int, Tuple(I)))
-            haskey(out, key) || (out[key] = Float64(v[I]))
+            vals[I] = Float64(v[I])
         end
+        push!(arrays, name => vals)
     end
-    return out
+    return _InlineICs(out, arrays)
 end
 
 # esm-spec §6.6.2: inline array data MUST match the variable's declared `shape`
@@ -1458,8 +1461,11 @@ function _enumerate_declared_array_cells!(array_cells, model::Model,
         (haskey(array_cells, n) && !isempty(array_cells[n])) && continue
         exts = _declared_shape_extents(v.shape, index_sets, derived_extents)
         exts === nothing && continue
-        cells = Vector{Int}[collect(Int, Tuple(I)) for I in CartesianIndices(Tuple(exts))]
-        array_cells[n] = sort!(cells)
+        cs = _DiscoveredCells()
+        if all(>(0), exts)
+            _cellset_push_box!(cs, ones(Int, length(exts)), exts, n)
+        end
+        array_cells[n] = cs
     end
     return nothing
 end
@@ -1494,14 +1500,15 @@ end
 
 # ---- Stage: fold scoped-reference / array `ic` equations (spec §11.4.1) ----
 # Now that each array state's cells are known, expand every deferred field-ic
-# into per-element initial values keyed by the flat element name. The RHS may
-# be a LOADED FIELD (a `const_arrays` entry supplying the initial field over
-# the lifted grid), a broadcast constant, or a coordinate expression. Folding
-# here means the array-cell u0 seeding (and callers that don't override)
-# pick these up exactly like a model-local `ic`. A target that resolves to no
-# array cells, or an RHS the seed path cannot evaluate, is a hard error — a
-# missing/unsupported scoped ic is never silently dropped. Mutates `eq_ics`.
-function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
+# into per-element initial values, handed to `set(slot, value)` for each cell of
+# the target (in lexicographic cell order). The RHS may be a LOADED FIELD (a
+# `const_arrays` entry supplying the initial field over the lifted grid), a
+# broadcast constant, or a coordinate expression. Folding here means the
+# array-cell u0 seeding (and callers that don't override) pick these up exactly
+# like a model-local `ic`. A target that resolves to no array cells, or an RHS
+# the seed path cannot evaluate, is a hard error — a missing/unsupported scoped
+# ic is never silently dropped.
+function _fold_field_ics!(set, field_ics, array_cells, layout::StateLayout,
                           param_scope::AbstractDict,
                           registered_functions::AbstractDict,
                           const_arrays::AbstractDict)
@@ -1511,6 +1518,8 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
             "E_TREEWALK_UNSUPPORTED_EQUATION",
             "ic($(target)): scoped-reference target resolves to no array cells; the " *
             "target must name a lifted/array state variable of the flattened system"))
+        blk = _layout_block(layout, target)
+        put = (idxs, val) -> (blk === nothing || set(_block_slot(blk, idxs), val); nothing)
         # Compile the coordinate field ONCE (indices as params) when possible; else
         # fall back to the per-cell resolve+compile. With the construction-time
         # compile-once forms off (`compiler = :interpreter`) this takes the
@@ -1520,10 +1529,7 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
                nothing
         if fast !== nothing
             _record_rule!("ic($(target))", :equation, :setup_compiled)
-            for cell in cells
-                idxs = collect(Int, cell)
-                eq_ics[_cell_key(target, idxs)] = fast(idxs)
-            end
+            _foreach_cell_lex(idxs -> put(idxs, fast(idxs)), cells)
             continue
         end
         # The first two forms `_resolve_field_ic` serves do not depend on the
@@ -1533,57 +1539,36 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
         # covers goes per cell, handed this verdict so no cell re-runs the
         # failed constant attempt, and there the coordinate-expression step
         # raises the refusal itself.
-        uniform = _field_ic_uniform(target, rhs, length(first(cells)), const_arrays,
+        uniform = _field_ic_uniform(target, rhs, cells.rank, const_arrays,
                                     registered_functions; params=param_scope)
         hit = uniform[1]
         if hit !== nothing
             tier, val = hit
             _record_rule!("ic($(target))", :equation, tier)
-            for cell in cells
-                idxs = collect(Int, cell)
-                eq_ics[_cell_key(target, idxs)] = val(idxs)
-            end
+            _foreach_cell_lex(idxs -> put(idxs, val(idxs)), cells)
             continue
         end
         _record_rule!("ic($(target))", :equation, :setup_percell)
-        for cell in cells
-            idxs = collect(Int, cell)
-            eq_ics[_cell_key(target, idxs)] =
-                _resolve_field_ic(target, rhs, idxs, const_arrays, registered_functions;
-                                  params=param_scope, uniform=uniform)
+        _foreach_cell_lex(cells) do idxs
+            put(idxs, _resolve_field_ic(target, rhs, copy(idxs), const_arrays,
+                                        registered_functions;
+                                        params=param_scope, uniform=uniform))
         end
     end
     return nothing
-end
-
-# ---- Stage: flat state-vector cell names ----
-# Array cells are enumerated in column-major order (first index fastest,
-# consistent with Julia's native array layout and the Rust/Python runtimes).
-function _enumerate_array_cell_names(array_cells, array_var_info)
-    array_cell_names = String[]
-    for vname in sort(collect(keys(array_cells)))
-        haskey(array_var_info, vname) || continue
-        lo, hi = array_var_info[vname]
-        # `CartesianIndices` iterates the first index fastest — the same
-        # column-major order the sibling `_enumerate_declared_array_cells!`
-        # (and the manual linear-decode loop this replaced) produces.
-        for I in CartesianIndices(ntuple(d -> lo[d]:hi[d], length(lo)))
-            push!(array_cell_names, _cell_key(vname, collect(Int, Tuple(I))))
-        end
-    end
-    return array_cell_names
 end
 
 # ---- Stage: initial-condition vector ----
 # Seed u0 per state slot: an explicit `initial_conditions` entry wins, then an
 # `ic`-equation value (scalar or per-cell field), then the variable's declared
 # scalar default (an array cell falls back to its parent variable's default).
-function _build_u0(model::Model, scalar_state_names::Vector{String},
-                   array_cell_names::Vector{String},
+# `fold_fields!(set)` hands the field-`ic` values to `set(slot, value)`.
+function _build_u0(model::Model, layout::StateLayout,
                    initial_conditions::AbstractDict,
-                   eq_ics::Dict{String,Float64})
-    u0 = Vector{Float64}(undef, length(scalar_state_names) + length(array_cell_names))
-    for (i, name) in enumerate(scalar_state_names)
+                   eq_ics::Dict{String,Float64}, fold_fields!)
+    u0 = Vector{Float64}(undef, length(layout))
+    scalar_names = _layout_scalar_names(layout)
+    for (i, name) in enumerate(scalar_names)
         if haskey(initial_conditions, name)
             u0[i] = Float64(initial_conditions[name])
         elseif haskey(eq_ics, name)
@@ -1593,39 +1578,73 @@ function _build_u0(model::Model, scalar_state_names::Vector{String},
             u0[i] = d === nothing ? 0.0 : Float64(d)
         end
     end
-    n_scalar = length(scalar_state_names)
-    for (i_rel, cname) in enumerate(array_cell_names)
-        i_abs = n_scalar + i_rel
-        if haskey(initial_conditions, cname)
-            u0[i_abs] = Float64(initial_conditions[cname])
-        elseif haskey(eq_ics, cname)
-            u0[i_abs] = eq_ics[cname]   # scoped-reference / array ic (§11.4.1)
-        else
-            # The parent variable's declared default: a scalar broadcasts to
-            # every cell, and INLINE ARRAY DATA (esm-spec §6.3) supplies this
-            # cell's own value at its multi-index.
-            parsed = _parse_cell_key(cname)
-            vname = parsed === nothing ? "" : parsed[1]
-            if haskey(model.variables, vname)
-                d = model.variables[vname].default
-                u0[i_abs] = if d === nothing
-                    0.0
-                elseif is_inline_array(d)
-                    idxs = parsed[2]
-                    checkbounds(Bool, d, idxs...) || throw(TreeWalkError(
-                        "E_TREEWALK_UNSUPPORTED_SHAPE",
-                        "default[$(vname)]: inline array data has shape $(size(d)), which " *
-                        "does not cover cell $(Tuple(idxs)) (esm-spec §6.6.2)"))
-                    Float64(d[idxs...])
-                else
-                    Float64(d)
+    # Array cells: the parent variable's declared default first (a scalar
+    # broadcasts to every cell, and INLINE ARRAY DATA (esm-spec §6.3) supplies
+    # each cell's own value at its multi-index), then the field-`ic` values,
+    # then the explicit initial conditions, so the later wins. A block whose
+    # default cannot be written to every cell up front (inline data that does
+    # not cover the block, or a value that does not convert) is resolved cell
+    # by cell at the end, for the cells nothing else set, so a cell an `ic` or
+    # an initial condition sets never reads the default.
+    deferred = _ArrayBlock[]
+    for b in _layout_blocks(layout)
+        rng = (b.base):(b.base + b.len - 1)
+        if !haskey(model.variables, b.name) || any(<(0), b.lo)
+            push!(deferred, b)
+            continue
+        end
+        d = model.variables[b.name].default
+        if d === nothing
+            fill!(view(u0, rng), 0.0)
+        elseif is_inline_array(d)
+            inside = eltype(d) <: Real && ndims(d) == length(b.lo) &&
+                     all(dd -> b.lo[dd] >= 1 && b.hi[dd] <= size(d, dd), eachindex(b.lo))
+            if inside
+                k = b.base
+                for I in CartesianIndices(_block_ranges(b))
+                    u0[k] = Float64(d[I])
+                    k += 1
                 end
             else
-                u0[i_abs] = 0.0
+                push!(deferred, b)
             end
+        elseif d isa Real
+            fill!(view(u0, rng), Float64(d))
+        else
+            push!(deferred, b)
+        end
+    end
+    n_scalar = length(scalar_names)
+    covered = isempty(deferred) ? nothing : falses(length(u0))
+    mark = s -> (covered === nothing || (covered[s] = true); nothing)
+    fold_fields!((s, v) -> (s == 0 || (u0[s] = v; mark(s)); nothing))
+    _apply_ics_by_slot!((s, v) -> (s > n_scalar && (u0[s] = Float64(v); mark(s)); nothing),
+                        layout, initial_conditions)
+    for b in deferred
+        idxs = Vector{Int}(undef, length(b.lo))
+        for s in (b.base):(b.base + b.len - 1)
+            covered[s] && continue
+            u0[s] = _cell_default(model, b.name, _block_cell!(idxs, b, s))
         end
     end
     return u0
+end
+
+# One array cell's default value: its parent variable's declared default, or 0
+# when the cell's key names no variable (`_parse_cell_key` reads no name out of
+# a negative index).
+function _cell_default(model::Model, name::String, idxs::Vector{Int})
+    (any(<(0), idxs) || !haskey(model.variables, name)) && return 0.0
+    d = model.variables[name].default
+    d === nothing && return 0.0
+    if is_inline_array(d)
+        checkbounds(Bool, d, idxs...) || throw(TreeWalkError(
+            "E_TREEWALK_UNSUPPORTED_SHAPE",
+            "default[$(name)]: inline array data has shape $(size(d)), which " *
+            "does not cover cell $(Tuple(idxs)) (esm-spec §6.6.2)"))
+        return Float64(d[idxs...])
+    end
+    return Float64(d)
 end
 
 # ---- Stage: observed substitution / derivative-equation split ----
@@ -1947,7 +1966,7 @@ end
 # seeded in u0).
 function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
                                 initial_conditions::AbstractDict,
-                                var_map::Dict{String,Int}, array_var_info,
+                                var_map::AbstractDict{String,Int}, array_var_info,
                                 const_arrays::AbstractDict,
                                 pgather::AbstractDict, param_sym_set, reg_funcs, p)
     pp = isnothing(p) ? NamedTuple() : p
@@ -1962,11 +1981,16 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
         body === nothing && continue
         range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
         todo = Tuple{Any,Int}[]
+        may_override = _ics_may_name_cells(initial_conditions)
+        cell = Vector{Int}(undef, length(idx_names))
         for idx_tuple in Iterators.product(range_iters...)
-            cname = _cell_key(var_name, [idx_tuple[d] for d in 1:length(idx_names)])
-            slot = get(var_map, cname, 0)
+            for d in eachindex(cell)
+                cell[d] = idx_tuple[d]
+            end
+            slot = _vm_slot(var_map, var_name, cell)
             slot == 0 && continue
-            haskey(initial_conditions, cname) && continue   # explicit override wins
+            # explicit override wins
+            may_override && haskey(initial_conditions, _cell_key(var_name, cell)) && continue
             push!(todo, (idx_tuple, slot))
         end
         isempty(todo) && continue
@@ -2018,7 +2042,7 @@ end
 # compiled once against them — or `nothing` when the body does not resolve or
 # compile with its indices symbolic.
 function _compile_init_once(body::ASTExpr, idx_names::Vector{String}, array_var_info,
-                            var_map::Dict{String,Int}, const_arrays::AbstractDict,
+                            var_map::AbstractDict{String,Int}, const_arrays::AbstractDict,
                             pgather::AbstractDict, param_sym_set, reg_funcs)
     isempty(idx_names) && return nothing
     built = _try_build_array_contraction(body, idx_names, String[], Any[], "+", 0.0,
@@ -2210,7 +2234,7 @@ end
 # place. Mutates `pgather` (adds the caches).
 function _build_discrete_materializer!(mut::DiscreteMaterializer,
         discrete_vars, discrete_defs::Dict{String,ASTExpr}, resolved_obs::Dict{String,ASTExpr},
-        array_var_info, var_map::Dict{String,Int}, const_arrays::AbstractDict,
+        array_var_info, var_map::AbstractDict{String,Int}, const_arrays::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs, p, n_states::Int)
     isempty(discrete_vars) && return nothing
     order = _discrete_fill_order(discrete_vars, discrete_defs)
@@ -2845,7 +2869,7 @@ function _build_state_layout(model::Model, cls, parts;
                                          initial_conditions)
     union!(array_var_names, array_var_names_declared)
 
-    # array_cells: var_name → sorted list of index-tuples (1-based)
+    # array_cells: var_name → the cells its equations and initial conditions name
     array_cells = _discover_array_cells(parts.equations, initial_conditions,
                                         array_var_names)
     # Equation-less declared array states still get one u0 slot per cell.
@@ -2864,26 +2888,23 @@ function _build_state_layout(model::Model, cls, parts;
     array_var_info = Dict{String, Tuple{Vector{Int},Vector{Int}}}()
     for (vname, cells) in array_cells
         isempty(cells) && continue
-        ndim = length(cells[1])
-        lo = [minimum(c[d] for c in cells) for d in 1:ndim]
-        hi = [maximum(c[d] for c in cells) for d in 1:ndim]
-        array_var_info[vname] = (lo, hi)
+        array_var_info[vname] = _cellset_bbox(cells)
     end
 
-    # ---- Fold scoped-reference / array `ic` equations into u0 (spec §11.4.1) ----
-    _with_param_reads(param_reads) do
-        _fold_field_ics!(parts.eq_ics, parts.field_ics, array_cells, parts.param_scope,
-                         registered_functions, const_arrays)
-    end
+    # ---- Flat state layout: scalars first, then one block per array ----
+    # Each array variable's block covers the bounding box of its cells,
+    # column-major (first index fastest, consistent with Julia's native array
+    # layout and the Rust/Python runtimes), arrays in name order.
+    var_map = StateLayout(scalar_state_names,
+        [vname => array_var_info[vname] for vname in sort(collect(keys(array_var_info)))])
 
-    # ---- Build flat state vector: scalars first, then array cells ----
-    array_cell_names = _enumerate_array_cell_names(array_cells, array_var_info)
-    all_state_names = vcat(scalar_state_names, array_cell_names)
-    var_map = Dict{String,Int}(name => i for (i, name) in enumerate(all_state_names))
-
-    # ---- Initial condition vector ----
-    u0 = _build_u0(model, scalar_state_names, array_cell_names,
-                   initial_conditions, parts.eq_ics)
+    # ---- Initial condition vector, with the scoped-reference / array `ic`
+    # equations folded in (spec §11.4.1) ----
+    u0 = _build_u0(model, var_map, initial_conditions, parts.eq_ics,
+        set -> _with_param_reads(param_reads) do
+            _fold_field_ics!(set, parts.field_ics, array_cells, var_map,
+                             parts.param_scope, registered_functions, const_arrays)
+        end)
 
     # ---- Parameter NamedTuple ----
     p_vals = Float64[]
@@ -2902,13 +2923,12 @@ function _build_state_layout(model::Model, cls, parts;
     # ---- Factored array-observed buffer layout (perf: array-observed slots) ----
     # Each materialized array observed gets a dense block of slots ABOVE the
     # ODE state (`n_states+1 …`) in the same flat vector, laid out column-major
-    # exactly as an array state's cells are (`_enumerate_array_cell_names`), and
+    # exactly as an array state's cells are (one `StateLayout` block each), and
     # is registered in `array_var_info` + `var_map` so a reader's
-    # `index(obs, i…)` resolves through the ordinary array-gather path. `u0`,
-    # `all_state_names` and the PUBLIC `var_map` keep only the ODE slots — the
-    # buffers are build-owned scratch, never an integrator slot.
+    # `index(obs, i…)` resolves through the ordinary array-gather path. `u0`
+    # and the PUBLIC `var_map` keep only the ODE slots — the buffers are
+    # build-owned scratch, never an integrator slot.
     mat_dims = Dict{String,Vector{Int}}()
-    mat_cell_names = String[]
     var_map_ext = var_map
     array_var_info_ext = array_var_info
     if !isempty(cls.mat_array_vars)
@@ -2918,8 +2938,8 @@ function _build_state_layout(model::Model, cls, parts;
                 ((eq.lhs::VarExpr).name in cls.mat_array_vars) &&
                 (mat_defs_raw[(eq.lhs::VarExpr).name] = eq.rhs)
         end
-        var_map_ext = copy(var_map)
         array_var_info_ext = copy(array_var_info)
+        mat_blocks = Pair{String,Tuple{Vector{Int},Vector{Int}}}[]
         for name in sort(collect(cls.mat_array_vars))
             haskey(mat_defs_raw, name) || continue
             haskey(array_var_info_ext, name) && continue   # never shadow a state
@@ -2932,14 +2952,9 @@ function _build_state_layout(model::Model, cls, parts;
             (v.shape !== nothing && length(v.shape) != length(dims)) && continue
             mat_dims[name] = dims
             array_var_info_ext[name] = (ones(Int, length(dims)), copy(dims))
-            for I in CartesianIndices(Tuple(dims))
-                push!(mat_cell_names, _cell_key(name, collect(Int, Tuple(I))))
-            end
+            push!(mat_blocks, name => array_var_info_ext[name])
         end
-        n_st = length(all_state_names)
-        for (i, cn) in enumerate(mat_cell_names)
-            var_map_ext[cn] = n_st + i
-        end
+        var_map_ext = _layout_extend(var_map, mat_blocks)
     end
 
     # The parameter scope handed to `_compile`, as an ORDERED map: `sym → its
@@ -2952,10 +2967,10 @@ function _build_state_layout(model::Model, cls, parts;
     param_index = Dict{Symbol,Int}(s => i for (i, s) in enumerate(p_syms))
     param_map = Dict{String,Int}(String(s) => i for (i, s) in enumerate(p_syms))
 
-    return (; all_state_names, var_map, u0, p,
+    return (; n_states=length(var_map), var_map, u0, p,
             param_sym_set=param_index, param_map, array_var_info,
             var_map_ext, array_var_info_ext, mat_dims,
-            n_total=length(all_state_names) + length(mat_cell_names))
+            n_total=length(var_map_ext))
 end
 
 # ---- Phase 4: registry + forcing buffers + derivative compile + closure ----
@@ -2972,7 +2987,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     u0 = layout.u0
     p = layout.p
     param_sym_set = layout.param_sym_set
-    n_states = length(layout.all_state_names)
+    n_states = layout.n_states
     # The layout hands back TWO maps: the ODE-only one (`var_map` — the public
     # return, and the scope the setup-time seeding evaluates in, where the
     # observed buffers do not exist yet) and the EXTENDED one that also carries
@@ -3736,7 +3751,7 @@ end
 # `(scalar_entries, percell_scalar, acc_kernels, scan_folds, array_contractions)`.
 function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
-        var_map::Dict{String,Int}, const_registry::AbstractDict,
+        var_map::AbstractDict{String,Int}, const_registry::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs, n_states::Int;
         template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,
         # SCALAR-arm substitution map (ess-obs-slots): `resolved_obs` minus the
@@ -4089,7 +4104,7 @@ end
 # per-cell build uses (`_compile_faq_percell!`), deliberately: the state
 # ordering is a derived fact, not a convention, and this must not re-derive it.
 function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
-        range_iters, lhs_body::OpExpr, var_map::Dict{String,Int},
+        range_iters, lhs_body::OpExpr, var_map::AbstractDict{String,Int},
         oplus::String, zerobar::Float64)
     nd = length(idx_names)
     scan_range = collect(range_iters[axis])
@@ -4262,7 +4277,7 @@ end
 function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         array_contractions, covered::BitVector,
         eq::Equation, resolved_obs::Dict{String,ASTExpr},
-        array_var_info, var_map::Dict{String,Int},
+        array_var_info, var_map::AbstractDict{String,Int},
         const_registry::AbstractDict, pgather::AbstractDict,
         param_sym_set, reg_funcs;
         template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,
@@ -4638,7 +4653,7 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         contract_names::Vector{String}, contract_ranges,
         rhs_oplus::String, rhs_zerobar::Float64,
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
-        var_map::Dict{String,Int}, const_registry::AbstractDict,
+        var_map::AbstractDict{String,Int}, const_registry::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs,
         # True when a non-strict build has the per-cell loop behind this tier:
         # an emitter decline then falls back to it instead of refusing.
@@ -4750,7 +4765,7 @@ function _compile_faq_percell!(percell_scalar, acc_kernels, covered::BitVector,
         contract_names::Vector{String}, contract_ranges, contract_const,
         rhs_oplus::String, rhs_zerobar::Float64, agg_gates, agg_filter,
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
-        var_map::Dict{String,Int}, const_registry::AbstractDict,
+        var_map::AbstractDict{String,Int}, const_registry::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs,
         contraction_loop::Bool=false,
         pooled_cells=nothing)   # `nothing` or `Vector{Tuple{Int,_Node}}` — see above

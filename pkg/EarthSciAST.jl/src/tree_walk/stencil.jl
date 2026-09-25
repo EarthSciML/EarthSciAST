@@ -198,7 +198,7 @@ struct _TemplateCtx
     variants::Dict{Tuple{UInt64,String,String},_SubVariant}
     gmemo::IdDict{OpExpr,Bool}
     bio::IOBuffer
-    var_map::Dict{String,Int}
+    var_map::AbstractDict{String,Int}
     param_sym_set::Any
     reg_funcs::Any
     # Index-bound bodies for expansion roots that are ARRAY PRODUCERS (an
@@ -218,7 +218,7 @@ struct _TemplateCtx
     # per expansion-root identity, computed once per equation.
     szmemo::IdDict{OpExpr,Int}
 end
-function _TemplateCtx(sites::IdDict{OpExpr,OpExpr}, var_map::Dict{String,Int},
+function _TemplateCtx(sites::IdDict{OpExpr,OpExpr}, var_map::AbstractDict{String,Int},
                       param_sym_set, reg_funcs;
                       idxkey::String="", store::Union{Nothing,_XEqStore}=nothing)
     variants = store === nothing ? Dict{Tuple{UInt64,String,String},_SubVariant}() :
@@ -1115,37 +1115,37 @@ end
 # Extend `var_map` with the lane sentinels → a negative slot marker. `_compile`
 # maps `VarExpr(lane_name(k))` to `_NK_STATE(idx = -k)`, which the box
 # processor's `_lower_to_access` decodes back to `recipes[k]`. Built ONCE per
-# equation (not per cell).
-function _lane_var_map(var_map::Dict{String,Int}, recipes::Vector{_LaneRecipe})
+# equation (not per cell), as an overlay on `var_map` rather than a copy of it.
+function _lane_var_map(var_map::AbstractDict{String,Int}, recipes::Vector{_LaneRecipe})
     isempty(recipes) && return var_map
-    ext = copy(var_map)
+    ext = Dict{String,Int}()
     for k in eachindex(recipes)
         ext[_lane_name(k)] = -k
     end
-    return ext
+    return _VarMapOverlay(ext, var_map)
 end
 
 # Lane sentinels plus sub-kernel call sentinels (compile-once tier): call site j
 # maps to the disjoint negative range `-(_SUBCALL_SENT_BASE + j)`, decoded by
 # `_lower_to_access`.
-function _ext_var_map(var_map::Dict{String,Int}, recipes::Vector{_LaneRecipe},
+function _ext_var_map(var_map::AbstractDict{String,Int}, recipes::Vector{_LaneRecipe},
                       subcalls::Vector{_SubCallSite})
     (isempty(recipes) && isempty(subcalls)) && return var_map
-    ext = copy(var_map)
+    ext = Dict{String,Int}()
     for k in eachindex(recipes)
         ext[_lane_name(k)] = -k
     end
     for j in eachindex(subcalls)
         ext[_subcall_name(j)] = -(_SUBCALL_SENT_BASE + j)
     end
-    return ext
+    return _VarMapOverlay(ext, var_map)
 end
 
 # Evaluate one lane recipe for the current cell (`idx_env`). Byte-for-byte the
 # `_resolve_indices` outcome for that leaf: a STATE slot (≥1), 0 for a ghost cell,
 # a linear PGATHER offset, or a folded const / loop-index literal.
 function _eval_recipe(rec::_LaneRecipe, idx_env::Dict{String,Int},
-                      var_map::Dict{String,Int}, const_arrays::AbstractDict)
+                      var_map::AbstractDict{String,Int}, const_arrays::AbstractDict)
     if rec.kind == LANE_LOOPLIT
         return Float64(idx_env[rec.loop_name])
     end
@@ -1247,7 +1247,7 @@ const _StencilBranch = Tuple{_Node,Vector{_LaneRecipe},Vector{Int},Vector{_SubCa
 # var's `[lo,hi]` box — in which case `_eval_recipe` keeps the exact string lookup.
 # ~2^D + D probes, once per var per branch template (cold); the payoff is per-cell.
 function _derive_var_affine(var_name::String, lo::Vector{Int}, hi::Vector{Int},
-                            var_map::Dict{String,Int})
+                            var_map::AbstractDict{String,Int})
     n = length(lo)
     (n == 0 || length(hi) != n) && return nothing
     base0 = get(var_map, _cell_key(var_name, lo), 0)
@@ -1279,7 +1279,7 @@ function _derive_var_affine(var_name::String, lo::Vector{Int}, hi::Vector{Int},
 end
 
 function _build_branch_template(body::ASTExpr, ctx_proto::_StencilCtx,
-                                var_map::Dict{String,Int},
+                                var_map::AbstractDict{String,Int},
                                 param_sym_set, reg_funcs)::_StencilBranch
     _BENCH_ON[] && (_BENCH_BRANCH_TEMPLATES[] += 1)   # §12 spine-template counter (off by default)
     rs = _LaneRecipe[]
