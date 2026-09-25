@@ -109,7 +109,7 @@ def per_result_checks(run, r, gates, family_spec):
             )
         )
     if "speed" in gates and "speed" not in excl:
-        g = gates["speed"]
+        g = {**gates["speed"], **family_spec.get("gate_overrides", {}).get("speed", {})}
         s, h = r.get("steady_rhs_s"), r.get("hand_loop_s")
         big = (r.get("n_states") or 0) >= g.get("min_n_states", 0)
         ratio = s / h if (ok and s is not None and h) else None

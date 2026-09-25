@@ -336,17 +336,26 @@ def prefix_scan(n):
     The idiom of tests/valid/faq/cumulative_prefix_reduction.esm: a running
     sum is an ordinary faq whose filter compares the contracted index to the
     output index. D(u[i]) = -0.001 * burden_below[i], burden_below[i] =
-    sum_{j <= i} u[j] * dz[j].
+    sum_{j <= i} u[j] * dz[j]. The layer thickness is non-uniform,
+    dz[i] = 100 * (1 + 0.5 * sin(i)), defined in the document by a formula of
+    its index so a compiler must materialize and read it rather than use one
+    value for every layer.
     """
     ranges_i = {"i": {"from": "x"}}
     ranges_ij = {"i": {"from": "x"}, "j": {"from": "x"}}
     model = {
         "variables": {
             "u": {"type": "unknown", "units": "kg/m^3", "shape": ["x"], "default": 1.0},
-            "dz": {"type": "parameter", "units": "m", "shape": ["x"], "default": 100.0},
+            "dz": {"type": "unknown", "units": "m", "shape": ["x"]},
             "burden_below": {"type": "unknown", "units": "kg/m^2", "shape": ["x"]},
         },
         "equations": [
+            {
+                "lhs": "dz",
+                "rhs": faq(
+                    op("*", 100.0, op("+", 1, op("*", 0.5, op("sin", "i")))), ["i"], ranges_i
+                ),
+            },
             {
                 "lhs": faq_lhs("u", ["i"], ranges_i),
                 "rhs": faq(op("*", -0.001, ix("burden_below", "i")), ["i"], ranges_i),
@@ -370,17 +379,26 @@ def prefix_scan(n):
 def source_receptor(n):
     """A square dense source-receptor contraction, D(c[i]) = sum_j K[i,j] * e[j].
 
-    K is an n x n parameter with a scalar default, so the document stays small
-    while the contraction is dense; the emissions e decay at rate kd.
+    K is a genuinely non-uniform dense n x n array, defined in the document by
+    a non-separable formula of its indices, K[i,j] = 0.001 * (1 + sin(i*j)),
+    so the document stays small while nothing about K is uniform or
+    factorable: a compiler has to materialize it (it depends on nothing but
+    the indices, so it is built once) and read it on every call, like a
+    loaded source-receptor matrix. The emissions e decay at rate kd.
     """
+    kij = op("*", 0.001, op("+", 1, op("sin", op("*", "i", "j"))))
     model = {
         "variables": {
             "c": {"type": "unknown", "units": "1", "shape": ["rcv"], "default": 0.0},
             "e": {"type": "unknown", "units": "1", "shape": ["src"], "default": 1.0},
-            "K": {"type": "parameter", "units": "1", "shape": ["rcv", "src"], "default": 0.001},
+            "K": {"type": "unknown", "units": "1", "shape": ["rcv", "src"]},
             "kd": {"type": "parameter", "units": "1", "default": 0.1},
         },
         "equations": [
+            {
+                "lhs": "K",
+                "rhs": faq(kij, ["i", "j"], {"i": {"from": "rcv"}, "j": {"from": "src"}}),
+            },
             {
                 "lhs": faq_lhs("c", ["i"], {"i": {"from": "rcv"}}),
                 "rhs": faq(

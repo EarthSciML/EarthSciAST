@@ -288,14 +288,25 @@ fn build_hand_loop(family: &str, doc: &Value, shape: &Value) -> Result<HandLoop,
                 dx: adv["dx"]["default"].as_f64().ok_or("no dx")?,
             }
         }
+        // The document's own formulas for its non-uniform arrays (generate.py),
+        // at the 1-based indices it evaluates them at.
         "prefix_scan" => HandLoop::PrefixScan {
-            dz: vec![param_default(doc, "dz")?; set_size("x")],
+            dz: (1..=set_size("x"))
+                .map(|i| 100.0 * (1.0 + 0.5 * (i as f64).sin()))
+                .collect(),
         },
         "source_receptor" => {
             let n = set_size("rcv");
+            let mut k = Vec::with_capacity(n * n);
+            // Source-major, the layout the hand loop streams.
+            for j in 1..=n {
+                for i in 1..=n {
+                    k.push(0.001 * (1.0 + (i as f64 * j as f64).sin()));
+                }
+            }
             HandLoop::SourceReceptor {
                 n,
-                k: vec![param_default(doc, "K")?; n * n],
+                k,
                 kd: param_default(doc, "kd")?,
             }
         }

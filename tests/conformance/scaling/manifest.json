@@ -40,16 +40,22 @@
       "pr_sizes": [100, 1000]
     },
     "prefix_scan": {
-      "description": "An inclusive measure-weighted prefix scan (a filtered faq) feeding a column settling term.",
+      "description": "An inclusive measure-weighted prefix scan (a filtered faq) feeding a column settling term; the layer thickness dz[i] = 100 (1 + 0.5 sin(i)) is non-uniform.",
       "size_meaning": "cells",
       "sizes": [100, 1000, 10000, 100000, 1000000],
       "pr_sizes": [100, 1000]
     },
     "source_receptor": {
-      "description": "A dense square source-receptor contraction. The work per call is N^2, so the ladder stops at 3162 (10^7 matrix entries).",
+      "description": "A dense square source-receptor contraction over a non-uniform matrix K[i,j] = 0.001 (1 + sin(i j)), defined in the document by that formula, so it is materialized once and read on every call. The work per call is N^2, so the ladder stops at 3162 (10^7 matrix entries).",
       "size_meaning": "receptors = sources (2 states per index)",
       "sizes": [100, 1000, 3162],
-      "pr_sizes": [100, 1000]
+      "pr_sizes": [100, 1000],
+      "gate_overrides": {
+        "speed": {
+          "min_n_states": 2000,
+          "why": "the work per call is N^2, so 2000 states (N = 1000) is already a 10^6 multiply-add call"
+        }
+      }
     },
     "regrid": {
       "description": "A conservative regrid (bin-skolem broad phase, inline polygon_intersection_area) applied on every call. The overlap arrays are declared dense over source x target, so the ladder stops at 3162.",
@@ -100,7 +106,7 @@
     },
     "speed": {
       "kind": "timing",
-      "description": "steady_rhs_s / hand_loop_s <= max_ratio, in each result file (serial and threaded runs are separate files). Applied from min_n_states states up, below which a call is a few microseconds and the ratio measures timer noise.",
+      "description": "steady_rhs_s / hand_loop_s <= max_ratio, in each result file (serial and threaded runs are separate files). Applied from min_n_states states up (a family's gate_overrides may lower it), below which a call is a few microseconds and the ratio measures timer noise.",
       "max_ratio": 1.25,
       "min_n_states": 10000
     }
@@ -138,10 +144,10 @@
         "family": "prefix_scan",
         "gate": "code_size_flat",
         "measured": {
-          "100": 507,
-          "1000": 5007,
-          "10000": 50007,
-          "100000": 500007
+          "100": 508,
+          "1000": 5008,
+          "10000": 50008,
+          "100000": 500008
         },
         "reason": "a prefix scan is unrolled into one region write per step: 5N + 7 instructions",
         "phase": 2
@@ -150,9 +156,9 @@
         "family": "source_receptor",
         "gate": "code_size_flat",
         "measured": {
-          "100": 208,
-          "1000": 2008,
-          "3162": 6332
+          "100": 210,
+          "1000": 2010,
+          "3162": 6334
         },
         "reason": "a contraction is unrolled once per output tuple: 2N + 8 instructions",
         "phase": 2
@@ -284,7 +290,7 @@
         "family": "prefix_scan",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": 6765,
+        "measured": 7348,
         "reason": "build cost per state above 20 ns (ns/state over N=100..100000)",
         "phase": 2,
         "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
@@ -294,7 +300,7 @@
         "gate": "speed",
         "n": 10000,
         "threads": "serial",
-        "measured": 998,
+        "measured": 1485,
         "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
         "phase": 5,
         "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
@@ -304,7 +310,7 @@
         "gate": "speed",
         "n": 100000,
         "threads": "serial",
-        "measured": 19019,
+        "measured": 32170,
         "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
         "phase": 5,
         "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
@@ -342,7 +348,7 @@
         "family": "source_receptor",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": 103574,
+        "measured": 3289,
         "reason": "build cost per state above 20 ns (ns/state over N=100..3162)",
         "phase": 2,
         "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
