@@ -435,8 +435,17 @@ impl ArrayCompiled {
             .collect()
     }
 
+    /// Every state slot's name (`u[2,3]`, or a 0-D state's bare name), in
+    /// flat state-vector order. Built from the slot layout the first time it
+    /// is asked for, then kept.
     pub fn state_variable_names(&self) -> &[String] {
-        &self.scalar_state_names
+        self.state_names
+            .get_or_init(|| super::layout::slot_names(&self.var_shapes))
+    }
+
+    /// The length of the flat state vector.
+    pub fn n_states(&self) -> usize {
+        self.n_states
     }
     pub fn parameter_names(&self) -> &[String] {
         &self.param_names
@@ -943,9 +952,11 @@ impl ArrayCompiled {
     /// it is exactly what makes `P.sub.g` a legal spelling of `sub.g`.
     fn override_namespaces(&self) -> std::collections::HashSet<String> {
         crate::simulate::namespace_scope(
+            // A slot name's cell suffix carries no `.`, so the state
+            // VARIABLES' names carry every namespace their slots' names do.
             self.param_names
                 .iter()
-                .chain(self.scalar_state_names.iter())
+                .chain(self.var_shapes.keys())
                 .map(String::as_str),
             self.namespace.as_deref(),
         )
@@ -998,7 +1009,7 @@ impl ArrayCompiled {
     ) -> Result<Vec<f64>, SimulateError> {
         // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
         let initial_conditions = crate::simulate::canonicalize_override_keys(
-            &self.scalar_state_index,
+            &super::layout::SlotNames(&self.var_shapes),
             &self.override_namespaces(),
             initial_conditions,
             &self.merged_renames,
@@ -1027,17 +1038,38 @@ impl ArrayCompiled {
                 self.resolve_field_ics(&resolved_params, None)?
             }
         };
+        // Per slot, the first of: an explicit override, a field `ic`, the
+        // variable's default. Written lowest priority first, each variable's
+        // default as one fill (or one gather of its inline data); a slot left
+        // with none of the three is flagged, and only a variable that
+        // declares no default can leave one.
         let mut ic_vec = vec![0.0f64; self.n_states];
-        for (i, name) in self.scalar_state_names.iter().enumerate() {
-            if let Some(&v) = initial_conditions.get(name) {
-                ic_vec[i] = v;
-            } else if let Some(&v) = field_ic_map.get(&i) {
-                ic_vec[i] = v;
-            } else if let Some(d) = self.state_defaults[i] {
-                ic_vec[i] = d;
-            } else {
-                return Err(SimulateError::InvalidInitialCondition { name: name.clone() });
+        let mut unset: Option<Vec<bool>> = None;
+        for ((_, vs), default) in self.var_shapes.iter().zip(&self.state_defaults) {
+            let n = vs.shape.iter().copied().product::<usize>().max(1);
+            let range = vs.flat_offset..vs.flat_offset + n;
+            if !super::layout::write_state_default(vs, default, &mut ic_vec[range.clone()]) {
+                unset.get_or_insert_with(|| vec![false; self.n_states])[range].fill(true);
             }
+        }
+        for (&slot, &v) in &field_ic_map {
+            ic_vec[slot] = v;
+            if let Some(u) = unset.as_mut() {
+                u[slot] = false;
+            }
+        }
+        for (name, &v) in &initial_conditions {
+            // Canonicalization answers only with names the layout resolves.
+            let slot = super::layout::lookup_slot(&self.var_shapes, name)
+                .expect("a canonical initial-condition key names a slot");
+            ic_vec[slot] = v;
+            if let Some(u) = unset.as_mut() {
+                u[slot] = false;
+            }
+        }
+        if let Some(slot) = unset.and_then(|u| u.iter().position(|&x| x)) {
+            let name = super::layout::slot_name(&self.var_shapes, slot).unwrap_or_default();
+            return Err(SimulateError::InvalidInitialCondition { name });
         }
         Ok(ic_vec)
     }
@@ -1655,7 +1687,7 @@ impl ArrayCompiled {
         output_observed: &[String],
         tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) -> Result<Solution, SimulateError> {
-        let mut state_variable_names = self.scalar_state_names.clone();
+        let mut state_variable_names = self.state_variable_names().to_vec();
         self.append_observed_trajectories(
             &time,
             &mut state,
