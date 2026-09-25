@@ -60,14 +60,15 @@ it off).
 - `status` is `refused` for a `compiler_refused_rule` out of the build and
   `error` for anything else; `reason` carries the message.
 
-Julia adds these fields to each result:
+Julia fills the optional `hand_loop_threads` and `hand_loop_checked_against`
+(`"interpreter"` when native did not build and the interpreter did, so a loop
+is known good before native reaches it), and adds these fields of its own:
 
 | field | meaning |
 |---|---|
 | `tiers` | the compiler report's tier breakdown, `[[tier, rules], ...]` (`compiler_report(prob)`, folded by `tier_histogram`). A per-cell tier (`percell_build`, `scalar`) shows up here |
 | `code_size_parts` | the code-size measure's two terms and the number of generated functions |
 | `hand_loop_serial_s` | the serial hand loop's time (equal to `hand_loop_s` in a serial run) |
-| `hand_loop_interpreter_max_abs_diff` | when native did not build, the hand loop checked against the interpreter's dy instead, so a loop is known good before native reaches it |
 | `interpreter_note` | why the interpreter oracle did not run, when it did not |
 
 ## The code-size measure
@@ -128,7 +129,8 @@ Notes per family:
   alive filter and row-sum normalisation; the cells are rectangles, so each
   overlap is a product of two interval overlaps) and applies them as a sparse
   row loop per call.
-- `unstructured_gather` reads the neighbour table out of the document.
+- `unstructured_gather` reads the neighbour table out of the document (the
+  const equation defining `nbr`).
 - `scalar_chemistry` reads each box's 20 species through a slot table, since
   scalar states have no array layout.
 

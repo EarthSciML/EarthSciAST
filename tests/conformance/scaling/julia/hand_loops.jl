@@ -518,28 +518,13 @@ HAND_LOOPS["regrid"] = HandLoop(_regrid_setup, _regrid_row!)
 # Unstructured gather: D(u[c]) = sum_k kappa * (u[nbr[c,k]] - u[c])
 # ---------------------------------------------------------------------------
 #
-# The neighbour table is the document's inline const array.
-
-function _find_const(e)
-    if e isa AbstractDict
-        get(e, "op", nothing) == "const" && return e["value"]
-        for v in values(e)
-            x = _find_const(v)
-            x === nothing || return x
-        end
-    elseif e isa AbstractVector
-        for v in e
-            x = _find_const(v)
-            x === nothing || return x
-        end
-    end
-    return nothing
-end
+# The neighbour table is the document's: the const equation that defines `nbr`.
 
 function _gather_setup(prob, doc, entry)
     m = Int(entry["n_cells"])
     o = _block_offset(prob.var_map, "Mesh.u", (m,))
-    tbl = _find_const(doc["models"]["Mesh"]["equations"][1]["rhs"])
+    eqs = doc["models"]["Mesh"]["equations"]
+    tbl = only(e["rhs"]["value"] for e in eqs if e["lhs"] == "nbr")
     nbr = Matrix{Int}(undef, 4, m)          # nbr[k, c]: a cell's four neighbours together
     for c in 1:m, k in 1:4
         nbr[k, c] = Int(tbl[c][k])

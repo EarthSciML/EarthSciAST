@@ -20,7 +20,7 @@
 # that say so. `--interpreter-max-states` (default 10^4) is the largest document
 # the interpreter is also built for, as the oracle for native's dy
 # (`interpreter_max_abs_diff`) and for the hand loop's when native does not
-# build (`hand_loop_interpreter_max_abs_diff`); 0 turns it off.
+# build (`hand_loop_checked_against` is then "interpreter"); 0 turns it off.
 #
 # THREADS. Native threads its compiled sections only when Polyester is loaded
 # (the opt-in lives in EarthSciASTPolyesterExt), so this adapter always loads
@@ -224,7 +224,8 @@ function blank_result(entry)
         "interpreter_max_abs_diff" => nothing,
         # Julia's own fields, beyond the tier's format:
         "tiers" => nothing, "code_size_parts" => nothing, "hand_loop_serial_s" => nothing,
-        "hand_loop_interpreter_max_abs_diff" => nothing, "interpreter_note" => nothing)
+        "hand_loop_threads" => nothing, "hand_loop_checked_against" => nothing,
+        "interpreter_note" => nothing)
 end
 
 # The state every call is measured at (the tier's README, "The measured
@@ -348,21 +349,22 @@ function measure!(rec, path, entry, compiler, budget, interp_cap)
         end
     end
     if du !== nothing
-        hand_loop!(rec, prob, path, entry, du, budget, "hand_loop_max_abs_diff")
+        hand_loop!(rec, prob, path, entry, du, budget, "native")
     elseif iprob !== nothing
         # Native did not build; the hand loop is still checked, against the
         # interpreter, so it is known good before native reaches it.
         iu = probe_state(iprob, fam, entry)
         idu = zeros(length(iu))
         iprob.f!(idu, iu, iprob.p, PROBE_T)
-        hand_loop!(rec, iprob, path, entry, idu, budget, "hand_loop_interpreter_max_abs_diff")
+        hand_loop!(rec, iprob, path, entry, idu, budget, "interpreter")
     end
     return rec
 end
 
 # Run the family's hand loop at the measured state of `prob`, record its max
-# difference from `du` (that problem's dy) under `diffkey`, and time it.
-function hand_loop!(rec, prob, path, entry, du, budget, diffkey)
+# difference from `du` (that problem's dy; `against` names its compiler), and
+# time it.
+function hand_loop!(rec, prob, path, entry, du, budget, against)
     fam = String(entry["family"])
     hl = get(HAND_LOOPS, fam, nothing)
     note(msg) = (rec["reason"] = rec["reason"] === nothing ? msg : rec["reason"] * "; " * msg)
@@ -381,10 +383,12 @@ function hand_loop!(rec, prob, path, entry, du, budget, diffkey)
         if isnan(diff)
             note("the hand loop left some dy slots unwritten")
         else
-            rec[diffkey] = diff
+            rec["hand_loop_max_abs_diff"] = diff
+            rec["hand_loop_checked_against"] = against
         end
         tser = timeit(() -> hand_serial!(row!, duh, u, PROBE_T, st); budget = budget)
         rec["hand_loop_serial_s"] = tser
+        rec["hand_loop_threads"] = Threads.nthreads()
         if Threads.nthreads() > 1
             duh2 = fill(NaN, length(u))
             hand_threaded!(row!, duh2, u, PROBE_T, st)
