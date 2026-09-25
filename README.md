@@ -21,7 +21,7 @@ These utilities have overlapping implementations in multiple languages:
 | **Classification** — derived variable classification | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Simulation** — run a simulation | ✅ | — | ✅ | ✅ | — |
 | **Runtime I/O** — data-source providers, refresh cadence, output sinks, checkpoints | ✅ | — | ✅ | ✅ | — |
-| **Hardware Acceleration** – run on GPUS (experimental) | ✅ | — | - | ✅ | — |
+| **Hardware Acceleration** – run on GPUs (experimental) | ✅ | — | - | ✅ | — |
 
 > [!NOTE]
 > For the most part, this is a project that has been grown rather than built. As such, don't be surprised by occasional eccentricities!
