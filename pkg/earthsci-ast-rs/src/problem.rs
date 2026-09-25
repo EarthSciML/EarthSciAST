@@ -825,6 +825,21 @@ impl EsmProblem {
         self.precision.document
     }
 
+    /// The compiled array model behind this Problem's right-hand side, or
+    /// `None` for a static Problem.
+    ///
+    /// Read-only access for measurement tooling (the scaling conformance
+    /// tier's adapter and the wasm suite), which drive the same compiled
+    /// artifact through the `debug_*` entry points of [`ArrayCompiled`]
+    /// rather than through a solve.
+    #[doc(hidden)]
+    pub fn debug_array_compiled(&self) -> Option<Rc<ArrayCompiled>> {
+        match &*self.backend {
+            Backend::Array(c) => Some(Rc::clone(c)),
+            Backend::Static(_) => None,
+        }
+    }
+
     /// Whether this EsmProblem has a right-hand side to integrate.
     pub fn is_dynamic(&self) -> bool {
         !matches!(&*self.backend, Backend::Static(_))
