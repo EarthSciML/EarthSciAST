@@ -249,6 +249,7 @@ pub(crate) struct TapeBuilder<'m> {
     slots: Vec<SlotDesc>,
     plans: Vec<GatherPlan>,
     regions: Vec<RegionSpec>,
+    assemblies: Vec<AssembleSpec>,
     /// Inline array-literal payloads, one per lowered array-valued `const`.
     const_data: Vec<ConstArrayData>,
     interp_tables: Vec<InterpTable>,
@@ -287,6 +288,7 @@ struct RuleTxn {
     slots: usize,
     plans: usize,
     regions: usize,
+    assemblies: usize,
     const_data: usize,
     interp_tables: usize,
     dy_writes: usize,
@@ -303,6 +305,7 @@ struct SubTxn {
     slots: usize,
     plans: usize,
     regions: usize,
+    assemblies: usize,
     const_data: usize,
     interp_tables: usize,
     /// Per stream: `(chunk count, instructions in the last chunk)`.
@@ -339,6 +342,7 @@ impl<'m> TapeBuilder<'m> {
             slots: Vec::new(),
             plans: Vec::new(),
             regions: Vec::new(),
+            assemblies: Vec::new(),
             const_data: Vec::new(),
             interp_tables: Vec::new(),
             state_vars,
@@ -1866,17 +1870,10 @@ impl<'m> TapeBuilder<'m> {
             .map(|d| (hi_bb[d] - lo_bb[d] + 1) as usize)
             .collect();
 
-        let sec0 = self.placement(Cadence::Const);
-        let mut cur = self.new_slot(&bb_shape, &lo_bb, false, sec0);
-        self.emit(
-            Instr::Fill {
-                v: Operand::Lit(0.0),
-                out: cur,
-            },
-            sec0,
-        );
-        let mut cur_cad = sec0;
-
+        // Every region value first, then ONE instruction assembling them: a
+        // makearray whose values are all literals is a constant array, built
+        // here; any other is an `Instr::Assemble`.
+        let mut parts: Vec<(LV, u32)> = Vec::with_capacity(regions.len());
         for (region, value_expr) in regions.iter().zip(values.iter()) {
             if region
                 .iter()
@@ -1914,25 +1911,53 @@ impl<'m> TapeBuilder<'m> {
                     bail_tape!("makearray: region value box does not match the region");
                 }
             }
-            let region_ix = self.regions.len() as u32;
+            let region_ix = tape_index(self.regions.len(), "makearray regions")?;
             self.regions.push(RegionSpec {
                 dest_lo: (0..ndim).map(|d| (r_lo[d] - lo_bb[d]) as usize).collect(),
                 shape: r_shape,
             });
-            let want = cur_cad.max(self.lv_cadence(&v));
-            let sec = self.placement(want);
-            let out = self.new_slot(&bb_shape, &lo_bb, false, sec);
-            let instr = Instr::Region {
-                base: cur,
-                src: self.op_of(&v),
-                region: region_ix,
-                out,
-            };
-            self.emit(instr, sec);
-            cur = out;
-            cur_cad = sec;
+            parts.push((v, region_ix));
         }
-        Ok(LV::Arr(cur))
+
+        if parts.iter().all(|(v, _)| matches!(v, LV::Lit(_))) {
+            let mut values = ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&bb_shape));
+            for (v, region_ix) in &parts {
+                let LV::Lit(x) = v else { unreachable!() };
+                let spec = &self.regions[*region_ix as usize];
+                let mut view = values.view_mut();
+                for d in 0..ndim {
+                    view.slice_axis_inplace(
+                        ndarray::Axis(d),
+                        ndarray::Slice::from(spec.dest_lo[d]..spec.dest_lo[d] + spec.shape[d]),
+                    );
+                }
+                view.fill(*x);
+            }
+            let data = tape_index(self.const_data.len(), "array constants")?;
+            self.const_data.push(ConstArrayData {
+                shape: bb_shape.clone(),
+                values: values.iter().copied().collect(),
+            });
+            let sec = self.placement(Cadence::Const);
+            let out = self.new_slot(&bb_shape, &lo_bb, false, sec);
+            self.emit(Instr::ConstArray { data, out }, sec);
+            return Ok(LV::Arr(out));
+        }
+
+        let want = parts
+            .iter()
+            .map(|(v, _)| self.lv_cadence(v))
+            .max()
+            .unwrap_or(Cadence::Const);
+        let sec = self.placement(want);
+        let table = tape_index(self.assemblies.len(), "makearray assemblies")?;
+        let spec = AssembleSpec {
+            parts: parts.iter().map(|(v, r)| (self.op_of(v), *r)).collect(),
+        };
+        self.assemblies.push(spec);
+        let out = self.new_slot(&bb_shape, &lo_bb, false, sec);
+        self.emit(Instr::Assemble { table, out }, sec);
+        Ok(LV::Arr(out))
     }
 
     // -- nested aggregate -----------------------------------------------------
@@ -3357,6 +3382,7 @@ impl<'m> TapeBuilder<'m> {
             slots: self.slots.len(),
             plans: self.plans.len(),
             regions: self.regions.len(),
+            assemblies: self.assemblies.len(),
             const_data: self.const_data.len(),
             interp_tables: self.interp_tables.len(),
             dy_writes: self.dy_writes.len(),
@@ -3374,6 +3400,7 @@ impl<'m> TapeBuilder<'m> {
         self.slots.truncate(txn.slots);
         self.plans.truncate(txn.plans);
         self.regions.truncate(txn.regions);
+        self.assemblies.truncate(txn.assemblies);
         self.const_data.truncate(txn.const_data);
         self.interp_tables.truncate(txn.interp_tables);
         self.dy_writes.truncate(txn.dy_writes);
@@ -3401,6 +3428,7 @@ impl<'m> TapeBuilder<'m> {
             slots: self.slots.len(),
             plans: self.plans.len(),
             regions: self.regions.len(),
+            assemblies: self.assemblies.len(),
             const_data: self.const_data.len(),
             interp_tables: self.interp_tables.len(),
             streams: [stream(0), stream(1), stream(2)],
@@ -3414,6 +3442,7 @@ impl<'m> TapeBuilder<'m> {
         self.slots.truncate(txn.slots);
         self.plans.truncate(txn.plans);
         self.regions.truncate(txn.regions);
+        self.assemblies.truncate(txn.assemblies);
         self.const_data.truncate(txn.const_data);
         self.interp_tables.truncate(txn.interp_tables);
         for (s, &(n_chunks, last_len)) in txn.streams.iter().enumerate() {
@@ -3847,6 +3876,7 @@ impl<'m> TapeBuilder<'m> {
             slots: std::mem::take(&mut self.slots),
             plans: std::mem::take(&mut self.plans),
             regions: std::mem::take(&mut self.regions),
+            assemblies: std::mem::take(&mut self.assemblies),
             const_data: std::mem::take(&mut self.const_data),
             interp_tables: std::mem::take(&mut self.interp_tables),
             state_vars: std::mem::take(&mut self.state_vars),
@@ -3897,7 +3927,7 @@ fn color_slab(prog: &mut TapeProgram) {
                 last_use[out as usize] = last_use[out as usize].max(i);
             }
         });
-        instr.for_each_read(&prog.dy_writes, &prog.fused, |s| {
+        instr.for_each_read(&prog.dy_writes, &prog.fused, &prog.assemblies, |s| {
             last_use[s as usize] = last_use[s as usize].max(i);
         });
     }
@@ -3941,6 +3971,7 @@ fn color_slab(prog: &mut TapeProgram) {
                 | Instr::Fused { .. }
                 | Instr::Reduce { .. }
                 | Instr::Scan { .. }
+                | Instr::Assemble { .. }
         );
         let mut defs_here: SmallVec<[SlotId; 2]> = SmallVec::new();
         prog.instrs[i].for_each_def(&prog.fused, |o| {

@@ -1189,7 +1189,7 @@ pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
     // Global reader index sets per slot.
     let mut readers: Vec<SmallVec<[u32; 4]>> = vec![SmallVec::new(); prog.slots.len()];
     for (i, ins) in prog.instrs.iter().enumerate() {
-        ins.for_each_read(&prog.dy_writes, &prog.fused, |s| {
+        ins.for_each_read(&prog.dy_writes, &prog.fused, &prog.assemblies, |s| {
             readers[s as usize].push(i as u32)
         });
     }
@@ -1478,13 +1478,18 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
         fx: &mut FuseCtx,
     ) {
         let mut hazard: Vec<usize> = Vec::new();
-        ins.for_each_read(&fx.prog.dy_writes, &fx.prog.fused, |s| {
-            for (gi, g) in open.iter().enumerate() {
-                if keep_shape != Some(&g.shape) && g.defines(s) && !hazard.contains(&gi) {
-                    hazard.push(gi);
+        ins.for_each_read(
+            &fx.prog.dy_writes,
+            &fx.prog.fused,
+            &fx.prog.assemblies,
+            |s| {
+                for (gi, g) in open.iter().enumerate() {
+                    if keep_shape != Some(&g.shape) && g.defines(s) && !hazard.contains(&gi) {
+                        hazard.push(gi);
+                    }
                 }
-            }
-        });
+            },
+        );
         hazard.sort_unstable();
         for &gi in hazard.iter().rev() {
             let g = open.remove(gi);

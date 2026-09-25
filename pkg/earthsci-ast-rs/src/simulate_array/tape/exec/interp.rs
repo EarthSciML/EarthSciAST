@@ -255,6 +255,27 @@ pub(super) fn run_range(
                     },
                 }
             }
+            Instr::Assemble { table, out } => {
+                let desc = &prog.slots[*out as usize];
+                let off = slot_off[*out as usize];
+                let dst = unsafe { slab_ptr.add(off) };
+                unsafe { std::slice::from_raw_parts_mut(dst, desc.elems()).fill(0.0) };
+                let out_rm = rm_strides(&desc.shape);
+                for (src, region) in &prog.assemblies[*table as usize].parts {
+                    let spec = &prog.regions[*region as usize];
+                    let mut dbase = 0i64;
+                    for d in 0..desc.shape.len() {
+                        dbase += out_rm[d] * spec.dest_lo[d] as i64;
+                    }
+                    let sub_dst = unsafe { dst.offset(dbase as isize) };
+                    match resolve_rv(src, &spec.shape, env, slab_ptr, slot_off, obs) {
+                        Rv::S(v) => unsafe { fill_strided(sub_dst, &out_rm, &spec.shape, v) },
+                        Rv::V { ptr, strides } => unsafe {
+                            copy_strided(sub_dst, &out_rm, ptr, &strides, &spec.shape);
+                        },
+                    }
+                }
+            }
             Instr::Interp { table, x, y, out } => {
                 let tbl = &prog.interp_tables[*table as usize];
                 let desc = &prog.slots[*out as usize];

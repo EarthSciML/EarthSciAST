@@ -187,6 +187,26 @@ pub(super) fn run_reference(
                 }
                 slots[*out as usize] = Some(RefVal::Arr(o));
             }
+            Instr::Assemble { table, out } => {
+                let desc = &prog.slots[*out as usize];
+                let mut o = ArrayD::<f64>::zeros(IxDyn(&desc.shape));
+                for (src, region) in &prog.assemblies[*table as usize].parts {
+                    let spec = &prog.regions[*region as usize];
+                    let sv = resolve(prog, &slots, &state_arrays, &obs, params, t, src);
+                    let mut sub = o.slice_each_axis_mut(|ax| {
+                        let d = ax.axis.index();
+                        Slice::from(spec.dest_lo[d]..spec.dest_lo[d] + spec.shape[d])
+                    });
+                    match &sv {
+                        RefVal::Scalar(s) => sub.fill(*s),
+                        RefVal::Arr(a) => {
+                            assert_eq!(a.shape(), &spec.shape[..], "Assemble source shape");
+                            sub.assign(a);
+                        }
+                    }
+                }
+                slots[*out as usize] = Some(RefVal::Arr(o));
+            }
             Instr::ConstArray { data, out } => {
                 let d = &prog.const_data[*data as usize];
                 let arr = ArrayD::from_shape_vec(IxDyn(&d.shape[..]), d.values.clone())

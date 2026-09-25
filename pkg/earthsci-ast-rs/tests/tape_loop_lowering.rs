@@ -474,3 +474,78 @@ fn a_filtered_contraction_is_one_reduction() {
         assert_eq!(c.reductions, 1, "{cmp}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// makearray
+// ---------------------------------------------------------------------------
+
+fn makearray(regions: Vec<Value>, values: Vec<Value>) -> Value {
+    json!({"op": "makearray", "args": [], "regions": regions, "values": values})
+}
+
+/// A table of one literal region per cell (the shape of a join's code table)
+/// is one constant array, however many regions it has.
+#[test]
+fn a_literal_region_table_is_one_constant() {
+    let make = |n: i64| {
+        let regions: Vec<Value> = (1..=n).map(|p| json!([[p, p]])).collect();
+        let values: Vec<Value> = (1..=n)
+            .map(|p| json!(0.5 + 0.25 * (p % 7) as f64))
+            .collect();
+        doc(
+            json!({"x": {"kind": "interval", "size": n}}),
+            json!({
+                "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+                "tab": {"type": "unknown", "units": "1", "shape": ["x"]}
+            }),
+            json!([
+                {"lhs": "tab", "rhs": makearray(regions, values)},
+                deriv_faq("u", &["i"], json!({"i": {"from": "x"}}),
+                    op("*", json!([index(json!(["tab", "i"])), index(json!(["u", "i"]))])))
+            ]),
+        )
+    };
+    let c = flat_in_n(make, 5, 200);
+    assert_eq!(c.count("Region"), 0);
+}
+
+/// A boundary-dispatch `makearray` (the shape every discretization template
+/// expands to): one instruction assembling the regions, with no per-region
+/// copy of the box; later regions overwrite earlier ones.
+#[test]
+fn a_boundary_dispatch_makearray_is_one_instruction() {
+    let make = |n: i64| {
+        let interior = index(json!(["u", op("-", json!(["i", 1]))]));
+        let regions = vec![
+            json!([[1, n]]),
+            json!([[1, 1]]),
+            json!([[2, n - 1]]),
+            json!([[n, n]]),
+        ];
+        let values = vec![
+            json!(7.0),
+            op("*", json!([2.0, index(json!(["u", "i"]))])),
+            op(
+                "-",
+                json!([index(json!(["u", op("+", json!(["i", 1]))])), interior]),
+            ),
+            op("-", json!([index(json!(["u", "i"]))])),
+        ];
+        doc(
+            json!({"x": {"kind": "interval", "size": n}}),
+            json!({"u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0}}),
+            json!([deriv_faq(
+                "u",
+                &["i"],
+                json!({"i": {"from": "x"}}),
+                op(
+                    "*",
+                    json!([0.5, index(json!([makearray(regions, values), "i"]))])
+                )
+            )]),
+        )
+    };
+    let c = flat_in_n(make, 6, 300);
+    assert_eq!(c.count("Region"), 0);
+    assert_eq!(c.count("Assemble"), 1);
+}

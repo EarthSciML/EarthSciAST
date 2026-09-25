@@ -925,7 +925,7 @@ fn coloring_invariants() {
                 last[o as usize] = last[o as usize].max(i);
             }
         });
-        ins.for_each_read(&prog.dy_writes, &prog.fused, |s| {
+        ins.for_each_read(&prog.dy_writes, &prog.fused, &prog.assemblies, |s| {
             last[s as usize] = last[s as usize].max(i);
         });
     }

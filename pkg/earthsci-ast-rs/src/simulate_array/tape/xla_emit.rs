@@ -913,6 +913,25 @@ impl<'a> Emitter<'a> {
                 )?;
                 self.define(*out, v);
             }
+            Instr::Assemble { table, out } => {
+                let dims = self.out_dims(*out);
+                let mut cur = self.zeros(&dims)?;
+                for (src, region) in &self.prog.assemblies[*table as usize].parts {
+                    let spec = &self.prog.regions[*region as usize];
+                    let sv = self.operand(src)?;
+                    let upd = self.to_shape(&sv, &spec.shape)?;
+                    let starts: Vec<XlaOp> = spec
+                        .dest_lo
+                        .iter()
+                        .map(|&x| self.ci(x as i64))
+                        .collect::<R<Vec<_>>>()?;
+                    cur = self.wrap(
+                        cur.dynamic_update_slice(&upd, &starts),
+                        "assemble: dynamic_update_slice",
+                    )?;
+                }
+                self.define(*out, cur);
+            }
             Instr::Export { slot, export } => {
                 let name = self.prog.exports[*export as usize].0.clone();
                 let v = self.slots[*slot as usize]

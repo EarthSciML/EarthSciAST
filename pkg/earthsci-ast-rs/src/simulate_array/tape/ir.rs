@@ -29,6 +29,8 @@
 //! * [`Instr::Ramp`] is the coordinate-ramp idiom of `eval_vec_variable`.
 //! * [`Instr::Region`] is one `eval_vec_makearray` region write (later regions
 //!   overwrite earlier ones).
+//! * [`Instr::Assemble`] is a whole `eval_vec_makearray`: the zero-filled
+//!   bounding box with every region written in order, in one instruction.
 //! * [`Instr::ConstArray`] materializes an inline array literal: the elements
 //!   `eval_const`/`json_to_value` produce for that node, in row-major order,
 //!   already precision-rounded at ingress — the same `f64`s the interpreter
@@ -159,6 +161,12 @@ pub(crate) enum Instr {
         region: u32,
         out: SlotId,
     },
+    /// A whole `makearray` in one instruction: `out` zero-filled, then each
+    /// part of `assemblies[table]` written over its region IN ORDER (a later
+    /// region overwrites an earlier one) — what a chain of [`Instr::Region`]
+    /// writes computes, with no per-region copy of the box. `out` never
+    /// aliases a part's source.
+    Assemble { table: u32, out: SlotId },
     /// Evaluate the §9.2 `interp.*` entry `interp_tables[table]` elementwise
     /// over `out`'s box: `out[k] = f(table, x[k], y[k])`, with a scalar query
     /// operand broadcasting exactly as [`Instr::Bin`]'s operands do.
@@ -289,6 +297,7 @@ impl Instr {
             | Instr::Fill { out, .. }
             | Instr::Copy { out, .. }
             | Instr::Region { out, .. }
+            | Instr::Assemble { out, .. }
             | Instr::ConstArray { out, .. }
             | Instr::Interp { out, .. }
             | Instr::Reduce { out, .. }
@@ -327,6 +336,7 @@ impl Instr {
         &self,
         dy_writes: &[DyWrite],
         fused: &[FusedSpec],
+        assemblies: &[AssembleSpec],
         mut f: impl FnMut(SlotId),
     ) {
         let mut op = |o: &Operand| {
@@ -366,6 +376,11 @@ impl Instr {
                 op(src);
                 op(&Operand::Slot(*base));
             }
+            Instr::Assemble { table, .. } => {
+                for (src, _) in &assemblies[*table as usize].parts {
+                    op(src);
+                }
+            }
             Instr::JmpIfZero { cond, .. } => op(cond),
             Instr::Fallback { .. } => {}
             Instr::Export { slot, .. } => f(*slot),
@@ -397,6 +412,7 @@ impl Instr {
             Instr::Fill { .. } => "Fill",
             Instr::Copy { .. } => "Copy",
             Instr::Region { .. } => "Region",
+            Instr::Assemble { .. } => "Assemble",
             Instr::ConstArray { .. } => "ConstArray",
             Instr::Interp { .. } => "Interp",
             Instr::Reduce { .. } => "Reduce",
@@ -795,6 +811,15 @@ pub(crate) struct RegionSpec {
     pub shape: DimU,
 }
 
+/// The parts of one [`Instr::Assemble`]: each source (a scalar fill or an
+/// array spanning its region) and the region it is written over, in the
+/// `makearray`'s region order.
+#[derive(Clone, Debug)]
+pub(crate) struct AssembleSpec {
+    /// `(source, index into TapeProgram::regions)`.
+    pub parts: Vec<(Operand, u32)>,
+}
+
 /// A state variable the program reads/writes, snapshot of its `VarShape`.
 #[derive(Clone, Debug)]
 pub(crate) struct StateRef {
@@ -886,6 +911,8 @@ pub(crate) struct TapeProgram {
     pub slots: Vec<SlotDesc>,
     pub plans: Vec<GatherPlan>,
     pub regions: Vec<RegionSpec>,
+    /// `makearray` assemblies (`Instr::Assemble` indexes here).
+    pub assemblies: Vec<AssembleSpec>,
     /// Inline array-literal payloads (`Instr::ConstArray` indexes here).
     pub const_data: Vec<ConstArrayData>,
     /// §9.2 `interp.*` constant tables (`Instr::Interp` indexes here).
