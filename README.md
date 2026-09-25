@@ -2,7 +2,7 @@
 
 ## Overview
 
-**EarthSciAST** is short for "Earth Science Abstract Syntax Tree". This repository contains a specification of an AST suitable for use in Earth science or geoscience modeling, utilities to read, write, and manipulate the AST, and utilities for compiling the AST into a runnable simulation.
+**EarthSciAST** is short for "Earth Science Abstract Syntax Tree". An "abstract syntax tree" ([AST](https://en.wikipedia.org/wiki/Abstract_syntax_tree)) is a data structure used to represent a formal language. This repository contains a specification of an AST suitable for use in Earth science or geoscience modeling, utilities to read, write, and manipulate the AST, and utilities for compiling the AST into a runnable simulation.
 
 These utilities have overlapping implementations in multiple languages:
 
