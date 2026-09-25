@@ -10,12 +10,13 @@
     "earthsciast_commit": "b36fe61a351a5beac96af8514a861a086ac5c2a2",
     "earthsciast_dirty": true,
     "earthscimodels_commit": "e298021cd5dc02149c291e64600feb786d76612b",
-    "documents": 1226,
+    "documents": 1250,
+    "note": "The four tests/conformance/scaling/fixtures entries were added 2026-09-25 from the first scheduled census (native-coverage.yml run 36175185154, 1,250 documents): the scaling tier's fixtures were committed after this baseline was measured.",
     "counts": {
-      "both build": 817,
+      "both build": 837,
       "both fail": 130,
       "invalid fixture (excluded)": 204,
-      "native gap": 75
+      "native gap": 79
     }
   },
   "entries": [
@@ -192,6 +193,30 @@
       "code": "compiler_refused_rule",
       "rule": "scale_tgt",
       "reason": "[const] variable: unresolved symbol (forcing/loop-bind?): scale_src"
+    },
+    {
+      "path": "tests/conformance/scaling/fixtures/regrid/regrid_N100.esm",
+      "code": "compiler_refused_rule",
+      "rule": "A_ij",
+      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
+    },
+    {
+      "path": "tests/conformance/scaling/fixtures/regrid/regrid_N1000.esm",
+      "code": "compiler_refused_rule",
+      "rule": "A_ij",
+      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
+    },
+    {
+      "path": "tests/conformance/scaling/fixtures/unstructured_gather/unstructured_gather_N100.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(u)",
+      "reason": "[continuous] index: axis 0 is neither an affine/wrap map of an unclaimed output symbol nor a constant select"
+    },
+    {
+      "path": "tests/conformance/scaling/fixtures/unstructured_gather/unstructured_gather_N1000.esm",
+      "code": "compiler_refused_rule",
+      "rule": "D(u)",
+      "reason": "[continuous] index: axis 0 is neither an affine/wrap map of an unclaimed output symbol nor a constant select"
     },
     {
       "path": "tests/conformance/shaped_observed_scalar_broadcast/fixtures/scalar_rhs_broadcast.esm",

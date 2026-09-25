@@ -91,7 +91,7 @@
     },
     "no_steady_alloc": {
       "kind": "deterministic",
-      "description": "allocs_per_call is 0 bytes where it is measurable (null means not measurable and is skipped).",
+      "description": "allocs_per_call is 0 bytes. On a document that built, a null allocs_per_call is a missing measurement and fails, unless the result's unmeasurable map names the field.",
       "max_bytes_per_call": 0
     },
     "hand_loop_agrees": {

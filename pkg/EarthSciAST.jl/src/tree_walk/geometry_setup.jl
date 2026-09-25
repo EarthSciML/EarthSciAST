@@ -1330,7 +1330,7 @@ function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
                        registered_functions=registered_functions, params=params)
     end
     _refuse_percell_evaluation(_current_rule_label(),
-        "the setup MAP materializer", prod(exts))
+        "the setup MAP materializer", prod(exts); one_cell = true)
     _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
     return _fill_map_percell(rhs, exts, ca, registered_functions, params)
 end
@@ -1479,7 +1479,7 @@ function _materialize_setup_wholearray(rhs::OpExpr, env::AbstractDict,
                        registered_functions=registered_functions, params=params)
     end
     _refuse_percell_evaluation(_current_rule_label(),
-        "the whole-array setup materializer", prod(exts))
+        "the whole-array setup materializer", prod(exts); one_cell = true)
     _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
     arr = zeros(Float64, exts...)
     for I in CartesianIndices(Tuple(exts))

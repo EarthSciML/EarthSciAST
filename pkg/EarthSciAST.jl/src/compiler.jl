@@ -464,7 +464,7 @@ not one of these and never reaches here: what is refused is re-deriving the
 program for every cell.
 """
 function _refuse_percell_evaluation(rule::AbstractString, what::AbstractString,
-                                    cells::Union{Nothing,Integer})
+                                    cells::Union{Nothing,Integer}; one_cell::Bool = false)
     _compiler_is_strict() || return nothing
     over = cells === nothing ? "" :
            ", over $cells cell" * (cells == 1 ? "" : "s")
@@ -473,5 +473,14 @@ function _refuse_percell_evaluation(rule::AbstractString, what::AbstractString,
         "because the compile-once form declined it. That is a tree walk per " *
         "cell at construction time, which esm-libraries-spec §2.5.10 puts " *
         "under the same rule as the right-hand side. Build with " *
-        "compiler=:interpreter to run it")
+        "compiler=:interpreter to run it" * (one_cell ? ". " * _ONE_CELL_NOTE : ""))
 end
+
+# Said by every refusal raised once ONE cell of a per-cell route has been
+# evaluated for its diagnostic (`one_cell = true` above), in the words the Rust
+# binding uses for its own: the cells it did not evaluate may still hold a
+# document error, and only the interpreter would find it.
+const _ONE_CELL_NOTE =
+    "Only one cell of it was evaluated before this refusal, so a document error " *
+    "in a cell that was not (an out-of-range gather at the last cell, say) is not " *
+    "reported here; the interpreter evaluates every cell and reports it"
