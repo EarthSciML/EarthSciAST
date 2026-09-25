@@ -850,8 +850,8 @@ function format_structural_op(node::OpExpr, format::Symbol)
 
     if op == "const"
         return format_const_value(node.value, format)
-    elseif op == "true"
-        return "true"
+    elseif op == "true" || op == "false"
+        return op
     elseif op == "fn"
         name = node.name === nothing ? "" : node.name
         inner = join([r(a) for a in args], ", ")

@@ -388,9 +388,13 @@ pub struct CompilerRuleReport {
     /// compiler), or `"oracle"` (every rule under [`Compiler::Interpreter`],
     /// by design). An evaluation outside the compiled rule set is
     /// `"vectorized"` when the whole-array overlay served it and `"oracle"`
-    /// when it was walked per cell — which a strict compiler refuses, except
-    /// for `"value invention"`, which the array runtime's own build performs
-    /// under every compiler and which is reported rather than refused.
+    /// when it was walked per cell, which a strict compiler refuses. A
+    /// `"value invention"` row is `"relational"`: the producer's member set,
+    /// computed once at setup by the relational engine from build-time factors
+    /// (CONFORMANCE_SPEC §5.7.6 keeps that engine off the hot path), under
+    /// every compiler alike. It is neither the oracle nor a fallback, so a
+    /// build that succeeds under a strict compiler still has
+    /// [`CompilerReport::n_oracle`] `== 0`.
     pub tier: &'static str,
     /// For a `"fallback"`, the DEEPEST decline reason reached while trying to
     /// lower the rule; for an `"oracle"` evaluation outside the compiled rule
@@ -503,6 +507,10 @@ impl std::fmt::Display for CompilerReport {
         }
         if self.n_vectorized() > 0 {
             write!(f, ", {} on the whole-array overlay", self.n_vectorized())?;
+        }
+        let n_relational = self.rules.iter().filter(|r| r.tier == "relational").count();
+        if n_relational > 0 {
+            write!(f, ", {n_relational} by the relational engine at setup")?;
         }
         if self.fused_groups > 0 {
             write!(
@@ -817,6 +825,21 @@ impl EsmProblem {
         self.precision.document
     }
 
+    /// The compiled array model behind this Problem's right-hand side, or
+    /// `None` for a static Problem.
+    ///
+    /// Read-only access for measurement tooling (the scaling conformance
+    /// tier's adapter and the wasm suite), which drive the same compiled
+    /// artifact through the `debug_*` entry points of [`ArrayCompiled`]
+    /// rather than through a solve.
+    #[doc(hidden)]
+    pub fn debug_array_compiled(&self) -> Option<Rc<ArrayCompiled>> {
+        match &*self.backend {
+            Backend::Array(c) => Some(Rc::clone(c)),
+            Backend::Static(_) => None,
+        }
+    }
+
     /// Whether this EsmProblem has a right-hand side to integrate.
     pub fn is_dynamic(&self) -> bool {
         !matches!(&*self.backend, Backend::Static(_))
@@ -938,11 +961,15 @@ pub fn callbacks(prob: &EsmProblem) -> &CallbackSet {
 /// the second alone puts both into the one namespace Julia and Python key
 /// their build-time fields by, so `observed_field` answers the same spellings
 /// in all three bindings.
+///
+/// A key EQUAL to `model` is a variable named like its model, not a component
+/// path, so it is qualified too: `fuel_mce` in model `fuel_mce` is
+/// `fuel_mce.fuel_mce`, the spelling the flattened name has (API_SPEC §5.8)
+/// and the one Julia and Python report.
 fn qualify(model: &str, key: &str) -> String {
-    let already = key == model
-        || key
-            .strip_prefix(model)
-            .is_some_and(|rest| rest.starts_with('.'));
+    let already = key
+        .strip_prefix(model)
+        .is_some_and(|rest| rest.starts_with('.'));
     if model.is_empty() || already {
         key.to_string()
     } else {
@@ -1724,13 +1751,17 @@ pub fn esm_problem<'a>(
             // evaluator whatever the compiler, and under a strict one it
             // stopped at the first observed it had to walk per cell.
             if let Some(r) = &prepared.refused {
+                let reason = match &r.route {
+                    crate::prepare::Route::PerCell(why) => why.clone(),
+                    _ => String::new(),
+                };
                 return Err(SimulateError::Compile(
                     crate::compile_error::CompileError::CompilerRefusedRule {
                         compiler: compiler.as_str(),
                         kind: r.kind,
                         rule: qualify(&prepared.model_name, &r.name),
                         tier: "const",
-                        reason: r.per_cell.clone().unwrap_or_default(),
+                        reason,
                     },
                 ));
             }
@@ -1738,13 +1769,22 @@ pub fn esm_problem<'a>(
             // `interpreter` included, so its rows say which observeds the
             // overlay served.
             route_rows.extend(prepared.rules.iter().map(|r| {
-                outside_rule_row(
-                    compiler,
-                    qualify(&prepared.model_name, &r.name),
-                    r.kind,
-                    r.per_cell.clone(),
-                    false,
-                )
+                let rule = qualify(&prepared.model_name, &r.name);
+                match &r.route {
+                    crate::prepare::Route::Relational => CompilerRuleReport {
+                        rule,
+                        kind: r.kind,
+                        cadence: "const",
+                        tier: "relational",
+                        reason: None,
+                    },
+                    crate::prepare::Route::Overlay => {
+                        outside_rule_row(compiler, rule, r.kind, None, false)
+                    }
+                    crate::prepare::Route::PerCell(why) => {
+                        outside_rule_row(compiler, rule, r.kind, Some(why.clone()), false)
+                    }
+                }
             }));
             *raw = prepared.doc;
             model_name = Some(prepared.model_name);
@@ -2347,7 +2387,7 @@ fn build_compiler_report(
     {
         let model = model_name.unwrap_or("");
         let mut ic_rows = Vec::new();
-        for r in compiled.field_ic_records(p) {
+        for r in compiled.field_ic_records(p, compiler.is_strict()) {
             let reason = r.per_cell.then(|| {
                 "evaluated by the reference evaluator at setup, and a `faq` in it is not one \
                  the whole-array overlay takes, so it was walked once per cell"

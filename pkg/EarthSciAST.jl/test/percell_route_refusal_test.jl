@@ -237,4 +237,241 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         @test all(uc[k] === ur[k] for k in 1:6)
         @test uc[vm["M.u[2,2]"]] == 0.2 * 0.2 + sin(2.0)
     end
+
+    # ── observed_field's memo and report row (review of #485) ────────────────
+    # `y[i] = s·i` compiles once and reads the parameter `s`, which the
+    # right-hand side reads too. `T[i] = h[1]·i` compiles once as well, but its
+    # un-inlined definition names the makearray observed `h`, so reading it
+    # first tries to materialize `h` — which only the per-cell route can do.
+    obs_doc() = Dict{String,Any}("esm" => "1.1.0",
+        "metadata" => Dict("name" => "pr_observed_memo"),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
+        "models" => Dict("M" => Dict{String,Any}(
+            "variables" => Dict(
+                "c" => Dict("type" => "unknown", "default" => 1.0),
+                "s" => Dict("type" => "parameter", "default" => 1.0),
+                "y" => Dict("type" => "unknown", "shape" => Any["x"]),
+                "h" => Dict("type" => "unknown", "shape" => Any["x"]),
+                "T" => Dict("type" => "unknown", "shape" => Any["x"])),
+            "equations" => Any[
+                Dict("lhs" => Dict("op" => "D", "args" => Any["c"], "wrt" => "t"),
+                     "rhs" => Dict("op" => "*", "args" => Any[
+                         Dict("op" => "neg", "args" => Any["s"]), "c"])),
+                Dict("lhs" => "y", "rhs" => Dict("op" => "faq", "args" => Any[],
+                    "output_idx" => Any["i"],
+                    "ranges" => Dict("i" => Dict("from" => "x")),
+                    "expr" => Dict("op" => "*", "args" => Any["s", "i"]))),
+                Dict("lhs" => "h", "rhs" => Dict("op" => "makearray", "args" => Any[],
+                    "regions" => Any[Any[Any[1, 1]], Any[Any[2, 3]]],
+                    "values" => Any[5.0, 7.0])),
+                Dict("lhs" => "T", "rhs" => Dict("op" => "faq", "args" => Any[],
+                    "output_idx" => Any["i"],
+                    "ranges" => Dict("i" => Dict("from" => "x")),
+                    "expr" => Dict("op" => "*", "args" => Any[
+                        Dict("op" => "index", "args" => Any["h", 1]), "i"])))])))
+    obs_rows(prob, name) = [r for r in compiler_report(prob).rules
+                            if r.kind === :observed && r.rule == name]
+
+    @testset "observed_field: a reused BuildInspection answers for its own build" begin
+        insp = _PR.BuildInspection()
+        p1 = esm_problem(obs_doc(), (0.0, 1.0); inspect = insp)
+        @test observed_field(p1, "y") == [1.0, 2.0, 3.0]
+        p2 = esm_problem(obs_doc(), (0.0, 1.0); p = Dict("s" => 2.0), inspect = insp)
+        @test observed_field(p2, "y") == [2.0, 4.0, 6.0]
+        @test length(obs_rows(p2, "y")) == 1
+    end
+
+    @testset "observed_field: a remade problem reads its build's field" begin
+        # `observed_field` reports what the BUILD materialized (API_SPEC §5.8),
+        # and `remake` shares the build, so a `p` or `u0` swap does not move it.
+        # What the memo must never do is answer with anything other than what
+        # the unmemoized read of the same problem would.
+        p2 = esm_problem(obs_doc(), (0.0, 1.0); p = Dict("s" => 2.0))
+        @test observed_field(p2, "y") == [2.0, 4.0, 6.0]
+        for pr in (remake(p2; p = Dict("s" => 5.0)), remake(p2; u0 = Dict("c" => 9.0)))
+            @test observed_field(pr, "y") == _PR._observed_field_impl(pr, "y") ==
+                  [2.0, 4.0, 6.0]
+        end
+        @test length(obs_rows(p2, "y")) == 1
+    end
+
+    @testset "observed_field: the report row says what this read did" begin
+        # Under `native` the attempt to materialize `h` walks per cell and is
+        # refused, the refusal is swallowed, and the value comes from the
+        # compiled-once body. The row names that route, not the failed attempt.
+        pn = esm_problem(obs_doc(), (0.0, 1.0))
+        @test observed_field(pn, "T") == [5.0, 10.0, 15.0]
+        @test [r.tier for r in obs_rows(pn, "T")] == [:output_compiled_once]
+        # Under `interpreter` `h` IS materialized per cell and served the value.
+        pi_ = esm_problem(obs_doc(), (0.0, 1.0); compiler = :interpreter)
+        @test observed_field(pi_, "T") == [5.0, 10.0, 15.0]
+        @test [r.tier for r in obs_rows(pi_, "T")] == [:output_percell]
+    end
+
+    @testset "the per-cell signal counts this task's evaluations only" begin
+        h = _PR.expression_from_json(Dict{String,Any}("op" => "makearray",
+            "args" => Any[], "regions" => Any[Any[Any[1, 1]], Any[Any[2, 3]]],
+            "values" => Any[5.0, 7.0]))
+        cells = [[1], [2], [3]]
+        v, n = _PR._counting_percell() do
+            fetch(Threads.@spawn _PR.evaluate_cellwise(h, cells))
+        end
+        @test v == [5.0, 7.0, 7.0]
+        @test n == 0
+        v, n = _PR._counting_percell(() -> _PR.evaluate_cellwise(h, cells))
+        @test v == [5.0, 7.0, 7.0]
+        @test n == 1
+    end
+
+    # ── A document's own error comes before a per-cell refusal ────────────────
+    # Each route below refuses under `native` only once the per-cell reference
+    # has been shown to evaluate; a construct no form can evaluate raises the
+    # error the interpreter raises.
+    err_of(f) = try
+        f(); nothing
+    catch e
+        e
+    end
+    code_of(e) = e isa _PR.TreeWalkError ? e.code : nothing
+
+    @testset "seed_expression_ic!: an undeclared name is the caller's error" begin
+        vm = Dict{String,Int}("M.u[$i]" => i for i in 1:3)
+        bad = _PR.expression_from_json(Dict{String,Any}("op" => "*",
+                                                        "args" => Any["x", "q"]))
+        native(f) = _PR._with_compiler_plan(f, _PR._compiler_plan(:native))
+        @test err_of(() -> native(() -> seed_expression_ic!(zeros(3), vm, "M.u", bad,
+                                                            ["x" => [1.0, 2.0, 3.0]]))) isa
+              _PR.UnboundVariableError
+        # …and one that evaluates per cell but not once still refuses.
+        tx = _PR.expression_from_json(Dict{String,Any}("op" => "*", "args" => Any["t", 2.0]))
+        @test _pr_refuses(() -> native(() -> seed_expression_ic!(zeros(3), vm, "M.u", tx,
+                                                                 ["t" => [1.0, 2.0, 3.0]])),
+                          "seed_expression_ic!(M.u)")
+    end
+
+    @testset "faq initialization equation: an undeclared name, an out-of-range gather" begin
+        cvar = Dict("C" => _PR.ModelVariable(_PR.ParameterVariable; shape = ["x"]))
+        for (body, code) in (
+                (_op("*", _n(2.0), _v("q")), "E_TREEWALK_UNBOUND_VARIABLE"),
+                (_op("*", _v("i"), _idx("C", _PR.IntExpr(11))), "E_TREEWALK_CONSTARRAY_OOB"))
+            m = _PR.Model(merge(uvar(), cvar), [zero_eq()];
+                          initialization_equations = [_PR.Equation(_v("u"), faq1(body))])
+            for c in (:native, :interpreter)
+                e = err_of(() -> seed(m, c; const_arrays = Dict("C" => collect(1.0:5.0))))
+                @test code_of(e) == code
+            end
+        end
+    end
+
+    @testset "discrete-cadence materializer: an out-of-range gather, an undeclared name" begin
+        W = [1.0 2.0 3.0; 4.0 5.0 6.0]
+        ics = Dict{String,Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+        raw() = JSON3.read(read(joinpath(@__DIR__, "fixtures", "discrete_materialize.esm"),
+                                String), Dict{String,Any})
+        oob = raw(); oob["models"]["M"]["equations"][2]["rhs"]["ranges"]["i"] = Any[1, 3]
+        unb = raw()
+        unb["models"]["M"]["equations"][2]["rhs"]["expr"]["args"][1] =
+            Dict("op" => "index", "args" => Any["Wq", "i", "j"])
+        for (doc, code) in ((oob, "E_TREEWALK_CONSTARRAY_OOB"),
+                            (unb, "E_TREEWALK_UNBOUND_VARIABLE"))
+            file = _PR.load_string(JSON3.write(doc))
+            for c in (:native, :interpreter)
+                e = err_of(() -> _PR._build_evaluator(file; initial_conditions = ics,
+                    const_arrays = Dict("W" => W), param_arrays = Dict("src" => [1.0, 1.0]),
+                    materialize_out = _PR.DiscreteMaterializer(), compiler = c))
+                @test code_of(e) == code
+            end
+        end
+    end
+
+    @testset "a contraction left to the per-cell loop: an out-of-range gather" begin
+        W = Float64[1, 2, 3, 4, 5, 6, 7, 8]
+        rng = Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d"))
+        agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+            "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
+            # One term past the end of `W`.
+            "ranges" => merge(rng, Dict{String,Any}("k" => Any[1, length(W) + 1])),
+            "expr" => Dict("op" => "*", "args" => Any[
+                Dict("op" => "index", "args" => Any[
+                    Dict("op" => "const", "args" => Any[], "value" => W), "k"]),
+                Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])]))
+        doc = Dict{String,Any}("esm" => "1.1.0",
+            "metadata" => Dict("name" => "pr_short_contraction_oob"),
+            "models" => Dict("R" => Dict{String,Any}(
+                "variables" => Dict(
+                    "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
+                    "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
+                "equations" => Any[Dict(
+                    "lhs" => Dict("op" => "faq", "args" => Any[],
+                        "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
+                        "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
+                            "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
+                    "rhs" => agg)])))
+        for c in (:native, :interpreter)
+            e = err_of(() -> withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
+                _PR._build_evaluator(doc; initial_conditions = Dict("out[1,1,1,1]" => 0.0),
+                    param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)), compiler = c)
+            end)
+            @test code_of(e) == "E_TREEWALK_CONSTARRAY_OOB"
+        end
+    end
+
+    @testset "setup materializers: an out-of-range gather, an undeclared name" begin
+        native(f) = _PR._with_compiler_plan(f, _PR._compiler_plan(:native))
+        interp(f) = _PR._with_compiler_plan(f, _PR._compiler_plan(:interpreter))
+        env = Dict{String,Any}("B" => reshape(collect(1.0:20.0), 5, 4))
+        idx = Dict{String,Int}("X" => 5)
+        # A MAP whose last cell reads past the end of `B`'s first axis: the
+        # compiled-once sweep fails there, and so does the per-cell reference.
+        map_oob = _PR.expression_from_json(Dict{String,Any}("op" => "faq",
+            "args" => Any[], "output_idx" => Any["x"],
+            "ranges" => Dict{String,Any}("x" => Dict{String,Any}("from" => "X")),
+            "expr" => Dict{String,Any}("op" => "index", "args" => Any["B",
+                Dict{String,Any}("op" => "+", "args" => Any["x", 1]), 1])))
+        for run in (native, interp)
+            e = err_of(() -> run(() -> _PR._materialize_setup_general_map(map_oob,
+                copy(env), nothing, idx, Dict{String,Function}())))
+            @test code_of(e) == "E_TREEWALK_CONSTARRAY_OOB"
+        end
+        # A makearray stencil (no compiled-once form at all) naming an undeclared
+        # array.
+        mk = _PR.expression_from_json(Dict{String,Any}("op" => "makearray",
+            "args" => Any[], "regions" => Any[Any[Any[1, 5]]],
+            "values" => Any[Dict{String,Any}("op" => "index", "args" => Any["Bq", 1, 1])]))
+        for run in (native, interp)
+            e = err_of(() -> run(() -> _PR._materialize_setup_wholearray(mk, copy(env),
+                nothing, idx, ["X"], Dict{String,Function}())))
+            @test code_of(e) == "E_TREEWALK_UNBOUND_VARIABLE"
+        end
+        # …and a makearray that evaluates still refuses.
+        ok = _PR.expression_from_json(Dict{String,Any}("op" => "makearray",
+            "args" => Any[], "regions" => Any[Any[Any[1, 5]]],
+            "values" => Any[Dict{String,Any}("op" => "index", "args" => Any["B", 1, 1])]))
+        @test _pr_refuses(() -> native(() -> _PR._materialize_setup_wholearray(ok, copy(env),
+                              nothing, idx, ["X"], Dict{String,Function}())),
+                          "the whole-array setup materializer")
+    end
+
+    # ── Field initial conditions: the cell-independent forms, once ────────────
+    @testset "a broadcast-constant field ic under the interpreter" begin
+        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "scalar_ic",
+                        "fixtures", "scalar_ic_in_array_model.esm")
+        pi_ = esm_problem(path, (0.0, 1.0); compiler = :interpreter)
+        rows = [r for r in compiler_report(pi_).rules if startswith(r.rule, "ic(")]
+        @test !isempty(rows)
+        @test all(r -> r.tier === :setup_constant, rows)
+    end
+
+    @testset "the per-cell field ic step does not re-run the constant step" begin
+        # Every form fails for this RHS. Handed the cell-independent verdict
+        # computed once, the per-cell resolve reports THAT attempt rather than
+        # evaluating the constant again at this cell.
+        rhs = _op("+", _v("nope"), _n(1.0))
+        e = err_of(() -> _PR._resolve_field_ic("u", rhs, [1], Dict{String,Any}(),
+                                               Dict{String,Any}();
+                                               uniform = (nothing, ["as constant: SENTINEL"])))
+        @test code_of(e) == "E_TREEWALK_UNSUPPORTED_EQUATION"
+        @test occursin("SENTINEL", e.detail)
+        @test count("as constant:", e.detail) == 1
+    end
 end

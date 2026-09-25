@@ -148,6 +148,67 @@
         ]
       },
       "named_exclusions": []
+    },
+    {
+      "id": "angle_array_element",
+      "path": "fixtures/angle_array_element.esm",
+      "model": "AngleArrayElement",
+      "golden": "golden/angle_array_element.json",
+      "tags": [
+        "circular-trig",
+        "units",
+        "angle",
+        "esm-spec-4.8.3",
+        "array-element",
+        "static-evaluation"
+      ],
+      "note": "Authored here. The array-element half of esm-spec \u00a74.8.3's angle conversion: a `deg` argument reached through `index` or an `faq` body is converted exactly as a bare `deg` variable is (tests/simulation/angle_units_degrees.esm pins the scalar half).",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "angle_nested_fields",
+      "path": "fixtures/angle_nested_fields.esm",
+      "model": "AngleNestedFields",
+      "golden": "golden/angle_nested_fields.json",
+      "tags": [
+        "circular-trig",
+        "units",
+        "angle",
+        "esm-spec-4.8.3",
+        "makearray",
+        "table_lookup",
+        "static-evaluation"
+      ],
+      "note": "Authored here. The nested-field half of esm-spec \u00a74.8.3's angle conversion: a `deg` argument inside a `makearray` region value or a `table_lookup` axis input is converted as one in `args` is. Sibling of angle_array_element.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
     }
   ]
 }

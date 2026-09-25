@@ -103,6 +103,25 @@ describe('unevaluable_operator versus unlowered_operator', () => {
       evaluateExpression({ op: 'ifelse', args: [{ op: 'true', args: [] }, 2, 3] } as Expr, x),
     ).toBe(2)
   })
+
+  it('evaluates the `false` literal', () => {
+    expect(evaluateExpression({ op: 'false', args: [] } as Expr, x)).toBe(0)
+    expect(
+      evaluateExpression({ op: 'ifelse', args: [{ op: 'false', args: [] }, 2, 3] } as Expr, x),
+    ).toBe(3)
+    expect(compileExpression({ op: 'not', args: [{ op: 'false', args: [] }] } as Expr)(x)).toBe(1)
+  })
+
+  it('evaluates `pow` as the word spelling of `^`', () => {
+    const b = new Map([['x', 2]])
+    expect(evaluateExpression({ op: 'pow', args: ['x', 3] } as Expr, b)).toBe(8)
+    expect(evaluateExpression({ op: 'pow', args: ['x', 0.5] } as Expr, b)).toBe(
+      evaluateExpression({ op: '^', args: ['x', 0.5] } as Expr, b),
+    )
+    expect(() => evaluateExpression({ op: 'pow', args: ['x'] } as Expr, b)).toThrow(
+      'Exponentiation requires exactly 2 arguments',
+    )
+  })
 })
 
 describe('the up-front walk also carries the unlowered_operator gate (issue #277)', () => {

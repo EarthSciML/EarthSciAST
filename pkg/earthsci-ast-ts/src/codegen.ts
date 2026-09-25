@@ -99,13 +99,14 @@ export class UnevaluableOperatorError extends EsmDiagnosticError {
  * (`op-registry.ts`), which lists only ops with an arity contract. Membership
  * here is what tells a closed-core op with no scalar rule
  * (`unevaluable_operator`) apart from an open-tier op no rewrite rule lowered
- * (`unlowered_operator`). `const`, `fn`, `true` and `table_lookup` are
- * evaluated; the rest are refused.
+ * (`unlowered_operator`). `const`, `fn`, `true`, `false` and `table_lookup`
+ * are evaluated; the rest are refused.
  */
 const CORE_OPS_WITHOUT_REGISTRY_ROW: ReadonlySet<string> = new Set([
   'const',
   'fn',
   'true',
+  'false',
   'table_lookup',
   'enum',
   'apply_expression_template',
@@ -161,6 +162,7 @@ function assertEvaluable(expr: Expr): void {
   switch (node.op) {
     case 'const':
     case 'true':
+    case 'false':
       return
     case 'fn':
     case 'table_lookup':
@@ -286,9 +288,10 @@ function evalExprNode(
     // pass ran.
     if (node.op === 'enum') throw unevaluableOperator(node)
 
-    // `true`: the boolean literal (esm-spec §4.2), in the evaluator's float
-    // encoding.
+    // `true` / `false`: the boolean literals (esm-spec §4.2), in the
+    // evaluator's float encoding.
     if (node.op === 'true') return 1
+    if (node.op === 'false') return 0
 
     // fn: closed function registry dispatch (esm-spec §9.2). Most
     // args evaluate to scalars; interp.searchsorted's second arg is

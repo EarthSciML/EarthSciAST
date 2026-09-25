@@ -21,15 +21,30 @@
 #     the ones `_run_acc_kernel!` walks per cell on every RHS call, under every
 #     element type. This count is the census's headline.
 #
+# Every build names its compiler: `--compiler native` (the default) or
+# `--compiler interpreter`, carried to the worker processes as the
+# `CENSUS_COMPILER` environment variable. The native-coverage ledger
+# (tests/conformance/native_coverage/) is read off one sweep under each.
+#
 # Usage
 # -----
 #   # one document, one JSON object on stdout (prefixed `##CENSUS##`)
-#   julia --project=pkg/EarthSciAST.jl scripts/compiler_census.jl \
-#         --one path/to/doc.esm
+#   CENSUS_COMPILER=native julia --project=pkg/EarthSciAST.jl/scripts/compiler_agreement_env \
+#         pkg/EarthSciAST.jl/scripts/compiler_census.jl --one path/to/doc.esm
 #
 #   # a whole corpus: a manifest of .esm paths, one per line, JSON lines out
-#   julia --project=pkg/EarthSciAST.jl scripts/compiler_census.jl \
-#         --manifest manifest.txt --out census.jsonl --jobs 4 --timeout 180
+#   julia --project=pkg/EarthSciAST.jl/scripts/compiler_agreement_env \
+#         pkg/EarthSciAST.jl/scripts/compiler_census.jl \
+#         --manifest manifest.txt --out census.jsonl --compiler native \
+#         --jobs 4 --timeout 180 [--project <env>]
+#
+# `--project` is the environment the workers run in (default: the one the
+# driver was started with). It needs EarthSciAST and the SciML packages
+# `esm_problem` builds with, which `scripts/compiler_agreement_env` carries.
+#
+# After a successful `esm_problem` build the census also calls `f!` twice on
+# `u0`, so a missing evaluation rule that only fires at call time shows up as
+# `rhs_ok = false` rather than as a clean build.
 #
 # The driver shards the manifest across `--jobs` WORKER processes. A worker
 # loads EarthSciAST once and then builds documents one at a time, so the
@@ -98,8 +113,14 @@ cascade did. Never throws: every failure is a record. Whatever the build writes
 to stderr is captured — including the `@info` the affine fallback logs, which is
 why a fresh `ConsoleLogger` is installed over the same file.
 """
+_census_compiler() = Symbol(get(ENV, "CENSUS_COMPILER", "native"))
+
 function _census_one(M, path::AbstractString)
-    rec = Dict{String,Any}("path" => String(path))
+    CENSUS_COMPILER = _census_compiler()
+    rec = Dict{String,Any}("path" => String(path), "compiler" => String(CENSUS_COMPILER))
+    err1_code = nothing; err1_msg = nothing; err1_type = nothing
+    rhs_ok = nothing; rhs_err = nothing; rhs_first = nothing; rhs_second = nothing
+    tiers = nothing; nstate = nothing
     # A real FILE, not an `IOBuffer`: `redirect_stderr` rewires the process file
     # descriptor and only accepts an `IOStream`/`Pipe`/TTY, so an in-memory
     # buffer cannot receive what the build writes to `stderr`.
@@ -122,11 +143,29 @@ function _census_one(M, path::AbstractString)
                 # way a simulation does. `tspan` is the only argument it needs
                 # that a document does not carry.
                 try
-                    M.esm_problem(String(path), (0.0, 1.0))
+                    prob = M.esm_problem(String(path), (0.0, 1.0); compiler = CENSUS_COMPILER)
                     entry = "esm_problem"
                     ok = true
+                    try
+                        tiers = Dict{String,Int}(String(k) => v for (k, v) in M.tier_histogram(M.compiler_report(prob)))
+                    catch
+                    end
+                    nstate = length(prob.u0)
+                    try
+                        du = similar(prob.u0); fill!(du, 0.0)
+                        t1 = time(); prob.f!(du, copy(prob.u0), prob.p, prob.tspan[1]); rhs_first = time() - t1
+                        t1 = time(); prob.f!(du, copy(prob.u0), prob.p, prob.tspan[1]); rhs_second = time() - t1
+                        rhs_ok = true
+                    catch er
+                        M._is_resource_error(er) && rethrow()
+                        rhs_ok = false
+                        rhs_err = first(sprint(showerror, er), 400)
+                    end
                 catch e1
                     M._is_resource_error(e1) && rethrow()
+                    err1_type = string(typeof(e1))
+                    err1_code = hasproperty(e1, :code) ? string(getproperty(e1, :code)) : nothing
+                    err1_msg = first(sprint(showerror, e1), 600)
                     # Documents that need providers, metaparameters or a model
                     # selection `esm_problem` cannot guess still reach the
                     # tree-walk build through the typed entry point.
@@ -135,9 +174,9 @@ function _census_one(M, path::AbstractString)
                     names = file.models === nothing ? String[] :
                             sort!(String[String(k) for k in keys(file.models)])
                     if length(names) <= 1
-                        M._build_evaluator(file)
+                        M._build_evaluator(file; compiler = CENSUS_COMPILER)
                     else
-                        M._build_evaluator(file; model_name = names[1])
+                        M._build_evaluator(file; model_name = names[1], compiler = CENSUS_COMPILER)
                     end
                     entry = "_build_evaluator"
                     ok = true
@@ -147,7 +186,7 @@ function _census_one(M, path::AbstractString)
     catch err
         err_type = string(typeof(err))
         err_code = hasproperty(err, :code) ? string(getproperty(err, :code)) : nothing
-        err_msg  = first(sprint(showerror, err), 400)
+        err_msg  = first(sprint(showerror, err), 600)
     end
     t_build = time() - t0
     close(errio)
@@ -175,12 +214,21 @@ function _census_one(M, path::AbstractString)
         rm(errpath; force = true)
     end
 
+    rec["esm_problem_error_type"] = err1_type
+    rec["esm_problem_error_code"] = err1_code
+    rec["esm_problem_error_message"] = err1_msg
+    rec["rhs_ok"] = rhs_ok
+    rec["rhs_error"] = rhs_err
+    rec["rhs_first_s"] = rhs_first
+    rec["rhs_second_s"] = rhs_second
+    rec["tiers"] = tiers === nothing ? nothing : tiers
+    rec["nstate"] = nstate
     rec["entry"]          = entry
     rec["ok"]             = ok
     rec["build_seconds"]  = t_build
     rec["error_type"]     = err_type
     rec["error_code"]     = err_code
-    rec["error_message"]  = err_msg
+    rec["error_message"]  = first(something(err_msg, ""), 600)
     rec["tally"]          = tally
     rec["percell_build"]  = percell_build
     rec["codegen_kernels"]      = get(tally, "codegen_kernel", 0)
@@ -235,7 +283,7 @@ const WARMUP_DOC = Dict{String,Any}(
 
 function _warmup(M)
     try
-        M.esm_problem(WARMUP_DOC, (0.0, 1.0))
+        M.esm_problem(WARMUP_DOC, (0.0, 1.0); compiler = _census_compiler())
     catch err
         println(stderr, "warm-up failed (continuing): ",
                 first(sprint(showerror, err), 200))
@@ -371,7 +419,7 @@ end
 
 function run_driver(manifest::String, out::String; jobs::Int = 4,
                     timeout_s::Int = 180, resume::Bool = false,
-                    project::String = dirname(@__DIR__))
+                    project::String = Base.active_project())
     script = abspath(@__FILE__)
     n = count(!isempty, strip.(readlines(manifest)))
     per = cld(n, jobs)
@@ -405,6 +453,7 @@ function main(args)
         return 0
     end
     manifest = out = nothing
+    project = Base.active_project()
     jobs, timeout_s, resume = 4, 180, false
     i = 1
     while i <= length(args)
@@ -414,11 +463,14 @@ function main(args)
         a == "--jobs"     ? (jobs = parse(Int, args[i+1]); i += 2) :
         a == "--timeout"  ? (timeout_s = parse(Int, args[i+1]); i += 2) :
         a == "--resume"   ? (resume = true; i += 1) :
+        a == "--project"  ? (project = abspath(args[i+1]); i += 2) :
+        a == "--compiler" ? (ENV["CENSUS_COMPILER"] = args[i+1]; i += 2) :
         error("compiler_census.jl: unknown argument '$a'")
     end
     (manifest === nothing || out === nothing) &&
         error("compiler_census.jl: --manifest and --out are required")
-    run_driver(manifest, out; jobs = jobs, timeout_s = timeout_s, resume = resume)
+    run_driver(manifest, out; jobs = jobs, timeout_s = timeout_s, resume = resume,
+               project = project)
     return 0
 end
 

@@ -29,7 +29,8 @@ Design decisions of record (2026-09-21) that this tier implements:
 > Julia `interpreter` and committed; each one reproduces the analytic anchor its
 > fixture carries. Julia, Rust and Python each answer for both `interpreter`
 > and `native` with no refusals on any fixture, and all three are
-> `bindings_required` for each; Python is `bindings_required` for `sympy`,
+> `bindings_required` for each. Every fixture's `required` map names `native`
+> for all three, so a `native` refusal anywhere in the tier is red; Python is `bindings_required` for `sympy`,
 > which refuses the four array fixtures by name and runs the two scalar ones.
 > **Julia is `bindings_required` for `mtk`** as of 2026-09-22:
 > `esm_problem(…; compiler = :mtk)` builds every one of the six fixtures
@@ -248,8 +249,10 @@ Field rules:
   fixture and never left to the library default: a default is what a document
   gets when nobody has an opinion, and a conformance tier has one
   (`API_SPEC.md` §5.8).
-* **`required`** maps a binding to the compilers that MUST run this fixture. It
-  is empty for every fixture today. Each name added is a one-way ratchet, the
+* **`required`** maps a binding to the compilers that MUST run this fixture.
+  Every fixture requires `native` of Julia, Rust and Python (2026-09-24): each
+  answered all six within tolerance, so a `native` refusal of any of them is now
+  RED rather than a named exclusion. Each name added is a one-way ratchet, the
   same shape `compiled_rhs`'s `compiled_required` has.
 
 **The two ledgers mean different things and must never be merged.** The
@@ -654,4 +657,5 @@ and the Julia stages run for real with the gate above deciding.
    carry one.
 3. Mint its golden with `--write-golden --bindings julia` and commit it.
 4. Run every compiler. A refusal is a finding to record in the report, not a
-   reason to drop the fixture.
+   reason to drop the fixture. Add each compiler that answers within tolerance
+   to the fixture's `required` map, so that it cannot regress unnoticed.

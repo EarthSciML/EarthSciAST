@@ -453,6 +453,41 @@ func TestSimplifyFoldsExtendedOps(t *testing.T) {
 	}
 }
 
+// The §4.2 evaluable core carries `pow` beside `^` and the `false` literal
+// beside `true`; each evaluates, and each folds, to the value every other
+// binding gives it.
+func TestEvaluatePowAndBooleanLiterals(t *testing.T) {
+	cases := []struct {
+		name string
+		expr Expression
+		want float64
+	}{
+		{"pow is ^", ExprNode{Op: "pow", Args: []any{"x", 3.0}}, 8.0},
+		{"true is 1", ExprNode{Op: "true", Args: []any{}}, 1.0},
+		{"false is 0", ExprNode{Op: "false", Args: []any{}}, 0.0},
+		{"false selects the else branch", ExprNode{Op: "ifelse", Args: []any{
+			ExprNode{Op: "false", Args: []any{}}, 2.0, 3.0}}, 3.0},
+		{"not false", ExprNode{Op: "not", Args: []any{ExprNode{Op: "false", Args: []any{}}}}, 1.0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := Evaluate(c.expr, map[string]float64{"x": 2.0})
+			if err != nil {
+				t.Fatalf("Evaluate() error: %v", err)
+			}
+			if got != c.want {
+				t.Errorf("Evaluate() = %v, want %v", got, c.want)
+			}
+		})
+	}
+	if got := Simplify(ExprNode{Op: "pow", Args: []any{2.0, 3.0}}); !reflect.DeepEqual(got, 8.0) {
+		t.Errorf("Simplify(pow(2, 3)) = %v, want 8", got)
+	}
+	if _, err := Evaluate(ExprNode{Op: "pow", Args: []any{2.0}}, nil); err == nil {
+		t.Error("pow with one operand must be an arity error")
+	}
+}
+
 // Strict numeric coercion (task 6): a variable literally named "0" is a symbol,
 // never the number zero, so identity elimination must not drop it.
 func TestSimplifyStrictNumericCoercion(t *testing.T) {

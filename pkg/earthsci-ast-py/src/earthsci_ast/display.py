@@ -987,8 +987,8 @@ def _format_structural_op(node, format_type: str):
     if op == "const":
         return _format_const_value(_node_field(node, "value"), format_type)
 
-    if op == "true":
-        return "true"
+    if op in ("true", "false"):
+        return op
 
     if op == "fn":
         name = str(_node_field(node, "name") or "")

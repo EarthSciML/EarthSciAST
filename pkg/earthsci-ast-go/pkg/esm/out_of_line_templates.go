@@ -83,6 +83,7 @@ var evaluableCoreOps = map[string]struct{}{
 	"faq": {},
 	// Geometry kernel leaves / value invention
 	"intersect_polygon": {}, "polygon_intersection_area": {}, "skolem": {},
+	"rank": {}, "argmin": {}, "argmax": {},
 }
 
 // opInT reports whether op is a member of the rewrite-target tier T (esm-spec

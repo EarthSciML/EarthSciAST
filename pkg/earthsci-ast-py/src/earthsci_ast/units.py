@@ -1011,6 +1011,12 @@ def scaled_dimensionless_message(op: str, scale: ExactScale) -> str:
 #: dimensionless ratio.
 _CIRCULAR_FUNCS = frozenset({"sin", "cos", "tan"})
 
+#: The array operators whose ELEMENT unit the evaluation-path reading carries
+#: (`UnitValidator._type_array_element`).
+_ARRAY_ELEMENT_OPS = frozenset(
+    {"faq", "makearray", "index", "reshape", "transpose", "concat", "broadcast"}
+)
+
 #: The dimensionality of a PLANE angle (`rad**1`). `sr` is `rad**2` and is NOT
 #: this: no conversion turns a solid angle into a plane one, and multiplying by
 #: `scale` where `scale**2` was meant would be silently wrong.
@@ -1024,9 +1030,9 @@ _INVERSE_CIRCULAR_FUNCS = frozenset({"asin", "acos", "atan"})
 #: boolean.
 _COMPARISON_OPS = frozenset({">", "<", ">=", "<=", "==", "!="})
 
-#: Booleans (and `sign`, whose result is a dimensionless ±1) yield a
-#: dimensionless result regardless of operand dimensions.
-_DIMENSIONLESS_RESULT_OPS = frozenset({"and", "or", "not", "sign", "true"})
+#: Booleans, the boolean literals, and `sign` (whose result is a dimensionless
+#: ±1) yield a dimensionless result regardless of operand dimensions.
+_DIMENSIONLESS_RESULT_OPS = frozenset({"and", "or", "not", "sign", "true", "false"})
 
 
 #: The unit-finding vocabulary -- the SECOND, smaller unit code set, shared
@@ -1118,6 +1124,10 @@ class UnitValidator:
 
         self.ureg = ureg
         self.known_units: dict[str, pint.Quantity] = {}
+        # The EVALUATION-PATH reading, set only by `normalize_angle_arguments`:
+        # an array operator carries its ELEMENT's unit (see `_type_array_element`).
+        # The checker leaves it off, so no checker verdict depends on it.
+        self.element_units = False
 
     def validate_esm_file(self, esm_file: EsmFile) -> UnitValidationResult:
         """
@@ -1590,6 +1600,9 @@ class UnitValidator:
                 return None
             return _Typed(unit.dimensionality, exact_scale_of(unit))
 
+        if self.element_units and node.op in _ARRAY_ELEMENT_OPS:
+            return self._type_array_element(node)
+
         if not node.args:
             return None
 
@@ -1716,6 +1729,45 @@ class UnitValidator:
         # rule here. Report UNKNOWN, not dimensionless.
         return None
 
+    def _type_array_element(self, node: ExprNode) -> _Typed | None:
+        """The ELEMENT unit of an array operator, on the evaluation path only.
+
+        The checker has no rule for the array operators (esm-spec §4.8.4: they
+        are undeterminable there), but an evaluator that meets
+        ``cos(index(lat, i))`` with ``lat`` in ``deg`` reads a number in degrees
+        all the same, and §4.8.3 requires it converted. The rules are the Rust
+        binding's ``propagate_array_dim`` (units.rs), case for case, so every
+        binding's angle rewrite folds the factor into the same arguments: an
+        ``faq`` has its body's unit; a ``makearray`` has the unit its value
+        regions share; a ``broadcast`` has the unit of its ``fn`` applied to its
+        operands; ``index``, ``reshape``, ``transpose`` and ``concat`` have their
+        source array's.
+        """
+        op = node.op
+        if op == "faq":
+            if node.expr is not None:
+                return self._type(node.expr)
+            return self._type(node.args[0]) if node.args else self._dimensionless
+        if op == "makearray":
+            if not node.values:
+                return self._dimensionless
+            typed = [self._type(v) for v in node.values]
+            known = [t for t in typed if t is not None]
+            if not known:
+                return None
+            first = known[0]
+            if len(known) != len(typed) or any(
+                not self._dimensions_compatible(first.dim, t.dim) or first.scale != t.scale
+                for t in known[1:]
+            ):
+                return None
+            return first
+        if op == "broadcast":
+            if node.fn is None:
+                return None
+            return self._type_node(ExprNode(op=node.fn, args=list(node.args)))
+        return self._type(node.args[0]) if node.args else self._dimensionless
+
     def _dimensions_compatible(self, dim1: UnitsContainer, dim2: UnitsContainer) -> bool:
         """Check whether two DIMENSIONALITY containers denote the same dimension.
 
@@ -1798,6 +1850,9 @@ def normalize_angle_arguments(expr: Expr, env: dict[str, Any], _validator=None) 
     if validator is None:
         validator = UnitValidator()
         validator.known_units = env
+        # An array element carries its array's declared unit on this path, so
+        # `cos(index(lat, i))` with `lat` in `deg` is converted like `cos(lat)`.
+        validator.element_units = True
 
     # Children first, so a nested `sin(theta [deg])` inside another argument is
     # converted too. IDENTITY-PRESERVING: ``map_children`` always rebuilds, and

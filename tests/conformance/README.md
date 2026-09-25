@@ -22,6 +22,10 @@ tests/conformance/
 │   ├── stub_adapter.py             #   a canned stand-in adapter, for the runner's own test only
 │   ├── test_runner.py              #   drives the runner through all five outcomes and both ledgers
 │   └── golden/<id>.json            #   the Julia-INTERPRETER trajectory (phase 2 mints these)
+├── native_coverage/                # the corpus-wide native-builds-where-interpreter-builds ledger (CONFORMANCE_SPEC §5.44.6)
+│   ├── README.md                   #   the contract: what the census measures, the ledger format, the one-way check
+│   ├── julia.json                  #   every document Julia's native refuses and its interpreter builds
+│   └── rust.json                   #   the same for Rust
 ├── broadcast_alignment/            # esm-spec §4.3.4 operand alignment (CONFORMANCE_SPEC §5.45.3)
 │   ├── README.md                   #   the contract: what moved here, and what did not
 │   ├── manifest.json               #   `"runner": "inline_tests"`; fixtures, tolerances, the two ledgers

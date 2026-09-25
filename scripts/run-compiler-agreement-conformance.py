@@ -607,8 +607,7 @@ def compiler_bindings(manifest: dict, compiler: str) -> tuple[set[str], set[str]
 
 def fixture_required(fixture: dict, binding: str) -> list[str]:
     """The compilers that MUST run this fixture in this binding — the REFUSAL
-    ledger. Empty for every fixture in phase 1; each name added is a one-way
-    ratchet."""
+    ledger. Each name added is a one-way ratchet."""
     return list((fixture.get("required") or {}).get(binding) or [])
 
 

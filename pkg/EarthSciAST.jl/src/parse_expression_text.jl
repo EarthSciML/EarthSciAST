@@ -17,7 +17,7 @@ Coverage:
    functions, derivatives (`D(x)/Dt` and `D(x, t)`), open/user function calls;
  - array & call-shaped tier: array literals `[…]` (`const`), indexing
    `a[i, j]` (`index`), dotted closed-function calls `datetime.year(t)` (`fn`),
-   the `true` literal, and `integral` / `reshape` / `transpose` / `concat`;
+   the `true` and `false` literals, and `integral` / `reshape` / `transpose` / `concat`;
  - reduction & array-query tier: `faq` reductions
    `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
    key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax`
@@ -102,7 +102,7 @@ const _TP_TEMPLATE_ARG_MIN = get_operator_precedence("+")
 """
 Structural ops whose defining data lives OUTSIDE `args` AND which have no text
 surface yet — refused, pending a dedicated syntax pass. (`integral`, `reshape`,
-`transpose`, `concat`, `fn`, `const`, `index`, `true`, `faq`,
+`transpose`, `concat`, `fn`, `const`, `index`, `true`, `false`, `faq`,
 `apply_expression_template`, `polygon_intersection_area`, `intersect_polygon`,
 `makearray` DO have a surface and are reconstructed below; they are
 intentionally absent here. `table_lookup` IS listed: its surface is the bracket
@@ -434,7 +434,7 @@ function _tp_parse_atom(ps::_TPParser)
         return OpExpr("const", ASTExpr[]; value=_tp_parse_array_rest(ps))
     if t.kind === :name
         name = t.val::String
-        name == "true" && return OpExpr("true", ASTExpr[])
+        (name == "true" || name == "false") && return OpExpr(name, ASTExpr[])
         # `makearray(region = value, …)` — a piecewise-region array. Its
         # arguments are `[lo:hi, …] = value` pairs, not plain call args, so it
         # needs its own parse rather than the generic call path.

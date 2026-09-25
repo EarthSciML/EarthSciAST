@@ -401,7 +401,7 @@ function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
         append!(idx, buf)
         push!(slots, Int(slot))
     end
-    ce = _stencil_disabled() ? nothing : _seed_expression_compile(expr, dims)
+    ce = _setup_compile_once_enabled() ? _seed_expression_compile(expr, dims) : nothing
     if ce !== nothing
         vals = Vector{Float64}(undef, nd)
         @inbounds for c in eachindex(slots)
@@ -412,12 +412,18 @@ function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
         end
         return u0
     end
-    _refuse_percell_evaluation("seed_expression_ic!($(var_name))",
-        "the expression initial-state seed", length(slots))
+    binding(c) = Dict{String,Any}(dims[d] => axes_[d][idx[(c - 1) * nd + d]]
+                                  for d in eachindex(dims))
+    if _compiler_is_strict()
+        # An expression no form can evaluate — an undeclared name — is the
+        # caller's error, not a compiler's refusal, so the first cell is
+        # evaluated once, for its diagnostic only, before the refusal is raised.
+        isempty(slots) || evaluate_expr(expr, binding(1))
+        _refuse_percell_evaluation("seed_expression_ic!($(var_name))",
+            "the expression initial-state seed", length(slots))
+    end
     for c in eachindex(slots)
-        binding = Dict{String,Any}(dims[d] => axes_[d][idx[(c - 1) * nd + d]]
-                                   for d in eachindex(dims))
-        u0[slots[c]] = evaluate_expr(expr, binding)
+        u0[slots[c]] = evaluate_expr(expr, binding(c))
     end
     return u0
 end
@@ -1346,28 +1352,35 @@ function observed_field(prob::EsmProblem, name::AbstractString)
     end
 end
 
-# The output-time route, memoized on the problem and reported in its compiler
-# report. The first read of a name evaluates it — through the compile-once
-# cellwise sweep, or, where that declines, the per-cell resolve-and-compile
-# fallback that a strict compiler refuses — and files one `:observed` row saying
-# which. Later reads at the same forcing epoch return the stored field without
+# The output-time route, memoized on the problem's build and reported in its
+# compiler report. The first read of a name evaluates it — through the
+# compile-once cellwise sweep, or, where that declines, the per-cell
+# resolve-and-compile fallback that a strict compiler refuses — and files one
+# `:observed` row saying which, from what THIS call did (`_counting_percell`).
+# Later reads at the same forcing epoch return the stored field without
 # evaluating anything: the observed is state-free, so only an in-place refresh of
-# a live buffer (which bumps the epoch) can move it.
+# a live buffer (which bumps the epoch) can move it. A `remake` of the problem
+# shares the build and so the memo: `observed_field` reports what the build
+# materialized (API_SPEC §5.8), which a `p` or `u0` swap does not change.
 function _observed_field_memo(prob::EsmProblem, name::String)
     insp = prob.inspection
     epoch = _FORCING_EPOCH[]
-    hit = get(insp.observed_memo, name, nothing)
-    hit !== nothing && hit[1] == epoch && return copy(hit[2])
-    percell0 = get(_CASCADE_TALLY, :cellwise_percell, 0)
-    v = _observed_field_impl(prob, name)
-    if hit === nothing
-        percell = get(_CASCADE_TALLY, :cellwise_percell, 0) > percell0
-        push!(insp.compiler_report.rules,
-              CompilerRuleRecord(name, :observed,
-                                 percell ? :output_percell : :output_compiled_once,
-                                 Pair{Symbol,Symbol}[]))
+    hit = lock(() -> get(insp.observed_memo, name, nothing), insp.observed_lock)
+    hit !== nothing && hit.build === prob.run_file && hit.epoch == epoch &&
+        return copy(hit.value)
+    v, percell = _counting_percell() do
+        _observed_field_impl(prob, name)
     end
-    insp.observed_memo[name] = (epoch, copy(v))
+    lock(insp.observed_lock) do
+        # One row per name per build: the memo is emptied when a build starts,
+        # so an absent entry is this build's first read of the name.
+        haskey(insp.observed_memo, name) ||
+            push!(insp.compiler_report.rules,
+                  CompilerRuleRecord(name, :observed,
+                                     percell > 0 ? :output_percell : :output_compiled_once,
+                                     Pair{Symbol,Symbol}[]))
+        insp.observed_memo[name] = _ObservedMemo(prob.run_file, epoch, copy(v))
+    end
     return v
 end
 

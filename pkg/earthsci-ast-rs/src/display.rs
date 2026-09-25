@@ -815,7 +815,7 @@ fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
             fmt,
         )),
 
-        "true" => Some("true".to_string()),
+        "true" | "false" => Some(op.to_string()),
 
         "fn" => {
             let name = node.name.as_deref().unwrap_or("");
