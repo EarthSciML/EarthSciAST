@@ -175,6 +175,7 @@ and then the software utilities above can turn that into an esm file that looks 
 }
 ```
 
+For a working demonstration, go to [earthscilab.com](https://earthscilab.com).
 
 ## Installation
 
