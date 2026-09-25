@@ -33,8 +33,12 @@ records what each answered:
 Only the **front door** counts. Julia's census falls back to `_build_evaluator`
 for a document that needs providers or a model selection `esm_problem` cannot
 guess, but a document only the fallback builds is not one a caller can build, so
-it counts as not building. Rust builds through `esm_problem` with the default
-`Rhs::Auto`.
+it counts as not building. After a build, Julia's census also calls the
+problem's right-hand side `f!` on `u0`; a build whose call then throws counts as
+not building either (code `rhs_call_failed`), since a missing evaluation rule
+can fire at call time rather than at construction. Rust builds through
+`esm_problem` with the default `Rhs::Auto` and does not call the right-hand
+side.
 
 A document is a **native coverage gap** when the interpreter builds it and
 native does not. Two kinds of document are never gaps, whatever they answer,
@@ -71,7 +75,8 @@ An entry has the shape of a compiler-agreement named exclusion, keyed by
 document instead of by fixture: `path` is relative to the repository root, or
 `EarthSciModels/…` for a document in that repository; `code` is native's error
 code (`compiler_refused_rule` for a refusal, the error's own code or type
-otherwise, `timeout` / `crashed` / `killed` for a document the census could not
+otherwise, `rhs_call_failed` for a Julia build whose first right-hand-side call
+threw, `timeout` / `crashed` / `killed` for a document the census could not
 finish); `rule` is the refused rule where the refusal names one; `reason` is the
 message, squashed to one line. Entries are sorted by path and unique.
 `measured` records what the baseline ran on and is not compared.

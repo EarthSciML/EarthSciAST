@@ -6376,7 +6376,8 @@ in EarthSciML/EarthSciModels; a census builds each through `esm_problem` under
 both compilers in Julia (`pkg/EarthSciAST.jl/scripts/compiler_census.jl`) and in
 Rust (`pkg/earthsci-ast-rs/examples/compiler_census.rs`). A document under an
 `invalid/` directory, or a template or coupling library with no model of its
-own, is never listed.
+own, is never listed. Where a census also calls the built problem's right-hand
+side (Julia's does), a build whose call throws does not count as building.
 
 Each binding's ledger (`julia.json`, `rust.json`) lists every document the
 interpreter builds and native does not, with native's code, the refused rule

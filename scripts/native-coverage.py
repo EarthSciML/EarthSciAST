@@ -154,8 +154,20 @@ def julia_outcome(rec: dict[str, Any]) -> dict[str, Any]:
     Only the front door counts: ``esm_problem`` must build. The census falls back
     to ``_build_evaluator`` for documents that need providers or a model
     selection, but a document only the fallback builds is not one a caller can
-    build."""
+    build.
+
+    A build whose right-hand side then fails to evaluate (``rhs_ok`` false: the
+    census calls ``f!`` on ``u0`` after the build) does not count as building
+    either. A record from before the census recorded ``rhs_ok`` has none, and
+    reads as a build."""
     if rec.get("ok") and rec.get("entry") == "esm_problem":
+        if rec.get("rhs_ok") is False:
+            return {
+                "ok": False,
+                "code": "rhs_call_failed",
+                "rule": None,
+                "reason": _squash(rec.get("rhs_error")),
+            }
         return {"ok": True}
     status = rec.get("status")
     if status in ("timeout", "crashed", "worker_load_failure"):
@@ -666,6 +678,29 @@ def _self_test() -> list[str]:
         fails.append(f"rust_outcome: {r}")
     if rust_outcome({"killed": True, "rc": 124}, "interpreter")["code"] != "killed":
         fails.append("rust_outcome: a killed document must not read as a build")
+    # A build whose right-hand side then fails is not a build.
+    rhs_failed = julia_outcome(
+        {"ok": True, "entry": "esm_problem", "rhs_ok": False, "rhs_error": "MethodError: …"}
+    )
+    if rhs_failed["ok"] or rhs_failed["code"] != "rhs_call_failed":
+        fails.append(
+            f"julia_outcome: a failed right-hand-side call counted as a build: {rhs_failed}"
+        )
+    if not julia_outcome({"ok": True, "entry": "esm_problem", "rhs_ok": True})["ok"]:
+        fails.append("julia_outcome: a build whose right-hand side ran must count as a build")
+    if not julia_outcome({"ok": True, "entry": "esm_problem"})["ok"]:
+        fails.append("julia_outcome: a record with no rhs_ok must read as a build")
+    rhs = copy.deepcopy(base)
+    rhs["tests/valid/b.esm"]["native"] = rhs_failed
+    expect(
+        "native builds but its right-hand side fails",
+        rhs,
+        "NEW native refusal: tests/valid/b.esm builds under interpreter and not under "
+        "native (rhs_call_failed",
+    )
+    both_rhs = copy.deepcopy(rhs)
+    both_rhs["tests/valid/b.esm"]["interpreter"] = rhs_failed
+    expect("both right-hand sides fail", both_rhs, None)
     return fails
 
 
