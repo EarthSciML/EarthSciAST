@@ -1427,10 +1427,25 @@ pub fn validate_geometry_manifolds(
     tree: &Value,
     path: &str,
 ) -> Result<(), ExpressionTemplateError> {
+    // The path is built in one buffer as the walk descends; only an error
+    // formats it.
+    validate_geometry_manifolds_at(tree, &mut path.to_string())
+}
+
+fn validate_geometry_manifolds_at(
+    tree: &Value,
+    path: &mut String,
+) -> Result<(), ExpressionTemplateError> {
     match tree {
         Value::Array(arr) => {
             for (i, child) in arr.iter().enumerate() {
-                validate_geometry_manifolds(child, &format!("{path}/{i}"))?;
+                let len = path.len();
+                {
+                    use std::fmt::Write;
+                    let _ = write!(path, "/{i}");
+                }
+                validate_geometry_manifolds_at(child, path)?;
+                path.truncate(len);
             }
             Ok(())
         }
@@ -1462,7 +1477,11 @@ pub fn validate_geometry_manifolds(
                 if k == "expression_templates" {
                     continue;
                 }
-                validate_geometry_manifolds(v, &format!("{path}/{k}"))?;
+                let len = path.len();
+                path.push('/');
+                path.push_str(k);
+                validate_geometry_manifolds_at(v, path)?;
+                path.truncate(len);
             }
             Ok(())
         }
@@ -1488,10 +1507,25 @@ pub fn validate_geometry_manifolds(
 /// (`expression_templates` subtrees are skipped) and the diagnostic needs the
 /// offender's path with an early error return.
 pub fn validate_makearray_regions(tree: &Value, path: &str) -> Result<(), ExpressionTemplateError> {
+    // The path is built in one buffer as the walk descends; only an error
+    // formats it.
+    validate_makearray_regions_at(tree, &mut path.to_string())
+}
+
+fn validate_makearray_regions_at(
+    tree: &Value,
+    path: &mut String,
+) -> Result<(), ExpressionTemplateError> {
     match tree {
         Value::Array(arr) => {
             for (i, child) in arr.iter().enumerate() {
-                validate_makearray_regions(child, &format!("{path}/{i}"))?;
+                let len = path.len();
+                {
+                    use std::fmt::Write;
+                    let _ = write!(path, "/{i}");
+                }
+                validate_makearray_regions_at(child, path)?;
+                path.truncate(len);
             }
             Ok(())
         }
@@ -1540,7 +1574,11 @@ pub fn validate_makearray_regions(tree: &Value, path: &str) -> Result<(), Expres
                 if k == "expression_templates" {
                     continue;
                 }
-                validate_makearray_regions(v, &format!("{path}/{k}"))?;
+                let len = path.len();
+                path.push('/');
+                path.push_str(k);
+                validate_makearray_regions_at(v, path)?;
+                path.truncate(len);
             }
             Ok(())
         }

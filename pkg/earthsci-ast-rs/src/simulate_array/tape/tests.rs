@@ -2640,3 +2640,60 @@ fn ab_fused_box_past_u16_splits_into_groups() {
         );
     }
 }
+
+/// A shaped parameter's inline array default reaches the tape as the numbers
+/// it was declared with — one `ConstArray` whose payload is the row-major
+/// data — and the taped right-hand side agrees bit for bit with the
+/// interpreter, which reads the same default back from the `const` literal.
+#[test]
+fn a_shaped_parameter_default_is_taped_from_its_data() {
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "shaped_param_data", "authors": ["tape tests"]},
+        "index_sets": {"x": {"kind": "interval", "size": 3}, "y": {"kind": "interval", "size": 2}},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "units": "1", "default": 1.0, "shape": ["x", "y"]},
+                "w": {"type": "parameter", "units": "1", "shape": ["x", "y"],
+                      "default": [[0.5, -1.25], [2.0, 3.5], [-0.75, 1e-3]]}
+            },
+            "equations": [{
+                "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                        "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i", "j"]}], "wrt": "t"},
+                        "ranges": {"i": [1, 3], "j": [1, 2]}},
+                "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                        "ranges": {"i": [1, 3], "j": [1, 2]},
+                        "expr": {"op": "*", "args": [
+                            {"op": "index", "args": ["w", "i", "j"]},
+                            {"op": "index", "args": ["u", "i", "j"]}]}}
+            }]
+        }}
+    });
+    let prog = ab_check(doc.clone(), 0, -2.0, 2.0);
+    let payloads: Vec<&ConstArrayData> = prog.const_data.iter().collect();
+    assert!(
+        payloads
+            .iter()
+            .any(|d| d.shape[..] == [3, 2] && d.values == [0.5, -1.25, 2.0, 3.5, -0.75, 1e-3]),
+        "the default's row-major data is a ConstArray payload: {payloads:?}"
+    );
+    // And against the per-cell oracle, not only the overlay.
+    let compiled = compile(doc);
+    let n = compiled.state_variable_names().len();
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let state = seeded_state(n, 7, -2.0, 2.0);
+    let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
+    let mut scratch = compiled.debug_new_scratch_taped();
+    let mut dy = vec![0.0f64; n];
+    compiled.debug_eval_rhs_into(
+        &state,
+        0.0,
+        &param_vec,
+        &mut dy,
+        &mut scratch,
+        &mut RhsStats::default(),
+    );
+    let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&dy), bits(&dy_oracle));
+}

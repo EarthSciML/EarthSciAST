@@ -606,13 +606,6 @@ fn for_each_run(shape: &[usize], shifted: &[ShiftedGeom], mut sink: impl FnMut(F
             ShiftedGeom::Linear { .. } => None,
         })
         .collect();
-    let seg_base: SmallVec<[i64; 2]> = shifted
-        .iter()
-        .map(|g| match g {
-            ShiftedGeom::Segs { base, .. } => *base,
-            ShiftedGeom::Linear { .. } => 0,
-        })
-        .collect();
     // Per axis: merged interval list
     // [(start, len, per-input Option<source start position on this axis>)]
     // (`None` for Linear inputs, which impose no cuts).
@@ -679,8 +672,8 @@ fn for_each_run(shape: &[usize], shifted: &[ShiftedGeom], mut sink: impl FnMut(F
     // A block of consecutive rows along the innermost leading axis `lead`
     // (one of its intervals) coalesces into ONE run when the inner axis is a
     // single full interval and every Segs input is either a ghost there or
-    // advances by exactly one row per row (its source's inner extent is the
-    // box's): each row then starts where the previous one ended, in the output
+    // advances along `lead` by exactly one row's worth of its own element
+    // stride: each row then starts where the previous one ended, in the output
     // and in every source. Such a block is emitted as one piece.
     let inner_ivals = &axis_ivals[nd - 1];
     let inner_full = inner_ivals.len() == 1;
@@ -701,8 +694,11 @@ fn for_each_run(shape: &[usize], shifted: &[ShiftedGeom], mut sink: impl FnMut(F
     loop {
         // This row's output base and each Segs input's source base (or ghost).
         let mut row_off = 0i64;
-        for (r, &b) in row_src.iter_mut().zip(seg_base.iter()) {
-            *r = Some(b);
+        for (r, g) in row_src.iter_mut().zip(shifted) {
+            *r = Some(match g {
+                ShiftedGeom::Segs { base, .. } => *base,
+                ShiftedGeom::Linear { .. } => 0,
+            });
         }
         for d in 0..nd - 1 {
             row_off += x[d] as i64 * strides[d];
@@ -1964,28 +1960,26 @@ mod run_schedule_tests {
                             b: rng.next(5) as i64,
                         }
                     } else {
+                        // A same-rank source (row-major strides over its own
+                        // extents), with now and then an axis broadcast
+                        // (stride 0) and a fixed-axis base offset.
                         let mut segs: AxisSegs = SmallVec::new();
-                        let mut src: super::super::super::DimU = SmallVec::new();
+                        let mut src: Vec<usize> = Vec::new();
                         for &n in &shape {
                             let (s, m) = axis_segs(&mut rng, n);
                             segs.push(s);
                             src.push(m);
                         }
-                        let mut strides = rm_strides(&src);
-                        let mut base = 0i64;
-                        // Sometimes a broadcast fold: an axis the source is
-                        // repeated along (stride 0, one full segment), from a
-                        // fixed-axis base offset.
-                        if rng.next(3) == 0 {
-                            let d = rng.next(nd as u64) as usize;
-                            segs[d] = SmallVec::from_slice(&[(0, shape[d], 0)]);
-                            strides[d] = 0;
-                            base = rng.next(4) as i64;
+                        let mut strides: SmallVec<[i64; 4]> = rm_strides(&src);
+                        for st in strides.iter_mut() {
+                            if rng.next(5) == 0 {
+                                *st = 0;
+                            }
                         }
                         ShiftedGeom::Segs {
                             segs,
                             strides,
-                            base,
+                            base: rng.next(4) as i64,
                         }
                     }
                 })
