@@ -41,6 +41,8 @@ def fmt(v):
     if isinstance(v, float):
         return f"{v:.4g}"
     if isinstance(v, dict):
+        if not v:
+            return "null"
         return ", ".join(f"{k}:{fmt(x)}" for k, x in v.items())
     return str(v)
 
@@ -345,17 +347,22 @@ def main(argv=None):
     for r in rows:
         if a.report_timing and r["kind"] == TIMING:
             continue
+        # Several files share a family (serial and threaded, one per binding),
+        # so every message names the binding and thread mode.
+        where = f"{r['binding']} {'serial' if (r['threads'] or 1) == 1 else 'threaded'}"
+        n = "all" if r["n"] is None else r["n"]
         if r["outcome"] == "FAIL":
             red.append(
-                f"{r['family']} N={r['n']} {r['gate']}: fails and is not in the ledger ({fmt(r['measured'])})"
+                f"{where} {r['family']} N={n} {r['gate']}: fails and is not in the ledger "
+                f"({fmt(r['measured'])})"
             )
         elif r["outcome"] == "STALE":
             red.append(
-                f"{r['family']} N={r['n']} {r['gate']}: passes; remove this entry from the "
-                f"{r['binding']} ledger"
+                f"{where} {r['family']} N={n} {r['gate']}: passes; remove this entry from "
+                f"the {r['binding']} ledger"
             )
         elif r["outcome"] == "MISSING":
-            red.append(f"{r['family']} N={r['n']}: no result")
+            red.append(f"{where} {r['family']} N={n}: no result")
     counts = {}
     for r in rows:
         counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
@@ -363,8 +370,10 @@ def main(argv=None):
     if a.json:
         with open(a.json, "w") as fh:
             json.dump({"rows": rows, "red": red}, fh, indent=1)
+    # On stdout after the table, so a log that captures both streams keeps
+    # them in order.
     for msg in red:
-        print(f"RED: {msg}", file=sys.stderr)
+        print(f"RED: {msg}")
     return 1 if red else 0
 
 
