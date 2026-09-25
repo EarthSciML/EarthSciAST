@@ -73,8 +73,8 @@ SCALING_BUILD=/scratch/$USER/scaling tests/conformance/scaling/sweep.sh
 | `stencil_1d` .. `stencil_4d` | rank-1 to rank-4 diffusion, zero-ghost boundaries, one affine box | cells | 10^2 .. 10^6 |
 | `transport_3d` | the transport benchmark: five boundary classes per axis through expression-template matches, min/max limiter | cells | 10^2 .. 10^6 |
 | `chemistry_grid` | a 20-species reaction system lifted pointwise onto a lon x lat grid by `operator_compose`, plus lon advection | grid cells (20 states each) | 10^2 .. 10^6 |
-| `prefix_scan` | an inclusive measure-weighted prefix scan (filtered `faq`) feeding the right-hand side | cells | 10^2 .. 10^6 |
-| `source_receptor` | a dense square contraction `sum_j K[i,j] e[j]` | receptors | 10^2 .. 3162 |
+| `prefix_scan` | an inclusive measure-weighted prefix scan (filtered `faq`) over a non-uniform layer thickness, feeding the right-hand side | cells | 10^2 .. 10^6 |
+| `source_receptor` | a dense square contraction `sum_j K[i,j] e[j]` over a non-uniform `K[i,j] = 0.001 (1 + sin(i j))` the document defines by formula | receptors | 10^2 .. 3162 |
 | `regrid` | conservative regrid: bin-skolem broad phase, inline `polygon_intersection_area`, apply every call | source cells | 10^2 .. 3162 |
 | `unstructured_gather` | the indirect gather `u[nbr[i,k]]` over a permuted periodic mesh | cells | 10^2 .. 10^6 |
 | `scalar_chemistry` | N/20 scalar Pollu boxes written as one scalar ODE per state | states | 10^2 .. 10^5 |
@@ -85,6 +85,13 @@ is the actual count and `n` is the nominal ladder value. `source_receptor` and
 grow as N^2; `scalar_chemistry` stops at 10^5 because the document itself
 grows with N, which is also why the flat-code-size gate does not apply to it
 (`gate_exclusions` in the manifest).
+
+No array a hand loop reads densely is uniform in its document:
+`source_receptor`'s `K` and `prefix_scan`'s `dz` are defined by formulas of
+their indices, so a compiler must materialize them and read them on every
+call, as it would a loaded array, rather than serve every element from one
+value. (Rust's tape computes both in its build-once section and gathers them
+per call.)
 
 ## The measured state
 
@@ -164,7 +171,7 @@ Thresholds live in `manifest.json` under `gates`.
 | `no_steady_alloc` | deterministic | `allocs_per_call` is 0 where measurable |
 | `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast. Checked against the interpreter when native refused |
 | `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns, over the smallest and largest N that built with at most 10^6 cells |
-| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise) |
+| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise; `source_receptor`, whose work is N^2, lowers it to 2000 through `gate_overrides`) |
 
 The deterministic gates run in PR CI at the PR sizes (the Rust leg of
 `conformance-testing.yml`; `generate.py --check` runs in its lint job). The
@@ -189,7 +196,10 @@ where the Rust ledger has a `builds` entry for it.
 ```
 
 `n` omitted means every N of the family (and the family-level gates, which
-have no N); `threads` (`"serial"` or `"threaded"`) omitted means both;
+have no N); `n_min` says a family-level failure appears only from that N up,
+so a run that stops below it (the PR sizes) neither matches the entry nor
+marks it stale; `provisional` says a timing entry was measured on a machine
+that was not clean; `threads` (`"serial"` or `"threaded"`) omitted means both;
 `compiler` defaults to `"native"`. `phase` is the plan phase expected to fix
 it: 2 for build time and code size, 3 or 4 for refusals, 5 for speed and
 threading.

@@ -48,9 +48,10 @@ pub enum HandLoop {
         u_wind: f64,
         dx: f64,
     },
-    /// `dy[i] = -0.001 * sum_{j <= i} u[j] * dz[j]`.
+    /// `dy[i] = -0.001 * sum_{j <= i} u[j] * dz[j]`, `dz` non-uniform.
     PrefixScan { dz: Vec<f64> },
-    /// `dc[i] = sum_j k[i, j] e[j]`, `de[j] = -kd e[j]`.
+    /// `dc[i] = sum_j k[i, j] e[j]` over a dense non-uniform `k`, stored
+    /// source-major (`k[j * n + i]`), and `de[j] = -kd e[j]`.
     SourceReceptor { n: usize, k: Vec<f64>, kd: f64 },
     /// `dF_src[i] = -kd F_src[i]`, `dF_tgt[j] = sum_i w[i, j] F_src[i] - F_tgt[j]`
     /// over each target's overlapping sources in source order.
@@ -128,15 +129,22 @@ impl HandLoop {
                 }
             }
             HandLoop::SourceReceptor { n, k, kd } => {
+                // Column by column (`k` is stored source-major, see
+                // `SourceReceptor`): each receptor's sum still runs over j in
+                // order, the fold order of a row-by-row dot product, but the
+                // inner loop is over independent receptors, so it is not one
+                // dependency chain and not latency-bound.
                 let n = *n;
                 let e = &u[n..2 * n];
-                for i in lo..hi {
-                    let row = &k[i * n..(i + 1) * n];
-                    let mut acc = 0.0f64;
-                    for j in 0..n {
-                        acc += row[j] * e[j];
+                let mut acc = vec![0.0f64; hi - lo];
+                for (j, ej) in e.iter().enumerate() {
+                    let col = &k[j * n + lo..j * n + hi];
+                    for (a, kij) in acc.iter_mut().zip(col) {
+                        *a += kij * ej;
                     }
-                    du.set(i, acc);
+                }
+                for (r, a) in acc.iter().enumerate() {
+                    du.set(lo + r, *a);
                 }
                 for (j, ej) in e.iter().enumerate().take(hi).skip(lo) {
                     du.set(n + j, -kd * ej);

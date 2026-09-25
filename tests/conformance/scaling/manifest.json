@@ -40,16 +40,22 @@
       "pr_sizes": [100, 1000]
     },
     "prefix_scan": {
-      "description": "An inclusive measure-weighted prefix scan (a filtered faq) feeding a column settling term.",
+      "description": "An inclusive measure-weighted prefix scan (a filtered faq) feeding a column settling term; the layer thickness dz[i] = 100 (1 + 0.5 sin(i)) is non-uniform.",
       "size_meaning": "cells",
       "sizes": [100, 1000, 10000, 100000, 1000000],
       "pr_sizes": [100, 1000]
     },
     "source_receptor": {
-      "description": "A dense square source-receptor contraction. The work per call is N^2, so the ladder stops at 3162 (10^7 matrix entries).",
+      "description": "A dense square source-receptor contraction over a non-uniform matrix K[i,j] = 0.001 (1 + sin(i j)), defined in the document by that formula, so it is materialized once and read on every call. The work per call is N^2, so the ladder stops at 3162 (10^7 matrix entries).",
       "size_meaning": "receptors = sources (2 states per index)",
       "sizes": [100, 1000, 3162],
-      "pr_sizes": [100, 1000]
+      "pr_sizes": [100, 1000],
+      "gate_overrides": {
+        "speed": {
+          "min_n_states": 2000,
+          "why": "the work per call is N^2, so 2000 states (N = 1000) is already a 10^6 multiply-add call"
+        }
+      }
     },
     "regrid": {
       "description": "A conservative regrid (bin-skolem broad phase, inline polygon_intersection_area) applied on every call. The overlap arrays are declared dense over source x target, so the ladder stops at 3162.",
@@ -100,7 +106,7 @@
     },
     "speed": {
       "kind": "timing",
-      "description": "steady_rhs_s / hand_loop_s <= max_ratio, in each result file (serial and threaded runs are separate files). Applied from min_n_states states up, below which a call is a few microseconds and the ratio measures timer noise.",
+      "description": "steady_rhs_s / hand_loop_s <= max_ratio, in each result file (serial and threaded runs are separate files). Applied from min_n_states states up (a family's gate_overrides may lower it), below which a call is a few microseconds and the ratio measures timer noise.",
       "max_ratio": 1.25,
       "min_n_states": 10000
     }
@@ -126,7 +132,10 @@
         "gate": "code_size_flat",
         "measured": {
           "100": 47,
-          "1000": 71
+          "1000": 71,
+          "10000": 59,
+          "100000": 59,
+          "1000000": 47
         },
         "reason": "the tape's instruction count changes with the grid side (cause not yet traced)",
         "phase": 2
@@ -135,8 +144,10 @@
         "family": "prefix_scan",
         "gate": "code_size_flat",
         "measured": {
-          "100": 507,
-          "1000": 5007
+          "100": 508,
+          "1000": 5008,
+          "10000": 50008,
+          "100000": 500008
         },
         "reason": "a prefix scan is unrolled into one region write per step: 5N + 7 instructions",
         "phase": 2
@@ -145,8 +156,9 @@
         "family": "source_receptor",
         "gate": "code_size_flat",
         "measured": {
-          "100": 208,
-          "1000": 2008
+          "100": 210,
+          "1000": 2010,
+          "3162": 6334
         },
         "reason": "a contraction is unrolled once per output tuple: 2N + 8 instructions",
         "phase": 2
@@ -177,10 +189,294 @@
         "gate": "no_steady_alloc",
         "measured": {
           "100": 3840,
-          "1000": 32512
+          "1000": 32512,
+          "3162": 130816
         },
         "reason": "each steady right-hand-side call allocates, growing with N (not yet traced)",
         "phase": 5
+      },
+      {
+        "family": "stencil_2d",
+        "gate": "code_size_flat",
+        "measured": {
+          "100": 4,
+          "1000": 4,
+          "10000": 4,
+          "100000": 2,
+          "1000000": 2
+        },
+        "reason": "the tape shrinks at larger N (the same stencil lowers to fewer instructions; cause not yet traced)",
+        "phase": 2,
+        "n_min": 100000
+      },
+      {
+        "family": "stencil_3d",
+        "gate": "code_size_flat",
+        "measured": {
+          "100": 6,
+          "1000": 6,
+          "10000": 4,
+          "100000": 4,
+          "1000000": 4
+        },
+        "reason": "the tape shrinks at larger N (the same stencil lowers to fewer instructions; cause not yet traced)",
+        "phase": 2,
+        "n_min": 10000
+      },
+      {
+        "family": "stencil_4d",
+        "gate": "code_size_flat",
+        "measured": {
+          "100": 6,
+          "1000": 6,
+          "10000": 6,
+          "100000": 4,
+          "1000000": 4
+        },
+        "reason": "the tape shrinks at larger N (the same stencil lowers to fewer instructions; cause not yet traced)",
+        "phase": 2,
+        "n_min": 100000
+      },
+      {
+        "family": "chemistry_grid",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": 1540,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "chemistry_grid",
+        "gate": "speed",
+        "n": 1000,
+        "threads": "serial",
+        "measured": 1.6348,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "chemistry_grid",
+        "gate": "speed",
+        "n": 10000,
+        "threads": "serial",
+        "measured": 1.8336,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "chemistry_grid",
+        "gate": "speed",
+        "n": 100000,
+        "threads": "serial",
+        "measured": 2.9575,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "chemistry_grid",
+        "gate": "speed",
+        "n": 1000000,
+        "threads": "serial",
+        "measured": 2.7175,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "prefix_scan",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": 7348,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..100000)",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "prefix_scan",
+        "gate": "speed",
+        "n": 10000,
+        "threads": "serial",
+        "measured": 1485,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "prefix_scan",
+        "gate": "speed",
+        "n": 100000,
+        "threads": "serial",
+        "measured": 32170,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "scalar_chemistry",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": 143347,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..100000)",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "scalar_chemistry",
+        "gate": "speed",
+        "n": 10000,
+        "threads": "serial",
+        "measured": 204,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "scalar_chemistry",
+        "gate": "speed",
+        "n": 100000,
+        "threads": "serial",
+        "measured": 249,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "source_receptor",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": 3289,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..3162)",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "stencil_1d",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": 1292,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "stencil_1d",
+        "gate": "speed",
+        "n": 1000000,
+        "threads": "serial",
+        "measured": 1.592,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "stencil_2d",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": 1158,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "stencil_2d",
+        "gate": "speed",
+        "n": 1000000,
+        "threads": "serial",
+        "measured": 2.6057,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "stencil_3d",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": 1266,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "stencil_3d",
+        "gate": "speed",
+        "n": 100000,
+        "threads": "serial",
+        "measured": 1.7653,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "stencil_3d",
+        "gate": "speed",
+        "n": 1000000,
+        "threads": "serial",
+        "measured": 4.0437,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "stencil_4d",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": 1098,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..100000)",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "stencil_4d",
+        "gate": "speed",
+        "n": 1000000,
+        "threads": "serial",
+        "measured": 2.9886,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "transport_3d",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": 940,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "transport_3d",
+        "gate": "speed",
+        "n": 10000,
+        "threads": "serial",
+        "measured": 1.6881,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "transport_3d",
+        "gate": "speed",
+        "n": 100000,
+        "threads": "serial",
+        "measured": 2.5206,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "transport_3d",
+        "gate": "speed",
+        "n": 1000000,
+        "threads": "serial",
+        "measured": 2.2693,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
       }
     ],
     "julia": []
