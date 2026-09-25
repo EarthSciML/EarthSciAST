@@ -1352,6 +1352,61 @@ const _DIMENSION_RULES = let rules = Dict{String, Function}(
     rules
 end
 
+# The EVALUATION-PATH unit environment: the declared units, plus the reading
+# that an array operator carries its ELEMENT's unit. The checker has no rule
+# for the array operators (esm-spec §4.8.4: they are undeterminable there), but
+# an evaluator that meets `cos(index(lat, i))` with `lat` in `deg` reads a
+# number in degrees all the same, and §4.8.3 requires it converted. Only the
+# angle rewrite (`_normalize_angle_expr`, flatten.jl) builds one of these, so
+# no checker verdict moves.
+struct _ElementUnits{D<:AbstractDict} <: AbstractDict{String, String}
+    units::D
+end
+Base.get(e::_ElementUnits, k, default) = get(e.units, k, default)
+Base.haskey(e::_ElementUnits, k) = haskey(e.units, k)
+Base.getindex(e::_ElementUnits, k) = e.units[k]
+Base.length(e::_ElementUnits) = length(e.units)
+Base.iterate(e::_ElementUnits, state...) = iterate(e.units, state...)
+
+const _ARRAY_ELEMENT_OPS = Set(["faq", "makearray", "index", "reshape",
+                                "transpose", "concat", "broadcast"])
+
+# The element unit of an array operator, under an `_ElementUnits` environment.
+# The same rules, case for case, as the Rust binding's `propagate_array_dim`
+# (units.rs), so every binding's angle rewrite folds the factor into the same
+# arguments: an `faq` has its body's unit; a `makearray` has the unit its value
+# regions share; a `broadcast` has the unit of its `fn` applied to its operands;
+# `index`, `reshape`, `transpose` and `concat` have their source array's.
+function _array_element_rule(expr, var_units, findings)
+    if expr.op == "faq"
+        expr.expr_body !== nothing &&
+            return _expr_dimensions!(findings, expr.expr_body, var_units)
+        isempty(expr.args) && return Unitful.NoUnits
+        return _expr_dimensions!(findings, expr.args[1], var_units)
+    elseif expr.op == "makearray"
+        (expr.values === nothing || isempty(expr.values)) && return Unitful.NoUnits
+        dims = [_expr_dimensions!(findings, v, var_units) for v in expr.values]
+        known = filter(!isnothing, dims)
+        isempty(known) && return nothing
+        first_dim = known[1]
+        mismatched = false
+        for dim in known[2:end]
+            if !_same_unit(dim, first_dim)
+                push!(findings, "'makearray' regions must share units: " *
+                                "'$(_ustr(first_dim))' vs '$(_ustr(dim))'")
+                mismatched = true
+            end
+        end
+        (mismatched || length(known) != length(dims)) && return nothing
+        return first_dim
+    elseif expr.op == "broadcast"
+        expr.fn === nothing && return nothing
+        return _expr_dimensions!(findings, OpExpr(expr.fn, expr.args), var_units)
+    end
+    isempty(expr.args) && return Unitful.NoUnits
+    return _expr_dimensions!(findings, expr.args[1], var_units)
+end
+
 # The engine proper. Returns the expression's dimension, or `nothing` when it
 # cannot be determined; every PROVABLE inconsistency encountered anywhere in the
 # subtree is appended to `findings`. See the invariant at the top of this block.
@@ -1371,6 +1426,8 @@ function _expr_dimensions!(findings::Vector{String}, expr::ASTExpr,
     elseif expr isa OpExpr
         rule = get(_DIMENSION_RULES, expr.op, nothing)
         rule !== nothing && return rule(expr, var_units, findings)
+        var_units isa _ElementUnits && expr.op in _ARRAY_ELEMENT_OPS &&
+            return _array_element_rule(expr, var_units, findings)
         # Operator without a dimensional rule (comparisons, aggregate ops,
         # registered-function calls, …): degrade silently — the result is
         # unknown, not an authoring error.

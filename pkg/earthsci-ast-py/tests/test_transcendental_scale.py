@@ -143,6 +143,62 @@ def test_flatten_converts_degrees_and_leaves_radians_alone() -> None:
     assert (converted, untouched) == (3, 1)
 
 
+def _trig_arguments_by_lhs(flat) -> dict:
+    """Every circular-trig argument of each equation, faq bodies included, keyed
+    by the equation's bare left-hand-side name."""
+    found: dict = {}
+
+    def walk(name: str, expr) -> None:
+        if not isinstance(expr, ExprNode):
+            return
+        if expr.op in ("sin", "cos", "tan") and len(expr.args) == 1:
+            found[name] = expr.args[0]
+        for child in [*expr.args, expr.expr]:
+            walk(name, child)
+
+    for equation in flat.equations:
+        if isinstance(equation.lhs, str):
+            walk(equation.lhs.split(".")[-1], equation.rhs)
+    return found
+
+
+def test_flatten_converts_a_degree_array_element() -> None:
+    """An array element carries its array's unit on the evaluation path, so
+    ``cos(index(lat, i))`` with ``lat`` in ``deg`` converts like ``cos(lat)``.
+
+    The checker has no rule for ``index`` or ``faq`` (esm-spec §4.8.4), and the
+    rewrite used to read the argument with the checker's rules, so it left every
+    array element unconverted and evaluated cos(60 radians) = -0.952."""
+    rel = "conformance/scalar_operator_semantics/fixtures/angle_array_element.esm"
+    path = str(FIXTURES_ROOT / rel)
+    args = _trig_arguments_by_lhs(flatten(load_path(path)))
+    assert sorted(args) == ["cos_lat", "cos_lat_rad", "sin_colat", "sin_scalar", "sin_sum"]
+    for name in ("cos_lat", "sin_colat", "sin_sum"):
+        arg = args[name]
+        # `index(A, ...) * (pi/180)`: the element, then the declared scale, once.
+        assert isinstance(arg, ExprNode) and arg.op == "*", name
+        assert isinstance(arg.args[0], ExprNode) and arg.args[0].op == "index", name
+        assert arg.args[1] == math.pi / 180.0, name
+    assert isinstance(args["sin_scalar"], ExprNode) and args["sin_scalar"].op == "*"
+    # The `rad` control is never touched.
+    assert isinstance(args["cos_lat_rad"], ExprNode) and args["cos_lat_rad"].op == "index"
+    # The checker still reads the authored spelling and still accepts it.
+    result = validate_path(path)
+    assert result.is_valid, [e.message for e in result.structural_errors]
+
+
+def test_the_checker_still_has_no_rule_for_an_array_element() -> None:
+    """The element reading is the EVALUATION path's alone: the checker still
+    reports ``index`` as undeterminable (esm-spec §4.8.4), so no verdict moved."""
+    validator = UnitValidator()
+    validator.known_units = {"lat": parse_unit("deg")}
+    node = ExprNode(op="index", args=["lat", 1])
+    assert validator._type(node) is None
+    validator.element_units = True
+    typed = validator._type(node)
+    assert typed is not None and not typed.scale.is_one(), "the element is in `deg`"
+
+
 def test_flatten_leaves_a_document_with_no_scaled_angle_untouched() -> None:
     """A document declaring no scaled angle is not rewritten at all, so the
     common case costs nothing and cannot change a number."""
@@ -224,5 +280,6 @@ def test_the_fixture_paths_exist() -> None:
         "simulation/angle_units_degrees.esm",
         "invalid/units_discriminator_transcendental_scaled_argument.esm",
         "valid/units_transcendental_scaled_argument_repair.esm",
+        "conformance/scalar_operator_semantics/fixtures/angle_array_element.esm",
     ):
         assert Path(FIXTURES_ROOT / rel).is_file(), rel

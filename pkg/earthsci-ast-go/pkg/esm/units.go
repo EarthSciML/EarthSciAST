@@ -1336,6 +1336,77 @@ func PropagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 // is undeterminable until a discretization rewrite lowers them (esm-spec §4.2 /
 // §9.6.8), so the units layer reports nothing.
 func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
+	return propagateDimensionIn(expr, env, false)
+}
+
+// propagateElementDimension is the EVALUATION-PATH reading of propagateDimension:
+// the same rules, plus an array operator carrying its ELEMENT's unit. The
+// checker has no rule for the array operators (esm-spec §4.8.4: they are
+// undeterminable there), but an evaluator that meets cos(index(lat, i)) with
+// lat in deg reads a number in degrees all the same, and §4.8.3 requires it
+// converted. Only the angle rewrite (normalizeAngleArguments) calls it, so no
+// checker verdict depends on it.
+func propagateElementDimension(expr Expression, env map[string]Unit) (*Unit, error) {
+	return propagateDimensionIn(expr, env, true)
+}
+
+// propagateArrayElement is the element unit of an array operator under the
+// evaluation-path reading. The rules are the Rust binding's propagate_array_dim
+// (units.rs), case for case, so every binding's angle rewrite folds the factor
+// into the same arguments: an faq has its body's unit; a makearray has the
+// unit its value regions share; a broadcast has the unit of its fn applied to
+// its operands; index, reshape, transpose and concat have their source array's.
+func propagateArrayElement(node ExprNode, env map[string]Unit) (*Unit, error) {
+	dimensionless := func() (*Unit, error) { return &Unit{Scale: 1}, nil }
+	switch node.Op {
+	case "faq":
+		if node.Expr != nil {
+			return propagateElementDimension(node.Expr, env)
+		}
+		if len(node.Args) == 0 {
+			return dimensionless()
+		}
+		return propagateElementDimension(node.Args[0], env)
+	case "makearray":
+		if len(node.Values) == 0 {
+			return dimensionless()
+		}
+		var first *Unit
+		complete := true
+		for _, v := range node.Values {
+			u, err := propagateElementDimension(v, env)
+			if err != nil {
+				return nil, err
+			}
+			if u == nil {
+				complete = false
+				continue
+			}
+			if first == nil {
+				first = u
+				continue
+			}
+			if !first.Dim.Equal(u.Dim) || !first.Exact.Equal(u.Exact) {
+				return nil, nil
+			}
+		}
+		if !complete {
+			return nil, nil
+		}
+		return first, nil
+	case "broadcast":
+		if node.Fn == nil {
+			return nil, nil
+		}
+		return propagateExprNode(ExprNode{Op: *node.Fn, Args: node.Args}, env, true)
+	}
+	if len(node.Args) == 0 {
+		return dimensionless()
+	}
+	return propagateElementDimension(node.Args[0], env)
+}
+
+func propagateDimensionIn(expr Expression, env map[string]Unit, elements bool) (*Unit, error) {
 	switch e := expr.(type) {
 	case nil:
 		return nil, nil
@@ -1367,15 +1438,21 @@ func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 		// not double-report it.
 		return nil, nil
 	case ExprNode:
-		return propagateExprNode(e, env)
+		return propagateExprNode(e, env, elements)
 	case *ExprNode:
-		return propagateExprNode(*e, env)
+		return propagateExprNode(*e, env, elements)
 	default:
 		return nil, nil
 	}
 }
 
-func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
+func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit, error) {
+	if elements {
+		switch node.Op {
+		case "faq", "makearray", "index", "reshape", "transpose", "concat", "broadcast":
+			return propagateArrayElement(node, env)
+		}
+	}
 	switch node.Op {
 	case "+", "-":
 		// Every operand whose dimension is known must agree, and the result is
@@ -1393,7 +1470,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// is between two DECLARED quantities and is still caught.
 		var first *Unit
 		for i, arg := range node.Args {
-			u, err := propagateDimension(arg, env)
+			u, err := propagateDimensionIn(arg, env, elements)
 			if err != nil {
 				return nil, err
 			}
@@ -1424,7 +1501,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// a mismatch against the declared µg/m³.
 		result := Unit{Scale: 1}
 		for _, arg := range node.Args {
-			u, err := propagateDimension(arg, env)
+			u, err := propagateDimensionIn(arg, env, elements)
 			if err != nil {
 				return nil, err
 			}
@@ -1439,11 +1516,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 2 {
 			return nil, analysisErrf("'/' requires exactly 2 arguments, got %d", len(node.Args))
 		}
-		num, err := propagateDimension(node.Args[0], env)
+		num, err := propagateDimensionIn(node.Args[0], env, elements)
 		if err != nil {
 			return nil, err
 		}
-		den, err := propagateDimension(node.Args[1], env)
+		den, err := propagateDimensionIn(node.Args[1], env, elements)
 		if err != nil {
 			return nil, err
 		}
@@ -1457,11 +1534,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 2 {
 			return nil, analysisErrf("'%s' requires exactly 2 arguments, got %d", node.Op, len(node.Args))
 		}
-		base, err := propagateDimension(node.Args[0], env)
+		base, err := propagateDimensionIn(node.Args[0], env, elements)
 		if err != nil {
 			return nil, err
 		}
-		expDim, err := propagateDimension(node.Args[1], env)
+		expDim, err := propagateDimensionIn(node.Args[1], env, elements)
 		if err != nil {
 			return nil, err
 		}
@@ -1494,7 +1571,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("sqrt requires 1 argument, got %d", len(node.Args))
 		}
-		base, err := propagateDimension(node.Args[0], env)
+		base, err := propagateDimensionIn(node.Args[0], env, elements)
 		if err != nil {
 			return nil, err
 		}
@@ -1516,7 +1593,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		arg, err := propagateDimension(node.Args[0], env)
+		arg, err := propagateDimensionIn(node.Args[0], env, elements)
 		if err != nil {
 			return nil, err
 		}
@@ -1546,7 +1623,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		arg, err := propagateDimension(node.Args[0], env)
+		arg, err := propagateDimensionIn(node.Args[0], env, elements)
 		if err != nil {
 			return nil, err
 		}
@@ -1566,11 +1643,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 2 {
 			return nil, analysisErrf("'atan2' requires 2 arguments, got %d", len(node.Args))
 		}
-		y, err := propagateDimension(node.Args[0], env)
+		y, err := propagateDimensionIn(node.Args[0], env, elements)
 		if err != nil {
 			return nil, err
 		}
-		x, err := propagateDimension(node.Args[1], env)
+		x, err := propagateDimensionIn(node.Args[1], env, elements)
 		if err != nil {
 			return nil, err
 		}
@@ -1589,7 +1666,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		arg, err := propagateDimension(node.Args[0], env)
+		arg, err := propagateDimensionIn(node.Args[0], env, elements)
 		if err != nil {
 			return nil, err
 		}
@@ -1608,7 +1685,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		return propagateDimension(node.Args[0], env)
+		return propagateDimensionIn(node.Args[0], env, elements)
 
 	case OpDerivative:
 		// A REWRITE-TARGET `D` may carry trailing auxiliary boundary operands
@@ -1621,7 +1698,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if !isRewriteTargetDerivative(node) && len(node.Args) != 1 {
 			return nil, analysisErrf("'D' requires 1 argument, got %d", len(node.Args))
 		}
-		varDim, err := propagateDimension(node.Args[0], env)
+		varDim, err := propagateDimensionIn(node.Args[0], env, elements)
 		if err != nil {
 			return nil, err
 		}
@@ -1653,7 +1730,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// operands are, including when none is known (esm-spec §4.8.3).
 		var first *Unit
 		for i, arg := range node.Args {
-			u, err := propagateDimension(arg, env)
+			u, err := propagateDimensionIn(arg, env, elements)
 			if err != nil {
 				return nil, err
 			}
@@ -1681,7 +1758,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// mismatch inside one (`not(x [m] > z [kg])`) is reported (esm-spec
 		// §4.8.3).
 		for _, arg := range node.Args {
-			if _, err := propagateDimension(arg, env); err != nil {
+			if _, err := propagateDimensionIn(arg, env, elements); err != nil {
 				return nil, err
 			}
 		}
@@ -1698,12 +1775,12 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 3 {
 			return nil, analysisErrf("'ifelse' requires 3 arguments, got %d", len(node.Args))
 		}
-		if _, err := propagateDimension(node.Args[0], env); err != nil {
+		if _, err := propagateDimensionIn(node.Args[0], env, elements); err != nil {
 			return nil, err
 		}
 		var first *Unit
 		for _, arg := range node.Args[1:] {
-			u, err := propagateDimension(arg, env)
+			u, err := propagateDimensionIn(arg, env, elements)
 			if err != nil {
 				return nil, err
 			}
@@ -1741,7 +1818,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// Return dimension of first operand; require others to match.
 		var first *Unit
 		for i, arg := range node.Args {
-			u, err := propagateDimension(arg, env)
+			u, err := propagateDimensionIn(arg, env, elements)
 			if err != nil {
 				return nil, err
 			}

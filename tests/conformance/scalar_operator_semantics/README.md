@@ -59,6 +59,26 @@ Non-vacuity is structural, in three places:
 * `arctangent_quadrant` asserts `atan2(1, -3)`, whose value separates the
   argument order that `atan2(1, 1)` cannot.
 
+## The angle fixture
+
+`angle_array_element.esm` pins the array-element half of esm-spec §4.8.3's
+angle conversion: a circular function whose argument is an element of an array
+declared in `deg` receives that element in radians, exactly as it would a bare
+`deg` variable. Julia, Python, Go and TypeScript read the argument's unit with
+the checker's rules, which have none for `index` or `faq` (§4.8.4), so their
+flatten pass left `cos(index(lat, i))` unconverted, and Julia and Python
+evaluated cos(60 radians) = −0.952 where 0.5 is right. The fixture asserts, per
+cell and against the arithmetic rather than a binding:
+
+* `cos` of an element of a `deg` parameter, over [0, 60, 90]°;
+* `sin` of an element of an observed that an `faq` defines in `deg`;
+* `sin` of each element inside a reducing `faq` body, summed (1 + √3/2);
+* the `rad` control, the same angles declared in radians, which must NOT be
+  converted: it tells "the scale is applied" apart from "applied twice".
+
+The scalar half is `tests/simulation/angle_units_degrees.esm`, pinned by each
+binding's own transcendental-scale tests.
+
 ## Named exclusions
 
 The tier found **three disagreements on its first run**, and each contested
@@ -111,6 +131,7 @@ document can make:
   `unsupported_construct/` are where they belong. (Rust:
   `tests/evaluate_leaf_ops.rs`, through the public `evaluate`.)
 * the inverse-trigonometric and hyperbolic leaves, already gated by
-  `tests/conformance/inverse_trig/`, and the degree/radian scale rule, already
-  gated by `tests/conformance/` transcendental-scale fixtures. This tier does
-  not duplicate them.
+  `tests/conformance/inverse_trig/`, and the SCALAR degree/radian scale rule,
+  already pinned by each binding's transcendental-scale tests against
+  `tests/simulation/angle_units_degrees.esm`. This tier does not duplicate
+  them; `angle_array_element` covers only the array-element half (above).

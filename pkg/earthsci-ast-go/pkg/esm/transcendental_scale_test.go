@@ -174,6 +174,86 @@ func TestFlattenConvertsDegreesAndLeavesRadiansAlone(t *testing.T) {
 	}
 }
 
+// TestFlattenConvertsADegreeArrayElement pins that an array element carries its
+// array's unit on the evaluation path, so cos(index(lat, i)) with lat in deg
+// converts like cos(lat) does. The checker has no rule for index or faq
+// (esm-spec §4.8.4), and the rewrite used to read the argument with the
+// checker's rules, so it left every array element unconverted.
+func TestFlattenConvertsADegreeArrayElement(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	path := filepath.Join(repoRoot, "tests", "conformance", "scalar_operator_semantics",
+		"fixtures", "angle_array_element.esm")
+	file, err := LoadPath(path)
+	if err != nil {
+		t.Fatalf("load the shared array-element fixture: %v", err)
+	}
+	flat, err := Flatten(file)
+	if err != nil {
+		t.Fatalf("flatten: %v", err)
+	}
+	args := map[string]Expression{}
+	var walk func(name string, e Expression)
+	walk = func(name string, e Expression) {
+		node, ok := asExprNode(e)
+		if !ok {
+			return
+		}
+		if (node.Op == "sin" || node.Op == "cos" || node.Op == "tan") && len(node.Args) == 1 {
+			args[name] = node.Args[0]
+		}
+		for _, a := range node.Args {
+			walk(name, a)
+		}
+		if node.Expr != nil {
+			walk(name, node.Expr)
+		}
+	}
+	for _, eq := range flat.Equations {
+		if lhs, ok := eq.LHS.(string); ok {
+			walk(lhs[strings.LastIndex(lhs, ".")+1:], eq.RHS)
+		}
+	}
+	if len(args) != 5 {
+		t.Fatalf("the fixture carries five trig calls, found %d: %v", len(args), args)
+	}
+	for _, name := range []string{"cos_lat", "sin_colat", "sin_sum"} {
+		node, ok := asExprNode(args[name])
+		if !ok || node.Op != "*" {
+			t.Fatalf("%s: expected the folded product, got %#v", name, args[name])
+		}
+		inner, ok := asExprNode(node.Args[0])
+		if !ok || inner.Op != "index" {
+			t.Fatalf("%s: the element comes first, got %#v", name, node.Args[0])
+		}
+		if node.Args[1] != math.Pi/180.0 {
+			t.Fatalf("%s: the factor must be the declared scale of `deg`, got %v", name, node.Args[1])
+		}
+	}
+	if node, ok := asExprNode(args["sin_scalar"]); !ok || node.Op != "*" {
+		t.Fatalf("sin_scalar: expected the folded product, got %#v", args["sin_scalar"])
+	}
+	if node, ok := asExprNode(args["cos_lat_rad"]); !ok || node.Op != "index" {
+		t.Fatalf("cos_lat_rad: the `rad` control is never touched, got %#v", args["cos_lat_rad"])
+	}
+	// The checker still reads the authored spelling and still accepts it.
+	if r := Validate(file); !r.IsValid {
+		t.Fatalf("the fixture must stay valid, got %+v", r.StructuralErrors)
+	}
+	// And the checker still has no rule for an array element.
+	env := map[string]Unit{}
+	if u, err := ParseUnit("deg"); err == nil {
+		env["lat"] = u
+	} else {
+		t.Fatalf("parse deg: %v", err)
+	}
+	if u, err := propagateDimension(ExprNode{Op: "index", Args: []any{"lat", 1.0}}, env); err != nil || u != nil {
+		t.Fatalf("the checker must report index as undeterminable, got %v, %v", u, err)
+	}
+}
+
 func TestSharedScaledArgumentFixtures(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
