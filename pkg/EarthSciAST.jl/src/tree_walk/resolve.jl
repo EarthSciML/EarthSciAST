@@ -632,6 +632,32 @@ function _try_build_array_contraction(body::ASTExpr, out_names::Vector{String},
         contract_names::Vector{String}, contract_ranges::AbstractVector,
         oplus::String, zerobar::Float64,
         array_var_info, var_map, const_arrays, pgather::AbstractDict)
+    got = _resolve_array_contraction_term(body, out_names, contract_names,
+                                          array_var_info, var_map, const_arrays, pgather)
+    got === nothing && return nothing
+    out_refs, contract_refs, resolved = got
+    oplus_sym = Symbol(oplus)
+    node::ASTExpr = resolved
+    # Innermost-first over the contracted indices, matching the per-cell loop
+    # tier's nesting — so this tier's fold order IS that tier's fold order.
+    for d in eachindex(contract_names)
+        r = contract_ranges[d]
+        node = OpExpr("__contract_loop", ASTExpr[node];
+                      value=_ContractLoopBuild(contract_refs[d], first(r), last(r),
+                                               step(r), oplus_sym, zerobar))
+    end
+    return (out_refs, node)
+end
+
+# The term of an array einsum resolved ONCE with its output and its contracted
+# indices all symbolic (reserved loop-var names), and no reduction around it:
+# `(out_refs, contract_refs, resolved)`, or `nothing` when the body does not
+# resolve that way. `_try_build_array_contraction` wraps it in the static
+# contraction loops; the table-driven form of the nest (array_contraction.jl)
+# drives the contracted refs from the admitted tuples instead.
+function _resolve_array_contraction_term(body::ASTExpr, out_names::Vector{String},
+        contract_names::Vector{String},
+        array_var_info, var_map, const_arrays, pgather::AbstractDict)
     nout = length(out_names)
     all_names = vcat(out_names, contract_names)
     fresh = String[_fresh_loopvar_name() for _ in all_names]
@@ -657,17 +683,7 @@ function _try_build_array_contraction(body::ASTExpr, out_names::Vector{String},
     for d in eachindex(fresh)
         _LOOPVAR_REFS[Symbol(fresh[d])] = refs[d]
     end
-    oplus_sym = Symbol(oplus)
-    node::ASTExpr = resolved
-    # Innermost-first over the contracted indices, matching the per-cell loop
-    # tier's nesting — so this tier's fold order IS that tier's fold order.
-    for d in eachindex(contract_names)
-        r = contract_ranges[d]
-        node = OpExpr("__contract_loop", ASTExpr[node];
-                      value=_ContractLoopBuild(refs[nout + d], first(r), last(r),
-                                               step(r), oplus_sym, zerobar))
-    end
-    return (refs[1:nout], node)
+    return (refs[1:nout], refs[nout+1:end], resolved)
 end
 
 # Expand a scalar faq (empty output_idx) to a plain scalar ASTExpr by

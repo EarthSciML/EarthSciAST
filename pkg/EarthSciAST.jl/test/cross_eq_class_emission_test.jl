@@ -39,7 +39,10 @@
 # The per-cell fixtures force the per-cell path exactly as
 # direct_class_emission_test does: an aggregate whose contracted bound is
 # expression-valued but constant (`k in 1:(i+2-i)` == `1:2`), which declines
-# the affine build (`:percell_acc` pinned).
+# the affine build (`:percell_acc` pinned). The whole-array nest takes that
+# bound as a per-cell table when codegen runs; the `codegen=false` builds put
+# the node budget at zero, so it declines there and the cells take the per-cell
+# path this file is about. (d)'s codegen build is therefore the nest.
 using Test
 using EarthSciAST
 using ForwardDiff

@@ -281,6 +281,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("contraction_loop_test.jl")             # runtime contraction loop (ess-runtime-contraction)
     include("contraction_tier_order_test.jl")       # loop-vs-affine tier ORDER (ess-runtime-contraction × ess-affine)
     include("array_contraction_test.jl")            # whole-array contraction loop nest (ess-array-contraction)
+    include("array_contraction_table_test.jl")      # …its gated / ragged / filtered form, table-driven
     include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
     # `compiler=:interpreter`: an in-place build that skips no prelude slot,
