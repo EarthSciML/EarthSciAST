@@ -531,3 +531,112 @@ pub(super) unsafe fn exec_gather(
         }
     }
 }
+
+/// `Instr::Scan`: `dst` (contiguous row-major over `src.shape`) receives the
+/// running fold of `src` along `axis`, from `init`, independently for every
+/// position of the other axes — inclusive (`dst[k] = f(dst[k-1], src[k])`,
+/// `dst[0] = f(init, src[0])`) or exclusive (`dst[0] = init`, `dst[k] =
+/// f(dst[k-1], src[k-1])`). Every position folds its window ascending, one
+/// combine per step, in `run_prefix_scan`'s association; walking the scanned
+/// axis outermost lets each step be one contiguous row of the other axes.
+/// `dst` never aliases `src` (a scan is not alias-safe in the slab coloring).
+pub(super) unsafe fn scan_axis(
+    dst: *mut f64,
+    src: &SrcView,
+    axis: usize,
+    init: f64,
+    inclusive: bool,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    let shape = &src.shape;
+    let pre: usize = shape[..axis].iter().product();
+    let len = shape[axis];
+    let post: usize = shape[axis + 1..].iter().product();
+    // Source offset of row-major flat position `k`, through the source's own
+    // strides (every tape source is row-major, but an observed need not be).
+    let contig = is_contig(&src.strides, shape);
+    let src_at = |k: usize| -> *const f64 {
+        if contig {
+            return unsafe { src.ptr.add(k) };
+        }
+        let mut rest = k;
+        let mut off = 0i64;
+        for d in (0..shape.len()).rev() {
+            off += (rest % shape[d]) as i64 * src.strides[d];
+            rest /= shape[d];
+        }
+        unsafe { src.ptr.offset(off as isize) }
+    };
+    unsafe {
+        if contig && post == 1 {
+            // A scan along the innermost axis: one running accumulator per
+            // lane, the same fold as the row form below.
+            for p in 0..pre {
+                let (s, d) = (src.ptr.add(p * len), dst.add(p * len));
+                let mut acc = init;
+                for k in 0..len {
+                    let x = *s.add(k);
+                    if inclusive {
+                        acc = f(acc, x);
+                        *d.add(k) = acc;
+                    } else {
+                        *d.add(k) = acc;
+                        acc = f(acc, x);
+                    }
+                }
+            }
+            return;
+        }
+        for p in 0..pre {
+            let base = p * len * post;
+            for k in 0..len {
+                let row = base + k * post;
+                match (inclusive, k) {
+                    (true, 0) => {
+                        for q in 0..post {
+                            *dst.add(row + q) = f(init, *src_at(row + q));
+                        }
+                    }
+                    (true, _) => {
+                        for q in 0..post {
+                            *dst.add(row + q) = f(*dst.add(row - post + q), *src_at(row + q));
+                        }
+                    }
+                    (false, 0) => {
+                        for q in 0..post {
+                            *dst.add(row + q) = init;
+                        }
+                    }
+                    (false, _) => {
+                        for q in 0..post {
+                            *dst.add(row + q) =
+                                f(*dst.add(row - post + q), *src_at(row - post + q));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `Instr::Reduce` over the LEADING axes of a contiguous row-major source:
+/// `acc[o] = f(acc[o], src[r * n + o])` for every row `r` in order — the
+/// row-major visiting order, one contiguous row at a time. `acc` holds `n`
+/// elements, already seeded with the identity, and never aliases `src`.
+pub(super) unsafe fn reduce_rows(
+    acc: *mut f64,
+    n: usize,
+    src: *const f64,
+    rows: usize,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    unsafe {
+        let a = std::slice::from_raw_parts_mut(acc, n);
+        for r in 0..rows {
+            let row = std::slice::from_raw_parts(src.add(r * n), n);
+            for (y, &x) in a.iter_mut().zip(row) {
+                *y = f(*y, x);
+            }
+        }
+    }
+}

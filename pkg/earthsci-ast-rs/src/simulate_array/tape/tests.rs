@@ -8,7 +8,7 @@
 //! scratch across every state/time, so slab recycling, CONST-section
 //! retention and the section re-run discipline are all exercised.
 
-use super::super::{ArrayCompiled, RhsStats};
+use super::super::{ArrayCompiled, DimU, RhsStats};
 use super::ir::*;
 use super::refexec::{RefVal, run_reference};
 use crate::types::EsmFile;
@@ -925,7 +925,7 @@ fn coloring_invariants() {
                 last[o as usize] = last[o as usize].max(i);
             }
         });
-        ins.for_each_read(&prog.dy_writes, &prog.fused, |s| {
+        ins.for_each_read(&prog.dy_writes, &prog.fused, &prog.assemblies, |s| {
             last[s as usize] = last[s as usize].max(i);
         });
     }
@@ -1116,15 +1116,9 @@ fn ab_prefix_scan_observeds() {
         }}
     });
     let prog = ab_check(doc, 0, -2.0, 2.0);
-    // The scan lowers to per-step Region writes along the scanned axis.
-    assert!(
-        prog.instrs
-            .iter()
-            .filter(|i| matches!(i, Instr::Region { .. }))
-            .count()
-            >= 2 * nk as usize,
-        "expected one Region write per scan step"
-    );
+    // Each scan is ONE `Scan` over its whole box, with no per-step writes.
+    assert_eq!(opcount(&prog, "Scan"), 2, "one Scan per scan observed");
+    assert_eq!(opcount(&prog, "Region"), 0, "no per-step region writes");
 }
 
 /// A declared observed whose whole body is a `makearray` (the boundary-
@@ -1979,6 +1973,44 @@ fn opcount(prog: &TapeProgram, opcode: &str) -> usize {
     prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
 }
 
+/// Every fold of the program, as `(source box, folded leading axes, output
+/// slot)`: an `Instr::Reduce`, or one a fused group absorbed (which folds its
+/// box's leading axes down to `n_inner` elements).
+fn reductions(prog: &TapeProgram) -> Vec<(DimU, usize, SlotId)> {
+    let mut out = Vec::new();
+    for i in &prog.instrs {
+        match i {
+            Instr::Reduce {
+                axes,
+                src_shape,
+                out: o,
+                ..
+            } => {
+                assert!(
+                    axes.iter().enumerate().all(|(k, &a)| a as usize == k),
+                    "the tape folds leading axes"
+                );
+                out.push((src_shape.clone(), axes.len(), *o));
+            }
+            Instr::Fused { spec } => {
+                let fs = &prog.fused[*spec as usize];
+                if let Some(r) = &fs.reduce {
+                    let mut inner = 1usize;
+                    let mut kept = 0usize;
+                    while inner < r.n_inner {
+                        kept += 1;
+                        inner *= fs.shape[fs.shape.len() - kept];
+                    }
+                    assert_eq!(inner, r.n_inner, "n_inner is a trailing sub-box");
+                    out.push((fs.shape.clone(), fs.shape.len() - kept, r.out));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// An array-valued `const` observed, consumed elementwise and through a
 /// gather. Before `Instr::ConstArray` the `const` rule bailed and took every
 /// reader with it.
@@ -2059,19 +2091,12 @@ fn ab_rank0_scalar_reductions() {
         }}
     });
     let prog = ab_check(doc, 0, -2.0, 2.0);
-    assert_eq!(opcount(&prog, "Reduce"), 4, "one fold per reduction rule");
-    for i in &prog.instrs {
-        if let Instr::Reduce {
-            axes,
-            src_shape,
-            out,
-            ..
-        } = i
-        {
-            assert_eq!(&axes[..], &[0u8], "the single contracted axis");
-            assert_eq!(&src_shape[..], &[n as usize]);
-            assert!(prog.slots[*out as usize].scalar, "rank-0 output");
-        }
+    let folds = reductions(&prog);
+    assert_eq!(folds.len(), 4, "one fold per reduction rule");
+    for (src_shape, n_axes, out) in folds {
+        assert_eq!(n_axes, 1, "the single contracted axis");
+        assert_eq!(&src_shape[..], &[n as usize]);
+        assert!(prog.slots[out as usize].scalar, "rank-0 output");
     }
 }
 
@@ -2103,18 +2128,10 @@ fn ab_rank0_reduction_two_contracted_axes() {
         }}
     });
     let prog = ab_check(doc, 0, -3.0, 3.0);
-    let reduce = prog
-        .instrs
-        .iter()
-        .find_map(|i| match i {
-            Instr::Reduce {
-                axes, src_shape, ..
-            } => Some((axes.clone(), src_shape.clone())),
-            _ => None,
-        })
-        .expect("Reduce emitted");
-    assert_eq!(&reduce.0[..], &[0u8, 1]);
-    assert_eq!(&reduce.1[..], &[n as usize, n as usize]);
+    let folds = reductions(&prog);
+    let (src_shape, n_axes, _) = folds.first().expect("a fold emitted");
+    assert_eq!(*n_axes, 2);
+    assert_eq!(&src_shape[..], &[n as usize, n as usize]);
 }
 
 /// A rank-0 reduction carrying a §5.3 `filter` stays per-cell on purpose: the
@@ -2231,7 +2248,8 @@ fn ab_elementwise_observed_gather_fixture() {
             "{label}: {:?}",
             report.fallbacks
         );
-        assert_eq!(report.n_taped, 9, "{label}: all nine rules");
+        // Four observeds, `D(s)`, and `D(u)` as ONE rule over its four cells.
+        assert_eq!(report.n_taped, 6, "{label}: all six rules");
         assert_eq!(opcount(&prog, "ConstArray"), 1, "{label}");
         assert_eq!(opcount(&prog, "Reduce"), 1, "{label}");
 

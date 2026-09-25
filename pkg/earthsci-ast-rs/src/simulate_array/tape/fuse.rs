@@ -99,8 +99,15 @@ type AxisSegs = SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]>;
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 enum ShiftedGeom {
-    /// Piecewise per-axis segments (stride-1 within runs; ghost gaps).
-    Segs(AxisSegs, super::super::DimU),
+    /// Piecewise per-axis segments with ghost gaps: along output axis `d` the
+    /// source advances by `strides[d]` per element (0 for an axis the source
+    /// is broadcast along), from `base` (the fixed axes' offset). Within a run
+    /// the source advances by the innermost axis's stride.
+    Segs {
+        segs: AxisSegs,
+        strides: SmallVec<[i64; 4]>,
+        base: i64,
+    },
     /// Globally linear: `flat_src = a * flat_out + b` over the whole box
     /// (e.g. a level slice of a deeper box). Single run, element stride `a`.
     Linear { a: i64, b: i64 },
@@ -127,6 +134,19 @@ struct GBuilder {
     folded: Vec<(u32, SlotId, GroupIx)>,
     /// Rule ordinal of the first member (provenance of the emitted Fused).
     prov: u32,
+    /// An absorbed [`Instr::Reduce`] folding one of the group's values
+    /// (see [`FusedReduce`]); the group is flushed as soon as it is set.
+    reduce: Option<ReduceTail>,
+}
+
+/// An [`Instr::Reduce`] a group absorbed, before register allocation.
+struct ReduceTail {
+    /// The folded value's SSA register.
+    ssa: GroupIx,
+    op: BinCode,
+    init: f64,
+    out: SlotId,
+    n_inner: usize,
 }
 
 /// Operand resolved for group membership (pre-commit description).
@@ -152,11 +172,51 @@ impl GBuilder {
             defs: Vec::new(),
             folded: Vec::new(),
             prov,
+            reduce: None,
         }
     }
 
     fn defines(&self, s: SlotId) -> bool {
-        self.val_of.contains_key(&s)
+        self.val_of.contains_key(&s) || self.reduce.as_ref().is_some_and(|r| r.out == s)
+    }
+
+    /// Absorb `Reduce { src, axes, .. }` at instruction `ix` when it folds the
+    /// LEADING axes of this group's box and reads a value only this group
+    /// computes and nothing else reads — so the value never has to be stored.
+    /// Returns `false` (group untouched) otherwise.
+    fn try_absorb_reduce(&mut self, ix: u32, ins: &Instr, readers: &[SmallVec<[u32; 4]>]) -> bool {
+        let Instr::Reduce {
+            op,
+            init,
+            src: SrcRef::Slot(src),
+            axes,
+            src_shape,
+            out,
+        } = ins
+        else {
+            return false;
+        };
+        if self.reduce.is_some()
+            || *src_shape != self.shape
+            || axes.is_empty()
+            || axes.iter().enumerate().any(|(k, &a)| a as usize != k)
+            || readers[*src as usize].iter().any(|&r| r != ix)
+        {
+            return false;
+        }
+        let Some(&MRef::Reg(ssa)) = self.val_of.get(src) else {
+            return false;
+        };
+        self.reduce = Some(ReduceTail {
+            ssa,
+            op: *op,
+            init: *init,
+            out: *out,
+            n_inner: src_shape[axes.len()..].iter().product::<usize>().max(1),
+        });
+        self.members.insert(ix);
+        self.member_instrs.push(ix);
+        true
     }
 
     /// Whether one more member keeps every group-local index inside
@@ -319,10 +379,7 @@ impl GBuilder {
     ) {
         let input_ix = self.inputs.len() as GroupIx;
         let shifted_ix = self.shifted_segs.len() as GroupIx;
-        let elem_stride = match &geom {
-            ShiftedGeom::Segs(..) => 1,
-            ShiftedGeom::Linear { a, .. } => *a,
-        };
+        let elem_stride = geom.elem_stride();
         self.inputs.push(FusedInput {
             src,
             shifted_ix: Some(shifted_ix),
@@ -430,6 +487,60 @@ fn linear_fold(plan: &GatherPlan) -> Option<ShiftedGeom> {
     })
 }
 
+/// Detect the broadcast fold: a plan that REPEATS its source along some
+/// output axes — a broadcast axis of any extent, and fixed source axes — but
+/// keeps the mapped axes in order (no transposition). Along a broadcast axis
+/// the source offset does not move (stride 0), a fixed axis contributes a
+/// constant offset, and every mapped axis keeps its own copy segments (so
+/// shifted and ghost reads fold exactly as [`foldable_plan`]'s do). The
+/// classic instance is a contraction term read by the contracted index alone,
+/// `e[j]` over a `window × output` box: constant along each run, one source
+/// element per run.
+fn broadcast_fold(plan: &GatherPlan) -> Option<ShiftedGeom> {
+    if plan.shape.is_empty() || plan.shape.contains(&0) || plan.src_shape.len() > 16 {
+        return None;
+    }
+    if plan.perm.iter().enumerate().any(|(i, &p)| p != i) {
+        return None;
+    }
+    let sstr = rm_strides(&plan.src_shape);
+    let mut base = 0i64;
+    let mut fixed_mask = [false; 16];
+    for &(d, i0) in &plan.fixed_desc {
+        fixed_mask[d] = true;
+        base += sstr[d] * i0 as i64;
+    }
+    let reduced: SmallVec<[i64; 4]> = (0..plan.src_shape.len())
+        .filter(|d| !fixed_mask[*d])
+        .map(|d| sstr[d])
+        .collect();
+    let mut strides: SmallVec<[i64; 4]> = SmallVec::new();
+    let mut mpos = 0usize;
+    for a in 0..plan.shape.len() {
+        if plan.mapped[a] {
+            strides.push(reduced[plan.perm[mpos]]);
+            mpos += 1;
+        } else {
+            strides.push(0);
+        }
+    }
+    Some(ShiftedGeom::Segs {
+        segs: plan.segs.clone(),
+        strides,
+        base,
+    })
+}
+
+impl ShiftedGeom {
+    /// The source advance per element within a run.
+    fn elem_stride(&self) -> i64 {
+        match self {
+            ShiftedGeom::Segs { strides, .. } => strides.last().copied().unwrap_or(1),
+            ShiftedGeom::Linear { a, .. } => *a,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Run-schedule construction.
 // ---------------------------------------------------------------------------
@@ -491,17 +602,11 @@ fn for_each_run(
     let strides = rm_strides(shape);
     let n_shift = shifted.len();
     // Per-input element stride (coalescing contiguity is offset + len*stride).
-    let elem_stride: SmallVec<[i64; 2]> = shifted
+    let elem_stride: SmallVec<[i64; 2]> = shifted.iter().map(ShiftedGeom::elem_stride).collect();
+    let seg_strides: SmallVec<[Option<&[i64]>; 2]> = shifted
         .iter()
         .map(|g| match g {
-            ShiftedGeom::Segs(..) => 1,
-            ShiftedGeom::Linear { a, .. } => *a,
-        })
-        .collect();
-    let seg_strides: SmallVec<[Option<SmallVec<[i64; 4]>>; 2]> = shifted
-        .iter()
-        .map(|g| match g {
-            ShiftedGeom::Segs(_, ss) => Some(rm_strides(ss)),
+            ShiftedGeom::Segs { strides, .. } => Some(&strides[..]),
             ShiftedGeom::Linear { .. } => None,
         })
         .collect();
@@ -516,7 +621,7 @@ fn for_each_run(
         cuts.insert(0);
         cuts.insert(shape[d]);
         for g in shifted {
-            if let ShiftedGeom::Segs(segs, _) = g {
+            if let ShiftedGeom::Segs { segs, .. } = g {
                 for &(o, l, _) in &segs[d] {
                     cuts.insert(o);
                     cuts.insert(o + l);
@@ -530,7 +635,7 @@ fn for_each_run(
             let mut src_start: SmallVec<[Option<i64>; 2]> = SmallVec::new();
             for g in shifted {
                 let mut pos = None;
-                if let ShiftedGeom::Segs(segs, _) = g {
+                if let ShiftedGeom::Segs { segs, .. } = g {
                     for &(o, l, so) in &segs[d] {
                         if a >= o && b <= o + l {
                             pos = Some(so as i64 + (a as i64 - o as i64));
@@ -571,8 +676,8 @@ fn for_each_run(
     // A block of consecutive rows along the innermost leading axis `lead`
     // (one of its intervals) coalesces into ONE run when the inner axis is a
     // single full interval and every Segs input is either a ghost there or
-    // advances by exactly one row per row (its source's inner extent is the
-    // box's): each row then starts where the previous one ended, in the output
+    // advances along `lead` by exactly one row's worth of its own element
+    // stride: each row then starts where the previous one ended, in the output
     // and in every source. Such a block is emitted as one piece.
     let inner_ivals = &axis_ivals[nd - 1];
     let inner_full = inner_ivals.len() == 1;
@@ -593,8 +698,11 @@ fn for_each_run(
     loop {
         // This row's output base and each Segs input's source base (or ghost).
         let mut row_off = 0i64;
-        for r in row_src.iter_mut() {
-            *r = Some(0);
+        for (r, g) in row_src.iter_mut().zip(shifted) {
+            *r = Some(match g {
+                ShiftedGeom::Segs { base, .. } => *base,
+                ShiftedGeom::Linear { .. } => 0,
+            });
         }
         for d in 0..nd - 1 {
             row_off += x[d] as i64 * strides[d];
@@ -612,7 +720,7 @@ fn for_each_run(
             let (st, len, _) = &axis_ivals[l][lead_ival[x[l]]];
             let row_len = shape[nd - 1] as i64;
             let advances = (0..n_shift).all(|j| match (&seg_strides[j], row_src[j]) {
-                (Some(sstr), Some(_)) => sstr[l] == row_len,
+                (Some(sstr), Some(_)) => sstr[l] == row_len * elem_stride[j],
                 _ => true,
             });
             if x[l] == *st && advances {
@@ -624,9 +732,9 @@ fn for_each_run(
             for j in 0..n_shift {
                 piece[j] = match &shifted[j] {
                     ShiftedGeom::Linear { a, b } => a * off + b,
-                    ShiftedGeom::Segs(..) => match (row_src[j], starts[j]) {
+                    ShiftedGeom::Segs { .. } => match (row_src[j], starts[j]) {
                         (Some(base), Some(p)) => {
-                            let sstr = seg_strides[j].as_ref().expect("segs have strides");
+                            let sstr = seg_strides[j].expect("segs have strides");
                             base + p * sstr[nd - 1]
                         }
                         _ => GHOST_OFF,
@@ -1141,7 +1249,7 @@ pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
     // Global reader index sets per slot.
     let mut readers: Vec<SmallVec<[u32; 4]>> = vec![SmallVec::new(); prog.slots.len()];
     for (i, ins) in prog.instrs.iter().enumerate() {
-        ins.for_each_read(&prog.dy_writes, &prog.fused, |s| {
+        ins.for_each_read(&prog.dy_writes, &prog.fused, &prog.assemblies, |s| {
             readers[s as usize].push(i as u32)
         });
     }
@@ -1255,6 +1363,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         defs,
         folded,
         prov,
+        reduce,
         ..
     } = g;
 
@@ -1296,7 +1405,9 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         }
     }
 
-    // Live-outs.
+    // Live-outs. An absorbed reduction's register is live to the end like
+    // one (so neither the superop peephole nor the register allocator can
+    // retire it); it rides LAST in `outputs` until allocation has renamed it.
     let mut outputs: SmallVec<[(GroupIx, SlotId); 2]> = SmallVec::new();
     for &(slot, ssa) in &defs {
         let external = fx.readers[slot as usize]
@@ -1305,6 +1416,9 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         if external {
             outputs.push((ssa, slot));
         }
+    }
+    if let Some(r) = &reduce {
+        outputs.push((r.ssa, r.out));
     }
 
     // Step 4b histograms (pre-superop, while the program is SSA): single-use
@@ -1346,6 +1460,20 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         *fx.sink.micro_hist.entry(mop_label(op)).or_insert(0) += n_elems;
     }
     let n_regs = allocate_registers(&mut micro, &mut outputs);
+    if reduce.is_some() {
+        fx.sink.stats.n_reduces_folded += 1;
+    }
+    let reduce = reduce.map(|r| {
+        let (reg, slot) = outputs.pop().expect("the reduction rides last");
+        debug_assert_eq!(slot, r.out);
+        FusedReduce {
+            reg,
+            op: r.op,
+            init: r.init,
+            out: r.out,
+            n_inner: r.n_inner,
+        }
+    });
     // Bin3 executes all-pointer: its scalar operands read from per-scalar
     // splat registers and ghost reads from a trailing zero register, all
     // appended after the load registers and filled once per call.
@@ -1389,6 +1517,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         n_splat_regs,
         outputs,
         runs,
+        reduce,
         n_fused_instrs: n_members as u32,
         n_folded_gathers: folded.len() as u32,
     });
@@ -1409,13 +1538,18 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
         fx: &mut FuseCtx,
     ) {
         let mut hazard: Vec<usize> = Vec::new();
-        ins.for_each_read(&fx.prog.dy_writes, &fx.prog.fused, |s| {
-            for (gi, g) in open.iter().enumerate() {
-                if keep_shape != Some(&g.shape) && g.defines(s) && !hazard.contains(&gi) {
-                    hazard.push(gi);
+        ins.for_each_read(
+            &fx.prog.dy_writes,
+            &fx.prog.fused,
+            &fx.prog.assemblies,
+            |s| {
+                for (gi, g) in open.iter().enumerate() {
+                    if keep_shape != Some(&g.shape) && g.defines(s) && !hazard.contains(&gi) {
+                        hazard.push(gi);
+                    }
                 }
-            }
-        });
+            },
+        );
         hazard.sort_unstable();
         for &gi in hazard.iter().rev() {
             let g = open.remove(gi);
@@ -1483,10 +1617,15 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             let out_desc = &prog.slots[*out as usize];
             let geom: Option<ShiftedGeom> = if out_desc.shape == plan_ref.shape {
                 linear_fold(plan_ref).or_else(|| {
-                    if !foldable_plan(plan_ref) {
-                        return None;
-                    }
-                    let g = ShiftedGeom::Segs(plan_ref.segs.clone(), plan_ref.src_shape.clone());
+                    let g = if foldable_plan(plan_ref) {
+                        ShiftedGeom::Segs {
+                            segs: plan_ref.segs.clone(),
+                            strides: rm_strides(&plan_ref.src_shape),
+                            base: 0,
+                        }
+                    } else {
+                        broadcast_fold(plan_ref)?
+                    };
                     fold_runs_acceptable(&out_desc.shape, &g).then_some(g)
                 })
             } else {
@@ -1541,6 +1680,20 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             continue;
         }
 
+        // A reduction of an open group's value folds inside that group.
+        if let Instr::Reduce {
+            src: SrcRef::Slot(src),
+            ..
+        } = ins
+            && let Some(gi) = open.iter().position(|g| g.defines(*src))
+            && open[gi].try_absorb_reduce(i as u32, ins, fx.readers)
+        {
+            let g = open.remove(gi);
+            flush_one(g, fx);
+            i += 1;
+            continue;
+        }
+
         // Everything else passes through, flushing any group it reads from.
         flush_hazards(ins, None, &mut open, fx);
         fx.sink.passthrough(prog, i);
@@ -1571,17 +1724,11 @@ mod run_schedule_tests {
         let strides = rm_strides(shape);
         let n_shift = shifted.len();
         // Per-input element stride (coalescing contiguity is offset + len*stride).
-        let elem_stride: SmallVec<[i64; 2]> = shifted
+        let elem_stride: SmallVec<[i64; 2]> = shifted.iter().map(ShiftedGeom::elem_stride).collect();
+        let seg_strides: SmallVec<[Option<&[i64]>; 2]> = shifted
             .iter()
             .map(|g| match g {
-                ShiftedGeom::Segs(..) => 1,
-                ShiftedGeom::Linear { a, .. } => *a,
-            })
-            .collect();
-        let seg_strides: SmallVec<[Option<SmallVec<[i64; 4]>>; 2]> = shifted
-            .iter()
-            .map(|g| match g {
-                ShiftedGeom::Segs(_, ss) => Some(rm_strides(ss)),
+                ShiftedGeom::Segs { strides, .. } => Some(&strides[..]),
                 ShiftedGeom::Linear { .. } => None,
             })
             .collect();
@@ -1596,7 +1743,7 @@ mod run_schedule_tests {
             cuts.insert(0);
             cuts.insert(shape[d]);
             for g in shifted {
-                if let ShiftedGeom::Segs(segs, _) = g {
+                if let ShiftedGeom::Segs { segs, .. } = g {
                     for &(o, l, _) in &segs[d] {
                         cuts.insert(o);
                         cuts.insert(o + l);
@@ -1610,7 +1757,7 @@ mod run_schedule_tests {
                 let mut src_start: SmallVec<[Option<i64>; 2]> = SmallVec::new();
                 for g in shifted {
                     let mut pos = None;
-                    if let ShiftedGeom::Segs(segs, _) = g {
+                    if let ShiftedGeom::Segs { segs, .. } = g {
                         for &(o, l, so) in &segs[d] {
                             if a >= o && b <= o + l {
                                 pos = Some(so as i64 + (a as i64 - o as i64));
@@ -1633,7 +1780,13 @@ mod run_schedule_tests {
             // Per Segs-input per-axis source base of this tile (ghost if any axis
             // is uncovered).
             let mut ghost: SmallVec<[bool; 2]> = SmallVec::from_elem(false, n_shift);
-            let mut src_base: SmallVec<[i64; 2]> = SmallVec::from_elem(0i64, n_shift);
+            let mut src_base: SmallVec<[i64; 2]> = shifted
+                .iter()
+                .map(|g| match g {
+                    ShiftedGeom::Segs { base, .. } => *base,
+                    ShiftedGeom::Linear { .. } => 0,
+                })
+                .collect();
             for d in 0..nd {
                 let (_, _, ref starts) = axis_ivals[d][pick[d]];
                 for j in 0..n_shift {
@@ -1659,11 +1812,11 @@ mod run_schedule_tests {
                 let in_off: SmallVec<[i64; 2]> = (0..n_shift)
                     .map(|j| match &shifted[j] {
                         ShiftedGeom::Linear { a, b } => a * off + b,
-                        ShiftedGeom::Segs(..) => {
+                        ShiftedGeom::Segs { .. } => {
                             if ghost[j] {
                                 GHOST_OFF
                             } else {
-                                let sstr = seg_strides[j].as_ref().expect("segs have strides");
+                                let sstr = seg_strides[j].expect("segs have strides");
                                 let mut so = src_base[j];
                                 for d in 0..nd - 1 {
                                     so += row[d] as i64 * sstr[d];
@@ -1800,14 +1953,27 @@ mod run_schedule_tests {
                             b: rng.next(5) as i64,
                         }
                     } else {
+                        // A same-rank source (row-major strides over its own
+                        // extents), with now and then an axis broadcast
+                        // (stride 0) and a fixed-axis base offset.
                         let mut segs: AxisSegs = SmallVec::new();
-                        let mut src: super::super::super::DimU = SmallVec::new();
+                        let mut src: Vec<usize> = Vec::new();
                         for &n in &shape {
                             let (s, m) = axis_segs(&mut rng, n);
                             segs.push(s);
                             src.push(m);
                         }
-                        ShiftedGeom::Segs(segs, src)
+                        let mut strides: SmallVec<[i64; 4]> = rm_strides(&src);
+                        for st in strides.iter_mut() {
+                            if rng.next(5) == 0 {
+                                *st = 0;
+                            }
+                        }
+                        ShiftedGeom::Segs {
+                            segs,
+                            strides,
+                            base: rng.next(4) as i64,
+                        }
                     }
                 })
                 .collect();

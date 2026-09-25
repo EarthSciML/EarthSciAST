@@ -88,6 +88,26 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 
 type LResult<T> = Result<T, Bail>;
 
+/// Most contracted indices one contraction may carry.
+const MAX_CONTRACT: usize = 4;
+
+/// Highest rank a contraction is promoted to: the executor's per-axis tables
+/// hold four axes inline, so a deeper box would allocate on every call.
+const MAX_RANK: usize = 4;
+
+/// Largest box a contraction is promoted to (`window × output` elements, one
+/// term each): beyond it the contraction stays unrolled rather than
+/// materialize its terms.
+const MAX_PROMOTED_ELEMS: usize = 1 << 27;
+
+/// A static contraction window: the contracted names and their inclusive
+/// bounds, in `contract_names` order.
+struct ContractWindow<'a> {
+    names: &'a [String],
+    lo: &'a [i64],
+    hi: &'a [i64],
+}
+
 // ---------------------------------------------------------------------------
 // Lowering-time values.
 // ---------------------------------------------------------------------------
@@ -234,6 +254,7 @@ pub(crate) struct TapeBuilder<'m> {
     slots: Vec<SlotDesc>,
     plans: Vec<GatherPlan>,
     regions: Vec<RegionSpec>,
+    assemblies: Vec<AssembleSpec>,
     /// Inline array-literal payloads, one per lowered array-valued `const`.
     const_data: Vec<ConstArrayData>,
     interp_tables: Vec<InterpTable>,
@@ -272,10 +293,29 @@ struct RuleTxn {
     slots: usize,
     plans: usize,
     regions: usize,
+    assemblies: usize,
     const_data: usize,
     interp_tables: usize,
     dy_writes: usize,
     stream_lens: [usize; 3],
+    hoist_journal: usize,
+}
+
+/// Snapshot for undoing a failed ATTEMPT inside one rule (a looped form that
+/// bails and hands over to its unrolled equivalent), as opposed to
+/// [`RuleTxn`], which undoes a whole rule. The attempt keeps its own
+/// value-numbering scopes balanced, so only emitted state is recorded: the
+/// tables, and how far each stream (or the open branch buffer) had grown.
+struct SubTxn {
+    slots: usize,
+    plans: usize,
+    regions: usize,
+    assemblies: usize,
+    const_data: usize,
+    interp_tables: usize,
+    /// Per stream: `(chunk count, instructions in the last chunk)`.
+    streams: [(usize, usize); 3],
+    branch_len: Option<usize>,
     hoist_journal: usize,
 }
 
@@ -308,6 +348,7 @@ impl<'m> TapeBuilder<'m> {
             slots: Vec::new(),
             plans: Vec::new(),
             regions: Vec::new(),
+            assemblies: Vec::new(),
             const_data: Vec::new(),
             interp_tables: Vec::new(),
             state_vars,
@@ -1835,17 +1876,10 @@ impl<'m> TapeBuilder<'m> {
             .map(|d| (hi_bb[d] - lo_bb[d] + 1) as usize)
             .collect();
 
-        let sec0 = self.placement(Cadence::Const);
-        let mut cur = self.new_slot(&bb_shape, &lo_bb, false, sec0);
-        self.emit(
-            Instr::Fill {
-                v: Operand::Lit(0.0),
-                out: cur,
-            },
-            sec0,
-        );
-        let mut cur_cad = sec0;
-
+        // Every region value first, then ONE instruction assembling them: a
+        // makearray whose values are all literals is a constant array, built
+        // here; any other is an `Instr::Assemble`.
+        let mut parts: Vec<(LV, u32)> = Vec::with_capacity(regions.len());
         for (region, value_expr) in regions.iter().zip(values.iter()) {
             if region
                 .iter()
@@ -1883,25 +1917,53 @@ impl<'m> TapeBuilder<'m> {
                     bail_tape!("makearray: region value box does not match the region");
                 }
             }
-            let region_ix = self.regions.len() as u32;
+            let region_ix = tape_index(self.regions.len(), "makearray regions")?;
             self.regions.push(RegionSpec {
                 dest_lo: (0..ndim).map(|d| (r_lo[d] - lo_bb[d]) as usize).collect(),
                 shape: r_shape,
             });
-            let want = cur_cad.max(self.lv_cadence(&v));
-            let sec = self.placement(want);
-            let out = self.new_slot(&bb_shape, &lo_bb, false, sec);
-            let instr = Instr::Region {
-                base: cur,
-                src: self.op_of(&v),
-                region: region_ix,
-                out,
-            };
-            self.emit(instr, sec);
-            cur = out;
-            cur_cad = sec;
+            parts.push((v, region_ix));
         }
-        Ok(LV::Arr(cur))
+
+        if parts.iter().all(|(v, _)| matches!(v, LV::Lit(_))) {
+            let mut values = ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&bb_shape));
+            for (v, region_ix) in &parts {
+                let LV::Lit(x) = v else { unreachable!() };
+                let spec = &self.regions[*region_ix as usize];
+                let mut view = values.view_mut();
+                for d in 0..ndim {
+                    view.slice_axis_inplace(
+                        ndarray::Axis(d),
+                        ndarray::Slice::from(spec.dest_lo[d]..spec.dest_lo[d] + spec.shape[d]),
+                    );
+                }
+                view.fill(*x);
+            }
+            let data = tape_index(self.const_data.len(), "array constants")?;
+            self.const_data.push(ConstArrayData {
+                shape: bb_shape.clone(),
+                values: values.iter().copied().collect(),
+            });
+            let sec = self.placement(Cadence::Const);
+            let out = self.new_slot(&bb_shape, &lo_bb, false, sec);
+            self.emit(Instr::ConstArray { data, out }, sec);
+            return Ok(LV::Arr(out));
+        }
+
+        let want = parts
+            .iter()
+            .map(|(v, _)| self.lv_cadence(v))
+            .max()
+            .unwrap_or(Cadence::Const);
+        let sec = self.placement(want);
+        let table = tape_index(self.assemblies.len(), "makearray assemblies")?;
+        let spec = AssembleSpec {
+            parts: parts.iter().map(|(v, r)| (self.op_of(v), *r)).collect(),
+        };
+        self.assemblies.push(spec);
+        let out = self.new_slot(&bb_shape, &lo_bb, false, sec);
+        self.emit(Instr::Assemble { table, out }, sec);
+        Ok(LV::Arr(out))
     }
 
     // -- nested aggregate -----------------------------------------------------
@@ -2025,10 +2087,11 @@ impl<'m> TapeBuilder<'m> {
         }
     }
 
-    /// Mirror of `eval_vec_contracted`: unroll the static contraction window
-    /// in ITS ascending mixed-radix tuple order (dim 0 fastest) and left-fold
-    /// with the reduction's combine kernel from an identity-filled
-    /// accumulator.
+    /// A static contraction: the body over the output box EXTENDED by the
+    /// contracted axes, folded away by one [`Instr::Reduce`] — one
+    /// instruction whatever the window's length
+    /// ([`Self::lower_contracted_box`]). A body that form cannot lower keeps
+    /// the unrolled form ([`Self::lower_contracted_unrolled`]).
     #[allow(clippy::too_many_arguments)]
     fn lower_contracted(
         &mut self,
@@ -2044,13 +2107,12 @@ impl<'m> TapeBuilder<'m> {
         let Some(combine_op) = reduce_combine_op(reduce) else {
             bail_tape!("contracted: boolean reduction (or/and) not vectorized");
         };
-        const MAXC: usize = 4;
         let nc = contract_names.len();
-        if nc == 0 || nc > MAXC {
+        if nc == 0 || nc > MAX_CONTRACT {
             bail_tape!("contracted: contraction rank out of range ({nc})");
         }
-        let mut clo = [0i64; MAXC];
-        let mut chi = [0i64; MAXC];
+        let mut clo = [0i64; MAX_CONTRACT];
+        let mut chi = [0i64; MAX_CONTRACT];
         for (i, d) in contract_dims.iter().enumerate() {
             match d {
                 ContractDim::Static(l, h) => {
@@ -2060,18 +2122,146 @@ impl<'m> TapeBuilder<'m> {
                 other => bail_tape!("contracted: non-static contraction dim ({other:?})"),
             }
         }
-
-        // Accumulator: identity-filled buffer over the output box.
         let identity = reduce.identity();
-        let mut acc = self.emit_fill(&LV::Lit(identity), shape, lo, Cadence::Const);
-
         // An empty window contributes no terms — the result is the identity.
         if (0..nc).any(|i| clo[i] > chi[i]) {
-            return Ok(acc);
+            return Ok(self.emit_fill(&LV::Lit(identity), shape, lo, Cadence::Const));
         }
+        let window = ContractWindow {
+            names: contract_names,
+            lo: &clo[..nc],
+            hi: &chi[..nc],
+        };
+        let txn = self.sub_txn();
+        match self.lower_contracted_box(
+            idx_names, lo, shape, body, &window, combine_op, identity, filter,
+        ) {
+            Ok(v) => Ok(v),
+            Err(_) => {
+                self.sub_rollback(txn);
+                self.lower_contracted_unrolled(
+                    idx_names, lo, shape, body, &window, combine_op, identity, filter,
+                )
+            }
+        }
+    }
 
-        let mut cvals = [0i64; MAXC];
-        cvals[..nc].copy_from_slice(&clo[..nc]);
+    /// The looped form of a static contraction. The term is lowered ONCE over
+    /// the box `window × output` — the contracted names are its LEADING axes,
+    /// in `contract_names` order — and one [`Instr::Reduce`] folds those axes
+    /// away. `Reduce` visits its source row-major, so every output cell folds
+    /// its terms in the per-cell oracle's `CartesianTuples` order (the last
+    /// contracted name fastest), each combine `acc ⊕ term` from the identity,
+    /// exactly as `reduce_contraction` does. A `filter` masks an excluded
+    /// tuple's term to the identity, as the unrolled form does.
+    ///
+    /// The promoted box holds one term per (tuple, output cell); a window
+    /// whose box would exceed [`MAX_PROMOTED_ELEMS`] stays unrolled.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_contracted_box(
+        &mut self,
+        idx_names: &[String],
+        lo: &DimI,
+        shape: &DimU,
+        body: &Expr,
+        window: &ContractWindow,
+        combine_op: BinCode,
+        identity: f64,
+        filter: Option<&Expr>,
+    ) -> LResult<LV> {
+        let nc = window.names.len();
+        if shape.is_empty() || shape.len() + nc > MAX_RANK {
+            bail_tape!("contracted: promoted box rank out of range");
+        }
+        let mut ext_syms: Vec<String> = window.names.to_vec();
+        ext_syms.extend(idx_names.iter().cloned());
+        let mut ext_lo: DimI = window.lo.iter().copied().collect();
+        ext_lo.extend(lo.iter().copied());
+        let mut ext_shape: DimU = (0..nc)
+            .map(|i| (window.hi[i] - window.lo[i] + 1) as usize)
+            .collect();
+        ext_shape.extend(shape.iter().copied());
+        let elems = ext_shape
+            .iter()
+            .try_fold(1usize, |acc, &n| acc.checked_mul(n))
+            .filter(|&n| n <= MAX_PROMOTED_ELEMS);
+        if elems.is_none() {
+            bail_tape!("contracted: promoted box too large");
+        }
+        self.push_scope();
+        let bx = LBox {
+            syms: &ext_syms,
+            lo: ext_lo.clone(),
+            shape: ext_shape.clone(),
+            cnames: &[],
+            cvals: SmallVec::new(),
+        };
+        let term = (|| -> LResult<LV> {
+            let term = self.lower_expr(body, &bx)?;
+            match filter {
+                None => Ok(term),
+                Some(f) => {
+                    let fv = self.lower_expr(f, &bx)?;
+                    match fv {
+                        LV::Lit(c) if c != 0.0 => Ok(term),
+                        LV::Lit(_) => Ok(LV::Lit(identity)),
+                        fv => self.emit_select(fv, term, LV::Lit(identity)),
+                    }
+                }
+            }
+        })();
+        self.pop_scope();
+        let term = term?;
+        if matches!(&term, LV::State(_) | LV::Obs { .. }) && self.lv_box(&term).is_some() {
+            bail_tape!("contracted: term reduced to a bare whole-array view");
+        }
+        let src = match self.lv_box(&term) {
+            None => self.emit_fill(&term, &ext_shape, &ext_lo, Cadence::Const),
+            Some((s, o)) if s == ext_shape && o == ext_lo => term,
+            Some(_) => bail_tape!("contracted: term box does not match the promoted box"),
+        };
+        let sec = self.placement(self.lv_cadence(&src));
+        let out = self.new_slot(shape, lo, false, sec);
+        let instr = Instr::Reduce {
+            op: combine_op,
+            init: identity,
+            src: self.src_of(&src),
+            axes: (0..nc as u8).collect(),
+            src_shape: ext_shape,
+            out,
+        };
+        self.emit(instr, sec);
+        Ok(LV::Arr(out))
+    }
+
+    /// The unrolled form of a static contraction: one term per contraction
+    /// tuple, each over the output box with the tuple bound as constants,
+    /// left-folded into an identity-filled accumulator. Tuples are visited
+    /// in the per-cell oracle's `CartesianTuples` order (the last contracted
+    /// name fastest), so the fold is the interpreter's. Its length grows with
+    /// the window; it serves only bodies the looped form cannot lower (a
+    /// read whose index mixes an output and a contracted symbol, such as a
+    /// stencil window `u[i + k]`).
+    #[allow(clippy::too_many_arguments)]
+    fn lower_contracted_unrolled(
+        &mut self,
+        idx_names: &[String],
+        lo: &DimI,
+        shape: &DimU,
+        body: &Expr,
+        window: &ContractWindow,
+        combine_op: BinCode,
+        identity: f64,
+        filter: Option<&Expr>,
+    ) -> LResult<LV> {
+        let nc = window.names.len();
+        let contract_names = window.names;
+        let (clo, chi) = (window.lo, window.hi);
+        // Accumulator: identity-filled buffer over the output box.
+        let mut acc = self.emit_fill(&LV::Lit(identity), shape, lo, Cadence::Const);
+
+        let mut cvals = [0i64; MAX_CONTRACT];
+        cvals[..nc].copy_from_slice(clo);
         loop {
             // Each contraction tuple is a DISTINCT box (and CSE scope).
             self.push_scope();
@@ -2110,22 +2300,18 @@ impl<'m> TapeBuilder<'m> {
             let term = term?;
             acc = self.emit_bin(combine_op, acc, term)?;
 
-            // Mixed-radix increment over the contraction window (dim 0
-            // fastest — `eval_vec_contracted`'s order, NOT the per-cell
-            // oracle's odometer).
-            let mut d = 0;
-            let mut done = false;
-            loop {
-                if d == nc {
-                    done = true;
-                    break;
-                }
+            // Odometer over the window, the LAST contracted name fastest —
+            // the per-cell oracle's `CartesianTuples` order.
+            let mut d = nc;
+            let mut done = true;
+            while d > 0 {
+                d -= 1;
                 cvals[d] += 1;
                 if cvals[d] <= chi[d] {
+                    done = false;
                     break;
                 }
                 cvals[d] = clo[d];
-                d += 1;
             }
             if done {
                 break;
@@ -2573,14 +2759,21 @@ impl<'m> TapeBuilder<'m> {
         Ok(self.reorigin_to_one(v))
     }
 
-    /// A forward prefix scan (esm-spec §4.3.1) compiled as a whole-plane
-    /// running fold along the scanned axis — the vectorized analogue of
-    /// `run_prefix_scan`. Bit-identical: every output cell folds the same
-    /// admitted window ascending in the same association (`acc = identity`,
-    /// then `acc ⊕= term` per step, inclusive folding before the write and
-    /// exclusive after), the fold is elementwise independent across the outer
-    /// axes, and the per-step plane is evaluated with the same overlay-pinned
-    /// instruction semantics as everything else.
+    /// A forward prefix scan (esm-spec §4.3.1): the term over the whole
+    /// output box, then one [`Instr::Scan`] along the scanned axis — the
+    /// vectorized analogue of `run_prefix_scan`, and one instruction whatever
+    /// the scanned length.
+    ///
+    /// Bit-identical: `run_prefix_scan` evaluates the body at step `i` with
+    /// both the scanned output symbol and the contracted symbol bound to `i`,
+    /// and the body never reads the scanned output symbol (the detector
+    /// rejects such bodies), so the term at step `i` is the body over a box
+    /// whose scanned axis is named by the CONTRACTED symbol. The scan then
+    /// folds each window ascending in the same association.
+    ///
+    /// A body whose whole-box lowering bails keeps the per-step form
+    /// ([`Self::lower_prefix_scan_steps`]), which binds the step position as
+    /// a constant.
     fn lower_prefix_scan(
         &mut self,
         idx_names: &[String],
@@ -2601,6 +2794,78 @@ impl<'m> TapeBuilder<'m> {
         if full_shape.contains(&0) {
             bail_tape!("scan: empty output box (per-cell path)");
         }
+        let txn = self.sub_txn();
+        let mut syms: Vec<String> = idx_names.to_vec();
+        syms[scan.axis] = j_name.to_string();
+        self.push_scope();
+        let bx = LBox {
+            syms: &syms,
+            lo: full_lo.clone(),
+            shape: full_shape.clone(),
+            cnames: &[],
+            cvals: SmallVec::new(),
+        };
+        let term = self.lower_expr(body, &bx);
+        self.pop_scope();
+        let term = term.and_then(|v| {
+            // The oracle scalarizes a bare whole-array body (NaN); see the
+            // same bail in `lower_faq`.
+            if matches!(&v, LV::State(_) | LV::Obs { .. }) && self.lv_box(&v).is_some() {
+                bail_tape!("scan: body reduced to a bare whole-array view");
+            }
+            match self.lv_box(&v) {
+                None => Ok(self.emit_fill(&v, &full_shape, &full_lo, Cadence::Const)),
+                Some((s, o)) if s == full_shape && o == full_lo => Ok(v),
+                Some(_) => bail_tape!("scan: term box does not match the output box"),
+            }
+        });
+        let term = match term {
+            Ok(t) => t,
+            Err(_) => {
+                self.sub_rollback(txn);
+                return self.lower_prefix_scan_steps(
+                    idx_names, ranges, scan, j_name, body, combine_op, reduce,
+                );
+            }
+        };
+        let axis = u8::try_from(scan.axis).map_err(|_| Bail {
+            reason: "scan: axis index out of range".into(),
+        })?;
+        let sec = self.placement(self.lv_cadence(&term));
+        let out = self.new_slot(&full_shape, &full_lo, false, sec);
+        let instr = Instr::Scan {
+            op: combine_op,
+            init: reduce.identity(),
+            src: self.src_of(&term),
+            axis,
+            inclusive: scan.inclusive,
+            src_shape: full_shape,
+            out,
+        };
+        self.emit(instr, sec);
+        Ok(LV::Arr(out))
+    }
+
+    /// The per-step form of [`Self::lower_prefix_scan`]: one step box per
+    /// scanned position with the step bound as a constant, each written into
+    /// the result by a full-box region write. Its length grows with the
+    /// scanned extent; it serves only bodies the whole-box form cannot lower.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_prefix_scan_steps(
+        &mut self,
+        idx_names: &[String],
+        ranges: &[(i64, i64)],
+        scan: PrefixScan,
+        j_name: &str,
+        body: &Expr,
+        combine_op: BinCode,
+        reduce: ReduceKind,
+    ) -> LResult<LV> {
+        let full_lo: DimI = ranges.iter().map(|(l, _)| *l).collect();
+        let full_shape: DimU = ranges
+            .iter()
+            .map(|(l, h)| (h - l + 1).max(0) as usize)
+            .collect();
         let (slo, shi) = ranges[scan.axis];
         // Step box: the full box with the scanned axis collapsed to extent 1.
         // The body never references the scanned OUTPUT symbol (the detector
@@ -3124,6 +3389,7 @@ impl<'m> TapeBuilder<'m> {
             slots: self.slots.len(),
             plans: self.plans.len(),
             regions: self.regions.len(),
+            assemblies: self.assemblies.len(),
             const_data: self.const_data.len(),
             interp_tables: self.interp_tables.len(),
             dy_writes: self.dy_writes.len(),
@@ -3141,6 +3407,7 @@ impl<'m> TapeBuilder<'m> {
         self.slots.truncate(txn.slots);
         self.plans.truncate(txn.plans);
         self.regions.truncate(txn.regions);
+        self.assemblies.truncate(txn.assemblies);
         self.const_data.truncate(txn.const_data);
         self.interp_tables.truncate(txn.interp_tables);
         self.dy_writes.truncate(txn.dy_writes);
@@ -3157,6 +3424,48 @@ impl<'m> TapeBuilder<'m> {
         }
         self.scope_frames.clear();
         self.branch_bufs.clear();
+    }
+
+    fn sub_txn(&self) -> SubTxn {
+        let stream = |s: usize| {
+            let st = &self.streams[s];
+            (st.len(), st.last().map_or(0, |c| c.instrs.len()))
+        };
+        SubTxn {
+            slots: self.slots.len(),
+            plans: self.plans.len(),
+            regions: self.regions.len(),
+            assemblies: self.assemblies.len(),
+            const_data: self.const_data.len(),
+            interp_tables: self.interp_tables.len(),
+            streams: [stream(0), stream(1), stream(2)],
+            branch_len: self.branch_bufs.last().map(Vec::len),
+            hoist_journal: self.hoist_journal.len(),
+        }
+    }
+
+    /// Undo everything emitted since `txn` was taken, within the current rule.
+    fn sub_rollback(&mut self, txn: SubTxn) {
+        self.slots.truncate(txn.slots);
+        self.plans.truncate(txn.plans);
+        self.regions.truncate(txn.regions);
+        self.assemblies.truncate(txn.assemblies);
+        self.const_data.truncate(txn.const_data);
+        self.interp_tables.truncate(txn.interp_tables);
+        for (s, &(n_chunks, last_len)) in txn.streams.iter().enumerate() {
+            let stream = &mut self.streams[s];
+            stream.truncate(n_chunks);
+            if n_chunks > 0 {
+                stream[n_chunks - 1].instrs.truncate(last_len);
+            }
+        }
+        if let (Some(buf), Some(n)) = (self.branch_bufs.last_mut(), txn.branch_len) {
+            buf.truncate(n);
+        }
+        while self.hoist_journal.len() > txn.hoist_journal {
+            let key = self.hoist_journal.pop().expect("journal entry");
+            self.hoist.remove(&key);
+        }
     }
 
     /// Lower one observed rule; returns the recorded observed value.
@@ -3604,6 +3913,7 @@ impl<'m> TapeBuilder<'m> {
             slots: std::mem::take(&mut self.slots),
             plans: std::mem::take(&mut self.plans),
             regions: std::mem::take(&mut self.regions),
+            assemblies: std::mem::take(&mut self.assemblies),
             const_data: std::mem::take(&mut self.const_data),
             interp_tables: std::mem::take(&mut self.interp_tables),
             state_vars: std::mem::take(&mut self.state_vars),
@@ -3654,7 +3964,7 @@ fn color_slab(prog: &mut TapeProgram) {
                 last_use[out as usize] = last_use[out as usize].max(i);
             }
         });
-        instr.for_each_read(&prog.dy_writes, &prog.fused, |s| {
+        instr.for_each_read(&prog.dy_writes, &prog.fused, &prog.assemblies, |s| {
             last_use[s as usize] = last_use[s as usize].max(i);
         });
     }
@@ -3697,6 +4007,8 @@ fn color_slab(prog: &mut TapeProgram) {
                 | Instr::Region { .. }
                 | Instr::Fused { .. }
                 | Instr::Reduce { .. }
+                | Instr::Scan { .. }
+                | Instr::Assemble { .. }
         );
         let mut defs_here: SmallVec<[SlotId; 2]> = SmallVec::new();
         prog.instrs[i].for_each_def(&prog.fused, |o| {
