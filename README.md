@@ -219,7 +219,7 @@ If you use EarthSciAST in your research, please cite:
 
 ```bibtex
 @software{earthsciast,
-  title = {EarthSciAST: An Abstract Syntax Tree Format and },
+  title = {EarthSciAST: An Abstract Syntax Tree Format and Utilities for Earth Science Modeling },
   author = {EarthSciML Authors and Contributors},
   year = {2026},
   url = {https://github.com/EarthSciML/EarthSciAST}
