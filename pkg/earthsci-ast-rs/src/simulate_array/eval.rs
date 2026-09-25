@@ -1864,6 +1864,14 @@ impl Drop for StopAtFirstCell {
     }
 }
 
+/// What a refusal raised from a walk [`StopAtFirstCell`] stopped says after its
+/// reason, in the words the Julia binding uses for its own: the cells the walk
+/// did not evaluate may still hold a document error (an out-of-range gather at
+/// the last cell of a prefix scan), and only the interpreter would find it.
+pub(crate) const ONE_CELL_NOTE: &str = "only one cell of it was evaluated before this refusal, \
+    so a document error in a cell that was not (an out-of-range gather at the last cell, say) \
+    is not reported here; the interpreter evaluates every cell and reports it";
+
 /// Whether a per-cell walk on this thread stopped under a [`StopAtFirstCell`]
 /// with no document error pending, so that what was computed since — a value,
 /// or an error raised by reading a placeholder — is not the document's, and
