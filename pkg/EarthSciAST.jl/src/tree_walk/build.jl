@@ -2011,7 +2011,7 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
             # before the refusal is raised.
             percell(first(todo)[1])
             _refuse_percell_evaluation(rule, "the faq-valued initialization-equation seed",
-                                       length(todo))
+                                       length(todo); one_cell = true)
         end
         _record_rule!(rule, :equation, :setup_percell)
         for (idx_tuple, slot) in todo
@@ -2294,7 +2294,7 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
                     "tree walk at each data refresh and at each run's start — a " *
                     "per-cell evaluation that esm-libraries-spec §2.5.10 puts under " *
                     "the same rule as the right-hand side. Build with " *
-                    "compiler=:interpreter to run it")
+                    "compiler=:interpreter to run it. " * _ONE_CELL_NOTE)
             end
             l = isempty(idx_tuple) ? 1 : lin[idx_tuple...]
             push!(fills, (cvec, l, node))
@@ -4620,7 +4620,7 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
             "tier and the affine tier, and the only tier left is the per-cell " *
             "contraction loop, whose cells the right-hand side walks as trees " *
             "(`_eval_node`, one per output cell) on every call. Build with " *
-            "compiler=:interpreter to run it")
+            "compiler=:interpreter to run it. " * _ONE_CELL_NOTE)
     end
     # Anything the affine build cannot model takes the per-cell fallback, whose
     # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,

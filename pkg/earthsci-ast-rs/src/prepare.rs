@@ -2490,6 +2490,55 @@ mod first_cell_stop_tests {
             assert!(err.to_string().contains("OOB"), "[{compiler}] {err}");
         }
     }
+
+    /// A document error that first appears in a LATER cell is not reached by a
+    /// walk that stops after its first: native refuses, and says that the
+    /// cells it did not evaluate are the interpreter's to check, which then
+    /// reports the document's own error. Here the gather is out of range only
+    /// at the last output cell.
+    #[test]
+    fn a_refusal_says_the_later_cells_were_not_evaluated() {
+        let d = doc(
+            3,
+            json!({
+                "table": {"type": "parameter", "units": "1", "shape": ["rows"]},
+                "cum": {"type": "unknown", "units": "1", "shape": ["rows"]},
+            }),
+            json!([
+                {"lhs": "cum",
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                         "ranges": {"i": {"from": "rows"}, "j": {"from": "rows"}},
+                         "filter": {"op": "<=", "args": ["j", "i"]},
+                         "expr": {"op": "index", "args": ["table", {"op": "+", "args": ["i", 1]}]}}},
+            ]),
+        );
+        let run = |compiler| {
+            let table = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[3]), vec![1.0, 2.0, 3.0])
+                .expect("shape");
+            esm_problem(
+                &d,
+                (0.0, 1.0),
+                ProblemOptions {
+                    compiler: Some(compiler),
+                    build_pipeline: true,
+                    const_arrays: [("table".to_string(), table)].into_iter().collect(),
+                    ..Default::default()
+                },
+            )
+            .expect_err("the last cell gathers out of range")
+        };
+        match run(Compiler::Native) {
+            SimulateError::Compile(CompileError::CompilerRefusedRule { reason, .. }) => {
+                assert!(
+                    reason.ends_with(crate::simulate_array::ONE_CELL_NOTE),
+                    "{reason}"
+                );
+            }
+            other => panic!("expected compiler_refused_rule, got {other:?}"),
+        }
+        let err = run(Compiler::Interpreter);
+        assert!(err.to_string().contains("OOB"), "{err}");
+    }
 }
 
 #[cfg(test)]

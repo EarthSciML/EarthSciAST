@@ -3695,6 +3695,11 @@ mod field_ic_memo_tests {
         let (large, cells) = refusal(100_000, cumulative.clone());
         assert_eq!(large, small);
         assert_eq!(large.0, "initial condition");
+        assert!(
+            large.2.ends_with(crate::simulate_array::ONE_CELL_NOTE),
+            "{}",
+            large.2
+        );
         assert_eq!(cells, 1, "the walk must stop at its first cell");
 
         // What the rest of the expression makes of the stopped walk's

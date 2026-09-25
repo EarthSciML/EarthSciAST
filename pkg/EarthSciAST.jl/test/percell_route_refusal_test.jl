@@ -23,14 +23,16 @@ include("testutils.jl")
 
 const _PR = EarthSciAST
 
-# True when `f()` throws `compiler_refused_rule` whose message names `needle`.
-function _pr_refuses(f, needle::AbstractString)
+# True when `f()` throws `compiler_refused_rule` whose message names `needle`
+# (and, with `one_cell`, says that only one cell was evaluated before it).
+function _pr_refuses(f, needle::AbstractString; one_cell::Bool = false)
     try
         f()
     catch err
         err isa _PR.TreeWalkError || rethrow()
         return err.code == _PR.ERROR_CODES.COMPILER_REFUSED_RULE &&
-               occursin(needle, err.detail)
+               occursin(needle, err.detail) &&
+               (!one_cell || occursin(_PR._ONE_CELL_NOTE, err.detail))
     end
     return false
 end
@@ -74,7 +76,7 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
                 param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)),
                 compiler = compiler)
         end
-        @test _pr_refuses(() -> build(:native), "per-cell contraction loop")
+        @test _pr_refuses(() -> build(:native), "per-cell contraction loop"; one_cell = true)
         f!, u0, p, _, vm = build(:interpreter)
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vm["out[1,1,1,1]"]] == 3.0 * sum(W)
@@ -93,7 +95,7 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
             materialize_out = dm, inspect = insp, compiler = compiler)
         @test _pr_refuses(() -> build(:native, _PR.DiscreteMaterializer(),
                                       _PR.BuildInspection()),
-                          "the discrete-cadence materializer")
+                          "the discrete-cadence materializer"; one_cell = true)
         dm = _PR.DiscreteMaterializer()
         insp = _PR.BuildInspection()
         build(:interpreter, dm, insp)
@@ -142,7 +144,7 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
                           faq1(_op("*", _n(2.0), _idx("F", _v("i")))))])
         F = collect(1.0:5.0)
         @test _pr_refuses(() -> seed(m, :native; param_arrays = Dict("F" => F)),
-                          "init(u)")
+                          "init(u)"; one_cell = true)
         ui, vi, _ = seed(m, :interpreter; param_arrays = Dict("F" => F))
         @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* F
     end
@@ -364,7 +366,7 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         tx = _PR.expression_from_json(Dict{String,Any}("op" => "*", "args" => Any["t", 2.0]))
         @test _pr_refuses(() -> native(() -> seed_expression_ic!(zeros(3), vm, "M.u", tx,
                                                                  ["t" => [1.0, 2.0, 3.0]])),
-                          "seed_expression_ic!(M.u)")
+                          "seed_expression_ic!(M.u)"; one_cell = true)
     end
 
     @testset "faq initialization equation: an undeclared name, an out-of-range gather" begin
@@ -521,7 +523,7 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
             "values" => Any[Dict{String,Any}("op" => "index", "args" => Any["B", 1, 1])]))
         @test _pr_refuses(() -> native(() -> _PR._materialize_setup_wholearray(ok, copy(env),
                               nothing, idx, ["X"], Dict{String,Function}())),
-                          "the whole-array setup materializer")
+                          "the whole-array setup materializer"; one_cell = true)
     end
 
     # ── Field initial conditions: the cell-independent forms, once ────────────

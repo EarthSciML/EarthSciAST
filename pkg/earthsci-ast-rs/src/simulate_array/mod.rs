@@ -89,8 +89,8 @@ pub(crate) use compile::{apply_flatten_rewrites, mount_subsystems, resolve_model
 #[cfg(test)]
 pub(crate) use eval::per_cell_cells;
 pub(crate) use eval::{
-    StopAtFirstCell, eval_observed_recurrence, eval_scalar_expression, per_cell_walk_refused,
-    per_cell_walks,
+    ONE_CELL_NOTE, StopAtFirstCell, eval_observed_recurrence, eval_scalar_expression,
+    per_cell_walk_refused, per_cell_walks,
 };
 // Read only by `crate::expression`'s tests.
 #[cfg(test)]
