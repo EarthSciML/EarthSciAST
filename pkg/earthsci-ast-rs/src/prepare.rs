@@ -1530,8 +1530,13 @@ impl<'o> BuildState<'o> {
             base_path: opts.base_path.clone(),
             metaparameters,
         };
-        let file = crate::parse::load_string_with_options(&text, &load_opts)
+        let mut file = crate::parse::load_string_with_options(&text, &load_opts)
             .map_err(|e| err(format!("load rewritten document: {e}")))?;
+        // esm-spec §9.5.3: a `table_lookup` is lowered before anything
+        // evaluates it, on this route as on the compile path — the reference
+        // evaluator has no rule for the node itself.
+        crate::lower_table_lookup::lower_table_lookups(&mut file)
+            .map_err(|e| err(format!("lower table lookups: {e}")))?;
         let index_sets: HashMap<String, IndexSet> = file
             .index_sets
             .clone()

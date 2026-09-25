@@ -1208,7 +1208,7 @@ pub fn angle_normalization_factor(unit: &Unit) -> Option<f64> {
 /// conversion is exact and has no second reading, which is why this half
 /// converts where the `ppm` half refuses.
 ///
-/// Returns `None` when nothing changed, so the common case allocates nothing.
+/// Returns `None` when nothing changed, so the common case clones nothing.
 /// The rewrite runs on the EVALUATION path only (the flatten funnel); the
 /// checker still sees the authored spelling, and so still reports the argument's
 /// declared unit rather than a literal-poisoned `unknown`.
@@ -1218,58 +1218,44 @@ pub fn normalize_angle_arguments(expr: &Expr, env: &HashMap<String, Unit>) -> Op
         return None;
     };
 
-    // Rewrite the children first, so a nested `sin(deg)` inside another
-    // argument is converted too.
-    let mut args: Vec<Expr> = node.args.clone();
-    let mut changed = false;
-    for a in &mut args {
-        if let Some(rewritten) = normalize_angle_arguments(a, env) {
-            *a = rewritten;
-            changed = true;
-        }
-    }
-    let sidecars: [(&Option<Box<Expr>>, usize); 3] =
-        [(&node.lower, 0), (&node.upper, 1), (&node.expr, 2)];
-    let mut new_sidecars: [Option<Box<Expr>>; 3] = [None, None, None];
-    for (slot, idx) in sidecars {
-        if let Some(inner) = slot
-            && let Some(rewritten) = normalize_angle_arguments(inner, env)
-        {
-            new_sidecars[idx] = Some(Box::new(rewritten));
-            changed = true;
-        }
-    }
+    // Rewrite the children first, so a nested `sin(deg)` is converted too —
+    // EVERY expression-bearing child (`ExpressionNode::for_each_child`), not a
+    // hand list: a trig call in a `makearray` region value, a `table_lookup`
+    // axis input, a `faq` filter or an aggregate key is as much an evaluated
+    // argument as one in `args`. The node is cloned only when something in it
+    // changes.
+    let mut children: Vec<Option<Expr>> = Vec::new();
+    node.for_each_child(&mut |child| children.push(normalize_angle_arguments(child, env)));
 
     // Then this node: a circular trig whose (possibly rewritten) argument is a
-    // scaled angle gets the factor folded in.
-    if matches!(node.op.as_str(), "sin" | "cos" | "tan") && args.len() == 1 {
+    // scaled angle gets the factor folded in. `args` are the first children
+    // visited, so `children[0]` is the rewritten `args[0]`.
+    let mut factor = None;
+    if matches!(node.op.as_str(), "sin" | "cos" | "tan") && node.args.len() == 1 {
+        let arg = children[0].as_ref().unwrap_or(&node.args[0]);
         let mut findings = Vec::new();
-        if let Some(unit) = propagate_dim(&args[0], env, &mut findings).known()
-            && let Some(factor) = angle_normalization_factor(unit)
-        {
-            let scaled = ExpressionNode {
-                op: "*".to_string(),
-                args: vec![args[0].clone(), Expr::Number(factor)],
-                ..Default::default()
-            };
-            args[0] = Expr::operator(scaled);
-            changed = true;
-        }
+        factor = propagate_dim(arg, env, &mut findings)
+            .known()
+            .and_then(angle_normalization_factor);
     }
 
-    if !changed {
+    if factor.is_none() && children.iter().all(Option::is_none) {
         return None;
     }
     let mut out = (**node).clone();
-    out.args = args;
-    for (idx, slot) in new_sidecars.into_iter().enumerate() {
-        if let Some(v) = slot {
-            match idx {
-                0 => out.lower = Some(v),
-                1 => out.upper = Some(v),
-                _ => out.expr = Some(v),
-            }
+    let mut rewritten = children.into_iter();
+    out.for_each_child_mut(&mut |child| {
+        if let Some(Some(next)) = rewritten.next() {
+            *child = next;
         }
+    });
+    if let Some(factor) = factor {
+        let scaled = ExpressionNode {
+            op: "*".to_string(),
+            args: vec![out.args[0].clone(), Expr::Number(factor)],
+            ..Default::default()
+        };
+        out.args[0] = Expr::operator(scaled);
     }
     Some(Expr::operator(out))
 }
@@ -3215,6 +3201,53 @@ mod tests {
             Expr::Number(std::f64::consts::PI / 180.0),
             "the factor is the declared scale, applied ONCE"
         );
+    }
+
+    /// The rewrite reaches a circular function in EVERY expression-bearing
+    /// field, not only `args`: a `makearray` region value, a `table_lookup`
+    /// axis input, a `faq` filter and an aggregate key.
+    #[test]
+    fn test_normalize_angle_arguments_reaches_every_child() {
+        let env = env_of(&[("lat", "deg")]);
+        let sin = || op("sin", vec![Expr::Variable("lat".into())]);
+        let folded = |e: &Expr| {
+            let Expr::Operator(n) = e else { return false };
+            n.op == "sin"
+                && matches!(&n.args[0], Expr::Operator(p) if p.op == "*"
+                    && p.args[1] == Expr::Number(std::f64::consts::PI / 180.0))
+        };
+        let nodes = [
+            ExpressionNode {
+                op: "makearray".into(),
+                values: Some(vec![sin()]),
+                ..Default::default()
+            },
+            ExpressionNode {
+                op: "table_lookup".into(),
+                axes: Some([("x".to_string(), sin())].into_iter().collect()),
+                ..Default::default()
+            },
+            ExpressionNode {
+                op: "faq".into(),
+                filter: Some(Box::new(sin())),
+                key: Some(Box::new(sin())),
+                ..Default::default()
+            },
+        ];
+        for node in nodes {
+            let op_name = node.op.clone();
+            let rewritten = normalize_angle_arguments(&Expr::operator(node), &env)
+                .unwrap_or_else(|| panic!("{op_name}: the nested `deg` sin was not reached"));
+            let Expr::Operator(out) = &rewritten else {
+                panic!("{op_name}: expected the node back")
+            };
+            let mut children = 0;
+            out.for_each_child(&mut |c| {
+                assert!(folded(c), "{op_name}: {c:?} was not folded");
+                children += 1;
+            });
+            assert!(children > 0, "{op_name}");
+        }
     }
 
     /// The fold is IDEMPOTENT. It has to be: the array runtime runs the same
