@@ -23,14 +23,16 @@ include("testutils.jl")
 
 const _PR = EarthSciAST
 
-# True when `f()` throws `compiler_refused_rule` whose message names `needle`.
-function _pr_refuses(f, needle::AbstractString)
+# True when `f()` throws `compiler_refused_rule` whose message names `needle`
+# (and, with `one_cell`, says that only one cell was evaluated before it).
+function _pr_refuses(f, needle::AbstractString; one_cell::Bool = false)
     try
         f()
     catch err
         err isa _PR.TreeWalkError || rethrow()
         return err.code == _PR.ERROR_CODES.COMPILER_REFUSED_RULE &&
-               occursin(needle, err.detail)
+               occursin(needle, err.detail) &&
+               (!one_cell || occursin(_PR._ONE_CELL_NOTE, err.detail))
     end
     return false
 end
@@ -74,7 +76,7 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
                 param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)),
                 compiler = compiler)
         end
-        @test _pr_refuses(() -> build(:native), "per-cell contraction loop")
+        @test _pr_refuses(() -> build(:native), "per-cell contraction loop"; one_cell = true)
         f!, u0, p, _, vm = build(:interpreter)
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vm["out[1,1,1,1]"]] == 3.0 * sum(W)
@@ -93,7 +95,7 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
             materialize_out = dm, inspect = insp, compiler = compiler)
         @test _pr_refuses(() -> build(:native, _PR.DiscreteMaterializer(),
                                       _PR.BuildInspection()),
-                          "the discrete-cadence materializer")
+                          "the discrete-cadence materializer"; one_cell = true)
         dm = _PR.DiscreteMaterializer()
         insp = _PR.BuildInspection()
         build(:interpreter, dm, insp)
@@ -142,7 +144,7 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
                           faq1(_op("*", _n(2.0), _idx("F", _v("i")))))])
         F = collect(1.0:5.0)
         @test _pr_refuses(() -> seed(m, :native; param_arrays = Dict("F" => F)),
-                          "init(u)")
+                          "init(u)"; one_cell = true)
         ui, vi, _ = seed(m, :interpreter; param_arrays = Dict("F" => F))
         @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* F
     end
@@ -281,6 +283,24 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         @test length(obs_rows(p2, "y")) == 1
     end
 
+    @testset "observed_field: a record shared by two problems files the latest build's row" begin
+        # The record describes its latest build, so its report is p2's. A read
+        # through the earlier p1 files no row there, and neither problem's read
+        # evicts the other's memo entry or decides whether p2's row is filed.
+        insp = _PR.BuildInspection()
+        p1 = esm_problem(obs_doc(), (0.0, 1.0); inspect = insp)
+        p2 = esm_problem(obs_doc(), (0.0, 1.0); p = Dict("s" => 2.0), inspect = insp)
+        y1 = observed_field(p1, "y")
+        @test isempty(obs_rows(p2, "y"))
+        @test observed_field(p2, "y") == [2.0, 4.0, 6.0]
+        @test [r.tier for r in obs_rows(p2, "y")] == [:output_compiled_once]
+        hits = _PR._CELLWISE_FASTPATH_HITS[]
+        @test observed_field(p1, "y") == y1
+        @test observed_field(p2, "y") == [2.0, 4.0, 6.0]
+        @test _PR._CELLWISE_FASTPATH_HITS[] == hits
+        @test length(obs_rows(p2, "y")) == 1
+    end
+
     @testset "observed_field: a remade problem reads its build's field" begin
         # `observed_field` reports what the BUILD materialized (API_SPEC §5.8),
         # and `remake` shares the build, so a `p` or `u0` swap does not move it.
@@ -346,7 +366,7 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         tx = _PR.expression_from_json(Dict{String,Any}("op" => "*", "args" => Any["t", 2.0]))
         @test _pr_refuses(() -> native(() -> seed_expression_ic!(zeros(3), vm, "M.u", tx,
                                                                  ["t" => [1.0, 2.0, 3.0]])),
-                          "seed_expression_ic!(M.u)")
+                          "seed_expression_ic!(M.u)"; one_cell = true)
     end
 
     @testset "faq initialization equation: an undeclared name, an out-of-range gather" begin
@@ -416,6 +436,60 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         end
     end
 
+    @testset "a long contraction left to the per-cell loop refuses without unrolling" begin
+        # The diagnostic build ahead of the refusal unrolls one output cell, and
+        # past `_REFUSAL_DIAGNOSTIC_TERMS` terms only the ends of the contracted
+        # range: the refusal costs the same at 10^5 terms as at 8, and a gather
+        # out of range at the end is still the document's error.
+        long_doc(K, past) = Dict{String,Any}("esm" => "1.1.0",
+            "metadata" => Dict("name" => "pr_long_contraction"),
+            "models" => Dict("R" => Dict{String,Any}(
+                "variables" => Dict(
+                    "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
+                    "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
+                "equations" => Any[Dict(
+                    "lhs" => Dict("op" => "faq", "args" => Any[],
+                        "output_idx" => Any["a", "b", "c", "d"],
+                        "ranges" => Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d")),
+                        "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
+                            "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
+                    "rhs" => Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+                        "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
+                        "ranges" => merge(
+                            Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d")),
+                            Dict{String,Any}("k" => Any[1, K + past])),
+                        "expr" => Dict("op" => "*", "args" => Any[
+                            Dict("op" => "index", "args" => Any[
+                                Dict("op" => "const", "args" => Any[],
+                                     "value" => collect(1.0:K)), "k"]),
+                            Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])])))])))
+        function lowerings(K, past)
+            insp = _PR.BuildInspection()
+            _PR._bench_reset!()
+            _PR._BENCH_ON[] = true
+            e = try
+                err_of(() -> withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
+                    _PR._build_evaluator(long_doc(K, past);
+                        initial_conditions = Dict("out[1,1,1,1]" => 0.0),
+                        param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)),
+                        compiler = :native, inspect = insp)
+                end)
+            finally
+                _PR._BENCH_ON[] = false
+            end
+            return e, _PR._BENCH_COMPILE_CALLS[], _PR.compiler_report(insp)
+        end
+        e_short, n_short, _ = lowerings(8, 0)
+        @test code_of(e_short) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
+        e_long, n_long, rep = lowerings(100_000, 0)
+        @test code_of(e_long) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test n_long <= n_short
+        # The build that is refused leaves no tally behind it.
+        @test isempty(rep.tally)
+        e_oob, _, _ = lowerings(100_000, 1)
+        @test code_of(e_oob) == "E_TREEWALK_CONSTARRAY_OOB"
+    end
+
     @testset "setup materializers: an out-of-range gather, an undeclared name" begin
         native(f) = _PR._with_compiler_plan(f, _PR._compiler_plan(:native))
         interp(f) = _PR._with_compiler_plan(f, _PR._compiler_plan(:interpreter))
@@ -449,7 +523,7 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
             "values" => Any[Dict{String,Any}("op" => "index", "args" => Any["B", 1, 1])]))
         @test _pr_refuses(() -> native(() -> _PR._materialize_setup_wholearray(ok, copy(env),
                               nothing, idx, ["X"], Dict{String,Function}())),
-                          "the whole-array setup materializer")
+                          "the whole-array setup materializer"; one_cell = true)
     end
 
     # ── Field initial conditions: the cell-independent forms, once ────────────
