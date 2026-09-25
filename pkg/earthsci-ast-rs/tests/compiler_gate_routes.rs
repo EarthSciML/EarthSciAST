@@ -493,3 +493,41 @@ fn a_native_build_of_a_distinct_producer_fixture_has_nothing_on_the_oracle() {
     }
     assert!(built > 0, "no fixture built, so this proves nothing");
 }
+
+// ---------------------------------------------------------------------------
+// (e) Field names
+// ---------------------------------------------------------------------------
+
+/// A variable named like its model is `M.M`, the flattened, component-qualified
+/// spelling (API_SPEC §5.8) Julia and Python report, on the build pipeline as
+/// on the state-free evaluation — and the bare name still resolves.
+#[test]
+fn a_variable_named_like_its_model_is_qualified_on_every_route() {
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "SameName"},
+        "models": {"fuel": {
+            "variables": {
+                "code": {"type": "parameter", "units": "1", "default": 3.0},
+                "fuel": {"type": "unknown", "units": "1"}
+            },
+            "equations": [{"lhs": "fuel", "rhs": {"op": "*", "args": ["code", 2.0]}}]
+        }}
+    });
+    for o in [
+        opts(Compiler::Native),
+        with_pipeline(Compiler::Native),
+        with_pipeline(Compiler::Interpreter),
+    ] {
+        let pipeline = o.build_pipeline;
+        let prob = build_json(&doc, o).unwrap_or_else(|e| panic!("pipeline={pipeline}: {e}"));
+        assert_eq!(
+            prob.observed_field_names(),
+            vec!["fuel.fuel".to_string()],
+            "pipeline={pipeline}"
+        );
+        for name in ["fuel.fuel", "fuel"] {
+            assert_eq!(values(&prob, name), vec![6.0], "pipeline={pipeline} {name}");
+        }
+    }
+}

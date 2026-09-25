@@ -946,11 +946,15 @@ pub fn callbacks(prob: &EsmProblem) -> &CallbackSet {
 /// the second alone puts both into the one namespace Julia and Python key
 /// their build-time fields by, so `observed_field` answers the same spellings
 /// in all three bindings.
+///
+/// A key EQUAL to `model` is a variable named like its model, not a component
+/// path, so it is qualified too: `fuel_mce` in model `fuel_mce` is
+/// `fuel_mce.fuel_mce`, the spelling the flattened name has (API_SPEC §5.8)
+/// and the one Julia and Python report.
 fn qualify(model: &str, key: &str) -> String {
-    let already = key == model
-        || key
-            .strip_prefix(model)
-            .is_some_and(|rest| rest.starts_with('.'));
+    let already = key
+        .strip_prefix(model)
+        .is_some_and(|rest| rest.starts_with('.'));
     if model.is_empty() || already {
         key.to_string()
     } else {
