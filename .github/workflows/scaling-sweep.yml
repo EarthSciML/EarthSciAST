@@ -27,6 +27,7 @@ concurrency:
 
 env:
   RUST_VERSION: 'stable'
+  JULIA_VERSION: '1.12'
   PYTHON_VERSION: '3.11'
 
 jobs:
@@ -100,9 +101,76 @@ jobs:
           name: scaling-rust-${{ matrix.family }}
           path: scaling-results/
 
+  julia:
+    name: Julia (${{ matrix.family }})
+    runs-on: ubuntu-latest
+    # A family's ladder, serial then threaded. The adapter stops a ladder
+    # itself once a build takes, or is projected to take, over --max-build
+    # (the sizes it skips are recorded as errors that say so).
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [stencil_1d, stencil_2d, stencil_3d, stencil_4d, transport_3d, chemistry_grid,
+                 prefix_scan, source_receptor, regrid, unstructured_gather, scalar_chemistry]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ env.JULIA_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Restore only: the julia-tests job in conformance-testing.yml owns this
+      # depot and saves it from main.
+      - name: Restore Julia depot
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.julia/artifacts
+            ~/.julia/packages
+            ~/.julia/registries
+            ~/.julia/compiled
+            ~/.julia/scratchspaces
+            ~/.julia/logs
+          key: julia-depot-v1-${{ runner.os }}-${{ env.JULIA_VERSION }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml') }}
+          restore-keys: |
+            julia-depot-v1-${{ runner.os }}-${{ env.JULIA_VERSION }}-
+
+      - name: Generate the ladder
+        run: |
+          python3 tests/conformance/scaling/generate.py \
+            --out "$RUNNER_TEMP/scaling" --family "${{ matrix.family }}"
+
+      - name: Measure (serial)
+        run: |
+          mkdir -p scaling-results
+          julia --project=pkg/EarthSciAST.jl/scripts/scaling_env \
+            tests/conformance/scaling/julia/adapter.jl --docs "$RUNNER_TEMP/scaling" \
+            --max-build 900 --output "scaling-results/julia-${{ matrix.family }}-t1.json"
+
+      - name: Measure (threaded)
+        run: |
+          julia --threads="$(nproc)" --project=pkg/EarthSciAST.jl/scripts/scaling_env \
+            tests/conformance/scaling/julia/adapter.jl --docs "$RUNNER_TEMP/scaling" \
+            --max-build 900 --interpreter-max-states 0 \
+            --output "scaling-results/julia-${{ matrix.family }}-threaded.json"
+
+      - name: Upload results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaling-julia-${{ matrix.family }}
+          path: scaling-results/
+
   report:
     name: Gates and ledger
-    needs: rust
+    needs: [rust, julia]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -117,7 +185,7 @@ jobs:
       - name: Download results
         uses: actions/download-artifact@v4
         with:
-          pattern: scaling-rust-*
+          pattern: scaling-*
           path: scaling-results
           merge-multiple: true
 
