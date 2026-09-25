@@ -6365,6 +6365,36 @@ remains the only place `native`'s coverage is measured. Without that, the whole
 harness goes red for reasons unrelated to what each stage tests.
 
 
+#### 5.44.6 The native coverage ledger
+
+This tier's `required` maps hold six fixtures to a trajectory. The **native
+coverage ledger** (`tests/conformance/native_coverage/`, contract in its
+`README.md`) holds the whole corpus to something weaker and wider: wherever the
+`interpreter` BUILDS a document, `native` builds it too, or the document is
+named in the ledger. The corpus is every `.esm` under `tests/` plus every `.esm`
+in EarthSciML/EarthSciModels; a census builds each through `esm_problem` under
+both compilers in Julia (`pkg/EarthSciAST.jl/scripts/compiler_census.jl`) and in
+Rust (`pkg/earthsci-ast-rs/examples/compiler_census.rs`). A document under an
+`invalid/` directory, or a template or coupling library with no model of its
+own, is never listed.
+
+Each binding's ledger (`julia.json`, `rust.json`) lists every document the
+interpreter builds and native does not, with native's code, the refused rule
+and the reason — a named exclusion keyed by document. Its count may only fall,
+the same one-way rule as `required` above. `scripts/native-coverage.py check`
+compares a census against it and is RED on a document native newly refuses; on
+a ledgered document native now builds, until the entry is removed; on an entry
+that stopped being a gap in any other way; on an entry whose code drifted; and
+on a census missing a corpus document. Regenerating a ledger may drop entries
+and never add one, except for a first measurement.
+
+`scripts/native-coverage.py self-test` drives every one of those arms on
+synthetic records and validates both committed ledgers; it is the
+`native-coverage self-test` stage of `scripts/test-conformance.sh`. The census
+runs weekly, and on demand, in `.github/workflows/native-coverage.yml`, which
+checks EarthSciModels out beside this repository; `scripts/native-coverage.sbatch`
+runs the same census on a Slurm node.
+
 ### 5.45 Inline-Test Conformance Tiers (normative)
 
 §5.38 governs one right-hand side at fixed probe states; §5.44 governs a whole

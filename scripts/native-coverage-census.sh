@@ -18,11 +18,17 @@
 #
 # Usage:
 #   scripts/native-coverage-census.sh --earthscimodels ../EarthSciModels --out <dir> \
-#       [--bindings julia,rust] [--jobs 4] [--timeout 300] [--check-only] [--write-ledger]
+#       [--bindings julia,rust] [--jobs 4] [--timeout 300] [--check-only]
+#       [--write-ledger | --baseline]
 #
 #   --check-only    skip the sweeps and re-check the census already in <dir>
-#   --write-ledger  rewrite the ledgers from the census instead of checking
-#                   (the baseline; see tests/conformance/native_coverage/README.md)
+#   --write-ledger  rewrite the ledgers from the census instead of checking; a
+#                   rewrite may drop entries and never add one
+#   --baseline      --write-ledger for a first measurement, which may add entries
+#                   (see tests/conformance/native_coverage/README.md)
+#
+# Re-running into the same --out directory reuses the Rust per-document records
+# already there (a resume); start from an empty directory for a fresh census.
 #
 # Environment:
 #   JULIA_CENSUS_ENV  the Julia environment the census runs in (default:
@@ -41,6 +47,7 @@ JOBS=4
 TIMEOUT=300
 CHECK_ONLY=false
 WRITE_LEDGER=false
+BASELINE=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -51,7 +58,8 @@ while [[ $# -gt 0 ]]; do
     --timeout)        TIMEOUT="$2"; shift 2 ;;
     --check-only)     CHECK_ONLY=true; shift ;;
     --write-ledger)   WRITE_LEDGER=true; shift ;;
-    -h|--help)        sed -n '2,34p' "$0"; exit 0 ;;
+    --baseline)       WRITE_LEDGER=true; BASELINE=true; shift ;;
+    -h|--help)        sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "native-coverage-census.sh: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
@@ -134,6 +142,8 @@ census_rust() {
 check() {
   local binding="$1" mode=check
   [[ "$WRITE_LEDGER" == true ]] && mode=write-ledger
+  local extra=()
+  [[ "$BASELINE" == true ]] && extra+=(--baseline)
   local args=(--binding "$binding" --corpus "$CORPUS" --earthscimodels "$MODELS")
   if [[ "$binding" == julia ]]; then
     args+=(--census "$OUT/julia_native.jsonl" --census-interpreter "$OUT/julia_interpreter.jsonl")
@@ -145,7 +155,7 @@ check() {
   elif [[ -f "$OUT/provenance.json" ]]; then
     args+=(--provenance "$OUT/provenance.json")
   fi
-  python3 "$TOOL" "$mode" "${args[@]}"
+  python3 "$TOOL" "$mode" "${args[@]}" "${extra[@]}"
 }
 
 status=0

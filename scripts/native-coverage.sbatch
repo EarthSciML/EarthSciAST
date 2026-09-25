@@ -15,7 +15,8 @@
 #   NC_BINDINGS   julia, rust, or julia,rust (default: julia,rust)
 #   NC_JOBS       concurrent documents per sweep (default: 12)
 #   NC_TIMEOUT    per-document wall clock, seconds (default: 300)
-#   NC_MODE       check (default) or write-ledger (the baseline)
+#   NC_MODE       check (default), write-ledger (may only shrink the ledgers) or
+#                 baseline (a first measurement)
 #
 # A Julia sweep runs NC_JOBS two-threaded workers per compiler and both
 # compilers at once, so it wants about 4 x NC_JOBS cores and several GB per
@@ -37,7 +38,12 @@ export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-${SLURM_CPUS_PER_TASK:-16}}"
 
 extra=()
-[[ "${NC_MODE:-check}" == write-ledger ]] && extra+=(--write-ledger)
+case "${NC_MODE:-check}" in
+  check) ;;
+  write-ledger) extra+=(--write-ledger) ;;
+  baseline) extra+=(--baseline) ;;
+  *) echo "NC_MODE must be check, write-ledger or baseline" >&2; exit 2 ;;
+esac
 
 echo "[$(date)] $(hostname) native coverage census: bindings ${NC_BINDINGS:-julia,rust}, $(git rev-parse HEAD)"
 ./scripts/native-coverage-census.sh \

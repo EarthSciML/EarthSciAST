@@ -1,0 +1,42 @@
+{
+  "category": "native_coverage",
+  "version": "1.0",
+  "binding": "julia",
+  "compiler": "native",
+  "reference_compiler": "interpreter",
+  "$comment": "Every corpus document the interpreter builds through esm_problem and native does not, with native's refusal. The list only shrinks: a document missing from it that native refuses is RED, and an entry native now builds is RED until it is removed. See README.md in this directory.",
+  "measured": {
+    "date": "2026-09-25",
+    "earthsciast_commit": "b36fe61a351a5beac96af8514a861a086ac5c2a2",
+    "earthsciast_dirty": true,
+    "earthscimodels_commit": "e298021cd5dc02149c291e64600feb786d76612b",
+    "documents": 1226,
+    "counts": {
+      "both build": 702,
+      "both fail": 255,
+      "invalid fixture (excluded)": 204,
+      "library fragment (excluded)": 62,
+      "native gap": 3
+    }
+  },
+  "entries": [
+    {
+      "path": "tests/conformance/build_once_spatial_field/fixtures/build_once_spatial_ode.esm",
+      "code": "compiler_refused_rule",
+      "rule": "Field.darea",
+      "reason": "compiler_refused_rule: compiler=:native refuses 'Field.darea': the whole-array setup materializer resolves and compiles the expression once per cell, over 3 cells, because the compile-once form declined it. That is a tree walk per cell at construction time, which esm-libraries-spec §2.5.10 puts under the same rule as the right-hand side. Build with compiler=:interpreter to run it"
+    },
+    {
+      "path": "tests/conformance/pde_inline_ic_param_override/fixtures/ic_param_override.esm",
+      "code": "compiler_refused_rule",
+      "rule": "ic(M.u)",
+      "reason": "compiler_refused_rule: compiler=:native refuses 'ic(M.u)': the coordinate-expression initial-state seed resolves and compiles the expression once per cell, because the compile-once form declined it. That is a tree walk per cell at construction time, which esm-libraries-spec §2.5.10 puts under the same rule as the right-hand side. Build with compiler=:interpreter to run it"
+    },
+    {
+      "path": "tests/spatial/pde_inline_assertions_exec.esm",
+      "code": "compiler_refused_rule",
+      "rule": "ic(M.u)",
+      "reason": "compiler_refused_rule: compiler=:native refuses 'ic(M.u)': the coordinate-expression initial-state seed resolves and compiles the expression once per cell, because the compile-once form declined it. That is a tree walk per cell at construction time, which esm-libraries-spec §2.5.10 puts under the same rule as the right-hand side. Build with compiler=:interpreter to run it"
+    }
+  ]
+}

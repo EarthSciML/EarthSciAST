@@ -33,7 +33,8 @@ Subcommands:
 
     corpus        list the corpus, one absolute path per line
     check         compare a census against the committed ledger (exit 1 on drift)
-    write-ledger  write the ledger from a census (the baseline; see the README)
+    write-ledger  rewrite the ledger from a census: it may drop entries and never
+                  add one, unless --baseline (a first measurement)
     self-test     drive the check through every arm on synthetic records, and
                   validate the committed ledgers' shape
 
@@ -215,6 +216,16 @@ def outcomes(binding: str, census: Path, census_interpreter: Path | None,
                         "interpreter": rust_outcome(rec, "interpreter")}
     else:
         raise InputError(f"unknown binding {binding!r}")
+    # A message that quotes a document's path quotes the census machine's
+    # checkout; the ledger spells it the way it spells `path`.
+    prefixes = [(f"{repo_root.resolve()}/", "")]
+    if models_root is not None:
+        prefixes.append((f"{models_root.resolve()}/", MODELS_PREFIX))
+    for o in out.values():
+        for r in o.values():
+            if r.get("reason"):
+                for old, new in prefixes:
+                    r["reason"] = r["reason"].replace(old, new)
     return out
 
 
@@ -443,6 +454,16 @@ def cmd_write_ledger(args) -> int:
     if args.note:
         measured["note"] = args.note
     ledger_path = Path(args.ledger) if args.ledger else TIER_DIR / f"{args.binding}.json"
+    if ledger_path.is_file() and not args.baseline:
+        # The one-way rule holds for a regenerated ledger too: rewriting it may
+        # drop entries and update the ones it keeps, never add one.
+        old = {e["path"] for e in load_ledger(ledger_path, args.binding)["entries"]}
+        added = sorted(set(cls["gaps"]) - old)
+        if added:
+            print(f"refusing to grow {ledger_path}: {len(added)} document(s) native now "
+                  f"refuses are not in it, e.g. {added[:3]}. The ledger only shrinks; "
+                  f"--baseline is for measuring a new one.")
+            return 1
     ledger_path.write_text(render_ledger(args.binding, cls["gaps"], cls["counts"], measured))
     print(f"wrote {ledger_path}: {len(cls['gaps'])} entries")
     return 0
@@ -605,6 +626,9 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--report", default=None, help="write a JSON report here")
         else:
             p.add_argument("--note", default=None, help="a note for the ledger's 'measured' block")
+            p.add_argument("--baseline", action="store_true",
+                           help="write the ledger even if it gains entries (a first "
+                                "measurement); without it a rewrite may only shrink it")
             p.add_argument("--provenance", default=None,
                            help="the census's provenance.json (the commits it ran on); "
                                 "default: the checkouts' current HEADs")
