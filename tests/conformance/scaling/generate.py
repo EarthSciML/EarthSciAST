@@ -11,7 +11,8 @@ so the committed small fixtures can be checked against the generator
     generate.py --check
         regenerates the committed fixtures in memory and fails on any drift
     generate.py --write-fixtures
-        rewrites fixtures/ from the generator (then commit the result)
+        rewrites fixtures/ and the generated hand-loop sources from the
+        generator (then commit the result)
 
 Nothing here reads outside the repository: the reaction mechanism is vendored
 under vendor/, and the size ladders come from manifest.json.
@@ -261,8 +262,10 @@ def chemistry_grid(n):
     lon faces). This is the shape of tests/valid/advection_reaction_loaded_ic_bc.esm
     without loaded data.
     """
-    nlon = max(3, int(round(math.sqrt(n))))
-    nlat = max(1, int(round(n / nlon)))
+    # lon is twice lat, so the two extents never coincide: a binding matching
+    # a lifted species' grid axes to index sets by extent is never ambiguous.
+    nlon = max(3, int(round(math.sqrt(2 * n))))
+    nlat = max(2, int(round(n / nlon)))
     p = load_pollu()
     rs = {
         "reference": p["reference"],
@@ -409,12 +412,19 @@ def regrid(n):
         D(F_src[i]) = -kd * F_src[i]
         F_rg[j] = sum_i W[i,j] * F_src[i]
         D(F_tgt[j]) = F_rg[j] - F_tgt[j]
-    The source cells are the unit strips [i-1, i] x [0, 1]; the target cells
-    have boundaries at 0, 1.5, 2.5, ..., n - 0.5, n, so every target cell
-    overlaps two source cells fractionally except at the ends.
+    The source cells are the unit strips [i-1, i] x [0, 1]. The target grid
+    splits each pair of source cells [2m, 2m+2] at 2m+1.5, as the corpus
+    fixture does, so each target cell overlaps one or two source cells
+    fractionally and never straddles a broad-phase bin (dx = 2): the
+    bin-skolem candidate set keeps every overlapping pair, and the regrid
+    conserves mass. An odd last source cell is its own target cell.
     """
     src = [[[float(i), 0.0], [i + 1.0, 0.0], [i + 1.0, 1.0], [float(i), 1.0]] for i in range(n)]
-    bnd = [0.0] + [j + 0.5 for j in range(1, n)] + [float(n)]
+    bnd = [0.0]
+    for m in range(0, n - 1, 2):
+        bnd += [m + 1.5, m + 2.0]
+    if n % 2:
+        bnd.append(float(n))
     tgt = [[[bnd[j], 0.0], [bnd[j + 1], 0.0], [bnd[j + 1], 1.0], [bnd[j], 1.0]] for j in range(n)]
     S = {"from": "src_cells"}
     T = {"from": "tgt_cells"}
@@ -545,6 +555,7 @@ def regrid(n):
             "rhs": faq(op("-", ix("F_rg", "j"), ix("F_tgt", "j")), ["j"], {"j": T}),
         },
     ]
+    assert len(bnd) == n + 1
     desc = f"conservative regrid of {n} unit source strips onto {n} shifted target strips, applied every call"
     isets = {"coord": 2, "cell_verts": 4, "src_cells": n, "tgt_cells": n}
     return doc("regrid", desc, isets, {"Regrid": {"variables": v, "equations": eqs}}), {
@@ -573,8 +584,9 @@ def unstructured_gather(n):
     """A neighbour gather over an unstructured numbering of a periodic 2-D mesh.
 
     The cells of an s x s periodic grid are renumbered by a fixed permutation,
-    and the four neighbours of each cell are listed in an inline const table
-    nbr[c, k] (k = east, west, north, south). D(u[c]) = kappa * sum_k (u[nbr[c,k]] - u[c]):
+    and the four neighbours of each cell are listed in a const-defined table
+    nbr[c, k] (k = east, west, north, south; esm-spec 4.3.3 makes a variable
+    defined by a `const` node a const array). D(u[c]) = kappa * sum_k (u[nbr[c,k]] - u[c]):
     the indirect gather u[nbr[i,k]] of a finite-volume scheme on a mesh.
     """
     s = max(3, side_for(n, 2))
@@ -586,18 +598,19 @@ def unstructured_gather(n):
             me = perm[gi * s + gj]
             nb = [((gi + 1) % s, gj), ((gi - 1) % s, gj), (gi, (gj + 1) % s), (gi, (gj - 1) % s)]
             nbr[me] = [perm[a * s + b] + 1 for a, b in nb]
-    table = {"op": "const", "args": [], "value": nbr}
-    body = op("*", "kappa", op("-", ix("u", ix(table, "i", "k")), ix("u", "i")))
+    body = op("*", "kappa", op("-", ix("u", ix("nbr", "i", "k")), ix("u", "i")))
     model = {
         "variables": {
             "u": {"type": "unknown", "units": "1", "default": 1.0, "shape": ["cells"]},
+            "nbr": {"type": "unknown", "units": "1", "shape": ["cells", "nb"]},
             "kappa": {"type": "parameter", "units": "1", "default": 0.1},
         },
         "equations": [
+            {"lhs": "nbr", "rhs": {"op": "const", "args": [], "value": nbr}},
             {
                 "lhs": faq_lhs("u", ["i"], {"i": {"from": "cells"}}),
                 "rhs": faq(body, ["i"], {"i": {"from": "cells"}, "k": {"from": "nb"}}),
-            }
+            },
         ],
     }
     desc = f"four-neighbour gather over a permuted numbering of a {s}x{s} periodic mesh"
@@ -663,6 +676,69 @@ def scalar_chemistry(n):
         "scalar_chemistry", desc, None, {"Boxes": {"variables": variables, "equations": equations}}
     )
     return d, {"cells": boxes, "states": 20 * boxes, "boxes": boxes}
+
+
+def rust_pollu_box():
+    """The Rust hand loops' Pollu box, as straight-line code.
+
+    One box's mass-action right-hand side, written in exactly the fold order
+    of `scalar_chemistry`'s equations: per species, the reactions in mechanism
+    order, `+` folded left, a loss term negated, a stoichiometry other than
+    one multiplied in. A rate is evaluated once per reaction, which reads the
+    same bits as evaluating it per term.
+    """
+    rs = load_pollu()
+    species = list(rs["species"])
+    pos = {sp: k for k, sp in enumerate(species)}
+    lines = [
+        "// @generated by tests/conformance/scaling/generate.py --write-fixtures from",
+        "// tests/conformance/scaling/vendor/pollu_reaction_system.json. Do not edit by hand;",
+        "// `generate.py --check` fails when this file and the generator disagree.",
+        "",
+        "//! One Pollu box's mass-action right-hand side (20 species, 25 reactions).",
+        "",
+        f"pub const NSPEC: usize = {len(species)};",
+        "",
+        "/// The species, in the mechanism's declaration order (the tier's canonical order).",
+        f"pub const SPECIES: [&str; NSPEC] = [{', '.join(repr(sp).replace(chr(39), chr(34)) for sp in species)}];",
+        "",
+        "/// `d = f(c)` for one box, both in canonical species order.",
+        "#[allow(non_snake_case, clippy::too_many_lines)]",
+        "#[inline(always)]",
+        "pub fn box_rhs(c: &[f64; NSPEC], d: &mut [f64; NSPEC]) {",
+    ]
+    for pname, pv in rs["parameters"].items():
+        lines.append(f"    let {pname}: f64 = {float(pv['default'])!r};")
+    rate_of = {}
+    for k, r in enumerate(rs["reactions"]):
+        factors = [r["rate"]]
+        for sub in r.get("substrates") or []:
+            factors += [f"c[{pos[sub['species']]}]"] * int(sub["stoichiometry"])
+        # `*` is left-associative in Rust, which is the document's n-ary fold.
+        lines.append(f"    let r{k} = {' * '.join(factors)}; // {r['id']}")
+        rate_of[id(r)] = f"r{k}"
+    for sp in species:
+        ts = []
+        for r in rs["reactions"]:
+            net = sum(
+                x["stoichiometry"] for x in (r.get("products") or []) if x["species"] == sp
+            ) - sum(x["stoichiometry"] for x in (r.get("substrates") or []) if x["species"] == sp)
+            if net == 1:
+                ts.append(rate_of[id(r)])
+            elif net == -1:
+                ts.append(f"-{rate_of[id(r)]}")
+            elif net:
+                ts.append(f"{float(net)!r} * {rate_of[id(r)]}")
+        body = " + ".join(ts) if ts else "0.0"
+        lines.append(f"    d[{pos[sp]}] = {body}; // {sp}")
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+REPO = os.path.normpath(os.path.join(HERE, "..", "..", ".."))
+GENERATED_SOURCES = {
+    "pkg/earthsci-ast-rs/src/bin/earthsci-scaling-adapter-rust/pollu_box.rs": rust_pollu_box,
+}
 
 
 FAMILIES = {
@@ -774,6 +850,10 @@ def check(manifest):
             rel = os.path.relpath(os.path.join(root, name), FIXTURES)
             if rel != "index.json" and rel not in expected:
                 bad.append(f"fixture {rel} is not produced by the generator at a PR size")
+    for rel, emit in GENERATED_SOURCES.items():
+        path = os.path.join(REPO, rel)
+        if not os.path.exists(path) or open(path).read() != emit():
+            bad.append(f"generated source {rel} differs from the generator")
     for msg in bad:
         print(f"FAIL: {msg}", file=sys.stderr)
     if bad:
@@ -817,6 +897,9 @@ def main(argv=None):
         return check(manifest)
     if a.write_fixtures:
         write_tree(FIXTURES, planned(manifest, "pr"))
+        for rel, emit in GENERATED_SOURCES.items():
+            with open(os.path.join(REPO, rel), "w") as fh:
+                fh.write(emit())
         return 0
     if not a.out:
         ap.error("one of --out, --check, --write-fixtures is required")

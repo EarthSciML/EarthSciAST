@@ -69,6 +69,17 @@ name = "earthsci-inline-tests-adapter-rust"
 path = "src/bin/earthsci-inline-tests-adapter-rust.rs"
 required-features = ["conformance-adapters"]
 
+# The scaling conformance tier's adapter (tests/conformance/scaling/): build
+# time, tape length, first-call latency, steady right-hand-side time, bytes
+# allocated per call and the hand-written reference loops, one document per
+# child process. Its own directory because it carries the reference loops and a
+# counting global allocator, which must not leak into any other binary.
+# `parallel` (rayon) runs the threaded reference loops.
+[[bin]]
+name = "earthsci-scaling-adapter-rust"
+path = "src/bin/earthsci-scaling-adapter-rust/main.rs"
+required-features = ["conformance-adapters", "parallel"]
+
 # Diagnostics for the XLA backend: which device the client picked, what the
 # `xla` crate reaches for multi-device work, and what a host round trip costs
 # against a device-resident evaluation. Not part of any conformance run.

@@ -21,7 +21,8 @@ tests/conformance/scaling/
 ├── manifest.json        # families, size ladders, gates and thresholds, the ledger
 ├── check.py             # applies the gates and the ledger to result files
 ├── test_check.py        # the checker's own test, on canned result files
-├── sweep.sbatch         # the Slurm driver for the full ladder
+├── sweep.sh             # the Slurm driver for the full ladder (submits sweep.sbatch jobs)
+├── sweep.sbatch         # one sweep job: one family, every size, one thread mode
 ├── vendor/
 │   └── pollu_reaction_system.json   # the Pollu mechanism, so generation needs no EarthSciModels
 └── fixtures/            # the generated documents at the PR sizes (N = 10^2, 10^3), committed
@@ -47,9 +48,9 @@ python3 tests/conformance/scaling/generate.py --write-fixtures   # after changin
 # Rust adapter (one child process per document, so a timeout or an
 # out-of-memory kill is recorded and the run carries on):
 cd pkg/earthsci-ast-rs
-cargo run --release --features conformance-adapters --bin earthsci-scaling-adapter-rust -- \
+cargo run --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust -- \
     --index ../../tests/conformance/scaling/fixtures/index.json --output rust-serial.json
-cargo run --release --features conformance-adapters --bin earthsci-scaling-adapter-rust -- \
+cargo run --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust -- \
     --index "$BUILD/scaling/index.json" --output rust-threaded.json --threads 16
 
 # Gates:
@@ -57,8 +58,13 @@ python3 tests/conformance/scaling/check.py rust-serial.json --gates deterministi
 python3 tests/conformance/scaling/check.py rust-serial.json rust-threaded.json      # sweep
 ```
 
-`sweep.sbatch` runs the whole Rust ladder, serial and threaded, on an
-exclusive Slurm node and then the checker; its header says how to submit it.
+`sweep.sh` runs the whole Rust ladder on Slurm: one exclusive job per family
+and thread mode, then one job running `check.py` over every result. Its header
+lists the environment it reads (`SCALING_BUILD` is required):
+
+```bash
+SCALING_BUILD=/scratch/$USER/scaling tests/conformance/scaling/sweep.sh
+```
 
 ## Families
 
@@ -109,7 +115,7 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
 
 ```json
 {"binding": "rust", "compiler": "native", "threads": 1, "commit": "<sha>", "host": "<hostname>",
- "target": "x86_64-unknown-linux-gnu",
+ "target": "x86_64-unknown-linux-gnu", "load_average": "0.02 0.10 0.31", "cpus": 128,
  "results": [
    {"family": "stencil_2d", "n": 10000, "n_cells": 10000, "n_states": 10000,
     "status": "ok",
@@ -128,6 +134,7 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
 
 | field | meaning |
 |---|---|
+| `load_average`, `cpus` (file level) | how busy the machine was when the run started, and its core count: a timing run wants a machine nothing else shares (an exclusive Slurm node, or an idle one) |
 | `status` | `"ok"`, `"refused"` (the compiler refused the document by name; `reason` is its text) or `"error"` (anything else, including a timeout or a killed child process; `reason` says which) |
 | `n`, `n_cells`, `n_states` | the nominal ladder size, the actual cell count, the state-vector length |
 | `build_s` | wall seconds of `esm_problem` (reading and parsing the file included), after a warm-up build of a trivial document in the same process |
@@ -139,6 +146,12 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
 | `hand_loop_max_abs_diff` | max over the state of `abs(dy_hand - dy_compiler)` |
 | `dy_max_abs` | max over the state of `abs(dy_compiler)`, the scale for the hand-loop check |
 | `interpreter_max_abs_diff` | max `abs(dy_compiler - dy_interpreter)` at the same point, or `null` when the adapter did not run the interpreter (it does so only up to a size cap, since the interpreter walks per cell) |
+| `hand_loop_threads` | threads the hand loop used (a prefix scan's running sum is sequential, so its threaded reference is the serial loop) |
+| `hand_loop_checked_against` | `"native"`, or `"interpreter"` when native refused the document: the hand loop is then checked against the interpreter's `dy` (up to the size cap), so the reference is known good before native learns the construct |
+
+Adapters may add fields of their own (the Rust adapter adds `code_size_detail`,
+`hand_loop_error`, `interpreter_error`); the checker ignores fields it does not
+know.
 
 ## Gates
 
@@ -149,13 +162,21 @@ Thresholds live in `manifest.json` under `gates`.
 | `builds` | deterministic | `status` is `"ok"`. A refusal or error fails it, and the other gates are then unmeasurable for that (family, N) |
 | `code_size_flat` | deterministic | `code_size` is identical at every N that built (slack 0: no measure has a legitimate wobble yet) |
 | `no_steady_alloc` | deterministic | `allocs_per_call` is 0 where measurable |
-| `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast |
+| `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast. Checked against the interpreter when native refused |
 | `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns, over the smallest and largest N that built with at most 10^6 cells |
 | `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise) |
 
-The deterministic gates run in PR CI at the PR sizes. The timing gates need a
-clean machine and the big sizes: they run on the scheduled workflow and through
-`sweep.sbatch`, and are reported but do not block merges until plan phase 6.
+The deterministic gates run in PR CI at the PR sizes (the Rust leg of
+`conformance-testing.yml`; `generate.py --check` runs in its lint job). The
+timing gates need a clean machine and the big sizes: they run on the scheduled
+`scaling-sweep.yml` (with `check.py --report-timing`, so they print but never
+go red) and through `sweep.sh`, and do not block merges until plan phase 6.
+The ledger's timing entries come from `sweep.sh` on an exclusive node.
+
+The Rust wasm suite (`pkg/earthsci-ast-rs/tests/wasm_suite.rs`) also builds
+every committed fixture here under native and the interpreter on wasm32 and
+requires bit-identical right-hand sides; a native refusal passes there only
+where the Rust ledger has a `builds` entry for it.
 
 ## The known-failure ledger
 

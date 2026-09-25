@@ -14,7 +14,8 @@ Prints one row per (file, family, N, gate) with the measured value and one of
               reported, not red, because timing noise can flip it
     skip      not measurable (the document did not build, or a field is null)
     MISSING   --require named a (family, N) no result file covers   (red)
-Exit status 0 when nothing is red, 1 otherwise. The gates, thresholds and the
+Exit status 0 when nothing is red, 1 otherwise. With --report-timing the
+timing gates are printed but never red. The gates, thresholds and the
 ledger live in manifest.json; README.md says what each gate means.
 """
 
@@ -101,7 +102,7 @@ def per_result_checks(run, r, gates, family_spec):
                 n,
                 "hand_loop_agrees",
                 DETERMINISTIC,
-                None if (not ok or d is None) else d <= tol,
+                None if d is None else d <= tol,
                 d,
                 f"tol {tol:.3g}",
             )
@@ -220,6 +221,12 @@ def main(argv=None):
         choices=["pr", "sweep"],
         help="every (family, N) of this size list must have a result",
     )
+    ap.add_argument(
+        "--report-timing",
+        action="store_true",
+        help="evaluate and print the timing gates, but never go red on one "
+        "(the scheduled sweep, until plan phase 6 makes them block)",
+    )
     ap.add_argument("--json", help="also write the rows as JSON here")
     a = ap.parse_args(argv)
 
@@ -231,6 +238,8 @@ def main(argv=None):
 
     checks = []
     red = []
+    have = {}
+    first_run = {}
     for path in a.results:
         run = load(path)
         run["_path"] = path
@@ -243,12 +252,18 @@ def main(argv=None):
             checks += per_result_checks(run, r, gates, fams[r["family"]])
         for fam, rs in by_family.items():
             checks += family_checks(run, fam, rs, gates, fams[fam])
-        if a.require:
-            have = {(r["family"], r.get("n")) for r in run["results"]}
+        group = (run.get("binding"), run.get("compiler"), threads_label(run))
+        first_run.setdefault(group, run)
+        have.setdefault(group, set()).update((r["family"], r.get("n")) for r in run["results"])
+
+    # --require is per (binding, compiler, thread mode) across every file,
+    # since a sweep writes one file per family.
+    if a.require:
+        for group, got in have.items():
             for fam, spec in fams.items():
                 for n in spec["pr_sizes" if a.require == "pr" else "sizes"]:
-                    if (fam, n) not in have:
-                        c = Check(run, fam, n, "present", DETERMINISTIC, False, None)
+                    if (fam, n) not in got:
+                        c = Check(first_run[group], fam, n, "present", DETERMINISTIC, False, None)
                         c.outcome = "MISSING"
                         checks.append(c)
 
@@ -319,6 +334,8 @@ def main(argv=None):
         )
 
     for r in rows:
+        if a.report_timing and r["kind"] == TIMING:
+            continue
         if r["outcome"] == "FAIL":
             red.append(
                 f"{r['family']} N={r['n']} {r['gate']}: fails and is not in the ledger ({fmt(r['measured'])})"

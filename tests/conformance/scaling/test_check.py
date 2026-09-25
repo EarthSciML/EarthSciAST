@@ -108,6 +108,8 @@ def main():
     slow = [result("stencil_1d", 10000), result("stencil_1d", 100000, steady_rhs_s=1.0)]
     code, o = run(slow, [])
     assert code == 1 and o[("stencil_1d", 100000, "speed")] == "FAIL", o
+    code, o = run(slow, [], "--report-timing")
+    assert code == 0 and o[("stencil_1d", 100000, "speed")] == "FAIL", o
     code, o = run(slow, [], "--gates", "deterministic")
     assert code == 0 and ("stencil_1d", 100000, "speed") not in o, o
 
@@ -119,6 +121,24 @@ def main():
     # --require names what is missing.
     code, o = run(ok, [], "--require", "pr")
     assert code == 1 and o[("stencil_2d", 100, "present")] == "MISSING", o
+    # --require looks across files: one file per family is a complete sweep.
+    with open(os.path.join(HERE, "manifest.json")) as fh:
+        fams = json.load(fh)["families"]
+    with tempfile.TemporaryDirectory() as d:
+        paths = []
+        for fam, spec in fams.items():
+            rs = [result(fam, n) for n in spec["pr_sizes"]]
+            path = os.path.join(d, f"{fam}.json")
+            with open(path, "w") as fh:
+                json.dump(
+                    {"binding": "julia", "compiler": "native", "threads": 1, "results": rs}, fh
+                )
+            paths.append(path)
+        out = os.path.join(d, "rows.json")
+        check.main([*paths, "--require", "pr", "--json", out])
+        with open(out) as fh:
+            outcomes = {r["outcome"] for r in json.load(fh)["rows"]}
+        assert "MISSING" not in outcomes, outcomes
     print("test_check: ok")
 
 

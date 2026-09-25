@@ -240,6 +240,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./scripts/check-version-sync.sh
 
+      # The scaling tier commits its PR-size documents, so the wasm build can
+      # embed them, and the Rust hand loop's generated Pollu box. Both must be
+      # what tests/conformance/scaling/generate.py produces today, or the
+      # gates below would measure documents the generator no longer writes.
+      # The checker's own test rides along: pure Python, and instant.
+      - name: Scaling tier fixtures match the generator
+        if: ${{ !cancelled() }}
+        run: |
+          python3 tests/conformance/scaling/generate.py --check
+          python3 tests/conformance/scaling/test_check.py
+
   # Run each language's individual tests first.
   # Matrices absorbed from the per-language CI workflows (gt-9ju):
   #   python-package.yml, rust-ci.yml, julia-ci.yml, go-ci.yml, npm-publish.yml
@@ -593,6 +604,25 @@ jobs:
             cargo test --verbose --features \
               conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio
           fi
+
+      # The scaling tier's DETERMINISTIC gates at the PR sizes
+      # (tests/conformance/scaling/README.md): each document builds or is a
+      # ledgered refusal, the tape length is flat in N, a steady right-hand
+      # side allocates nothing, and each hand-written loop reproduces native's
+      # dy. The known-failure ledger in its manifest.json applies, one way: an
+      # unledgered failure is red, and so is a ledger entry that now passes.
+      # The test step above already built the adapter binary with this exact
+      # feature list, so this costs the run and nothing else. The timing gates
+      # need a clean machine and the big sizes; they run in scaling-sweep.yml.
+      - name: Scaling tier (deterministic gates, PR sizes)
+        if: ${{ !cancelled() && matrix.rust == 'stable' }}
+        run: |
+          cargo run --features \
+            conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio \
+            --bin earthsci-scaling-adapter-rust -- \
+            --index ../../tests/conformance/scaling/fixtures/index.json --output scaling-rust.json
+          python3 ../../tests/conformance/scaling/check.py scaling-rust.json \
+            --gates deterministic --require pr
 
       # `cargo test` does NOT build bench targets -- that needs `--benches` or
       # `--all-targets` -- so nothing above ever compiles benches/benchmarks.rs,

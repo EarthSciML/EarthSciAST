@@ -104,22 +104,22 @@
    "family": "chemistry_grid",
    "n": 100,
    "path": "chemistry_grid/chemistry_grid_N100.esm",
-   "n_cells": 100,
-   "n_states": 2000,
+   "n_cells": 98,
+   "n_states": 1960,
    "shape": {
-    "nlon": 10,
-    "nlat": 10
+    "nlon": 14,
+    "nlat": 7
    }
   },
   {
    "family": "chemistry_grid",
    "n": 1000,
    "path": "chemistry_grid/chemistry_grid_N1000.esm",
-   "n_cells": 992,
-   "n_states": 19840,
+   "n_cells": 990,
+   "n_states": 19800,
    "shape": {
-    "nlon": 32,
-    "nlat": 31
+    "nlon": 45,
+    "nlat": 22
    }
   },
   {

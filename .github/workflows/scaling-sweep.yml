@@ -1,0 +1,147 @@
+name: Scaling sweep (scheduled)
+
+# The scaling tier's FULL ladder (tests/conformance/scaling/README.md): every
+# family from 10^2 to 10^6 cells, serially and threaded, with the timing gates
+# (build cost per state, right-hand side against the hand-written loop) as
+# well as the deterministic ones.
+#
+# Reported, not merge-blocking: a hosted runner is not a clean machine, and
+# the plan makes the timing gates block only at its phase 6. So the report job
+# runs check.py with --report-timing: a timing failure is printed, and only a
+# deterministic one (an unledgered refusal, tape growth, steady allocation, a
+# hand loop that disagrees, a missing result, or a stale ledger entry) turns
+# the run red. The numbers that go into the ledger come from the Slurm driver
+# (tests/conformance/scaling/sweep.sh) on an exclusive node, not from here.
+
+on:
+  schedule:
+    - cron: '23 5 * * 1'  # Mondays, 05:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scaling-sweep-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_VERSION: 'stable'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.family }})
+    runs-on: ubuntu-latest
+    # A family's ladder, serial then threaded, with each document capped at
+    # 15 minutes by the adapter itself (a timeout is recorded, not fatal).
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [stencil_1d, stencil_2d, stencil_3d, stencil_4d, transport_3d, chemistry_grid,
+                 prefix_scan, source_receptor, regrid, unstructured_gather, scalar_chemistry]
+    env:
+      CARGO_INCREMENTAL: '0'
+    defaults:
+      run:
+        working-directory: pkg/earthsci-ast-rs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Registry and git checkouts only, for the reason the rust-tests job in
+      # conformance-testing.yml gives: a cached `target` costs more disk than
+      # it saves.
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-scaling-${{ hashFiles('pkg/earthsci-ast-rs/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-scaling-
+
+      - name: Build the adapter (release)
+        run: cargo build --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust
+
+      - name: Generate the ladder
+        run: |
+          python3 ../../tests/conformance/scaling/generate.py \
+            --out "$RUNNER_TEMP/scaling" --family "${{ matrix.family }}"
+
+      - name: Measure (serial)
+        run: |
+          mkdir -p ../../scaling-results
+          target/release/earthsci-scaling-adapter-rust \
+            --index "$RUNNER_TEMP/scaling/index.json" --timeout-s 900 \
+            --output "../../scaling-results/rust-${{ matrix.family }}-t1.json"
+
+      - name: Measure (threaded)
+        run: |
+          target/release/earthsci-scaling-adapter-rust \
+            --index "$RUNNER_TEMP/scaling/index.json" --timeout-s 900 --threads "$(nproc)" \
+            --output "../../scaling-results/rust-${{ matrix.family }}-threaded.json"
+
+      - name: Upload results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaling-rust-${{ matrix.family }}
+          path: scaling-results/
+
+  report:
+    name: Gates and ledger
+    needs: rust
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: scaling-rust-*
+          path: scaling-results
+          merge-multiple: true
+
+      - name: check.py (timing gates reported, not red)
+        run: |
+          set +e
+          python3 tests/conformance/scaling/check.py scaling-results/*.json \
+            --report-timing --require sweep --json scaling-check.json > scaling-check.txt 2>&1
+          status=$?
+          {
+            echo '## Scaling sweep'
+            echo
+            echo '```'
+            cat scaling-check.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat scaling-check.txt
+          exit $status
+
+      - name: Upload the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaling-check
+          path: |
+            scaling-check.txt
+            scaling-check.json
