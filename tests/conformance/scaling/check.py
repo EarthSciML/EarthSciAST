@@ -12,7 +12,9 @@ Prints one row per (file, family, N, gate) with the measured value and one of
               passes: remove the entry                              (red)
     fixed?    a ledger entry covers a TIMING gate that now passes:
               reported, not red, because timing noise can flip it
-    skip      not measurable (the document did not build, or a field is null)
+    skip      not measurable: the document did not build, or the result
+              declares the measure unmeasurable (a null measure on a
+              document that built is a FAIL: a missing measurement)
     MISSING   --require named a (family, N) no result file covers   (red)
 Exit status 0 when nothing is red, 1 otherwise. With --report-timing the
 timing gates are printed but never red. The gates, thresholds and the
@@ -64,6 +66,28 @@ class Check:
         self.max_n = n
 
 
+def measure(r, ok, field):
+    """A deterministic gate's measure: ``(value, passed_if_null, note)``.
+
+    ``passed_if_null`` is what the gate says when the measure is null: ``None``
+    (skip) when the document did not build, or when the result's
+    ``unmeasurable`` map names the field; ``False`` otherwise, since a document
+    that built and carries no measurement is an adapter that failed to measure,
+    and a skip there would leave the gate unchecked."""
+    v = r.get(field)
+    if v is not None or not ok:
+        return v, None, ""
+    why = (r.get("unmeasurable") or {}).get(field)
+    if why is not None:
+        return v, None, f"unmeasurable: {why}"
+    # What the adapter said went wrong: the Rust adapter's `hand_loop_error`,
+    # the Julia adapter's note in `reason`.
+    detail = (r.get("hand_loop_error") if field == "hand_loop_max_abs_diff" else None) or r.get(
+        "reason"
+    )
+    return v, False, "missing measurement" + (f": {str(detail)[:160]}" if detail else "")
+
+
 def per_result_checks(run, r, gates, family_spec):
     fam, n = r["family"], r.get("n", r.get("n_cells"))
     excl = family_spec.get("gate_exclusions", {})
@@ -81,7 +105,7 @@ def per_result_checks(run, r, gates, family_spec):
         )
     )
     if "no_steady_alloc" in gates and "no_steady_alloc" not in excl:
-        a = r.get("allocs_per_call")
+        a, if_null, note = measure(r, ok, "allocs_per_call")
         lim = gates["no_steady_alloc"]["max_bytes_per_call"]
         out.append(
             Check(
@@ -90,12 +114,13 @@ def per_result_checks(run, r, gates, family_spec):
                 n,
                 "no_steady_alloc",
                 DETERMINISTIC,
-                None if (not ok or a is None) else a <= lim,
+                if_null if (not ok or a is None) else a <= lim,
                 a,
+                note,
             )
         )
     if "hand_loop_agrees" in gates and "hand_loop_agrees" not in excl:
-        d = r.get("hand_loop_max_abs_diff")
+        d, if_null, note = measure(r, ok, "hand_loop_max_abs_diff")
         scale = max(1.0, abs(r.get("dy_max_abs") or 0.0))
         tol = gates["hand_loop_agrees"]["rel_tol"] * scale
         out.append(
@@ -105,9 +130,9 @@ def per_result_checks(run, r, gates, family_spec):
                 n,
                 "hand_loop_agrees",
                 DETERMINISTIC,
-                None if d is None else d <= tol,
+                if_null if d is None else d <= tol,
                 d,
-                f"tol {tol:.3g}",
+                note or f"tol {tol:.3g}",
             )
         )
     if "speed" in gates and "speed" not in excl:

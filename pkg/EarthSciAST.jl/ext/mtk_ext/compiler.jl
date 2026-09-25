@@ -708,6 +708,9 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
     insp = inspect === nothing ? EarthSciAST.BuildInspection() : inspect
     report = _mtk_report(flat, system, rev)
     insp.compiler_report = report
+    # This record now describes the `:mtk` build, whose observeds its backend
+    # answers: no earlier problem's read files a row into this report.
+    lock(() -> (insp.observed_build = Ref{Any}(nothing)), insp.observed_lock)
     merge!(insp.params, Dict{String,Float64}(
         k => Float64(v) for (k, v) in resolved if v isa Real))
     param_classes = _mtk_param_classes(flat)

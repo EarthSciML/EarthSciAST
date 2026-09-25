@@ -170,6 +170,21 @@ starts `out of memory:`, `timeout:` or `the child process ...`, and the
 family's larger sizes as `not attempted: ...`. Such a `builds` failure goes in
 the ledger like any other.
 
+**A null measure on a document that built is a missing measurement.** For a
+result with `status: "ok"`, a null `allocs_per_call` or `hand_loop_max_abs_diff`
+fails its gate (`no_steady_alloc`, `hand_loop_agrees`), with the adapter's
+`hand_loop_error` or `reason` as the note: an adapter that built the document
+and did not measure it has failed, and a skip there would leave the gate
+unchecked. The one exception is a measure the result itself declares
+unmeasurable, in an optional `unmeasurable` map from field name to why
+(`"unmeasurable": {"allocs_per_call": "no counting allocator on this target"}`);
+the gate then reports `skip`. Neither adapter writes that map today: the Rust
+adapter binary always installs its counting allocator, Julia's `@allocated`
+always answers, and both bindings have a hand loop for every family. For a
+document that did not build, every measure is unmeasured and its gates skip
+(`hand_loop_agrees` is still checked against the interpreter where the adapter
+ran it).
+
 ## Gates
 
 Thresholds live in `manifest.json` under `gates`.
@@ -178,7 +193,7 @@ Thresholds live in `manifest.json` under `gates`.
 |---|---|---|
 | `builds` | deterministic | `status` is `"ok"`. A refusal or error fails it, and the other gates are then unmeasurable for that (family, N) |
 | `code_size_flat` | deterministic | `code_size` is identical at every N that built (slack 0: no measure has a legitimate wobble yet) |
-| `no_steady_alloc` | deterministic | `allocs_per_call` is 0 where measurable |
+| `no_steady_alloc` | deterministic | `allocs_per_call` is 0 (null on a built document fails, unless the result declares it unmeasurable) |
 | `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast. Checked against the interpreter when native refused |
 | `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns, over the smallest and largest N that built with at most 10^6 cells |
 | `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise; `source_receptor`, whose work is N^2, lowers it to 2000 through `gate_overrides`) |
