@@ -6,8 +6,8 @@
 //! (CONST / SEGMENT / CONTINUOUS), liveness-based slab coloring, `dy` scatter
 //! descriptors and observed exports (Step 3a), and executes it as the
 //! DEFAULT production RHS hot path through the fast slab executor in
-//! [`exec`] (Step 3b): `simulate` builds the program once per solve and each
-//! segment's RHS scratch runs it. Which evaluator runs is the caller's
+//! [`exec`] (Step 3b): a model builds the program once, keeps it
+//! ([`TapeCache`]), and each segment's RHS scratch runs it. Which evaluator runs is the caller's
 //! choice of compiler (API_SPEC §5.8) and nothing else: `native` is this
 //! tape, `interpreter` is the per-cell oracle. Under `native` the tape also
 //! serves the finite-difference Jacobian closure and the observed passes
@@ -79,9 +79,11 @@ pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
 pub(crate) use ir::*;
 use lower::build_tape_program;
 
-use super::ArrayCompiled;
+use super::{AlgebraicRule, ArrayCompiled};
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt;
+use std::rc::Rc;
 
 /// Human-readable summary of one tape build. Public so external diagnostics
 /// (the `tape_report` example) can print it; the program itself stays
@@ -191,8 +193,8 @@ impl fmt::Display for TapeBuildReport {
 
 /// Where ONE rule of a model landed, for `compiler_report` (API_SPEC §5.8).
 ///
-/// Deliberately plain data rather than a borrow of the program: the program is
-/// built and discarded, and the record outlives it on the Problem.
+/// Deliberately plain data rather than a borrow of the program: the record
+/// lives on the Problem, apart from the program the model keeps.
 #[derive(Clone, Debug)]
 pub(crate) struct TapeRuleRecord {
     /// The rule's variable name, as the compiled model spells it (the caller
@@ -253,9 +255,91 @@ pub(crate) fn make_report(prog: &TapeProgram, vn_hits: (usize, usize)) -> TapeBu
     }
 }
 
+/// A tape program this model built, with its report, kept so that every pass
+/// that runs the tape — the construction-time gate, a state-free evaluation,
+/// each solve, the diagnostic seams — runs the one program instead of
+/// building its own.
+///
+/// What a build reads, and so what invalidates a kept program:
+///
+/// * the compiled model itself — its rules, state layout, parameter NAMES and
+///   const-array registry. These are fixed when the model is constructed and
+///   nothing mutates them through `&self`; a changed document is a new model,
+///   with an empty cache.
+/// * the DISCRETE-forcing set, which decides each observed's cadence tier;
+/// * the precision in force (`crate::precision::active`), which rounds every
+///   literal the build folds;
+/// * whether the tape serves the observed passes (the runtime mode), which
+///   decides what it exports.
+///
+/// The last three are the key an entry is looked up by. Parameter VALUES and
+/// the forcing buffer's contents are not inputs: the program reads parameters
+/// on every call, and it cannot read the forcing buffer at all. So a new
+/// parameter vector, or new forcing data, needs no rebuild — the CONST and
+/// SEGMENT sections the program primes from them are per-scratch state, re-run
+/// when the parameter vector changes.
+pub(crate) struct TapeCache {
+    entries: RefCell<Vec<CachedTape>>,
+}
+
+struct CachedTape {
+    discrete_forcing: Vec<String>,
+    precision: crate::precision::Precision,
+    serves_passes: bool,
+    prog: Rc<TapeProgram>,
+    report: Rc<TapeBuildReport>,
+}
+
+impl TapeCache {
+    pub(crate) fn new() -> Self {
+        TapeCache {
+            entries: RefCell::new(Vec::new()),
+        }
+    }
+}
+
 impl ArrayCompiled {
-    /// Build the tape program for this model. Called once per solve by
-    /// `simulate_core` (Step 3b) and by the diagnostic entry points below.
+    /// The production tape for `discrete_forcing`, built on first use and then
+    /// served from [`TapeCache`]: see there for what a kept program depends on.
+    pub(crate) fn tape(
+        &self,
+        discrete_forcing: &HashSet<String>,
+    ) -> (Rc<TapeProgram>, Rc<TapeBuildReport>) {
+        let mut forcing: Vec<String> = discrete_forcing.iter().cloned().collect();
+        forcing.sort();
+        let precision = crate::precision::active();
+        let serves_passes = self.tape_serves_passes();
+        if let Some(e) = self.tape_cache.entries.borrow().iter().find(|e| {
+            e.discrete_forcing == forcing
+                && e.precision == precision
+                && e.serves_passes == serves_passes
+        }) {
+            return (Rc::clone(&e.prog), Rc::clone(&e.report));
+        }
+        let (prog, report) = self.build_tape(discrete_forcing);
+        let (prog, report) = (Rc::new(prog), Rc::new(report));
+        self.tape_cache.entries.borrow_mut().push(CachedTape {
+            discrete_forcing: forcing,
+            precision,
+            serves_passes,
+            prog: Rc::clone(&prog),
+            report: Rc::clone(&report),
+        });
+        (prog, report)
+    }
+
+    /// The observed rules a taped scratch carries beside its program, shared
+    /// rather than copied per install.
+    pub(super) fn shared_observed_rules(&self) -> Rc<Vec<AlgebraicRule>> {
+        Rc::clone(
+            self.shared_observed
+                .get_or_init(|| Rc::new(self.observed_rules.clone())),
+        )
+    }
+
+    /// Build the tape program for this model, uncached. Production passes go
+    /// through [`Self::tape`]; this is the build itself, for the tests that
+    /// take a program apart.
     pub(crate) fn build_tape(
         &self,
         discrete_forcing: &HashSet<String>,
@@ -281,7 +365,42 @@ impl ArrayCompiled {
     /// [`TapeBuildReport`]). Evaluation is unchanged: this is a build-and-
     /// discard entry for inspection tooling (`examples/tape_report.rs`).
     pub fn debug_build_tape_report(&self) -> TapeBuildReport {
-        self.build_tape(&HashSet::new()).1
+        (*self.tape(&HashSet::new()).1).clone()
+    }
+
+    /// The program as text, one instruction per line with its section and
+    /// the box it defines, then the fused groups (`TAPE_LISTING=1` in
+    /// `examples/tape_report.rs`). Diagnostics only.
+    #[doc(hidden)]
+    pub fn debug_tape_listing(&self) -> String {
+        use std::fmt::Write;
+        let (prog, _) = self.tape(&HashSet::new());
+        let mut out = String::new();
+        for (pc, ins) in prog.instrs.iter().enumerate() {
+            let boxed = ins
+                .out()
+                .map(|o| {
+                    let d = &prog.slots[o as usize];
+                    format!(" -> s{o}{:?}", &d.shape[..])
+                })
+                .unwrap_or_default();
+            let _ = writeln!(out, "{pc:4} {:?} {ins:?}{boxed}", prog.section_of(pc));
+        }
+        for (i, fs) in prog.fused.iter().enumerate() {
+            let _ = writeln!(
+                out,
+                "fused {i}: box {:?}, {} micro-ops, {} inputs ({} shifted), {} scalars, {} outputs, {} runs, reduce {:?}",
+                &fs.shape[..],
+                fs.micro.len(),
+                fs.inputs.len(),
+                fs.inputs.iter().filter(|x| x.shifted_ix.is_some()).count(),
+                fs.scalars.len(),
+                fs.outputs.len(),
+                fs.runs.len(),
+                fs.reduce
+            );
+        }
+        out
     }
 
     /// Where every rule of this model LANDS, in program order — the per-rule
@@ -293,13 +412,13 @@ impl ArrayCompiled {
     /// the rules that DID lower, nor at which cadence they run. This walks the
     /// program's whole rule table instead, so a taped rule is named too.
     ///
-    /// Build-and-discard, like [`Self::debug_build_tape_report`]: the program
-    /// the solve runs is compiled separately.
+    /// Read off the same kept program the solve runs ([`Self::tape`]).
     pub(crate) fn tape_rule_records(
         &self,
         discrete_forcing: &HashSet<String>,
     ) -> (Vec<TapeRuleRecord>, TapeBuildReport) {
-        let (prog, report) = self.build_tape(discrete_forcing);
+        let (prog, report) = self.tape(discrete_forcing);
+        let report = (*report).clone();
         let records = prog
             .rules
             .iter()
@@ -326,7 +445,7 @@ impl ArrayCompiled {
     /// Step 4 diagnostic: dump per-group shape statistics of the fused
     /// program to stderr (`examples/fuse_stats.rs`).
     pub fn debug_dump_fuse_stats(&self) {
-        let (prog, report) = self.build_tape(&HashSet::new());
+        let (prog, report) = self.tape(&HashSet::new());
         eprintln!("{report}");
         let mut by_regs: Vec<&FusedSpec> = prog.fused.iter().collect();
         by_regs.sort_by_key(|f| std::cmp::Reverse(f.n_regs));

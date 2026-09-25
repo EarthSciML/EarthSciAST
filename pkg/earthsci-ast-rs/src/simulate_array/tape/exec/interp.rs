@@ -35,6 +35,7 @@ pub(super) fn run_range(
         pending,
         plan_full,
         fregs,
+        fscratch,
         exports_active,
         simd,
         ..
@@ -469,7 +470,7 @@ pub(super) fn run_range(
             }
             Instr::Fused { spec } => {
                 let fs = &prog.fused[*spec as usize];
-                unsafe { exec_fused(fs, env, slab_ptr, slot_off, obs, fregs, simd) };
+                unsafe { exec_fused(fs, env, slab_ptr, slot_off, obs, fregs, fscratch, simd) };
             }
             Instr::DyWrite { write } => {
                 let w = &prog.dy_writes[*write as usize];

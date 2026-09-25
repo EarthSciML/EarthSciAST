@@ -74,11 +74,44 @@ pub(crate) fn namespace_scope<'a>(
     out
 }
 
+/// A build's set of resolvable names, as [`canonicalize_override_keys`] asks
+/// about it: whether a key is one of them, and which of them carry a key as a
+/// dotted suffix. A name table answers from its keys; the state vector answers
+/// from its per-array layout, so its per-cell names never have to exist as a
+/// table.
+pub(crate) trait KnownNames {
+    /// Whether `key` is exactly one of the names.
+    fn contains(&self, key: &str) -> bool;
+    /// Every name carrying `key` as a PROPER dotted suffix
+    /// ([`is_dotted_suffix`]), in any order, each once.
+    fn suffix_owners(&self, key: &str) -> Vec<String>;
+}
+
+impl KnownNames for HashMap<String, usize> {
+    fn contains(&self, key: &str) -> bool {
+        self.contains_key(key)
+    }
+
+    fn suffix_owners(&self, key: &str) -> Vec<String> {
+        self.keys()
+            .filter(|n| is_dotted_suffix(n, key))
+            .cloned()
+            .collect()
+    }
+}
+
+/// Whether `key` is one of `name`'s [`dotted_suffixes`]: what follows one of
+/// its `.` separators.
+pub(crate) fn is_dotted_suffix(name: &str, key: &str) -> bool {
+    name.len() > key.len()
+        && name.ends_with(key)
+        && name.as_bytes()[name.len() - key.len() - 1] == b'.'
+}
+
 /// Rewrite each caller override key onto the build-resolved name it designates
 /// (esm-spec §6.6.2 "Unrecognized override keys"), or report why it designates
-/// none. `known` is the build's own name -> slot table — flattening-qualified
-/// parameters (`M.A`) or state elements (`M.u`, `M.u[1]`); only its KEYS are
-/// consulted. `namespaces` is the component / subsystem scope rule 2 validates
+/// none. `known` is the build's own set of names — flattening-qualified
+/// parameters (`M.A`) or state elements (`M.u`, `M.u[1]`). `namespaces` is the component / subsystem scope rule 2 validates
 /// a key's leading segments against ([`namespace_scope`]).
 ///
 /// Precedence, matching the Julia tree-walk `_canonicalize_override_keys` and
@@ -116,8 +149,8 @@ pub(crate) fn namespace_scope<'a>(
 ///
 /// Errors are reported for the lexicographically first offending key so the
 /// diagnostic does not depend on `HashMap` iteration order.
-pub(crate) fn canonicalize_override_keys(
-    known: &HashMap<String, usize>,
+pub(crate) fn canonicalize_override_keys<K: KnownNames + ?Sized>(
+    known: &K,
     namespaces: &HashSet<String>,
     overrides: &HashMap<String, f64>,
     renames: &HashMap<String, String>,
@@ -139,61 +172,53 @@ pub(crate) fn canonicalize_override_keys(
         resolved = resolve_merged_renames(overrides, renames);
         &resolved
     };
-    // Dotted suffix -> every qualified name carrying it as one. Rule 3 admits
-    // EVERY proper suffix, not only the trailing segment, so `P.sub.g` is
-    // reachable as `sub.g` as well as `g` — a suffix carried by two or more
-    // names is ambiguous rather than tie-broken.
-    let mut groups: HashMap<&str, Vec<&str>> = HashMap::new();
-    for n in known.keys() {
-        for s in dotted_suffixes(n) {
-            groups.entry(s).or_default().push(n.as_str());
-        }
-    }
-
     // Which key(s) CLAIMED each resolved name. An exact hit (rule 1) is
     // recorded separately from the non-exact claims (rules 2 and 3) because it
     // WINS rather than collides.
-    let mut out: HashMap<&str, f64> = HashMap::new();
+    let mut out: HashMap<String, f64> = HashMap::new();
     let mut exact: HashSet<&str> = HashSet::new();
-    let mut claims: HashMap<&str, Vec<(&str, f64)>> = HashMap::new();
+    let mut claims: HashMap<String, Vec<(&str, f64)>> = HashMap::new();
     let mut failures: Vec<OverrideKeyError> = Vec::new();
     for (k, v) in overrides {
-        if let Some((n, _)) = known.get_key_value(k.as_str()) {
-            exact.insert(n.as_str()); // rule 1: exact hit
-            out.insert(n.as_str(), *v);
+        if known.contains(k) {
+            exact.insert(k.as_str()); // rule 1: exact hit
+            out.insert(k.clone(), *v);
             continue;
         }
-        let name: &str = if let Some(suffix) = dotted_suffix_hit(known, namespaces, k) {
-            suffix // rule 2: longest known dotted suffix under a real namespace
-        } else if let Some(cands) = groups.get(k.as_str()) {
-            if cands.len() == 1 {
-                cands[0] // rule 3: unique dotted-suffix alias
-            } else {
-                let mut candidates: Vec<String> = cands.iter().map(|s| (*s).to_string()).collect();
-                candidates.sort();
-                failures.push(OverrideKeyError::Ambiguous {
-                    key: k.clone(),
-                    candidates,
-                }); // rule 4
-                continue;
-            }
+        let name: String = if let Some(suffix) = dotted_suffix_hit(known, namespaces, k) {
+            suffix.to_string() // rule 2: longest known dotted suffix under a real namespace
         } else {
-            failures.push(OverrideKeyError::Unknown(k.clone())); // rule 5
-            continue;
+            // Rule 3 admits EVERY proper suffix, not only the trailing
+            // segment, so `P.sub.g` is reachable as `sub.g` as well as `g` — a
+            // suffix carried by two or more names is ambiguous rather than
+            // tie-broken.
+            let mut cands = known.suffix_owners(k);
+            match cands.len() {
+                0 => {
+                    failures.push(OverrideKeyError::Unknown(k.clone())); // rule 5
+                    continue;
+                }
+                1 => cands.pop().expect("one candidate"), // rule 3: unique dotted-suffix alias
+                _ => {
+                    cands.sort();
+                    failures.push(OverrideKeyError::Ambiguous {
+                        key: k.clone(),
+                        candidates: cands,
+                    }); // rule 4
+                    continue;
+                }
+            }
         };
         claims.entry(name).or_default().push((k.as_str(), *v));
     }
     for (name, mut cs) in claims {
-        if exact.contains(name) {
+        if exact.contains(name.as_str()) {
             continue; // rule 1 already identified this name outright
         }
         if cs.len() > 1 {
             let mut keys: Vec<String> = cs.iter().map(|(k, _)| (*k).to_string()).collect();
             keys.sort();
-            failures.push(OverrideKeyError::Collision {
-                name: name.to_string(),
-                keys,
-            });
+            failures.push(OverrideKeyError::Collision { name, keys });
             continue;
         }
         out.insert(name, cs.pop().expect("one claim").1);
@@ -202,7 +227,7 @@ pub(crate) fn canonicalize_override_keys(
         failures.sort_by(|a, b| override_key_of(a).cmp(override_key_of(b)));
         return Err(failures.swap_remove(0));
     }
-    Ok(out.into_iter().map(|(n, v)| (n.to_string(), v)).collect())
+    Ok(out)
 }
 
 /// Rule 2: the LONGEST dotted suffix of a dotted key `k` — every `<segment>.`
@@ -213,18 +238,18 @@ pub(crate) fn canonicalize_override_keys(
 /// `sub` are real, a bare `A` tries nothing (rules 3–5 handle it), and
 /// `Doc.Left.solo` in a build with no component `Doc` is rejected rather than
 /// re-pointed at `Left.solo`.
-fn dotted_suffix_hit<'a>(
-    known: &'a HashMap<String, usize>,
+fn dotted_suffix_hit<'k, K: KnownNames + ?Sized>(
+    known: &K,
     namespaces: &HashSet<String>,
-    k: &str,
-) -> Option<&'a str> {
+    k: &'k str,
+) -> Option<&'k str> {
     let mut rest = k;
     while let Some((head, tail)) = rest.split_once('.') {
         if !namespaces.contains(head) {
             return None;
         }
-        if let Some((name, _)) = known.get_key_value(tail) {
-            return Some(name.as_str());
+        if known.contains(tail) {
+            return Some(tail);
         }
         rest = tail;
     }

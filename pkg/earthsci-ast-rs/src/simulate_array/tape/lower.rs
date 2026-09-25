@@ -3122,7 +3122,7 @@ pub(super) fn build_tape_program(
         // coupling reorders.
         let name = match rule {
             RhsRule::Scalar { slot, .. } | RhsRule::IndexedScalar { slot, .. } => {
-                match compiled.scalar_state_names.get(*slot) {
+                match super::super::layout::slot_name(&compiled.var_shapes, *slot) {
                     Some(var) => format!("D({var})"),
                     None => format!("D(slot {slot})"),
                 }

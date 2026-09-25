@@ -207,6 +207,18 @@ pub struct VarShape {
     pub flat_offset: usize,
 }
 
+/// One state variable's declared default (esm-spec §6.3): one value
+/// broadcast over every cell (or none declared), or inline array data.
+#[derive(Debug, Clone)]
+pub(crate) enum StateDefault {
+    /// The same value in every cell, or `None` when the variable declares no
+    /// default.
+    Scalar(Option<f64>),
+    /// One value per cell, ROW-major over the variable's shape (the authored
+    /// nesting's order), which the slots' column-major order gathers from.
+    Field(Vec<f64>),
+}
+
 /// One contracted (reduction) index's loop bound in a `faq`
 /// einsum. Either a static inclusive interval, or a **ragged** bound whose
 /// upper limit `offsets[of…]` is gathered per output tuple at eval time
@@ -631,14 +643,20 @@ pub struct ArrayCompiled {
     /// merge moved resolves instead of silently designating nothing. Empty on
     /// the `from_model` path, which has no coupling to have renamed anything.
     merged_renames: HashMap<String, String>,
+    /// Every state variable's slot range — its base slot in the flat state
+    /// vector and its extents — in slot order. This is the whole state
+    /// layout: a slot's name (`"u[2,3]"`, `"s"`) is computed from it
+    /// (`layout::slot_name`, `layout::lookup_slot`) rather than stored.
     var_shapes: IndexMap<String, VarShape>,
-    /// Names of every scalar slot (`"u[1]"`, `"u[2,3]"`, `"s"`, etc.),
-    /// parallel to the flat state vector.
-    scalar_state_names: Vec<String>,
-    /// Name → flat slot lookup.
-    scalar_state_index: HashMap<String, usize>,
-    /// Per-slot default value (from variable.default or None).
-    state_defaults: Vec<Option<f64>>,
+    /// Every slot's name, parallel to the flat state vector, built the first
+    /// time [`Self::state_variable_names`] is asked. Nothing inside the build
+    /// or a solve's setup reads it; it is the public surface's spelling.
+    state_names: std::cell::OnceCell<Vec<String>>,
+    /// The same names qualified by `namespace`, built on first ask
+    /// ([`Self::qualified_state_names`]).
+    qualified_state_names: std::cell::OnceCell<Vec<String>>,
+    /// Each state variable's default, parallel to `var_shapes`.
+    state_defaults: Vec<StateDefault>,
     param_names: Vec<String>,
     param_index: HashMap<String, usize>,
     param_defaults: Vec<Option<f64>>,
@@ -738,6 +756,12 @@ pub struct ArrayCompiled {
     /// of resolving them again. See [`driver::FieldIcMemo`].
     #[cfg(feature = "solve")]
     field_ic_memo: RefCell<Option<driver::FieldIcMemo>>,
+    /// The tape programs this model has built ([`tape::TapeCache`], which says
+    /// what a kept program depends on).
+    tape_cache: tape::TapeCache,
+    /// `observed_rules` behind one `Rc`, for the taped scratches that carry
+    /// them beside the program.
+    shared_observed: std::cell::OnceCell<Rc<Vec<AlgebraicRule>>>,
 }
 
 /// A reuse pool of `f64` backing buffers for vectorized kernel intermediates.

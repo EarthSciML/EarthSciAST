@@ -208,6 +208,9 @@ pub(crate) struct TapeExec {
     /// Step 4: chunk register file for fused groups
     /// (`max n_regs over specs × FCHUNK` doubles, recycled across groups).
     fregs: Vec<f64>,
+    /// A fused group's resolved operands, sized for the largest group so a
+    /// call never allocates.
+    fscratch: fused::FusedScratch,
     /// Step 4 export demotion: `Export` instructions only execute when
     /// something can read the published arrays — a fallback rule is present,
     /// or a caller explicitly requested them
@@ -308,6 +311,7 @@ impl TapeExec {
             primed_param_epoch: 0,
             primed_forcing_epoch: 0,
             fregs: vec![0.0f64; max_fregs * FCHUNK],
+            fscratch: fused::FusedScratch::for_program(prog),
             exports_active: n_fallback > 0,
             n_taped: prog.rules.len() - n_fallback,
             n_fallback,

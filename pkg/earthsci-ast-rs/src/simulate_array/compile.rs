@@ -891,8 +891,6 @@ impl ArrayCompiled {
 
         let SlotTables {
             var_shapes,
-            scalar_state_names,
-            scalar_state_index,
             state_defaults,
             n_states,
         } = slots;
@@ -912,8 +910,8 @@ impl ArrayCompiled {
             #[cfg(feature = "xla")]
             xla_rhs: std::cell::OnceCell::new(),
             var_shapes,
-            scalar_state_names,
-            scalar_state_index,
+            state_names: std::cell::OnceCell::new(),
+            qualified_state_names: std::cell::OnceCell::new(),
             state_defaults,
             param_names,
             param_index,
@@ -932,6 +930,8 @@ impl ArrayCompiled {
             merged_renames: HashMap::new(),
             #[cfg(feature = "solve")]
             field_ic_memo: RefCell::new(None),
+            tape_cache: tape::TapeCache::new(),
+            shared_observed: std::cell::OnceCell::new(),
         })
     }
 }
@@ -1365,16 +1365,6 @@ fn capture_ic_scope_defs(
     out
 }
 
-/// The ROW-major (last index fastest) linear offset of the 0-based multi-index
-/// `multi` in an array of extents `shape` — the order an authored nested JSON
-/// array reads in, which is not this runtime's column-major slot order.
-fn row_major_offset(multi: &[usize], shape: &[usize]) -> usize {
-    multi
-        .iter()
-        .zip(shape.iter())
-        .fold(0usize, |acc, (i, n)| acc * n + i)
-}
-
 /// Lower every SHAPED parameter whose value the document itself supplies —
 /// INLINE ARRAY DATA (a row-major nested JSON array on its `default`, esm-spec
 /// §6.3, and the `parameter_overrides` a test resolves into it, §6.6.2) or a
@@ -1679,17 +1669,16 @@ fn partition_states(
 
 /// Flat state-vector tables built by [`build_slot_tables`] (stage 4),
 /// mirroring the corresponding [`ArrayCompiled`] fields: per-variable
-/// shape/offset descriptions plus the per-slot name / index / default tables.
+/// shape/offset descriptions and per-variable defaults. Per-slot names are
+/// not built: they follow from the layout (see `layout::slot_name`).
 struct SlotTables {
     var_shapes: IndexMap<String, VarShape>,
-    scalar_state_names: Vec<String>,
-    scalar_state_index: HashMap<String, usize>,
-    state_defaults: Vec<Option<f64>>,
+    state_defaults: Vec<StateDefault>,
     n_states: usize,
 }
 
-/// (4) Build the flat offset and scalar-slot names per state variable
-/// (column-major slot enumeration).
+/// (4) Build the flat offset and extents per state variable (column-major
+/// slot enumeration within each), with each variable's default.
 ///
 /// # Errors
 ///
@@ -1701,9 +1690,7 @@ fn build_slot_tables(
     shape_map: &HashMap<String, Vec<usize>>,
 ) -> Result<SlotTables, CompileError> {
     let mut var_shapes: IndexMap<String, VarShape> = IndexMap::new();
-    let mut scalar_state_names: Vec<String> = Vec::new();
-    let mut scalar_state_index: HashMap<String, usize> = HashMap::new();
-    let mut state_defaults: Vec<Option<f64>> = Vec::new();
+    let mut state_defaults: Vec<StateDefault> = Vec::with_capacity(final_states.len());
     let mut flat_offset: usize = 0;
 
     for name in final_states {
@@ -1714,15 +1701,13 @@ fn build_slot_tables(
             vec![1i64; shape.len()]
         };
         let var = model.variables.get(name);
-        let default = var.and_then(|v| v.default_scalar());
         // A SHAPED unknown may declare its whole initial profile as INLINE
-        // ARRAY DATA (esm-spec §6.3) instead of one broadcast scalar. Flatten it
-        // ROW-major (the authored nesting's order) and read each cell at its own
-        // multi-index below — the slot enumeration here is COLUMN-major, so the
-        // two orders coincide only in rank 1 and the value must be gathered, not
-        // zipped. A ragged array or a shape that disagrees with the slots is a
-        // build error, never a silently mis-seeded state vector.
-        let default_field = match var.and_then(|v| v.default_array()) {
+        // ARRAY DATA (esm-spec §6.3) instead of one broadcast scalar. It is
+        // kept ROW-major (the authored nesting's order) and gathered into the
+        // column-major slots when the initial state is built. A ragged array
+        // or a shape that disagrees with the slots is a build error, never a
+        // silently mis-seeded state vector.
+        let default = match var.and_then(|v| v.default_array()) {
             Some(Ok((dshape, values))) => {
                 if dshape != shape {
                     return Err(CompileError::build_err(format!(
@@ -1730,39 +1715,21 @@ fn build_slot_tables(
                          not match the resolved grid shape {shape:?} (esm-spec §6.6.2)"
                     )));
                 }
-                Some(values)
+                if shape.is_empty() {
+                    StateDefault::Scalar(var.and_then(|v| v.default_scalar()))
+                } else {
+                    StateDefault::Field(values)
+                }
             }
             Some(Err(e)) => {
                 return Err(CompileError::build_err(format!(
                     "state '{name}': {e} (esm-spec §6.3)"
                 )));
             }
-            None => None,
+            _ => StateDefault::Scalar(var.and_then(|v| v.default_scalar())),
         };
         let total = shape.iter().copied().product::<usize>().max(1);
-        if shape.is_empty() {
-            scalar_state_names.push(name.clone());
-            scalar_state_index.insert(name.clone(), flat_offset);
-            state_defaults.push(default);
-        } else {
-            // Generate per-element names in column-major order.
-            for flat in 0..total {
-                let multi = flat_to_multi_col_major(flat, &shape);
-                let idx_str = multi
-                    .iter()
-                    .zip(origin.iter())
-                    .map(|(v, o)| (v + *o as usize).to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let slot_name = format!("{name}[{idx_str}]");
-                scalar_state_names.push(slot_name.clone());
-                scalar_state_index.insert(slot_name, flat_offset + flat);
-                state_defaults.push(match default_field.as_ref() {
-                    Some(values) => Some(values[row_major_offset(&multi, &shape)]),
-                    None => default,
-                });
-            }
-        }
+        state_defaults.push(default);
         var_shapes.insert(
             name.clone(),
             VarShape {
@@ -1776,8 +1743,6 @@ fn build_slot_tables(
 
     Ok(SlotTables {
         var_shapes,
-        scalar_state_names,
-        scalar_state_index,
         state_defaults,
         n_states: flat_offset,
     })
@@ -2642,7 +2607,7 @@ fn build_rhs_rules(
 ) -> Result<Vec<RhsRule>, CompileError> {
     let var_shapes = &slots.var_shapes;
     let mut rhs_rules: Vec<RhsRule> = Vec::new();
-    let mut covered_slots: HashSet<usize> = HashSet::new();
+    let mut covered_slots = SlotCoverage::new(slots.n_states);
 
     // Declared index-set axis NAMES of every array-shaped variable (state /
     // parameter / observed), used to lower a whole-array `D(state)` RHS into
@@ -2693,7 +2658,7 @@ fn build_rhs_rules(
 fn lower_faq_derivative(
     d: DerivArrayop,
     var_shapes: &IndexMap<String, VarShape>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     let DerivArrayop {
@@ -2713,21 +2678,13 @@ fn lower_faq_derivative(
         )));
     }
     // Mark the covered slots.
-    let shape = &var_shapes[&var];
-    for tuple in cartesian_range(&ranges) {
-        // Map to column-major flat offset using actual LHS index expressions.
-        let binds: HashMap<String, i64> = idx_names
-            .iter()
-            .zip(tuple.iter())
-            .map(|(n, v)| (n.clone(), *v))
-            .collect();
-        let actual_multi: Vec<i64> = lhs_idx_exprs
-            .iter()
-            .map(|e| eval_simple_index(e, &binds))
-            .collect();
-        let flat = multi_to_flat_col_major(&actual_multi, &shape.shape, &shape.origin);
-        covered_slots.insert(shape.flat_offset + flat);
-    }
+    mark_faq_lhs_coverage(
+        &var_shapes[&var],
+        &idx_names,
+        &ranges,
+        &lhs_idx_exprs,
+        covered_slots,
+    );
     rhs_rules.push(RhsRule::ArrayLoop {
         var_name: var,
         output_idx_names: idx_names,
@@ -2749,7 +2706,7 @@ fn lower_indexed_derivative(
     indices: &[i64],
     rhs: &Expr,
     var_shapes: &IndexMap<String, VarShape>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     // Indexed: find slot.
@@ -2777,7 +2734,7 @@ fn lower_bare_derivative(
     model: &Model,
     array_axes: &HashMap<String, Vec<String>>,
     var_shapes: &IndexMap<String, VarShape>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     let shape = var_shapes
@@ -2848,7 +2805,7 @@ fn lower_wholearray_producer_lift(
     shape: &VarShape,
     target_axes: Option<&[String]>,
     array_axes: &HashMap<String, Vec<String>>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     let ndim = shape.shape.len();
@@ -2863,9 +2820,7 @@ fn lower_wholearray_producer_lift(
     let plan = build_gather_plan(rhs, array_axes, &var, target_axes, false)?;
     let body = index_array_leaves_by_loops(rhs, array_axes, Some(&plan), &loops);
     let total = shape.shape.iter().copied().product::<usize>().max(1);
-    for flat in 0..total {
-        covered_slots.insert(shape.flat_offset + flat);
-    }
+    covered_slots.insert_range(shape.flat_offset, total);
     rhs_rules.push(RhsRule::ArrayLoop {
         var_name: var.clone(),
         output_idx_names: loops,
@@ -2903,7 +2858,7 @@ fn lower_wholearray_percell(
     target_axes: Option<&[String]>,
     array_axes: &HashMap<String, Vec<String>>,
     var_shapes: &IndexMap<String, VarShape>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     let plan = build_gather_plan(rhs, array_axes, &var, target_axes, true)?;
@@ -2919,9 +2874,7 @@ fn lower_wholearray_percell(
             .collect();
         let lhs_idx_exprs: Vec<Expr> = loops.iter().map(|l| Expr::Variable(l.clone())).collect();
         let body = index_array_leaves(rhs, array_axes, Some(&plan), CellCoords::Loops(&loops));
-        for flat in 0..total {
-            covered_slots.insert(shape.flat_offset + flat);
-        }
+        covered_slots.insert_range(shape.flat_offset, total);
         rhs_rules.push(RhsRule::ArrayLoop {
             var_name: var,
             output_idx_names: loops,
@@ -2962,14 +2915,12 @@ fn lower_wholearray_percell(
 fn cover_held_at_ic_slots(
     held_at_ic: &HashSet<String>,
     var_shapes: &IndexMap<String, VarShape>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
 ) {
     for name in held_at_ic {
         if let Some(vs) = var_shapes.get(name) {
             let total = vs.shape.iter().copied().product::<usize>().max(1);
-            for k in 0..total {
-                covered_slots.insert(vs.flat_offset + k);
-            }
+            covered_slots.insert_range(vs.flat_offset, total);
         }
     }
 }
@@ -2977,16 +2928,17 @@ fn cover_held_at_ic_slots(
 /// (8) Every state slot must have a defining equation.
 fn check_state_slots_covered(
     slots: &SlotTables,
-    covered_slots: &HashSet<usize>,
+    covered_slots: &SlotCoverage,
 ) -> Result<(), CompileError> {
-    for (i, name) in slots.scalar_state_names.iter().enumerate() {
-        if !covered_slots.contains(&i) {
-            return Err(CompileError::build_err(format!(
+    match covered_slots.first_uncovered() {
+        Some(slot) => {
+            let name = slot_name(&slots.var_shapes, slot).unwrap_or_default();
+            Err(CompileError::build_err(format!(
                 "State slot '{name}' has no defining derivative equation."
-            )));
+            )))
         }
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Evaluate a state-free build-time expression (grid geometry, §11.4.1
