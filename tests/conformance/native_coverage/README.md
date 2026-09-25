@@ -33,8 +33,12 @@ records what each answered:
 Only the **front door** counts. Julia's census falls back to `_build_evaluator`
 for a document that needs providers or a model selection `esm_problem` cannot
 guess, but a document only the fallback builds is not one a caller can build, so
-it counts as not building. Rust builds through `esm_problem` with the default
-`Rhs::Auto`.
+it counts as not building. After a build, Julia's census also calls the
+problem's right-hand side `f!` on `u0`; a build whose call then throws counts as
+not building either (code `rhs_call_failed`), since a missing evaluation rule
+can fire at call time rather than at construction. Rust builds through
+`esm_problem` with the default `Rhs::Auto` and does not call the right-hand
+side.
 
 A document is a **native coverage gap** when the interpreter builds it and
 native does not. Two kinds of document are never gaps, whatever they answer,
@@ -71,8 +75,8 @@ An entry has the shape of a compiler-agreement named exclusion, keyed by
 document instead of by fixture: `path` is relative to the repository root, or
 `EarthSciModels/…` for a document in that repository; `code` is native's error
 code (`compiler_refused_rule` for a refusal, the error's own code or type
-otherwise, `timeout` / `crashed` / `killed` for a document the census could not
-finish); `rule` is the refused rule where the refusal names one; `reason` is the
+otherwise, `rhs_call_failed` for a Julia build whose first right-hand-side call
+threw); `rule` is the refused rule where the refusal names one; `reason` is the
 message, squashed to one line. Entries are sorted by path and unique.
 `measured` records what the baseline ran on and is not compared.
 
@@ -91,6 +95,18 @@ It is RED when:
 
 The `reason` text is not compared: messages are reworded without the refusal
 changing.
+
+**A document the census could not finish is inconclusive.** A Julia worker
+that runs past the timeout (`timeout`) or dies (`crashed`), and a Rust process
+that is killed (`killed`), finish or not depending on the machine's load, so
+they say nothing about native's coverage. Such a document is reported
+(`INCONCLUSIVE` in the check's output, `inconclusive` in its JSON report, and
+`inconclusive (excluded)` in the counts) and kept out of the comparison
+whichever compiler it was: it is never a new refusal, a ledger entry for it is
+neither confirmed nor stale and its code is not compared, and `write-ledger`
+keeps such an entry as it was. The ledger therefore never holds a `timeout`,
+`crashed` or `killed` entry. The census still has a record for the document,
+so it is not "census incomplete".
 
 **The one-way rule is enforced on the file too.** `write-ledger` rewrites a
 ledger from a census and refuses to add an entry the committed ledger lacks; it
@@ -148,18 +164,29 @@ Rust builds, under both compilers, all 62 documents Julia reports as library
 fragments, so there they count under "both build" and are never gaps either.
 No document timed out or crashed in either census.
 
+**Since the baseline.** The scaling tier's committed fixtures
+(`tests/conformance/scaling/fixtures/`, 22 documents) and two
+`scalar_operator_semantics` fixtures landed after this census, so the first
+scheduled census (`native-coverage.yml` run 36175185154, 1,250 documents) saw
+four Rust gaps the baseline did not: the scaling tier's `regrid` and
+`unstructured_gather` fixtures at both PR sizes, which the scaling tier's own
+Rust ledger already lists (phase 3). They were added to `rust.json` then,
+which is the one time the Rust ledger has grown. On those 1,250 documents
+Rust counts 837 both build, **79 native gaps**, 130 both fail and 204 invalid
+fixtures; the Julia census matched its ledger unchanged.
+
 **Julia's three** are per-cell setup evaluations that strict `native` refuses
 rather than walking the tree once per cell: a setup-time `makearray` whose
 compile-once form declined (`build_once_spatial_ode.esm`), and two array
 initial conditions written as a coordinate expression the compile-once seed
 declined (`ic_param_override.esm`, `pde_inline_assertions_exec.esm`).
 
-**Rust's seventy-five**, by what the tape cannot lower:
+**Rust's seventy-nine**, by what the tape cannot lower:
 
 | Documents | Reason |
 |---|---|
 | 14 | the whole-rule lowering meets a name it cannot resolve: a loaded forcing field (the EarthSciModels data loaders), a coupled or scoped reference, a loop index |
-| 13 | a geometry kernel, `polygon_intersection_area` or `intersect_polygon` |
+| 15 | a geometry kernel, `polygon_intersection_area` or `intersect_polygon` |
 | 9 | a variable the tape cannot bind, fed by a loader or a provider (the pipeline's per-cell routes) |
 | 9 | a recurrence (a causal self-reference), which needs a sequential sweep |
 | 8 | a constant-array gather out of range, which native refuses at build and the interpreter reaches only when it evaluates |
@@ -168,4 +195,5 @@ declined (`ic_param_override.esm`, `pde_inline_assertions_exec.esm`).
 | 4 | `reshape`, `transpose` or `concat` |
 | 3 | a `faq` with an empty output box, or a `makearray` with an empty region |
 | 2 | a ragged (non-static) contraction dimension |
+| 2 | a gather through a neighbour table, whose index is neither an affine or periodic map of an output index nor a constant (the scaling tier's `unstructured_gather`) |
 | 3 | one each: `ifelse` branches of different shapes under a runtime condition, a variable with its own `element_type`, and a reduction with a filter |

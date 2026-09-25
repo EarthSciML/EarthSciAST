@@ -1751,8 +1751,11 @@ pub fn esm_problem<'a>(
             // evaluator whatever the compiler, and under a strict one it
             // stopped at the first observed it had to walk per cell.
             if let Some(r) = &prepared.refused {
+                // The walk stopped at its first cell (`StopAtFirstCell`).
                 let reason = match &r.route {
-                    crate::prepare::Route::PerCell(why) => why.clone(),
+                    crate::prepare::Route::PerCell(why) => {
+                        format!("{why}; {}", crate::simulate_array::ONE_CELL_NOTE)
+                    }
                     _ => String::new(),
                 };
                 return Err(SimulateError::Compile(
@@ -2396,13 +2399,14 @@ fn build_compiler_report(
             if compiler.is_strict()
                 && let Some(reason) = reason
             {
+                // The walk stopped at its first cell (`field_ic_records`).
                 return Err(SimulateError::Compile(
                     crate::compile_error::CompileError::CompilerRefusedRule {
                         compiler: compiler.as_str(),
                         kind: r.kind,
                         rule: qualify(model, &r.name),
                         tier: "const",
-                        reason,
+                        reason: format!("{reason}; {}", crate::simulate_array::ONE_CELL_NOTE),
                     },
                 ));
             }
@@ -2832,7 +2836,7 @@ fn bind_providers(
     // where §2.5.2 puts the gated fetch — and never again.
     let providers = std::mem::take(&mut opts.providers);
     let mut exec = crate::provider::RefreshExecutor::from_providers(providers);
-    let forcing = compiled.forcing_handle();
+    let forcing = compiled.forcing_buffer();
     exec.materialize_const(&forcing)
         .map_err(|e| SimulateError::ProviderError {
             name: "<const-loader>".into(),
@@ -2891,7 +2895,7 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
             let sol = {
                 match (&prob.refresh, prob.discrete_forcing.is_empty()) {
                     (Some(exec), false) => {
-                        let forcing = compiled.forcing_handle();
+                        let forcing = compiled.forcing_buffer();
                         let mut exec = exec.borrow_mut();
                         let refresh_fn = |t: f64| -> Result<(), SimulateError> {
                             exec.refresh_at(t, &forcing).map(|_| ()).map_err(|e| {
