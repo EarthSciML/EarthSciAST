@@ -49,6 +49,48 @@ pub(crate) fn visit_values(root: &Value, f: &mut impl FnMut(&str, &Value)) {
     go(root, &mut String::new(), f);
 }
 
+/// The path (in [`visit_values`]'s spelling) of the FIRST value, in its
+/// pre-order, that `hit` accepts; `None` when none does.
+///
+/// For the load-time checks that look for one offending node: the path is
+/// assembled in one reused buffer as the walk descends, and only the hit's is
+/// copied out, so a clean document costs no string per node.
+pub(crate) fn find_value_path(root: &Value, hit: &mut impl FnMut(&Value) -> bool) -> Option<String> {
+    fn go(v: &Value, path: &mut String, hit: &mut impl FnMut(&Value) -> bool) -> bool {
+        if hit(v) {
+            return true;
+        }
+        match v {
+            Value::Array(arr) => {
+                for (i, child) in arr.iter().enumerate() {
+                    use std::fmt::Write;
+                    let len = path.len();
+                    let _ = write!(path, "/{i}");
+                    if go(child, path, hit) {
+                        return true;
+                    }
+                    path.truncate(len);
+                }
+            }
+            Value::Object(obj) => {
+                for (k, child) in obj {
+                    let len = path.len();
+                    path.push('/');
+                    path.push_str(k);
+                    if go(child, path, hit) {
+                        return true;
+                    }
+                    path.truncate(len);
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+    let mut path = String::new();
+    go(root, &mut path, hit).then_some(path)
+}
+
 /// Mutable pre-order visit: `f` sees each value BEFORE its children, so when
 /// `f` replaces a value, the walk descends into the replacement's children
 /// (the replacement itself is not re-visited).
@@ -114,6 +156,16 @@ mod tests {
                 ("/a".to_string(), json!(true)),
             ]
         );
+    }
+
+    /// The first hit in pre-order, with the path `visit_values` would give it.
+    #[test]
+    fn find_value_path_returns_the_first_hit_in_pre_order() {
+        let doc = json!({"b": [1, {"op": "x"}], "a": {"op": "x"}});
+        let mut is_x = |v: &Value| v.get("op").and_then(|o| o.as_str()) == Some("x");
+        assert_eq!(find_value_path(&doc, &mut is_x), Some("/b/1".to_string()));
+        assert_eq!(find_value_path(&json!({"op": "x"}), &mut is_x), Some(String::new()));
+        assert_eq!(find_value_path(&json!([1, 2]), &mut is_x), None);
     }
 
     /// A replacement installed by the visitor is descended into, not
