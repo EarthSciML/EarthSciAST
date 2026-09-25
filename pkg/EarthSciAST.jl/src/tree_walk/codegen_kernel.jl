@@ -1301,11 +1301,19 @@ function _cellset_outs_disjoint!(seen::Set{Int}, cs::_CellSet)
             push!(seen, o)
         end
     else
-        for idxs in Iterators.product(rg...)
+        # Rank above 3: an odometer over the box, dim 1 fastest.
+        idx = Int[first(r) for r in rg]
+        for _ in 1:prod(length, rg)
             o = b
-            for d in 1:nd; o += idxs[d]*st[d]; end
+            for d in 1:nd; o += idx[d]*st[d]; end
             o in seen && return false
             push!(seen, o)
+            d = 1
+            while d <= nd
+                idx[d] < last(rg[d]) && (idx[d] += 1; break)
+                idx[d] = first(rg[d])
+                d += 1
+            end
         end
     end
     return true
