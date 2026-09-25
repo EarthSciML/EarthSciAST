@@ -6,14 +6,13 @@
 # build_evaluator entry points, and evaluate_expr.
 # ========================================================================
 
-# One `observed_field` answer: the build it belongs to, the forcing epoch it was
-# computed at (`_FORCING_EPOCH`) and the field. The field is state-free, so it
-# moves only when a live buffer is refreshed in place. The build is named by the
-# problem's `run_file` slot — each build allocates its own and `remake` shares
-# it — so a record reused for a second build, or a second problem, never
-# answers with the first one's field.
+# One `observed_field` answer: the forcing epoch it was computed at
+# (`_FORCING_EPOCH`) and the field. The field is state-free, so it moves only
+# when a live buffer is refreshed in place. It is filed under the build it
+# belongs to, named by the problem's `run_file` slot — each build allocates its
+# own and `remake` shares it — so a record reused for a second build, or a
+# second problem, never answers with the first one's field.
 struct _ObservedMemo
-    build::Base.RefValue{Any}
     epoch::UInt64
     value::Any
 end
@@ -108,11 +107,18 @@ mutable struct BuildInspection
     # built it — the seam used to hang off the out-of-place build product alone.
     forcing_buffers::NamedTuple
     forcing_buffer_index::Dict{String,Int}
-    # `observed_field(prob, name)` answers, keyed by the requested name (see
-    # `_ObservedMemo`). Emptied when a build starts, and read and written under
-    # `observed_lock`, since two tasks may read one problem at once.
-    observed_memo::Dict{String,_ObservedMemo}
+    # `observed_field(prob, name)` answers, keyed by the build (the problem's
+    # `run_file` slot) and the requested name (see `_ObservedMemo`), so two
+    # problems sharing this record do not evict each other's. Emptied when a
+    # build starts, and read and written under `observed_lock`, since two tasks
+    # may read one problem at once.
+    observed_memo::Dict{Tuple{Base.RefValue{Any},String},_ObservedMemo}
     observed_lock::ReentrantLock
+    # The `run_file` slot of the problem whose build this record describes:
+    # the one whose reads file `:observed` rows into `compiler_report`. A
+    # problem built earlier with the same record still reads through it, but
+    # its rows would land in another build's report.
+    observed_build::Base.RefValue{Any}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -122,7 +128,8 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Symbol}(),
                                     CompilerReport(:native),
                                     NamedTuple(), Dict{String,Int}(),
-                                    Dict{String,_ObservedMemo}(), ReentrantLock())
+                                    Dict{Tuple{Base.RefValue{Any},String},_ObservedMemo}(),
+                                    ReentrantLock(), Ref{Any}(nothing))
 
 """
     DiscreteMaterializer()
@@ -2004,7 +2011,7 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
             # before the refusal is raised.
             percell(first(todo)[1])
             _refuse_percell_evaluation(rule, "the faq-valued initialization-equation seed",
-                                       length(todo))
+                                       length(todo); one_cell = true)
         end
         _record_rule!(rule, :equation, :setup_percell)
         for (idx_tuple, slot) in todo
@@ -2287,7 +2294,7 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
                     "tree walk at each data refresh and at each run's start — a " *
                     "per-cell evaluation that esm-libraries-spec §2.5.10 puts under " *
                     "the same rule as the right-hand side. Build with " *
-                    "compiler=:interpreter to run it")
+                    "compiler=:interpreter to run it. " * _ONE_CELL_NOTE)
             end
             l = isempty(idx_tuple) ? 1 : lin[idx_tuple...]
             push!(fills, (cvec, l, node))
@@ -3415,8 +3422,10 @@ function _build_evaluator_impl(model::Model;
     insp = get(kwargs, :inspect, nothing)
     # A record passed to a second build describes that build from here on, so
     # nothing the previous one answered may be served out of it.
-    insp isa BuildInspection &&
-        lock(() -> empty!(insp.observed_memo), insp.observed_lock)
+    insp isa BuildInspection && lock(insp.observed_lock) do
+        empty!(insp.observed_memo)
+        insp.observed_build = Ref{Any}(nothing)
+    end
     return _with_compiler_plan(plan) do
         _with_build_record(record) do
             try
@@ -4259,6 +4268,10 @@ function _faq_debug_label(lhs_body, idx_names::Vector{String}, range_iters)
     return "D($(name))[$(axes)]"
 end
 
+# The most contraction terms the diagnostic build ahead of a retired-loop
+# refusal unrolls in full (see `_compile_faq_equation!`).
+const _REFUSAL_DIAGNOSTIC_TERMS = 1024
+
 function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         array_contractions, covered::BitVector,
         eq::Equation, resolved_obs::Dict{String,ASTExpr},
@@ -4581,14 +4594,20 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # `:interpreter` by the routing table.) The first output cell is built
     # first, the way the interpreter builds every cell — unrolled — so that a
     # body no form can build (an out-of-range const gather, an undeclared name)
-    # raises the document's own error rather than a refusal.
+    # raises the document's own error rather than a refusal. Unrolling costs
+    # a tree per term, so past `_REFUSAL_DIAGNOSTIC_TERMS` terms only the first
+    # and last value of each contracted index are built: an undeclared name
+    # shows in any term, and an affine gather is out of range at an end if
+    # anywhere.
     if retire_loop && _compiler_is_strict()
         if all(!isempty, range_iters)
+            diag_const = prod(length(c) for c in contract_const) <= _REFUSAL_DIAGNOSTIC_TERMS ?
+                contract_const : [unique!([first(c), last(c)]) for c in contract_const]
             _compile_faq_percell!(Tuple{Int,_Node}[], _AccKernel[], copy(covered),
                 lhs_body, rhs_body;
                 idx_names=idx_names, range_iters=[r[1:1] for r in range_iters],
                 contract_names=contract_names, contract_ranges=contract_ranges,
-                contract_const=contract_const, rhs_oplus=rhs_oplus,
+                contract_const=diag_const, rhs_oplus=rhs_oplus,
                 rhs_zerobar=rhs_zerobar, agg_gates=agg_gates, agg_filter=agg_filter,
                 resolved_obs=resolved_obs, array_var_info=array_var_info,
                 var_map=var_map, const_registry=const_registry, pgather=pgather,
@@ -4601,7 +4620,7 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
             "tier and the affine tier, and the only tier left is the per-cell " *
             "contraction loop, whose cells the right-hand side walks as trees " *
             "(`_eval_node`, one per output cell) on every call. Build with " *
-            "compiler=:interpreter to run it")
+            "compiler=:interpreter to run it. " * _ONE_CELL_NOTE)
     end
     # Anything the affine build cannot model takes the per-cell fallback, whose
     # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,

@@ -226,7 +226,7 @@ pub(crate) fn parse_subsystem_model(
 /// what makes the MPAS keyed-factor wiring contract (`nEdgesOnCell :=
 /// mesh.nEdgesOnCell`, a bare-name observed alias of a mounted const factor)
 /// resolvable. A model without subsystems is untouched (byte-identical build).
-pub(super) fn mount_subsystems(
+pub(crate) fn mount_subsystems(
     model: &mut Model,
     index_sets: &mut HashMap<String, IndexSet>,
 ) -> Result<(), CompileError> {
@@ -922,6 +922,7 @@ impl ArrayCompiled {
             n_states,
             declared_names,
             forcing: Rc::new(RefCell::new(HashMap::new())),
+            forcing_generation: std::cell::Cell::new(0),
             field_ics,
             ic_scope_defs,
             index_sets: index_sets.clone(),

@@ -269,16 +269,21 @@ pub(crate) struct FieldIcRecord {
 /// * the parameters, checked here bit for bit against the positional vector
 ///   the solve resolved (a [`crate::remake`] with new `p` shares this model and
 ///   misses);
-/// * the provider forcing buffer, which is final by the time construction
-///   records (the CONST providers are bound before the compiler gate runs) and
-///   first refreshed AFTER the initial state is built. Taking the memo, rather
-///   than keeping it, is what holds that: only the first solve can read it,
-///   and every later one resolves from the buffer as it stands.
+/// * the provider forcing buffer, which the crate's own drivers leave as
+///   construction had it until the initial state is built (the CONST providers
+///   are bound before the compiler gate runs, and a discrete refresh comes
+///   after `u0`). A host can write it in between through
+///   [`ArrayCompiled::forcing_handle`], so the memo records the buffer's
+///   handle generation, which every call to that accessor bumps, and answers
+///   only while it is unchanged. Taking the memo, rather than keeping it, is
+///   what holds the rest: only the first solve can read it, and every later
+///   one resolves from the buffer as it stands.
 ///
 /// Initial-condition overrides are applied over the result, not read by it.
 #[cfg(feature = "solve")]
 pub(crate) struct FieldIcMemo {
     params: Vec<u64>,
+    forcing_generation: u64,
     slots: HashMap<usize, f64>,
 }
 
@@ -396,7 +401,23 @@ impl ArrayCompiled {
     /// problem. The buffer is shared (the handle and the closures clone one
     /// `Rc`); mutate it only *between* segments, never inside a solver step, to
     /// keep the RHS pure within a segment.
+    ///
+    /// Whoever holds the handle may write the buffer at any later point, so
+    /// taking one also retires the field initial conditions construction
+    /// resolved from it ([`FieldIcMemo`]): the next solve resolves them from
+    /// the buffer as it then stands.
     pub fn forcing_handle(&self) -> Rc<RefCell<HashMap<String, ArrayD<f64>>>> {
+        self.forcing_generation
+            .set(self.forcing_generation.get().wrapping_add(1));
+        Rc::clone(&self.forcing)
+    }
+
+    /// The forcing buffer, for the crate's own drivers, which write it only
+    /// where [`FieldIcMemo`] allows: before construction records the memo, or
+    /// after the initial state is built. Unlike [`Self::forcing_handle`] it
+    /// leaves the memo standing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn forcing_buffer(&self) -> Rc<RefCell<HashMap<String, ArrayD<f64>>>> {
         Rc::clone(&self.forcing)
     }
 
@@ -950,6 +971,7 @@ impl ArrayCompiled {
         {
             *self.field_ic_memo.borrow_mut() = Some(FieldIcMemo {
                 params: param_bits(&param_vec),
+                forcing_generation: self.forcing_generation.get(),
                 slots,
             });
         }
@@ -1032,11 +1054,10 @@ impl ArrayCompiled {
         .map_err(crate::simulate::ic_key_error)?;
         // What construction resolved, when it resolved it under these
         // parameters ([`FieldIcMemo`]).
-        let memo = self
-            .field_ic_memo
-            .borrow_mut()
-            .take()
-            .filter(|m| m.params == param_bits(param_vec));
+        let memo = self.field_ic_memo.borrow_mut().take().filter(|m| {
+            m.params == param_bits(param_vec)
+                && m.forcing_generation == self.forcing_generation.get()
+        });
         let field_ic_map = match memo {
             Some(m) => m.slots,
             None => {
@@ -3721,6 +3742,11 @@ mod field_ic_memo_tests {
         let (large, cells) = refusal(100_000, cumulative.clone());
         assert_eq!(large, small);
         assert_eq!(large.0, "initial condition");
+        assert!(
+            large.2.ends_with(crate::simulate_array::ONE_CELL_NOTE),
+            "{}",
+            large.2
+        );
         assert_eq!(cells, 1, "the walk must stop at its first cell");
 
         // What the rest of the expression makes of the stopped walk's
@@ -3731,5 +3757,72 @@ mod field_ic_memo_tests {
         let (large, cells) = refusal(100_000, reciprocal);
         assert_eq!(large, small);
         assert_eq!(cells, 1);
+    }
+
+    /// A CONST provider serving `w` as zeros over three cells.
+    struct Zeros;
+
+    impl crate::provider::CadenceProvider for Zeros {
+        fn materialize(
+            &mut self,
+        ) -> Result<
+            std::collections::HashMap<String, crate::provider::NativeField>,
+            crate::provider::ProviderError,
+        > {
+            let zeros = ndarray::ArrayD::zeros(ndarray::IxDyn(&[3]));
+            Ok([("w".to_string(), crate::provider::NativeField::new(zeros))].into())
+        }
+        fn refresh(
+            &mut self,
+            _t: f64,
+        ) -> Result<
+            Option<std::collections::HashMap<String, crate::provider::NativeField>>,
+            crate::provider::ProviderError,
+        > {
+            Ok(None)
+        }
+        fn refresh_times(&self) -> Vec<f64> {
+            Vec::new()
+        }
+    }
+
+    fn loaded(compiler: Compiler) -> crate::EsmProblem {
+        let file = with_ic(3, json!("w"));
+        let options = ProblemOptions {
+            providers: [(
+                "w".to_string(),
+                Box::new(Zeros) as Box<dyn crate::provider::CadenceProvider>,
+            )]
+            .into(),
+            ..opts(compiler)
+        };
+        esm_problem(&file, (0.0, 1.0), options).unwrap_or_else(|e| panic!("[{compiler}] {e}"))
+    }
+
+    /// The memo was resolved from the forcing buffer as construction left it.
+    /// A host that writes the buffer through `forcing_handle` before the first
+    /// solve must get initial conditions from what it wrote.
+    #[test]
+    fn a_forcing_write_before_the_first_solve_is_not_masked_by_the_memo() {
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            // Untouched, the first solve takes the construction's resolution.
+            let prob = loaded(compiler);
+            let before = field_ic_resolutions();
+            let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(field_ic_resolutions() - before, 0, "[{compiler}]");
+            assert_eq!(first_column(&sol), [0.0, 0.0, 0.0], "[{compiler}]");
+
+            let prob = loaded(compiler);
+            let compiled = prob.debug_array_compiled().expect("an array model");
+            compiled.forcing_handle().borrow_mut().insert(
+                "w".to_string(),
+                ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[3]), vec![1.0, 2.0, 3.0])
+                    .expect("shape"),
+            );
+            let before = field_ic_resolutions();
+            let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(field_ic_resolutions() - before, 1, "[{compiler}]");
+            assert_eq!(first_column(&sol), [1.0, 2.0, 3.0], "[{compiler}]");
+        }
     }
 }

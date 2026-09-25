@@ -118,6 +118,39 @@ def main():
     code, o = run(wrong, [])
     assert code == 1 and o[("stencil_1d", 100, "hand_loop_agrees")] == "FAIL", o
 
+    # A document that built must carry each deterministic gate's measure: a
+    # null there is a missing measurement, not an unmeasurable one.
+    lost = [
+        result(
+            "stencil_1d",
+            100,
+            hand_loop_max_abs_diff=None,
+            hand_loop_error="canonical_vars: no state named u",
+        )
+    ]
+    code, o = run(lost, [])
+    assert code == 1 and o[("stencil_1d", 100, "hand_loop_agrees")] == "FAIL", o
+    code, o = run([result("stencil_1d", 100, allocs_per_call=None)], [])
+    assert code == 1 and o[("stencil_1d", 100, "no_steady_alloc")] == "FAIL", o
+    # ...unless the result says the measure is unmeasurable there.
+    declared = [
+        result(
+            "stencil_1d",
+            100,
+            allocs_per_call=None,
+            unmeasurable={"allocs_per_call": "no counting allocator on this target"},
+        )
+    ]
+    code, o = run(declared, [])
+    assert code == 0 and o[("stencil_1d", 100, "no_steady_alloc")] == "skip", o
+    # A missing measurement a ledger entry covers is ledgered like any failure.
+    code, o = run(lost, [{"family": "stencil_1d", "gate": "hand_loop_agrees", "phase": 2}])
+    assert code == 0 and o[("stencil_1d", 100, "hand_loop_agrees")] == "ledgered", o
+    # A refused document's hand loop is checked against the interpreter only up
+    # to its size cap: a null there stays unmeasured.
+    code, o = run(refused, [{"family": "regrid", "gate": "builds", "phase": 3}])
+    assert o[("regrid", 100, "hand_loop_agrees")] == "skip", o
+
     # --require names what is missing.
     code, o = run(ok, [], "--require", "pr")
     assert code == 1 and o[("stencil_2d", 100, "present")] == "MISSING", o

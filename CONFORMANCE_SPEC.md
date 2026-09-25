@@ -6376,7 +6376,8 @@ in EarthSciML/EarthSciModels; a census builds each through `esm_problem` under
 both compilers in Julia (`pkg/EarthSciAST.jl/scripts/compiler_census.jl`) and in
 Rust (`pkg/earthsci-ast-rs/examples/compiler_census.rs`). A document under an
 `invalid/` directory, or a template or coupling library with no model of its
-own, is never listed.
+own, is never listed. Where a census also calls the built problem's right-hand
+side (Julia's does), a build whose call throws does not count as building.
 
 Each binding's ledger (`julia.json`, `rust.json`) lists every document the
 interpreter builds and native does not, with native's code, the refused rule
@@ -6385,8 +6386,11 @@ the same one-way rule as `required` above. `scripts/native-coverage.py check`
 compares a census against it and is RED on a document native newly refuses; on
 a ledgered document native now builds, until the entry is removed; on an entry
 that stopped being a gap in any other way; on an entry whose code drifted; and
-on a census missing a corpus document. Regenerating a ledger may drop entries
-and never add one, except for a first measurement.
+on a census missing a corpus document. A document the census could not finish
+(a timeout, a crash, a killed process) is inconclusive: the check reports it
+and leaves it out of the comparison, so it is never a new refusal and a ledger
+entry for it is neither confirmed nor stale. Regenerating a ledger may drop
+entries and never add one, except for a first measurement.
 
 `scripts/native-coverage.py self-test` drives every one of those arms on
 synthetic records and validates both committed ledgers; it is the
