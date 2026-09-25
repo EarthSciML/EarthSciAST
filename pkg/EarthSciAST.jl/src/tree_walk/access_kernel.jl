@@ -1160,6 +1160,141 @@ function _cellset_ncells(cs::_CellSet)
     return n
 end
 
+"""
+    _cellsets_outs_unique(css) -> Bool
+
+Whether every output slot of the cell sets `css`, taken together, is distinct
+(what `allunique` over the concatenation of their slot lists says, without
+the lists). Boxes that share one affine slot map (`base`, `strides`) and whose
+map is one-to-one on their joint hull collide exactly when their index boxes
+overlap, which is checked box against box; separate maps whose slot hulls do
+not overlap cannot collide. Anything else (an `outs` list, overlapping hulls)
+is decided exactly on a bit map of the slot range.
+"""
+function _cellsets_outs_unique(css)
+    boxes = Tuple{Int,Vector{Int},Vector{UnitRange{Int}}}[]
+    lists = Vector{Int}[]
+    for cs in css
+        if _is_outs(cs)
+            push!(lists, cs.outs)
+        elseif _is_contig(cs)
+            isempty(cs.ranges[1]) || push!(boxes, (0, Int[1], UnitRange{Int}[cs.ranges[1]]))
+        else
+            any(isempty, cs.ranges) || push!(boxes, (cs.base, cs.strides, cs.ranges))
+        end
+    end
+    if isempty(lists)
+        r = _boxes_outs_unique(boxes)
+        r === nothing || return r
+    end
+    return _outs_unique_bitmap(boxes, lists)
+end
+
+# The slot hull `[lo, hi]` of `base + Σ_d i_d·strides[d]` over the box `ranges`.
+function _box_slot_hull(base::Int, strides::Vector{Int}, ranges)
+    lo = hi = base
+    @inbounds for d in eachindex(strides)
+        a = first(ranges[d]) * strides[d]
+        b = last(ranges[d]) * strides[d]
+        lo += min(a, b)
+        hi += max(a, b)
+    end
+    return lo, hi
+end
+
+# Is `i ↦ Σ_d i_d·strides[d]` one-to-one on the box `ranges`? Sufficient test:
+# ordered by |stride|, each stride exceeds the largest offset the smaller ones
+# can reach (a mixed radix). `false` means "not shown", not "collides".
+function _affine_injective_on(strides::Vector{Int}, ranges)
+    dims = [d for d in eachindex(strides) if length(ranges[d]) > 1]
+    any(d -> strides[d] == 0, dims) && return false
+    sort!(dims; by = d -> abs(strides[d]))
+    reach = 0
+    for d in dims
+        abs(strides[d]) > reach || return false
+        reach += abs(strides[d]) * (length(ranges[d]) - 1)
+    end
+    return true
+end
+
+# `true`/`false` when box arithmetic decides it, `nothing` when it cannot.
+function _boxes_outs_unique(boxes)
+    groups = Dict{Tuple{Int,Vector{Int}},Vector{Int}}()
+    for (k, (b, st, _)) in enumerate(boxes)
+        push!(get!(groups, (b, st), Int[]), k)
+    end
+    hulls = Tuple{Int,Int}[]
+    for ((b, st), ks) in groups
+        length(ks) > 4096 && return nothing
+        nd = length(st)
+        hull = UnitRange{Int}[boxes[ks[1]][3][d] for d in 1:nd]
+        for k in ks
+            rg = boxes[k][3]
+            length(rg) == nd || return nothing
+            for d in 1:nd
+                hull[d] = min(first(hull[d]), first(rg[d])):max(last(hull[d]), last(rg[d]))
+            end
+        end
+        _affine_injective_on(st, hull) || return nothing
+        for x in 1:length(ks), y in (x + 1):length(ks)
+            rx = boxes[ks[x]][3]; ry = boxes[ks[y]][3]
+            all(d -> first(rx[d]) <= last(ry[d]) && first(ry[d]) <= last(rx[d]), 1:nd) &&
+                return false
+        end
+        push!(hulls, _box_slot_hull(b, st, hull))
+    end
+    sort!(hulls)
+    for k in 2:length(hulls)
+        hulls[k][1] <= hulls[k - 1][2] && return nothing
+    end
+    return true
+end
+
+# The exact test: one bit per slot of the joint slot range.
+function _outs_unique_bitmap(boxes, lists)
+    lo, hi = typemax(Int), typemin(Int)
+    for (b, st, rg) in boxes
+        l, h = _box_slot_hull(b, st, rg)
+        lo = min(lo, l); hi = max(hi, h)
+    end
+    for outs in lists, o in outs
+        lo = min(lo, o); hi = max(hi, o)
+    end
+    lo > hi && return true
+    seen = falses(hi - lo + 1)
+    for (b, st, rg) in boxes
+        _mark_box_slots!(seen, lo, b, ntuple(d -> st[d], length(st)),
+                         ntuple(d -> rg[d], length(rg))) || return false
+    end
+    for outs in lists
+        _mark_list_slots!(seen, lo, outs) || return false
+    end
+    return true
+end
+
+function _mark_box_slots!(seen::BitVector, lo::Int, b::Int, st::NTuple{N,Int},
+                          rg::NTuple{N,UnitRange{Int}}) where {N}
+    for I in CartesianIndices(rg)
+        o = b
+        @inbounds for d in 1:N
+            o += I[d] * st[d]
+        end
+        k = o - lo + 1
+        @inbounds seen[k] && return false
+        @inbounds seen[k] = true
+    end
+    return true
+end
+
+function _mark_list_slots!(seen::BitVector, lo::Int, outs::Vector{Int})
+    @inbounds for o in outs
+        k = o - lo + 1
+        seen[k] && return false
+        seen[k] = true
+    end
+    return true
+end
+
 # The static partition itself: chunk `c` of `nchunks` covers the half-open
 # 0-based ordinal range `[a, b)` of `n` cells, sizes differing by at most one.
 # A pure function of `(n, nchunks, c)` — identical run to run, no dynamic work

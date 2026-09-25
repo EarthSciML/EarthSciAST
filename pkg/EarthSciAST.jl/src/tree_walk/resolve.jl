@@ -829,7 +829,7 @@ _refs_bound_sym(::ASTExpr, ::Set{String}) = false
 function _resolve_const_array_gather(vals::AbstractArray, name::String,
         idx_args_expr::Vector{ASTExpr},
         array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-        var_map::Dict{String,Int}, const_arrays::AbstractDict,
+        var_map::AbstractDict{String,Int}, const_arrays::AbstractDict,
         pgather::AbstractDict, memo::_MaybeMemo, bound_syms::Set{String})
     length(idx_args_expr) == ndims(vals) ||
         throw(TreeWalkError("E_TREEWALK_CONSTARRAY_NDIM",
@@ -905,7 +905,7 @@ _refs_loopvar(::ASTExpr) = false
 # evaluated + bounds-checked at eval time. A missing state cell (sparse layout)
 # throws, which the loop-build try/catch converts to a fall-back to the exact unroll.
 function _resolve_state_gather(vname::String, lo::Vector{Int}, hi::Vector{Int},
-        idx_args::Vector{ASTExpr}, array_var_info, var_map::Dict{String,Int},
+        idx_args::Vector{ASTExpr}, array_var_info, var_map::AbstractDict{String,Int},
         const_arrays::AbstractDict, pgather::AbstractDict, memo::_MaybeMemo,
         bound_syms::Set{String})
     nd = length(lo)
@@ -944,7 +944,7 @@ end
 # fallback and the generic-recurse arm of `_resolve_indices`.
 function _resolve_arg_vec(args::Vector{ASTExpr},
                           array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-                          var_map::Dict{String,Int},
+                          var_map::AbstractDict{String,Int},
                           const_arrays::AbstractDict,
                           pgather::AbstractDict,
                           memo::_MaybeMemo=nothing,
@@ -974,7 +974,7 @@ end
 
 function _resolve_indices(expr::NumExpr,
                           array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-                          var_map::Dict{String,Int},
+                          var_map::AbstractDict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                           pgather::AbstractDict=_EMPTY_PGATHER,
                           memo::_MaybeMemo=nothing,
@@ -983,7 +983,7 @@ function _resolve_indices(expr::NumExpr,
 end
 function _resolve_indices(expr::IntExpr,
                           array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-                          var_map::Dict{String,Int},
+                          var_map::AbstractDict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                           pgather::AbstractDict=_EMPTY_PGATHER,
                           memo::_MaybeMemo=nothing,
@@ -992,7 +992,7 @@ function _resolve_indices(expr::IntExpr,
 end
 function _resolve_indices(expr::VarExpr,
                           array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-                          var_map::Dict{String,Int},
+                          var_map::AbstractDict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                           pgather::AbstractDict=_EMPTY_PGATHER,
                           memo::_MaybeMemo=nothing,
@@ -1019,7 +1019,7 @@ function _resolve_indices(expr::VarExpr,
 end
 function _resolve_indices(expr::OpExpr,
                           array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-                          var_map::Dict{String,Int},
+                          var_map::AbstractDict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                           pgather::AbstractDict=_EMPTY_PGATHER,
                           memo::_MaybeMemo=nothing,
@@ -1040,7 +1040,7 @@ function _resolve_indices(expr::OpExpr,
 end
 function _resolve_indices_op(expr::OpExpr,
                           array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-                          var_map::Dict{String,Int},
+                          var_map::AbstractDict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                           pgather::AbstractDict=_EMPTY_PGATHER,
                           memo::_MaybeMemo=nothing,
@@ -1279,12 +1279,9 @@ function _detect_array_vars(equations::Vector{Equation},
                              initial_conditions::AbstractDict)
     detected = Set{String}()
     # From initial conditions: "u[3]" style keys imply array usage.
-    for (key, _) in initial_conditions
-        parsed = _parse_cell_key(String(key))
-        parsed === nothing && continue
-        vname = parsed[1]
-        vname in state_var_names && push!(detected, vname)
-    end
+    _foreach_ic_cell(initial_conditions,
+        (vname, _) -> (vname in state_var_names && push!(detected, vname)),
+        (vname, _, _) -> (vname in state_var_names && push!(detected, vname)))
     # From equation LHS patterns.
     for eq in equations
         lhs = eq.lhs
@@ -1311,31 +1308,128 @@ function _detect_array_vars(equations::Vector{Equation},
 end
 
 # Scan equations and initial_conditions to discover all array cells.
-# Returns Dict{String, Vector{Vector{Int}}} — var_name → sorted list of index tuples.
+# Returns Dict{String,_DiscoveredCells}: var_name → the cells its equation LHSs and
+# per-cell initial-condition keys name. A `faq` LHS whose subscripts are each a
+# constant or ±(one loop index) + constant, with no loop index shared between
+# subscripts, names a box, recorded arithmetically; any other LHS is enumerated
+# cell by cell.
 function _discover_array_cells(
         equations::Vector{Equation},
         initial_conditions::AbstractDict,
         array_var_names::Set{String})
-    cells = Dict{String, Set{Vector{Int}}}()
+    cells = Dict{String,_DiscoveredCells}()
 
-    # From initial conditions: parse "u[3]" or "u[2,3]" style keys.
-    for (key, _) in initial_conditions
-        parsed = _parse_cell_key(String(key))
-        parsed === nothing && continue
-        vname, indices = parsed
-        vname in array_var_names || continue
-        if !haskey(cells, vname); cells[vname] = Set{Vector{Int}}(); end
-        push!(cells[vname], indices)
-    end
+    # From initial conditions: "u[3]" or "u[2,3]" style keys, and whole inline
+    # array profiles.
+    _foreach_ic_cell(initial_conditions,
+        (vname, indices) -> (vname in array_var_names &&
+            _cellset_push_point!(get!(_DiscoveredCells, cells, vname), indices, vname)),
+        (vname, lo, hi) -> (vname in array_var_names &&
+            _cellset_push_box!(get!(_DiscoveredCells, cells, vname), lo, hi, vname)))
 
     # From equation LHS.
     for eq in equations
         _scan_lhs_cells!(cells, eq.lhs, array_var_names)
     end
+    return cells
+end
 
-    # Sort each var's cells and return as Vector{Vector{Int}}.
-    return Dict{String, Vector{Vector{Int}}}(
-        vname => sort(collect(cset)) for (vname, cset) in cells)
+# The affine form `coef * loop_index[pos] + c` of an index expression, as
+# `(pos, coef, c)` with `pos = 0` for a constant, or `nothing` when the
+# expression is not one (another operator, a name that is not a loop index, a
+# non-integer literal, or two different loop indices). Integer arithmetic wraps
+# exactly as `_eval_const_int`'s does.
+function _lhs_index_affine(a::ASTExpr, idx_names::Vector{String})
+    if a isa IntExpr
+        return (0, 0, Int(a.value))
+    elseif a isa NumExpr
+        v = a.value
+        (isinteger(v) && -9.0e18 <= v <= 9.0e18) || return nothing
+        return (0, 0, Int(v))
+    elseif a isa VarExpr
+        pos = findfirst(==(a.name), idx_names)
+        pos === nothing && return nothing
+        return (pos, 1, 0)
+    elseif a isa OpExpr
+        op = a.op
+        c = a.args
+        if op == "+"
+            isempty(c) && return nothing
+            pos, coef, k = 0, 0, 0
+            for x in c
+                t = _lhs_index_affine(x, idx_names)
+                t === nothing && return nothing
+                p2, c2, k2 = t
+                if p2 != 0
+                    (pos == 0 || pos == p2) || return nothing
+                    pos = p2
+                    coef += c2
+                end
+                k += k2
+            end
+            return (coef == 0 ? 0 : pos, coef, k)
+        elseif op == "-" || op == "neg"
+            if length(c) == 1
+                t = _lhs_index_affine(c[1], idx_names)
+                t === nothing && return nothing
+                return (t[1], -t[2], -t[3])
+            end
+            (op == "-" && length(c) == 2) || return nothing
+            t1 = _lhs_index_affine(c[1], idx_names)
+            t2 = _lhs_index_affine(c[2], idx_names)
+            (t1 === nothing || t2 === nothing) && return nothing
+            (t1[1] == 0 || t2[1] == 0 || t1[1] == t2[1]) || return nothing
+            coef = t1[2] - t2[2]
+            pos = t1[1] != 0 ? t1[1] : t2[1]
+            return (coef == 0 ? 0 : pos, coef, t1[3] - t2[3])
+        elseif op == "*"
+            isempty(c) && return nothing
+            pos, coef, k = 0, 0, 1
+            for x in c
+                t = _lhs_index_affine(x, idx_names)
+                t === nothing && return nothing
+                if t[1] != 0 && t[2] != 0
+                    pos == 0 || return nothing          # a product of two loop indices
+                    pos, coef, k = t[1], k * t[2], k * t[3]
+                else
+                    coef *= t[3]
+                    k *= t[3]
+                end
+            end
+            return (coef == 0 ? 0 : pos, coef, k)
+        end
+    end
+    return nothing
+end
+
+# The box a `faq` LHS's subscripts sweep over `range_iters`, as `(lo, hi)`, or
+# `nothing` when the cells do not form a box (a stride other than ±1, a loop
+# index in two subscripts, or a subscript `_lhs_index_affine` cannot read).
+# Only called with every range non-empty.
+function _lhs_cells_box(idx_args, idx_names::Vector{String}, range_iters)
+    n = length(idx_args)
+    lo = Vector{Int}(undef, n)
+    hi = Vector{Int}(undef, n)
+    used = falses(length(idx_names))
+    for d in 1:n
+        t = _lhs_index_affine(idx_args[d], idx_names)
+        t === nothing && return nothing
+        pos, coef, k = t
+        if pos == 0
+            lo[d] = hi[d] = k
+            continue
+        end
+        used[pos] && return nothing
+        used[pos] = true
+        r = range_iters[pos]
+        (length(r) == 1 || step(r) == 1 || step(r) == -1) || return nothing
+        (coef == 1 || coef == -1 || length(r) == 1) || return nothing
+        a = coef * first(r) + k
+        b = coef * last(r) + k
+        lo[d] = min(a, b)
+        hi[d] = max(a, b)
+    end
+    return lo, hi
 end
 
 function _scan_lhs_cells!(cells, lhs::ASTExpr, array_var_names::Set{String})
@@ -1351,8 +1445,7 @@ function _scan_lhs_cells!(cells, lhs::ASTExpr, array_var_names::Set{String})
         try
             indices = [_eval_const_int(a, _EMPTY_IDX_ENV) for a in idx_args]
             vname = first_arg.name
-            if !haskey(cells, vname); cells[vname] = Set{Vector{Int}}(); end
-            push!(cells[vname], indices)
+            _cellset_push_point!(get!(_DiscoveredCells, cells, vname), indices, vname)
         catch err
             # A non-constant index expression is simply not discoverable here
             # (the faq path enumerates it); anything else is a real bug.
@@ -1375,16 +1468,27 @@ function _scan_lhs_cells!(cells, lhs::ASTExpr, array_var_names::Set{String})
 
         idx_names = _output_idx_strings(lhs)
         ranges_dict = _ranges_dict(lhs)
-        range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
+        range_iters = [_expand_int_range(ranges_dict[n]) for n in idx_names]
 
-        if !haskey(cells, vname); cells[vname] = Set{Vector{Int}}(); end
+        cs = get!(_DiscoveredCells, cells, vname)
+        any(isempty, range_iters) && return
         idx_args = inner.args[2:end]
+        box = _lhs_cells_box(idx_args, idx_names, range_iters)
+        if box !== nothing
+            _cellset_push_box!(cs, box[1], box[2], vname)
+            return
+        end
         try
+            idx_env = Dict{String,Int}()
+            indices = Vector{Int}(undef, length(idx_args))
             for idx_tuple in Iterators.product(range_iters...)
-                idx_env = Dict{String,Int}(idx_names[d] => idx_tuple[d]
-                                           for d in 1:length(idx_names))
-                indices = [_eval_const_int(a, idx_env) for a in idx_args]
-                push!(cells[vname], indices)
+                for d in 1:length(idx_names)
+                    idx_env[idx_names[d]] = idx_tuple[d]
+                end
+                for d in eachindex(idx_args)
+                    indices[d] = _eval_const_int(idx_args[d], idx_env)
+                end
+                _cellset_push_point!(cs, indices, vname)
             end
         catch err
             # An index expression that is not constant under the loop bindings

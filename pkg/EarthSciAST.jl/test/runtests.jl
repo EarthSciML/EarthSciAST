@@ -160,6 +160,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
 
     # ---- Tree-walk evaluator (src/tree_walk.jl) + discrete-cadence data refresh ----
     include("tree_walk_test.jl")
+    include("state_layout_test.jl")                # the flat state layout ≡ the per-cell name map it replaced
     include("dag_walk_memo_test.jl")               # ESS-1p5 exponential-path DAG walk regression
     include("intern_oracle_test.jl")               # A1 hash-consing ≡ the interpreter (differential)
     include("xeq_variant_oracle_test.jl")          # A3 cross-eq variant memo ≡ the interpreter (differential)

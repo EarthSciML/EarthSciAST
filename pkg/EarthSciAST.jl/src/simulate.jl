@@ -599,7 +599,7 @@ struct EsmProblem
     u0::Vector{Float64}                   # seeded initial state; COPIED per run
     tspan::Tuple{Float64,Float64}         # integration interval
     p::Any                                # parameter NamedTuple (or nothing)
-    var_map::Dict{String,Int}             # state-element name → flat index
+    var_map::AbstractDict{String,Int}     # state-element name → flat index (a `StateLayout`)
     param_buffers::Dict{String,Any}       # live forcing buffers, aliased into f!
     discrete_providers::Dict{String,Any}  # forcing var → DISCRETE data Provider
     dm::DiscreteMaterializer              # discrete-cadence cache sink (may be empty)
