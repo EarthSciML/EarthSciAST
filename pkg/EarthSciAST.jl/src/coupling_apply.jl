@@ -194,7 +194,7 @@ function _check_variable_map_endpoints(file::EsmFile,
     for entry in file.coupling
         entry isa CouplingVariableMap || continue
         dot = findfirst('.', entry.from)
-        from_owner = dot === nothing ? entry.from : String(SubString(entry.from, 1, dot - 1))
+        from_owner = dot === nothing ? entry.from : String(SubString(entry.from, 1, prevind(entry.from, dot)))
         from_is_loaded = from_owner in loader_names
         for (side, endpoint) in (("from", entry.from), ("to", entry.to))
             (isempty(endpoint) || endpoint in declared) && continue
@@ -232,7 +232,7 @@ function _lookup_model_units(model::Model, name::String)::Union{String, Nothing}
     # Recurse into subsystems for nested names like "Inner.T".
     dot = findfirst('.', name)
     if dot !== nothing
-        head = String(SubString(name, 1, dot - 1))
+        head = String(SubString(name, 1, prevind(name, dot)))
         rest = String(SubString(name, dot + 1))
         if haskey(model.subsystems, head)
             return _lookup_model_units(model.subsystems[head], rest)
@@ -250,7 +250,7 @@ function _lookup_rsys_units(rsys::ReactionSystem, name::String)::Union{String, N
     end
     dot = findfirst('.', name)
     if dot !== nothing
-        head = String(SubString(name, 1, dot - 1))
+        head = String(SubString(name, 1, prevind(name, dot)))
         rest = String(SubString(name, dot + 1))
         if haskey(rsys.subsystems, head)
             return _lookup_rsys_units(rsys.subsystems[head], rest)
@@ -813,7 +813,7 @@ name with no dot → itself. Ownership is what tells A's equations from B's, and
 after placeholder expansion it is the only thing that still can.
 """
 _component_root(name::AbstractString)::String =
-    (i = findfirst('.', name); i === nothing ? String(name) : String(SubString(name, 1, i - 1)))
+    (i = findfirst('.', name); i === nothing ? String(name) : String(SubString(name, 1, prevind(name, i))))
 
 """
 A namespaced flattened name with its leading component segment removed:
