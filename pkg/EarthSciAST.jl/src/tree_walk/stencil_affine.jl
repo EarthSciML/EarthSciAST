@@ -1248,7 +1248,8 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
                               body, ctx_proto, var_map, const_arrays,
                               param_sym_set, reg_funcs, base, strides,
                               lhs_var, lhs_idx_args, sig::_AffineSig,
-                              reduce::Union{Nothing,_AffineReduce}=nothing)
+                              reduce::Union{Nothing,_AffineReduce}=nothing;
+                              out_ranges=nothing)
     D = length(box)
     nout = reduce === nothing ? D : D - length(reduce.names)
     rep = Int[first(box[d]) for d in 1:D]
@@ -1292,8 +1293,12 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
         cs_spine, cse = _build_acc_cse(raw, a)   # per-cell CSE (shared subtrees → scratch)
         (cs_spine, a, cse, _collect_subkernels(cs_spine, cse))
     end
+    slab = out_ranges === nothing ? Bool[] :
+           Bool[length(box[d]) == 1 && (first(box[d]) == first(out_ranges[d]) ||
+                                        last(box[d]) == last(out_ranges[d]))
+                for d in 1:nout]
     cs = _CellSet(Int[strides[d] for d in 1:nout],
-                  UnitRange{Int}[box[d] for d in 1:nout], base)
+                  UnitRange{Int}[box[d] for d in 1:nout], base, Int[], slab)
     push!(kernels, _AccKernel(cs, spine, acc, _FixedBound(0), 0.0, cse, subs))
 end
 
@@ -1459,7 +1464,8 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
             @_bench :affine_box _process_affine_box!(kernels, spine_cache, flat_cache, box, all_names,
                                  body, ctx_proto, var_map, const_arrays,
                                  param_sym_set, reg_funcs, base, all_strides,
-                                 lhs_var, lhs_idx_args, sig, reduce)
+                                 lhs_var, lhs_idx_args, sig, reduce;
+                                 out_ranges=ranges)
             push!(boxes, box[1:D])
         end
         # Only after every box is verified: mark covered (untouched on fallback).

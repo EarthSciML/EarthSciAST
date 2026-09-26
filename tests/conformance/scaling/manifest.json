@@ -652,65 +652,38 @@
     ],
     "julia": [
       {
-        "family": "stencil_1d",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": "79.7 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run (8 to 9 for stencil_1d and prefix_scan), serial run, 2026-09-25; the scheduled sweep re-measures it",
-        "reason": "the build itself is flat from N = 1000 to 10^6 (a warm rebuild at 10^6 cells is about 20 ms); the slope is the first build at each new N, which pays a one-time Julia compile of about 80 ms because the emitted kernel bakes the box bounds, base slot and strides in as literals, so every N is a new generated function (the N = 100 program is compiled during the adapter's warm-up)",
-        "phase": 2
-      },
-      {
-        "family": "stencil_2d",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": "73.81 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run (8 to 9 for stencil_1d and prefix_scan), serial run, 2026-09-25; the scheduled sweep re-measures it",
-        "reason": "the build itself is flat from N = 1000 to 10^6 (a warm rebuild at 10^6 cells is about 15 ms); the slope is the first build at each new N, which pays a one-time Julia compile of about 75 ms because the emitted kernel bakes the box bounds, base slot and strides in as literals, so every N is a new generated function (the N = 100 program is compiled during the adapter's warm-up)",
-        "phase": 2
-      },
-      {
-        "family": "stencil_3d",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": "80.6 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run (8 to 9 for stencil_1d and prefix_scan), serial run, 2026-09-25; the scheduled sweep re-measures it",
-        "reason": "the build itself is flat from N = 1000 to 10^6 (a warm rebuild at 10^6 cells is about 25 ms); the slope is the first build at each new N, which pays a one-time Julia compile of about 80 ms because the emitted kernel bakes the box bounds, base slot and strides in as literals, so every N is a new generated function (the N = 100 program is compiled during the adapter's warm-up)",
-        "phase": 2
-      },
-      {
         "family": "stencil_4d",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "1168 ns per state (ns/state over N=100..100000)",
-        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 9.04 12.90 15.48), serial run, 2026-09-25; the scheduled sweep re-measures it",
-        "reason": "rank 4 lands on the affine tier; what still grows is the build's per-cell bookkeeping over 81 boundary boxes (the largest size is over the gate's 10^6-cell cap, so the slope is read to 10^5)",
+        "measured": "284.5 ns per state (ns/state over N=100..100000)",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
+        "reason": "the generated code no longer depends on N (the box geometry is run-time data), so a new N compiles nothing; what still grows is the affine tier's work over the grid: of a 64 ms warm build at 10^5 cells, the cut-point scan is 24 ms, the box processing 17 ms and its lane derivation 12 ms (the largest size is over the gate's 10^6-cell cap, so the slope is read to 10^5)",
         "phase": 2
       },
       {
         "family": "transport_3d",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "117.9 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run (8 to 9 for stencil_1d and prefix_scan), serial run, 2026-09-25; the scheduled sweep re-measures it",
-        "reason": "the build itself is flat from N = 1000 to 10^6 (a warm rebuild at 10^6 cells is about 170 ms); the slope is the first build at each new N, which pays a one-time Julia compile of about 75 ms because the emitted kernel bakes the box bounds, base slot and strides in as literals, so every N is a new generated function (the N = 100 program is compiled during the adapter's warm-up)",
+        "measured": "40.66 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
+        "reason": "the generated code no longer depends on N (the box geometry is run-time data), so a new N compiles nothing; what still grows is the build over the grid: of a 153 ms warm build at 10^6 cells, the kernel-class merge takes 58 ms (most of it the out-of-place plan's descriptor vectors) and the affine tier 41 ms (cut-point scan 21 ms, boxes 19 ms)",
         "phase": 2
       },
       {
         "family": "prefix_scan",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "274.2 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run (8 to 9 for stencil_1d and prefix_scan), serial run, 2026-09-25; the scheduled sweep re-measures it",
-        "reason": "the build itself is flat from N = 1000 to 10^6 (a warm rebuild at 10^6 cells is about 90 ms); the slope is the first build at each new N, which pays a one-time Julia compile of about 210 ms because the emitted kernel bakes the box bounds, base slot and strides in as literals, so every N is a new generated function (the N = 100 program is compiled during the adapter's warm-up)",
+        "measured": "73.26 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
+        "reason": "the generated code no longer depends on N (the box geometry is run-time data), so a new N compiles nothing; the warm build at 10^6 cells (85 ms, 200 MiB allocated) is O(N) array work: the affine tier 17 ms, the state layout 13 ms, and zero-filling and copying state-sized buffers (the observed-extension buffer, the scanned equation's collected index ranges) for most of the rest",
         "phase": 2
       },
       {
         "family": "source_receptor",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "9.499e+05 ns per state (ns/state over N=100..3162)",
-        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 9.04 12.90 15.48), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "measured": "9.18e+05 ns per state (ns/state over N=100..3162)",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the N x N array K is a materialized observed, so the build keeps per-cell bookkeeping for N^2 cells (the string-keyed layout of its fill, its affine box), against 2N states",
         "phase": 2
       },
@@ -747,7 +720,7 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 1.32",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the affine kernel runs slower than the plain loop at this size",
         "phase": 5
       },
@@ -756,8 +729,8 @@
         "n": 10000,
         "gate": "speed",
         "threads": "serial",
-        "measured": "native / hand loop = 1.36",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "measured": "native / hand loop = 1.46",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the affine kernel runs slower than the plain loop at this size",
         "phase": 5
       },
@@ -766,8 +739,8 @@
         "n": 10000,
         "gate": "speed",
         "threads": "serial",
-        "measured": "native / hand loop = 3.53",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "measured": "native / hand loop = 3.56",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
         "phase": 5
       },
@@ -776,8 +749,8 @@
         "n": 100000,
         "gate": "speed",
         "threads": "serial",
-        "measured": "native / hand loop = 3.03",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "measured": "native / hand loop = 2.95",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
         "phase": 5
       },
@@ -786,8 +759,8 @@
         "n": 1000000,
         "gate": "speed",
         "threads": "serial",
-        "measured": "native / hand loop = 2.52",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "measured": "native / hand loop = 2.68",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
         "phase": 5
       },
@@ -806,8 +779,8 @@
         "n": 10000,
         "gate": "speed",
         "threads": "serial",
-        "measured": "native / hand loop = 9.52",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "measured": "native / hand loop = 9.76",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the scan fold walks a per-cell slot table on every call",
         "phase": 5
       },
@@ -816,8 +789,8 @@
         "n": 100000,
         "gate": "speed",
         "threads": "serial",
-        "measured": "native / hand loop = 12.8",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "measured": "native / hand loop = 12.7",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the scan fold walks a per-cell slot table on every call",
         "phase": 5
       },
@@ -827,7 +800,7 @@
         "gate": "speed",
         "threads": "serial",
         "measured": "native / hand loop = 13.4",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the scan fold walks a per-cell slot table on every call",
         "phase": 5
       },
@@ -836,8 +809,8 @@
         "n": 1000,
         "gate": "speed",
         "threads": "serial",
-        "measured": "native / hand loop = 21.9",
-        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 9.04 12.90 15.48), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "measured": "native / hand loop = 21.8",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the materialized N x N observed K is refilled on every call (N^2 sin evaluations), where the hand loop builds it once; the contraction itself is a run-time fold now",
         "phase": 5
       },
@@ -846,8 +819,8 @@
         "n": 3162,
         "gate": "speed",
         "threads": "serial",
-        "measured": "native / hand loop = 27.0",
-        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 9.04 12.90 15.48), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "measured": "native / hand loop = 28.2",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the materialized N x N observed K is refilled on every call (N^2 sin evaluations), where the hand loop builds it once; the contraction itself is a run-time fold now",
         "phase": 5
       },
@@ -882,23 +855,6 @@
         "phase": 5
       },
       {
-        "family": "stencil_4d",
-        "n": 1000000,
-        "gate": "builds",
-        "measured": "error: out of memory: the process measuring this document reached 12.0 GB resident after 242 s on it, over this run's --max-rss-gb of 12.0 GB",
-        "reason": "rank 4 misses the affine tier (rank-3 cap) and lands on the per-cell build, whose memory grows with N: 2.9 GB at 10^5 cells and past the adapter's 12 GB cap at 10^6 (a hosted runner has 16 GB; the first scheduled sweep lost this runner here)",
-        "phase": 2
-      },
-      {
-        "family": "source_receptor",
-        "n": 3162,
-        "gate": "no_steady_alloc",
-        "threads": "threaded",
-        "measured": "778401680 bytes per steady call",
-        "reason": "the fully unrolled contraction body loses type stability above some size (the serial entry's cause; the threaded dispatch adds its own bytes on top)",
-        "phase": 2
-      },
-      {
         "family": "chemistry_grid",
         "gate": "no_steady_alloc",
         "threads": "threaded",
@@ -910,8 +866,8 @@
         "family": "prefix_scan",
         "gate": "no_steady_alloc",
         "threads": "threaded",
-        "measured": "bytes per steady call with 4 threads: 10000:288, 100000:288, 1000000:288",
-        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
+        "measured": "bytes per steady call with 4 threads: 10000:384, 100000:384, 1000000:384",
+        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path; each of prefix_scan's three threaded sections now allocates 32 bytes more per dispatch, because the chunk closure carries the section's tab tuple, which holds one more container (the run-time box geometry)",
         "phase": 5
       },
       {
@@ -926,7 +882,7 @@
         "family": "source_receptor",
         "gate": "no_steady_alloc",
         "threads": "threaded",
-        "measured": "bytes per steady call with 4 threads: 100:128, 1000:256",
+        "measured": "bytes per steady call with 4 threads: 100:128, 1000:256, 3162:256",
         "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
         "phase": 5
       },
@@ -1001,9 +957,9 @@
         "family": "prefix_scan",
         "gate": "build_slope",
         "threads": "threaded",
-        "measured": "1.129e+04 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 8.44 at the start and 8.60 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
-        "reason": "per-cell state layout, and the scan fold is built by rewriting the syntax tree per cell",
+        "measured": "72.29 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
+        "reason": "the generated code no longer depends on N (the box geometry is run-time data), so a new N compiles nothing; the warm build is O(N) array work (the serial entry's breakdown)",
         "phase": 2
       },
       {
@@ -1011,8 +967,8 @@
         "n": 10000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": "native / hand loop = 3.65",
-        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 8.44 at the start and 8.60 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
+        "measured": "native / hand loop = 3.26",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the scan fold walks a per-cell slot table on every call",
         "phase": 5
       },
@@ -1021,8 +977,8 @@
         "n": 100000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": "native / hand loop = 4.59",
-        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 8.44 at the start and 8.60 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
+        "measured": "native / hand loop = 4.54",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the scan fold walks a per-cell slot table on every call",
         "phase": 5
       },
@@ -1031,8 +987,8 @@
         "n": 1000000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": "native / hand loop = 4.41",
-        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 8.44 at the start and 8.60 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
+        "measured": "native / hand loop = 4.49",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the scan fold walks a per-cell slot table on every call",
         "phase": 5
       },
@@ -1068,9 +1024,9 @@
         "family": "source_receptor",
         "gate": "build_slope",
         "threads": "threaded",
-        "measured": "4.538e+06 ns per state (ns/state over N=100..3162)",
-        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 7.09 at the start and 6.20 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
-        "reason": "the contraction is unrolled into every receptor's kernel body, so the emitted code, and its compile, grow with N",
+        "measured": "8.34e+05 ns per state (ns/state over N=100..3162)",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
+        "reason": "the N x N array K is a materialized observed, so the build keeps per-cell bookkeeping for N^2 cells (the string-keyed layout of its fill, its affine box), against 2N states",
         "phase": 2
       },
       {
@@ -1078,9 +1034,9 @@
         "n": 1000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": "native / hand loop = 20.5",
-        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 7.09 at the start and 6.20 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
-        "reason": "the unrolled contraction body; at 3162 it also loses type stability and allocates on every call",
+        "measured": "native / hand loop = 22.2",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
+        "reason": "the materialized N x N observed K is refilled on every call (N^2 sin evaluations), where the hand loop builds it once; the contraction itself is a run-time fold now",
         "phase": 5
       },
       {
@@ -1088,74 +1044,27 @@
         "n": 3162,
         "gate": "speed",
         "threads": "threaded",
-        "measured": "native / hand loop = 469",
-        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 7.09 at the start and 6.20 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
-        "reason": "the unrolled contraction body; at 3162 it also loses type stability and allocates on every call",
-        "phase": 5
-      },
-      {
-        "family": "stencil_1d",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "4478 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.45 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
-        "phase": 2
-      },
-      {
-        "family": "stencil_2d",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "6357 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.46 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
-        "phase": 2
-      },
-      {
-        "family": "stencil_3d",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "7166 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.40 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
-        "phase": 2
-      },
-      {
-        "family": "stencil_4d",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "9.259e+04 ns per state (ns/state over N=100..100000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 18.36 at the start and 28.47 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
-        "reason": "rank 4 misses the affine tier (rank-3 cap) and lands on the per-cell build",
-        "phase": 2
-      },
-      {
-        "family": "stencil_4d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": "native / hand loop = 1.3",
-        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 18.36 at the start and 28.47 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
-        "reason": "rank 4 runs the per-cell build's gather-table kernel, not an affine box",
+        "measured": "native / hand loop = 30.4",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
+        "reason": "the materialized N x N observed K is refilled on every call (N^2 sin evaluations), where the hand loop builds it once; the contraction itself is a run-time fold now",
         "phase": 5
       },
       {
         "family": "stencil_4d",
-        "n": 100000,
-        "gate": "speed",
+        "gate": "build_slope",
         "threads": "threaded",
-        "measured": "native / hand loop = 2.14",
-        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 18.36 at the start and 28.47 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
-        "reason": "rank 4 runs the per-cell build's gather-table kernel, not an affine box",
-        "phase": 5
+        "measured": "277.7 ns per state (ns/state over N=100..100000)",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
+        "reason": "the generated code no longer depends on N (the box geometry is run-time data), so a new N compiles nothing; what still grows is the affine tier's work over the grid (the serial entry's breakdown); the slope is read to 10^5, the largest size being over the gate's 10^6-cell cap",
+        "phase": 2
       },
       {
         "family": "transport_3d",
         "gate": "build_slope",
         "threads": "threaded",
-        "measured": "9740 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.05 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
+        "measured": "47.11 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
+        "reason": "the generated code no longer depends on N (the box geometry is run-time data), so a new N compiles nothing; what still grows is the kernel-class merge and the affine tier's work over the grid (the serial entry's breakdown)",
         "phase": 2
       },
       {
@@ -1163,8 +1072,8 @@
         "n": 1000000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": "native / hand loop = 2",
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.05 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "measured": "native / hand loop = 2.72",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
         "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
         "phase": 5
       },
@@ -1176,6 +1085,46 @@
         "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.07 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
         "reason": "the build grows as N^2 (107 s at 10^5 cells)",
         "phase": 2
+      },
+      {
+        "family": "stencil_3d",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": "native / hand loop = 1.27",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
+        "reason": "the affine kernel runs slower than the plain loop at this size; it sits at the gate either way (1.28 with the box geometry as literals, in a run straight after this one)",
+        "phase": 5
+      },
+      {
+        "family": "transport_3d",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": "native / hand loop = 2.6",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
+        "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables (the serial entries' cause; 2.34 with the box geometry as literals, in a run straight after this one)",
+        "phase": 5
+      },
+      {
+        "family": "transport_3d",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": "native / hand loop = 2.73",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
+        "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables (the serial entries' cause; 2.49 with the box geometry as literals, in a run straight after this one)",
+        "phase": 5
+      },
+      {
+        "family": "stencil_3d",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": "native / hand loop = 1.26",
+        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
+        "reason": "the box geometry is run-time data, so the vectorized rows read at run-time slot offsets and their trip counts are not constants; at this size the steady call is about 15% slower than with literal geometry (1.11 in a run straight after this one)",
+        "phase": 5
       }
     ]
   }

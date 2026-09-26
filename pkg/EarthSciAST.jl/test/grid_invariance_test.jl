@@ -171,3 +171,65 @@ _gi_invariant(d) = (; [k => getfield(d, k) for k in keys(d)
         @test length(B.u0) - 1 == 3 * (length(A.u0) - 1)  # 2N states + x
     end
 end
+
+# The generated CODE is grid-free too, not just the IR under it: a box's bounds,
+# base slot and strides, a stencil's slot offsets and a contraction's extents
+# reach the emitted functions as run-time data, so two documents that differ
+# only in N emit the same expressions — the same RuntimeGeneratedFunction TYPES
+# — and Julia compiles each one once, not once per N. Pinned on the model above
+# and on the scaling tier's own two-size fixtures, one per family whose native
+# right-hand side is all generated code.
+_gi_rgf_types(root) = begin
+    RGF = ESM.RuntimeGeneratedFunctions
+    seen = IdDict{Any,Nothing}(); types = Set{Any}()
+    stack = Any[root]
+    while !isempty(stack)
+        x = pop!(stack)
+        T = typeof(x)
+        (isbitstype(T) || x isa AbstractString || x isa Symbol || x isa Module ||
+         x isa DataType) && continue
+        if ismutable(x)
+            haskey(seen, x) && continue
+            seen[x] = nothing
+        end
+        if x isa RGF.RuntimeGeneratedFunction
+            push!(types, T)
+            continue
+        end
+        if x isa Array
+            eltype(x) <: Number && continue
+            for i in eachindex(x); isassigned(x, i) && push!(stack, x[i]); end
+        elseif x isa AbstractDict
+            continue
+        else
+            for i in 1:nfields(x); isdefined(x, i) && push!(stack, getfield(x, i)); end
+        end
+    end
+    types
+end
+
+@testset "generated functions are shared across grid sizes" begin
+    function build(N)
+        ics = Dict{String,Float64}("x" => 1.0)
+        for k in 1:N
+            ics["u[$k]"] = sin(0.3k) + 0.1k
+            ics["y[$k]"] = 0.0
+        end
+        f, u0, p, _t, vm, _ = ESM._build_evaluator_impl(_gi_model(N);
+            initial_conditions=ics)
+        f
+    end
+    A = _gi_rgf_types(build(8))
+    B = _gi_rgf_types(build(24))
+    @test !isempty(A)
+    @test A == B
+
+    fixtures = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "scaling", "fixtures")
+    @testset "$fam" for fam in ("stencil_1d", "stencil_2d", "stencil_3d", "stencil_4d",
+                                "transport_3d", "prefix_scan", "source_receptor")
+        types = [_gi_rgf_types(ESM.esm_problem(joinpath(fixtures, fam, "$(fam)_N$(n).esm"),
+                                               (0.0, 1.0)).f!) for n in (100, 1000)]
+        @test !isempty(types[1])
+        @test types[1] == types[2]
+    end
+end
