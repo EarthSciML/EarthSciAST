@@ -21,30 +21,6 @@
   },
   "entries": [
     {
-      "path": "EarthSciModels/components/earthsci_data/edgar_v81_monthly.esm",
-      "code": "compiler_refused_rule",
-      "rule": "EDGARv81MonthlyEmis.emission",
-      "reason": "[const] wholesale: unresolved symbol (forcing/NaN sentinel?) `EDGARv81MonthlyEmis.flx`"
-    },
-    {
-      "path": "EarthSciModels/components/earthsci_data/geosfp.esm",
-      "code": "compiler_refused_rule",
-      "rule": "GEOSFP.P",
-      "reason": "[const] wholesale: unresolved symbol (forcing/NaN sentinel?) `GEOSFP.PS`"
-    },
-    {
-      "path": "EarthSciModels/components/earthsci_data/nei2016_monthly.esm",
-      "code": "compiler_refused_rule",
-      "rule": "NEI2016MonthlyEmis.ACET",
-      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `NEI2016MonthlyEmis.flux_ACET`"
-    },
-    {
-      "path": "EarthSciModels/components/earthsci_data/wrf.esm",
-      "code": "compiler_refused_rule",
-      "rule": "WRF.P_total",
-      "reason": "[const] wholesale: unresolved symbol (forcing/NaN sentinel?) `WRF.P`"
-    },
-    {
       "path": "tests/bench/transport_3axis_7cubed.esm",
       "code": "compiler_refused_rule",
       "rule": "D(q)",
@@ -108,7 +84,7 @@
       "path": "tests/conformance/discrete_materialize/fixtures/discrete_materialize_contraction.esm",
       "code": "compiler_refused_rule",
       "rule": "g",
-      "reason": "[const] variable: unresolved symbol (forcing/loop-bind?): src"
+      "reason": "[const] forcing `src`: its declared shape names an index set the registry cannot size, and the forcing buffer held no entry for it when the tape was built, so there is no box to compile its read against"
     },
     {
       "path": "tests/conformance/expression_templates/eager_target_bearing/emitted.esm",
@@ -177,12 +153,6 @@
       "reason": "[const] faq: empty output box"
     },
     {
-      "path": "tests/conformance/pushdown/fixtures/pushdown_l1.esm",
-      "code": "compiler_refused_rule",
-      "rule": "ISRM.X",
-      "reason": "[const] variable: unresolved symbol (forcing/loop-bind?): ISRM.emis_lat"
-    },
-    {
       "path": "tests/conformance/pushdown/fixtures/pushdown_polygon_area.esm",
       "code": "compiler_refused_rule",
       "rule": "Binned.E_PM25",
@@ -192,7 +162,7 @@
       "path": "tests/conformance/refresh/fixtures/coupled_refresh_regrid.esm",
       "code": "compiler_refused_rule",
       "rule": "scale_tgt",
-      "reason": "[const] variable: unresolved symbol (forcing/loop-bind?): scale_src"
+      "reason": "[const] forcing `scale_src`: its declared shape names an index set the registry cannot size, and the forcing buffer held no entry for it when the tape was built, so there is no box to compile its read against"
     },
     {
       "path": "tests/conformance/scaling/fixtures/regrid/regrid_N100.esm",
@@ -225,12 +195,6 @@
       "reason": "[const] ifelse: branch value boxes differ under a runtime scalar condition"
     },
     {
-      "path": "tests/conformance/subsystem_loader/fixtures/subsystem_loader_ode.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(c)",
-      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `k`"
-    },
-    {
       "path": "tests/coupling/callback_examples.esm",
       "code": "compiler_refused_rule",
       "rule": "D(WeatherModel.temperature)",
@@ -253,12 +217,6 @@
       "code": "compiler_refused_rule",
       "rule": "Ingest.annual_obs",
       "reason": "[const] faq: empty output box"
-    },
-    {
-      "path": "tests/fixtures/data_source_extent_scope/extent_resolved_shape.esm",
-      "code": "compiler_refused_rule",
-      "rule": "Ingest.annual_obs",
-      "reason": "[const] variable: unresolved symbol (forcing/loop-bind?): Ingest.annual"
     },
     {
       "path": "tests/fixtures/faq/11_reshape_roundtrip.esm",
@@ -345,46 +303,16 @@
       "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `ParentSystem.SubsystemA.DeepSubA.deep_variable`"
     },
     {
-      "path": "tests/valid/advection_reaction_loaded_ic_bc.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(Chemistry.O3)",
-      "reason": "[continuous] variable: unresolved symbol (forcing/loop-bind?): Advection.u_wind"
-    },
-    {
       "path": "tests/valid/cadence/discrete_remesh_stencil.esm",
       "code": "compiler_refused_rule",
       "rule": "D(u)",
-      "reason": "[continuous] variable: unresolved symbol (forcing/loop-bind?): coeff"
-    },
-    {
-      "path": "tests/valid/cadence/loader_const_seed.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(c)",
-      "reason": "[continuous] variable: unresolved symbol (forcing/loop-bind?): bc"
-    },
-    {
-      "path": "tests/valid/cadence/loader_temporal_seed.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(c)",
-      "reason": "[continuous] variable: unresolved symbol (forcing/loop-bind?): bc"
+      "reason": "[continuous] index: axis 0 is neither an affine/wrap map of an unclaimed output symbol nor a constant select"
     },
     {
       "path": "tests/valid/cadence/mixed_stencil.esm",
       "code": "compiler_refused_rule",
       "rule": "D(u)",
-      "reason": "[continuous] variable: unresolved symbol (forcing/loop-bind?): Kdiff"
-    },
-    {
-      "path": "tests/valid/cadence/observed_leaf_seeds.esm",
-      "code": "compiler_refused_rule",
-      "rule": "k_scaled",
-      "reason": "[const] wholesale: unresolved symbol (forcing/NaN sentinel?) `Kdiff`"
-    },
-    {
-      "path": "tests/valid/data_sources_comprehensive.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(O3)",
-      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `wind_u`"
+      "reason": "[continuous] index: base is a scalar but 2 index args given"
     },
     {
       "path": "tests/valid/faq/join_disaggregation_m2m.esm",
@@ -469,12 +397,6 @@
       "code": "compiler_refused_rule",
       "rule": "D(c)",
       "reason": "[continuous] makearray: empty region"
-    },
-    {
-      "path": "tests/valid/reaction_system_only.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(PureChemistry.O)",
-      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `PureChemistry.jO3`"
     },
     {
       "path": "tests/valid/recurrence_causal_self_reference.esm",
