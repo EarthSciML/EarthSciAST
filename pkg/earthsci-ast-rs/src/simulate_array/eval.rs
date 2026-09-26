@@ -2438,14 +2438,11 @@ pub(crate) fn clip_area_value(
     vb: &[(f64, f64)],
     manifold: crate::geometry::Manifold,
 ) -> f64 {
-    match crate::geometry::intersect_polygon(va, vb, manifold)
+    // A degenerate input ring or unavailable backend surfaces as NaN, the
+    // same not-a-value sentinel the evaluator uses for unevaluable nodes.
+    crate::geometry::intersect_polygon(va, vb, manifold)
         .and_then(|ring| crate::geometry::polygon_area(&ring, manifold))
-    {
-        Ok(area) => area,
-        // A degenerate input ring or unavailable backend surfaces as NaN, the
-        // same not-a-value sentinel the evaluator uses for unevaluable nodes.
-        Err(_) => f64::NAN,
-    }
+        .unwrap_or(f64::NAN)
 }
 
 /// Close a ring by repeating its first vertex (RFC §8.1; mirrors Python
