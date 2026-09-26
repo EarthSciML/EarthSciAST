@@ -1924,7 +1924,7 @@ SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol,
 # against (the ephemeral injected file when the test injects a discretization).
 struct _SimulateHandle
     sim::Any                      # the SciML solution `solve(prob, alg)` returned
-    var_map::Dict{String,Int}     # state-element name → flat index (from the problem)
+    var_map::AbstractDict{String,Int}     # state-element name → flat index (from the problem)
     insp::BuildInspection
     eval_file::EsmFile
     # The states an `operator_compose` renaming match DELETED, mapped onto the

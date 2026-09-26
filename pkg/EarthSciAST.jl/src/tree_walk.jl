@@ -10,11 +10,13 @@
 #
 #     _build_evaluator(model::Model; kwargs...)
 #         → (f!, u0::Vector{Float64}, p::NamedTuple, tspan::Tuple{Float64,Float64},
-#            var_map::Dict{String,Int})
+#            var_map::StateLayout)
 #
 # The returned tuple plugs straight into `ODEProblem(f!, u0, tspan, p)`.
 # `var_map` is the state-name → index lookup so callers can probe the
-# solution at specific variables.
+# solution at specific variables: an `AbstractDict{String,Int}` over the
+# element names (`"u[2,3]"`), answered arithmetically from one block per array
+# variable (tree_walk/state_layout.jl).
 #
 # The default `f!` both SOLVES and DIFFERENTIATES: it is zero-alloc at Float64 and
 # eltype-generic, so ForwardDiff runs through it over the state or the parameters
@@ -41,6 +43,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 include("tree_walk/errors.jl")           # §1   TreeWalkError + E_TREEWALK_* codes
+include("tree_walk/state_layout.jl")     #      the flat state layout (`StateLayout`)
 include("tree_walk/geometry_setup.jl")   # §2   build-time geometry materialization
 include("tree_walk/build_helpers.jl")    #      sentinels, boundary policy, folds
 include("tree_walk/unlowered_gate.jl")   #      §9.6.3 c.6 pre-build rewrite-target walk

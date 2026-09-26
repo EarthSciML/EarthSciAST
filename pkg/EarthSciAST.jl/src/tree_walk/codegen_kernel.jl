@@ -39,7 +39,7 @@
 # FALLBACK CONTRACT: anything the emitter cannot model — an unknown node kind
 # or descriptor, a foreign CSE scratch (except the build's own shared
 # scalar-prelude cache, which since ess-cgfsc is emitted as the interpreter's
-# `_cse_read`; see the tier note below), a >3-D box, an oversized spine —
+# `_cse_read`; see the tier note below), an oversized spine —
 # declines THAT kernel silently (`_CodegenDecline`); the kernel keeps the
 # per-cell interpreter (`_run_acc_kernel!`, eltype-generic). Declines are
 # counted per reason in `_CASCADE_TALLY` (`:codegen_kernel` /
@@ -320,17 +320,56 @@ struct _CGKernCtx
     mi3::Any
     cellsyms::Vector{Symbol}
     invsyms::Vector{Symbol}
+    # The multi-index of loop dims 4, 5, … — empty on a box of rank ≤ 3, where
+    # every dim past the third reads as the literal 1, exactly as the
+    # interpreter's padded `midx` does.
+    mix::Vector{Any}
 end
+_CGKernCtx(K, c, n, oln, mi1, mi2, mi3, cellsyms, invsyms) =
+    _CGKernCtx(K, c, n, oln, mi1, mi2, mi3, cellsyms, invsyms, Any[])
 
-_cg_mi(kc::_CGKernCtx, d::Int) = d == 1 ? kc.mi1 : d == 2 ? kc.mi2 : kc.mi3
+_cg_mi(kc::_CGKernCtx, d::Int) =
+    d == 1 ? kc.mi1 : d == 2 ? kc.mi2 : d == 3 ? kc.mi3 :
+    d - 3 <= length(kc.mix) ? kc.mix[d - 3] : 1
+
+# The same context with loop dim `d` bound to `v` (an affine reduction binds its
+# reduction dims this way, inside its loops).
+function _cg_with_mi(kc::_CGKernCtx, d::Int, v)
+    mi1, mi2, mi3 = kc.mi1, kc.mi2, kc.mi3
+    mix = kc.mix
+    if d == 1
+        mi1 = v
+    elseif d == 2
+        mi2 = v
+    elseif d == 3
+        mi3 = v
+    else
+        mix = copy(kc.mix)
+        while length(mix) < d - 3
+            push!(mix, 1)
+        end
+        mix[d - 3] = v
+    end
+    return _CGKernCtx(kc.K, kc.c, kc.n, kc.oln, mi1, mi2, mi3, kc.cellsyms,
+                      kc.invsyms, mix)
+end
 
 # Integer index expression `off + Σ_d (mi_d - 1)·s_d`, folding literal-1 mi
 # and zero strides (exact Int arithmetic — folding cannot change the index).
-function _cg_boxaddr(kc::_CGKernCtx, s1::Int, s2::Int, s3::Int, off::Int)
+# `sx` carries the strides of dims 4, 5, … (`_AccDesc.sx`).
+function _cg_boxaddr(kc::_CGKernCtx, s1::Int, s2::Int, s3::Int, off::Int,
+                     sx::Vector{Int}=_AK_NO_CONN)
     e = nothing
     for (mi, s) in ((kc.mi1, s1), (kc.mi2, s2), (kc.mi3, s3))
         s == 0 && continue
         mi === 1 && continue                      # (1-1)*s == 0
+        term = :(($mi - 1) * $s)
+        e = e === nothing ? term : :($e + $term)
+    end
+    for d in eachindex(sx)
+        s = sx[d]
+        mi = _cg_mi(kc, d + 3)
+        (s == 0 || mi === 1) && continue
         term = :(($mi - 1) * $s)
         e = e === nothing ? term : :($e + $term)
     end
@@ -349,7 +388,7 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc)
     elseif k === _AK_CONST_BOX || k === _AK_FORCING_BOX
         # FORCING_BOX's arr is the aliased LIVE buffer — passing the reference
         # through `tabs` keeps every in-place refresh visible.
-        return :($(_cg_tab!(ctx, a.arr))[$(_cg_boxaddr(kc, a.s1, a.s2, a.s3, a.off))])
+        return :($(_cg_tab!(ctx, a.arr))[$(_cg_boxaddr(kc, a.s1, a.s2, a.s3, a.off, a.sx))])
     elseif k === _AK_STATE_FIXED
         return :(u[$(a.idx)])
     elseif k === _AK_LOOP_IDX
@@ -368,13 +407,13 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc)
         return :(u[$(_cg_tab!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(a.col)]])
     elseif k === _AK_STATE_TBL_BOX
         s = _cg_name(ctx, "s")
-        addr = _cg_boxaddr(kc, a.s1, a.s2, a.s3, a.off)
+        addr = _cg_boxaddr(kc, a.s1, a.s2, a.s3, a.off, a.sx)
         # Exactly `_fetch`'s ghost test: slot 0 ⇒ the ghost literal 0.0.
         return :(let $s = $(_cg_tab!(ctx, a.conn))[$addr]
                      $s == 0 ? 0.0 : u[$s]
                  end)
     elseif k === _AK_ARR_TBL_BOX
-        addr = _cg_boxaddr(kc, a.s1, a.s2, a.s3, a.off)
+        addr = _cg_boxaddr(kc, a.s1, a.s2, a.s3, a.off, a.sx)
         return :($(_cg_tab!(ctx, a.arr))[$(_cg_tab!(ctx, a.conn))[$addr]])
     end
     throw(_CodegenDecline(:unsupported_desc))
@@ -455,7 +494,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
         s = _cg_name(ctx, "r")
         m = _cg_name(ctx, "m")
         inner = _CGKernCtx(kc.K, kc.c, m, kc.oln, kc.mi1, kc.mi2, kc.mi3,
-                           kc.cellsyms, kc.invsyms)
+                           kc.cellsyms, kc.invsyms, kc.mix)
         body = _cg_emit(ctx, inner, nd.children[1])
         return quote
             local $s = $(kc.K.zerobar)
@@ -464,6 +503,8 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
             end
             $s
         end
+    elseif k === _NK_AREDUCE
+        return _cg_emit_areduce(ctx, kc, nd)
     elseif k === _NK_CONTRACTION
         # Seeded sequential ⊕-fold in child order — `_eval_acc_contraction`
         # arm for arm (`max`/`min` fold through the function, `+`/`*` through
@@ -485,6 +526,33 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
         return _cg_emit_op(ctx, kc, nd)
     end
     throw(_CodegenDecline(:unknown_kind))
+end
+
+# Affine reduction (`_NK_AREDUCE`) — `_eval_acc_areduce` as a loop nest: one
+# accumulator seeded from the node's 0̄ (a `Float64`, as the interpreter seeds
+# it), the contracted dims bound to loop counters (the first dim innermost),
+# and `s = s ⊕ body` in the innermost loop. The body is emitted once, so the
+# kernel's code does not grow with the contraction length.
+function _cg_emit_areduce(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
+    spec = nd.payload::_AReduceSpec
+    fnsym = _cg_oplus_fn(nd.op)
+    acc = _cg_name(ctx, "r")
+    js = Symbol[_cg_name(ctx, "j") for _ in spec.dims]
+    inner = kc
+    for r in eachindex(spec.dims)
+        inner = _cg_with_mi(inner, spec.dims[r], js[r])
+    end
+    body = _cg_emit(ctx, inner, nd.children[1])
+    loop = Expr(:(=), acc, Expr(:call, fnsym, acc, body))
+    for r in eachindex(spec.dims)
+        rg = spec.ranges[r]
+        loop = Expr(:for, :($(js[r]) = $(first(rg)):$(last(rg))), Expr(:block, loop))
+    end
+    return quote
+        local $acc = $(nd.literal)
+        $loop
+        $acc
+    end
 end
 
 # Emit a kernel's per-cell CSE recipes as `local q = convert(T, …)` statements
@@ -665,7 +733,9 @@ end
 function _cg_emit_subcall(ctx::_CGCtx, kc::_CGKernCtx, S::_AccKernel)
     invsyms = get(ctx.invdone, S, nothing)
     invsyms === nothing && throw(_CodegenDecline(:subcall_order))
-    if _cg_split_supported() && !_cg_subcall_fn_disabled()
+    # The function tier passes the three-dim cell context as its formal
+    # parameters, so a body read past the third dim is inlined instead.
+    if _cg_split_supported() && !_cg_subcall_fn_disabled() && isempty(kc.mix)
         got = _cg_subcall_fn!(ctx, S, invsyms)
         if got !== :inline
             fname, extra, ints, flts =
@@ -685,7 +755,7 @@ function _cg_emit_subcall(ctx::_CGCtx, kc::_CGKernCtx, S::_AccKernel)
     # recipes become occurrence-local locals, then the body spine evaluates
     # against its OWN descriptor table.
     inner = _CGKernCtx(S, kc.c, kc.n, kc.oln, kc.mi1, kc.mi2, kc.mi3,
-                       Symbol[], invsyms)
+                       Symbol[], invsyms, kc.mix)
     stmts = _cg_emit_recipes!(Any[], ctx, inner)
     spine = _cg_emit(ctx, inner, S.spine)
     isempty(stmts) && return spine
@@ -970,7 +1040,8 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     end
     invsyms = _cg_inv!(ctx, K)
 
-    cellfn = (_cg_split_supported() && !_cg_subcall_fn_disabled()) ?
+    cellfn = (_cg_split_supported() && !_cg_subcall_fn_disabled() &&
+              length(K.cells.strides) <= 3) ?
              _cg_cell_fn!(ctx, K, invsyms) : nothing
 
     # Per-cell body: a CALL to the shared cell function when the structural
@@ -1034,7 +1105,7 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     # (the decode is hoisted to the row level so the inner loop stays today's
     # instructions).
     nd = length(cs.strides)
-    nd <= 3 || throw(_CodegenDecline(:box_rank))
+    nd <= 3 || return _cg_emit_box_rank_n(ctx, K, cs, hdr, av, bv, cellbody)
     st = cs.strides
     rg = cs.ranges
     iv = _cg_name(ctx, "i")
@@ -1112,6 +1183,80 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     end
 end
 
+# A strided Cartesian box of rank above 3, in `_run_box_kernel!`'s iteration
+# order (dim 1 fastest). The chunk `[a, b)` is walked as whole dim-1 ROWS, the
+# same row walk the rank-2/3 nests use: the chunk's first row ordinal
+# `r = a ÷ n1` is decoded into dims 2…D by division once, each later row steps
+# that odometer by one (dim 2 fastest, carrying upward), so the inner loop is
+# the rank-1 loop over `rowbase + i·s1`, and only the first and last row of a
+# chunk clamp dim 1 to the chunk boundary. c == oln for a box.
+function _cg_emit_box_rank_n(ctx::_CGCtx, K::_AccKernel, cs::_CellSet, hdr, av, bv,
+                             cellbody)
+    st = cs.strides
+    rg = cs.ranges
+    nd = length(st)
+    iv = _cg_name(ctx, "i")
+    ovs = Any[iv]
+    for d in 2:nd
+        push!(ovs, _cg_name(ctx, "i"))
+    end
+    oln = _cg_name(ctx, "o")
+    rowb = _cg_name(ctx, "rb")
+    rowexpr = cs.base
+    for d in 2:nd
+        rowexpr = :($rowexpr + $(ovs[d]) * $(st[d]))
+    end
+    kc = _CGKernCtx(K, oln, 0, oln, ovs[1], ovs[2], ovs[3], Symbol[], _cg_inv!(ctx, K),
+                    Any[ovs[d] for d in 4:nd])
+    body = cellbody(kc)
+    i0 = first(rg[1]); i1 = last(rg[1]); ni = length(rg[1])
+    ohi = _cg_name(ctx, "e")
+    rlo = _cg_name(ctx, "rl")
+    rhi = _cg_name(ctx, "rh")
+    rv = _cg_name(ctx, "r")
+    rr = _cg_name(ctx, "rr")
+    ilo = _cg_name(ctx, "il")
+    ihi = _cg_name(ctx, "ih")
+    seek = Any[:(local $rr = $rlo)]
+    for d in 2:nd
+        push!(seek, :(local $(ovs[d]) = $(first(rg[d])) + rem($rr, $(length(rg[d])))))
+        d < nd && push!(seek, :($rr = div($rr, $(length(rg[d])))))
+    end
+    # The odometer step after a row: dim 2 up by one, carrying into the next
+    # dim when it passes its last index. Past the chunk's last row it may run
+    # off the box; nothing reads it then.
+    step = :($(ovs[nd]) += 1)
+    for d in (nd - 1):-1:2
+        step = quote
+            if $(ovs[d]) < $(last(rg[d]))
+                $(ovs[d]) += 1
+            else
+                $(ovs[d]) = $(first(rg[d]))
+                $step
+            end
+        end
+    end
+    return quote
+        $(hdr...)
+        if $av < $bv
+            local $ohi = $bv - 1
+            local $rlo = div($av, $ni)
+            local $rhi = div($ohi, $ni)
+            $(seek...)
+            for $rv in $rlo:$rhi
+                local $ilo = $rv == $rlo ? $i0 + rem($av, $ni) : $i0
+                local $ihi = $rv == $rhi ? $i0 + rem($ohi, $ni) : $i1
+                local $rowb = $rowexpr
+                for $iv in $ilo:$ihi
+                    local $oln = $rowb + $iv * $(st[1])
+                    $(body...)
+                end
+                $step
+            end
+        end
+    end
+end
+
 # ---- Build the fused generated RHS section ----------------------------------
 struct _CGBuilt{F,TB}
     f::F
@@ -1130,53 +1275,6 @@ struct _CGBuilt{F,TB}
     outs_disjoint::Bool
 end
 
-# Every output slot of `cs` pushed into `seen`; false on the first duplicate.
-# Cross-KERNEL by design: a per-kernel check could short-circuit a contiguous
-# set as disjoint-by-construction (it only compares a set against itself),
-# while here a contiguous range must also collide with the OTHER kernels'
-# slots, so every kind enumerates. Same slot arithmetic as the runners,
-# exact Int.
-function _cellset_outs_disjoint!(seen::Set{Int}, cs::_CellSet)
-    if _is_outs(cs)
-        for o in cs.outs
-            o in seen && return false
-            push!(seen, o)
-        end
-        return true
-    end
-    if _is_contig(cs)
-        for o in cs.ranges[1]
-            o in seen && return false
-            push!(seen, o)
-        end
-        return true
-    end
-    st = cs.strides; rg = cs.ranges; b = cs.base; nd = length(st)
-    if nd == 1
-        s1 = st[1]
-        for i in rg[1]
-            o = b + i*s1
-            o in seen && return false
-            push!(seen, o)
-        end
-    elseif nd == 2
-        s1 = st[1]; s2 = st[2]
-        for j in rg[2], i in rg[1]
-            o = b + i*s1 + j*s2
-            o in seen && return false
-            push!(seen, o)
-        end
-    else
-        s1 = st[1]; s2 = st[2]; s3 = st[3]
-        for k in rg[3], j in rg[2], i in rg[1]
-            o = b + i*s1 + j*s2 + k*s3
-            o in seen && return false
-            push!(seen, o)
-        end
-    end
-    return true
-end
-
 # Build-time SECTION-chunking safety check: are the emitted kernels' output
 # slots globally pairwise-distinct ACROSS the whole generated function? Only
 # then may one chunk run ALL kernels' cell sub-ranges without a barrier —
@@ -1192,13 +1290,8 @@ function _cg_covered_outs_disjoint(acc_kernels::AbstractVector{_AccKernel},
         covered[j] || continue
         ncells += _cellset_ncells(K.cells)
     end
-    seen = Set{Int}()
-    sizehint!(seen, ncells)
-    for (j, K) in enumerate(acc_kernels)
-        covered[j] || continue
-        _cellset_outs_disjoint!(seen, K.cells) || return ncells, false
-    end
-    return ncells, true
+    return ncells, _cellsets_outs_unique(K.cells for (j, K) in enumerate(acc_kernels)
+                                         if covered[j])
 end
 
 # Per-generated-FUNCTION emitted-node cap. The node budget above bounds total

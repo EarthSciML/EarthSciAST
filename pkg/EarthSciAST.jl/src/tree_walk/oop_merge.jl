@@ -196,10 +196,12 @@ function _oop_merge_trees_sig!(io::IOBuffer, K::_AccKernel, parentsubs, why)
     return io
 end
 
-function _oop_merge_kernel_sig(K::_AccKernel, plan::_OopAccPlan)
+_oop_merge_kernel_sig(K::_AccKernel, plan::_OopAccPlan) =
+    _oop_merge_kernel_sig(K, plan.vectorizable, !isempty(plan.red_seg))
+function _oop_merge_kernel_sig(K::_AccKernel, vectorizable::Bool, reduce::Bool)
     why = Ref(:ok)
-    plan.vectorizable || (why[] = :unvectorizable)
-    isempty(plan.red_seg) || (why[] = :reduce)
+    vectorizable || (why[] = :unvectorizable)
+    reduce && (why[] = :reduce)
     io = IOBuffer()
     _oop_merge_trees_sig!(io, K, K.subs, why)
     for (si, S) in enumerate(K.subs)
@@ -500,6 +502,76 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
                       _AccCSE(mrc_, msc_, minv_, mis_), merged_subs)
 end
 
+# The class merge's per-kernel lane plans, built on first use. Grouping reads
+# only whether a kernel vectorizes and whether it carries a reduce, and the
+# global out-slot check reads only its cell set, so a full plan (its per-lane
+# tables) is built only for a kernel whose class actually merges.
+#
+# `outs_unique` is the global out-slot verdict, shared by every plan vector a
+# merge round derives from this one: a round replaces the members of a class
+# by one kernel whose lanes are exactly theirs, so the vectorized kernels' out
+# slots, taken together, are the same multiset after the round as before it.
+struct _LazyOopPlans <: AbstractVector{_OopAccPlan}
+    kernels::Vector{_AccKernel}
+    plans::Vector{Union{Nothing,_OopAccPlan}}
+    vecable::Vector{Int8}                  # -1 not yet known, else 0 / 1
+    outs_unique::Base.RefValue{Int8}       # -1 not yet known, else 0 / 1
+end
+_LazyOopPlans(kernels::AbstractVector{_AccKernel}) =
+    _LazyOopPlans(collect(_AccKernel, kernels),
+                  Union{Nothing,_OopAccPlan}[nothing for _ in kernels],
+                  fill(Int8(-1), length(kernels)), Ref(Int8(-1)))
+Base.size(v::_LazyOopPlans) = (length(v.kernels),)
+function Base.getindex(v::_LazyOopPlans, j::Int)
+    p = v.plans[j]
+    p === nothing || return p
+    p = _build_oop_acc_plan(v.kernels[j])
+    v.plans[j] = p
+    v.vecable[j] = p.vectorizable ? 1 : 0
+    return p
+end
+
+function _plan_vecable(v::_LazyOopPlans, j::Int)
+    if v.vecable[j] < 0
+        v.vecable[j] = _oop_plan_vecable(v.kernels[j]) ? 1 : 0
+    end
+    return v.vecable[j] == 1
+end
+_plan_vecable(v::AbstractVector{_OopAccPlan}, j::Int) = v[j].vectorizable
+# A vectorized plan carries CSR reduce segments exactly when the spine reduces.
+_plan_reduce(v::_LazyOopPlans, j::Int) =
+    _plan_vecable(v, j) && _acc_has_reduce(v.kernels[j].spine)
+_plan_reduce(v::AbstractVector{_OopAccPlan}, j::Int) = !isempty(v[j].red_seg)
+
+_plans_empty(v::_LazyOopPlans) =
+    _LazyOopPlans(_AccKernel[], Union{Nothing,_OopAccPlan}[], Int8[], v.outs_unique)
+_plans_empty(::AbstractVector{_OopAccPlan}) = _OopAccPlan[]
+function _plans_push!(out::_LazyOopPlans, v::_LazyOopPlans, j::Int)
+    push!(out.kernels, v.kernels[j]); push!(out.plans, v.plans[j])
+    push!(out.vecable, v.vecable[j])
+    return out
+end
+_plans_push!(out::AbstractVector{_OopAccPlan}, v::AbstractVector{_OopAccPlan}, j::Int) =
+    push!(out, v[j])
+function _plans_push!(out::_LazyOopPlans, K::_AccKernel, pl::_OopAccPlan)
+    push!(out.kernels, K); push!(out.plans, pl)
+    push!(out.vecable, pl.vectorizable ? 1 : 0)
+    return out
+end
+_plans_push!(out::AbstractVector{_OopAccPlan}, ::_AccKernel, pl::_OopAccPlan) = push!(out, pl)
+
+# Every vectorized plan's out slots, together, are distinct (an unvectorized
+# plan scatters nothing).
+function _plans_outs_unique(kernels, v::_LazyOopPlans)
+    if v.outs_unique[] < 0
+        v.outs_unique[] = _cellsets_outs_unique(kernels[j].cells for j in eachindex(kernels)
+                                                if _plan_vecable(v, j)) ? 1 : 0
+    end
+    return v.outs_unique[] == 1
+end
+_plans_outs_unique(kernels, v::AbstractVector{_OopAccPlan}) =
+    allunique(reduce(vcat, (pl.out_slots for pl in v); init = Int[]))
+
 """
     _merge_oop_acc_kernels(kernels, plans[, tally]) -> (kernels′, plans′, diag)
 
@@ -522,23 +594,23 @@ function _merge_oop_acc_kernels(kernels::AbstractVector{_AccKernel},
 
     # Assignment scatter + globally unique out-slots ⇒ concatenating lanes
     # across kernels cannot reorder any write. Without uniqueness, decline.
-    allouts = reduce(vcat, (pl.out_slots for pl in plans); init = Int[])
-    allunique(allouts) || return (kernels, plans, nodiag)
+    _plans_outs_unique(kernels, plans) || return (kernels, plans, nodiag)
 
     groups = Dict{String,Vector{Int}}()
     passthrough = Int[]
     for j in eachindex(kernels)
-        s, _why = _oop_merge_kernel_sig(kernels[j], plans[j])
+        s, _why = _oop_merge_kernel_sig(kernels[j], _plan_vecable(plans, j),
+                                        _plan_reduce(plans, j))
         s === nothing ? push!(passthrough, j) : push!(get!(groups, s, Int[]), j)
     end
 
     out_kernels = _AccKernel[]
-    out_plans = _OopAccPlan[]
+    out_plans = _plans_empty(plans)
     n_failed = 0
     # Deterministic output order: classes by first-member kernel index.
     for js in sort!(collect(values(groups)); by = first)
         if length(js) == 1
-            push!(out_kernels, kernels[js[1]]); push!(out_plans, plans[js[1]])
+            push!(out_kernels, kernels[js[1]]); _plans_push!(out_plans, plans, js[1])
             continue
         end
         merged = try
@@ -552,10 +624,10 @@ function _merge_oop_acc_kernels(kernels::AbstractVector{_AccKernel},
         if merged === nothing
             n_failed += 1
             for j in js
-                push!(out_kernels, kernels[j]); push!(out_plans, plans[j])
+                push!(out_kernels, kernels[j]); _plans_push!(out_plans, plans, j)
             end
         else
-            push!(out_kernels, merged[1]); push!(out_plans, merged[2])
+            push!(out_kernels, merged[1]); _plans_push!(out_plans, merged[1], merged[2])
             # Cascade observability (direct class emission): one bump per
             # class this round actually merged, on the caller-named counter.
             # As the REPAIR pass (the default `tally`) this must stay zero on
@@ -570,7 +642,7 @@ function _merge_oop_acc_kernels(kernels::AbstractVector{_AccKernel},
         end
     end
     for j in passthrough
-        push!(out_kernels, kernels[j]); push!(out_plans, plans[j])
+        push!(out_kernels, kernels[j]); _plans_push!(out_plans, plans, j)
     end
     diag = (; n_in = length(kernels), n_out = length(out_kernels),
             n_classes = length(groups), n_blocked = length(passthrough),
@@ -714,10 +786,12 @@ function _oop_x_sig(n0::_Node, K::_AccKernel, parentsubs,
     return r
 end
 
-function _oop_x_kernel_sig(K::_AccKernel, plan::_OopAccPlan)
+_oop_x_kernel_sig(K::_AccKernel, plan::_OopAccPlan) =
+    _oop_x_kernel_sig(K, plan.vectorizable, !isempty(plan.red_seg))
+function _oop_x_kernel_sig(K::_AccKernel, vectorizable::Bool, reduce::Bool)
     why = Ref(:ok)
-    plan.vectorizable || (why[] = :unvectorizable)
-    isempty(plan.red_seg) || (why[] = :reduce)
+    vectorizable || (why[] = :unvectorizable)
+    reduce && (why[] = :reduce)
     memo = IdDict{_Node,UInt}()
     h = hash(reinterpret(UInt64, K.zerobar), UInt(0xaa33))
     h = hash(_oop_x_sig(K.spine, K, K.subs, memo, why), h)
@@ -950,22 +1024,22 @@ function _merge_oop_x_kernels(kernels::AbstractVector{_AccKernel},
     nodiag = (; n_in = length(kernels), n_out = length(kernels),
               n_classes = 0, n_blocked = length(kernels), n_failed = 0)
     length(kernels) <= 1 && return (kernels, plans, nodiag)
-    allouts = reduce(vcat, (pl.out_slots for pl in plans); init = Int[])
-    allunique(allouts) || return (kernels, plans, nodiag)
+    _plans_outs_unique(kernels, plans) || return (kernels, plans, nodiag)
 
     groups = Dict{UInt,Vector{Int}}()
     passthrough = Int[]
     for j in eachindex(kernels)
-        s, _why = _oop_x_kernel_sig(kernels[j], plans[j])
+        s, _why = _oop_x_kernel_sig(kernels[j], _plan_vecable(plans, j),
+                                    _plan_reduce(plans, j))
         s === nothing ? push!(passthrough, j) : push!(get!(groups, s, Int[]), j)
     end
 
     out_kernels = _AccKernel[]
-    out_plans = _OopAccPlan[]
+    out_plans = _plans_empty(plans)
     n_failed = 0
     for js in sort!(collect(values(groups)); by = first)
         if length(js) == 1
-            push!(out_kernels, kernels[js[1]]); push!(out_plans, plans[js[1]])
+            push!(out_kernels, kernels[js[1]]); _plans_push!(out_plans, plans, js[1])
             continue
         end
         merged = try
@@ -979,17 +1053,17 @@ function _merge_oop_x_kernels(kernels::AbstractVector{_AccKernel},
         if merged === nothing
             n_failed += 1
             for j in js
-                push!(out_kernels, kernels[j]); push!(out_plans, plans[j])
+                push!(out_kernels, kernels[j]); _plans_push!(out_plans, plans, j)
             end
         else
-            push!(out_kernels, merged[1]); push!(out_plans, merged[2])
+            push!(out_kernels, merged[1]); _plans_push!(out_plans, merged[1], merged[2])
             # Round-2 twin of the round-1 counter above (repair by default,
             # `:direct_classmerge_round2_merge` under the direct stage).
             _tally_cascade!(tally)
         end
     end
     for j in passthrough
-        push!(out_kernels, kernels[j]); push!(out_plans, plans[j])
+        push!(out_kernels, kernels[j]); _plans_push!(out_plans, plans, j)
     end
     diag = (; n_in = length(kernels), n_out = length(out_kernels),
             n_classes = length(groups), n_blocked = length(passthrough),
@@ -1030,7 +1104,7 @@ every stage.
 """
 function _merge_acc_kernel_classes(kernels::AbstractVector{_AccKernel})
     (_oop_merge_disabled() || length(kernels) <= 1) && return (kernels, nothing)
-    plans = _OopAccPlan[_build_oop_acc_plan(K) for K in kernels]
+    plans = _LazyOopPlans(kernels)
 
     # ---- DIRECT class-emission stage (cross-eq/affine-box families) ------
     ddiag = nothing

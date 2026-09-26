@@ -38,8 +38,10 @@
 # grid); `c` the cell ordinal (== `oln` for a Cartesian box, the running index
 # for a contiguous/unstructured set) used by per-cell/edge descriptors and the
 # `_VarBound`; `n` the neighbour index inside a reduction (0 outside); and `midx`
-# the cell's up-to-3D loop multi-index (i,j,k), used ONLY by `_AccConstBox` to
-# address a const on a different grid. `midx` is padded with 1s for absent dims.
+# the cell's loop multi-index (i,j,k,…), used by the box-addressed descriptors
+# and the loop-index leaf. `midx` has one entry per loop dim, padded with 1s to
+# three; inside an affine reduction (`_NK_AREDUCE`) it also carries the
+# reduction indices, at the dims after the output's.
 # ========================================================================
 
 # New spine kinds (disjoint from _NK_LITERAL..._NK_PARAM_GATHER = 1..8).
@@ -53,6 +55,22 @@ const _NK_REDUCE = UInt8(21)   # ⊕-reduction over the neighbour index (payload
 # recurses into it with the SAME (u, p, t, c, n, oln, midx) cell context, so the
 # body computes exactly the scalar sequence the fused (expanded) spine would.
 const _NK_SUBCALL = UInt8(22)  # template-body sub-kernel (payload = _AccKernel)
+# Affine reduction: the ⊕-fold of a contraction whose contracted indices are
+# extra loop dims of the kernel's box (stencil_affine.jl, `_AffineReduce`). The
+# body (`children[1]`) is ONE access spine over the output AND the contracted
+# indices, and this node walks the contracted ones at run time — so the kernel
+# is the same size at every contraction length, where the unrolled fold it
+# replaces holds one term per contracted index. `payload` is the `_AReduceSpec`
+# (which `midx` dims to walk, over which ranges; the first dim fastest, the
+# order the unroll enumerates its terms in), `op` the ⊕ and `literal` its 0̄
+# seed. The fold is sequential from the seed, `s = s ⊕ body` in that order, so
+# it is the unrolled fold's arithmetic exactly.
+const _NK_AREDUCE = UInt8(23)
+
+struct _AReduceSpec
+    dims::Vector{Int}                # `midx` positions of the contracted indices
+    ranges::Vector{UnitRange{Int}}   # their ranges, aligned with `dims`
+end
 
 # ---- Access descriptors: how one leaf resolves to a value at (cell c, nbr n) ----
 #
@@ -114,6 +132,11 @@ struct _AccDesc
     s3::Int
     off::Int
     v::Float64             # SCALAR
+    # Box strides of loop dims 4, 5, … (empty for a box of rank ≤ 3, which is
+    # every box but a rank-4+ grid or a contraction's reduction dims past the
+    # third). Kept apart from s1..s3 so the rank ≤ 3 descriptor, its fetch and
+    # its emitted address are exactly what they were.
+    sx::Vector{Int}
 end
 
 const _AK_NO_ARR  = Float64[]
@@ -121,8 +144,14 @@ const _AK_NO_CONN = Int[]
 
 @inline _mkacc(kind::UInt8; arr::Vector{Float64}=_AK_NO_ARR, conn::Vector{Int}=_AK_NO_CONN,
                delta::Int=0, idx::Int=0, width::Int=0, col::Int=0, dim::Int=0,
-               s1::Int=0, s2::Int=0, s3::Int=0, off::Int=0, v::Float64=0.0) =
-    _AccDesc(kind, arr, conn, delta, idx, width, col, dim, s1, s2, s3, off, v)
+               s1::Int=0, s2::Int=0, s3::Int=0, off::Int=0, v::Float64=0.0,
+               sx::Vector{Int}=_AK_NO_CONN) =
+    _AccDesc(kind, arr, conn, delta, idx, width, col, dim, s1, s2, s3, off, v, sx)
+
+# A box-addressed descriptor's per-dim strides, any rank: the first three go to
+# s1..s3 (zero-padded) and the rest to `sx`.
+@inline _box_s(s::AbstractVector{Int}, d::Int) = d <= length(s) ? s[d] : 0
+_box_sx(s::AbstractVector{Int}) = length(s) > 3 ? Vector{Int}(s[4:end]) : _AK_NO_CONN
 
 # Named constructors — the descriptor call sites (stencil_affine.jl, tests) use
 # these and are unchanged by the tagged-struct storage.
@@ -133,12 +162,18 @@ _AccStateIndirectCol(conn::Vector{Int}, width::Int, col::Int) =
 _AccConstAffine(arr::Vector{Float64}, delta::Int) = _mkacc(_AK_CONST_AFFINE; arr=arr, delta=delta)
 _AccConstBox(arr::Vector{Float64}, s1::Int, s2::Int, s3::Int, off::Int) =
     _mkacc(_AK_CONST_BOX; arr=arr, s1=s1, s2=s2, s3=s3, off=off)
+_AccConstBox(arr::Vector{Float64}, s::AbstractVector{Int}, off::Int) =
+    _mkacc(_AK_CONST_BOX; arr=arr, s1=_box_s(s, 1), s2=_box_s(s, 2), s3=_box_s(s, 3),
+           off=off, sx=_box_sx(s))
 # LIVE forcing gather with a lane-affine flat index. Same addressing as CONST_BOX
 # but `arr` MUST be the aliased `_PGatherArray.flat` buffer (a data-refresh mutates
 # it in place, so a captured reference stays live) — never a copy. A distinct kind
 # from CONST_BOX so an invariant/const-hoisting analysis can never freeze it.
 _AccForcingBox(arr::Vector{Float64}, s1::Int, s2::Int, s3::Int, off::Int) =
     _mkacc(_AK_FORCING_BOX; arr=arr, s1=s1, s2=s2, s3=s3, off=off)
+_AccForcingBox(arr::Vector{Float64}, s::AbstractVector{Int}, off::Int) =
+    _mkacc(_AK_FORCING_BOX; arr=arr, s1=_box_s(s, 1), s2=_box_s(s, 2), s3=_box_s(s, 3),
+           off=off, sx=_box_sx(s))
 _AccConstCell(arr::Vector{Float64})              = _mkacc(_AK_CONST_CELL; arr=arr)
 _AccConstEdge(arr::Vector{Float64}, width::Int)  = _mkacc(_AK_CONST_EDGE; arr=arr, width=width)
 _AccStateFixed(idx::Int)                         = _mkacc(_AK_STATE_FIXED; idx=idx)
@@ -147,8 +182,27 @@ _AccLoopIdx(dim::Int)                            = _mkacc(_AK_LOOP_IDX; dim=dim)
 _AccScalar(v::Float64)                           = _mkacc(_AK_SCALAR; v=v)
 _AccStateTblBox(conn::Vector{Int}, s1::Int, s2::Int, s3::Int, off::Int) =
     _mkacc(_AK_STATE_TBL_BOX; conn=conn, s1=s1, s2=s2, s3=s3, off=off)
+_AccStateTblBox(conn::Vector{Int}, s::AbstractVector{Int}, off::Int) =
+    _mkacc(_AK_STATE_TBL_BOX; conn=conn, s1=_box_s(s, 1), s2=_box_s(s, 2),
+           s3=_box_s(s, 3), off=off, sx=_box_sx(s))
 _AccArrTblBox(arr::Vector{Float64}, conn::Vector{Int}, s1::Int, s2::Int, s3::Int, off::Int) =
     _mkacc(_AK_ARR_TBL_BOX; arr=arr, conn=conn, s1=s1, s2=s2, s3=s3, off=off)
+_AccArrTblBox(arr::Vector{Float64}, conn::Vector{Int}, s::AbstractVector{Int}, off::Int) =
+    _mkacc(_AK_ARR_TBL_BOX; arr=arr, conn=conn, s1=_box_s(s, 1), s2=_box_s(s, 2),
+           s3=_box_s(s, 3), off=off, sx=_box_sx(s))
+
+# The box address `off + Σ_d (midx_d - 1)·s_d` of a box-addressed descriptor.
+# `midx` carries one entry per loop dim (padded with 1s to three), so the `sx`
+# terms read the dims past the third; at rank ≤ 3 `sx` is empty and this is the
+# three-term sum.
+@inline function _acc_boxaddr(a::_AccDesc, midx::Tuple{Vararg{Int}})
+    x = a.off + (midx[1]-1)*a.s1 + (midx[2]-1)*a.s2 + (midx[3]-1)*a.s3
+    sx = a.sx
+    @inbounds for d in eachindex(sx)
+        x += (midx[d + 3] - 1) * sx[d]
+    end
+    return x
+end
 
 # One `_fetch`, dispatched by the kind tag — concrete field reads throughout, so
 # no dynamic dispatch and no boxing. Hot Cartesian cases first. The result is
@@ -161,7 +215,7 @@ _AccArrTblBox(arr::Vector{Float64}, conn::Vector{Int}, s1::Int, s2::Int, s3::Int
     elseif k === _AK_CONST_AFFINE
         return @inbounds a.arr[oln + a.delta]
     elseif k === _AK_CONST_BOX
-        return @inbounds a.arr[a.off + (midx[1]-1)*a.s1 + (midx[2]-1)*a.s2 + (midx[3]-1)*a.s3]
+        return @inbounds a.arr[_acc_boxaddr(a, midx)]
     elseif k === _AK_STATE_FIXED
         return @inbounds u[a.idx]
     elseif k === _AK_LOOP_IDX
@@ -175,16 +229,16 @@ _AccArrTblBox(arr::Vector{Float64}, conn::Vector{Int}, s1::Int, s2::Int, s3::Int
     elseif k === _AK_ARR_FIXED
         return @inbounds a.arr[a.idx]
     elseif k === _AK_FORCING_BOX
-        return @inbounds a.arr[a.off + (midx[1]-1)*a.s1 + (midx[2]-1)*a.s2 + (midx[3]-1)*a.s3]
+        return @inbounds a.arr[_acc_boxaddr(a, midx)]
     elseif k === _AK_STATE_INDIRECT
         return @inbounds u[a.conn[(c-1)*a.width + n]]
     elseif k === _AK_STATE_INDIRECT_COL
         return @inbounds u[a.conn[(c-1)*a.width + a.col]]
     elseif k === _AK_STATE_TBL_BOX
-        s = @inbounds a.conn[a.off + (midx[1]-1)*a.s1 + (midx[2]-1)*a.s2 + (midx[3]-1)*a.s3]
+        s = @inbounds a.conn[_acc_boxaddr(a, midx)]
         return s == 0 ? 0.0 : @inbounds u[s]     # 0 ⇒ ghost literal, as per cell
     elseif k === _AK_ARR_TBL_BOX
-        return @inbounds a.arr[a.conn[a.off + (midx[1]-1)*a.s1 + (midx[2]-1)*a.s2 + (midx[3]-1)*a.s3]]
+        return @inbounds a.arr[a.conn[_acc_boxaddr(a, midx)]]
     end
     throw(TreeWalkError("E_TREEWALK_ACC_BAD_DESC", "unknown access kind $(Int(k))"))
 end
@@ -312,11 +366,11 @@ _AccKernel(cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}, bound::_Bound,
 # (padded with 1s). The 9-arg form derives `T` from the runtime inputs (the
 # build-time / test entry point), mirroring `_eval_node`'s 4-arg convenience form.
 @inline _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
-                  midx::NTuple{3,Int}, K::_AccKernel) =
+                  midx::Tuple{Vararg{Int}}, K::_AccKernel) =
     _eval_acc(nd, u, p, t, c, n, oln, midx, K, _rhs_value_type(u, p, t))
 
 function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
-                   midx::NTuple{3,Int}, K::_AccKernel, ::Type{T}) where {T}
+                   midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}) where {T}
     k = nd.kind
     if k === _NK_ACCESS
         return _fetch(K.acc[nd.idx], u, c, n, oln, midx)
@@ -330,6 +384,8 @@ function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
             s += _eval_acc(body, u, p, t, c, m, oln, midx, K, T)
         end
         return s
+    elseif k === _NK_AREDUCE
+        return _eval_acc_areduce(nd, u, p, t, c, n, oln, midx, K, T)
     elseif k === _NK_CONTRACTION
         # Fixed-width runtime ⊕-fold (the per-cell merge hosts einsum groups on
         # the access spine). MIRRORS `_eval_contraction` (compile.jl) arm for
@@ -373,12 +429,39 @@ function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
     end
 end
 
+# The affine reduction's fold (`_NK_AREDUCE`): `midx` is widened to cover the
+# contracted dims, which the nest below binds, the last dim outermost.
+function _eval_acc_areduce(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
+                           midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}) where {T}
+    spec = nd.payload::_AReduceSpec
+    m = max(length(midx), maximum(spec.dims))
+    mi = ntuple(i -> i <= length(midx) ? midx[i] : 1, m)
+    return _areduce_fold(nd.children[1], spec, length(spec.dims), nd.literal, nd.op,
+                         u, p, t, c, n, oln, mi, K, T)
+end
+
+function _areduce_fold(body::_Node, spec::_AReduceSpec, r::Int, s, op::Symbol,
+                       u, p, t, c::Int, n::Int, oln::Int, midx::Tuple{Vararg{Int}},
+                       K::_AccKernel, ::Type{T}) where {T}
+    d = spec.dims[r]
+    for j in spec.ranges[r]
+        mi = Base.setindex(midx, j, d)
+        if r == 1
+            v = _eval_acc(body, u, p, t, c, n, oln, mi, K, T)
+            s = op === :+ ? s + v : op === :* ? s * v : op === :max ? max(s, v) : min(s, v)
+        else
+            s = _areduce_fold(body, spec, r - 1, s, op, u, p, t, c, n, oln, mi, K, T)
+        end
+    end
+    return s
+end
+
 # Runtime ⊕-fold over an access-spine contraction node's children, seeded from
 # `nd.literal` (the 0̄ identity baked on at build time) — byte-for-byte the
 # `_eval_contraction` (compile.jl) fold shape, with `_eval_acc` as the child
 # walker.
 function _eval_acc_contraction(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
-                               midx::NTuple{3,Int}, K::_AccKernel, ::Type{T}) where {T}
+                               midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}) where {T}
     op = nd.op
     ch = nd.children
     if op === :+
@@ -430,7 +513,7 @@ let arms = :(return nothing)
     end
     @eval @inline function _eval_acc_unary_elementwise(op::Symbol, ch::Vector{_Node},
                                                        u, p, t, c::Int, n::Int, oln::Int,
-                                                       midx::NTuple{3,Int}, K::_AccKernel,
+                                                       midx::Tuple{Vararg{Int}}, K::_AccKernel,
                                                        ::Type{T}) where {T}
         $arms
     end
@@ -448,7 +531,7 @@ let arms = :(return nothing)
     end
     @eval @inline function _eval_acc_comparison(op::Symbol, ch::Vector{_Node},
                                                 u, p, t, c::Int, n::Int, oln::Int,
-                                                midx::NTuple{3,Int}, K::_AccKernel,
+                                                midx::Tuple{Vararg{Int}}, K::_AccKernel,
                                                 ::Type{T}) where {T}
         $arms
     end
@@ -466,7 +549,7 @@ let arms = :(return nothing)
     end
     @eval @inline function _eval_acc_binary_elementwise(op::Symbol, ch::Vector{_Node},
                                                         u, p, t, c::Int, n::Int, oln::Int,
-                                                        midx::NTuple{3,Int}, K::_AccKernel,
+                                                        midx::Tuple{Vararg{Int}}, K::_AccKernel,
                                                         ::Type{T}) where {T}
         $arms
     end
@@ -488,7 +571,7 @@ let arms = :(return nothing)
     end
     @eval @inline function _eval_acc_minmax(op::Symbol, ch::Vector{_Node},
                                             u, p, t, c::Int, n::Int, oln::Int,
-                                            midx::NTuple{3,Int}, K::_AccKernel,
+                                            midx::Tuple{Vararg{Int}}, K::_AccKernel,
                                             ::Type{T}) where {T}
         $arms
     end
@@ -503,7 +586,7 @@ end
 # as `_eval_node_op`'s (see above), so those cannot drift by construction; the
 # hand-written remainder is still caught by the differential test.
 function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
-                      midx::NTuple{3,Int}, K::_AccKernel, ::Type{T}) where {T}
+                      midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}) where {T}
     op = nd.op
     ch = nd.children
     @inline ev(x) = _eval_acc(x, u, p, t, c, n, oln, midx, K, T)
@@ -637,7 +720,7 @@ end
 # zero extra work, so non-CSE kernels are byte-identical to before. `n = 0`: CSE is
 # only built for reduce-free spines, so the neighbour index never matters here.
 @inline function _eval_cell(K::_AccKernel, u, p, t, c::Int, oln::Int,
-                            midx::NTuple{3,Int}, ::Type{T}) where {T}
+                            midx::Tuple{Vararg{Int}}, ::Type{T}) where {T}
     cse = K.cse
     if _has_cse(cse)
         buf = _acc_scratch_buf(cse.scratch, T)
@@ -696,8 +779,9 @@ function _run_acc_kernel!(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
     return du
 end
 
-# Nested loop over a Cartesian box; rank ≤ 3 (the latlon3d ceiling) is unrolled
-# for a tight `oln`, with a product-based fallback for higher rank.
+# Nested loop over a Cartesian box; rank ≤ 3 is unrolled for a tight `oln`,
+# with a product-based loop for higher rank, whose multi-index carries every
+# loop dim (the rank ≤ 3 forms pad theirs to three with 1s).
 function _run_box_kernel!(du, u, p, t, K::_AccKernel, cs::_CellSet, ::Type{T}) where {T}
     st = cs.strides
     rg = cs.ranges
@@ -725,8 +809,7 @@ function _run_box_kernel!(du, u, p, t, K::_AccKernel, cs::_CellSet, ::Type{T}) w
         @inbounds for idxs in Iterators.product(rg...)
             oln = b
             for d in 1:nd; oln += idxs[d]*st[d]; end
-            mi = (idxs[1], nd >= 2 ? idxs[2] : 1, nd >= 3 ? idxs[3] : 1)
-            du[oln] = _eval_cell(K, u, p, t, oln, oln, mi, T)
+            du[oln] = _eval_cell(K, u, p, t, oln, oln, Tuple(idxs), T)
         end
     end
     return du
@@ -741,18 +824,21 @@ end
 # is always < its parent's (post-order numbering), so a recipe only ever reads
 # LOWER slots — the box loop fills them front-to-back. Skipped for any spine with a
 # `_NK_REDUCE` (its body reads the neighbour index `n`, which the per-cell prelude —
-# run at n=0 — cannot capture).
+# run at n=0 — cannot capture). A spine with an `_NK_AREDUCE` keeps only the
+# loop-invariant tier: its body reads the contracted dims of `midx`, which the
+# per-cell prelude does not bind, but an invariant subtree reads no dim at all.
 # Identity-deduped existence predicate (ESS-0hh): the spine is a DAG (its
 # builders memoize by node identity), and the per-path recursion was
 # exponential on a doubling chain. A predicate is path-multiplicity-
 # insensitive, so a visited set is exactly equivalent.
-_acc_has_reduce(n::_Node) = _acc_has_reduce(n, IdDict{_Node,Nothing}())
-function _acc_has_reduce(n::_Node, seen::IdDict{_Node,Nothing})
-    n.kind === _NK_REDUCE && return true
+_acc_has_reduce(n::_Node) = _acc_has_kind(n, _NK_REDUCE, IdDict{_Node,Nothing}())
+_acc_has_areduce(n::_Node) = _acc_has_kind(n, _NK_AREDUCE, IdDict{_Node,Nothing}())
+function _acc_has_kind(n::_Node, kind::UInt8, seen::IdDict{_Node,Nothing})
+    n.kind === kind && return true
     haskey(seen, n) && return false
     seen[n] = nothing
     for c in n.children
-        _acc_has_reduce(c, seen) && return true
+        _acc_has_kind(c, kind, seen) && return true
     end
     return false
 end
@@ -872,6 +958,7 @@ end
 
 function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     _acc_has_reduce(spine) && return (spine, _ACC_NO_CSE)
+    inv_only = _acc_has_areduce(spine)
     key_to_vn = Dict{Any,Int}()
     counts = Int[]; is_op = Bool[]; is_inv = Bool[]; rep = _Node[]
     # Occurrence counting must stay PER PATH (a value occurring on ≥2 paths is
@@ -944,7 +1031,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
         is_op[vn] || continue
         if is_inv[vn]
             inv_slot[vn] = length(inv_slot) + 1
-        elseif counts[vn] >= 2
+        elseif counts[vn] >= 2 && !inv_only
             cell_slot[vn] = length(cell_slot) + 1
         end
     end
@@ -1071,6 +1158,141 @@ function _cellset_ncells(cs::_CellSet)
         n *= length(r)
     end
     return n
+end
+
+"""
+    _cellsets_outs_unique(css) -> Bool
+
+Whether every output slot of the cell sets `css`, taken together, is distinct
+(what `allunique` over the concatenation of their slot lists says, without
+the lists). Boxes that share one affine slot map (`base`, `strides`) and whose
+map is one-to-one on their joint hull collide exactly when their index boxes
+overlap, which is checked box against box; separate maps whose slot hulls do
+not overlap cannot collide. Anything else (an `outs` list, overlapping hulls)
+is decided exactly on a bit map of the slot range.
+"""
+function _cellsets_outs_unique(css)
+    boxes = Tuple{Int,Vector{Int},Vector{UnitRange{Int}}}[]
+    lists = Vector{Int}[]
+    for cs in css
+        if _is_outs(cs)
+            push!(lists, cs.outs)
+        elseif _is_contig(cs)
+            isempty(cs.ranges[1]) || push!(boxes, (0, Int[1], UnitRange{Int}[cs.ranges[1]]))
+        else
+            any(isempty, cs.ranges) || push!(boxes, (cs.base, cs.strides, cs.ranges))
+        end
+    end
+    if isempty(lists)
+        r = _boxes_outs_unique(boxes)
+        r === nothing || return r
+    end
+    return _outs_unique_bitmap(boxes, lists)
+end
+
+# The slot hull `[lo, hi]` of `base + Σ_d i_d·strides[d]` over the box `ranges`.
+function _box_slot_hull(base::Int, strides::Vector{Int}, ranges)
+    lo = hi = base
+    @inbounds for d in eachindex(strides)
+        a = first(ranges[d]) * strides[d]
+        b = last(ranges[d]) * strides[d]
+        lo += min(a, b)
+        hi += max(a, b)
+    end
+    return lo, hi
+end
+
+# Is `i ↦ Σ_d i_d·strides[d]` one-to-one on the box `ranges`? Sufficient test:
+# ordered by |stride|, each stride exceeds the largest offset the smaller ones
+# can reach (a mixed radix). `false` means "not shown", not "collides".
+function _affine_injective_on(strides::Vector{Int}, ranges)
+    dims = [d for d in eachindex(strides) if length(ranges[d]) > 1]
+    any(d -> strides[d] == 0, dims) && return false
+    sort!(dims; by = d -> abs(strides[d]))
+    reach = 0
+    for d in dims
+        abs(strides[d]) > reach || return false
+        reach += abs(strides[d]) * (length(ranges[d]) - 1)
+    end
+    return true
+end
+
+# `true`/`false` when box arithmetic decides it, `nothing` when it cannot.
+function _boxes_outs_unique(boxes)
+    groups = Dict{Tuple{Int,Vector{Int}},Vector{Int}}()
+    for (k, (b, st, _)) in enumerate(boxes)
+        push!(get!(groups, (b, st), Int[]), k)
+    end
+    hulls = Tuple{Int,Int}[]
+    for ((b, st), ks) in groups
+        length(ks) > 4096 && return nothing
+        nd = length(st)
+        hull = UnitRange{Int}[boxes[ks[1]][3][d] for d in 1:nd]
+        for k in ks
+            rg = boxes[k][3]
+            length(rg) == nd || return nothing
+            for d in 1:nd
+                hull[d] = min(first(hull[d]), first(rg[d])):max(last(hull[d]), last(rg[d]))
+            end
+        end
+        _affine_injective_on(st, hull) || return nothing
+        for x in 1:length(ks), y in (x + 1):length(ks)
+            rx = boxes[ks[x]][3]; ry = boxes[ks[y]][3]
+            all(d -> first(rx[d]) <= last(ry[d]) && first(ry[d]) <= last(rx[d]), 1:nd) &&
+                return false
+        end
+        push!(hulls, _box_slot_hull(b, st, hull))
+    end
+    sort!(hulls)
+    for k in 2:length(hulls)
+        hulls[k][1] <= hulls[k - 1][2] && return nothing
+    end
+    return true
+end
+
+# The exact test: one bit per slot of the joint slot range.
+function _outs_unique_bitmap(boxes, lists)
+    lo, hi = typemax(Int), typemin(Int)
+    for (b, st, rg) in boxes
+        l, h = _box_slot_hull(b, st, rg)
+        lo = min(lo, l); hi = max(hi, h)
+    end
+    for outs in lists, o in outs
+        lo = min(lo, o); hi = max(hi, o)
+    end
+    lo > hi && return true
+    seen = falses(hi - lo + 1)
+    for (b, st, rg) in boxes
+        _mark_box_slots!(seen, lo, b, ntuple(d -> st[d], length(st)),
+                         ntuple(d -> rg[d], length(rg))) || return false
+    end
+    for outs in lists
+        _mark_list_slots!(seen, lo, outs) || return false
+    end
+    return true
+end
+
+function _mark_box_slots!(seen::BitVector, lo::Int, b::Int, st::NTuple{N,Int},
+                          rg::NTuple{N,UnitRange{Int}}) where {N}
+    for I in CartesianIndices(rg)
+        o = b
+        @inbounds for d in 1:N
+            o += I[d] * st[d]
+        end
+        k = o - lo + 1
+        @inbounds seen[k] && return false
+        @inbounds seen[k] = true
+    end
+    return true
+end
+
+function _mark_list_slots!(seen::BitVector, lo::Int, outs::Vector{Int})
+    @inbounds for o in outs
+        k = o - lo + 1
+        seen[k] && return false
+        seen[k] = true
+    end
+    return true
 end
 
 # The static partition itself: chunk `c` of `nchunks` covers the half-open

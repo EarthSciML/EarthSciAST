@@ -160,6 +160,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
 
     # ---- Tree-walk evaluator (src/tree_walk.jl) + discrete-cadence data refresh ----
     include("tree_walk_test.jl")
+    include("state_layout_test.jl")                # the flat state layout ≡ the per-cell name map it replaced
     include("dag_walk_memo_test.jl")               # ESS-1p5 exponential-path DAG walk regression
     include("intern_oracle_test.jl")               # A1 hash-consing ≡ the interpreter (differential)
     include("xeq_variant_oracle_test.jl")          # A3 cross-eq variant memo ≡ the interpreter (differential)
@@ -281,6 +282,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("contraction_loop_test.jl")             # runtime contraction loop (ess-runtime-contraction)
     include("contraction_tier_order_test.jl")       # loop-vs-affine tier ORDER (ess-runtime-contraction × ess-affine)
     include("array_contraction_test.jl")            # whole-array contraction loop nest (ess-array-contraction)
+    include("array_contraction_table_test.jl")      # …its gated / ragged / filtered form, table-driven
+    include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
     # `compiler=:interpreter`: an in-place build that skips no prelude slot,
     # which is what the tiering tests above use as their differential oracle.

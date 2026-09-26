@@ -1,9 +1,9 @@
 # Whole-array contraction nest (ess-array-contraction).
 #
 # An array-producing aggregate `out[i…] = ⊕_{k…} body(i…, k…)` is compiled to ONE
-# body node plus one flat slot vector, and emitted as a loop NEST: the output
-# indices iterate in the generated section, the contracted ones inside the body's
-# `_NK_CONTRACTION_LOOP` nodes.
+# term node plus one flat slot vector, and emitted as a loop NEST: the output
+# indices iterate in the generated section, the contracted ones in the fold the
+# emitter writes around the term (`_ACFold`).
 #
 # WHY THE TIER EXISTS. The tiers it sits below both scale the BUILD with an
 # extent of the equation: the affine tier unrolls the reduction into ∏|k…| terms
@@ -32,10 +32,11 @@
 # BIT-IDENTITY with the per-cell path is what the tier is tested on, and is
 # structural: every arm below is `_eval_node`'s arm rewritten as an expression,
 # in the same child order, with the same seeds and the same short-circuits. In
-# particular the ⊕-fold keeps `_eval_contraction_loop`'s order (innermost
-# contracted index fastest, accumulator seeded from the node's 0̄), which
-# conformance pins for reductions, and the output odometer is a division rather
-# than a nested loop, so a chunk can start at any cell.
+# particular the ⊕-fold is the per-cell expansion's (`_eval_contraction`): one
+# accumulator seeded from the `Float64` 0̄, the terms in `Iterators.product`
+# order (the first contracted index fastest), which conformance pins for
+# reductions; and the output odometer is a division rather than a nested loop,
+# so a chunk can start at any cell.
 #
 # What the emitter models is the SCALAR `_Node` spine — the kinds `_eval_node`
 # dispatches on. `_cg_emit`'s other method models the ACCESS-KERNEL spine
@@ -178,9 +179,13 @@ function _cg_state_gather_dim(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node,
         Expr(:block, :(($lo <= $sd <= $hi) ? $nxt : zero(eltype(u)))))
 end
 
-# `_NK_CONTRACTION_LOOP`: the static range walked in `_expand_int_range` order
-# with the accumulator seeded from the node's 0̄ at the value type — the fold
-# `_eval_contraction_loop` performs, statement for statement. The counter is a
+# `_NK_CONTRACTION_LOOP`: the static range walked in `_expand_int_range` order,
+# `acc = acc ⊕ body` from the node's 0̄ — the fold `_eval_contraction_loop`
+# performs, statement for statement. The seed is the `Float64` 0̄ itself, as the
+# unrolled fold (`_eval_contraction`, the interpreter's form of the same
+# reduction) seeds it: under a `Dual` value type `0̄ ⊕ term` then carries the
+# term's partials exactly, where a seed converted to the value type would add
+# zero partials to them and turn a `-0.0` partial into `0.0`. The counter is a
 # plain loop local here instead of the shared `Ref` the walker writes, which is
 # also what makes the emitted nest safe to run on several threads.
 function _cg_contraction_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
@@ -197,7 +202,7 @@ function _cg_contraction_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         delete!(kc.loops, spec.ref)
     end
     step = Expr(:(=), acc, Expr(:call, fnsym, acc, body))
-    return Expr(:let, Expr(:block, :($acc = _cgT($(nd.literal)))),
+    return Expr(:let, Expr(:block, :($acc = $(nd.literal))),
         Expr(:block,
              Expr(:for, :($kv = $(spec.lo):$(spec.step):$(spec.hi)),
                   Expr(:block, step)),
@@ -213,9 +218,38 @@ end
 # Returns an `_ArrayContraction`, or the emitter's decline reason as a `Symbol`
 # — which the caller turns into a refusal, there being no other form of this
 # tier to fall back to.
+#
+# THE FOLD AS DATA (`fold`, an `_ACFold`). `body` is then the bare TERM, with
+# no contraction loops in it, and the emitter writes the fold around it: ONE
+# accumulator, seeded from the 0̄, `acc = acc ⊕ term` over the contracted
+# tuples in the order the per-cell expansion enumerates them. Two forms:
+#
+#   * STATIC — constant ranges, walked as nested loops, the first contracted
+#     index innermost (the expansion's `Iterators.product` order). One
+#     accumulator across the whole nest: nested `_NK_CONTRACTION_LOOP`s would
+#     each fold from their own 0̄ and add up the partial folds, a different
+#     association once there are two contracted indices.
+#   * TABLE — a contraction whose admitted tuples differ per output cell (a join
+#     gate drops some, a ragged bound gives each cell its own length) cannot be
+#     a static loop, so the tuples are data: cell `c`'s are entries
+#     `seg[c]:seg[c+1]-1` of the per-dim value columns.
+struct _ACFold
+    refs::Vector{Base.RefValue{Int}}   # the contracted indices' loop counters
+    op::Symbol                         # ⊕
+    zerobar::Float64                   # its 0̄
+    ranges::Vector{StepRange{Int,Int}} # STATIC: each counter's range (empty for TABLE)
+    seg::Vector{Int}                   # TABLE: length ncells + 1
+    cols::Vector{Vector{Int}}          # TABLE: per contracted dim, its value at each entry
+end
+_ACFold(refs, op::Symbol, zerobar::Float64, ranges::Vector{StepRange{Int,Int}}) =
+    _ACFold(refs, op, zerobar, ranges, Int[], Vector{Int}[])
+_ACFold(refs, op::Symbol, zerobar::Float64, seg::Vector{Int}, cols::Vector{Vector{Int}}) =
+    _ACFold(refs, op, zerobar, StepRange{Int,Int}[], seg, cols)
+_acfold_is_table(f::_ACFold) = !isempty(f.seg)
+
 function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
         los::Vector{Int}, steps::Vector{Int}, lens::Vector{Int},
-        outs::Vector{Int}, body::_Node)
+        outs::Vector{Int}, body::_Node; fold::Union{Nothing,_ACFold}=nothing)
     _codegen_disabled() && return :codegen_disabled
     ctx = _CGCtx(_codegen_node_budget())
     kc = _CGScalarCtx()
@@ -228,8 +262,17 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
         push!(seek, :(local $iv = $(los[d]) + ($rv % $(lens[d])) * $(steps[d])))
         push!(seek, :($rv = div($rv, $(lens[d]))))
     end
+    kvs = Symbol[]
+    if fold !== nothing
+        for r in fold.refs
+            kv = _cg_name(ctx, "kk")
+            kc.loops[r] = kv
+            push!(kvs, kv)
+        end
+    end
     cell = try
-        _cg_emit(ctx, kc, body)
+        term = _cg_emit(ctx, kc, body)
+        fold === nothing ? term : _cg_fold(ctx, fold, cv, kvs, term)
     catch err
         err isa _CodegenDecline || rethrow()
         return err.reason
@@ -265,6 +308,41 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
     # which throws on a second claim — so the cell axis chunks like the kernel
     # section's, and for the same reason: every ⊕-fold is inside one cell.
     return _ArrayContraction(f, tabpack, _SecTCache(length(outs), true))
+end
+
+# The fold around the term for cell `cv`: the `Float64` 0̄ (the static nest's
+# `_cg_contraction_loop` seed), then `acc = acc ⊕ term` innermost, with the
+# contracted counters `kvs` bound by the loops (STATIC) or from the cell's
+# table entries (TABLE).
+function _cg_fold(ctx::_CGCtx, fold::_ACFold, cv::Symbol, kvs::Vector{Symbol}, term)
+    fnsym = _cg_oplus_fn(fold.op)
+    acc = _cg_name(ctx, "acc")
+    upd = :($acc = $fnsym($acc, $term))
+    loop = if _acfold_is_table(fold)
+        ev = _cg_name(ctx, "ent")
+        segv = _cg_tab!(ctx, fold.seg)
+        binds = Any[:(local $(kvs[r]) = $(_cg_tab!(ctx, fold.cols[r]))[$ev])
+                    for r in eachindex(kvs)]
+        quote
+            for $ev in $segv[$cv]:($segv[$cv + 1] - 1)
+                $(binds...)
+                $upd
+            end
+        end
+    else
+        l = upd
+        for r in eachindex(kvs)
+            rg = fold.ranges[r]
+            l = Expr(:for, :($(kvs[r]) = $(first(rg)):$(step(rg)):$(last(rg))),
+                     Expr(:block, l))
+        end
+        l
+    end
+    return quote
+        local $acc = $(fold.zerobar)
+        $loop
+        $acc
+    end
 end
 
 @inline function _run_acgen!(g::_ArrayContraction, du, u, p, t, ::Type{T}) where {T}
