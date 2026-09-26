@@ -309,6 +309,20 @@ pub(super) fn run_reference(
                 }
                 slots[*out as usize] = Some(RefVal::Arr(o));
             }
+            Instr::Reshape { src, out } => {
+                let sv = resolve_src(prog, &slots, &state_arrays, &obs, src);
+                let desc = &prog.slots[*out as usize];
+                // `iter()` is the logical row-major walk.
+                let flat: Vec<f64> = sv.iter().copied().collect();
+                let arr = ArrayD::from_shape_vec(IxDyn(&desc.shape[..]), flat)
+                    .expect("Reshape keeps the element count");
+                slots[*out as usize] = Some(RefVal::Arr(arr));
+            }
+            Instr::Fault { fault } => {
+                crate::simulate_array::eval::latch_gather_fault(
+                    prog.faults[*fault as usize].clone(),
+                );
+            }
             Instr::JmpIfZero {
                 cond,
                 n_true,

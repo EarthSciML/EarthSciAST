@@ -1060,6 +1060,32 @@ impl<'a> Emitter<'a> {
                 let v = self.emit_interp(tbl, &dims, &xv, yv.as_ref())?;
                 self.define(*out, v);
             }
+            Instr::Reshape { src, out } => {
+                let s = self.src(src)?;
+                let dims = self.out_dims(*out);
+                let have = self.dims(&s)?;
+                if have.iter().product::<usize>() != dims.iter().product::<usize>() {
+                    return Err(self.err(format!(
+                        "reshape source has shape {have:?}, which does not hold the \
+                         {dims:?} its slot's box needs"
+                    )));
+                }
+                // XLA's reshape is row-major, which is the tape's definition.
+                let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+                let v = self.wrap(s.reshape(&d), "reshape")?;
+                self.define(*out, v);
+            }
+            Instr::Fault { fault } => {
+                // A computation has no channel to latch a fault through: its
+                // one output is `du`. The model is refused with the fault it
+                // would raise rather than compiled to return the `NaN` the
+                // interpreter substitutes WITHOUT the error that goes with it.
+                return Err(self.err(format!(
+                    "the program raises a fail-closed evaluation fault, which a compiled \
+                     program cannot report: {}",
+                    self.prog.faults[*fault as usize]
+                )));
+            }
             Instr::Fallback { rule } => {
                 let info = &self.prog.rules[*rule as usize];
                 let reason = match &info.status {
