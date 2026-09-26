@@ -3483,8 +3483,7 @@ fn externally_refreshed(var: &ModelVariable) -> bool {
 /// `variables[v].expression` field. Sorted by name (a `BTreeMap`), so every
 /// consumer iterates deterministically.
 fn observed_bodies(model: &Model) -> std::collections::BTreeMap<String, Expr> {
-    crate::classification::Classification::from_parts(&model.variables, &model.equations)
-        .observed_definitions
+    crate::classification::observed_definitions_of_parts(&model.variables, &model.equations)
 }
 
 /// Gather the build-time-CONSTANT factor arrays the value-invention engine reads
