@@ -13,7 +13,7 @@
 // be rejected.
 // ---------------------------------------------------------------------------
 
-use super::fused::{FCHUNK, exec_fused_runs_generic};
+use super::fused::{FCHUNK, RunCursor, exec_fused_runs_generic};
 #[cfg(target_arch = "x86_64")]
 use super::fused::{exec_fused_runs_avx2, exec_fused_runs_avx512};
 use super::*;
@@ -292,20 +292,31 @@ fn drive(with_nan: bool) {
     let mut inputs = inputs;
     inputs[3].load_reg = n_regs; // one strided pre-load register
 
-    // Runs: [0, 1300) shifted-src offset 5; [1300, N) ghost for the
+    // Runs: [0, 1300) shifted-src offset 5, as a 650-element run repeated
+    // twice (so the clones walk a repetition too); [1300, N) ghost for the
     // stride-1 shifted input. The strided input stays live in both.
-    let runs = vec![
-        FusedRun {
-            out_off: 0,
-            len: 1300,
-            in_off: SmallVec::from_slice(&[5i64, 3]),
-        },
-        FusedRun {
-            out_off: 1300,
-            len: (N - 1300) as u32,
-            in_off: SmallVec::from_slice(&[GHOST_OFF, 3 + 2 * 1300]),
-        },
-    ];
+    let schedule = RunSchedule {
+        nodes: vec![
+            RunNode::Repeat {
+                count: 2,
+                body: 1,
+                out_step: 650,
+                in_step: SmallVec::from_slice(&[650, 2 * 650]),
+            },
+            RunNode::Run(FusedRun {
+                out_off: 0,
+                len: 650,
+                in_off: SmallVec::from_slice(&[5i64, 3]),
+            }),
+            RunNode::Run(FusedRun {
+                out_off: 1300,
+                len: (N - 1300) as u32,
+                in_off: SmallVec::from_slice(&[GHOST_OFF, 3 + 2 * 1300]),
+            }),
+        ],
+        n_runs: 3,
+        depth: 1,
+    };
     let fs = FusedSpec {
         shape: DimU::from_elem(N, 1),
         inputs,
@@ -315,7 +326,7 @@ fn drive(with_nan: bool) {
         n_load_regs: 1,
         n_splat_regs: 6,          // 5 scalars + the zero register
         outputs: SmallVec::new(), // outs are passed directly
-        runs,
+        schedule,
         reduce: None,
         n_fused_instrs: 0,
         n_folded_gathers: 0,
@@ -330,6 +341,7 @@ fn drive(with_nan: bool) {
             .map(|(i, buf)| (i as GroupIx, buf.as_mut_ptr()))
             .collect();
         let mut fregs = vec![0.0f64; (n_regs as usize + 1 + 6) * FCHUNK];
+        let mut cursor = RunCursor::for_spec(&fs);
         match wider {
             0 => unsafe {
                 exec_fused_runs_generic(
@@ -339,15 +351,32 @@ fn drive(with_nan: bool) {
                     &outs,
                     std::ptr::null_mut(),
                     &mut fregs,
+                    &mut cursor,
                 )
             },
             #[cfg(target_arch = "x86_64")]
             1 => unsafe {
-                exec_fused_runs_avx2(&fs, &svals, &bases, &outs, std::ptr::null_mut(), &mut fregs)
+                exec_fused_runs_avx2(
+                    &fs,
+                    &svals,
+                    &bases,
+                    &outs,
+                    std::ptr::null_mut(),
+                    &mut fregs,
+                    &mut cursor,
+                )
             },
             #[cfg(target_arch = "x86_64")]
             2 => unsafe {
-                exec_fused_runs_avx512(&fs, &svals, &bases, &outs, std::ptr::null_mut(), &mut fregs)
+                exec_fused_runs_avx512(
+                    &fs,
+                    &svals,
+                    &bases,
+                    &outs,
+                    std::ptr::null_mut(),
+                    &mut fregs,
+                    &mut cursor,
+                )
             },
             _ => panic!("level unavailable in this build"),
         }

@@ -555,13 +555,121 @@ pub(crate) const GHOST_OFF: i64 = i64::MIN;
 /// One contiguous run of a fused group's precompiled schedule. Runs partition
 /// the (row-major flat) output box; within a run every shifted input is either
 /// a single constant flat offset into its source or entirely ghost.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FusedRun {
     pub out_off: u32,
     pub len: u32,
     /// Per SHIFTED input (indexed by `FusedInput::shifted_ix`): the 0-based
     /// flat source offset of the run's first element, or [`GHOST_OFF`].
     pub in_off: SmallVec<[i64; 2]>,
+}
+
+impl FusedRun {
+    /// This run moved `k` steps of `(out_step, in_step)`: every offset
+    /// advanced, a ghost input left ghost.
+    pub(crate) fn stepped(&self, k: i64, out_step: i64, in_step: &[i64]) -> FusedRun {
+        FusedRun {
+            out_off: (self.out_off as i64 + k * out_step) as u32,
+            len: self.len,
+            in_off: self
+                .in_off
+                .iter()
+                .zip(in_step)
+                .map(|(&o, &s)| if o == GHOST_OFF { o } else { o + k * s })
+                .collect(),
+        }
+    }
+}
+
+/// One node of a [`RunSchedule`].
+#[derive(Clone, Debug)]
+pub(crate) enum RunNode {
+    Run(FusedRun),
+    /// The `body` nodes that follow (a subtree), executed `count` (>= 2)
+    /// times in order; the `k`-th time (from 0) every run in them has its
+    /// `out_off` advanced by `k * out_step` and every non-ghost `in_off[j]`
+    /// by `k * in_step[j]`. A regular sequence of rows -- one row's runs
+    /// repeated at a constant stride in the output and in every source -- is
+    /// one such node, so the schedule's size does not grow with the box.
+    Repeat {
+        count: u32,
+        body: u32,
+        out_step: i64,
+        in_step: SmallVec<[i64; 2]>,
+    },
+}
+
+/// A fused group's precompiled run schedule: the runs, in ascending
+/// `out_off` and maximally coalesced, that partition its box, with regular
+/// repetitions kept as [`RunNode::Repeat`] instead of written out.
+#[derive(Clone, Debug)]
+pub(crate) struct RunSchedule {
+    /// Pre-order: a `Repeat` is followed by its body.
+    pub nodes: Vec<RunNode>,
+    /// The runs it executes (a repeated body counted once per repetition).
+    pub n_runs: usize,
+    /// The deepest nesting of `Repeat` nodes.
+    pub depth: usize,
+}
+
+impl RunSchedule {
+    /// The one-run schedule `(0, n_elems, [])` of a group with no shifted
+    /// inputs.
+    pub(crate) fn whole(n_elems: usize) -> Self {
+        RunSchedule {
+            nodes: vec![RunNode::Run(FusedRun {
+                out_off: 0,
+                len: n_elems as u32,
+                in_off: SmallVec::new(),
+            })],
+            n_runs: 1,
+            depth: 0,
+        }
+    }
+
+    /// Every run the schedule executes, in execution order, with its
+    /// repetition applied (diagnostics and the reference executor; the
+    /// production executor walks the nodes without expanding them).
+    pub(crate) fn for_each_run(&self, mut f: impl FnMut(&FusedRun)) {
+        fn walk(nodes: &[RunNode], out_d: i64, in_d: &[i64], f: &mut impl FnMut(&FusedRun)) {
+            let mut i = 0usize;
+            while i < nodes.len() {
+                match &nodes[i] {
+                    RunNode::Run(r) => {
+                        f(&r.stepped(1, out_d, in_d));
+                        i += 1;
+                    }
+                    RunNode::Repeat {
+                        count,
+                        body,
+                        out_step,
+                        in_step,
+                    } => {
+                        let body_nodes = &nodes[i + 1..i + 1 + *body as usize];
+                        for k in 0..*count as i64 {
+                            let d: SmallVec<[i64; 2]> =
+                                in_d.iter().zip(in_step).map(|(&a, &s)| a + k * s).collect();
+                            walk(body_nodes, out_d + k * out_step, &d, f);
+                        }
+                        i += 1 + *body as usize;
+                    }
+                }
+            }
+        }
+        let n_in = self.nodes.iter().find_map(|n| match n {
+            RunNode::Run(r) => Some(r.in_off.len()),
+            RunNode::Repeat { .. } => None,
+        });
+        let zeros: SmallVec<[i64; 2]> = SmallVec::from_elem(0, n_in.unwrap_or(0));
+        walk(&self.nodes, 0, &zeros, &mut f);
+    }
+
+    /// The expanded runs (see [`Self::for_each_run`]).
+    pub(crate) fn expanded(&self) -> Vec<FusedRun> {
+        let mut v = Vec::with_capacity(self.n_runs);
+        self.for_each_run(|r| v.push(r.clone()));
+        v
+    }
 }
 
 /// A fused elementwise group: a straight-line micro-program over virtual
@@ -590,9 +698,9 @@ pub(crate) struct FusedSpec {
     pub n_splat_regs: GroupIx,
     /// `(register, slot)` live-outs stored back to the slab.
     pub outputs: SmallVec<[(GroupIx, SlotId); 2]>,
-    /// Precompiled run schedule (see [`FusedRun`]); a group with no shifted
-    /// inputs has the single run `(0, n_elems, [])`.
-    pub runs: Vec<FusedRun>,
+    /// Precompiled run schedule (see [`RunSchedule`]); a group with no
+    /// shifted inputs has the single run `(0, n_elems, [])`.
+    pub schedule: RunSchedule,
     /// An absorbed [`Instr::Reduce`] over the group box, folding one register
     /// instead of storing it (see [`FusedReduce`]).
     pub reduce: Option<FusedReduce>,

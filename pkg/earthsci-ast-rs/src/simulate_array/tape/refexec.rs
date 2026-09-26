@@ -422,7 +422,7 @@ pub(super) fn run_reference(
                     .as_ref()
                     .map_or_else(Vec::new, |r| vec![r.init; r.n_inner]);
                 let mut covered = 0usize;
-                for run in &fs.runs {
+                for run in &fs.schedule.expanded() {
                     for k in 0..run.len as usize {
                         let at = run.out_off as usize + k;
                         let get = |m: &MRef, regs: &[f64]| -> f64 {

@@ -1581,6 +1581,9 @@ pub fn esm_problem<'a>(
     let mut owned_json: Option<JsonValue> = None;
     let mut owned_file: Option<EsmFile> = None;
     let mut flat_only: Option<&FlattenedSystem> = None;
+    // `owned_json` is exactly what the parser made of the file's text, so it
+    // nests within the parser's recursion limit (see stage (3)).
+    let mut json_from_text = false;
 
     match input {
         ProblemInput::Path(path) => {
@@ -1597,6 +1600,7 @@ pub fn esm_problem<'a>(
                 )))
             })?;
             owned_json = Some(raw);
+            json_from_text = true;
         }
         ProblemInput::Json(v) => owned_json = Some(v.clone()),
         ProblemInput::File(f) => owned_file = Some(f.clone()),
@@ -1790,6 +1794,7 @@ pub fn esm_problem<'a>(
                 }
             }));
             *raw = prepared.doc;
+            json_from_text = false;
             model_name = Some(prepared.model_name);
             build.fields = prepared.fields;
             build.members = prepared.members;
@@ -1805,12 +1810,25 @@ pub fn esm_problem<'a>(
         && let Some(raw) = owned_json.as_ref()
     {
         {
-            let text = serde_json::to_string(raw).map_err(|e| {
-                SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
-                    "re-serializing the prepared document: {e}"
-                )))
-            })?;
-            match crate::parse::load_string(&text) {
+            // The prepared document goes to the loader as the value it already
+            // is. Writing it out and parsing the text back gives the same
+            // document -- this crate parses with `float_roundtrip`, so every
+            // number reads back as the value written -- except that the parser
+            // refuses nesting past its recursion limit, so only a document
+            // nested that deep still takes the round trip, to get the same
+            // refusal. A document parsed from a file's text and not rewritten
+            // since is within that limit already.
+            let loaded = if json_from_text || nesting_within(raw, NESTING_WITHOUT_ROUND_TRIP) {
+                crate::parse::load_document(raw)
+            } else {
+                let text = serde_json::to_string(raw).map_err(|e| {
+                    SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
+                        "re-serializing the prepared document: {e}"
+                    )))
+                })?;
+                crate::parse::load_string(&text)
+            };
+            match loaded {
                 Ok(f) => owned_file = Some(f),
                 Err(e) => {
                     // A document the build pipeline rewrote may no longer be a
@@ -2085,6 +2103,20 @@ fn reject_f32_integration(prob: &EsmProblem) -> Result<(), SimulateError> {
         ));
     }
     Ok(())
+}
+
+/// Arrays and objects nested this deep or less parse from text well inside
+/// `serde_json`'s recursion limit (128).
+const NESTING_WITHOUT_ROUND_TRIP: usize = 64;
+
+/// Whether no array or object in `v` sits more than `limit` containers deep
+/// (the root container is depth 1).
+fn nesting_within(v: &JsonValue, limit: usize) -> bool {
+    match v {
+        JsonValue::Array(items) => limit > 0 && items.iter().all(|x| nesting_within(x, limit - 1)),
+        JsonValue::Object(map) => limit > 0 && map.values().all(|x| nesting_within(x, limit - 1)),
+        _ => true,
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

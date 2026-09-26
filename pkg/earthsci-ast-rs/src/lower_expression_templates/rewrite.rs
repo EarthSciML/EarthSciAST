@@ -1,4 +1,5 @@
 use super::*;
+use crate::json_visit::JsonPath;
 
 // ---------------------------------------------------------------------------
 // Eager-expansion carve-out: the rewrite-target op tier T (esm-spec §9.6.4
@@ -1198,10 +1199,11 @@ pub fn expand_against_registry(
     Ok(to_value(&out))
 }
 
-/// True if `value` either declares any non-empty `expression_templates` block
-/// (component-level or top-level) or contains any `apply_expression_template`
-/// op anywhere. Mirrors the Julia reference `_has_template_machinery`.
-fn has_template_machinery(value: &Value) -> bool {
+/// True if `value` declares any non-empty `expression_templates` block
+/// (component-level or top-level). With [`scan_without_templates`] finding no
+/// `apply_expression_template` op anywhere, this is the Julia reference's
+/// `_has_template_machinery`.
+fn declares_templates(value: &Value) -> bool {
     let Some(obj) = value.as_object() else {
         return false;
     };
@@ -1225,9 +1227,63 @@ fn has_template_machinery(value: &Value) -> bool {
             }
         }
     }
-    let mut hits = Vec::new();
-    find_apply_paths(value, &mut hits);
-    !hits.is_empty()
+    false
+}
+
+/// The fast path's one walk over a document that declares no templates: does
+/// it use an `apply_expression_template` op anywhere (then it has template
+/// machinery after all), and if not, the first error each §9.6.4
+/// expanded-form validator reports on it, in that validator's pre-order.
+/// Equivalent to looking for the op and then running
+/// [`validate_geometry_manifolds`] and [`validate_makearray_regions`], each
+/// over the whole document; the op is looked for inside `expression_templates`
+/// subtrees too, which the validators skip.
+#[derive(Default)]
+struct UntemplatedScan {
+    uses_apply: bool,
+    geometry: Option<ExpressionTemplateError>,
+    makearray: Option<ExpressionTemplateError>,
+}
+
+fn scan_without_templates(
+    tree: &Value,
+    at: &JsonPath<'_>,
+    in_templates: bool,
+    out: &mut UntemplatedScan,
+) {
+    match tree {
+        Value::Array(arr) => {
+            for (i, child) in arr.iter().enumerate() {
+                scan_without_templates(child, &JsonPath::Index(at, i), in_templates, out);
+                if out.uses_apply {
+                    return;
+                }
+            }
+        }
+        Value::Object(obj) => {
+            let op = obj.get("op").and_then(|v| v.as_str());
+            if op == Some(APPLY_OP) {
+                out.uses_apply = true;
+                return;
+            }
+            if !in_templates && let Some(op) = op {
+                if out.geometry.is_none() && GEOMETRY_MANIFOLD_OPS.contains(&op) {
+                    out.geometry = check_geometry_manifold(obj, at).err();
+                }
+                if out.makearray.is_none() && op == "makearray" {
+                    out.makearray = check_makearray_regions(obj, at).err();
+                }
+            }
+            for (k, v) in obj {
+                let skip = in_templates || k == "expression_templates";
+                scan_without_templates(v, &JsonPath::Key(at, k), skip, out);
+                if out.uses_apply {
+                    return;
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Run the load-time rewrite pass (esm-spec §9.6, Option B / esm 0.9.0):
@@ -1240,20 +1296,36 @@ fn has_template_machinery(value: &Value) -> bool {
 ///
 /// Pre-condition: the input has been schema-validated.
 pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTemplateError> {
+    lower_expression_templates_found(value).map(|_| ())
+}
+
+/// [`lower_expression_templates`], answering whether the document has any
+/// template machinery — a non-empty `expression_templates` block or an
+/// `apply_expression_template` op. When it has none, the document is left
+/// unchanged, and [`expand`] would only strip its components' (empty)
+/// `expression_templates` blocks ([`strip_component_template_blocks`]).
+pub(crate) fn lower_expression_templates_found(
+    value: &mut Value,
+) -> Result<bool, ExpressionTemplateError> {
     reject_expression_templates_pre_v04(value)?;
 
     if value.as_object().is_none() {
-        return Ok(());
+        return Ok(false);
     }
 
     // Fast path: files that neither declare `expression_templates` blocks nor
     // use any `apply_expression_template` op need no expansion at all. The
     // §9.6.4 expanded-form validators still apply — the raw tree IS the
-    // expanded form.
-    if !has_template_machinery(value) {
-        validate_geometry_manifolds(value, "")?;
-        validate_makearray_regions(value, "")?;
-        return Ok(());
+    // expanded form — and share the walk that looks for the op.
+    if !declares_templates(value) {
+        let mut scan = UntemplatedScan::default();
+        scan_without_templates(value, &JsonPath::Root(""), false, &mut scan);
+        if !scan.uses_apply {
+            if let Some(e) = scan.geometry.or(scan.makearray) {
+                return Err(e);
+            }
+            return Ok(false);
+        }
     }
 
     let root = value.as_object_mut().expect("checked object above");
@@ -1395,7 +1467,7 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
     validate_makearray_regions(value, "")?;
     validate_makearray_regions_in_registries(&registries)?;
 
-    Ok(())
+    Ok(true)
 }
 
 /// Geometry-kernel ops whose `manifold` scalar field is restricted to the
@@ -1427,66 +1499,63 @@ pub fn validate_geometry_manifolds(
     tree: &Value,
     path: &str,
 ) -> Result<(), ExpressionTemplateError> {
-    // The path is built in one buffer as the walk descends; only an error
-    // formats it.
-    validate_geometry_manifolds_at(tree, &mut path.to_string())
+    validate_geometry_manifolds_at(tree, &JsonPath::Root(path))
 }
 
 fn validate_geometry_manifolds_at(
     tree: &Value,
-    path: &mut String,
+    at: &JsonPath<'_>,
 ) -> Result<(), ExpressionTemplateError> {
     match tree {
         Value::Array(arr) => {
             for (i, child) in arr.iter().enumerate() {
-                let len = path.len();
-                {
-                    use std::fmt::Write;
-                    let _ = write!(path, "/{i}");
-                }
-                validate_geometry_manifolds_at(child, path)?;
-                path.truncate(len);
+                validate_geometry_manifolds_at(child, &JsonPath::Index(at, i))?;
             }
             Ok(())
         }
         Value::Object(obj) => {
-            if let Some(op) = obj.get("op").and_then(|v| v.as_str())
-                && GEOMETRY_MANIFOLD_OPS.contains(&op)
-                && let Some(m) = obj.get("manifold")
-            {
-                let ok = m
-                    .as_str()
-                    .is_some_and(|s| GEOMETRY_MANIFOLD_VALUES.contains(&s));
-                if !ok {
-                    return Err(err(
-                        codes::GEOMETRY_MANIFOLD_INVALID,
-                        format!(
-                            "{path}: `{op}` carries manifold {m}, not a member of the \
-                             closed set {{planar, spherical, geodesic}}. The manifold \
-                             enum is enforced on the expanded form (esm-spec §9.6.4; \
-                             CONFORMANCE_SPEC §5.8.4) — a template parameter substituted \
-                             into this scalar field must be bound to one of the \
-                             closed-set literals."
-                        ),
-                    ));
-                }
-            }
+            check_geometry_manifold(obj, at)?;
             for (k, v) in obj {
                 // Pre-substitution template trees; params may legally occupy
                 // the manifold position there (esm-spec §9.6.1).
                 if k == "expression_templates" {
                     continue;
                 }
-                let len = path.len();
-                path.push('/');
-                path.push_str(k);
-                validate_geometry_manifolds_at(v, path)?;
-                path.truncate(len);
+                validate_geometry_manifolds_at(v, &JsonPath::Key(at, k))?;
             }
             Ok(())
         }
         _ => Ok(()),
     }
+}
+
+/// [`validate_geometry_manifolds`]' check on one object node at `at`.
+fn check_geometry_manifold(
+    obj: &Map<String, Value>,
+    at: &JsonPath<'_>,
+) -> Result<(), ExpressionTemplateError> {
+    if let Some(op) = obj.get("op").and_then(|v| v.as_str())
+        && GEOMETRY_MANIFOLD_OPS.contains(&op)
+        && let Some(m) = obj.get("manifold")
+    {
+        let ok = m
+            .as_str()
+            .is_some_and(|s| GEOMETRY_MANIFOLD_VALUES.contains(&s));
+        if !ok {
+            return Err(err(
+                codes::GEOMETRY_MANIFOLD_INVALID,
+                format!(
+                    "{at}: `{op}` carries manifold {m}, not a member of the \
+                     closed set {{planar, spherical, geodesic}}. The manifold \
+                     enum is enforced on the expanded form (esm-spec §9.6.4; \
+                     CONFORMANCE_SPEC §5.8.4) — a template parameter substituted \
+                     into this scalar field must be bound to one of the \
+                     closed-set literals."
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Post-expansion validator (esm-spec §4.3.2 / §9.6.4): every `makearray`
@@ -1507,81 +1576,77 @@ fn validate_geometry_manifolds_at(
 /// (`expression_templates` subtrees are skipped) and the diagnostic needs the
 /// offender's path with an early error return.
 pub fn validate_makearray_regions(tree: &Value, path: &str) -> Result<(), ExpressionTemplateError> {
-    // The path is built in one buffer as the walk descends; only an error
-    // formats it.
-    validate_makearray_regions_at(tree, &mut path.to_string())
+    validate_makearray_regions_at(tree, &JsonPath::Root(path))
 }
 
 fn validate_makearray_regions_at(
     tree: &Value,
-    path: &mut String,
+    at: &JsonPath<'_>,
 ) -> Result<(), ExpressionTemplateError> {
     match tree {
         Value::Array(arr) => {
             for (i, child) in arr.iter().enumerate() {
-                let len = path.len();
-                {
-                    use std::fmt::Write;
-                    let _ = write!(path, "/{i}");
-                }
-                validate_makearray_regions_at(child, path)?;
-                path.truncate(len);
+                validate_makearray_regions_at(child, &JsonPath::Index(at, i))?;
             }
             Ok(())
         }
         Value::Object(obj) => {
-            if obj.get("op").and_then(|v| v.as_str()) == Some("makearray")
-                && let Some(regions) = obj.get("regions").and_then(|v| v.as_array())
-            {
-                for (ri, region) in regions.iter().enumerate() {
-                    let Some(region_arr) = region.as_array() else {
-                        continue;
-                    };
-                    for (di, bounds) in region_arr.iter().enumerate() {
-                        let Some(bounds_arr) = bounds.as_array() else {
-                            continue;
-                        };
-                        if bounds_arr.len() != 2 {
-                            continue;
-                        }
-                        // Only concrete integer pairs are checked; a fully
-                        // folded document carries nothing else here. `as_i64`
-                        // rejects booleans and floats, matching the Julia
-                        // `Integer && !Bool` gate.
-                        let (Some(lo), Some(hi)) = (bounds_arr[0].as_i64(), bounds_arr[1].as_i64())
-                        else {
-                            continue;
-                        };
-                        if hi < lo - 1 {
-                            return Err(err(
-                                codes::MAKEARRAY_REGION_INVERTED,
-                                format!(
-                                    "{path}: makearray regions[{ri}] dimension {di} bound pair \
-                                     [{lo}, {hi}] is inverted (stop < start - 1). An empty bound \
-                                     is spelled [start, start-1] and contributes no elements \
-                                     (esm-spec §4.3.2); a further-inverted pair is an authoring \
-                                     error — e.g. an interior stencil region [2, N-1] instantiated \
-                                     at N below the scheme's minimum extent (§9.6.8)."
-                                ),
-                            ));
-                        }
-                    }
-                }
-            }
+            check_makearray_regions(obj, at)?;
             for (k, v) in obj {
                 // Template bodies/matches are pre-substitution trees; bounds may
                 // legally carry metaparameter names or fold later (§9.7.6).
                 if k == "expression_templates" {
                     continue;
                 }
-                let len = path.len();
-                path.push('/');
-                path.push_str(k);
-                validate_makearray_regions_at(v, path)?;
-                path.truncate(len);
+                validate_makearray_regions_at(v, &JsonPath::Key(at, k))?;
             }
             Ok(())
         }
         _ => Ok(()),
     }
+}
+
+/// [`validate_makearray_regions`]' check on one object node at `at`.
+fn check_makearray_regions(
+    obj: &Map<String, Value>,
+    at: &JsonPath<'_>,
+) -> Result<(), ExpressionTemplateError> {
+    if obj.get("op").and_then(|v| v.as_str()) == Some("makearray")
+        && let Some(regions) = obj.get("regions").and_then(|v| v.as_array())
+    {
+        for (ri, region) in regions.iter().enumerate() {
+            let Some(region_arr) = region.as_array() else {
+                continue;
+            };
+            for (di, bounds) in region_arr.iter().enumerate() {
+                let Some(bounds_arr) = bounds.as_array() else {
+                    continue;
+                };
+                if bounds_arr.len() != 2 {
+                    continue;
+                }
+                // Only concrete integer pairs are checked; a fully folded
+                // document carries nothing else here. `as_i64` rejects
+                // booleans and floats, matching the Julia `Integer && !Bool`
+                // gate.
+                let (Some(lo), Some(hi)) = (bounds_arr[0].as_i64(), bounds_arr[1].as_i64()) else {
+                    continue;
+                };
+                if hi < lo - 1 {
+                    return Err(err(
+                        codes::MAKEARRAY_REGION_INVERTED,
+                        format!(
+                            "{at}: makearray regions[{ri}] dimension {di} bound pair \
+                             [{lo}, {hi}] is inverted (stop < start - 1). An empty bound \
+                             is spelled [start, start-1] and contributes no elements \
+                             (esm-spec §4.3.2); a further-inverted pair is an authoring \
+                             error — e.g. an interior stencil region [2, N-1] instantiated \
+                             at N below the scheme's minimum extent (§9.6.8)."
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
