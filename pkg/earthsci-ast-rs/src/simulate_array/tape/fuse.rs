@@ -421,6 +421,20 @@ fn fold_runs_acceptable(shape: &[usize], geom: &ShiftedGeom) -> bool {
     // far as that bound.
     let n_elems: usize = shape.iter().product::<usize>().max(1);
     let limit = (n_elems / 64).max(8);
+    // Every row of the box contributes at most one run per interval of the
+    // innermost axis (coalescing only merges them), so when that bound is
+    // within the limit there is nothing to count.
+    if let (Some((&inner, lead)), ShiftedGeom::Segs { segs, .. }) = (shape.split_last(), geom) {
+        let mut cuts: BTreeSet<usize> = BTreeSet::from([0, inner]);
+        for &(o, l, _) in segs.last().into_iter().flatten() {
+            cuts.insert(o);
+            cuts.insert(o + l);
+        }
+        let rows = lead.iter().product::<usize>();
+        if rows.saturating_mul(cuts.len() - 1) <= limit {
+            return true;
+        }
+    }
     count_runs_upto(shape, std::slice::from_ref(geom), limit) <= limit
 }
 
@@ -1992,6 +2006,16 @@ mod run_schedule_tests {
                 want.iter().map(key).collect::<Vec<_>>(),
                 "case {case}: shape {shape:?}"
             );
+            // The fold test, per input, against the rule it states.
+            for g in &shifted {
+                let runs = reference_build_runs(&shape, std::slice::from_ref(g)).len();
+                let n_elems: usize = shape.iter().product::<usize>().max(1);
+                assert_eq!(
+                    fold_runs_acceptable(&shape, g),
+                    runs <= 8 || n_elems / runs >= 64,
+                    "case {case}: fold test, shape {shape:?}"
+                );
+            }
             for limit in [0, 1, 2, want.len(), want.len() + 3] {
                 assert_eq!(
                     count_runs_upto(&shape, &shifted, limit),

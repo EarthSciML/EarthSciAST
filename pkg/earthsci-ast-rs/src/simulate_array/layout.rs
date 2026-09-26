@@ -517,3 +517,153 @@ fn mark_box(vs: &VarShape, bx: &[(usize, usize)], coverage: &mut SlotCoverage) {
         }
     }
 }
+
+#[cfg(test)]
+mod slot_layout_tests {
+    use super::*;
+    use crate::simulate::KnownNames;
+
+    /// `s` (0-D), `M.u` over 3x2, `v` over 4: slots 0, 1..=6, 7..=10.
+    fn layout() -> IndexMap<String, VarShape> {
+        let mut m = IndexMap::new();
+        let mut off = 0;
+        for (name, shape) in [("s", vec![]), ("M.u", vec![3, 2]), ("v", vec![4])] {
+            let n = shape.iter().product::<usize>().max(1);
+            m.insert(
+                name.to_string(),
+                VarShape {
+                    origin: vec![1; shape.len()],
+                    shape,
+                    flat_offset: off,
+                },
+            );
+            off += n;
+        }
+        m
+    }
+
+    /// The names are the column-major cells the per-slot table used to hold,
+    /// and every one of them looks up to its own slot.
+    #[test]
+    fn slot_names_round_trip_through_lookup() {
+        let m = layout();
+        let names = slot_names(&m);
+        assert_eq!(
+            names,
+            [
+                "s", "M.u[1,1]", "M.u[2,1]", "M.u[3,1]", "M.u[1,2]", "M.u[2,2]", "M.u[3,2]",
+                "v[1]", "v[2]", "v[3]", "v[4]"
+            ]
+        );
+        for (k, n) in names.iter().enumerate() {
+            assert_eq!(slot_name(&m, k).as_deref(), Some(n.as_str()));
+            assert_eq!(lookup_slot(&m, n), Some(k), "{n}");
+        }
+        assert_eq!(slot_name(&m, names.len()), None);
+    }
+
+    /// Only the exact printed spelling names a slot.
+    #[test]
+    fn lookup_refuses_every_other_spelling() {
+        let m = layout();
+        for key in [
+            "M.u",
+            "v",
+            "s[1]",
+            "v[0]",
+            "v[5]",
+            "v[01]",
+            "v[+1]",
+            "v[ 1]",
+            "v[1,1]",
+            "M.u[1]",
+            "M.u[1,2,1]",
+            "M.u[1,]",
+            "v[]",
+            "v[1",
+            "u[1,1]",
+            "w",
+        ] {
+            assert_eq!(lookup_slot(&m, key), None, "{key}");
+        }
+    }
+
+    /// Rule-3 candidates: a key that is a dotted suffix of a slot name.
+    #[test]
+    fn suffix_owners_carry_the_cell() {
+        let m = layout();
+        let names = SlotNames(&m);
+        assert_eq!(names.suffix_owners("u[2,1]"), ["M.u[2,1]"]);
+        assert!(names.suffix_owners("u[4,1]").is_empty());
+        assert!(names.suffix_owners("u").is_empty());
+        assert!(names.suffix_owners("v[1]").is_empty());
+        assert!(names.contains("M.u[3,2]") && !names.contains("u[3,2]"));
+    }
+
+    /// Inline array data (row-major) lands in the column-major slots.
+    #[test]
+    fn a_field_default_is_gathered_column_major() {
+        let vs = VarShape {
+            shape: vec![3, 2],
+            origin: vec![1, 1],
+            flat_offset: 0,
+        };
+        let mut out = vec![0.0; 6];
+        let row_major = vec![11.0, 12.0, 21.0, 22.0, 31.0, 32.0];
+        assert!(write_state_default(
+            &vs,
+            &StateDefault::Field(row_major),
+            &mut out
+        ));
+        assert_eq!(out, [11.0, 21.0, 31.0, 12.0, 22.0, 32.0]);
+        assert!(!write_state_default(
+            &vs,
+            &StateDefault::Scalar(None),
+            &mut out
+        ));
+    }
+
+    /// The box fast path marks exactly what the per-cell arithmetic does,
+    /// shifted and out-of-range forms included.
+    #[test]
+    fn faq_coverage_box_matches_per_cell_marking() {
+        let vs = VarShape {
+            shape: vec![4, 3],
+            origin: vec![1, 1],
+            flat_offset: 2,
+        };
+        let names = vec!["i".to_string(), "j".to_string()];
+        let v = |n: &str| Expr::Variable(n.to_string());
+        let add = |a: Expr, b: i64| {
+            Expr::operator(crate::types::ExpressionNode {
+                op: "+".into(),
+                args: vec![a, Expr::Integer(b)],
+                ..Default::default()
+            })
+        };
+        let cases: Vec<(Vec<(i64, i64)>, Vec<Expr>)> = vec![
+            (vec![(1, 4), (1, 3)], vec![v("i"), v("j")]),
+            (vec![(1, 3), (2, 3)], vec![add(v("i"), 1), v("j")]),
+            (vec![(1, 3), (1, 4)], vec![v("j"), v("i")]),
+            (vec![(1, 4), (1, 3)], vec![v("i"), Expr::Integer(2)]),
+            (vec![(1, 4), (1, 3)], vec![add(v("i"), 2), v("j")]),
+            (vec![(1, 2), (1, 2)], vec![v("i"), v("i")]),
+        ];
+        for (ranges, lhs) in cases {
+            let mut fast = SlotCoverage::new(16);
+            mark_faq_lhs_coverage(&vs, &names, &ranges, &lhs, &mut fast);
+            // The per-cell interpretation this replaced.
+            let mut slow = SlotCoverage::new(16);
+            let mut t = CartesianTuples::new(&ranges);
+            while let Some(tuple) = t.next() {
+                let binds: HashMap<String, i64> =
+                    names.iter().cloned().zip(tuple.iter().copied()).collect();
+                let multi: Vec<i64> = lhs.iter().map(|e| eval_simple_index(e, &binds)).collect();
+                slow.insert(
+                    vs.flat_offset + multi_to_flat_col_major(&multi, &vs.shape, &vs.origin),
+                );
+            }
+            assert_eq!(fast.covered, slow.covered, "{ranges:?}");
+        }
+    }
+}
