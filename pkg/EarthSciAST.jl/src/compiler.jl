@@ -75,9 +75,10 @@ struct CompilerPlan
     tcadence::Bool
     # ---- build-once machinery whose OFF state is a reference path ----
     intern::Bool
-    # Every construction-time compile-once form: the setup MAP materializer and
-    # the initial-state seeds (field `ic`, faq `initialization_equations`,
-    # `seed_expression_ic!`). Off, each takes its per-cell reference form.
+    # Every construction-time compiled form: the fills of setup_fill.jl (setup
+    # MAP and makearray, field `ic`, faq `initialization_equations`) and the
+    # compile-once sweeps behind them (those, and `seed_expression_ic!`). Off,
+    # each takes its per-cell reference form.
     setup_map_compile_once::Bool
     geom_sweep_specialize::Bool
     geom_overlap_gate::Bool
