@@ -1180,6 +1180,16 @@ fn check_coupling_references(obj: &serde_json::Map<String, Value>, errors: &mut 
 /// expanded AST.
 fn check_circular_model_dependencies_typed(json_value: &Value, errors: &mut Vec<String>) {
     use serde::Deserialize as _;
+    // An edge joins two DIFFERENT models (a model's reference into itself or
+    // its own subsystems is not one), so with fewer than two there is no
+    // cycle to find, and no reason to deserialize the whole document for it.
+    let n_models = json_value
+        .get("models")
+        .and_then(|m| m.as_object())
+        .map_or(0, |m| m.len());
+    if n_models < 2 {
+        return;
+    }
     let Ok(esm_file) = EsmFile::deserialize(json_value) else {
         return;
     };
