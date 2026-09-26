@@ -849,7 +849,7 @@ impl EsmProblem {
     /// flattened state-vector order. Empty for a static EsmProblem.
     pub fn state_variable_names(&self) -> Vec<String> {
         match &*self.backend {
-            Backend::Array(c) => qualify_array_names(c, c.state_variable_names()),
+            Backend::Array(c) => c.qualified_state_names().to_vec(),
             Backend::Static(_) => Vec::new(),
         }
     }
@@ -966,7 +966,7 @@ pub fn callbacks(prob: &EsmProblem) -> &CallbackSet {
 /// path, so it is qualified too: `fuel_mce` in model `fuel_mce` is
 /// `fuel_mce.fuel_mce`, the spelling the flattened name has (API_SPEC §5.8)
 /// and the one Julia and Python report.
-fn qualify(model: &str, key: &str) -> String {
+pub(crate) fn qualify(model: &str, key: &str) -> String {
     let already = key
         .strip_prefix(model)
         .is_some_and(|rest| rest.starts_with('.'));
@@ -2929,7 +2929,17 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
             // single-model array build names its rows bare, the flattened one
             // qualifies them. See `qualify_array_names`.
             let mut sol = sol;
-            sol.state_variable_names = qualify_array_names(compiled, &sol.state_variable_names);
+            if compiled.namespace().is_some() {
+                // The state rows' names are the model's (kept, already
+                // qualified); only the observed rows after them are spelled here.
+                let states = compiled.qualified_state_names();
+                let observed = sol
+                    .state_variable_names
+                    .split_off(states.len().min(sol.state_variable_names.len()));
+                let mut names = states.to_vec();
+                names.extend(qualify_array_names(compiled, &observed));
+                sol.state_variable_names = names;
+            }
             // Every row now carries the namespace, so none is reached through it.
             sol.metadata.namespace = None;
             Ok(sol)

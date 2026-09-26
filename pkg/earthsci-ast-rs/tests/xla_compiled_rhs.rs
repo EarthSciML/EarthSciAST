@@ -758,3 +758,78 @@ fn interp_lowers_and_matches_the_interpreter() {
         checked - inexact
     );
 }
+
+/// The loop-owning tape instructions — a prefix scan (`Instr::Scan`), a
+/// `makearray` assembled in one instruction (`Instr::Assemble`) and a
+/// contraction folded by one `Instr::Reduce` over its promoted box — lower
+/// through the emitter and agree with the interpreter within the `reduction`
+/// tolerance class (XLA does not pin a fold's association).
+#[test]
+fn scans_assemblies_and_promoted_contractions_lower() {
+    if !runtime_available() {
+        return;
+    }
+    let n = 9;
+    let u_j = r#"{"op": "index", "args": ["u", "j"]}"#;
+    let u_i = r#"{"op": "index", "args": ["u", "i"]}"#;
+    let doc = format!(
+        r#"{{
+  "esm": "1.1.0",
+  "metadata": {{"name": "XlaLoopProbe"}},
+  "index_sets": {{"x": {{"kind": "interval", "size": {n}}}}},
+  "models": {{"M": {{
+    "variables": {{
+      "u": {{"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0}},
+      "b": {{"type": "unknown", "units": "1", "shape": ["x"]}},
+      "c": {{"type": "unknown", "units": "1", "shape": ["x"]}}
+    }},
+    "equations": [
+      {{"lhs": "b", "rhs": {{"op": "faq", "args": [], "output_idx": ["i"],
+          "ranges": {{"i": {{"from": "x"}}, "j": {{"from": "x"}}}},
+          "filter": {{"op": "<", "args": ["j", "i"]}},
+          "expr": {{"op": "*", "args": [{u_j}, 0.5]}}}}}},
+      {{"lhs": "c", "rhs": {{"op": "faq", "args": [], "output_idx": ["i"],
+          "ranges": {{"i": {{"from": "x"}}, "j": {{"from": "x"}}}},
+          "expr": {{"op": "*", "args": [{u_j}, {{"op": "cos", "args": [{{"op": "*", "args": ["i", "j"]}}]}}]}}}}}},
+      {{"lhs": {{"op": "faq", "args": [], "output_idx": ["i"],
+               "expr": {{"op": "D", "args": [{u_i}], "wrt": "t"}},
+               "ranges": {{"i": {{"from": "x"}}}}}},
+       "rhs": {{"op": "faq", "args": [], "output_idx": ["i"], "ranges": {{"i": {{"from": "x"}}}},
+          "expr": {{"op": "+", "args": [
+            {{"op": "index", "args": ["b", "i"]}},
+            {{"op": "index", "args": ["c", "i"]}},
+            {{"op": "index", "args": [{{"op": "makearray", "args": [],
+                "regions": [[[1, {n}]], [[1, 1]], [[{n}, {n}]]],
+                "values": [{u_i}, -1.0, {{"op": "*", "args": [2.0, {u_i}]}}]}}, "i"]}}
+          ]}}}}}}
+    ]
+  }}}}
+}}"#
+    );
+    let file = load_string(&doc).expect("the probe document loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("it compiles");
+    let program = match CompiledRhs::compile(&compiled) {
+        Ok(p) => p,
+        Err(CompileRhsError::Refused(e)) => {
+            panic!("the emitter refused rule {}: {}", e.rule, e.reason)
+        }
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+    };
+    let params: HashMap<String, f64> = HashMap::new();
+    let pv = compiled.debug_resolve_params(&params);
+    let m = compiled.state_variable_names().len();
+    for seed in 0..4 {
+        let u: Vec<f64> = (0..m)
+            .map(|k| ((k * 7 + seed * 3) % 11) as f64 * 0.37 - 1.5)
+            .collect();
+        let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, true);
+        let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
+        let scale = want.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+        for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+            assert!(
+                within("reduction", *g, *w, scale),
+                "seed {seed} tendency {i}: compiled {g:e} vs interpreter {w:e}"
+            );
+        }
+    }
+}

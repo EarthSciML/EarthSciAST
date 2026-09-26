@@ -187,6 +187,26 @@ pub(super) fn run_reference(
                 }
                 slots[*out as usize] = Some(RefVal::Arr(o));
             }
+            Instr::Assemble { table, out } => {
+                let desc = &prog.slots[*out as usize];
+                let mut o = ArrayD::<f64>::zeros(IxDyn(&desc.shape));
+                for (src, region) in &prog.assemblies[*table as usize].parts {
+                    let spec = &prog.regions[*region as usize];
+                    let sv = resolve(prog, &slots, &state_arrays, &obs, params, t, src);
+                    let mut sub = o.slice_each_axis_mut(|ax| {
+                        let d = ax.axis.index();
+                        Slice::from(spec.dest_lo[d]..spec.dest_lo[d] + spec.shape[d])
+                    });
+                    match &sv {
+                        RefVal::Scalar(s) => sub.fill(*s),
+                        RefVal::Arr(a) => {
+                            assert_eq!(a.shape(), &spec.shape[..], "Assemble source shape");
+                            sub.assign(a);
+                        }
+                    }
+                }
+                slots[*out as usize] = Some(RefVal::Arr(o));
+            }
             Instr::ConstArray { data, out } => {
                 let d = &prog.const_data[*data as usize];
                 let arr = ArrayD::from_shape_vec(IxDyn(&d.shape[..]), d.values.clone())
@@ -258,6 +278,36 @@ pub(super) fn run_reference(
                     RefVal::Arr(acc)
                 };
                 slots[*out as usize] = Some(val);
+            }
+            Instr::Scan {
+                op,
+                init,
+                src,
+                axis,
+                inclusive,
+                src_shape,
+                out,
+            } => {
+                let f = binary_kernel_of(*op);
+                let sv = resolve_src(prog, &slots, &state_arrays, &obs, src);
+                assert_eq!(sv.shape(), &src_shape[..], "Scan source box");
+                let ax = Axis(*axis as usize);
+                let mut o = ArrayD::<f64>::zeros(IxDyn(&src_shape[..]));
+                // One lane per position of the other axes, swept ascending —
+                // `run_prefix_scan`'s loop, written out.
+                for (mut ol, sl) in o.lanes_mut(ax).into_iter().zip(sv.lanes(ax)) {
+                    let mut acc = *init;
+                    for (y, &x) in ol.iter_mut().zip(sl.iter()) {
+                        if *inclusive {
+                            acc = f(acc, x);
+                            *y = acc;
+                        } else {
+                            *y = acc;
+                            acc = f(acc, x);
+                        }
+                    }
+                }
+                slots[*out as usize] = Some(RefVal::Arr(o));
             }
             Instr::JmpIfZero {
                 cond,
@@ -367,6 +417,10 @@ pub(super) fn run_reference(
                 let n = fs.n_elems();
                 let mut regs = vec![0.0f64; fs.n_regs as usize];
                 let mut outs: Vec<Vec<f64>> = fs.outputs.iter().map(|_| vec![0.0; n]).collect();
+                let mut acc: Vec<f64> = fs
+                    .reduce
+                    .as_ref()
+                    .map_or_else(Vec::new, |r| vec![r.init; r.n_inner]);
                 let mut covered = 0usize;
                 for run in &fs.runs {
                     for k in 0..run.len as usize {
@@ -398,10 +452,25 @@ pub(super) fn run_reference(
                         for (oi, &(reg, _)) in fs.outputs.iter().enumerate() {
                             outs[oi][at] = regs[reg as usize];
                         }
+                        if let Some(r) = &fs.reduce {
+                            let a = &mut acc[at % r.n_inner];
+                            *a = binary_kernel_of(r.op)(*a, regs[r.reg as usize]);
+                        }
                     }
                     covered += run.len as usize;
                 }
                 assert_eq!(covered, n, "run schedule tiles the box");
+                if let Some(r) = &fs.reduce {
+                    let desc = &prog.slots[r.out as usize];
+                    slots[r.out as usize] = Some(if desc.scalar {
+                        RefVal::Scalar(acc[0])
+                    } else {
+                        RefVal::Arr(
+                            ArrayD::from_shape_vec(IxDyn(&desc.shape), acc)
+                                .expect("reduction output shape"),
+                        )
+                    });
+                }
                 for (ovals, &(_, slot)) in outs.into_iter().zip(fs.outputs.iter()) {
                     let desc = &prog.slots[slot as usize];
                     let arr =

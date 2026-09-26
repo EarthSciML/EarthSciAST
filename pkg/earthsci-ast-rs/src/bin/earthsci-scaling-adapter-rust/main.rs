@@ -529,7 +529,12 @@ fn measure_one(one: &One) -> Map<String, Value> {
     r.insert(
         "code_size_detail".into(),
         json!({"const": tape.n_instr_const, "segment": tape.n_instr_segment,
-               "continuous": tape.n_instr_continuous, "slots": tape.n_slots,
+               "continuous": tape.n_instr_continuous,
+               // Before fusion: what the lowering emitted, which bounds the
+               // fused count above.
+               "lowered": if tape.fuse.instrs_before > 0 { tape.fuse.instrs_before }
+                          else { tape.n_instr_const + tape.n_instr_segment + tape.n_instr_continuous },
+               "slots": tape.n_slots,
                "gather_plans": tape.n_gather_plans, "fallback_rules": tape.fallbacks.len()}),
     );
 

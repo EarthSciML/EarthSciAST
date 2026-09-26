@@ -1180,6 +1180,16 @@ fn check_coupling_references(obj: &serde_json::Map<String, Value>, errors: &mut 
 /// expanded AST.
 fn check_circular_model_dependencies_typed(json_value: &Value, errors: &mut Vec<String>) {
     use serde::Deserialize as _;
+    // An edge joins two DIFFERENT models (a model's reference into itself or
+    // its own subsystems is not one), so with fewer than two there is no
+    // cycle to find, and no reason to deserialize the whole document for it.
+    let n_models = json_value
+        .get("models")
+        .and_then(|m| m.as_object())
+        .map_or(0, |m| m.len());
+    if n_models < 2 {
+        return;
+    }
     let Ok(esm_file) = EsmFile::deserialize(json_value) else {
         return;
     };
@@ -1725,23 +1735,9 @@ pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), 
 
 /// Locate a `"op": "faq"` node, returning a JSON-pointer-ish path to it.
 fn find_faq_op(value: &serde_json::Value) -> Option<String> {
-    fn walk(v: &serde_json::Value, at: &str) -> Option<String> {
-        match v {
-            serde_json::Value::Object(map) => {
-                if map.get("op").and_then(|o| o.as_str()) == Some("faq") {
-                    return Some(at.to_string());
-                }
-                map.iter()
-                    .find_map(|(k, child)| walk(child, &format!("{at}/{k}")))
-            }
-            serde_json::Value::Array(items) => items
-                .iter()
-                .enumerate()
-                .find_map(|(i, child)| walk(child, &format!("{at}/{i}"))),
-            _ => None,
-        }
-    }
-    walk(value, "")
+    crate::json_visit::find_value_path(value, &mut |v| {
+        v.get("op").and_then(|o| o.as_str()) == Some("faq")
+    })
 }
 
 /// Raise a document's declared `esm` to 1.1.0 when it sits below that floor.
@@ -1771,23 +1767,9 @@ fn raise_esm_floor_to_v11(value: &mut serde_json::Value) {
 /// (esm-spec §4.2), loading silently and failing only much later as an
 /// `unlowered_operator`.
 fn find_removed_op(value: &serde_json::Value) -> Option<String> {
-    fn walk(v: &serde_json::Value, at: &str) -> Option<String> {
-        match v {
-            serde_json::Value::Object(map) => {
-                if map.get("op").and_then(|o| o.as_str()) == Some("arrayop") {
-                    return Some(at.to_string());
-                }
-                map.iter()
-                    .find_map(|(k, child)| walk(child, &format!("{at}/{k}")))
-            }
-            serde_json::Value::Array(items) => items
-                .iter()
-                .enumerate()
-                .find_map(|(i, child)| walk(child, &format!("{at}/{i}"))),
-            _ => None,
-        }
-    }
-    walk(value, "")
+    crate::json_visit::find_value_path(value, &mut |v| {
+        v.get("op").and_then(|o| o.as_str()) == Some("arrayop")
+    })
 }
 
 /// Depth-first rewrite of `"op": "aggregate"` to `"op": "faq"`; returns the count.

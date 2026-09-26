@@ -60,5 +60,8 @@ fn main() -> Result<(), String> {
     let dt = t2.elapsed().as_secs_f64();
     println!("{report}");
     println!("tape build time: {dt:.3} s");
+    if std::env::var("TAPE_LISTING").is_ok_and(|v| v == "1") {
+        print!("{}", compiled.debug_tape_listing());
+    }
     Ok(())
 }

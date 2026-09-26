@@ -193,7 +193,7 @@ Thresholds live in `manifest.json` under `gates`.
 | gate | kind | holds when |
 |---|---|---|
 | `builds` | deterministic | `status` is `"ok"`. A refusal or error fails it, and the other gates are then unmeasurable for that (family, N) |
-| `code_size_flat` | deterministic | `code_size` is identical at every N that built (slack 0: no measure has a legitimate wobble yet) |
+| `code_size_flat` | deterministic | `code_size` is identical at every N that built, up to the gate's `slack` (0). A family's `gate_overrides` may state a slack per binding, with a `why` that bounds the spread: Rust's stencil and transport families state one, because fusion's fold decision depends on row length, while the lowered tape it can only shrink is flat (`code_size_detail.lowered`) |
 | `no_steady_alloc` | deterministic | `allocs_per_call` is 0 (null on a built document fails, unless the result declares it unmeasurable) |
 | `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast. Checked against the interpreter when native refused |
 | `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns, over the smallest and largest N that built with at most 10^6 cells |

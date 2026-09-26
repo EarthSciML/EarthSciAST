@@ -1785,21 +1785,6 @@ pub fn unresolvable_const_units(expr: &Expr) -> Vec<String> {
 pub fn reject_const_units_pre_v12(
     view: &serde_json::Value,
 ) -> Result<(), crate::diagnostic::DiagnosticError> {
-    fn find(value: &serde_json::Value, at: &str) -> Option<String> {
-        match value {
-            serde_json::Value::Object(obj) => {
-                if obj.contains_key("op") && obj.contains_key("units") {
-                    return Some(at.to_string());
-                }
-                obj.iter().find_map(|(k, v)| find(v, &format!("{at}/{k}")))
-            }
-            serde_json::Value::Array(items) => items
-                .iter()
-                .enumerate()
-                .find_map(|(i, v)| find(v, &format!("{at}/{i}"))),
-            _ => None,
-        }
-    }
     let Some(esm) = view.get("esm").and_then(|v| v.as_str()) else {
         return Ok(());
     };
@@ -1809,7 +1794,11 @@ pub fn reject_const_units_pre_v12(
     if (major, minor) >= (1, 2) {
         return Ok(());
     }
-    match find(view, "") {
+    let offending = crate::json_visit::find_value_path(view, &mut |v| {
+        v.as_object()
+            .is_some_and(|o| o.contains_key("op") && o.contains_key("units"))
+    });
+    match offending {
         None => Ok(()),
         Some(path) => Err(crate::diagnostic::err(
             crate::diagnostic::codes::CONST_UNITS_VERSION_TOO_OLD,
