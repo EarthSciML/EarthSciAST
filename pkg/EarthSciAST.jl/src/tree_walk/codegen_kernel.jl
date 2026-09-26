@@ -1185,10 +1185,11 @@ end
 
 # A strided Cartesian box of rank above 3, in `_run_box_kernel!`'s iteration
 # order (dim 1 fastest). The chunk `[a, b)` is walked as whole dim-1 ROWS, the
-# same row walk the rank-2/3 nests use: the flat row ordinal `r = o ÷ n1` is
-# decoded into dims 2…D by a division odometer (dim 2 fastest) once per row, so
-# the inner loop is the rank-1 loop, and only the first and last row of a chunk
-# clamp dim 1 to the chunk boundary. c == oln for a box.
+# same row walk the rank-2/3 nests use: the chunk's first row ordinal
+# `r = a ÷ n1` is decoded into dims 2…D by division once, each later row steps
+# that odometer by one (dim 2 fastest, carrying upward), so the inner loop is
+# the rank-1 loop over `rowbase + i·s1`, and only the first and last row of a
+# chunk clamp dim 1 to the chunk boundary. c == oln for a box.
 function _cg_emit_box_rank_n(ctx::_CGCtx, K::_AccKernel, cs::_CellSet, hdr, av, bv,
                              cellbody)
     st = cs.strides
@@ -1200,9 +1201,10 @@ function _cg_emit_box_rank_n(ctx::_CGCtx, K::_AccKernel, cs::_CellSet, hdr, av, 
         push!(ovs, _cg_name(ctx, "i"))
     end
     oln = _cg_name(ctx, "o")
-    olnexpr = :($(cs.base) + $iv * $(st[1]))
+    rowb = _cg_name(ctx, "rb")
+    rowexpr = cs.base
     for d in 2:nd
-        olnexpr = :($olnexpr + $(ovs[d]) * $(st[d]))
+        rowexpr = :($rowexpr + $(ovs[d]) * $(st[d]))
     end
     kc = _CGKernCtx(K, oln, 0, oln, ovs[1], ovs[2], ovs[3], Symbol[], _cg_inv!(ctx, K),
                     Any[ovs[d] for d in 4:nd])
@@ -1215,10 +1217,24 @@ function _cg_emit_box_rank_n(ctx::_CGCtx, K::_AccKernel, cs::_CellSet, hdr, av, 
     rr = _cg_name(ctx, "rr")
     ilo = _cg_name(ctx, "il")
     ihi = _cg_name(ctx, "ih")
-    seek = Any[:(local $rr = $rv)]
+    seek = Any[:(local $rr = $rlo)]
     for d in 2:nd
         push!(seek, :(local $(ovs[d]) = $(first(rg[d])) + rem($rr, $(length(rg[d])))))
         d < nd && push!(seek, :($rr = div($rr, $(length(rg[d])))))
+    end
+    # The odometer step after a row: dim 2 up by one, carrying into the next
+    # dim when it passes its last index. Past the chunk's last row it may run
+    # off the box; nothing reads it then.
+    step = :($(ovs[nd]) += 1)
+    for d in (nd - 1):-1:2
+        step = quote
+            if $(ovs[d]) < $(last(rg[d]))
+                $(ovs[d]) += 1
+            else
+                $(ovs[d]) = $(first(rg[d]))
+                $step
+            end
+        end
     end
     return quote
         $(hdr...)
@@ -1226,14 +1242,16 @@ function _cg_emit_box_rank_n(ctx::_CGCtx, K::_AccKernel, cs::_CellSet, hdr, av, 
             local $ohi = $bv - 1
             local $rlo = div($av, $ni)
             local $rhi = div($ohi, $ni)
+            $(seek...)
             for $rv in $rlo:$rhi
-                $(seek...)
                 local $ilo = $rv == $rlo ? $i0 + rem($av, $ni) : $i0
                 local $ihi = $rv == $rhi ? $i0 + rem($ohi, $ni) : $i1
+                local $rowb = $rowexpr
                 for $iv in $ilo:$ihi
-                    local $oln = $olnexpr
+                    local $oln = $rowb + $iv * $(st[1])
                     $(body...)
                 end
+                $step
             end
         end
     end
