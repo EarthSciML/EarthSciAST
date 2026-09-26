@@ -302,9 +302,11 @@ fn prefix_scans_along_either_axis_match_the_oracle() {
     }
 }
 
-/// A scan body the whole-box form cannot lower (a strided read, `u[2j]`,
-/// which is no per-axis shift of the box) keeps the per-step form, and still
-/// agrees with the oracle — the whole-box attempt leaves nothing behind.
+/// A scan body the whole-box form cannot lower (a strided read of a const
+/// array, `w[2j]`: no per-axis shift of the box, and a data subscript into a
+/// const array is never lowered, because its out-of-range rule needs the
+/// subscript's values) keeps the per-step form, and still agrees with the
+/// oracle — the whole-box attempt leaves nothing behind.
 #[test]
 fn a_scan_body_without_a_whole_box_form_keeps_the_per_step_form() {
     let mut burden = faq(
@@ -313,20 +315,23 @@ fn a_scan_body_without_a_whole_box_form_keeps_the_per_step_form() {
         op(
             "+",
             json!([
-                index(json!(["u", op("*", json!([2, "j"]))])),
+                index(json!(["w", op("*", json!([2, "j"]))])),
                 op("*", json!([0.25, index(json!(["u", "j"]))]))
             ]),
         ),
     );
     burden["filter"] = op("<", json!(["j", "i"]));
+    let w: Vec<f64> = (1..=22).map(|k| 0.1 * k as f64).collect();
     let d = doc(
-        json!({"x": {"kind": "interval", "size": 11}}),
+        json!({"x": {"kind": "interval", "size": 11}, "x2": {"kind": "interval", "size": 22}}),
         json!({
             "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+            "w": {"type": "unknown", "units": "1", "shape": ["x2"]},
             "b": {"type": "unknown", "units": "1", "shape": ["x"]}
         }),
         json!([
             deriv_faq("u", &["i"], json!({"i": {"from": "x"}}), index(json!(["b", "i"]))),
+            {"lhs": "w", "rhs": {"op": "const", "args": [], "value": w}},
             {"lhs": "b", "rhs": burden}
         ]),
     );
@@ -412,35 +417,53 @@ fn a_two_index_contraction_folds_in_the_oracle_order() {
         let c = flat_in_n(looped, 3, 40);
         assert_eq!(c.reductions, 1, "{reduce}");
 
-        // Unrolled: `u[i + a - b]` mixes an output and two contracted symbols.
-        let mut rhs = faq(
-            json!(["i"]),
-            json!({"i": [1, 30], "a": [0, 2], "b": [0, 3]}),
-            op(
-                "*",
-                json!([
-                    index(json!([
-                        "u",
-                        op("-", json!([op("+", json!(["i", "a"])), "b"]))
-                    ])),
-                    op(
-                        "+",
-                        json!([op("*", json!([0.3, "a"])), op("*", json!([1.7, "b"])), 0.1])
-                    )
-                ]),
-            ),
-        );
-        rhs["reduce"] = json!(reduce);
-        let unrolled = doc(
-            json!({}),
-            json!({"u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0}}),
-            json!([{"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
-                            "expr": {"op": "D", "args": [index(json!(["u", "i"]))], "wrt": "t"},
-                            "ranges": {"i": [1, 30]}},
-                    "rhs": rhs}]),
-        );
-        let c = check(&unrolled);
-        assert_eq!(c.reductions, 0, "{reduce}: the window stays unrolled");
+        // `u[i + a - b]` mixes an output and two contracted symbols: no shift
+        // of the box, so the subscript is data and one IndexGather keeps the
+        // promoted box looped. Over a const array (`w[i + a - b + 3]`) a data
+        // subscript is never lowered, and the window stays unrolled.
+        let w: Vec<f64> = (1..=35).map(|k| (0.37 * k as f64).sin()).collect();
+        for (base, shift, looped) in [("u", 0, true), ("w", 3, false)] {
+            let mut rhs = faq(
+                json!(["i"]),
+                json!({"i": [1, 30], "a": [0, 2], "b": [0, 3]}),
+                op(
+                    "*",
+                    json!([
+                        index(json!([
+                            base,
+                            op(
+                                "+",
+                                json!([op("-", json!([op("+", json!(["i", "a"])), "b"])), shift])
+                            )
+                        ])),
+                        op(
+                            "+",
+                            json!([op("*", json!([0.3, "a"])), op("*", json!([1.7, "b"])), 0.1])
+                        )
+                    ]),
+                ),
+            );
+            rhs["reduce"] = json!(reduce);
+            let d = doc(
+                json!({"x": {"kind": "interval", "size": 30}, "wx": {"kind": "interval", "size": 35}}),
+                json!({"u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+                       "w": {"type": "unknown", "units": "1", "shape": ["wx"]}}),
+                json!([{"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                                "expr": {"op": "D", "args": [index(json!(["u", "i"]))], "wrt": "t"},
+                                "ranges": {"i": [1, 30]}},
+                        "rhs": rhs},
+                       {"lhs": "w", "rhs": {"op": "const", "args": [], "value": w}}]),
+            );
+            let c = check(&d);
+            if looped {
+                assert_eq!(
+                    c.reductions, 1,
+                    "{reduce}: a data subscript keeps it looped"
+                );
+            } else {
+                assert_eq!(c.reductions, 0, "{reduce}: the window stays unrolled");
+            }
+        }
     }
 }
 

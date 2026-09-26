@@ -147,14 +147,16 @@ fn a_value_outside_the_vocabulary_is_compiler_unknown() {
 
 /// The document `native` refuses, and the reason it refuses for.
 ///
-/// This used to be an `interp.linear` fixture, which was then the largest
-/// single decline in the corpus census (405 rules of 1057). That family is on
-/// the tape now, so the canonical refusal moved to the next one that is a
-/// genuine CAPABILITY gap rather than a cost choice:
-/// `polygon_intersection_area` has no array evaluator at all, so nothing about
-/// this test can quietly become a tautology the way a lowered `interp.linear`
-/// would have.
-const REFUSED_FIXTURE: &str = "tests/coupling/interfaces.esm";
+/// This was first an `interp.linear` fixture and then a
+/// `polygon_intersection_area` one; both families are on the tape now. The
+/// canonical refusal is a causal self-reference (esm-spec §4.3.1.1): a
+/// recurrence's cells are not independent, the interpreter's sequential sweep
+/// is its one implementation, and the tape refuses it by construction rather
+/// than by a missing lowering that could quietly land.
+const REFUSED_FIXTURE: &str = "tests/valid/recurrence_causal_self_reference.esm";
+
+/// What the refusal's reason names.
+const REFUSED_CONSTRUCT: &str = "recurrence";
 
 /// The refusal must name the RULE, not just the document.
 #[test]
@@ -179,11 +181,11 @@ fn native_refuses_a_rule_the_tape_cannot_lower_and_names_it() {
                 "the cadence tier is reported: {tier}"
             );
             assert!(
-                reason.contains("polygon_intersection_area"),
+                reason.contains(REFUSED_CONSTRUCT),
                 "the deepest decline reason is carried: {reason}"
             );
         }
-        other => panic!("native must refuse a polygon_intersection_area rule, got {other:?}"),
+        other => panic!("native must refuse a {REFUSED_CONSTRUCT} rule, got {other:?}"),
     }
 }
 
@@ -516,11 +518,11 @@ fn xla_refuses_a_rule_the_tape_cannot_lower_and_names_it() {
                 "the cadence tier is reported: {tier}"
             );
             assert!(
-                reason.contains("polygon_intersection_area"),
+                reason.contains(REFUSED_CONSTRUCT),
                 "the deepest decline reason is carried: {reason}"
             );
         }
-        other => panic!("xla must refuse a polygon_intersection_area rule, got {other:?}"),
+        other => panic!("xla must refuse a {REFUSED_CONSTRUCT} rule, got {other:?}"),
     }
 }
 

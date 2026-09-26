@@ -833,3 +833,58 @@ fn scans_assemblies_and_promoted_contractions_lower() {
         }
     }
 }
+
+/// The scaling tier's regrid (a `polygon_intersection_area` over literal
+/// rings, folded to a constant at emit time) and unstructured-gather (a data
+/// subscript, lowered to one `take`) fixtures compile and agree with the
+/// interpreter. The opcode counts pin that each one reaches the emitter
+/// through the instruction it is meant to exercise.
+#[test]
+fn geometry_and_data_subscript_gathers_lower() {
+    if !runtime_available() {
+        return;
+    }
+    let root = repo_root().join("tests/conformance/scaling/fixtures");
+    for (path, opcode) in [
+        ("regrid/regrid_N100.esm", "PolyArea"),
+        (
+            "unstructured_gather/unstructured_gather_N100.esm",
+            "IndexGather",
+        ),
+    ] {
+        let compiled = build(&root.join(path));
+        let report = compiled.debug_build_tape_report();
+        let has = |op: &str| report.opcode_counts.iter().any(|(o, n)| o == op && *n > 0);
+        // The fused program folds a rank-1 IndexGather into its consumer; the
+        // emitter runs the unfused one, where the instruction stands alone.
+        assert!(
+            has(opcode) || (opcode == "IndexGather" && report.fuse.n_gathers_folded > 0),
+            "{path}: no {opcode} in the tape ({:?})",
+            report.opcode_counts
+        );
+        let program = match CompiledRhs::compile(&compiled) {
+            Ok(p) => p,
+            Err(CompileRhsError::Refused(e)) => {
+                panic!("{path}: the emitter refused rule {}: {}", e.rule, e.reason)
+            }
+            Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+        };
+        let params: HashMap<String, f64> = HashMap::new();
+        let pv = compiled.debug_resolve_params(&params);
+        let m = compiled.state_variable_names().len();
+        for seed in 0..3 {
+            let u: Vec<f64> = (0..m)
+                .map(|k| 1.0 + 0.1 * ((k * 7 + seed * 3) as f64 * 0.37).sin())
+                .collect();
+            let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, true);
+            let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
+            let scale = want.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+            for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                assert!(
+                    within("reduction", *g, *w, scale),
+                    "{path} seed {seed} tendency {i}: compiled {g:e} vs interpreter {w:e}"
+                );
+            }
+        }
+    }
+}
