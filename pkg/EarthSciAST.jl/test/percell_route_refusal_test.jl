@@ -214,9 +214,14 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
     end
 
     # ── Output-time observeds and inline-test assertions (#481, #482) ─────────
-    # `h` is a makearray observed: the compile-once cellwise sweep cannot keep a
-    # region choice symbolic, so reading it takes the per-cell resolve-and-compile
-    # fallback. `k[i] = 2·i` is an ordinary compile-once observed.
+    # `h` is a makearray observed: the build-time cellwise sweep cannot keep a
+    # region choice symbolic, so under `interpreter` reading it takes the
+    # per-cell resolve-and-compile route. Under `native` both it and the
+    # ordinary `k[i] = 2·i` are read through the compiled observed program,
+    # and with both code-generation budgets at zero (refusal boundaries under
+    # `native`) that program cannot be built — which is how a read native
+    # cannot compile is provoked here. The document's right-hand side is
+    # scalar, so the budgets refuse nothing else.
     mk_doc() = Dict{String,Any}("esm" => "1.1.0",
         "metadata" => Dict("name" => "pr_observed_routes"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
@@ -240,40 +245,54 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
                 "assertions" => Any[Dict("variable" => "h", "time" => 0.0,
                     "coords" => Dict("x" => 2), "expected" => 7.0)])])))
 
-    @testset "observed_field: the per-cell fallback refuses under native" begin
+    no_codegen(f) = withenv(f, "ESS_CODEGEN_NODE_BUDGET" => "0",
+                            "ESS_DUAL_CODEGEN_NODE_BUDGET" => "0")
+
+    @testset "observed_field: a read native cannot compile refuses" begin
+        @test _pr_refuses(() -> no_codegen() do
+                              observed_field(esm_problem(mk_doc(), (0.0, 1.0)), "h")
+                          end, "refuses 'M.h'")
         pn = esm_problem(mk_doc(), (0.0, 1.0))
-        @test _pr_refuses(() -> observed_field(pn, "h"),
-                          "the build-time cellwise evaluator")
         pi_ = esm_problem(mk_doc(), (0.0, 1.0); compiler = :interpreter)
-        @test observed_field(pi_, "h") == [5.0, 7.0, 7.0]
+        @test observed_field(pn, "h") == observed_field(pi_, "h") == [5.0, 7.0, 7.0]
     end
 
     @testset "observed_field: compiled once, memoized, and reported" begin
         pn = esm_problem(mk_doc(), (0.0, 1.0))
-        hits0 = _PR._CELLWISE_FASTPATH_HITS[]
-        @test observed_field(pn, "k") == [2.0, 4.0, 6.0]
-        hits1 = _PR._CELLWISE_FASTPATH_HITS[]
-        @test hits1 > hits0
+        read_k() = _PR._counting_program_reads(() -> observed_field(pn, "k"))
+        v, n = read_k()
+        @test v == [2.0, 4.0, 6.0] && n == 1
         # The second read evaluates nothing.
-        @test observed_field(pn, "k") == [2.0, 4.0, 6.0]
-        @test _PR._CELLWISE_FASTPATH_HITS[] == hits1
+        v, n = read_k()
+        @test v == [2.0, 4.0, 6.0] && n == 0
         rows = [r for r in compiler_report(pn).rules if r.kind === :observed]
-        @test [(r.rule, r.tier) for r in rows] == [("k", :output_compiled_once)]
+        @test [(r.rule, r.tier) for r in rows] == [("k", :output_compiled)]
         # …until a live buffer is refreshed in place.
         _PR.notify_forcing_refresh!()
-        @test observed_field(pn, "k") == [2.0, 4.0, 6.0]
-        @test _PR._CELLWISE_FASTPATH_HITS[] > hits1
+        v, n = read_k()
+        @test v == [2.0, 4.0, 6.0] && n == 1
+        @test count(r -> r.kind === :observed, compiler_report(pn).rules) == 1
+        # Under `interpreter` the same read is the build-time cellwise sweep.
+        pi_ = esm_problem(mk_doc(), (0.0, 1.0); compiler = :interpreter)
+        hits0 = _PR._CELLWISE_FASTPATH_HITS[]
+        @test observed_field(pi_, "k") == [2.0, 4.0, 6.0]
+        @test _PR._CELLWISE_FASTPATH_HITS[] > hits0
+        @test [r.tier for r in compiler_report(pi_).rules if r.kind === :observed] ==
+              [:output_compiled_once]
     end
 
     @testset "inline-test assertions run under the problem's compiler" begin
         f = _PR.load_string(JSON3.write(mk_doc()))
-        rn = run_inline_tests(f)
+        rn = no_codegen(() -> run_inline_tests(f))
         @test length(rn) == 1
         @test rn[1].status == _PR.ERROR
         @test occursin("compiler_refused_rule", rn[1].message)
         ri = run_inline_tests(f; compiler = :interpreter)
         @test ri[1].status == _PR.PASS
         @test ri[1].actual == 7.0
+        rc = run_inline_tests(f)
+        @test rc[1].status == _PR.PASS
+        @test rc[1].actual === ri[1].actual
     end
 
     # ── seed_expression_ic! (#482) ─────────────────────────────────────────────
@@ -293,10 +312,10 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
     end
 
     # ── observed_field's memo and report row (review of #485) ────────────────
-    # `y[i] = s·i` compiles once and reads the parameter `s`, which the
-    # right-hand side reads too. `T[i] = h[1]·i` compiles once as well, but its
-    # un-inlined definition names the makearray observed `h`, so reading it
-    # first tries to materialize `h` — which only the per-cell route can do.
+    # `y[i] = s·i` reads the parameter `s`, which the right-hand side reads
+    # too. `T[i] = h[1]·i` names the makearray observed `h`: under `native` the
+    # compiled program materializes `h` as a level of its own, and under
+    # `interpreter` the build-time route materializes it per cell.
     obs_doc() = Dict{String,Any}("esm" => "1.1.0",
         "metadata" => Dict("name" => "pr_observed_memo"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
@@ -343,9 +362,10 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         p1 = esm_problem(obs_doc(), (0.0, 1.0); inspect = insp)
         p2 = esm_problem(obs_doc(), (0.0, 1.0); p = Dict("s" => 2.0), inspect = insp)
         y1 = observed_field(p1, "y")
+        @test y1 == [1.0, 2.0, 3.0]          # p1's own build, not the record's latest
         @test isempty(obs_rows(p2, "y"))
         @test observed_field(p2, "y") == [2.0, 4.0, 6.0]
-        @test [r.tier for r in obs_rows(p2, "y")] == [:output_compiled_once]
+        @test [r.tier for r in obs_rows(p2, "y")] == [:output_compiled]
         hits = _PR._CELLWISE_FASTPATH_HITS[]
         @test observed_field(p1, "y") == y1
         @test observed_field(p2, "y") == [2.0, 4.0, 6.0]
@@ -368,12 +388,10 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
     end
 
     @testset "observed_field: the report row says what this read did" begin
-        # Under `native` the attempt to materialize `h` walks per cell and is
-        # refused, the refusal is swallowed, and the value comes from the
-        # compiled-once body. The row names that route, not the failed attempt.
+        # Under `native` the compiled program served it, `h` included.
         pn = esm_problem(obs_doc(), (0.0, 1.0))
         @test observed_field(pn, "T") == [5.0, 10.0, 15.0]
-        @test [r.tier for r in obs_rows(pn, "T")] == [:output_compiled_once]
+        @test [r.tier for r in obs_rows(pn, "T")] == [:output_compiled]
         # Under `interpreter` `h` IS materialized per cell and served the value.
         pi_ = esm_problem(obs_doc(), (0.0, 1.0); compiler = :interpreter)
         @test observed_field(pi_, "T") == [5.0, 10.0, 15.0]

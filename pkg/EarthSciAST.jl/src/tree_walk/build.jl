@@ -119,6 +119,13 @@ mutable struct BuildInspection
     # problem built earlier with the same record still reads through it, but
     # its rows would land in another build's report.
     observed_build::Base.RefValue{Any}
+    # What the compiled observed program (`observed_program.jl`) needs from the
+    # latest build, and, per problem (keyed by its `run_file` slot, bound when
+    # `esm_problem` publishes the problem), the context its reads compile
+    # against — each problem's own build, whatever was built with this record
+    # since.
+    observed_ctx::Any
+    observed_ctxs::WeakKeyDict{Base.RefValue{Any},Any}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -129,7 +136,8 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     CompilerReport(:native),
                                     NamedTuple(), Dict{String,Int}(),
                                     Dict{Tuple{Base.RefValue{Any},String},_ObservedMemo}(),
-                                    ReentrantLock(), Ref{Any}(nothing))
+                                    ReentrantLock(), Ref{Any}(nothing),
+                                    nothing, WeakKeyDict{Base.RefValue{Any},Any}())
 
 """
     DiscreteMaterializer()
@@ -2288,7 +2296,7 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
     end
     uz = zeros(Float64, n_states)
     pp = isnothing(p) ? NamedTuple() : p
-    compiled = _discrete_fill_compiled()
+    compiled = _array_cascade_on()
     state_names = compiled ? _state_base_names(var_map, array_var_info) : Set{String}()
     # 2. The fills, in dependency order. Scalar observeds are inlined into each
     #    aggregate via `resolved_obs` (the inline reader gets them the same way); an
@@ -2386,11 +2394,6 @@ function _percell_discrete_fill(cvec::Vector{Float64}, cell_fills,
     end
 end
 
-# Whether the discrete fills take the compiled route: whenever the plan in force
-# runs any array tier. `interpreter` runs none, so it keeps the per-cell oracle.
-_discrete_fill_compiled() = (pl = _compiler_plan_now(); pl.stencil || pl.codegen ||
-                             pl.array_contraction)
-
 # The base names of every continuous state `var_map` lays out: its scalars and
 # the arrays `array_var_info` names. A `StateLayout` answers the scalars
 # directly; a plain map is read key by key, cell keys skipped.
@@ -2456,9 +2459,11 @@ function _compile_discrete_fill(name::String, def::OpExpr, dims::Vector{Int},
     feq = _materialized_fill_equation(name, def, dims)
     rec = _build_record()
     n0 = rec === nothing ? 0 : length(rec.rules)
-    se, pcs, aks, sfs, acs = _with_rule_alias(name, name) do
-        _compile_derivative_equations(Equation[feq], resolved_obs, avi, L,
-            const_arrays, pgather, param_sym_set, reg_funcs, length(cvec))
+    se, pcs, aks, sfs, acs = _with_own_state_slot_tables() do
+        _with_rule_alias(name, name) do
+            _compile_derivative_equations(Equation[feq], resolved_obs, avi, L,
+                const_arrays, pgather, param_sym_set, reg_funcs, length(cvec))
+        end
     end
     if rec !== nothing
         for k in (n0 + 1):length(rec.rules)
@@ -3119,6 +3124,7 @@ end
 # faq-valued initialization equations, the per-derivative compile + CSE,
 # and the final `f!` closure. Returns the full `_build_evaluator_impl` result.
 function _build_compile_evaluator(model::Model, cls, parts, layout;
+        index_sets::AbstractDict=Dict{String,Any}(),
         registered_functions::AbstractDict, const_arrays::AbstractDict,
         const_array_boundaries::AbstractDict, param_arrays::AbstractDict,
         initial_conditions::AbstractDict, tspan, inspect, materialize_out,
@@ -3220,6 +3226,21 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         @_bench :discrete_mat _build_discrete_materializer!(materialize_out, cls.discrete_vars,
             parts.discrete_defs, resolved_obs, layout.array_var_info, layout.var_map,
             const_registry, pgather, param_sym_set, reg_funcs, p, n_states)
+    end
+
+    # ---- The compiled observed program's context (observed_program.jl) ----
+    # Output-time reads compile against this build's ODE layout, its const
+    # arrays, live buffers (discrete caches included) and parameters. Captured
+    # only for a build with a sink to hold it; nothing here runs until a read.
+    if inspect !== nothing
+        inspect.observed_ctx = _ObsProgramCtx(model, cls, parts, index_sets,
+            layout.var_map, layout.array_var_info, n_states, p, param_sym_set,
+            const_registry, pgather, reg_funcs, template_sites,
+            materialize_out === nothing ? Dict{String,Array{Float64}}() :
+                                          materialize_out.caches,
+            merge(Dict{String,ASTExpr}(raw_obs), mat_defs),
+            _state_base_names(layout.var_map, layout.array_var_info),
+            Dict{String,Any}(), ReentrantLock())
     end
 
     # ---- Evaluate faq-valued initialization_equations into u0 ----
@@ -3573,6 +3594,7 @@ function _build_evaluator_impl(model::Model;
     insp isa BuildInspection && lock(insp.observed_lock) do
         empty!(insp.observed_memo)
         insp.observed_build = Ref{Any}(nothing)
+        insp.observed_ctx = nothing
     end
     return _with_compiler_plan(plan) do
         _with_build_record(record) do
@@ -3871,6 +3893,7 @@ function _build_evaluator_impl_inner(model::Model;
 
     # ---- Phase 4: registry + forcing buffers + derivative compile + closure ----
     return _build_compile_evaluator(model, cls, parts, layout;
+        index_sets=index_sets,
         registered_functions=registered_functions, const_arrays=const_arrays,
         const_array_boundaries=const_array_boundaries, param_arrays=param_arrays,
         initial_conditions=initial_conditions, tspan=tspan, inspect=inspect,
