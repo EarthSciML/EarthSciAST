@@ -4792,6 +4792,45 @@ runners are, respectively, a scalar expression evaluator with no state vector an
 a parse-plus-validate surface with no evaluator at all — though both accept and
 round-trip the document.
 
+#### 5.32.5 A caller's const array for a shaped parameter is keyed like an override
+
+A caller-supplied `const_arrays` entry that gives a SHAPED parameter its value is
+the same binding as an inline-array `parameter_overrides` entry for it: both land
+on the array channel the binding uses for a shaped parameter. Its key therefore
+resolves by the esm-spec §6.6.2 rules §5.31 fixes for override keys — an exact
+flattened name first, then the longest dotted suffix with its guard, then a key
+that is a dotted suffix of exactly one shaped parameter — so the model-local
+spelling `k` designates the flattened `Column.k`. The registry also carries arrays
+that are no parameter's value (a loader field, a coordinate table), so a key that
+designates no shaped parameter is left as it is and is NOT an unknown-key error.
+Caller data outranks the parameter's declared `default` under either spelling of
+its key. Julia and Python also reject a key carried as a suffix by two or more
+shaped parameters (ambiguous) and two non-exact keys designating one parameter (a
+collision), as they do for an override; the shared fixture pins the single-model
+cases only, and Rust's build pipeline, which binds the selected model's
+parameters under their local names and aliases a dotted key onto its unique bare
+tail, is not checked against those two rejections.
+
+Julia and Python matched the flattened name only. With no `default`, Julia refused
+the document (`E_TREEWALK_UNSUPPORTED_SHAPE`, the parameter backed by nothing) and
+Python bound the parameter as a scalar and failed the per-cell read with "index
+applied to scalar value"; with a scalar `default`, both silently used the default
+and ignored the caller's array. Rust's build pipeline already bound both
+spellings.
+
+**Gate:** `tests/conformance/shaped_parameter_const_arrays/` — two documents (a
+shaped parameter with no `default`, and one with a scalar `default`), each built
+through `esm_problem` with the manifest's `const_arrays` under `native` and
+`interpreter`, and the state-free observed read back through `observed_field` and
+compared exactly. Runners: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_shaped_parameter_const_arrays_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_shaped_parameter_const_arrays_conformance.py`;
+**Rust** —
+`pkg/earthsci-ast-rs/tests/shaped_parameter_const_arrays_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`; TypeScript and Go are
+`scope_excluded`.
+
 ### 5.33 `operator_compose` Merge Intent (normative)
 
 esm-libraries-spec §4.7.1 step 5 preserves an equation the merge did not match.
