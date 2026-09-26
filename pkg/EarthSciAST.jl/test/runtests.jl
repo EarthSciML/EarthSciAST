@@ -285,6 +285,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("array_contraction_test.jl")            # whole-array contraction loop nest (ess-array-contraction)
     include("array_contraction_table_test.jl")      # …its gated / ragged / filtered form, table-driven
     include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
+    include("native_probe_fixtures_test.jl")        # native's probe fixtures: rank > 3, fill sections, const subscripts
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
     # `compiler=:interpreter`: an in-place build that skips no prelude slot,
     # which is what the tiering tests above use as their differential oracle.
