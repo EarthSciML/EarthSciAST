@@ -71,7 +71,7 @@ _CGScalarCtx() = _CGScalarCtx(IdDict{Any,Symbol}())
 # merge, which no scalar spine goes through. Declining keeps that arm's address
 # arithmetic a kernel-only concern instead of a `MethodError` escaping the
 # emitter's decline protocol.
-_cg_boxaddr(::_CGScalarCtx, ::Int, ::Int, ::Int, ::Int) =
+_cg_boxaddr(::_CGCtx, ::_CGScalarCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
     throw(_CodegenDecline(:lane_spec_on_scalar_spine))
 
 # ---- Scalar spine node → expression (mirrors `_eval_node`) ------------------
@@ -81,7 +81,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     if k === _NK_LITERAL
         return nd.literal
     elseif k === _NK_STATE
-        return :(u[$(nd.idx)])
+        return :(u[$(_cg_geo!(ctx, nd.idx, (nd, :idx)))])
     elseif k === _NK_PARAM
         return :(_read_param(p, $(QuoteNode(nd.sym)), $(nd.idx)))
     elseif k === _NK_TIME
@@ -90,7 +90,8 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         # The aliased flat buffer at a build-fixed offset, as the walker's arm
         # reads it; the tab container is `Vector{Float64}`, so the element type
         # is concrete without the walker's type assert.
-        return :($(_cg_tab!(ctx, nd.payload::Vector{Float64}))[$(nd.idx)])
+        buf = _cg_tab!(ctx, nd.payload::Vector{Float64})
+        return :($buf[$(_cg_geo!(ctx, nd.idx, (nd, :idx)))])
     elseif k === _NK_CONST_GATHER
         return _cg_const_gather(ctx, kc, nd)
     elseif k === _NK_STATE_GATHER
@@ -145,7 +146,7 @@ function _cg_const_gather(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         sd = _cg_name(ctx, "cgs")
         push!(binds, :($sd = _const_gather_sub($cgv, $d,
                             round(Int, $(_cg_emit(ctx, kc, children[d]))))))
-        push!(off, :(($sd - 1) * $(cg.strides[d])))
+        push!(off, :(($sd - 1) * $(_cg_geo!(ctx, cg.strides[d], (cg.strides, d), true))))
     end
     return Expr(:let, Expr(:block, binds...),
                 Expr(:block, :($cgv.flat[$(_cg_foldl(:+, off))])))
@@ -171,9 +172,11 @@ function _cg_state_gather_dim(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node,
     d > length(children) &&
         return :(u[$sgv.slot_flat[$(_cg_foldl(:+, off)) + 1]])
     sd = _cg_name(ctx, "sgs")
-    lo, hi = sg.lo[d], sg.hi[d]
+    lo = _cg_geo!(ctx, sg.lo[d], (sg.lo, d))
+    hi = _cg_geo!(ctx, sg.hi[d], (sg.hi, d))
+    sd_stride = _cg_geo!(ctx, sg.strides[d], (sg.strides, d), true)
     nxt = _cg_state_gather_dim(ctx, kc, nd, sg, sgv, d + 1,
-                               push!(copy(off), :(($sd - $lo) * $(sg.strides[d]))))
+                               push!(copy(off), :(($sd - $lo) * $sd_stride)))
     return Expr(:let,
         Expr(:block, :($sd = round(Int, $(_cg_emit(ctx, kc, children[d]))))),
         Expr(:block, :(($lo <= $sd <= $hi) ? $nxt : zero(eltype(u)))))
@@ -202,14 +205,21 @@ function _cg_contraction_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         delete!(kc.loops, spec.ref)
     end
     step = Expr(:(=), acc, Expr(:call, fnsym, acc, body))
+    lo = _cg_geo!(ctx, spec.lo, (spec.ref, :lo))
+    st = _cg_geo!(ctx, spec.step, (spec.ref, :step), true)
+    hi = _cg_geo!(ctx, spec.hi, (spec.ref, :hi))
     return Expr(:let, Expr(:block, :($acc = $(nd.literal))),
         Expr(:block,
-             Expr(:for, :($kv = $(spec.lo):$(spec.step):$(spec.hi)),
+             Expr(:for, :($kv = $lo:$st:$hi),
                   Expr(:block, step)),
              acc))
 end
 
 # ---- One contraction → its generated function -------------------------------
+# Every extent, bound and fixed slot is run-time geometry (`_cg_geo!`,
+# codegen_kernel.jl), read into locals ahead of the cell loop, so the function is
+# the same for every size of the arrays it contracts.
+#
 # The output odometer decomposes cell `c` by division, dimension 1 varying
 # fastest — the order `Iterators.product(range_iters...)` walked when `outs` was
 # filled — so the loop is correct from any starting cell and a chunk needs no
@@ -259,8 +269,11 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
     for d in eachindex(refs)
         iv = _cg_name(ctx, "oi")
         kc.loops[refs[d]] = iv
-        push!(seek, :(local $iv = $(los[d]) + ($rv % $(lens[d])) * $(steps[d])))
-        push!(seek, :($rv = div($rv, $(lens[d]))))
+        lo = _cg_geo!(ctx, los[d], (los, d))
+        len = _cg_geo!(ctx, lens[d], (lens, d))
+        st = _cg_geo!(ctx, steps[d], (steps, d), true)
+        push!(seek, :(local $iv = $lo + ($rv % $len) * $st))
+        push!(seek, :($rv = div($rv, $len)))
     end
     kvs = Symbol[]
     if fold !== nothing
@@ -283,9 +296,11 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
     av = _cg_name(ctx, "a")
     bv = _cg_name(ctx, "b")
     tv = _cg_name(ctx, "ab")
+    ncells = _cg_geo!(ctx, length(outs))
     loop = quote
+        $(ctx.geosink...)
         local $ov = $outsv
-        local $tv = _chunk_ordinals($(length(outs)), _cgci, _cgnc)
+        local $tv = _chunk_ordinals($ncells, _cgci, _cgnc)
         local $av = $tv[1]
         local $bv = $tv[2]
         for $cv in ($av + 1):$bv
@@ -333,8 +348,10 @@ function _cg_fold(ctx::_CGCtx, fold::_ACFold, cv::Symbol, kvs::Vector{Symbol}, t
         l = upd
         for r in eachindex(kvs)
             rg = fold.ranges[r]
-            l = Expr(:for, :($(kvs[r]) = $(first(rg)):$(step(rg)):$(last(rg))),
-                     Expr(:block, l))
+            lo = _cg_geo!(ctx, first(rg), (fold.ranges, r, :lo))
+            st = _cg_geo!(ctx, step(rg), (fold.ranges, r, :step), true)
+            hi = _cg_geo!(ctx, last(rg), (fold.ranges, r, :hi))
+            l = Expr(:for, :($(kvs[r]) = $lo:$st:$hi), Expr(:block, l))
         end
         l
     end
