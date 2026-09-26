@@ -1405,11 +1405,11 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
         "expected the stencil gathers to fold: {:?}",
         prog.fuse_stats
     );
-    let any_multi_run = prog.fused.iter().any(|f| f.runs.len() > 1);
+    let any_multi_run = prog.fused.iter().any(|f| f.schedule.n_runs > 1);
     let any_ghost = prog
         .fused
         .iter()
-        .flat_map(|f| f.runs.iter())
+        .flat_map(|f| f.schedule.expanded())
         .any(|r| r.in_off.contains(&GHOST_OFF));
     let any_strided = prog
         .fused

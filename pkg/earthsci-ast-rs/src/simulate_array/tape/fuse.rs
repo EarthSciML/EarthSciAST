@@ -414,28 +414,14 @@ fn foldable_plan(plan: &GatherPlan) -> bool {
 /// Cap on the fold's run-schedule shattering: a fold must keep runs coarse
 /// (a shift along the innermost axis of a deep box would shatter the box
 /// into per-row runs and eat the chunked executor's dispatch amortization —
-/// such gathers stay materialized).
+/// such gathers stay materialized). What is counted is the runs the executor
+/// dispatches, a repetition's body once per repetition, read off the built
+/// schedule: a regular row pattern is one node of it however many rows it
+/// covers, but each row is still one dispatch.
 fn fold_runs_acceptable(shape: &[usize], geom: &ShiftedGeom) -> bool {
-    // `runs <= 8 || n_elems / runs >= 64`, and `n_elems / runs >= 64` holds
-    // exactly when `runs <= n_elems / 64`, so the schedule is counted only as
-    // far as that bound.
     let n_elems: usize = shape.iter().product::<usize>().max(1);
-    let limit = (n_elems / 64).max(8);
-    // Every row of the box contributes at most one run per interval of the
-    // innermost axis (coalescing only merges them), so when that bound is
-    // within the limit there is nothing to count.
-    if let (Some((&inner, lead)), ShiftedGeom::Segs { segs, .. }) = (shape.split_last(), geom) {
-        let mut cuts: BTreeSet<usize> = BTreeSet::from([0, inner]);
-        for &(o, l, _) in segs.last().into_iter().flatten() {
-            cuts.insert(o);
-            cuts.insert(o + l);
-        }
-        let rows = lead.iter().product::<usize>();
-        if rows.saturating_mul(cuts.len() - 1) <= limit {
-            return true;
-        }
-    }
-    count_runs_upto(shape, std::slice::from_ref(geom), limit) <= limit
+    let runs = build_schedule(shape, std::slice::from_ref(geom)).n_runs;
+    runs <= 8 || n_elems / runs >= 64
 }
 
 /// Detect the globally-linear fold: `flat_src = a * flat_out + b` over the
@@ -559,249 +545,402 @@ impl ShiftedGeom {
 // Run-schedule construction.
 // ---------------------------------------------------------------------------
 
-/// Build the contiguous-run schedule for a group box `shape` with the given
-/// shifted-input geometries. Runs are emitted ascending in `out_off` and
-/// maximally coalesced. Within a run every shifted input advances by its
-/// constant element stride through its own row-major source, so a run stores
-/// one flat source offset (or ghost) per shifted input.
-fn build_runs(shape: &[usize], shifted: &[ShiftedGeom]) -> Vec<FusedRun> {
-    let mut out: Vec<FusedRun> = Vec::new();
-    for_each_run(shape, shifted, |r| {
-        out.push(r);
-        true
-    });
-    debug_assert_eq!(
-        out.iter().map(|r| r.len as usize).sum::<usize>(),
-        shape.iter().product::<usize>().max(1),
-        "run schedule must tile the box"
-    );
+/// A run schedule under construction: runs and repetitions in execution
+/// (ascending output) order, maximally coalesced. Flattened into a
+/// [`RunSchedule`] once built.
+#[derive(Clone)]
+enum Sched {
+    Run(FusedRun),
+    /// `body` executed `count` (>= 2) times, the `k`-th time stepped `k`
+    /// times by `(out_step, in_step)` (see [`RunNode::Repeat`]).
+    Rep {
+        count: u32,
+        out_step: i64,
+        in_step: SmallVec<[i64; 2]>,
+        body: Vec<Sched>,
+    },
+}
+
+/// Whether run `b` continues run `a`: it starts where `a` ends in the output
+/// and in every input (each advancing by its element stride), or both are
+/// ghost there.
+fn continues(a: &FusedRun, b: &FusedRun, elem_stride: &[i64]) -> bool {
+    a.out_off as i64 + a.len as i64 == b.out_off as i64
+        && a.in_off
+            .iter()
+            .zip(&b.in_off)
+            .zip(elem_stride)
+            .all(|((&x, &y), &es)| {
+                (x == GHOST_OFF && y == GHOST_OFF)
+                    || (x != GHOST_OFF && y != GHOST_OFF && x + a.len as i64 * es == y)
+            })
+}
+
+/// `a` extended by the run `b` that [`continues`] it.
+fn joined(a: FusedRun, b: &FusedRun) -> FusedRun {
+    FusedRun {
+        len: a.len + b.len,
+        ..a
+    }
+}
+
+/// `seq` moved `k` steps of `(out_step, in_step)`.
+fn stepped_seq(seq: &[Sched], k: i64, out_step: i64, in_step: &[i64]) -> Vec<Sched> {
+    seq.iter()
+        .map(|n| match n {
+            Sched::Run(r) => Sched::Run(r.stepped(k, out_step, in_step)),
+            Sched::Rep {
+                count,
+                out_step: os,
+                in_step: is,
+                body,
+            } => Sched::Rep {
+                count: *count,
+                out_step: *os,
+                in_step: is.clone(),
+                body: stepped_seq(body, k, out_step, in_step),
+            },
+        })
+        .collect()
+}
+
+/// `count` repetitions of `body`: a `Rep`, or the body itself when once.
+fn rep_of(count: u32, out_step: i64, in_step: &[i64], body: Vec<Sched>) -> Vec<Sched> {
+    if count == 1 {
+        body
+    } else {
+        vec![Sched::Rep {
+            count,
+            out_step,
+            in_step: in_step.into(),
+            body,
+        }]
+    }
+}
+
+/// The first run `seq` executes.
+fn first_run(seq: &[Sched]) -> FusedRun {
+    match &seq[0] {
+        Sched::Run(r) => r.clone(),
+        Sched::Rep { body, .. } => first_run(body),
+    }
+}
+
+/// The last run `seq` executes.
+fn last_run(seq: &[Sched]) -> FusedRun {
+    match seq.last().expect("a schedule piece has a run") {
+        Sched::Run(r) => r.clone(),
+        Sched::Rep {
+            count,
+            out_step,
+            in_step,
+            body,
+        } => last_run(body).stepped(*count as i64 - 1, *out_step, in_step),
+    }
+}
+
+/// Remove and return the first run `seq` executes, peeling it out of any
+/// repetition that starts with it.
+fn pop_first(seq: &mut Vec<Sched>) -> FusedRun {
+    match seq.remove(0) {
+        Sched::Run(r) => r,
+        Sched::Rep {
+            count,
+            out_step,
+            in_step,
+            body,
+        } => {
+            let rest = rep_of(
+                count - 1,
+                out_step,
+                &in_step,
+                stepped_seq(&body, 1, out_step, &in_step),
+            );
+            let mut head = body;
+            let f = pop_first(&mut head);
+            head.extend(rest);
+            seq.splice(0..0, head);
+            f
+        }
+    }
+}
+
+/// Remove and return the last run `seq` executes, peeling it out of any
+/// repetition that ends with it.
+fn pop_last(seq: &mut Vec<Sched>) -> FusedRun {
+    match seq.pop().expect("a schedule piece has a run") {
+        Sched::Run(r) => r,
+        Sched::Rep {
+            count,
+            out_step,
+            in_step,
+            body,
+        } => {
+            let mut tail = stepped_seq(&body, count as i64 - 1, out_step, &in_step);
+            let l = pop_last(&mut tail);
+            seq.extend(rep_of(count - 1, out_step, &in_step, body));
+            seq.extend(tail);
+            l
+        }
+    }
+}
+
+/// Append `more` to `seq`, joining the two runs at the seam when the second
+/// continues the first. Both are maximally coalesced, and so is the result:
+/// a joined run keeps the first run's start and the second's end.
+fn append(seq: &mut Vec<Sched>, mut more: Vec<Sched>, elem_stride: &[i64]) {
+    if more.is_empty() {
+        return;
+    }
+    if !seq.is_empty() && continues(&last_run(seq), &first_run(&more), elem_stride) {
+        let l = pop_last(seq);
+        let f = pop_first(&mut more);
+        seq.push(Sched::Run(joined(l, &f)));
+    }
+    seq.extend(more);
+}
+
+/// `p` executed `count` times, stepped `(out_step, in_step)` each time.
+///
+/// When one repetition's last run is continued by the next one's first run
+/// (a row that ends where the next begins), the repetition is rotated so the
+/// repeated body ENDS with that joined run: `first, (middle, last+first) x
+/// (count - 1), middle, last`. A one-run `p` so continued is one long run.
+fn repeat(
+    p: Vec<Sched>,
+    count: u32,
+    out_step: i64,
+    in_step: &[i64],
+    elem_stride: &[i64],
+) -> Vec<Sched> {
+    if count == 1 {
+        return p;
+    }
+    let next_first = first_run(&p).stepped(1, out_step, in_step);
+    if !continues(&last_run(&p), &next_first, elem_stride) {
+        return rep_of(count, out_step, in_step, p);
+    }
+    if let [Sched::Run(r)] = &p[..] {
+        return vec![Sched::Run(FusedRun {
+            len: r.len * count,
+            ..r.clone()
+        })];
+    }
+    let mut middle = p;
+    let first = pop_first(&mut middle);
+    let last_rep = stepped_seq(&middle, count as i64 - 1, out_step, in_step);
+    let last = pop_last(&mut middle);
+    let mut body = middle;
+    body.push(Sched::Run(joined(last, &next_first)));
+    let mut out = vec![Sched::Run(first)];
+    out.extend(rep_of(count - 1, out_step, in_step, body));
+    out.extend(last_rep);
     out
 }
 
-/// How many runs [`build_runs`] would schedule, counting no further than
-/// `limit + 1`: enough to tell whether the schedule stays within `limit`
-/// without building it.
-fn count_runs_upto(shape: &[usize], shifted: &[ShiftedGeom], limit: usize) -> usize {
-    let mut n = 0usize;
-    for_each_run(shape, shifted, |_| {
-        n += 1;
-        n <= limit
-    });
-    n
-}
-
-/// Hand every run of the schedule [`build_runs`] describes to `sink`, in
-/// ascending `out_off` and coalesced, until `sink` answers `false`.
+/// Build the run schedule for a group box `shape` with the given
+/// shifted-input geometries: runs ascending in `out_off` and maximally
+/// coalesced, with regular repetitions kept as [`RunNode::Repeat`]. Within
+/// a run every shifted input advances by its constant element stride through
+/// its own row-major source, so a run stores one flat source offset (or
+/// ghost) per shifted input.
 ///
-/// The box is cut, per axis, at every segment boundary of every `Segs` input;
-/// each row of the box (every coordinate on the leading axes) then crosses
-/// the inner axis's intervals in order, which is ascending output order, so
-/// adjacent pieces are coalesced as they are produced.
-fn for_each_run(shape: &[usize], shifted: &[ShiftedGeom], mut sink: impl FnMut(FusedRun) -> bool) {
+/// The box is cut, per axis, at every segment boundary of every `Segs` input.
+/// Inside one interval of a leading axis, every input's source offset (or its
+/// ghost) moves by a constant per coordinate, so the rows below each
+/// coordinate are the rows below the interval's first coordinate, stepped:
+/// the schedule is built once per interval (not per row) and repeated, and
+/// its size is set by the number of intervals, not by the box's extents.
+fn build_schedule(shape: &[usize], shifted: &[ShiftedGeom]) -> RunSchedule {
     let n_elems: usize = shape.iter().product::<usize>().max(1);
     if shifted.is_empty() {
-        sink(FusedRun {
-            out_off: 0,
-            len: n_elems as u32,
-            in_off: SmallVec::new(),
-        });
-        return;
+        return RunSchedule::whole(n_elems);
     }
     let nd = shape.len();
     debug_assert!(nd > 0, "a shifted input has a box of rank >= 1");
-    let strides = rm_strides(shape);
-    let n_shift = shifted.len();
-    // Per-input element stride (coalescing contiguity is offset + len*stride).
-    let elem_stride: SmallVec<[i64; 2]> = shifted.iter().map(ShiftedGeom::elem_stride).collect();
-    let seg_strides: SmallVec<[Option<&[i64]>; 2]> = shifted
+    let cx = SchedCx::new(shape, shifted);
+    let base: SmallVec<[Option<i64>; 2]> = shifted
         .iter()
         .map(|g| match g {
-            ShiftedGeom::Segs { strides, .. } => Some(&strides[..]),
-            ShiftedGeom::Linear { .. } => None,
+            ShiftedGeom::Segs { base, .. } => Some(*base),
+            ShiftedGeom::Linear { .. } => Some(0),
         })
         .collect();
-    // Per axis: merged interval list
-    // [(start, len, per-input Option<source start position on this axis>)]
-    // (`None` for Linear inputs, which impose no cuts).
-    #[allow(clippy::type_complexity)]
-    let mut axis_ivals: Vec<Vec<(usize, usize, SmallVec<[Option<i64>; 2]>)>> =
-        Vec::with_capacity(nd);
-    for d in 0..nd {
-        let mut cuts: BTreeSet<usize> = BTreeSet::new();
-        cuts.insert(0);
-        cuts.insert(shape[d]);
-        for g in shifted {
-            if let ShiftedGeom::Segs { segs, .. } = g {
-                for &(o, l, _) in &segs[d] {
-                    cuts.insert(o);
-                    cuts.insert(o + l);
-                }
+    let seq = cx.axis(0, 0, &base);
+    let mut nodes = Vec::new();
+    let (n_runs, depth) = flatten(&seq, &mut nodes);
+    debug_assert_eq!(
+        {
+            let mut n = 0usize;
+            let s = RunSchedule {
+                nodes: nodes.clone(),
+                n_runs,
+                depth,
+            };
+            s.for_each_run(|r| n += r.len as usize);
+            n
+        },
+        n_elems,
+        "run schedule must tile the box"
+    );
+    RunSchedule {
+        nodes,
+        n_runs,
+        depth,
+    }
+}
+
+/// Write `seq` into `nodes` in pre-order; returns the runs it executes and
+/// its repetition depth.
+fn flatten(seq: &[Sched], nodes: &mut Vec<RunNode>) -> (usize, usize) {
+    let (mut runs, mut depth) = (0usize, 0usize);
+    for n in seq {
+        match n {
+            Sched::Run(r) => {
+                nodes.push(RunNode::Run(r.clone()));
+                runs += 1;
+            }
+            Sched::Rep {
+                count,
+                out_step,
+                in_step,
+                body,
+            } => {
+                let at = nodes.len();
+                nodes.push(RunNode::Run(FusedRun {
+                    out_off: 0,
+                    len: 0,
+                    in_off: SmallVec::new(),
+                }));
+                let (r, d) = flatten(body, nodes);
+                nodes[at] = RunNode::Repeat {
+                    count: *count,
+                    body: (nodes.len() - at - 1) as u32,
+                    out_step: *out_step,
+                    in_step: in_step.clone(),
+                };
+                runs += *count as usize * r;
+                depth = depth.max(d + 1);
             }
         }
-        let cuts: Vec<usize> = cuts.into_iter().collect();
-        let mut ivals = Vec::with_capacity(cuts.len() - 1);
-        for w in cuts.windows(2) {
-            let (a, b) = (w[0], w[1]);
-            let mut src_start: SmallVec<[Option<i64>; 2]> = SmallVec::new();
+    }
+    (runs, depth)
+}
+
+/// The per-box tables [`build_schedule`] walks.
+struct SchedCx<'a> {
+    shape: &'a [usize],
+    shifted: &'a [ShiftedGeom],
+    strides: SmallVec<[i64; 4]>,
+    /// Per input: its advance per element within a run.
+    elem_stride: SmallVec<[i64; 2]>,
+    /// Per axis: `[(start, len, per-input source start on this axis)]`, the
+    /// start `None` where the interval is uncovered (a ghost) and for a
+    /// `Linear` input (which imposes no cuts).
+    #[allow(clippy::type_complexity)]
+    axis_ivals: Vec<Vec<(usize, usize, SmallVec<[Option<i64>; 2]>)>>,
+}
+
+impl<'a> SchedCx<'a> {
+    fn new(shape: &'a [usize], shifted: &'a [ShiftedGeom]) -> Self {
+        let nd = shape.len();
+        let mut axis_ivals = Vec::with_capacity(nd);
+        for d in 0..nd {
+            let mut cuts: BTreeSet<usize> = BTreeSet::new();
+            cuts.insert(0);
+            cuts.insert(shape[d]);
             for g in shifted {
-                let mut pos = None;
                 if let ShiftedGeom::Segs { segs, .. } = g {
-                    for &(o, l, so) in &segs[d] {
-                        if a >= o && b <= o + l {
-                            pos = Some(so as i64 + (a as i64 - o as i64));
-                            break;
-                        }
+                    for &(o, l, _) in &segs[d] {
+                        cuts.insert(o);
+                        cuts.insert(o + l);
                     }
                 }
-                src_start.push(pos);
             }
-            ivals.push((a, b - a, src_start));
+            let cuts: Vec<usize> = cuts.into_iter().collect();
+            let mut ivals = Vec::with_capacity(cuts.len() - 1);
+            for w in cuts.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                let src_start: SmallVec<[Option<i64>; 2]> = shifted
+                    .iter()
+                    .map(|g| match g {
+                        ShiftedGeom::Segs { segs, .. } => segs[d]
+                            .iter()
+                            .find(|&&(o, l, _)| a >= o && b <= o + l)
+                            .map(|&(o, _, so)| so as i64 + (a as i64 - o as i64)),
+                        ShiftedGeom::Linear { .. } => None,
+                    })
+                    .collect();
+                ivals.push((a, b - a, src_start));
+            }
+            axis_ivals.push(ivals);
         }
-        axis_ivals.push(ivals);
+        SchedCx {
+            shape,
+            shifted,
+            strides: rm_strides(shape),
+            elem_stride: shifted.iter().map(ShiftedGeom::elem_stride).collect(),
+            axis_ivals,
+        }
     }
 
-    // Per leading axis and coordinate, each Segs input's source contribution
-    // (`(source position) * source stride`), or `None` where the coordinate's
-    // interval is uncovered (a ghost).
-    let mut contrib: Vec<Vec<SmallVec<[Option<i64>; 2]>>> = Vec::with_capacity(nd - 1);
-    for d in 0..nd - 1 {
-        let mut per_x = Vec::with_capacity(shape[d]);
-        for (st, len, starts) in &axis_ivals[d] {
-            for k in 0..*len {
-                per_x.push(
-                    (0..n_shift)
-                        .map(|j| match (&seg_strides[j], starts[j]) {
-                            (Some(sstr), Some(p)) => Some((p + k as i64) * sstr[d]),
-                            (Some(_), None) => None,
-                            (None, _) => Some(0),
-                        })
-                        .collect(),
-                );
-            }
-            debug_assert_eq!(per_x.len(), st + len);
-        }
-        contrib.push(per_x);
-    }
-
-    // A block of consecutive rows along the innermost leading axis `lead`
-    // (one of its intervals) coalesces into ONE run when the inner axis is a
-    // single full interval and every Segs input is either a ghost there or
-    // advances along `lead` by exactly one row's worth of its own element
-    // stride: each row then starts where the previous one ended, in the output
-    // and in every source. Such a block is emitted as one piece.
-    let inner_ivals = &axis_ivals[nd - 1];
-    let inner_full = inner_ivals.len() == 1;
-    let lead = nd.checked_sub(2);
-    // The lead axis's interval index at each of its coordinates.
-    let lead_ival: Vec<usize> = match lead {
-        Some(l) => axis_ivals[l]
-            .iter()
-            .enumerate()
-            .flat_map(|(k, (_, len, _))| std::iter::repeat_n(k, *len))
-            .collect(),
-        None => Vec::new(),
-    };
-    let mut last: Option<FusedRun> = None;
-    let mut piece: SmallVec<[i64; 4]> = SmallVec::from_elem(0i64, n_shift);
-    let mut row_src: SmallVec<[Option<i64>; 4]> = SmallVec::from_elem(None, n_shift);
-    let mut x: SmallVec<[usize; 4]> = SmallVec::from_elem(0usize, nd - 1);
-    loop {
-        // This row's output base and each Segs input's source base (or ghost).
-        let mut row_off = 0i64;
-        for (r, g) in row_src.iter_mut().zip(shifted) {
-            *r = Some(match g {
-                ShiftedGeom::Segs { base, .. } => *base,
-                ShiftedGeom::Linear { .. } => 0,
-            });
-        }
-        for d in 0..nd - 1 {
-            row_off += x[d] as i64 * strides[d];
-            for (j, c) in contrib[d][x[d]].iter().enumerate() {
-                row_src[j] = match (row_src[j], c) {
-                    (Some(a), Some(b)) => Some(a + b),
-                    _ => None,
-                };
-            }
-        }
-        // How many rows this piece spans: the whole of the lead axis's
-        // interval when its block coalesces and this row starts it, else one.
-        let mut rows = 1usize;
-        if inner_full && let Some(l) = lead {
-            let (st, len, _) = &axis_ivals[l][lead_ival[x[l]]];
-            let row_len = shape[nd - 1] as i64;
-            let advances = (0..n_shift).all(|j| match (&seg_strides[j], row_src[j]) {
-                (Some(sstr), Some(_)) => sstr[l] == row_len * elem_stride[j],
-                _ => true,
-            });
-            if x[l] == *st && advances {
-                rows = *len;
-            }
-        }
-        for (st, len, starts) in inner_ivals {
-            let off = row_off + *st as i64 * strides[nd - 1];
-            for j in 0..n_shift {
-                piece[j] = match &shifted[j] {
-                    ShiftedGeom::Linear { a, b } => a * off + b,
-                    ShiftedGeom::Segs { .. } => match (row_src[j], starts[j]) {
-                        (Some(base), Some(p)) => {
-                            let sstr = seg_strides[j].expect("segs have strides");
-                            base + p * sstr[nd - 1]
-                        }
-                        _ => GHOST_OFF,
-                    },
-                };
-            }
-            let len = (*len * rows) as u32;
-            if let Some(prev) = last.as_mut() {
-                let contiguous = prev.out_off as i64 + prev.len as i64 == off
-                    && prev
-                        .in_off
-                        .iter()
-                        .zip(piece.iter())
-                        .enumerate()
-                        .all(|(j, (&a, &b))| {
-                            (a == GHOST_OFF && b == GHOST_OFF)
-                                || (a != GHOST_OFF
-                                    && b != GHOST_OFF
-                                    && a + prev.len as i64 * elem_stride[j] == b)
-                        });
-                if contiguous {
-                    prev.len += len;
-                    continue;
-                }
-            }
-            let r = FusedRun {
-                out_off: off as u32,
-                len,
-                in_off: piece.iter().copied().collect(),
+    /// The schedule of the sub-box of axes `d..` at output offset `off`,
+    /// where each `Segs` input's source offset so far is `src[j]` (`None`: a
+    /// ghost on some outer axis).
+    fn axis(&self, d: usize, off: i64, src: &[Option<i64>]) -> Vec<Sched> {
+        let inner = d + 1 == self.shape.len();
+        let mut seq: Vec<Sched> = Vec::new();
+        for (st, len, starts) in &self.axis_ivals[d] {
+            let o = off + *st as i64 * self.strides[d];
+            let at: SmallVec<[Option<i64>; 2]> = self
+                .shifted
+                .iter()
+                .enumerate()
+                .map(|(j, g)| match (g, src[j], starts[j]) {
+                    (ShiftedGeom::Segs { strides, .. }, Some(b), Some(p)) => {
+                        Some(b + p * strides[d])
+                    }
+                    (ShiftedGeom::Segs { .. }, _, _) => None,
+                    (ShiftedGeom::Linear { .. }, _, _) => Some(0),
+                })
+                .collect();
+            let piece = if inner {
+                let in_off = self
+                    .shifted
+                    .iter()
+                    .zip(&at)
+                    .map(|(g, s)| match (g, s) {
+                        (ShiftedGeom::Linear { a, b }, _) => a * o + b,
+                        (ShiftedGeom::Segs { .. }, Some(s)) => *s,
+                        (ShiftedGeom::Segs { .. }, None) => GHOST_OFF,
+                    })
+                    .collect();
+                vec![Sched::Run(FusedRun {
+                    out_off: o as u32,
+                    len: *len as u32,
+                    in_off,
+                })]
+            } else {
+                let in_step: SmallVec<[i64; 2]> = self
+                    .shifted
+                    .iter()
+                    .map(|g| match g {
+                        ShiftedGeom::Linear { a, .. } => a * self.strides[d],
+                        ShiftedGeom::Segs { strides, .. } => strides[d],
+                    })
+                    .collect();
+                let sub = self.axis(d + 1, o, &at);
+                repeat(
+                    sub,
+                    *len as u32,
+                    self.strides[d],
+                    &in_step,
+                    &self.elem_stride,
+                )
             };
-            if let Some(done) = last.replace(r)
-                && !sink(done)
-            {
-                return;
-            }
+            append(&mut seq, piece, &self.elem_stride);
         }
-        // Advance the row odometer over the leading axes (the last of them
-        // fastest), in ascending output order; `rows` rows were consumed.
-        let mut d = nd - 1;
-        let mut step = rows;
-        let mut done = true;
-        while d > 0 {
-            d -= 1;
-            x[d] += step;
-            step = 1;
-            if x[d] < shape[d] {
-                done = false;
-                break;
-            }
-            x[d] = 0;
-        }
-        if done {
-            break;
-        }
-    }
-    if let Some(r) = last {
-        sink(r);
+        seq
     }
 }
 
@@ -1495,7 +1634,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     } else {
         0
     };
-    let runs = build_runs(&shape, &new_segs);
+    let schedule = build_schedule(&shape, &new_segs);
     // Strided shifted inputs are pre-loaded into dedicated chunk registers
     // appended after the micro register file.
     let mut n_load_regs: GroupIx = 0;
@@ -1535,7 +1674,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         n_load_regs,
         n_splat_regs,
         outputs,
-        runs,
+        schedule,
         reduce,
         n_fused_instrs: n_members as u32,
         n_folded_gathers: folded.len() as u32,
@@ -1728,8 +1867,8 @@ mod run_schedule_tests {
     use super::*;
 
     /// The schedule as it was first written: every (tile, row) piece
-    /// materialized, then sorted and coalesced. The streamed schedule must
-    /// reproduce it run for run.
+    /// materialized, then sorted and coalesced. The built schedule, expanded,
+    /// must reproduce it run for run.
     fn reference_build_runs(shape: &[usize], shifted: &[ShiftedGeom]) -> Vec<FusedRun> {
         let n_elems: usize = shape.iter().product::<usize>().max(1);
         if shifted.is_empty() {
@@ -1959,8 +2098,50 @@ mod run_schedule_tests {
         }
     }
 
+    /// A regular sequence of rows is one repetition, not one run per row: a
+    /// contraction term read by the contracted index alone (`e[j]` over a
+    /// `j x i` box, constant along each row and one source element per row)
+    /// and a shift along the inner axis of a deep box both keep a schedule
+    /// whose size does not depend on the extents, while it still executes
+    /// (and counts, for the fold test) one run per row.
     #[test]
-    fn the_streamed_schedule_is_the_sorted_and_coalesced_one() {
+    fn a_regular_row_pattern_is_one_repetition() {
+        for n in [100usize, 3162] {
+            let geom = ShiftedGeom::Segs {
+                segs: SmallVec::from_vec(vec![
+                    SmallVec::from_slice(&[(0, n, 0)]),
+                    SmallVec::from_slice(&[(0, n, 0)]),
+                ]),
+                strides: SmallVec::from_slice(&[1, 0]),
+                base: 0,
+            };
+            let s = build_schedule(&[n, n], std::slice::from_ref(&geom));
+            assert_eq!(s.n_runs, n);
+            assert_eq!(s.nodes.len(), 2, "{:?}", s.nodes);
+            assert!(fold_runs_acceptable(&[n, n], &geom));
+        }
+        for n in [16usize, 40] {
+            let shape = [n, n, n];
+            let geom = ShiftedGeom::Segs {
+                segs: SmallVec::from_vec(vec![
+                    SmallVec::from_slice(&[(0, n, 0)]),
+                    SmallVec::from_slice(&[(0, n, 0)]),
+                    SmallVec::from_slice(&[(0, n - 1, 1)]),
+                ]),
+                strides: rm_strides(&shape),
+                base: 0,
+            };
+            let s = build_schedule(&shape, std::slice::from_ref(&geom));
+            assert_eq!(
+                s.n_runs,
+                reference_build_runs(&shape, std::slice::from_ref(&geom)).len()
+            );
+            assert!(s.nodes.len() <= 8, "{} nodes at n = {n}", s.nodes.len());
+        }
+    }
+
+    #[test]
+    fn the_schedule_expands_to_the_sorted_and_coalesced_one() {
         let mut rng = Lcg(0x5eed);
         for case in 0..3000 {
             let nd = 1 + rng.next(4) as usize;
@@ -1999,13 +2180,15 @@ mod run_schedule_tests {
                 })
                 .collect();
             let want = reference_build_runs(&shape, &shifted);
-            let got = build_runs(&shape, &shifted);
+            let sched = build_schedule(&shape, &shifted);
+            let got = sched.expanded();
             let key = |r: &FusedRun| (r.out_off, r.len, r.in_off.to_vec());
             assert_eq!(
                 got.iter().map(key).collect::<Vec<_>>(),
                 want.iter().map(key).collect::<Vec<_>>(),
                 "case {case}: shape {shape:?}"
             );
+            assert_eq!(sched.n_runs, want.len(), "case {case}: run count");
             // The fold test, per input, against the rule it states.
             for g in &shifted {
                 let runs = reference_build_runs(&shape, std::slice::from_ref(g)).len();
@@ -2014,13 +2197,6 @@ mod run_schedule_tests {
                     fold_runs_acceptable(&shape, g),
                     runs <= 8 || n_elems / runs >= 64,
                     "case {case}: fold test, shape {shape:?}"
-                );
-            }
-            for limit in [0, 1, 2, want.len(), want.len() + 3] {
-                assert_eq!(
-                    count_runs_upto(&shape, &shifted, limit),
-                    want.len().min(limit + 1),
-                    "case {case}: count up to {limit}"
                 );
             }
         }

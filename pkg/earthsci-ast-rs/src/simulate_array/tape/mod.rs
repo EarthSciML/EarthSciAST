@@ -389,14 +389,15 @@ impl ArrayCompiled {
         for (i, fs) in prog.fused.iter().enumerate() {
             let _ = writeln!(
                 out,
-                "fused {i}: box {:?}, {} micro-ops, {} inputs ({} shifted), {} scalars, {} outputs, {} runs, reduce {:?}",
+                "fused {i}: box {:?}, {} micro-ops, {} inputs ({} shifted), {} scalars, {} outputs, {} runs ({} schedule nodes), reduce {:?}",
                 &fs.shape[..],
                 fs.micro.len(),
                 fs.inputs.len(),
                 fs.inputs.iter().filter(|x| x.shifted_ix.is_some()).count(),
                 fs.scalars.len(),
                 fs.outputs.len(),
-                fs.runs.len(),
+                fs.schedule.n_runs,
+                fs.schedule.nodes.len(),
                 fs.reduce
             );
         }
@@ -450,7 +451,7 @@ impl ArrayCompiled {
         let mut by_regs: Vec<&FusedSpec> = prog.fused.iter().collect();
         by_regs.sort_by_key(|f| std::cmp::Reverse(f.n_regs));
         let max_regs = by_regs.first().map(|f| f.n_regs).unwrap_or(0);
-        let tot_runs: usize = prog.fused.iter().map(|f| f.runs.len()).sum();
+        let tot_runs: usize = prog.fused.iter().map(|f| f.schedule.n_runs).sum();
         let tot_micro: usize = prog.fused.iter().map(|f| f.micro.len()).sum();
         let tot_inputs: usize = prog.fused.iter().map(|f| f.inputs.len()).sum();
         let tot_outputs: usize = prog.fused.iter().map(|f| f.outputs.len()).sum();
@@ -496,7 +497,7 @@ impl ArrayCompiled {
                 f.inputs.iter().filter(|i| i.shifted_ix.is_some()).count(),
                 f.scalars.len(),
                 f.outputs.len(),
-                f.runs.len(),
+                f.schedule.n_runs,
                 f.n_folded_gathers
             );
         }
