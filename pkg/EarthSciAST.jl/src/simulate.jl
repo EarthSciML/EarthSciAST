@@ -420,7 +420,8 @@ function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
         # evaluated once, for its diagnostic only, before the refusal is raised.
         isempty(slots) || evaluate_expr(expr, binding(1))
         _refuse_percell_evaluation("seed_expression_ic!($(var_name))",
-            "the expression initial-state seed", length(slots); one_cell = true)
+            "the expression initial-state seed", length(slots);
+            one_cell = !isempty(slots))
     end
     for c in eachindex(slots)
         u0[slots[c]] = evaluate_expr(expr, binding(c))

@@ -39,47 +39,57 @@ end
 
 _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
 
+# `D(out[a,b,c,d]) = Σ_k W[k]·F[a,b,c,d]` over a single output cell: `W` an
+# inline `const` read at the contracted index `k` (which runs `past` terms beyond
+# it), `F` a live forcing buffer read at the output index; with `filt`, only
+# the terms `k ≥ 2`.
+function _pr_rank4_doc(W::Vector{Float64}; past::Int = 0, filt::Bool = false)
+    rng = Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d"))
+    agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+        "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
+        "ranges" => merge(rng, Dict{String,Any}("k" => Any[1, length(W) + past])),
+        "expr" => Dict("op" => "*", "args" => Any[
+            Dict("op" => "index", "args" => Any[
+                Dict("op" => "const", "args" => Any[], "value" => W), "k"]),
+            Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])]))
+    filt && (agg["filter"] = Dict("op" => ">=", "args" => Any["k", 2]))
+    Dict{String,Any}("esm" => "1.1.0",
+        "metadata" => Dict("name" => "pr_rank4_contraction"),
+        "models" => Dict("R" => Dict{String,Any}(
+            "variables" => Dict(
+                "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
+                "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
+            "equations" => Any[Dict(
+                "lhs" => Dict("op" => "faq", "args" => Any[],
+                    "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
+                    "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
+                        "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
+                "rhs" => agg)])))
+end
+_pr_rank4_build(doc, compiler; kw...) =
+    withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
+        _PR._build_evaluator(doc; initial_conditions = Dict("out[1,1,1,1]" => 0.0),
+            param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)), compiler = compiler, kw...)
+    end
+
 @testset "per-cell routes under strict native" begin
 
     # ── The short-contraction route (#479) ────────────────────────────────────
-    # `D(out[a,b,c,d]) = Σ_k W[k]·F[a,b,c,d]`: a constant-bound contraction the
-    # per-cell contraction loop's gate admits, whose body reads a LIVE forcing
+    # `D(out[a,b,c,d]) = Σ_k W[k]·F[a,b,c,d]`: a constant-bound contraction whose
+    # body reads an inline `const` at the contracted index and a LIVE forcing
     # buffer `F` at the output index. The whole-array nest cannot keep that
-    # read symbolic, and the affine tier does not model a rank-4 output, so the
-    # only tier left is the per-cell loop — whose cells the in-place `f!` walks
-    # as trees on every call.
-    @testset "a contraction left to the per-cell loop refuses" begin
+    # forcing read symbolic; the affine tier's run-time fold reads both, the
+    # inline `const` as a const lane, so it compiles the equation once.
+    @testset "a short contraction over a live forcing read compiles once" begin
         W = Float64[1, 2, 3, 4, 5, 6, 7, 8]
-        rng = Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d"))
-        agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
-            "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
-            "ranges" => merge(rng, Dict{String,Any}("k" => Any[1, length(W)])),
-            "expr" => Dict("op" => "*", "args" => Any[
-                Dict("op" => "index", "args" => Any[
-                    Dict("op" => "const", "args" => Any[], "value" => W), "k"]),
-                Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])]))
-        doc = Dict{String,Any}("esm" => "1.1.0",
-            "metadata" => Dict("name" => "pr_short_contraction"),
-            "models" => Dict("R" => Dict{String,Any}(
-                "variables" => Dict(
-                    "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
-                    "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
-                "equations" => Any[Dict(
-                    "lhs" => Dict("op" => "faq", "args" => Any[],
-                        "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
-                        "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
-                            "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
-                    "rhs" => agg)])))
-        build(compiler) = withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
-            _PR._build_evaluator(doc;
-                initial_conditions = Dict("out[1,1,1,1]" => 0.0),
-                param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)),
-                compiler = compiler)
-        end
-        @test _pr_refuses(() -> build(:native), "per-cell contraction loop"; one_cell = true)
-        f!, u0, p, _, vm = build(:interpreter)
+        doc = _pr_rank4_doc(W)
+        insp = _PR.BuildInspection()
+        f!, u0, p, _, vm = _pr_rank4_build(doc, :native; inspect = insp)
+        fi!, ui, pi_, _, vi = _pr_rank4_build(doc, :interpreter)
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vm["out[1,1,1,1]"]] == 3.0 * sum(W)
+        di = similar(ui); fi!(di, ui, pi_, 0.0)
+        @test du[vm["out[1,1,1,1]"]] === di[vi["out[1,1,1,1]"]] == 3.0 * sum(W)
+        @test length(_pr_rows(_PR.compiler_report(insp), :affine)) == 1
     end
 
     # ── The discrete-cadence materializer (#480) ──────────────────────────────
@@ -367,6 +377,13 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         @test _pr_refuses(() -> native(() -> seed_expression_ic!(zeros(3), vm, "M.u", tx,
                                                                  ["t" => [1.0, 2.0, 3.0]])),
                           "seed_expression_ic!(M.u)"; one_cell = true)
+        # Over no cell at all (a variable the map does not hold), nothing is
+        # evaluated first, and the refusal does not say one cell was.
+        e = err_of(() -> native(() -> seed_expression_ic!(zeros(3), vm, "M.v", tx,
+                                                          ["t" => [1.0, 2.0, 3.0]])))
+        @test code_of(e) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test occursin("over 0 cells", e.detail)
+        @test !occursin(_PR._ONE_CELL_NOTE, e.detail)
     end
 
     @testset "faq initialization equation: an undeclared name, an out-of-range gather" begin
@@ -404,157 +421,116 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         end
     end
 
-    @testset "a contraction left to the per-cell loop: an out-of-range gather" begin
+    @testset "a contraction's out-of-range gather is the document's error" begin
+        # One term past the end of `W`, under both compilers.
         W = Float64[1, 2, 3, 4, 5, 6, 7, 8]
-        rng = Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d"))
-        agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
-            "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
-            # One term past the end of `W`.
-            "ranges" => merge(rng, Dict{String,Any}("k" => Any[1, length(W) + 1])),
-            "expr" => Dict("op" => "*", "args" => Any[
-                Dict("op" => "index", "args" => Any[
-                    Dict("op" => "const", "args" => Any[], "value" => W), "k"]),
-                Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])]))
-        doc = Dict{String,Any}("esm" => "1.1.0",
-            "metadata" => Dict("name" => "pr_short_contraction_oob"),
-            "models" => Dict("R" => Dict{String,Any}(
-                "variables" => Dict(
-                    "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
-                    "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
-                "equations" => Any[Dict(
-                    "lhs" => Dict("op" => "faq", "args" => Any[],
-                        "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
-                        "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
-                            "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
-                    "rhs" => agg)])))
         for c in (:native, :interpreter)
-            e = err_of(() -> withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
-                _PR._build_evaluator(doc; initial_conditions = Dict("out[1,1,1,1]" => 0.0),
-                    param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)), compiler = c)
-            end)
+            e = err_of(() -> _pr_rank4_build(_pr_rank4_doc(W; past = 1), c))
             @test code_of(e) == "E_TREEWALK_CONSTARRAY_OOB"
         end
     end
 
-    @testset "a long contraction left to the per-cell loop refuses without unrolling" begin
-        # The diagnostic build ahead of the refusal unrolls one output cell, and
-        # past `_REFUSAL_DIAGNOSTIC_TERMS` terms only the ends of the contracted
-        # range: the refusal costs the same at 10^5 terms as at 8, and a gather
-        # out of range at the end is still the document's error.
-        long_doc(K, past) = Dict{String,Any}("esm" => "1.1.0",
-            "metadata" => Dict("name" => "pr_long_contraction"),
-            "models" => Dict("R" => Dict{String,Any}(
-                "variables" => Dict(
-                    "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
-                    "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
-                "equations" => Any[Dict(
-                    "lhs" => Dict("op" => "faq", "args" => Any[],
-                        "output_idx" => Any["a", "b", "c", "d"],
-                        "ranges" => Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d")),
-                        "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
-                            "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
-                    "rhs" => Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
-                        "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
-                        "ranges" => merge(
-                            Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d")),
-                            Dict{String,Any}("k" => Any[1, K + past])),
-                        "expr" => Dict("op" => "*", "args" => Any[
-                            Dict("op" => "index", "args" => Any[
-                                Dict("op" => "const", "args" => Any[],
-                                     "value" => collect(1.0:K)), "k"]),
-                            Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])])))])))
+    # A long contraction is the affine tier's run-time fold at any length: its
+    # build lowers no more at 10^5 terms than at 8, and a gather out of range at
+    # the far end is still the document's error. With a filter too.
+    @testset "a long contraction compiles once$(filt ? ", filtered" : "")" for filt in (false, true)
         function lowerings(K, past)
-            insp = _PR.BuildInspection()
             _PR._bench_reset!()
             _PR._BENCH_ON[] = true
-            e = try
-                err_of(() -> withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
-                    _PR._build_evaluator(long_doc(K, past);
-                        initial_conditions = Dict("out[1,1,1,1]" => 0.0),
-                        param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)),
-                        compiler = :native, inspect = insp)
-                end)
+            r = try
+                _pr_rank4_build(_pr_rank4_doc(collect(1.0:K); past, filt), :native)
+            catch e
+                e
             finally
                 _PR._BENCH_ON[] = false
             end
-            return e, _PR._BENCH_COMPILE_CALLS[], _PR.compiler_report(insp)
+            return r, _PR._BENCH_COMPILE_CALLS[]
         end
-        e_short, n_short, _ = lowerings(8, 0)
-        @test code_of(e_short) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
-        e_long, n_long, rep = lowerings(100_000, 0)
-        @test code_of(e_long) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
-        @test n_long <= n_short
-        # The build that is refused leaves no tally behind it.
-        @test isempty(rep.tally)
-        e_oob, _, _ = lowerings(100_000, 1)
+        want(K) = 3.0 * sum(filt ? (2.0:K) : (1.0:K))
+        for K in (8, 100_000)
+            (f!, u0, p, _, vm), _ = lowerings(K, 0)
+            du = similar(u0); f!(du, u0, p, 0.0)
+            @test du[vm["out[1,1,1,1]"]] == want(K)
+        end
+        _, n_short = lowerings(8, 0)
+        _, n_long = lowerings(100_000, 0)
+        @test n_long == n_short
+        e_oob, _ = lowerings(100_000, 1)
         @test code_of(e_oob) == "E_TREEWALK_CONSTARRAY_OOB"
+        fi!, ui, pi_, _, vi = _pr_rank4_build(_pr_rank4_doc(collect(1.0:8.0); filt),
+                                              :interpreter)
+        di = similar(ui); fi!(di, ui, pi_, 0.0)
+        @test di[vi["out[1,1,1,1]"]] == want(8)
     end
 
-    # A long contraction that is NO per-cell-loop candidate — it carries a
-    # filter, which the loop's gate does not admit — and that neither the affine
-    # tier's run-time fold (an inline `const` at a loop subscript) nor the
-    # whole-array nest (a live forcing read) takes. What is left is the per-cell
-    # build, which unrolls the contraction into every output cell, so a strict
-    # compiler refuses it; and the affine tier's own unroll is not offered it
-    # either: the build's lowerings do not grow with the contraction.
-    @testset "a long contraction nothing compiles once is refused, not unrolled" begin
-        filt_doc(K) = Dict{String,Any}("esm" => "1.1.0",
-            "metadata" => Dict("name" => "pr_long_filtered_contraction"),
+    # What no compile-once form takes. A RAGGED contraction (its bound an
+    # expression of the output index) is not the affine tier's, and the nest
+    # cannot keep its live forcing read symbolic, so the only form left is the
+    # per-cell build: a strict compiler refuses it by name, naming the tier that
+    # was offered it and declined, and not claiming a decline from one that was
+    # not. Its one cell is evaluated first, in full when it is short, and only
+    # at the ends of its contracted range when it is long, which the note says.
+    @testset "a contraction no compile-once form takes is refused by name" begin
+        N = 3
+        rag(len) = Dict{String,Any}("esm" => "1.1.0",
+            "metadata" => Dict("name" => "pr_ragged_forcing"),
             "models" => Dict("R" => Dict{String,Any}(
                 "variables" => Dict(
-                    "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
-                    "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
+                    "F" => Dict("type" => "parameter", "shape" => Any["i"]),
+                    "u" => Dict("type" => "unknown", "shape" => Any["i"])),
                 "equations" => Any[Dict(
-                    "lhs" => Dict("op" => "faq", "args" => Any[],
-                        "output_idx" => Any["a", "b", "c", "d"],
-                        "ranges" => Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d")),
-                        "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
-                            "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
-                    "rhs" => Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
-                        "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
-                        "ranges" => merge(
-                            Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d")),
-                            Dict{String,Any}("k" => Any[1, K])),
-                        "filter" => Dict("op" => ">=", "args" => Any["k", 2]),
+                    "lhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                        "ranges" => Dict("i" => Any[1, N]),
+                        "expr" => Dict("op" => "D", "wrt" => "t", "args" => Any[
+                            Dict("op" => "index", "args" => Any["u", "i"])])),
+                    "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                        "ranges" => Dict("i" => Any[1, N], "k" => Any[1,
+                            Dict("op" => "-", "args" => Any[
+                                Dict("op" => "+", "args" => Any["i", len]), "i"])]),
                         "expr" => Dict("op" => "*", "args" => Any[
-                            Dict("op" => "index", "args" => Any[
-                                Dict("op" => "const", "args" => Any[],
-                                     "value" => collect(1.0:K)), "k"]),
-                            Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])])))])))
-        function build(K, compiler)
-            _PR._bench_reset!()
-            _PR._BENCH_ON[] = true
-            try
-                r = try
-                    withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
-                        _PR._build_evaluator(filt_doc(K);
-                            initial_conditions = Dict("out[1,1,1,1]" => 0.0),
-                            param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)),
-                            compiler = compiler)
-                    end
-                catch err
-                    err
-                end
-                return r, _PR._BENCH_COMPILE_CALLS[]
-            finally
-                _PR._BENCH_ON[] = false
-            end
-        end
-        e_short, n_short = build(8, :native)
-        @test e_short isa _PR.TreeWalkError &&
-              e_short.code == _PR.ERROR_CODES.COMPILER_REFUSED_RULE &&
-              occursin("per-cell build, which unrolls", e_short.detail) &&
-              occursin(_PR._ONE_CELL_NOTE, e_short.detail)
-        e_long, n_long = build(100_000, :native)
-        @test e_long isa _PR.TreeWalkError &&
-              e_long.code == _PR.ERROR_CODES.COMPILER_REFUSED_RULE &&
-              occursin("per-cell build, which unrolls", e_long.detail)
-        # The ends-only diagnostic build: the refusal lowers as little at
-        # 10^5 terms as at 8.
-        @test n_long <= n_short
-        (f!, u0, p, _, vm), _ = build(8, :interpreter)
+                            Dict("op" => "index", "args" => Any["F", "i"]), "k"])))])))
+        build(len, c) = _PR._build_evaluator(rag(len);
+            initial_conditions = Dict("u[$i]" => 0.0 for i in 1:N),
+            param_arrays = Dict("F" => collect(1.0:N)), compiler = c)
+        e = err_of(() -> build(4, :native))
+        @test code_of(e) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test occursin("declined by the whole-array contraction tier", e.detail)
+        @test occursin("takes no ragged contraction", e.detail)
+        @test !occursin("declined by the affine", e.detail)
+        @test occursin("per-cell build", e.detail)
+        @test occursin(_PR._ONE_CELL_NOTE, e.detail)
+        e_long = err_of(() -> build(5000, :native))
+        @test code_of(e_long) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test occursin(_PR._PART_CELL_NOTE, e_long.detail)
+        f!, u0, p, _, vm = build(4, :interpreter)
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vm["out[1,1,1,1]"]] == 3.0 * sum(2.0:8.0)
+        @test [du[vm["u[$i]"]] for i in 1:N] == [i * 10.0 for i in 1:N]
+    end
+
+    # The diagnostic reports what it evaluated. A join gate that admits none of
+    # the tuples tried (here the ends of a range too long to build in full)
+    # leaves no term built, and the refusal says so rather than the one-cell
+    # note, which would claim a document error could have surfaced.
+    @testset "the refusal diagnostic says how much of the cell it evaluated" begin
+        body = _PR.OpExpr("*", _PR.ASTExpr[_PR.VarExpr("k"),
+            _PR.OpExpr("index", _PR.ASTExpr[_PR.VarExpr("u"), _PR.VarExpr("i")])])
+        lhs = _PR.OpExpr("D", _PR.ASTExpr[
+            _PR.OpExpr("index", _PR.ASTExpr[_PR.VarExpr("u"), _PR.VarExpr("i")])])
+        K = 2000
+        gate = [_PR._JoinGate("i", "k", Dict(1 => 7),
+                              Dict(k => (k == K ÷ 2 ? 7 : 0) for k in 1:K))]
+        diag(gates, n) = _PR._faq_diagnostic_cell(lhs, body;
+            idx_names = ["i"], range_iters = [[1]], contract_names = ["k"],
+            contract_ranges = [Any[1, n]], contract_const = [collect(1:n)],
+            rhs_zerobar = 0.0, agg_gates = gates, agg_filter = nothing,
+            resolved_obs = Dict{String,_PR.ASTExpr}(),
+            array_var_info = Dict("u" => ([1], [1])),
+            var_map = Dict("u[1]" => 1), const_registry = Dict{String,Any}(),
+            pgather = Dict{String,Any}(), param_sym_set = Dict{Symbol,Int}(),
+            reg_funcs = Dict{String,Any}())
+        @test diag(nothing, 8) === :cell
+        @test diag(nothing, K) === :part
+        @test diag(gate, K) === :none
     end
 
     @testset "setup materializers: an out-of-range gather, an undeclared name" begin
