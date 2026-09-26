@@ -6386,10 +6386,13 @@ the same one-way rule as `required` above. `scripts/native-coverage.py check`
 compares a census against it and is RED on a document native newly refuses; on
 a ledgered document native now builds, until the entry is removed; on an entry
 that stopped being a gap in any other way; on an entry whose code drifted; and
-on a census missing a corpus document. A document the census could not finish
-(a timeout, a crash, a killed process) is inconclusive: the check reports it
-and leaves it out of the comparison, so it is never a new refusal and a ledger
-entry for it is neither confirmed nor stale. Regenerating a ledger may drop
+on a census missing a corpus document. A document the census timed out on is
+inconclusive, since finishing inside the wall clock depends on the machine's
+load: the check reports it and leaves it out of the comparison, so it is never a
+new refusal and a ledger entry for it is neither confirmed nor stale. A build
+whose process died (a crash, an out-of-memory kill, an abort) is not
+inconclusive: it fails the same way on every run, so it counts as that compiler
+not building the document, and under native it is a gap like any refusal. Regenerating a ledger may drop
 entries and never add one, except for a first measurement.
 
 `scripts/native-coverage.py self-test` drives every one of those arms on

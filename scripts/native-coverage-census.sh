@@ -8,9 +8,9 @@
 #   julia  pkg/EarthSciAST.jl/scripts/compiler_census.jl, one sweep per
 #          compiler, sharded over --jobs worker processes per sweep;
 #   rust   pkg/earthsci-ast-rs/examples/compiler_census.rs (release build), one
-#          process per document, --jobs at a time, each under a wall-clock
-#          timeout and an address-space cap, so one pathological document costs
-#          one record rather than the run.
+#          process per document and compiler, --jobs documents at a time, each
+#          under a wall-clock timeout and an address-space cap, so one
+#          pathological document costs one record rather than the run.
 #
 # The corpus is every .esm under tests/ plus every .esm in the EarthSciModels
 # checkout. Then scripts/native-coverage.py checks each census against its
@@ -92,25 +92,49 @@ print(json.dumps({
 PY
 fi
 
-# One Rust document: the census line on stdout, or a `killed` record when the
-# process produced none (a timeout, the memory cap, an abort).
+# One Rust document. Each compiler runs in its own process, under its own
+# timeout and address-space cap, so a half that dies is known to be that
+# compiler's. A half that printed nothing (a timeout, the memory cap, an abort)
+# is recorded as `<compiler>_killed`, with `<compiler>_timed_out` saying whether
+# the wall clock is what stopped it: only a timeout depends on the machine's
+# load. The two halves are merged into one record per document.
 rust_one() {
   local bin="$1" outdir="$2" doc="$3" timeout_s="$4" mem_kb="$5"
-  local key f
+  local key f tag rc t0
   key=$(printf '%s' "$doc" | md5sum | cut -c1-32)
   f="$outdir/$key.json"
-  [[ -s "$f" ]] && return 0
-  local rc=0
-  ( ulimit -v "$mem_kb" 2>/dev/null; timeout -k 5 "$timeout_s" "$bin" "$doc" ) \
-      > "$f.part" 2> "$f.err" || rc=$?
-  if [[ -s "$f.part" ]]; then
-    mv "$f.part" "$f"
-  else
-    python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1], "killed": True, "rc": int(sys.argv[2]), "stderr_tail": open(sys.argv[3], errors="replace").read()[-800:]}))' \
-      "$doc" "$rc" "$f.err" > "$f"
-    rm -f "$f.part"
-  fi
-  rm -f "$f.err"
+  # A record from before the halves ran apart names no compiler in its kill:
+  # run the document again rather than reuse it.
+  [[ -s "$f" ]] && ! grep -qF '"killed": true' "$f" && return 0
+  local halves=()
+  for tag in native interpreter; do
+    rc=0
+    t0=$(date +%s)
+    ( ulimit -v "$mem_kb" 2>/dev/null; timeout -k 5 "$timeout_s" "$bin" --only "$tag" "$doc" ) \
+        > "$f.$tag" 2> "$f.$tag.err" || rc=$?
+    halves+=("$tag" "$rc" "$(( $(date +%s) - t0 ))")
+  done
+  python3 - "$doc" "$f" "$timeout_s" "${halves[@]}" > "$f.part" <<'PY'
+import json, sys
+doc, f, timeout_s = sys.argv[1], sys.argv[2], int(sys.argv[3])
+rec = {"path": doc}
+h = sys.argv[4:]
+for tag, rc, secs in zip(h[0::3], h[1::3], h[2::3]):
+    rc, secs = int(rc), int(secs)
+    line = open(f"{f}.{tag}", errors="replace").read().strip()
+    if line:
+        rec.update({k: v for k, v in json.loads(line).items() if k != "path"})
+        continue
+    # `timeout` answers 124 when its TERM stopped the process and 137 when its
+    # KILL did; a 137 before the deadline is some other kill.
+    rec[f"{tag}_killed"] = True
+    rec[f"{tag}_rc"] = rc
+    rec[f"{tag}_timed_out"] = rc == 124 or (rc == 137 and secs >= timeout_s)
+    rec[f"{tag}_stderr_tail"] = open(f"{f}.{tag}.err", errors="replace").read()[-800:]
+print(json.dumps(rec))
+PY
+  mv "$f.part" "$f"
+  rm -f "$f.native" "$f.interpreter" "$f.native.err" "$f.interpreter.err"
 }
 export -f rust_one
 
