@@ -84,30 +84,82 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
 
     # ── The discrete-cadence materializer (#480) ──────────────────────────────
     # `g[j] = Σ_i W[i,j]·src[i]` over a live buffer `src` is state-free and
-    # forcing-derived, so the materializer cuts it into a cache filled per cell
-    # at build and at every refresh.
-    @testset "the discrete-cadence materializer refuses, and is reported" begin
+    # forcing-derived, so the materializer cuts it into a cache filled at build
+    # and at every refresh: one compiled whole-array kernel under `native`, a
+    # per-cell walk under `interpreter`, bit for bit the same cache.
+    @testset "the discrete-cadence materializer compiles once, and is reported" begin
         file = _PR.load_path(joinpath(@__DIR__, "fixtures", "discrete_materialize.esm"))
         W = [1.0 2.0 3.0; 4.0 5.0 6.0]
         ics = Dict{String,Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
-        build(compiler, dm, insp) = _PR._build_evaluator(file; initial_conditions = ics,
-            const_arrays = Dict("W" => W), param_arrays = Dict("src" => [1.0, 1.0]),
-            materialize_out = dm, inspect = insp, compiler = compiler)
-        @test _pr_refuses(() -> build(:native, _PR.DiscreteMaterializer(),
-                                      _PR.BuildInspection()),
-                          "the discrete-cadence materializer"; one_cell = true)
-        dm = _PR.DiscreteMaterializer()
-        insp = _PR.BuildInspection()
-        build(:interpreter, dm, insp)
-        @test dm.caches["g"] == [5.0, 7.0, 9.0]
-        @test [r.rule for r in _pr_rows(insp.compiler_report, :discrete_percell)] ==
-              ["g"]
-        # No sink, no cut: the field is inlined into the compiled right-hand side
-        # and `native` builds it.
-        f!, u0, p, _, vm = _PR._build_evaluator(file; initial_conditions = ics,
-            const_arrays = Dict("W" => W), param_arrays = Dict("src" => [1.0, 1.0]))
-        du = similar(u0); f!(du, u0, p, 0.0)
-        @test isfinite(du[vm["c[1]"]])
+        function build(compiler)
+            dm = _PR.DiscreteMaterializer(); insp = _PR.BuildInspection()
+            src = [0.3, 1.7]
+            r = _PR._build_evaluator(file; initial_conditions = ics,
+                const_arrays = Dict("W" => W), param_arrays = Dict("src" => src),
+                materialize_out = dm, inspect = insp, compiler = compiler)
+            (dm = dm, src = src, report = insp.compiler_report, r = r)
+        end
+        n, i = build(:native), build(:interpreter)
+        g0 = [W[1, j] * 0.3 + W[2, j] * 1.7 for j in 1:3]
+        @test n.dm.caches["g"] == g0
+        @test all(n.dm.caches["g"] .=== i.dm.caches["g"])
+        # A refill after an in-place refresh of the live buffer: the same bits again.
+        n.src .= [2.5, -0.1]; i.src .= [2.5, -0.1]
+        n.dm.materialize!(); i.dm.materialize!()
+        @test all(n.dm.caches["g"] .=== i.dm.caches["g"])
+        @test n.dm.caches["g"] == [W[1, j] * 2.5 + W[2, j] * -0.1 for j in 1:3]
+        g_rows(rep) = [(r.kind, r.tier) for r in rep.rules if r.rule == "g"]
+        @test g_rows(n.report) == [(:observed, :affine)]
+        @test g_rows(i.report) == [(:observed, :discrete_percell)]
+        # The right-hand side reads the refreshed cache under both compilers.
+        for b in (n, i)
+            f!, u0, p, _, vm = b.r
+            du = similar(u0); f!(du, u0, p, 0.0)
+            @test du[vm["c[1]"]] == b.dm.caches["g"][1] + (W[1, 1] + W[2, 1]) * 1.0
+        end
+    end
+
+    # A fill the cascade cannot compile is refused, naming the field: the
+    # rank-4 contraction of the short-contraction route above, as a
+    # discrete-cadence field instead of a derivative.
+    @testset "a discrete-cadence fill left to the per-cell loop refuses by name" begin
+        W = Float64[1, 2, 3, 4, 5, 6, 7, 8]
+        rng = Dict{String,Any}(n => Any[1, 2] for n in ("a", "b", "c", "d"))
+        agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+            "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
+            "ranges" => merge(rng, Dict{String,Any}("k" => Any[1, length(W)])),
+            "expr" => Dict("op" => "*", "args" => Any[
+                Dict("op" => "index", "args" => Any[
+                    Dict("op" => "const", "args" => Any[], "value" => W), "k"]),
+                Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])]))
+        doc = Dict{String,Any}("esm" => "1.1.0",
+            "metadata" => Dict("name" => "pr_discrete_rank4"),
+            "models" => Dict("R" => Dict{String,Any}(
+                "variables" => Dict(
+                    "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
+                    "g" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"]),
+                    "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
+                "equations" => Any[
+                    Dict("lhs" => "g", "rhs" => agg),
+                    Dict("lhs" => Dict("op" => "faq", "args" => Any[],
+                            "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
+                            "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
+                                "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
+                         "rhs" => Dict("op" => "faq", "args" => Any[],
+                            "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
+                            "expr" => Dict("op" => "index",
+                                "args" => Any["g", "a", "b", "c", "d"])))])))
+        ics = Dict("out[$a,$b,$c,$d]" => 0.0 for a in 1:2, b in 1:2, c in 1:2, d in 1:2)
+        F = reshape(collect(1.0:16.0), 2, 2, 2, 2)
+        build(compiler) = withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
+            dm = _PR.DiscreteMaterializer()
+            _PR._build_evaluator(doc; initial_conditions = ics,
+                param_arrays = Dict("F" => copy(F)), materialize_out = dm,
+                compiler = compiler)
+            dm
+        end
+        @test _pr_refuses(() -> build(:native), "refuses 'g'"; one_cell = true)
+        @test vec(build(:interpreter).caches["g"]) == sum(W) .* vec(F)
     end
 
     # ── faq-valued initialization equations (#482) ────────────────────────────

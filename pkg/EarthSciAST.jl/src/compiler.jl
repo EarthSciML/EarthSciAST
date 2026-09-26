@@ -231,7 +231,9 @@ landed on, and every decline it collected getting there.
     `:setup_loaded` (copied out of a supplied array), `:setup_constant`
     (evaluated once and filled), `:setup_percell` (resolved and compiled per
     cell), and `:discrete_percell` (a discrete-cadence field, resolved and
-    compiled per cell at build and walked per cell at every data refresh);
+    compiled per cell at build and walked per cell at every data refresh;
+    under `native` such a field is instead an `:observed` row on the
+    right-hand-side tier its compiled fill landed on);
   - output time, added by `observed_field` the first time it reads a name:
     `:output_compiled_once` or `:output_percell`;
   - and, on the `:rhs_program` row an `:xla` build adds, `:xla_direct_cpu` /
