@@ -124,51 +124,13 @@ impl Classification {
         variables: &IndexMap<String, ModelVariable>,
         equations: &[Equation],
     ) -> Classification {
-        let mut ode_states = BTreeSet::new();
-        let mut observed = BTreeSet::new();
-        let mut inlined = BTreeSet::new();
-        let mut observed_definitions = BTreeMap::new();
-
-        let unknowns: BTreeSet<&str> = variables
-            .iter()
-            .filter(|(_, v)| v.var_type == VariableType::Unknown)
-            .map(|(k, _)| k.as_str())
-            .collect();
-
-        for eq in equations {
-            match lhs_form(&eq.lhs) {
-                // `D(x)/dt ~ …`, including the wrapped spellings `D(x[i])` and
-                // a `faq` whose `expr` is the derivative.
-                LhsForm::Derivative(name) => {
-                    if unknowns.contains(name.as_str()) {
-                        ode_states.insert(name);
-                    }
-                }
-                // `y ~ f(…)` / `y[i] ~ f(…)` — the LHS DEFINES y.
-                LhsForm::Bare(name) => {
-                    if unknowns.contains(name.as_str()) {
-                        if !observed.contains(&name) {
-                            observed_definitions.insert(name.clone(), eq.rhs.clone());
-                        }
-                        if matches!(eq.lhs, Expr::Variable(_)) {
-                            inlined.insert(name.clone());
-                        }
-                        observed.insert(name);
-                    }
-                }
-                // An expression LHS constrains its unknowns only implicitly.
-                LhsForm::Expression => {}
-            }
-        }
-
-        // An unknown that is BOTH differentiated somewhere and bare-LHS
-        // elsewhere is an ODE state: the derivative is what the solver
-        // integrates, and the partition must stay disjoint.
-        for name in &ode_states {
-            observed.remove(name);
-            inlined.remove(name);
-            observed_definitions.remove(name);
-        }
+        let UnknownPartition {
+            unknowns,
+            ode_states,
+            observed,
+            inlined,
+            observed_definitions,
+        } = UnknownPartition::of(variables, equations);
 
         // The three sets partition the unknowns, so `algebraic` is exactly what
         // neither of the first two claimed. That also gives an unknown named by
@@ -434,7 +396,7 @@ pub fn system_kind(model: &Model) -> SystemKind {
 /// `equations`, not a `variables[v].expression` field. Every site that used to
 /// read that field reads this map instead.
 pub fn observed_definitions(model: &Model) -> BTreeMap<String, Expr> {
-    Classification::of(model).observed_definitions
+    observed_definitions_of_parts(&model.variables, &model.equations)
 }
 
 /// The first cycle a deterministic DFS closes over an observed dependency
@@ -608,6 +570,87 @@ fn base_variable(expr: &Expr) -> Option<String> {
         },
         _ => None,
     }
+}
+
+// === the left-hand-side partition ========================================
+
+/// The part of a [`Classification`] read off the equations' left-hand sides:
+/// which unknowns are ODE states and which are observed, and each observed's
+/// definition. It walks no right-hand side, so a caller that wants only the
+/// definitions ([`observed_definitions_of_parts`]) pays for nothing else.
+struct UnknownPartition<'a> {
+    unknowns: BTreeSet<&'a str>,
+    ode_states: BTreeSet<String>,
+    observed: BTreeSet<String>,
+    inlined: BTreeSet<String>,
+    observed_definitions: BTreeMap<String, Expr>,
+}
+
+impl<'a> UnknownPartition<'a> {
+    fn of(variables: &'a IndexMap<String, ModelVariable>, equations: &[Equation]) -> Self {
+        let mut ode_states = BTreeSet::new();
+        let mut observed = BTreeSet::new();
+        let mut inlined = BTreeSet::new();
+        let mut observed_definitions = BTreeMap::new();
+
+        let unknowns: BTreeSet<&str> = variables
+            .iter()
+            .filter(|(_, v)| v.var_type == VariableType::Unknown)
+            .map(|(k, _)| k.as_str())
+            .collect();
+
+        for eq in equations {
+            match lhs_form(&eq.lhs) {
+                // `D(x)/dt ~ …`, including the wrapped spellings `D(x[i])` and
+                // a `faq` whose `expr` is the derivative.
+                LhsForm::Derivative(name) => {
+                    if unknowns.contains(name.as_str()) {
+                        ode_states.insert(name);
+                    }
+                }
+                // `y ~ f(…)` / `y[i] ~ f(…)` — the LHS DEFINES y.
+                LhsForm::Bare(name) => {
+                    if unknowns.contains(name.as_str()) {
+                        if !observed.contains(&name) {
+                            observed_definitions.insert(name.clone(), eq.rhs.clone());
+                        }
+                        if matches!(eq.lhs, Expr::Variable(_)) {
+                            inlined.insert(name.clone());
+                        }
+                        observed.insert(name);
+                    }
+                }
+                // An expression LHS constrains its unknowns only implicitly.
+                LhsForm::Expression => {}
+            }
+        }
+
+        // An unknown that is BOTH differentiated somewhere and bare-LHS
+        // elsewhere is an ODE state: the derivative is what the solver
+        // integrates, and the partition must stay disjoint.
+        for name in &ode_states {
+            observed.remove(name);
+            inlined.remove(name);
+            observed_definitions.remove(name);
+        }
+
+        UnknownPartition {
+            unknowns,
+            ode_states,
+            observed,
+            inlined,
+            observed_definitions,
+        }
+    }
+}
+
+/// [`Classification::observed_definitions`] from the raw parts, without the
+/// rest of the classification (the system kind walks every equation).
+pub(crate) fn observed_definitions_of_parts(
+    variables: &IndexMap<String, ModelVariable>,
+    equations: &[Equation],
+) -> BTreeMap<String, Expr> {
+    UnknownPartition::of(variables, equations).observed_definitions
 }
 
 // === system_kind ==========================================================
