@@ -1527,10 +1527,19 @@ function _fold_field_ics!(set, field_ics, array_cells, layout::StateLayout,
             "target must name a lifted/array state variable of the flattened system"))
         blk = _layout_block(layout, target)
         put = (idxs, val) -> (blk === nothing || set(_block_slot(blk, idxs), val); nothing)
-        # Compile the coordinate field ONCE (indices as params) when possible; else
-        # fall back to the per-cell resolve+compile. With the construction-time
-        # compile-once forms off (`compiler = :interpreter`) this takes the
-        # per-cell path.
+        # A coordinate expression is filled through the right-hand-side cascade
+        # and emitted code, once (`_field_ic_fill`, setup_fill.jl); failing
+        # that, a bare coordinate aggregate is compiled once and evaluated per
+        # cell; failing both, the per-cell resolve+compile below. With the
+        # construction-time compile-once forms off (`compiler = :interpreter`)
+        # only the per-cell path runs.
+        filled = _field_ic_fill(rhs, cells, param_scope, registered_functions, const_arrays)
+        if filled !== nothing
+            sf, buf = filled
+            _record_rule!("ic($(target))", :equation, :setup_codegen)
+            _foreach_cell_lex(idxs -> put(idxs, _setup_fill_at(sf, buf, idxs)), cells)
+            continue
+        end
         fast = _setup_compile_once_enabled() ?
                _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays) :
                nothing
@@ -1963,12 +1972,14 @@ end
 
 # ---- Stage: faq-valued initialization_equations → u0 ----
 # When discretize() materializes an IC equation as a faq (coord-subst
-# x→index(coord_x,i)), its body is compiled ONCE with the output indices kept
-# symbolic — the same symbolic resolve the whole-array contraction tier uses, so
-# a const or state read at an output index becomes a runtime gather — and then
-# evaluated at each cell by setting the index counters. Only a body that will
-# not resolve symbolically takes the per-cell substitute → resolve → compile,
-# which a strict compiler refuses. The coord_<dim> const_array must be provided
+# x→index(coord_x,i)), the aggregate is filled through the right-hand-side
+# cascade and emitted code, once (`_init_equation_fill`, setup_fill.jl). A body
+# the fill declines — one that reads a state, say — is compiled ONCE with the
+# output indices kept symbolic — the same symbolic resolve the whole-array
+# contraction tier uses, so a const or state read at an output index becomes a
+# runtime gather — and then evaluated at each cell by setting the index
+# counters. Only a body that will not resolve symbolically takes the per-cell
+# substitute → resolve → compile, which a strict compiler refuses. The coord_<dim> const_array must be provided
 # by the caller. Explicit initial_conditions values take precedence (already
 # seeded in u0).
 function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
@@ -2002,6 +2013,20 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
         end
         isempty(todo) && continue
         rule = "init($(var_name))"
+        # The compiled fill (setup_fill.jl): the aggregate filled through the
+        # right-hand-side cascade and emitted code, once, over its own ranges.
+        filled = _init_equation_fill(rhs_op,
+                                     [_expand_int_range(ranges_dict[n]) for n in idx_names],
+                                     var_map, const_arrays,
+                                     pgather, param_sym_set, reg_funcs, p)
+        if filled !== nothing
+            sf, buf = filled
+            _record_rule!(rule, :equation, :setup_codegen)
+            for (idx_tuple, slot) in todo
+                u0[slot] = _setup_fill_at(sf, buf, idx_tuple)
+            end
+            continue
+        end
         # With the construction-time compile-once forms off
         # (`compiler = :interpreter`) the seed is the per-cell reference, as the
         # field-`ic` fast path is.

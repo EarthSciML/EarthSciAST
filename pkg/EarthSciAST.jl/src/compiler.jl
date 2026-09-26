@@ -227,7 +227,9 @@ landed on, and every decline it collected getting there.
     `:scalar` (a scalar equation, walked once per slot on every call by the
     scalar walker) and `:scalar_loop` (the same, with a reduction kept as a
     runtime loop the walker runs over its whole length on every call);
-  - construction: `:setup_compiled` (compiled once, evaluated per cell),
+  - construction: `:setup_codegen` (filled through the right-hand-side cascade
+    and emitted code, run once), `:setup_compiled` (compiled once, evaluated per
+    cell),
     `:setup_loaded` (copied out of a supplied array), `:setup_constant`
     (evaluated once and filled), `:setup_percell` (resolved and compiled per
     cell), and `:discrete_percell` (a discrete-cadence field, resolved and
