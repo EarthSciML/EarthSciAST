@@ -229,7 +229,7 @@ end
 # Instrumentation: number of leaf bindings an OVERLAP-GATED enumerator VISITED
 # (a tuple its callback was invoked on / a product tuple its unroll entered).
 # Reset by callers/tests; proves that an overlap-gated walk — the value-invention
-# producer AND the dense aggregate expansion alike — visits
+# producer, its arg-witness reducer and the dense aggregate expansion alike — visits
 # O(|candidates|·∏ungated) tuples, NOT the full O(∏ranges) product
 # (projection-pushdown Wall #1).
 #

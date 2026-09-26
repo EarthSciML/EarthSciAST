@@ -100,10 +100,22 @@ const ARGMIN = "tests/valid/faq/nearest_generator_argmin.esm"
         end
         ca["gx"] = vcat(ca["gx"], gx); ca["gy"] = vcat(ca["gy"], gy)
         m, isets = _typed(ARGMIN, "NearestGeneratorBinned"; points = np, generators = ng + 16)
+        EA._VI_ENUM_VISITS[] = 0
         vi = EA.materialize_value_invention(m, isets, ca, params)
+        driven = EA._VI_ENUM_VISITS[]
+        EA._VI_ENUM_VISITS[] = 0
         ref = _interp(() -> EA.materialize_value_invention(m, isets, ca, params))
+        full = EA._VI_ENUM_VISITS[]
         @test vi.assignments["assign_binned"] == ref.assignments["assign_binned"]
         @test length(unique(vi.assignments["assign_binned"])) > 10
+        # The driven walk visits exactly the same-bin (point, generator) pairs;
+        # the product visits every pair.
+        _bin(x, y) = (floor(x / params["binw"]), floor(y / params["binw"]))
+        same_bin = count(_bin(ca["px"][i], ca["py"][i]) == _bin(ca["gx"][g], ca["gy"][g])
+                         for i in 1:np, g in 1:(ng + 16))
+        @test full == np * (ng + 16)
+        @test driven == same_bin
+        @test driven < full ÷ 4
     end
 end
 

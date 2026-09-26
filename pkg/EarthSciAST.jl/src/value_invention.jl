@@ -711,6 +711,7 @@ function _vi_argreduce(node::OpExpr, ctx::_ViCtx, outer_bindings::AbstractDict, 
     best_val = nothing
     best_arg = nothing
     leaf = function (bindings)
+        join_gates === nothing || (_VI_ENUM_VISITS[] += 1)
         if filt !== nothing
             fv = _vi_eval(filt, ctx, bindings)
             (fv === true || (isa(fv, Real) && fv > 0)) || return
@@ -733,7 +734,8 @@ function _vi_argreduce(node::OpExpr, ctx::_ViCtx, outer_bindings::AbstractDict, 
     end
     # A gate with candidate pairs restricts the inner candidates to the outer
     # point's partners (`_vi_enumerate_driven`, the producer's driven walk); the
-    # visited candidates keep their order, minus those the gate rejects.
+    # visited candidates keep their order, minus those the gate rejects. A
+    # gated walk counts its visited candidates in `_VI_ENUM_VISITS`.
     function rec(k)
         if k > length(syms)
             leaf(bindings)
