@@ -12,6 +12,26 @@ use super::*;
 /// is acyclic and substitution confluent, so `expand(load_string(f))` is structurally
 /// equal to the pre-0.9.0 expanded form. Mutates `value` in place. Mirrors the
 /// Julia reference `expand_document` / `Expand`.
+/// What [`expand`] does to a document with no template machinery (no
+/// non-empty `expression_templates` block, no `apply_expression_template` op
+/// anywhere): there is nothing to expand, so it only drops each component's
+/// `expression_templates` key.
+pub(crate) fn strip_component_template_blocks(value: &mut Value) {
+    let Some(root) = value.as_object_mut() else {
+        return;
+    };
+    for compkind in ["models", "reaction_systems"] {
+        let Some(Value::Object(comps)) = root.get_mut(compkind) else {
+            continue;
+        };
+        for (_, comp_value) in comps.iter_mut() {
+            if let Value::Object(comp) = comp_value {
+                comp.remove("expression_templates");
+            }
+        }
+    }
+}
+
 /// Capture every component's `expression_templates` registry BEFORE
 /// [`expand`] strips the blocks from the document.
 ///
