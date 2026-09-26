@@ -1219,6 +1219,243 @@ function _eval_recipe(rec::_LaneRecipe, idx_env::Dict{String,Int},
     end
 end
 
+# ---- Compiled lane evaluation (the per-box table materializers) ------------
+# `_eval_recipe` reads the loop indices out of a `Dict` environment and walks the
+# subscript trees through `_eval_const_int` for every cell. A table materializer
+# evaluates one recipe at every cell of a box, so it compiles the recipe once:
+# the subscripts become an `_IdxNode` tree over loop POSITIONS, a const gather
+# holds its array's flat data, and a state slot comes from the layout block. The
+# integer arithmetic is `_eval_const_int`'s, operation for operation. Anything
+# the compiled form does not cover — an out-of-range const subscript (a boundary
+# policy or an error), a missing cell, a value that does not convert — reports
+# `ok = false` for that cell, which then takes `_eval_recipe` itself, so the
+# table and every error are exactly the per-cell resolution's.
+
+const _IX_LIT, _IX_LOOP, _IX_ADD, _IX_SUB, _IX_NEG, _IX_MUL, _IX_DIV, _IX_MOD,
+      _IX_MAX, _IX_MIN, _IX_IFELSE, _IX_LT, _IX_LE, _IX_GT, _IX_GE, _IX_EQ,
+      _IX_GATHER = Int8.(1:17)
+
+struct _IdxNode
+    kind::Int8
+    val::Int                    # literal, or loop position
+    args::Vector{_IdxNode}
+    flat::Vector{Float64}       # gather: the const array's data, column-major
+    dims::Vector{Int}
+end
+_IdxNode(kind::Int8, val::Int, args::Vector{_IdxNode}=_IdxNode[]) =
+    _IdxNode(kind, val, args, Float64[], Int[])
+
+const _IX_BINOPS = Dict{String,Int8}("/" => _IX_DIV, "mod" => _IX_MOD, "<" => _IX_LT,
+    "<=" => _IX_LE, ">" => _IX_GT, ">=" => _IX_GE, "==" => _IX_EQ)
+
+# The `_IdxNode` form of an index expression, or `nothing` when some part of it
+# is outside what `_ix_eval` models (the caller keeps `_eval_const_int`).
+function _ix_compile(e::ASTExpr, idx_names::Vector{String}, const_arrays::AbstractDict)
+    if e isa IntExpr
+        return _IdxNode(_IX_LIT, Int(e.value))
+    elseif e isa NumExpr
+        v = e.value
+        (isinteger(v) && -9.0e18 <= v <= 9.0e18) || return nothing
+        return _IdxNode(_IX_LIT, Int(v))
+    elseif e isa VarExpr
+        pos = findfirst(==(e.name), idx_names)
+        return pos === nothing ? nothing : _IdxNode(_IX_LOOP, pos)
+    elseif e isa OpExpr
+        op = e.op
+        c = e.args
+        sub() = (xs = _IdxNode[]; for a in c
+                     x = _ix_compile(a, idx_names, const_arrays)
+                     x === nothing && return nothing
+                     push!(xs, x)
+                 end; xs)
+        if op == "index"
+            (length(c) >= 2 && c[1] isa VarExpr) || return nothing
+            arr = get(const_arrays, (c[1]::VarExpr).name, nothing)
+            data = arr isa BoundedConstArray ? arr.data : arr
+            (data isa Array{Float64} && ndims(data) == length(c) - 1) || return nothing
+            xs = _IdxNode[]
+            for a in @view c[2:end]
+                x = _ix_compile(a, idx_names, const_arrays)
+                x === nothing && return nothing
+                push!(xs, x)
+            end
+            return _IdxNode(_IX_GATHER, 0, xs, vec(data), collect(Int, size(data)))
+        end
+        xs = sub()
+        xs === nothing && return nothing
+        n = length(xs)
+        if op == "+" && n >= 1
+            return _IdxNode(_IX_ADD, 0, xs)
+        elseif op == "*" && n >= 1
+            return _IdxNode(_IX_MUL, 0, xs)
+        elseif op == "-" && n == 1 || op == "neg" && n == 1
+            return _IdxNode(_IX_NEG, 0, xs)
+        elseif op == "-" && n == 2
+            return _IdxNode(_IX_SUB, 0, xs)
+        elseif op == "floor" && n == 1
+            return xs[1]
+        elseif (op == "max" || op == "min") && n >= 1
+            return _IdxNode(op == "max" ? _IX_MAX : _IX_MIN, 0, xs)
+        elseif op == "ifelse" && n == 3
+            return _IdxNode(_IX_IFELSE, 0, xs)
+        elseif haskey(_IX_BINOPS, op) && n == 2
+            return _IdxNode(_IX_BINOPS[op], 0, xs)
+        end
+    end
+    return nothing
+end
+
+# `(value, ok)`: `_eval_const_int` of the compiled expression at loop values
+# `loop`, or `ok = false` where that call would throw or apply a boundary policy.
+function _ix_eval(n::_IdxNode, loop::Vector{Int})::Tuple{Int,Bool}
+    k = n.kind
+    k === _IX_LIT && return (n.val, true)
+    k === _IX_LOOP && return (@inbounds(loop[n.val]), true)
+    a = n.args
+    if k === _IX_ADD || k === _IX_MUL || k === _IX_MAX || k === _IX_MIN
+        acc, ok = _ix_eval(a[1], loop)
+        ok || return (0, false)
+        for j in 2:length(a)
+            v, ok = _ix_eval(a[j], loop)
+            ok || return (0, false)
+            acc = k === _IX_ADD ? acc + v : k === _IX_MUL ? acc * v :
+                  k === _IX_MAX ? max(acc, v) : min(acc, v)
+        end
+        return (acc, true)
+    elseif k === _IX_NEG
+        v, ok = _ix_eval(a[1], loop)
+        return (-v, ok)
+    elseif k === _IX_IFELSE
+        c, ok = _ix_eval(a[1], loop)
+        ok || return (0, false)
+        return _ix_eval(c != 0 ? a[2] : a[3], loop)
+    elseif k === _IX_GATHER
+        lin = 0
+        stride = 1
+        for d in eachindex(a)
+            v, ok = _ix_eval(a[d], loop)
+            (ok && 1 <= v <= n.dims[d]) || return (0, false)
+            lin += (v - 1) * stride
+            stride *= n.dims[d]
+        end
+        x = round(@inbounds(n.flat[lin + 1]))
+        (isfinite(x) && -9.0e18 <= x <= 9.0e18) || return (0, false)
+        return (Int(x), true)
+    end
+    x, ok1 = _ix_eval(a[1], loop)
+    y, ok2 = _ix_eval(a[2], loop)
+    (ok1 && ok2) || return (0, false)
+    k === _IX_SUB && return (x - y, true)
+    if k === _IX_DIV || k === _IX_MOD
+        y == 0 && return (0, false)
+        return (k === _IX_DIV ? div(x, y) : mod(x, y), true)
+    end
+    b = k === _IX_LT ? x < y : k === _IX_LE ? x <= y : k === _IX_GT ? x > y :
+        k === _IX_GE ? x >= y : x == y
+    return (b ? 1 : 0, true)
+end
+
+"""
+    _LaneEval
+
+A recipe compiled for evaluation at many cells (see the section header):
+`_lane_eval(le, loop)` is `(value, ok)`, with `value` what `_eval_recipe`
+returns at that cell whenever `ok`.
+"""
+struct _LaneEval{M}
+    kind::_LaneKind
+    args::Vector{_IdxNode}
+    lo::Vector{Int}
+    hi::Vector{Int}
+    affine::Union{Nothing,Tuple{Int,Vector{Int}}}
+    blk::Union{Nothing,_ArrayBlock}     # LANE_STATE with no affine map
+    var_map::M
+    var_name::String
+    flat::Vector{Float64}               # LANE_CONST data / LANE_PGATHER extents
+    dims::Vector{Int}
+    loop_pos::Int                       # LANE_LOOPLIT
+    cell::Vector{Int}
+end
+
+# `nothing` when the recipe (or one of its subscripts) has no compiled form.
+function _lane_evaluator(rec::_LaneRecipe, idx_names::Vector{String}, var_map,
+                         const_arrays::AbstractDict)
+    if rec.kind == LANE_LOOPLIT
+        pos = findfirst(==(rec.loop_name), idx_names)
+        pos === nothing && return nothing
+        return _LaneEval(rec.kind, _IdxNode[], rec.lo, rec.hi, nothing, nothing, var_map,
+                         rec.var_name, Float64[], Int[], pos, Int[])
+    end
+    rec.kind == LANE_EXPRTBL && return nothing
+    args = _IdxNode[]
+    for a in rec.idx_args
+        x = _ix_compile(a, idx_names, const_arrays)
+        x === nothing && return nothing
+        push!(args, x)
+    end
+    n = length(args)
+    flat = Float64[]
+    dims = Int[]
+    blk = nothing
+    if rec.kind == LANE_STATE
+        rec.affine === nothing && (blk = _vm_block(var_map, rec.var_name))
+    elseif rec.kind == LANE_CONST
+        data = rec.arr isa BoundedConstArray ? rec.arr.data : rec.arr
+        (data isa Array{Float64} && ndims(data) == n) || return nothing
+        flat = vec(data)
+        dims = collect(Int, size(data))
+    else  # LANE_PGATHER
+        pg = rec.arr::_PGatherArray
+        length(pg.dims) == n || return nothing
+        dims = collect(Int, pg.dims)
+    end
+    return _LaneEval(rec.kind, args, rec.lo, rec.hi, rec.affine, blk, var_map,
+                     rec.var_name, flat, dims, 0, Vector{Int}(undef, n))
+end
+
+function _lane_eval(le::_LaneEval, loop::Vector{Int})
+    k = le.kind
+    k == LANE_LOOPLIT && return (Float64(@inbounds(loop[le.loop_pos])), true)
+    args = le.args
+    n = length(args)
+    if k == LANE_STATE
+        aff = le.affine
+        ghost = false
+        slot = aff === nothing ? 0 : aff[1]
+        @inbounds for d in 1:n
+            v, ok = _ix_eval(args[d], loop)
+            ok || return (0, false)
+            (v < le.lo[d] || v > le.hi[d]) && (ghost = true)
+            aff === nothing ? (le.cell[d] = v) : (slot += v * aff[2][d])
+        end
+        ghost && return (0, true)
+        aff === nothing || return (slot, true)
+        s = le.blk === nothing ? _vm_slot(le.var_map, le.var_name, le.cell) :
+            _block_slot(le.blk, le.cell)
+        return (s, s != 0)
+    elseif k == LANE_CONST
+        lin = 0
+        stride = 1
+        @inbounds for d in 1:n
+            v, ok = _ix_eval(args[d], loop)
+            (ok && 1 <= v <= le.dims[d]) || return (0.0, false)
+            lin += (v - 1) * stride
+            stride *= le.dims[d]
+        end
+        return (@inbounds(le.flat[lin + 1]), true)
+    else  # LANE_PGATHER
+        lin = 0
+        stride = 1
+        @inbounds for d in 1:n
+            v, ok = _ix_eval(args[d], loop)
+            (ok && 1 <= v <= le.dims[d]) || return (0, false)
+            lin += (v - 1) * stride
+            stride *= le.dims[d]
+        end
+        return (lin + 1, true)
+    end
+end
+
 # Ghost pattern of the STATE lanes, from slots ALREADY isolated into a
 # Vector{Int} (the affine sweep evaluates only those), encoded as a `String`
 # for a cheap, hashable signature component (`_cell_ckey!`'s base key).

@@ -2485,9 +2485,10 @@ end
 # `levels` is a vector of
 # `(scalar_nodes, kernel_section, scan_folds, array_contractions)` in dependency
 # order.
-function _make_rhs_with_obs_buffers(f_state!, ext::_ObsExtVec, n_states::Int,
+function _make_rhs_with_obs_buffers(f_state!, n_total::Int, n_states::Int,
                                     levels::Tuple)
     isempty(levels) && return f_state!
+    ext = _ObsExtVec(n_total)
     function f!(du, u, p, t)
         T = _rhs_value_type(u, p, t)
         ue = _obsext_buf(ext, T)
@@ -3308,7 +3309,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
                       const_slots, time_slots, dyn_slots, scan_folds,
                       _make_contraction_section(array_contractions)),
-            _ObsExtVec(n_total), n_states, Tuple(mat_levels))
+            n_total, n_states, Tuple(mat_levels))
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
         # along so the out-of-place build can expose its live forcing buffers as
