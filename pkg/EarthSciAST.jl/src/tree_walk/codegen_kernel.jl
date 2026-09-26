@@ -328,8 +328,8 @@ end
 # what lets the compiler see a contiguous run — and which is the same at every
 # N (the leading axis's stride and neighbour offset; any other axis has a unit
 # stride only on a grid one cell wide). Bounds, bases and fixed slots are data
-# even when they are 1. So are extents and cell counts, except where a box is
-# one cell thick (`_cg_emit_kernel_nest!`), which a boundary slab is at every N.
+# even when they are 1. So are extents and cell counts, except a boundary slab's
+# (`_CellSet.slab`), which is one cell thick at every N.
 # Everything inside a structural sub-kernel body (`ctx.subivt`) stays literal,
 # since `_cg_abstract!` already lifts its literals into per-instance data.
 #
@@ -1154,19 +1154,20 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     av = _cg_name(ctx, "a")
     bv = _cg_name(ctx, "b")
     # Every bound, base and stride below is run-time geometry (`_cg_geo!`),
-    # except the extent of an axis the box is ONE cell thick on (and a one-cell
-    # box's count): a boundary slab is one cell thick at every N, and a literal
-    # extent lets the compiler drop that axis's loop, where a run-time one
-    # leaves a loop set up (and vectorized) for a single cell per row. Its
-    # index stays data, so the slab at the far edge is still one function.
+    # except the extent of a boundary slab's thin axis (`_cellset_slab`), and
+    # the count of a box that is a slab on every axis: it is one cell at every
+    # N, and a literal extent lets the compiler drop that axis's loop, where a
+    # run-time one leaves a loop set up (and vectorized) for a single cell per
+    # row. The slab's index stays data, so the far edge's is one function too.
     geo(v, f, unit::Bool=false) = _cg_geo!(ctx, v, (cs, f), unit)
     function axis(d)
         lo = geo(first(cs.ranges[d]), (d, :first))
+        _cellset_slab(cs, d) && return (lo, lo, 1)
         n = length(cs.ranges[d])
-        n == 1 && return (lo, lo, 1)
         return (lo, geo(last(cs.ranges[d]), (d, :last)), geo(n, (d, :len)))
     end
-    hdr = Any[:(local $tv = _chunk_ordinals($(geo(ncells, :n, ncells == 1)), _cgci, _cgnc)),
+    corner = !isempty(cs.strides) && all(d -> _cellset_slab(cs, d), eachindex(cs.strides))
+    hdr = Any[:(local $tv = _chunk_ordinals($(corner ? 1 : geo(ncells, :n)), _cgci, _cgnc)),
               :(local $av = $tv[1]),
               :(local $bv = $tv[2])]
     if _is_outs(cs)

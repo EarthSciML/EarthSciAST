@@ -266,14 +266,21 @@ struct _VarBound   <: _Bound; valence::Vector{Int}; end   # per-cell edge count 
 # `midx == (c, 1, 1)`, and the box-addressed descriptors (CONST_BOX /
 # STATE_TBL_BOX / ARR_TBL_BOX with s1=1, off=1) index their per-cell tables by
 # that ordinal.
+# `slab[d]` (a box, or empty for "none"): the box is one cell thick on dim d AT
+# THE EDGE of the equation's range there — a boundary slab, which is one cell
+# thick at every grid size. The codegen tier keeps that extent a literal (a
+# one-cell box elsewhere, an interior that a small grid squeezes to one cell, is
+# as wide as the grid lets it be, and stays run-time geometry).
 struct _CellSet
     strides::Vector{Int}
     ranges::Vector{UnitRange{Int}}
     base::Int
     outs::Vector{Int}
+    slab::Vector{Bool}
 end
-_CellSet(strides::Vector{Int}, ranges::Vector{UnitRange{Int}}, base::Int) =
-    _CellSet(strides, ranges, base, Int[])
+_CellSet(strides::Vector{Int}, ranges::Vector{UnitRange{Int}}, base::Int,
+         outs::Vector{Int}=Int[]) = _CellSet(strides, ranges, base, outs, Bool[])
+@inline _cellset_slab(cs::_CellSet, d::Int) = d <= length(cs.slab) && cs.slab[d]
 _contig_cells(ncell::Int) = _CellSet(Int[], UnitRange{Int}[1:ncell], 0)
 _outs_cells(outs::Vector{Int}) = _CellSet(Int[], UnitRange{Int}[1:length(outs)], 0, outs)
 @inline _is_contig(cs::_CellSet) = isempty(cs.strides) && isempty(cs.outs)
