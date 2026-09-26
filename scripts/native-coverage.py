@@ -176,8 +176,10 @@ def julia_outcome(rec: dict[str, Any]) -> dict[str, Any]:
 
     A build whose right-hand side then fails to evaluate (``rhs_ok`` false: the
     census calls ``f!`` on ``u0`` after the build) does not count as building
-    either. A record from before the census recorded ``rhs_ok`` has none, and
-    reads as a build.
+    either. Nor does a record with no ``rhs_ok`` that carries an error: the
+    right-hand-side call, or what came after it, threw past the census's
+    handler. A record from before the census recorded ``rhs_ok`` has neither,
+    and reads as a build.
 
     A ``timeout`` is inconclusive. A worker that died (``crashed``) or never
     loaded (``worker_load_failure``) is a failure."""
@@ -193,6 +195,15 @@ def julia_outcome(rec: dict[str, Any]) -> dict[str, Any]:
                 "code": "rhs_call_failed",
                 "rule": None,
                 "reason": _squash(rec.get("rhs_error")),
+            }
+        if rec.get("rhs_ok") is None and (rec.get("error_type") or rec.get("error_message")):
+            return {
+                "ok": False,
+                "code": "rhs_call_failed",
+                "rule": None,
+                "reason": _squash(
+                    ": ".join(x for x in (rec.get("error_type"), rec.get("error_message")) if x)
+                ),
             }
         return {"ok": True}
     code = (
@@ -796,6 +807,29 @@ def _self_test() -> list[str]:
         fails.append("julia_outcome: a build whose right-hand side ran must count as a build")
     if not julia_outcome({"ok": True, "entry": "esm_problem"})["ok"]:
         fails.append("julia_outcome: a record with no rhs_ok must read as a build")
+    if not julia_outcome(
+        {
+            "ok": True,
+            "entry": "esm_problem",
+            "rhs_ok": None,
+            "error_type": None,
+            "error_message": "",
+        }
+    )["ok"]:
+        fails.append("julia_outcome: an empty error message is no error")
+    # The right-hand-side call threw past the census's handler (a stack overflow
+    # from a census that rethrew it): no rhs_ok, and the record's error set.
+    escaped = julia_outcome(
+        {
+            "ok": True,
+            "entry": "esm_problem",
+            "rhs_ok": None,
+            "error_type": "StackOverflowError",
+            "error_message": "",
+        }
+    )
+    if escaped["ok"] or escaped["code"] != "rhs_call_failed":
+        fails.append(f"julia_outcome: an error with no rhs_ok counted as a build: {escaped}")
     rhs = copy.deepcopy(base)
     rhs["tests/valid/b.esm"]["native"] = rhs_failed
     expect(
@@ -832,6 +866,13 @@ def _self_test() -> list[str]:
             outs,
             f"the interpreter no longer builds it either ({code}). Remove this entry",
         )
+    rhs_escaped = copy.deepcopy(base)
+    rhs_escaped["tests/valid/b.esm"]["native"] = escaped
+    expect(
+        "native's right-hand side throws past the census",
+        rhs_escaped,
+        "NEW native refusal: tests/valid/b.esm",
+    )
     # A timeout is inconclusive: never a new refusal, never a stale entry,
     # never a code drift.
     timeout = julia_outcome({"ok": False, "status": "timeout", "error_type": "exceeded 180s"})

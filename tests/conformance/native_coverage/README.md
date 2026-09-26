@@ -36,7 +36,9 @@ guess, but a document only the fallback builds is not one a caller can build, so
 it counts as not building. After a build, Julia's census also calls the
 problem's right-hand side `f!` on `u0`; a build whose call then throws counts as
 not building either (code `rhs_call_failed`), since a missing evaluation rule
-can fire at call time rather than at construction. Rust builds through
+can fire at call time rather than at construction. That includes a stack
+overflow or an out-of-memory error in the call, and a record with no `rhs_ok`
+that carries an error. Rust builds through
 `esm_problem` with the default `Rhs::Auto` and does not call the right-hand
 side.
 
