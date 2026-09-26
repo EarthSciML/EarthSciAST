@@ -11,16 +11,21 @@
 #         tests/conformance/scaling/julia/adapter.jl \
 #         --docs <dir with index.json> --output <result.json> \
 #         [--family F ...] [--max-n N] [--budget SECONDS] [--max-build SECONDS]
-#         [--interpreter-max-states N]
+#         [--interpreter-max-states N] [--timeout-s SECONDS] [--max-rss-gb GB]
+#         [--in-process]
 #
 # `--docs` is a tree `generate.py --out` wrote, or the committed fixtures/.
 # `--budget` is the least wall time each steady measurement samples for
 # (default 0.25 s, the README's). `--max-build` stops a family's ladder once one
 # of its builds takes longer; the sizes not attempted are recorded as errors
-# that say so. `--interpreter-max-states` (default 10^4) is the largest document
+# that say so. `--interpreter-max-states` (default 2000) is the largest document
 # the interpreter is also built for, as the oracle for native's dy
 # (`interpreter_max_abs_diff`) and for the hand loop's when native does not
 # build (`hand_loop_checked_against` is then "interpreter"); 0 turns it off.
+# The default stays low because the interpreter's per-cell expansion of a
+# prefix scan or a dense contraction grows as N^2 in memory: past 12 GB at
+# prefix_scan's 10^4 cells and source_receptor's 3162, where native needs
+# under 3 GB, and the oracle's memory would be charged to native's document.
 #
 # THREADS. Native threads its compiled sections only when Polyester is loaded
 # (the opt-in lives in EarthSciASTPolyesterExt), so this adapter always loads
@@ -28,14 +33,27 @@
 # whatever it threads today. The result file's `threads` is Julia's thread
 # count, and `hand_loop_s` is then the threaded hand loop.
 #
+# ONE CHILD PROCESS PER FAMILY. The adapter measures each family's ladder in a
+# child Julia process (this script with `--in-process --family F`) and watches
+# it: a child whose resident memory passes `--max-rss-gb` (default 12), or that
+# finishes no document for `--timeout-s` (default 1800), is killed, and a child
+# that dies on its own is noticed. The memory cap is the same on every machine,
+# and is also the child's GC heap-size hint, so whether a document fits is a
+# property of the document and the compiler rather than of the machine. The document it was working on is then recorded as an `error`
+# that says which, and the family's larger sizes as not attempted, so a
+# document too big for the machine is a result rather than a lost run. The
+# memory cap reads /proc, so it holds on Linux only. `--in-process` measures in
+# this process, with neither guard.
+#
 # OUTCOMES. `refused` is a `compiler_refused_rule` out of the build; `error` is
-# anything else the build or a call threw. Both record the message and the run
-# continues with the next document. The file is rewritten after every document,
-# so a process that dies part-way (out of memory at the top of a ladder, say)
-# leaves every result it finished.
+# anything else the build or a call threw, or a child's end above. Every one
+# records the message and the run continues with the next document. The file
+# is rewritten after every document, so a process that is itself killed
+# part-way leaves every result it finished.
 
 import Pkg
-let env = normpath(joinpath(@__DIR__, "..", "..", "..", "..", "pkg", "EarthSciAST.jl",
+# A child runs in the environment its parent has already instantiated.
+get(ENV, "SCALING_ADAPTER_CHILD", "") == "1" || let env = normpath(joinpath(@__DIR__, "..", "..", "..", "..", "pkg", "EarthSciAST.jl",
                             "scripts", "scaling_env")),
     manifest = joinpath(env, "Manifest.toml")
     bootstrap() = begin
@@ -69,19 +87,25 @@ include(joinpath(@__DIR__, "hand_loops.jl"))
 function parse_args(args)
     o = Dict{String,Any}("family" => String[], "max-n" => typemax(Int), "budget" => 0.25,
                          "max-build" => 1800.0, "compiler" => "native",
-                         "interpreter-max-states" => 10_000)
+                         "interpreter-max-states" => 2_000, "timeout-s" => 1800.0,
+                         "max-rss-gb" => 12.0, "in-process" => false)
     i = 1
     while i <= length(args)
         a = args[i]
         startswith(a, "--") || error("unexpected argument $a")
         k = a[3:end]
+        if k == "in-process"
+            o[k] = true
+            i += 1
+            continue
+        end
         i < length(args) || error("$a needs a value")
         v = args[i+1]
         if k == "family"
             push!(o["family"], v)
         elseif k in ("max-n", "interpreter-max-states")
             o[k] = parse(Int, v)
-        elseif k in ("budget", "max-build")
+        elseif k in ("budget", "max-build", "timeout-s", "max-rss-gb")
             o[k] = parse(Float64, v)
         elseif k in ("docs", "output", "compiler")
             o[k] = v
@@ -225,7 +249,7 @@ function blank_result(entry)
         # Julia's own fields, beyond the tier's format:
         "tiers" => nothing, "code_size_parts" => nothing, "hand_loop_serial_s" => nothing,
         "hand_loop_threads" => nothing, "hand_loop_checked_against" => nothing,
-        "interpreter_note" => nothing)
+        "interpreter_note" => nothing, "peak_rss_bytes" => nothing)
 end
 
 # The state every call is measured at (the tier's README, "The measured
@@ -473,23 +497,41 @@ function ladder_stop(rec, prev, next, max_build)
            "at n = $(next["n"]), over this run's --max-build of $(max_build) s"
 end
 
-function main(args)
-    o = parse_args(args)
-    compiler = Symbol(o["compiler"])
-    index = JSON3.read(read(joinpath(o["docs"], "index.json"), String), Dict{String,Any})
-    entries = [e for e in index["documents"]
-               if (isempty(o["family"]) || e["family"] in o["family"]) && e["n"] <= o["max-n"]]
-    fams = unique(String(e["family"]) for e in entries)
-    header = Dict{String,Any}(
+function run_header(o, compiler)
+    return Dict{String,Any}(
         "binding" => "julia", "compiler" => String(compiler), "threads" => Threads.nthreads(),
         "commit" => git_commit(), "host" => gethostname(),
         "target" => string(Sys.MACHINE), "julia_version" => string(VERSION),
         "polyester_loaded" => ESA._polyester_loaded(),
         "machine" => machine_note(), "load_average" => load_average(),
-        "cpus" => Sys.CPU_THREADS)
+        "cpus" => Sys.CPU_THREADS, "max_rss_gb" => o["in-process"] ? nothing : _gb(_cap(o)),
+        "timeout_s" => o["in-process"] ? nothing : o["timeout-s"])
+end
+
+function selected(o)
+    index = JSON3.read(read(joinpath(o["docs"], "index.json"), String), Dict{String,Any})
+    entries = [e for e in index["documents"]
+               if (isempty(o["family"]) || e["family"] in o["family"]) && e["n"] <= o["max-n"]]
+    fams = unique(String(e["family"]) for e in entries)
+    ladders = [sort([e for e in entries if e["family"] == fam]; by = e -> e["n"]) for fam in fams]
+    return fams, ladders
+end
+
+function log_result(rec)
+    peak = rec["peak_rss_bytes"] === nothing ? "" : " peak_rss=$(_gb(rec["peak_rss_bytes"]))GB"
+    println(stderr, "[$(rec["family"]) n=$(rec["n"])] $(rec["status"]) build=$(rec["build_s"]) " *
+                    "code=$(rec["code_size"]) rhs=$(rec["steady_rhs_s"]) hand=$(rec["hand_loop_s"]) " *
+                    "alloc=$(rec["allocs_per_call"]) diff=$(rec["hand_loop_max_abs_diff"])$peak" *
+                    (rec["reason"] === nothing ? "" : "  -- " * first(rec["reason"], 200)))
+end
+
+# Measure every selected ladder in this process.
+function run_in_process(o)
+    compiler = Symbol(o["compiler"])
+    fams, ladders = selected(o)
+    header = run_header(o, compiler)
     results = Any[]
-    for fam in fams
-        ladder = sort([e for e in entries if e["family"] == fam]; by = e -> e["n"])
+    for (fam, ladder) in zip(fams, ladders)
         # The first build of a family in the process pays for compiling the
         # build path it takes; build the smallest document once, untimed, so
         # every recorded build_s is a warm one.
@@ -514,14 +556,130 @@ function main(args)
             end
             push!(results, rec)
             write_results(o["output"], header, results)
-            println(stderr, "[$(rec["family"]) n=$(rec["n"])] $(rec["status"]) build=$(rec["build_s"]) " *
-                            "code=$(rec["code_size"]) rhs=$(rec["steady_rhs_s"]) hand=$(rec["hand_loop_s"]) " *
-                            "alloc=$(rec["allocs_per_call"]) diff=$(rec["hand_loop_max_abs_diff"])" *
-                            (rec["reason"] === nothing ? "" : "  -- " * first(rec["reason"], 200)))
+            log_result(rec)
         end
     end
     write_results(o["output"], header, results)
     return 0
 end
+
+# ---------------------------------------------------------------------------
+# The parent: one watched child per family
+# ---------------------------------------------------------------------------
+
+_gb(b) = round(b / 2^30; digits = 1)
+_cap(o) = o["max-rss-gb"] * 2^30
+
+# Resident bytes of process `pid` now (Linux), or nothing when it cannot be read.
+function rss_bytes(pid)
+    s = try
+        read("/proc/$pid/status", String)
+    catch
+        return nothing
+    end
+    m = match(r"VmRSS:\s+(\d+)\s+kB", s)
+    return m === nothing ? nothing : parse(Int, m.captures[1]) * 1024
+end
+
+# The records a child has written so far (its output is replaced atomically).
+function child_results(path)
+    isfile(path) || return Any[]
+    try
+        return collect(Any, JSON3.read(read(path, String), Dict{String,Any})["results"])
+    catch
+        return Any[]
+    end
+end
+
+# Measure one family's ladder in a child and return its records, completed with
+# a record for the document the child did not finish and for every size above.
+function run_family(o, fam, ladder)
+    part = o["output"] * "." * fam * ".part"
+    rm(part; force = true)
+    threads = "$(Threads.nthreads(:default)),$(Threads.nthreads(:interactive))"
+    cmd = `$(Base.julia_cmd()) --threads=$threads --heap-size-hint=$(round(Int, _cap(o)))
+           --project=$(Base.active_project())
+           $(abspath(PROGRAM_FILE)) --in-process --docs $(o["docs"]) --family $fam
+           --max-n $(o["max-n"]) --budget $(o["budget"]) --max-build $(o["max-build"])
+           --compiler $(o["compiler"]) --interpreter-max-states $(o["interpreter-max-states"])
+           --output $part`
+    proc = run(pipeline(addenv(cmd, "SCALING_ADAPTER_CHILD" => "1"); stdout = stdout, stderr = stderr);
+               wait = false)
+    cap = _cap(o)
+    done = 0
+    peaks = Int[]          # the highest resident memory sampled while each document ran
+    peak = 0
+    since = time()         # when the child last finished a document
+    polled = 0.0
+    killed = nothing
+    while process_running(proc)
+        r = something(rss_bytes(getpid(proc)), 0)
+        peak = max(peak, r)
+        if time() - polled > 1.0
+            polled = time()
+            k = length(child_results(part))
+            while done < k
+                push!(peaks, peak)
+                peak = r
+                done += 1
+                since = time()
+            end
+        end
+        if r > cap
+            killed = "out of memory: the process measuring this document reached $(_gb(r)) GB " *
+                     "resident after $(round(Int, time() - since)) s on it, over this run's " *
+                     "--max-rss-gb of $(_gb(cap)) GB"
+        elseif time() - since > o["timeout-s"]
+            killed = "timeout: no result within $(round(Int, o["timeout-s"])) s"
+        end
+        if killed !== nothing
+            kill(proc, Base.SIGKILL)
+            break
+        end
+        sleep(0.1)
+    end
+    wait(proc)
+    got = child_results(part)
+    rm(part; force = true)
+    while length(peaks) < length(got)
+        push!(peaks, peak)
+    end
+    for (rec, p) in zip(got, peaks)
+        startswith(something(rec["reason"], ""), "not attempted") || (rec["peak_rss_bytes"] = p)
+    end
+    if length(got) < length(ladder)
+        e = ladder[length(got)+1]
+        rec = blank_result(e)
+        rec["peak_rss_bytes"] = peak
+        rec["reason"] = killed !== nothing ? killed :
+                        proc.termsignal != 0 ?
+                        "the child process was killed by signal $(proc.termsignal) (9 is usually out of memory)" :
+                        "the child process exited with code $(proc.exitcode) before this document's result"
+        log_result(rec)
+        why = "not attempted: the document at n = $(e["n"]) did not finish ($(rec["reason"]))"
+        push!(got, rec)
+        for e2 in ladder[length(got)+1:end]
+            r2 = blank_result(e2)
+            r2["reason"] = why
+            log_result(r2)
+            push!(got, r2)
+        end
+    end
+    return got
+end
+
+function supervise(o)
+    fams, ladders = selected(o)
+    header = run_header(o, Symbol(o["compiler"]))
+    results = Any[]
+    for (fam, ladder) in zip(fams, ladders)
+        append!(results, run_family(o, fam, ladder))
+        write_results(o["output"], header, results)
+    end
+    write_results(o["output"], header, results)
+    return 0
+end
+
+main(args) = (o = parse_args(args); o["in-process"] ? run_in_process(o) : supervise(o))
 
 exit(main(ARGS))

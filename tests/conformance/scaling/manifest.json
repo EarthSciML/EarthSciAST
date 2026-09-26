@@ -477,6 +477,365 @@
         "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
         "phase": 5,
         "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+      },
+      {
+        "family": "prefix_scan",
+        "n": 1000000,
+        "gate": "builds",
+        "measured": "error: timeout: no result within 900 s",
+        "reason": "the tape unrolls the prefix scan into one region write per step, and the call is quadratic in N (about 2x10^4 times the hand loop at 10^5 cells), so at 10^6 cells the child gives no result within the adapter's 900 s, serial or threaded",
+        "phase": 2
+      },
+      {
+        "family": "chemistry_grid",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": 1306.4,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.60 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
+        "phase": 2
+      },
+      {
+        "family": "chemistry_grid",
+        "n": 1000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 3.6643,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.60 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "chemistry_grid",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 4.9517,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.60 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "chemistry_grid",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 11.2228,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.60 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "chemistry_grid",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 4.3534,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.60 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "prefix_scan",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": 3831.8,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.08 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "build cost per state above 20 ns (ns/state over N=100..100000)",
+        "phase": 2
+      },
+      {
+        "family": "prefix_scan",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1473.6617,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.08 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "prefix_scan",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 21524.7707,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.08 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "scalar_chemistry",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": 110803.5,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.92 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "build cost per state above 20 ns (ns/state over N=100..100000)",
+        "phase": 2
+      },
+      {
+        "family": "scalar_chemistry",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 140.6465,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.92 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "scalar_chemistry",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 505.8614,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.92 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "source_receptor",
+        "n": 1000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.2947,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.32 at the start), serial run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5
+      },
+      {
+        "family": "source_receptor",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": 2663.4,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.21 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "build cost per state above 20 ns (ns/state over N=100..3162)",
+        "phase": 2
+      },
+      {
+        "family": "source_receptor",
+        "n": 1000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.4111,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.21 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "source_receptor",
+        "n": 3162,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.3523,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.21 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "stencil_1d",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": 883.0,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.61 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
+        "phase": 2
+      },
+      {
+        "family": "stencil_1d",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.8084,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.61 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "stencil_2d",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.6382,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.18 at the start), serial run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5
+      },
+      {
+        "family": "stencil_2d",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.4729,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.18 at the start), serial run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5
+      },
+      {
+        "family": "stencil_2d",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": 859.2,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.18 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
+        "phase": 2
+      },
+      {
+        "family": "stencil_2d",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.6335,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.18 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "stencil_2d",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 3.9176,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.18 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "stencil_3d",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.3667,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.54 at the start), serial run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5
+      },
+      {
+        "family": "stencil_3d",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": 1194.0,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.58 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
+        "phase": 2
+      },
+      {
+        "family": "stencil_3d",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.5457,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.58 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "stencil_3d",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.5272,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.58 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "stencil_3d",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 6.3524,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.58 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "stencil_4d",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.5099,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.77 at the start), serial run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "phase": 5
+      },
+      {
+        "family": "stencil_4d",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": 994.8,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.77 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "build cost per state above 20 ns (ns/state over N=100..100000)",
+        "phase": 2
+      },
+      {
+        "family": "stencil_4d",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.8778,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.77 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "stencil_4d",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.0791,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.77 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "stencil_4d",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 10.1365,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.77 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "transport_3d",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": 679.5,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.89 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
+        "phase": 2
+      },
+      {
+        "family": "transport_3d",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.5864,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.89 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "transport_3d",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.8522,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.89 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
+      },
+      {
+        "family": "transport_3d",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 3.1206,
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.89 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5
       }
     ],
     "julia": [
@@ -771,6 +1130,302 @@
         "provisional": "measured on a shared, loaded node: the agents' own node, load average 29 at the start of the run and 9 at its end on its 20 cores, serial run, 2026-09-25; the scheduled sweep re-measures it",
         "reason": "scalar equations are walked as trees, once per slot, on every call",
         "phase": 5
+      },
+      {
+        "family": "stencil_4d",
+        "n": 1000000,
+        "gate": "builds",
+        "measured": "error: out of memory: the process measuring this document reached 12.0 GB resident after 242 s on it, over this run's --max-rss-gb of 12.0 GB",
+        "reason": "rank 4 misses the affine tier (rank-3 cap) and lands on the per-cell build, whose memory grows with N: 2.9 GB at 10^5 cells and past the adapter's 12 GB cap at 10^6 (a hosted runner has 16 GB; the first scheduled sweep lost this runner here)",
+        "phase": 2
+      },
+      {
+        "family": "source_receptor",
+        "n": 3162,
+        "gate": "no_steady_alloc",
+        "threads": "threaded",
+        "measured": "778401680 bytes per steady call",
+        "reason": "the fully unrolled contraction body loses type stability above some size (the serial entry's cause; the threaded dispatch adds its own bytes on top)",
+        "phase": 2
+      },
+      {
+        "family": "chemistry_grid",
+        "gate": "no_steady_alloc",
+        "threads": "threaded",
+        "measured": "bytes per steady call with 4 threads: 100:544, 1000:544, 10000:544, 100000:544, 1000000:544",
+        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
+        "phase": 5
+      },
+      {
+        "family": "prefix_scan",
+        "gate": "no_steady_alloc",
+        "threads": "threaded",
+        "measured": "bytes per steady call with 4 threads: 10000:288, 100000:288, 1000000:288",
+        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
+        "phase": 5
+      },
+      {
+        "family": "regrid",
+        "gate": "no_steady_alloc",
+        "threads": "threaded",
+        "measured": "bytes per steady call with 4 threads: 1000:160, 3162:352",
+        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
+        "phase": 5
+      },
+      {
+        "family": "source_receptor",
+        "gate": "no_steady_alloc",
+        "threads": "threaded",
+        "measured": "bytes per steady call with 4 threads: 100:128, 1000:256",
+        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
+        "phase": 5
+      },
+      {
+        "family": "stencil_1d",
+        "gate": "no_steady_alloc",
+        "threads": "threaded",
+        "measured": "bytes per steady call with 4 threads: 10000:128, 100000:128, 1000000:128",
+        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
+        "phase": 5
+      },
+      {
+        "family": "stencil_2d",
+        "gate": "no_steady_alloc",
+        "threads": "threaded",
+        "measured": "bytes per steady call with 4 threads: 1000:128, 10000:128, 100000:128, 1000000:128",
+        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
+        "phase": 5
+      },
+      {
+        "family": "stencil_3d",
+        "gate": "no_steady_alloc",
+        "threads": "threaded",
+        "measured": "bytes per steady call with 4 threads: 10000:128, 100000:128, 1000000:128",
+        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
+        "phase": 5
+      },
+      {
+        "family": "stencil_4d",
+        "gate": "no_steady_alloc",
+        "threads": "threaded",
+        "measured": "bytes per steady call with 4 threads: 1000:128, 10000:128, 100000:128",
+        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
+        "phase": 5
+      },
+      {
+        "family": "transport_3d",
+        "gate": "no_steady_alloc",
+        "threads": "threaded",
+        "measured": "bytes per steady call with 4 threads: 10000:128, 100000:128, 1000000:128",
+        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
+        "phase": 5
+      },
+      {
+        "family": "unstructured_gather",
+        "gate": "no_steady_alloc",
+        "threads": "threaded",
+        "measured": "bytes per steady call with 4 threads: 1000:128, 10000:128, 100000:128",
+        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
+        "phase": 5
+      },
+      {
+        "family": "chemistry_grid",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": "native / hand loop = 1.47",
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.55 at the start), serial run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "one kernel per species, with no sharing of per-cell rates across the species equations",
+        "phase": 5
+      },
+      {
+        "family": "chemistry_grid",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": "7326 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.00 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "per-state string layout plus the per-template var_map copies in the affine cut scan",
+        "phase": 2
+      },
+      {
+        "family": "prefix_scan",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": "1.129e+04 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 8.44 at the start and 8.60 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
+        "reason": "per-cell state layout, and the scan fold is built by rewriting the syntax tree per cell",
+        "phase": 2
+      },
+      {
+        "family": "prefix_scan",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": "native / hand loop = 3.65",
+        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 8.44 at the start and 8.60 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
+        "reason": "the scan fold walks a per-cell slot table on every call",
+        "phase": 5
+      },
+      {
+        "family": "prefix_scan",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": "native / hand loop = 4.59",
+        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 8.44 at the start and 8.60 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
+        "reason": "the scan fold walks a per-cell slot table on every call",
+        "phase": 5
+      },
+      {
+        "family": "prefix_scan",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": "native / hand loop = 4.41",
+        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 8.44 at the start and 8.60 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
+        "reason": "the scan fold walks a per-cell slot table on every call",
+        "phase": 5
+      },
+      {
+        "family": "regrid",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": "7.004e+05 ns per state (ns/state over N=100..3162)",
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.24 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "the join-gated contractions land on the per-cell build, and the geometry setup and value-invention join sweep the source x target product",
+        "phase": 2
+      },
+      {
+        "family": "scalar_chemistry",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": "2.486e+07 ns per state (ns/state over N=100..10000)",
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.06 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "one scalar equation per state, and the scalar build grows faster than linearly (210 s at 10^4 states)",
+        "phase": 2
+      },
+      {
+        "family": "scalar_chemistry",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": "native / hand loop = 12.3",
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.06 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "scalar equations are walked as trees, once per slot, on every call",
+        "phase": 5
+      },
+      {
+        "family": "source_receptor",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": "4.538e+06 ns per state (ns/state over N=100..3162)",
+        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 7.09 at the start and 6.20 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
+        "reason": "the contraction is unrolled into every receptor's kernel body, so the emitted code, and its compile, grow with N",
+        "phase": 2
+      },
+      {
+        "family": "source_receptor",
+        "n": 1000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": "native / hand loop = 20.5",
+        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 7.09 at the start and 6.20 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
+        "reason": "the unrolled contraction body; at 3162 it also loses type stability and allocates on every call",
+        "phase": 5
+      },
+      {
+        "family": "source_receptor",
+        "n": 3162,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": "native / hand loop = 469",
+        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 7.09 at the start and 6.20 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
+        "reason": "the unrolled contraction body; at 3162 it also loses type stability and allocates on every call",
+        "phase": 5
+      },
+      {
+        "family": "stencil_1d",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": "4478 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.45 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
+        "phase": 2
+      },
+      {
+        "family": "stencil_2d",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": "6357 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.46 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
+        "phase": 2
+      },
+      {
+        "family": "stencil_3d",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": "7166 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.40 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
+        "phase": 2
+      },
+      {
+        "family": "stencil_4d",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": "9.259e+04 ns per state (ns/state over N=100..100000)",
+        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 18.36 at the start and 28.47 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
+        "reason": "rank 4 misses the affine tier (rank-3 cap) and lands on the per-cell build",
+        "phase": 2
+      },
+      {
+        "family": "stencil_4d",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": "native / hand loop = 1.3",
+        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 18.36 at the start and 28.47 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
+        "reason": "rank 4 runs the per-cell build's gather-table kernel, not an affine box",
+        "phase": 5
+      },
+      {
+        "family": "stencil_4d",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": "native / hand loop = 2.14",
+        "provisional": "measured on a shared, loaded node: the agents' own node (ccc0234, 20 cores, load average 18.36 at the start and 28.47 at the end, nice 19), threaded (4 threads) run, 2026-09-25, the scheduled sweep's Julia steps run locally; the scheduled sweep re-measures it",
+        "reason": "rank 4 runs the per-cell build's gather-table kernel, not an affine box",
+        "phase": 5
+      },
+      {
+        "family": "transport_3d",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": "9740 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.05 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
+        "phase": 2
+      },
+      {
+        "family": "transport_3d",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": "native / hand loop = 2",
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.05 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
+        "phase": 5
+      },
+      {
+        "family": "unstructured_gather",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": "6.927e+05 ns per state (ns/state over N=100..100000)",
+        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.07 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
+        "reason": "the build grows as N^2 (107 s at 10^5 cells)",
+        "phase": 2
       }
     ]
   }

@@ -45,8 +45,9 @@ python3 tests/conformance/scaling/generate.py --out "$BUILD/scaling" --family st
 python3 tests/conformance/scaling/generate.py --check
 python3 tests/conformance/scaling/generate.py --write-fixtures   # after changing a family
 
-# Rust adapter (one child process per document, so a timeout or an
-# out-of-memory kill is recorded and the run carries on):
+# Rust adapter (one child process per document, so a timeout, an
+# out-of-memory kill or passing --max-rss-gb is recorded and the run carries
+# on; the Julia adapter does the same with one child per family):
 cd pkg/earthsci-ast-rs
 cargo run --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust -- \
     --index ../../tests/conformance/scaling/fixtures/index.json --output rust-serial.json
@@ -157,8 +158,18 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
 | `hand_loop_checked_against` | `"native"`, or `"interpreter"` when native refused the document: the hand loop is then checked against the interpreter's `dy` (up to the size cap), so the reference is known good before native learns the construct |
 
 Adapters may add fields of their own (the Rust adapter adds `code_size_detail`,
-`hand_loop_error`, `interpreter_error`); the checker ignores fields it does not
-know.
+`hand_loop_error`, `interpreter_error`; both add `peak_rss_bytes`, the child
+process's peak resident memory, and a file-level `max_rss_gb` and `timeout_s`,
+the guards the run used); the checker ignores fields it does not know.
+
+A document the machine cannot hold is a result, not a lost run: each adapter
+measures in child processes, kills a child past `--max-rss-gb` (12 GB by
+default on every machine, so whether a document fits is a property of the
+document and the compiler, not of the machine) or `--timeout-s`, and records
+that document as `"error"` with a `reason` that starts `out of memory:`,
+`timeout:` or `the child process ...`, and the family's larger sizes as
+`not attempted: ...`. Such a `builds` failure goes in the ledger like any
+other; since the document did not build, its other gates skip (below).
 
 **A null measure on a document that built is a missing measurement.** For a
 result with `status: "ok"`, a null `allocs_per_call` or `hand_loop_max_abs_diff`
