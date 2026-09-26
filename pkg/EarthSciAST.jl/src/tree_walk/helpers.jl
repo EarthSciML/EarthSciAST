@@ -1177,28 +1177,45 @@ function _eval_const_int(expr::OpExpr, idx_env::Dict{String,Int},
     elseif op == "neg"
         length(c) == 1 || throw(TreeWalkError("E_TREEWALK_ARITY", "neg needs 1 arg"))
         return -_eval_const_int(c[1], idx_env, const_arrays)
+    elseif op == "const"
+        # A scalar `const` literal — what a lowered `enum` op becomes
+        # (`_lower_expr_enums`), so a categorical lookup `index(T, enum(…), …)`
+        # subscripts with one. It is the `NumExpr` arm above.
+        v = expr.value
+        (v isa Real && !(v isa Bool)) ||
+            throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
+                "a non-scalar `const` is not an integer index"))
+        return Int(v)
     elseif op == "index"
         # Indirect gather: index(const_array_name, i1, i2, ...) → Int
         # Used for mesh connectivity: u[index(cells_on_cell, c, k)] resolves the
-        # neighbor index from a pre-computed connectivity array.
+        # neighbor index from a pre-computed connectivity array. The table may
+        # also be an inline `const` literal, `index({op:const, value:[…]}, i)`,
+        # read through the interning the expression-position gather uses
+        # (`_intern_inline_const`), so both spellings share one boundary policy.
         isempty(c) && throw(TreeWalkError("E_TREEWALK_INDEX_EMPTY",
                                            "index op in index position requires at least one arg"))
         first = c[1]
-        first isa VarExpr ||
-            throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
-                "index op in index position: first arg must be a variable name"))
-        haskey(const_arrays, first.name) ||
-            throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
-                "non-const array '$(first.name)' used in index position; " *
-                "add it to const_arrays or use a state-variable index"))
-        arr = const_arrays[first.name]
+        if first isa OpExpr && first.op == "const" && first.value isa AbstractVector
+            arr, name = _intern_inline_const(first, const_arrays)
+        else
+            first isa VarExpr ||
+                throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
+                    "index op in index position: first arg must be a variable name " *
+                    "or an inline `const` array"))
+            haskey(const_arrays, first.name) ||
+                throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
+                    "non-const array '$(first.name)' used in index position; " *
+                    "add it to const_arrays or use a state-variable index"))
+            arr, name = const_arrays[first.name], first.name
+        end
         idx_args = c[2:end]
         length(idx_args) == ndims(arr) ||
             throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
-                "const array '$(first.name)' is $(ndims(arr))D but got $(length(idx_args)) indices"))
+                "const array '$(name)' is $(ndims(arr))D but got $(length(idx_args)) indices"))
         int_indices = [_eval_const_int(a, idx_env, const_arrays) for a in idx_args]
         for d in 1:ndims(arr)
-            int_indices[d] = _resolve_const_index(arr, first.name, d, int_indices[d], size(arr, d))
+            int_indices[d] = _resolve_const_index(arr, name, d, int_indices[d], size(arr, d))
         end
         return Int(round(arr[int_indices...]))
     end
