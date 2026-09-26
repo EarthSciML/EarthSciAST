@@ -1072,6 +1072,65 @@ function _normalize_param_override_keys(model::Model, overrides::AbstractDict;
     return normalized
 end
 
+# ---- Stage: canonicalize the caller's `const_arrays` keys ----
+# A caller's `const_arrays` entry for a SHAPED parameter is the same binding as
+# an inline-array `parameter_overrides` entry for it — both land on the
+# const-array channel — so its key is resolved by the same esm-spec §6.6.2
+# rules: the model-local spelling `lat` designates the flattened `Deg.lat`
+# exactly as it does for an override. An exact key alone missed that parameter:
+# with no `default` the build refused the document
+# (`E_TREEWALK_UNSUPPORTED_SHAPE`, the parameter backed by nothing), and with
+# one it silently used the default instead of the caller's array. Rust's build
+# pipeline resolves such a key the same way.
+#
+# The registry also carries arrays that are not a parameter's value at all — a
+# loader field, a coordinate table, a synthetic build array — so a key that
+# designates no shaped parameter is left as it is, never reported as unknown.
+# A key that is a dotted suffix of more than one shaped parameter is ambiguous,
+# and two non-exact keys designating one parameter collide; both are rejected
+# as they are for `parameter_overrides`. An exact key always wins. The resolved
+# name is ADDED beside the caller's key, which stays, so a consumer that reads
+# the caller's spelling still finds it.
+function _normalize_const_array_keys(model::Model, const_arrays::AbstractDict;
+                                     model_name=nothing)
+    isempty(const_arrays) && return const_arrays
+    shaped = Set{String}(n for (n, v) in model.variables
+                         if v.type == ParameterVariable && _is_array_shape(v.shape))
+    isempty(shaped) && return const_arrays
+    namespaces = _override_namespaces(shaped; model=model, model_name=model_name)
+    suffix_group = Dict{String,Vector{String}}()
+    for n in shaped, s in _dotted_suffixes(n)
+        push!(get!(suffix_group, s, String[]), n)
+    end
+    claims = Dict{String,Vector{String}}()
+    for rawk in keys(const_arrays)
+        k = String(rawk)
+        haskey(model.variables, k) && continue    # an exact name
+        name = _dotted_suffix_hit(shaped, namespaces, k)
+        if name === nothing
+            cands = get(suffix_group, k, nothing)
+            cands === nothing && continue          # designates no shaped parameter
+            length(cands) == 1 || throw(ArgumentError(
+                "const_arrays: ambiguous parameter name '$(k)' — it is carried as a " *
+                "suffix by $(length(cands)) shaped parameters " *
+                "($(join(sort(cands), ", "))). Qualify it further with its owning " *
+                "component (esm-spec §6.6.2)."))
+            name = cands[1]
+        end
+        haskey(const_arrays, name) && continue     # the exact key wins
+        push!(get!(claims, name, String[]), k)
+    end
+    isempty(claims) && return const_arrays
+    merged = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
+    for name in sort!(collect(keys(claims)))
+        ks = claims[name]
+        length(ks) == 1 || throw(ArgumentError(_override_collision_message(
+            "const_arrays", "parameter", name, sort!(ks))))
+        merged[name] = merged[ks[1]]
+    end
+    return merged
+end
+
 # ---- Shared caller-key canonicalization (esm-spec §6.6.2) ----
 # Rewrite each caller key onto the build-resolved name it designates, and
 # classify the ones that designate none — or the ones that designate one the
@@ -3697,6 +3756,7 @@ function _build_evaluator_impl_inner(model::Model;
     # `initial_conditions` profile is expanded into the per-cell keys `_build_u0`
     # seeds from. Both are no-ops (and the registries byte-identical) for a
     # document that declares no shaped parameter.
+    const_arrays = _normalize_const_array_keys(model, const_arrays; model_name=_model_name)
     const_arrays = _register_inline_array_parameters(model, const_arrays,
                                                      parameter_overrides, index_sets;
                                                      param_arrays=param_arrays)
@@ -5788,6 +5848,12 @@ function _build_evaluator_dict(esm::AbstractDict;
         # legal rule-2 key for the parameter `A` (esm-spec §6.6.2).
         kwd[:parameter_overrides] = _normalize_param_override_keys(
             model, kwd[:parameter_overrides];
+            model_name=(model_name === nothing ? _sole_model_name(file) : String(model_name)))
+    end
+    # The same for the caller's `const_arrays` keys, so the front-door pre-passes
+    # below read a shaped parameter's array under the name the model spells.
+    if model !== nothing && haskey(kwd, :const_arrays)
+        kwd[:const_arrays] = _normalize_const_array_keys(model, kwd[:const_arrays];
             model_name=(model_name === nothing ? _sole_model_name(file) : String(model_name)))
     end
 
