@@ -357,6 +357,9 @@ end
         @test _cgk_fired(tally) >= 1
         du = zero(u0)
         f!(du, u0, p, 0.0)                       # warm up
-        @test (@allocated f!(du, u0, p, 0.0)) == 0
+        # Julia >= 1.12 only: older versions box across RuntimeGeneratedFunction inner functions and @testset-scope reads.
+        if VERSION >= v"1.12"
+            @test (@allocated f!(du, u0, p, 0.0)) == 0
+        end
     end
 end

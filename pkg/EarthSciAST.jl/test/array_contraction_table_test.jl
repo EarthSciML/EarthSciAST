@@ -107,7 +107,10 @@ end
         @test !haskey(tiers, :percell_build)
         du = similar(u)
         pn.f!(du, u, pn.p, 0.0)
-        @test (@allocated pn.f!(du, u, pn.p, 0.0)) == 0
+        # Julia >= 1.12 only: older versions box across RuntimeGeneratedFunction inner functions and @testset-scope reads.
+        if VERSION >= v"1.12"
+            @test (@allocated pn.f!(du, u, pn.p, 0.0)) == 0
+        end
         seed = Float64[0.2 + 0.01 * cos(i) for i in eachindex(u)]
         seedi = similar(seed)
         for (k, j) in pi_.var_map
