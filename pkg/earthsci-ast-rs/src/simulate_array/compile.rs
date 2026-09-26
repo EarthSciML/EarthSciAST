@@ -805,6 +805,7 @@ impl ArrayCompiled {
         // moves each observed body out of the variable registry).
         let (
             observed_names,
+            forcing_decls,
             eliminated,
             held_at_ic,
             slots,
@@ -860,8 +861,23 @@ impl ArrayCompiled {
             // exactly the order `classify_variables` produced them in).
             let observed_names: Vec<String> =
                 observed_vars.iter().map(|(n, _)| (*n).clone()).collect();
+            // The externally refreshed parameters ride in `observed_vars` with
+            // no defining rule (see `classify_variables`); these are the
+            // forcing buffer's names.
+            let forcing_decls: IndexMap<String, Option<Vec<usize>>> = observed_vars
+                .iter()
+                .filter(|(_, var)| var.var_type == VariableType::Parameter)
+                .map(|(name, var)| {
+                    let shape = match var.shape.as_deref() {
+                        None => Some(Vec::new()),
+                        Some(decl) => resolve_declared_shape(decl, index_sets),
+                    };
+                    ((*name).clone(), shape)
+                })
+                .collect();
             (
                 observed_names,
+                forcing_decls,
                 eliminated,
                 held_at_ic,
                 slots,
@@ -933,6 +949,7 @@ impl ArrayCompiled {
             #[cfg(feature = "solve")]
             field_ic_memo: RefCell::new(None),
             inline_param_arrays,
+            forcing_decls,
             tape_cache: tape::TapeCache::new(),
             shared_observed: std::cell::OnceCell::new(),
         })

@@ -48,6 +48,10 @@
 //! * [`Instr::Scan`] is `run_prefix_scan` over a whole box: a running fold
 //!   along one axis, ascending, independently for every position of the
 //!   other axes, writing the inclusive or exclusive partial result.
+//! * [`Instr::LoadForcing`] is `lookup_variable`'s forcing arm: the entry the
+//!   forcing buffer holds for the name, copied in row-major order (a 0-d entry
+//!   read as a scalar, rounded to the active precision), and the same
+//!   fail-closed fault when the buffer holds none.
 //!
 //! Array operands within one instruction share one box (shape + 1-based
 //! origin), checked at lowering time — the same precondition `vec_combine`
@@ -197,6 +201,17 @@ pub(crate) enum Instr {
     /// XlaBuilder emitter lowers this to a `ConstantLiteral` of the same
     /// row-major buffer.)
     ConstArray { data: u32, out: SlotId },
+    /// Copy the forcing-buffer entry `forcings[forcing]` names into `out`
+    /// (row-major, origin all-1s; a scalar slot for a 0-d entry).
+    ///
+    /// The forcing buffer only changes between integration segments, so this
+    /// runs in the CONST section for a forcing nothing refreshes and in the
+    /// SEGMENT section for a DISCRETE one, and every reader takes the slot:
+    /// no instruction ever reads the buffer itself. A missing entry latches
+    /// the fault the interpreter's lookup raises and fills `out` with `NaN`;
+    /// an entry whose shape is not the one the program was built against
+    /// latches a fault naming both.
+    LoadForcing { forcing: u32, out: SlotId },
     /// Reduce `src` over `axes` with `op`'s kernel, from `init`:
     ///
     /// ```text
@@ -299,6 +314,7 @@ impl Instr {
             | Instr::Region { out, .. }
             | Instr::Assemble { out, .. }
             | Instr::ConstArray { out, .. }
+            | Instr::LoadForcing { out, .. }
             | Instr::Interp { out, .. }
             | Instr::Reduce { out, .. }
             | Instr::Scan { out, .. } => Some(*out),
@@ -363,7 +379,7 @@ impl Instr {
                     f(*s);
                 }
             }
-            Instr::Ramp { .. } | Instr::ConstArray { .. } => {}
+            Instr::Ramp { .. } | Instr::ConstArray { .. } | Instr::LoadForcing { .. } => {}
             Instr::Interp { x, y, .. } => {
                 op(x);
                 if let Some(y) = y {
@@ -414,6 +430,7 @@ impl Instr {
             Instr::Region { .. } => "Region",
             Instr::Assemble { .. } => "Assemble",
             Instr::ConstArray { .. } => "ConstArray",
+            Instr::LoadForcing { .. } => "LoadForcing",
             Instr::Interp { .. } => "Interp",
             Instr::Reduce { .. } => "Reduce",
             Instr::Scan { .. } => "Scan",
@@ -843,6 +860,18 @@ pub(crate) struct ConstArrayData {
     pub values: Vec<f64>,
 }
 
+/// One forcing-buffer entry the program reads ([`Instr::LoadForcing`]).
+#[derive(Clone, Debug)]
+pub(crate) struct ForcingRef {
+    /// The buffer key, which is the variable's name as the compiled model
+    /// spells it.
+    pub name: String,
+    /// The box the program was built against (empty for a 0-d entry): the
+    /// entry's shape when the buffer held it at build time, else the
+    /// variable's declared shape.
+    pub shape: DimU,
+}
+
 /// Which esm-spec §9.2 `interp.*` entry an [`Instr::Interp`] evaluates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InterpKind {
@@ -1035,6 +1064,9 @@ pub(crate) struct TapeProgram {
     /// Observed names resolved through the runtime observed map
     /// (`Operand::Obs`/`SrcRef::Obs` index here).
     pub obs_reads: Vec<String>,
+    /// Forcing-buffer entries the program loads (`Instr::LoadForcing`
+    /// indexes here).
+    pub forcings: Vec<ForcingRef>,
     pub dy_writes: Vec<DyWrite>,
     /// Observed values published back into the runtime observed map: names a
     /// fallback rule or the samples/observed-trajectory dependency cone reads.

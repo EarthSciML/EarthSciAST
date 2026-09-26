@@ -88,6 +88,17 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 
 type LResult<T> = Result<T, Bail>;
 
+/// What a build knows about the forcing buffer: the box a read of each name
+/// it can serve compiles against, and which of them a provider refreshes
+/// between segments (see `ArrayCompiled::forcing_inputs`).
+pub(super) struct ForcingInputs<'a> {
+    pub shapes: FxHashMap<String, DimU>,
+    /// Externally refreshed parameters with no box to compile against: the
+    /// buffer does not hold them and their declared shape does not size.
+    pub unsized_: HashSet<String>,
+    pub discrete: &'a HashSet<String>,
+}
+
 /// Most contracted indices one contraction may carry.
 const MAX_CONTRACT: usize = 4;
 
@@ -264,6 +275,20 @@ pub(crate) struct TapeBuilder<'m> {
     state_ix: FxHashMap<String, usize>,
     obs_reads: Vec<String>,
     obs_read_ix: FxHashMap<String, u32>,
+    /// Every name the forcing buffer can serve, with the box a read of it
+    /// compiles against ([`ForcingInputs`]).
+    forcing_shapes: FxHashMap<String, DimU>,
+    forcing_unsized: HashSet<String>,
+    /// The forcing names a provider refreshes between segments; their loads
+    /// go in the SEGMENT section, every other forcing load in CONST.
+    discrete_forcing: &'m HashSet<String>,
+    forcings: Vec<ForcingRef>,
+    forcing_ix: FxHashMap<String, u32>,
+    /// The slot an UNCONDITIONAL load of `forcings[i]` defined, so every later
+    /// read shares it; `forcing_journal` records the insertions of the current
+    /// rule for rollback.
+    forcing_loaded: FxHashMap<u32, LV>,
+    forcing_journal: Vec<u32>,
     dy_writes: Vec<DyWrite>,
     rules: Vec<RuleInfo>,
     /// Per-section chunk streams (index = Cadence as usize).
@@ -299,6 +324,7 @@ struct RuleTxn {
     dy_writes: usize,
     stream_lens: [usize; 3],
     hoist_journal: usize,
+    forcing_journal: usize,
 }
 
 /// Snapshot for undoing a failed ATTEMPT inside one rule (a looped form that
@@ -317,6 +343,7 @@ struct SubTxn {
     streams: [(usize, usize); 3],
     branch_len: Option<usize>,
     hoist_journal: usize,
+    forcing_journal: usize,
 }
 
 impl<'m> TapeBuilder<'m> {
@@ -326,6 +353,7 @@ impl<'m> TapeBuilder<'m> {
         obs_tier: FxHashMap<String, Cadence>,
         const_arrays: &'m ConstArrayScope,
         f32_document: bool,
+        forcing: &ForcingInputs<'m>,
     ) -> Self {
         let mut state_vars = Vec::with_capacity(var_shapes.len());
         let mut state_ix = FxHashMap::default();
@@ -355,6 +383,13 @@ impl<'m> TapeBuilder<'m> {
             state_ix,
             obs_reads: Vec::new(),
             obs_read_ix: FxHashMap::default(),
+            forcing_shapes: forcing.shapes.clone(),
+            forcing_unsized: forcing.unsized_.clone(),
+            discrete_forcing: forcing.discrete,
+            forcings: Vec::new(),
+            forcing_ix: FxHashMap::default(),
+            forcing_loaded: FxHashMap::default(),
+            forcing_journal: Vec::new(),
             dy_writes: Vec::new(),
             rules: Vec::new(),
             streams: [Vec::new(), Vec::new(), Vec::new()],
@@ -489,6 +524,61 @@ impl<'m> TapeBuilder<'m> {
         self.obs_reads.push(name.to_string());
         self.obs_read_ix.insert(name.to_string(), ix);
         Ok(ix)
+    }
+
+    /// A read of `name` served by the forcing buffer: `lookup_variable`'s last
+    /// arm, reached only after `t`, the state, the observeds and the
+    /// parameters, exactly as there. `None` when the buffer cannot serve the
+    /// name.
+    ///
+    /// One [`Instr::LoadForcing`] per forcing, in the section its cadence
+    /// allows, shared by every later read. A load made inside a conditional
+    /// branch is not shared, since the branch may not run.
+    fn forcing_read(&mut self, name: &str) -> LResult<Option<LV>> {
+        let Some(shape) = self.forcing_shapes.get(name).cloned() else {
+            if self.forcing_unsized.contains(name) {
+                bail_tape!(
+                    "forcing `{name}`: its declared shape names an index set the registry \
+                     cannot size, and the forcing buffer held no entry for it when the tape \
+                     was built, so there is no box to compile its read against"
+                );
+            }
+            return Ok(None);
+        };
+        let ix = match self.forcing_ix.get(name) {
+            Some(&ix) => ix,
+            None => {
+                let ix = tape_index(self.forcings.len(), "forcing reads")?;
+                self.forcings.push(ForcingRef {
+                    name: name.to_string(),
+                    shape: shape.clone(),
+                });
+                self.forcing_ix.insert(name.to_string(), ix);
+                ix
+            }
+        };
+        if let Some(lv) = self.forcing_loaded.get(&ix) {
+            return Ok(Some(lv.clone()));
+        }
+        let cadence = if self.discrete_forcing.contains(name) {
+            Cadence::Segment
+        } else {
+            Cadence::Const
+        };
+        let sec = self.placement(cadence);
+        let scalar = shape.is_empty();
+        let out = self.new_slot(&shape, &DimI::from_elem(1, shape.len()), scalar, sec);
+        self.emit(Instr::LoadForcing { forcing: ix, out }, sec);
+        let lv = if scalar {
+            LV::Scalar(out)
+        } else {
+            LV::Arr(out)
+        };
+        if !self.in_branch() {
+            self.forcing_loaded.insert(ix, lv.clone());
+            self.forcing_journal.push(ix);
+        }
+        Ok(Some(lv))
     }
 
     // -- scopes / VN ----------------------------------------------------------
@@ -637,6 +727,9 @@ impl<'m> TapeBuilder<'m> {
         }
         if let Some(i) = self.param_names.iter().position(|p| p == name) {
             return Ok(LV::Param(tape_index(i, "parameters")?));
+        }
+        if let Some(lv) = self.forcing_read(name)? {
+            return Ok(lv);
         }
         bail_tape!("variable: unresolved symbol (forcing/loop-bind?): {name}")
     }
@@ -2373,6 +2466,9 @@ impl<'m> TapeBuilder<'m> {
         if let Some(i) = self.param_names.iter().position(|p| p == name) {
             return Ok(LV::Param(tape_index(i, "parameters")?));
         }
+        if let Some(lv) = self.forcing_read(name)? {
+            return Ok(lv);
+        }
         bail_tape!("wholesale: unresolved symbol (forcing/NaN sentinel?) `{name}`")
     }
 
@@ -3055,6 +3151,7 @@ pub(super) fn build_tape_program(
     compiled: &ArrayCompiled,
     const_names: &HashSet<String>,
     seg_invariant_names: &HashSet<String>,
+    forcing: &ForcingInputs<'_>,
     // Step 4: run the kernel-fusion post-pass with the given superop
     // configuration (`None` = the unfused program, bitwise-identical
     // results — the arm `build_tape_opts` gives the fused-vs-unfused tests).
@@ -3088,6 +3185,7 @@ pub(super) fn build_tape_program(
         obs_tier,
         const_arrays,
         compiled.precision.is_f32(),
+        forcing,
     );
     b.inline_params = Some(&compiled.inline_param_arrays);
 
@@ -3244,8 +3342,9 @@ impl<'m> TapeBuilder<'m> {
         if self.param_names.iter().any(|p| p == name) {
             return Some(DimU::new());
         }
-        // Forcing / the NaN sentinel: shape unknowable without the runtime.
-        None
+        // A forcing read compiles against the box `forcing_read` loads; any
+        // other name is the NaN sentinel, whose shape nothing pins.
+        self.forcing_shapes.get(name).cloned()
     }
 
     /// Broadcast two operand shapes the way `combine` does for the shapes the
@@ -3399,6 +3498,7 @@ impl<'m> TapeBuilder<'m> {
                 self.streams[2].len(),
             ],
             hoist_journal: self.hoist_journal.len(),
+            forcing_journal: self.forcing_journal.len(),
         }
     }
 
@@ -3422,8 +3522,18 @@ impl<'m> TapeBuilder<'m> {
             let key = self.hoist_journal.pop().expect("journal entry");
             self.hoist.remove(&key);
         }
+        self.rollback_forcing_loads(txn.forcing_journal);
         self.scope_frames.clear();
         self.branch_bufs.clear();
+    }
+
+    /// Forget the forcing loads recorded since `mark`: their instructions were
+    /// just discarded.
+    fn rollback_forcing_loads(&mut self, mark: usize) {
+        while self.forcing_journal.len() > mark {
+            let ix = self.forcing_journal.pop().expect("journal entry");
+            self.forcing_loaded.remove(&ix);
+        }
     }
 
     fn sub_txn(&self) -> SubTxn {
@@ -3441,6 +3551,7 @@ impl<'m> TapeBuilder<'m> {
             streams: [stream(0), stream(1), stream(2)],
             branch_len: self.branch_bufs.last().map(Vec::len),
             hoist_journal: self.hoist_journal.len(),
+            forcing_journal: self.forcing_journal.len(),
         }
     }
 
@@ -3466,6 +3577,7 @@ impl<'m> TapeBuilder<'m> {
             let key = self.hoist_journal.pop().expect("journal entry");
             self.hoist.remove(&key);
         }
+        self.rollback_forcing_loads(txn.forcing_journal);
     }
 
     /// Lower one observed rule; returns the recorded observed value.
@@ -3918,6 +4030,7 @@ impl<'m> TapeBuilder<'m> {
             interp_tables: std::mem::take(&mut self.interp_tables),
             state_vars: std::mem::take(&mut self.state_vars),
             obs_reads: std::mem::take(&mut self.obs_reads),
+            forcings: std::mem::take(&mut self.forcings),
             dy_writes: std::mem::take(&mut self.dy_writes),
             exports,
             rules: std::mem::take(&mut self.rules),

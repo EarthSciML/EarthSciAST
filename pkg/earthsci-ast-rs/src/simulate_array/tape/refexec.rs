@@ -6,7 +6,7 @@
 //! cannot mask a lowering bug, and it clones freely.
 
 use super::super::*;
-use super::exec::{eval_micro_op, run_rhs_oracle};
+use super::exec::{eval_micro_op, forcing_len, load_forcing, run_rhs_oracle};
 use super::ir::*;
 use ndarray::{ArrayD, ArrayViewD, Axis, IxDyn, Slice};
 use std::cell::RefCell;
@@ -212,6 +212,24 @@ pub(super) fn run_reference(
                 let arr = ArrayD::from_shape_vec(IxDyn(&d.shape[..]), d.values.clone())
                     .expect("ConstArray payload matches its shape");
                 slots[*out as usize] = Some(RefVal::Arr(arr));
+            }
+            Instr::LoadForcing { forcing, out } => {
+                let fr = &prog.forcings[*forcing as usize];
+                let mut buf = vec![0.0f64; forcing_len(fr)];
+                load_forcing(
+                    fr,
+                    &compiled.forcing.borrow(),
+                    &compiled.declared_names,
+                    &mut buf,
+                );
+                slots[*out as usize] = Some(if fr.shape.is_empty() {
+                    RefVal::Scalar(buf[0])
+                } else {
+                    RefVal::Arr(
+                        ArrayD::from_shape_vec(IxDyn(&fr.shape[..]), buf)
+                            .expect("a forcing load fills its whole box"),
+                    )
+                });
             }
             Instr::Interp { table, x, y, out } => {
                 let tbl = &prog.interp_tables[*table as usize];
