@@ -153,15 +153,6 @@
       },
       {
         "family": "chemistry_grid",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": 1540,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
-        "phase": 2,
-        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
-      },
-      {
-        "family": "chemistry_grid",
         "gate": "speed",
         "n": 1000,
         "threads": "serial",
@@ -202,15 +193,6 @@
       },
       {
         "family": "prefix_scan",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": 7348,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..100000)",
-        "phase": 2,
-        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
-      },
-      {
-        "family": "prefix_scan",
         "gate": "speed",
         "n": 10000,
         "threads": "serial",
@@ -233,10 +215,10 @@
         "family": "scalar_chemistry",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": 143347,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..100000)",
+        "measured": 110200,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..100000): the document itself grows with N (one scalar ODE per state, about 320 bytes of JSON each), and the build's load-time checks, schema validation, template expansion, typed parse and compile stages each walk the whole document",
         "phase": 2,
-        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+        "provisional": "measured on a shared node: ccc0234 (20 cores, load average 9-14 during the run, nice 19), 2026-09-25"
       },
       {
         "family": "scalar_chemistry",
@@ -262,19 +244,10 @@
         "family": "source_receptor",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": 3289,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..3162)",
+        "measured": 46,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..3162): the fused contraction box is N x N and its run schedule has one run per row (the broadcast operand restarts every row), so the schedule is O(N) at about 20 ns a row per build of it. Measured as the minimum of 7 builds per size; the adapter's single build is below its noise at these sizes",
         "phase": 2,
-        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
-      },
-      {
-        "family": "stencil_1d",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": 1292,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
-        "phase": 2,
-        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
+        "provisional": "measured on a shared node: ccc0234 (20 cores, load average 9-14 during the run, nice 19), 2026-09-25"
       },
       {
         "family": "stencil_1d",
@@ -288,30 +261,12 @@
       },
       {
         "family": "stencil_2d",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": 1158,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
-        "phase": 2,
-        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
-      },
-      {
-        "family": "stencil_2d",
         "gate": "speed",
         "n": 1000000,
         "threads": "serial",
         "measured": 2.6057,
         "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
         "phase": 5,
-        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
-      },
-      {
-        "family": "stencil_3d",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": 1266,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
-        "phase": 2,
         "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
       },
       {
@@ -336,30 +291,12 @@
       },
       {
         "family": "stencil_4d",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": 1098,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..100000)",
-        "phase": 2,
-        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
-      },
-      {
-        "family": "stencil_4d",
         "gate": "speed",
         "n": 1000000,
         "threads": "serial",
         "measured": 2.9886,
         "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
         "phase": 5,
-        "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
-      },
-      {
-        "family": "transport_3d",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": 940,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000)",
-        "phase": 2,
         "provisional": "measured on a shared, loaded node: shared node ccc0234 (20 cores, load average 20-25 during the run, nice 19), 2026-09-24"
       },
       {
