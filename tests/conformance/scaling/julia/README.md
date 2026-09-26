@@ -19,7 +19,8 @@ adapter develops the local package into it and instantiates it on first use.
 ```bash
 # The PR sizes (what CI runs), serially, deterministic gates only:
 julia --project=pkg/EarthSciAST.jl/scripts/scaling_env tests/conformance/scaling/julia/adapter.jl \
-    --docs tests/conformance/scaling/fixtures --output julia-serial.json --budget 0 --interpreter-max-states 0
+    --docs tests/conformance/scaling/fixtures --output julia-serial.json --budget 0 --interpreter-max-states 0 \
+    --in-process
 python3 tests/conformance/scaling/check.py julia-serial.json --gates deterministic --require pr
 
 # Any generated tree, threaded:

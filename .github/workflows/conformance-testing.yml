@@ -354,8 +354,11 @@ jobs:
       # (`--budget 0`) and skips the interpreter oracle, which the
       # compiler-agreement tier already covers. One leg, like the goldens:
       # code size and allocation are properties of the emitted program, not of
-      # the Julia version. `!cancelled()` so a red suite above still reports
-      # this gate.
+      # the Julia version. `--in-process` measures in this one process: the
+      # PR sizes fit any runner, and a watched child per family (the
+      # scheduled sweep's guard against a document that outgrows the runner)
+      # would load the package once per family. `!cancelled()` so a red suite
+      # above still reports this gate.
       - name: Scaling tier, deterministic gates (Julia native)
         if: ${{ !cancelled() && matrix.julia-version == '1.12' }}
         working-directory: ${{ github.workspace }}
@@ -363,7 +366,7 @@ jobs:
           julia --project=pkg/EarthSciAST.jl/scripts/scaling_env \
             tests/conformance/scaling/julia/adapter.jl \
             --docs tests/conformance/scaling/fixtures --output scaling-julia-serial.json \
-            --budget 0 --interpreter-max-states 0
+            --budget 0 --interpreter-max-states 0 --in-process
           python3 tests/conformance/scaling/check.py scaling-julia-serial.json \
             --gates deterministic --require pr
 
