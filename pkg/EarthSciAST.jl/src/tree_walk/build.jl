@@ -4547,6 +4547,17 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # With the loop form on offer the affine tier goes first, and the nest is
     # what a decline leaves (the block after it).
     nest_first = retire_loop && loop_preempts_affine && areduce0 === nothing
+    # A LONG contraction — as many terms as the loop floor, the length at which
+    # a reduction is a loop candidate — never unrolls in the in-place build.
+    # The unroll writes one term per contracted index into the kernel, so its
+    # code and its compile grow with the contraction; such a contraction is the
+    # affine tier's run-time fold or the whole-array nest's, and when neither
+    # takes it a strict compiler refuses it by name below rather than handing
+    # it to an unroll (the affine tier's, or the per-cell build's, which
+    # unrolls it into every output cell).
+    long_contraction = !rhs_list_compiled && !_stencil_disabled() &&
+        !isempty(contract_names) && all(c -> c !== nothing, contract_const) &&
+        prod(length(c) for c in contract_const) >= _contraction_loop_min()
 
     # Affine polyhedral build (ess-affine, stencil_affine.jl): O(#structural
     # groups), producing `_AccKernel`s that resolve gathers at runtime. This is the
@@ -4636,7 +4647,8 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
             scan !== nothing ?
                 _sub_preserving(rhs_body,
                     Dict{String,ASTExpr}(scan[3] => VarExpr(idx_names[scan[1]]))) :
-            (agg_gates === nothing && all(c -> c !== nothing, contract_const)) ?
+            (agg_gates === nothing && all(c -> c !== nothing, contract_const) &&
+             !long_contraction) ?
                 _unrolled_contraction_body(rhs_body, contract_names, contract_const,
                                            agg_filter, rhs_oplus, rhs_zerobar) :
             nothing
@@ -4769,18 +4781,21 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         end
     end
 
-    # A retired loop candidate that neither the nest nor the affine tier took has
-    # only the per-cell loop left, which is interpreted on every call: a strict
-    # compiler refuses it by name. (A non-strict build keeps the loop, filed as
-    # `:interpreter` by the routing table.) The first output cell is built
-    # first, the way the interpreter builds every cell — unrolled — so that a
-    # body no form can build (an out-of-range const gather, an undeclared name)
-    # raises the document's own error rather than a refusal. Unrolling costs
-    # a tree per term, so past `_REFUSAL_DIAGNOSTIC_TERMS` terms only the first
-    # and last value of each contracted index are built: an undeclared name
-    # shows in any term, and an affine gather is out of range at an end if
-    # anywhere.
-    if retire_loop && _compiler_is_strict()
+    # A contraction the per-cell tier would run interpreted or unrolled has no
+    # compiled form left: a strict compiler refuses it by name. Two routes lead
+    # here. A retired loop candidate that neither the nest nor the affine tier
+    # took has only the per-cell contraction loop, interpreted on every call (a
+    # non-strict build keeps the loop, filed as `:interpreter` by the routing
+    # table). Any other long contraction (see `long_contraction`) has only the
+    # per-cell build, which unrolls it into every output cell. The first output
+    # cell is built first, the way the interpreter builds every cell — unrolled
+    # — so that a body no form can build (an out-of-range const gather, an
+    # undeclared name) raises the document's own error rather than a refusal.
+    # Unrolling costs a tree per term, so past `_REFUSAL_DIAGNOSTIC_TERMS` terms
+    # only the first and last value of each contracted index are built: an
+    # undeclared name shows in any term, and an affine gather is out of range
+    # at an end if anywhere.
+    if (retire_loop || long_contraction) && _compiler_is_strict()
         if all(!isempty, range_iters)
             diag_const = prod(length(c) for c in contract_const) <= _REFUSAL_DIAGNOSTIC_TERMS ?
                 contract_const : [unique!([first(c), last(c)]) for c in contract_const]
@@ -4795,13 +4810,20 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
                 param_sym_set=param_sym_set, reg_funcs=reg_funcs,
                 contraction_loop=false, pooled_cells=Tuple{Int,_Node}[])
         end
+        nterms = prod(length(c) for c in contract_const)
         _refuse_rule(
             _faq_debug_label(lhs_body, idx_names, range_iters),
-            "this constant-bound contraction declined the whole-array contraction " *
-            "tier and the affine tier, and the only tier left is the per-cell " *
-            "contraction loop, whose cells the right-hand side walks as trees " *
-            "(`_eval_node`, one per output cell) on every call. Build with " *
-            "compiler=:interpreter to run it. " * _ONE_CELL_NOTE)
+            retire_loop ?
+                "this constant-bound contraction declined the whole-array contraction " *
+                "tier and the affine tier, and the only tier left is the per-cell " *
+                "contraction loop, whose cells the right-hand side walks as trees " *
+                "(`_eval_node`, one per output cell) on every call. Build with " *
+                "compiler=:interpreter to run it. " * _ONE_CELL_NOTE :
+                "this contraction of $(nterms) terms declined the affine tier's " *
+                "run-time fold and the whole-array contraction tier, and the only " *
+                "tier left is the per-cell build, which unrolls it into every output " *
+                "cell's code, so that code grows with the contraction. Build with " *
+                "compiler=:interpreter to run it. " * _ONE_CELL_NOTE)
     end
     # Anything the affine build cannot model takes the per-cell fallback, whose
     # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,

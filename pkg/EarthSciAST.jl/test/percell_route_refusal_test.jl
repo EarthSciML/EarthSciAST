@@ -490,6 +490,73 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         @test code_of(e_oob) == "E_TREEWALK_CONSTARRAY_OOB"
     end
 
+    # A long contraction that is NO per-cell-loop candidate — it carries a
+    # filter, which the loop's gate does not admit — and that neither the affine
+    # tier's run-time fold (an inline `const` at a loop subscript) nor the
+    # whole-array nest (a live forcing read) takes. What is left is the per-cell
+    # build, which unrolls the contraction into every output cell, so a strict
+    # compiler refuses it; and the affine tier's own unroll is not offered it
+    # either: the build's lowerings do not grow with the contraction.
+    @testset "a long contraction nothing compiles once is refused, not unrolled" begin
+        filt_doc(K) = Dict{String,Any}("esm" => "1.1.0",
+            "metadata" => Dict("name" => "pr_long_filtered_contraction"),
+            "models" => Dict("R" => Dict{String,Any}(
+                "variables" => Dict(
+                    "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
+                    "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
+                "equations" => Any[Dict(
+                    "lhs" => Dict("op" => "faq", "args" => Any[],
+                        "output_idx" => Any["a", "b", "c", "d"],
+                        "ranges" => Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d")),
+                        "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
+                            "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
+                    "rhs" => Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+                        "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
+                        "ranges" => merge(
+                            Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d")),
+                            Dict{String,Any}("k" => Any[1, K])),
+                        "filter" => Dict("op" => ">=", "args" => Any["k", 2]),
+                        "expr" => Dict("op" => "*", "args" => Any[
+                            Dict("op" => "index", "args" => Any[
+                                Dict("op" => "const", "args" => Any[],
+                                     "value" => collect(1.0:K)), "k"]),
+                            Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])])))])))
+        function build(K, compiler)
+            _PR._bench_reset!()
+            _PR._BENCH_ON[] = true
+            try
+                r = try
+                    withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
+                        _PR._build_evaluator(filt_doc(K);
+                            initial_conditions = Dict("out[1,1,1,1]" => 0.0),
+                            param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)),
+                            compiler = compiler)
+                    end
+                catch err
+                    err
+                end
+                return r, _PR._BENCH_COMPILE_CALLS[]
+            finally
+                _PR._BENCH_ON[] = false
+            end
+        end
+        e_short, n_short = build(8, :native)
+        @test e_short isa _PR.TreeWalkError &&
+              e_short.code == _PR.ERROR_CODES.COMPILER_REFUSED_RULE &&
+              occursin("per-cell build, which unrolls", e_short.detail) &&
+              occursin(_PR._ONE_CELL_NOTE, e_short.detail)
+        e_long, n_long = build(100_000, :native)
+        @test e_long isa _PR.TreeWalkError &&
+              e_long.code == _PR.ERROR_CODES.COMPILER_REFUSED_RULE &&
+              occursin("per-cell build, which unrolls", e_long.detail)
+        # The ends-only diagnostic build: the refusal lowers as little at
+        # 10^5 terms as at 8.
+        @test n_long <= n_short
+        (f!, u0, p, _, vm), _ = build(8, :interpreter)
+        du = similar(u0); f!(du, u0, p, 0.0)
+        @test du[vm["out[1,1,1,1]"]] == 3.0 * sum(2.0:8.0)
+    end
+
     @testset "setup materializers: an out-of-range gather, an undeclared name" begin
         native(f) = _PR._with_compiler_plan(f, _PR._compiler_plan(:native))
         interp(f) = _PR._with_compiler_plan(f, _PR._compiler_plan(:interpreter))
