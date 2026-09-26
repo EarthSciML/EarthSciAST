@@ -231,6 +231,32 @@ pub const INLINE_TIER_DOCS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+macro_rules! corpus_doc {
+    ($path:literal) => {
+        ($path, include_str!(concat!("../../../../tests/", $path)))
+    };
+}
+
+/// `(path under tests/, document)` for the corpus documents whose geometry
+/// (`polygon_intersection_area`, a build-time `intersect_polygon` ring) the
+/// tape lowers: native must build each one, and agree with the interpreter on
+/// the build-time fields and the right-hand side.
+pub const GEOMETRY_DOCS: &[(&str, &str)] = &[
+    corpus_doc!("conformance/build_once_spatial_field/fixtures/build_once_spatial_ode.esm"),
+    corpus_doc!("conformance/expression_templates/scalar_field_param/expanded.esm"),
+    corpus_doc!("conformance/expression_templates/scalar_field_param/fixture.esm"),
+    corpus_doc!("conformance/pushdown/fixtures/pushdown_polygon_area.esm"),
+    corpus_doc!("coupling/cross_domain_coupling.esm"),
+    corpus_doc!("coupling/interfaces.esm"),
+    corpus_doc!("valid/geometry/conservative_regrid_assembly.esm"),
+    corpus_doc!("valid/geometry/intersect_polygon_clip_area.esm"),
+    corpus_doc!("valid/geometry/intersect_polygon_planar_area.esm"),
+    corpus_doc!("valid/geometry/intersect_polygon_planar_ode.esm"),
+    corpus_doc!("valid/geometry/polygon_intersection_area_padded_ring.esm"),
+    corpus_doc!("valid/geometry/polygon_intersection_area_planar.esm"),
+    corpus_doc!("valid/wildfire_atmosphere_ocean.esm"),
+];
+
 fn options(compiler: Compiler, model: Option<&str>) -> ProblemOptions {
     ProblemOptions {
         compiler: Some(compiler),
@@ -427,5 +453,53 @@ pub fn check_inline_tier_doc(id: &str, model: &str, text: &str) {
                 is.time[i]
             );
         }
+    }
+}
+
+/// Native builds one geometry document with no rule off the tape, and agrees
+/// with the interpreter bit for bit on every build-time field and on the
+/// right-hand side at one state, with the right-hand side forced on.
+pub fn check_geometry_doc(id: &str, text: &str) {
+    let doc: Value = serde_json::from_str(text).expect("the document parses");
+    let interp = esm_problem(&doc, (0.0, 1.0), options(Compiler::Interpreter, None))
+        .unwrap_or_else(|e| panic!("{id}: the interpreter does not build it: {e}"));
+    let native = esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None))
+        .unwrap_or_else(|e| panic!("{id}: native does not build it: {e}"));
+    let mut names: Vec<&String> = interp.observed_fields().keys().collect();
+    names.sort();
+    let mut native_names: Vec<&String> = native.observed_fields().keys().collect();
+    native_names.sort();
+    assert_eq!(names, native_names, "{id}: build-time field names");
+    for name in names {
+        let a: Vec<f64> = interp.observed_fields()[name].iter().copied().collect();
+        let b: Vec<f64> = native.observed_fields()[name].iter().copied().collect();
+        if let Some((i, x, y)) = first_bit_difference(&a, &b) {
+            panic!("{id}: build-time field {name}[{i}]: interpreter {x}, native {y}");
+        }
+    }
+    let (Some(nc), Some(ic)) = (native.debug_array_compiled(), interp.debug_array_compiled())
+    else {
+        return;
+    };
+    assert_eq!(
+        nc.state_variable_names(),
+        ic.state_variable_names(),
+        "{id}: state order"
+    );
+    let state: Vec<f64> = (0..nc.state_variable_names().len())
+        .map(|p| 1.0 + 0.1 * (0.37 * p as f64).sin())
+        .collect();
+    let params = nc.debug_resolve_params(native.p());
+    let mut dy = vec![0.0f64; state.len()];
+    let mut scratch = nc.debug_new_scratch_taped();
+    let mut stats = RhsStats::default();
+    nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
+    assert_eq!(stats.fallback_rules, 0, "{id}: a rule left the tape");
+    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p(), true);
+    if let Some((i, a, b)) = first_bit_difference(&dy, &idy) {
+        panic!(
+            "{id}: native dy differs from the interpreter's at {} ({a} vs {b})",
+            nc.state_variable_names()[i]
+        );
     }
 }

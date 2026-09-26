@@ -51,12 +51,6 @@
       "reason": "[continuous] makearray: region value box does not match the region"
     },
     {
-      "path": "tests/conformance/build_once_spatial_field/fixtures/build_once_spatial_ode.esm",
-      "code": "compiler_refused_rule",
-      "rule": "area",
-      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
-    },
-    {
       "path": "tests/conformance/const_array_gather_bounds/fixtures/inline_1d_index_zero.esm",
       "code": "compiler_refused_rule",
       "rule": "g",
@@ -153,18 +147,6 @@
       "reason": "[continuous] makearray: region value box does not match the region"
     },
     {
-      "path": "tests/conformance/expression_templates/scalar_field_param/expanded.esm",
-      "code": "compiler_refused_rule",
-      "rule": "area_planar",
-      "reason": "[const] wholesale: unsupported op `polygon_intersection_area`"
-    },
-    {
-      "path": "tests/conformance/expression_templates/scalar_field_param/fixture.esm",
-      "code": "compiler_refused_rule",
-      "rule": "area_planar",
-      "reason": "[const] wholesale: unsupported op `polygon_intersection_area`"
-    },
-    {
       "path": "tests/conformance/operator_compose_merge/fixtures/owner_rename_state_wins_observed_first.esm",
       "code": "compiler_refused_rule",
       "rule": "Sink.O3",
@@ -183,40 +165,10 @@
       "reason": "[const] variable: unresolved symbol (forcing/loop-bind?): ISRM.emis_lat"
     },
     {
-      "path": "tests/conformance/pushdown/fixtures/pushdown_polygon_area.esm",
-      "code": "compiler_refused_rule",
-      "rule": "Binned.E_PM25",
-      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
-    },
-    {
       "path": "tests/conformance/refresh/fixtures/coupled_refresh_regrid.esm",
       "code": "compiler_refused_rule",
       "rule": "scale_tgt",
       "reason": "[const] variable: unresolved symbol (forcing/loop-bind?): scale_src"
-    },
-    {
-      "path": "tests/conformance/scaling/fixtures/regrid/regrid_N100.esm",
-      "code": "compiler_refused_rule",
-      "rule": "A_ij",
-      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
-    },
-    {
-      "path": "tests/conformance/scaling/fixtures/regrid/regrid_N1000.esm",
-      "code": "compiler_refused_rule",
-      "rule": "A_ij",
-      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
-    },
-    {
-      "path": "tests/conformance/scaling/fixtures/unstructured_gather/unstructured_gather_N100.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(u)",
-      "reason": "[continuous] index: axis 0 is neither an affine/wrap map of an unclaimed output symbol nor a constant select"
-    },
-    {
-      "path": "tests/conformance/scaling/fixtures/unstructured_gather/unstructured_gather_N1000.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(u)",
-      "reason": "[continuous] index: axis 0 is neither an affine/wrap map of an unclaimed output symbol nor a constant select"
     },
     {
       "path": "tests/conformance/shaped_observed_scalar_broadcast/fixtures/scalar_rhs_broadcast.esm",
@@ -235,18 +187,6 @@
       "code": "compiler_refused_rule",
       "rule": "D(WeatherModel.temperature)",
       "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `WeatherModel.external_temperature_forcing`"
-    },
-    {
-      "path": "tests/coupling/cross_domain_coupling.esm",
-      "code": "compiler_refused_rule",
-      "rule": "Ocean3D.rg_A",
-      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
-    },
-    {
-      "path": "tests/coupling/interfaces.esm",
-      "code": "compiler_refused_rule",
-      "rule": "LowerAtmosphere.rg_A",
-      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
     },
     {
       "path": "tests/fixtures/data_source_extent_scope/extent_axis_leaf.esm",
@@ -429,42 +369,6 @@
       "reason": "[continuous] contracted: non-static contraction dim (Ragged { offsets: \"parentMemberCount\", of: [\"i\"] })"
     },
     {
-      "path": "tests/valid/geometry/conservative_regrid_assembly.esm",
-      "code": "compiler_refused_rule",
-      "rule": "A_ij",
-      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
-    },
-    {
-      "path": "tests/valid/geometry/intersect_polygon_clip_area.esm",
-      "code": "compiler_refused_rule",
-      "rule": "clip",
-      "reason": "[const] wholesale: unsupported op `intersect_polygon`"
-    },
-    {
-      "path": "tests/valid/geometry/intersect_polygon_planar_area.esm",
-      "code": "compiler_refused_rule",
-      "rule": "clip",
-      "reason": "[const] wholesale: unsupported op `intersect_polygon`"
-    },
-    {
-      "path": "tests/valid/geometry/intersect_polygon_planar_ode.esm",
-      "code": "compiler_refused_rule",
-      "rule": "clip",
-      "reason": "[const] wholesale: unsupported op `intersect_polygon`"
-    },
-    {
-      "path": "tests/valid/geometry/polygon_intersection_area_padded_ring.esm",
-      "code": "compiler_refused_rule",
-      "rule": "overlap_area",
-      "reason": "[const] wholesale: unsupported op `polygon_intersection_area`"
-    },
-    {
-      "path": "tests/valid/geometry/polygon_intersection_area_planar.esm",
-      "code": "compiler_refused_rule",
-      "rule": "overlap_area",
-      "reason": "[const] wholesale: unsupported op `polygon_intersection_area`"
-    },
-    {
       "path": "tests/valid/makearray_empty_region_min_extent.esm",
       "code": "compiler_refused_rule",
       "rule": "D(c)",
@@ -487,12 +391,6 @@
       "code": "compiler_refused_rule",
       "rule": "D(system_energy)",
       "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `EarthSystem.Ocean.Surface.sst`"
-    },
-    {
-      "path": "tests/valid/wildfire_atmosphere_ocean.esm",
-      "code": "compiler_refused_rule",
-      "rule": "OceanDynamics.rg_A",
-      "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
     }
   ]
 }

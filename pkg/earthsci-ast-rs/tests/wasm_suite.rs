@@ -335,6 +335,15 @@ scaling_family!(scaling_regrid, "regrid");
 scaling_family!(scaling_unstructured_gather, "unstructured_gather");
 scaling_family!(scaling_scalar_chemistry, "scalar_chemistry");
 
+/// The corpus geometry documents the tape lowers (`polygon_intersection_area`,
+/// a build-time `intersect_polygon` ring), native against the interpreter.
+#[wasm_bindgen_test]
+fn geometry_documents() {
+    for (id, text) in portable::GEOMETRY_DOCS {
+        portable::check_geometry_doc(id, text);
+    }
+}
+
 /// One wasm test per inline-test tier, over its documents.
 macro_rules! inline_tier {
     ($test:ident, $tier:literal) => {

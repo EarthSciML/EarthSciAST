@@ -37,6 +37,13 @@ scaling_family!(unstructured_gather);
 scaling_family!(scalar_chemistry);
 
 #[test]
+fn geometry_documents() {
+    for (id, text) in portable::GEOMETRY_DOCS {
+        portable::check_geometry_doc(id, text);
+    }
+}
+
+#[test]
 fn inline_test_tier_documents() {
     for (id, model, text) in portable::INLINE_TIER_DOCS {
         portable::check_inline_tier_doc(id, model, text);
