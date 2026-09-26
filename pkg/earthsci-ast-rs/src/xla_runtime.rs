@@ -109,7 +109,7 @@ use std::sync::OnceLock;
 use xla::{ArrayElement, Literal, PjRtBuffer, PjRtClient, PjRtLoadedExecutable, XlaBuilder};
 
 use crate::simulate_array::ArrayCompiled;
-use crate::simulate_array::tape::xla_emit::{self, EmittedRhs, XlaEmitError};
+use crate::simulate_array::tape::xla_emit::{self, EmittedRhs, ForcingFeed, XlaEmitError};
 
 /// Why a model has no compiled right-hand side.
 ///
@@ -235,6 +235,9 @@ pub struct CompiledRhs {
     params_len: usize,
     n_instrs: usize,
     platform: String,
+    /// The fourth argument of a program that reads the forcing buffer, packed
+    /// from the model's live buffer on each evaluation.
+    forcing: Option<ForcingFeed>,
 }
 
 impl CompiledRhs {
@@ -246,7 +249,8 @@ impl CompiledRhs {
 
     /// Compile an already-emitted computation (the seam a test uses when it
     /// wants the HLO as well as the numbers).
-    pub fn from_emitted(emitted: EmittedRhs) -> Result<Self, CompileRhsError> {
+    pub fn from_emitted(mut emitted: EmittedRhs) -> Result<Self, CompileRhsError> {
+        let forcing = emitted.take_forcing();
         let client = client().map_err(CompileRhsError::Runtime)?;
         let exe = client
             .compile(emitted.computation())
@@ -257,6 +261,7 @@ impl CompiledRhs {
             params_len: emitted.params_len(),
             n_instrs: emitted.n_instrs(),
             platform: client.platform_name(),
+            forcing,
         })
     }
 
@@ -309,7 +314,12 @@ impl CompiledRhs {
             )));
         }
         let pv = self.check_and_pad(state, params)?;
-        let args = [Literal::vec1(state), Literal::vec1(&pv), Literal::scalar(t)];
+        let mut args = vec![Literal::vec1(state), Literal::vec1(&pv), Literal::scalar(t)];
+        // The forcing is read afresh on every call, as the tape's CONST and
+        // SEGMENT sections would read it on the scratch the call runs on.
+        if let Some(feed) = &self.forcing {
+            args.push(Literal::vec1(&feed.pack()));
+        }
         let result = self
             .exe
             .execute::<Literal>(&args)
@@ -352,6 +362,13 @@ impl CompiledRhs {
         p: &PjRtBuffer,
         t: &PjRtBuffer,
     ) -> Result<Vec<f64>, CompileRhsError> {
+        if self.forcing.is_some() {
+            return Err(CompileRhsError::Runtime(
+                "this program reads the forcing buffer and takes a fourth argument, which \
+                 this three-buffer seam does not supply; use `eval` or `on_device`"
+                    .into(),
+            ));
+        }
         let out = self
             .exe
             .execute_b(&[u, p, t])
@@ -391,6 +408,9 @@ pub struct DeviceRhs<'a> {
     rhs: &'a CompiledRhs,
     u: PjRtBuffer,
     p: PjRtBuffer,
+    /// The forcing argument, packed and uploaded once with `p`: a forcing
+    /// refresh needs a new `DeviceRhs`, as a new parameter vector does.
+    f: Option<PjRtBuffer>,
     /// Result of the most recent [`eval_at`](Self::eval_at), still on the
     /// device. `None` before the first evaluation.
     du: Option<PjRtBuffer>,
@@ -415,10 +435,19 @@ impl CompiledRhs {
         let p = client
             .buffer_from_host_buffer(&pv, &[self.params_len], None)
             .map_err(|e| CompileRhsError::Runtime(format!("upload of p failed: {e}")))?;
+        let f = match &self.forcing {
+            None => None,
+            Some(feed) => Some(
+                client
+                    .buffer_from_host_buffer(&feed.pack(), &[feed.len()], None)
+                    .map_err(|e| CompileRhsError::Runtime(format!("upload of f failed: {e}")))?,
+            ),
+        };
         Ok(DeviceRhs {
             rhs: self,
             u,
             p,
+            f,
             du: None,
             stepper: None,
         })
@@ -481,11 +510,11 @@ impl DeviceRhs<'_> {
         let tb = client
             .buffer_from_host_buffer(&[t], &[], None)
             .map_err(|e| CompileRhsError::Runtime(format!("upload of t failed: {e}")))?;
-        let out = self
-            .rhs
-            .exe
-            .execute_b(&[&self.u, &self.p, &tb])
-            .map_err(|e| CompileRhsError::Runtime(format!("execute failed: {e}")))?;
+        let out = match &self.f {
+            None => self.rhs.exe.execute_b(&[&self.u, &self.p, &tb]),
+            Some(f) => self.rhs.exe.execute_b(&[&self.u, &self.p, &tb, f]),
+        }
+        .map_err(|e| CompileRhsError::Runtime(format!("execute failed: {e}")))?;
         self.du = Some(take_single_output(out, "rhs")?);
         Ok(())
     }

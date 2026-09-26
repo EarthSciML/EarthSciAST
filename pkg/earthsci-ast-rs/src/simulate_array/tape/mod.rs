@@ -25,7 +25,8 @@
 //! [`Instr::Copy`] / [`Instr::Region`] / [`Instr::Fill`] / [`Instr::Ramp`];
 //! control flow is the one structured [`Instr::JmpIfZero`]; and the
 //! boundaries with the rest of the runtime are [`Instr::Export`],
-//! [`Instr::DyWrite`] and [`Instr::Fallback`].
+//! [`Instr::DyWrite`], [`Instr::LoadForcing`] (the forcing buffer, read in the
+//! CONST or SEGMENT section) and [`Instr::Fallback`].
 //!
 //! Two instructions carry data or a fold rather than a per-element map, and
 //! both exist so a whole downstream cone of rules stops falling back:
