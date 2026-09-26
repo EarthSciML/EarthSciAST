@@ -103,9 +103,7 @@ impl KnownNames for HashMap<String, usize> {
 /// Whether `key` is one of `name`'s [`dotted_suffixes`]: what follows one of
 /// its `.` separators.
 pub(crate) fn is_dotted_suffix(name: &str, key: &str) -> bool {
-    name.len() > key.len()
-        && name.ends_with(key)
-        && name.as_bytes()[name.len() - key.len() - 1] == b'.'
+    name.len() > key.len() && dotted_suffixes(name).any(|s| s == key)
 }
 
 /// Rewrite each caller override key onto the build-resolved name it designates
