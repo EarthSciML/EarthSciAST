@@ -5,6 +5,7 @@
 //! slab coloring entirely (per-slot owned buffers) so that a coloring bug
 //! cannot mask a lowering bug, and it clones freely.
 
+use super::super::eval::clip_area_value;
 use super::super::*;
 use super::exec::{eval_micro_op, run_rhs_oracle};
 use super::ir::*;
@@ -309,6 +310,83 @@ pub(super) fn run_reference(
                 }
                 slots[*out as usize] = Some(RefVal::Arr(o));
             }
+            Instr::PolyArea { a, b, geom, out } => {
+                // Every element clipped DENSELY, with no broad phase: the
+                // definition the fast executor's candidate enumeration is
+                // pinned against.
+                let spec = &prog.geoms[*geom as usize];
+                let av = resolve_src(prog, &slots, &state_arrays, &obs, a);
+                let bv = resolve_src(prog, &slots, &state_arrays, &obs, b);
+                assert_eq!(av.shape(), &spec.a.src_shape[..], "PolyArea table a");
+                assert_eq!(bv.shape(), &spec.b.src_shape[..], "PolyArea table b");
+                let ring = |t: &ArrayD<f64>, r: &RingRef, pos: &[usize]| -> Vec<(f64, f64)> {
+                    let mut view = t.view();
+                    for s in &r.sel {
+                        let i = match *s {
+                            RingSel::Fixed(i) => i,
+                            RingSel::Axis { axis, off } => {
+                                (pos[axis as usize] as i64 + off) as usize
+                            }
+                        };
+                        view = view.index_axis_move(Axis(0), i);
+                    }
+                    (0..view.shape()[0])
+                        .map(|v| (view[IxDyn(&[v, 0])], view[IxDyn(&[v, 1])]))
+                        .collect()
+                };
+                let desc = &prog.slots[*out as usize];
+                let val = if desc.scalar {
+                    let (ra, rb) = (ring(&av, &spec.a, &[]), ring(&bv, &spec.b, &[]));
+                    RefVal::Scalar(clip_area_value(&ra, &rb, spec.manifold))
+                } else {
+                    let mut o = ArrayD::<f64>::zeros(IxDyn(&desc.shape[..]));
+                    for (pos, y) in o.indexed_iter_mut() {
+                        let pos = ndarray::Dimension::slice(&pos).to_vec();
+                        let pos = &pos[..];
+                        let (ra, rb) = (ring(&av, &spec.a, pos), ring(&bv, &spec.b, pos));
+                        *y = clip_area_value(&ra, &rb, spec.manifold);
+                    }
+                    RefVal::Arr(o)
+                };
+                slots[*out as usize] = Some(val);
+            }
+            Instr::IndexGather {
+                src,
+                idx,
+                spec,
+                out,
+            } => {
+                let spec = &prog.index_gathers[*spec as usize];
+                let sv = resolve_src(prog, &slots, &state_arrays, &obs, src);
+                assert_eq!(sv.shape(), &spec.src_shape[..], "IndexGather source box");
+                let iv = resolve(prog, &slots, &state_arrays, &obs, params, t, idx);
+                let iv = to_shape(&iv, &spec.shape);
+                let mut o = ArrayD::<f64>::zeros(IxDyn(&spec.shape[..]));
+                let mut at: Vec<usize> = vec![0; spec.axes.len()];
+                for (pos, y) in o.indexed_iter_mut() {
+                    let pos = ndarray::Dimension::slice(&pos).to_vec();
+                    let pos = &pos[..];
+                    let mut ghost = false;
+                    for (d, ax) in spec.axes.iter().enumerate() {
+                        at[d] = match *ax {
+                            GatherAxis::Fixed(i) => i,
+                            GatherAxis::Affine { axis, off } => {
+                                (pos[axis as usize] as i64 + off) as usize
+                            }
+                            GatherAxis::Data => match data_subscript(iv[IxDyn(pos)], sv.shape()[d])
+                            {
+                                Some(p) => p,
+                                None => {
+                                    ghost = true;
+                                    0
+                                }
+                            },
+                        };
+                    }
+                    *y = if ghost { 0.0 } else { sv[IxDyn(&at)] };
+                }
+                slots[*out as usize] = Some(RefVal::Arr(o));
+            }
             Instr::JmpIfZero {
                 cond,
                 n_true,
@@ -432,7 +510,15 @@ pub(super) fn run_reference(
                                 MRef::In(i) => {
                                     let inp = &fs.inputs[*i as usize];
                                     match inp.shifted_ix {
-                                        None => flats[*i as usize][at],
+                                        None => match inp.index {
+                                            Some((by, n)) => {
+                                                match data_subscript(flats[by as usize][at], n) {
+                                                    Some(p) => flats[*i as usize][p],
+                                                    None => 0.0,
+                                                }
+                                            }
+                                            None => flats[*i as usize][at],
+                                        },
                                         Some(s) => {
                                             let o = run.in_off[s as usize];
                                             if o == GHOST_OFF {

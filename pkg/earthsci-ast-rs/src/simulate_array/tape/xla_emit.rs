@@ -118,6 +118,17 @@ enum CountCmp {
     AxisLtQuery,
 }
 
+/// Row-major strides (elements) of `shape` — the layout every slot value has.
+fn rm_strides(shape: &[usize]) -> Vec<i64> {
+    let mut st = vec![0i64; shape.len()];
+    let mut acc = 1i64;
+    for d in (0..shape.len()).rev() {
+        st[d] = acc;
+        acc *= shape[d] as i64;
+    }
+    st
+}
+
 /// A lowered right-hand side: the computation plus the shapes its caller has
 /// to feed it.
 pub struct EmittedRhs {
@@ -1060,6 +1071,19 @@ impl<'a> Emitter<'a> {
                 let v = self.emit_interp(tbl, &dims, &xv, yv.as_ref())?;
                 self.define(*out, v);
             }
+            Instr::PolyArea { a, b, geom, out } => {
+                let v = self.emit_poly_area(a, b, *geom, *out)?;
+                self.define(*out, v);
+            }
+            Instr::IndexGather {
+                src,
+                idx,
+                spec,
+                out,
+            } => {
+                let v = self.emit_index_gather(src, idx, *spec)?;
+                self.define(*out, v);
+            }
             Instr::Fallback { rule } => {
                 let info = &self.prog.rules[*rule as usize];
                 let reason = match &info.status {
@@ -1327,6 +1351,156 @@ impl<'a> Emitter<'a> {
         }
         let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
         self.wrap(c.broadcast(&d), "interp: broadcast s32 constant")
+    }
+
+    // -- geometry ----------------------------------------------------------
+
+    /// Lower one [`Instr::PolyArea`] by evaluating it HERE, at emit time,
+    /// into a constant.
+    ///
+    /// A polygon clip has no expression in XLA's operation set, so the
+    /// emitter can take the instruction only when both ring tables are
+    /// compile-time constants: slots an [`Instr::ConstArray`] defines. It then
+    /// runs the slab executor's own [`super::geom::run_poly_area`] over those
+    /// literals (broad phase included) and emits the areas as a literal, so
+    /// the compiled program reads the same `f64`s the slab executor computes.
+    /// A table that depends on a parameter, the state or an observed is a
+    /// named refusal.
+    fn emit_poly_area(&self, a: &SrcRef, b: &SrcRef, geom: u32, out: SlotId) -> R<XlaOp> {
+        let spec = &self.prog.geoms[geom as usize];
+        let ta = self.const_table(a)?;
+        let tb = self.const_table(b)?;
+        let (sa, sb) = (rm_strides(&ta.shape), rm_strides(&tb.shape));
+        let dims = self.out_dims(out);
+        let mut areas = vec![0.0f64; dims.iter().product::<usize>().max(1)];
+        unsafe {
+            super::geom::run_poly_area(
+                spec,
+                &super::geom::RingTable {
+                    ptr: ta.values.as_ptr(),
+                    shape: &ta.shape,
+                    strides: &sa,
+                },
+                &super::geom::RingTable {
+                    ptr: tb.values.as_ptr(),
+                    shape: &tb.shape,
+                    strides: &sb,
+                },
+                areas.as_mut_ptr(),
+            );
+        }
+        let flat = self.wrap(self.b.constant_r1(&areas[..]), "polygon area: literal")?;
+        let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+        self.wrap(flat.reshape(&d), "polygon area: reshape")
+    }
+
+    /// The literal an [`Instr::ConstArray`] stores into ring-table slot `s`,
+    /// or the refusal saying the table is not a compile-time constant.
+    fn const_table(&self, s: &SrcRef) -> R<&ConstArrayData> {
+        let not_const = || {
+            self.err(
+                "polygon_intersection_area: a ring table that is not a compile-time \
+                 constant (it depends on a parameter, the state or an observed) has no \
+                 lowering: XLA has no polygon clip",
+            )
+        };
+        let SrcRef::Slot(id) = s else {
+            return Err(not_const());
+        };
+        self.prog
+            .instrs
+            .iter()
+            .find_map(|i| match i {
+                Instr::ConstArray { data, out } if out == id => {
+                    Some(&self.prog.const_data[*data as usize])
+                }
+                _ => None,
+            })
+            .ok_or_else(not_const)
+    }
+
+    /// Lower one [`Instr::IndexGather`]: the subscript is rounded and
+    /// range-checked exactly as [`data_subscript`] does it (NaN reads as 0,
+    /// an out-of-range position as the zero ghost), each output element's
+    /// row-major source offset is built in `s64`, and one `take` over the
+    /// flattened source reads them.
+    fn emit_index_gather(&self, src: &SrcRef, idx: &Operand, spec: u32) -> R<XlaOp> {
+        let spec = &self.prog.index_gathers[spec as usize];
+        let s = self.src(src)?;
+        let have = self.dims(&s)?;
+        if have != spec.src_shape.as_slice() {
+            return Err(self.err(format!(
+                "indexed gather source has shape {have:?} but the spec expects {:?}",
+                &spec.src_shape[..]
+            )));
+        }
+        let dims: Vec<usize> = spec.shape.to_vec();
+        let d64: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+        let total: i64 = spec.src_shape.iter().product::<usize>() as i64;
+        let flat = self.wrap(s.reshape(&[total]), "indexed gather: flatten source")?;
+        let strides = rm_strides(&spec.src_shape);
+        let data_d = spec.data_axis();
+        let n = spec.src_shape[data_d] as f64;
+
+        let iv = self.operand(idx)?;
+        let iv = self.to_shape(&iv, &dims)?;
+        let r = self.wrap(iv.round(), "indexed gather: round")?;
+        let nan = self.wrap(r.ne(&r), "indexed gather: isnan")?;
+        let zero = self.splat(0.0, &dims)?;
+        let r = self.wrap(nan.select(&zero, &r), "indexed gather: NaN reads as 0")?;
+        // Pinned to [0, n + 1] before the integer convert, so every value
+        // converts exactly and the out-of-range ones stay out of range.
+        let top = self.splat(n + 1.0, &dims)?;
+        let r = self.wrap(
+            r.max(&zero).and_then(|x| x.min(&top)),
+            "indexed gather: pin",
+        )?;
+        let one_based = self.wrap(r.convert(PrimitiveType::S64), "indexed gather: convert")?;
+        let splat_i = |v: i64| -> R<XlaOp> {
+            let c = self.ci(v)?;
+            self.to_shape(&c, &dims)
+        };
+        let (one, zero_i, n_i, last_i) = (
+            splat_i(1)?,
+            splat_i(0)?,
+            splat_i(n as i64)?,
+            splat_i(n as i64 - 1)?,
+        );
+        let valid = self.wrap(
+            one_based
+                .ge(&one)
+                .and_then(|lo| one_based.le(&n_i).and_then(|hi| lo.and(&hi))),
+            "indexed gather: in range",
+        )?;
+        let pos = self.wrap(
+            one_based
+                .sub_(&one)
+                .and_then(|p| p.max(&zero_i))
+                .and_then(|p| p.min(&last_i)),
+            "indexed gather: position",
+        )?;
+        let stride_data = splat_i(strides[data_d])?;
+        let mut off = self.wrap(pos.mul_(&stride_data), "indexed gather: data offset")?;
+        for (d, ax) in spec.axes.iter().enumerate() {
+            let term = match *ax {
+                GatherAxis::Data => continue,
+                GatherAxis::Fixed(i) => splat_i(i as i64 * strides[d])?,
+                GatherAxis::Affine { axis, off: k } => {
+                    let io = self.wrap(
+                        self.b.iota(ElementType::S64, &d64, axis as i64),
+                        "indexed gather: iota",
+                    )?;
+                    let (k, st) = (splat_i(k)?, splat_i(strides[d])?);
+                    self.wrap(
+                        io.add_(&k).and_then(|x| x.mul_(&st)),
+                        "indexed gather: affine offset",
+                    )?
+                }
+            };
+            off = self.wrap(off.add_(&term), "indexed gather: offset")?;
+        }
+        let g = self.wrap(flat.take(&off, 0), "indexed gather: take")?;
+        self.wrap(valid.select(&g, &zero), "indexed gather: ghost")
     }
 
     // -- gather ------------------------------------------------------------

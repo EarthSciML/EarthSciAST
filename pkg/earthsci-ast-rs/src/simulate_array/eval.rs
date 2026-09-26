@@ -2422,17 +2422,29 @@ pub(super) fn eval_polygon_intersection_area(node: &ExpressionNode, ctx: &mut Ev
     let Some((manifold, va, vb)) = eval_clip_operands(node, ctx) else {
         return Value::Scalar(f64::NAN);
     };
-    // Clip, then measure — the fused composition. The clip kernel returns the
-    // `n` distinct overlap vertices; `polygon_area`'s shoelace / spherical body
-    // reads the wrap edge `n→1` itself, so no explicit ring closure is needed
-    // here (and no derived ring is registered — the fused leaf exposes none).
-    match crate::geometry::intersect_polygon(&va, &vb, manifold)
+    Value::Scalar(clip_area_value(&va, &vb, manifold))
+}
+
+/// The value of one `polygon_intersection_area` of two `(lon, lat)` rings: the
+/// ONE definition the interpreter above and the tape's geometry instruction
+/// both call, so a compiled area is the interpreter's by shared code.
+///
+/// Clip, then measure — the fused composition. The clip kernel returns the `n`
+/// distinct overlap vertices; `polygon_area`'s shoelace / spherical body reads
+/// the wrap edge `n→1` itself, so no explicit ring closure is needed here (and
+/// no derived ring is registered — the fused leaf exposes none).
+pub(crate) fn clip_area_value(
+    va: &[(f64, f64)],
+    vb: &[(f64, f64)],
+    manifold: crate::geometry::Manifold,
+) -> f64 {
+    match crate::geometry::intersect_polygon(va, vb, manifold)
         .and_then(|ring| crate::geometry::polygon_area(&ring, manifold))
     {
-        Ok(area) => Value::Scalar(area),
+        Ok(area) => area,
         // A degenerate input ring or unavailable backend surfaces as NaN, the
         // same not-a-value sentinel the evaluator uses for unevaluable nodes.
-        Err(_) => Value::Scalar(f64::NAN),
+        Err(_) => f64::NAN,
     }
 }
 

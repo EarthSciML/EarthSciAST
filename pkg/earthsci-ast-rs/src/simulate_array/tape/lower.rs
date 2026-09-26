@@ -258,6 +258,13 @@ pub(crate) struct TapeBuilder<'m> {
     /// Inline array-literal payloads, one per lowered array-valued `const`.
     const_data: Vec<ConstArrayData>,
     interp_tables: Vec<InterpTable>,
+    geoms: Vec<GeomSpec>,
+    index_gathers: Vec<IndexGatherSpec>,
+    /// `(producer id, distinct-vertex count)` of every `intersect_polygon`
+    /// ring evaluated at build ([`TapeBuilder::lower_intersect_polygon`]):
+    /// the extent a `kind: "derived"` range over that ring has, which the
+    /// interpreter reads off its runtime ring registry (`derived_extent`).
+    rings: Vec<(String, i64)>,
     state_vars: Vec<StateRef>,
     /// Position in `state_vars`; narrowed to the IR's `u32` by [`tape_index`]
     /// where it is emitted.
@@ -296,6 +303,9 @@ struct RuleTxn {
     assemblies: usize,
     const_data: usize,
     interp_tables: usize,
+    geoms: usize,
+    index_gathers: usize,
+    rings: usize,
     dy_writes: usize,
     stream_lens: [usize; 3],
     hoist_journal: usize,
@@ -313,6 +323,8 @@ struct SubTxn {
     assemblies: usize,
     const_data: usize,
     interp_tables: usize,
+    geoms: usize,
+    index_gathers: usize,
     /// Per stream: `(chunk count, instructions in the last chunk)`.
     streams: [(usize, usize); 3],
     branch_len: Option<usize>,
@@ -351,6 +363,9 @@ impl<'m> TapeBuilder<'m> {
             assemblies: Vec::new(),
             const_data: Vec::new(),
             interp_tables: Vec::new(),
+            geoms: Vec::new(),
+            index_gathers: Vec::new(),
+            rings: Vec::new(),
             state_vars,
             state_ix,
             obs_reads: Vec::new(),
@@ -652,6 +667,12 @@ impl<'m> TapeBuilder<'m> {
     fn lower_op(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
         if node.op == "fn" {
             return self.lower_closed_fn(node, bx);
+        }
+        // The overlay has no geometry arm either (`vec_op_code` classifies it
+        // `Unsupported`), so the reference here is the per-cell oracle's
+        // `eval_polygon_intersection_area`, called on each cell's two rings.
+        if node.op == "polygon_intersection_area" {
+            return self.lower_poly_area(node, Some(bx));
         }
         self.lower_op_code(vec_op_code(&node.op), node, bx)
     }
@@ -1692,6 +1713,9 @@ impl<'m> TapeBuilder<'m> {
         let mut n_mapped = 0usize;
         let mut fixed: SmallVec<[(usize, i64); 4]> = SmallVec::new();
         let mut any_fixed_oob = false;
+        // The one source axis whose subscript is DATA (`u[nbr[i, k]]`), if
+        // any: an indexed gather rather than a segment copy.
+        let mut data_axis: Option<usize> = None;
         for d in 0..n {
             let e = &node.args[1 + d];
             match classify_axis_role(e, &vb) {
@@ -1708,10 +1732,14 @@ impl<'m> TapeBuilder<'m> {
                         fixed.push((d, i0));
                     }
                 }
+                None if data_axis.is_none() && !const_base => data_axis = Some(d),
                 _ => bail_tape!(
                     "index: axis {d} is neither an affine/wrap map of an unclaimed output symbol nor a constant select"
                 ),
             }
+        }
+        if let Some(d) = data_axis {
+            return self.lower_index_gather(node, bx, &arg0, d, &mapped, &fixed, any_fixed_oob);
         }
 
         // A fixed axis out of bounds ⇒ every read is the Dirichlet ghost 0.
@@ -1836,6 +1864,345 @@ impl<'m> TapeBuilder<'m> {
         let instr = Instr::Gather {
             src: self.src_of(&arg0),
             plan: plan_ix,
+            out,
+        };
+        self.emit(instr, sec);
+        Ok(LV::Arr(out))
+    }
+
+    // -- geometry -------------------------------------------------------------
+
+    /// `polygon_intersection_area` (esm-spec §4.2): one [`Instr::PolyArea`]
+    /// over the box `bx`, or over a scalar slot when `bx` is `None` (the
+    /// wholesale form, or a box neither ring varies over).
+    ///
+    /// Mirrors `eval_polygon_intersection_area` / `eval_clip_operands`: a
+    /// required in-enum `manifold`, exactly two operands, each a `[V, 2]`
+    /// ring, and the NaN sentinel wherever that contract fails in a way the
+    /// box alone decides (the wrong arity, no manifold, an operand that is a
+    /// scalar or not `[V, 2]`). What the tape takes as a ring is narrower than
+    /// what the oracle evaluates — a partial `index(table, s…)` whose
+    /// subscripts are affine in one output symbol or constant, or a whole
+    /// array — and every other operand, and any ring position outside its
+    /// table, is a refusal naming it rather than a guess at the oracle.
+    fn lower_poly_area(&mut self, node: &Arc<ExpressionNode>, bx: Option<&LBox>) -> LResult<LV> {
+        use crate::geometry::Manifold;
+        if self.f32_document {
+            bail_tape!("geometry: `polygon_intersection_area` in a Float32 document");
+        }
+        let [a_expr, b_expr] = node.args.as_slice() else {
+            return Ok(LV::Lit(f64::NAN));
+        };
+        let Some(manifold) = node.manifold.as_deref().and_then(Manifold::from_flag) else {
+            return Ok(LV::Lit(f64::NAN));
+        };
+        let Some((ta, ra)) = self.lower_ring_operand(a_expr, bx)? else {
+            return Ok(LV::Lit(f64::NAN));
+        };
+        let Some((tb, rb)) = self.lower_ring_operand(b_expr, bx)? else {
+            return Ok(LV::Lit(f64::NAN));
+        };
+        let (axes_a, axes_b) = (ra.axes(), rb.axes());
+        // A box neither ring varies over holds one value: compute it once.
+        let bx = bx.filter(|_| !axes_a.is_empty() || !axes_b.is_empty());
+        let pairs = match (&axes_a[..], &axes_b[..]) {
+            ([x], [y]) if manifold == Manifold::Planar && x != y => Some((*x, *y)),
+            _ => None,
+        };
+        let (shape, lo) = match bx {
+            Some(bx) => (bx.shape.clone(), bx.lo.clone()),
+            None => (DimU::new(), DimI::new()),
+        };
+        let cad = self.lv_cadence(&ta).max(self.lv_cadence(&tb));
+        let sec = self.placement(cad);
+        let geom = self.geoms.len() as u32;
+        self.geoms.push(GeomSpec {
+            manifold,
+            a: ra,
+            b: rb,
+            shape: shape.clone(),
+            pairs,
+        });
+        let scalar = bx.is_none();
+        let out = self.new_slot(&shape, &lo, scalar, sec);
+        let instr = Instr::PolyArea {
+            a: self.src_of(&ta),
+            b: self.src_of(&tb),
+            geom,
+            out,
+        };
+        self.emit(instr, sec);
+        Ok(if scalar {
+            LV::Scalar(out)
+        } else {
+            LV::Arr(out)
+        })
+    }
+
+    /// One ring operand of [`Self::lower_poly_area`]: the table it reads
+    /// (the WHOLE array, as the oracle's `eval` of the base yields it) and how
+    /// each leading table axis is addressed. `None` when the operand is, for
+    /// every cell, not a `[V, 2]` array — a scalar, or a table whose ring is
+    /// not two-column — which `eval_clip_operands` answers with NaN.
+    fn lower_ring_operand(
+        &mut self,
+        e: &Expr,
+        bx: Option<&LBox>,
+    ) -> LResult<Option<(LV, RingRef)>> {
+        let (base, subs): (&Expr, &[Expr]) = match e {
+            Expr::Operator(n) if n.op == "index" => match n.args.split_first() {
+                Some((base, subs)) => (base, subs),
+                None => return Ok(None),
+            },
+            other => (other, &[]),
+        };
+        let table = self.lower_wholesale(base)?;
+        let Some((tshape, torigin)) = self.lv_box(&table) else {
+            if subs.is_empty() {
+                return Ok(None);
+            }
+            // Subscripts on a 0-D value are the interpreter's fail-closed
+            // fault, which only the oracle can raise.
+            bail_tape!("geometry: ring operand subscripts a scalar");
+        };
+        if torigin.iter().any(|&o| o != 1) {
+            bail_tape!("geometry: ring table is not origin-1");
+        }
+        if tshape.len() != subs.len() + 2 || tshape[tshape.len() - 1] != 2 {
+            if subs.is_empty() {
+                return Ok(None);
+            }
+            bail_tape!(
+                "geometry: ring operand of box {:?} with {} subscripts is not a [V, 2] ring",
+                &tshape[..],
+                subs.len()
+            );
+        }
+        let mut sel: SmallVec<[RingSel; 3]> = SmallVec::new();
+        for (d, sub) in subs.iter().enumerate() {
+            let extent = tshape[d] as i64;
+            let s = match bx {
+                Some(bx) => match classify_axis_role(sub, &bx.as_vecbox()) {
+                    Some(AxisRole::Map {
+                        out_axis,
+                        ax: AxisIndex::Affine(k),
+                    }) => {
+                        // 0-based table position `p + off` at output position p.
+                        let off = bx.lo[out_axis] + k - 1;
+                        let last = off + bx.shape[out_axis] as i64 - 1;
+                        if off < 0 || last >= extent {
+                            bail_tape!(
+                                "geometry: ring subscript {d} leaves its table (1..{extent})"
+                            );
+                        }
+                        RingSel::Axis {
+                            axis: out_axis as u8,
+                            off,
+                        }
+                    }
+                    Some(AxisRole::Const(i1)) => Self::ring_fixed(i1, extent, d)?,
+                    _ => bail_tape!(
+                        "geometry: ring subscript {d} is neither affine in one output symbol nor constant"
+                    ),
+                },
+                None => match self.lower_wholesale(sub)? {
+                    LV::Lit(f) => Self::ring_fixed(f.round() as i64, extent, d)?,
+                    _ => bail_tape!("geometry: ring subscript {d} is not a literal"),
+                },
+            };
+            sel.push(s);
+        }
+        Ok(Some((
+            table,
+            RingRef {
+                src_shape: tshape,
+                sel,
+            },
+        )))
+    }
+
+    /// `intersect_polygon` (RFC §8.1) evaluated wholesale: the closed overlap
+    /// ring, `[n + 1, 2]`, with `n` data-dependent.
+    ///
+    /// A slot's box is fixed when the tape is built, and the length of a clip
+    /// is known only once the clip has run, so the ring is computed HERE, at
+    /// build, when both operands are compile-time constants (literal `const`
+    /// data), by the interpreter's own `eval_intersect_polygon` steps: the
+    /// kernel clip, then `close_ring`. The ring becomes an ordinary
+    /// [`Instr::ConstArray`], and its distinct-vertex count is recorded under
+    /// the node's `id` for a `kind: "derived"` range over it, which is what the
+    /// interpreter's ring registry would answer. Where the interpreter's clip
+    /// yields its NaN sentinel and registers nothing (an operand that is not a
+    /// `[V, 2]` array, no manifold, a clip the kernel refuses), so does this,
+    /// and the derived range is empty. Operands that are rings but not
+    /// constants (a parameter, the state, an observed computed at run time)
+    /// and an empty ring are refusals naming the reason.
+    fn lower_intersect_polygon(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
+        use crate::geometry::Manifold;
+        if self.f32_document {
+            bail_tape!("geometry: `intersect_polygon` in a Float32 document");
+        }
+        let no_ring = |b: &mut Self| {
+            if let Some(id) = &node.id {
+                b.rings.push((id.clone(), 0));
+            }
+            Ok(LV::Lit(f64::NAN))
+        };
+        let [a_expr, b_expr] = node.args.as_slice() else {
+            return no_ring(self);
+        };
+        let Some(manifold) = node.manifold.as_deref().and_then(Manifold::from_flag) else {
+            return no_ring(self);
+        };
+        let mut rings: [Vec<(f64, f64)>; 2] = [Vec::new(), Vec::new()];
+        for (k, e) in [a_expr, b_expr].into_iter().enumerate() {
+            let Some((table, r)) = self.lower_ring_operand(e, None)? else {
+                return no_ring(self);
+            };
+            let Some(data) = self.const_slot_data(&table) else {
+                bail_tape!(
+                    "geometry: `intersect_polygon` of a ring that is not a compile-time \
+                     constant: its overlap has a data-dependent length, and a tape slot's \
+                     box is fixed when the tape is built"
+                );
+            };
+            let lead = r.sel.len();
+            // Row-major strides of the literal, which is how it is stored.
+            let mut st = vec![1usize; data.shape.len()];
+            for d in (0..data.shape.len().saturating_sub(1)).rev() {
+                st[d] = st[d + 1] * data.shape[d + 1];
+            }
+            let mut base = 0usize;
+            for (d, s) in r.sel.iter().enumerate() {
+                let RingSel::Fixed(i) = *s else {
+                    unreachable!("a wholesale ring subscript is fixed");
+                };
+                base += st[d] * i;
+            }
+            rings[k] = (0..data.shape[lead])
+                .map(|v| {
+                    let p = base + st[lead] * v;
+                    (data.values[p], data.values[p + st[lead + 1]])
+                })
+                .collect();
+        }
+        let ring = match crate::geometry::intersect_polygon(&rings[0], &rings[1], manifold) {
+            Ok(ring) => super::super::eval::close_ring(&ring),
+            Err(_) => return no_ring(self),
+        };
+        if ring.is_empty() {
+            bail_tape!("geometry: `intersect_polygon` ring is empty (a disjoint clip)");
+        }
+        let arr = super::super::eval::lonlat_to_arrayd(&ring);
+        if let Some(id) = &node.id {
+            self.rings.push((id.clone(), ring.len() as i64 - 1));
+        }
+        self.emit_const_array(&arr)
+    }
+
+    /// The literal data behind an array LV the tape stores with an
+    /// [`Instr::ConstArray`] in the CONST section, if that is what it is.
+    fn const_slot_data(&self, lv: &LV) -> Option<&ConstArrayData> {
+        let LV::Arr(slot) = lv else {
+            return None;
+        };
+        self.streams[Cadence::Const as usize]
+            .iter()
+            .flat_map(|c| c.instrs.iter())
+            .find_map(|i| match i {
+                Instr::ConstArray { data, out } if out == slot => {
+                    Some(&self.const_data[*data as usize])
+                }
+                _ => None,
+            })
+    }
+
+    /// The distinct-vertex count of the build-time ring produced under `id`.
+    fn ring_extent(&self, id: &str) -> Option<i64> {
+        self.rings
+            .iter()
+            .rev()
+            .find(|(r, _)| r == id)
+            .map(|(_, n)| *n)
+    }
+
+    /// A constant 1-based ring subscript as a fixed 0-based table position.
+    fn ring_fixed(one_based: i64, extent: i64, d: usize) -> LResult<RingSel> {
+        if one_based < 1 || one_based > extent {
+            bail_tape!("geometry: ring subscript {d} leaves its table (1..{extent})");
+        }
+        Ok(RingSel::Fixed((one_based - 1) as usize))
+    }
+
+    /// The indexed-gather arm of [`Self::lower_index`]: source axis `data_d`
+    /// is subscripted by a value (`u[nbr[i, k]]` on an unstructured mesh), so
+    /// the read position is data, not a shift. One [`Instr::IndexGather`]
+    /// over the box, whatever its size.
+    ///
+    /// The oracle's rule is `eval_index` → `index_into` with a state or
+    /// observed base: the subscript is `round()`ed to an integer and a
+    /// position outside the source reads the zero ghost. The other axes stay
+    /// what the segment gather supports, in range for every cell (a shifted
+    /// read that leaves the source, or a periodic wrap, is refused here rather
+    /// than mixed with a data subscript). A const-array base never reaches
+    /// here: its out-of-range rule is the factor's boundary policy, which
+    /// needs the subscript values to decide.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_index_gather(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+        base: &LV,
+        data_d: usize,
+        mapped: &[Option<(usize, AxisIndex)>],
+        fixed: &[(usize, i64)],
+        any_fixed_oob: bool,
+    ) -> LResult<LV> {
+        let (src_shape, src_origin) = self.lv_box(base).expect("an array base");
+        if src_origin.iter().any(|&o| o != 1) {
+            bail_tape!("index: data subscript into a base that is not origin-1");
+        }
+        if any_fixed_oob {
+            bail_tape!("index: data subscript with an out-of-range fixed axis");
+        }
+        let mut axes: SmallVec<[GatherAxis; 4]> =
+            SmallVec::from_elem(GatherAxis::Fixed(0), src_shape.len());
+        axes[data_d] = GatherAxis::Data;
+        for &(d, i0) in fixed {
+            axes[d] = GatherAxis::Fixed(i0 as usize);
+        }
+        for (a, m) in mapped.iter().enumerate() {
+            let Some((d, ax)) = m else { continue };
+            let AxisIndex::Affine(k) = ax else {
+                bail_tape!("index: data subscript with a periodic-wrap axis");
+            };
+            // 0-based source position `p + off` at output position p.
+            let off = bx.lo[a] + k - src_origin[*d];
+            let last = off + bx.shape[a] as i64 - 1;
+            if off < 0 || last >= src_shape[*d] as i64 {
+                bail_tape!("index: data subscript with a shifted axis that leaves the source");
+            }
+            axes[*d] = GatherAxis::Affine { axis: a as u8, off };
+        }
+        let sub = self.lower_expr(&node.args[1 + data_d], bx)?;
+        if let Some((s, o)) = self.lv_box(&sub)
+            && (s != bx.shape || o != bx.lo)
+        {
+            bail_tape!("index: data subscript box does not match the output box");
+        }
+        let cad = self.lv_cadence(base).max(self.lv_cadence(&sub));
+        let sec = self.placement(cad);
+        let spec = self.index_gathers.len() as u32;
+        self.index_gathers.push(IndexGatherSpec {
+            axes,
+            src_shape,
+            shape: bx.shape.clone(),
+        });
+        let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
+        let instr = Instr::IndexGather {
+            src: self.src_of(base),
+            idx: self.op_of(&sub),
+            spec,
             out,
         };
         self.emit(instr, sec);
@@ -2118,6 +2485,10 @@ impl<'m> TapeBuilder<'m> {
                 ContractDim::Static(l, h) => {
                     clo[i] = *l;
                     chi[i] = *h;
+                }
+                ContractDim::Derived { from_faq } if self.ring_extent(from_faq).is_some() => {
+                    clo[i] = 1;
+                    chi[i] = self.ring_extent(from_faq).unwrap_or(0);
                 }
                 other => bail_tape!("contracted: non-static contraction dim ({other:?})"),
             }
@@ -2498,6 +2869,8 @@ impl<'m> TapeBuilder<'m> {
             "index" => self.lower_wholesale_index(node),
             "faq" => self.lower_wholesale_aggregate(node),
             "makearray" => self.lower_wholesale_makearray(node),
+            "polygon_intersection_area" => self.lower_poly_area(node, None),
+            "intersect_polygon" => self.lower_intersect_polygon(node),
             other => bail_tape!("wholesale: unsupported op `{other}`"),
         }
     }
@@ -2657,6 +3030,10 @@ impl<'m> TapeBuilder<'m> {
                 ContractDim::Static(l, h) => {
                     lo.push(*l);
                     shape.push((h - l + 1).max(0) as usize);
+                }
+                ContractDim::Derived { from_faq } if self.ring_extent(from_faq).is_some() => {
+                    lo.push(1);
+                    shape.push(self.ring_extent(from_faq).unwrap_or(0).max(0) as usize);
                 }
                 other => bail_tape!("reduction: non-static contraction dim ({other:?})"),
             }
@@ -3310,6 +3687,8 @@ impl<'m> TapeBuilder<'m> {
                 Self::broadcast_shape(Self::broadcast_shape(Some(c), Some(t)), Some(f))
             }
             "D" => Some(DimU::new()), // the NaN sentinel
+            // The fused geometry leaf is a scalar area (or the NaN sentinel).
+            "polygon_intersection_area" => Some(DimU::new()),
             "const" => match eval_const(node) {
                 Value::Scalar(_) => Some(DimU::new()),
                 Value::Array(a) => Some(a.shape().iter().copied().collect()),
@@ -3392,6 +3771,9 @@ impl<'m> TapeBuilder<'m> {
             assemblies: self.assemblies.len(),
             const_data: self.const_data.len(),
             interp_tables: self.interp_tables.len(),
+            geoms: self.geoms.len(),
+            index_gathers: self.index_gathers.len(),
+            rings: self.rings.len(),
             dy_writes: self.dy_writes.len(),
             stream_lens: [
                 self.streams[0].len(),
@@ -3410,6 +3792,9 @@ impl<'m> TapeBuilder<'m> {
         self.assemblies.truncate(txn.assemblies);
         self.const_data.truncate(txn.const_data);
         self.interp_tables.truncate(txn.interp_tables);
+        self.geoms.truncate(txn.geoms);
+        self.index_gathers.truncate(txn.index_gathers);
+        self.rings.truncate(txn.rings);
         self.dy_writes.truncate(txn.dy_writes);
         for s in 0..3 {
             let stream = &mut self.streams[s];
@@ -3438,6 +3823,8 @@ impl<'m> TapeBuilder<'m> {
             assemblies: self.assemblies.len(),
             const_data: self.const_data.len(),
             interp_tables: self.interp_tables.len(),
+            geoms: self.geoms.len(),
+            index_gathers: self.index_gathers.len(),
             streams: [stream(0), stream(1), stream(2)],
             branch_len: self.branch_bufs.last().map(Vec::len),
             hoist_journal: self.hoist_journal.len(),
@@ -3452,6 +3839,8 @@ impl<'m> TapeBuilder<'m> {
         self.assemblies.truncate(txn.assemblies);
         self.const_data.truncate(txn.const_data);
         self.interp_tables.truncate(txn.interp_tables);
+        self.geoms.truncate(txn.geoms);
+        self.index_gathers.truncate(txn.index_gathers);
         for (s, &(n_chunks, last_len)) in txn.streams.iter().enumerate() {
             let stream = &mut self.streams[s];
             stream.truncate(n_chunks);
@@ -3916,6 +4305,8 @@ impl<'m> TapeBuilder<'m> {
             assemblies: std::mem::take(&mut self.assemblies),
             const_data: std::mem::take(&mut self.const_data),
             interp_tables: std::mem::take(&mut self.interp_tables),
+            geoms: std::mem::take(&mut self.geoms),
+            index_gathers: std::mem::take(&mut self.index_gathers),
             state_vars: std::mem::take(&mut self.state_vars),
             obs_reads: std::mem::take(&mut self.obs_reads),
             dy_writes: std::mem::take(&mut self.dy_writes),
@@ -4009,6 +4400,8 @@ fn color_slab(prog: &mut TapeProgram) {
                 | Instr::Reduce { .. }
                 | Instr::Scan { .. }
                 | Instr::Assemble { .. }
+                | Instr::PolyArea { .. }
+                | Instr::IndexGather { .. }
         );
         let mut defs_here: SmallVec<[SlotId; 2]> = SmallVec::new();
         prog.instrs[i].for_each_def(&prog.fused, |o| {

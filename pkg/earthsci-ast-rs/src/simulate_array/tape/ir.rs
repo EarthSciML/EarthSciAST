@@ -48,6 +48,14 @@
 //! * [`Instr::Scan`] is `run_prefix_scan` over a whole box: a running fold
 //!   along one axis, ascending, independently for every position of the
 //!   other axes, writing the inclusive or exclusive partial result.
+//! * [`Instr::PolyArea`] is `eval_polygon_intersection_area` per element of
+//!   its box: each element's two rings are read out of the two ring tables
+//!   and measured by the interpreter's own `clip_area_value`. Pairs a planar
+//!   broad phase proves bounding-box disjoint are not clipped; they hold the
+//!   value the kernel's own bounding-box reject returns for them.
+//! * [`Instr::IndexGather`] is `index_into` with one subscript that is DATA:
+//!   the subscript operand is rounded (`f64::round`, then `as i64`, exactly
+//!   `eval_index_args`) and an out-of-range position reads the zero ghost.
 //!
 //! Array operands within one instruction share one box (shape + 1-based
 //! origin), checked at lowering time — the same precondition `vec_combine`
@@ -254,6 +262,28 @@ pub(crate) enum Instr {
         src_shape: DimU,
         out: SlotId,
     },
+    /// `polygon_intersection_area` over `out`'s box (a scalar slot for a
+    /// single pair): element `k`'s rings are `a` and `b` read at the positions
+    /// `geoms[geom]` derives from `k`, and its value is the interpreter's
+    /// `clip_area_value` of the two. See [`GeomSpec`] for the broad phase.
+    PolyArea {
+        a: SrcRef,
+        b: SrcRef,
+        geom: u32,
+        out: SlotId,
+    },
+    /// `out[k] = src[pos(k)]`, where source axis `index_gathers[spec].data_axis`
+    /// is addressed by the 1-based subscript `idx[k]` (a data value, rounded
+    /// as the interpreter rounds it) and every other source axis by an affine
+    /// map of an output axis or a fixed position. A subscript outside the
+    /// source extent reads the zero ghost, `eval_index`'s state and observed
+    /// rule; a const-array base is never lowered here.
+    IndexGather {
+        src: SrcRef,
+        idx: Operand,
+        spec: u32,
+        out: SlotId,
+    },
     /// Scalar-`ifelse` short circuit: if `cond != 0`, execute the next
     /// `n_true` instructions then skip the following `n_false`; else skip
     /// `n_true` and execute the following `n_false`. The untaken branch is
@@ -301,7 +331,9 @@ impl Instr {
             | Instr::ConstArray { out, .. }
             | Instr::Interp { out, .. }
             | Instr::Reduce { out, .. }
-            | Instr::Scan { out, .. } => Some(*out),
+            | Instr::Scan { out, .. }
+            | Instr::PolyArea { out, .. }
+            | Instr::IndexGather { out, .. } => Some(*out),
             Instr::JmpIfZero { .. }
             | Instr::Fallback { .. }
             | Instr::Export { .. }
@@ -363,6 +395,19 @@ impl Instr {
                     f(*s);
                 }
             }
+            Instr::PolyArea { a, b, .. } => {
+                for src in [a, b] {
+                    if let SrcRef::Slot(s) = src {
+                        f(*s);
+                    }
+                }
+            }
+            Instr::IndexGather { src, idx, .. } => {
+                if let SrcRef::Slot(s) = src {
+                    op(&Operand::Slot(*s));
+                }
+                op(idx);
+            }
             Instr::Ramp { .. } | Instr::ConstArray { .. } => {}
             Instr::Interp { x, y, .. } => {
                 op(x);
@@ -417,6 +462,8 @@ impl Instr {
             Instr::Interp { .. } => "Interp",
             Instr::Reduce { .. } => "Reduce",
             Instr::Scan { .. } => "Scan",
+            Instr::PolyArea { .. } => "PolyArea",
+            Instr::IndexGather { .. } => "IndexGather",
             Instr::JmpIfZero { .. } => "JmpIfZero",
             Instr::Fallback { .. } => "Fallback",
             Instr::Export { .. } => "Export",
@@ -544,8 +591,14 @@ pub(crate) struct FusedInput {
     /// For a shifted input with `elem_stride` other than 1 and 0 (and 0 too in
     /// a group with a `Bin3` superop): the chunk register the executor
     /// pre-loads this input into (`GroupIx::MAX` otherwise; a zero-stride
-    /// input is then read as the run's one element).
+    /// input is then read as the run's one element). A folded data-subscript
+    /// gather is always pre-loaded.
     pub load_reg: GroupIx,
+    /// `Some((by, n))`: a folded [`Instr::IndexGather`] of a rank-1 source
+    /// of extent `n`. The element at output offset `k` is
+    /// `src[data_subscript(inputs[by][k], n)]`, the zero ghost when that is
+    /// `None`; `inputs[by]` is the subscript array, an aligned input.
+    pub index: Option<(GroupIx, usize)>,
 }
 
 /// Sentinel source offset: the input reads the gather's Dirichlet ghost
@@ -916,6 +969,110 @@ impl InterpTable {
     }
 }
 
+/// Where one [`Instr::PolyArea`] element reads a ring along one LEADING axis
+/// of the ring table (the table is `[.., V, 2]`: the last two axes are the
+/// ring's vertices and its `(lon, lat)` pair).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RingSel {
+    /// This 0-based position, for every element.
+    Fixed(usize),
+    /// Position `p + off` for the element at position `p` along output axis
+    /// `axis` (a partial `index(table, i)` whose subscript is `i + k`). Every
+    /// position the box reaches is inside the table, checked at lowering.
+    Axis { axis: u8, off: i64 },
+}
+
+/// One ring operand of an [`Instr::PolyArea`]: the table's box and how each
+/// of its leading axes is addressed. No selectors means the operand is the
+/// whole `[V, 2]` array, the same ring for every element.
+#[derive(Clone, Debug)]
+pub(crate) struct RingRef {
+    /// The expected table box (validation).
+    pub src_shape: DimU,
+    pub sel: SmallVec<[RingSel; 3]>,
+}
+
+impl RingRef {
+    /// The output axes this operand's ring varies along.
+    pub(crate) fn axes(&self) -> SmallVec<[u8; 3]> {
+        let mut v: SmallVec<[u8; 3]> = SmallVec::new();
+        for s in &self.sel {
+            if let RingSel::Axis { axis, .. } = s
+                && !v.contains(axis)
+            {
+                v.push(*axis);
+            }
+        }
+        v
+    }
+}
+
+/// The constant part of one [`Instr::PolyArea`].
+///
+/// `pairs` is the broad phase: `Some((axis_a, axis_b))` when the manifold is
+/// planar and ring `a` varies along output axis `axis_a` only and ring `b`
+/// along the different axis `axis_b` only. The instruction then clips just
+/// the candidate pairs whose bounding boxes are not strictly disjoint (an
+/// R*-tree query over the two rings' boxes, so the work is `O(n log n)` plus
+/// the candidates, not the product) and writes every other element the value
+/// the kernel's own disjoint-box reject returns. That reject is part of
+/// `crate::geometry::intersect_polygon`, which is what makes the skipped
+/// pairs exact rather than approximately zero. Every element is still a pure
+/// function of its own pair, so the order pairs are visited in cannot reach
+/// a result, and a fold over the box downstream is unchanged.
+#[derive(Clone, Debug)]
+pub(crate) struct GeomSpec {
+    pub manifold: crate::geometry::Manifold,
+    pub a: RingRef,
+    pub b: RingRef,
+    /// The output box (empty for a scalar slot).
+    pub shape: DimU,
+    pub pairs: Option<(u8, u8)>,
+}
+
+/// How one source axis of an [`Instr::IndexGather`] is addressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GatherAxis {
+    /// By the data subscript (the instruction's `idx` operand).
+    Data,
+    /// 0-based position `p + off` for output position `p` along `axis`; in
+    /// range for every position, checked at lowering.
+    Affine { axis: u8, off: i64 },
+    /// This 0-based position.
+    Fixed(usize),
+}
+
+/// The constant part of one [`Instr::IndexGather`].
+#[derive(Clone, Debug)]
+pub(crate) struct IndexGatherSpec {
+    /// One entry per source axis; exactly one is [`GatherAxis::Data`].
+    pub axes: SmallVec<[GatherAxis; 4]>,
+    /// The expected source box (validation).
+    pub src_shape: DimU,
+    /// The output box.
+    pub shape: DimU,
+}
+
+impl IndexGatherSpec {
+    /// The source axis the data subscript addresses.
+    pub(crate) fn data_axis(&self) -> usize {
+        self.axes
+            .iter()
+            .position(|a| *a == GatherAxis::Data)
+            .expect("an IndexGather has one data axis")
+    }
+}
+
+/// The 0-based source position a data subscript `v` addresses along an axis
+/// of extent `n`, or `None` for the zero ghost — `eval_index_args` then
+/// `index_into` exactly: `v.round() as i64` (NaN reads as 0, out-of-range
+/// values saturate), and a 1-based position outside `1..=n` is out of range.
+#[inline]
+pub(crate) fn data_subscript(v: f64, n: usize) -> Option<usize> {
+    let one_based = v.round() as i64;
+    (one_based >= 1 && one_based <= n as i64).then(|| (one_based - 1) as usize)
+}
+
 /// One makearray region: placement of a region write within its bounding box.
 #[derive(Clone, Debug)]
 pub(crate) struct RegionSpec {
@@ -1031,6 +1188,11 @@ pub(crate) struct TapeProgram {
     pub const_data: Vec<ConstArrayData>,
     /// §9.2 `interp.*` constant tables (`Instr::Interp` indexes here).
     pub interp_tables: Vec<InterpTable>,
+    /// Geometry instructions' constant parts (`Instr::PolyArea` indexes here).
+    pub geoms: Vec<GeomSpec>,
+    /// Data-subscript gathers' constant parts (`Instr::IndexGather` indexes
+    /// here).
+    pub index_gathers: Vec<IndexGatherSpec>,
     pub state_vars: Vec<StateRef>,
     /// Observed names resolved through the runtime observed map
     /// (`Operand::Obs`/`SrcRef::Obs` index here).

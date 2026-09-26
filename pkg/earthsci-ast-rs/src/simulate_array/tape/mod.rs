@@ -63,6 +63,7 @@
 
 mod exec;
 mod fuse;
+mod geom;
 mod ir;
 mod lower;
 #[cfg(test)]

@@ -132,6 +132,8 @@ struct GBuilder {
     defs: Vec<(SlotId, GroupIx)>,
     /// Folded gathers: `(original instr index, out slot, input index)`.
     folded: Vec<(u32, SlotId, GroupIx)>,
+    /// Folded data-subscript gathers, the same way.
+    folded_index: Vec<(u32, SlotId, GroupIx)>,
     /// Rule ordinal of the first member (provenance of the emitted Fused).
     prov: u32,
     /// An absorbed [`Instr::Reduce`] folding one of the group's values
@@ -171,6 +173,7 @@ impl GBuilder {
             scalar_ix: FxHashMap::default(),
             defs: Vec::new(),
             folded: Vec::new(),
+            folded_index: Vec::new(),
             prov,
             reduce: None,
         }
@@ -301,6 +304,7 @@ impl GBuilder {
                     src_shape: self.shape.clone(),
                     elem_stride: 1,
                     load_reg: GroupIx::MAX,
+                    index: None,
                 });
                 self.aligned_ix.insert(key, i);
                 MRef::In(i)
@@ -368,6 +372,52 @@ impl GBuilder {
         true
     }
 
+    /// Absorb a rank-1 data-subscript gather whose subscript is `idx`, an
+    /// array operand of the group's box defined outside it, as a pre-loaded
+    /// input. `false` (group untouched) when the subscript cannot be an
+    /// aligned input.
+    fn add_folded_index_gather(
+        &mut self,
+        ix: u32,
+        src: SrcRef,
+        idx: &Operand,
+        n: usize,
+        out: SlotId,
+        prog: &TapeProgram,
+    ) -> bool {
+        let resolved = match idx {
+            Operand::Slot(_) | Operand::State(_) => self.resolve(idx, prog),
+            _ => None,
+        };
+        let by = match resolved {
+            Some(r @ ResOp::NewAligned(..)) => match self.commit(r) {
+                MRef::In(i) => i,
+                _ => unreachable!("an aligned input commits to an input"),
+            },
+            Some(ResOp::Existing(MRef::In(i)))
+                if self.inputs[i as usize].shifted_ix.is_none()
+                    && self.inputs[i as usize].index.is_none() =>
+            {
+                i
+            }
+            _ => return false,
+        };
+        let input_ix = self.inputs.len() as GroupIx;
+        self.inputs.push(FusedInput {
+            src,
+            shifted_ix: None,
+            src_shape: SmallVec::from_elem(n, 1),
+            elem_stride: 1,
+            load_reg: GroupIx::MAX,
+            index: Some((by, n)),
+        });
+        self.val_of.insert(out, MRef::In(input_ix));
+        self.folded_index.push((ix, out, input_ix));
+        self.members.insert(ix);
+        self.member_instrs.push(ix);
+        true
+    }
+
     /// Absorb a foldable gather as a shifted input.
     fn add_folded_gather(
         &mut self,
@@ -386,6 +436,7 @@ impl GBuilder {
             src_shape: plan.src_shape.clone(),
             elem_stride,
             load_reg: GroupIx::MAX,
+            index: None,
         });
         self.shifted_segs.push(geom);
         self.val_of.insert(out, MRef::In(input_ix));
@@ -1514,6 +1565,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         scalars,
         defs,
         folded,
+        folded_index,
         prov,
         reduce,
         ..
@@ -1537,6 +1589,26 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
                 src_shape: shape.clone(),
                 elem_stride: 1,
                 load_reg: GroupIx::MAX,
+                index: None,
+            };
+        } else {
+            fx.sink.stats.n_gathers_folded += 1;
+        }
+    }
+    // The same for a folded data-subscript gather.
+    for &(orig_ix, slot, input_ix) in &folded_index {
+        let external = fx.readers[slot as usize]
+            .iter()
+            .any(|r| !members.contains(r));
+        if external {
+            fx.sink.passthrough(prog, orig_ix as usize);
+            inputs[input_ix as usize] = FusedInput {
+                src: SrcRef::Slot(slot),
+                shifted_ix: None,
+                src_shape: shape.clone(),
+                elem_stride: 1,
+                load_reg: GroupIx::MAX,
+                index: None,
             };
         } else {
             fx.sink.stats.n_gathers_folded += 1;
@@ -1642,9 +1714,10 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     // scalar instead, except under the all-pointer Bin3 superop, which
     // needs every operand in a register.
     for inp in inputs.iter_mut() {
-        if inp.shifted_ix.is_some()
-            && inp.elem_stride != 1
-            && (inp.elem_stride != 0 || n_splat_regs > 0)
+        if inp.index.is_some()
+            || inp.shifted_ix.is_some()
+                && inp.elem_stride != 1
+                && (inp.elem_stride != 0 || n_splat_regs > 0)
         {
             inp.load_reg = n_regs + n_load_regs;
             n_load_regs += 1;
@@ -1677,7 +1750,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         schedule,
         reduce,
         n_fused_instrs: n_members as u32,
-        n_folded_gathers: folded.len() as u32,
+        n_folded_gathers: (folded.len() + folded_index.len()) as u32,
     });
     fx.sink.instrs.push(Instr::Fused { spec: spec_ix });
     fx.sink.prov.push(prov);
@@ -1800,6 +1873,33 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                 continue;
             }
             // Unfoldable: pass through (with the usual read hazards).
+            flush_hazards(ins, None, &mut open, fx);
+            fx.sink.passthrough(prog, i);
+            i += 1;
+            continue;
+        }
+
+        // A rank-1 data-subscript gather: a pre-loaded input of its box's
+        // group, when its subscript is an array defined outside that group.
+        if let Instr::IndexGather {
+            src,
+            idx,
+            spec,
+            out,
+        } = ins
+        {
+            let spec_ref = &prog.index_gathers[*spec as usize];
+            let out_desc = &prog.slots[*out as usize];
+            if spec_ref.axes[..] == [GatherAxis::Data] && !out_desc.shape.is_empty() {
+                flush_hazards(ins, None, &mut open, fx);
+                let shape = out_desc.shape.clone();
+                let gi = find_or_open(&mut open, shape, prog.provenance[i], fx);
+                let n = spec_ref.src_shape[0];
+                if open[gi].add_folded_index_gather(i as u32, *src, idx, n, *out, prog) {
+                    i += 1;
+                    continue;
+                }
+            }
             flush_hazards(ins, None, &mut open, fx);
             fx.sink.passthrough(prog, i);
             i += 1;

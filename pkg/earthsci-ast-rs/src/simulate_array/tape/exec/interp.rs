@@ -5,13 +5,26 @@
 //! why the boundary sits here: the kernels it drives know pointers and
 //! strides and nothing about the program.
 
+use super::super::geom::{RingTable, run_poly_area};
 use super::fused::{dispatch_bin_kernel, dispatch_un_kernel, exec_fused};
 use super::kernels::{
-    copy_strided, ew_select, ew1, ew2, exec_gather, fill_strided, reduce_rows, scan_axis,
+    copy_strided, ew_select, ew1, ew2, exec_gather, fill_strided, index_gather, reduce_rows,
+    scan_axis,
 };
 use super::oracle::run_rhs_oracle;
-use super::resolve::{Rv, cm_strides, resolve_rv, resolve_scalar, resolve_src, rm_strides};
+use super::resolve::{
+    Rv, SrcView, cm_strides, resolve_rv, resolve_scalar, resolve_src, rm_strides,
+};
 use super::*;
+
+/// A resolved source viewed as a ring table.
+fn ring_table(v: &SrcView) -> RingTable<'_> {
+    RingTable {
+        ptr: v.ptr,
+        shape: &v.shape,
+        strides: &v.strides,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The interpreter loop.
@@ -405,6 +418,26 @@ pub(super) fn run_range(
                     };
                 }
                 dispatch_bin_kernel!(op, scan);
+            }
+            Instr::PolyArea { a, b, geom, out } => {
+                let spec = &prog.geoms[*geom as usize];
+                let av = resolve_src(a, env, slab_ptr, slot_off, obs);
+                let bv = resolve_src(b, env, slab_ptr, slot_off, obs);
+                let (ta, tb) = (ring_table(&av), ring_table(&bv));
+                let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+                unsafe { run_poly_area(spec, &ta, &tb, dst) };
+            }
+            Instr::IndexGather {
+                src,
+                idx,
+                spec,
+                out,
+            } => {
+                let spec = &prog.index_gathers[*spec as usize];
+                let sv = resolve_src(src, env, slab_ptr, slot_off, obs);
+                let iv = resolve_rv(idx, &spec.shape, env, slab_ptr, slot_off, obs);
+                let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+                unsafe { index_gather(dst, spec, &sv, &iv) };
             }
             Instr::JmpIfZero {
                 cond,
