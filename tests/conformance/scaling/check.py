@@ -12,7 +12,9 @@ Prints one row per (file, family, N, gate) with the measured value and one of
               passes: remove the entry                              (red)
     fixed?    a ledger entry covers a TIMING gate that now passes:
               reported, not red, because timing noise can flip it
-    skip      not measurable (the document did not build, or a field is null)
+    skip      not measurable: the document did not build, or the result
+              declares the measure unmeasurable (a null measure on a
+              document that built is a FAIL: a missing measurement)
     MISSING   --require named a (family, N) no result file covers   (red)
 Exit status 0 when nothing is red, 1 otherwise. With --report-timing the
 timing gates are printed but never red. The gates, thresholds and the
@@ -41,6 +43,8 @@ def fmt(v):
     if isinstance(v, float):
         return f"{v:.4g}"
     if isinstance(v, dict):
+        if not v:
+            return "null"
         return ", ".join(f"{k}:{fmt(x)}" for k, x in v.items())
     return str(v)
 
@@ -62,6 +66,28 @@ class Check:
         self.max_n = n
 
 
+def measure(r, ok, field):
+    """A deterministic gate's measure: ``(value, passed_if_null, note)``.
+
+    ``passed_if_null`` is what the gate says when the measure is null: ``None``
+    (skip) when the document did not build, or when the result's
+    ``unmeasurable`` map names the field; ``False`` otherwise, since a document
+    that built and carries no measurement is an adapter that failed to measure,
+    and a skip there would leave the gate unchecked."""
+    v = r.get(field)
+    if v is not None or not ok:
+        return v, None, ""
+    why = (r.get("unmeasurable") or {}).get(field)
+    if why is not None:
+        return v, None, f"unmeasurable: {why}"
+    # What the adapter said went wrong: the Rust adapter's `hand_loop_error`,
+    # the Julia adapter's note in `reason`.
+    detail = (r.get("hand_loop_error") if field == "hand_loop_max_abs_diff" else None) or r.get(
+        "reason"
+    )
+    return v, False, "missing measurement" + (f": {str(detail)[:160]}" if detail else "")
+
+
 def per_result_checks(run, r, gates, family_spec):
     fam, n = r["family"], r.get("n", r.get("n_cells"))
     excl = family_spec.get("gate_exclusions", {})
@@ -79,7 +105,7 @@ def per_result_checks(run, r, gates, family_spec):
         )
     )
     if "no_steady_alloc" in gates and "no_steady_alloc" not in excl:
-        a = r.get("allocs_per_call")
+        a, if_null, note = measure(r, ok, "allocs_per_call")
         lim = gates["no_steady_alloc"]["max_bytes_per_call"]
         out.append(
             Check(
@@ -88,12 +114,13 @@ def per_result_checks(run, r, gates, family_spec):
                 n,
                 "no_steady_alloc",
                 DETERMINISTIC,
-                None if (not ok or a is None) else a <= lim,
+                if_null if (not ok or a is None) else a <= lim,
                 a,
+                note,
             )
         )
     if "hand_loop_agrees" in gates and "hand_loop_agrees" not in excl:
-        d = r.get("hand_loop_max_abs_diff")
+        d, if_null, note = measure(r, ok, "hand_loop_max_abs_diff")
         scale = max(1.0, abs(r.get("dy_max_abs") or 0.0))
         tol = gates["hand_loop_agrees"]["rel_tol"] * scale
         out.append(
@@ -103,9 +130,9 @@ def per_result_checks(run, r, gates, family_spec):
                 n,
                 "hand_loop_agrees",
                 DETERMINISTIC,
-                None if d is None else d <= tol,
+                if_null if d is None else d <= tol,
                 d,
-                f"tol {tol:.3g}",
+                note or f"tol {tol:.3g}",
             )
         )
     if "speed" in gates and "speed" not in excl:
@@ -126,6 +153,18 @@ def per_result_checks(run, r, gates, family_spec):
             )
         )
     return out
+
+
+def code_size_slack(run, gates, family_spec):
+    """The spread `code_size_flat` tolerates for this run: the gate's own
+    `slack`, unless the family's `gate_overrides` states one. A stated slack is
+    a number, or a map from binding to number (a binding it does not name gets
+    0), since each binding measures its code size its own way."""
+    g = {**gates["code_size_flat"], **family_spec.get("gate_overrides", {}).get("code_size_flat", {})}
+    slack = g.get("slack", 0)
+    if isinstance(slack, dict):
+        slack = slack.get(run.get("binding"), 0)
+    return slack
 
 
 def family_checks(run, fam, results, gates, family_spec):
@@ -150,6 +189,7 @@ def family_checks(run, fam, results, gates, family_spec):
             )
         else:
             spread = max(sizes.values()) - min(sizes.values())
+            slack = code_size_slack(run, gates, family_spec)
             out.append(
                 Check(
                     run,
@@ -157,8 +197,9 @@ def family_checks(run, fam, results, gates, family_spec):
                     None,
                     "code_size_flat",
                     DETERMINISTIC,
-                    spread <= gates["code_size_flat"].get("slack", 0),
+                    spread <= slack,
                     sizes,
+                    f"slack {slack}" if slack else "",
                 )
             )
     if "build_slope" in gates and "build_slope" not in excl:
@@ -345,17 +386,22 @@ def main(argv=None):
     for r in rows:
         if a.report_timing and r["kind"] == TIMING:
             continue
+        # Several files share a family (serial and threaded, one per binding),
+        # so every message names the binding and thread mode.
+        where = f"{r['binding']} {'serial' if (r['threads'] or 1) == 1 else 'threaded'}"
+        n = "all" if r["n"] is None else r["n"]
         if r["outcome"] == "FAIL":
             red.append(
-                f"{r['family']} N={r['n']} {r['gate']}: fails and is not in the ledger ({fmt(r['measured'])})"
+                f"{where} {r['family']} N={n} {r['gate']}: fails and is not in the ledger "
+                f"({fmt(r['measured'])})"
             )
         elif r["outcome"] == "STALE":
             red.append(
-                f"{r['family']} N={r['n']} {r['gate']}: passes; remove this entry from the "
-                f"{r['binding']} ledger"
+                f"{where} {r['family']} N={n} {r['gate']}: passes; remove this entry from "
+                f"the {r['binding']} ledger"
             )
         elif r["outcome"] == "MISSING":
-            red.append(f"{r['family']} N={r['n']}: no result")
+            red.append(f"{where} {r['family']} N={n}: no result")
     counts = {}
     for r in rows:
         counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
@@ -363,8 +409,10 @@ def main(argv=None):
     if a.json:
         with open(a.json, "w") as fh:
             json.dump({"rows": rows, "red": red}, fh, indent=1)
+    # On stdout after the table, so a log that captures both streams keeps
+    # them in order.
     for msg in red:
-        print(f"RED: {msg}", file=sys.stderr)
+        print(f"RED: {msg}")
     return 1 if red else 0
 
 

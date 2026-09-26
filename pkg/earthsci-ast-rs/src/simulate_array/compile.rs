@@ -226,7 +226,7 @@ pub(crate) fn parse_subsystem_model(
 /// what makes the MPAS keyed-factor wiring contract (`nEdgesOnCell :=
 /// mesh.nEdgesOnCell`, a bare-name observed alias of a mounted const factor)
 /// resolvable. A model without subsystems is untouched (byte-identical build).
-pub(super) fn mount_subsystems(
+pub(crate) fn mount_subsystems(
     model: &mut Model,
     index_sets: &mut HashMap<String, IndexSet>,
 ) -> Result<(), CompileError> {
@@ -712,7 +712,8 @@ impl ArrayCompiled {
         // is lowered under its namespaced name too; `vi_arrays` is passed so a
         // caller-supplied factor array stays authoritative over a declared
         // default.
-        lower_inline_array_parameters(&mut model_owned, &index_sets_owned, vi_arrays)?;
+        let inline_param_arrays =
+            lower_inline_array_parameters(&mut model_owned, &index_sets_owned, vi_arrays)?;
         apply_ragged_factor_scope(&mut index_sets_owned, &model_owned.variables)?;
         // Under `element_type: "Float32"`, reject an index set whose subscripts
         // binary32 cannot address exactly. Index expressions share the value
@@ -891,8 +892,6 @@ impl ArrayCompiled {
 
         let SlotTables {
             var_shapes,
-            scalar_state_names,
-            scalar_state_index,
             state_defaults,
             n_states,
         } = slots;
@@ -912,8 +911,8 @@ impl ArrayCompiled {
             #[cfg(feature = "xla")]
             xla_rhs: std::cell::OnceCell::new(),
             var_shapes,
-            scalar_state_names,
-            scalar_state_index,
+            state_names: std::cell::OnceCell::new(),
+            qualified_state_names: std::cell::OnceCell::new(),
             state_defaults,
             param_names,
             param_index,
@@ -923,6 +922,7 @@ impl ArrayCompiled {
             n_states,
             declared_names,
             forcing: Rc::new(RefCell::new(HashMap::new())),
+            forcing_generation: std::cell::Cell::new(0),
             field_ics,
             ic_scope_defs,
             index_sets: index_sets.clone(),
@@ -932,6 +932,9 @@ impl ArrayCompiled {
             merged_renames: HashMap::new(),
             #[cfg(feature = "solve")]
             field_ic_memo: RefCell::new(None),
+            inline_param_arrays,
+            tape_cache: tape::TapeCache::new(),
+            shared_observed: std::cell::OnceCell::new(),
         })
     }
 }
@@ -1365,16 +1368,6 @@ fn capture_ic_scope_defs(
     out
 }
 
-/// The ROW-major (last index fastest) linear offset of the 0-based multi-index
-/// `multi` in an array of extents `shape` — the order an authored nested JSON
-/// array reads in, which is not this runtime's column-major slot order.
-fn row_major_offset(multi: &[usize], shape: &[usize]) -> usize {
-    multi
-        .iter()
-        .zip(shape.iter())
-        .fold(0usize, |acc, (i, n)| acc * n + i)
-}
-
 /// Lower every SHAPED parameter whose value the document itself supplies —
 /// INLINE ARRAY DATA (a row-major nested JSON array on its `default`, esm-spec
 /// §6.3, and the `parameter_overrides` a test resolves into it, §6.6.2) or a
@@ -1417,8 +1410,9 @@ fn lower_inline_array_parameters(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
     external: Option<&HashMap<String, ArrayD<f64>>>,
-) -> Result<(), CompileError> {
+) -> Result<HashMap<String, (Vec<usize>, Vec<f64>)>, CompileError> {
     let mut lowered: Vec<(String, JsonValue)> = Vec::new();
+    let mut dense: HashMap<String, (Vec<usize>, Vec<f64>)> = HashMap::new();
     for (name, var) in &mut model.variables {
         if var.var_type != VariableType::Parameter {
             continue;
@@ -1452,6 +1446,7 @@ fn lower_inline_array_parameters(
             var.var_type = VariableType::Unknown;
             var.default = None;
             lowered.push((name.clone(), dense_to_json(&want, &values)));
+            dense.insert(name.clone(), (want, values));
             continue;
         }
         let (shape, values) = default.to_dense().map_err(|e| {
@@ -1476,6 +1471,7 @@ fn lower_inline_array_parameters(
         var.var_type = VariableType::Unknown;
         var.default = None;
         lowered.push((name.clone(), dense_to_json(&shape, &values)));
+        dense.insert(name.clone(), (shape, values));
     }
     for (name, value) in lowered {
         // A bare-variable LHS makes it an OBSERVED (esm-spec §6.3.1), and a
@@ -1492,7 +1488,7 @@ fn lower_inline_array_parameters(
             comment: None,
         });
     }
-    Ok(())
+    Ok(dense)
 }
 
 /// Re-nest a row-major dense buffer into the nested JSON array a `const` node
@@ -1679,17 +1675,16 @@ fn partition_states(
 
 /// Flat state-vector tables built by [`build_slot_tables`] (stage 4),
 /// mirroring the corresponding [`ArrayCompiled`] fields: per-variable
-/// shape/offset descriptions plus the per-slot name / index / default tables.
+/// shape/offset descriptions and per-variable defaults. Per-slot names are
+/// not built: they follow from the layout (see `layout::slot_name`).
 struct SlotTables {
     var_shapes: IndexMap<String, VarShape>,
-    scalar_state_names: Vec<String>,
-    scalar_state_index: HashMap<String, usize>,
-    state_defaults: Vec<Option<f64>>,
+    state_defaults: Vec<StateDefault>,
     n_states: usize,
 }
 
-/// (4) Build the flat offset and scalar-slot names per state variable
-/// (column-major slot enumeration).
+/// (4) Build the flat offset and extents per state variable (column-major
+/// slot enumeration within each), with each variable's default.
 ///
 /// # Errors
 ///
@@ -1701,9 +1696,7 @@ fn build_slot_tables(
     shape_map: &HashMap<String, Vec<usize>>,
 ) -> Result<SlotTables, CompileError> {
     let mut var_shapes: IndexMap<String, VarShape> = IndexMap::new();
-    let mut scalar_state_names: Vec<String> = Vec::new();
-    let mut scalar_state_index: HashMap<String, usize> = HashMap::new();
-    let mut state_defaults: Vec<Option<f64>> = Vec::new();
+    let mut state_defaults: Vec<StateDefault> = Vec::with_capacity(final_states.len());
     let mut flat_offset: usize = 0;
 
     for name in final_states {
@@ -1714,15 +1707,13 @@ fn build_slot_tables(
             vec![1i64; shape.len()]
         };
         let var = model.variables.get(name);
-        let default = var.and_then(|v| v.default_scalar());
         // A SHAPED unknown may declare its whole initial profile as INLINE
-        // ARRAY DATA (esm-spec §6.3) instead of one broadcast scalar. Flatten it
-        // ROW-major (the authored nesting's order) and read each cell at its own
-        // multi-index below — the slot enumeration here is COLUMN-major, so the
-        // two orders coincide only in rank 1 and the value must be gathered, not
-        // zipped. A ragged array or a shape that disagrees with the slots is a
-        // build error, never a silently mis-seeded state vector.
-        let default_field = match var.and_then(|v| v.default_array()) {
+        // ARRAY DATA (esm-spec §6.3) instead of one broadcast scalar. It is
+        // kept ROW-major (the authored nesting's order) and gathered into the
+        // column-major slots when the initial state is built. A ragged array
+        // or a shape that disagrees with the slots is a build error, never a
+        // silently mis-seeded state vector.
+        let default = match var.and_then(|v| v.default_array()) {
             Some(Ok((dshape, values))) => {
                 if dshape != shape {
                     return Err(CompileError::build_err(format!(
@@ -1730,39 +1721,21 @@ fn build_slot_tables(
                          not match the resolved grid shape {shape:?} (esm-spec §6.6.2)"
                     )));
                 }
-                Some(values)
+                if shape.is_empty() {
+                    StateDefault::Scalar(var.and_then(|v| v.default_scalar()))
+                } else {
+                    StateDefault::Field(values)
+                }
             }
             Some(Err(e)) => {
                 return Err(CompileError::build_err(format!(
                     "state '{name}': {e} (esm-spec §6.3)"
                 )));
             }
-            None => None,
+            _ => StateDefault::Scalar(var.and_then(|v| v.default_scalar())),
         };
         let total = shape.iter().copied().product::<usize>().max(1);
-        if shape.is_empty() {
-            scalar_state_names.push(name.clone());
-            scalar_state_index.insert(name.clone(), flat_offset);
-            state_defaults.push(default);
-        } else {
-            // Generate per-element names in column-major order.
-            for flat in 0..total {
-                let multi = flat_to_multi_col_major(flat, &shape);
-                let idx_str = multi
-                    .iter()
-                    .zip(origin.iter())
-                    .map(|(v, o)| (v + *o as usize).to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let slot_name = format!("{name}[{idx_str}]");
-                scalar_state_names.push(slot_name.clone());
-                scalar_state_index.insert(slot_name, flat_offset + flat);
-                state_defaults.push(match default_field.as_ref() {
-                    Some(values) => Some(values[row_major_offset(&multi, &shape)]),
-                    None => default,
-                });
-            }
-        }
+        state_defaults.push(default);
         var_shapes.insert(
             name.clone(),
             VarShape {
@@ -1776,8 +1749,6 @@ fn build_slot_tables(
 
     Ok(SlotTables {
         var_shapes,
-        scalar_state_names,
-        scalar_state_index,
         state_defaults,
         n_states: flat_offset,
     })
@@ -2642,7 +2613,7 @@ fn build_rhs_rules(
 ) -> Result<Vec<RhsRule>, CompileError> {
     let var_shapes = &slots.var_shapes;
     let mut rhs_rules: Vec<RhsRule> = Vec::new();
-    let mut covered_slots: HashSet<usize> = HashSet::new();
+    let mut covered_slots = SlotCoverage::new(slots.n_states);
 
     // Declared index-set axis NAMES of every array-shaped variable (state /
     // parameter / observed), used to lower a whole-array `D(state)` RHS into
@@ -2693,7 +2664,7 @@ fn build_rhs_rules(
 fn lower_faq_derivative(
     d: DerivArrayop,
     var_shapes: &IndexMap<String, VarShape>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     let DerivArrayop {
@@ -2713,21 +2684,13 @@ fn lower_faq_derivative(
         )));
     }
     // Mark the covered slots.
-    let shape = &var_shapes[&var];
-    for tuple in cartesian_range(&ranges) {
-        // Map to column-major flat offset using actual LHS index expressions.
-        let binds: HashMap<String, i64> = idx_names
-            .iter()
-            .zip(tuple.iter())
-            .map(|(n, v)| (n.clone(), *v))
-            .collect();
-        let actual_multi: Vec<i64> = lhs_idx_exprs
-            .iter()
-            .map(|e| eval_simple_index(e, &binds))
-            .collect();
-        let flat = multi_to_flat_col_major(&actual_multi, &shape.shape, &shape.origin);
-        covered_slots.insert(shape.flat_offset + flat);
-    }
+    mark_faq_lhs_coverage(
+        &var_shapes[&var],
+        &idx_names,
+        &ranges,
+        &lhs_idx_exprs,
+        covered_slots,
+    );
     rhs_rules.push(RhsRule::ArrayLoop {
         var_name: var,
         output_idx_names: idx_names,
@@ -2749,7 +2712,7 @@ fn lower_indexed_derivative(
     indices: &[i64],
     rhs: &Expr,
     var_shapes: &IndexMap<String, VarShape>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     // Indexed: find slot.
@@ -2777,7 +2740,7 @@ fn lower_bare_derivative(
     model: &Model,
     array_axes: &HashMap<String, Vec<String>>,
     var_shapes: &IndexMap<String, VarShape>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     let shape = var_shapes
@@ -2824,6 +2787,7 @@ fn lower_bare_derivative(
             &shape,
             target_axes,
             array_axes,
+            var_shapes,
             covered_slots,
             rhs_rules,
         )?;
@@ -2847,7 +2811,7 @@ fn lower_wholearray_producer_lift(
     shape: &VarShape,
     target_axes: Option<&[String]>,
     array_axes: &HashMap<String, Vec<String>>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     let ndim = shape.shape.len();
@@ -2862,9 +2826,7 @@ fn lower_wholearray_producer_lift(
     let plan = build_gather_plan(rhs, array_axes, &var, target_axes, false)?;
     let body = index_array_leaves_by_loops(rhs, array_axes, Some(&plan), &loops);
     let total = shape.shape.iter().copied().product::<usize>().max(1);
-    for flat in 0..total {
-        covered_slots.insert(shape.flat_offset + flat);
-    }
+    covered_slots.insert_range(shape.flat_offset, total);
     rhs_rules.push(RhsRule::ArrayLoop {
         var_name: var.clone(),
         output_idx_names: loops,
@@ -2883,21 +2845,55 @@ fn lower_wholearray_producer_lift(
 }
 
 /// Whole-array `D(var) = <array-valued rhs>` over a declared
-/// array shape: enumerate cells and emit one per-cell scalar
-/// rule, indexing each array-shaped RHS leaf by that cell
-/// (elementwise semantics). This is the array-runtime analog
-/// of the Julia `_lift_wholearray_deriv_equations` lift.
+/// array shape, with elementwise semantics: each array-shaped
+/// RHS leaf is indexed by the output cell. This is the
+/// array-runtime analog of the Julia
+/// `_lift_wholearray_deriv_equations` lift.
+///
+/// The rule is ONE [`RhsRule::ArrayLoop`] over the whole shape, its body
+/// gathering every leaf by the loop symbols ([`CellCoords::Loops`]) — the
+/// same rewrite the per-cell form applies with integer coordinates, so each
+/// cell evaluates the identical scalar expression. Only a body
+/// [`wholearray_body_loops_as_percell`] rejects keeps the per-cell form, one
+/// [`RhsRule::IndexedScalar`] per cell.
+#[allow(clippy::too_many_arguments)]
 fn lower_wholearray_percell(
     var: String,
     rhs: &Expr,
     shape: &VarShape,
     target_axes: Option<&[String]>,
     array_axes: &HashMap<String, Vec<String>>,
-    covered_slots: &mut HashSet<usize>,
+    var_shapes: &IndexMap<String, VarShape>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     let plan = build_gather_plan(rhs, array_axes, &var, target_axes, true)?;
     let total = shape.shape.iter().copied().product::<usize>().max(1);
+    if wholearray_body_loops_as_percell(rhs, array_axes, var_shapes) {
+        let ndim = shape.shape.len();
+        let loops: Vec<String> = (0..ndim).map(|d| format!("_lp{d}_{var}")).collect();
+        let output_ranges: Vec<(i64, i64)> = shape
+            .shape
+            .iter()
+            .zip(shape.origin.iter())
+            .map(|(sz, o)| (*o, *o + *sz as i64 - 1))
+            .collect();
+        let lhs_idx_exprs: Vec<Expr> = loops.iter().map(|l| Expr::Variable(l.clone())).collect();
+        let body = index_array_leaves(rhs, array_axes, Some(&plan), CellCoords::Loops(&loops));
+        covered_slots.insert_range(shape.flat_offset, total);
+        rhs_rules.push(RhsRule::ArrayLoop {
+            var_name: var,
+            output_idx_names: loops,
+            output_ranges,
+            lhs_idx_exprs,
+            body: Box::new(body),
+            contract_names: Vec::new(),
+            contract_dims: Vec::new(),
+            reduce: ReduceKind::Sum,
+            filter: None,
+        });
+        return Ok(());
+    }
     for flat in 0..total {
         let multi0 = flat_to_multi_col_major(flat, &shape.shape);
         let cell: Vec<i64> = multi0
@@ -2905,7 +2901,7 @@ fn lower_wholearray_percell(
             .zip(shape.origin.iter())
             .map(|(m, o)| *m as i64 + *o)
             .collect();
-        let body = index_array_leaves(rhs, array_axes, Some(&plan), &cell);
+        let body = index_array_leaves(rhs, array_axes, Some(&plan), CellCoords::Ints(&cell));
         let slot = shape.flat_offset + flat;
         covered_slots.insert(slot);
         rhs_rules.push(RhsRule::IndexedScalar {
@@ -2925,14 +2921,12 @@ fn lower_wholearray_percell(
 fn cover_held_at_ic_slots(
     held_at_ic: &HashSet<String>,
     var_shapes: &IndexMap<String, VarShape>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
 ) {
     for name in held_at_ic {
         if let Some(vs) = var_shapes.get(name) {
             let total = vs.shape.iter().copied().product::<usize>().max(1);
-            for k in 0..total {
-                covered_slots.insert(vs.flat_offset + k);
-            }
+            covered_slots.insert_range(vs.flat_offset, total);
         }
     }
 }
@@ -2940,16 +2934,17 @@ fn cover_held_at_ic_slots(
 /// (8) Every state slot must have a defining equation.
 fn check_state_slots_covered(
     slots: &SlotTables,
-    covered_slots: &HashSet<usize>,
+    covered_slots: &SlotCoverage,
 ) -> Result<(), CompileError> {
-    for (i, name) in slots.scalar_state_names.iter().enumerate() {
-        if !covered_slots.contains(&i) {
-            return Err(CompileError::build_err(format!(
+    match covered_slots.first_uncovered() {
+        Some(slot) => {
+            let name = slot_name(&slots.var_shapes, slot).unwrap_or_default();
+            Err(CompileError::build_err(format!(
                 "State slot '{name}' has no defining derivative equation."
-            )));
+            )))
         }
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Evaluate a state-free build-time expression (grid geometry, §11.4.1
@@ -3488,8 +3483,7 @@ fn externally_refreshed(var: &ModelVariable) -> bool {
 /// `variables[v].expression` field. Sorted by name (a `BTreeMap`), so every
 /// consumer iterates deterministically.
 fn observed_bodies(model: &Model) -> std::collections::BTreeMap<String, Expr> {
-    crate::classification::Classification::from_parts(&model.variables, &model.equations)
-        .observed_definitions
+    crate::classification::observed_definitions_of_parts(&model.variables, &model.equations)
 }
 
 /// Gather the build-time-CONSTANT factor arrays the value-invention engine reads
@@ -4415,10 +4409,35 @@ pub(super) fn index_array_leaves_by_loops(
     }
 }
 
+/// The coordinates [`index_array_leaves`] gathers each leaf at: one concrete
+/// 1-based cell, or the loop symbols of an [`RhsRule::ArrayLoop`] over the
+/// whole shape (which bind, cell by cell, to exactly those integers).
+#[derive(Clone, Copy)]
+pub(super) enum CellCoords<'a> {
+    Ints(&'a [i64]),
+    Loops(&'a [String]),
+}
+
+impl CellCoords<'_> {
+    fn len(&self) -> usize {
+        match self {
+            CellCoords::Ints(c) => c.len(),
+            CellCoords::Loops(l) => l.len(),
+        }
+    }
+
+    fn coord(&self, d: usize) -> Expr {
+        match self {
+            CellCoords::Ints(c) => Expr::Integer(c[d]),
+            CellCoords::Loops(l) => Expr::Variable(l[d].clone()),
+        }
+    }
+}
+
 /// Rewrite each bare array-shaped `Variable` leaf of a whole-array `D(state)` RHS
-/// into an `index(var, cell…)` gather at the given 1-based cell, so the
-/// elementwise array equation compiles to one per-cell scalar rule. The array
-/// target of an existing `index` node is left untouched (it is already a gather).
+/// into an `index(var, cell…)` gather at the given cell, so the elementwise
+/// array equation compiles to a scalar body per cell. The array target of an
+/// existing `index` node is left untouched (it is already a gather).
 ///
 /// A declared leaf listed in `plan` is gathered at the cell coordinates of ITS
 /// OWN axes (esm-spec §4.3.4) — a `[lat]` operand under a `[lon,lat,lev]`
@@ -4431,7 +4450,7 @@ pub(super) fn index_array_leaves(
     expr: &Expr,
     array_axes: &HashMap<String, Vec<String>>,
     plan: Option<&GatherPlan>,
-    cell: &[i64],
+    cell: CellCoords<'_>,
 ) -> Expr {
     match expr {
         Expr::Variable(v) => {
@@ -4441,11 +4460,11 @@ pub(super) fn index_array_leaves(
                     // `positions` is built against this same result, so every
                     // entry indexes `cell`.
                     Some(positions) => {
-                        args.extend(positions.iter().map(|&p| Expr::Integer(cell[p])));
+                        args.extend(positions.iter().map(|&p| cell.coord(p)));
                     }
                     None => {
                         let n = axes.len().min(cell.len());
-                        args.extend(cell[..n].iter().map(|&c| Expr::Integer(c)));
+                        args.extend((0..n).map(|d| cell.coord(d)));
                     }
                 }
                 Expr::operator(ExpressionNode {
@@ -4474,6 +4493,54 @@ pub(super) fn index_array_leaves(
             Expr::operator(out)
         }
         other => other.clone(),
+    }
+}
+
+/// Whether a whole-array `D(state)` RHS may be lowered as one loop over the
+/// state's shape ([`CellCoords::Loops`]) instead of one rule per cell.
+///
+/// The two forms evaluate the same scalar expression at every cell, so the
+/// oracle cannot tell them apart. The loop form is refused where the TAPE
+/// lowers the two differently: a leaf the rewrite would gather inside an
+/// `index` argument (a data-dependent index), any aggregate (a per-cell body
+/// folds a scalar reduction wholesale, while one nested in a loop's box stays
+/// per-cell), and a state leaf whose shape was inferred rather than declared,
+/// which the rewrite leaves whole.
+fn wholearray_body_loops_as_percell(
+    expr: &Expr,
+    array_axes: &HashMap<String, Vec<String>>,
+    var_shapes: &IndexMap<String, VarShape>,
+) -> bool {
+    fn rewrites_a_leaf(e: &Expr, array_axes: &HashMap<String, Vec<String>>) -> bool {
+        match e {
+            Expr::Variable(v) => array_axes.contains_key(v),
+            Expr::Operator(node) if node.op == "index" => node
+                .args
+                .iter()
+                .skip(1)
+                .any(|a| rewrites_a_leaf(a, array_axes)),
+            Expr::Operator(node) => node.any_child(&mut |c| rewrites_a_leaf(c, array_axes)),
+            _ => false,
+        }
+    }
+    match expr {
+        Expr::Variable(v) => {
+            array_axes.contains_key(v) || var_shapes.get(v).is_none_or(|vs| vs.shape.is_empty())
+        }
+        Expr::Operator(node) => {
+            if node.op == "index" {
+                return !node
+                    .args
+                    .iter()
+                    .skip(1)
+                    .any(|a| rewrites_a_leaf(a, array_axes));
+            }
+            if is_faq_op(&node.op) {
+                return false;
+            }
+            !node.any_child(&mut |c| !wholearray_body_loops_as_percell(c, array_axes, var_shapes))
+        }
+        _ => true,
     }
 }
 

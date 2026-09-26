@@ -913,6 +913,25 @@ impl<'a> Emitter<'a> {
                 )?;
                 self.define(*out, v);
             }
+            Instr::Assemble { table, out } => {
+                let dims = self.out_dims(*out);
+                let mut cur = self.zeros(&dims)?;
+                for (src, region) in &self.prog.assemblies[*table as usize].parts {
+                    let spec = &self.prog.regions[*region as usize];
+                    let sv = self.operand(src)?;
+                    let upd = self.to_shape(&sv, &spec.shape)?;
+                    let starts: Vec<XlaOp> = spec
+                        .dest_lo
+                        .iter()
+                        .map(|&x| self.ci(x as i64))
+                        .collect::<R<Vec<_>>>()?;
+                    cur = self.wrap(
+                        cur.dynamic_update_slice(&upd, &starts),
+                        "assemble: dynamic_update_slice",
+                    )?;
+                }
+                self.define(*out, cur);
+            }
             Instr::Export { slot, export } => {
                 let name = self.prog.exports[*export as usize].0.clone();
                 let v = self.slots[*slot as usize]
@@ -977,6 +996,54 @@ impl<'a> Emitter<'a> {
                     )));
                 }
                 self.define(*out, v);
+            }
+            Instr::Scan {
+                op,
+                init,
+                src,
+                axis,
+                inclusive,
+                src_shape,
+                out,
+            } => {
+                let s = self.src(src)?;
+                let have = self.dims(&s)?;
+                if have != src_shape.as_slice() {
+                    return Err(self.err(format!(
+                        "scan source has shape {have:?} but the instruction expects {:?}",
+                        &src_shape[..]
+                    )));
+                }
+                // One plane per scanned position, folded ascending and written
+                // back in place: the tape's own sweep, so the association is
+                // the interpreter's.
+                let ax = *axis as usize;
+                let plane_at = |k: usize| {
+                    self.wrap(
+                        s.slice_in_dim(k as i64, k as i64 + 1, 1, ax as i64),
+                        "scan: plane",
+                    )
+                };
+                let first = plane_at(0)?;
+                let mut acc = self.splat_like(&first, *init)?;
+                let mut cur = self.zeros(&have)?;
+                for k in 0..have[ax] {
+                    let plane = plane_at(k)?;
+                    if *inclusive {
+                        acc = self.bin(*op, &acc, &plane)?;
+                    }
+                    let starts: Vec<XlaOp> = (0..have.len())
+                        .map(|d| self.ci(if d == ax { k as i64 } else { 0 }))
+                        .collect::<R<Vec<_>>>()?;
+                    cur = self.wrap(
+                        cur.dynamic_update_slice(&acc, &starts),
+                        "scan: dynamic_update_slice",
+                    )?;
+                    if !*inclusive {
+                        acc = self.bin(*op, &acc, &plane)?;
+                    }
+                }
+                self.define(*out, cur);
             }
             Instr::Interp { table, x, y, out } => {
                 let tbl = &self.prog.interp_tables[*table as usize];

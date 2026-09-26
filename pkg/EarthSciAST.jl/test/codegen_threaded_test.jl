@@ -8,12 +8,12 @@
 #   2. CHUNK-INSTANCE DECOMPOSITION — the generated function's `(c, nchunks)`
 #      instances, run sequentially in THIS process, reproduce the serial
 #      `(1, 1)` du bitwise (`===`, so NaN/-0.0 count) for every cell-set kind
-#      the emitter chunks: outs/contig, rank-1, rank-2, and rank-3 boxes.
+#      the emitter chunks: outs/contig, rank-1, rank-2, rank-3 and rank-4 boxes.
 #      This pins the chunked loop-bound arithmetic (the row clamps of the
-#      rank-2/3 nests) with no threads involved — under Polyester the chunks
+#      rank-2/3/N nests) with no threads involved — under Polyester the chunks
 #      only ever run concurrently, which cannot change per-cell values when
 #      the out-slots are disjoint (the build-time check below).
-#   3. DISJOINTNESS — `_cellset_outs_disjoint!` catches duplicates within an
+#   3. DISJOINTNESS — `_cellsets_outs_unique` catches duplicates within an
 #      outs set AND across cell sets (contiguous ranges included); real builds
 #      carry `outs_disjoint == true` into the section caches, and a poisoned
 #      cache yields the permanent `:cg_serial_shared_outs` verdict.
@@ -97,6 +97,27 @@ function _cgt_3d_model(Ni, Nj, Nk)
 end
 _cgt_3d_ics(Ni, Nj, Nk) = Dict("u[$i,$j,$k]" => sin(0.3i) * cos(0.2j) + 0.07k
                                for i in 1:Ni, j in 1:Nj, k in 1:Nk)
+
+# 4-D 9-point Laplacian — the rank-above-3 chunked nest (a division odometer
+# over the dims past the first, once per row).
+function _cgt_4d_model(Ni, Nj, Nk, Nl)
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j", "k", "l"]))
+    u(i, j, k, l) = _idx("u", i, j, k, l)
+    I = _v("i"); J = _v("j"); K = _v("k"); L = _v("l")
+    m(x) = _op("-", x, _i(1)); pl(x) = _op("+", x, _i(1))
+    body = _op("+",
+        u(m(I), J, K, L), u(pl(I), J, K, L), u(I, m(J), K, L), u(I, pl(J), K, L),
+        u(I, J, m(K), L), u(I, J, pl(K), L), u(I, J, K, m(L)), u(I, J, K, pl(L)),
+        _op("*", _n(-8.0), u(I, J, K, L)))
+    rng = Dict("i" => [1, Ni], "j" => [1, Nj], "k" => [1, Nk], "l" => [1, Nl])
+    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j", "k", "l"],
+        expr_body=_Didx("u", I, J, K, L), ranges=rng)
+    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j", "k", "l"],
+        expr_body=body, ranges=rng)
+    ESM.Model(vars, [ESM.Equation(lhs, rhs)])
+end
+_cgt_4d_ics(Ni, Nj, Nk, Nl) = Dict("u[$i,$j,$k,$l]" => sin(0.3i) * cos(0.2j) + 0.07k - 0.03l
+                                   for i in 1:Ni, j in 1:Nj, k in 1:Nk, l in 1:Nl)
 
 function _cgt_build(model, ics; compiler::Symbol=:native, env...)
     withenv((String(k) => v for (k, v) in pairs(env))...) do
@@ -262,27 +283,35 @@ else
             end
         end
 
-        @testset "_cellset_outs_disjoint! (within and across cell sets)" begin
-            seen = Set{Int}()
-            @test ESM._cellset_outs_disjoint!(seen, ESM._outs_cells([4, 9, 2]))
-            @test !ESM._cellset_outs_disjoint!(Set{Int}(),
-                                               ESM._outs_cells([4, 9, 4]))
+        @testset "_cellsets_outs_unique (within and across cell sets)" begin
+            U = ESM._cellsets_outs_unique
+            @test U([ESM._outs_cells([4, 9, 2])])
+            @test !U([ESM._outs_cells([4, 9, 4])])
             # contig vs box overlap ACROSS sets (the case a per-kernel check
             # would never see): contig 1:6, then a stride-2 box hitting slot 4.
-            @test !ESM._cellset_outs_disjoint!(copy(seen), ESM._contig_cells(6))
-            seen2 = Set{Int}()
-            @test ESM._cellset_outs_disjoint!(seen2, ESM._contig_cells(6))
+            @test !U([ESM._outs_cells([4, 9, 2]), ESM._contig_cells(6)])
             box = ESM._CellSet([2], [UnitRange{Int}(1, 3)], 2)  # slots 4, 6, 8
-            @test !ESM._cellset_outs_disjoint!(seen2, box)
-            seen3 = Set{Int}()
-            @test ESM._cellset_outs_disjoint!(seen3, ESM._contig_cells(3))
-            @test ESM._cellset_outs_disjoint!(seen3, box)       # 1..3 vs 4,6,8
+            @test !U([ESM._contig_cells(6), box])
+            @test U([ESM._contig_cells(3), box])                # 1..3 vs 4,6,8
+            # Boxes of one layout map (a 10x10 column-major block at slot 1):
+            # decided box against box, with no slot enumerated.
+            b2(r1, r2) = ESM._CellSet([1, 10], [r1, r2], -10)
+            @test U([b2(1:10, 1:1), b2(1:1, 2:10), b2(2:10, 2:10)])
+            @test !U([b2(1:10, 1:1), b2(1:1, 1:10)])            # share cell (1,1)
+            # A map that is not one-to-one on its box goes to the bit map.
+            @test !U([ESM._CellSet([1, 1], [1:3, 1:3], 0)])
+            @test U([ESM._CellSet([1, 3], [1:3, 1:3], 0)])
+            # Rank 4, one box per corner slab of a 3^4 block.
+            b4(r) = ESM._CellSet([1, 3, 9, 27], r, 0)
+            @test U([b4([1:3, 1:3, 1:3, 1:1]), b4([1:3, 1:3, 1:3, 2:3])])
+            @test !U([b4([1:3, 1:3, 1:3, 1:2]), b4([1:3, 1:3, 1:3, 2:3])])
         end
 
         @testset "chunk instances reproduce the serial du ($(name))" for (name, model, ics, wantrank) in (
                     ("1-D contig+box", _cgt_1d_model(37), _cgt_1d_ics(37), 1),
                     ("2-D boxes", _cgt_2d_model(13), _cgt_2d_ics(13), 2),
-                    ("3-D boxes", _cgt_3d_model(9, 8, 7), _cgt_3d_ics(9, 8, 7), 3))
+                    ("3-D boxes", _cgt_3d_model(9, 8, 7), _cgt_3d_ics(9, 8, 7), 3),
+                    ("4-D boxes", _cgt_4d_model(6, 5, 4, 5), _cgt_4d_ics(6, 5, 4, 5), 4))
             # The fixture really carries a box of the advertised rank (else
             # this case would silently stop exercising that emission arm).
             @test wantrank in _cgt_ranks(model, ics)

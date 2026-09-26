@@ -160,6 +160,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
 
     # ---- Tree-walk evaluator (src/tree_walk.jl) + discrete-cadence data refresh ----
     include("tree_walk_test.jl")
+    include("state_layout_test.jl")                # the flat state layout ≡ the per-cell name map it replaced
+    include("compiled_lane_eval_test.jl")          # the affine tier's compiled lane evaluator ≡ _eval_recipe
     include("dag_walk_memo_test.jl")               # ESS-1p5 exponential-path DAG walk regression
     include("intern_oracle_test.jl")               # A1 hash-consing ≡ the interpreter (differential)
     include("xeq_variant_oracle_test.jl")          # A3 cross-eq variant memo ≡ the interpreter (differential)
@@ -281,6 +283,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("contraction_loop_test.jl")             # runtime contraction loop (ess-runtime-contraction)
     include("contraction_tier_order_test.jl")       # loop-vs-affine tier ORDER (ess-runtime-contraction × ess-affine)
     include("array_contraction_test.jl")            # whole-array contraction loop nest (ess-array-contraction)
+    include("array_contraction_table_test.jl")      # …its gated / ragged / filtered form, table-driven
+    include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
     # `compiler=:interpreter`: an in-place build that skips no prelude slot,
     # which is what the tiering tests above use as their differential oracle.
@@ -316,12 +320,14 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("setup_map_compile_once_test.jl")  # promoted-physics MAP: compile-once == per-cell, bitwise
     include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == rank-abstract, bitwise
     include("geom_overlap_drive_test.jl")     # setup overlap broad phase: candidate-DRIVEN, and what it changes
+    include("geom_on_drive_test.jl")          # setup bin-equality broad phase: key matches DRIVE the sweep
     include("broad_phase_conformance_test.jl")   # projection-pushdown Phase 3a
     include("overlap_gate_conformance_test.jl")   # projection-pushdown Phase 2a
     include("join_namespacing_test.jl")           # §5.5.6 join names under flattening
     include("join_on_equality_gate_test.jl")      # §5.5.8 value-equality gate: data columns + DRIVING
     include("join_on_self_join_test.jl")          # §5.5.8 a relation joined to ITSELF: two ranges, one index set
     include("vi_overlap_scaling_test.jl")         # projection-pushdown Wall #1 (candidate-driven)
+    include("vi_on_drive_test.jl")                # value invention: bin-equality key matches DRIVE the join
     include("pushdown_edge_test.jl")              # projection-pushdown Phase 2b (L1 milestone)
     include("auto_pushdown_rewrite_test.jl")      # projection-pushdown Phase 4 (auto desugar)
     include("pushdown_template_ref_test.jl")      # the desugar THROUGH surviving template refs (§9.6.4 Option B)

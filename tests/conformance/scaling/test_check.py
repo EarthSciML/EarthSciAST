@@ -118,6 +118,39 @@ def main():
     code, o = run(wrong, [])
     assert code == 1 and o[("stencil_1d", 100, "hand_loop_agrees")] == "FAIL", o
 
+    # A document that built must carry each deterministic gate's measure: a
+    # null there is a missing measurement, not an unmeasurable one.
+    lost = [
+        result(
+            "stencil_1d",
+            100,
+            hand_loop_max_abs_diff=None,
+            hand_loop_error="canonical_vars: no state named u",
+        )
+    ]
+    code, o = run(lost, [])
+    assert code == 1 and o[("stencil_1d", 100, "hand_loop_agrees")] == "FAIL", o
+    code, o = run([result("stencil_1d", 100, allocs_per_call=None)], [])
+    assert code == 1 and o[("stencil_1d", 100, "no_steady_alloc")] == "FAIL", o
+    # ...unless the result says the measure is unmeasurable there.
+    declared = [
+        result(
+            "stencil_1d",
+            100,
+            allocs_per_call=None,
+            unmeasurable={"allocs_per_call": "no counting allocator on this target"},
+        )
+    ]
+    code, o = run(declared, [])
+    assert code == 0 and o[("stencil_1d", 100, "no_steady_alloc")] == "skip", o
+    # A missing measurement a ledger entry covers is ledgered like any failure.
+    code, o = run(lost, [{"family": "stencil_1d", "gate": "hand_loop_agrees", "phase": 2}])
+    assert code == 0 and o[("stencil_1d", 100, "hand_loop_agrees")] == "ledgered", o
+    # A refused document's hand loop is checked against the interpreter only up
+    # to its size cap: a null there stays unmeasured.
+    code, o = run(refused, [{"family": "regrid", "gate": "builds", "phase": 3}])
+    assert o[("regrid", 100, "hand_loop_agrees")] == "skip", o
+
     # --require names what is missing.
     code, o = run(ok, [], "--require", "pr")
     assert code == 1 and o[("stencil_2d", 100, "present")] == "MISSING", o
@@ -128,6 +161,19 @@ def main():
     grown = ok + [result("stencil_1d", 100000, code_size=2)]
     code, o = run(grown, late)
     assert code == 0 and o[("stencil_1d", None, "code_size_flat")] == "ledgered", o
+
+    # A family's stated code-size slack, per binding: stencil_2d's fused tape
+    # may lose two instructions at a larger N under Rust, and not three; a
+    # binding the slack does not name keeps slack 0.
+    wobble = [result("stencil_2d", 100), result("stencil_2d", 1000, code_size=2)]
+    code, o = run(wobble, [])
+    assert code == 0 and o[("stencil_2d", None, "code_size_flat")] == "pass", o
+    code, o = run([result("stencil_2d", 100), result("stencil_2d", 1000, code_size=1)], [])
+    assert code == 1 and o[("stencil_2d", None, "code_size_flat")] == "FAIL", o
+    code, o = run([result("stencil_1d", 100), result("stencil_1d", 1000, code_size=2)], [])
+    assert code == 1 and o[("stencil_1d", None, "code_size_flat")] == "FAIL", o
+    assert check.code_size_slack({"binding": "julia"}, {"code_size_flat": {"slack": 0}},
+                                 {"gate_overrides": {"code_size_flat": {"slack": {"rust": 2}}}}) == 0
 
     # --require looks across files: one file per family is a complete sweep.
     with open(os.path.join(HERE, "manifest.json")) as fh:

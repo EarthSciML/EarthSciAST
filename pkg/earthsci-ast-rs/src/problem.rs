@@ -849,7 +849,7 @@ impl EsmProblem {
     /// flattened state-vector order. Empty for a static EsmProblem.
     pub fn state_variable_names(&self) -> Vec<String> {
         match &*self.backend {
-            Backend::Array(c) => qualify_array_names(c, c.state_variable_names()),
+            Backend::Array(c) => c.qualified_state_names().to_vec(),
             Backend::Static(_) => Vec::new(),
         }
     }
@@ -966,7 +966,7 @@ pub fn callbacks(prob: &EsmProblem) -> &CallbackSet {
 /// path, so it is qualified too: `fuel_mce` in model `fuel_mce` is
 /// `fuel_mce.fuel_mce`, the spelling the flattened name has (API_SPEC §5.8)
 /// and the one Julia and Python report.
-fn qualify(model: &str, key: &str) -> String {
+pub(crate) fn qualify(model: &str, key: &str) -> String {
     let already = key
         .strip_prefix(model)
         .is_some_and(|rest| rest.starts_with('.'));
@@ -1581,6 +1581,9 @@ pub fn esm_problem<'a>(
     let mut owned_json: Option<JsonValue> = None;
     let mut owned_file: Option<EsmFile> = None;
     let mut flat_only: Option<&FlattenedSystem> = None;
+    // `owned_json` is exactly what the parser made of the file's text, so it
+    // nests within the parser's recursion limit (see stage (3)).
+    let mut json_from_text = false;
 
     match input {
         ProblemInput::Path(path) => {
@@ -1597,6 +1600,7 @@ pub fn esm_problem<'a>(
                 )))
             })?;
             owned_json = Some(raw);
+            json_from_text = true;
         }
         ProblemInput::Json(v) => owned_json = Some(v.clone()),
         ProblemInput::File(f) => owned_file = Some(f.clone()),
@@ -1751,8 +1755,11 @@ pub fn esm_problem<'a>(
             // evaluator whatever the compiler, and under a strict one it
             // stopped at the first observed it had to walk per cell.
             if let Some(r) = &prepared.refused {
+                // The walk stopped at its first cell (`StopAtFirstCell`).
                 let reason = match &r.route {
-                    crate::prepare::Route::PerCell(why) => why.clone(),
+                    crate::prepare::Route::PerCell(why) => {
+                        format!("{why}; {}", crate::simulate_array::ONE_CELL_NOTE)
+                    }
                     _ => String::new(),
                 };
                 return Err(SimulateError::Compile(
@@ -1787,6 +1794,7 @@ pub fn esm_problem<'a>(
                 }
             }));
             *raw = prepared.doc;
+            json_from_text = false;
             model_name = Some(prepared.model_name);
             build.fields = prepared.fields;
             build.members = prepared.members;
@@ -1802,12 +1810,25 @@ pub fn esm_problem<'a>(
         && let Some(raw) = owned_json.as_ref()
     {
         {
-            let text = serde_json::to_string(raw).map_err(|e| {
-                SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
-                    "re-serializing the prepared document: {e}"
-                )))
-            })?;
-            match crate::parse::load_string(&text) {
+            // The prepared document goes to the loader as the value it already
+            // is. Writing it out and parsing the text back gives the same
+            // document -- this crate parses with `float_roundtrip`, so every
+            // number reads back as the value written -- except that the parser
+            // refuses nesting past its recursion limit, so only a document
+            // nested that deep still takes the round trip, to get the same
+            // refusal. A document parsed from a file's text and not rewritten
+            // since is within that limit already.
+            let loaded = if json_from_text || nesting_within(raw, NESTING_WITHOUT_ROUND_TRIP) {
+                crate::parse::load_document(raw)
+            } else {
+                let text = serde_json::to_string(raw).map_err(|e| {
+                    SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
+                        "re-serializing the prepared document: {e}"
+                    )))
+                })?;
+                crate::parse::load_string(&text)
+            };
+            match loaded {
                 Ok(f) => owned_file = Some(f),
                 Err(e) => {
                     // A document the build pipeline rewrote may no longer be a
@@ -2082,6 +2103,20 @@ fn reject_f32_integration(prob: &EsmProblem) -> Result<(), SimulateError> {
         ));
     }
     Ok(())
+}
+
+/// Arrays and objects nested this deep or less parse from text well inside
+/// `serde_json`'s recursion limit (128).
+const NESTING_WITHOUT_ROUND_TRIP: usize = 64;
+
+/// Whether no array or object in `v` sits more than `limit` containers deep
+/// (the root container is depth 1).
+fn nesting_within(v: &JsonValue, limit: usize) -> bool {
+    match v {
+        JsonValue::Array(items) => limit > 0 && items.iter().all(|x| nesting_within(x, limit - 1)),
+        JsonValue::Object(map) => limit > 0 && map.values().all(|x| nesting_within(x, limit - 1)),
+        _ => true,
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2396,13 +2431,14 @@ fn build_compiler_report(
             if compiler.is_strict()
                 && let Some(reason) = reason
             {
+                // The walk stopped at its first cell (`field_ic_records`).
                 return Err(SimulateError::Compile(
                     crate::compile_error::CompileError::CompilerRefusedRule {
                         compiler: compiler.as_str(),
                         kind: r.kind,
                         rule: qualify(model, &r.name),
                         tier: "const",
-                        reason,
+                        reason: format!("{reason}; {}", crate::simulate_array::ONE_CELL_NOTE),
                     },
                 ));
             }
@@ -2832,7 +2868,7 @@ fn bind_providers(
     // where §2.5.2 puts the gated fetch — and never again.
     let providers = std::mem::take(&mut opts.providers);
     let mut exec = crate::provider::RefreshExecutor::from_providers(providers);
-    let forcing = compiled.forcing_handle();
+    let forcing = compiled.forcing_buffer();
     exec.materialize_const(&forcing)
         .map_err(|e| SimulateError::ProviderError {
             name: "<const-loader>".into(),
@@ -2891,7 +2927,7 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
             let sol = {
                 match (&prob.refresh, prob.discrete_forcing.is_empty()) {
                     (Some(exec), false) => {
-                        let forcing = compiled.forcing_handle();
+                        let forcing = compiled.forcing_buffer();
                         let mut exec = exec.borrow_mut();
                         let refresh_fn = |t: f64| -> Result<(), SimulateError> {
                             exec.refresh_at(t, &forcing).map(|_| ()).map_err(|e| {
@@ -2925,7 +2961,17 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
             // single-model array build names its rows bare, the flattened one
             // qualifies them. See `qualify_array_names`.
             let mut sol = sol;
-            sol.state_variable_names = qualify_array_names(compiled, &sol.state_variable_names);
+            if compiled.namespace().is_some() {
+                // The state rows' names are the model's (kept, already
+                // qualified); only the observed rows after them are spelled here.
+                let states = compiled.qualified_state_names();
+                let observed = sol
+                    .state_variable_names
+                    .split_off(states.len().min(sol.state_variable_names.len()));
+                let mut names = states.to_vec();
+                names.extend(qualify_array_names(compiled, &observed));
+                sol.state_variable_names = names;
+            }
             // Every row now carries the namespace, so none is reached through it.
             sol.metadata.namespace = None;
             Ok(sol)

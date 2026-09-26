@@ -6,14 +6,13 @@
 # build_evaluator entry points, and evaluate_expr.
 # ========================================================================
 
-# One `observed_field` answer: the build it belongs to, the forcing epoch it was
-# computed at (`_FORCING_EPOCH`) and the field. The field is state-free, so it
-# moves only when a live buffer is refreshed in place. The build is named by the
-# problem's `run_file` slot — each build allocates its own and `remake` shares
-# it — so a record reused for a second build, or a second problem, never
-# answers with the first one's field.
+# One `observed_field` answer: the forcing epoch it was computed at
+# (`_FORCING_EPOCH`) and the field. The field is state-free, so it moves only
+# when a live buffer is refreshed in place. It is filed under the build it
+# belongs to, named by the problem's `run_file` slot — each build allocates its
+# own and `remake` shares it — so a record reused for a second build, or a
+# second problem, never answers with the first one's field.
 struct _ObservedMemo
-    build::Base.RefValue{Any}
     epoch::UInt64
     value::Any
 end
@@ -108,11 +107,18 @@ mutable struct BuildInspection
     # built it — the seam used to hang off the out-of-place build product alone.
     forcing_buffers::NamedTuple
     forcing_buffer_index::Dict{String,Int}
-    # `observed_field(prob, name)` answers, keyed by the requested name (see
-    # `_ObservedMemo`). Emptied when a build starts, and read and written under
-    # `observed_lock`, since two tasks may read one problem at once.
-    observed_memo::Dict{String,_ObservedMemo}
+    # `observed_field(prob, name)` answers, keyed by the build (the problem's
+    # `run_file` slot) and the requested name (see `_ObservedMemo`), so two
+    # problems sharing this record do not evict each other's. Emptied when a
+    # build starts, and read and written under `observed_lock`, since two tasks
+    # may read one problem at once.
+    observed_memo::Dict{Tuple{Base.RefValue{Any},String},_ObservedMemo}
     observed_lock::ReentrantLock
+    # The `run_file` slot of the problem whose build this record describes:
+    # the one whose reads file `:observed` rows into `compiler_report`. A
+    # problem built earlier with the same record still reads through it, but
+    # its rows would land in another build's report.
+    observed_build::Base.RefValue{Any}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -122,7 +128,8 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Symbol}(),
                                     CompilerReport(:native),
                                     NamedTuple(), Dict{String,Int}(),
-                                    Dict{String,_ObservedMemo}(), ReentrantLock())
+                                    Dict{Tuple{Base.RefValue{Any},String},_ObservedMemo}(),
+                                    ReentrantLock(), Ref{Any}(nothing))
 
 """
     DiscreteMaterializer()
@@ -932,15 +939,17 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
     return merged
 end
 
-# Expand every INLINE ARRAY `initial_conditions` entry into the per-cell keys
-# (`u[1]`, `u[2,3]`, …) the u0 seeding reads, leaving scalar entries untouched.
-# A per-cell key the caller wrote explicitly WINS: it is the more specific
-# binding. Returns the ORIGINAL map when nothing was expanded.
+# Read every INLINE ARRAY `initial_conditions` entry as the per-cell keys
+# (`u[1]`, `u[2,3]`, …) the u0 seeding reads, leaving scalar entries untouched:
+# an `_InlineICs` view that holds each profile as an array rather than a key per
+# cell. A per-cell key the caller wrote explicitly WINS: it is the more specific
+# binding. Returns the ORIGINAL map when there is no inline profile.
 function _expand_inline_array_ics(model::Model, initial_conditions::AbstractDict,
                                   index_sets::AbstractDict)
     any(is_inline_array(v) for (_, v) in initial_conditions) || return initial_conditions
     out = Dict{String,Any}(String(k) => v for (k, v) in initial_conditions
                            if !is_inline_array(v))
+    arrays = Pair{String,Array{Float64}}[]
     for (k, v) in initial_conditions
         is_inline_array(v) || continue
         name = String(k)
@@ -949,12 +958,13 @@ function _expand_inline_array_ics(model::Model, initial_conditions::AbstractDict
             "initial_conditions[$(name)]: inline array data names no variable of this " *
             "model (esm-spec §6.6.2)"))
         _check_inline_shape(name, v, var.shape, index_sets, "initial_conditions")
+        vals = Array{Float64}(undef, size(v))
         for I in CartesianIndices(v)
-            key = _cell_key(name, collect(Int, Tuple(I)))
-            haskey(out, key) || (out[key] = Float64(v[I]))
+            vals[I] = Float64(v[I])
         end
+        push!(arrays, name => vals)
     end
-    return out
+    return _InlineICs(out, arrays)
 end
 
 # esm-spec §6.6.2: inline array data MUST match the variable's declared `shape`
@@ -1458,8 +1468,11 @@ function _enumerate_declared_array_cells!(array_cells, model::Model,
         (haskey(array_cells, n) && !isempty(array_cells[n])) && continue
         exts = _declared_shape_extents(v.shape, index_sets, derived_extents)
         exts === nothing && continue
-        cells = Vector{Int}[collect(Int, Tuple(I)) for I in CartesianIndices(Tuple(exts))]
-        array_cells[n] = sort!(cells)
+        cs = _DiscoveredCells()
+        if all(>(0), exts)
+            _cellset_push_box!(cs, ones(Int, length(exts)), exts, n)
+        end
+        array_cells[n] = cs
     end
     return nothing
 end
@@ -1494,14 +1507,15 @@ end
 
 # ---- Stage: fold scoped-reference / array `ic` equations (spec §11.4.1) ----
 # Now that each array state's cells are known, expand every deferred field-ic
-# into per-element initial values keyed by the flat element name. The RHS may
-# be a LOADED FIELD (a `const_arrays` entry supplying the initial field over
-# the lifted grid), a broadcast constant, or a coordinate expression. Folding
-# here means the array-cell u0 seeding (and callers that don't override)
-# pick these up exactly like a model-local `ic`. A target that resolves to no
-# array cells, or an RHS the seed path cannot evaluate, is a hard error — a
-# missing/unsupported scoped ic is never silently dropped. Mutates `eq_ics`.
-function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
+# into per-element initial values, handed to `set(slot, value)` for each cell of
+# the target (in lexicographic cell order). The RHS may be a LOADED FIELD (a
+# `const_arrays` entry supplying the initial field over the lifted grid), a
+# broadcast constant, or a coordinate expression. Folding here means the
+# array-cell u0 seeding (and callers that don't override) pick these up exactly
+# like a model-local `ic`. A target that resolves to no array cells, or an RHS
+# the seed path cannot evaluate, is a hard error — a missing/unsupported scoped
+# ic is never silently dropped.
+function _fold_field_ics!(set, field_ics, array_cells, layout::StateLayout,
                           param_scope::AbstractDict,
                           registered_functions::AbstractDict,
                           const_arrays::AbstractDict)
@@ -1511,6 +1525,8 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
             "E_TREEWALK_UNSUPPORTED_EQUATION",
             "ic($(target)): scoped-reference target resolves to no array cells; the " *
             "target must name a lifted/array state variable of the flattened system"))
+        blk = _layout_block(layout, target)
+        put = (idxs, val) -> (blk === nothing || set(_block_slot(blk, idxs), val); nothing)
         # Compile the coordinate field ONCE (indices as params) when possible; else
         # fall back to the per-cell resolve+compile. With the construction-time
         # compile-once forms off (`compiler = :interpreter`) this takes the
@@ -1520,10 +1536,7 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
                nothing
         if fast !== nothing
             _record_rule!("ic($(target))", :equation, :setup_compiled)
-            for cell in cells
-                idxs = collect(Int, cell)
-                eq_ics[_cell_key(target, idxs)] = fast(idxs)
-            end
+            _foreach_cell_lex(idxs -> put(idxs, fast(idxs)), cells)
             continue
         end
         # The first two forms `_resolve_field_ic` serves do not depend on the
@@ -1533,57 +1546,36 @@ function _fold_field_ics!(eq_ics::Dict{String,Float64}, field_ics, array_cells,
         # covers goes per cell, handed this verdict so no cell re-runs the
         # failed constant attempt, and there the coordinate-expression step
         # raises the refusal itself.
-        uniform = _field_ic_uniform(target, rhs, length(first(cells)), const_arrays,
+        uniform = _field_ic_uniform(target, rhs, cells.rank, const_arrays,
                                     registered_functions; params=param_scope)
         hit = uniform[1]
         if hit !== nothing
             tier, val = hit
             _record_rule!("ic($(target))", :equation, tier)
-            for cell in cells
-                idxs = collect(Int, cell)
-                eq_ics[_cell_key(target, idxs)] = val(idxs)
-            end
+            _foreach_cell_lex(idxs -> put(idxs, val(idxs)), cells)
             continue
         end
         _record_rule!("ic($(target))", :equation, :setup_percell)
-        for cell in cells
-            idxs = collect(Int, cell)
-            eq_ics[_cell_key(target, idxs)] =
-                _resolve_field_ic(target, rhs, idxs, const_arrays, registered_functions;
-                                  params=param_scope, uniform=uniform)
+        _foreach_cell_lex(cells) do idxs
+            put(idxs, _resolve_field_ic(target, rhs, copy(idxs), const_arrays,
+                                        registered_functions;
+                                        params=param_scope, uniform=uniform))
         end
     end
     return nothing
-end
-
-# ---- Stage: flat state-vector cell names ----
-# Array cells are enumerated in column-major order (first index fastest,
-# consistent with Julia's native array layout and the Rust/Python runtimes).
-function _enumerate_array_cell_names(array_cells, array_var_info)
-    array_cell_names = String[]
-    for vname in sort(collect(keys(array_cells)))
-        haskey(array_var_info, vname) || continue
-        lo, hi = array_var_info[vname]
-        # `CartesianIndices` iterates the first index fastest — the same
-        # column-major order the sibling `_enumerate_declared_array_cells!`
-        # (and the manual linear-decode loop this replaced) produces.
-        for I in CartesianIndices(ntuple(d -> lo[d]:hi[d], length(lo)))
-            push!(array_cell_names, _cell_key(vname, collect(Int, Tuple(I))))
-        end
-    end
-    return array_cell_names
 end
 
 # ---- Stage: initial-condition vector ----
 # Seed u0 per state slot: an explicit `initial_conditions` entry wins, then an
 # `ic`-equation value (scalar or per-cell field), then the variable's declared
 # scalar default (an array cell falls back to its parent variable's default).
-function _build_u0(model::Model, scalar_state_names::Vector{String},
-                   array_cell_names::Vector{String},
+# `fold_fields!(set)` hands the field-`ic` values to `set(slot, value)`.
+function _build_u0(model::Model, layout::StateLayout,
                    initial_conditions::AbstractDict,
-                   eq_ics::Dict{String,Float64})
-    u0 = Vector{Float64}(undef, length(scalar_state_names) + length(array_cell_names))
-    for (i, name) in enumerate(scalar_state_names)
+                   eq_ics::Dict{String,Float64}, fold_fields!)
+    u0 = Vector{Float64}(undef, length(layout))
+    scalar_names = _layout_scalar_names(layout)
+    for (i, name) in enumerate(scalar_names)
         if haskey(initial_conditions, name)
             u0[i] = Float64(initial_conditions[name])
         elseif haskey(eq_ics, name)
@@ -1593,39 +1585,73 @@ function _build_u0(model::Model, scalar_state_names::Vector{String},
             u0[i] = d === nothing ? 0.0 : Float64(d)
         end
     end
-    n_scalar = length(scalar_state_names)
-    for (i_rel, cname) in enumerate(array_cell_names)
-        i_abs = n_scalar + i_rel
-        if haskey(initial_conditions, cname)
-            u0[i_abs] = Float64(initial_conditions[cname])
-        elseif haskey(eq_ics, cname)
-            u0[i_abs] = eq_ics[cname]   # scoped-reference / array ic (§11.4.1)
-        else
-            # The parent variable's declared default: a scalar broadcasts to
-            # every cell, and INLINE ARRAY DATA (esm-spec §6.3) supplies this
-            # cell's own value at its multi-index.
-            parsed = _parse_cell_key(cname)
-            vname = parsed === nothing ? "" : parsed[1]
-            if haskey(model.variables, vname)
-                d = model.variables[vname].default
-                u0[i_abs] = if d === nothing
-                    0.0
-                elseif is_inline_array(d)
-                    idxs = parsed[2]
-                    checkbounds(Bool, d, idxs...) || throw(TreeWalkError(
-                        "E_TREEWALK_UNSUPPORTED_SHAPE",
-                        "default[$(vname)]: inline array data has shape $(size(d)), which " *
-                        "does not cover cell $(Tuple(idxs)) (esm-spec §6.6.2)"))
-                    Float64(d[idxs...])
-                else
-                    Float64(d)
+    # Array cells: the parent variable's declared default first (a scalar
+    # broadcasts to every cell, and INLINE ARRAY DATA (esm-spec §6.3) supplies
+    # each cell's own value at its multi-index), then the field-`ic` values,
+    # then the explicit initial conditions, so the later wins. A block whose
+    # default cannot be written to every cell up front (inline data that does
+    # not cover the block, or a value that does not convert) is resolved cell
+    # by cell at the end, for the cells nothing else set, so a cell an `ic` or
+    # an initial condition sets never reads the default.
+    deferred = _ArrayBlock[]
+    for b in _layout_blocks(layout)
+        rng = (b.base):(b.base + b.len - 1)
+        if !haskey(model.variables, b.name) || any(<(0), b.lo)
+            push!(deferred, b)
+            continue
+        end
+        d = model.variables[b.name].default
+        if d === nothing
+            fill!(view(u0, rng), 0.0)
+        elseif is_inline_array(d)
+            inside = eltype(d) <: Real && ndims(d) == length(b.lo) &&
+                     all(dd -> b.lo[dd] >= 1 && b.hi[dd] <= size(d, dd), eachindex(b.lo))
+            if inside
+                k = b.base
+                for I in CartesianIndices(_block_ranges(b))
+                    u0[k] = Float64(d[I])
+                    k += 1
                 end
             else
-                u0[i_abs] = 0.0
+                push!(deferred, b)
             end
+        elseif d isa Real
+            fill!(view(u0, rng), Float64(d))
+        else
+            push!(deferred, b)
+        end
+    end
+    n_scalar = length(scalar_names)
+    covered = isempty(deferred) ? nothing : falses(length(u0))
+    mark = s -> (covered === nothing || (covered[s] = true); nothing)
+    fold_fields!((s, v) -> (s == 0 || (u0[s] = v; mark(s)); nothing))
+    _apply_ics_by_slot!((s, v) -> (s > n_scalar && (u0[s] = Float64(v); mark(s)); nothing),
+                        layout, initial_conditions)
+    for b in deferred
+        idxs = Vector{Int}(undef, length(b.lo))
+        for s in (b.base):(b.base + b.len - 1)
+            covered[s] && continue
+            u0[s] = _cell_default(model, b.name, _block_cell!(idxs, b, s))
         end
     end
     return u0
+end
+
+# One array cell's default value: its parent variable's declared default, or 0
+# when the cell's key names no variable (`_parse_cell_key` reads no name out of
+# a negative index).
+function _cell_default(model::Model, name::String, idxs::Vector{Int})
+    (any(<(0), idxs) || !haskey(model.variables, name)) && return 0.0
+    d = model.variables[name].default
+    d === nothing && return 0.0
+    if is_inline_array(d)
+        checkbounds(Bool, d, idxs...) || throw(TreeWalkError(
+            "E_TREEWALK_UNSUPPORTED_SHAPE",
+            "default[$(name)]: inline array data has shape $(size(d)), which " *
+            "does not cover cell $(Tuple(idxs)) (esm-spec §6.6.2)"))
+        return Float64(d[idxs...])
+    end
+    return Float64(d)
 end
 
 # ---- Stage: observed substitution / derivative-equation split ----
@@ -1947,7 +1973,7 @@ end
 # seeded in u0).
 function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
                                 initial_conditions::AbstractDict,
-                                var_map::Dict{String,Int}, array_var_info,
+                                var_map::AbstractDict{String,Int}, array_var_info,
                                 const_arrays::AbstractDict,
                                 pgather::AbstractDict, param_sym_set, reg_funcs, p)
     pp = isnothing(p) ? NamedTuple() : p
@@ -1962,11 +1988,16 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
         body === nothing && continue
         range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
         todo = Tuple{Any,Int}[]
+        may_override = _ics_may_name_cells(initial_conditions)
+        cell = Vector{Int}(undef, length(idx_names))
         for idx_tuple in Iterators.product(range_iters...)
-            cname = _cell_key(var_name, [idx_tuple[d] for d in 1:length(idx_names)])
-            slot = get(var_map, cname, 0)
+            for d in eachindex(cell)
+                cell[d] = idx_tuple[d]
+            end
+            slot = _vm_slot(var_map, var_name, cell)
             slot == 0 && continue
-            haskey(initial_conditions, cname) && continue   # explicit override wins
+            # explicit override wins
+            may_override && haskey(initial_conditions, _cell_key(var_name, cell)) && continue
             push!(todo, (idx_tuple, slot))
         end
         isempty(todo) && continue
@@ -2004,7 +2035,7 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
             # before the refusal is raised.
             percell(first(todo)[1])
             _refuse_percell_evaluation(rule, "the faq-valued initialization-equation seed",
-                                       length(todo))
+                                       length(todo); one_cell = true)
         end
         _record_rule!(rule, :equation, :setup_percell)
         for (idx_tuple, slot) in todo
@@ -2018,7 +2049,7 @@ end
 # compiled once against them — or `nothing` when the body does not resolve or
 # compile with its indices symbolic.
 function _compile_init_once(body::ASTExpr, idx_names::Vector{String}, array_var_info,
-                            var_map::Dict{String,Int}, const_arrays::AbstractDict,
+                            var_map::AbstractDict{String,Int}, const_arrays::AbstractDict,
                             pgather::AbstractDict, param_sym_set, reg_funcs)
     isempty(idx_names) && return nothing
     built = _try_build_array_contraction(body, idx_names, String[], Any[], "+", 0.0,
@@ -2210,7 +2241,7 @@ end
 # place. Mutates `pgather` (adds the caches).
 function _build_discrete_materializer!(mut::DiscreteMaterializer,
         discrete_vars, discrete_defs::Dict{String,ASTExpr}, resolved_obs::Dict{String,ASTExpr},
-        array_var_info, var_map::Dict{String,Int}, const_arrays::AbstractDict,
+        array_var_info, var_map::AbstractDict{String,Int}, const_arrays::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs, p, n_states::Int)
     isempty(discrete_vars) && return nothing
     order = _discrete_fill_order(discrete_vars, discrete_defs)
@@ -2287,7 +2318,7 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
                     "tree walk at each data refresh and at each run's start — a " *
                     "per-cell evaluation that esm-libraries-spec §2.5.10 puts under " *
                     "the same rule as the right-hand side. Build with " *
-                    "compiler=:interpreter to run it")
+                    "compiler=:interpreter to run it. " * _ONE_CELL_NOTE)
             end
             l = isempty(idx_tuple) ? 1 : lin[idx_tuple...]
             push!(fills, (cvec, l, node))
@@ -2454,9 +2485,10 @@ end
 # `levels` is a vector of
 # `(scalar_nodes, kernel_section, scan_folds, array_contractions)` in dependency
 # order.
-function _make_rhs_with_obs_buffers(f_state!, ext::_ObsExtVec, n_states::Int,
+function _make_rhs_with_obs_buffers(f_state!, n_total::Int, n_states::Int,
                                     levels::Tuple)
     isempty(levels) && return f_state!
+    ext = _ObsExtVec(n_total)
     function f!(du, u, p, t)
         T = _rhs_value_type(u, p, t)
         ue = _obsext_buf(ext, T)
@@ -2686,7 +2718,7 @@ function _build_partition_and_materialize(model::Model, cls;
     geom_setup_arrays = Dict{String,AbstractArray{Float64}}()
     if !isempty(cls.geom_setup_vars)
         geom_setup_arrays = _with_param_reads(param_reads) do
-            _materialize_geometry_setup(cls.geom_setup_vars,
+            @_bench :geometry_setup _materialize_geometry_setup(cls.geom_setup_vars,
                 cls.geom_defs, model, const_arrays, index_sets, derived_extents;
                 vi_maps=vi_maps.maps, param_overrides=parameter_overrides,
                 const_obs_arrays=cls.const_obs_arrays,
@@ -2845,7 +2877,7 @@ function _build_state_layout(model::Model, cls, parts;
                                          initial_conditions)
     union!(array_var_names, array_var_names_declared)
 
-    # array_cells: var_name → sorted list of index-tuples (1-based)
+    # array_cells: var_name → the cells its equations and initial conditions name
     array_cells = _discover_array_cells(parts.equations, initial_conditions,
                                         array_var_names)
     # Equation-less declared array states still get one u0 slot per cell.
@@ -2864,26 +2896,23 @@ function _build_state_layout(model::Model, cls, parts;
     array_var_info = Dict{String, Tuple{Vector{Int},Vector{Int}}}()
     for (vname, cells) in array_cells
         isempty(cells) && continue
-        ndim = length(cells[1])
-        lo = [minimum(c[d] for c in cells) for d in 1:ndim]
-        hi = [maximum(c[d] for c in cells) for d in 1:ndim]
-        array_var_info[vname] = (lo, hi)
+        array_var_info[vname] = _cellset_bbox(cells)
     end
 
-    # ---- Fold scoped-reference / array `ic` equations into u0 (spec §11.4.1) ----
-    _with_param_reads(param_reads) do
-        _fold_field_ics!(parts.eq_ics, parts.field_ics, array_cells, parts.param_scope,
-                         registered_functions, const_arrays)
-    end
+    # ---- Flat state layout: scalars first, then one block per array ----
+    # Each array variable's block covers the bounding box of its cells,
+    # column-major (first index fastest, consistent with Julia's native array
+    # layout and the Rust/Python runtimes), arrays in name order.
+    var_map = StateLayout(scalar_state_names,
+        [vname => array_var_info[vname] for vname in sort(collect(keys(array_var_info)))])
 
-    # ---- Build flat state vector: scalars first, then array cells ----
-    array_cell_names = _enumerate_array_cell_names(array_cells, array_var_info)
-    all_state_names = vcat(scalar_state_names, array_cell_names)
-    var_map = Dict{String,Int}(name => i for (i, name) in enumerate(all_state_names))
-
-    # ---- Initial condition vector ----
-    u0 = _build_u0(model, scalar_state_names, array_cell_names,
-                   initial_conditions, parts.eq_ics)
+    # ---- Initial condition vector, with the scoped-reference / array `ic`
+    # equations folded in (spec §11.4.1) ----
+    u0 = _build_u0(model, var_map, initial_conditions, parts.eq_ics,
+        set -> _with_param_reads(param_reads) do
+            _fold_field_ics!(set, parts.field_ics, array_cells, var_map,
+                             parts.param_scope, registered_functions, const_arrays)
+        end)
 
     # ---- Parameter NamedTuple ----
     p_vals = Float64[]
@@ -2902,13 +2931,12 @@ function _build_state_layout(model::Model, cls, parts;
     # ---- Factored array-observed buffer layout (perf: array-observed slots) ----
     # Each materialized array observed gets a dense block of slots ABOVE the
     # ODE state (`n_states+1 …`) in the same flat vector, laid out column-major
-    # exactly as an array state's cells are (`_enumerate_array_cell_names`), and
+    # exactly as an array state's cells are (one `StateLayout` block each), and
     # is registered in `array_var_info` + `var_map` so a reader's
-    # `index(obs, i…)` resolves through the ordinary array-gather path. `u0`,
-    # `all_state_names` and the PUBLIC `var_map` keep only the ODE slots — the
-    # buffers are build-owned scratch, never an integrator slot.
+    # `index(obs, i…)` resolves through the ordinary array-gather path. `u0`
+    # and the PUBLIC `var_map` keep only the ODE slots — the buffers are
+    # build-owned scratch, never an integrator slot.
     mat_dims = Dict{String,Vector{Int}}()
-    mat_cell_names = String[]
     var_map_ext = var_map
     array_var_info_ext = array_var_info
     if !isempty(cls.mat_array_vars)
@@ -2918,8 +2946,8 @@ function _build_state_layout(model::Model, cls, parts;
                 ((eq.lhs::VarExpr).name in cls.mat_array_vars) &&
                 (mat_defs_raw[(eq.lhs::VarExpr).name] = eq.rhs)
         end
-        var_map_ext = copy(var_map)
         array_var_info_ext = copy(array_var_info)
+        mat_blocks = Pair{String,Tuple{Vector{Int},Vector{Int}}}[]
         for name in sort(collect(cls.mat_array_vars))
             haskey(mat_defs_raw, name) || continue
             haskey(array_var_info_ext, name) && continue   # never shadow a state
@@ -2932,14 +2960,9 @@ function _build_state_layout(model::Model, cls, parts;
             (v.shape !== nothing && length(v.shape) != length(dims)) && continue
             mat_dims[name] = dims
             array_var_info_ext[name] = (ones(Int, length(dims)), copy(dims))
-            for I in CartesianIndices(Tuple(dims))
-                push!(mat_cell_names, _cell_key(name, collect(Int, Tuple(I))))
-            end
+            push!(mat_blocks, name => array_var_info_ext[name])
         end
-        n_st = length(all_state_names)
-        for (i, cn) in enumerate(mat_cell_names)
-            var_map_ext[cn] = n_st + i
-        end
+        var_map_ext = _layout_extend(var_map, mat_blocks)
     end
 
     # The parameter scope handed to `_compile`, as an ORDERED map: `sym → its
@@ -2952,10 +2975,10 @@ function _build_state_layout(model::Model, cls, parts;
     param_index = Dict{Symbol,Int}(s => i for (i, s) in enumerate(p_syms))
     param_map = Dict{String,Int}(String(s) => i for (i, s) in enumerate(p_syms))
 
-    return (; all_state_names, var_map, u0, p,
+    return (; n_states=length(var_map), var_map, u0, p,
             param_sym_set=param_index, param_map, array_var_info,
             var_map_ext, array_var_info_ext, mat_dims,
-            n_total=length(all_state_names) + length(mat_cell_names))
+            n_total=length(var_map_ext))
 end
 
 # ---- Phase 4: registry + forcing buffers + derivative compile + closure ----
@@ -2972,7 +2995,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     u0 = layout.u0
     p = layout.p
     param_sym_set = layout.param_sym_set
-    n_states = length(layout.all_state_names)
+    n_states = layout.n_states
     # The layout hands back TWO maps: the ODE-only one (`var_map` — the public
     # return, and the scope the setup-time seeding evaluates in, where the
     # observed buffers do not exist yet) and the EXTENDED one that also carries
@@ -3286,7 +3309,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
                       const_slots, time_slots, dyn_slots, scan_folds,
                       _make_contraction_section(array_contractions)),
-            _ObsExtVec(n_total), n_states, Tuple(mat_levels))
+            n_total, n_states, Tuple(mat_levels))
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
         # along so the out-of-place build can expose its live forcing buffers as
@@ -3415,8 +3438,10 @@ function _build_evaluator_impl(model::Model;
     insp = get(kwargs, :inspect, nothing)
     # A record passed to a second build describes that build from here on, so
     # nothing the previous one answered may be served out of it.
-    insp isa BuildInspection &&
-        lock(() -> empty!(insp.observed_memo), insp.observed_lock)
+    insp isa BuildInspection && lock(insp.observed_lock) do
+        empty!(insp.observed_memo)
+        insp.observed_build = Ref{Any}(nothing)
+    end
     return _with_compiler_plan(plan) do
         _with_build_record(record) do
             try
@@ -3736,7 +3761,7 @@ end
 # `(scalar_entries, percell_scalar, acc_kernels, scan_folds, array_contractions)`.
 function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
-        var_map::Dict{String,Int}, const_registry::AbstractDict,
+        var_map::AbstractDict{String,Int}, const_registry::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs, n_states::Int;
         template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,
         # SCALAR-arm substitution map (ess-obs-slots): `resolved_obs` minus the
@@ -3872,6 +3897,30 @@ function _unrolled_contraction_body(rhs_body::ASTExpr, contract_names::Vector{St
     end
     isempty(terms) && return NumExpr(zerobar)            # empty ⊕-reduction → 0̄ (§5.1)
     return OpExpr(oplus, ASTExpr[NumExpr(zerobar); terms])
+end
+
+# The loop form of a contraction for the affine tier (`_AffineReduce`), or
+# `nothing` when it has none: every contracted bound constant and contiguous
+# with unit step (the box's dims are unit ranges), no join gate (a join drops
+# terms per output cell, so cells would not share one fold), and a ⊕ the fold
+# node has an arm for. The same admission `_unrolled_contraction_body` has,
+# less the ranges an axis cannot be. A single-term contraction is left to the
+# unroll, whose one term is no larger than the loop's body and keeps the kernel
+# an ordinary one that the kernel-class merge can batch.
+function _affine_reduce_form(contract_names::Vector{String}, contract_const,
+                             agg_gates, oplus::String, zerobar::Float64)
+    isempty(contract_names) && return nothing
+    agg_gates === nothing || return nothing
+    (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") || return nothing
+    rngs = UnitRange{Int}[]
+    for c in contract_const
+        (c === nothing || isempty(c)) && return nothing
+        r = first(c):last(c)
+        c == collect(r) || return nothing
+        push!(rngs, r)
+    end
+    prod(length, rngs) >= 2 || return nothing
+    return _AffineReduce(copy(contract_names), rngs, Symbol(oplus), zerobar)
 end
 
 # ess-scan: recognize a CUMULATIVE (prefix) reduction — an aggregate whose
@@ -4033,11 +4082,20 @@ function _unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
     end
     newranges = Dict{String,Any}()
     for (k, v) in aranges
-        newranges[get(renmap, k, k)] = v
+        # A ragged bound's expression names the output symbols it varies with.
+        newranges[get(renmap, k, k)] = (v isa AbstractVector && !isempty(ren)) ?
+            Any[x isa ASTExpr ? _sub_preserving(x, ren) : x for x in v] : v
+    end
+    # A join gate binds range symbols by NAME, so it follows the rename too.
+    gates = a.join_gates
+    if gates !== nothing && !isempty(renmap)
+        gates = [_JoinGate(get(renmap, g.sym_l, g.sym_l), get(renmap, g.sym_r, g.sym_r),
+                           g.codes_l, g.codes_r, g.candidates) for g in gates]
     end
     bare = reconstruct(a;
         output_idx = Any[n for n in idx_names],
         ranges = newranges,
+        join_gates = gates,
         # `a.filter` is `nothing` for a plain (unfiltered) reduction — a shape
         # this unwrap now admits, where it once took scans only.
         filter = (a.filter === nothing || isempty(ren)) ? a.filter :
@@ -4048,12 +4106,12 @@ function _unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
     cnames = _contracted_index_names(newranges, idx_names)
     # No contraction ⇒ the gather form already lowers identically. Keep it.
     isempty(cnames) && return rhs
-    # Every contracted bound must be a constant integer range: that is the
-    # precondition BOTH the prefix-scan detector and the unrolled fold state, and
-    # a variable-valence bound would take the per-cell path from either form.
-    cspecs = [collect(newranges[n]) for n in cnames]
-    all(_is_const_int_range, cspecs) || return rhs
     all(n -> haskey(ranges_dict, n), idx_names) || return rhs
+    cspecs = [collect(newranges[n]) for n in cnames]
+    # A join gate or a variable (ragged) bound: the whole-array contraction nest
+    # takes the bare producer in its table-driven form, and the per-cell path
+    # expands it exactly as it expands the gather form.
+    (all(_is_const_int_range, cspecs) && bare.join_gates === nothing) || return bare
     range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
     cconst = Union{Vector{Int},Nothing}[collect(_expand_int_range(s)) for s in cspecs]
     # A forward prefix scan: the O(N) term-plus-accumulation tier (scan.jl).
@@ -4063,10 +4121,7 @@ function _unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
                            _extract_faq_body(bare)) !== nothing
         return bare
     end
-    # Otherwise the ordinary contraction tiers. A join gate can drop terms per
-    # output cell, which breaks the shared fold template `_unrolled_contraction_body`
-    # builds — decline, exactly as that function's own contract requires.
-    bare.join_gates === nothing || return rhs
+    # Otherwise the ordinary contraction tiers.
     return bare
 end
 
@@ -4081,15 +4136,78 @@ function _scan_term_iters(range_iters, axis::Int, citer, inclusive::Bool)
     return term_iters
 end
 
+# The affine reading of an equation LHS `D(index(var, a...))`: `(var, forms)`
+# with one `_lhs_index_affine` form `(pos, coef, c)` per subscript, so the cell
+# a binding of the loop indices writes is `coef * loop[pos] + c` per subscript
+# with no substitution into the tree. `nothing` when the LHS is not that shape,
+# a subscript is not affine, or the variable shares a loop index's name; the
+# caller then substitutes cell by cell, which raises the shape's own error.
+function _lhs_affine_target(lhs_body, idx_names::Vector{String})
+    (lhs_body isa OpExpr && lhs_body.op == "D" && !isempty(lhs_body.args)) || return nothing
+    inner = lhs_body.args[1]
+    (inner isa OpExpr && inner.op == "index" && !isempty(inner.args)) || return nothing
+    ve = inner.args[1]
+    (ve isa VarExpr && !(ve.name in idx_names)) || return nothing
+    forms = Tuple{Int,Int,Int}[]
+    for a in @view inner.args[2:end]
+        t = _lhs_index_affine(a, idx_names)
+        t === nothing && return nothing
+        push!(forms, t)
+    end
+    return (ve.name, forms)
+end
+
+# The cell `forms` (from `_lhs_affine_target`) name at loop-index values
+# `loop`, written into `cell`.
+@inline function _lhs_affine_cell!(cell::Vector{Int}, forms::Vector{Tuple{Int,Int,Int}}, loop)
+    @inbounds for k in eachindex(forms)
+        pos, coef, c = forms[k]
+        cell[k] = pos == 0 ? c : coef * loop[pos] + c
+    end
+    return cell
+end
+
+# The slot of the cell `forms` name at loop values `loop`: arithmetic on the
+# array's block when there is one, the map lookup otherwise; 0 for no state.
+@inline function _lhs_cell_slot(blk, var_map, vname::String, cell::Vector{Int},
+                                forms::Vector{Tuple{Int,Int,Int}}, loop)
+    _lhs_affine_cell!(cell, forms, loop)
+    return blk === nothing ? _vm_slot(var_map, vname, cell) : _block_slot(blk, cell)
+end
+
+# The scan fold's slots in lane order (see `_build_scan_fold`), for an LHS whose
+# subscripts are affine.
+function _scan_fold_slots!(slots::Vector{Int}, blk, var_map, vname::String,
+                           forms::Vector{Tuple{Int,Int,Int}}, axis::Int,
+                           outer_iters, scan_range)
+    nd = length(outer_iters)
+    cell = Vector{Int}(undef, length(forms))
+    loop = Vector{Int}(undef, nd)
+    for outer in Iterators.product(outer_iters...)
+        for d in 1:nd
+            loop[d] = outer[d]
+        end
+        for s in scan_range
+            loop[axis] = s
+            slot = _lhs_cell_slot(blk, var_map, vname, cell, forms, loop)
+            slot == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE",
+                                             _cell_key(vname, cell)))
+            push!(slots, slot)
+        end
+    end
+    return slots
+end
+
 # Resolve the output slots a prefix-scan equation owns, grouped into lanes
 # along the scanned axis (see `_ScanFold`). One lane per combination of the
 # NON-scanned output indices; within a lane the slots ascend.
 #
-# Slots come from the same `lhs_body` → `_cell_key` → `var_map` path the
-# per-cell build uses (`_compile_faq_percell!`), deliberately: the state
+# Slots come from `var_map` for the cell the LHS names, deliberately: the state
 # ordering is a derived fact, not a convention, and this must not re-derive it.
+# The cell is read off the LHS's affine subscripts when they are affine, else by
+# the per-cell substitution the per-cell build uses (`_compile_faq_percell!`).
 function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
-        range_iters, lhs_body::OpExpr, var_map::Dict{String,Int},
+        range_iters, lhs_body::OpExpr, var_map::AbstractDict{String,Int},
         oplus::String, zerobar::Float64)
     nd = length(idx_names)
     scan_range = collect(range_iters[axis])
@@ -4109,6 +4227,13 @@ function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
     end
     slots = Int[]
     sizehint!(slots, len * prod(length(it) for it in outer_iters; init=1))
+    target = _lhs_affine_target(lhs_body, idx_names)
+    if target !== nothing
+        vname, forms = target
+        _scan_fold_slots!(slots, _vm_block(var_map, vname), var_map, vname, forms,
+                          axis, outer_iters, scan_range)
+        return _ScanFold(slots, len, Symbol(oplus), zerobar, inclusive)
+    end
     idx_exprs = Dict{String,ASTExpr}()
     for outer in Iterators.product(outer_iters...)
         for s in scan_range
@@ -4259,10 +4384,14 @@ function _faq_debug_label(lhs_body, idx_names::Vector{String}, range_iters)
     return "D($(name))[$(axes)]"
 end
 
+# The most contraction terms the diagnostic build ahead of a retired-loop
+# refusal unrolls in full (see `_compile_faq_equation!`).
+const _REFUSAL_DIAGNOSTIC_TERMS = 1024
+
 function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         array_contractions, covered::BitVector,
         eq::Equation, resolved_obs::Dict{String,ASTExpr},
-        array_var_info, var_map::Dict{String,Int},
+        array_var_info, var_map::AbstractDict{String,Int},
         const_registry::AbstractDict, pgather::AbstractDict,
         param_sym_set, reg_funcs;
         template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,
@@ -4405,9 +4534,30 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # the loop, because its emitters compile `rhs_list` and have no arm for the
     # nest's section.
     retire_loop = use_contraction_loop && !rhs_list_compiled
-    # Where the loop would have PREEMPTED the affine tier, the nest takes that
-    # place: it is offered first, and affine only if it declines.
-    nest_first = retire_loop && loop_preempts_affine
+    # The affine tier's LOOP form of the contraction (`_AffineReduce`, below):
+    # it keeps the contracted indices as loop dims and folds them at run time,
+    # so its build is O(#structural groups) whatever the contraction length —
+    # the preemption rule's premise, an unroll of ∏|k…| terms, does not hold
+    # for it. Only the in-place form has it.
+    areduce0 = (rhs_list_compiled || _stencil_disabled()) ? nothing :
+        _affine_reduce_form(contract_names, contract_const, agg_gates,
+                            rhs_oplus, rhs_zerobar)
+    # Where the loop would have PREEMPTED an unrolling affine tier, the nest
+    # takes that place: it is offered first, and affine only if it declines.
+    # With the loop form on offer the affine tier goes first, and the nest is
+    # what a decline leaves (the block after it).
+    nest_first = retire_loop && loop_preempts_affine && areduce0 === nothing
+    # A LONG contraction — as many terms as the loop floor, the length at which
+    # a reduction is a loop candidate — never unrolls in the in-place build.
+    # The unroll writes one term per contracted index into the kernel, so its
+    # code and its compile grow with the contraction; such a contraction is the
+    # affine tier's run-time fold or the whole-array nest's, and when neither
+    # takes it a strict compiler refuses it by name below rather than handing
+    # it to an unroll (the affine tier's, or the per-cell build's, which
+    # unrolls it into every output cell).
+    long_contraction = !rhs_list_compiled && !_stencil_disabled() &&
+        !isempty(contract_names) && all(c -> c !== nothing, contract_const) &&
+        prod(length(c) for c in contract_const) >= _contraction_loop_min()
 
     # Affine polyhedral build (ess-affine, stencil_affine.jl): O(#structural
     # groups), producing `_AccKernel`s that resolve gathers at runtime. This is the
@@ -4461,12 +4611,44 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     if !_stencil_disabled() && (!loop_preempts_affine || retire_loop)
         scan = _detect_prefix_scan(idx_names, range_iters, contract_names,
                                    contract_const, agg_gates, agg_filter, rhs_body)
-        affine_body =
+        # A contraction the affine tier would UNROLL is offered to it as a loop
+        # first: the contracted indices stay symbolic, as extra loop dims of the
+        # box, and the kernel folds the body over them at run time
+        # (`_AffineReduce`). The unroll emits one term per contracted index, so
+        # its kernel grows with the contraction; the loop's does not, at any
+        # length, and its fold is the unroll's term order with the same seed
+        # and the same filter guard. So the loop is the form whenever it builds,
+        # and the unroll below is what is left for the shapes it declines (a
+        # contracted axis the cut scan splits, a body the lanes cannot model).
+        # The out-of-place form keeps the unroll: its whole-array emitters have
+        # no lowering of the run-time fold.
+        areduce = scan !== nothing ? nothing : areduce0
+        if areduce !== nothing
+            loop_body = agg_filter === nothing ? rhs_body :
+                OpExpr("ifelse", ASTExpr[agg_filter, rhs_body, NumExpr(rhs_zerobar)])
+            affine_kernels =
+                @_bench :affine_tier _try_affine_stencil(loop_body, idx_names, range_iters,
+                                lhs_body, resolved_obs, array_var_info, var_map,
+                                const_registry, pgather, param_sym_set, reg_funcs,
+                                covered; template_sites=template_sites, xeq=xeq,
+                                reduce=areduce)
+            affine_first_try = affine_kernels !== nothing
+            if affine_kernels === nothing && template_sites !== nothing
+                affine_kernels =
+                    _try_affine_stencil(loop_body, idx_names, range_iters, lhs_body,
+                                        resolved_obs, array_var_info, var_map,
+                                        const_registry, pgather, param_sym_set,
+                                        reg_funcs, covered; xeq=xeq, reduce=areduce)
+            end
+            affine_kernels === nothing || _tally_cascade!(:affine_reduce)
+        end
+        affine_body = affine_kernels !== nothing ? nothing :
             isempty(contract_names) ? rhs_body :
             scan !== nothing ?
                 _sub_preserving(rhs_body,
                     Dict{String,ASTExpr}(scan[3] => VarExpr(idx_names[scan[1]]))) :
-            (agg_gates === nothing && all(c -> c !== nothing, contract_const)) ?
+            (agg_gates === nothing && all(c -> c !== nothing, contract_const) &&
+             !long_contraction) ?
                 _unrolled_contraction_body(rhs_body, contract_names, contract_const,
                                            agg_filter, rhs_oplus, rhs_zerobar) :
             nothing
@@ -4475,12 +4657,14 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         # (`scan[4]`, see `_scan_term_iters`). The FOLD below always walks the
         # full output axis. Identical object on every pre-existing shape.
         term_iters = (scan === nothing || scan[4] === nothing) ? range_iters : scan[4]
-        affine_kernels = affine_body === nothing ? nothing :
-            @_bench :affine_tier _try_affine_stencil(affine_body, idx_names, term_iters, lhs_body,
-                                resolved_obs, array_var_info, var_map,
-                                const_registry, pgather, param_sym_set, reg_funcs,
-                                covered; template_sites=template_sites, xeq=xeq)
-        affine_first_try = affine_kernels !== nothing
+        if affine_kernels === nothing
+            affine_kernels = affine_body === nothing ? nothing :
+                @_bench :affine_tier _try_affine_stencil(affine_body, idx_names, term_iters, lhs_body,
+                                    resolved_obs, array_var_info, var_map,
+                                    const_registry, pgather, param_sym_set, reg_funcs,
+                                    covered; template_sites=template_sites, xeq=xeq)
+            affine_first_try = affine_kernels !== nothing
+        end
         # Compile-once tier declined (a body construct the sub-kernel split cannot
         # model): retry the SAME expanded body fused — exactly the pre-tier build.
         # Rarely taken; `covered` is untouched on a `nothing` return.
@@ -4554,13 +4738,16 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     #
     # The floor does not apply to a RETIRED loop candidate: below it the
     # alternative is the per-cell loop, which is interpreted on every call.
-    if !nest_first && _array_contraction_enabled() && !_stencil_disabled() &&
-       !isempty(contract_names) &&
+    nest_ok = _array_contraction_enabled() && !_stencil_disabled() &&
+              !isempty(contract_names) &&
+              (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
+              !isempty(range_iters) && all(!isempty, range_iters)
+    nest_tried = nest_first
+    if !nest_first && nest_ok &&
        agg_gates === nothing && agg_filter === nothing &&
        all(c -> c !== nothing, contract_const) &&
-       (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
-       !isempty(range_iters) && all(!isempty, range_iters) &&
        (retire_loop || prod(length(c) for c in contract_const) >= _array_contraction_min())
+        nest_tried = true
         ac = _try_compile_array_contraction(lhs_body, rhs_body, covered; ac_kwargs...)
         if ac !== nothing
             _tally_cascade!(:array_contraction_codegen)
@@ -4574,34 +4761,69 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         # say which tier won, never which one nearly did, and the report is
         # where that belongs.
     end
+    # What is left below is the per-cell build: one resolve and compile per
+    # output cell. Every contraction that reaches this point is offered to the
+    # nest in its general form first — join-gated, filtered, a ragged
+    # (per-cell) bound, or a constant one under the floor — so its build is one
+    # symbolic compile plus data: the admitted tuples of a gated or ragged
+    # contraction as a table (`_ACFold`), a filter as the `ifelse` guard the
+    # per-cell expansion wraps each term in. Its fold is that expansion's, term
+    # for term. The out-of-place form keeps the per-cell build, whose cells its
+    # emitters compile. A decline here keeps the per-cell build.
+    if !nest_tried && nest_ok && !rhs_list_compiled
+        ac = _try_compile_array_contraction(lhs_body, rhs_body, covered; ac_kwargs...,
+                 loop_fallback=true, agg_gates=agg_gates, agg_filter=agg_filter,
+                 contract_const=contract_const)
+        if ac !== nothing
+            _tally_cascade!(:array_contraction_codegen)
+            push!(array_contractions, ac)
+            return nothing
+        end
+    end
 
-    # A retired loop candidate that neither the nest nor the affine tier took has
-    # only the per-cell loop left, which is interpreted on every call: a strict
-    # compiler refuses it by name. (A non-strict build keeps the loop, filed as
-    # `:interpreter` by the routing table.) The first output cell is built
-    # first, the way the interpreter builds every cell — unrolled — so that a
-    # body no form can build (an out-of-range const gather, an undeclared name)
-    # raises the document's own error rather than a refusal.
-    if retire_loop && _compiler_is_strict()
+    # A contraction the per-cell tier would run interpreted or unrolled has no
+    # compiled form left: a strict compiler refuses it by name. Two routes lead
+    # here. A retired loop candidate that neither the nest nor the affine tier
+    # took has only the per-cell contraction loop, interpreted on every call (a
+    # non-strict build keeps the loop, filed as `:interpreter` by the routing
+    # table). Any other long contraction (see `long_contraction`) has only the
+    # per-cell build, which unrolls it into every output cell. The first output
+    # cell is built first, the way the interpreter builds every cell — unrolled
+    # — so that a body no form can build (an out-of-range const gather, an
+    # undeclared name) raises the document's own error rather than a refusal.
+    # Unrolling costs a tree per term, so past `_REFUSAL_DIAGNOSTIC_TERMS` terms
+    # only the first and last value of each contracted index are built: an
+    # undeclared name shows in any term, and an affine gather is out of range
+    # at an end if anywhere.
+    if (retire_loop || long_contraction) && _compiler_is_strict()
         if all(!isempty, range_iters)
+            diag_const = prod(length(c) for c in contract_const) <= _REFUSAL_DIAGNOSTIC_TERMS ?
+                contract_const : [unique!([first(c), last(c)]) for c in contract_const]
             _compile_faq_percell!(Tuple{Int,_Node}[], _AccKernel[], copy(covered),
                 lhs_body, rhs_body;
                 idx_names=idx_names, range_iters=[r[1:1] for r in range_iters],
                 contract_names=contract_names, contract_ranges=contract_ranges,
-                contract_const=contract_const, rhs_oplus=rhs_oplus,
+                contract_const=diag_const, rhs_oplus=rhs_oplus,
                 rhs_zerobar=rhs_zerobar, agg_gates=agg_gates, agg_filter=agg_filter,
                 resolved_obs=resolved_obs, array_var_info=array_var_info,
                 var_map=var_map, const_registry=const_registry, pgather=pgather,
                 param_sym_set=param_sym_set, reg_funcs=reg_funcs,
                 contraction_loop=false, pooled_cells=Tuple{Int,_Node}[])
         end
+        nterms = prod(length(c) for c in contract_const)
         _refuse_rule(
             _faq_debug_label(lhs_body, idx_names, range_iters),
-            "this constant-bound contraction declined the whole-array contraction " *
-            "tier and the affine tier, and the only tier left is the per-cell " *
-            "contraction loop, whose cells the right-hand side walks as trees " *
-            "(`_eval_node`, one per output cell) on every call. Build with " *
-            "compiler=:interpreter to run it")
+            retire_loop ?
+                "this constant-bound contraction declined the whole-array contraction " *
+                "tier and the affine tier, and the only tier left is the per-cell " *
+                "contraction loop, whose cells the right-hand side walks as trees " *
+                "(`_eval_node`, one per output cell) on every call. Build with " *
+                "compiler=:interpreter to run it. " * _ONE_CELL_NOTE :
+                "this contraction of $(nterms) terms declined the affine tier's " *
+                "run-time fold and the whole-array contraction tier, and the only " *
+                "tier left is the per-cell build, which unrolls it into every output " *
+                "cell's code, so that code grows with the contraction. Build with " *
+                "compiler=:interpreter to run it. " * _ONE_CELL_NOTE)
     end
     # Anything the affine build cannot model takes the per-cell fallback, whose
     # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,
@@ -4638,21 +4860,31 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         contract_names::Vector{String}, contract_ranges,
         rhs_oplus::String, rhs_zerobar::Float64,
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
-        var_map::Dict{String,Int}, const_registry::AbstractDict,
+        var_map::AbstractDict{String,Int}, const_registry::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs,
         # True when a non-strict build has the per-cell loop behind this tier:
         # an emitter decline then falls back to it instead of refusing.
-        loop_fallback::Bool=false)
-    body = isempty(resolved_obs) ? rhs_body : _sub_preserving(rhs_body, resolved_obs)
-    pranges = [_expand_int_range(contract_ranges[d]) for d in eachindex(contract_names)]
-    built = _try_build_array_contraction(body, idx_names, contract_names, pranges,
-                rhs_oplus, rhs_zerobar, array_var_info, var_map,
-                const_registry, pgather)
-    if built === nothing
+        loop_fallback::Bool=false,
+        # Join gates, a filter, and each contracted range's constant iterator
+        # (`nothing` for a ragged, per-cell bound). With gates or a ragged bound
+        # the admitted tuples become data (the TABLE form of `_ACFold`); a
+        # filter is the per-cell expansion's `ifelse(filter, term, 0̄)` guard,
+        # kept symbolic in the term.
+        agg_gates=nothing, agg_filter=nothing, contract_const=nothing)
+    table_form = agg_gates !== nothing ||
+                 (contract_const !== nothing && any(c -> c === nothing, contract_const))
+    term = agg_filter === nothing ? rhs_body :
+        OpExpr("ifelse", ASTExpr[agg_filter, rhs_body, NumExpr(rhs_zerobar)])
+    body = isempty(resolved_obs) ? term : _sub_preserving(term, resolved_obs)
+    # The term, resolved once with every index symbolic; the emitter writes the
+    # fold around it (array_contraction.jl, `_ACFold`).
+    got = _resolve_array_contraction_term(body, idx_names, contract_names,
+                array_var_info, var_map, const_registry, pgather)
+    if got === nothing
         _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
         return nothing
     end
-    out_refs, marker = built
+    out_refs, contract_refs, marker = got
     # `memo=nothing`: the symbolic body shares nothing with the concrete per-cell
     # builds, the same isolation the per-cell loop tier's compile relies on.
     node = try
@@ -4668,35 +4900,60 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
         return nothing
     end
+    fold = table_form ?
+        _array_contraction_table(contract_refs, idx_names, range_iters, contract_names,
+                                 contract_ranges, contract_const, agg_gates,
+                                 rhs_oplus, rhs_zerobar, const_registry) :
+        _ACFold(contract_refs, Symbol(rhs_oplus), rhs_zerobar,
+                StepRange{Int,Int}[(r = _expand_int_range(contract_ranges[d]);
+                                    first(r):step(r):last(r))
+                                   for d in eachindex(contract_names)])
     # The output cells, in `Iterators.product` order (dimension 1 fastest) — the
     # order the emitted odometer reconstructs the loop counters in.
     n_cells = prod(length(r) for r in range_iters)
     outs = Vector{Int}(undef, n_cells)
     c = 0
-    for idx_tuple in Iterators.product(range_iters...)
-        c += 1
-        idx_exprs = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(idx_tuple[d]))
-                                         for d in eachindex(idx_names))
-        sub_lhs = _sub_preserving(lhs_body, idx_exprs)
-        sub_lhs isa OpExpr && sub_lhs.op == "D" ||
-            throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
-                                "expected D(index(...)) in faq body"))
-        inner = sub_lhs.args[1]
-        inner isa OpExpr && inner.op == "index" ||
-            throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
-                                "expected index(var,...) inside D"))
-        ve = inner.args[1]
-        ve isa VarExpr ||
-            throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
-                                "index first arg must be a variable name"))
-        cname = _cell_key(ve.name, [_eval_const_int(a, _EMPTY_IDX_ENV)
-                                    for a in inner.args[2:end]])
-        idx = get(var_map, cname, 0)
-        idx == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE", cname))
-        covered[idx] &&
-            throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE", cname))
-        covered[idx] = true
-        outs[c] = idx
+    target = _lhs_affine_target(lhs_body, idx_names)
+    if target !== nothing
+        vname, forms = target
+        cell = Vector{Int}(undef, length(forms))
+        blk = _vm_block(var_map, vname)
+        for idx_tuple in Iterators.product(range_iters...)
+            c += 1
+            idx = _lhs_cell_slot(blk, var_map, vname, cell, forms, idx_tuple)
+            idx == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE",
+                                            _cell_key(vname, cell)))
+            covered[idx] && throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE",
+                                                _cell_key(vname, cell)))
+            covered[idx] = true
+            outs[c] = idx
+        end
+    else
+        for idx_tuple in Iterators.product(range_iters...)
+            c += 1
+            idx_exprs = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(idx_tuple[d]))
+                                             for d in eachindex(idx_names))
+            sub_lhs = _sub_preserving(lhs_body, idx_exprs)
+            sub_lhs isa OpExpr && sub_lhs.op == "D" ||
+                throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                                    "expected D(index(...)) in faq body"))
+            inner = sub_lhs.args[1]
+            inner isa OpExpr && inner.op == "index" ||
+                throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                                    "expected index(var,...) inside D"))
+            ve = inner.args[1]
+            ve isa VarExpr ||
+                throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                                    "index first arg must be a variable name"))
+            cname = _cell_key(ve.name, [_eval_const_int(a, _EMPTY_IDX_ENV)
+                                        for a in inner.args[2:end]])
+            idx = get(var_map, cname, 0)
+            idx == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE", cname))
+            covered[idx] &&
+                throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE", cname))
+            covered[idx] = true
+            outs[c] = idx
+        end
     end
     rngs = [_expand_int_range(ranges_dict[n]) for n in idx_names]
     los  = Int[first(r) for r in rngs]
@@ -4708,7 +4965,8 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     # demote to, so the decline IS the refusal — raised here, where the rule the
     # cascade has open is still this equation, rather than several stages later
     # where only "the assembled right-hand side" is left to name.
-    gen = _try_codegen_array_contraction(out_refs, los, stps, lens, outs, node)
+    gen = _try_codegen_array_contraction(out_refs, los, stps, lens, outs, node;
+                                         fold=fold)
     if gen isa Symbol && loop_fallback
         # Hand the cells back untouched: every one was unclaimed on entry (the
         # loop above throws on a second claim), so clearing restores `covered`.
@@ -4724,6 +4982,52 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         "equation down the per-cell path, or grow the emitter to cover this " *
         "construct")
     return gen
+end
+
+# Sentinel term for enumerating a contraction's admitted tuples: the per-cell
+# expansion substitutes each tuple's values into it, so its arguments read back
+# as the tuple.
+const _AC_KEYS_OP = "__esm_ac_keys"
+
+# The admitted contracted tuples of every output cell, as the TABLE form of
+# `_ACFold` the nest walks. Enumerated by the SAME `_foreach_aggregate_term` the
+# per-cell expansion runs, with the same per-cell iterators (a ragged bound
+# expanded at the cell) and the same join admission, so each cell's entries are
+# exactly the terms that expansion folds, in its order. One pass over the
+# admitted tuples, no resolve or compile per cell.
+function _array_contraction_table(contract_refs::Vector{Base.RefValue{Int}},
+        idx_names::Vector{String}, range_iters, contract_names::Vector{String},
+        contract_ranges, contract_const, agg_gates, oplus::String, zerobar::Float64,
+        const_registry::AbstractDict)
+    nc = length(contract_names)
+    sentinel = OpExpr(_AC_KEYS_OP, ASTExpr[VarExpr(n) for n in contract_names])
+    n_cells = prod(length(r) for r in range_iters)
+    seg = Vector{Int}(undef, n_cells + 1)
+    seg[1] = 1
+    cols = [Int[] for _ in 1:nc]
+    iters = Vector{Vector{Int}}(undef, nc)
+    idx_env = Dict{String,Int}()
+    c = 0
+    for idx_tuple in Iterators.product(range_iters...)
+        c += 1
+        for d in eachindex(idx_names)
+            idx_env[idx_names[d]] = idx_tuple[d]
+        end
+        for d in 1:nc
+            cc = contract_const === nothing ? nothing : contract_const[d]
+            iters[d] = cc === nothing ?
+                _expand_contract_range(contract_ranges[d], idx_env, const_registry) : cc
+        end
+        _foreach_aggregate_term(sentinel, contract_names, iters, agg_gates, nothing,
+                                zerobar, idx_env) do t
+            ks = (t::OpExpr).args
+            @inbounds for d in 1:nc
+                push!(cols[d], Int((ks[d]::IntExpr).value))
+            end
+        end
+        seg[c + 1] = length(cols[1]) + 1
+    end
+    return _ACFold(contract_refs, Symbol(oplus), zerobar, seg, cols)
 end
 
 # ---- Stage: faq per-cell fallback ----
@@ -4750,7 +5054,7 @@ function _compile_faq_percell!(percell_scalar, acc_kernels, covered::BitVector,
         contract_names::Vector{String}, contract_ranges, contract_const,
         rhs_oplus::String, rhs_zerobar::Float64, agg_gates, agg_filter,
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
-        var_map::Dict{String,Int}, const_registry::AbstractDict,
+        var_map::AbstractDict{String,Int}, const_registry::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs,
         contraction_loop::Bool=false,
         pooled_cells=nothing)   # `nothing` or `Vector{Tuple{Int,_Node}}` — see above
@@ -5515,7 +5819,8 @@ function _build_evaluator_dict(esm::AbstractDict;
     end
     _vi = model === nothing ? nothing :
           _with_param_reads(_preads) do
-              materialize_value_invention(model, file.index_sets, _vi_ca, _params)
+              @_bench :value_invention materialize_value_invention(model, file.index_sets,
+                                                                   _vi_ca, _params)
           end
 
     # ---- Phase 2b Hook 1: value-invention MEMBERS fed back as const factors ----

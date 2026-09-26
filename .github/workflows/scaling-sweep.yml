@@ -12,6 +12,13 @@ name: Scaling sweep (scheduled)
 # hand loop that disagrees, a missing result, or a stale ledger entry) turns
 # the run red. The numbers that go into the ledger come from the Slurm driver
 # (tests/conformance/scaling/sweep.sh) on an exclusive node, not from here.
+#
+# A hosted runner has 16 GB. Each adapter measures in a child process it kills
+# past --max-rss-gb (12 here, leaving the runner itself room), so a document
+# too big for the runner is recorded as an out-of-memory result and the
+# family's larger sizes as not attempted, instead of the runner starving and
+# losing every result of that job. The measure steps and the upload run even
+# when an earlier step failed, so every job uploads what it measured.
 
 on:
   schedule:
@@ -35,7 +42,7 @@ jobs:
     name: Rust (${{ matrix.family }})
     runs-on: ubuntu-latest
     # A family's ladder, serial then threaded, with each document capped at
-    # 15 minutes by the adapter itself (a timeout is recorded, not fatal).
+    # 15 minutes and 12 GB by the adapter itself (either is recorded, not fatal).
     timeout-minutes: 300
     strategy:
       fail-fast: false
@@ -85,17 +92,18 @@ jobs:
         run: |
           mkdir -p ../../scaling-results
           target/release/earthsci-scaling-adapter-rust \
-            --index "$RUNNER_TEMP/scaling/index.json" --timeout-s 900 \
+            --index "$RUNNER_TEMP/scaling/index.json" --timeout-s 900 --max-rss-gb 12 \
             --output "../../scaling-results/rust-${{ matrix.family }}-t1.json"
 
       - name: Measure (threaded)
+        if: ${{ !cancelled() }}
         run: |
           target/release/earthsci-scaling-adapter-rust \
-            --index "$RUNNER_TEMP/scaling/index.json" --timeout-s 900 --threads "$(nproc)" \
+            --index "$RUNNER_TEMP/scaling/index.json" --timeout-s 900 --max-rss-gb 12 --threads "$(nproc)" \
             --output "../../scaling-results/rust-${{ matrix.family }}-threaded.json"
 
       - name: Upload results
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: scaling-rust-${{ matrix.family }}
@@ -105,8 +113,9 @@ jobs:
     name: Julia (${{ matrix.family }})
     runs-on: ubuntu-latest
     # A family's ladder, serial then threaded. The adapter stops a ladder
-    # itself once a build takes, or is projected to take, over --max-build
-    # (the sizes it skips are recorded as errors that say so).
+    # itself once a build takes, or is projected to take, over --max-build,
+    # or once a document passes 12 GB or finishes nothing for 30 minutes (the
+    # sizes it skips are recorded as errors that say so).
     timeout-minutes: 300
     strategy:
       fail-fast: false
@@ -152,17 +161,19 @@ jobs:
           mkdir -p scaling-results
           julia --project=pkg/EarthSciAST.jl/scripts/scaling_env \
             tests/conformance/scaling/julia/adapter.jl --docs "$RUNNER_TEMP/scaling" \
-            --max-build 900 --output "scaling-results/julia-${{ matrix.family }}-t1.json"
+            --max-build 900 --max-rss-gb 12 --timeout-s 1800 \
+            --output "scaling-results/julia-${{ matrix.family }}-t1.json"
 
       - name: Measure (threaded)
+        if: ${{ !cancelled() }}
         run: |
           julia --threads="$(nproc)" --project=pkg/EarthSciAST.jl/scripts/scaling_env \
             tests/conformance/scaling/julia/adapter.jl --docs "$RUNNER_TEMP/scaling" \
-            --max-build 900 --interpreter-max-states 0 \
+            --max-build 900 --max-rss-gb 12 --timeout-s 1800 --interpreter-max-states 0 \
             --output "scaling-results/julia-${{ matrix.family }}-threaded.json"
 
       - name: Upload results
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: scaling-julia-${{ matrix.family }}

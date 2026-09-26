@@ -596,22 +596,7 @@ pub(super) fn eval_vec_contracted<'a>(
                     acc = vec_combine(combine_op, acc, term, pool)?;
                 }
             }
-            // Mixed-radix increment over the contraction window.
-            let mut d = 0;
-            let mut done = false;
-            loop {
-                if d == nc {
-                    done = true;
-                    break;
-                }
-                cvals[d] += 1;
-                if cvals[d] <= chi[d] {
-                    break;
-                }
-                cvals[d] = clo[d];
-                d += 1;
-            }
-            if done {
+            if !next_contraction_tuple(&mut cvals[..nc], &clo[..nc], &chi[..nc]) {
                 break;
             }
             continue;
@@ -635,26 +620,28 @@ pub(super) fn eval_vec_contracted<'a>(
         // returning `None`, so `?` (bail to the oracle) leaks no pooled buffer.
         acc = vec_combine(combine_op, acc, term, pool)?;
 
-        // Mixed-radix increment over the contraction window.
-        let mut d = 0;
-        let mut done = false;
-        loop {
-            if d == nc {
-                done = true;
-                break;
-            }
-            cvals[d] += 1;
-            if cvals[d] <= chi[d] {
-                break;
-            }
-            cvals[d] = clo[d];
-            d += 1;
-        }
-        if done {
+        if !next_contraction_tuple(&mut cvals[..nc], &clo[..nc], &chi[..nc]) {
             break;
         }
     }
     Some(acc)
+}
+
+/// Advance `cvals` to the next tuple of the contraction window, the LAST
+/// contracted name fastest — the per-cell oracle's `CartesianTuples` order,
+/// so the overlay folds each cell's terms in the oracle's association.
+/// `false` once the window is exhausted.
+fn next_contraction_tuple(cvals: &mut [i64], clo: &[i64], chi: &[i64]) -> bool {
+    let mut d = cvals.len();
+    while d > 0 {
+        d -= 1;
+        cvals[d] += 1;
+        if cvals[d] <= chi[d] {
+            return true;
+        }
+        cvals[d] = clo[d];
+    }
+    false
 }
 
 /// Vectorized evaluation of `expr` over the output box `bx`. Increments `ops`

@@ -420,7 +420,7 @@ function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
         # evaluated once, for its diagnostic only, before the refusal is raised.
         isempty(slots) || evaluate_expr(expr, binding(1))
         _refuse_percell_evaluation("seed_expression_ic!($(var_name))",
-            "the expression initial-state seed", length(slots))
+            "the expression initial-state seed", length(slots); one_cell = true)
     end
     for c in eachindex(slots)
         u0[slots[c]] = evaluate_expr(expr, binding(c))
@@ -599,7 +599,7 @@ struct EsmProblem
     u0::Vector{Float64}                   # seeded initial state; COPIED per run
     tspan::Tuple{Float64,Float64}         # integration interval
     p::Any                                # parameter NamedTuple (or nothing)
-    var_map::Dict{String,Int}             # state-element name → flat index
+    var_map::AbstractDict{String,Int}     # state-element name → flat index (a `StateLayout`)
     param_buffers::Dict{String,Any}       # live forcing buffers, aliased into f!
     discrete_providers::Dict{String,Any}  # forcing var → DISCRETE data Provider
     dm::DiscreteMaterializer              # discrete-cadence cache sink (may be empty)
@@ -1256,10 +1256,13 @@ function esm_problem(input, tspan;
         save_everystep = false
     end
 
+    # The record now describes this problem's build (`_observed_field_memo`).
+    run_file = Ref{Any}(nothing)
+    lock(() -> (insp.observed_build = run_file), insp.observed_lock)
     return EsmProblem(f!, u0_run, span, p_built, var_map, merged_param,
                       discrete_providers, dm, _doc_equation_count(doc),
                       Ref(t_sample), Ref(false), derive_output_meta(doc), doc,
-                      Ref{Any}(nothing), param_classes, insp,
+                      run_file, param_classes, insp,
                       _compose_callbacks(cbs), tstops, save_everystep,
                       sink_vec, _distinct_sinks(sink_vec, ck_vec), Ref{Any}(nothing),
                       merged_renames)
@@ -1365,21 +1368,23 @@ end
 function _observed_field_memo(prob::EsmProblem, name::String)
     insp = prob.inspection
     epoch = _FORCING_EPOCH[]
-    hit = lock(() -> get(insp.observed_memo, name, nothing), insp.observed_lock)
-    hit !== nothing && hit.build === prob.run_file && hit.epoch == epoch &&
-        return copy(hit.value)
+    key = (prob.run_file, name)
+    hit = lock(() -> get(insp.observed_memo, key, nothing), insp.observed_lock)
+    hit !== nothing && hit.epoch == epoch && return copy(hit.value)
     v, percell = _counting_percell() do
         _observed_field_impl(prob, name)
     end
     lock(insp.observed_lock) do
-        # One row per name per build: the memo is emptied when a build starts,
-        # so an absent entry is this build's first read of the name.
-        haskey(insp.observed_memo, name) ||
+        # One row per name per build, filed into the report of the build this
+        # record describes: the memo is emptied when a build starts and keyed
+        # by build, so an absent entry is this build's first read of the name,
+        # whatever another problem sharing the record has read.
+        insp.observed_build === prob.run_file && !haskey(insp.observed_memo, key) &&
             push!(insp.compiler_report.rules,
                   CompilerRuleRecord(name, :observed,
                                      percell > 0 ? :output_percell : :output_compiled_once,
                                      Pair{Symbol,Symbol}[]))
-        insp.observed_memo[name] = _ObservedMemo(prob.run_file, epoch, copy(v))
+        insp.observed_memo[key] = _ObservedMemo(epoch, copy(v))
     end
     return v
 end

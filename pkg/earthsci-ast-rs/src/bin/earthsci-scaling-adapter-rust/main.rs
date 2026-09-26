@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! earthsci-scaling-adapter-rust --index <index.json> --output <results.json>
-//!     [--threads T] [--family F ...] [--max-n N] [--timeout-s S] [--oracle-max-states M]
+//!     [--threads T] [--family F ...] [--max-n N] [--timeout-s S] [--max-rss-gb G]
+//!     [--oracle-max-states M]
 //! ```
 //!
 //! Reads the generator's `index.json`, measures every listed document under
@@ -10,7 +11,12 @@
 //! document runs in its own child process (this binary with `--one`), so a
 //! timeout, a panic or an out-of-memory kill is recorded as that document's
 //! `"error"` and the run carries on; a refusal is recorded as `"refused"` with
-//! the compiler's reason text.
+//! the compiler's reason text. The parent kills a child whose resident memory
+//! passes `--max-rss-gb` (default 12, the same on every machine, so whether a
+//! document fits does not depend on the machine), so a document too big is
+//! recorded before the machine runs out.
+//! After a child that timed out or was killed, the family's larger sizes are
+//! recorded as not attempted.
 //!
 //! Per document the child: builds a warm-up problem (one-time process costs),
 //! times `esm_problem` on the document, reads the tape length off the compiled
@@ -446,7 +452,7 @@ fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
     m
 }
 
-const FIELDS: [&str; 12] = [
+const FIELDS: [&str; 13] = [
     "reason",
     "build_s",
     "code_size",
@@ -459,6 +465,7 @@ const FIELDS: [&str; 12] = [
     "interpreter_max_abs_diff",
     "hand_loop_threads",
     "code_size_detail",
+    "peak_rss_bytes",
 ];
 
 /// A record with every field present and `null`.
@@ -522,7 +529,12 @@ fn measure_one(one: &One) -> Map<String, Value> {
     r.insert(
         "code_size_detail".into(),
         json!({"const": tape.n_instr_const, "segment": tape.n_instr_segment,
-               "continuous": tape.n_instr_continuous, "slots": tape.n_slots,
+               "continuous": tape.n_instr_continuous,
+               // Before fusion: what the lowering emitted, which bounds the
+               // fused count above.
+               "lowered": if tape.fuse.instrs_before > 0 { tape.fuse.instrs_before }
+                          else { tape.n_instr_const + tape.n_instr_segment + tape.n_instr_continuous },
+               "slots": tape.n_slots,
                "gather_plans": tape.n_gather_plans, "fallback_rules": tape.fallbacks.len()}),
     );
 
@@ -703,6 +715,7 @@ struct Run {
     families: Vec<String>,
     max_n: Option<u64>,
     timeout: Duration,
+    max_rss_bytes: u64,
     oracle_max_states: usize,
 }
 
@@ -711,6 +724,27 @@ const RESULT_TAG: &str = "SCALING_RESULT ";
 fn error_record(entry: &Value, reason: String) -> Value {
     Value::Object(failed(blank(entry, "error"), reason))
 }
+
+/// A `kB` field of `/proc/<pid>/status` (`VmRSS`, `VmHWM`) in bytes, on Linux.
+fn proc_status_bytes(pid: &str, field: &str) -> Option<u64> {
+    let s = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let line = s.lines().find(|l| l.starts_with(field))?;
+    let kb: u64 = line[field.len()..]
+        .trim()
+        .trim_end_matches("kB")
+        .trim()
+        .parse()
+        .ok()?;
+    Some(kb * 1024)
+}
+
+fn gb(bytes: u64) -> String {
+    format!("{:.1}", bytes as f64 / (1u64 << 30) as f64)
+}
+
+/// The default `--max-rss-gb`, 12 GB: a hosted runner's 16 GB less room for
+/// the runner itself.
+const DEFAULT_MAX_RSS: u64 = 12 << 30;
 
 fn run_child(run: &Run, doc: &Path, entry: &Value) -> Value {
     let exe = match std::env::current_exe() {
@@ -740,24 +774,48 @@ fn run_child(run: &Run, doc: &Path, entry: &Value) -> Value {
         s
     });
     let start = Instant::now();
+    let pid = child.id().to_string();
+    let mut peak = 0u64;
     let status = loop {
         match child.try_wait() {
-            Ok(Some(st)) => break Some(st),
-            Ok(None) if start.elapsed() > run.timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
+            Ok(Some(st)) => break Ok(st),
+            Ok(None) => {
+                let rss = proc_status_bytes(&pid, "VmRSS:").unwrap_or(0);
+                peak = peak.max(rss);
+                let killed = if rss > run.max_rss_bytes {
+                    Some(format!(
+                        "out of memory: the process measuring this document reached {} GB \
+                         resident after {} s, over this run's --max-rss-gb of {} GB",
+                        gb(rss),
+                        start.elapsed().as_secs(),
+                        gb(run.max_rss_bytes)
+                    ))
+                } else if start.elapsed() > run.timeout {
+                    Some(format!(
+                        "timeout: no result within {} s",
+                        run.timeout.as_secs()
+                    ))
+                } else {
+                    None
+                };
+                if let Some(msg) = killed {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break Err(msg);
+                }
+                std::thread::sleep(Duration::from_millis(20));
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
             Err(e) => return error_record(entry, format!("waiting on the child process: {e}")),
         }
     };
     let out = reader.join().unwrap_or_default();
-    let Some(status) = status else {
-        return error_record(
-            entry,
-            format!("timeout: no result within {} s", run.timeout.as_secs()),
-        );
+    let with_peak = |mut v: Value| {
+        v["peak_rss_bytes"] = json!(peak);
+        v
+    };
+    let status = match status {
+        Ok(st) => st,
+        Err(msg) => return with_peak(error_record(entry, msg)),
     };
     if let Some(v) = out
         .lines()
@@ -771,18 +829,35 @@ fn run_child(run: &Run, doc: &Path, entry: &Value) -> Value {
     {
         use std::os::unix::process::ExitStatusExt;
         if let Some(sig) = status.signal() {
-            return error_record(
+            return with_peak(error_record(
                 entry,
                 format!(
                     "the child process was killed by signal {sig} (9 is usually out of memory)"
                 ),
-            );
+            ));
         }
     }
-    error_record(
+    with_peak(error_record(
         entry,
         format!("the child process exited with {status} and no result"),
-    )
+    ))
+}
+
+/// A record the child did not write (timed out, killed, died): the family's
+/// larger sizes would end the same way.
+fn child_ended(r: &Value) -> bool {
+    r["status"] == "error"
+        && r["build_s"].is_null()
+        && r["reason"].as_str().is_some_and(|s| {
+            [
+                "timeout",
+                "out of memory",
+                "the child process",
+                "cannot start",
+            ]
+            .iter()
+            .any(|p| s.starts_with(p))
+        })
 }
 
 /// The commit measured: `SCALING_COMMIT` when the caller built this binary
@@ -851,7 +926,13 @@ fn run_all(run: &Run) -> Result<(), String> {
             std::env::consts::OS
         )),
     );
+    header.insert(
+        "max_rss_gb".into(),
+        json!((run.max_rss_bytes as f64 / (1u64 << 30) as f64 * 10.0).round() / 10.0),
+    );
+    header.insert("timeout_s".into(), json!(run.timeout.as_secs()));
     let mut results = Vec::new();
+    let mut stopped: HashMap<String, String> = HashMap::new();
     let docs = index["documents"]
         .as_array()
         .ok_or("index.json has no documents")?;
@@ -868,7 +949,20 @@ fn run_all(run: &Run) -> Result<(), String> {
         }
         let doc = base.join(entry["path"].as_str().unwrap_or(""));
         let t = Instant::now();
-        let r = run_child(run, &doc, entry);
+        let r = match stopped.get(family) {
+            Some(why) => error_record(entry, why.clone()),
+            None => run_child(run, &doc, entry),
+        };
+        if child_ended(&r) {
+            stopped.insert(
+                family.to_string(),
+                format!(
+                    "not attempted: the document at n = {} did not finish ({})",
+                    entry["n"],
+                    r["reason"].as_str().unwrap_or("")
+                ),
+            );
+        }
         let reason = r["reason"]
             .as_str()
             .map(|s| format!(": {}", s.chars().take(160).collect::<String>()))
@@ -904,6 +998,7 @@ fn parse_args(args: Vec<String>) -> Result<Mode, String> {
     let mut families = Vec::new();
     let mut max_n = None;
     let mut timeout_s = 1800u64;
+    let mut max_rss_bytes = DEFAULT_MAX_RSS;
     let mut oracle_max_states = 20_000usize;
     let mut one = None;
     let mut entry = None;
@@ -920,6 +1015,14 @@ fn parse_args(args: Vec<String>) -> Result<Mode, String> {
             "--family" => families.push(it.next().ok_or("--family needs a value")?),
             "--max-n" => max_n = Some(num(it.next(), "--max-n")?),
             "--timeout-s" => timeout_s = num(it.next(), "--timeout-s")?,
+            "--max-rss-gb" => {
+                let g: f64 = it
+                    .next()
+                    .ok_or("--max-rss-gb needs a value")?
+                    .parse()
+                    .map_err(|e| format!("--max-rss-gb: {e}"))?;
+                max_rss_bytes = (g * (1u64 << 30) as f64) as u64;
+            }
             "--oracle-max-states" => {
                 oracle_max_states = num(it.next(), "--oracle-max-states")? as usize
             }
@@ -947,6 +1050,7 @@ fn parse_args(args: Vec<String>) -> Result<Mode, String> {
             families,
             max_n,
             timeout: Duration::from_secs(timeout_s),
+            max_rss_bytes,
             oracle_max_states,
         })),
         _ => Err("--index and --output are required".into()),
@@ -956,7 +1060,9 @@ fn parse_args(args: Vec<String>) -> Result<Mode, String> {
 fn main() -> ExitCode {
     match parse_args(std::env::args().skip(1).collect()) {
         Ok(Mode::One(one)) => {
-            let r = measure_one(&one);
+            let mut r = measure_one(&one);
+            let peak = proc_status_bytes("self", "VmHWM:");
+            r.insert("peak_rss_bytes".into(), json!(peak));
             println!("{RESULT_TAG}{}", Value::Object(r));
             ExitCode::SUCCESS
         }

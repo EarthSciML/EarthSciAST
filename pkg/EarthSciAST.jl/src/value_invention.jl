@@ -529,7 +529,10 @@ end
 # not per tuple). A bin-EQUALITY gate carries the two materialised map buffers
 # (`map_l`/`map_r`) and admits iff the buffer values are equal; an OVERLAP gate
 # (Phase 2a) carries `candidates`, the prebuilt broad-phase `(pos_l,pos_r)` set,
-# and admits iff the binding's range positions are a member.
+# and admits iff the binding's range positions are a member. A bin-equality
+# gate may carry `candidates` too: its key-equality match pairs
+# (`_vi_equality_candidates`), which only drive enumeration — admission still
+# compares the buffers.
 struct _ViJoinGate
     sym_l::String
     sym_r::String
@@ -566,11 +569,41 @@ function _vi_resolve_join(join, producer_ranges, ctx::_ViCtx)
                 lname, rname = String(pair[1]), String(pair[2])
                 ls = _vi_join_index_sym(lname, producer_ranges, ctx)
                 rs = _vi_join_index_sym(rname, producer_ranges, ctx)
-                push!(gates, _ViJoinGate(ls, rs, ctx.maps[lname], ctx.maps[rname], nothing))
+                ml, mr = ctx.maps[lname], ctx.maps[rname]
+                cands = _vi_equality_candidates(ls, ml, rs, mr, producer_ranges, ctx)
+                push!(gates, _ViJoinGate(ls, rs, ml, mr, cands))
             end
         end
     end
     return gates
+end
+
+# The key-equality match pairs of a bin-equality gate, as the drive index for
+# `_vi_enumerate_join`, or `nothing` (the gate then filters the full product as
+# before). Built only where the driven walk provably visits a subset of what
+# the product visits and skips only tuples the gate rejects: both gated ranges
+# are interval or categorical (their values are the positions `1:n`), and each
+# buffer holds every one of those positions, so the product would never have
+# raised a missing-key error the driven walk skips. Off with the plan's
+# `join_on_gate`, the switch for every `on`-gate driver.
+function _vi_equality_candidates(ls, ml, rs, mr, ranges, ctx::_ViCtx)
+    (ls == rs || _join_on_gate_disabled()) && return nothing
+    n_l = _vi_position_extent(get(ranges, ls, nothing), ctx)
+    n_r = _vi_position_extent(get(ranges, rs, nothing), ctx)
+    (n_l === nothing || n_r === nothing) && return nothing
+    all(p -> haskey(ml, p), 1:n_l) || return nothing
+    all(p -> haskey(mr, p), 1:n_r) || return nothing
+    return _equality_match_index(1:n_l, p -> ml[p], 1:n_r, p -> mr[p])
+end
+
+# The size of a range whose values are the positions `1:n`, or `nothing`.
+function _vi_position_extent(spec, ctx::_ViCtx)
+    spec isa IndexSetRef || return nothing
+    is = get(ctx.index_sets, spec.from, nothing)
+    is === nothing && return nothing
+    is.kind == "interval" && return Int(is.size)
+    is.kind == "categorical" && return length(is.members)
+    return nothing
 end
 
 # True iff every resolved join gate admits this binding (§5.3 / Phase 2a): a
@@ -578,7 +611,7 @@ end
 # membership of the `(pos_l,pos_r)` range positions in the broad-phase set.
 function _vi_join_ok(gates::Vector{_ViJoinGate}, bindings::AbstractDict)
     for g in gates
-        if g.candidates === nothing
+        if g.map_l !== nothing
             g.map_l[bindings[g.sym_l]] == g.map_r[bindings[g.sym_r]] || return false
         else
             (bindings[g.sym_l], bindings[g.sym_r]) in g.candidates || return false
@@ -587,84 +620,58 @@ function _vi_join_ok(gates::Vector{_ViJoinGate}, bindings::AbstractDict)
     return true
 end
 
-# Enumerate an aggregate's `ranges`, DRIVING from an OVERLAP gate's prebuilt
-# candidate pairs when one is present (Wall #1 fix). Instead of building the full
-# `Iterators.product` over every range and membership-testing each tuple —
-# O(∏ranges), e.g. O(N_query·N_cell) — iterate ONLY the gate's `(query_pos,
-# cell_pos)` candidate pairs, bind the two gated range symbols from each pair, and
-# take the cartesian product with any OTHER (ungated) ranges. Cost drops to
-# O(|candidates|·∏ungated); with both gated symbols the only ranges (the ISRM
-# emis×cells producer) that is O(|candidates|).
+# Enumerate an aggregate's `ranges`, DRIVING from a gate's prebuilt candidate
+# pairs when one carries them (Wall #1 fix): an OVERLAP gate's broad-phase set,
+# or a bin-equality gate's key-equality matches (`_vi_equality_candidates`).
+# Instead of walking the full product over every range and testing each tuple —
+# O(∏ranges), e.g. O(N_query·N_cell) — the walk visits the ranges in the SAME
+# topological order the full product does, and when it reaches the second of
+# the two gated symbols (the first already bound), it enumerates only that
+# binding's candidate partners. Cost drops to O(N_first + |candidates|) times
+# the ungated ranges.
 #
 # The DRIVE DECISION is `_overlap_drive_plan` (broad_phase.jl) — the same policy
 # the dense-aggregate expansion applies (`_foreach_aggregate_term`); only the loop
 # shape differs, because a value-invention range may be RAGGED and therefore
-# resolvable only against its parent binding.
+# resolvable only against its parent binding. A symbol whose restriction the
+# planner cannot prove order-preserving enumerates its full range.
 #
-# With NO overlap gate this is EXACTLY `_vi_enumerate` — byte-for-byte identical
-# enumeration order and leaf set (bin-equality / ungated producers are untouched).
-# The callback is identical in both paths and STILL applies the narrow `filter`
-# and the full `_vi_join_ok` re-check downstream, so the overlap-gated leaf set
-# differs from the full product only by provably-non-candidate tuples the
-# membership test would have rejected anyway — the materialised member SET (after
-# `distinct` canonicalises order) is identical to the old full-product path.
+# The visited leaves are exactly the full product's, in the same order, minus
+# tuples the gate rejects: the restriction is an ascending subsequence of the
+# range. With NO drivable gate this is `_vi_enumerate` itself. The callback is
+# identical in both paths and STILL applies the narrow `filter` and the full
+# `_vi_join_ok` re-check downstream.
 function _vi_enumerate_join(ranges, gates::Union{Vector{_ViJoinGate},Nothing},
                             ctx::_ViCtx, cb)
     counted = bindings -> (_VI_ENUM_VISITS[] += 1; cb(bindings))
     ov = _drivable_gate(gates)
     ov === nothing && return _vi_enumerate(ranges, ctx, counted)   # full product
+    _vi_enumerate_driven(_vi_order_syms(ranges), ranges, ctx, Dict{String,Any}(), ov,
+                         counted)
+    return
+end
 
-    # Every producer range symbol is FREE here (a producer binds nothing up
-    # front), in the SAME topological order the full product visits them (ragged
-    # `of` parents before children).
-    syms = _vi_order_syms(ranges)
-    bindings = Dict{String,Any}()
-    plan = _overlap_drive_plan(ov, syms, bindings,
-                               s -> _vi_range_values(ranges[s], ctx, bindings))
-    plan[1] === :reject && return
-    if plan[1] === :none
-        _vi_enumerate(ranges, ctx, counted)
-        return
-    end
-
-    # The remaining ungated symbols, minus whatever the plan drives. Overlap-gated
-    # symbols index a 1-D buffer (interval/categorical), so they are never ragged
-    # `of` parents — pre-binding them is order-safe.
-    driven = plan[1] === :pairs ? (plan[2], plan[3]) : (plan[2],)
-    rest = filter(s -> !(s in driven), syms)
+# The driven walk of `_vi_enumerate_join`, over `syms` in order, starting from
+# `bindings` (which it restores on return).
+function _vi_enumerate_driven(syms, ranges, ctx::_ViCtx, bindings::AbstractDict, ov, cb)
     function rec(k)
-        if k > length(rest)
-            counted(bindings)
+        if k > length(syms)
+            cb(bindings)
             return
         end
-        s = rest[k]
-        for v in _vi_range_values(ranges[s], ctx, bindings)
+        s = syms[k]
+        vals = _vi_range_values(ranges[s], ctx, bindings)
+        if s == ov.sym_l || s == ov.sym_r
+            plan = _overlap_drive_plan(ov, (s,), bindings, _ -> vals)
+            plan[1] === :restrict && (vals = plan[3])
+        end
+        for v in vals
             bindings[s] = v
             rec(k + 1)
         end
         delete!(bindings, s)
     end
-    if plan[1] === :pairs
-        # A candidate pair holds 1-based range POSITIONS; for an interval/categorical
-        # range `_vi_range_values` binds position p to the value p, so binding the two
-        # gated symbols directly reproduces exactly the tuple the old product bound at
-        # those positions (and which `_vi_join_ok` admitted). DETERMINISTIC
-        # (query_pos, cell_pos)-ascending drive order: the member set is canonicalised
-        # downstream (`distinct`/`rank`), but a sorted drive keeps any order-sensitive
-        # `⊕` reduction stable.
-        sym_l, sym_r = plan[2], plan[3]
-        for (pl, pr) in plan[4]
-            bindings[sym_l] = pl
-            bindings[sym_r] = pr
-            rec(1)
-        end
-    else                                    # (:restrict, sym, vals)
-        sym = plan[2]
-        for v in plan[3]
-            bindings[sym] = v
-            rec(1)
-        end
-    end
+    rec(1)
     return
 end
 
@@ -680,7 +687,8 @@ end
 # `join` (a bin-Skolem broad-phase prune, §5.3) and/or `filter` restrict the
 # candidate set; an empty candidate set is an error (no index witnesses an empty
 # argmin — a point with no candidate generator is undefined).
-function _vi_argreduce(node::OpExpr, ctx::_ViCtx, outer_bindings::AbstractDict, outer_ranges)
+function _vi_argreduce(node::OpExpr, ctx::_ViCtx, outer_bindings::AbstractDict, outer_ranges,
+                       gate_cache::Base.RefValue{Any} = Ref{Any}(missing))
     op = node.op
     inner_ranges = _vi_ranges(node)
     arg_sym = node.arg
@@ -695,38 +703,40 @@ function _vi_argreduce(node::OpExpr, ctx::_ViCtx, outer_bindings::AbstractDict, 
     haskey(outer_bindings, arg_sym) && throw(TreeWalkError("E_TREEWALK_VI_ARG",
         "arg-witness `arg`='$arg_sym' shadows an outer index symbol"))
     filt = node.filter
-    join = node.join
-    # Combined ranges so a `join` column over an OUTER-indexed map buffer (the
-    # point's bin) resolves alongside the inner candidate's bin (§5.3 equi-join).
-    # `Base.merge` — the module shadows `merge` with an `EsmFile` method.
-    combined = Base.merge(Dict{String,Any}(outer_ranges), Dict{String,Any}(inner_ranges))
-    # Resolve the join gates ONCE (broad-phase candidate set / buffer bindings are
-    # shared across every candidate tuple), not per `rec` leaf.
-    join_gates = join === nothing ? nothing : _vi_resolve_join(join, combined, ctx)
+    # The join gates, resolved on the first point of a map and reused for the rest.
+    gate_cache[] === missing && (gate_cache[] = _vi_argreduce_gates(node, ctx, outer_ranges))
+    join_gates = gate_cache[]
     syms = _vi_order_syms(inner_ranges)
     bindings = Dict{String,Any}(outer_bindings)
     best_val = nothing
     best_arg = nothing
+    leaf = function (bindings)
+        if filt !== nothing
+            fv = _vi_eval(filt, ctx, bindings)
+            (fv === true || (isa(fv, Real) && fv > 0)) || return
+        end
+        if join_gates !== nothing && !_vi_join_ok(join_gates, bindings)
+            return
+        end
+        v = Float64(_vi_eval(value_expr, ctx, bindings))
+        a = _vi_key_int(bindings[arg_sym])
+        if best_arg === nothing
+            best_val = v; best_arg = a
+        else
+            better = op == "argmax" ? (v > best_val) : (v < best_val)
+            # Strict improvement OR an exact tie resolved to the smaller arg.
+            if better || (v == best_val && a < best_arg)
+                best_val = v; best_arg = a
+            end
+        end
+        return
+    end
+    # A gate with candidate pairs restricts the inner candidates to the outer
+    # point's partners (`_vi_enumerate_driven`, the producer's driven walk); the
+    # visited candidates keep their order, minus those the gate rejects.
     function rec(k)
         if k > length(syms)
-            if filt !== nothing
-                fv = _vi_eval(filt, ctx, bindings)
-                (fv === true || (isa(fv, Real) && fv > 0)) || return
-            end
-            if join_gates !== nothing && !_vi_join_ok(join_gates, bindings)
-                return
-            end
-            v = Float64(_vi_eval(value_expr, ctx, bindings))
-            a = _vi_key_int(bindings[arg_sym])
-            if best_arg === nothing
-                best_val = v; best_arg = a
-            else
-                better = op == "argmax" ? (v > best_val) : (v < best_val)
-                # Strict improvement OR an exact tie resolved to the smaller arg.
-                if better || (v == best_val && a < best_arg)
-                    best_val = v; best_arg = a
-                end
-            end
+            leaf(bindings)
             return
         end
         s = syms[k]
@@ -736,11 +746,25 @@ function _vi_argreduce(node::OpExpr, ctx::_ViCtx, outer_bindings::AbstractDict, 
         end
         delete!(bindings, s)
     end
-    rec(1)
+    ov = _drivable_gate(join_gates)
+    ov === nothing ? rec(1) :
+        _vi_enumerate_driven(syms, inner_ranges, ctx, bindings, ov, leaf)
     best_arg === nothing && throw(TreeWalkError("E_TREEWALK_VI_ARGEMPTY",
         "arg-witness op '$op' has an empty candidate set; no index witnesses the " *
         "optimum (a point with no candidate generator is undefined)"))
     return best_arg
+end
+
+# An arg-witness node's join gates, resolved against its outer and inner ranges
+# together so a `join` column over an OUTER-indexed map buffer (the point's bin)
+# resolves alongside the inner candidate's bin (§5.3 equi-join). They depend on
+# the ranges only, so a map resolves them once for all its points (the
+# `gate_cache` of `_vi_argreduce`).
+# `Base.merge` — the module shadows `merge` with an `EsmFile` method.
+function _vi_argreduce_gates(node::OpExpr, ctx::_ViCtx, outer_ranges)
+    node.join === nothing && return nothing
+    combined = Base.merge(Dict{String,Any}(outer_ranges), Dict{String,Any}(_vi_ranges(node)))
+    return _vi_resolve_join(node.join, combined, ctx)
 end
 
 # Materialise a per-element value-invention map var → Dict(output-index → value).
@@ -755,10 +779,11 @@ function _vi_materialize_map!(ctx::_ViCtx, vname::AbstractString, node::OpExpr)
     is_arg = body isa OpExpr && body.op in _VI_ARGWITNESS_OPS
     out = Dict{Any,Any}()
     sym = String(output_idx[1])
+    gates = Ref{Any}(missing)
     _vi_enumerate(outer_ranges, ctx, bindings -> begin
         # An arg-witness body runs the inner reduction (with the outer point bound)
         # and emits the witnessing INDEX; an ordinary body (skolem) emits its value.
-        out[bindings[sym]] = is_arg ? _vi_argreduce(body, ctx, bindings, outer_ranges) :
+        out[bindings[sym]] = is_arg ? _vi_argreduce(body, ctx, bindings, outer_ranges, gates) :
                                       _vi_eval(body, ctx, bindings)
     end)
     ctx.maps[vname] = out

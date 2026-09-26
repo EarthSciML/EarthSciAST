@@ -269,16 +269,21 @@ pub(crate) struct FieldIcRecord {
 /// * the parameters, checked here bit for bit against the positional vector
 ///   the solve resolved (a [`crate::remake`] with new `p` shares this model and
 ///   misses);
-/// * the provider forcing buffer, which is final by the time construction
-///   records (the CONST providers are bound before the compiler gate runs) and
-///   first refreshed AFTER the initial state is built. Taking the memo, rather
-///   than keeping it, is what holds that: only the first solve can read it,
-///   and every later one resolves from the buffer as it stands.
+/// * the provider forcing buffer, which the crate's own drivers leave as
+///   construction had it until the initial state is built (the CONST providers
+///   are bound before the compiler gate runs, and a discrete refresh comes
+///   after `u0`). A host can write it in between through
+///   [`ArrayCompiled::forcing_handle`], so the memo records the buffer's
+///   handle generation, which every call to that accessor bumps, and answers
+///   only while it is unchanged. Taking the memo, rather than keeping it, is
+///   what holds the rest: only the first solve can read it, and every later
+///   one resolves from the buffer as it stands.
 ///
 /// Initial-condition overrides are applied over the result, not read by it.
 #[cfg(feature = "solve")]
 pub(crate) struct FieldIcMemo {
     params: Vec<u64>,
+    forcing_generation: u64,
     slots: HashMap<usize, f64>,
 }
 
@@ -396,7 +401,23 @@ impl ArrayCompiled {
     /// problem. The buffer is shared (the handle and the closures clone one
     /// `Rc`); mutate it only *between* segments, never inside a solver step, to
     /// keep the RHS pure within a segment.
+    ///
+    /// Whoever holds the handle may write the buffer at any later point, so
+    /// taking one also retires the field initial conditions construction
+    /// resolved from it ([`FieldIcMemo`]): the next solve resolves them from
+    /// the buffer as it then stands.
     pub fn forcing_handle(&self) -> Rc<RefCell<HashMap<String, ArrayD<f64>>>> {
+        self.forcing_generation
+            .set(self.forcing_generation.get().wrapping_add(1));
+        Rc::clone(&self.forcing)
+    }
+
+    /// The forcing buffer, for the crate's own drivers, which write it only
+    /// where [`FieldIcMemo`] allows: before construction records the memo, or
+    /// after the initial state is built. Unlike [`Self::forcing_handle`] it
+    /// leaves the memo standing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn forcing_buffer(&self) -> Rc<RefCell<HashMap<String, ArrayD<f64>>>> {
         Rc::clone(&self.forcing)
     }
 
@@ -435,8 +456,32 @@ impl ArrayCompiled {
             .collect()
     }
 
+    /// Every state slot's name (`u[2,3]`, or a 0-D state's bare name), in
+    /// flat state-vector order. Built from the slot layout the first time it
+    /// is asked for, then kept.
     pub fn state_variable_names(&self) -> &[String] {
-        &self.scalar_state_names
+        self.state_names
+            .get_or_init(|| super::layout::slot_names(&self.var_shapes))
+    }
+
+    /// [`Self::state_variable_names`] under this model's single-model
+    /// namespace (`M.u[2,3]`), the spelling the Problem reports (API_SPEC
+    /// §5.8's qualification rule, `crate::problem::qualify`, applied to each
+    /// variable's name; the cell suffix carries no `.`, so qualifying the
+    /// variable and qualifying the slot name agree). The same names as
+    /// [`Self::state_variable_names`] when the model has no namespace.
+    pub(crate) fn qualified_state_names(&self) -> &[String] {
+        let Some(ns) = self.namespace.as_deref() else {
+            return self.state_variable_names();
+        };
+        self.qualified_state_names.get_or_init(|| {
+            super::layout::slot_names_with(&self.var_shapes, |v| crate::problem::qualify(ns, v))
+        })
+    }
+
+    /// The length of the flat state vector.
+    pub fn n_states(&self) -> usize {
+        self.n_states
     }
     pub fn parameter_names(&self) -> &[String] {
         &self.param_names
@@ -535,8 +580,8 @@ impl ArrayCompiled {
         let mut s = RhsScratch::new(&self.var_shapes);
         s.set_const_arrays(Rc::clone(&self.const_scope));
         if !tape_disabled() {
-            let (prog, _report) = self.build_tape(&HashSet::new());
-            s.install_tape(Rc::new(prog), Rc::new(self.observed_rules.clone()));
+            let (prog, _report) = self.tape(&HashSet::new());
+            s.install_tape(prog, self.shared_observed_rules());
         }
         s
     }
@@ -705,8 +750,8 @@ impl ArrayCompiled {
         let mut scratch = RhsScratch::new(&self.var_shapes);
         scratch.set_const_arrays(Rc::clone(&self.const_scope));
         if self.tape_serves_passes() && !tape_disabled() {
-            let (prog, _report) = self.build_tape(&HashSet::new());
-            scratch.install_tape(Rc::new(prog), Rc::new(self.observed_rules.clone()));
+            let (prog, _report) = self.tape(&HashSet::new());
+            scratch.install_tape(prog, self.shared_observed_rules());
             scratch.set_exports_active(true);
         }
         let mut dy: Vec<f64> = Vec::new();
@@ -926,6 +971,7 @@ impl ArrayCompiled {
         {
             *self.field_ic_memo.borrow_mut() = Some(FieldIcMemo {
                 params: param_bits(&param_vec),
+                forcing_generation: self.forcing_generation.get(),
                 slots,
             });
         }
@@ -943,9 +989,11 @@ impl ArrayCompiled {
     /// it is exactly what makes `P.sub.g` a legal spelling of `sub.g`.
     fn override_namespaces(&self) -> std::collections::HashSet<String> {
         crate::simulate::namespace_scope(
+            // A slot name's cell suffix carries no `.`, so the state
+            // VARIABLES' names carry every namespace their slots' names do.
             self.param_names
                 .iter()
-                .chain(self.scalar_state_names.iter())
+                .chain(self.var_shapes.keys())
                 .map(String::as_str),
             self.namespace.as_deref(),
         )
@@ -998,7 +1046,7 @@ impl ArrayCompiled {
     ) -> Result<Vec<f64>, SimulateError> {
         // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
         let initial_conditions = crate::simulate::canonicalize_override_keys(
-            &self.scalar_state_index,
+            &super::layout::SlotNames(&self.var_shapes),
             &self.override_namespaces(),
             initial_conditions,
             &self.merged_renames,
@@ -1006,11 +1054,10 @@ impl ArrayCompiled {
         .map_err(crate::simulate::ic_key_error)?;
         // What construction resolved, when it resolved it under these
         // parameters ([`FieldIcMemo`]).
-        let memo = self
-            .field_ic_memo
-            .borrow_mut()
-            .take()
-            .filter(|m| m.params == param_bits(param_vec));
+        let memo = self.field_ic_memo.borrow_mut().take().filter(|m| {
+            m.params == param_bits(param_vec)
+                && m.forcing_generation == self.forcing_generation.get()
+        });
         let field_ic_map = match memo {
             Some(m) => m.slots,
             None => {
@@ -1027,17 +1074,38 @@ impl ArrayCompiled {
                 self.resolve_field_ics(&resolved_params, None)?
             }
         };
+        // Per slot, the first of: an explicit override, a field `ic`, the
+        // variable's default. Written lowest priority first, each variable's
+        // default as one fill (or one gather of its inline data); a slot left
+        // with none of the three is flagged, and only a variable that
+        // declares no default can leave one.
         let mut ic_vec = vec![0.0f64; self.n_states];
-        for (i, name) in self.scalar_state_names.iter().enumerate() {
-            if let Some(&v) = initial_conditions.get(name) {
-                ic_vec[i] = v;
-            } else if let Some(&v) = field_ic_map.get(&i) {
-                ic_vec[i] = v;
-            } else if let Some(d) = self.state_defaults[i] {
-                ic_vec[i] = d;
-            } else {
-                return Err(SimulateError::InvalidInitialCondition { name: name.clone() });
+        let mut unset: Option<Vec<bool>> = None;
+        for ((_, vs), default) in self.var_shapes.iter().zip(&self.state_defaults) {
+            let n = vs.shape.iter().copied().product::<usize>().max(1);
+            let range = vs.flat_offset..vs.flat_offset + n;
+            if !super::layout::write_state_default(vs, default, &mut ic_vec[range.clone()]) {
+                unset.get_or_insert_with(|| vec![false; self.n_states])[range].fill(true);
             }
+        }
+        for (&slot, &v) in &field_ic_map {
+            ic_vec[slot] = v;
+            if let Some(u) = unset.as_mut() {
+                u[slot] = false;
+            }
+        }
+        for (name, &v) in &initial_conditions {
+            // Canonicalization answers only with names the layout resolves.
+            let slot = super::layout::lookup_slot(&self.var_shapes, name)
+                .expect("a canonical initial-condition key names a slot");
+            ic_vec[slot] = v;
+            if let Some(u) = unset.as_mut() {
+                u[slot] = false;
+            }
+        }
+        if let Some(slot) = unset.and_then(|u| u.iter().position(|&x| x)) {
+            let name = super::layout::slot_name(&self.var_shapes, slot).unwrap_or_default();
+            return Err(SimulateError::InvalidInitialCondition { name });
         }
         Ok(ic_vec)
     }
@@ -1507,9 +1575,9 @@ impl ArrayCompiled {
         let tape: SolveTape = if self.is_interpreter() || tape_disabled() {
             None
         } else {
-            let (prog, report) = self.build_tape(discrete_forcing);
-            tape_fallbacks = report.fallbacks;
-            Some((Rc::new(prog), Rc::new(self.observed_rules.clone())))
+            let (prog, report) = self.tape(discrete_forcing);
+            tape_fallbacks = report.fallbacks.clone();
+            Some((prog, self.shared_observed_rules()))
         };
         (tape, tape_fallbacks)
     }
@@ -1655,7 +1723,7 @@ impl ArrayCompiled {
         output_observed: &[String],
         tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) -> Result<Solution, SimulateError> {
-        let mut state_variable_names = self.scalar_state_names.clone();
+        let mut state_variable_names = self.state_variable_names().to_vec();
         self.append_observed_trajectories(
             &time,
             &mut state,
@@ -3674,6 +3742,11 @@ mod field_ic_memo_tests {
         let (large, cells) = refusal(100_000, cumulative.clone());
         assert_eq!(large, small);
         assert_eq!(large.0, "initial condition");
+        assert!(
+            large.2.ends_with(crate::simulate_array::ONE_CELL_NOTE),
+            "{}",
+            large.2
+        );
         assert_eq!(cells, 1, "the walk must stop at its first cell");
 
         // What the rest of the expression makes of the stopped walk's
@@ -3684,5 +3757,72 @@ mod field_ic_memo_tests {
         let (large, cells) = refusal(100_000, reciprocal);
         assert_eq!(large, small);
         assert_eq!(cells, 1);
+    }
+
+    /// A CONST provider serving `w` as zeros over three cells.
+    struct Zeros;
+
+    impl crate::provider::CadenceProvider for Zeros {
+        fn materialize(
+            &mut self,
+        ) -> Result<
+            std::collections::HashMap<String, crate::provider::NativeField>,
+            crate::provider::ProviderError,
+        > {
+            let zeros = ndarray::ArrayD::zeros(ndarray::IxDyn(&[3]));
+            Ok([("w".to_string(), crate::provider::NativeField::new(zeros))].into())
+        }
+        fn refresh(
+            &mut self,
+            _t: f64,
+        ) -> Result<
+            Option<std::collections::HashMap<String, crate::provider::NativeField>>,
+            crate::provider::ProviderError,
+        > {
+            Ok(None)
+        }
+        fn refresh_times(&self) -> Vec<f64> {
+            Vec::new()
+        }
+    }
+
+    fn loaded(compiler: Compiler) -> crate::EsmProblem {
+        let file = with_ic(3, json!("w"));
+        let options = ProblemOptions {
+            providers: [(
+                "w".to_string(),
+                Box::new(Zeros) as Box<dyn crate::provider::CadenceProvider>,
+            )]
+            .into(),
+            ..opts(compiler)
+        };
+        esm_problem(&file, (0.0, 1.0), options).unwrap_or_else(|e| panic!("[{compiler}] {e}"))
+    }
+
+    /// The memo was resolved from the forcing buffer as construction left it.
+    /// A host that writes the buffer through `forcing_handle` before the first
+    /// solve must get initial conditions from what it wrote.
+    #[test]
+    fn a_forcing_write_before_the_first_solve_is_not_masked_by_the_memo() {
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            // Untouched, the first solve takes the construction's resolution.
+            let prob = loaded(compiler);
+            let before = field_ic_resolutions();
+            let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(field_ic_resolutions() - before, 0, "[{compiler}]");
+            assert_eq!(first_column(&sol), [0.0, 0.0, 0.0], "[{compiler}]");
+
+            let prob = loaded(compiler);
+            let compiled = prob.debug_array_compiled().expect("an array model");
+            compiled.forcing_handle().borrow_mut().insert(
+                "w".to_string(),
+                ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[3]), vec![1.0, 2.0, 3.0])
+                    .expect("shape"),
+            );
+            let before = field_ic_resolutions();
+            let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(field_ic_resolutions() - before, 1, "[{compiler}]");
+            assert_eq!(first_column(&sol), [1.0, 2.0, 3.0], "[{compiler}]");
+        }
     }
 }

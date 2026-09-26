@@ -342,12 +342,75 @@ macro_rules! dispatch_un_kernel {
 }
 pub(super) use dispatch_un_kernel;
 
+/// A fused group's operands resolved for one execution: its scalar values,
+/// its array inputs' base pointers and its live-outs' slab pointers. Held by
+/// the executor with room for the program's largest group, so resolving a
+/// group never allocates.
+pub(super) struct FusedScratch {
+    svals: Vec<f64>,
+    bases: Vec<*const f64>,
+    outs: Vec<(GroupIx, *mut f64)>,
+    cursor: RunCursor,
+}
+
+impl FusedScratch {
+    pub(super) fn for_program(prog: &TapeProgram) -> Self {
+        let most = |f: fn(&FusedSpec) -> usize| prog.fused.iter().map(f).max().unwrap_or(0);
+        FusedScratch {
+            svals: Vec::with_capacity(most(|f| f.scalars.len())),
+            bases: Vec::with_capacity(most(|f| f.inputs.len())),
+            outs: Vec::with_capacity(most(|f| f.outputs.len())),
+            cursor: RunCursor::with_room(most(|f| f.schedule.depth), most(n_shifted)),
+        }
+    }
+}
+
+fn n_shifted(fs: &FusedSpec) -> usize {
+    fs.inputs.iter().filter(|i| i.shifted_ix.is_some()).count()
+}
+
+/// The executor's position in a [`RunSchedule`]: one frame per open
+/// [`RunNode::Repeat`], the offsets the open repetitions have stepped so far,
+/// and the current run's shifted-input offsets with them applied. Sized for
+/// the program's deepest schedule and widest group, so walking never
+/// allocates.
+pub(super) struct RunCursor {
+    frames: Vec<RepeatFrame>,
+    in_delta: Vec<i64>,
+    in_off: Vec<i64>,
+}
+
+/// An open repetition: the `Repeat` node, its body's node range, and the
+/// repetitions still to run (this one included).
+#[derive(Clone, Copy)]
+struct RepeatFrame {
+    node: usize,
+    end: usize,
+    left: u32,
+}
+
+impl RunCursor {
+    pub(super) fn with_room(depth: usize, n_shifted: usize) -> Self {
+        RunCursor {
+            frames: Vec::with_capacity(depth),
+            in_delta: Vec::with_capacity(n_shifted),
+            in_off: Vec::with_capacity(n_shifted),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_spec(fs: &FusedSpec) -> Self {
+        Self::with_room(fs.schedule.depth, n_shifted(fs))
+    }
+}
+
 /// Execute one fused group. Iterates the precompiled run schedule; each run
 /// is strip-mined into `FCHUNK`-element chunks whose micro-ops execute over
 /// the register file, then live-out registers store to the slab. Per element
 /// this applies exactly the same scalar kernels in the same order as the
 /// unfused instructions (elementwise maps — chunking cannot change a bit).
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused(
     fs: &FusedSpec,
     env: &Env,
@@ -355,15 +418,22 @@ pub(super) unsafe fn exec_fused(
     slot_off: &[usize],
     obs: &ArrMap,
     fregs: &mut [f64],
+    scratch: &mut FusedScratch,
     simd: SimdLevel,
 ) {
+    let FusedScratch {
+        svals,
+        bases,
+        outs,
+        cursor,
+    } = scratch;
     // Resolve scalar inputs once.
-    let mut svals: SmallVec<[f64; 8]> = SmallVec::new();
+    svals.clear();
     for op in &fs.scalars {
         svals.push(resolve_scalar(op, env, slab_ptr, slot_off, obs));
     }
     // Resolve array input base pointers once.
-    let mut bases: SmallVec<[*const f64; 8]> = SmallVec::new();
+    bases.clear();
     for inp in &fs.inputs {
         let p: *const f64 = match &inp.src {
             SrcRef::Slot(s) => {
@@ -392,20 +462,63 @@ pub(super) unsafe fn exec_fused(
         bases.push(p);
     }
     // Output slab pointers.
-    let mut outs: SmallVec<[(GroupIx, *mut f64); 2]> = SmallVec::new();
+    outs.clear();
     for &(reg, slot) in &fs.outputs {
         outs.push((reg, unsafe { slab_ptr.add(slot_off[slot as usize]) }));
     }
+    // An absorbed reduction's accumulator, seeded with its identity.
+    let red: *mut f64 = match &fs.reduce {
+        Some(r) => unsafe {
+            let p = slab_ptr.add(slot_off[r.out as usize]);
+            std::slice::from_raw_parts_mut(p, r.n_inner).fill(r.init);
+            p
+        },
+        None => std::ptr::null_mut(),
+    };
 
     // Step 4b: run the chunked micro-program through the SIMD clone selected
     // at executor construction. Same source, same scalar semantics — the
     // `#[target_feature]` wrappers only widen the auto-vectorized lanes.
     match simd {
-        SimdLevel::Generic => unsafe { exec_fused_runs_generic(fs, &svals, &bases, &outs, fregs) },
+        SimdLevel::Generic => unsafe {
+            exec_fused_runs_generic(fs, svals, bases, outs, red, fregs, cursor)
+        },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 => unsafe { exec_fused_runs_avx2(fs, &svals, &bases, &outs, fregs) },
+        SimdLevel::Avx2 => unsafe {
+            exec_fused_runs_avx2(fs, svals, bases, outs, red, fregs, cursor)
+        },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx512 => unsafe { exec_fused_runs_avx512(fs, &svals, &bases, &outs, fregs) },
+        SimdLevel::Avx512 => unsafe {
+            exec_fused_runs_avx512(fs, svals, bases, outs, red, fregs, cursor)
+        },
+    }
+}
+
+/// Fold one chunk (`c` values at flat box offset `at`) into an absorbed
+/// reduction's accumulator: `acc[(at + k) % n_inner] = f(acc[..], v[k])`,
+/// ascending in `k` — contiguous pieces of the accumulator, one per crossing
+/// of a leading-axes position.
+#[inline(always)]
+unsafe fn fold_chunk(
+    acc: *mut f64,
+    n_inner: usize,
+    at: usize,
+    v: *const f64,
+    c: usize,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    let mut k = 0usize;
+    while k < c {
+        let o = (at + k) % n_inner;
+        let len = (c - k).min(n_inner - o);
+        unsafe {
+            let a = std::slice::from_raw_parts_mut(acc.add(o), len);
+            let x = std::slice::from_raw_parts(v.add(k), len);
+            for (y, &t) in a.iter_mut().zip(x) {
+                *y = f(*y, t);
+            }
+        }
+        k += len;
     }
 }
 
@@ -419,7 +532,9 @@ unsafe fn exec_fused_runs(
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
+    red: *mut f64,
     fregs: &mut [f64],
+    cursor: &mut RunCursor,
 ) {
     let rp = fregs.as_mut_ptr();
     // Bin3 splat registers: one FCHUNK broadcast per scalar plus a zero
@@ -443,12 +558,76 @@ unsafe fn exec_fused_runs(
             }
         }
     }
-    for run in &fs.runs {
+    // Walk the schedule in execution order: a `Repeat` opens a frame over
+    // its body, and each time the walk reaches the body's end it either
+    // steps every offset once more and goes back to the body's start, or
+    // (the last repetition done) takes the steps back off and closes.
+    let nodes = &fs.schedule.nodes;
+    let RunCursor {
+        frames,
+        in_delta,
+        in_off,
+    } = cursor;
+    frames.clear();
+    in_delta.clear();
+    in_delta.resize(n_shifted(fs), 0);
+    in_off.clear();
+    in_off.resize(in_delta.len(), 0);
+    let mut out_delta = 0i64;
+    let mut i = 0usize;
+    loop {
+        while let Some(fr) = frames.last_mut()
+            && i == fr.end
+        {
+            let RunNode::Repeat {
+                count,
+                body,
+                out_step,
+                in_step,
+            } = &nodes[fr.node]
+            else {
+                unreachable!("a frame is opened by a Repeat node")
+            };
+            fr.left -= 1;
+            if fr.left > 0 {
+                out_delta += out_step;
+                for (d, s) in in_delta.iter_mut().zip(in_step) {
+                    *d += s;
+                }
+                i = fr.end - *body as usize;
+                break;
+            }
+            let back = *count as i64 - 1;
+            out_delta -= back * out_step;
+            for (d, s) in in_delta.iter_mut().zip(in_step) {
+                *d -= back * s;
+            }
+            frames.pop();
+        }
+        let run = match nodes.get(i) {
+            None => break,
+            Some(RunNode::Repeat { count, body, .. }) => {
+                frames.push(RepeatFrame {
+                    node: i,
+                    end: i + 1 + *body as usize,
+                    left: *count,
+                });
+                i += 1;
+                continue;
+            }
+            Some(RunNode::Run(run)) => run,
+        };
+        i += 1;
+        for ((o, &r), &d) in in_off.iter_mut().zip(&run.in_off).zip(in_delta.iter()) {
+            *o = if r == GHOST_OFF { r } else { r + d };
+        }
+        let in_off: &[i64] = in_off;
+        let out_off = (run.out_off as i64 + out_delta) as usize;
         let mut done = 0usize;
         let len = run.len as usize;
         while done < len {
             let c = (len - done).min(FCHUNK);
-            let at = run.out_off as usize + done;
+            let at = out_off + done;
             // Pre-load strided shifted inputs into their dedicated chunk
             // registers (a ghost run needs no load — reads resolve to 0.0).
             for (i, inp) in fs.inputs.iter().enumerate() {
@@ -456,7 +635,7 @@ unsafe fn exec_fused_runs(
                     continue;
                 }
                 let sx = inp.shifted_ix.expect("load_reg implies shifted");
-                let o = run.in_off[sx as usize];
+                let o = in_off[sx as usize];
                 if o == GHOST_OFF {
                     continue;
                 }
@@ -478,13 +657,17 @@ unsafe fn exec_fused_runs(
                         match inp.shifted_ix {
                             None => MSrc::P(unsafe { bases[*i as usize].add(at) }),
                             Some(s) => {
-                                let o = run.in_off[s as usize];
+                                let o = in_off[s as usize];
                                 if o == GHOST_OFF {
                                     MSrc::C(0.0)
                                 } else if inp.load_reg != GroupIx::MAX {
                                     MSrc::P(unsafe {
                                         rp.add(inp.load_reg as usize * FCHUNK) as *const f64
                                     })
+                                } else if inp.elem_stride == 0 {
+                                    // Constant along the run: one source
+                                    // element, broadcast like a scalar.
+                                    MSrc::C(unsafe { *bases[*i as usize].offset(o as isize) })
                                 } else {
                                     MSrc::P(unsafe {
                                         bases[*i as usize].offset(o as isize + done as isize)
@@ -758,6 +941,15 @@ unsafe fn exec_fused_runs(
                     );
                 }
             }
+            if let Some(r) = &fs.reduce {
+                let v = unsafe { rp.add(r.reg as usize * FCHUNK) as *const f64 };
+                macro_rules! fold {
+                    ($f:expr) => {
+                        unsafe { fold_chunk(red, r.n_inner, at, v, c, $f) }
+                    };
+                }
+                dispatch_bin_kernel!(&r.op, fold);
+            }
             done += c;
         }
     }
@@ -770,9 +962,11 @@ pub(super) unsafe fn exec_fused_runs_generic(
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
+    red: *mut f64,
     fregs: &mut [f64],
+    cursor: &mut RunCursor,
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, fregs) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor) }
 }
 
 /// AVX2 clone: identical Rust source compiled under `avx2` (+`fma` is NOT
@@ -786,9 +980,11 @@ pub(super) unsafe fn exec_fused_runs_avx2(
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
+    red: *mut f64,
     fregs: &mut [f64],
+    cursor: &mut RunCursor,
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, fregs) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor) }
 }
 
 /// AVX-512 clone (f+vl+dq+bw, all runtime-checked). Note LLVM keeps its
@@ -806,9 +1002,11 @@ pub(super) unsafe fn exec_fused_runs_avx512(
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
+    red: *mut f64,
     fregs: &mut [f64],
+    cursor: &mut RunCursor,
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, fregs) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor) }
 }
 
 /// The SINGLE definition of micro-op scalar semantics: one element of one

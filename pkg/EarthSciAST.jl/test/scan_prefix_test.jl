@@ -278,12 +278,14 @@ end
         let g = gather(nocon)
             @test ESM._unwrap_identity_gather(g, ["_mo0"], ranges_d) === g
         end
-        # A VARIABLE-VALENCE contracted bound takes the per-cell path from either
-        # form, so there is nothing to gain and a lowering to change.
+        # A VARIABLE-VALENCE contracted bound unwraps too: the whole-array
+        # contraction nest takes the bare producer with each cell's admitted
+        # indices as a table, where the gather form hides the contraction from
+        # it and leaves the per-cell build. The per-cell path expands the bare
+        # form term for term as it expands the gather form, so an equation the
+        # nest declines lowers as before.
         varb = mkagg(; filt=nothing, jrange=Any[1, "nedges"])
-        let g = gather(varb)
-            @test ESM._unwrap_identity_gather(g, ["_mo0"], ranges_d) === g
-        end
+        @test unwrapped(varb)
         # A non-identity gather (a real reindex) is left alone.
         reidx = _op("index", mkagg(), _op("+", _v("_mo0"), _n(1)))
         @test ESM._unwrap_identity_gather(reidx, ["_mo0"], ranges_d) === reidx

@@ -849,6 +849,51 @@ function _geo_overlap_drive(ov::_GeoOverlapGate, out::Vector{String},
     return _GeoOverlapDrive(:restrict, po, gc, Int[], side)
 end
 
+# ---- The bin-equality broad phase at SETUP ----
+#
+# A `join.on` key pair (`_GeoSlotGate`, e.g. `src_bin[i] == tgt_bin[j]` in the
+# conservative regrid) is otherwise tested one tuple at a time over the whole
+# output × contracted product, which is quadratic in the grid. Its candidate
+# pairs are the key-equality matches (`_equality_match_index`, broad_phase.jl),
+# and they drive the sweep exactly as an overlap gate's candidates do: the
+# same drive plan, the same `:pairs` MAP and `:restrict` contraction sweeps.
+# Both sweeps still run `_geo_gate_ok` on every tuple they visit, so the
+# admitted set is the dense sweep's; a MAP writes the same cells, and a
+# contraction folds the same terms in the same order (the restriction is an
+# ascending subsequence of the contracted range).
+#
+# Gated by the plan's `join_on_gate`, the switch for the ODE path's `on`-gate
+# driver: off (`compiler = :interpreter`), the sweep is the dense one, which is
+# the oracle. A gate whose key column is shorter than its range, or whose keys
+# are of a kind the index declines, keeps the dense sweep.
+const _GEOM_EQ_DRIVE = Ref{Int}(0)
+
+function _geo_equality_drive(gates, out::Vector{String}, contract::Vector{String},
+                             exts::Vector{Int}, index_sets, derived_extents, faq)
+    (gates === nothing || isempty(gates)) && return nothing
+    _join_on_gate_disabled() && return nothing
+    nout = length(out)
+    nslot = nout + length(contract)
+    slotname(s) = s <= nout ? out[s] : contract[s - nout]
+    slotext(s) = s <= nout ? exts[s] :
+        _geo_index_extent(faq.ranges[contract[s - nout]], index_sets, derived_extents)
+    for gt in gates
+        sA, sB = gt.slotA, gt.slotB
+        (sA != sB && 1 <= sA <= nslot && 1 <= sB <= nslot) || continue
+        a, b = gt.arrA, gt.arrB
+        (a isa AbstractArray && b isa AbstractArray) || continue
+        eA, eB = slotext(sA), slotext(sB)
+        (length(a) >= eA && length(b) >= eB) || continue
+        oi = _equality_match_index(1:eA, p -> a[p], 1:eB, p -> b[p])
+        oi === nothing && continue
+        g = _GeoOverlapGate(_JoinGate(slotname(sA), slotname(sB), Dict{Int,Int}(),
+                                      Dict{Int,Int}(), oi), sA, sB)
+        d = _geo_overlap_drive(g, out, contract, exts, index_sets, derived_extents, faq)
+        d === nothing || return (g, d)
+    end
+    return nothing
+end
+
 # PAIRS-driven MAP sweep: `_overlap_drive_plan` bound BOTH gated symbols, and
 # both are OUTPUT indices, so the candidate pairs enumerate the output cells
 # directly and every remaining output index products around them. Output cells
@@ -997,6 +1042,18 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
     else
         _GEOM_OVERLAP_DRIVE[] += 1
     end
+    # With no overlap gate, a bin-equality (`on`) gate drives instead, through
+    # the same two sweep shapes (see `_geo_equality_drive`). `dov` is the gate
+    # whose candidate index the driven sweep reads.
+    dov = ov
+    if ov === nothing
+        eq = _geo_equality_drive(gates, out, contract, exts, index_sets,
+                                 derived_extents, faq)
+        if eq !== nothing
+            dov, drive = eq
+            _GEOM_EQ_DRIVE[] += 1
+        end
+    end
     # ---- The sweep (see `_geom_sweep_map!` / `_geom_sweep_contract!`) ----
     # The sweep counters describe the DENSE sweeps only; a candidate-driven
     # sweep runs neither of them and is counted by `_GEOM_OVERLAP_DRIVE`.
@@ -1009,7 +1066,7 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
         if drive !== nothing
             rp = Tuple(drive.restpos)
             _geom_sweep_pairs_map!(arr, body, gates, filt, u,
-                                   _overlap_sorted_pairs(ov.gate.candidates::_OverlapIndex),
+                                   _overlap_sorted_pairs(dov.gate.candidates::_OverlapIndex),
                                    drive.pos_l, drive.pos_r, rp,
                                    CartesianIndices(map(k -> exts[k], rp)))
         elseif fast
@@ -1026,7 +1083,7 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
         ncon = length(contract)
         if drive !== nothing
             _geom_sweep_restrict_contract!(arr, body, gates, filt, u,
-                                           ov.gate.candidates::_OverlapIndex,
+                                           dov.gate.candidates::_OverlapIndex,
                                            drive.side, drive.pos_l,
                                            Tuple(cexts), drive.pos_r, nout,
                                            Float64(init), fold)
@@ -1273,7 +1330,7 @@ function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
                        registered_functions=registered_functions, params=params)
     end
     _refuse_percell_evaluation(_current_rule_label(),
-        "the setup MAP materializer", prod(exts))
+        "the setup MAP materializer", prod(exts); one_cell = true)
     _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
     return _fill_map_percell(rhs, exts, ca, registered_functions, params)
 end
@@ -1422,7 +1479,7 @@ function _materialize_setup_wholearray(rhs::OpExpr, env::AbstractDict,
                        registered_functions=registered_functions, params=params)
     end
     _refuse_percell_evaluation(_current_rule_label(),
-        "the whole-array setup materializer", prod(exts))
+        "the whole-array setup materializer", prod(exts); one_cell = true)
     _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
     arr = zeros(Float64, exts...)
     for I in CartesianIndices(Tuple(exts))
