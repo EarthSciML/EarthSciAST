@@ -1485,8 +1485,14 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     // Strided shifted inputs are pre-loaded into dedicated chunk registers
     // appended after the micro register file.
     let mut n_load_regs: GroupIx = 0;
+    // A zero-stride input (constant along each run) is read as a per-run
+    // scalar instead, except under the all-pointer Bin3 superop, which
+    // needs every operand in a register.
     for inp in inputs.iter_mut() {
-        if inp.shifted_ix.is_some() && inp.elem_stride != 1 {
+        if inp.shifted_ix.is_some()
+            && inp.elem_stride != 1
+            && (inp.elem_stride != 0 || n_splat_regs > 0)
+        {
             inp.load_reg = n_regs + n_load_regs;
             n_load_regs += 1;
         }

@@ -537,10 +537,14 @@ pub(crate) struct FusedInput {
     pub src_shape: DimU,
     /// Per-element source advance within a run (1 = contiguous; a LINEAR
     /// folded gather — e.g. a level slice of a deeper box — advances by a
-    /// constant stride). Meaningful only for shifted inputs.
+    /// constant stride; 0 = one source element for the whole run, a read
+    /// broadcast along the box's innermost axis). Meaningful only for shifted
+    /// inputs.
     pub elem_stride: i64,
-    /// For a shifted input with `elem_stride != 1`: the chunk register the
-    /// executor pre-loads this input into (`GroupIx::MAX` otherwise).
+    /// For a shifted input with `elem_stride` other than 1 and 0 (and 0 too in
+    /// a group with a `Bin3` superop): the chunk register the executor
+    /// pre-loads this input into (`GroupIx::MAX` otherwise; a zero-stride
+    /// input is then read as the run's one element).
     pub load_reg: GroupIx,
 }
 

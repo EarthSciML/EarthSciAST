@@ -430,7 +430,7 @@ fn ab_makearray_regions() {
 }
 
 /// Static einsum contraction with the `ifelse(k==0,…)` weight idiom — the
-/// per-tuple fold in `eval_vec_contracted`'s ascending mixed-radix order.
+/// per-tuple fold in the per-cell oracle's tuple order (last name fastest).
 #[test]
 fn ab_contraction_weights() {
     let n = 8;

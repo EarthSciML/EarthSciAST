@@ -342,12 +342,34 @@ macro_rules! dispatch_un_kernel {
 }
 pub(super) use dispatch_un_kernel;
 
+/// A fused group's operands resolved for one execution: its scalar values,
+/// its array inputs' base pointers and its live-outs' slab pointers. Held by
+/// the executor with room for the program's largest group, so resolving a
+/// group never allocates.
+pub(super) struct FusedScratch {
+    svals: Vec<f64>,
+    bases: Vec<*const f64>,
+    outs: Vec<(GroupIx, *mut f64)>,
+}
+
+impl FusedScratch {
+    pub(super) fn for_program(prog: &TapeProgram) -> Self {
+        let most = |f: fn(&FusedSpec) -> usize| prog.fused.iter().map(f).max().unwrap_or(0);
+        FusedScratch {
+            svals: Vec::with_capacity(most(|f| f.scalars.len())),
+            bases: Vec::with_capacity(most(|f| f.inputs.len())),
+            outs: Vec::with_capacity(most(|f| f.outputs.len())),
+        }
+    }
+}
+
 /// Execute one fused group. Iterates the precompiled run schedule; each run
 /// is strip-mined into `FCHUNK`-element chunks whose micro-ops execute over
 /// the register file, then live-out registers store to the slab. Per element
 /// this applies exactly the same scalar kernels in the same order as the
 /// unfused instructions (elementwise maps — chunking cannot change a bit).
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused(
     fs: &FusedSpec,
     env: &Env,
@@ -355,15 +377,17 @@ pub(super) unsafe fn exec_fused(
     slot_off: &[usize],
     obs: &ArrMap,
     fregs: &mut [f64],
+    scratch: &mut FusedScratch,
     simd: SimdLevel,
 ) {
+    let FusedScratch { svals, bases, outs } = scratch;
     // Resolve scalar inputs once.
-    let mut svals: SmallVec<[f64; 8]> = SmallVec::new();
+    svals.clear();
     for op in &fs.scalars {
         svals.push(resolve_scalar(op, env, slab_ptr, slot_off, obs));
     }
     // Resolve array input base pointers once.
-    let mut bases: SmallVec<[*const f64; 8]> = SmallVec::new();
+    bases.clear();
     for inp in &fs.inputs {
         let p: *const f64 = match &inp.src {
             SrcRef::Slot(s) => {
@@ -392,7 +416,7 @@ pub(super) unsafe fn exec_fused(
         bases.push(p);
     }
     // Output slab pointers.
-    let mut outs: SmallVec<[(GroupIx, *mut f64); 2]> = SmallVec::new();
+    outs.clear();
     for &(reg, slot) in &fs.outputs {
         outs.push((reg, unsafe { slab_ptr.add(slot_off[slot as usize]) }));
     }
@@ -411,14 +435,12 @@ pub(super) unsafe fn exec_fused(
     // `#[target_feature]` wrappers only widen the auto-vectorized lanes.
     match simd {
         SimdLevel::Generic => unsafe {
-            exec_fused_runs_generic(fs, &svals, &bases, &outs, red, fregs)
+            exec_fused_runs_generic(fs, svals, bases, outs, red, fregs)
         },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 => unsafe { exec_fused_runs_avx2(fs, &svals, &bases, &outs, red, fregs) },
+        SimdLevel::Avx2 => unsafe { exec_fused_runs_avx2(fs, svals, bases, outs, red, fregs) },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx512 => unsafe {
-            exec_fused_runs_avx512(fs, &svals, &bases, &outs, red, fregs)
-        },
+        SimdLevel::Avx512 => unsafe { exec_fused_runs_avx512(fs, svals, bases, outs, red, fregs) },
     }
 }
 
@@ -527,6 +549,10 @@ unsafe fn exec_fused_runs(
                                     MSrc::P(unsafe {
                                         rp.add(inp.load_reg as usize * FCHUNK) as *const f64
                                     })
+                                } else if inp.elem_stride == 0 {
+                                    // Constant along the run: one source
+                                    // element, broadcast like a scalar.
+                                    MSrc::C(unsafe { *bases[*i as usize].offset(o as isize) })
                                 } else {
                                     MSrc::P(unsafe {
                                         bases[*i as usize].offset(o as isize + done as isize)

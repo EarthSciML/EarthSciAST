@@ -368,6 +368,41 @@ impl ArrayCompiled {
         (*self.tape(&HashSet::new()).1).clone()
     }
 
+    /// The program as text, one instruction per line with its section and
+    /// the box it defines, then the fused groups (`TAPE_LISTING=1` in
+    /// `examples/tape_report.rs`). Diagnostics only.
+    #[doc(hidden)]
+    pub fn debug_tape_listing(&self) -> String {
+        use std::fmt::Write;
+        let (prog, _) = self.tape(&HashSet::new());
+        let mut out = String::new();
+        for (pc, ins) in prog.instrs.iter().enumerate() {
+            let boxed = ins
+                .out()
+                .map(|o| {
+                    let d = &prog.slots[o as usize];
+                    format!(" -> s{o}{:?}", &d.shape[..])
+                })
+                .unwrap_or_default();
+            let _ = writeln!(out, "{pc:4} {:?} {ins:?}{boxed}", prog.section_of(pc));
+        }
+        for (i, fs) in prog.fused.iter().enumerate() {
+            let _ = writeln!(
+                out,
+                "fused {i}: box {:?}, {} micro-ops, {} inputs ({} shifted), {} scalars, {} outputs, {} runs, reduce {:?}",
+                &fs.shape[..],
+                fs.micro.len(),
+                fs.inputs.len(),
+                fs.inputs.iter().filter(|x| x.shifted_ix.is_some()).count(),
+                fs.scalars.len(),
+                fs.outputs.len(),
+                fs.runs.len(),
+                fs.reduce
+            );
+        }
+        out
+    }
+
     /// Where every rule of this model LANDS, in program order — the per-rule
     /// half of `compiler_report` (API_SPEC §5.8).
     ///
