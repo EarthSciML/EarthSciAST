@@ -457,7 +457,8 @@ function _vi_order_syms(ranges)
 end
 
 # The element values a range symbol binds to, given the current bindings.
-# interval/categorical → 1-based positions; ragged → the MEMBER values gathered
+# interval/categorical → 1-based positions, as the lazy range `1:n` (the driven
+# walk narrows it without materialising it); ragged → the MEMBER values gathered
 # from the set's `values` factor sliced by its `offsets` factor (so a range
 # symbol over `face_vertices` binds to the vertex IDs of the parent face, §5.2).
 function _vi_range_values(spec, ctx::_ViCtx, bindings::AbstractDict)
@@ -468,9 +469,9 @@ function _vi_range_values(spec, ctx::_ViCtx, bindings::AbstractDict)
     is === nothing && throw(TreeWalkError("E_TREEWALK_VI_RANGE",
         "value-invention range references undeclared index set '$(spec.from)'"))
     if is.kind == "interval"
-        return collect(1:Int(is.size))
+        return 1:Int(is.size)
     elseif is.kind == "categorical"
-        return collect(1:length(is.members))
+        return 1:length(is.members)
     elseif is.kind == "ragged"
         of = _vi_range_of(spec)
         isempty(of) && throw(TreeWalkError("E_TREEWALK_VI_RANGE",
@@ -628,7 +629,10 @@ end
 # topological order the full product does, and when it reaches the second of
 # the two gated symbols (the first already bound), it enumerates only that
 # binding's candidate partners. Cost drops to O(N_first + |candidates|) times
-# the ungated ranges.
+# the ungated ranges, in time and in allocation: an interval or categorical
+# range is the lazy `1:n` (`_vi_range_values`), so the first gated symbol walks
+# it without a list and the second's restriction costs O(its partners)
+# (`_overlap_restrict` on a unit range).
 #
 # The DRIVE DECISION is `_overlap_drive_plan` (broad_phase.jl) — the same policy
 # the dense-aggregate expansion applies (`_foreach_aggregate_term`); only the loop
@@ -711,6 +715,7 @@ function _vi_argreduce(node::OpExpr, ctx::_ViCtx, outer_bindings::AbstractDict, 
     best_val = nothing
     best_arg = nothing
     leaf = function (bindings)
+        join_gates === nothing || (_VI_ENUM_VISITS[] += 1)
         if filt !== nothing
             fv = _vi_eval(filt, ctx, bindings)
             (fv === true || (isa(fv, Real) && fv > 0)) || return
@@ -733,7 +738,8 @@ function _vi_argreduce(node::OpExpr, ctx::_ViCtx, outer_bindings::AbstractDict, 
     end
     # A gate with candidate pairs restricts the inner candidates to the outer
     # point's partners (`_vi_enumerate_driven`, the producer's driven walk); the
-    # visited candidates keep their order, minus those the gate rejects.
+    # visited candidates keep their order, minus those the gate rejects. A
+    # gated walk counts its visited candidates in `_VI_ENUM_VISITS`.
     function rec(k)
         if k > length(syms)
             leaf(bindings)

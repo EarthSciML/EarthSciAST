@@ -2448,26 +2448,54 @@ end
 # `M` fill from an unfilled `N` — a silently wrong RHS, not an error. So the
 # walk expands through every non-materialized observed definition and stops at
 # the materialized ones (their buffers are the dependency).
+#
+# A fill that reaches its OWN buffer through an inlined observed (an `index`
+# self-read in its own body is declined earlier, as a recurrence) is an
+# observed cycle, and is refused here with the code the inlining build
+# (`_resolve_observed`) and `validate()` give it. It must be: a level's kernel
+# section runs in an alias scope that asserts no store to the buffers it fills
+# aliases a load (`_build_codegen_rhs`), and that level's writes are exactly its
+# own observeds, whose other reads all sit on strictly lower levels. A build
+# from a `Model` that skipped `validate()` would otherwise put a load of a slot
+# the same section stores into that scope, which is undefined, not merely
+# stale. The check is per observed and per name it reaches, never per cell.
 function _materialized_obs_levels(mat_defs::Dict{String,ASTExpr}, names,
                                   inline_obs::Dict{String,ASTExpr})
     nm = Set{String}(names)
+    # The materialized buffers `root` reads, and for each the inlined observed
+    # it was reached through (`nothing` for a direct read).
     function reach(root::ASTExpr)
-        out = Set{String}()
-        seen = Set{String}()
-        frontier = collect(_referenced_var_names(root))
+        out = Dict{String,Union{Nothing,String}}()
+        via = Dict{String,Union{Nothing,String}}()
+        frontier = Tuple{String,Union{Nothing,String}}[
+            (r, nothing) for r in _referenced_var_names(root)]
         while !isempty(frontier)
-            r = pop!(frontier)
+            r, from = pop!(frontier)
             if r in nm
-                push!(out, r)
-            elseif !(r in seen) && haskey(inline_obs, r)
-                push!(seen, r)
-                append!(frontier, collect(_referenced_var_names(inline_obs[r])))
+                haskey(out, r) || (out[r] = from)
+            elseif !haskey(via, r) && haskey(inline_obs, r)
+                via[r] = from
+                append!(frontier, [(x, r) for x in _referenced_var_names(inline_obs[r])])
             end
         end
-        return out
+        return out, via
     end
-    deps = Dict{String,Set{String}}(n => setdiff(reach(mat_defs[n]), (n,))
-                                    for n in names)
+    deps = Dict{String,Set{String}}()
+    for n in sort!(collect(names))
+        out, via = reach(mat_defs[n])
+        if haskey(out, n)
+            path = String[n]
+            step = out[n]
+            while step !== nothing
+                pushfirst!(path, step)
+                step = via[step]
+            end
+            throw(TreeWalkError("E_TREEWALK_OBSERVED_CYCLE",
+                "$(join(sort!(unique(path)), ",")): the array observed '$(n)' reads its " *
+                "own buffer ($(n) -> $(join(path, " -> ")))"))
+        end
+        deps[n] = Set{String}(keys(out))
+    end
     order = _dependency_order(sort(collect(names)), n -> deps[n];
         on_cycle=done -> throw(TreeWalkError("E_TREEWALK_OBSERVED_CYCLE",
             join(sort(collect(setdiff(nm, done))), ","))))

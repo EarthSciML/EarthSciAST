@@ -194,7 +194,7 @@ Thresholds live in `manifest.json` under `gates`.
 |---|---|---|
 | `builds` | deterministic | `status` is `"ok"`. A refusal or error fails it, and the other gates are then unmeasurable for that (family, N) |
 | `code_size_flat` | deterministic | `code_size` is identical at every N that built, up to the gate's `slack` (0). A family's `gate_overrides` may state a slack per binding, with a `why` that bounds the spread: Rust's stencil and transport families state one, because fusion's fold decision depends on row length, while the lowered tape it can only shrink is flat (`code_size_detail.lowered`) |
-| `no_steady_alloc` | deterministic | `allocs_per_call` is 0 (null on a built document fails, unless the result declares it unmeasurable) |
+| `no_steady_alloc` | deterministic | `allocs_per_call` is 0 (null on a built document fails, unless the result declares it unmeasurable). A ledger entry for it states `max_bytes_per_call`, the most it excuses, and a measure past that bound is red (`EXCEEDS`) |
 | `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast. Checked against the interpreter when native refused |
 | `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns, over the smallest and largest N that built with at most 10^6 cells |
 | `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise; `source_receptor`, whose work is N^2, lowers it to 2000 through `gate_overrides`) |
@@ -229,6 +229,14 @@ that was not clean; `threads` (`"serial"` or `"threaded"`) omitted means both;
 `compiler` defaults to `"native"`. `phase` is the plan phase expected to fix
 it: 2 for build time and code size, 3 or 4 for refusals, 5 for speed and
 threading.
+
+A `no_steady_alloc` entry must also state `max_bytes_per_call`, a positive
+integer: the entry excuses an allocation up to that many bytes per call and no
+more. A measure past it is red (`EXCEEDS`), so a ledgered 128 bytes that jumps
+to megabytes is a regression, not a ledgered failure. The committed bounds are
+twice the largest value the entry's `measured` records, room for a section or
+two more of the same dispatch cost; an entry missing its bound, or a bound on
+any other gate, is red.
 
 The rule is one-way. A failure not in the ledger is red. A ledger entry for a
 deterministic gate that now passes is red too, with "remove this entry", so

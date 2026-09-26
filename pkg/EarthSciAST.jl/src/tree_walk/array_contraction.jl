@@ -34,9 +34,14 @@
 # in the same child order, with the same seeds and the same short-circuits. In
 # particular the ⊕-fold is the per-cell expansion's (`_eval_contraction`): one
 # accumulator seeded from the `Float64` 0̄, the terms in `Iterators.product`
-# order (the first contracted index fastest), which conformance pins for
-# reductions; and the output odometer is a division rather than a nested loop,
-# so a chunk can start at any cell.
+# order (the first contracted index fastest), so this tier and the interpreter
+# fold in one association; and the output odometer is a division rather than a
+# nested loop, so a chunk can start at any cell. That order is this binding's,
+# not the spec's: esm-spec §4.3.1 reduces over the contracted indices as a SET
+# and pins an order only for a single-index scan, and CONFORMANCE_SPEC §5.2
+# holds any other contraction across bindings to the §5.9 simulation
+# tolerance, not to the bit (Rust's interpreter varies the last contracted
+# index fastest).
 #
 # What the emitter models is the SCALAR `_Node` spine — the kinds `_eval_node`
 # dispatches on. `_cg_emit`'s other method models the ACCESS-KERNEL spine

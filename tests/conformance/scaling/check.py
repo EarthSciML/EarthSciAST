@@ -8,6 +8,9 @@ Prints one row per (file, family, N, gate) with the measured value and one of
     pass      the gate holds
     FAIL      the gate fails and no ledger entry covers it          (red)
     ledgered  the gate fails and a ledger entry covers it
+    EXCEEDS   a ledger entry covers the gate, but the measure is past
+              the entry's own bound (no_steady_alloc's
+              max_bytes_per_call)                                   (red)
     STALE     a ledger entry covers a DETERMINISTIC gate that now
               passes: remove the entry                              (red)
     fixed?    a ledger entry covers a TIMING gate that now passes:
@@ -251,6 +254,43 @@ def entry_matches(e, c):
     return True
 
 
+# The gates whose ledger entries must bound how far the failure may go, and
+# the field that holds the bound. A no_steady_alloc entry excuses a few bytes
+# per call, not any allocation at all.
+ENTRY_BOUNDS = {"no_steady_alloc": "max_bytes_per_call"}
+
+
+def ledger_shape_errors(ledgers):
+    """Every ledger entry of a bounded gate that lacks its bound, and every
+    bound on a gate that has none."""
+    errs = []
+    for binding, entries in ledgers.items():
+        for i, e in enumerate(entries):
+            where = f"ledger.{binding}[{i}] ({e.get('family')} {e.get('gate')})"
+            field = ENTRY_BOUNDS.get(e.get("gate"))
+            for other in set(ENTRY_BOUNDS.values()) - {field}:
+                if other in e:
+                    errs.append(f"{where}: {other} bounds no other gate")
+            if field is None:
+                continue
+            v = e.get(field)
+            if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+                errs.append(
+                    f"{where}: needs a positive integer {field}, the most it excuses "
+                    f"(the measured bytes with headroom)"
+                )
+    return errs
+
+
+def over_bound(entry, c):
+    """The entry's bound when the check's measure is past it, else None."""
+    field = ENTRY_BOUNDS.get(c.gate)
+    if field is None or not isinstance(c.measured, (int, float)):
+        return None
+    bound = entry.get(field)
+    return bound if isinstance(bound, (int, float)) and c.measured > bound else None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -318,6 +358,7 @@ def main(argv=None):
                         checks.append(c)
 
     ledgers = manifest.get("ledger", {})
+    red += [f"manifest: {e}" for e in ledger_shape_errors(ledgers)]
     entry_hits = {}  # (binding, index) -> [checks]
     for c in checks:
         if c.outcome:
@@ -334,8 +375,13 @@ def main(argv=None):
             c.outcome = (
                 "pass" if c.entry is None else ("STALE" if c.kind == DETERMINISTIC else "fixed?")
             )
+        elif c.entry is None:
+            c.outcome = "FAIL"
         else:
-            c.outcome = "FAIL" if c.entry is None else "ledgered"
+            bound = over_bound(ledgers[c.entry[0]][c.entry[1]], c)
+            c.outcome = "ledgered" if bound is None else "EXCEEDS"
+            if bound is not None:
+                c.note = f"the ledger excuses at most {fmt(bound)}"
 
     # A ledger entry that covers several N (no `n`) is stale only when it no
     # longer covers any failure; per-check STALE marks are withdrawn otherwise.
@@ -375,7 +421,7 @@ def main(argv=None):
             print(f"-- {r['file']} (binding {r['binding']}, threads {r['threads']})")
             last = r["file"]
         extra = f"  [{r['note']}]" if r["note"] else ""
-        if r["ledger"] and r["outcome"] in ("ledgered", "STALE", "fixed?"):
+        if r["ledger"] and r["outcome"] in ("ledgered", "EXCEEDS", "STALE", "fixed?"):
             extra += f"  [ledger: phase {r['ledger'].get('phase')}]"
         n = "all" if r["n"] is None else r["n"]
         print(
@@ -394,6 +440,12 @@ def main(argv=None):
             red.append(
                 f"{where} {r['family']} N={n} {r['gate']}: fails and is not in the ledger "
                 f"({fmt(r['measured'])})"
+            )
+        elif r["outcome"] == "EXCEEDS":
+            red.append(
+                f"{where} {r['family']} N={n} {r['gate']}: {fmt(r['measured'])} is past the "
+                f"{r['binding']} ledger entry's bound ({r['note']}): a regression the entry "
+                f"does not cover"
             )
         elif r["outcome"] == "STALE":
             red.append(
