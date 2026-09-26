@@ -511,9 +511,9 @@
         "family": "stencil_4d",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "2.22e+04 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 25.48 36.09 34.64), serial run, 2026-09-25; the scheduled sweep re-measures it",
-        "reason": "rank 4 lands on the affine tier now; what grows is the affine build's per-cell bookkeeping (the string-keyed state layout and the class merge's per-kernel lane plans, over 81 boundary boxes)",
+        "measured": "1168 ns per state (ns/state over N=100..100000)",
+        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 9.04 12.90 15.48), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "rank 4 lands on the affine tier; what still grows is the build's per-cell bookkeeping over 81 boundary boxes (the largest size is over the gate's 10^6-cell cap, so the slope is read to 10^5)",
         "phase": 2
       },
       {
@@ -547,8 +547,8 @@
         "family": "source_receptor",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "7.26e+06 ns per state (ns/state over N=100..3162)",
-        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 25.48 36.09 34.64), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "measured": "9.499e+05 ns per state (ns/state over N=100..3162)",
+        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 9.04 12.90 15.48), serial run, 2026-09-25; the scheduled sweep re-measures it",
         "reason": "the N x N array K is a materialized observed, so the build keeps per-cell bookkeeping for N^2 cells (the string-keyed layout of its fill, its affine box), against 2N states",
         "phase": 2
       },
@@ -556,8 +556,8 @@
         "family": "regrid",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "1.085e+05 ns per state (ns/state over N=100..3162)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average 29 at the start of the run and 9 at its end on its 20 cores, serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "measured": "5.375e+04 ns per state (ns/state over N=100..3162)",
+        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 9.04 12.90 15.48), serial run, 2026-09-25; the scheduled sweep re-measures it",
         "reason": "the overlap arrays are declared dense over source x target, so zero-filling them is O(N^2); the join-gated contractions compile once now (the whole-array contraction nest, with the admitted pairs as data)",
         "phase": 2
       },
@@ -674,8 +674,8 @@
         "n": 1000,
         "gate": "speed",
         "threads": "serial",
-        "measured": "native / hand loop = 28.1",
-        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 25.48 36.09 34.64), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "measured": "native / hand loop = 21.9",
+        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 9.04 12.90 15.48), serial run, 2026-09-25; the scheduled sweep re-measures it",
         "reason": "the materialized N x N observed K is refilled on every call (N^2 sin evaluations), where the hand loop builds it once; the contraction itself is a run-time fold now",
         "phase": 5
       },
@@ -684,8 +684,8 @@
         "n": 3162,
         "gate": "speed",
         "threads": "serial",
-        "measured": "native / hand loop = 32.7",
-        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 25.48 36.09 34.64), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "measured": "native / hand loop = 27.0",
+        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 9.04 12.90 15.48), serial run, 2026-09-25; the scheduled sweep re-measures it",
         "reason": "the materialized N x N observed K is refilled on every call (N^2 sin evaluations), where the hand loop builds it once; the contraction itself is a run-time fold now",
         "phase": 5
       },
