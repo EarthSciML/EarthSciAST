@@ -507,27 +507,27 @@
         "family": "stencil_1d",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "6551 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
+        "measured": "79.7 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run (8 to 9 for stencil_1d and prefix_scan), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "the build itself is flat from N = 1000 to 10^6 (a warm rebuild at 10^6 cells is about 20 ms); the slope is the first build at each new N, which pays a one-time Julia compile of about 80 ms because the emitted kernel bakes the box bounds, base slot and strides in as literals, so every N is a new generated function (the N = 100 program is compiled during the adapter's warm-up)",
         "phase": 2
       },
       {
         "family": "stencil_2d",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "9412 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
+        "measured": "73.81 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run (8 to 9 for stencil_1d and prefix_scan), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "the build itself is flat from N = 1000 to 10^6 (a warm rebuild at 10^6 cells is about 15 ms); the slope is the first build at each new N, which pays a one-time Julia compile of about 75 ms because the emitted kernel bakes the box bounds, base slot and strides in as literals, so every N is a new generated function (the N = 100 program is compiled during the adapter's warm-up)",
         "phase": 2
       },
       {
         "family": "stencil_3d",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "1.108e+04 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
+        "measured": "80.6 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run (8 to 9 for stencil_1d and prefix_scan), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "the build itself is flat from N = 1000 to 10^6 (a warm rebuild at 10^6 cells is about 25 ms); the slope is the first build at each new N, which pays a one-time Julia compile of about 80 ms because the emitted kernel bakes the box bounds, base slot and strides in as literals, so every N is a new generated function (the N = 100 program is compiled during the adapter's warm-up)",
         "phase": 2
       },
       {
@@ -543,27 +543,18 @@
         "family": "transport_3d",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "1.488e+04 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "the affine build keeps string-keyed per-cell bookkeeping (state layout, class-merge plans, per-cell checks)",
-        "phase": 2
-      },
-      {
-        "family": "chemistry_grid",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": "1.264e+04 ns per state (ns/state over N=100..100000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "per-state string layout plus the per-template var_map copies in the affine cut scan",
+        "measured": "117.9 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run (8 to 9 for stencil_1d and prefix_scan), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "the build itself is flat from N = 1000 to 10^6 (a warm rebuild at 10^6 cells is about 170 ms); the slope is the first build at each new N, which pays a one-time Julia compile of about 75 ms because the emitted kernel bakes the box bounds, base slot and strides in as literals, so every N is a new generated function (the N = 100 program is compiled during the adapter's warm-up)",
         "phase": 2
       },
       {
         "family": "prefix_scan",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "1.306e+04 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "per-cell state layout, and the scan fold is built by rewriting the syntax tree per cell",
+        "measured": "274.2 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run (8 to 9 for stencil_1d and prefix_scan), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "the build itself is flat from N = 1000 to 10^6 (a warm rebuild at 10^6 cells is about 90 ms); the slope is the first build at each new N, which pays a one-time Julia compile of about 210 ms because the emitted kernel bakes the box bounds, base slot and strides in as literals, so every N is a new generated function (the N = 100 program is compiled during the adapter's warm-up)",
         "phase": 2
       },
       {
@@ -588,18 +579,18 @@
         "family": "unstructured_gather",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "2.845e+04 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average 29 at the start of the run and 9 at its end on its 20 cores, serial run, 2026-09-25; the scheduled sweep re-measures it",
-        "reason": "the affine tier builds the non-affine neighbour lane's index table by interpreting the index expression once per cell, and the state layout keeps per-cell bookkeeping",
+        "measured": "7230 ns per state (ns/state over N=100..1000000)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run (8 to 9 for stencil_1d and prefix_scan), serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "loading the document dominates: at 10^6 cells two thirds of the build is reading and normalizing the 30 MB of inline neighbour-table JSON, plus the garbage collection that tree causes; the affine build itself is about 0.2 s",
         "phase": 2
       },
       {
         "family": "scalar_chemistry",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "1.608e+06 ns per state (ns/state over N=100..100000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average 29 at the start of the run and 9 at its end on its 20 cores, serial run, 2026-09-25; the scheduled sweep re-measures it",
-        "reason": "one scalar equation per state, each resolved and compiled on its own",
+        "measured": "1.558e+06 ns per state (ns/state over N=100..100000)",
+        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run, serial run, 2026-09-25; the scheduled sweep re-measures it",
+        "reason": "linear since the loader fix (1.5 us per state from 10^3 to 10^5); at 10^4 states about 63% of the build is JSON schema validation (about 0.8 ms per equation), 20% parsing, coercion and enum lowering, 6% the scalar common-subexpression pass, and the rest of the tree-walk build about 5%",
         "phase": 2
       },
       {
