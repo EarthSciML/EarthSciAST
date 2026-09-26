@@ -1357,6 +1357,11 @@ function _cg_emit_box_rank_n(ctx::_CGCtx, K::_AccKernel, cs::_CellSet, hdr, av, 
     end
 end
 
+# The read-only view of `u` the generated section's alias scope reads through
+# (see `_build_codegen_rhs`). `Const` wraps an `Array` only.
+@inline _cg_readonly(u::Array) = Base.Experimental.Const(u)
+@inline _cg_readonly(u) = u
+
 # ---- Build the fused generated RHS section ----------------------------------
 struct _CGBuilt{F,TB}
     f::F
@@ -1834,6 +1839,20 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     fnstmts = byval && !isempty(ctx.helpers) ?
               Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
     helperdefs = byval ? Any[] : ctx.helpers
+    # The kernels run in an alias scope with `u` read-only (`_cg_readonly`): no
+    # `du` store aliases a `u` load. The section already rests on that — no cell
+    # reads a slot any cell of the section writes, which is what lets the
+    # threaded path run its chunks concurrently, and what an observed level's
+    # `(ue, ue)` call relies on — and it is what lets the compiler vectorize a
+    # row whose reads sit at run-time slot offsets (`_cg_geo!`) without a
+    # run-time overlap check per offset. Loads and stores only move relative to
+    # each other; no arithmetic changes.
+    kernels = Expr(:macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
+                   Expr(:let, Expr(:block, :(u = _cg_readonly(u))),
+                        Expr(:block,
+                             Expr(:macrocall, Symbol("@inbounds"), ln,
+                                  Expr(:block, ctx.prologue...)),
+                             callstmts...)))
     body = Expr(:block,
                 grpstmts...,
                 fnstmts...,
@@ -1842,9 +1861,8 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
                 # invariant prologue and every chunk sub-function can call them by
                 # name. Each is `@noinline`, params-only (captures nothing).
                 helperdefs...,
-                Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, ctx.prologue...)),
                 fndefs...,
-                callstmts...,
+                kernels,
                 :(return nothing))
     ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc), body)
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
