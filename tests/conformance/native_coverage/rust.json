@@ -45,64 +45,10 @@
       "reason": "[const] wholesale: unresolved symbol (forcing/NaN sentinel?) `WRF.P`"
     },
     {
-      "path": "tests/bench/transport_3axis_7cubed.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(q)",
-      "reason": "[continuous] makearray: region value box does not match the region"
-    },
-    {
       "path": "tests/conformance/build_once_spatial_field/fixtures/build_once_spatial_ode.esm",
       "code": "compiler_refused_rule",
       "rule": "area",
       "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
-    },
-    {
-      "path": "tests/conformance/const_array_gather_bounds/fixtures/inline_1d_index_zero.esm",
-      "code": "compiler_refused_rule",
-      "rule": "g",
-      "reason": "[const] index: const-array gather out of range (§5.5.5)"
-    },
-    {
-      "path": "tests/conformance/const_array_gather_bounds/fixtures/inline_1d_past_end.esm",
-      "code": "compiler_refused_rule",
-      "rule": "g",
-      "reason": "[const] index: const-array gather out of range (§5.5.5)"
-    },
-    {
-      "path": "tests/conformance/const_array_gather_bounds/fixtures/inline_2d_column_past_end.esm",
-      "code": "compiler_refused_rule",
-      "rule": "g",
-      "reason": "[const] index: const-array gather out of range (§5.5.5)"
-    },
-    {
-      "path": "tests/conformance/const_array_gather_bounds/fixtures/inline_2d_row_past_end.esm",
-      "code": "compiler_refused_rule",
-      "rule": "g",
-      "reason": "[const] index: const-array gather out of range (§5.5.5)"
-    },
-    {
-      "path": "tests/conformance/const_array_gather_bounds/fixtures/named_1d_index_zero.esm",
-      "code": "compiler_refused_rule",
-      "rule": "g",
-      "reason": "[const] index: const-array gather out of range (§5.5.5)"
-    },
-    {
-      "path": "tests/conformance/const_array_gather_bounds/fixtures/named_1d_past_end.esm",
-      "code": "compiler_refused_rule",
-      "rule": "g",
-      "reason": "[const] index: const-array gather out of range (§5.5.5)"
-    },
-    {
-      "path": "tests/conformance/const_array_gather_bounds/fixtures/named_2d_column_past_end.esm",
-      "code": "compiler_refused_rule",
-      "rule": "g",
-      "reason": "[const] index: const-array gather out of range (§5.5.5)"
-    },
-    {
-      "path": "tests/conformance/const_array_gather_bounds/fixtures/named_2d_row_past_end.esm",
-      "code": "compiler_refused_rule",
-      "rule": "g",
-      "reason": "[const] index: const-array gather out of range (§5.5.5)"
     },
     {
       "path": "tests/conformance/discrete_materialize/fixtures/discrete_materialize_contraction.esm",
@@ -121,30 +67,6 @@
       "code": "compiler_refused_rule",
       "rule": "d_eager",
       "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `i`"
-    },
-    {
-      "path": "tests/conformance/expression_templates/emit_materialized_registry/emitted.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(c)",
-      "reason": "[continuous] makearray: region value box does not match the region"
-    },
-    {
-      "path": "tests/conformance/expression_templates/import_smoke/expanded.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(c)",
-      "reason": "[continuous] makearray: region value box does not match the region"
-    },
-    {
-      "path": "tests/conformance/expression_templates/inject_coupling_entry/expanded.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(Advection.c)",
-      "reason": "[continuous] makearray: region value box does not match the region"
-    },
-    {
-      "path": "tests/conformance/expression_templates/inject_subsystem_ref/expanded.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(Runoff.c)",
-      "reason": "[continuous] makearray: region value box does not match the region"
     },
     {
       "path": "tests/conformance/expression_templates/scalar_field_param/expanded.esm",
@@ -167,8 +89,8 @@
     {
       "path": "tests/conformance/pushdown/fixtures/isrm.esm",
       "code": "compiler_refused_rule",
-      "rule": "ISRM.X",
-      "reason": "[const] faq: empty output box"
+      "rule": "ISRM.rcv_cx",
+      "reason": "[const] variable: unresolved symbol (forcing/loop-bind?): ISRM.W"
     },
     {
       "path": "tests/conformance/pushdown/fixtures/pushdown_l1.esm",
@@ -213,12 +135,6 @@
       "reason": "[continuous] index: axis 0 is neither an affine/wrap map of an unclaimed output symbol nor a constant select"
     },
     {
-      "path": "tests/conformance/shaped_observed_scalar_broadcast/fixtures/scalar_rhs_broadcast.esm",
-      "code": "compiler_refused_rule",
-      "rule": "folded",
-      "reason": "[const] ifelse: branch value boxes differ under a runtime scalar condition"
-    },
-    {
       "path": "tests/conformance/subsystem_loader/fixtures/subsystem_loader_ode.esm",
       "code": "compiler_refused_rule",
       "rule": "D(c)",
@@ -243,40 +159,10 @@
       "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
     },
     {
-      "path": "tests/fixtures/data_source_extent_scope/extent_axis_leaf.esm",
-      "code": "compiler_refused_rule",
-      "rule": "Ingest.annual_obs",
-      "reason": "[const] faq: empty output box"
-    },
-    {
       "path": "tests/fixtures/data_source_extent_scope/extent_resolved_shape.esm",
       "code": "compiler_refused_rule",
       "rule": "Ingest.annual_obs",
       "reason": "[const] variable: unresolved symbol (forcing/loop-bind?): Ingest.annual"
-    },
-    {
-      "path": "tests/fixtures/faq/11_reshape_roundtrip.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(diff)",
-      "reason": "[continuous] wholesale: unsupported op `reshape`"
-    },
-    {
-      "path": "tests/fixtures/faq/12_transpose_2d.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(diff)",
-      "reason": "[continuous] wholesale: unsupported op `transpose`"
-    },
-    {
-      "path": "tests/fixtures/faq/13_concat_1d.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(head)",
-      "reason": "[continuous] wholesale: unsupported op `concat`"
-    },
-    {
-      "path": "tests/fixtures/faq/14_broadcast_elementwise.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(corner)",
-      "reason": "[continuous] wholesale: unsupported op `reshape`"
     },
     {
       "path": "tests/fixtures/recurrence/01_recurrence_doubling.esm",
@@ -381,12 +267,6 @@
       "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `wind_u`"
     },
     {
-      "path": "tests/valid/faq/join_filter.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(emissions)",
-      "reason": "[continuous] reduction: rank-0 reduction with a filter (the oracle SKIPS excluded tuples; a mask-to-identity fold is not bit-identical)"
-    },
-    {
       "path": "tests/valid/geometry/conservative_regrid_assembly.esm",
       "code": "compiler_refused_rule",
       "rule": "A_ij",
@@ -421,12 +301,6 @@
       "code": "compiler_refused_rule",
       "rule": "overlap_area",
       "reason": "[const] wholesale: unsupported op `polygon_intersection_area`"
-    },
-    {
-      "path": "tests/valid/makearray_empty_region_min_extent.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(c)",
-      "reason": "[continuous] makearray: empty region"
     },
     {
       "path": "tests/valid/reaction_system_only.esm",

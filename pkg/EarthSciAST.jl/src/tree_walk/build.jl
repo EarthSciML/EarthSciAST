@@ -119,6 +119,13 @@ mutable struct BuildInspection
     # problem built earlier with the same record still reads through it, but
     # its rows would land in another build's report.
     observed_build::Base.RefValue{Any}
+    # What the compiled observed program (`observed_program.jl`) needs from the
+    # latest build, and, per problem (keyed by its `run_file` slot, bound when
+    # `esm_problem` publishes the problem), the context its reads compile
+    # against — each problem's own build, whatever was built with this record
+    # since.
+    observed_ctx::Any
+    observed_ctxs::WeakKeyDict{Base.RefValue{Any},Any}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -129,7 +136,8 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     CompilerReport(:native),
                                     NamedTuple(), Dict{String,Int}(),
                                     Dict{Tuple{Base.RefValue{Any},String},_ObservedMemo}(),
-                                    ReentrantLock(), Ref{Any}(nothing))
+                                    ReentrantLock(), Ref{Any}(nothing),
+                                    nothing, WeakKeyDict{Base.RefValue{Any},Any}())
 
 """
     DiscreteMaterializer()
@@ -141,10 +149,13 @@ three-phase cadence partition (`const ⊏ discrete ⊏ continuous`, `cadence.jl`
 inspectable. A direct `build_evaluator` call without the keyword makes no cut,
 so its discrete-cadence derived fields stay inlined into the per-step RHS.
 
-The fills are resolved, compiled and evaluated once per cell, so a strict
-`compiler = :native` refuses a document that has any discrete-cadence field
-(`compiler_refused_rule`, naming the field); `compiler = :interpreter` runs it.
-Each field is recorded in the compiler report as `:discrete_percell`.
+Under `compiler = :native` each field's fill is one whole-array kernel, compiled
+once through the same cascade as the right-hand side and run into the cache at
+every refill; its compiler-report row is an `:observed` row named after the
+field, carrying the tier the cascade landed it on, and a fill the cascade cannot
+compile is refused by name. `compiler = :interpreter` resolves, compiles and
+walks every cell instead (`:discrete_percell`), the oracle the compiled fill is
+checked against bit for bit.
 
 A derived ARRAY observed whose value depends (transitively) on a live
 `param_arrays` forcing buffer but NOT on any continuous `state` (nor the
@@ -1072,6 +1083,65 @@ function _normalize_param_override_keys(model::Model, overrides::AbstractDict;
     return normalized
 end
 
+# ---- Stage: canonicalize the caller's `const_arrays` keys ----
+# A caller's `const_arrays` entry for a SHAPED parameter is the same binding as
+# an inline-array `parameter_overrides` entry for it — both land on the
+# const-array channel — so its key is resolved by the same esm-spec §6.6.2
+# rules: the model-local spelling `lat` designates the flattened `Deg.lat`
+# exactly as it does for an override. An exact key alone missed that parameter:
+# with no `default` the build refused the document
+# (`E_TREEWALK_UNSUPPORTED_SHAPE`, the parameter backed by nothing), and with
+# one it silently used the default instead of the caller's array. Rust's build
+# pipeline resolves such a key the same way.
+#
+# The registry also carries arrays that are not a parameter's value at all — a
+# loader field, a coordinate table, a synthetic build array — so a key that
+# designates no shaped parameter is left as it is, never reported as unknown.
+# A key that is a dotted suffix of more than one shaped parameter is ambiguous,
+# and two non-exact keys designating one parameter collide; both are rejected
+# as they are for `parameter_overrides`. An exact key always wins. The resolved
+# name is ADDED beside the caller's key, which stays, so a consumer that reads
+# the caller's spelling still finds it.
+function _normalize_const_array_keys(model::Model, const_arrays::AbstractDict;
+                                     model_name=nothing)
+    isempty(const_arrays) && return const_arrays
+    shaped = Set{String}(n for (n, v) in model.variables
+                         if v.type == ParameterVariable && _is_array_shape(v.shape))
+    isempty(shaped) && return const_arrays
+    namespaces = _override_namespaces(shaped; model=model, model_name=model_name)
+    suffix_group = Dict{String,Vector{String}}()
+    for n in shaped, s in _dotted_suffixes(n)
+        push!(get!(suffix_group, s, String[]), n)
+    end
+    claims = Dict{String,Vector{String}}()
+    for rawk in keys(const_arrays)
+        k = String(rawk)
+        haskey(model.variables, k) && continue    # an exact name
+        name = _dotted_suffix_hit(shaped, namespaces, k)
+        if name === nothing
+            cands = get(suffix_group, k, nothing)
+            cands === nothing && continue          # designates no shaped parameter
+            length(cands) == 1 || throw(ArgumentError(
+                "const_arrays: ambiguous parameter name '$(k)' — it is carried as a " *
+                "suffix by $(length(cands)) shaped parameters " *
+                "($(join(sort(cands), ", "))). Qualify it further with its owning " *
+                "component (esm-spec §6.6.2)."))
+            name = cands[1]
+        end
+        haskey(const_arrays, name) && continue     # the exact key wins
+        push!(get!(claims, name, String[]), k)
+    end
+    isempty(claims) && return const_arrays
+    merged = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
+    for name in sort!(collect(keys(claims)))
+        ks = claims[name]
+        length(ks) == 1 || throw(ArgumentError(_override_collision_message(
+            "const_arrays", "parameter", name, sort!(ks))))
+        merged[name] = merged[ks[1]]
+    end
+    return merged
+end
+
 # ---- Shared caller-key canonicalization (esm-spec §6.6.2) ----
 # Rewrite each caller key onto the build-resolved name it designates, and
 # classify the ones that designate none — or the ones that designate one the
@@ -1527,10 +1597,19 @@ function _fold_field_ics!(set, field_ics, array_cells, layout::StateLayout,
             "target must name a lifted/array state variable of the flattened system"))
         blk = _layout_block(layout, target)
         put = (idxs, val) -> (blk === nothing || set(_block_slot(blk, idxs), val); nothing)
-        # Compile the coordinate field ONCE (indices as params) when possible; else
-        # fall back to the per-cell resolve+compile. With the construction-time
-        # compile-once forms off (`compiler = :interpreter`) this takes the
-        # per-cell path.
+        # A coordinate expression is filled through the right-hand-side cascade
+        # and emitted code, once (`_field_ic_fill`, setup_fill.jl); failing
+        # that, a bare coordinate aggregate is compiled once and evaluated per
+        # cell; failing both, the per-cell resolve+compile below. With the
+        # construction-time compile-once forms off (`compiler = :interpreter`)
+        # only the per-cell path runs.
+        filled = _field_ic_fill(rhs, cells, param_scope, registered_functions, const_arrays)
+        if filled !== nothing
+            sf, buf = filled
+            _record_rule!("ic($(target))", :equation, :setup_codegen)
+            _foreach_cell_lex(idxs -> put(idxs, _setup_fill_at(sf, buf, idxs)), cells)
+            continue
+        end
         fast = _setup_compile_once_enabled() ?
                _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays) :
                nothing
@@ -1963,12 +2042,14 @@ end
 
 # ---- Stage: faq-valued initialization_equations → u0 ----
 # When discretize() materializes an IC equation as a faq (coord-subst
-# x→index(coord_x,i)), its body is compiled ONCE with the output indices kept
-# symbolic — the same symbolic resolve the whole-array contraction tier uses, so
-# a const or state read at an output index becomes a runtime gather — and then
-# evaluated at each cell by setting the index counters. Only a body that will
-# not resolve symbolically takes the per-cell substitute → resolve → compile,
-# which a strict compiler refuses. The coord_<dim> const_array must be provided
+# x→index(coord_x,i)), the aggregate is filled through the right-hand-side
+# cascade and emitted code, once (`_init_equation_fill`, setup_fill.jl). A body
+# the fill declines — one that reads a state, say — is compiled ONCE with the
+# output indices kept symbolic — the same symbolic resolve the whole-array
+# contraction tier uses, so a const or state read at an output index becomes a
+# runtime gather — and then evaluated at each cell by setting the index
+# counters. Only a body that will not resolve symbolically takes the per-cell
+# substitute → resolve → compile, which a strict compiler refuses. The coord_<dim> const_array must be provided
 # by the caller. Explicit initial_conditions values take precedence (already
 # seeded in u0).
 function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
@@ -2002,6 +2083,20 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
         end
         isempty(todo) && continue
         rule = "init($(var_name))"
+        # The compiled fill (setup_fill.jl): the aggregate filled through the
+        # right-hand-side cascade and emitted code, once, over its own ranges.
+        filled = _init_equation_fill(rhs_op,
+                                     [_expand_int_range(ranges_dict[n]) for n in idx_names],
+                                     var_map, const_arrays,
+                                     pgather, param_sym_set, reg_funcs, p)
+        if filled !== nothing
+            sf, buf = filled
+            _record_rule!(rule, :equation, :setup_codegen)
+            for (idx_tuple, slot) in todo
+                u0[slot] = _setup_fill_at(sf, buf, idx_tuple)
+            end
+            continue
+        end
         # With the construction-time compile-once forms off
         # (`compiler = :interpreter`) the seed is the per-cell reference, as the
         # field-`ic` fast path is.
@@ -2205,16 +2300,7 @@ end
 function _check_discrete_fill_state_free(node, name::String)
     k = node.kind
     if k === _NK_STATE || k === _NK_TIME
-        what = k === _NK_STATE ? "a continuous state variable" : "the time variable `t`"
-        throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
-            "discrete-cadence var '$name' depends on $what. A discrete-cadence cache " *
-            "is filled only when the forcing data refreshes (its fill kernel runs " *
-            "with u = 0 and t = 0), so it CANNOT depend on a continuous state or on " *
-            "`t` — the field would silently freeze at u = 0 instead of tracking the " *
-            "solution. Either drop the state/`t` dependency from '$name' (keep the " *
-            "state-dependent part in its readers, where it stays on the continuous " *
-            "path), or, if the reference reaches '$name' through an expression field " *
-            "the cadence classifier does not walk, that classifier is the bug."))
+        _throw_discrete_state_dependent(name, k === _NK_STATE)
     elseif k === _NK_CACHED
         throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
             "internal: the discrete-cadence fill kernel for '$name' contains a CSE " *
@@ -2228,17 +2314,39 @@ function _check_discrete_fill_state_free(node, name::String)
     return nothing
 end
 
+function _throw_discrete_state_dependent(name::String, state::Bool)
+    what = state ? "a continuous state variable" : "the time variable `t`"
+    throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
+        "discrete-cadence var '$name' depends on $what. A discrete-cadence cache " *
+        "is filled only when the forcing data refreshes (its fill kernel runs " *
+        "with u = 0 and t = 0), so it CANNOT depend on a continuous state or on " *
+        "`t` — the field would silently freeze at u = 0 instead of tracking the " *
+        "solution. Either drop the state/`t` dependency from '$name' (keep the " *
+        "state-dependent part in its readers, where it stays on the continuous " *
+        "path), or, if the reference reaches '$name' through an expression field " *
+        "the cadence classifier does not walk, that classifier is the bug."))
+end
+
 # ---- Stage: discrete-cadence cache buffers + fill kernels ----
-# Allocate a dense cache buffer per discrete var, register it in `pgather` (so a
-# reader's `index(var, j…)` gathers the cache via `_NK_PARAM_GATHER` — the SAME
-# zero-alloc live-buffer path a raw forcing read uses, NOT an inline beta-reduction),
-# and precompile a per-cell fill node list. `materialize!` evaluates every node into
-# its cache in dependency order — reusing the proven `_seed_faq_init_u0!`
-# per-cell (`_sub_preserving` → `_resolve_indices` → `_compile` → `_eval_node`)
-# pattern, but writing a cache buffer instead of a u0 slot, and reading the live raw
-# buffers + const arrays + upstream caches. Runs once here (initial fill) and again
-# per refresh. `mut` is the caller's `DiscreteMaterializer` sink; it is populated in
-# place. Mutates `pgather` (adds the caches).
+# Allocate a dense cache buffer per discrete var and register it in `pgather`, so
+# a reader's `index(var, j…)` gathers the cache via `_NK_PARAM_GATHER` — the SAME
+# zero-alloc live-buffer path a raw forcing read uses, NOT an inline
+# beta-reduction. Then build each var's fill, in dependency order, and a
+# `materialize!` that runs them all into their caches: once here (the initial
+# fill) and again per refresh. `mut` is the caller's `DiscreteMaterializer` sink;
+# it is populated in place. Mutates `pgather` (adds the caches).
+#
+# Two routes, chosen by the plan in force:
+#
+#   * COMPILED (any array tier on — `native` and `xla`): each var is ONE fill
+#     equation through the same array cascade the right-hand side takes
+#     (`_compile_discrete_fill`), its output slots being the cache itself. The
+#     build is independent of the cache's size, and a fill the cascade cannot
+#     compile is refused by the cascade, naming it.
+#   * PER CELL (`interpreter`, the oracle): every cell is resolved and compiled
+#     as `index(<def>, j…)` and walked with `_eval_node` at each refill —
+#     the `_seed_faq_init_u0!` pattern, writing a cache buffer instead of a u0
+#     slot. Reported `:discrete_percell`, and refused by a strict plan.
 function _build_discrete_materializer!(mut::DiscreteMaterializer,
         discrete_vars, discrete_defs::Dict{String,ASTExpr}, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::AbstractDict{String,Int}, const_arrays::AbstractDict,
@@ -2270,26 +2378,16 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
         pgather[name] = _PGatherArray(vec(cache), collect(size(cache)))
         cells_of[name] = (idx_names, rngs)
     end
-    # 2. Precompile per-cell fill nodes: (cache_vec, linear_index, node). Each cell is
-    #    compiled as `index(<the defining aggregate>, j0…)` and resolved through the
-    #    SAME `_resolve_index_of_faq` expansion the inline reader uses — so a
-    #    reduction over CONTRACTED indices (the conservative regrid Σ_i A_ij·F_src/A_j,
-    #    whose sum-over-source `i` lives in the aggregate's ranges, not the body) is
-    #    expanded, not silently dropped. Scalar observeds are inlined into the
-    #    aggregate first via `resolved_obs` (the inline reader gets them the same way);
-    #    an `index(other_discrete, i)` stays a pgather over that cache (other discrete
+    uz = zeros(Float64, n_states)
+    pp = isnothing(p) ? NamedTuple() : p
+    compiled = _array_cascade_on()
+    state_names = compiled ? _state_base_names(var_map, array_var_info) : Set{String}()
+    # 2. The fills, in dependency order. Scalar observeds are inlined into each
+    #    aggregate via `resolved_obs` (the inline reader gets them the same way); an
+    #    `index(other_discrete, i)` stays a pgather over that cache (other discrete
     #    vars are excluded from `resolved_obs`).
-    fills = Tuple{Vector{Float64},Int,_Node}[]
+    fills = Function[]                    # one per var, in dependency order
     for name in order
-        # Every fill below is resolved and compiled once per cell here and then
-        # walked per cell by `materialize!` — at build, at every refresh boundary
-        # and at every run's `t0`. There is no compiled form of this stage yet
-        # (the fill bodies gather live forcing buffers at the output index, which
-        # the symbolic resolve cannot keep symbolic), so a strict compiler refuses
-        # the discrete variable by name — once its first cell has resolved,
-        # compiled and evaluated, so that a fill no form can evaluate (an
-        # undeclared name, an out-of-range const gather) raises the document's
-        # own error rather than a refusal.
         rop = discrete_defs[name]::OpExpr
         rop_res = isempty(resolved_obs) ? rop : _sub_preserving(rop, resolved_obs)
         rop_res isa OpExpr ||
@@ -2297,19 +2395,41 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
                 "discrete-cadence var '$name' resolved to a non-faq expression"))
         idx_names, rngs = cells_of[name]
         cvec = vec(caches[name])
+        if compiled && !isempty(idx_names)
+            # The cadence cut is CHECKED, not assumed (see
+            # `_check_discrete_fill_state_free`). Here it is checked on the
+            # resolved definition, and the fill compiles against a layout that
+            # holds only its own cache, so a state read the name walk missed
+            # cannot compile at all rather than read u = 0.
+            _check_discrete_def_state_free(rop_res, name, state_names)
+            push!(fills, _compile_discrete_fill(name, rop, Int[length(r) for r in rngs],
+                cvec, resolved_obs, const_arrays, pgather, param_sym_set, reg_funcs, pp))
+            continue
+        end
+        # The per-cell route, and a rank-0 field under either plan (one cell,
+        # compiled once — the scalar walker the right-hand side's scalar
+        # equations use).
         dims = isempty(rngs) ? Int[1] : Int[length(r) for r in rngs]
         lin = LinearIndices(Tuple(dims))
+        cell_fills = Tuple{Int,_Node}[]
         for idx_tuple in Iterators.product(rngs...)
+            # Each cell is compiled as `index(<the defining aggregate>, j0…)` and
+            # resolved through the SAME `_resolve_index_of_faq` expansion the
+            # inline reader uses — so a reduction over CONTRACTED indices (the
+            # conservative regrid Σ_i A_ij·F_src/A_j, whose sum-over-source `i`
+            # lives in the aggregate's ranges, not the body) is expanded, not
+            # silently dropped.
             gather = OpExpr("index", ASTExpr[rop_res::OpExpr,
                 (IntExpr(Int64(idx_tuple[d])) for d in 1:length(idx_names))...])
             g_r = _resolve_indices(gather, array_var_info, var_map, const_arrays, pgather)
             node = _compile(g_r, var_map, param_sym_set, reg_funcs)
-            # The cadence cut is CHECKED, not assumed: a fill kernel that reads `u` or
-            # `t` would freeze at u = 0 (see `_check_discrete_fill_state_free`).
             _check_discrete_fill_state_free(node, name)
-            if _compiler_is_strict()
-                _eval_node(node, zeros(Float64, n_states),
-                           isnothing(p) ? NamedTuple() : p, 0.0)
+            if _compiler_is_strict() && !isempty(idx_names)
+                # Refused once its first cell has resolved, compiled and
+                # evaluated, so that a fill no form can evaluate (an undeclared
+                # name, an out-of-range const gather) raises the document's own
+                # error rather than a refusal.
+                _eval_node(node, uz, pp, 0.0)
                 ncells = prod(dims)
                 _refuse_rule(name,
                     "the discrete-cadence materializer resolves and compiles this " *
@@ -2321,19 +2441,15 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
                     "compiler=:interpreter to run it. " * _ONE_CELL_NOTE)
             end
             l = isempty(idx_tuple) ? 1 : lin[idx_tuple...]
-            push!(fills, (cvec, l, node))
+            push!(cell_fills, (l, node))
         end
-        _record_rule!(name, :observed, :discrete_percell)
+        push!(fills, _percell_discrete_fill(cvec, cell_fills, uz, pp))
+        _record_rule!(name, :observed, isempty(idx_names) ? :scalar : :discrete_percell)
     end
-    # 3. `materialize!`: eval every fill into its cache (dep order preserved by the
-    #    build order). Every fill node was CHECKED state-free above, so the zero `u` /
-    #    `t=0` passed to `_eval_node` is provably never read; `p` carries the scalar
-    #    params a fill may use.
-    uz = zeros(Float64, n_states)
-    pp = isnothing(p) ? NamedTuple() : p
+    # 3. `materialize!`: every fill into its cache, in dependency order.
     function materialize!()
-        @inbounds for (cv, l, node) in fills
-            cv[l] = _eval_node(node, uz, pp, 0.0)
+        for fill in fills
+            fill()
         end
         # The caches just changed IN PLACE under readers gathering them via
         # `_NK_PARAM_GATHER` — invalidate the memoized time-cadence prelude slots
@@ -2347,6 +2463,111 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
     mut.materialize! = materialize!
     mut.var_order = order
     return nothing
+end
+
+# The per-cell route's fill of one cache. Every node was CHECKED state-free, so
+# the zero `u` / `t = 0` passed to `_eval_node` is provably never read; `p`
+# carries the scalar params a fill may use.
+function _percell_discrete_fill(cvec::Vector{Float64}, cell_fills,
+                                uz::Vector{Float64}, pp)
+    return function ()
+        @inbounds for (l, node) in cell_fills
+            cvec[l] = _eval_node(node, uz, pp, 0.0)
+        end
+        return nothing
+    end
+end
+
+# The base names of every continuous state `var_map` lays out: its scalars and
+# the arrays `array_var_info` names. A `StateLayout` answers the scalars
+# directly; a plain map is read key by key, cell keys skipped.
+function _state_base_names(var_map::AbstractDict, array_var_info)
+    out = Set{String}(String(k) for k in keys(array_var_info))
+    if var_map isa StateLayout
+        union!(out, _layout_scalar_names(var_map))
+    else
+        for k in keys(var_map)
+            s = String(k)
+            endswith(s, "]") || push!(out, s)
+        end
+    end
+    return out
+end
+
+# The state-freedom check of the compiled route, on the resolved definition: a
+# reference to a continuous state or to `t` anywhere in it, in any expression
+# field, raises the same error `_check_discrete_fill_state_free` raises on a
+# per-cell node. Loop symbols the definition binds are not references.
+function _check_discrete_def_state_free(def::ASTExpr, name::String,
+                                        state_names::Set{String})
+    bound = Set{String}()
+    foreach_subexpr_once(def) do e
+        e isa OpExpr || return nothing
+        if e.output_idx !== nothing
+            for s in e.output_idx
+                push!(bound, String(s))
+            end
+        end
+        if e.ranges !== nothing
+            for k in keys(e.ranges)
+                push!(bound, String(k))
+            end
+        end
+        nothing
+    end
+    hit = 0          # 1: a state, 2: `t`
+    foreach_subexpr_once(def) do e
+        (hit == 0 && e isa VarExpr && !(e.name in bound)) || return nothing
+        e.name == "t" ? (hit = 2) : (e.name in state_names && (hit = 1))
+        nothing
+    end
+    hit == 0 || _throw_discrete_state_dependent(name, hit == 1)
+    return nothing
+end
+
+# One discrete var's fill, compiled once: the synthesized
+# `faq(D(index(var, i…))) = index(<def>, i…)` equation
+# (`_materialized_fill_equation`, the route a materialized array observed's fill
+# takes) through `_compile_derivative_equations`, over a layout whose only block
+# is the cache itself, so the cascade's output slots ARE the cache's column-major
+# cells and its kernels write the cache in place. Returns a `() -> nothing` that
+# runs the fill. The cascade labels its report row and its refusals by the
+# variable's own name (`_with_rule_alias`), and the row is filed as an observed.
+function _compile_discrete_fill(name::String, def::OpExpr, dims::Vector{Int},
+                                cvec::Vector{Float64}, resolved_obs, const_arrays,
+                                pgather, param_sym_set, reg_funcs, pp)
+    nd = length(dims)
+    blk = name => (ones(Int, nd), copy(dims))
+    L = StateLayout(String[], [blk])
+    avi = Dict{String,Tuple{Vector{Int},Vector{Int}}}(blk)
+    feq = _materialized_fill_equation(name, def, dims)
+    rec = _build_record()
+    n0 = rec === nothing ? 0 : length(rec.rules)
+    se, pcs, aks, sfs, acs = _with_own_state_slot_tables() do
+        _with_rule_alias(name, name) do
+            _compile_derivative_equations(Equation[feq], resolved_obs, avi, L,
+                const_arrays, pgather, param_sym_set, reg_funcs, length(cvec))
+        end
+    end
+    if rec !== nothing
+        for k in (n0 + 1):length(rec.rules)
+            r = rec.rules[k]
+            rec.rules[k] = CompilerRuleRecord(r.rule, :observed, r.tier, r.declines)
+        end
+    end
+    scal = Tuple{Int,_Node}[]
+    for (slot, ex) in se
+        push!(scal, (slot, _compile(ex, L, param_sym_set, reg_funcs)))
+    end
+    append!(scal, pcs)
+    merged, _ = _merge_acc_kernel_classes(aks)
+    # The kernel emission refuses what it cannot generate, naming the rule open
+    # at the time — this one, not the assembled right-hand side.
+    rec === nothing || (rec.current = name)
+    section = _make_kernel_section(merged)
+    rec === nothing || (rec.current = "")
+    levels = ((scal, section, sfs, _make_contraction_section(acs)),)
+    return () -> (_fill_obs_levels!(levels, cvec, pp, 0.0, Float64); nothing)
 end
 
 # ============================================================
@@ -2448,26 +2669,54 @@ end
 # `M` fill from an unfilled `N` — a silently wrong RHS, not an error. So the
 # walk expands through every non-materialized observed definition and stops at
 # the materialized ones (their buffers are the dependency).
+#
+# A fill that reaches its OWN buffer through an inlined observed (an `index`
+# self-read in its own body is declined earlier, as a recurrence) is an
+# observed cycle, and is refused here with the code the inlining build
+# (`_resolve_observed`) and `validate()` give it. It must be: a level's kernel
+# section runs in an alias scope that asserts no store to the buffers it fills
+# aliases a load (`_build_codegen_rhs`), and that level's writes are exactly its
+# own observeds, whose other reads all sit on strictly lower levels. A build
+# from a `Model` that skipped `validate()` would otherwise put a load of a slot
+# the same section stores into that scope, which is undefined, not merely
+# stale. The check is per observed and per name it reaches, never per cell.
 function _materialized_obs_levels(mat_defs::Dict{String,ASTExpr}, names,
                                   inline_obs::Dict{String,ASTExpr})
     nm = Set{String}(names)
+    # The materialized buffers `root` reads, and for each the inlined observed
+    # it was reached through (`nothing` for a direct read).
     function reach(root::ASTExpr)
-        out = Set{String}()
-        seen = Set{String}()
-        frontier = collect(_referenced_var_names(root))
+        out = Dict{String,Union{Nothing,String}}()
+        via = Dict{String,Union{Nothing,String}}()
+        frontier = Tuple{String,Union{Nothing,String}}[
+            (r, nothing) for r in _referenced_var_names(root)]
         while !isempty(frontier)
-            r = pop!(frontier)
+            r, from = pop!(frontier)
             if r in nm
-                push!(out, r)
-            elseif !(r in seen) && haskey(inline_obs, r)
-                push!(seen, r)
-                append!(frontier, collect(_referenced_var_names(inline_obs[r])))
+                haskey(out, r) || (out[r] = from)
+            elseif !haskey(via, r) && haskey(inline_obs, r)
+                via[r] = from
+                append!(frontier, [(x, r) for x in _referenced_var_names(inline_obs[r])])
             end
         end
-        return out
+        return out, via
     end
-    deps = Dict{String,Set{String}}(n => setdiff(reach(mat_defs[n]), (n,))
-                                    for n in names)
+    deps = Dict{String,Set{String}}()
+    for n in sort!(collect(names))
+        out, via = reach(mat_defs[n])
+        if haskey(out, n)
+            path = String[n]
+            step = out[n]
+            while step !== nothing
+                pushfirst!(path, step)
+                step = via[step]
+            end
+            throw(TreeWalkError("E_TREEWALK_OBSERVED_CYCLE",
+                "$(join(sort!(unique(path)), ",")): the array observed '$(n)' reads its " *
+                "own buffer ($(n) -> $(join(path, " -> ")))"))
+        end
+        deps[n] = Set{String}(keys(out))
+    end
     order = _dependency_order(sort(collect(names)), n -> deps[n];
         on_cycle=done -> throw(TreeWalkError("E_TREEWALK_OBSERVED_CYCLE",
             join(sort(collect(setdiff(nm, done))), ","))))
@@ -2987,6 +3236,7 @@ end
 # faq-valued initialization equations, the per-derivative compile + CSE,
 # and the final `f!` closure. Returns the full `_build_evaluator_impl` result.
 function _build_compile_evaluator(model::Model, cls, parts, layout;
+        index_sets::AbstractDict=Dict{String,Any}(),
         registered_functions::AbstractDict, const_arrays::AbstractDict,
         const_array_boundaries::AbstractDict, param_arrays::AbstractDict,
         initial_conditions::AbstractDict, tspan, inspect, materialize_out,
@@ -3088,6 +3338,21 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         @_bench :discrete_mat _build_discrete_materializer!(materialize_out, cls.discrete_vars,
             parts.discrete_defs, resolved_obs, layout.array_var_info, layout.var_map,
             const_registry, pgather, param_sym_set, reg_funcs, p, n_states)
+    end
+
+    # ---- The compiled observed program's context (observed_program.jl) ----
+    # Output-time reads compile against this build's ODE layout, its const
+    # arrays, live buffers (discrete caches included) and parameters. Captured
+    # only for a build with a sink to hold it; nothing here runs until a read.
+    if inspect !== nothing
+        inspect.observed_ctx = _ObsProgramCtx(model, cls, parts, index_sets,
+            layout.var_map, layout.array_var_info, n_states, p, param_sym_set,
+            const_registry, pgather, reg_funcs, template_sites,
+            materialize_out === nothing ? Dict{String,Array{Float64}}() :
+                                          materialize_out.caches,
+            merge(Dict{String,ASTExpr}(raw_obs), mat_defs),
+            _state_base_names(layout.var_map, layout.array_var_info),
+            Dict{String,Any}(), ReentrantLock())
     end
 
     # ---- Evaluate faq-valued initialization_equations into u0 ----
@@ -3441,6 +3706,7 @@ function _build_evaluator_impl(model::Model;
     insp isa BuildInspection && lock(insp.observed_lock) do
         empty!(insp.observed_memo)
         insp.observed_build = Ref{Any}(nothing)
+        insp.observed_ctx = nothing
     end
     return _with_compiler_plan(plan) do
         _with_build_record(record) do
@@ -3672,6 +3938,7 @@ function _build_evaluator_impl_inner(model::Model;
     # `initial_conditions` profile is expanded into the per-cell keys `_build_u0`
     # seeds from. Both are no-ops (and the registries byte-identical) for a
     # document that declares no shaped parameter.
+    const_arrays = _normalize_const_array_keys(model, const_arrays; model_name=_model_name)
     const_arrays = _register_inline_array_parameters(model, const_arrays,
                                                      parameter_overrides, index_sets;
                                                      param_arrays=param_arrays)
@@ -3739,6 +4006,7 @@ function _build_evaluator_impl_inner(model::Model;
 
     # ---- Phase 4: registry + forcing buffers + derivative compile + closure ----
     return _build_compile_evaluator(model, cls, parts, layout;
+        index_sets=index_sets,
         registered_functions=registered_functions, const_arrays=const_arrays,
         const_array_boundaries=const_array_boundaries, param_arrays=param_arrays,
         initial_conditions=initial_conditions, tspan=tspan, inspect=inspect,
@@ -4379,10 +4647,26 @@ function _faq_debug_label(lhs_body, idx_names::Vector{String}, range_iters)
             ve isa VarExpr && (name = ve.name)
         end
     end
+    alias = _rule_alias(name)
+    alias === nothing || return alias
     axes = join(("$(idx_names[d])=$(length(range_iters[d]))"
                  for d in eachindex(idx_names)), ",")
     return "D($(name))[$(axes)]"
 end
+
+# A synthesized equation standing for something that is not an equation of the
+# document (a discrete-cadence fill) is labelled, in the report and in every
+# refusal the cascade raises for it, by what it stands for: `_with_rule_alias`
+# maps the target's name to that label for the duration of `f`.
+const _RULE_ALIAS_KEY = :earthsci_rule_alias
+
+function _rule_alias(name::AbstractString)
+    a = get(task_local_storage(), _RULE_ALIAS_KEY, nothing)
+    return a === nothing ? nothing : get(a::Dict{String,String}, String(name), nothing)
+end
+
+_with_rule_alias(f, target::String, label::String) =
+    task_local_storage(f, _RULE_ALIAS_KEY, Dict{String,String}(target => label))
 
 # The most contraction terms the diagnostic build ahead of a retired-loop
 # refusal unrolls in full (see `_compile_faq_equation!`).
@@ -5763,6 +6047,12 @@ function _build_evaluator_dict(esm::AbstractDict;
         # legal rule-2 key for the parameter `A` (esm-spec §6.6.2).
         kwd[:parameter_overrides] = _normalize_param_override_keys(
             model, kwd[:parameter_overrides];
+            model_name=(model_name === nothing ? _sole_model_name(file) : String(model_name)))
+    end
+    # The same for the caller's `const_arrays` keys, so the front-door pre-passes
+    # below read a shaped parameter's array under the name the model spells.
+    if model !== nothing && haskey(kwd, :const_arrays)
+        kwd[:const_arrays] = _normalize_const_array_keys(model, kwd[:const_arrays];
             model_name=(model_name === nothing ? _sole_model_name(file) : String(model_name)))
     end
 

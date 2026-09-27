@@ -75,9 +75,10 @@ struct CompilerPlan
     tcadence::Bool
     # ---- build-once machinery whose OFF state is a reference path ----
     intern::Bool
-    # Every construction-time compile-once form: the setup MAP materializer and
-    # the initial-state seeds (field `ic`, faq `initialization_equations`,
-    # `seed_expression_ic!`). Off, each takes its per-cell reference form.
+    # Every construction-time compiled form: the fills of setup_fill.jl (setup
+    # MAP and makearray, field `ic`, faq `initialization_equations`) and the
+    # compile-once sweeps behind them (those, and `seed_expression_ic!`). Off,
+    # each takes its per-cell reference form.
     setup_map_compile_once::Bool
     geom_sweep_specialize::Bool
     geom_overlap_gate::Bool
@@ -227,11 +228,15 @@ landed on, and every decline it collected getting there.
     `:scalar` (a scalar equation, walked once per slot on every call by the
     scalar walker) and `:scalar_loop` (the same, with a reduction kept as a
     runtime loop the walker runs over its whole length on every call);
-  - construction: `:setup_compiled` (compiled once, evaluated per cell),
+  - construction: `:setup_codegen` (filled through the right-hand-side cascade
+    and emitted code, run once), `:setup_compiled` (compiled once, evaluated per
+    cell),
     `:setup_loaded` (copied out of a supplied array), `:setup_constant`
     (evaluated once and filled), `:setup_percell` (resolved and compiled per
     cell), and `:discrete_percell` (a discrete-cadence field, resolved and
-    compiled per cell at build and walked per cell at every data refresh);
+    compiled per cell at build and walked per cell at every data refresh;
+    under `native` such a field is instead an `:observed` row on the
+    right-hand-side tier its compiled fill landed on);
   - output time, added by `observed_field` the first time it reads a name:
     `:output_compiled_once` or `:output_percell`;
   - and, on the `:rhs_program` row an `:xla` build adds, `:xla_direct_cpu` /

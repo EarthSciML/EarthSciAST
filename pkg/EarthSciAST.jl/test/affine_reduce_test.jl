@@ -182,7 +182,10 @@ _ar_sr_ics(n, m) = merge(Dict{String,Any}("y[$i]" => 0.1 * i for i in 1:n),
         fn, u0, p, _, _ = _ar_build(_ar_sr_doc(12, 64), _ar_sr_ics(12, 64))
         du = similar(u0)
         fn(du, u0, p, 0.0)
-        @test (@allocated fn(du, u0, p, 0.0)) == 0
+        # Julia >= 1.12 only: older versions box across RuntimeGeneratedFunction inner functions and @testset-scope reads.
+        if VERSION >= v"1.12"
+            @test (@allocated fn(du, u0, p, 0.0)) == 0
+        end
     end
 
     @testset "a ghost along the contracted axis keeps the unroll" begin

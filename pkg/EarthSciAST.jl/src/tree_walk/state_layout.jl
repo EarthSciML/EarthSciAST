@@ -227,7 +227,7 @@ function _cell_key_slot(L::StateLayout, key::String)
         end
     end
     p <= 1 && return 0
-    b = _layout_block(L, SubString(key, 1, p - 1))
+    b = _layout_block(L, SubString(key, 1, prevind(key, p)))
     b === nothing && return 0
     rank = length(b.lo)
     slot = b.base
@@ -445,7 +445,7 @@ function _inline_ic_cell(array_of::Dict{String,Int}, arrays, key::AbstractString
     (n >= 4 && codeunit(k, n) == UInt8(']')) || return nothing
     p = something(findlast(==('['), k), 0)
     p <= 1 && return nothing
-    i = get(array_of, SubString(k, 1, p - 1), 0)
+    i = get(array_of, SubString(k, 1, prevind(k, p)), 0)
     i == 0 && return nothing
     v = arrays[i][2]
     parts = split(SubString(k, p + 1, n - 1), ',')

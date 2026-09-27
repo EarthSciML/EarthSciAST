@@ -110,6 +110,7 @@ from .simulation_common import (
     _limit_iters,
     _retcode_for_error,
     _scipy_missing_message,
+    canonicalize_const_array_keys,
     check_parameter_override_keys,
     flat_namespace_scope,
     resolve_merged_renames,
@@ -796,6 +797,14 @@ def _esm_problem_under(
             discrete_providers[k] = prov
         else:
             merged[k] = np.asarray(_provider_sample_field(prov, t0), dtype=float)
+
+    # ---- caller keys for a shaped parameter (esm-spec §6.6.2) ----
+    merged = canonicalize_const_array_keys(
+        merged,
+        [n for n, v in flat.parameters.items() if v.shape],
+        {*flat.state_variables, *flat.parameters, *flat.observed_variables},
+        flat_namespace_scope(flat),
+    )
 
     # ---- pushdown-path name aliasing (same objects, no copies) ----
     if pushdown_rewrite:

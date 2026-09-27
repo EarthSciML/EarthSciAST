@@ -85,17 +85,24 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
             initial_conditions = ics,
             const_arrays = Dict("scale_src" => scale_native),
             param_arrays = Dict("F_src" => fsrc_buf),
-            compiler = :interpreter,  # the discrete-cadence materializer is per cell
             materialize_out = dm)
+        # The interpreter's per-cell fill: the oracle the compiled one must equal.
+        fsrc_buf_i = copy(fsrc_anchor(0.0))
+        dm_i = _ESS_RG.DiscreteMaterializer()
+        _ESS_RG._build_evaluator(sim_doc; initial_conditions = ics,
+            const_arrays = Dict("scale_src" => scale_native),
+            param_arrays = Dict("F_src" => fsrc_buf_i),
+            compiler = :interpreter, materialize_out = dm_i)
 
         # (b) regrid band — the in-model regrid reproduces the golden regridded
         # fields. F_tgt (DISCRETE cache) at each anchor; scale_tgt (CONST) once.
         @test haskey(dm.caches, "F_tgt")          # forcing-tainted -> discrete cache
         @test !haskey(dm.caches, "scale_tgt")     # const-fed -> build-once/inlined (not a cache)
         for t in anchors
-            fsrc_buf .= fsrc_anchor(t)
-            dm.materialize!()
+            fsrc_buf .= fsrc_anchor(t); fsrc_buf_i .= fsrc_anchor(t)
+            dm.materialize!(); dm_i.materialize!()
             @test vec(Float64.(dm.caches["F_tgt"])) ≈ ftgt_anchor(t) atol = field_atol
+            @test all(dm.caches["F_tgt"] .=== dm_i.caches["F_tgt"])
         end
         # scale_tgt is CONST (inlined into the RHS, not a named cache): recover it
         # from the derivative. At anchor 0, F_tgt = [1,1,1], so
@@ -115,7 +122,6 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
             initial_conditions = ics,
             const_arrays = Dict("scale_src" => scale_native),
             param_arrays = Dict("F_src" => fsrc_buf2),
-            compiler = :interpreter,  # the discrete-cadence materializer is per cell
             materialize_out = dm2)
         interior = [t for t in anchors if t > 0.0]
         prov = _RGConfProvider(interior, Dict(t => Dict("F_src" => fsrc_anchor(t)) for t in interior))

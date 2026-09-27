@@ -13,6 +13,7 @@ use super::kernels::{
 use super::oracle::run_rhs_oracle;
 use super::resolve::{Rv, cm_strides, resolve_rv, resolve_scalar, resolve_src, rm_strides};
 use super::*;
+use crate::simulate_array::eval::latch_gather_fault;
 
 // ---------------------------------------------------------------------------
 // The interpreter loop.
@@ -442,6 +443,23 @@ pub(super) fn run_range(
                 }
                 dispatch_bin_kernel!(op, fold);
             }
+            Instr::Reshape { src, out } => {
+                let sv = resolve_src(src, env, slab_ptr, slot_off, obs);
+                debug_assert_eq!(
+                    sv.shape.iter().product::<usize>(),
+                    prog.slots[*out as usize].shape.iter().product::<usize>(),
+                    "Reshape element count"
+                );
+                // The source walked in its own row-major order, written
+                // contiguously: `out`'s row-major layout over its own box.
+                let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+                unsafe {
+                    copy_strided(dst, &rm_strides(&sv.shape), sv.ptr, &sv.strides, &sv.shape)
+                };
+            }
+            Instr::Fault { fault } => {
+                latch_gather_fault(prog.faults[*fault as usize].clone());
+            }
             Instr::JmpIfZero {
                 cond,
                 n_true,
@@ -495,11 +513,14 @@ pub(super) fn run_range(
                     a[IxDyn(&[])] = unsafe { *slab_ptr.add(off) };
                 } else {
                     let dst = a.as_slice_mut().expect("export arrays are standard layout");
+                    // `dst.len()`, not `desc.elems()`: an empty box keeps a
+                    // one-element storage but publishes an empty array.
+                    debug_assert_eq!(dst.len(), desc.shape.iter().product::<usize>());
                     unsafe {
                         std::ptr::copy_nonoverlapping(
                             slab_ptr.add(off) as *const f64,
                             dst.as_mut_ptr(),
-                            desc.elems(),
+                            dst.len(),
                         );
                     }
                 }

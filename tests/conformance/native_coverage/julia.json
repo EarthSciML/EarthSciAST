@@ -19,24 +19,5 @@
       "native gap": 3
     }
   },
-  "entries": [
-    {
-      "path": "tests/conformance/build_once_spatial_field/fixtures/build_once_spatial_ode.esm",
-      "code": "compiler_refused_rule",
-      "rule": "Field.darea",
-      "reason": "compiler_refused_rule: compiler=:native refuses 'Field.darea': the whole-array setup materializer resolves and compiles the expression once per cell, over 3 cells, because the compile-once form declined it. That is a tree walk per cell at construction time, which esm-libraries-spec §2.5.10 puts under the same rule as the right-hand side. Build with compiler=:interpreter to run it"
-    },
-    {
-      "path": "tests/conformance/pde_inline_ic_param_override/fixtures/ic_param_override.esm",
-      "code": "compiler_refused_rule",
-      "rule": "ic(M.u)",
-      "reason": "compiler_refused_rule: compiler=:native refuses 'ic(M.u)': the coordinate-expression initial-state seed resolves and compiles the expression once per cell, because the compile-once form declined it. That is a tree walk per cell at construction time, which esm-libraries-spec §2.5.10 puts under the same rule as the right-hand side. Build with compiler=:interpreter to run it"
-    },
-    {
-      "path": "tests/spatial/pde_inline_assertions_exec.esm",
-      "code": "compiler_refused_rule",
-      "rule": "ic(M.u)",
-      "reason": "compiler_refused_rule: compiler=:native refuses 'ic(M.u)': the coordinate-expression initial-state seed resolves and compiles the expression once per cell, because the compile-once form declined it. That is a tree walk per cell at construction time, which esm-libraries-spec §2.5.10 puts under the same rule as the right-hand side. Build with compiler=:interpreter to run it"
-    }
-  ]
+  "entries": []
 }

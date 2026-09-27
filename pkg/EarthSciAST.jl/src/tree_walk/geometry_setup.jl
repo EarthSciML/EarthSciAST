@@ -1196,19 +1196,21 @@ end
 #     in INTEGER arithmetic. Those agree on every op in the index vocabulary
 #     except `/`, which is TRUNCATING `div` for `_eval_const_int` and true division
 #     in `Float64`. So any `/` under an `index` subscript declines the fast path.
-#  3. Boundary policy (`_ca_boundaries_all_error`). An out-of-range subscript is
-#     resolved per axis by the array's declared policy on both paths — by
-#     `_resolve_const_index` when it folds, by `_const_gather_sub` in the runtime
-#     gather — so a plain (`:error`) array raises `E_TREEWALK_CONSTARRAY_OOB` on
-#     either. Any non-`:error` const array still declines the fast path.
+#  3. Boundary policy. An out-of-range subscript is resolved per axis by the
+#     array's declared policy on both paths — by `_resolve_const_index` when it
+#     folds, by `_const_gather_sub` in the runtime gather, which both hand the
+#     out-of-range case to `_resolve_const_index_oob` — so a `:periodic` or
+#     `:clamp` axis reads the same element on either, and a plain (`:error`)
+#     array raises `E_TREEWALK_CONSTARRAY_OOB` on either.
 
 # Off, the MAP takes the per-cell loop, which is the differential oracle. A
 # strict `native` refuses that loop rather than running it (§2.5.10), so the
 # comparison is between the two compilers on the same document.
 _setup_map_compile_once_disabled() = !_setup_compile_once_enabled()
 
-# ENGAGEMENT DIAGNOSTICS. HITS counts MAPs materialized by the compile-once
-# path, MISS those that fell back to the per-cell loop (a decline, or an
+# ENGAGEMENT DIAGNOSTICS. HITS counts MAPs materialized by a compiled path (the
+# fill of setup_fill.jl or the compile-once sweep), MISS those that fell back to
+# the per-cell loop (a decline, or an
 # eval-time error). Purely observational — reset (`[] = 0`) around a build to
 # attribute counts to one run.
 const _SETUP_MAP_FASTPATH_HITS = Ref{Int}(0)
@@ -1249,16 +1251,6 @@ function _subtree_free_of(e::ASTExpr, banned::Set{String})::Bool
     return ok
 end
 
-# True iff every const array carries the default `:error` boundary policy, so a
-# folded OOB gather would THROW rather than silently wrap/clamp (guard 3 above).
-function _ca_boundaries_all_error(ca::AbstractDict)::Bool
-    for (_, v) in ca
-        v isa BoundedConstArray || continue
-        all(b -> b === :error, v.boundary) || return false
-    end
-    return true
-end
-
 # The compile-once cell evaluator for a promoted-physics MAP, or `nothing` to
 # keep the per-cell loop. Every decline is silent and lossless — the caller falls
 # back to the byte-identical reference path.
@@ -1267,7 +1259,6 @@ function _setup_map_compile_once(rhs::OpExpr, nd::Int, ca::AbstractDict,
                                  params::AbstractDict)
     nd >= 1 || return nothing
     _setup_map_compile_once_disabled() && return nothing
-    _ca_boundaries_all_error(ca) || return nothing
     _subscripts_int_exact(rhs) || return nothing
     return _cellwise_compile_once(rhs, nd, ca, registered_functions, params)
 end
@@ -1287,6 +1278,17 @@ function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
     exts = Int[_geo_index_extent(rhs.ranges[v], index_sets, derived_extents) for v in out]
     ca, params = _setup_env_split(env)
     nd = length(out)
+    # ---- Compiled fill (setup_fill.jl) ----
+    # The MAP filled through the right-hand-side cascade and emitted code, once.
+    # A decline, or a run that raises, leaves the compile-once sweep and the
+    # per-cell reference below exactly as they were.
+    filled = _setup_fill_array(rhs, exts; const_arrays=ca, params=params,
+                               reg_funcs=registered_functions)
+    if filled !== nothing
+        _SETUP_MAP_FASTPATH_HITS[] += 1
+        _record_rule!(_current_rule_label(), :setup_array, :setup_codegen)
+        return filled
+    end
     # ---- Compile-once fast path (see `_setup_map_compile_once` above) ----
     # Resolve+compile the MAP body ONCE with the output indices bound as
     # parameters, then walk the cells rebinding only those. Any decline (⇒
@@ -1470,10 +1472,20 @@ function _materialize_setup_wholearray(rhs::OpExpr, env::AbstractDict,
         return reshape(Array{Float64}(src), exts...)   # column-major, numpy-parity
     end
     ca, params = _setup_env_split(env)
-    # This materializer has no compile-once form at all: the `makearray` stencil
-    # it serves is resolved and compiled from scratch at every output cell. A
-    # strict compiler refuses it once its first cell has evaluated, so that a
-    # stencil no form can evaluate raises the document's own error instead.
+    # The compiled form: the stencil filled through the right-hand-side cascade
+    # and emitted code, once (setup_fill.jl) — the same lowering an
+    # `index(makearray, …)` in the right-hand side gets, region selection
+    # included.
+    arr = _setup_fill_array(rhs, exts; const_arrays=ca, params=params,
+                            reg_funcs=registered_functions)
+    if arr !== nothing
+        _record_rule!(_current_rule_label(), :setup_array, :setup_codegen)
+        return arr
+    end
+    # Otherwise the stencil is resolved and compiled from scratch at every
+    # output cell. A strict compiler refuses that once its first cell has
+    # evaluated, so that a stencil no form can evaluate raises the document's
+    # own error instead.
     if _compiler_is_strict() && all(>(0), exts)
         _eval_cellwise(rhs, ones(Int, length(exts)); const_arrays=ca,
                        registered_functions=registered_functions, params=params)

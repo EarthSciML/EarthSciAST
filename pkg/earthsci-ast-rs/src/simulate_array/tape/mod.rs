@@ -61,6 +61,8 @@
 //! read a table, and a rule that calls one becomes a fallback naming the
 //! function.
 
+#[cfg(test)]
+mod array_tests;
 mod exec;
 mod fuse;
 mod ir;

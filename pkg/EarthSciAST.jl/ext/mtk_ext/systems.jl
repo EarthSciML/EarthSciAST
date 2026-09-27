@@ -418,7 +418,7 @@ function _lower_slice_sources_to_bcs!(flat::FlattenedSystem,
         # Extract base prefix + slice dim from the candidate name
         base_dot = findlast('.', slice_name)
         base_dot === nothing && continue
-        prefix = slice_name[1:(base_dot-1)]
+        prefix = slice_name[1:prevind(slice_name, base_dot)]
         tail = slice_name[(base_dot+1):end]  # e.g. "at_z"
         dim_name = tail[4:end]                # "z"
         base_name = prefix                    # we emit flux BC on the "prefix" base var

@@ -157,6 +157,7 @@ impl TapeBuilder<'_> {
             cnames: &[],
             cvals: SmallVec::new(),
             tuple: id,
+            visit: SmallVec::new(),
         };
         let lowered = (|| -> LResult<(LV, Option<LV>)> {
             let term = self.lower_expr(body, &bx)?;

@@ -116,6 +116,41 @@ end
         end
     end
 
+    # ---- A fill that reads its own buffer through an inlined observed ----
+    # g[i] = u[i] + s with s = g[3]: g's fill reads g's buffer through the
+    # scalar observed s. `validate()` calls this an observed cycle, and so does
+    # the inlining build; a `Model` built without validating must not reach
+    # the level's kernel section, whose alias scope asserts no store to g
+    # aliases a load.
+    @testset "a self-read through an inlined observed is an observed cycle" begin
+        vars3 = Dict(
+            "u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "s" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable),
+        )
+        eqs3 = [
+            ESM_AOM.Equation(_v("g"), _agg(_op("+", _idx("u", _v("i")), _v("s")))),
+            ESM_AOM.Equation(_v("s"), _idx("g", _i(3))),
+            ESM_AOM.Equation(_agg(_Didx("u", _v("i"))), _agg(_idx("g", _v("i")))),
+        ]
+        m3 = ESM_AOM.Model(vars3, eqs3)
+        for compiler in (:native, :interpreter)
+            err = try
+                ESM_AOM._build_evaluator_impl(m3; compiler = compiler, index_sets = isets,
+                                              initial_conditions = ics)
+                nothing
+            catch e
+                e
+            end
+            @test err isa ESM_AOM.TreeWalkError
+            @test err isa ESM_AOM.TreeWalkError && err.code == "E_TREEWALK_OBSERVED_CYCLE"
+        end
+        file = ESM_AOM.EsmFile("1.0.0", ESM_AOM.Metadata("selfread");
+                               models = Dict("M" => m3), index_sets = isets)
+        @test any(e -> e.error_type == "observed_cycle",
+                  ESM_AOM.validate(file).structural_errors)
+    end
+
     # ---- Observeds that MUST stay inlined ----
     # A buffer read is a RUNTIME value, so an observed referenced where the build
     # needs a CONCRETE one — a gather SUBSCRIPT, a range bound — cannot be

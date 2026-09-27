@@ -111,7 +111,10 @@ end
         f!, u0, p, _, vmap = _cl_build(_cl_doc(200); loop=true)
         du = similar(u0)
         f!(du, u0, p, 0.0)                       # warm up
-        @test (@allocated f!(du, u0, p, 0.0)) == 0
+        # Julia >= 1.12 only: older versions box across RuntimeGeneratedFunction inner functions and @testset-scope reads.
+        if VERSION >= v"1.12"
+            @test (@allocated f!(du, u0, p, 0.0)) == 0
+        end
     end
 
     @testset "AD (ForwardDiff) differentiates through the loop" begin
@@ -239,7 +242,10 @@ end
     @testset "einsum loop preserves zero-alloc f!" begin
         f!, u0, p, _, vm = _cl_build2d(_cl_doc2d_arith(30), _cl_ics2d_a(); loop=true)
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test (@allocated f!(du, u0, p, 0.0)) == 0
+        # Julia >= 1.12 only: older versions box across RuntimeGeneratedFunction inner functions and @testset-scope reads.
+        if VERSION >= v"1.12"
+            @test (@allocated f!(du, u0, p, 0.0)) == 0
+        end
     end
 
     # Flat in M on both routes: the loop tier's, and the affine tier's, which no
@@ -370,7 +376,10 @@ end
         fl,u0,p,vml = _cl_halo_du(doc, ics; loop=true)
         dl = similar(u0); fl(dl,u0,p,0.0)
         fl(dl,u0,p,0.0)
-        @test (@allocated fl(dl,u0,p,0.0)) == 0
+        # Julia >= 1.12 only: older versions box across RuntimeGeneratedFunction inner functions and @testset-scope reads.
+        if VERSION >= v"1.12"
+            @test (@allocated fl(dl,u0,p,0.0)) == 0
+        end
         # out[1,1] = Σ_{k,l} W(1,1,k,l)·q[k,l], so ∂/∂q[a,b] = W(1,1,a,b) for a,b∈1..M.
         g(u) = (d = similar(u, eltype(u)); fl(d,u,p,0.0); d[vml["out[1,1]"]])
         J = ForwardDiff.gradient(g, u0)

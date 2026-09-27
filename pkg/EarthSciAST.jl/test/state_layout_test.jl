@@ -85,6 +85,29 @@ end
         end
     end
 
+    @testset "array names ending in a multi-byte character" begin
+        # The name before '[' ends in a character wider than one byte, so the
+        # byte before '[' is not a valid string index.
+        T = ESM.StateLayout(["M.α"], ["M.θ" => ([1], [3]), "M.vθ" => ([0, 1], [1, 2])])
+        toracle, tnames = _oracle_var_map(["M.α"], ["M.θ" => ([1], [3]), "M.vθ" => ([0, 1], [1, 2])])
+        @test Dict(T) == toracle
+        @test collect(keys(T)) == tnames
+        for (k, v) in toracle
+            @test T[k] == v
+            @test haskey(T, k)
+            @test get(T, k, 0) == v
+        end
+        @test get(T, "M.θ[2]", 0) == 3
+        @test haskey(T, "M.θ[1]")
+        for bad in ["M.θ[4]", "M.θ[0]", "M.θ", "θ[1]", "M.θθ[1]", "M.vθ[2,1]", "M.α[1]"]
+            @test !haskey(T, bad)
+            @test get(T, bad, -7) == -7
+        end
+        O = ESM._VarMapOverlay(Dict{String,Int}("\0lane\0" * "1" => -1), T)
+        @test O["M.θ[3]"] == toracle["M.θ[3]"]
+        @test get(O, "M.vθ[1,2]", 0) == toracle["M.vθ[1,2]"]
+    end
+
     @testset "rank-0 block" begin
         R = ESM.StateLayout(String[], ["s" => (Int[], Int[])])
         @test length(R) == 1
@@ -135,6 +158,23 @@ end
     @test got[L["u[1,2]"]] == 2.0
     @test got[L["x"]] == 2.5
     @test length(got) == 7
+end
+
+@testset "_InlineICs with a multi-byte array name" begin
+    # A per-cell initial condition and an inline profile for an array whose
+    # name ends in a character wider than one byte.
+    explicit = Dict{String,Any}("θ[1]" => 9.0, "α" => 0.5)
+    ics = ESM._InlineICs(explicit, Pair{String,Array{Float64}}["θ" => [1.0, 2.0, 3.0]])
+    @test ics["θ[1]"] == 9.0
+    @test ics["θ[2]"] == 2.0
+    @test haskey(ics, "θ[3]")
+    @test !haskey(ics, "θ[4]")
+    @test !haskey(ics, "θ")
+    @test length(ics) == 4
+    L = ESM.StateLayout(["α"], ["θ" => ([1], [3])])
+    got = Dict{Int,Float64}()
+    ESM._apply_ics_by_slot!((s, v) -> (got[s] = Float64(v)), L, ics)
+    @test got == Dict(L["α"] => 0.5, L["θ[1]"] => 9.0, L["θ[2]"] => 2.0, L["θ[3]"] => 3.0)
 end
 
 @testset "LHS cell discovery: boxes by arithmetic, others cell by cell" begin
@@ -191,5 +231,30 @@ end
     ]
     for (args, ranges) in cases
         @test cells_of(args, ranges) == enumerate_cells(args, ranges)
+    end
+end
+
+@testset "a built model with a multi-byte array name" begin
+    _θ(i) = Dict{String,Any}("op" => "index", "args" => Any["θ", i])
+    _faq(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
+        "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "cells")), "expr" => e)
+    model = Dict{String,Any}(
+        "variables" => Dict{String,Any}("θ" => Dict{String,Any}(
+            "type" => "unknown", "shape" => Any["cells"], "default" => 1.0)),
+        "equations" => Any[Dict{String,Any}(
+            "lhs" => _faq(Dict{String,Any}("op" => "D", "args" => Any[_θ("i")], "wrt" => "t")),
+            "rhs" => _faq(Dict{String,Any}("op" => "*", "args" => Any[-2.0, _θ("i")])))])
+    doc = Dict{String,Any}("esm" => "0.6.0", "metadata" => Dict{String,Any}("name" => "theta"),
+        "index_sets" => Dict{String,Any}("cells" => Dict{String,Any}("kind" => "interval", "size" => 3)),
+        "models" => Dict{String,Any}("M" => model))
+    # A per-cell initial condition, then an inline profile.
+    for (ics, want) in ((Dict{String,Any}("θ[1]" => 5.0), [5.0, 1.0, 1.0]),
+                        (Dict{String,Any}("θ" => [1.0, 2.0, 3.0]), [1.0, 2.0, 3.0]))
+        f!, u0, p, _, vm = ESM._build_evaluator(doc; initial_conditions = ics)
+        @test [u0[vm["θ[$i]"]] for i in 1:3] == want
+        @test haskey(vm, "θ[3]") && !haskey(vm, "θ[4]")
+        du = similar(u0)
+        f!(du, u0, p, 0.0)
+        @test [du[vm["θ[$i]"]] for i in 1:3] == -2 .* want
     end
 end
