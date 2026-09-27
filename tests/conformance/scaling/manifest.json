@@ -634,6 +634,102 @@
         "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x (a prefix scan's threaded reference is the serial loop; the size did not finish at 0082083c5)",
         "phase": 5,
         "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 11.8-13.0 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p2-rust-strided"
+      },
+      {
+        "family": "regrid",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": 3769.0,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..3162); the document carries both cell tables as inline const rings (about 55 bytes of JSON per state), and loading and lowering it is the whole build (0.03 s of 0.032 s at N=3162); the dense source x target overlap and weight arrays, and the geometry over the candidate pairs, are computed in the first call's build-once section (0.10 s at N=3162), which this gate does not time",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "regrid",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": 3824.0,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..3162); the document carries both cell tables as inline const rings (about 55 bytes of JSON per state), and loading and lowering it is the whole build (0.03 s of 0.032 s at N=3162); the dense source x target overlap and weight arrays, and the geometry over the candidate pairs, are computed in the first call's build-once section (0.10 s at N=3162), which this gate does not time",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": 863.1,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000); the document carries the neighbour table as an inline const array (about 30 bytes of JSON per state), and loading it is most of the build (0.66 s of 0.87 s at 10^6 cells); the tape is 5 instructions at every N",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": 1010.0,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000); the document carries the neighbour table as an inline const array (about 30 bytes of JSON per state), and loading it is most of the build (0.66 s of 0.87 s at 10^6 cells); the tape is 5 instructions at every N",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.812,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x; per call the fused gather rounds and range-checks each of the 4N floating-point subscripts where the hand loop reads integer indices, and the call also pays the whole-state passes (the row-major state copy, the zeroed dy)",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 3.348,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x; per call the fused gather rounds and range-checks each of the 4N floating-point subscripts where the hand loop reads integer indices, and the call also pays the whole-state passes (the row-major state copy, the zeroed dy)",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.052,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x; per call the fused gather rounds and range-checks each of the 4N floating-point subscripts where the hand loop reads integer indices, and the call also pays the whole-state passes (the row-major state copy, the zeroed dy)",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 8.008,
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 14.68,
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 11.75,
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
       }
     ],
     "julia": [
