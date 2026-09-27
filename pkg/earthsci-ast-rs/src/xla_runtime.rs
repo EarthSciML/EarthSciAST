@@ -234,6 +234,7 @@ pub struct CompiledRhs {
     n_states: usize,
     params_len: usize,
     n_instrs: usize,
+    opcode_counts: Vec<(&'static str, usize)>,
     platform: String,
 }
 
@@ -256,6 +257,7 @@ impl CompiledRhs {
             n_states: emitted.n_states(),
             params_len: emitted.params_len(),
             n_instrs: emitted.n_instrs(),
+            opcode_counts: emitted.opcode_counts().to_vec(),
             platform: client.platform_name(),
         })
     }
@@ -271,6 +273,14 @@ impl CompiledRhs {
     /// Tape instructions lowered (diagnostics only).
     pub fn n_instrs(&self) -> usize {
         self.n_instrs
+    }
+    /// How many tape instructions of opcode `op` (`"Reduce"`, `"Scan"`, …)
+    /// were lowered (diagnostics only).
+    pub fn opcode_count(&self, op: &str) -> usize {
+        self.opcode_counts
+            .iter()
+            .find(|(o, _)| *o == op)
+            .map_or(0, |(_, n)| *n)
     }
     /// PJRT platform name (`"cpu"`, `"cuda"`, …).
     pub fn platform(&self) -> &str {

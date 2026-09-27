@@ -815,6 +815,17 @@ fn scans_assemblies_and_promoted_contractions_lower() {
         }
         Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
     };
+    // The three rules lowered to the loop-owning instructions this test is
+    // about, one each, and not to the per-step or unrolled forms: without
+    // this the agreement below would hold just as well over those.
+    for op in ["Scan", "Assemble", "Reduce"] {
+        assert_eq!(
+            program.opcode_count(op),
+            1,
+            "the lowered tape carries {} `{op}` instructions, expected one",
+            program.opcode_count(op)
+        );
+    }
     let params: HashMap<String, f64> = HashMap::new();
     let pv = compiled.debug_resolve_params(&params);
     let m = compiled.state_variable_names().len();
@@ -833,3 +844,4 @@ fn scans_assemblies_and_promoted_contractions_lower() {
         }
     }
 }
+

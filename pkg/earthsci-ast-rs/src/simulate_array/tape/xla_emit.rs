@@ -125,6 +125,7 @@ pub struct EmittedRhs {
     n_states: usize,
     params_len: usize,
     n_instrs: usize,
+    opcode_counts: Vec<(&'static str, usize)>,
 }
 
 impl EmittedRhs {
@@ -147,6 +148,11 @@ impl EmittedRhs {
     /// Tape instruction count that was lowered (diagnostics only).
     pub fn n_instrs(&self) -> usize {
         self.n_instrs
+    }
+    /// How many instructions of each opcode the lowered tape carried
+    /// (diagnostics only), in first-seen program order.
+    pub fn opcode_counts(&self) -> &[(&'static str, usize)] {
+        &self.opcode_counts
     }
     /// HLO text of the computation, for a debug dump. NEVER a gate: the tier
     /// compares numbers, never programs.
@@ -207,7 +213,21 @@ pub(crate) fn emit_program(
         // `Emitter::new` widens a zero-parameter model to `f64[1]`.
         params_len: prog.params_len.max(1),
         n_instrs: prog.instrs.len(),
+        opcode_counts: opcode_counts(prog),
     })
+}
+
+/// Instructions per opcode, in first-seen program order.
+fn opcode_counts(prog: &TapeProgram) -> Vec<(&'static str, usize)> {
+    let mut counts: Vec<(&'static str, usize)> = Vec::new();
+    for i in &prog.instrs {
+        let op = i.opcode();
+        match counts.iter_mut().find(|(o, _)| *o == op) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((op, 1)),
+        }
+    }
+    counts
 }
 
 // ---------------------------------------------------------------------------
