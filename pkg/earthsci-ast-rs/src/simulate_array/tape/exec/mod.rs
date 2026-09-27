@@ -79,25 +79,6 @@ use resolve::{cm_strides, rm_strides};
 // Device selection (read once and cached).
 // ---------------------------------------------------------------------------
 
-/// Whether this document must run off the tape whatever the compiler says.
-///
-/// Not a switch: the caller names the compiler (API_SPEC §5.8) and this is the
-/// one document property the tape cannot express, so `native` REFUSES such a
-/// document (`crate::problem::esm_problem`) rather than demoting it quietly.
-pub(crate) fn tape_disabled() -> bool {
-    // A document with per-variable element types (esm-spec §11.3.1) does not
-    // run on the tape. The tape resolves its kernels at EXECUTION from the
-    // thread-local precision, and it fuses instructions ACROSS rules, so the
-    // one thing a per-variable precision needs — a rule (or a subtree)
-    // evaluated in a precision its neighbours are not — is the one thing a
-    // fused tape cannot express. The vectorized overlay and the per-cell
-    // oracle both re-enter per rule and per node, where the guard still
-    // stands. Correctness over throughput, and only for the documents that
-    // ask for it: every other document is unaffected, this being a
-    // thread-local read on a path that already reads one.
-    crate::precision::has_variable_overrides()
-}
-
 /// Runtime-selected SIMD width for the fused-loop kernel clones (Step 4b).
 ///
 /// The generic build targets baseline x86-64 (SSE-2), leaving 2x-4x of vector

@@ -71,6 +71,13 @@ pub(super) fn run_range(
         if pc >= range.end {
             break;
         }
+        // The instruction's own precision, armed for it alone (esm-spec
+        // §11.3.1); a program without per-instruction precision skips this.
+        let _precision = prog
+            .precision
+            .get(pc)
+            .filter(|&&p| p != crate::precision::active())
+            .map(|&p| crate::precision::enter(p));
         match &prog.instrs[pc] {
             Instr::Bin { op, a, b, out } => {
                 let desc = &prog.slots[*out as usize];

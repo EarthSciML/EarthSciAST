@@ -335,10 +335,10 @@ scaling_family!(scaling_regrid, "regrid");
 scaling_family!(scaling_unstructured_gather, "unstructured_gather");
 scaling_family!(scaling_scalar_chemistry, "scalar_chemistry");
 
-/// Join-gated and ragged contractions.
+/// Join-gated and ragged contractions, and per-variable element types.
 #[wasm_bindgen_test]
-fn tuple_list_contractions() {
-    for (id, text) in portable::TUPLE_LIST_DOCS {
+fn tuple_list_contractions_and_element_types() {
+    for (id, text) in portable::TUPLE_LIST_AND_PRECISION_DOCS {
         portable::check_native_rhs_doc(id, text);
     }
 }

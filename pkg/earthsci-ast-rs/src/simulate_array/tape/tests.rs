@@ -2703,3 +2703,61 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
     assert_eq!(bits(&dy), bits(&dy_oracle));
 }
 
+/// Per-variable element types (esm-spec §11.3.1) on the tape: a binary32
+/// observed beside a binary64 one, each with a predicate at the other
+/// precision inside it. Every instruction carries the precision it was
+/// lowered at, fusion keeps the two apart, and both executors agree with the
+/// interpreter bit for bit, fused and unfused.
+#[test]
+fn ab_float32_variables_beside_float64_neighbours() {
+    use crate::precision::Precision;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/element_type/float32_state_float64_neighbour.esm");
+    let text = std::fs::read_to_string(&path).expect("fixture reads");
+    let doc: serde_json::Value = serde_json::from_str(&text).expect("fixture is JSON");
+    let file = typed(doc);
+    let env = crate::precision_infer::env_of_file(&file).expect("precision environment");
+    let annotated = crate::precision_infer::annotated(&file)
+        .expect("precision inference")
+        .expect("the fixture declares element types");
+    let _env = env.enter();
+    let compiled = ArrayCompiled::from_file(&annotated).expect("fixture compiles");
+    let (prog, report) = compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()));
+    assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
+    assert_eq!(prog.precision.len(), prog.instrs.len());
+    assert!(prog.precision.contains(&Precision::Float32));
+    assert!(prog.precision.contains(&Precision::Float64));
+
+    let n = compiled.state_variable_names().len();
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let prog_uf = compiled.build_tape_opts(&HashSet::new(), None).0;
+    let mut fast = compiled.debug_new_scratch_taped();
+    assert!(fast.has_tape());
+    for seed in 0..4u64 {
+        let state = seeded_state(n, seed, -1.0, 1.0);
+        let (want, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+        let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&want), bits(&oracle), "seed {seed}: overlay vs oracle");
+        for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
+            let mut dy = vec![0.0f64; n];
+            run_reference(p, &compiled, &state, &param_vec, 0.0, &mut dy);
+            assert_eq!(
+                bits(&dy),
+                bits(&want),
+                "seed {seed}: {label} reference executor"
+            );
+        }
+        let mut dy = vec![0.0f64; n];
+        compiled.debug_eval_rhs_into(
+            &state,
+            0.0,
+            &param_vec,
+            &mut dy,
+            &mut fast,
+            &mut RhsStats::default(),
+        );
+        assert_eq!(bits(&dy), bits(&want), "seed {seed}: fast executor");
+    }
+}

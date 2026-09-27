@@ -96,8 +96,8 @@ macro_rules! corpus_doc {
 }
 
 /// Documents whose contractions run over a tuple list (a join gate, a ragged
-/// bound).
-pub const TUPLE_LIST_DOCS: &[(&str, &str)] = &[
+/// bound) and one that mixes per-variable element types.
+pub const TUPLE_LIST_AND_PRECISION_DOCS: &[(&str, &str)] = &[
     corpus_doc!("valid/faq/join_disaggregation_m2m.esm"),
     corpus_doc!("valid/faq/join_disaggregation_m2m_permuted.esm"),
     corpus_doc!("valid/faq/join_on_data_columns.esm"),
@@ -105,6 +105,7 @@ pub const TUPLE_LIST_DOCS: &[(&str, &str)] = &[
     corpus_doc!("valid/faq/join_on_self_join_syms.esm"),
     corpus_doc!("valid/faq/ragged_member_gather.esm"),
     corpus_doc!("conformance/expression_templates/import_rebind_keyed_factors/expanded.esm"),
+    corpus_doc!("fixtures/element_type/float32_state_float64_neighbour.esm"),
 ];
 
 /// `(tier/fixture id, model, document)` for the inline-test tiers' documents.
@@ -341,6 +342,8 @@ fn assert_rhs_agrees(
     let ic = interp
         .debug_array_compiled()
         .expect("the interpreter has a right-hand side");
+    // What a solve arms for its whole run: the document's element types.
+    let _precision = nc.debug_precision_env().enter();
     assert_eq!(
         nc.state_variable_names(),
         ic.state_variable_names(),

@@ -45,6 +45,7 @@
 
 use super::super::BinCode;
 use super::ir::*;
+use crate::precision::Precision;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use std::collections::BTreeSet;
@@ -134,6 +135,10 @@ struct GBuilder {
     folded: Vec<(u32, SlotId, GroupIx)>,
     /// Rule ordinal of the first member (provenance of the emitted Fused).
     prov: u32,
+    /// The precision every member runs at (`None` when the program carries
+    /// no per-instruction precision). A group never spans two: fusion stops
+    /// at a change of precision.
+    prec: Option<Precision>,
     /// An absorbed [`Instr::Reduce`] folding one of the group's values
     /// (see [`FusedReduce`]); the group is flushed as soon as it is set.
     reduce: Option<ReduceTail>,
@@ -157,7 +162,7 @@ enum ResOp {
 }
 
 impl GBuilder {
-    fn new(shape: super::super::DimU, prov: u32) -> Self {
+    fn new(shape: super::super::DimU, prov: u32, prec: Option<Precision>) -> Self {
         GBuilder {
             shape,
             member_instrs: Vec::new(),
@@ -172,6 +177,7 @@ impl GBuilder {
             defs: Vec::new(),
             folded: Vec::new(),
             prov,
+            prec,
             reduce: None,
         }
     }
@@ -1414,6 +1420,7 @@ pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
         fused: Vec::new(),
         instrs: Vec::with_capacity(n),
         prov: Vec::with_capacity(n),
+        prec: Vec::with_capacity(if prog.precision.is_empty() { 0 } else { n }),
         micro_hist: FxHashMap::default(),
         adj_hist: FxHashMap::default(),
         chain_hist: FxHashMap::default(),
@@ -1452,6 +1459,7 @@ pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
     };
     prog.instrs = sink.instrs;
     prog.provenance = sink.prov;
+    prog.precision = sink.prec;
     prog.n_const = section_counts[0] as u32;
     prog.n_segment = section_counts[1] as u32;
     prog.fused = sink.fused;
@@ -1464,6 +1472,8 @@ struct Sink {
     fused: Vec<FusedSpec>,
     instrs: Vec<Instr>,
     prov: Vec<u32>,
+    /// Parallel to `instrs` when the source program is precision-tagged.
+    prec: Vec<Precision>,
     /// Step 4b histogram accumulators (weighted by group element count).
     micro_hist: FxHashMap<String, usize>,
     adj_hist: FxHashMap<String, usize>,
@@ -1477,7 +1487,15 @@ impl Sink {
         }
         self.instrs.push(prog.instrs[i].clone());
         self.prov.push(prog.provenance[i]);
+        if let Some(p) = prec_at(prog, i) {
+            self.prec.push(p);
+        }
     }
+}
+
+/// Instruction `i`'s precision tag, when the program carries them.
+fn prec_at(prog: &TapeProgram, i: usize) -> Option<Precision> {
+    prog.precision.get(i).copied()
 }
 
 /// The state [`fuse_section`] and its helpers share for the whole pass: the
@@ -1515,6 +1533,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         defs,
         folded,
         prov,
+        prec,
         reduce,
         ..
     } = g;
@@ -1681,6 +1700,9 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     });
     fx.sink.instrs.push(Instr::Fused { spec: spec_ix });
     fx.sink.prov.push(prov);
+    if let Some(p) = prec {
+        fx.sink.prec.push(p);
+    }
 }
 
 fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
@@ -1691,7 +1713,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
     // about to join. Returns the surviving groups untouched.
     fn flush_hazards(
         ins: &Instr,
-        keep_shape: Option<&super::super::DimU>,
+        keep: Option<(&super::super::DimU, Option<Precision>)>,
         open: &mut Vec<GBuilder>,
         fx: &mut FuseCtx,
     ) {
@@ -1702,7 +1724,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             &fx.prog.assemblies,
             |s| {
                 for (gi, g) in open.iter().enumerate() {
-                    if keep_shape != Some(&g.shape) && g.defines(s) && !hazard.contains(&gi) {
+                    if keep != Some((&g.shape, g.prec)) && g.defines(s) && !hazard.contains(&gi) {
                         hazard.push(gi);
                     }
                 }
@@ -1721,9 +1743,10 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
         open: &mut Vec<GBuilder>,
         shape: super::super::DimU,
         prov: u32,
+        prec: Option<Precision>,
         fx: &mut FuseCtx,
     ) -> usize {
-        if let Some(gi) = open.iter().position(|g| g.shape == shape) {
+        if let Some(gi) = open.iter().position(|g| g.shape == shape && g.prec == prec) {
             if open[gi].has_room() {
                 return gi;
             }
@@ -1734,7 +1757,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             let g = open.remove(0);
             flush_one(g, fx);
         }
-        open.push(GBuilder::new(shape, prov));
+        open.push(GBuilder::new(shape, prov, prec));
         open.len() - 1
     }
 
@@ -1794,7 +1817,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                 // that group to materialize first.
                 flush_hazards(ins, None, &mut open, fx);
                 let shape = out_desc.shape.clone();
-                let gi = find_or_open(&mut open, shape, prog.provenance[i], fx);
+                let gi = find_or_open(&mut open, shape, prog.provenance[i], prec_at(prog, i), fx);
                 open[gi].add_folded_gather(i as u32, *src, plan_ref, geom, *out);
                 i += 1;
                 continue;
@@ -1824,8 +1847,9 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             _ => None,
         };
         if let Some(shape) = elem_shape {
-            flush_hazards(ins, Some(&shape), &mut open, fx);
-            let gi = find_or_open(&mut open, shape.clone(), prog.provenance[i], fx);
+            let prec = prec_at(prog, i);
+            flush_hazards(ins, Some((&shape, prec)), &mut open, fx);
+            let gi = find_or_open(&mut open, shape.clone(), prog.provenance[i], prec, fx);
             if open[gi].try_add(i as u32, ins, prog) {
                 i += 1;
                 continue;
@@ -1844,6 +1868,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             ..
         } = ins
             && let Some(gi) = open.iter().position(|g| g.defines(*src))
+            && open[gi].prec == prec_at(prog, i)
             && open[gi].try_absorb_reduce(i as u32, ins, fx.readers)
         {
             let g = open.remove(gi);

@@ -5,7 +5,6 @@
 
 #[cfg(feature = "solve")]
 use super::tape::TapeProgram;
-use super::tape::tape_disabled;
 use super::*;
 #[cfg_attr(not(feature = "solve"), allow(unused_imports))]
 use crate::simulate::SimulateError;
@@ -569,21 +568,26 @@ impl ArrayCompiled {
     }
 
     /// Build a scratch with the compiled tape installed (Step 3b) — what the
-    /// production RHS closure carries. A document the tape cannot express at
-    /// all ([`tape_disabled`]) gets a legacy scratch, so a caller can observe
-    /// the routing through [`RhsScratch::has_tape`] /
-    /// [`RhsStats::taped_rules`]. Exposed for the fast-executor A/B,
+    /// production RHS closure carries. Exposed for the fast-executor A/B,
     /// allocation-steady-state and invalidation tests, driven through
     /// [`Self::debug_eval_rhs_into`].
     #[doc(hidden)]
     pub fn debug_new_scratch_taped(&self) -> RhsScratch {
         let mut s = RhsScratch::new(&self.var_shapes);
         s.set_const_arrays(Rc::clone(&self.const_scope));
-        if !tape_disabled() {
-            let (prog, _report) = self.tape(&HashSet::new());
-            s.install_tape(prog, self.shared_observed_rules());
-        }
+        let (prog, _report) = self.tape(&HashSet::new());
+        s.install_tape(prog, self.shared_observed_rules());
         s
+    }
+
+    /// The precision environment this model was compiled under (the
+    /// document's element type and its per-variable ones), which a solve arms
+    /// for its whole run. The `debug_*` right-hand-side entries do not arm it;
+    /// a caller comparing them on a document that declares element types
+    /// holds this guard around the calls, as a solve would.
+    #[doc(hidden)]
+    pub fn debug_precision_env(&self) -> crate::precision::Env {
+        self.precision.clone()
     }
 
     /// Resolve a parameter map into the positional parameter vector once, so the
@@ -749,7 +753,7 @@ impl ArrayCompiled {
         let param_vec = self.build_param_vec(params)?;
         let mut scratch = RhsScratch::new(&self.var_shapes);
         scratch.set_const_arrays(Rc::clone(&self.const_scope));
-        if self.tape_serves_passes() && !tape_disabled() {
+        if self.tape_serves_passes() {
             let (prog, _report) = self.tape(&HashSet::new());
             scratch.install_tape(prog, self.shared_observed_rules());
             scratch.set_exports_active(true);
@@ -1551,9 +1555,7 @@ impl ArrayCompiled {
     /// every integration segment (each segment's fresh RHS scratch gets its
     /// own slab and re-runs the CONST/SEGMENT sections — the same cadence as
     /// the static-observed hoist above). [`crate::Compiler::Interpreter`]
-    /// builds no tape at all — it IS the per-cell oracle — and neither does a
-    /// document whose per-variable element types the tape cannot express
-    /// ([`tape_disabled`]).
+    /// builds no tape at all — it IS the per-cell oracle.
     ///
     /// The build report's fallback list is kept, not dropped: a rule the
     /// tape could not compile is evaluated by the per-cell oracle, whose
@@ -1572,7 +1574,7 @@ impl ArrayCompiled {
         // tape, and the whole-array overlay off under it, so every rule is
         // walked per cell. It is the compiler the caller named, and the only
         // way to reach the oracle.
-        let tape: SolveTape = if self.is_interpreter() || tape_disabled() {
+        let tape: SolveTape = if self.is_interpreter() {
             None
         } else {
             let (prog, report) = self.tape(discrete_forcing);

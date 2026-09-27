@@ -286,6 +286,20 @@ fn native_and_the_interpreter_agree_bit_for_bit() {
     }
 }
 
+/// A document declaring per-variable element types (esm-spec §11.3.1) runs on
+/// the tape under `native`, and lands where the interpreter does. It is not in
+/// [`AGREEMENT_FIXTURES`] because the `xla` lane below refuses such documents.
+#[test]
+fn native_runs_per_variable_element_types_bit_for_bit() {
+    let rel = "tests/fixtures/element_type/float32_state_float64_neighbour.esm";
+    let native = build_rhs(&fixture(rel), Compiler::Native, Rhs::Always)
+        .unwrap_or_else(|e| panic!("{rel} must build under native: {e}"));
+    let report = native.compiler_report();
+    assert_eq!(report.n_oracle(), 0, "{report}");
+    assert_eq!(report.n_taped(), report.rules().len(), "{report}");
+    assert_native_agrees(rel, &[]);
+}
+
 /// Solve `rel` under `native` and under `interpreter` and require the same
 /// trajectory, bit for bit.
 fn assert_native_agrees(rel: &str, u0: &[(&str, f64)]) {

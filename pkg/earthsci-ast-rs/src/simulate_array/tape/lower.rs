@@ -50,6 +50,7 @@ use super::super::driver::{
 };
 use super::super::*;
 use super::ir::*;
+use crate::precision::Precision;
 use crate::types::ExpressionNode;
 use rustc_hash::FxHashMap;
 use std::collections::HashSet;
@@ -227,9 +228,13 @@ enum ObsVal {
 // Builder.
 // ---------------------------------------------------------------------------
 
+/// An instruction and the precision its kernels run at: the one in force
+/// while it was lowered (esm-spec §11.3.1).
+type Tagged = (Instr, Precision);
+
 struct Chunk {
     rule: u32,
-    instrs: Vec<Instr>,
+    instrs: Vec<Tagged>,
 }
 
 pub(crate) struct TapeBuilder<'m> {
@@ -296,7 +301,7 @@ pub(crate) struct TapeBuilder<'m> {
     home: Cadence,
     scope_frames: Vec<ScopeFrame>,
     /// Nested conditional-branch buffers (top = innermost).
-    branch_bufs: Vec<Vec<Instr>>,
+    branch_bufs: Vec<Vec<Tagged>>,
     hoist: FxHashMap<(BoxKey, VnKey), LV>,
     /// Hoist insertions of the CURRENT rule (rollback on bail).
     hoist_journal: Vec<(BoxKey, VnKey)>,
@@ -430,6 +435,12 @@ impl<'m> TapeBuilder<'m> {
     }
 
     fn emit(&mut self, instr: Instr, section: Cadence) {
+        self.emit_tagged(instr, crate::precision::active(), section);
+    }
+
+    /// [`Self::emit`] at a stated precision (a branch's buffered
+    /// instructions keep the precision they were lowered at).
+    fn emit_tagged(&mut self, instr: Instr, prec: Precision, section: Cadence) {
         match &instr {
             Instr::ConstArray { data, out } => {
                 self.known.insert(*out, Known::Data(*data));
@@ -445,15 +456,15 @@ impl<'m> TapeBuilder<'m> {
             _ => {}
         }
         if let Some(buf) = self.branch_bufs.last_mut() {
-            buf.push(instr);
+            buf.push((instr, prec));
             return;
         }
         let stream = &mut self.streams[section as usize];
         match stream.last_mut() {
-            Some(c) if c.rule == self.cur_rule => c.instrs.push(instr),
+            Some(c) if c.rule == self.cur_rule => c.instrs.push((instr, prec)),
             _ => stream.push(Chunk {
                 rule: self.cur_rule,
-                instrs: vec![instr],
+                instrs: vec![(instr, prec)],
             }),
         }
     }
@@ -598,7 +609,7 @@ impl<'m> TapeBuilder<'m> {
 
     /// Close the innermost branch: roll back VN insertions made inside it and
     /// return its instruction buffer.
-    fn pop_branch(&mut self, journal_mark: usize) -> Vec<Instr> {
+    fn pop_branch(&mut self, journal_mark: usize) -> Vec<Tagged> {
         let buf = self.branch_bufs.pop().expect("branch buffer open");
         if let Some(frame) = self.scope_frames.last_mut() {
             while frame.journal.len() > journal_mark {
@@ -743,7 +754,7 @@ impl<'m> TapeBuilder<'m> {
             // where its guard is still standing. Reachable only in a document
             // that declares a per-variable `element_type`.
             VecOp::Precision => {
-                let arg = self.marker_operand(node)?;
+                let (arg, _precision) = self.marker_operand(node)?;
                 self.lower_expr(arg, bx)
             }
             VecOp::Arith(code) => {
@@ -1647,21 +1658,20 @@ impl<'m> TapeBuilder<'m> {
 
     // -- ifelse ---------------------------------------------------------------
 
-    /// The operand of a precision-boundary marker (`crate::precision_infer`),
-    /// which the evaluators run at the element type the marker names. The
-    /// tape resolves its kernels at execution from the precision in force, so
-    /// only a marker that names that same precision is transparent here.
-    fn marker_operand<'n>(&self, node: &'n Arc<ExpressionNode>) -> LResult<&'n Expr> {
+    /// The operand of a precision-boundary marker (`crate::precision_infer`)
+    /// and the precision it names, which the operand is lowered under: every
+    /// instruction it emits is tagged with that precision and runs at it.
+    fn marker_operand<'n>(
+        &self,
+        node: &'n Arc<ExpressionNode>,
+    ) -> LResult<(&'n Expr, Option<crate::precision::PrecisionGuard>)> {
         let [arg] = &node.args[..] else {
             bail_tape!("op: `{}` with arity {}", node.op, node.args.len());
         };
-        match crate::precision_infer::marker_precision(node) {
-            Some(p) if p != crate::precision::active() => bail_tape!(
-                "op: `{}` precision boundary (the tape resolves kernels at execution)",
-                node.op
-            ),
-            _ => Ok(arg),
-        }
+        Ok((
+            arg,
+            crate::precision_infer::marker_precision(node).map(crate::precision::enter),
+        ))
     }
 
     fn lower_ifelse(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
@@ -2624,7 +2634,7 @@ impl<'m> TapeBuilder<'m> {
             }
             "fn" => self.lower_wholesale_closed_fn(node),
             crate::precision_infer::MARKER_OP => {
-                let arg = self.marker_operand(node)?;
+                let (arg, _precision) = self.marker_operand(node)?;
                 self.lower_wholesale(arg)
             }
             "index" => self.lower_wholesale_index(node),
@@ -3138,14 +3148,21 @@ impl<'m> TapeBuilder<'m> {
             _ => bail_tape!("ifelse: branch value boxes differ under a runtime scalar condition"),
         };
         let phi = self.new_slot(&shape, &origin, scalar, self.home);
-        tbuf.push(Instr::Copy {
-            a: self.op_of(&tv),
-            out: phi,
-        });
-        fbuf.push(Instr::Copy {
-            a: self.op_of(&fv),
-            out: phi,
-        });
+        let prec = crate::precision::active();
+        tbuf.push((
+            Instr::Copy {
+                a: self.op_of(&tv),
+                out: phi,
+            },
+            prec,
+        ));
+        fbuf.push((
+            Instr::Copy {
+                a: self.op_of(&fv),
+                out: phi,
+            },
+            prec,
+        ));
         let jmp = Instr::JmpIfZero {
             cond: self.op_of(&cond),
             n_true: tbuf.len() as u32,
@@ -3153,11 +3170,8 @@ impl<'m> TapeBuilder<'m> {
         };
         let sec = self.home;
         self.emit(jmp, sec);
-        for i in tbuf {
-            self.emit(i, sec);
-        }
-        for i in fbuf {
-            self.emit(i, sec);
+        for (i, p) in tbuf.into_iter().chain(fbuf) {
+            self.emit_tagged(i, p, sec);
         }
         Ok(if scalar {
             LV::Scalar(phi)
@@ -3261,6 +3275,10 @@ pub(super) fn build_tape_program(
             status: RuleStatus::Taped,
         });
         let txn = b.txn();
+        // The rule's own working precision, as `materialize_observeds_pass`
+        // arms it: every instruction it emits is tagged with it.
+        let _rule_precision = crate::precision::has_variable_overrides()
+            .then(|| crate::precision::enter(crate::precision::of_variable(&name)));
         let lowered = b.lower_observed_rule(rule);
         match lowered {
             Ok(obs_val) => {
@@ -3942,14 +3960,18 @@ impl<'m> TapeBuilder<'m> {
                 export: export_ix,
             };
             match chunk {
-                Some(ci) => self.streams[home as usize][ci].instrs.push(instr),
+                Some(ci) => self.streams[home as usize][ci]
+                    .instrs
+                    .push((instr, crate::precision::active())),
                 None => {
                     // The rule emitted nothing into its home stream (its whole
                     // value hoisted to an earlier section): open a chunk now,
                     // AT THE RULE'S OWN PLACE in the stream (see
                     // [`Self::open_home_chunk`]) rather than at the end.
                     let ci = self.open_home_chunk(rule_ord as u32, home);
-                    self.streams[home as usize][ci].instrs.push(instr);
+                    self.streams[home as usize][ci]
+                        .instrs
+                        .push((instr, crate::precision::active()));
                 }
             }
             exports.push((name, slot));
@@ -4039,13 +4061,17 @@ impl<'m> TapeBuilder<'m> {
                     },
                 };
                 match self.rule_home_chunk[rule as usize] {
-                    Some(ci) => self.streams[home as usize][ci].instrs.push(instr),
+                    Some(ci) => self.streams[home as usize][ci]
+                        .instrs
+                        .push((instr, crate::precision::active())),
                     // Same ordering rule as the export itself: the chunk goes
                     // at the rule's own place in the stream, never at the end
                     // (issue #207; see [`Self::open_home_chunk`]).
                     None => {
                         let ci = self.open_home_chunk(rule, home);
-                        self.streams[home as usize][ci].instrs.push(instr);
+                        self.streams[home as usize][ci]
+                            .instrs
+                            .push((instr, crate::precision::active()));
                     }
                 }
                 out
@@ -4061,6 +4087,7 @@ impl<'m> TapeBuilder<'m> {
         fuse: Option<super::fuse::SuperopCfg>,
     ) -> TapeProgram {
         let mut instrs: Vec<Instr> = Vec::new();
+        let mut precision: Vec<Precision> = Vec::new();
         let mut provenance: Vec<u32> = Vec::new();
         let mut n_const = 0u32;
         let mut n_segment = 0u32;
@@ -4068,7 +4095,10 @@ impl<'m> TapeBuilder<'m> {
             let start = instrs.len();
             for chunk in stream.drain(..) {
                 provenance.extend(std::iter::repeat_n(chunk.rule, chunk.instrs.len()));
-                instrs.extend(chunk.instrs);
+                for (i, p) in chunk.instrs {
+                    instrs.push(i);
+                    precision.push(p);
+                }
             }
             let count = (instrs.len() - start) as u32;
             match sec {
@@ -4078,8 +4108,15 @@ impl<'m> TapeBuilder<'m> {
             }
         }
 
+        // Uniform — the precision the program runs under — for every document
+        // without a per-variable element type, and then not stored at all.
+        let build = crate::precision::active();
+        if precision.iter().all(|&p| p == build) {
+            precision.clear();
+        }
         let mut prog = TapeProgram {
             instrs,
+            precision,
             n_const,
             n_segment,
             slots: std::mem::take(&mut self.slots),

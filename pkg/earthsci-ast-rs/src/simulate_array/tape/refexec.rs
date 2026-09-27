@@ -60,6 +60,11 @@ pub(super) fn run_reference(
             break;
         }
         let instr = &prog.instrs[pc];
+        let _precision = prog
+            .precision
+            .get(pc)
+            .filter(|&&p| p != crate::precision::active())
+            .map(|&p| crate::precision::enter(p));
         match instr {
             Instr::Bin { op, a, b, out } => {
                 let f = binary_kernel_of(*op);

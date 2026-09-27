@@ -1,0 +1,127 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "Float32StateFloat64Neighbour",
+    "description": "esm-spec 11.3.1: a per-variable element_type beside a variable at the document's precision, with no recurrence. The document is Float64; `x` and the observed `a` are declared Float32; `y`, `b` and the key column `key` are not.\n\n`a = 0.1 * x + 0.37 * (key == 16777217)` is evaluated in binary32 (its variable's precision), except for the key comparison, which precision inference marks binary64: in binary32 16777217 rounds to 16777216 and would match the first key as well. `b = 0.1 * y + (x > 0.31)` is the mirror image, a binary64 rule with a binary32 predicate inside it. So a compiled program has to switch precision between neighbouring rules and inside one rule, and a binding that evaluates everything in one precision gets `a` (or `b`) wrong in its low bits, or the key test wrong outright.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "element_type",
+      "float32",
+      "precision"
+    ]
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "MixedPrecision": {
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-09
+      },
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "shape": ["cells"],
+          "units": "1",
+          "default": 0.3,
+          "element_type": "Float32",
+          "description": "A binary32 state."
+        },
+        "y": {
+          "type": "unknown",
+          "shape": ["cells"],
+          "units": "1",
+          "default": 1.7,
+          "description": "Its binary64 neighbour."
+        },
+        "key": {
+          "type": "unknown",
+          "shape": ["cells"],
+          "units": "1",
+          "description": "Integer keys above 2^24, which binary32 cannot tell apart."
+        },
+        "a": {
+          "type": "unknown",
+          "shape": ["cells"],
+          "units": "1",
+          "element_type": "Float32",
+          "description": "A binary32 observed with a binary64 key comparison inside it."
+        },
+        "b": {
+          "type": "unknown",
+          "shape": ["cells"],
+          "units": "1",
+          "description": "A binary64 observed with a binary32 predicate inside it."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "key",
+          "rhs": { "op": "const", "args": [], "value": [16777216, 16777217, 16777218, 16777217] }
+        },
+        {
+          "lhs": "a",
+          "rhs": {
+            "op": "+",
+            "args": [
+              { "op": "*", "args": [0.1, "x"] },
+              { "op": "*", "args": [0.37, { "op": "==", "args": ["key", 16777217] }] }
+            ]
+          }
+        },
+        {
+          "lhs": "b",
+          "rhs": {
+            "op": "+",
+            "args": [
+              { "op": "*", "args": [0.1, "y"] },
+              { "op": ">", "args": ["x", 0.31] }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq", "args": [], "output_idx": ["i"],
+            "ranges": { "i": { "from": "cells" } },
+            "expr": { "op": "D", "args": [{ "op": "index", "args": ["x", "i"] }], "wrt": "t" }
+          },
+          "rhs": {
+            "op": "faq", "args": [], "output_idx": ["i"],
+            "ranges": { "i": { "from": "cells" } },
+            "expr": {
+              "op": "-",
+              "args": [
+                { "op": "index", "args": ["a", "i"] },
+                { "op": "*", "args": [0.25, { "op": "index", "args": ["x", "i"] }] }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq", "args": [], "output_idx": ["i"],
+            "ranges": { "i": { "from": "cells" } },
+            "expr": { "op": "D", "args": [{ "op": "index", "args": ["y", "i"] }], "wrt": "t" }
+          },
+          "rhs": {
+            "op": "faq", "args": [], "output_idx": ["i"],
+            "ranges": { "i": { "from": "cells" } },
+            "expr": {
+              "op": "-",
+              "args": [
+                { "op": "index", "args": ["b", "i"] },
+                { "op": "*", "args": [0.5, { "op": "index", "args": ["y", "i"] }] }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

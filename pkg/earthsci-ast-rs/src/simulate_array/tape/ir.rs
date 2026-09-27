@@ -1095,6 +1095,13 @@ pub(crate) struct SlabLayout {
 pub(crate) struct TapeProgram {
     /// All instructions: CONST section, then SEGMENT, then CONTINUOUS.
     pub instrs: Vec<Instr>,
+    /// Per instruction, the precision its kernels run at (esm-spec §11.3.1):
+    /// the precision in force while it was lowered — its observed rule's
+    /// variable's, or a precision-boundary marker's inside it. Every executor
+    /// arms it around the instruction. EMPTY when every instruction runs at
+    /// the precision the program executes under, which is every document that
+    /// declares no per-variable element type.
+    pub precision: Vec<crate::precision::Precision>,
     /// Instruction count of the CONST section.
     pub n_const: u32,
     /// Instruction count of the SEGMENT section.

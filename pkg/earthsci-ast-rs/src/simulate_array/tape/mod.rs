@@ -76,7 +76,6 @@ mod tuple_tests;
 #[cfg(feature = "xla")]
 pub mod xla_emit;
 
-pub(crate) use exec::tape_disabled;
 pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
 pub(crate) use ir::*;
 use lower::build_tape_program;
