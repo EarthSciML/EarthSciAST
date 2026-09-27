@@ -81,6 +81,33 @@ probe the raw state vector rather than index the solution by name; `prob.f!`,
 `prob.u0`, `prob.p` and `prob.tspan` are the same objects the old five-tuple
 handed back.
 
+### Reading observeds — `observed_field`
+
+A `Solution` carries the state only. An observed — a variable an algebraic
+equation defines — is read off the Problem with [`observed_field`](@ref), which
+returns the field as a flat vector in row-major cell order (last index fastest):
+
+```julia
+observed_field(prob, "Model.flux")                     # the build-time field
+observed_field(prob, "Model.flux"; u = sol.u[end], t = sol.t[end])
+```
+
+Without `u` it is the field the build defines, which is only meaningful for a
+state-free observed; one that reads the state raises and asks for `u`. With `u`
+(any state vector laid out like `prob.u0`) and `t`, it is the observed at that
+point of a trajectory. Under `compiler = :native` both come from a program
+compiled once per problem and name through the same array cascade as the
+right-hand side, so a read costs one pass over the field; the first read of a
+name adds an `:observed` row to [`compiler_report`](@ref) (`:output_compiled`),
+and an observed native cannot compile is refused by name. Inline-test
+assertions and the observed fields a streaming-output sink names
+(`sink_observed_names`) are read through the same program, at each saved or
+written state. `compiler = :interpreter` answers from the build-time cellwise
+evaluator instead, the oracle the compiled program agrees with bit for bit.
+
+Rust's `observed_trajectory(prob, sol, name)` answers the same question for
+every saved point of a solution at once (API_SPEC §5.8).
+
 !!! note "`build_evaluator` has been retired"
     `build_evaluator` was the public entry point here and is not any more
     (`API_SPEC.md` §8 item 23): it is private behind `esm_problem`, with a

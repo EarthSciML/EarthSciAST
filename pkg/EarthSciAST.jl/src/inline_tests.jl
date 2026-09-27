@@ -661,6 +661,36 @@ end
 # collect the exact qualified / exact-bare stems first, and only fall back to
 # the bare-suffix match when no exact stem is present (a bare-keyed single-model
 # build). Same qualified-first hardening as the Python `state_cells`.
+function _state_cells(var_map::StateLayout, variable::AbstractString,
+                      model::AbstractString)
+    # The same two-pass match, over the layout's blocks rather than its keys.
+    qualified = String(model) * "." * String(variable)
+    exact = _ArrayBlock[]
+    fallback = _ArrayBlock[]
+    for b in _layout_blocks(var_map)
+        if b.name == qualified || b.name == String(variable)
+            push!(exact, b)
+        else
+            bare = occursin('.', b.name) ? String(split(b.name, '.'; limit=2)[2]) : b.name
+            bare == String(variable) && push!(fallback, b)
+        end
+    end
+    return _block_cell_pairs(isempty(exact) ? fallback : exact)
+end
+
+# Every `(cell, slot)` of `blocks`, in slot order and then sorted by cell — the
+# order the key-parsing forms below produce.
+function _block_cell_pairs(blocks)
+    out = Tuple{Vector{Int},Int}[]
+    for b in blocks
+        for slot in b.base:(b.base + b.len - 1)
+            push!(out, (_block_cell(b, slot), slot))
+        end
+    end
+    sort!(out; by=first)
+    return out
+end
+
 function _state_cells(var_map::AbstractDict, variable::AbstractString,
                       model::AbstractString)
     qualified = String(model) * "." * String(variable)
@@ -764,6 +794,25 @@ end
 # A stem whose cell keys do not tile a dense box (a partial or ragged layout) is
 # skipped rather than guessed at. `_parse_cell_key` (tree_walk.jl) is the single
 # inverse of the `name[i,j]` cell-key encoding.
+function _state_scope(var_map::StateLayout, state::AbstractVector)
+    # The layout IS the cell table: each array is one contiguous column-major
+    # block, so its sample is a reshaped slice, with no key made or parsed. A
+    # block whose box does not start at 1 does not tile a dense 1-based array
+    # and is skipped, as below.
+    arrays = Dict{String,Any}()
+    scalars = Dict{String,Float64}()
+    for (i, s) in enumerate(_layout_scalar_names(var_map))
+        i <= length(state) && (scalars[s] = Float64(state[i]))
+    end
+    for b in _layout_blocks(var_map)
+        (all(==(1), b.lo) && b.base + b.len - 1 <= length(state)) || continue
+        ext = Tuple(b.hi[d] - b.lo[d] + 1 for d in eachindex(b.lo))
+        arrays[b.name] = Array{Float64}(reshape(
+            Float64[state[k] for k in b.base:(b.base + b.len - 1)], ext))
+    end
+    return arrays, scalars
+end
+
 function _state_scope(var_map::AbstractDict, state::AbstractVector)
     arrays = Dict{String,Any}()
     scalars = Dict{String,Float64}()
@@ -1061,6 +1110,13 @@ end
 # bare-suffix fallback would splice another component's cells into the field.
 # Identical to the Python `_scoped_state_cells` and the Rust
 # `scoped_state_cells`.
+function _scoped_state_cells(var_map::StateLayout, owner::AbstractString,
+                             variable::AbstractString)
+    qualified = String(owner) * "." * String(variable)
+    return _block_cell_pairs(_ArrayBlock[b for b in _layout_blocks(var_map)
+                                         if b.name == qualified])
+end
+
 function _scoped_state_cells(var_map::AbstractDict, owner::AbstractString,
                              variable::AbstractString)
     qualified = String(owner) * "." * String(variable)
@@ -1078,7 +1134,11 @@ end
 function _observed_field(insp::BuildInspection, file::EsmFile,
                          mname::AbstractString, variable::AbstractString;
                          state_arrays::AbstractDict=Dict{String,Any}(),
-                         state_scalars::AbstractDict=Dict{String,Float64}())
+                         state_scalars::AbstractDict=Dict{String,Float64}(),
+                         ctx=nothing,
+                         u::Union{Nothing,AbstractVector}=nothing,
+                         t::Union{Nothing,Real}=nothing,
+                         var_map::Union{Nothing,AbstractDict}=nothing)
     # `models === nothing` for a document that is reaction systems only, whose
     # components declare SPECIES rather than variables and so have no observed
     # to find here; the assertion falls through to the scalar-slot path.
@@ -1102,6 +1162,25 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # component, and answering with it is the silent wrong answer this
     # resolution exists to remove.
     bare = occursin('.', String(mname)) ? nothing : String(variable)
+    tval = t === nothing ? Float64(get(state_scalars, "t", 0.0)) : Float64(t)
+    # THE COMPILED OBSERVED PROGRAM (observed_program.jl), under a plan that
+    # runs the array cascade: built once per build and name from the right-hand
+    # side's cascade, reading the state `u` through the build's own layout. An
+    # observed it does not take (one the build dropped, a build constant, a
+    # shape it cannot factor) falls through to the build-time route below.
+    if ctx !== nothing && _array_cascade_on()
+        bname = _program_build_name(ctx, qualified, bare)
+        prog = bname === nothing ? nothing : _observed_program!(ctx, bname)
+        if prog !== nothing && prog.dims == exts
+            (u === nothing && prog.reads_state) && throw(SimulateError(
+                "observed '$(variable)' reads the continuous state, so it is not " *
+                "a build-time field; pass the state to read it at, " *
+                "`observed_field(prob, name; u = …, t = …)`"))
+            vals = _run_observed_program(ctx, prog, u, tval)
+            _note_program_read!()
+            return (vals, prog.cells)
+        end
+    end
     _bare_get(d) = bare === nothing ? nothing : get(d, bare, nothing)
     inlined = get(insp.observed_exprs, qualified, _bare_get(insp.observed_exprs))
     # The UN-inlined form: cheap when its producers can be materialized (they
@@ -1118,6 +1197,16 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # observed-field ordering, so `field`/`reference` pair cell-for-cell.
     cells = sort!(vec(Vector{Int}[collect(Int, Tuple(I))
                                   for I in CartesianIndices(Tuple(exts))]))
+    # The build-time route reads the state out of `var_map` at `u`, when the
+    # caller gave a state and not the scope itself.
+    if u !== nothing && var_map !== nothing && isempty(state_arrays) &&
+       isempty(state_scalars)
+        state_arrays, state_scalars = _state_scope(var_map, u)
+    end
+    (t !== nothing && !haskey(state_scalars, "t")) &&
+        (state_scalars = merge(Dict{String,Float64}(String(k) => Float64(v)
+                                                    for (k, v) in state_scalars),
+                               Dict("t" => tval)))
     # NEITHER form published, but the build MATERIALIZED the field: an observed
     # whose body is build-once (a document-literal `const` array, a setup
     # geometry buffer) is dropped from the observed graph precisely because its
@@ -1158,7 +1247,6 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # declination — read ZERO at every asserted time until this was threaded
     # through (issue #406). The callsites seed `state_scalars["t"]` with the
     # sampled time; `0.0` is the build-time default for every other caller.
-    tval = Float64(get(state_scalars, "t", 0.0))
     const_scope = isempty(state_arrays) ? insp.const_arrays :
         merge(Dict{String,Any}(String(k) => v for (k, v) in insp.const_arrays),
               Dict{String,Any}(String(k) => v for (k, v) in state_arrays))
@@ -1391,11 +1479,15 @@ function _scalar_slot(var_map::AbstractDict, variable::AbstractString,
                       model::AbstractString,
                       renames::AbstractDict=Dict{String,String}())::Int
     qualified = String(model) * "." * String(variable)
-    for (name, slot) in var_map
+    # A name with no `[` never equals a cell key, so on a layout only its
+    # scalars (slots 1…n, in slot order) can match — no key is made per cell.
+    names = (var_map isa StateLayout && !occursin('[', variable)) ?
+        (s => i for (i, s) in enumerate(_layout_scalar_names(var_map))) : var_map
+    for (name, slot) in names
         s = String(name)
         (s == qualified || s == String(variable)) && return Int(slot)
     end
-    for (name, slot) in var_map
+    for (name, slot) in names
         s = String(name)
         bare = occursin('.', s) ? String(split(s, '.'; limit=2)[2]) : s
         bare == String(variable) && return Int(slot)
@@ -1725,7 +1817,8 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
                              insp::BuildInspection, eval_file::EsmFile,
                              mname::AbstractString,
                              resolved_base::AbstractString,
-                             renames::AbstractDict=Dict{String,String}())::Float64
+                             renames::AbstractDict=Dict{String,String}();
+                             ctx=nothing)::Float64
     # A solve whose `saveat` lies entirely outside the span saves NOTHING, and
     # `argmin` over the empty trajectory raised `ArgumentError: reducing over an
     # empty collection is not allowed` — an internal Julia message where the
@@ -1765,10 +1858,8 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
         # state-DEPENDENT observed evaluates at the state the solver had. Same
         # function, same scope, same ordering as the `coords` / `reduce` path
         # below — this is a second entry to it, not a second evaluator.
-        state_arrays, state_scalars = _state_scope(var_map, state)
-        state_scalars["t"] = Float64(sim.t[ti])
-        obs = _observed_field(insp, eval_file, owner, loc;
-                              state_arrays=state_arrays, state_scalars=state_scalars)
+        obs = _observed_field(insp, eval_file, owner, loc; ctx=ctx, u=state,
+                              t=Float64(sim.t[ti]), var_map=var_map)
         obs === nothing &&
             throw(InlineTestError("scalar state '$(a.variable)' not found"))
         field, cell_tuples = obs
@@ -1806,10 +1897,8 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
         # constants and parameters, so a STATE-DEPENDENT observed evaluates at
         # the state the solver had; a state-free one never reads those names and
         # is unaffected.
-        state_arrays, state_scalars = _state_scope(var_map, state)
-        state_scalars["t"] = Float64(sim.t[ti])
-        obs = _observed_field(insp, eval_file, owner, loc;
-                              state_arrays=state_arrays, state_scalars=state_scalars)
+        obs = _observed_field(insp, eval_file, owner, loc; ctx=ctx, u=state,
+                              t=Float64(sim.t[ti]), var_map=var_map)
         obs === nothing && throw(InlineTestError(
             "array state '$(a.variable)' has no cells in var_map"))
         field, cell_tuples = obs
@@ -1936,6 +2025,10 @@ struct _SimulateHandle
     # §2.5.10), so a strict build refuses here exactly what it refuses at
     # `observed_field(prob, name)`.
     compiler::Symbol
+    # The problem's compiled-observed-program context (observed_program.jl):
+    # an assertion on an observed reads it through the same program
+    # `observed_field(prob, name; u, t)` runs.
+    ctx::Any
 end
 
 # The §6.6 stand-in for a solution when the document has NOTHING TO INTEGRATE:
@@ -2101,7 +2194,7 @@ function _engine_setup(e::SimulateTestEngine, t)
         return "solver retcode $(sim.retcode)"
     return _SimulateHandle(sim, prob.var_map, insp, target,
                            Dict{String,String}(prob.merged_renames),
-                           compiler(prob))
+                           compiler(prob), _obs_ctx(prob))
 end
 
 # Under the plan of the compiler that BUILT the problem, not the process default:
@@ -2110,7 +2203,7 @@ end
 _engine_actual(e::SimulateTestEngine, h::_SimulateHandle, a) =
     _with_compiler_plan(_compiler_plan(h.compiler)) do
         _evaluate_assertion(a, h.sim, h.var_map, h.insp, h.eval_file, e.mname,
-                            e.resolved_base, h.merged_renames)
+                            e.resolved_base, h.merged_renames; ctx=h.ctx)
     end
 
 _engine_error_message(::SimulateTestEngine, err) =

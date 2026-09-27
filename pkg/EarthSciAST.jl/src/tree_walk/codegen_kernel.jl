@@ -585,6 +585,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
         op = nd.op
         fnsym = op === :+ ? :+ : op === :* ? :* :
                 op === :max ? :max : op === :min ? :min :
+                op === :or ? :_or_combine :
                 throw(_CodegenDecline(:unsupported_op))
         return _cg_foldl(fnsym, exprs)
     elseif k === _NK_SUBCALL

@@ -157,6 +157,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # Every per-cell route under a strict `native`: refused by name, or compiled
     # once and reported under a tier that says so.
     include("percell_route_refusal_test.jl")
+    # The compiled observed program: observed_field(prob, name; u, t), inline
+    # assertions and sink fields read through it, bit for bit the interpreter's.
+    include("observed_program_test.jl")
 
     # ---- Tree-walk evaluator (src/tree_walk.jl) + discrete-cadence data refresh ----
     include("tree_walk_test.jl")
@@ -285,6 +288,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("array_contraction_test.jl")            # whole-array contraction loop nest (ess-array-contraction)
     include("array_contraction_table_test.jl")      # …its gated / ragged / filtered form, table-driven
     include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
+    include("native_probe_fixtures_test.jl")        # native's probe fixtures: rank > 3, fill sections, const subscripts
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
     # `compiler=:interpreter`: an in-place build that skips no prelude slot,
     # which is what the tiering tests above use as their differential oracle.

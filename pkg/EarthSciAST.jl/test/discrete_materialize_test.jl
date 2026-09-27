@@ -36,7 +36,6 @@ _dm_k(offset)  = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
         dm = _DM_ESS.DiscreteMaterializer()
         f!, u0, p, _, vm = _DM_ESS._build_evaluator(file; initial_conditions=ics,
             const_arrays=Dict("W" => _DM_W), param_arrays=Dict("src" => srcB),
-            compiler=:interpreter,  # the discrete-cadence materializer is per cell
             materialize_out=dm)
         @test haskey(dm.caches, "g")             # param-tainted, state-free -> cached
         @test !haskey(dm.caches, "k")            # const-fed -> NOT cached (regression guard)
@@ -50,7 +49,6 @@ _dm_k(offset)  = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
         dm = _DM_ESS.DiscreteMaterializer()
         f!, u0, p, _, vm = _DM_ESS._build_evaluator(file; initial_conditions=ics,
             const_arrays=Dict("W" => _DM_W), param_arrays=Dict("src" => srcB),
-            compiler=:interpreter,  # the discrete-cadence materializer is per cell
             materialize_out=dm)
         du = zero(u0); f!(du, u0, p, 0.0)
         initial = [du[vm["c[$j]"]] for j in 1:3]
@@ -237,5 +235,98 @@ end
         raw .= [9.0, 9.0, 9.0, 9.0]
         dm.materialize!()                      # and refreshes on demand
         @test dm.caches["Fcache"] == [9.0, 9.0, 9.0, 9.0]
+    end
+end
+
+# ════════════════════════════════════════════════════════════════════════════
+# The compiled fill is ONE whole-array kernel per variable, independent of N
+# ════════════════════════════════════════════════════════════════════════════
+# `g[j] = Σ_i W[i,j]·src[i] + 2·F[j]` over two live buffers, at two grid sizes.
+# Under `native` the fill is compiled once through the right-hand side's
+# cascade, so the two builds share their generated code (the same
+# RuntimeGeneratedFunction types — Julia compiles each once, not once per N),
+# land the field on the same tier, and fill a cache bit-identical to the
+# interpreter's per-cell walk.
+_dmn_doc(N) = Dict{String,Any}("esm" => "1.1.0",
+    "metadata" => Dict("name" => "dm_across_n"),
+    "models" => Dict("M" => Dict{String,Any}(
+        "variables" => Dict(
+            "src" => Dict("type" => "parameter", "shape" => Any["i"]),
+            "F" => Dict("type" => "parameter", "shape" => Any["j"]),
+            "g" => Dict("type" => "unknown", "shape" => Any["j"]),
+            "c" => Dict("type" => "unknown", "shape" => Any["j"], "default" => 0.0)),
+        "equations" => Any[
+            Dict("lhs" => "g", "rhs" => Dict("op" => "faq", "args" => Any[],
+                "output_idx" => Any["j"],
+                "ranges" => Dict("j" => Any[1, N], "i" => Any[1, 2]),
+                "expr" => Dict("op" => "+", "args" => Any[
+                    Dict("op" => "*", "args" => Any[
+                        Dict("op" => "index", "args" => Any["W", "i", "j"]),
+                        Dict("op" => "index", "args" => Any["src", "i"])]),
+                    Dict("op" => "*", "args" => Any[2.0,
+                        Dict("op" => "index", "args" => Any["F", "j"])])]))),
+            Dict("lhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["j"],
+                    "ranges" => Dict("j" => Any[1, N]),
+                    "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
+                        "args" => Any["c", "j"])], "wrt" => "t")),
+                 "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["j"],
+                    "ranges" => Dict("j" => Any[1, N]),
+                    "expr" => Dict("op" => "index", "args" => Any["g", "j"])))])))
+
+function _dmn_build(N, compiler)
+    dm = _DM_ESS.DiscreteMaterializer(); insp = _DM_ESS.BuildInspection()
+    W = [sin(0.1 * i * j) for i in 1:2, j in 1:N]
+    ics = Dict{String,Float64}("c[$j]" => 0.0 for j in 1:N)
+    _DM_ESS._build_evaluator(_dmn_doc(N); initial_conditions = ics,
+        const_arrays = Dict("W" => W),
+        param_arrays = Dict("src" => [0.7, -1.3], "F" => [cos(0.2j) for j in 1:N]),
+        materialize_out = dm, inspect = insp, compiler = compiler)
+    return dm, insp.compiler_report
+end
+
+# Every RuntimeGeneratedFunction type reachable from `root` (the walk
+# grid_invariance_test.jl uses on a right-hand side).
+function _dmn_rgf_types(root)
+    RGF = _DM_ESS.RuntimeGeneratedFunctions
+    seen = IdDict{Any,Nothing}(); types = Set{Any}()
+    stack = Any[root]
+    while !isempty(stack)
+        x = pop!(stack)
+        T = typeof(x)
+        (isbitstype(T) || x isa AbstractString || x isa Symbol || x isa Module ||
+         x isa DataType) && continue
+        if ismutable(x)
+            haskey(seen, x) && continue
+            seen[x] = nothing
+        end
+        if x isa RGF.RuntimeGeneratedFunction
+            push!(types, T)
+            continue
+        end
+        if x isa Array
+            eltype(x) <: Number && continue
+            for i in eachindex(x); isassigned(x, i) && push!(stack, x[i]); end
+        elseif x isa AbstractDict
+            continue
+        else
+            for i in 1:nfields(x); isdefined(x, i) && push!(stack, getfield(x, i)); end
+        end
+    end
+    return types
+end
+
+@testset "the compiled discrete fill is shared across N" begin
+    (dmA, repA), (dmB, repB) = _dmn_build(16, :native), _dmn_build(160, :native)
+    tier(rep) = [(r.kind, r.tier) for r in rep.rules if r.rule == "g"]
+    @test tier(repA) == tier(repB)
+    @test only(tier(repA))[1] === :observed
+    @test only(tier(repA))[2] in (:affine, :codegen, :array_contraction_codegen)
+    tA, tB = _dmn_rgf_types(dmA.materialize!), _dmn_rgf_types(dmB.materialize!)
+    @test !isempty(tA)
+    @test tA == tB
+    for (N, dm) in ((16, dmA), (160, dmB))
+        dmi, repi = _dmn_build(N, :interpreter)
+        @test all(dm.caches["g"] .=== dmi.caches["g"])
+        @test tier(repi) == [(:observed, :discrete_percell)]
     end
 end

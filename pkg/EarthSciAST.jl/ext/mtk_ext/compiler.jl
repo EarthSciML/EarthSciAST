@@ -725,6 +725,8 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
     tstops = Float64[]
     sink_vec = collect(Any, sinks)
     save_everystep = true
+    prob_ref = Ref{Any}(nothing)
+    snapshot = EarthSciAST._observed_snapshot(snapshot, sink_vec, prob_ref)
     if !isempty(sink_vec)
         out_cb, out_tstops = EarthSciAST.build_output_callback(;
             sinks = sink_vec, snapshot = snapshot, pre_write = pre_write)
@@ -744,7 +746,7 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
 
     dm = materialize_out === nothing ? EarthSciAST.DiscreteMaterializer() :
          materialize_out
-    return EarthSciAST.EsmProblem(
+    prob = EarthSciAST.EsmProblem(
         f!, u0_run, span, prototype.p, var_map, Dict{String,Any}(),
         Dict{String,Any}(), dm, EarthSciAST._doc_equation_count(doc),
         Ref(sample_time), Ref(false), EarthSciAST.derive_output_meta(doc), doc,
@@ -752,6 +754,8 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
         EarthSciAST._compose_callbacks(cbs), tstops, save_everystep,
         sink_vec, EarthSciAST._distinct_sinks(sink_vec, ck_vec),
         Ref{Any}(nothing), merged_renames)
+    prob_ref[] = prob
+    return prob
 end
 
 # The structural compile, under whichever name the installed ModelingToolkit
@@ -816,13 +820,16 @@ end
 # ModelingToolkit build, so the answer is the compiled system's own observed
 # equation, evaluated through its generated observed function.
 #
-# STATE-FREE only, which is the same contract `:native` answers under: an
-# observed whose value depends on an unknown is not a build-time field, and
-# reporting its value at the seeded state would be a number the name does not
-# mean. The check is symbolic (the equation's variables against the compiled
-# unknowns), so it does not depend on what u0 happens to hold.
+# Without a state, STATE-FREE only, which is the same contract `:native`
+# answers under: an observed whose value depends on an unknown is not a
+# build-time field, and reporting its value at the seeded state would be a
+# number the name does not mean. The check is symbolic (the equation's
+# variables against the compiled unknowns), so it does not depend on what u0
+# happens to hold. Given `u` (in the compiled system's unknown order, the
+# order `prob.u0` has) and `t`, the observed is read at that state and time.
 function EarthSciAST._backend_observed_field(b::MTKCompiler, prob,
-                                             name::AbstractString)
+                                             name::AbstractString;
+                                             u = nothing, t = nothing)
     want = get(prob.merged_renames, String(name), String(name))
     target = _mtk_resolve_field_name(b, prob, want, String(name))
     cells = target isa AbstractVector ? target : [target]
@@ -841,7 +848,8 @@ function EarthSciAST._backend_observed_field(b::MTKCompiler, prob,
         sym === nothing && throw(SimulateError(
             "observed_field: '$name' resolved to '$nm', which the compiled " *
             "ModelingToolkit system does not carry"))
-        dep = _mtk_state_dependency(sym, unknown_set, defs)
+        # Given a state, the observed is read AT it, as under `:native`.
+        dep = u === nothing ? _mtk_state_dependency(sym, unknown_set, defs) : nothing
         dep === nothing || throw(SimulateError(
             "observed_field: '$name' is not a BUILD-TIME field — the compiled " *
             "system's observed equation for it depends on the state '$dep', so " *
@@ -855,7 +863,8 @@ function EarthSciAST._backend_observed_field(b::MTKCompiler, prob,
     # GENERATED A FUNCTION per output cell is the thing that rule exists to
     # refuse; SymbolicIndexingInterface takes a vector of symbols and returns
     # one function that answers the whole row.
-    vals = _MTK_SII.observed(b.system, syms)(prob.u0, prob.p, prob.tspan[1])
+    vals = _MTK_SII.observed(b.system, syms)(u === nothing ? prob.u0 : u, prob.p,
+                                             t === nothing ? prob.tspan[1] : t)
     return Float64[Float64(v) for v in vals]
 end
 

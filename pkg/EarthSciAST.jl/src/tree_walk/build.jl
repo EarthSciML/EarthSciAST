@@ -119,6 +119,13 @@ mutable struct BuildInspection
     # problem built earlier with the same record still reads through it, but
     # its rows would land in another build's report.
     observed_build::Base.RefValue{Any}
+    # What the compiled observed program (`observed_program.jl`) needs from the
+    # latest build, and, per problem (keyed by its `run_file` slot, bound when
+    # `esm_problem` publishes the problem), the context its reads compile
+    # against — each problem's own build, whatever was built with this record
+    # since.
+    observed_ctx::Any
+    observed_ctxs::WeakKeyDict{Base.RefValue{Any},Any}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -129,7 +136,8 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     CompilerReport(:native),
                                     NamedTuple(), Dict{String,Int}(),
                                     Dict{Tuple{Base.RefValue{Any},String},_ObservedMemo}(),
-                                    ReentrantLock(), Ref{Any}(nothing))
+                                    ReentrantLock(), Ref{Any}(nothing),
+                                    nothing, WeakKeyDict{Base.RefValue{Any},Any}())
 
 """
     DiscreteMaterializer()
@@ -141,10 +149,13 @@ three-phase cadence partition (`const ⊏ discrete ⊏ continuous`, `cadence.jl`
 inspectable. A direct `build_evaluator` call without the keyword makes no cut,
 so its discrete-cadence derived fields stay inlined into the per-step RHS.
 
-The fills are resolved, compiled and evaluated once per cell, so a strict
-`compiler = :native` refuses a document that has any discrete-cadence field
-(`compiler_refused_rule`, naming the field); `compiler = :interpreter` runs it.
-Each field is recorded in the compiler report as `:discrete_percell`.
+Under `compiler = :native` each field's fill is one whole-array kernel, compiled
+once through the same cascade as the right-hand side and run into the cache at
+every refill; its compiler-report row is an `:observed` row named after the
+field, carrying the tier the cascade landed it on, and a fill the cascade cannot
+compile is refused by name. `compiler = :interpreter` resolves, compiles and
+walks every cell instead (`:discrete_percell`), the oracle the compiled fill is
+checked against bit for bit.
 
 A derived ARRAY observed whose value depends (transitively) on a live
 `param_arrays` forcing buffer but NOT on any continuous `state` (nor the
@@ -2088,8 +2099,11 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
         end
         # With the construction-time compile-once forms off
         # (`compiler = :interpreter`) the seed is the per-cell reference, as the
-        # field-`ic` fast path is.
-        once = _setup_compile_once_enabled() ?
+        # field-`ic` fast path is. A strict compiler takes neither form below:
+        # the compile-once one walks its compiled tree at every cell, which is a
+        # tree walk per cell as much as the per-cell reference's (its refusal is
+        # after `percell`).
+        once = (_setup_compile_once_enabled() && !_compiler_is_strict()) ?
                _compile_init_once(body, idx_names, array_var_info, var_map,
                                   const_arrays, pgather, param_sym_set, reg_funcs) :
                nothing
@@ -2118,8 +2132,15 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
             # so the first cell is evaluated once, for its diagnostic only,
             # before the refusal is raised.
             percell(first(todo)[1])
-            _refuse_percell_evaluation(rule, "the faq-valued initialization-equation seed",
-                                       length(todo); one_cell = true)
+            _refuse_rule(rule,
+                "no compiled fill serves this faq-valued initialization equation " *
+                "(a fill reads no state and takes no join gate, filter or " *
+                "contraction), and the forms left walk a tree at each of its " *
+                "$(length(todo)) cell" * (length(todo) == 1 ? "" : "s") * ": one " *
+                "compiled once, or one resolved and compiled per cell. That is a " *
+                "tree walk per cell at construction time, which esm-libraries-spec " *
+                "§2.5.10 puts under the same rule as the right-hand side. Build " *
+                "with compiler=:interpreter to run it. " * _ONE_CELL_NOTE)
         end
         _record_rule!(rule, :equation, :setup_percell)
         for (idx_tuple, slot) in todo
@@ -2289,16 +2310,7 @@ end
 function _check_discrete_fill_state_free(node, name::String)
     k = node.kind
     if k === _NK_STATE || k === _NK_TIME
-        what = k === _NK_STATE ? "a continuous state variable" : "the time variable `t`"
-        throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
-            "discrete-cadence var '$name' depends on $what. A discrete-cadence cache " *
-            "is filled only when the forcing data refreshes (its fill kernel runs " *
-            "with u = 0 and t = 0), so it CANNOT depend on a continuous state or on " *
-            "`t` — the field would silently freeze at u = 0 instead of tracking the " *
-            "solution. Either drop the state/`t` dependency from '$name' (keep the " *
-            "state-dependent part in its readers, where it stays on the continuous " *
-            "path), or, if the reference reaches '$name' through an expression field " *
-            "the cadence classifier does not walk, that classifier is the bug."))
+        _throw_discrete_state_dependent(name, k === _NK_STATE)
     elseif k === _NK_CACHED
         throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
             "internal: the discrete-cadence fill kernel for '$name' contains a CSE " *
@@ -2312,17 +2324,39 @@ function _check_discrete_fill_state_free(node, name::String)
     return nothing
 end
 
+function _throw_discrete_state_dependent(name::String, state::Bool)
+    what = state ? "a continuous state variable" : "the time variable `t`"
+    throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
+        "discrete-cadence var '$name' depends on $what. A discrete-cadence cache " *
+        "is filled only when the forcing data refreshes (its fill kernel runs " *
+        "with u = 0 and t = 0), so it CANNOT depend on a continuous state or on " *
+        "`t` — the field would silently freeze at u = 0 instead of tracking the " *
+        "solution. Either drop the state/`t` dependency from '$name' (keep the " *
+        "state-dependent part in its readers, where it stays on the continuous " *
+        "path), or, if the reference reaches '$name' through an expression field " *
+        "the cadence classifier does not walk, that classifier is the bug."))
+end
+
 # ---- Stage: discrete-cadence cache buffers + fill kernels ----
-# Allocate a dense cache buffer per discrete var, register it in `pgather` (so a
-# reader's `index(var, j…)` gathers the cache via `_NK_PARAM_GATHER` — the SAME
-# zero-alloc live-buffer path a raw forcing read uses, NOT an inline beta-reduction),
-# and precompile a per-cell fill node list. `materialize!` evaluates every node into
-# its cache in dependency order — reusing the proven `_seed_faq_init_u0!`
-# per-cell (`_sub_preserving` → `_resolve_indices` → `_compile` → `_eval_node`)
-# pattern, but writing a cache buffer instead of a u0 slot, and reading the live raw
-# buffers + const arrays + upstream caches. Runs once here (initial fill) and again
-# per refresh. `mut` is the caller's `DiscreteMaterializer` sink; it is populated in
-# place. Mutates `pgather` (adds the caches).
+# Allocate a dense cache buffer per discrete var and register it in `pgather`, so
+# a reader's `index(var, j…)` gathers the cache via `_NK_PARAM_GATHER` — the SAME
+# zero-alloc live-buffer path a raw forcing read uses, NOT an inline
+# beta-reduction. Then build each var's fill, in dependency order, and a
+# `materialize!` that runs them all into their caches: once here (the initial
+# fill) and again per refresh. `mut` is the caller's `DiscreteMaterializer` sink;
+# it is populated in place. Mutates `pgather` (adds the caches).
+#
+# Two routes, chosen by the plan in force:
+#
+#   * COMPILED (any array tier on — `native` and `xla`): each var is ONE fill
+#     equation through the same array cascade the right-hand side takes
+#     (`_compile_discrete_fill`), its output slots being the cache itself. The
+#     build is independent of the cache's size, and a fill the cascade cannot
+#     compile is refused by the cascade, naming it.
+#   * PER CELL (`interpreter`, the oracle): every cell is resolved and compiled
+#     as `index(<def>, j…)` and walked with `_eval_node` at each refill —
+#     the `_seed_faq_init_u0!` pattern, writing a cache buffer instead of a u0
+#     slot. Reported `:discrete_percell`, and refused by a strict plan.
 function _build_discrete_materializer!(mut::DiscreteMaterializer,
         discrete_vars, discrete_defs::Dict{String,ASTExpr}, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::AbstractDict{String,Int}, const_arrays::AbstractDict,
@@ -2354,26 +2388,16 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
         pgather[name] = _PGatherArray(vec(cache), collect(size(cache)))
         cells_of[name] = (idx_names, rngs)
     end
-    # 2. Precompile per-cell fill nodes: (cache_vec, linear_index, node). Each cell is
-    #    compiled as `index(<the defining aggregate>, j0…)` and resolved through the
-    #    SAME `_resolve_index_of_faq` expansion the inline reader uses — so a
-    #    reduction over CONTRACTED indices (the conservative regrid Σ_i A_ij·F_src/A_j,
-    #    whose sum-over-source `i` lives in the aggregate's ranges, not the body) is
-    #    expanded, not silently dropped. Scalar observeds are inlined into the
-    #    aggregate first via `resolved_obs` (the inline reader gets them the same way);
-    #    an `index(other_discrete, i)` stays a pgather over that cache (other discrete
+    uz = zeros(Float64, n_states)
+    pp = isnothing(p) ? NamedTuple() : p
+    compiled = _array_cascade_on()
+    state_names = compiled ? _state_base_names(var_map, array_var_info) : Set{String}()
+    # 2. The fills, in dependency order. Scalar observeds are inlined into each
+    #    aggregate via `resolved_obs` (the inline reader gets them the same way); an
+    #    `index(other_discrete, i)` stays a pgather over that cache (other discrete
     #    vars are excluded from `resolved_obs`).
-    fills = Tuple{Vector{Float64},Int,_Node}[]
+    fills = Function[]                    # one per var, in dependency order
     for name in order
-        # Every fill below is resolved and compiled once per cell here and then
-        # walked per cell by `materialize!` — at build, at every refresh boundary
-        # and at every run's `t0`. There is no compiled form of this stage yet
-        # (the fill bodies gather live forcing buffers at the output index, which
-        # the symbolic resolve cannot keep symbolic), so a strict compiler refuses
-        # the discrete variable by name — once its first cell has resolved,
-        # compiled and evaluated, so that a fill no form can evaluate (an
-        # undeclared name, an out-of-range const gather) raises the document's
-        # own error rather than a refusal.
         rop = discrete_defs[name]::OpExpr
         rop_res = isempty(resolved_obs) ? rop : _sub_preserving(rop, resolved_obs)
         rop_res isa OpExpr ||
@@ -2381,19 +2405,41 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
                 "discrete-cadence var '$name' resolved to a non-faq expression"))
         idx_names, rngs = cells_of[name]
         cvec = vec(caches[name])
+        if compiled && !isempty(idx_names)
+            # The cadence cut is CHECKED, not assumed (see
+            # `_check_discrete_fill_state_free`). Here it is checked on the
+            # resolved definition, and the fill compiles against a layout that
+            # holds only its own cache, so a state read the name walk missed
+            # cannot compile at all rather than read u = 0.
+            _check_discrete_def_state_free(rop_res, name, state_names)
+            push!(fills, _compile_discrete_fill(name, rop, Int[length(r) for r in rngs],
+                cvec, resolved_obs, const_arrays, pgather, param_sym_set, reg_funcs, pp))
+            continue
+        end
+        # The per-cell route, and a rank-0 field under either plan (one cell,
+        # compiled once — the scalar walker the right-hand side's scalar
+        # equations use).
         dims = isempty(rngs) ? Int[1] : Int[length(r) for r in rngs]
         lin = LinearIndices(Tuple(dims))
+        cell_fills = Tuple{Int,_Node}[]
         for idx_tuple in Iterators.product(rngs...)
+            # Each cell is compiled as `index(<the defining aggregate>, j0…)` and
+            # resolved through the SAME `_resolve_index_of_faq` expansion the
+            # inline reader uses — so a reduction over CONTRACTED indices (the
+            # conservative regrid Σ_i A_ij·F_src/A_j, whose sum-over-source `i`
+            # lives in the aggregate's ranges, not the body) is expanded, not
+            # silently dropped.
             gather = OpExpr("index", ASTExpr[rop_res::OpExpr,
                 (IntExpr(Int64(idx_tuple[d])) for d in 1:length(idx_names))...])
             g_r = _resolve_indices(gather, array_var_info, var_map, const_arrays, pgather)
             node = _compile(g_r, var_map, param_sym_set, reg_funcs)
-            # The cadence cut is CHECKED, not assumed: a fill kernel that reads `u` or
-            # `t` would freeze at u = 0 (see `_check_discrete_fill_state_free`).
             _check_discrete_fill_state_free(node, name)
-            if _compiler_is_strict()
-                _eval_node(node, zeros(Float64, n_states),
-                           isnothing(p) ? NamedTuple() : p, 0.0)
+            if _compiler_is_strict() && !isempty(idx_names)
+                # Refused once its first cell has resolved, compiled and
+                # evaluated, so that a fill no form can evaluate (an undeclared
+                # name, an out-of-range const gather) raises the document's own
+                # error rather than a refusal.
+                _eval_node(node, uz, pp, 0.0)
                 ncells = prod(dims)
                 _refuse_rule(name,
                     "the discrete-cadence materializer resolves and compiles this " *
@@ -2405,19 +2451,15 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
                     "compiler=:interpreter to run it. " * _ONE_CELL_NOTE)
             end
             l = isempty(idx_tuple) ? 1 : lin[idx_tuple...]
-            push!(fills, (cvec, l, node))
+            push!(cell_fills, (l, node))
         end
-        _record_rule!(name, :observed, :discrete_percell)
+        push!(fills, _percell_discrete_fill(cvec, cell_fills, uz, pp))
+        _record_rule!(name, :observed, isempty(idx_names) ? :scalar : :discrete_percell)
     end
-    # 3. `materialize!`: eval every fill into its cache (dep order preserved by the
-    #    build order). Every fill node was CHECKED state-free above, so the zero `u` /
-    #    `t=0` passed to `_eval_node` is provably never read; `p` carries the scalar
-    #    params a fill may use.
-    uz = zeros(Float64, n_states)
-    pp = isnothing(p) ? NamedTuple() : p
+    # 3. `materialize!`: every fill into its cache, in dependency order.
     function materialize!()
-        @inbounds for (cv, l, node) in fills
-            cv[l] = _eval_node(node, uz, pp, 0.0)
+        for fill in fills
+            fill()
         end
         # The caches just changed IN PLACE under readers gathering them via
         # `_NK_PARAM_GATHER` — invalidate the memoized time-cadence prelude slots
@@ -2431,6 +2473,111 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
     mut.materialize! = materialize!
     mut.var_order = order
     return nothing
+end
+
+# The per-cell route's fill of one cache. Every node was CHECKED state-free, so
+# the zero `u` / `t = 0` passed to `_eval_node` is provably never read; `p`
+# carries the scalar params a fill may use.
+function _percell_discrete_fill(cvec::Vector{Float64}, cell_fills,
+                                uz::Vector{Float64}, pp)
+    return function ()
+        @inbounds for (l, node) in cell_fills
+            cvec[l] = _eval_node(node, uz, pp, 0.0)
+        end
+        return nothing
+    end
+end
+
+# The base names of every continuous state `var_map` lays out: its scalars and
+# the arrays `array_var_info` names. A `StateLayout` answers the scalars
+# directly; a plain map is read key by key, cell keys skipped.
+function _state_base_names(var_map::AbstractDict, array_var_info)
+    out = Set{String}(String(k) for k in keys(array_var_info))
+    if var_map isa StateLayout
+        union!(out, _layout_scalar_names(var_map))
+    else
+        for k in keys(var_map)
+            s = String(k)
+            endswith(s, "]") || push!(out, s)
+        end
+    end
+    return out
+end
+
+# The state-freedom check of the compiled route, on the resolved definition: a
+# reference to a continuous state or to `t` anywhere in it, in any expression
+# field, raises the same error `_check_discrete_fill_state_free` raises on a
+# per-cell node. Loop symbols the definition binds are not references.
+function _check_discrete_def_state_free(def::ASTExpr, name::String,
+                                        state_names::Set{String})
+    bound = Set{String}()
+    foreach_subexpr_once(def) do e
+        e isa OpExpr || return nothing
+        if e.output_idx !== nothing
+            for s in e.output_idx
+                push!(bound, String(s))
+            end
+        end
+        if e.ranges !== nothing
+            for k in keys(e.ranges)
+                push!(bound, String(k))
+            end
+        end
+        nothing
+    end
+    hit = 0          # 1: a state, 2: `t`
+    foreach_subexpr_once(def) do e
+        (hit == 0 && e isa VarExpr && !(e.name in bound)) || return nothing
+        e.name == "t" ? (hit = 2) : (e.name in state_names && (hit = 1))
+        nothing
+    end
+    hit == 0 || _throw_discrete_state_dependent(name, hit == 1)
+    return nothing
+end
+
+# One discrete var's fill, compiled once: the synthesized
+# `faq(D(index(var, i…))) = index(<def>, i…)` equation
+# (`_materialized_fill_equation`, the route a materialized array observed's fill
+# takes) through `_compile_derivative_equations`, over a layout whose only block
+# is the cache itself, so the cascade's output slots ARE the cache's column-major
+# cells and its kernels write the cache in place. Returns a `() -> nothing` that
+# runs the fill. The cascade labels its report row and its refusals by the
+# variable's own name (`_with_rule_alias`), and the row is filed as an observed.
+function _compile_discrete_fill(name::String, def::OpExpr, dims::Vector{Int},
+                                cvec::Vector{Float64}, resolved_obs, const_arrays,
+                                pgather, param_sym_set, reg_funcs, pp)
+    nd = length(dims)
+    blk = name => (ones(Int, nd), copy(dims))
+    L = StateLayout(String[], [blk])
+    avi = Dict{String,Tuple{Vector{Int},Vector{Int}}}(blk)
+    feq = _materialized_fill_equation(name, def, dims)
+    rec = _build_record()
+    n0 = rec === nothing ? 0 : length(rec.rules)
+    se, pcs, aks, sfs, acs = _with_own_state_slot_tables() do
+        _with_rule_alias(name, name) do
+            _compile_derivative_equations(Equation[feq], resolved_obs, avi, L,
+                const_arrays, pgather, param_sym_set, reg_funcs, length(cvec))
+        end
+    end
+    if rec !== nothing
+        for k in (n0 + 1):length(rec.rules)
+            r = rec.rules[k]
+            rec.rules[k] = CompilerRuleRecord(r.rule, :observed, r.tier, r.declines)
+        end
+    end
+    scal = Tuple{Int,_Node}[]
+    for (slot, ex) in se
+        push!(scal, (slot, _compile(ex, L, param_sym_set, reg_funcs)))
+    end
+    append!(scal, pcs)
+    merged, _ = _merge_acc_kernel_classes(aks)
+    # The kernel emission refuses what it cannot generate, naming the rule open
+    # at the time — this one, not the assembled right-hand side.
+    rec === nothing || (rec.current = name)
+    section = _make_kernel_section(merged)
+    rec === nothing || (rec.current = "")
+    levels = ((scal, section, sfs, _make_contraction_section(acs)),)
+    return () -> (_fill_obs_levels!(levels, cvec, pp, 0.0, Float64); nothing)
 end
 
 # ============================================================
@@ -3099,6 +3246,7 @@ end
 # faq-valued initialization equations, the per-derivative compile + CSE,
 # and the final `f!` closure. Returns the full `_build_evaluator_impl` result.
 function _build_compile_evaluator(model::Model, cls, parts, layout;
+        index_sets::AbstractDict=Dict{String,Any}(),
         registered_functions::AbstractDict, const_arrays::AbstractDict,
         const_array_boundaries::AbstractDict, param_arrays::AbstractDict,
         initial_conditions::AbstractDict, tspan, inspect, materialize_out,
@@ -3200,6 +3348,21 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         @_bench :discrete_mat _build_discrete_materializer!(materialize_out, cls.discrete_vars,
             parts.discrete_defs, resolved_obs, layout.array_var_info, layout.var_map,
             const_registry, pgather, param_sym_set, reg_funcs, p, n_states)
+    end
+
+    # ---- The compiled observed program's context (observed_program.jl) ----
+    # Output-time reads compile against this build's ODE layout, its const
+    # arrays, live buffers (discrete caches included) and parameters. Captured
+    # only for a build with a sink to hold it; nothing here runs until a read.
+    if inspect !== nothing
+        inspect.observed_ctx = _ObsProgramCtx(model, cls, parts, index_sets,
+            layout.var_map, layout.array_var_info, n_states, p, param_sym_set,
+            const_registry, pgather, reg_funcs, template_sites,
+            materialize_out === nothing ? Dict{String,Array{Float64}}() :
+                                          materialize_out.caches,
+            merge(Dict{String,ASTExpr}(raw_obs), mat_defs),
+            _state_base_names(layout.var_map, layout.array_var_info),
+            Dict{String,Any}(), ReentrantLock())
     end
 
     # ---- Evaluate faq-valued initialization_equations into u0 ----
@@ -3542,9 +3705,10 @@ end
 # is what every tier gate below — starting with the two pool gates on the next
 # lines — reads its own on/off state from.
 function _build_evaluator_impl(model::Model;
-                               compiler::Symbol = :native,
+                               compiler::Union{Symbol,CompilerPlan} = :native,
                                kwargs...)
-    _xla_check_form(compiler, get(kwargs, :form, :inplace))
+    _xla_check_form(compiler isa Symbol ? compiler : compiler.name,
+                    get(kwargs, :form, :inplace))
     plan = _plan_for(compiler)
     record = _BuildRecord(plan)
     insp = get(kwargs, :inspect, nothing)
@@ -3553,6 +3717,7 @@ function _build_evaluator_impl(model::Model;
     insp isa BuildInspection && lock(insp.observed_lock) do
         empty!(insp.observed_memo)
         insp.observed_build = Ref{Any}(nothing)
+        insp.observed_ctx = nothing
     end
     return _with_compiler_plan(plan) do
         _with_build_record(record) do
@@ -3852,6 +4017,7 @@ function _build_evaluator_impl_inner(model::Model;
 
     # ---- Phase 4: registry + forcing buffers + derivative compile + closure ----
     return _build_compile_evaluator(model, cls, parts, layout;
+        index_sets=index_sets,
         registered_functions=registered_functions, const_arrays=const_arrays,
         const_array_boundaries=const_array_boundaries, param_arrays=param_arrays,
         initial_conditions=initial_conditions, tspan=tspan, inspect=inspect,
@@ -4153,13 +4319,19 @@ end
 # STILL DELIBERATELY NARROW: the bare form is adopted only when it UNLOCKS
 # something — i.e. only when the producer actually contracts. A non-contracting
 # aggregate lowers identically either way, so it keeps the gather form and the
-# default above governs it unchanged. Beyond that, the contracted bounds must all
-# be constant integer ranges and there must be no join gate, which are exactly
-# the preconditions `_unrolled_contraction_body` states for a shared fold
-# template; anything else would take the per-cell path from the bare form too,
-# so there would be nothing to gain and a lowering to change.
+# default above governs it unchanged. A join-gated or ragged producer unwraps
+# too: the whole-array contraction nest takes the bare form as a table.
 #
-# Returns the bare producer when every guard holds, else `rhs` unchanged.
+# THE FOLD CHANGES WITH THE FORM. The bare form is a contraction, which every
+# tier folds from the semiring's 0̄ (`_NK_CONTRACTION` in the per-cell build,
+# the affine tier's unroll and run-time fold, the nest): `0̄ ⊕ t₁ ⊕ t₂ ⊕ …`.
+# The gather form resolved the producer as an expression, whose fold starts
+# from the first term (`_combine_with_reducer`). For `+` the two differ only
+# when every term is `-0.0`, which the 0̄ seed turns into `0.0`, under every
+# compiler alike.
+#
+# Returns the bare producer when the gather is the identity one and the
+# producer contracts, else `rhs` unchanged.
 function _unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
                                  ranges_dict)
     rhs isa OpExpr || return rhs
@@ -4214,27 +4386,16 @@ function _unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
         filter = (a.filter === nothing || isempty(ren)) ? a.filter :
                  _sub_preserving(a.filter, ren),
         expr_body = isempty(ren) ? a.expr_body : _sub_preserving(a.expr_body, ren))
-    # Everything below mirrors what `_compile_faq_equation!` would derive
-    # from `bare`, so each detector sees exactly what it will see later.
+    # The contracted names as `_compile_faq_equation!` will derive them from
+    # `bare`.
     cnames = _contracted_index_names(newranges, idx_names)
     # No contraction ⇒ the gather form already lowers identically. Keep it.
     isempty(cnames) && return rhs
     all(n -> haskey(ranges_dict, n), idx_names) || return rhs
-    cspecs = [collect(newranges[n]) for n in cnames]
-    # A join gate or a variable (ragged) bound: the whole-array contraction nest
-    # takes the bare producer in its table-driven form, and the per-cell path
-    # expands it exactly as it expands the gather form.
-    (all(_is_const_int_range, cspecs) && bare.join_gates === nothing) || return bare
-    range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
-    cconst = Union{Vector{Int},Nothing}[collect(_expand_int_range(s)) for s in cspecs]
-    # A forward prefix scan: the O(N) term-plus-accumulation tier (scan.jl).
-    if length(cnames) == 1 &&
-       _detect_prefix_scan(idx_names, range_iters, cnames, cconst,
-                           bare.join_gates, bare.filter,
-                           _extract_faq_body(bare)) !== nothing
-        return bare
-    end
-    # Otherwise the ordinary contraction tiers.
+    # A forward prefix scan, a constant-bound contraction, a join-gated or a
+    # ragged one: each is a tier's in the bare form (the scan tier, the affine
+    # tier, the nest's static or table form) and hidden from all of them in the
+    # gather form.
     return bare
 end
 
@@ -4382,7 +4543,9 @@ end
 #   :affine_fused_retry — affine succeeded only after fusing the compile-once
 #                         template tier back in
 #   :percell_acc        — the per-cell scalarize fallback, merged into
-#                         indirect-outs `_AccKernel`s (acc_merge.jl)
+#                         indirect-outs `_AccKernel`s (acc_merge.jl); never in
+#                         a strict in-place build, which refuses it
+#   :empty_output       — an equation over an empty output range: no cell
 #   :scan               — a forward cumulative (prefix) reduction, rewritten
 #                         into an affine TERM build plus an O(N) accumulation
 #                         (ess-scan, scan.jl). Counted instead of `:affine`,
@@ -4437,11 +4600,14 @@ const _CASCADE_ROUTING_TIER = Dict{Symbol,Symbol}(
     :affine_fused_retry => :affine,
     :scan               => :scan,
     :array_contraction_codegen => :array_contraction_codegen,
+    # An equation over an empty output range: no cell, nothing built or run.
+    :empty_output       => :empty_output,
     # A per-cell SCALARIZE at build whose cell entries then go to the codegen
     # tier as ordinary access kernels — build cost, not right-hand-side cost.
+    # A strict in-place build refuses it instead.
     :percell_acc        => :percell_build,
-    # The per-cell contraction loop is NOT that: its cells stay `_Node` trees on
-    # `rhs_list` and `_eval_node` walks one per output cell on every call.
+    # The per-cell contraction loop (out-of-place only) is NOT that: its cells
+    # stay `_Node` trees on `rhs_list`, one per output cell.
     :percell_loop       => :interpreter,
     # …except under the forced per-cell reference, where they stay plain scalar
     # nodes on `rhs_list` and are walked per cell on every call.
@@ -4492,13 +4658,29 @@ function _faq_debug_label(lhs_body, idx_names::Vector{String}, range_iters)
             ve isa VarExpr && (name = ve.name)
         end
     end
+    alias = _rule_alias(name)
+    alias === nothing || return alias
     axes = join(("$(idx_names[d])=$(length(range_iters[d]))"
                  for d in eachindex(idx_names)), ",")
     return "D($(name))[$(axes)]"
 end
 
-# The most contraction terms the diagnostic build ahead of a retired-loop
-# refusal unrolls in full (see `_compile_faq_equation!`).
+# A synthesized equation standing for something that is not an equation of the
+# document (a discrete-cadence fill) is labelled, in the report and in every
+# refusal the cascade raises for it, by what it stands for: `_with_rule_alias`
+# maps the target's name to that label for the duration of `f`.
+const _RULE_ALIAS_KEY = :earthsci_rule_alias
+
+function _rule_alias(name::AbstractString)
+    a = get(task_local_storage(), _RULE_ALIAS_KEY, nothing)
+    return a === nothing ? nothing : get(a::Dict{String,String}, String(name), nothing)
+end
+
+_with_rule_alias(f, target::String, label::String) =
+    task_local_storage(f, _RULE_ALIAS_KEY, Dict{String,String}(target => label))
+
+# The most contraction terms the diagnostic build ahead of a per-cell-build
+# refusal builds (see `_refuse_faq_percell`).
 const _REFUSAL_DIAGNOSTIC_TERMS = 1024
 
 function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
@@ -4571,57 +4753,53 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     end
 
     range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
+    label = _faq_debug_label(lhs_body, idx_names, range_iters)
+    # Open this rule's report entry first: every tier below either lands it
+    # (through the routing tally) or refuses it, and a refusal raised several
+    # frames deeper reads the label from here so it can name what it refused.
+    _open_rule!(label, :equation)
 
-    # ── Array-einsum runtime contraction loop (ess-runtime-contraction) ────────
+    # An EMPTY output range (an index set a metaparameter sizes to 0, say) has no
+    # cell to write: there is nothing for any tier to build or for the
+    # right-hand side to run, which is also what the per-cell build does with it
+    # (a loop over no cells). It lands here for every compiler, so a strict one
+    # never refuses an equation over no cells for what its body would cost.
+    if !isempty(range_iters) && any(isempty, range_iters)
+        _tally_cascade!(:empty_output)
+        return nothing
+    end
+
+    # ── Per-cell contraction loop (ess-runtime-contraction), out-of-place only ──
     # An array-producing aggregate `out[i…] = ⊕_{k…} body(i…, k…)` with a UNIFORM
-    # constant-bound inner reduction is compiled to ONE `_NK_CONTRACTION_LOOP` per
-    # OUTPUT cell (the contracted indices k… kept SYMBOLIC, the output indices i…
-    # concrete) instead of unrolling the body into `∏|k…|` terms per cell — so build
-    # IR is O(1) in the reduction length per cell (vs O(∏|k…|), quadratic-or-worse).
-    # The loop cells route to `percell_scalar` (→ `rhs_list`, the scalar-walk
-    # REFERENCE path), so the loop node NEVER reaches the affine /
-    # acc-merge / access-kernel / oop-merge / codegen passes, which model unrolled
-    # scalar terms — the same safety envelope the scalar-reduction loop uses. Gated
-    # exactly as the scalar path (const integer bounds, ⊕∈{+,*,max,min}, no join /
-    # filter, total length ≥ floor) PLUS a loopability PROBE on the first output cell:
-    # if the body indexes STATE at a contracted index (no static per-k slot) the probe
-    # returns `nothing` and the einsum takes the existing affine / unroll path,
-    # unchanged. Small reductions (< floor) also keep the existing path, so the vast
-    # existing array-kernel test surface is byte-for-byte unaffected.
+    # constant-bound reduction compiles to ONE `_NK_CONTRACTION_LOOP` per OUTPUT
+    # cell (the contracted indices kept SYMBOLIC, the output indices concrete)
+    # instead of unrolling the body into `∏|k…|` terms per cell. Its cells are
+    # `_Node` trees on `rhs_list`, and only the out-of-place form has the tier,
+    # because its emitters compile `rhs_list` into a program of their own. The
+    # in-place `f!` would walk each of those trees with `_eval_node` on every
+    # call, one tree walk per output cell, which a compiled compiler does not
+    # do: there the affine tier's run-time fold and the whole-array nest below
+    # take these contractions, whatever their length.
     #
-    # PREEMPTION — which tier is cheaper is NOT a property of the equation alone.
-    # The two build costs are:
+    # Gated as the scalar loop is (constant integer bounds, ⊕ ∈ {+,*,max,min}, no
+    # join or filter, total length ≥ `_contraction_loop_min()`), plus a
+    # loopability probe on the first output cell: a body that indexes STATE at a
+    # contracted index has no static per-k slot, the probe returns `nothing`, and
+    # the equation keeps the unroll.
     #
-    #   contraction loop   one resolve + `_compile` per OUTPUT CELL, each O(1) in
-    #                      the reduction length            →  O(#output cells)
-    #   unroll + affine    one resolve + `_compile` per STRUCTURAL GROUP over a
-    #                      body of ∏|k…| terms             →  O(#groups · ∏|k…|)
-    #
-    # Only the FIRST of those grows with the grid: `#groups` is a fact of the
-    # DOCUMENT (boundary classes, makearray regions), and `∏|k…|` a fact of the
-    # reduction, so the affine tier is the grid-independent one and the loop is
-    # not. Deciding the loop unconditionally would therefore hand the O(#cells)
-    # tier every reduction at or above the floor, INCLUDING the ones the affine
-    # tier compiles once for the whole array — a plain column sum
-    # (`Σ_k dp[i,j,k]·f[i,j,k]·c[i,j,k]`, one output cell per COLUMN) being the
-    # shape a transport model is full of.
-    #
-    # So the loop PREEMPTS the affine tier only when it is the cheaper of the two.
-    # `#groups ≥ 1` always, so `#output cells < ∏|k…|` is the most optimistic
-    # (single-group) form of "the unroll cannot be cheaper": the loop keeps the
-    # equation whenever it holds, which is exactly the small-output /
-    # long-reduction shape the loop exists for. When it does NOT hold the affine
-    # tier is OFFERED the equation first and the loop stays behind it as the
-    # fallback — a declined affine build lands on the same
-    # `_NK_CONTRACTION_LOOP` per-cell path, so no equation loses the loop, and one
-    # the affine tier accepts was never a candidate for a per-cell tier at all.
+    # The loop PREEMPTS the affine tier only when it is the cheaper of the two.
+    # The loop costs one resolve + `_compile` per output cell; the unroll one per
+    # structural group over a body of ∏|k…| terms. `#groups ≥ 1`, so
+    # `#output cells < ∏|k…|` is the most optimistic form of "the unroll cannot
+    # be cheaper", and the loop takes the equation when it holds. Otherwise the
+    # affine tier is offered it first and the loop stays behind as the fallback.
     use_contraction_loop = false
     loop_preempts_affine = false
-    if _contraction_loop_enabled() && !isempty(contract_names) &&
+    if rhs_list_compiled && _contraction_loop_enabled() && !isempty(contract_names) &&
        agg_gates === nothing && agg_filter === nothing &&
        all(c -> c !== nothing, contract_const) &&
        (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
-       !isempty(range_iters) && all(!isempty, range_iters)
+       !isempty(range_iters)
         total_contract = prod(length(c) for c in contract_const)
         if total_contract >= _contraction_loop_min()
             first_idx = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(first(range_iters[d])))
@@ -4636,30 +4814,13 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
             loop_preempts_affine = use_contraction_loop && n_out_cells < total_contract
         end
     end
-    # RETIRED WHERE `rhs_list` IS INTERPRETED. The loop tier's cells are `_Node`
-    # trees on `rhs_list`, which the in-place `f!` walks with `_eval_node` — one
-    # tree walk per output cell on every right-hand-side call, the thing a
-    # compiled compiler promises not to do. There its candidates go to the
-    # whole-array contraction nest instead, whatever the nest's length floor:
-    # the nest has the same admission (constant bounds, no join gate or filter,
-    # ⊕ ∈ {+,*,max,min}), the same fold order, and it is emitted code with a
-    # build that does not grow with either extent. The out-of-place form keeps
-    # the loop, because its emitters compile `rhs_list` and have no arm for the
-    # nest's section.
-    retire_loop = use_contraction_loop && !rhs_list_compiled
     # The affine tier's LOOP form of the contraction (`_AffineReduce`, below):
     # it keeps the contracted indices as loop dims and folds them at run time,
-    # so its build is O(#structural groups) whatever the contraction length —
-    # the preemption rule's premise, an unroll of ∏|k…| terms, does not hold
-    # for it. Only the in-place form has it.
+    # so its build is O(#structural groups) whatever the contraction length.
+    # Only the in-place form has it.
     areduce0 = (rhs_list_compiled || _stencil_disabled()) ? nothing :
         _affine_reduce_form(contract_names, contract_const, agg_gates,
                             rhs_oplus, rhs_zerobar)
-    # Where the loop would have PREEMPTED an unrolling affine tier, the nest
-    # takes that place: it is offered first, and affine only if it declines.
-    # With the loop form on offer the affine tier goes first, and the nest is
-    # what a decline leaves (the block after it).
-    nest_first = retire_loop && loop_preempts_affine && areduce0 === nothing
     # A LONG contraction — as many terms as the loop floor, the length at which
     # a reduction is a loop candidate — never unrolls in the in-place build.
     # The unroll writes one term per contracted index into the kernel, so its
@@ -4677,15 +4838,15 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # DEFAULT array-kernel build; it now carries its own eval-time optimization
     # (per-cell CSE + loop-invariant hoisting on the access spine), so it is a clean
     # win over the vectorized path it supersedes. Returns `nothing` (covered
-    # untouched) for anything it cannot model, falling through to the symbolic /
-    # per-cell chain. With this tier off the equation takes that per-cell
-    # reference, which is the differential test's oracle.
+    # untouched) for anything it cannot model, falling through to the
+    # whole-array nest and then the per-cell build. With this tier off the
+    # equation takes that per-cell reference, which is the differential test's
+    # oracle.
     #
-    # A CONSTANT-bound contraction with no join gate is UNROLLED into a plain
-    # ⊕-fold body (`_unrolled_contraction_body`) and lowered by the SAME box
-    # processor — no runtime reduce, no per-cell loop. A variable-valence bound or
-    # a join gate (either can vary the term set per output cell) is left to the
-    # per-cell path.
+    # A short CONSTANT-bound contraction with no join gate is UNROLLED into a
+    # plain ⊕-fold body (`_unrolled_contraction_body`) and lowered by the SAME
+    # box processor. A variable-valence bound or a join gate (either can vary the
+    # term set per output cell) is not the affine tier's.
     #
     # A FORWARD CUMULATIVE (prefix) reduction is split instead (ess-scan,
     # scan.jl): the body with the contracted symbol renamed to the output
@@ -4693,35 +4854,23 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # body, and a `_ScanFold` accumulates over the result after the kernel
     # section. Both passes are O(N); the unrolled guarded fold below is O(N²).
     # Declining leaves `scan_fold === nothing` and changes nothing.
-    #
-    # Open this rule's report entry first: every tier below either lands it
-    # (through the routing tally) or refuses it, and a refusal raised several
-    # frames deeper reads the label from here so it can name what it refused.
-    _open_rule!(_faq_debug_label(lhs_body, idx_names, range_iters), :equation)
     ac_kwargs = (idx_names=idx_names, ranges_dict=ranges_dict,
                  range_iters=range_iters, contract_names=contract_names,
                  contract_ranges=contract_ranges, rhs_oplus=rhs_oplus,
                  rhs_zerobar=rhs_zerobar, resolved_obs=resolved_obs,
                  array_var_info=array_var_info, var_map=var_map,
                  const_registry=const_registry, pgather=pgather,
-                 param_sym_set=param_sym_set, reg_funcs=reg_funcs,
-                 loop_fallback=retire_loop && !_compiler_is_strict())
-    if nest_first && _array_contraction_enabled()
-        ac = _try_compile_array_contraction(lhs_body, rhs_body, covered; ac_kwargs...)
-        if ac !== nothing
-            _tally_cascade!(:array_contraction_codegen)
-            push!(array_contractions, ac)
-            return nothing
-        end
-    end
+                 param_sym_set=param_sym_set, reg_funcs=reg_funcs)
+    # The compile-once forms offered this equation, in order — what a refusal
+    # below says declined it.
+    offered = Symbol[]
     scan_fold = nothing
     affine_kernels = nothing
     affine_first_try = false
-    # A viable contraction loop preempts this block only when it is the cheaper
-    # tier (see the PREEMPTION note above); otherwise it waits behind it as the
-    # fallback, which is the `use_contraction_loop` read below. A retired loop
-    # preempts nothing: the nest above took its place.
-    if !_stencil_disabled() && (!loop_preempts_affine || retire_loop)
+    # A contraction loop (out-of-place only) preempts this block when it is the
+    # cheaper tier; otherwise it waits behind it as the fallback, which is the
+    # `use_contraction_loop` read below.
+    if !_stencil_disabled() && !loop_preempts_affine
         scan = _detect_prefix_scan(idx_names, range_iters, contract_names,
                                    contract_const, agg_gates, agg_filter, rhs_body)
         # A contraction the affine tier would UNROLL is offered to it as a loop
@@ -4737,6 +4886,7 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         # no lowering of the run-time fold.
         areduce = scan !== nothing ? nothing : areduce0
         if areduce !== nothing
+            push!(offered, :affine_fold)
             loop_body = agg_filter === nothing ? rhs_body :
                 OpExpr("ifelse", ASTExpr[agg_filter, rhs_body, NumExpr(rhs_zerobar)])
             affine_kernels =
@@ -4765,6 +4915,7 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
                 _unrolled_contraction_body(rhs_body, contract_names, contract_const,
                                            agg_filter, rhs_oplus, rhs_zerobar) :
             nothing
+        affine_body === nothing || push!(offered, scan !== nothing ? :scan : :affine)
         # The TERM build runs over the axis the TERMS live on — the output axis
         # itself for a same-range scan, its centres for a staggered one
         # (`scan[4]`, see `_scan_term_iters`). The FOLD below always walks the
@@ -4803,90 +4954,46 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         scan_fold === nothing || push!(scan_folds, scan_fold)
         return nothing
     end
-    # ── Whole-array contraction loop nest (ess-array-contraction) ─────────────
-    # Offered HERE, and only here: every tier above has now either taken the
-    # equation or declined it, so what remains is the per-cell fallback below —
-    # one resolve + `_compile` per OUTPUT CELL, i.e. a build that grows with the
-    # array. This tier's build is O(1) in the contracted extent and O(cells)
-    # machine WORDS (not AST nodes) in the output extent, so it is the only one
-    # of the two whose cost does not track the grid.
+    # ── Whole-array contraction nest (ess-array-contraction) ──────────────────
+    # Offered HERE, once every affine form has declined: what is left below it
+    # is the per-cell build, one resolve + `_compile` per OUTPUT CELL. The nest
+    # compiles ONE term with every index symbolic, plus the flat slot of each
+    # output cell, so its build is O(1) in the contracted extent and O(cells)
+    # machine WORDS (not AST nodes) in the output extent. It takes what the
+    # per-cell build takes, in that build's fold order, term for term: a
+    # constant-bound contraction as static loops; a join-gated or ragged one with
+    # its admitted tuples as a table (`_ACFold`); a filter as the
+    # `ifelse(filter, term, 0̄)` guard the per-cell expansion wraps each term in;
+    # and an equation with no contraction as its bare term.
     #
-    # That ordering IS the admission rule, and it is the same rule the preemption
-    # note above states for the per-cell loop: take the equation when the
-    # alternative's build scales with an extent, leave it alone when a
-    # grid-independent tier already has it. The affine tier is grid-independent
-    # (O(#structural groups)) AND its kernels go on to the codegen tier, so an
-    # equation affine ACCEPTED must not be intercepted — doing so trades a
-    # compiled whole-array kernel for an interpreted nest and costs far more per
-    # RHS call than it ever saves once at build time.
+    # It comes AFTER the affine tier, not before: an equation affine accepts
+    # gets kernels that go on to the class merge and the codegen tier, and
+    # intercepting it would trade those for the nest. The affine ATTEMPT is not
+    # free, which is why a long contraction is never offered to it as an unroll
+    # (`long_contraction`): a declined unroll costs O(#output cells · ∏|k…|).
     #
-    # "Grid-independent" describes an affine build that SUCCEEDS: it emits
-    # O(#structural groups) kernels and they go on to codegen. The ATTEMPT is a
-    # different quantity and is NOT flat. On a contraction the affine tier is
-    # handed the UNROLLED body — ∏|k…| terms — and classifies it over the output
-    # axis, so an attempt that DECLINES still costs O(#output cells · ∏|k…|) in
-    # wall time and build memory, and that cost is paid before this tier is even
-    # offered the equation. On the square source-receptor shape this tier exists
-    # for (#output cells == ∏|k…|) that term is quadratic in the grid, and once
-    # the nest has removed the per-cell build it is the dominant one left.
+    # A decline (a body that will not resolve with its indices symbolic, or a
+    # generated form that cannot model a node) hands `covered` back untouched and
+    # files its reason against the rule, which a refusal below then reports.
+    # With the affine tier off neither is offered: that build is the per-cell
+    # reference, and a reference that went through the nest would not be one.
     #
-    # KNOWN GAP, deliberately not closed here. Telling "affine will decline" from
-    # "affine will accept" without running the attempt needs a cost model the
-    # cascade does not have, and moving this tier ahead of affine is not the fix:
-    # it takes equations affine would have ACCEPTED and trades a codegen'd
-    # whole-array kernel for an interpreted nest, which costs far more per RHS
-    # call than any build-time saving. Neither effect is visible in the node
-    # lowering counter, so do not re-decide the ordering from that counter alone.
-    #
-    # A build with the affine stencil tier off is excluded deliberately: it is
-    # the per-cell reference, and a reference that routes through this tier
-    # instead is not a reference. The floor stays as a conservative guard on
-    # the small-reduction surface, not as a tier-selection knob — above or below
-    # it, this tier is now reached only when the alternative is per-cell.
-    #
-    # `nothing` (a body that will not resolve with its indices symbolic, or a
-    # compile the `_Node` lowering declines) falls through to the per-cell path
-    # with `covered` untouched — correctness first, exactly as the per-cell loop
-    # probe does.
-    #
-    # The floor does not apply to a RETIRED loop candidate: below it the
-    # alternative is the per-cell loop, which is interpreted on every call.
-    nest_ok = _array_contraction_enabled() && !_stencil_disabled() &&
-              !isempty(contract_names) &&
-              (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
-              !isempty(range_iters) && all(!isempty, range_iters)
-    nest_tried = nest_first
-    if !nest_first && nest_ok &&
-       agg_gates === nothing && agg_filter === nothing &&
-       all(c -> c !== nothing, contract_const) &&
-       (retire_loop || prod(length(c) for c in contract_const) >= _array_contraction_min())
-        nest_tried = true
-        ac = _try_compile_array_contraction(lhs_body, rhs_body, covered; ac_kwargs...)
-        if ac !== nothing
-            _tally_cascade!(:array_contraction_codegen)
-            push!(array_contractions, ac)
-            return nothing
+    # The out-of-place form takes only the static form, at or above the length
+    # floor: its emitters compile the per-cell build's cells and have no arm for
+    # the nest's section, and below the floor that build is what they get.
+    if !_stencil_disabled() && _array_contraction_enabled() && !isempty(range_iters)
+        ac = nothing
+        if !rhs_list_compiled
+            push!(offered, :array_contraction)
+            ac = _try_compile_array_contraction(lhs_body, rhs_body, covered; ac_kwargs...,
+                     agg_gates=agg_gates, agg_filter=agg_filter,
+                     contract_const=contract_const)
+        elseif !isempty(contract_names) && agg_gates === nothing && agg_filter === nothing &&
+               all(c -> c !== nothing, contract_const) &&
+               (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
+               prod(length(c) for c in contract_const) >= _array_contraction_min()
+            ac = _try_compile_array_contraction(lhs_body, rhs_body, covered; ac_kwargs...)
         end
-        # A DECLINE is the interesting event: the gate admitted the equation, and
-        # it drops to the per-cell build this tier exists to avoid.
-        # `_try_compile_array_contraction` files the reason against the rule the
-        # cascade has open, the way the affine tier files its own — a tally can
-        # say which tier won, never which one nearly did, and the report is
-        # where that belongs.
-    end
-    # What is left below is the per-cell build: one resolve and compile per
-    # output cell. Every contraction that reaches this point is offered to the
-    # nest in its general form first — join-gated, filtered, a ragged
-    # (per-cell) bound, or a constant one under the floor — so its build is one
-    # symbolic compile plus data: the admitted tuples of a gated or ragged
-    # contraction as a table (`_ACFold`), a filter as the `ifelse` guard the
-    # per-cell expansion wraps each term in. Its fold is that expansion's, term
-    # for term. The out-of-place form keeps the per-cell build, whose cells its
-    # emitters compile. A decline here keeps the per-cell build.
-    if !nest_tried && nest_ok && !rhs_list_compiled
-        ac = _try_compile_array_contraction(lhs_body, rhs_body, covered; ac_kwargs...,
-                 loop_fallback=true, agg_gates=agg_gates, agg_filter=agg_filter,
-                 contract_const=contract_const)
         if ac !== nothing
             _tally_cascade!(:array_contraction_codegen)
             push!(array_contractions, ac)
@@ -4894,49 +5001,21 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         end
     end
 
-    # A contraction the per-cell tier would run interpreted or unrolled has no
-    # compiled form left: a strict compiler refuses it by name. Two routes lead
-    # here. A retired loop candidate that neither the nest nor the affine tier
-    # took has only the per-cell contraction loop, interpreted on every call (a
-    # non-strict build keeps the loop, filed as `:interpreter` by the routing
-    # table). Any other long contraction (see `long_contraction`) has only the
-    # per-cell build, which unrolls it into every output cell. The first output
-    # cell is built first, the way the interpreter builds every cell — unrolled
-    # — so that a body no form can build (an out-of-range const gather, an
-    # undeclared name) raises the document's own error rather than a refusal.
-    # Unrolling costs a tree per term, so past `_REFUSAL_DIAGNOSTIC_TERMS` terms
-    # only the first and last value of each contracted index are built: an
-    # undeclared name shows in any term, and an affine gather is out of range
-    # at an end if anywhere.
-    if (retire_loop || long_contraction) && _compiler_is_strict()
-        if all(!isempty, range_iters)
-            diag_const = prod(length(c) for c in contract_const) <= _REFUSAL_DIAGNOSTIC_TERMS ?
-                contract_const : [unique!([first(c), last(c)]) for c in contract_const]
-            _compile_faq_percell!(Tuple{Int,_Node}[], _AccKernel[], copy(covered),
-                lhs_body, rhs_body;
-                idx_names=idx_names, range_iters=[r[1:1] for r in range_iters],
-                contract_names=contract_names, contract_ranges=contract_ranges,
-                contract_const=diag_const, rhs_oplus=rhs_oplus,
-                rhs_zerobar=rhs_zerobar, agg_gates=agg_gates, agg_filter=agg_filter,
-                resolved_obs=resolved_obs, array_var_info=array_var_info,
-                var_map=var_map, const_registry=const_registry, pgather=pgather,
-                param_sym_set=param_sym_set, reg_funcs=reg_funcs,
-                contraction_loop=false, pooled_cells=Tuple{Int,_Node}[])
-        end
-        nterms = prod(length(c) for c in contract_const)
-        _refuse_rule(
-            _faq_debug_label(lhs_body, idx_names, range_iters),
-            retire_loop ?
-                "this constant-bound contraction declined the whole-array contraction " *
-                "tier and the affine tier, and the only tier left is the per-cell " *
-                "contraction loop, whose cells the right-hand side walks as trees " *
-                "(`_eval_node`, one per output cell) on every call. Build with " *
-                "compiler=:interpreter to run it. " * _ONE_CELL_NOTE :
-                "this contraction of $(nterms) terms declined the affine tier's " *
-                "run-time fold and the whole-array contraction tier, and the only " *
-                "tier left is the per-cell build, which unrolls it into every output " *
-                "cell's code, so that code grows with the contraction. Build with " *
-                "compiler=:interpreter to run it. " * _ONE_CELL_NOTE)
+    # What is left is the per-cell build: one resolve and compile per output
+    # cell, a contraction unrolled into each. In the in-place form a strict
+    # compiler refuses it by name (`_refuse_faq_percell`); `:interpreter` turns
+    # the affine tier off and takes this build as its reference, and the
+    # out-of-place form's per-cell cells are what its emitters compile.
+    if _compiler_is_strict() && !rhs_list_compiled && !_stencil_disabled()
+        _refuse_faq_percell(label, lhs_body, rhs_body, offered;
+            idx_names=idx_names, range_iters=range_iters,
+            contract_names=contract_names, contract_ranges=contract_ranges,
+            contract_const=contract_const, rhs_oplus=rhs_oplus,
+            rhs_zerobar=rhs_zerobar, agg_gates=agg_gates, agg_filter=agg_filter,
+            long_contraction=long_contraction, has_fold_form=areduce0 !== nothing,
+            resolved_obs=resolved_obs, array_var_info=array_var_info,
+            var_map=var_map, const_registry=const_registry, pgather=pgather,
+            param_sym_set=param_sym_set, reg_funcs=reg_funcs)
     end
     # Anything the affine build cannot model takes the per-cell fallback, whose
     # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,
@@ -4954,6 +5033,143 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         param_sym_set=param_sym_set, reg_funcs=reg_funcs,
         contraction_loop=use_contraction_loop, pooled_cells=pooled_cells)
     return nothing
+end
+
+# Thrown to stop the refusal diagnostic's enumeration at its term cap; caught
+# by the diagnostic itself, never seen outside it.
+struct _DiagnosticCap <: EarthSciASTError end
+
+# The refusal for an array equation whose only form left is the in-place
+# per-cell build (`_compile_faq_equation!`, strict compilers). The first output
+# cell is built first, term by term the way the interpreter builds every cell,
+# so that a body no form can build — an undeclared name, an out-of-range const
+# gather — raises the document's own error rather than this refusal. Unrolling
+# costs a tree per term, so the diagnostic is capped at
+# `_REFUSAL_DIAGNOSTIC_TERMS` terms: past that only the first and last value of
+# each contracted index are built (an undeclared name shows in any term, and an
+# affine gather is out of range at an end if anywhere), and a join gate that
+# drives its own enumeration stops at the cap. The note appended to the message
+# says how much of the cell that was.
+function _refuse_faq_percell(label::AbstractString, lhs_body::OpExpr, rhs_body::ASTExpr,
+        offered::Vector{Symbol}; idx_names, range_iters, contract_names, contract_ranges,
+        contract_const, rhs_oplus, rhs_zerobar, agg_gates, agg_filter,
+        long_contraction::Bool, has_fold_form::Bool, resolved_obs, array_var_info,
+        var_map, const_registry, pgather, param_sym_set, reg_funcs)
+    evaluated = _faq_diagnostic_cell(lhs_body, rhs_body; idx_names=idx_names,
+        range_iters=range_iters, contract_names=contract_names,
+        contract_ranges=contract_ranges, contract_const=contract_const,
+        rhs_zerobar=rhs_zerobar, agg_gates=agg_gates, agg_filter=agg_filter,
+        resolved_obs=resolved_obs, array_var_info=array_var_info, var_map=var_map,
+        const_registry=const_registry, pgather=pgather, param_sym_set=param_sym_set,
+        reg_funcs=reg_funcs)
+    tier_words = Dict(:affine_fold => "the affine tier's run-time fold",
+                      :affine => "the affine tier",
+                      :scan => "the prefix-scan tier",
+                      :array_contraction => "the whole-array contraction tier")
+    # Why the affine tier had nothing to try, when it had nothing.
+    unoffered = if any(in((:affine_fold, :affine, :scan)), offered)
+        ""
+    elseif agg_gates !== nothing
+        " (the affine tier takes no join-gated contraction, whose terms vary per output cell)"
+    elseif any(c -> c === nothing, contract_const)
+        " (the affine tier takes no ragged contraction, whose terms vary per output cell)"
+    elseif long_contraction && !has_fold_form
+        " (the affine tier does not unroll a contraction this long, and its " *
+        "run-time fold needs unit-step constant ranges, no join gate and a ⊕ of " *
+        "+, *, max or min; this one is `$(rhs_oplus)`)"
+    else
+        ""
+    end
+    rec = _build_record()
+    declines = rec === nothing ? Pair{Symbol,Symbol}[] : rec.declines
+    why = isempty(declines) ? "" :
+        " (" * join(("$(t): $(first(String(r), 120))" for (t, r) in declines), "; ") * ")"
+    offered_txt = isempty(offered) ?
+        "no compile-once form was offered this array equation" :
+        "this array equation was declined by " *
+        join((tier_words[t] for t in offered), ", ", " and ") * why
+    ncells = prod(length(r) for r in range_iters; init=1)
+    unroll = if isempty(contract_names)
+        ""
+    elseif all(c -> c !== nothing, contract_const)
+        ", unrolling its contraction of $(prod(length(c) for c in contract_const)) " *
+        "terms into each"
+    else
+        ", unrolling its contraction into each"
+    end
+    note = evaluated === :cell ? _ONE_CELL_NOTE :
+           evaluated === :part ? _PART_CELL_NOTE : _NO_CELL_NOTE
+    _refuse_rule(label,
+        offered_txt * unoffered * ". What is left is the per-cell build, which " *
+        "resolves and compiles the equation once per output cell ($(ncells) " *
+        "cell" * (ncells == 1 ? "" : "s") * ")$(unroll), so the build grows " *
+        "with the array. Build with compiler=:interpreter to run it. " * note)
+end
+
+# Build the first output cell of an array equation the way the per-cell build
+# does, for `_refuse_faq_percell`'s diagnostic, and say how much of it was
+# built: `:cell` (every term), `:part` (the capped or ends-only subset) or
+# `:none` (no term, e.g. a join gate that rejected every tuple tried).
+function _faq_diagnostic_cell(lhs_body::OpExpr, rhs_body::ASTExpr; idx_names,
+        range_iters, contract_names, contract_ranges, contract_const, rhs_zerobar,
+        agg_gates, agg_filter, resolved_obs, array_var_info, var_map, const_registry,
+        pgather, param_sym_set, reg_funcs)
+    idx_env = Dict{String,Int}(idx_names[d] => first(range_iters[d])
+                               for d in eachindex(idx_names))
+    idx_exprs = Dict{String,ASTExpr}(k => IntExpr(Int64(v)) for (k, v) in idx_env)
+    sub_lhs = _sub_preserving(lhs_body, idx_exprs)
+    sub_lhs isa OpExpr && sub_lhs.op == "D" ||
+        throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                            "expected D(index(...)) in faq body"))
+    inner = sub_lhs.args[1]
+    inner isa OpExpr && inner.op == "index" ||
+        throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                            "expected index(var,...) inside D"))
+    ve = inner.args[1]
+    ve isa VarExpr ||
+        throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+                            "index first arg must be a variable name"))
+    cname = _cell_key(ve.name, [_eval_const_int(a, _EMPTY_IDX_ENV) for a in inner.args[2:end]])
+    get(var_map, cname, 0) == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE", cname))
+    memo = _BuildMemo()
+    build(term) = begin
+        t = isempty(resolved_obs) ? term : _sub_preserving(term, resolved_obs)
+        _compile(_resolve_indices(t, array_var_info, var_map, const_registry, pgather, memo),
+                 var_map, param_sym_set, reg_funcs, memo)
+        nothing
+    end
+    sub_rhs = _sub_preserving(rhs_body, idx_exprs)
+    # A scalar aggregate nested in the body unrolls, as it does in the per-cell
+    # build (`_ARRAY_CELL_DEPTH`).
+    _ARRAY_CELL_DEPTH[] += 1
+    try
+        if isempty(contract_names)
+            build(sub_rhs)
+            return :cell
+        end
+        iters = Vector{Int}[contract_const[d] === nothing ?
+                    _expand_contract_range(contract_ranges[d], idx_env, const_registry) :
+                    contract_const[d] for d in eachindex(contract_names)]
+        whole = prod(length, iters) <= _REFUSAL_DIAGNOSTIC_TERMS
+        whole || (iters = Vector{Int}[unique!([first(c), last(c)]) for c in iters])
+        filt = agg_filter === nothing ? nothing : _sub_preserving(agg_filter, idx_exprs)
+        n = 0
+        capped = false
+        try
+            _foreach_aggregate_term(sub_rhs, contract_names, iters, agg_gates, filt,
+                                    rhs_zerobar, idx_env) do term
+                build(term)
+                n += 1
+                n >= _REFUSAL_DIAGNOSTIC_TERMS && throw(_DiagnosticCap())
+            end
+        catch err
+            err isa _DiagnosticCap || rethrow()
+            capped = true
+        end
+        return (whole && !capped) ? :cell : n == 0 ? :none : :part
+    finally
+        _ARRAY_CELL_DEPTH[] -= 1
+    end
 end
 
 # ---- Stage: whole-array contraction loop nest (ess-array-contraction) ----
@@ -4975,18 +5191,20 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
         var_map::AbstractDict{String,Int}, const_registry::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs,
-        # True when a non-strict build has the per-cell loop behind this tier:
-        # an emitter decline then falls back to it instead of refusing.
-        loop_fallback::Bool=false,
         # Join gates, a filter, and each contracted range's constant iterator
         # (`nothing` for a ragged, per-cell bound). With gates or a ragged bound
         # the admitted tuples become data (the TABLE form of `_ACFold`); a
         # filter is the per-cell expansion's `ifelse(filter, term, 0̄)` guard,
         # kept symbolic in the term.
         agg_gates=nothing, agg_filter=nothing, contract_const=nothing)
-    table_form = agg_gates !== nothing ||
-                 (contract_const !== nothing && any(c -> c === nothing, contract_const))
-    term = agg_filter === nothing ? rhs_body :
+    # With no contracted index the equation is elementwise: the cell's value is
+    # its term, written as it is with no fold and no seed, and a gate or filter
+    # on the right-hand side does nothing to it — which is what the per-cell
+    # build and the affine tier do with such an equation too.
+    elementwise = isempty(contract_names)
+    table_form = !elementwise && (agg_gates !== nothing ||
+                 (contract_const !== nothing && any(c -> c === nothing, contract_const)))
+    term = (elementwise || agg_filter === nothing) ? rhs_body :
         OpExpr("ifelse", ASTExpr[agg_filter, rhs_body, NumExpr(rhs_zerobar)])
     body = isempty(resolved_obs) ? term : _sub_preserving(term, resolved_obs)
     # The term, resolved once with every index symbolic; the emitter writes the
@@ -5013,7 +5231,7 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
         return nothing
     end
-    fold = table_form ?
+    fold = elementwise ? nothing : table_form ?
         _array_contraction_table(contract_refs, idx_names, range_iters, contract_names,
                                  contract_ranges, contract_const, agg_gates,
                                  rhs_oplus, rhs_zerobar, const_registry) :
@@ -5074,26 +5292,18 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     lens = Int[length(r) for r in rngs]
     # Emit the nest (array_contraction.jl). The whole equation is ONE body, so
     # the emission is O(1) in both extents like the nest itself. A `Symbol` back
-    # is the emitter's decline reason, and this tier has no interpreted form to
-    # demote to, so the decline IS the refusal — raised here, where the rule the
-    # cascade has open is still this equation, rather than several stages later
-    # where only "the assembled right-hand side" is left to name.
+    # is the emitter's decline reason: this tier has no interpreted form, so the
+    # equation goes back to the cascade, whose next and last form is the
+    # per-cell build (refused by a strict compiler, with this reason).
     gen = _try_codegen_array_contraction(out_refs, los, stps, lens, outs, node;
                                          fold=fold)
-    if gen isa Symbol && loop_fallback
+    if gen isa Symbol
         # Hand the cells back untouched: every one was unclaimed on entry (the
         # loop above throws on a second claim), so clearing restores `covered`.
         covered[outs] .= false
         _note_decline!(:array_contraction, gen)
         return nothing
     end
-    gen isa Symbol && _refuse_rule(
-        _faq_debug_label(lhs_body, idx_names, range_iters),
-        "the whole-array contraction tier accepted this equation, but its " *
-        "generated form declined it ($(gen)). Build with " *
-        "compiler=:interpreter, which turns this tier off and takes the " *
-        "equation down the per-cell path, or grow the emitter to cover this " *
-        "construct")
     return gen
 end
 

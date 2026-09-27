@@ -420,7 +420,8 @@ function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
         # evaluated once, for its diagnostic only, before the refusal is raised.
         isempty(slots) || evaluate_expr(expr, binding(1))
         _refuse_percell_evaluation("seed_expression_ic!($(var_name))",
-            "the expression initial-state seed", length(slots); one_cell = true)
+            "the expression initial-state seed", length(slots);
+            one_cell = !isempty(slots))
     end
     for c in eachindex(slots)
         u0[slots[c]] = evaluate_expr(expr, binding(c))
@@ -1236,6 +1237,11 @@ function esm_problem(input, tspan;
     # store. With no sinks nothing here fires and the solve is unchanged.
     sink_vec = collect(Any, sinks)
     save_everystep = true
+    # A sink that names observed fields gets them read at each record's state
+    # through the problem's compiled observed program (the problem is bound
+    # once it exists, below).
+    prob_ref = Ref{Any}(nothing)
+    snapshot = _observed_snapshot(snapshot, sink_vec, prob_ref)
     if !isempty(sink_vec)
         out_cb, out_tstops = build_output_callback(;
             sinks = sink_vec, snapshot = snapshot, pre_write = pre_write)
@@ -1261,14 +1267,40 @@ function esm_problem(input, tspan;
 
     # The record now describes this problem's build (`_observed_field_memo`).
     run_file = Ref{Any}(nothing)
-    lock(() -> (insp.observed_build = run_file), insp.observed_lock)
-    return EsmProblem(f!, u0_run, span, p_built, var_map, merged_param,
+    lock(insp.observed_lock) do
+        insp.observed_build = run_file
+        insp.observed_ctx === nothing || (insp.observed_ctxs[run_file] = insp.observed_ctx)
+    end
+    prob = EsmProblem(f!, u0_run, span, p_built, var_map, merged_param,
                       discrete_providers, dm, _doc_equation_count(doc),
                       Ref(t_sample), Ref(false), derive_output_meta(doc), doc,
                       run_file, param_classes, insp,
                       _compose_callbacks(cbs), tstops, save_everystep,
                       sink_vec, _distinct_sinks(sink_vec, ck_vec), Ref{Any}(nothing),
                       merged_renames)
+    prob_ref[] = prob
+    return prob
+end
+
+# The output callback's snapshot for `sinks`: the caller's own when it passed
+# one, or when no sink names an observed field (`sink_observed_names`);
+# otherwise the state snapshot with each named field read at the record's
+# state and time, `observed_field(prob, name; u, t)` — the flat row-major
+# vector that returns. `prob_ref` holds the problem once it is built.
+function _observed_snapshot(snapshot, sinks, prob_ref::Base.RefValue{Any})
+    snapshot === state_snapshot || return snapshot
+    names = String[]
+    for s in sinks, n in sink_observed_names(s)
+        String(n) in names || push!(names, String(n))
+    end
+    isempty(names) && return snapshot
+    return function (integrator)
+        u = integrator.u
+        t = Float64(integrator.t)
+        obs = Dict{String,Array}(n => observed_field(prob_ref[], n; u = Array(u), t = t)
+                                 for n in names)
+        return StateSnapshot(t, state_snapshot(integrator), obs)
+    end
 end
 
 # The seeded initial state: the build's own `u0`, then the caller's `u0`
@@ -1319,15 +1351,33 @@ function _bare_candidates(model, v::AbstractString)
 end
 
 """
-    observed_field(prob::EsmProblem, name) -> Array
+    observed_field(prob::EsmProblem, name; u = nothing, t = nothing) -> Vector{Float64}
 
-Evaluate the state-free observed `name` at BUILD time through the problem's own
-graph — the public face of the build-observability path (`_observed_field`).
+The observed `name` of the problem, as a flat vector in row-major cell order
+(last index fastest; one element for a scalar observed).
+
+With no `u`, it is the field the BUILD defines: a state-free observed evaluated
+with the parameters the problem was built with, at `t = 0` unless `t` is given.
+With `u` — a state vector laid out like `prob.u0`, such as `sol.u[k]` — it is
+the observed at that state and time `t` (default `0`), which is how a
+STATE-DEPENDENT observed is read; `t` is `sol.t[k]` for a saved solution point.
+
+Under `compiler = :native` the value comes from a program compiled once per
+problem and name — the same array cascade as the right-hand side, run over the
+state — so a read costs one pass over the field whatever `u` and `t` are. Under
+`compiler = :interpreter` it is the build-time cellwise evaluator, the oracle the
+compiled program agrees with bit for bit. The first read of a name files an
+`:observed` row in [`compiler_report`](@ref) naming the route
+(`:output_compiled`, or `:output_compiled_once` / `:output_percell` for the
+cellwise evaluator); an observed native cannot compile is refused by name.
 
 Two arguments (API_SPEC §5.8): build observability moved to a construction-time
 seam, so the caller no longer threads the same [`BuildInspection`](@ref) through
 the build and back into this accessor — the problem owns one. Pass your own via
 `esm_problem(...; inspect = insp)` if you also want to read the sink directly.
+`u` and `t` are keywords, not arguments: the result has the rank of the field
+whatever they are, which API_SPEC §5.8 lets a binding that can overload spell
+this way.
 
 Resolution is the cross-binding rule of API_SPEC §5.8, in precedence order:
 
@@ -1339,61 +1389,79 @@ Resolution is the cross-binding rule of API_SPEC §5.8, in precedence order:
 A bare name against a MULTI-component document is refused, with every qualified
 candidate named, rather than bound to an arbitrary one.
 
-Throws a `SimulateError` when `name` is not a build-time-evaluable observed
-(state-dependent, unsized axis, or not an observed at all).
+Throws a `SimulateError` when `name` is not an evaluable observed (an unsized
+axis, or not an observed at all), or when it reads the state and no `u` was
+given.
 """
-function observed_field(prob::EsmProblem, name::AbstractString)
+function observed_field(prob::EsmProblem, name::AbstractString;
+                        u::Union{Nothing,AbstractVector} = nothing,
+                        t::Union{Nothing,Real} = nothing)
     # A compiler that built its own program answers for its own observeds: under
     # `:mtk` the value lives in the compiled system's OBSERVED EQUATIONS, which
     # this package's build-time observed graph knows nothing about.
     backend = _compiler_backend(prob.f!)
     backend === nothing ||
-        return _backend_observed_field(backend, prob, String(name))
+        return _backend_observed_field(backend, prob, String(name); u = u, t = t)
     # Reading an observed at output time is one of the evaluations
     # esm-libraries-spec §2.5.10 puts under the compiler's refusal rule, so it
     # runs under the plan that BUILT the problem rather than under whatever
     # plan (if any) happens to be in scope on the reader's task.
     return _with_compiler_plan(_compiler_plan(compiler(prob))) do
-        _observed_field_memo(prob, String(name))
+        _observed_field_memo(prob, String(name), u, t)
     end
 end
 
-# The output-time route, memoized on the problem's build and reported in its
-# compiler report. The first read of a name evaluates it — through the
-# compile-once cellwise sweep, or, where that declines, the per-cell
-# resolve-and-compile fallback that a strict compiler refuses — and files one
-# `:observed` row saying which, from what THIS call did (`_counting_percell`).
-# Later reads at the same forcing epoch return the stored field without
-# evaluating anything: the observed is state-free, so only an in-place refresh of
-# a live buffer (which bumps the epoch) can move it. A `remake` of the problem
-# shares the build and so the memo: `observed_field` reports what the build
-# materialized (API_SPEC §5.8), which a `p` or `u0` swap does not change.
-function _observed_field_memo(prob::EsmProblem, name::String)
+# The output-time tiers an `observed_field` row can carry.
+const _OUTPUT_TIERS = (:output_compiled, :output_compiled_once, :output_percell)
+
+# The output-time route, reported in the problem's compiler report and, for the
+# build-time read (no `u`, no `t`), memoized on the problem's build. The first
+# read of a name in this build files one `:observed` row saying which route
+# served it, from what THIS call did (`_counting_program_reads`,
+# `_counting_percell`). A memoized read at the same forcing epoch returns the
+# stored field without evaluating anything: that read is state-free, so only an
+# in-place refresh of a live buffer (which bumps the epoch) can move it. A
+# `remake` of the problem shares the build and so the memo: `observed_field`
+# reports what the build materialized (API_SPEC §5.8), which a `p` or `u0` swap
+# does not change.
+function _observed_field_memo(prob::EsmProblem, name::String,
+                              u::Union{Nothing,AbstractVector} = nothing,
+                              t::Union{Nothing,Real} = nothing)
     insp = prob.inspection
+    memoizable = u === nothing && t === nothing
     epoch = _FORCING_EPOCH[]
     key = (prob.run_file, name)
-    hit = lock(() -> get(insp.observed_memo, key, nothing), insp.observed_lock)
-    hit !== nothing && hit.epoch == epoch && return copy(hit.value)
-    v, percell = _counting_percell() do
-        _observed_field_impl(prob, name)
+    if memoizable
+        hit = lock(() -> get(insp.observed_memo, key, nothing), insp.observed_lock)
+        hit !== nothing && hit.epoch == epoch && return copy(hit.value)
+    end
+    (v, nprog), percell = _counting_percell() do
+        _counting_program_reads() do
+            _observed_field_impl(prob, name; u = u, t = t)
+        end
     end
     lock(insp.observed_lock) do
         # One row per name per build, filed into the report of the build this
-        # record describes: the memo is emptied when a build starts and keyed
-        # by build, so an absent entry is this build's first read of the name,
-        # whatever another problem sharing the record has read.
-        insp.observed_build === prob.run_file && !haskey(insp.observed_memo, key) &&
+        # record describes (a problem built earlier with the same record reads
+        # through it, but files nothing into another build's report).
+        if insp.observed_build === prob.run_file &&
+           !any(r -> r.kind === :observed && r.rule == name && r.tier in _OUTPUT_TIERS,
+                insp.compiler_report.rules)
+            tier = nprog > 0 ? :output_compiled :
+                   percell > 0 ? :output_percell : :output_compiled_once
             push!(insp.compiler_report.rules,
-                  CompilerRuleRecord(name, :observed,
-                                     percell > 0 ? :output_percell : :output_compiled_once,
-                                     Pair{Symbol,Symbol}[]))
-        insp.observed_memo[key] = _ObservedMemo(epoch, copy(v))
+                  CompilerRuleRecord(name, :observed, tier, Pair{Symbol,Symbol}[]))
+        end
+        memoizable && (insp.observed_memo[key] = _ObservedMemo(epoch, copy(v)))
     end
     return v
 end
 
-function _observed_field_impl(prob::EsmProblem, name::AbstractString)
+function _observed_field_impl(prob::EsmProblem, name::AbstractString;
+                              u::Union{Nothing,AbstractVector} = nothing,
+                              t::Union{Nothing,Real} = nothing)
     insp = prob.inspection
+    ctx = _obs_ctx(prob)
     if prob.run_file[] === nothing
         prob.run_file[] = coerce_esm_file(prob.run_doc)
     end
@@ -1401,6 +1469,8 @@ function _observed_field_impl(prob::EsmProblem, name::AbstractString)
     (file.models !== nothing && !isempty(file.models)) || throw(SimulateError(
         "observed_field: prepared document has no model"))
     mname = String(first(keys(file.models)))
+    field_of(k) = _observed_field(insp, file, mname, k; ctx = ctx, u = u, t = t,
+                                  var_map = prob.var_map)
     # A name an `operator_compose` renaming match DELETED addresses a field that
     # MOVED (issue #230). The merge only ever REMOVES a spelling, so resolving
     # here can never shadow a live field.
@@ -1408,7 +1478,7 @@ function _observed_field_impl(prob::EsmProblem, name::AbstractString)
     model = file.models[mname]
     comps = _field_components(model)
     single = length(comps) == 1
-    fld = _observed_field(insp, file, mname, v)
+    fld = field_of(v)
     if fld === nothing && !occursin('.', v)
         # Bare spelling: resolve against the run model's observed tails, but
         # only on a SINGLE-component document (API_SPEC §5.8). On a multi-
@@ -1416,7 +1486,7 @@ function _observed_field_impl(prob::EsmProblem, name::AbstractString)
         cands = _bare_candidates(model, v)
         if single
             for k in cands
-                fld = _observed_field(insp, file, mname, k)
+                fld = field_of(k)
                 fld === nothing || break
             end
         elseif !isempty(cands)
