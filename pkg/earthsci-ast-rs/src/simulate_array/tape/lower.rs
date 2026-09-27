@@ -1861,7 +1861,7 @@ impl<'m> TapeBuilder<'m> {
             Some(f) => self.lower_expr(f, bx)?,
         };
         match keep {
-            LV::Lit(c) if c == 0.0 => Ok(None),
+            LV::Lit(0.0) => Ok(None),
             LV::Lit(_) => self.lower_expr(body, bx).map(Some),
             keep => {
                 self.lazy_depth += 1;
@@ -2353,6 +2353,7 @@ impl<'m> TapeBuilder<'m> {
     /// faults in the oracle's visiting order, and the message it latches
     /// there: `index_into` checks the source dims in order and reports the
     /// first one out of range with no policy.
+    #[allow(clippy::too_many_arguments)]
     fn const_oob_first(
         &self,
         bx: &LBox,
@@ -3569,7 +3570,7 @@ impl<'m> TapeBuilder<'m> {
                     let fv = self.lower_expr(f, &bx)?;
                     match fv {
                         // No tuple is kept: the body never runs.
-                        LV::Lit(c) if c == 0.0 => return Ok(None),
+                        LV::Lit(0.0) => return Ok(None),
                         LV::Lit(_) => None,
                         LV::State(_) | LV::Obs { .. } if self.lv_box(&fv).is_some() => {
                             bail_tape!("reduction: filter reduced to a bare whole-array view")
