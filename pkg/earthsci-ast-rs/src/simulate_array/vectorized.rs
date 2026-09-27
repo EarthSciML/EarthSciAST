@@ -1795,6 +1795,42 @@ pub(super) fn eval_vec_index<'a>(
 /// Vectorized makearray: materialize each region as a whole-array sub-range
 /// write over the region's box (last region wins), reusing the enclosing output
 /// symbols. Returns an array spanning the union bounding box.
+/// Which axes of a `makearray` region an array value of shape `value` covers,
+/// or `None` when it does not fit the region (esm-spec §4.3.2: "an
+/// array-valued expression must match the region's shape (excluding
+/// singleton dimensions)").
+///
+/// A value of the region's rank must match it exactly. A value of LOWER rank
+/// covers the region's non-singleton axes, in order, and must match their
+/// extents — the boundary face `[[1,1],[1,NLAT]]` holding an aggregate over
+/// `j` alone, which is how every §9.6.8 discretization writes its faces. That
+/// is the Julia reference's rule (`_resolve_index_of_makearray`). The value's
+/// elements are placed in row-major order, so the singleton axes are simply
+/// inserted.
+pub(super) fn region_value_axes(value: &[usize], region: &[usize]) -> Option<SmallVec<[bool; 4]>> {
+    if value == region {
+        return Some(SmallVec::from_elem(true, region.len()));
+    }
+    let covered: SmallVec<[bool; 4]> = region.iter().map(|&n| n != 1).collect();
+    let extents: SmallVec<[usize; 4]> = region.iter().copied().filter(|&n| n != 1).collect();
+    (value.len() < region.len() && value == extents.as_slice()).then_some(covered)
+}
+
+/// `value` viewed at the region's rank: the singleton axes
+/// [`region_value_axes`] leaves uncovered inserted, in place.
+pub(super) fn region_value_view<'v>(
+    value: ndarray::ArrayViewD<'v, f64>,
+    covered: &[bool],
+) -> ndarray::ArrayViewD<'v, f64> {
+    let mut v = value;
+    for (a, &c) in covered.iter().enumerate() {
+        if !c {
+            v = v.insert_axis(ndarray::Axis(a));
+        }
+    }
+    v
+}
+
 pub(super) fn eval_vec_makearray<'a>(
     node: &ExpressionNode,
     bx: &VecBox,
@@ -1854,9 +1890,10 @@ pub(super) fn eval_vec_makearray<'a>(
                 (hi - lo + 1) as usize
             })
             .collect();
+        // The legal EMPTY spelling (`stop == start - 1`, §4.3.2) covers no
+        // cell and its value is never consulted.
         if r_shape.contains(&0) {
-            pool.give_array(result);
-            return None;
+            continue;
         }
         // ess-cse: a region has its own `lo`/extent, so a coordinate ramp and
         // every shifted gather mean something different in it — a distinct box,
@@ -1876,16 +1913,29 @@ pub(super) fn eval_vec_makearray<'a>(
                 return None;
             }
         };
-        // An array region value must match the region box exactly.
-        let mismatch = match v.shape() {
-            None => false, // scalar fills the region
-            Some(s) => v.origin().map(|o| o != &r_lo[..]).unwrap_or(true) || s != &r_shape[..],
+        // An array region value must fit the region box (its non-singleton
+        // axes, for a lower-rank value) at the region's origin.
+        let covered = match (v.shape(), v.origin()) {
+            (None, _) => None, // scalar fills the region
+            (Some(s), Some(o)) => match region_value_axes(s, &r_shape) {
+                Some(c)
+                    if o.iter()
+                        .eq((0..r_shape.len()).filter(|&a| c[a]).map(|a| &r_lo[a])) =>
+                {
+                    Some(c)
+                }
+                _ => {
+                    v.release(pool);
+                    pool.give_array(result);
+                    return None;
+                }
+            },
+            (Some(_), None) => {
+                v.release(pool);
+                pool.give_array(result);
+                return None;
+            }
         };
-        if mismatch {
-            v.release(pool);
-            pool.give_array(result);
-            return None;
-        }
         match v {
             VecValue::Scalar(s) => {
                 let mut sub = result.slice_each_axis_mut(|ax| {
@@ -1898,6 +1948,7 @@ pub(super) fn eval_vec_makearray<'a>(
             other => {
                 {
                     let vview = other.view().expect("array operand has a view");
+                    let vview = region_value_view(vview, covered.as_deref().unwrap_or(&[]));
                     let mut sub = result.slice_each_axis_mut(|ax| {
                         let d = ax.axis.index();
                         let s0 = (r_lo[d] - lo_bb[d]) as usize;

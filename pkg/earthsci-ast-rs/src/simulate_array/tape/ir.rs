@@ -48,6 +48,12 @@
 //! * [`Instr::Scan`] is `run_prefix_scan` over a whole box: a running fold
 //!   along one axis, ascending, independently for every position of the
 //!   other axes, writing the inclusive or exclusive partial result.
+//! * [`Instr::Reshape`] is a row-major reinterpretation: the source's
+//!   elements, in row-major order, under the output slot's box.
+//! * [`Instr::Fault`] latches one fail-closed evaluation fault
+//!   (`E_TREEWALK_CONSTARRAY_OOB`, `E_TREEWALK_INDEX_ON_SCALAR`) exactly as
+//!   the per-cell oracle's `latch_gather_fault` does at the same point: the
+//!   FIRST fault latched in an evaluation wins, and the caller drains it.
 //!
 //! Array operands within one instruction share one box (shape + 1-based
 //! origin), checked at lowering time — the same precondition `vec_combine`
@@ -254,6 +260,20 @@ pub(crate) enum Instr {
         src_shape: DimU,
         out: SlotId,
     },
+    /// `out`'s elements, in ROW-MAJOR order, are `src`'s elements in
+    /// row-major order: the same element count under a different box. A
+    /// column-major reshape (`eval_reshape`) is this between two axis
+    /// reversals, which are plain [`Instr::Gather`] permutations.
+    Reshape { src: SrcRef, out: SlotId },
+    /// Latch `faults[fault]` as the evaluation's fail-closed fault, unless an
+    /// earlier one is already latched (the oracle's `latch_gather_fault`,
+    /// which keeps the FIRST). The lowering emits one where the per-cell
+    /// oracle latches for certain whenever this point executes — an
+    /// out-of-range read of a const array with no boundary policy, a
+    /// subscript on a 0-D parameter — and it defines no slot: the value the
+    /// oracle substitutes there (`NaN`) is carried by the ordinary
+    /// instructions around it.
+    Fault { fault: u32 },
     /// Scalar-`ifelse` short circuit: if `cond != 0`, execute the next
     /// `n_true` instructions then skip the following `n_false`; else skip
     /// `n_true` and execute the following `n_false`. The untaken branch is
@@ -301,8 +321,10 @@ impl Instr {
             | Instr::ConstArray { out, .. }
             | Instr::Interp { out, .. }
             | Instr::Reduce { out, .. }
-            | Instr::Scan { out, .. } => Some(*out),
+            | Instr::Scan { out, .. }
+            | Instr::Reshape { out, .. } => Some(*out),
             Instr::JmpIfZero { .. }
+            | Instr::Fault { .. }
             | Instr::Fallback { .. }
             | Instr::Export { .. }
             | Instr::DyWrite { .. }
@@ -358,7 +380,8 @@ impl Instr {
             Instr::Gather { src, .. }
             | Instr::LoadElem { src, .. }
             | Instr::Reduce { src, .. }
-            | Instr::Scan { src, .. } => {
+            | Instr::Scan { src, .. }
+            | Instr::Reshape { src, .. } => {
                 if let SrcRef::Slot(s) = src {
                     f(*s);
                 }
@@ -382,7 +405,7 @@ impl Instr {
                 }
             }
             Instr::JmpIfZero { cond, .. } => op(cond),
-            Instr::Fallback { .. } => {}
+            Instr::Fallback { .. } | Instr::Fault { .. } => {}
             Instr::Export { slot, .. } => f(*slot),
             Instr::DyWrite { write } => f(dy_writes[*write as usize].slot),
             Instr::Fused { spec } => {
@@ -417,6 +440,8 @@ impl Instr {
             Instr::Interp { .. } => "Interp",
             Instr::Reduce { .. } => "Reduce",
             Instr::Scan { .. } => "Scan",
+            Instr::Reshape { .. } => "Reshape",
+            Instr::Fault { .. } => "Fault",
             Instr::JmpIfZero { .. } => "JmpIfZero",
             Instr::Fallback { .. } => "Fallback",
             Instr::Export { .. } => "Export",
@@ -1031,6 +1056,9 @@ pub(crate) struct TapeProgram {
     pub const_data: Vec<ConstArrayData>,
     /// §9.2 `interp.*` constant tables (`Instr::Interp` indexes here).
     pub interp_tables: Vec<InterpTable>,
+    /// Fail-closed fault messages (`Instr::Fault` indexes here), each the
+    /// text the per-cell oracle latches at the same point.
+    pub faults: Vec<String>,
     pub state_vars: Vec<StateRef>,
     /// Observed names resolved through the runtime observed map
     /// (`Operand::Obs`/`SrcRef::Obs` index here).

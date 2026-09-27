@@ -2134,11 +2134,11 @@ fn ab_rank0_reduction_two_contracted_axes() {
     assert_eq!(&src_shape[..], &[n as usize, n as usize]);
 }
 
-/// A rank-0 reduction carrying a §5.3 `filter` stays per-cell on purpose: the
-/// oracle SKIPS an excluded tuple (`continue`), and a mask-to-identity fold is
-/// not bit-identical to skipping. The rule must fall back, not be taped.
+/// A filtered rank-0 reduction tapes: the excluded tuples are SKIPPED (their
+/// term replaced by a value the fold leaves unchanged), so the fold visits
+/// the oracle's terms in the oracle's order.
 #[test]
-fn rank0_reduction_with_a_filter_falls_back() {
+fn ab_rank0_reduction_with_a_filter() {
     let n = 4;
     let doc = json!({
         "esm": "1.1.0",
@@ -2159,20 +2159,8 @@ fn rank0_reduction_with_a_filter_falls_back() {
             ]
         }}
     });
-    // `tot` falls back; `D(s)` still tapes, because the fallback producer's
-    // shape (0-d) is inferable — that is the shape-cascade fix at work.
-    let prog = ab_check(doc, 1, -2.0, 2.0);
-    assert_eq!(opcount(&prog, "Reduce"), 0);
-    let (name, reason) = prog
-        .rules
-        .iter()
-        .find_map(|r| match &r.status {
-            RuleStatus::Fallback(why) => Some((r.name.clone(), why.clone())),
-            RuleStatus::Taped => None,
-        })
-        .expect("one fallback");
-    assert_eq!(name, "tot");
-    assert!(reason.contains("filter"), "{reason}");
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    assert_eq!(reductions(&prog).len(), 1, "one fold");
 }
 
 /// The shape cascade: an observed produced by a rule the tape REFUSES (a
