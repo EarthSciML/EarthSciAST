@@ -121,11 +121,14 @@ end
         @test all(gn[pn.var_map[k]] == gi[j] for (k, j) in pi_.var_map)
     end
 
-    @testset "two contracted indices fold into one accumulator" begin
+    @testset "two contracted indices fold into one accumulator ($(tier))" for
+            (asc, tier) in ((false, :array_contraction_codegen), (true, :affine_reduce))
         # Non-integer data, so the association of the fold shows in the last
         # bit: the expansion's fold is ((0̄ ⊕ t₁₁) ⊕ t₂₁) ⊕ …, one accumulator
         # over the whole (k, l) product, never a sum of per-l partial folds.
-        # The inline `const` keeps the affine tier out, so the nest takes it.
+        # Walked descending, the contraction is the nest's (the affine tier's
+        # run-time fold walks ascending unit-step ranges only); ascending, it is
+        # that fold's, which holds the same one accumulator.
         n, m1, m2 = 5, 7, 6
         w(i, k, l) = (0.001 * (1 + sin(0.7i * k + 0.3)) + 0.25 / (i + k)) * (1 + 0.1l)
         W = [[[w(i, k, l) for l in 1:m2] for k in 1:m1] for i in 1:n]
@@ -150,14 +153,15 @@ end
                     Dict("lhs" => dlhs("y", "i", n),
                          "rhs" => Dict("op" => "faq", "args" => Any[], "reduce" => "+",
                              "output_idx" => Any["i"],
-                             "ranges" => Dict("i" => Any[1, n], "k" => Any[1, m1],
-                                              "l" => Any[1, m2]),
+                             "ranges" => Dict("i" => Any[1, n],
+                                              "k" => asc ? Any[1, m1] : Any[m1, -1, 1],
+                                              "l" => asc ? Any[1, m2] : Any[m2, -1, 1]),
                              "expr" => body))])))
         path = joinpath(mktempdir(), "act_two.esm")
         open(io -> JSON3.write(io, doc), path, "w")
         same, tally, tiers, _, _ = _act_agree(path)
         @test same
-        @test get(tally, :array_contraction_codegen, 0) == 1
+        @test get(tally, tier, 0) == 1
         @test !haskey(tiers, :percell_build)
     end
 

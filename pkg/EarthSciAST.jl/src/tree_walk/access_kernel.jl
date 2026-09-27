@@ -489,6 +489,12 @@ function _eval_acc_contraction(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
             s = max(s, _eval_acc(ch[k], u, p, t, c, n, oln, midx, K, T))
         end
         return s
+    elseif op === :or
+        s = nd.literal
+        @inbounds for k in eachindex(ch)
+            s = _or_combine(s, _eval_acc(ch[k], u, p, t, c, n, oln, midx, K, T))
+        end
+        return s
     else  # :min
         s = nd.literal
         @inbounds for k in eachindex(ch)

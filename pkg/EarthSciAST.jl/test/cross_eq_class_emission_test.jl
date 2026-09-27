@@ -42,7 +42,8 @@
 # the affine build (`:percell_acc` pinned). The whole-array nest takes that
 # bound as a per-cell table when codegen runs; the `codegen=false` builds put
 # the node budget at zero, so it declines there and the cells take the per-cell
-# path this file is about. (d)'s codegen build is therefore the nest.
+# path this file is about, which only a non-strict plan builds (`_xq_build`).
+# (d)'s codegen build is therefore the nest.
 using Test
 using EarthSciAST
 using ForwardDiff
@@ -127,7 +128,12 @@ _xq_probe(n, k) = Float64[1.0 + 0.9 * sin(1.3i + 0.7k) for i in 1:n]
 # no class merge, no kernels at all. `codegen=false` puts the primary
 # emission's node budget at zero — a retained tuning threshold — so the class
 # kernels stay on `kernel_section.kernels` and can be introspected.
-function _xq_build(model, ics; codegen::Bool=true, compiler::Symbol=:native,
+#
+# The default build is `native`'s tier plan with `strict` off: a strict
+# `native` refuses the in-place per-cell build this file is about (it grows with
+# the array), so a non-strict plan is the one that still takes it.
+const _XQ_NATIVE = ESM._plan_with(ESM._compiler_plan(:native); strict=false)
+function _xq_build(model, ics; codegen::Bool=true, compiler=_XQ_NATIVE,
                    const_arrays=Dict{String,Any}())
     withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
         ESM._reset_cascade_tally!()
@@ -191,7 +197,7 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         rref = _xq_build(model, ics; compiler=:interpreter)         # the reference
 
         # The fixture really takes the per-cell path, once per equation. Under
-        # `:native` those cells merge into access kernels (`:percell_acc`);
+        # `native`'s tiers those cells merge into access kernels (`:percell_acc`);
         # under `:interpreter` they stay plain scalar nodes
         # (`:percell_disabled`), which is the reference this file compares to.
         @test get(ron.tally, :percell_acc, 0) == 2
