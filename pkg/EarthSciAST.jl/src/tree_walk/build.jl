@@ -4741,8 +4741,9 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     return nothing
 end
 
-# Thrown to stop the refusal diagnostic's enumeration at its term cap.
-struct _DiagnosticCap <: Exception end
+# Thrown to stop the refusal diagnostic's enumeration at its term cap; caught
+# by the diagnostic itself, never seen outside it.
+struct _DiagnosticCap <: EarthSciASTError end
 
 # The refusal for an array equation whose only form left is the in-place
 # per-cell build (`_compile_faq_equation!`, strict compilers). The first output
