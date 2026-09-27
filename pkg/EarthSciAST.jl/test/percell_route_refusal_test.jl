@@ -133,7 +133,7 @@ _pr_rank4_build(doc, compiler; kw...) =
         (r[2], r[5], insp.compiler_report)
     end
 
-    @testset "a faq initialization equation compiles once, bit-identically" begin
+    @testset "a faq initialization equation is a compiled fill, bit-identically" begin
         body = _op("+", _op("*", _n(0.37), _v("i")), _op("/", _n(1.0), _op("+", _v("i"), _n(2.0))))
         m = _PR.Model(uvar(), [zero_eq()];
                       initialization_equations = [_PR.Equation(_v("u"), faq1(body))])
@@ -141,22 +141,42 @@ _pr_rank4_build(doc, compiler; kw...) =
         ui, vi, ri = seed(m, :interpreter)
         @test all(un[vn["u[$i]"]] === ui[vi["u[$i]"]] for i in 1:5)
         @test all(un[vn["u[$i]"]] == 0.37 * i + 1.0 / (i + 2.0) for i in 1:5)
-        @test [r.rule for r in _pr_rows(rn, :setup_compiled)] == ["init(u)"]
+        @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(u)"]
         @test [r.rule for r in _pr_rows(ri, :setup_percell)] == ["init(u)"]
     end
 
-    @testset "a faq initialization equation left per cell refuses" begin
-        # A live forcing buffer read at the output index does not resolve with
-        # that index symbolic.
-        m = _PR.Model(merge(uvar(), Dict("F" => _PR.ModelVariable(
-                          _PR.ParameterVariable; shape = ["x"]))), [zero_eq()];
+    # A live forcing buffer read at the output index: the fill reads the buffer
+    # the way the right-hand side does.
+    Fvar() = Dict("F" => _PR.ModelVariable(_PR.ParameterVariable; shape = ["x"]))
+    @testset "a faq initialization equation reading a forcing buffer is a compiled fill" begin
+        m = _PR.Model(merge(uvar(), Fvar()), [zero_eq()];
                       initialization_equations = [_PR.Equation(_v("u"),
                           faq1(_op("*", _n(2.0), _idx("F", _v("i")))))])
+        F = collect(1.0:5.0)
+        un, vn, rn = seed(m, :native; param_arrays = Dict("F" => F))
+        ui, vi, _ = seed(m, :interpreter; param_arrays = Dict("F" => F))
+        @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* F
+        @test all(un[vn["u[$i]"]] === ui[vi["u[$i]"]] for i in 1:5)
+        @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(u)"]
+    end
+
+    @testset "a faq initialization equation left per cell refuses" begin
+        # A body that reads a STATE is left to the routes that evaluate it
+        # against the initial state seeded so far, and a live forcing buffer
+        # read at the output index does not resolve with that index symbolic,
+        # so the only route left is the per-cell one.
+        vvar = Dict("v" => _PR.ModelVariable(_PR.UnknownVariable; shape = ["x"],
+                                             default = 0.5))
+        vzero = _PR.Equation(faq1(_Didx("v", _v("i"))), faq1(_n(0.0)))
+        m = _PR.Model(merge(uvar(), Fvar(), vvar), [zero_eq(), vzero];
+                      initialization_equations = [_PR.Equation(_v("u"),
+                          faq1(_op("+", _op("*", _n(2.0), _idx("F", _v("i"))),
+                                   _idx("v", _v("i")))))])
         F = collect(1.0:5.0)
         @test _pr_refuses(() -> seed(m, :native; param_arrays = Dict("F" => F)),
                           "init(u)"; one_cell = true)
         ui, vi, _ = seed(m, :interpreter; param_arrays = Dict("F" => F))
-        @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* F
+        @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* F .+ 0.5
     end
 
     # ── Field initial conditions answered once per field (#482) ───────────────
@@ -560,13 +580,22 @@ _pr_rank4_build(doc, compiler; kw...) =
                 nothing, idx, ["X"], Dict{String,Function}())))
             @test code_of(e) == "E_TREEWALK_UNBOUND_VARIABLE"
         end
-        # …and a makearray that evaluates still refuses.
+        # …and a makearray that evaluates is a compiled fill under native, equal
+        # to the interpreter's per-cell materialization bit for bit.
         ok = _PR.expression_from_json(Dict{String,Any}("op" => "makearray",
-            "args" => Any[], "regions" => Any[Any[Any[1, 5]]],
-            "values" => Any[Dict{String,Any}("op" => "index", "args" => Any["B", 1, 1])]))
-        @test _pr_refuses(() -> native(() -> _PR._materialize_setup_wholearray(ok, copy(env),
-                              nothing, idx, ["X"], Dict{String,Function}())),
-                          "the whole-array setup materializer"; one_cell = true)
+            "args" => Any[], "regions" => Any[Any[Any[1, 2]], Any[Any[3, 5]]],
+            "values" => Any[Dict{String,Any}("op" => "index", "args" => Any["B", 1, 1]),
+                            Dict{String,Any}("op" => "*", "args" => Any[
+                                Dict{String,Any}("op" => "index", "args" => Any["B", 2, 3]),
+                                0.5])]))
+        mat() = _PR._materialize_setup_wholearray(ok, copy(env), nothing, idx, ["X"],
+                                                  Dict{String,Function}())
+        insp = _PR._BuildRecord(_PR._compiler_plan(:native))
+        an = native(() -> _PR._with_build_record(mat, insp))
+        ai = interp(mat)
+        @test isequal(an, ai)
+        @test an == [1.0, 1.0, 6.0, 6.0, 6.0]
+        @test [r.tier for r in insp.rules] == [:setup_codegen]
     end
 
     # ── Field initial conditions: the cell-independent forms, once ────────────

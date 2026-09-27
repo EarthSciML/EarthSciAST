@@ -874,11 +874,14 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
      evaluates the body once per output cell and no codegen tier ever sees the
      section. This is compiler backlog, not a property of the document.
   3. **A construction-time or output-time materialization that resolves and
-     compiles the expression once per cell** — the setup-map per-cell
-     reference, the whole-array setup materializer, the coordinate-expression
-     initial-condition fill and the build-time observed evaluator's per-cell
-     arm. §2.5.10 puts every evaluation a compiler performs for the problem
-     under the same rule, not the right-hand side alone.
+     compiles the expression once per cell** — the per-cell arms of the setup
+     MAP, of the whole-array setup materializer, of the coordinate-expression
+     initial-condition seed and of the faq initialization-equation seed, which
+     are reached only when the compiled fill (each filled through the
+     right-hand-side cascade and emitted code, once) and any compile-once form
+     decline, and the build-time observed evaluator's per-cell arm. §2.5.10
+     puts every evaluation a compiler performs for the problem under the same
+     rule, not the right-hand side alone.
 
   What it does NOT refuse: a per-cell BUILD (an equation scalarized one output
   cell at a time whose cell entries are then compiled — that costs build time
