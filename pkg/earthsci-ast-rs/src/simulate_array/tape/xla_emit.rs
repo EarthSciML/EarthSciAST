@@ -1034,36 +1034,8 @@ impl<'a> Emitter<'a> {
                         &src_shape[..]
                     )));
                 }
-                // One plane per scanned position, folded ascending and written
-                // back in place: the tape's own sweep, so the association is
-                // the interpreter's.
-                let ax = *axis as usize;
-                let plane_at = |k: usize| {
-                    self.wrap(
-                        s.slice_in_dim(k as i64, k as i64 + 1, 1, ax as i64),
-                        "scan: plane",
-                    )
-                };
-                let first = plane_at(0)?;
-                let mut acc = self.splat_like(&first, *init)?;
-                let mut cur = self.zeros(&have)?;
-                for k in 0..have[ax] {
-                    let plane = plane_at(k)?;
-                    if *inclusive {
-                        acc = self.bin(*op, &acc, &plane)?;
-                    }
-                    let starts: Vec<XlaOp> = (0..have.len())
-                        .map(|d| self.ci(if d == ax { k as i64 } else { 0 }))
-                        .collect::<R<Vec<_>>>()?;
-                    cur = self.wrap(
-                        cur.dynamic_update_slice(&acc, &starts),
-                        "scan: dynamic_update_slice",
-                    )?;
-                    if !*inclusive {
-                        acc = self.bin(*op, &acc, &plane)?;
-                    }
-                }
-                self.define(*out, cur);
+                let v = self.emit_scan_loop(*op, *init, &s, &have, *axis as usize, *inclusive)?;
+                self.define(*out, v);
             }
             Instr::TableGather { src, table, out } => {
                 let s = self.src(src)?;
@@ -1710,6 +1682,80 @@ impl<'a> Emitter<'a> {
             base.scatter(&cell, &terms, &comp, &[], &[0], &[0], 1),
             "segmented reduce: scatter",
         )
+    }
+
+    /// Lower one [`Instr::Scan`] as ONE `while` loop over the scanned axis,
+    /// so the program's size does not grow with the scan's length.
+    ///
+    /// The loop carries `(k, src, acc, out)`: step `k` slices plane `k` of
+    /// `src`, combines it into the running `acc` (a plane-shaped value), and
+    /// writes the inclusive or exclusive partial into plane `k` of `out`.
+    /// Planes are folded strictly in ascending order, one elementwise combine
+    /// per step, so every position folds its terms in the tape's own
+    /// association: this lowering adds no reordering of its own.
+    fn emit_scan_loop(
+        &self,
+        op: BinCode,
+        init: f64,
+        src: &XlaOp,
+        dims: &[usize],
+        ax: usize,
+        inclusive: bool,
+    ) -> R<XlaOp> {
+        use xla::Shape;
+        let full: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+        let mut plane = full.clone();
+        plane[ax] = 1;
+        let carried = Shape::tuple(vec![
+            Shape::array::<i64>(vec![]),
+            Shape::array::<f64>(full.clone()),
+            Shape::array::<f64>(plane.clone()),
+            Shape::array::<f64>(full.clone()),
+        ]);
+        let n = full[ax];
+
+        let cb = XlaBuilder::new("scan_cond");
+        let st = self.wrap(cb.parameter_s(0, &carried, "st"), "scan cond: parameter")?;
+        let k = self.wrap(st.get_tuple_element(0), "scan cond: k")?;
+        let bound = self.wrap(cb.c0(n), "scan cond: bound")?;
+        let cond = self.wrap(k.lt(&bound), "scan cond: k < n")?;
+        let cond = cond
+            .build()
+            .map_err(|e| self.err(format!("scan cond build: {e}")))?;
+
+        let bb = XlaBuilder::new("scan_body");
+        let st = self.wrap(bb.parameter_s(0, &carried, "st"), "scan body: parameter")?;
+        let part = |i: i64| self.wrap(st.get_tuple_element(i), "scan body: unpack");
+        let (k, s, acc, out) = (part(0)?, part(1)?, part(2)?, part(3)?);
+        let zero = self.wrap(bb.c0(0i64), "scan body: zero")?;
+        let starts: Vec<XlaOp> = (0..full.len())
+            .map(|d| if d == ax { k.clone() } else { zero.clone() })
+            .collect();
+        let pl = self.wrap(s.dynamic_slice(&starts, &plane), "scan body: plane")?;
+        let next = self.bin(op, &acc, &pl)?;
+        let written = if inclusive { &next } else { &acc };
+        let out = self.wrap(
+            out.dynamic_update_slice(written, &starts),
+            "scan body: write plane",
+        )?;
+        let one = self.wrap(bb.c0(1i64), "scan body: one")?;
+        let k1 = self.wrap(k.add_(&one), "scan body: k + 1")?;
+        let body = self.wrap(bb.tuple(&[k1, s, next, out]), "scan body: pack")?;
+        let body = body
+            .build()
+            .map_err(|e| self.err(format!("scan body build: {e}")))?;
+
+        let acc0 = {
+            let c = self.c(init)?;
+            self.wrap(c.broadcast(&plane), "scan: initial accumulator")?
+        };
+        let start = self.wrap(
+            self.b
+                .tuple(&[self.ci(0)?, src.clone(), acc0, self.zeros(dims)?]),
+            "scan: initial state",
+        )?;
+        let res = self.wrap(XlaOp::while_(cond, body, start), "scan: while")?;
+        self.wrap(res.get_tuple_element(3), "scan: result")
     }
 
     /// The variable whose flat block contains `flat`.

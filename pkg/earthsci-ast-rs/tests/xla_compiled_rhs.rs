@@ -845,3 +845,90 @@ fn scans_assemblies_and_promoted_contractions_lower() {
     }
 }
 
+/// A prefix-scan document over `n` cells: one inclusive and one exclusive
+/// running sum, both read by the state's tendency.
+fn scan_doc(n: usize) -> String {
+    let u_j = r#"{"op": "index", "args": ["u", "j"]}"#;
+    format!(
+        r#"{{
+  "esm": "1.1.0",
+  "metadata": {{"name": "XlaScanProbe"}},
+  "index_sets": {{"x": {{"kind": "interval", "size": {n}}}}},
+  "models": {{"M": {{
+    "variables": {{
+      "u": {{"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0}},
+      "incl": {{"type": "unknown", "units": "1", "shape": ["x"]}},
+      "excl": {{"type": "unknown", "units": "1", "shape": ["x"]}}
+    }},
+    "equations": [
+      {{"lhs": "incl", "rhs": {{"op": "faq", "args": [], "output_idx": ["i"],
+          "ranges": {{"i": {{"from": "x"}}, "j": {{"from": "x"}}}},
+          "filter": {{"op": "<=", "args": ["j", "i"]}},
+          "expr": {{"op": "*", "args": [{u_j}, 0.1]}}}}}},
+      {{"lhs": "excl", "rhs": {{"op": "faq", "args": [], "output_idx": ["i"],
+          "ranges": {{"i": {{"from": "x"}}, "j": {{"from": "x"}}}},
+          "filter": {{"op": "<", "args": ["j", "i"]}},
+          "expr": {{"op": "*", "args": [{u_j}, 0.3]}}}}}},
+      {{"lhs": {{"op": "faq", "args": [], "output_idx": ["i"],
+               "expr": {{"op": "D", "args": [{{"op": "index", "args": ["u", "i"]}}], "wrt": "t"}},
+               "ranges": {{"i": {{"from": "x"}}}}}},
+       "rhs": {{"op": "faq", "args": [], "output_idx": ["i"], "ranges": {{"i": {{"from": "x"}}}},
+          "expr": {{"op": "-", "args": [
+            {{"op": "index", "args": ["incl", "i"]}},
+            {{"op": "index", "args": ["excl", "i"]}}]}}}}}}
+    ]
+  }}}}
+}}"#
+    )
+}
+
+/// `Instr::Scan` lowers to one `while` loop, so the emitted program does not
+/// grow with the scanned length — and because the loop folds plane after
+/// plane in ascending order, each running sum is the interpreter's own
+/// association, bit for bit.
+#[test]
+fn scan_lowering_is_flat_in_the_scanned_length() {
+    if !runtime_available() {
+        return;
+    }
+    use earthsci_ast::simulate_array::tape::xla_emit::emit_rhs;
+    let hlo_len = |n: usize| {
+        let file = load_string(&scan_doc(n)).expect("the probe document loads");
+        let compiled = ArrayCompiled::from_file(&file).expect("it compiles");
+        let emitted = emit_rhs(&compiled).expect("the emitter lowers the scans");
+        emitted.hlo_text().expect("HLO text").len()
+    };
+    let (small, large) = (hlo_len(8), hlo_len(512));
+    // The lengths differ only in the digits of the extents and loop bounds.
+    assert!(
+        large.abs_diff(small) < 256,
+        "the emitted program grew with the scan: {small} bytes at n = 8, {large} at n = 512"
+    );
+
+    let n = 300;
+    let file = load_string(&scan_doc(n)).expect("the probe document loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("it compiles");
+    let program = match CompiledRhs::compile(&compiled) {
+        Ok(p) => p,
+        Err(CompileRhsError::Refused(e)) => {
+            panic!("the emitter refused rule {}: {}", e.rule, e.reason)
+        }
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+    };
+    assert_eq!(program.opcode_count("Scan"), 2);
+    let params: HashMap<String, f64> = HashMap::new();
+    let pv = compiled.debug_resolve_params(&params);
+    let m = compiled.state_variable_names().len();
+    let u: Vec<f64> = (0..m)
+        .map(|k| ((k * 37) % 101) as f64 * 0.013 - 0.61)
+        .collect();
+    let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, true);
+    let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
+    for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+        assert_eq!(
+            g.to_bits(),
+            w.to_bits(),
+            "tendency {i}: compiled {g:e} vs interpreter {w:e}"
+        );
+    }
+}
