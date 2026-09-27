@@ -129,12 +129,6 @@
       "reason": "[continuous] makearray: region value box does not match the region"
     },
     {
-      "path": "tests/conformance/expression_templates/import_rebind_keyed_factors/expanded.esm",
-      "code": "compiler_refused_rule",
-      "rule": "total",
-      "reason": "[continuous] contracted: non-static contraction dim (Ragged { offsets: \"meshA_count\", of: [\"i\"] })"
-    },
-    {
       "path": "tests/conformance/expression_templates/import_smoke/expanded.esm",
       "code": "compiler_refused_rule",
       "rule": "D(c)",
@@ -387,46 +381,10 @@
       "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `wind_u`"
     },
     {
-      "path": "tests/valid/faq/join_disaggregation_m2m.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(count)",
-      "reason": "[continuous] aggregate: carries an overlap join gate that drives enumeration"
-    },
-    {
-      "path": "tests/valid/faq/join_disaggregation_m2m_permuted.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(count)",
-      "reason": "[continuous] aggregate: carries an overlap join gate that drives enumeration"
-    },
-    {
       "path": "tests/valid/faq/join_filter.esm",
       "code": "compiler_refused_rule",
       "rule": "D(emissions)",
       "reason": "[continuous] reduction: rank-0 reduction with a filter (the oracle SKIPS excluded tuples; a mask-to-identity fold is not bit-identical)"
-    },
-    {
-      "path": "tests/valid/faq/join_on_data_columns.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(count)",
-      "reason": "[continuous] aggregate: carries an overlap join gate that drives enumeration"
-    },
-    {
-      "path": "tests/valid/faq/join_on_self_join.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(priorSum)",
-      "reason": "[continuous] aggregate: carries an overlap join gate that drives enumeration"
-    },
-    {
-      "path": "tests/valid/faq/join_on_self_join_syms.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(priorSum)",
-      "reason": "[continuous] aggregate: carries an overlap join gate that drives enumeration"
-    },
-    {
-      "path": "tests/valid/faq/ragged_member_gather.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(perParentTotal)",
-      "reason": "[continuous] contracted: non-static contraction dim (Ragged { offsets: \"parentMemberCount\", of: [\"i\"] })"
     },
     {
       "path": "tests/valid/geometry/conservative_regrid_assembly.esm",

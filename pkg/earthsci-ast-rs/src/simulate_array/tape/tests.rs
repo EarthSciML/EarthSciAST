@@ -23,7 +23,7 @@ fn typed(doc: serde_json::Value) -> EsmFile {
     crate::parse::load_string(&doc.to_string()).expect("fixture document loads")
 }
 
-fn compile(doc: serde_json::Value) -> ArrayCompiled {
+pub(super) fn compile(doc: serde_json::Value) -> ArrayCompiled {
     ArrayCompiled::from_file(&typed(doc)).expect("fixture compiles")
 }
 
@@ -44,7 +44,7 @@ fn all_superops_cfg() -> super::fuse::SuperopCfg {
 }
 
 /// Deterministic pseudo-random state in `[lo, hi)` (xorshift-style LCG).
-fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
+pub(super) fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
     let mut x = seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1);
     (0..n)
         .map(|_| {
@@ -63,7 +63,12 @@ fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
 /// the reference executor (fresh run per state) and the Step 3b fast
 /// executor (one warm taped scratch per program across all of them). Returns
 /// the FUSED program.
-fn ab_check(doc: serde_json::Value, expect_fallbacks: usize, lo: f64, hi: f64) -> TapeProgram {
+pub(super) fn ab_check(
+    doc: serde_json::Value,
+    expect_fallbacks: usize,
+    lo: f64,
+    hi: f64,
+) -> TapeProgram {
     let compiled = compile(doc);
     let (prog, report) = compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()));
     let (prog_uf, report_uf) = compiled.build_tape_opts(&HashSet::new(), None);
@@ -2697,3 +2702,4 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
     let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
     assert_eq!(bits(&dy), bits(&dy_oracle));
 }
+

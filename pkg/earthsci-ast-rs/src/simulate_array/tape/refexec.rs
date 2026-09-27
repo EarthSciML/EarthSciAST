@@ -309,6 +309,65 @@ pub(super) fn run_reference(
                 }
                 slots[*out as usize] = Some(RefVal::Arr(o));
             }
+            Instr::TableGather { src, table, out } => {
+                let sv = resolve_src(prog, &slots, &state_arrays, &obs, src);
+                let tbl = &prog.gather_tables[*table as usize];
+                assert_eq!(sv.shape(), &tbl.src_shape[..], "TableGather source box");
+                let flat: Vec<f64> = sv.iter().copied().collect();
+                let vals: Vec<f64> = tbl
+                    .pos
+                    .iter()
+                    .map(|&p| {
+                        if p == GATHER_GHOST {
+                            0.0
+                        } else {
+                            flat[p as usize]
+                        }
+                    })
+                    .collect();
+                let n = vals.len();
+                let o = ArrayD::from_shape_vec(IxDyn(&[n]), vals).expect("1-D gather box");
+                slots[*out as usize] = Some(RefVal::Arr(o));
+            }
+            Instr::SegReduce {
+                op,
+                init,
+                src,
+                mask,
+                table,
+                out,
+            } => {
+                let f = binary_kernel_of(*op);
+                let terms = match slots[*src as usize].as_ref() {
+                    Some(RefVal::Arr(a)) => a.iter().copied().collect::<Vec<f64>>(),
+                    other => panic!("SegReduce source is not an array slot: {other:?}"),
+                };
+                let keep: Option<Vec<f64>> = mask.map(|m| match slots[m as usize].as_ref() {
+                    Some(RefVal::Arr(a)) => a.iter().copied().collect(),
+                    other => panic!("SegReduce mask is not an array slot: {other:?}"),
+                });
+                let rows = &prog.seg_tables[*table as usize].rows;
+                let mut cells = Vec::with_capacity(rows.len() - 1);
+                for c in 0..rows.len() - 1 {
+                    let mut acc = *init;
+                    for k in rows[c] as usize..rows[c + 1] as usize {
+                        if keep.as_ref().is_none_or(|m| m[k] != 0.0) {
+                            acc = f(acc, terms[k]);
+                        }
+                    }
+                    cells.push(acc);
+                }
+                let desc = &prog.slots[*out as usize];
+                let val = if desc.scalar {
+                    RefVal::Scalar(cells[0])
+                } else {
+                    RefVal::Arr(
+                        ArrayD::from_shape_vec(IxDyn(&desc.shape[..]), cells)
+                            .expect("SegReduce output box"),
+                    )
+                };
+                slots[*out as usize] = Some(val);
+            }
             Instr::JmpIfZero {
                 cond,
                 n_true,

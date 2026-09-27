@@ -89,6 +89,24 @@ macro_rules! tier_doc {
     };
 }
 
+macro_rules! corpus_doc {
+    ($path:literal) => {
+        ($path, include_str!(concat!("../../../../tests/", $path)))
+    };
+}
+
+/// Documents whose contractions run over a tuple list (a join gate, a ragged
+/// bound).
+pub const TUPLE_LIST_DOCS: &[(&str, &str)] = &[
+    corpus_doc!("valid/faq/join_disaggregation_m2m.esm"),
+    corpus_doc!("valid/faq/join_disaggregation_m2m_permuted.esm"),
+    corpus_doc!("valid/faq/join_on_data_columns.esm"),
+    corpus_doc!("valid/faq/join_on_self_join.esm"),
+    corpus_doc!("valid/faq/join_on_self_join_syms.esm"),
+    corpus_doc!("valid/faq/ragged_member_gather.esm"),
+    corpus_doc!("conformance/expression_templates/import_rebind_keyed_factors/expanded.esm"),
+];
+
 /// `(tier/fixture id, model, document)` for the inline-test tiers' documents.
 pub const INLINE_TIER_DOCS: &[(&str, &str, &str)] = &[
     tier_doc!(
@@ -297,6 +315,26 @@ pub fn check_scaling_fixture(family: &str, n: u64, text: &str) {
         !expected_refusal,
         "{family} N={n}: native builds it now; remove its `builds` entry from the Rust ledger"
     );
+    assert_rhs_agrees(&format!("{family} N={n}"), &native, &interp);
+}
+
+/// Native builds `text` with every rule on the tape, and its right-hand side
+/// at one state is the interpreter's, bit for bit.
+pub fn check_native_rhs_doc(id: &str, text: &str) {
+    let doc: Value = serde_json::from_str(text).expect("the document parses");
+    let interp = esm_problem(&doc, (0.0, 1.0), options(Compiler::Interpreter, None))
+        .unwrap_or_else(|e| panic!("{id}: the interpreter does not build it: {e}"));
+    let native = esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None))
+        .unwrap_or_else(|e| panic!("{id}: native does not build it: {e}"));
+    assert_rhs_agrees(id, &native, &interp);
+}
+
+/// The two problems' right-hand sides at one state, compared bit for bit.
+fn assert_rhs_agrees(
+    label: &str,
+    native: &earthsci_ast::EsmProblem,
+    interp: &earthsci_ast::EsmProblem,
+) {
     let nc = native
         .debug_array_compiled()
         .expect("native has a right-hand side");
@@ -306,7 +344,7 @@ pub fn check_scaling_fixture(family: &str, n: u64, text: &str) {
     assert_eq!(
         nc.state_variable_names(),
         ic.state_variable_names(),
-        "{family} N={n}: state order"
+        "{label}: state order"
     );
     let state: Vec<f64> = (0..nc.state_variable_names().len())
         .map(|p| 1.0 + 0.1 * (0.37 * p as f64).sin())
@@ -316,14 +354,11 @@ pub fn check_scaling_fixture(family: &str, n: u64, text: &str) {
     let mut scratch = nc.debug_new_scratch_taped();
     let mut stats = RhsStats::default();
     nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
-    assert_eq!(
-        stats.fallback_rules, 0,
-        "{family} N={n}: a rule left the tape"
-    );
+    assert_eq!(stats.fallback_rules, 0, "{label}: a rule left the tape");
     let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p(), true);
     if let Some((i, a, b)) = first_bit_difference(&dy, &idy) {
         panic!(
-            "{family} N={n}: native dy differs from the interpreter's at {} ({a} vs {b})",
+            "{label}: native dy differs from the interpreter's at {} ({a} vs {b})",
             nc.state_variable_names()[i]
         );
     }

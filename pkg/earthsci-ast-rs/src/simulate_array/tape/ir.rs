@@ -48,6 +48,13 @@
 //! * [`Instr::Scan`] is `run_prefix_scan` over a whole box: a running fold
 //!   along one axis, ascending, independently for every position of the
 //!   other axes, writing the inclusive or exclusive partial result.
+//! * [`Instr::TableGather`] reads its source at positions fixed at build
+//!   time (one per output element, or the ghost `+0.0`): an `index` whose
+//!   subscripts are build-time data rather than an affine map of the box.
+//! * [`Instr::SegReduce`] is a compressed-row reduction: each output cell
+//!   folds its own contiguous run of a term list, skipping the terms a mask
+//!   excludes, which is `reduce_contraction`'s loop over an explicit list of
+//!   admitted contraction tuples (a join-gated or ragged contraction).
 //!
 //! Array operands within one instruction share one box (shape + 1-based
 //! origin), checked at lowering time — the same precondition `vec_combine`
@@ -254,6 +261,45 @@ pub(crate) enum Instr {
         src_shape: DimU,
         out: SlotId,
     },
+    /// `out[k] = src[pos[k]]`, with `pos = gather_tables[table].pos` the
+    /// ROW-MAJOR flat position of each element's source cell, resolved at
+    /// build time; a [`GATHER_GHOST`] position reads `+0.0` (the zero ghost of
+    /// an out-of-range read). `out` is a 1-D box of `pos.len()` elements.
+    ///
+    /// This is `eval_index` with every subscript already evaluated: the
+    /// lowering computes each position exactly as `index_into` does (the
+    /// subscript rounded, then the zero ghost or the const-array boundary
+    /// policy), so the element read is the one the interpreter reads.
+    TableGather {
+        src: SrcRef,
+        table: u32,
+        out: SlotId,
+    },
+    /// A compressed-row reduction over the 1-D term list `src`:
+    ///
+    /// ```text
+    /// for c in 0..n_out:
+    ///     acc = init
+    ///     for k in rows[c] .. rows[c + 1]:
+    ///         if mask is None or mask[k] != 0:  acc = kernel(op)(acc, src[k])
+    ///     out[c] = acc
+    /// ```
+    ///
+    /// with `rows = seg_tables[table].rows` (`n_out + 1` ascending offsets,
+    /// the last equal to `src`'s length) and `c` the ROW-MAJOR cell of
+    /// `out`'s box (a scalar `out` has one cell). Each cell's run lists its
+    /// admitted contraction tuples in the interpreter's odometer order (the
+    /// last contracted name fastest), and an excluded term is SKIPPED, not
+    /// combined as the identity, exactly as `reduce_contraction`'s `continue`
+    /// does — so the fold is bit-identical, signed zeros and NaNs included.
+    SegReduce {
+        op: BinCode,
+        init: f64,
+        src: SlotId,
+        mask: Option<SlotId>,
+        table: u32,
+        out: SlotId,
+    },
     /// Scalar-`ifelse` short circuit: if `cond != 0`, execute the next
     /// `n_true` instructions then skip the following `n_false`; else skip
     /// `n_true` and execute the following `n_false`. The untaken branch is
@@ -301,7 +347,9 @@ impl Instr {
             | Instr::ConstArray { out, .. }
             | Instr::Interp { out, .. }
             | Instr::Reduce { out, .. }
-            | Instr::Scan { out, .. } => Some(*out),
+            | Instr::Scan { out, .. }
+            | Instr::TableGather { out, .. }
+            | Instr::SegReduce { out, .. } => Some(*out),
             Instr::JmpIfZero { .. }
             | Instr::Fallback { .. }
             | Instr::Export { .. }
@@ -358,9 +406,16 @@ impl Instr {
             Instr::Gather { src, .. }
             | Instr::LoadElem { src, .. }
             | Instr::Reduce { src, .. }
-            | Instr::Scan { src, .. } => {
+            | Instr::Scan { src, .. }
+            | Instr::TableGather { src, .. } => {
                 if let SrcRef::Slot(s) = src {
                     f(*s);
+                }
+            }
+            Instr::SegReduce { src, mask, .. } => {
+                f(*src);
+                if let Some(m) = mask {
+                    f(*m);
                 }
             }
             Instr::Ramp { .. } | Instr::ConstArray { .. } => {}
@@ -417,6 +472,8 @@ impl Instr {
             Instr::Interp { .. } => "Interp",
             Instr::Reduce { .. } => "Reduce",
             Instr::Scan { .. } => "Scan",
+            Instr::TableGather { .. } => "TableGather",
+            Instr::SegReduce { .. } => "SegReduce",
             Instr::JmpIfZero { .. } => "JmpIfZero",
             Instr::Fallback { .. } => "Fallback",
             Instr::Export { .. } => "Export",
@@ -843,6 +900,26 @@ pub(crate) struct ConstArrayData {
     pub values: Vec<f64>,
 }
 
+/// The position an [`Instr::TableGather`] element reads when its source cell
+/// is out of range: the element is the zero ghost `+0.0`.
+pub(crate) const GATHER_GHOST: u32 = u32::MAX;
+
+/// The build-time positions of one [`Instr::TableGather`].
+#[derive(Clone, Debug)]
+pub(crate) struct GatherTable {
+    /// The source box the positions are row-major flat offsets into.
+    pub src_shape: DimU,
+    /// One source position per output element, or [`GATHER_GHOST`].
+    pub pos: Vec<u32>,
+}
+
+/// The row offsets of one [`Instr::SegReduce`]: output cell `c` folds terms
+/// `rows[c] .. rows[c + 1]`.
+#[derive(Clone, Debug)]
+pub(crate) struct SegTable {
+    pub rows: Vec<u32>,
+}
+
 /// Which esm-spec §9.2 `interp.*` entry an [`Instr::Interp`] evaluates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InterpKind {
@@ -1031,6 +1108,10 @@ pub(crate) struct TapeProgram {
     pub const_data: Vec<ConstArrayData>,
     /// §9.2 `interp.*` constant tables (`Instr::Interp` indexes here).
     pub interp_tables: Vec<InterpTable>,
+    /// Build-time gather positions (`Instr::TableGather` indexes here).
+    pub gather_tables: Vec<GatherTable>,
+    /// Compressed-row offsets (`Instr::SegReduce` indexes here).
+    pub seg_tables: Vec<SegTable>,
     pub state_vars: Vec<StateRef>,
     /// Observed names resolved through the runtime observed map
     /// (`Operand::Obs`/`SrcRef::Obs` index here).

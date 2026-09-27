@@ -88,6 +88,8 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 
 type LResult<T> = Result<T, Bail>;
 
+mod tuples;
+
 /// Most contracted indices one contraction may carry.
 const MAX_CONTRACT: usize = 4;
 
@@ -143,6 +145,10 @@ struct LBox<'a> {
     shape: DimU,
     cnames: &'a [String],
     cvals: SmallVec<[i64; 4]>,
+    /// Nonzero for a TUPLE-LIST box (see `tuples`): the 1-D box of a
+    /// contraction's admitted tuples, whose loop symbols are build-time
+    /// columns in the builder's frame with this id rather than axes.
+    tuple: u32,
 }
 
 impl<'a> LBox<'a> {
@@ -173,6 +179,8 @@ struct BoxKey {
     shape: Vec<usize>,
     cnames: Vec<String>,
     cvals: Vec<i64>,
+    /// Two tuple-list boxes of one length are different boxes.
+    tuple: u32,
 }
 
 impl BoxKey {
@@ -183,6 +191,7 @@ impl BoxKey {
             shape: bx.shape.to_vec(),
             cnames: bx.cnames.to_vec(),
             cvals: bx.cvals.to_vec(),
+            tuple: bx.tuple,
         }
     }
 }
@@ -258,6 +267,17 @@ pub(crate) struct TapeBuilder<'m> {
     /// Inline array-literal payloads, one per lowered array-valued `const`.
     const_data: Vec<ConstArrayData>,
     interp_tables: Vec<InterpTable>,
+    gather_tables: Vec<GatherTable>,
+    seg_tables: Vec<SegTable>,
+    /// Slots whose VALUES the build knows: array literals, and what the
+    /// tuple-list lowering derives from them (`tuples`). Read only to resolve
+    /// build-time data — a gather's subscripts, a join's key columns, a
+    /// ragged bound — never to fold a value the program computes.
+    known: FxHashMap<SlotId, Known>,
+    /// Open tuple-list boxes, innermost last (`tuples`).
+    tuple_frames: Vec<tuples::TupleFrame>,
+    /// The id the next tuple-list box gets (0 means "not a tuple box").
+    next_tuple: u32,
     state_vars: Vec<StateRef>,
     /// Position in `state_vars`; narrowed to the IR's `u32` by [`tape_index`]
     /// where it is emitted.
@@ -288,6 +308,15 @@ pub(crate) struct TapeBuilder<'m> {
     vn_hoist_hits: usize,
 }
 
+/// A slot's build-time value (see `TapeBuilder::known`).
+#[derive(Clone, Debug)]
+enum Known {
+    /// The payload of the `ConstArray` that defines it.
+    Data(u32),
+    /// Values the build computed itself, row-major.
+    Vals(std::rc::Rc<Vec<f64>>),
+}
+
 /// Snapshot for transactional per-rule lowering.
 struct RuleTxn {
     slots: usize,
@@ -296,6 +325,8 @@ struct RuleTxn {
     assemblies: usize,
     const_data: usize,
     interp_tables: usize,
+    gather_tables: usize,
+    seg_tables: usize,
     dy_writes: usize,
     stream_lens: [usize; 3],
     hoist_journal: usize,
@@ -313,6 +344,8 @@ struct SubTxn {
     assemblies: usize,
     const_data: usize,
     interp_tables: usize,
+    gather_tables: usize,
+    seg_tables: usize,
     /// Per stream: `(chunk count, instructions in the last chunk)`.
     streams: [(usize, usize); 3],
     branch_len: Option<usize>,
@@ -351,6 +384,11 @@ impl<'m> TapeBuilder<'m> {
             assemblies: Vec::new(),
             const_data: Vec::new(),
             interp_tables: Vec::new(),
+            gather_tables: Vec::new(),
+            seg_tables: Vec::new(),
+            known: FxHashMap::default(),
+            tuple_frames: Vec::new(),
+            next_tuple: 1,
             state_vars,
             state_ix,
             obs_reads: Vec::new(),
@@ -392,6 +430,20 @@ impl<'m> TapeBuilder<'m> {
     }
 
     fn emit(&mut self, instr: Instr, section: Cadence) {
+        match &instr {
+            Instr::ConstArray { data, out } => {
+                self.known.insert(*out, Known::Data(*data));
+            }
+            Instr::Copy {
+                a: Operand::Slot(a),
+                out,
+            } if !self.slots[*out as usize].scalar => {
+                if let Some(k) = self.known.get(a).cloned() {
+                    self.known.insert(*out, k);
+                }
+            }
+            _ => {}
+        }
         if let Some(buf) = self.branch_bufs.last_mut() {
             buf.push(instr);
             return;
@@ -596,6 +648,26 @@ impl<'m> TapeBuilder<'m> {
         if let Some(v) = bx.cbind(name) {
             return Ok(LV::Lit(v as f64));
         }
+        if bx.tuple != 0 {
+            if let Some(col) = self.tuple_column(bx.tuple, name)? {
+                return Ok(col);
+            }
+            // Anything else a tuple-list body reads is one value for every
+            // tuple; a whole array there is not an element of the list.
+            let plain = LBox {
+                syms: &[],
+                lo: DimI::new(),
+                shape: DimU::new(),
+                cnames: &[],
+                cvals: SmallVec::new(),
+                tuple: 0,
+            };
+            let v = self.resolve_var(name, &plain)?;
+            if self.lv_box(&v).is_some() {
+                bail_tape!("variable: whole array `{name}` read inside a tuple-list body");
+            }
+            return Ok(v);
+        }
         if let Some(a) = bx.syms.iter().position(|s| s == name) {
             let key = VnKey::Ramp(a);
             if let Some(hit) = self.vn_get(key, bx) {
@@ -670,10 +742,10 @@ impl<'m> TapeBuilder<'m> {
             // overlay / per-cell oracle, both of which evaluate the marker
             // where its guard is still standing. Reachable only in a document
             // that declares a per-variable `element_type`.
-            VecOp::Precision => bail_tape!(
-                "op: `{}` precision boundary (the tape resolves kernels at execution)",
-                node.op
-            ),
+            VecOp::Precision => {
+                let arg = self.marker_operand(node)?;
+                self.lower_expr(arg, bx)
+            }
             VecOp::Arith(code) => {
                 let Some((first, rest)) = node.args.split_first() else {
                     bail_tape!("op: `{}` with no arguments", node.op);
@@ -1575,6 +1647,23 @@ impl<'m> TapeBuilder<'m> {
 
     // -- ifelse ---------------------------------------------------------------
 
+    /// The operand of a precision-boundary marker (`crate::precision_infer`),
+    /// which the evaluators run at the element type the marker names. The
+    /// tape resolves its kernels at execution from the precision in force, so
+    /// only a marker that names that same precision is transparent here.
+    fn marker_operand<'n>(&self, node: &'n Arc<ExpressionNode>) -> LResult<&'n Expr> {
+        let [arg] = &node.args[..] else {
+            bail_tape!("op: `{}` with arity {}", node.op, node.args.len());
+        };
+        match crate::precision_infer::marker_precision(node) {
+            Some(p) if p != crate::precision::active() => bail_tape!(
+                "op: `{}` precision boundary (the tape resolves kernels at execution)",
+                node.op
+            ),
+            _ => Ok(arg),
+        }
+    }
+
     fn lower_ifelse(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
         if node.args.len() != 3 {
             bail_tape!("op: `ifelse` with arity {}", node.args.len());
@@ -1665,6 +1754,9 @@ impl<'m> TapeBuilder<'m> {
     /// Compile-time mirror of `eval_vec_index`, reusing the overlay's OWN axis
     /// classifier. Everything is static except the source data.
     fn lower_index(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
+        if bx.tuple != 0 {
+            return self.lower_tuple_index(node, bx);
+        }
         if node.args.is_empty() {
             bail_tape!("index: no arguments");
         }
@@ -1845,6 +1937,9 @@ impl<'m> TapeBuilder<'m> {
     // -- makearray ------------------------------------------------------------
 
     fn lower_makearray(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
+        if bx.tuple != 0 {
+            bail_tape!("makearray: inside a tuple-list contraction body");
+        }
         let Some(regions) = node.regions.as_ref() else {
             bail_tape!("makearray: no `regions`");
         };
@@ -1907,6 +2002,7 @@ impl<'m> TapeBuilder<'m> {
                 shape: r_shape.clone(),
                 cnames: bx.cnames,
                 cvals: bx.cvals.clone(),
+                tuple: bx.tuple,
             };
             let v = self.lower_expr(value_expr, &rbx);
             self.pop_scope();
@@ -1986,14 +2082,25 @@ impl<'m> TapeBuilder<'m> {
         if spec.ranges.is_empty() {
             bail_tape!("aggregate: rank-0 output (scalar reduction, nested in a box)");
         }
-        // See the same guard in `eval_vec_nested_aggregate`: an overlap gate
-        // drives the contraction, and the tape lowering has no driven form.
-        if spec.has_drivable_overlap() {
-            bail_tape!("aggregate: carries an overlap join gate that drives enumeration");
+        if bx.tuple != 0 {
+            bail_tape!("aggregate: nested inside a tuple-list contraction body");
         }
         if let Some(name) = nested_aggregate_capture(&spec, bx.syms.iter().chain(bx.cnames.iter()))
         {
             bail_tape!("aggregate: nested body depends on an enclosing bound index `{name}`");
+        }
+        // A join gate drives the contraction: the tuple-list form.
+        if spec.has_drivable_overlap() {
+            return self.lower_tuple_contraction(
+                spec.idx_names,
+                &spec.ranges,
+                spec.body,
+                &spec.contract_names,
+                &spec.contract_dims,
+                spec.reduce,
+                spec.filter,
+                spec.join,
+            );
         }
         self.lower_faq(
             spec.idx_names,
@@ -2032,6 +2139,7 @@ impl<'m> TapeBuilder<'m> {
                 shape: shape.clone(),
                 cnames: &[],
                 cvals: SmallVec::new(),
+                tuple: 0,
             };
             let r = self.lower_expr(body, &bx).and_then(|body_v| match filter {
                 None => Ok(body_v),
@@ -2111,15 +2219,33 @@ impl<'m> TapeBuilder<'m> {
         if nc == 0 || nc > MAX_CONTRACT {
             bail_tape!("contracted: contraction rank out of range ({nc})");
         }
+        if contract_dims
+            .iter()
+            .any(|d| !matches!(d, ContractDim::Static(..)))
+        {
+            // A ragged bound varies per output cell: the tuple-list form.
+            let ranges: Vec<(i64, i64)> = lo
+                .iter()
+                .zip(shape)
+                .map(|(&l, &n)| (l, l + n as i64 - 1))
+                .collect();
+            return self.lower_tuple_contraction(
+                idx_names,
+                &ranges,
+                body,
+                contract_names,
+                contract_dims,
+                reduce,
+                filter,
+                None,
+            );
+        }
         let mut clo = [0i64; MAX_CONTRACT];
         let mut chi = [0i64; MAX_CONTRACT];
         for (i, d) in contract_dims.iter().enumerate() {
-            match d {
-                ContractDim::Static(l, h) => {
-                    clo[i] = *l;
-                    chi[i] = *h;
-                }
-                other => bail_tape!("contracted: non-static contraction dim ({other:?})"),
+            if let ContractDim::Static(l, h) = d {
+                clo[i] = *l;
+                chi[i] = *h;
             }
         }
         let identity = reduce.identity();
@@ -2195,6 +2321,7 @@ impl<'m> TapeBuilder<'m> {
             shape: ext_shape.clone(),
             cnames: &[],
             cvals: SmallVec::new(),
+            tuple: 0,
         };
         let term = (|| -> LResult<LV> {
             let term = self.lower_expr(body, &bx)?;
@@ -2271,6 +2398,7 @@ impl<'m> TapeBuilder<'m> {
                 shape: shape.clone(),
                 cnames: contract_names,
                 cvals: SmallVec::from_slice(&cvals[..nc]),
+                tuple: 0,
             };
             let term = (|| -> LResult<LV> {
                 let term = self.lower_expr(body, &bx)?;
@@ -2495,6 +2623,10 @@ impl<'m> TapeBuilder<'m> {
                 self.lower_wholesale_op_named(fn_name, node)
             }
             "fn" => self.lower_wholesale_closed_fn(node),
+            crate::precision_infer::MARKER_OP => {
+                let arg = self.marker_operand(node)?;
+                self.lower_wholesale(arg)
+            }
             "index" => self.lower_wholesale_index(node),
             "faq" => self.lower_wholesale_aggregate(node),
             "makearray" => self.lower_wholesale_makearray(node),
@@ -2573,9 +2705,6 @@ impl<'m> TapeBuilder<'m> {
         let Some(spec) = faq_spec(node) else {
             return Ok(LV::Lit(f64::NAN)); // eval_faq's missing-body sentinel
         };
-        if spec.has_drivable_overlap() {
-            bail_tape!("aggregate: carries an overlap join gate that drives enumeration");
-        }
         let static_ranges = static_contract_ranges(&spec.contract_dims);
         if let Some(scan) = detect_prefix_scan(
             spec.idx_names,
@@ -2592,6 +2721,21 @@ impl<'m> TapeBuilder<'m> {
                 &spec.contract_names[0],
                 spec.body,
                 spec.reduce,
+            )?;
+            return Ok(self.reorigin_to_one(v));
+        }
+        // A join gate drives the contraction (`eval_faq` resolves its gates
+        // for everything but a prefix scan): the tuple-list form.
+        if spec.has_drivable_overlap() {
+            let v = self.lower_tuple_contraction(
+                spec.idx_names,
+                &spec.ranges,
+                spec.body,
+                &spec.contract_names,
+                &spec.contract_dims,
+                spec.reduce,
+                spec.filter,
+                spec.join,
             )?;
             return Ok(self.reorigin_to_one(v));
         }
@@ -2658,7 +2802,18 @@ impl<'m> TapeBuilder<'m> {
                     lo.push(*l);
                     shape.push((h - l + 1).max(0) as usize);
                 }
-                other => bail_tape!("reduction: non-static contraction dim ({other:?})"),
+                _ => {
+                    return self.lower_tuple_contraction(
+                        spec.idx_names,
+                        &spec.ranges,
+                        spec.body,
+                        &spec.contract_names,
+                        &spec.contract_dims,
+                        spec.reduce,
+                        spec.filter,
+                        None,
+                    );
+                }
             }
         }
         // An empty window enumerates no tuples: the fold is the identity.
@@ -2674,6 +2829,7 @@ impl<'m> TapeBuilder<'m> {
             shape: shape.clone(),
             cnames: &[],
             cvals: SmallVec::new(),
+            tuple: 0,
         };
         let v = self.lower_expr(spec.body, &bx);
         self.pop_scope();
@@ -2754,6 +2910,7 @@ impl<'m> TapeBuilder<'m> {
             shape,
             cnames: &[],
             cvals: SmallVec::new(),
+            tuple: 0,
         };
         let v = self.lower_makearray(node, &bx)?;
         Ok(self.reorigin_to_one(v))
@@ -2804,6 +2961,7 @@ impl<'m> TapeBuilder<'m> {
             shape: full_shape.clone(),
             cnames: &[],
             cvals: SmallVec::new(),
+            tuple: 0,
         };
         let term = self.lower_expr(body, &bx);
         self.pop_scope();
@@ -2900,6 +3058,7 @@ impl<'m> TapeBuilder<'m> {
                 shape: step_shape.clone(),
                 cnames: &cnames,
                 cvals: SmallVec::from_slice(&[i, i]),
+                tuple: 0,
             };
             let term = self.lower_expr(body, &bx);
             self.pop_scope();
@@ -3392,6 +3551,8 @@ impl<'m> TapeBuilder<'m> {
             assemblies: self.assemblies.len(),
             const_data: self.const_data.len(),
             interp_tables: self.interp_tables.len(),
+            gather_tables: self.gather_tables.len(),
+            seg_tables: self.seg_tables.len(),
             dy_writes: self.dy_writes.len(),
             stream_lens: [
                 self.streams[0].len(),
@@ -3410,6 +3571,11 @@ impl<'m> TapeBuilder<'m> {
         self.assemblies.truncate(txn.assemblies);
         self.const_data.truncate(txn.const_data);
         self.interp_tables.truncate(txn.interp_tables);
+        self.gather_tables.truncate(txn.gather_tables);
+        self.seg_tables.truncate(txn.seg_tables);
+        let n_slots = self.slots.len() as SlotId;
+        self.known.retain(|s, _| *s < n_slots);
+        self.tuple_frames.clear();
         self.dy_writes.truncate(txn.dy_writes);
         for s in 0..3 {
             let stream = &mut self.streams[s];
@@ -3438,6 +3604,8 @@ impl<'m> TapeBuilder<'m> {
             assemblies: self.assemblies.len(),
             const_data: self.const_data.len(),
             interp_tables: self.interp_tables.len(),
+            gather_tables: self.gather_tables.len(),
+            seg_tables: self.seg_tables.len(),
             streams: [stream(0), stream(1), stream(2)],
             branch_len: self.branch_bufs.last().map(Vec::len),
             hoist_journal: self.hoist_journal.len(),
@@ -3452,6 +3620,10 @@ impl<'m> TapeBuilder<'m> {
         self.assemblies.truncate(txn.assemblies);
         self.const_data.truncate(txn.const_data);
         self.interp_tables.truncate(txn.interp_tables);
+        self.gather_tables.truncate(txn.gather_tables);
+        self.seg_tables.truncate(txn.seg_tables);
+        let n_slots = self.slots.len() as SlotId;
+        self.known.retain(|s, _| *s < n_slots);
         for (s, &(n_chunks, last_len)) in txn.streams.iter().enumerate() {
             let stream = &mut self.streams[s];
             stream.truncate(n_chunks);
@@ -3916,6 +4088,8 @@ impl<'m> TapeBuilder<'m> {
             assemblies: std::mem::take(&mut self.assemblies),
             const_data: std::mem::take(&mut self.const_data),
             interp_tables: std::mem::take(&mut self.interp_tables),
+            gather_tables: std::mem::take(&mut self.gather_tables),
+            seg_tables: std::mem::take(&mut self.seg_tables),
             state_vars: std::mem::take(&mut self.state_vars),
             obs_reads: std::mem::take(&mut self.obs_reads),
             dy_writes: std::mem::take(&mut self.dy_writes),
@@ -4009,6 +4183,8 @@ fn color_slab(prog: &mut TapeProgram) {
                 | Instr::Reduce { .. }
                 | Instr::Scan { .. }
                 | Instr::Assemble { .. }
+                | Instr::TableGather { .. }
+                | Instr::SegReduce { .. }
         );
         let mut defs_here: SmallVec<[SlotId; 2]> = SmallVec::new();
         prog.instrs[i].for_each_def(&prog.fused, |o| {

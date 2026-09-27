@@ -1045,6 +1045,39 @@ impl<'a> Emitter<'a> {
                 }
                 self.define(*out, cur);
             }
+            Instr::TableGather { src, table, out } => {
+                let s = self.src(src)?;
+                let tbl = &self.prog.gather_tables[*table as usize];
+                let have = self.dims(&s)?;
+                if have != tbl.src_shape.as_slice() {
+                    return Err(self.err(format!(
+                        "table gather source has shape {have:?} but its table expects {:?}",
+                        &tbl.src_shape[..]
+                    )));
+                }
+                let v = self.emit_table_gather(&s, &have, &tbl.pos)?;
+                self.define(*out, v);
+            }
+            Instr::SegReduce {
+                op,
+                init,
+                src,
+                mask,
+                table,
+                out,
+            } => {
+                let terms = self.operand(&Operand::Slot(*src))?;
+                let mask = match mask {
+                    Some(m) => Some(self.operand(&Operand::Slot(*m))?),
+                    None => None,
+                };
+                let rows = &self.prog.seg_tables[*table as usize].rows;
+                let v = self.emit_seg_reduce(*op, *init, &terms, mask.as_ref(), rows)?;
+                let want = self.out_dims(*out);
+                let d: Vec<i64> = want.iter().map(|&x| x as i64).collect();
+                let v = self.wrap(v.reshape(&d), "segmented reduce: output box")?;
+                self.define(*out, v);
+            }
             Instr::Interp { table, x, y, out } => {
                 let tbl = &self.prog.interp_tables[*table as usize];
                 let dims = self.out_dims(*out);
@@ -1581,6 +1614,82 @@ impl<'a> Emitter<'a> {
         let body = self.bin(op, &a, &b)?;
         body.build()
             .map_err(|e| self.err(format!("reduce kernel build: {e}")))
+    }
+
+    /// Lower one [`Instr::TableGather`]: the source flattened row-major, one
+    /// `take` at the build-time positions, and the ghost positions selected
+    /// to `+0.0`.
+    fn emit_table_gather(&self, src: &XlaOp, dims: &[usize], pos: &[u32]) -> R<XlaOp> {
+        let n: usize = dims.iter().product::<usize>().max(1);
+        let flat = self.wrap(src.reshape(&[n as i64]), "table gather: flatten")?;
+        let at: Vec<i64> = pos
+            .iter()
+            .map(|&p| if p == GATHER_GHOST { 0 } else { p as i64 })
+            .collect();
+        let at = self.wrap(self.b.constant_r1(&at[..]), "table gather: positions")?;
+        let taken = self.wrap(flat.take(&at, 0), "table gather: take")?;
+        if !pos.contains(&GATHER_GHOST) {
+            return Ok(taken);
+        }
+        let live: Vec<f64> = pos
+            .iter()
+            .map(|&p| if p == GATHER_GHOST { 0.0 } else { 1.0 })
+            .collect();
+        let live = self.wrap(self.b.constant_r1(&live[..]), "table gather: live mask")?;
+        let z = self.splat_like(&taken, 0.0)?;
+        let keep = self.wrap(live.ne(&z), "table gather: live != 0")?;
+        self.wrap(keep.select(&taken, &z), "table gather: ghost")
+    }
+
+    /// Lower one [`Instr::SegReduce`] as a scatter-combine of each term into
+    /// its output cell, excluded terms first replaced by the identity. Like
+    /// [`Instr::Reduce`] this is equal to the interpreter numerically, not
+    /// bit for bit: XLA does not order the updates a scatter combines.
+    /// Returns the flat `n_out` result.
+    fn emit_seg_reduce(
+        &self,
+        op: BinCode,
+        init: f64,
+        terms: &XlaOp,
+        mask: Option<&XlaOp>,
+        rows: &[u32],
+    ) -> R<XlaOp> {
+        let n_out = rows.len() - 1;
+        let m = rows[n_out] as usize;
+        let base = {
+            let c = self.c(init)?;
+            self.wrap(c.broadcast(&[n_out as i64]), "segmented reduce: identity")?
+        };
+        if m == 0 {
+            return Ok(base);
+        }
+        let terms = match mask {
+            None => terms.clone(),
+            Some(mk) => {
+                let z = self.splat_like(mk, 0.0)?;
+                let keep = self.wrap(mk.ne(&z), "segmented reduce: mask != 0")?;
+                let id = self.splat_like(terms, init)?;
+                self.wrap(keep.select(terms, &id), "segmented reduce: mask")?
+            }
+        };
+        let mut cell: Vec<i64> = Vec::with_capacity(m);
+        for c in 0..n_out {
+            cell.extend(std::iter::repeat_n(
+                c as i64,
+                (rows[c + 1] - rows[c]) as usize,
+            ));
+        }
+        let cell = self.wrap(
+            self.b
+                .constant_r1(&cell[..])
+                .and_then(|c| c.reshape(&[m as i64, 1])),
+            "segmented reduce: cell ids",
+        )?;
+        let comp = self.reduce_computation(op)?;
+        self.wrap(
+            base.scatter(&cell, &terms, &comp, &[], &[0], &[0], 1),
+            "segmented reduce: scatter",
+        )
     }
 
     /// The variable whose flat block contains `flat`.

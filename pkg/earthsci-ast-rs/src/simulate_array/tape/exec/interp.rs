@@ -8,6 +8,7 @@
 use super::fused::{dispatch_bin_kernel, dispatch_un_kernel, exec_fused};
 use super::kernels::{
     copy_strided, ew_select, ew1, ew2, exec_gather, fill_strided, reduce_rows, scan_axis,
+    seg_reduce, table_gather,
 };
 use super::oracle::run_rhs_oracle;
 use super::resolve::{Rv, cm_strides, resolve_rv, resolve_scalar, resolve_src, rm_strides};
@@ -405,6 +406,34 @@ pub(super) fn run_range(
                     };
                 }
                 dispatch_bin_kernel!(op, scan);
+            }
+            Instr::TableGather { src, table, out } => {
+                let sv = resolve_src(src, env, slab_ptr, slot_off, obs);
+                let tbl = &prog.gather_tables[*table as usize];
+                debug_assert_eq!(&sv.shape[..], &tbl.src_shape[..], "TableGather source box");
+                let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+                unsafe { table_gather(dst, &sv, &tbl.pos) };
+            }
+            Instr::SegReduce {
+                op,
+                init,
+                src,
+                mask,
+                table,
+                out,
+            } => {
+                let rows = &prog.seg_tables[*table as usize].rows;
+                let src = unsafe { slab_ptr.add(slot_off[*src as usize]) as *const f64 };
+                let mask =
+                    mask.map(|m| unsafe { slab_ptr.add(slot_off[m as usize]) as *const f64 });
+                let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+                let init = *init;
+                macro_rules! fold {
+                    ($f:expr) => {
+                        unsafe { seg_reduce(dst, src, mask, rows, init, $f) }
+                    };
+                }
+                dispatch_bin_kernel!(op, fold);
             }
             Instr::JmpIfZero {
                 cond,

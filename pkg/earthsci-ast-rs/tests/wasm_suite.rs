@@ -335,6 +335,14 @@ scaling_family!(scaling_regrid, "regrid");
 scaling_family!(scaling_unstructured_gather, "unstructured_gather");
 scaling_family!(scaling_scalar_chemistry, "scalar_chemistry");
 
+/// Join-gated and ragged contractions.
+#[wasm_bindgen_test]
+fn tuple_list_contractions() {
+    for (id, text) in portable::TUPLE_LIST_DOCS {
+        portable::check_native_rhs_doc(id, text);
+    }
+}
+
 /// One wasm test per inline-test tier, over its documents.
 macro_rules! inline_tier {
     ($test:ident, $tier:literal) => {

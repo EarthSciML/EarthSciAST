@@ -3070,7 +3070,7 @@ impl JoinGate {
 
 /// Where one of a gate's two symbols sits in the aggregate being evaluated.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum GateAxis {
+pub(super) enum GateAxis {
     /// A contracted index — free, at this position in `contract_names`.
     Contracted(usize),
     /// An output index — already bound in `ctx.loop_binds` for this cell.
@@ -3085,7 +3085,7 @@ pub(super) struct GatePlacement {
     tgt: GateAxis,
 }
 
-fn gate_axis(sym: &str, idx_names: &[String], contract_names: &[String]) -> GateAxis {
+pub(super) fn gate_axis(sym: &str, idx_names: &[String], contract_names: &[String]) -> GateAxis {
     if let Some(d) = contract_names.iter().position(|n| n == sym) {
         return GateAxis::Contracted(d);
     }
@@ -3632,7 +3632,7 @@ pub(super) fn resolve_join_gates(join: &[JoinClause], ctx: &EvalCtx) -> Vec<Join
 
 /// Both sides of an `on` gate as the planner carries them: `(positions, keys)`
 /// per side, left then right.
-type EqSides = (
+pub(super) type EqSides = (
     Vec<i64>,
     Vec<crate::relational::Key>,
     Vec<i64>,
@@ -3826,34 +3826,45 @@ fn key_column_values(
     col: &crate::join::KeyColumn,
     ctx: &EvalCtx,
 ) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
-    use crate::join::{JoinKey, KeyColumn};
+    use crate::join::KeyColumn;
     match col {
-        KeyColumn::Const { positions, values } => {
-            let keys = values
-                .iter()
-                .map(|v| match v {
-                    JoinKey::Int(i) => crate::relational::Key::Int(*i),
-                    JoinKey::Cat(c) => crate::relational::Key::Str(c.clone()),
-                })
-                .collect();
-            Some((positions.clone(), keys))
-        }
-        KeyColumn::Column(name) => with_named_array(name, ctx, |a| {
-            if a.ndim() != 1 {
-                return None;
-            }
-            let mut keys = Vec::with_capacity(a.len());
-            for &v in a.iter() {
-                if !v.is_finite() || v.fract() != 0.0 {
-                    return None;
-                }
-                keys.push(crate::relational::Key::Int(v as i64));
-            }
-            // A 1-D data column is addressed 1-based by `index(col, sym)`, and
-            // its shape index set resolves the symbol's range to `[1, N]`.
-            Some(((1..=a.len() as i64).collect(), keys))
-        })?,
+        KeyColumn::Const { positions, values } => Some(const_key_column(positions, values)),
+        KeyColumn::Column(name) => with_named_array(name, ctx, data_key_column)?,
     }
+}
+
+/// The `(positions, keys)` of a build-time constant key column.
+pub(super) fn const_key_column(
+    positions: &[i64],
+    values: &[crate::join::JoinKey],
+) -> (Vec<i64>, Vec<crate::relational::Key>) {
+    use crate::join::JoinKey;
+    let keys = values
+        .iter()
+        .map(|v| match v {
+            JoinKey::Int(i) => crate::relational::Key::Int(*i),
+            JoinKey::Cat(c) => crate::relational::Key::Str(c.clone()),
+        })
+        .collect();
+    (positions.to_vec(), keys)
+}
+
+/// The `(positions, keys)` of a 1-D data column, or `None` when it is not one
+/// or holds a value that is not EXACTLY integral (see [`key_column_values`]).
+pub(super) fn data_key_column(a: &ArrayD<f64>) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
+    if a.ndim() != 1 {
+        return None;
+    }
+    let mut keys = Vec::with_capacity(a.len());
+    for &v in a.iter() {
+        if !v.is_finite() || v.fract() != 0.0 {
+            return None;
+        }
+        keys.push(crate::relational::Key::Int(v as i64));
+    }
+    // A 1-D data column is addressed 1-based by `index(col, sym)`, and
+    // its shape index set resolves the symbol's range to `[1, N]`.
+    Some(((1..=a.len() as i64).collect(), keys))
 }
 
 /// One side's per-position key: the single column's key for a simple `on`, or
@@ -3867,23 +3878,31 @@ fn side_keys(
     cols: &[crate::join::KeyColumn],
     ctx: &EvalCtx,
 ) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
-    let (positions, first) = key_column_values(cols.first()?, ctx)?;
-    if cols.len() == 1 {
-        return Some((positions, first));
+    let parts = cols
+        .iter()
+        .map(|c| key_column_values(c, ctx))
+        .collect::<Option<Vec<_>>>()?;
+    composite_side_keys(parts)
+}
+
+/// Combine one side's per-column `(positions, keys)` into its per-position
+/// key (see [`side_keys`]). `None` for no columns, or for columns that do
+/// not run over the same positions.
+pub(super) fn composite_side_keys(
+    mut parts: Vec<(Vec<i64>, Vec<crate::relational::Key>)>,
+) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
+    if parts.len() == 1 {
+        return parts.pop();
     }
-    let mut parts: Vec<Vec<crate::relational::Key>> = Vec::with_capacity(cols.len());
-    parts.push(first);
-    for c in &cols[1..] {
-        let (p, k) = key_column_values(c, ctx)?;
-        // Every column of one side runs over the SAME loop symbol, so a length
-        // or position disagreement means the gate does not describe this node.
-        if p != positions {
-            return None;
-        }
-        parts.push(k);
+    let (positions, _) = parts.first()?;
+    let positions = positions.clone();
+    // Every column of one side runs over the SAME loop symbol, so a length
+    // or position disagreement means the gate does not describe this node.
+    if parts.iter().any(|(p, _)| *p != positions) {
+        return None;
     }
     let keys = (0..positions.len())
-        .map(|t| crate::relational::skolem(parts.iter().map(|p| p[t].clone()).collect(), false))
+        .map(|t| crate::relational::skolem(parts.iter().map(|p| p.1[t].clone()).collect(), false))
         .collect();
     Some((positions, keys))
 }
@@ -3928,7 +3947,7 @@ fn equality_sides(g: &crate::join::OnGate, ctx: &EvalCtx) -> Option<EqSides> {
 /// Takes the keyed sides rather than reading them, because the planner has
 /// already read them to price this gate and reading a multi-million-row key
 /// column twice is the term issue #418 left standing.
-fn index_from_sides(sides: EqSides) -> (crate::broad_phase::OverlapIndex, usize, usize) {
+pub(super) fn index_from_sides(sides: EqSides) -> (crate::broad_phase::OverlapIndex, usize, usize) {
     let (pos_l, keys_l, pos_r, keys_r) = sides;
     let (n_l, n_r) = (pos_l.len(), pos_r.len());
     // Canonical-key-ordered matches (§5.5 rule 5) mapped back onto the two

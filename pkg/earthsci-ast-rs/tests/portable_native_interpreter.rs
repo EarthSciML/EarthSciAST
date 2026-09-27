@@ -42,3 +42,10 @@ fn inline_test_tier_documents() {
         portable::check_inline_tier_doc(id, model, text);
     }
 }
+
+#[test]
+fn tuple_list_contractions() {
+    for (id, text) in portable::TUPLE_LIST_DOCS {
+        portable::check_native_rhs_doc(id, text);
+    }
+}
