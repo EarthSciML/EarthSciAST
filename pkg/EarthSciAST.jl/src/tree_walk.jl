@@ -63,6 +63,7 @@ include("tree_walk/array_contraction.jl") # §4f  …and for the whole-array con
 include("tree_walk/const_tier.jl")       # §4g  cadence partition of the scalar prelude
 include("tree_walk/stencil.jl")          # §4c  symbolic stencilizer (spines + recipes)
 include("tree_walk/stencil_affine.jl")   #      affine box processor (the default build)
+include("tree_walk/observed_program.jl") #      the compiled output-time observed route
 include("tree_walk/helpers.jl")          # §5   misc + array-variable helpers
 include("tree_walk/semiring.jl")         # §5c  semiring registry + join-gate resolution
 include("tree_walk/resolve.jl")          # §5d  index resolution, `_PGatherArray`
