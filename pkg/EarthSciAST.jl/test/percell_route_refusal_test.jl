@@ -179,6 +179,30 @@ _pr_rank4_build(doc, compiler; kw...) =
         @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* F .+ 0.5
     end
 
+    # A body that reads a STATE but resolves with its index symbolic has a
+    # compile-once form, which walks its compiled tree at every cell against the
+    # initial state seeded so far. That is a tree walk per cell too, so a strict
+    # compiler refuses it by name rather than take it; the interpreter takes it.
+    @testset "a state-reading faq initialization equation refuses under native" begin
+        vvar = Dict("v" => _PR.ModelVariable(_PR.UnknownVariable; shape = ["x"],
+                                             default = 0.5))
+        vzero = _PR.Equation(faq1(_Didx("v", _v("i"))), faq1(_n(0.0)))
+        m = _PR.Model(merge(uvar(), vvar), [zero_eq(), vzero];
+                      initialization_equations = [_PR.Equation(_v("u"),
+                          faq1(_op("+", _op("*", _n(2.0), _v("i")), _idx("v", _v("i")))))])
+        e = try
+            seed(m, :native); nothing
+        catch err
+            err
+        end
+        @test e isa _PR.TreeWalkError && e.code == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test occursin("init(u)", e.detail) && occursin("tree walk per cell", e.detail)
+        @test occursin(_PR._ONE_CELL_NOTE, e.detail)
+        ui, vi, ri = seed(m, :interpreter)
+        @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* (1:5) .+ 0.5
+        @test [r.rule for r in _pr_rows(ri, :setup_percell)] == ["init(u)"]
+    end
+
     # ── Field initial conditions answered once per field (#482) ───────────────
     @testset "a broadcast-constant field ic is evaluated once and filled" begin
         path = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "scalar_ic",

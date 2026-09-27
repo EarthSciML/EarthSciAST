@@ -2088,8 +2088,11 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
         end
         # With the construction-time compile-once forms off
         # (`compiler = :interpreter`) the seed is the per-cell reference, as the
-        # field-`ic` fast path is.
-        once = _setup_compile_once_enabled() ?
+        # field-`ic` fast path is. A strict compiler takes neither form below:
+        # the compile-once one walks its compiled tree at every cell, which is a
+        # tree walk per cell as much as the per-cell reference's (its refusal is
+        # after `percell`).
+        once = (_setup_compile_once_enabled() && !_compiler_is_strict()) ?
                _compile_init_once(body, idx_names, array_var_info, var_map,
                                   const_arrays, pgather, param_sym_set, reg_funcs) :
                nothing
@@ -2118,8 +2121,15 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
             # so the first cell is evaluated once, for its diagnostic only,
             # before the refusal is raised.
             percell(first(todo)[1])
-            _refuse_percell_evaluation(rule, "the faq-valued initialization-equation seed",
-                                       length(todo); one_cell = true)
+            _refuse_rule(rule,
+                "no compiled fill serves this faq-valued initialization equation " *
+                "(a fill reads no state and takes no join gate, filter or " *
+                "contraction), and the forms left walk a tree at each of its " *
+                "$(length(todo)) cell" * (length(todo) == 1 ? "" : "s") * ": one " *
+                "compiled once, or one resolved and compiled per cell. That is a " *
+                "tree walk per cell at construction time, which esm-libraries-spec " *
+                "§2.5.10 puts under the same rule as the right-hand side. Build " *
+                "with compiler=:interpreter to run it. " * _ONE_CELL_NOTE)
         end
         _record_rule!(rule, :equation, :setup_percell)
         for (idx_tuple, slot) in todo
