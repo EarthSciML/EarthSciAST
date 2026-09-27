@@ -1162,6 +1162,25 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # component, and answering with it is the silent wrong answer this
     # resolution exists to remove.
     bare = occursin('.', String(mname)) ? nothing : String(variable)
+    tval = t === nothing ? Float64(get(state_scalars, "t", 0.0)) : Float64(t)
+    # THE COMPILED OBSERVED PROGRAM (observed_program.jl), under a plan that
+    # runs the array cascade: built once per build and name from the right-hand
+    # side's cascade, reading the state `u` through the build's own layout. An
+    # observed it does not take (one the build dropped, a build constant, a
+    # shape it cannot factor) falls through to the build-time route below.
+    if ctx !== nothing && _array_cascade_on()
+        bname = _program_build_name(ctx, qualified, bare)
+        prog = bname === nothing ? nothing : _observed_program!(ctx, bname)
+        if prog !== nothing && prog.dims == exts
+            (u === nothing && prog.reads_state) && throw(SimulateError(
+                "observed '$(variable)' reads the continuous state, so it is not " *
+                "a build-time field; pass the state to read it at, " *
+                "`observed_field(prob, name; u = …, t = …)`"))
+            vals = _run_observed_program(ctx, prog, u, tval)
+            _note_program_read!()
+            return (vals, prog.cells)
+        end
+    end
     _bare_get(d) = bare === nothing ? nothing : get(d, bare, nothing)
     inlined = get(insp.observed_exprs, qualified, _bare_get(insp.observed_exprs))
     # The UN-inlined form: cheap when its producers can be materialized (they
@@ -1178,25 +1197,6 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # observed-field ordering, so `field`/`reference` pair cell-for-cell.
     cells = sort!(vec(Vector{Int}[collect(Int, Tuple(I))
                                   for I in CartesianIndices(Tuple(exts))]))
-    tval = t === nothing ? Float64(get(state_scalars, "t", 0.0)) : Float64(t)
-    # THE COMPILED OBSERVED PROGRAM (observed_program.jl), under a plan that
-    # runs the array cascade: built once per build and name from the right-hand
-    # side's cascade, reading the state `u` through the build's own layout. An
-    # observed it does not take (one the build dropped, a build constant, a
-    # shape it cannot factor) falls through to the build-time route below.
-    if ctx !== nothing && _array_cascade_on()
-        bname = _program_build_name(ctx, qualified, bare)
-        prog = bname === nothing ? nothing : _observed_program!(ctx, bname)
-        if prog !== nothing && prog.cells == cells
-            (u === nothing && prog.reads_state) && throw(SimulateError(
-                "observed '$(variable)' reads the continuous state, so it is not " *
-                "a build-time field; pass the state to read it at, " *
-                "`observed_field(prob, name; u = …, t = …)`"))
-            vals = _run_observed_program(ctx, prog, u, tval)
-            _note_program_read!()
-            return (vals, cells)
-        end
-    end
     # The build-time route reads the state out of `var_map` at `u`, when the
     # caller gave a state and not the scope itself.
     if u !== nothing && var_map !== nothing && isempty(state_arrays) &&
