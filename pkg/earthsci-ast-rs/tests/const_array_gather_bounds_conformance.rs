@@ -48,23 +48,31 @@ fn const_array_gathers_out_of_range_fail_with_the_spec_code() {
         let path = dir.join(fx["path"].as_str().expect("path"));
         let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         let file = load_string(&text).unwrap_or_else(|e| panic!("{id}: does not load: {e}"));
-        let results = earthsci_ast::run_inline_tests_with_options(
-            &file,
-            // §5.5.5 resolves an out-of-range const-array gather PER CELL by
-            // its declared boundary policy, which the tape has no form for,
-            // so `native` refuses these documents by NAME (API_SPEC §5.8).
-            // The fault they assert is the reference evaluator's.
-            &earthsci_ast::InlineTestOptions {
-                model_name: fx["model"].as_str().map(str::to_string),
-                solve: opts.clone(),
-                base_dir: Some(dir.clone()),
-                compiler: Some(earthsci_ast::Compiler::Interpreter),
-                ..Default::default()
-            },
-            None,
+        // Both compilers, which must agree to the message: `native` resolves
+        // the gather at build time and raises the reference evaluator's fault
+        // where it raises it.
+        let run = |compiler| {
+            let results = earthsci_ast::run_inline_tests_with_options(
+                &file,
+                &earthsci_ast::InlineTestOptions {
+                    model_name: fx["model"].as_str().map(str::to_string),
+                    solve: opts.clone(),
+                    base_dir: Some(dir.clone()),
+                    compiler: Some(compiler),
+                    ..Default::default()
+                },
+                None,
+            );
+            assert_eq!(results.len(), 1, "{id}: expected one assertion result");
+            results.into_iter().next().expect("one result")
+        };
+        let r = run(earthsci_ast::Compiler::Interpreter);
+        let native = run(earthsci_ast::Compiler::Native);
+        assert_eq!(
+            (native.passed, &native.message, native.actual),
+            (r.passed, &r.message, r.actual),
+            "{id}: native and the interpreter disagree"
         );
-        assert_eq!(results.len(), 1, "{id}: expected one assertion result");
-        let r = &results[0];
         match fx["outcome"].as_str().expect("outcome") {
             "pass" => {
                 assert!(r.passed, "{id}: must pass, got {}", r.message);

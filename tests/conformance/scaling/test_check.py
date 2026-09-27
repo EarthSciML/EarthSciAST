@@ -73,11 +73,41 @@ def main():
     assert o[("stencil_1d", 1000, "no_steady_alloc")] == "FAIL", o
     ledger = [
         {"family": "stencil_1d", "gate": "code_size_flat", "phase": 2},
-        {"family": "stencil_1d", "n": 1000, "gate": "no_steady_alloc", "phase": 5},
+        {
+            "family": "stencil_1d",
+            "n": 1000,
+            "gate": "no_steady_alloc",
+            "max_bytes_per_call": 128,
+            "phase": 5,
+        },
     ]
     code, o = run(grew, ledger)
     assert code == 0, o
     assert o[("stencil_1d", None, "code_size_flat")] == "ledgered"
+    assert o[("stencil_1d", 1000, "no_steady_alloc")] == "ledgered", o
+    # A ledgered allocation past the entry's own bound is red: the entry
+    # excuses a few bytes per call, not a jump to megabytes.
+    blew = [result("stencil_1d", 100), result("stencil_1d", 1000, allocs_per_call=4_000_000)]
+    code, o = run(blew, ledger[1:])
+    assert code == 1 and o[("stencil_1d", 1000, "no_steady_alloc")] == "EXCEEDS", o
+    code, o = run(
+        [result("stencil_1d", 100), result("stencil_1d", 1000, allocs_per_call=128)], ledger[1:]
+    )
+    assert code == 0 and o[("stencil_1d", 1000, "no_steady_alloc")] == "ledgered", o
+    # A no_steady_alloc entry must state its bound, and only that gate has one.
+    unbounded = [{"family": "stencil_1d", "n": 1000, "gate": "no_steady_alloc", "phase": 5}]
+    code, o = run(grew[1:], unbounded)
+    assert code == 1, o
+    assert check.ledger_shape_errors({"rust": unbounded}), unbounded
+    assert check.ledger_shape_errors({"rust": [dict(unbounded[0], max_bytes_per_call=True)]})
+    assert check.ledger_shape_errors(
+        {"rust": [{"family": "regrid", "gate": "builds", "max_bytes_per_call": 64}]}
+    )
+    assert not check.ledger_shape_errors({"rust": ledger})
+    # The committed ledgers are well formed.
+    with open(os.path.join(HERE, "manifest.json")) as fh:
+        committed = json.load(fh)["ledger"]
+    assert not check.ledger_shape_errors(committed), check.ledger_shape_errors(committed)
 
     # A deterministic ledger entry that now passes is red ("remove this entry").
     code, o = run(ok, ledger)
@@ -194,6 +224,10 @@ def main():
             outcomes = {r["outcome"] for r in json.load(fh)["rows"]}
         assert "MISSING" not in outcomes, outcomes
     print("test_check: ok")
+
+
+def test_check():
+    main()
 
 
 if __name__ == "__main__":

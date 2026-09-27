@@ -1905,6 +1905,26 @@ def _enter_per_cell(tier: str) -> None:
         policy.land_per_cell(tier)
 
 
+def _fit_region_value(v: Any, region_shape: tuple[int, ...]) -> Any:
+    """A ``makearray`` region value at the region's rank (esm-spec §4.3.2: an
+    array value must match the region's shape "excluding singleton
+    dimensions").
+
+    A value of LOWER rank covers the region's non-singleton axes in order —
+    the boundary face ``[[1,1],[1,n]]`` (or ``[[1,n],[1,1]]``) holding an
+    aggregate over its one free axis — so the singleton axes are inserted.
+    That is the Julia reference's rule; NumPy's right-aligned broadcast
+    covers only the leading-singleton half of it. Anything else is left for
+    the assignment to accept or reject as before.
+    """
+    if not isinstance(v, np.ndarray) or v.ndim == 0 or v.ndim >= len(region_shape):
+        return v
+    free = tuple(n for n in region_shape if n != 1)
+    if v.shape == free:
+        return v.reshape(region_shape)
+    return v
+
+
 def _materialize_makearray_vectorized(
     ma: ExprNode,
     ctx: EvalContext,
@@ -1973,7 +1993,9 @@ def _materialize_makearray_vectorized(
             # Tier-1 generated function when available, else a closure) and
             # skip the eval_expr dispatch walk on each step.
             fn = region_fns[k] if region_fns is not None else None
-            out[tuple(slicer)] = fn(ctx) if fn is not None else _compile_expr(val_expr)(ctx)
+            v = fn(ctx) if fn is not None else _compile_expr(val_expr)(ctx)
+            region_shape = tuple(max(int(hi) - int(lo) + 1, 0) for lo, hi in region)
+            out[tuple(slicer)] = _fit_region_value(v, region_shape)
     finally:
         ctx.locals = prev
     return out
@@ -4458,7 +4480,8 @@ def _eval_makearray(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         v = _require_real(eval_expr(value_expr, ctx), "makearray region value")
         slicer = tuple(slice(int(lo) - 1, int(hi)) for lo, hi in region)
         if isinstance(v, np.ndarray):
-            out[slicer] = v
+            region_shape = tuple(max(int(hi) - int(lo) + 1, 0) for lo, hi in region)
+            out[slicer] = _fit_region_value(v, region_shape)
         else:
             out[slicer] = float(v)
     return out

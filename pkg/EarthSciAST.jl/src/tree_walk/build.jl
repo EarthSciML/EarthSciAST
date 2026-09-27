@@ -1072,6 +1072,65 @@ function _normalize_param_override_keys(model::Model, overrides::AbstractDict;
     return normalized
 end
 
+# ---- Stage: canonicalize the caller's `const_arrays` keys ----
+# A caller's `const_arrays` entry for a SHAPED parameter is the same binding as
+# an inline-array `parameter_overrides` entry for it — both land on the
+# const-array channel — so its key is resolved by the same esm-spec §6.6.2
+# rules: the model-local spelling `lat` designates the flattened `Deg.lat`
+# exactly as it does for an override. An exact key alone missed that parameter:
+# with no `default` the build refused the document
+# (`E_TREEWALK_UNSUPPORTED_SHAPE`, the parameter backed by nothing), and with
+# one it silently used the default instead of the caller's array. Rust's build
+# pipeline resolves such a key the same way.
+#
+# The registry also carries arrays that are not a parameter's value at all — a
+# loader field, a coordinate table, a synthetic build array — so a key that
+# designates no shaped parameter is left as it is, never reported as unknown.
+# A key that is a dotted suffix of more than one shaped parameter is ambiguous,
+# and two non-exact keys designating one parameter collide; both are rejected
+# as they are for `parameter_overrides`. An exact key always wins. The resolved
+# name is ADDED beside the caller's key, which stays, so a consumer that reads
+# the caller's spelling still finds it.
+function _normalize_const_array_keys(model::Model, const_arrays::AbstractDict;
+                                     model_name=nothing)
+    isempty(const_arrays) && return const_arrays
+    shaped = Set{String}(n for (n, v) in model.variables
+                         if v.type == ParameterVariable && _is_array_shape(v.shape))
+    isempty(shaped) && return const_arrays
+    namespaces = _override_namespaces(shaped; model=model, model_name=model_name)
+    suffix_group = Dict{String,Vector{String}}()
+    for n in shaped, s in _dotted_suffixes(n)
+        push!(get!(suffix_group, s, String[]), n)
+    end
+    claims = Dict{String,Vector{String}}()
+    for rawk in keys(const_arrays)
+        k = String(rawk)
+        haskey(model.variables, k) && continue    # an exact name
+        name = _dotted_suffix_hit(shaped, namespaces, k)
+        if name === nothing
+            cands = get(suffix_group, k, nothing)
+            cands === nothing && continue          # designates no shaped parameter
+            length(cands) == 1 || throw(ArgumentError(
+                "const_arrays: ambiguous parameter name '$(k)' — it is carried as a " *
+                "suffix by $(length(cands)) shaped parameters " *
+                "($(join(sort(cands), ", "))). Qualify it further with its owning " *
+                "component (esm-spec §6.6.2)."))
+            name = cands[1]
+        end
+        haskey(const_arrays, name) && continue     # the exact key wins
+        push!(get!(claims, name, String[]), k)
+    end
+    isempty(claims) && return const_arrays
+    merged = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
+    for name in sort!(collect(keys(claims)))
+        ks = claims[name]
+        length(ks) == 1 || throw(ArgumentError(_override_collision_message(
+            "const_arrays", "parameter", name, sort!(ks))))
+        merged[name] = merged[ks[1]]
+    end
+    return merged
+end
+
 # ---- Shared caller-key canonicalization (esm-spec §6.6.2) ----
 # Rewrite each caller key onto the build-resolved name it designates, and
 # classify the ones that designate none — or the ones that designate one the
@@ -1527,10 +1586,19 @@ function _fold_field_ics!(set, field_ics, array_cells, layout::StateLayout,
             "target must name a lifted/array state variable of the flattened system"))
         blk = _layout_block(layout, target)
         put = (idxs, val) -> (blk === nothing || set(_block_slot(blk, idxs), val); nothing)
-        # Compile the coordinate field ONCE (indices as params) when possible; else
-        # fall back to the per-cell resolve+compile. With the construction-time
-        # compile-once forms off (`compiler = :interpreter`) this takes the
-        # per-cell path.
+        # A coordinate expression is filled through the right-hand-side cascade
+        # and emitted code, once (`_field_ic_fill`, setup_fill.jl); failing
+        # that, a bare coordinate aggregate is compiled once and evaluated per
+        # cell; failing both, the per-cell resolve+compile below. With the
+        # construction-time compile-once forms off (`compiler = :interpreter`)
+        # only the per-cell path runs.
+        filled = _field_ic_fill(rhs, cells, param_scope, registered_functions, const_arrays)
+        if filled !== nothing
+            sf, buf = filled
+            _record_rule!("ic($(target))", :equation, :setup_codegen)
+            _foreach_cell_lex(idxs -> put(idxs, _setup_fill_at(sf, buf, idxs)), cells)
+            continue
+        end
         fast = _setup_compile_once_enabled() ?
                _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays) :
                nothing
@@ -1963,12 +2031,14 @@ end
 
 # ---- Stage: faq-valued initialization_equations → u0 ----
 # When discretize() materializes an IC equation as a faq (coord-subst
-# x→index(coord_x,i)), its body is compiled ONCE with the output indices kept
-# symbolic — the same symbolic resolve the whole-array contraction tier uses, so
-# a const or state read at an output index becomes a runtime gather — and then
-# evaluated at each cell by setting the index counters. Only a body that will
-# not resolve symbolically takes the per-cell substitute → resolve → compile,
-# which a strict compiler refuses. The coord_<dim> const_array must be provided
+# x→index(coord_x,i)), the aggregate is filled through the right-hand-side
+# cascade and emitted code, once (`_init_equation_fill`, setup_fill.jl). A body
+# the fill declines — one that reads a state, say — is compiled ONCE with the
+# output indices kept symbolic — the same symbolic resolve the whole-array
+# contraction tier uses, so a const or state read at an output index becomes a
+# runtime gather — and then evaluated at each cell by setting the index
+# counters. Only a body that will not resolve symbolically takes the per-cell
+# substitute → resolve → compile, which a strict compiler refuses. The coord_<dim> const_array must be provided
 # by the caller. Explicit initial_conditions values take precedence (already
 # seeded in u0).
 function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
@@ -2002,6 +2072,20 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
         end
         isempty(todo) && continue
         rule = "init($(var_name))"
+        # The compiled fill (setup_fill.jl): the aggregate filled through the
+        # right-hand-side cascade and emitted code, once, over its own ranges.
+        filled = _init_equation_fill(rhs_op,
+                                     [_expand_int_range(ranges_dict[n]) for n in idx_names],
+                                     var_map, const_arrays,
+                                     pgather, param_sym_set, reg_funcs, p)
+        if filled !== nothing
+            sf, buf = filled
+            _record_rule!(rule, :equation, :setup_codegen)
+            for (idx_tuple, slot) in todo
+                u0[slot] = _setup_fill_at(sf, buf, idx_tuple)
+            end
+            continue
+        end
         # With the construction-time compile-once forms off
         # (`compiler = :interpreter`) the seed is the per-cell reference, as the
         # field-`ic` fast path is.
@@ -2448,26 +2532,54 @@ end
 # `M` fill from an unfilled `N` — a silently wrong RHS, not an error. So the
 # walk expands through every non-materialized observed definition and stops at
 # the materialized ones (their buffers are the dependency).
+#
+# A fill that reaches its OWN buffer through an inlined observed (an `index`
+# self-read in its own body is declined earlier, as a recurrence) is an
+# observed cycle, and is refused here with the code the inlining build
+# (`_resolve_observed`) and `validate()` give it. It must be: a level's kernel
+# section runs in an alias scope that asserts no store to the buffers it fills
+# aliases a load (`_build_codegen_rhs`), and that level's writes are exactly its
+# own observeds, whose other reads all sit on strictly lower levels. A build
+# from a `Model` that skipped `validate()` would otherwise put a load of a slot
+# the same section stores into that scope, which is undefined, not merely
+# stale. The check is per observed and per name it reaches, never per cell.
 function _materialized_obs_levels(mat_defs::Dict{String,ASTExpr}, names,
                                   inline_obs::Dict{String,ASTExpr})
     nm = Set{String}(names)
+    # The materialized buffers `root` reads, and for each the inlined observed
+    # it was reached through (`nothing` for a direct read).
     function reach(root::ASTExpr)
-        out = Set{String}()
-        seen = Set{String}()
-        frontier = collect(_referenced_var_names(root))
+        out = Dict{String,Union{Nothing,String}}()
+        via = Dict{String,Union{Nothing,String}}()
+        frontier = Tuple{String,Union{Nothing,String}}[
+            (r, nothing) for r in _referenced_var_names(root)]
         while !isempty(frontier)
-            r = pop!(frontier)
+            r, from = pop!(frontier)
             if r in nm
-                push!(out, r)
-            elseif !(r in seen) && haskey(inline_obs, r)
-                push!(seen, r)
-                append!(frontier, collect(_referenced_var_names(inline_obs[r])))
+                haskey(out, r) || (out[r] = from)
+            elseif !haskey(via, r) && haskey(inline_obs, r)
+                via[r] = from
+                append!(frontier, [(x, r) for x in _referenced_var_names(inline_obs[r])])
             end
         end
-        return out
+        return out, via
     end
-    deps = Dict{String,Set{String}}(n => setdiff(reach(mat_defs[n]), (n,))
-                                    for n in names)
+    deps = Dict{String,Set{String}}()
+    for n in sort!(collect(names))
+        out, via = reach(mat_defs[n])
+        if haskey(out, n)
+            path = String[n]
+            step = out[n]
+            while step !== nothing
+                pushfirst!(path, step)
+                step = via[step]
+            end
+            throw(TreeWalkError("E_TREEWALK_OBSERVED_CYCLE",
+                "$(join(sort!(unique(path)), ",")): the array observed '$(n)' reads its " *
+                "own buffer ($(n) -> $(join(path, " -> ")))"))
+        end
+        deps[n] = Set{String}(keys(out))
+    end
     order = _dependency_order(sort(collect(names)), n -> deps[n];
         on_cycle=done -> throw(TreeWalkError("E_TREEWALK_OBSERVED_CYCLE",
             join(sort(collect(setdiff(nm, done))), ","))))
@@ -3672,6 +3784,7 @@ function _build_evaluator_impl_inner(model::Model;
     # `initial_conditions` profile is expanded into the per-cell keys `_build_u0`
     # seeds from. Both are no-ops (and the registries byte-identical) for a
     # document that declares no shaped parameter.
+    const_arrays = _normalize_const_array_keys(model, const_arrays; model_name=_model_name)
     const_arrays = _register_inline_array_parameters(model, const_arrays,
                                                      parameter_overrides, index_sets;
                                                      param_arrays=param_arrays)
@@ -5763,6 +5876,12 @@ function _build_evaluator_dict(esm::AbstractDict;
         # legal rule-2 key for the parameter `A` (esm-spec §6.6.2).
         kwd[:parameter_overrides] = _normalize_param_override_keys(
             model, kwd[:parameter_overrides];
+            model_name=(model_name === nothing ? _sole_model_name(file) : String(model_name)))
+    end
+    # The same for the caller's `const_arrays` keys, so the front-door pre-passes
+    # below read a shaped parameter's array under the name the model spells.
+    if model !== nothing && haskey(kwd, :const_arrays)
+        kwd[:const_arrays] = _normalize_const_array_keys(model, kwd[:const_arrays];
             model_name=(model_name === nothing ? _sole_model_name(file) : String(model_name)))
     end
 

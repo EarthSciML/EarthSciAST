@@ -24,7 +24,7 @@ records what each answered:
 | Binding | Census driver | Unit of work |
 |---|---|---|
 | Julia | `pkg/EarthSciAST.jl/scripts/compiler_census.jl --compiler <c>` | one sweep per compiler, sharded across worker processes that each load the package once; a worker whose document runs past the timeout, or that dies, is recorded and restarted at the next document |
-| Rust | `pkg/earthsci-ast-rs/examples/compiler_census.rs` (release build) | one process per document, both compilers in it, under a wall-clock timeout and an address-space cap |
+| Rust | `pkg/earthsci-ast-rs/examples/compiler_census.rs` (release build) | one process per document and compiler (`--only native` / `--only interpreter`), each under a wall-clock timeout and an address-space cap; the two halves are merged into one record per document |
 
 `scripts/native-coverage-census.sh` runs both drivers and the check;
 `scripts/native-coverage.sbatch` runs it on a Slurm node; the scheduled
@@ -36,7 +36,9 @@ guess, but a document only the fallback builds is not one a caller can build, so
 it counts as not building. After a build, Julia's census also calls the
 problem's right-hand side `f!` on `u0`; a build whose call then throws counts as
 not building either (code `rhs_call_failed`), since a missing evaluation rule
-can fire at call time rather than at construction. Rust builds through
+can fire at call time rather than at construction. That includes a stack
+overflow or an out-of-memory error in the call, and a record with no `rhs_ok`
+that carries an error. Rust builds through
 `esm_problem` with the default `Rhs::Auto` and does not call the right-hand
 side.
 
@@ -76,8 +78,9 @@ document instead of by fixture: `path` is relative to the repository root, or
 `EarthSciModels/…` for a document in that repository; `code` is native's error
 code (`compiler_refused_rule` for a refusal, the error's own code or type
 otherwise, `rhs_call_failed` for a Julia build whose first right-hand-side call
-threw); `rule` is the refused rule where the refusal names one; `reason` is the
-message, squashed to one line. Entries are sorted by path and unique.
+threw, `crashed` or `killed` for a build whose process died); `rule` is the
+refused rule where the refusal names one; `reason` is the message, squashed to
+one line. Entries are sorted by path and unique.
 `measured` records what the baseline ran on and is not compared.
 
 ## The check
@@ -96,17 +99,30 @@ It is RED when:
 The `reason` text is not compared: messages are reworded without the refusal
 changing.
 
-**A document the census could not finish is inconclusive.** A Julia worker
-that runs past the timeout (`timeout`) or dies (`crashed`), and a Rust process
-that is killed (`killed`), finish or not depending on the machine's load, so
-they say nothing about native's coverage. Such a document is reported
+**A document the census timed out on is inconclusive.** Whether a build
+finishes inside the census's wall clock depends on the machine's load, so a
+timeout (a Julia worker that runs past it, or a Rust half that `timeout`
+stopped) says nothing about native's coverage. Such a document is reported
 (`INCONCLUSIVE` in the check's output, `inconclusive` in its JSON report, and
 `inconclusive (excluded)` in the counts) and kept out of the comparison
 whichever compiler it was: it is never a new refusal, a ledger entry for it is
 neither confirmed nor stale and its code is not compared, and `write-ledger`
-keeps such an entry as it was. The ledger therefore never holds a `timeout`,
-`crashed` or `killed` entry. The census still has a record for the document,
-so it is not "census incomplete".
+keeps such an entry as it was. The ledger therefore never holds a `timeout`
+entry. The census still has a record for the document, so it is not "census
+incomplete".
+
+**A build whose process died is a failure, not inconclusive.** A Julia worker
+that dies (`crashed`: most often out of memory) or never loads
+(`worker_load_failure`), and a Rust half that printed nothing without the
+timeout stopping it (`killed`: the address-space cap, an abort, a stack
+overflow), fail the same way on every run whatever the load. Each is read as
+that compiler not building the document, with that code. So a native build that
+blows up in memory on a document the interpreter builds is a new gap and turns
+the check red, which is the failure this ledger exists to catch. Because the
+Rust census runs each compiler in its own process, a killed half is known to be
+that compiler's; a Rust record from before that split, killed with anything but
+a timeout's exit status, names no compiler, and the check refuses it as input
+(`native-coverage-census.sh` runs such a document again).
 
 **The one-way rule is enforced on the file too.** `write-ledger` rewrites a
 ledger from a census and refuses to add an entry the committed ledger lacks; it

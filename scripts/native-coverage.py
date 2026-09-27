@@ -149,12 +149,21 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def inconclusive(code: str, reason: str) -> dict[str, Any]:
-    """An outcome the census could not finish: a timeout, a crash, a kill.
+    """An outcome the census could not finish because it ran out of wall clock.
 
-    Whether a document finishes inside the census's wall clock depends on the
-    machine's load, so such an outcome says nothing about native's coverage: it
-    is reported, and kept out of the comparison with the ledger."""
+    Whether a document finishes inside the census's timeout depends on the
+    machine's load, so a timeout says nothing about native's coverage: it is
+    reported, and kept out of the comparison with the ledger. Only a timeout is
+    inconclusive. A crash, an out-of-memory kill or an abort happens on every
+    run, whatever the load, so it is an ordinary failure (see `died`)."""
     return {"ok": False, "inconclusive": True, "code": code, "rule": None, "reason": reason}
+
+
+def died(code: str, reason: str) -> dict[str, Any]:
+    """A build whose process died before it answered: a crash, an out-of-memory
+    kill, the census's memory cap, an abort. It did not build, so under native,
+    on a document the interpreter builds, it is a gap like any refusal."""
+    return {"ok": False, "code": code, "rule": None, "reason": reason}
 
 
 def julia_outcome(rec: dict[str, Any]) -> dict[str, Any]:
@@ -167,8 +176,18 @@ def julia_outcome(rec: dict[str, Any]) -> dict[str, Any]:
 
     A build whose right-hand side then fails to evaluate (``rhs_ok`` false: the
     census calls ``f!`` on ``u0`` after the build) does not count as building
-    either. A record from before the census recorded ``rhs_ok`` has none, and
-    reads as a build."""
+    either. Nor does a record with no ``rhs_ok`` that carries an error: the
+    right-hand-side call, or what came after it, threw past the census's
+    handler. A record from before the census recorded ``rhs_ok`` has neither,
+    and reads as a build.
+
+    A ``timeout`` is inconclusive. A worker that died (``crashed``) or never
+    loaded (``worker_load_failure``) is a failure."""
+    status = rec.get("status")
+    if status == "timeout":
+        return inconclusive(status, _squash(rec.get("error_message") or rec.get("error_type")))
+    if status in ("crashed", "worker_load_failure"):
+        return died(status, _squash(rec.get("error_message") or rec.get("error_type")))
     if rec.get("ok") and rec.get("entry") == "esm_problem":
         if rec.get("rhs_ok") is False:
             return {
@@ -177,10 +196,16 @@ def julia_outcome(rec: dict[str, Any]) -> dict[str, Any]:
                 "rule": None,
                 "reason": _squash(rec.get("rhs_error")),
             }
+        if rec.get("rhs_ok") is None and (rec.get("error_type") or rec.get("error_message")):
+            return {
+                "ok": False,
+                "code": "rhs_call_failed",
+                "rule": None,
+                "reason": _squash(
+                    ": ".join(x for x in (rec.get("error_type"), rec.get("error_message")) if x)
+                ),
+            }
         return {"ok": True}
-    status = rec.get("status")
-    if status in ("timeout", "crashed", "worker_load_failure"):
-        return inconclusive(status, _squash(rec.get("error_message") or rec.get("error_type")))
     code = (
         rec.get("esm_problem_error_code")
         or rec.get("error_code")
@@ -194,11 +219,26 @@ def julia_outcome(rec: dict[str, Any]) -> dict[str, Any]:
 
 
 def rust_outcome(rec: dict[str, Any], tag: str) -> dict[str, Any]:
-    """One compiler's half of a Rust census record (examples/compiler_census.rs)."""
+    """One compiler's half of a Rust census record (examples/compiler_census.rs).
+
+    The census runs each compiler in its own process, so a half that printed
+    nothing is that compiler's (``<tag>_killed``): inconclusive when the
+    timeout stopped it, a failure otherwise."""
     if rec.get("killed"):
-        return inconclusive(
-            "killed", _squash(f"exit {rec.get('rc')}: {rec.get('stderr_tail', '')}")
+        # A record from before each compiler ran in its own process: the kill
+        # names neither compiler, so nothing but a timeout can be read from it.
+        if rec.get("rc") == 124:
+            return inconclusive("timeout", _squash(f"exit 124: {rec.get('stderr_tail', '')}"))
+        raise InputError(
+            f"{rec.get('path')}: a Rust record killed with exit {rec.get('rc')} that does not say "
+            f"which compiler died; re-run the census (native-coverage-census.sh runs the "
+            f"record's document again)"
         )
+    if rec.get(f"{tag}_killed"):
+        why = _squash(f"exit {rec.get(f'{tag}_rc')}: {rec.get(f'{tag}_stderr_tail', '')}")
+        if rec.get(f"{tag}_timed_out"):
+            return inconclusive("timeout", why)
+        return died("killed", why)
     if rec.get(f"{tag}_ok"):
         return {"ok": True}
     variant = rec.get(f"{tag}_err_variant") or "error"
@@ -403,7 +443,7 @@ def compare(
         elif o["native"]["ok"]:
             why = "native now builds it"
         elif not o["interpreter"]["ok"]:
-            why = "the interpreter no longer builds it either"
+            why = f"the interpreter no longer builds it either ({o['interpreter']['code']})"
         else:
             why = "it is excluded from the gap list (library fragment)"
         red.append(f"stale entry: {rel}: {why}. Remove this entry from {ledger_name}.")
@@ -651,7 +691,7 @@ def _self_test() -> list[str]:
     expect(
         "the interpreter stops building a ledgered document",
         both,
-        "the interpreter no longer builds it either. Remove this entry",
+        "the interpreter no longer builds it either (compiler_refused_rule). Remove this entry",
     )
     drift = copy.deepcopy(base)
     drift["tests/valid/a.esm"]["native"] = refused("unbound_variable")
@@ -721,13 +761,40 @@ def _self_test() -> list[str]:
         "[continuous] wholesale: unsupported op",
     ):
         fails.append(f"rust_outcome: {r}")
-    killed = rust_outcome({"killed": True, "rc": 124}, "interpreter")
-    if killed["ok"] or not killed.get("inconclusive") or killed["code"] != "killed":
-        fails.append(f"rust_outcome: a killed document must read as inconclusive: {killed}")
-    for status in ("timeout", "crashed"):
-        o = julia_outcome({"ok": False, "status": status, "error_type": "exceeded 180s"})
-        if o["ok"] or not o.get("inconclusive"):
-            fails.append(f"julia_outcome: a {status} must read as inconclusive: {o}")
+    # Only a timeout is inconclusive; a process that died is a failure.
+    rust_timeout = rust_outcome(
+        {"native_killed": True, "native_rc": 124, "native_timed_out": True}, "native"
+    )
+    if rust_timeout["ok"] or not rust_timeout.get("inconclusive"):
+        fails.append(f"rust_outcome: a timed-out half must read as inconclusive: {rust_timeout}")
+    rust_killed = rust_outcome(
+        {
+            "native_killed": True,
+            "native_rc": 134,
+            "native_timed_out": False,
+            "interpreter_ok": True,
+        },
+        "native",
+    )
+    if rust_killed["ok"] or rust_killed.get("inconclusive") or rust_killed["code"] != "killed":
+        fails.append(f"rust_outcome: a killed half must read as a failure: {rust_killed}")
+    if not rust_outcome({"native_killed": True, "interpreter_ok": True}, "interpreter")["ok"]:
+        fails.append("rust_outcome: the other compiler's kill must not touch this half")
+    legacy = rust_outcome({"killed": True, "rc": 124}, "interpreter")
+    if not legacy.get("inconclusive"):
+        fails.append(f"rust_outcome: a record from before the split, timed out: {legacy}")
+    try:
+        rust_outcome({"path": "x.esm", "killed": True, "rc": 134}, "native")
+        fails.append("rust_outcome: a kill that names no compiler must be refused as input")
+    except InputError:
+        pass
+    o = julia_outcome({"ok": False, "status": "timeout", "error_type": "exceeded 180s"})
+    if o["ok"] or not o.get("inconclusive"):
+        fails.append(f"julia_outcome: a timeout must read as inconclusive: {o}")
+    for status in ("crashed", "worker_load_failure"):
+        o = julia_outcome({"ok": False, "status": status, "error_type": "worker died"})
+        if o["ok"] or o.get("inconclusive") or o["code"] != status:
+            fails.append(f"julia_outcome: a {status} must read as a failure: {o}")
     # A build whose right-hand side then fails is not a build.
     rhs_failed = julia_outcome(
         {"ok": True, "entry": "esm_problem", "rhs_ok": False, "rhs_error": "MethodError: …"}
@@ -740,6 +807,29 @@ def _self_test() -> list[str]:
         fails.append("julia_outcome: a build whose right-hand side ran must count as a build")
     if not julia_outcome({"ok": True, "entry": "esm_problem"})["ok"]:
         fails.append("julia_outcome: a record with no rhs_ok must read as a build")
+    if not julia_outcome(
+        {
+            "ok": True,
+            "entry": "esm_problem",
+            "rhs_ok": None,
+            "error_type": None,
+            "error_message": "",
+        }
+    )["ok"]:
+        fails.append("julia_outcome: an empty error message is no error")
+    # The right-hand-side call threw past the census's handler (a stack overflow
+    # from a census that rethrew it): no rhs_ok, and the record's error set.
+    escaped = julia_outcome(
+        {
+            "ok": True,
+            "entry": "esm_problem",
+            "rhs_ok": None,
+            "error_type": "StackOverflowError",
+            "error_message": "",
+        }
+    )
+    if escaped["ok"] or escaped["code"] != "rhs_call_failed":
+        fails.append(f"julia_outcome: an error with no rhs_ok counted as a build: {escaped}")
     rhs = copy.deepcopy(base)
     rhs["tests/valid/b.esm"]["native"] = rhs_failed
     expect(
@@ -751,17 +841,53 @@ def _self_test() -> list[str]:
     both_rhs = copy.deepcopy(rhs)
     both_rhs["tests/valid/b.esm"]["interpreter"] = rhs_failed
     expect("both right-hand sides fail", both_rhs, None)
-    # A timeout, a crash or a kill is inconclusive: never a new refusal, never
-    # a stale entry, never a code drift.
+    # A process that died is a failure like any other: under native, on a
+    # document the interpreter builds, a new gap.
+    crashed = julia_outcome({"ok": False, "status": "crashed", "error_type": "worker died"})
+    for label, died_outcome, code in (
+        ("a Julia native worker dies", crashed, "crashed"),
+        ("a Rust native process is killed", rust_killed, "killed"),
+    ):
+        outs = copy.deepcopy(base)
+        outs["tests/valid/b.esm"]["native"] = died_outcome
+        expect(
+            f"{label} on a document the interpreter builds",
+            outs,
+            f"NEW native refusal: tests/valid/b.esm builds under interpreter and not under "
+            f"native ({code}",
+        )
+        outs = copy.deepcopy(base)
+        outs["tests/valid/a.esm"]["native"] = died_outcome
+        expect(f"{label} on a ledgered document", outs, "code drift: tests/valid/a.esm")
+        outs = copy.deepcopy(base)
+        outs["tests/valid/a.esm"]["interpreter"] = died_outcome
+        expect(
+            f"the interpreter's {label.split(' ', 2)[1]} process dies on a ledgered document",
+            outs,
+            f"the interpreter no longer builds it either ({code}). Remove this entry",
+        )
+    rhs_escaped = copy.deepcopy(base)
+    rhs_escaped["tests/valid/b.esm"]["native"] = escaped
+    expect(
+        "native's right-hand side throws past the census",
+        rhs_escaped,
+        "NEW native refusal: tests/valid/b.esm",
+    )
+    # A timeout is inconclusive: never a new refusal, never a stale entry,
+    # never a code drift.
     timeout = julia_outcome({"ok": False, "status": "timeout", "error_type": "exceeded 180s"})
     for label, rel, compiler in (
         ("native times out on a document it built", "tests/valid/b.esm", "native"),
         ("native times out on a ledgered document", "tests/valid/a.esm", "native"),
         ("the interpreter times out on a ledgered document", "tests/valid/a.esm", "interpreter"),
-        ("native is killed on a ledgered document", MODELS_PREFIX + "components/f.esm", "native"),
+        (
+            "a Rust native process times out on a ledgered document",
+            MODELS_PREFIX + "components/f.esm",
+            "native",
+        ),
     ):
         outs = copy.deepcopy(base)
-        outs[rel][compiler] = killed if "killed" in label else timeout
+        outs[rel][compiler] = rust_timeout if "Rust" in label else timeout
         expect(label, outs, None)
         c = classify(outs)
         if rel in c["gaps"] or rel not in c["inconclusive"]:

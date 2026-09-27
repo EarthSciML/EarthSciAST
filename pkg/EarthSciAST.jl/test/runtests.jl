@@ -318,6 +318,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("geometry_overlap_join_conformance_test.jl")
     include("geometry_ranged_clip_test.jl")
     include("setup_map_compile_once_test.jl")  # promoted-physics MAP: compile-once == per-cell, bitwise
+    include("setup_fill_test.jl")  # construction-time fills through the cascade: bitwise, one compile across N
     include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == rank-abstract, bitwise
     include("geom_overlap_drive_test.jl")     # setup overlap broad phase: candidate-DRIVEN, and what it changes
     include("geom_on_drive_test.jl")          # setup bin-equality broad phase: key matches DRIVE the sweep
@@ -361,6 +362,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_scalar_ic_test.jl")
     include("conformance_static_evaluation_assertions_test.jl")  # §6.6.3 an assertion's `time` is when it is EVALUATED (#406)
     include("conformance_shaped_parameter_broadcast_test.jl")  # §6.3 scalar-on-a-shaped-parameter broadcast
+    include("conformance_shaped_parameter_const_arrays_test.jl")  # §5.32.5 const_arrays keys for a shaped parameter
     include("conformance_shaped_observed_scalar_broadcast_test.jl")  # §4.3.4 scalar right-hand side on a shaped observed (#262)
     include("conformance_override_key_diagnostics_test.jl")
     include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names
