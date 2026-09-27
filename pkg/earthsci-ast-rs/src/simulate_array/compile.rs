@@ -864,7 +864,7 @@ impl ArrayCompiled {
             // The externally refreshed parameters ride in `observed_vars` with
             // no defining rule (see `classify_variables`); these are the
             // forcing buffer's names.
-            let forcing_decls: IndexMap<String, Option<Vec<usize>>> = observed_vars
+            let mut forcing_decls: IndexMap<String, Option<Vec<usize>>> = observed_vars
                 .iter()
                 .filter(|(_, var)| var.var_type == VariableType::Parameter)
                 .map(|(name, var)| {
@@ -875,6 +875,7 @@ impl ArrayCompiled {
                     ((*name).clone(), shape)
                 })
                 .collect();
+            infer_unsized_forcing_shapes(&mut forcing_decls, &model.equations);
             (
                 observed_names,
                 forcing_decls,
@@ -4874,6 +4875,82 @@ pub(super) fn infer_shapes(
         out.insert(name_s, shape);
     }
     Ok(out)
+}
+
+/// Size, from how the equations index it, every refreshed parameter whose
+/// declared shape names an index set the registry cannot size, as
+/// [`infer_state_shapes`] sizes a state from its uses when no declaration
+/// does: each axis spans `[1, hi]`, `hi` the largest subscript any `index` of
+/// it reaches. A parameter no equation indexes, or indexes at different
+/// ranks, stays unsized.
+///
+/// The box is only what a compiled read is built against. The forcing load
+/// checks the entry the buffer actually holds against it at run time and
+/// faults on a different shape, so a wrong guess fails loudly rather than
+/// reading the wrong cells.
+fn infer_unsized_forcing_shapes(
+    decls: &mut IndexMap<String, Option<Vec<usize>>>,
+    equations: &[crate::types::Equation],
+) {
+    let unsized_: HashSet<&str> = decls
+        .iter()
+        .filter(|(_, s)| s.is_none())
+        .map(|(n, _)| n.as_str())
+        .collect();
+    if unsized_.is_empty() {
+        return;
+    }
+    let mut per_var_min: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut per_var_max: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut seen_indexed: HashSet<String> = HashSet::new();
+    let skip_none: HashSet<String> = HashSet::new();
+    let no_loops: HashMap<String, (i64, i64)> = HashMap::new();
+    let mut ranks: HashMap<String, HashSet<usize>> = HashMap::new();
+    {
+        let mut walk = ShapeWalk {
+            states: &unsized_,
+            per_var_min: &mut per_var_min,
+            per_var_max: &mut per_var_max,
+            seen_indexed: &mut seen_indexed,
+            skip_shape_update: &skip_none,
+        };
+        for eq in equations {
+            walk.walk(&eq.lhs, &no_loops);
+            walk.walk(&eq.rhs, &no_loops);
+        }
+    }
+    for eq in equations {
+        for e in [&eq.lhs, &eq.rhs] {
+            index_ranks(e, &unsized_, &mut ranks);
+        }
+    }
+    for (name, shape) in decls.iter_mut() {
+        if shape.is_some() || ranks.get(name).is_none_or(|r| r.len() != 1) {
+            continue;
+        }
+        let Some(maxes) = per_var_max.get(name) else {
+            continue;
+        };
+        if maxes.iter().all(|&hi| hi >= 1) {
+            *shape = Some(maxes.iter().map(|&hi| hi as usize).collect());
+        }
+    }
+}
+
+/// The subscript counts every `index` of a name in `names` uses.
+fn index_ranks(expr: &Expr, names: &HashSet<&str>, out: &mut HashMap<String, HashSet<usize>>) {
+    let Expr::Operator(node) = expr else {
+        return;
+    };
+    if node.op == "index"
+        && let Some(Expr::Variable(var)) = node.args.first()
+        && names.contains(var.as_str())
+    {
+        out.entry(var.clone())
+            .or_default()
+            .insert(node.args.len() - 1);
+    }
+    node.for_each_child(&mut |child| index_ranks(child, names, out));
 }
 
 /// Accumulator state for [`infer_shapes`]'s expression walk, so the recursion

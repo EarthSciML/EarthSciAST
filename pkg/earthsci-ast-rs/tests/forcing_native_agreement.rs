@@ -211,3 +211,27 @@ fn photolysis_rates_from_a_loader_agree() {
         &[5.0, 10.0],
     );
 }
+
+/// The forcing shapes here name index sets the document never declares, so
+/// the build sizes each read from how the equations index it; the DISCRETE
+/// field is not in the buffer until the solve's first refresh.
+#[test]
+fn forcings_sized_from_their_uses_agree() {
+    agree(
+        "conformance/refresh/fixtures/coupled_refresh_regrid.esm",
+        &[
+            ("F_src", &[6], &[0.0, 1.0, 2.0], 0.6),
+            ("scale_src", &[6], &[], 1.3),
+        ],
+        &[],
+        (0.0, 3.0),
+        &[0.5, 1.0, 1.5, 2.0, 3.0],
+    );
+    agree(
+        "conformance/discrete_materialize/fixtures/discrete_materialize_contraction.esm",
+        &[("src", &[2], &[0.0, 1.0, 2.0], 0.7)],
+        &[],
+        (0.0, 3.0),
+        &[1.0, 2.0, 3.0],
+    );
+}

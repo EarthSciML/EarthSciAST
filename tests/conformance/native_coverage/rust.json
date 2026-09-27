@@ -27,12 +27,6 @@
       "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
     },
     {
-      "path": "tests/conformance/discrete_materialize/fixtures/discrete_materialize_contraction.esm",
-      "code": "compiler_refused_rule",
-      "rule": "g",
-      "reason": "[const] forcing `src`: its declared shape names an index set the registry cannot size, and the forcing buffer held no entry for it when the tape was built, so there is no box to compile its read against"
-    },
-    {
       "path": "tests/conformance/expression_templates/eager_target_bearing/emitted.esm",
       "code": "compiler_refused_rule",
       "rule": "d_eager",
@@ -73,12 +67,6 @@
       "code": "compiler_refused_rule",
       "rule": "Binned.E_PM25",
       "reason": "[const] op: unsupported operator `polygon_intersection_area`/2"
-    },
-    {
-      "path": "tests/conformance/refresh/fixtures/coupled_refresh_regrid.esm",
-      "code": "compiler_refused_rule",
-      "rule": "scale_tgt",
-      "reason": "[const] forcing `scale_src`: its declared shape names an index set the registry cannot size, and the forcing buffer held no entry for it when the tape was built, so there is no box to compile its read against"
     },
     {
       "path": "tests/conformance/scaling/fixtures/regrid/regrid_N100.esm",
