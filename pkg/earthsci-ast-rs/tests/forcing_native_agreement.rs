@@ -14,7 +14,7 @@ use earthsci_ast::provider::{CadenceProvider, NativeField, ProviderError};
 use earthsci_ast::{Compiler, ProblemOptions, SolveOptions, esm_problem, solve};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 mod common;
 
@@ -59,7 +59,7 @@ impl CadenceProvider for Scripted {
 type Feed<'a> = (&'a str, &'a [usize], &'a [f64], f64);
 
 fn solve_under(
-    path: &PathBuf,
+    path: &Path,
     compiler: Compiler,
     feeds: &[Feed<'_>],
     u0: &HashMap<String, f64>,
@@ -81,7 +81,7 @@ fn solve_under(
         })
         .collect();
     let prob = esm_problem(
-        path.as_path(),
+        path,
         tspan,
         ProblemOptions {
             compiler: Some(compiler),
