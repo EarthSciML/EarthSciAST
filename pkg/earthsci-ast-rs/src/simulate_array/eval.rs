@@ -1936,8 +1936,10 @@ pub fn take_const_array_oob() -> Option<String> {
     CONST_OOB.with(|c| c.borrow_mut().take())
 }
 
-/// Latch the FIRST fail-closed gather diagnostic of this evaluation.
-fn latch_gather_fault(msg: String) {
+/// Latch the FIRST fail-closed gather diagnostic of this evaluation. The
+/// tape's `Instr::Fault` latches through here too, so both evaluators keep
+/// the same first-wins record.
+pub(crate) fn latch_gather_fault(msg: String) {
     CONST_OOB.with(|c| {
         let mut slot = c.borrow_mut();
         if slot.is_none() {
@@ -1974,29 +1976,40 @@ fn latch_recur_unavailable(name: &str, raw: &[i64]) {
 /// goes on to apply — the document then reports a number that was never
 /// computed.
 fn latch_index_on_scalar(base: &Expr, subscripts: usize) {
+    latch_gather_fault(index_on_scalar_message(base, subscripts));
+}
+
+/// The text [`latch_index_on_scalar`] latches, shared with the tape lowering,
+/// which emits it as an `Instr::Fault`.
+pub(crate) fn index_on_scalar_message(base: &Expr, subscripts: usize) -> String {
     let what = match base {
         Expr::Variable(name) => format!("'{name}'"),
         Expr::Operator(node) => format!("the `{}` result", node.op),
         Expr::Integer(_) | Expr::Number(_) => "a numeric literal".to_string(),
     };
-    latch_gather_fault(format!(
+    format!(
         "E_TREEWALK_INDEX_ON_SCALAR: {what} has no axes, so the {subscripts} subscript(s) \
          applied to it name nothing (esm-spec §4.3.4; CONFORMANCE_SPEC.md §7.1). Fail-closed: \
          never the §5.5.5 zero ghost, which is the boundary convention for a gather that HAS \
          an axis to fall outside of, and never a bare NaN. Read an unshaped quantity by its \
          bare name or as `index(<name>)` with no subscript, or give it a `shape` if it was \
          meant to have axes."
-    ));
+    )
 }
 
 /// Latch the FIRST const-array out-of-range diagnostic of this evaluation.
 fn latch_const_oob(name: &str, one_based: i64, n: i64, d: usize) {
-    latch_gather_fault(format!(
+    latch_gather_fault(const_oob_message(name, one_based, n, d));
+}
+
+/// The text [`latch_const_oob`] latches, shared with the tape lowering.
+pub(crate) fn const_oob_message(name: &str, one_based: i64, n: i64, d: usize) -> String {
+    format!(
         "E_TREEWALK_CONSTARRAY_OOB: const array '{name}' index {one_based} out of range \
          1..{n} in dim {d} (CONFORMANCE_SPEC.md §5.5.5: the zero-ghost convention is \
          never applied to a const-array gather; declare a per-dimension boundary policy \
          to resolve it as `periodic` or `clamp`)"
-    ));
+    )
 }
 
 /// The out-of-range boundary policy of the gather being resolved
@@ -5250,9 +5263,12 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
                 .iter()
                 .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
                 .collect();
-            if a.shape() != region_shape.as_slice() {
+            // The value must fit the region, excluding its singleton axes
+            // (esm-spec §4.3.2): the face region `[[1,1],[1,n]]` takes an
+            // `[n]` value.
+            let Some(covered) = region_value_axes(a.shape(), &region_shape) else {
                 return Value::Scalar(f64::NAN);
-            }
+            };
             // The legal EMPTY region spelling (`stop == start - 1`, §4.3.2)
             // writes nothing — and its `start` may sit one past the bounding
             // box, which is not a slicable offset. The per-cell walk produced no
@@ -5273,7 +5289,7 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
                 let s0 = (ranges[d].0 - origin[d]) as usize;
                 ndarray::Slice::from(s0..s0 + region_shape[d])
             })
-            .assign(a);
+            .assign(&region_value_view(a.view(), &covered));
             continue;
         }
         let scalar = match &v {

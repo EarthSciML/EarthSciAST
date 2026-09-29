@@ -157,7 +157,10 @@ function _census_one(M, path::AbstractString)
                         t1 = time(); prob.f!(du, copy(prob.u0), prob.p, prob.tspan[1]); rhs_second = time() - t1
                         rhs_ok = true
                     catch er
-                        M._is_resource_error(er) && rethrow()
+                        # A stack overflow or an out-of-memory error in the
+                        # right-hand side is that call failing, and is recorded
+                        # as such; only an interrupt stops the census.
+                        er isa InterruptException && rethrow()
                         rhs_ok = false
                         rhs_err = first(sprint(showerror, er), 400)
                     end

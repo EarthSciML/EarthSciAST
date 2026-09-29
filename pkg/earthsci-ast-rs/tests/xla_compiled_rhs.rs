@@ -834,6 +834,108 @@ fn scans_assemblies_and_promoted_contractions_lower() {
     }
 }
 
+/// The array forms phase 3 put on the tape — a column-major `reshape` (an
+/// `Instr::Reshape` between two reversal gathers), `transpose`, `concat`, the
+/// positional broadcast of anonymous operands, a makearray whose face regions
+/// hold lower-rank values, an empty region, a filtered rank-0 reduction and a
+/// shaped `ifelse` with a scalar arm — lower through the emitter and agree
+/// with the interpreter. Each document's tape is checked to carry the
+/// instruction it is here for, so the test notices if the form stopped being
+/// taped.
+#[test]
+fn phase3_array_forms_lower() {
+    if !runtime_available() {
+        return;
+    }
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "tests/fixtures/faq/11_reshape_roundtrip.esm",
+            "Reshape",
+            "algebraic",
+        ),
+        // A gather may be folded into a fused group, so these two name none.
+        ("tests/fixtures/faq/12_transpose_2d.esm", "", "algebraic"),
+        (
+            "tests/fixtures/faq/13_concat_1d.esm",
+            "Assemble",
+            "algebraic",
+        ),
+        (
+            "tests/fixtures/faq/14_broadcast_elementwise.esm",
+            "Reshape",
+            "algebraic",
+        ),
+        ("tests/bench/transport_3axis_7cubed.esm", "", "algebraic"),
+        (
+            "tests/valid/makearray_empty_region_min_extent.esm",
+            "Assemble",
+            "algebraic",
+        ),
+        (
+            "tests/conformance/shaped_observed_scalar_broadcast/fixtures/scalar_rhs_broadcast.esm",
+            "JmpIfZero",
+            "algebraic",
+        ),
+    ];
+    let params: HashMap<String, f64> = HashMap::new();
+    for (rel, opcode, class) in cases {
+        let path = repo_root().join(rel);
+        let compiled = build(&path);
+        let listing = compiled.debug_tape_listing();
+        assert!(
+            opcode.is_empty() || listing.contains(&format!(" {opcode} {{")),
+            "{rel}: the tape carries no {opcode}:\n{listing}"
+        );
+        let program = match CompiledRhs::compile(&compiled) {
+            Ok(p) => p,
+            Err(CompileRhsError::Refused(e)) => {
+                panic!("{rel}: the emitter refused rule {}: {}", e.rule, e.reason)
+            }
+            Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+        };
+        let pv = compiled.debug_resolve_params(&params);
+        let m = compiled.state_variable_names().len();
+        for seed in 0..3 {
+            let u: Vec<f64> = (0..m)
+                .map(|k| ((k * 7 + seed * 3) % 11) as f64 * 0.37 - 1.5)
+                .collect();
+            let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, true);
+            let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
+            let scale = want.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+            for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                assert!(
+                    within(class, *g, *w, scale),
+                    "{rel} seed {seed} tendency {i}: compiled {g:e} vs interpreter {w:e}"
+                );
+            }
+        }
+    }
+}
+
+/// A program that raises a fail-closed fault — here the const-array gather
+/// past the end, which the interpreter reports as `E_TREEWALK_CONSTARRAY_OOB`
+/// on evaluation — is refused by the emitter with that fault, not compiled
+/// into one that returns the `NaN` without the error.
+#[test]
+fn a_program_that_faults_is_refused_with_the_fault() {
+    if !runtime_available() {
+        return;
+    }
+    let path = repo_root()
+        .join("tests/conformance/const_array_gather_bounds/fixtures/named_1d_past_end.esm");
+    let compiled = build(&path);
+    assert!(compiled.debug_tape_listing().contains(" Fault {"));
+    match CompiledRhs::compile(&compiled) {
+        Ok(_) => panic!("a faulting program compiled"),
+        Err(CompileRhsError::Refused(e)) => assert!(
+            e.reason.contains("E_TREEWALK_CONSTARRAY_OOB"),
+            "the refusal does not carry the fault: {}",
+            e.reason
+        ),
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+    }
+}
+
 /// The scaling tier's regrid (a `polygon_intersection_area` over literal
 /// rings, folded to a constant at emit time) and unstructured-gather (a data
 /// subscript, lowered to one `take`) fixtures compile and agree with the

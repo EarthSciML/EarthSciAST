@@ -242,7 +242,10 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         (f!, u0, p, _, _), tally = _ac_build(_ac_doc(NS, NR), _ac_ics(NS, NR))
         @test _ac_fired(tally) == 1
         du = similar(u0)
-        @test rhs_alloc_bytes(f!, du, u0, p, 0.0) == 0
+        # Julia >= 1.12 only: older versions box across RuntimeGeneratedFunction inner functions and @testset-scope reads.
+        if VERSION >= v"1.12"
+            @test rhs_alloc_bytes(f!, du, u0, p, 0.0) == 0
+        end
     end
 
     @testset "ForwardDiff differentiates through the nest" begin

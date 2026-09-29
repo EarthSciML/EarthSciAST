@@ -382,3 +382,26 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         @test ESM._substitute_shared(e, Dict{String,ESM.ASTExpr}("zz" => _n(1.0))) === e
     end
 end
+
+# `_to_ordered` (json_walk.jl) memoizes a JSON3 view by its own `inds`
+# container, not by the view: the view's identity hash reads the whole parsed
+# text, so a caller normalizing a document one child at a time (template
+# declarations, `_collect_own_templates`) paid the whole document per child.
+@testset "_to_ordered: a JSON3 child costs its own size, not the document's" begin
+    child = """{"params": ["a", "b"], "body": {"op": "+", "args": ["a", "b"]}}"""
+    small = ESM.JSON3.read("""{"t": $child}""")
+    big = ESM.JSON3.read("""{"pad": "$(repeat("x", 8_000_000))", "t": $child}""")
+    conv(doc) = ESM._to_ordered(doc["t"])
+    @test conv(big) == conv(small)
+    t_small = minimum(@elapsed(conv(small)) for _ in 1:20)
+    t_big = minimum(@elapsed(conv(big)) for _ in 1:20)
+    # Hashing the 8 MB text costs milliseconds; the child costs microseconds.
+    @test t_big < 100 * t_small + 1e-4
+    # A native node holding one view twice still normalizes it once.
+    v = big["t"]
+    out = ESM._to_ordered(Dict{String,Any}("a" => v, "b" => v))
+    @test out["a"] === out["b"]
+    # Two views of the same text are two instances, and stay two copies.
+    out2 = ESM._to_ordered(Any[big["t"], big["t"]])
+    @test out2[1] == out2[2] && out2[1] !== out2[2]
+end

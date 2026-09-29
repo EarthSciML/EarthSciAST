@@ -748,6 +748,13 @@ call site. A binding that can overload MAY still spell it as an extra arity of
 `observed_field` — Julia and Python are free to — and this is the
 transliteration §2.1 fixes for the one that cannot.
 
+**Julia reads one point of a trajectory instead**, as keywords on the same
+function: `observed_field(prob, name; u, t)` is the observed at state `u` (laid
+out like `prob.u0`, e.g. `sol.u[k]`) and time `t`. The result is the field's own
+rank, so it is not the second-rank contract ruled out above; a trajectory is a
+loop over the saved points. Without `u` it is the build-time field, and an
+observed that reads the state is refused there, as in the other bindings.
+
 Name resolution is the rule below, unchanged. Scalar backend only: the
 array/spatial runtime materializes observeds per cell inside itself rather than
 through this graph, and a static document has no trajectory and wants
