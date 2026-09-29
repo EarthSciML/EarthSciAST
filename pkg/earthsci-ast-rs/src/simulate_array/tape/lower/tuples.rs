@@ -159,17 +159,36 @@ impl TapeBuilder<'_> {
             tuple: id,
             visit: SmallVec::new(),
         };
-        let lowered = (|| -> LResult<(LV, Option<LV>)> {
-            let term = self.lower_expr(body, &bx)?;
+        // The filter first: the oracle tests it before the body at every
+        // tuple, and evaluates the body only at the tuples it keeps (a lazily
+        // evaluated position). `None` for the term when no tuple is kept.
+        let lowered = (|| -> LResult<(Option<LV>, Option<LV>)> {
             let mask = match filter {
                 None => None,
                 Some(f) => Some(self.lower_expr(f, &bx)?),
             };
-            Ok((term, mask))
+            let lazy = match &mask {
+                None => false,
+                Some(LV::Lit(c)) if *c == 0.0 => return Ok((None, mask)),
+                Some(LV::Lit(_)) => false,
+                Some(_) => true,
+            };
+            self.lazy_depth += u32::from(lazy);
+            let term = self.lower_expr(body, &bx);
+            self.lazy_depth -= u32::from(lazy);
+            Ok((Some(term?), mask))
         })();
         self.pop_scope();
         self.tuple_frames.pop();
         let (term, mask) = lowered?;
+        let Some(term) = term else {
+            // The filter excludes every tuple.
+            return Ok(if rank0 {
+                LV::Lit(identity)
+            } else {
+                self.emit_fill(&LV::Lit(identity), &shape, &lo, Cadence::Const)
+            });
+        };
 
         let tuple_box = |s: &Self, v: &LV| -> LResult<Option<SlotId>> {
             match (v, s.lv_box(v)) {
@@ -188,16 +207,7 @@ impl TapeBuilder<'_> {
             },
         };
         let mask = match mask {
-            None => None,
-            Some(LV::Lit(c)) if c != 0.0 => None,
-            Some(LV::Lit(_)) => {
-                // The filter excludes every tuple.
-                return Ok(if rank0 {
-                    LV::Lit(identity)
-                } else {
-                    self.emit_fill(&LV::Lit(identity), &shape, &lo, Cadence::Const)
-                });
-            }
+            None | Some(LV::Lit(_)) => None,
             Some(v) => match tuple_box(self, &v)? {
                 Some(slot) => Some(slot),
                 None => match self.emit_fill(&v, &[m], &[1], Cadence::Const) {
@@ -434,7 +444,12 @@ impl TapeBuilder<'_> {
         });
         let sec = self.placement(Cadence::Const);
         let out = self.new_slot(&[len], &[1], false, sec);
+        // Every later read shares this slot, so it is defined unconditionally:
+        // a first read inside a conditional branch still places the column
+        // ahead of the branch, not in it.
+        let branches = std::mem::take(&mut self.branch_bufs);
         self.emit(Instr::ConstArray { data, out }, sec);
+        self.branch_bufs = branches;
         self.tuple_frames[fi].slots[ci] = Some(out);
         Ok(Some(LV::Arr(out)))
     }
@@ -520,10 +535,13 @@ impl TapeBuilder<'_> {
                 if raw < 1 || raw > n {
                     match const_name {
                         None => ghost = true,
-                        Some(name) => match self.const_arrays.boundary(name, d) {
-                            BoundaryKind::Periodic => i1 = (raw - 1).rem_euclid(n) + 1,
-                            BoundaryKind::Clamp => i1 = raw.clamp(1, n),
-                            BoundaryKind::Error => bail_tape!(
+                        // `index_into`: an empty axis can never be wrapped
+                        // or clamped into, so it is the error whatever the
+                        // policy.
+                        Some(name) => match (n >= 1).then(|| self.const_arrays.boundary(name, d)) {
+                            Some(BoundaryKind::Periodic) => i1 = (raw - 1).rem_euclid(n) + 1,
+                            Some(BoundaryKind::Clamp) => i1 = raw.clamp(1, n),
+                            Some(BoundaryKind::Error) | None => bail_tape!(
                                 "index: const-array gather out of range (§5.5.5) in a \
                                  tuple-list body"
                             ),

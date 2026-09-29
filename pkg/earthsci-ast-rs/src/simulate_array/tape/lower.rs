@@ -3049,14 +3049,8 @@ impl<'m> TapeBuilder<'m> {
                     (hi - lo + 1) as usize
                 })
                 .collect();
-            // The legal EMPTY spelling (`stop == start - 1`, §4.3.2) covers no
-            // cell, and its value is never consulted.
-            if r_shape.contains(&0) {
-                continue;
-            }
             // A region is its own box (and CSE scope): a ramp / shifted gather
             // means something different inside it.
-            self.push_scope();
             let rbx = LBox {
                 syms: bx.syms,
                 lo: r_lo.clone(),
@@ -3066,6 +3060,29 @@ impl<'m> TapeBuilder<'m> {
                 tuple: bx.tuple,
                 visit: SmallVec::new(),
             };
+            // The legal EMPTY spelling (`stop == start - 1`, §4.3.2) covers no
+            // cell, but the oracle still evaluates its value, and an array
+            // value that does not fit poisons the whole makearray with `NaN`.
+            // Its instructions are dropped; a fault it raises is kept.
+            if r_shape.contains(&0) {
+                let txn = self.sub_txn();
+                self.push_scope();
+                let v = self.lower_expr(value_expr, &rbx);
+                self.pop_scope();
+                let v = v?;
+                let fits = match self.lv_box(&v) {
+                    None => true,
+                    Some((s, _)) => s.is_empty() || region_value_axes(&s, &r_shape).is_some(),
+                };
+                let fault = (self.fault_first.take(), self.fault_seq);
+                self.sub_rollback(txn);
+                (self.fault_first, self.fault_seq) = fault;
+                if !fits {
+                    bail_tape!("makearray: an empty region's array value does not fit it");
+                }
+                continue;
+            }
+            self.push_scope();
             let v = self.lower_expr(value_expr, &rbx);
             self.pop_scope();
             let v = v?;
@@ -4588,6 +4605,24 @@ impl<'m> TapeBuilder<'m> {
         self.emit(jmp, sec);
         for (i, p) in tbuf.into_iter().chain(fbuf) {
             self.emit_tagged(i, p, sec);
+        }
+        // Each Copy into the join carried its branch's build-time value, the
+        // false branch's last. Which branch runs is a runtime question, so
+        // the join is build-time data only when the two agree bit for bit.
+        let agree = match (&tv, &fv) {
+            (LV::Arr(a), LV::Arr(b)) => match (self.known_values(*a), self.known_values(*b)) {
+                (Some(x), Some(y)) => {
+                    x.len() == y.len()
+                        && x.iter()
+                            .zip(y.iter())
+                            .all(|(p, q)| p.to_bits() == q.to_bits())
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if !agree {
+            self.known.remove(&phi);
         }
         Ok(if scalar {
             LV::Scalar(phi)

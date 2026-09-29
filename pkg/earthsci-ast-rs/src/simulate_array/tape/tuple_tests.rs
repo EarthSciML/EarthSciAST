@@ -269,3 +269,169 @@ fn a_ragged_gather_of_a_two_dimensional_state_reads_it_in_place() {
         .sum();
     assert_eq!(ghosts, 1);
 }
+
+// ---------------------------------------------------------------------------
+// Build-time data and laziness inside a tuple-list body.
+// ---------------------------------------------------------------------------
+
+use super::array_tests::{agrees_or_refuses, idx};
+use std::collections::HashMap;
+
+/// A ragged contraction `v' = Σ_{k ∈ nz(i)} body` over three rows whose
+/// member counts are the observed `cnt`, with a parameter `p` (default 1)
+/// and an optional filter.
+fn ragged_doc(cnt: Value, body: Value, filter: Option<Value>) -> Value {
+    let mut rhs = json!({"op": "faq", "args": [], "semiring": "sum_product", "output_idx": ["i"],
+        "ranges": {"i": {"from": "rows"}, "k": {"from": "nz", "of": ["i"]}},
+        "expr": body});
+    if let Some(f) = filter {
+        rhs["filter"] = f;
+    }
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "ragged_review", "authors": ["tape tests"]},
+        "index_sets": {
+            "rows": {"kind": "interval", "size": 3},
+            "maxnz": {"kind": "interval", "size": 3},
+            "nz": {"kind": "ragged", "of": ["rows"], "offsets": "cnt", "values": "cols"}
+        },
+        "models": {"M": {
+            "variables": {
+                "p": {"type": "parameter", "units": "1", "default": 1.0},
+                "cnt": {"type": "unknown", "units": "1", "shape": ["rows"]},
+                "cols": {"type": "unknown", "units": "1", "shape": ["rows", "maxnz"]},
+                "w": {"type": "unknown", "units": "1", "shape": ["rows", "maxnz"]},
+                "v": {"type": "unknown", "units": "1", "shape": ["rows"], "default": 1.0}
+            },
+            "equations": [
+                {"lhs": "cnt", "rhs": cnt},
+                {"lhs": "cols", "rhs": {"op": "const", "args": [], "value": [[1, 2, 0], [3, 1, 2], [2, 0, 0]]}},
+                {"lhs": "w", "rhs": {"op": "const", "args": [], "value": [[1.5, -2.5, 0.0], [0.125, 7.0, -3.25], [1e-3, 0.0, 0.0]]}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                         "expr": {"op": "D", "args": [{"op": "index", "args": ["v", "i"]}], "wrt": "t"},
+                         "ranges": {"i": {"from": "rows"}}},
+                 "rhs": rhs}
+            ]
+        }}
+    })
+}
+
+fn cnst(v: Value) -> Value {
+    json!({"op": "const", "args": [], "value": v})
+}
+
+fn p_positive() -> Value {
+    json!({"op": ">", "args": ["p", 0]})
+}
+
+/// `p = 1` (the default, the true branch) and `p = -1` (the false branch).
+fn both_branches() -> Vec<HashMap<String, f64>> {
+    vec![HashMap::new(), HashMap::from([("p".to_string(), -1.0)])]
+}
+
+fn wv() -> Value {
+    json!({"op": "*", "args": [idx(json!("w"), &[json!("i"), json!("k")]), idx(json!("v"), &[json!("i")])]})
+}
+
+fn states() -> Vec<Vec<f64>> {
+    vec![vec![0.5, -1.25, 2.0], vec![-0.5, -1.0, -2.0]]
+}
+
+/// A runtime-conditioned `ifelse` joins two values in one slot; the build
+/// knows neither which branch runs nor, so, the join's value. Ragged
+/// offsets chosen by a parameter are therefore not build-time data (the
+/// tape refuses rather than reading one branch's), while two branches that
+/// agree exactly still are.
+#[test]
+fn a_branch_join_is_build_time_data_only_when_its_branches_agree() {
+    let cnt = json!({"op": "ifelse", "args": [p_positive(), cnst(json!([2, 3, 1])), cnst(json!([1, 1, 1]))]});
+    let compiled = super::array_tests::compile(ragged_doc(cnt, wv(), None));
+    let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
+    assert!(
+        refused
+            .iter()
+            .any(|(_, r)| r.contains("ragged offsets factor `cnt`")),
+        "{refused:?}"
+    );
+
+    let cnt = json!({"op": "ifelse", "args": [p_positive(), cnst(json!([2, 3, 1])), cnst(json!([2, 3, 1]))]});
+    let compiled = super::array_tests::compile(ragged_doc(cnt, wv(), None));
+    super::array_tests::ab(&compiled, &both_branches());
+}
+
+/// The same for a gather subscript inside the body: `v[ifelse(p > 0, i, k)]`
+/// is not build-time data over the list.
+#[test]
+fn a_branch_join_subscript_is_not_build_time_data() {
+    let body = json!({"op": "*", "args": [
+        idx(json!("w"), &[json!("i"), json!("k")]),
+        idx(json!("v"), &[json!({"op": "ifelse", "args": [p_positive(), "i", "k"]})])]});
+    let compiled = super::array_tests::compile(ragged_doc(cnst(json!([2, 3, 1])), body, None));
+    let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
+    assert!(
+        refused
+            .iter()
+            .any(|(_, r)| r.contains("not build-time data over the list")),
+        "{refused:?}"
+    );
+}
+
+/// A loop symbol first read inside one branch of a runtime `ifelse` and then
+/// in the other: its column is defined whichever branch runs.
+#[test]
+fn a_loop_symbol_first_read_in_a_branch_is_defined_on_both_paths() {
+    let body = json!({"op": "*", "args": [
+        {"op": "ifelse", "args": [p_positive(), "k", {"op": "*", "args": [2, "k"]}]},
+        wv()]});
+    let compiled = super::array_tests::compile(ragged_doc(cnst(json!([2, 3, 1])), body, None));
+    super::array_tests::ab(&compiled, &both_branches());
+}
+
+/// A fault site in a filtered body is reached only at the tuples the filter
+/// keeps: with no earlier fault to settle it the tape refuses, rather than
+/// raising the fault where the oracle (every tuple excluded) raises none. The
+/// fault is `index(p, 1)` on the scalar parameter, inside the base of a
+/// gather.
+#[test]
+fn a_fault_in_a_filtered_tuple_body_is_not_certain() {
+    let base =
+        json!({"op": "+", "args": [cnst(json!([1.0, 2.0, 3.0])), idx(json!("p"), &[json!(1)])]});
+    let body =
+        json!({"op": "*", "args": [idx(base, &[json!("k")]), idx(json!("v"), &[json!("k")])]});
+    let filter = json!({"op": ">", "args": [idx(json!("v"), &[json!("k")]), 0]});
+    let compiled =
+        super::array_tests::compile(ragged_doc(cnst(json!([2, 3, 1])), body, Some(filter)));
+    let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
+    assert!(
+        refused
+            .iter()
+            .any(|(_, r)| r.starts_with("fault: `E_TREEWALK_INDEX_ON_SCALAR`")),
+        "{refused:?}"
+    );
+}
+
+/// A gather from a const array with an EMPTY axis under a boundary policy:
+/// no index can be wrapped or clamped into it, so, as `index_into` does, the
+/// build treats it as out of range whatever the policy (and refuses) rather
+/// than dividing by the empty extent.
+#[test]
+fn a_tuple_gather_from_an_empty_const_axis_is_refused_under_any_policy() {
+    use crate::simulate_array::ConstArrayScope;
+    use crate::value_invention::BoundaryKind;
+    for kind in [BoundaryKind::Periodic, BoundaryKind::Clamp] {
+        let body = json!({"op": "*", "args": [idx(json!("C"), &[json!("k")]), idx(json!("v"), &[json!("i")])]});
+        let mut doc = ragged_doc(cnst(json!([2, 3, 1])), body, None);
+        doc["index_sets"]["none"] = json!({"kind": "interval", "size": 0});
+        doc["models"]["M"]["variables"]["C"] =
+            json!({"type": "unknown", "units": "1", "shape": ["none"]});
+        doc["models"]["M"]["equations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"lhs": "C", "rhs": cnst(json!([]))}));
+        let mut compiled = super::array_tests::compile(doc);
+        let scope: ConstArrayScope = (*compiled.const_scope).clone();
+        compiled.const_scope = std::rc::Rc::new(scope.with_boundary("C", vec![kind]));
+        let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
+        assert!(!refused.is_empty(), "{kind:?}");
+    }
+}
