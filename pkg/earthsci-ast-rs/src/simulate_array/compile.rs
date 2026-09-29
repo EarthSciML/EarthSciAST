@@ -1173,7 +1173,7 @@ pub(crate) fn check_free_variables(
             continue;
         }
         collect_binders(&eq.lhs, &mut binders);
-        collect_binders(&eq.rhs, &mut binders);
+        collect_rhs_binders(&eq.rhs, false, &mut binders);
         with_binders(&mut bound, &mut binders, |scope| {
             check_expr_free_vars(&eq.lhs, scope)?;
             check_expr_free_vars(&eq.rhs, scope)
@@ -1267,6 +1267,30 @@ fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
         node_binders(node, out);
         node.for_each_child(&mut |child| collect_binders(child, out));
     }
+}
+
+/// [`collect_binders`] for an equation's right-hand side, less one case: a
+/// bare `index(array, i)` subscript that no enclosing node binds and the
+/// left-hand side does not bind either. There it is a READ of `i` with nothing
+/// in scope to give it a value — `d ~ index(faq{i}(…), i)` reads the `i` of no
+/// loop, since the `faq`'s own `i` is bound only inside it — so it is checked
+/// rather than credited. Under any node that carries binders (`faq`,
+/// `makearray`, `integral`, a template call…) every bare subscript still
+/// counts as a binder, as [`collect_binders`] has it.
+fn collect_rhs_binders(expr: &Expr, enclosed: bool, out: &mut HashSet<String>) {
+    let Expr::Operator(node) = expr else {
+        return;
+    };
+    let carries = node.output_idx.is_some()
+        || node.ranges.is_some()
+        || node.int_var.is_some()
+        || node.arg.is_some()
+        || node.bindings.is_some();
+    if enclosed || node.op != "index" {
+        node_binders(node, out);
+    }
+    let enclosed = enclosed || carries;
+    node.for_each_child(&mut |child| collect_rhs_binders(child, enclosed, out));
 }
 
 /// Collect every free BARE (non-dotted, non-builtin) symbol in the subtree —
