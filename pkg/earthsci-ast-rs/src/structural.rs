@@ -907,6 +907,60 @@ fn check_reserved_declaration_names<'a, I: IntoIterator<Item = &'a String>>(
     }
 }
 
+/// Every `reserved_variable_name` finding of `esm_file` (esm-spec §4.9.1.1),
+/// over all three declaration maps — each model's `variables` with its inline
+/// subsystems, and each reaction system's `species` and `parameters` — in
+/// sorted order. The same findings `validate` reports; the build refuses on
+/// them too (`crate::problem`).
+pub(crate) fn reserved_declaration_errors(esm_file: &EsmFile) -> Vec<StructuralError> {
+    let mut errors = Vec::new();
+    if let Some(models) = &esm_file.models {
+        let mut names: Vec<&String> = models.keys().collect();
+        names.sort();
+        for model_name in names {
+            let model = &models[model_name];
+            check_reserved_declaration_names(
+                esm_file,
+                model.variables.keys(),
+                &format!("/models/{model_name}/variables"),
+                &format!("Model '{model_name}'"),
+                "variable",
+                &mut errors,
+            );
+            if let Some(subsystems) = &model.subsystems {
+                check_reserved_subsystem_names(
+                    esm_file,
+                    subsystems.iter(),
+                    &format!("/models/{model_name}/subsystems"),
+                    &mut errors,
+                );
+            }
+        }
+    }
+    if let Some(systems) = &esm_file.reaction_systems {
+        let mut names: Vec<&String> = systems.keys().collect();
+        names.sort();
+        for rs_name in names {
+            let rs = &systems[rs_name];
+            let owner = format!("Reaction system '{rs_name}'");
+            for (map, kind, keys) in [
+                ("species", "species", rs.species.keys().collect::<Vec<_>>()),
+                ("parameters", "parameter", rs.parameters.keys().collect()),
+            ] {
+                check_reserved_declaration_names(
+                    esm_file,
+                    keys,
+                    &format!("/reaction_systems/{rs_name}/{map}"),
+                    &owner,
+                    kind,
+                    &mut errors,
+                );
+            }
+        }
+    }
+    errors
+}
+
 /// [`check_reserved_declaration_names`] over every INLINE subsystem of a model,
 /// recursively (esm-spec §4.9.1.1).
 ///
