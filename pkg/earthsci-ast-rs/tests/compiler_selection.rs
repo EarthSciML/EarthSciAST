@@ -614,6 +614,35 @@ fn xla_refuses_a_rule_the_tape_cannot_lower_and_names_it() {
     }
 }
 
+/// The two tape forms the XLA emitter has no lowering for — a derivative
+/// written through a per-cell position table, and a `datetime.*` call where
+/// the kernels are binary32 — are refused by name, never approximated. (The
+/// calendar probe declares per-variable element types, which the lane refuses
+/// before it reaches the instruction.)
+#[cfg(feature = "xla")]
+#[test]
+fn xla_refuses_the_scatter_and_calendar_forms_by_name() {
+    for (f, construct) in [
+        ("permuted_derivative_lhs.esm", "not a constant shift"),
+        ("datetime_float32.esm", "per-variable element types"),
+    ] {
+        let path = fixture(&format!("tests/fixtures/native_probes/{f}"));
+        match build_rhs(&path, Compiler::Xla, Rhs::Always) {
+            Err(SimulateError::Compile(CompileError::CompilerRefusedRule {
+                compiler,
+                rule,
+                reason,
+                ..
+            })) => {
+                assert_eq!(compiler, "xla");
+                assert!(!rule.is_empty(), "{f}: the rule is named");
+                assert!(reason.contains(construct), "{f}: {reason}");
+            }
+            other => panic!("xla must refuse {f} by name, got {other:?}"),
+        }
+    }
+}
+
 /// The observed passes under `xla`. The emitted program's only output is `du`,
 /// so the observeds reported at output times are served from the same tape the
 /// emitter was built from — and must still agree with the reference, or the
