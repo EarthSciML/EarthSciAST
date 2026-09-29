@@ -633,7 +633,8 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     elseif op_sym === :broadcast || op_sym === :reshape ||
            op_sym === :transpose || op_sym === :concat
         throw(_unevaluable_operator(expr.op,
-                            "the tree-walk path has no rule for this shape op"))
+                            "outside an index(...) the tree-walk path has no rule for " *
+                            "this shape op; index(op(...), k1, k2, ...) is a gather of its operand"))
     elseif op_sym === :index
         # A forcing gather over a live `param_arrays` buffer (ess-14f.3): the
         # `index` branch of `_resolve_indices` already bounds-checked and

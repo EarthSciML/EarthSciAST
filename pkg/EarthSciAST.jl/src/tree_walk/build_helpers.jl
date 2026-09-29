@@ -278,9 +278,10 @@ end
 # The `fn` contract is checked here (`_broadcast_fn_problem`, op_registry.jl —
 # the same predicate `validate()` reports as `invalid_broadcast_fn`), so a bogus
 # `fn` is a BUILD error even for a caller that never ran `validate()`.
-# `reshape`/`transpose`/`concat` are NOT lowered — they are genuine shape ops
-# with no scalar-operator spelling, and keep their `unevaluable_operator`
-# rejection in `_compile_op`.
+# `reshape`/`transpose`/`concat` are NOT lowered here — they are genuine shape
+# ops with no scalar-operator spelling. Under an `index` they become gathers of
+# their operand (`_index_through_shape_op`, resolve.jl); a bare one still meets
+# its `unevaluable_operator` rejection in `_compile_op`.
 #
 # DAG-SAFE, WITHOUT TAXING THE COMMON CASE (ESS-0hh).
 # `map_children` already declines to REBUILD an unchanged node, which keeps a
@@ -763,7 +764,7 @@ function _index_pushdown_arrayish(e::ASTExpr, is_array_leaf,
         o = e::OpExpr
         cached = get(memo, o, nothing)
         cached === nothing || return cached::Bool
-        r = _is_array_producer(o) ||
+        r = _is_array_producer(o) || o.op in _SHAPE_REMAP_OPS ||
             (_is_scalar_op(o.op) &&
              any(a -> _index_pushdown_arrayish(a, is_array_leaf, memo), o.args))
         memo[o] = r

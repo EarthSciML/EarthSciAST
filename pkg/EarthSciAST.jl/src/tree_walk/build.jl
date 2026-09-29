@@ -5588,8 +5588,10 @@ assumes equations have already been scalarized by the discretize
 pipeline. `faq` and `makearray` are supported in expression
 position: scalar `faq` (empty `output_idx`) is expanded inline;
 `index(faq(...), k...)` and `index(makearray(...), k...)` are
-resolved at build time. Other array-typed ops (`broadcast`, `reshape`,
-`transpose`, `concat`) are refused at build with `unevaluable_operator`.
+resolved at build time, and so are `index(reshape|transpose|concat(...), k...)`
+(each is a gather of its operand) and `broadcast` (lowered to its `fn`). A bare
+`reshape`, `transpose` or `concat` outside an `index` is refused at build with
+`unevaluable_operator`.
 
 The returned `f!` closure reads `u`, the captured parameter vector
 `p` (a NamedTuple keyed by parameter name), and `t`, and writes
