@@ -732,6 +732,23 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
                                        Int[], Int[], arr, ""))
         return VarExpr(_lane_name(length(ctx.recipes)))
     end
+    # An INLINE `const` array literal, `index({op:const, value:[…]}, k…)`, is a
+    # const-array lane like a registered one: interned under the content-hashed
+    # name the resolver gives it (`_intern_inline_const`), so this lane, the
+    # per-cell resolve and the whole-array nest read one array under one name
+    # and one boundary policy. A contraction's run-time fold reads it at the
+    # contracted index this way.
+    if first_arg isa OpExpr && (first_arg::OpExpr).op == "const" &&
+       (first_arg::OpExpr).value isa AbstractVector
+        arr, cname = _intern_inline_const(first_arg::OpExpr, ctx.const_arrays)
+        haskey(ctx.const_arrays, cname) ||
+            throw(_StencilFallback("inline const array outside a const registry"))
+        length(idx_args) == ndims(arr) ||
+            throw(_StencilFallback("const-array ndim mismatch on an inline const"))
+        push!(ctx.recipes, _LaneRecipe(LANE_CONST, cname, idx_args,
+                                       Int[], Int[], arr, ""))
+        return VarExpr(_lane_name(length(ctx.recipes)))
+    end
     # COMBINATION producer: `index(a ⊕ b, k…)` where ⊕ is elementwise. Push the
     # index through to each array-valued operand — `index(a,k…) ⊕ index(b,k…)` —
     # and re-stencilize. This mirrors the branch `_resolve_indices` already

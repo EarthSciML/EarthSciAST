@@ -75,9 +75,10 @@ struct CompilerPlan
     tcadence::Bool
     # ---- build-once machinery whose OFF state is a reference path ----
     intern::Bool
-    # Every construction-time compile-once form: the setup MAP materializer and
-    # the initial-state seeds (field `ic`, faq `initialization_equations`,
-    # `seed_expression_ic!`). Off, each takes its per-cell reference form.
+    # Every construction-time compiled form: the fills of setup_fill.jl (setup
+    # MAP and makearray, field `ic`, faq `initialization_equations`) and the
+    # compile-once sweeps behind them (those, and `seed_expression_ic!`). Off,
+    # each takes its per-cell reference form.
     setup_map_compile_once::Bool
     geom_sweep_specialize::Bool
     geom_overlap_gate::Bool
@@ -203,6 +204,11 @@ _with_compiler_plan(f, plan::CompilerPlan) =
 # spelled out is the second way of saying the same thing that §2.5.10 exists to
 # remove.
 _plan_for(compiler::Symbol) = _compiler_plan(compiler)
+# The internal build entry (`_build_evaluator_impl`) also takes a plan itself,
+# so a test can build with a tier plan no vocabulary value names (a non-strict
+# `native`, to reach the per-cell build a strict one refuses). The public
+# entries take only the vocabulary.
+_plan_for(plan::CompilerPlan) = plan
 
 # ---------------------------------------------------------------------------
 # The report: which tier each rule landed on
@@ -222,23 +228,29 @@ landed on, and every decline it collected getting there.
   (`:xla`) rather than lowering it rule by rule.
 * `tier` — where it landed:
   - right-hand side: `:affine`, `:scan`, `:array_contraction_codegen`,
-    `:percell_build` (scalarized per output cell at BUILD, then compiled),
+    `:empty_output` (an array equation over an empty output range: no cell to
+    build or run), `:percell_build` (scalarized per output cell at BUILD, then
+    compiled),
     `:codegen`, `:interpreter` (walked per cell as trees on every call);
     `:scalar` (a scalar equation, walked once per slot on every call by the
     scalar walker) and `:scalar_loop` (the same, with a reduction kept as a
     runtime loop the walker runs over its whole length on every call);
-  - construction: `:setup_compiled` (compiled once, evaluated per cell),
+  - construction: `:setup_codegen` (filled through the right-hand-side cascade
+    and emitted code, run once), `:setup_compiled` (compiled once, evaluated per
+    cell),
     `:setup_loaded` (copied out of a supplied array), `:setup_constant`
     (evaluated once and filled), `:setup_percell` (resolved and compiled per
     cell), and `:discrete_percell` (a discrete-cadence field, resolved and
-    compiled per cell at build and walked per cell at every data refresh);
+    compiled per cell at build and walked per cell at every data refresh;
+    under `native` such a field is instead an `:observed` row on the
+    right-hand-side tier its compiled fill landed on);
   - output time, added by `observed_field` the first time it reads a name:
     `:output_compiled_once` or `:output_percell`;
   - and, on the `:rhs_program` row an `:xla` build adds, `:xla_direct_cpu` /
     `:xla_direct_gpu`, which name the emitter and the device together.
   Under a strict compiler `:interpreter`, `:setup_percell`,
-  `:discrete_percell` and `:output_percell` are refusals instead, so a
-  `native` report never shows them.
+  `:discrete_percell` and `:output_percell` are refusals instead, and so is
+  `:percell_build` in the in-place form, so a `native` report never shows them.
 * `declines` — `tier => reason` for every tier that looked at this rule and
   passed, deepest reason last.
 """
@@ -484,3 +496,16 @@ const _ONE_CELL_NOTE =
     "Only one cell of it was evaluated before this refusal, so a document error " *
     "in a cell that was not (an out-of-range gather at the last cell, say) is not " *
     "reported here; the interpreter evaluates every cell and reports it"
+
+# The same, for a refusal whose diagnostic evaluated only some terms of one cell
+# (a contraction too long to build in full, `_refuse_faq_percell`), and for one
+# that evaluated no term at all (a join gate that admitted none it tried).
+const _PART_CELL_NOTE =
+    "Only some terms of one cell of it (the first and last value of each " *
+    "contracted index, or at most its first 1024 admitted terms) were evaluated " *
+    "before this refusal, so a document error in a term or cell that was not is " *
+    "not reported here; the interpreter evaluates every cell and reports it"
+const _NO_CELL_NOTE =
+    "No term of it was evaluated before this refusal (its join gate admitted " *
+    "none of the terms tried), so a document error in it is not reported here; " *
+    "the interpreter evaluates every cell and reports it"

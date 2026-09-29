@@ -20,12 +20,12 @@
 #   * zero per-call allocation in the steady-state `f!` (`rhs_alloc_bytes`);
 #   * build IR FLAT in the contracted extent AND in the output extent — the
 #     node-lowering count is identical across a 64× range of each;
-#   * ForwardDiff through the nest;
-#   * the FLOOR (`ESS_ARRAY_CONTRACTION_MIN`, a tuning threshold): a reduction
-#     under it is left to the affine tier, and takes the nest only once that
-#     declines, ahead of the per-cell build; one that IS a loop candidate takes
-#     the nest whatever the floor, because the in-place build has retired the
-#     loop (its cells would be walked per cell on every call);
+#   * ForwardDiff through the nest, with the fold's `Float64` 0̄ seed pinned on
+#     a `-0.0` partial;
+#   * the ORDER of the cascade: the nest is offered what the affine tier leaves,
+#     whatever the length (the in-place build has no floor for it and no
+#     per-cell contraction loop); a short contraction is the affine tier's
+#     unroll, and an ascending one its run-time fold;
 #   * a per-cell variable bound, which no static loop can walk, takes the
 #     nest's table-driven form.
 
@@ -43,6 +43,12 @@ const _AC_ESS = EarthSciAST
 # (`_NK_CONST_GATHER` at a loop-var subscript, `_NK_STATE_GATHER`).
 # Integer-valued data, so the exact sum is representable and every tier's answer
 # is comparable bit for bit.
+#
+# The contracted range is walked DESCENDING (`s = NS, NS-1, …, 1`) unless `asc`.
+# The affine tier folds a contraction at run time only over an ascending
+# unit-step range, and does not unroll one this long, so the descending form is
+# the one it leaves to the nest; the ascending form is the affine fold's (pinned
+# below, "an ascending contraction is the affine tier's run-time fold").
 _ac_sr(s, r) = Float64((3s + 7r) % 11)
 _ac_e0(s)    = Float64(s % 5)
 
@@ -58,11 +64,11 @@ _ac_zero(idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[idx]
 # three ⊕ the tier admits. `coef`/`e` swap in data with no exact zero and no
 # integer value, so a ×-fold cannot collapse to 0̄ and a fold ORDER difference
 # shows up in the last bit.
-function _ac_doc(NS::Int, NR::Int; coef=_ac_sr, red=nothing)
+function _ac_doc(NS::Int, NR::Int; coef=_ac_sr, red=nothing, asc::Bool=false)
     SR = [[coef(s, r) for r in 1:NR] for s in 1:NS]
     agg = Dict{String,Any}("op" => "faq",
         "args" => Any[], "output_idx" => Any["rcv"],
-        "ranges" => Dict("rcv" => Any[1, NR], "s" => Any[1, NS]),
+        "ranges" => Dict("rcv" => Any[1, NR], "s" => asc ? Any[1, NS] : Any[NS, -1, 1]),
         "expr" => Dict("op" => "*", "args" => Any[
             Dict("op" => "index", "args" => Any[
                 Dict("op" => "const", "args" => Any[], "value" => SR), "s", "rcv"]),
@@ -84,9 +90,9 @@ _ac_sr_frac(s, r) = _ac_sr(s, r) / 4 + 0.5      # never 0, never an integer
 _ac_e0_frac(s)    = _ac_e0(s) + 0.25            # never 0
 _ac_exact(NS, NR) = [sum(_ac_sr(s, r) * _ac_e0(s) for s in 1:NS) for r in 1:NR]
 
-# Every build in this file pins the tier's admission floor to 8 — a tuning
-# threshold, not a strategy switch — so the tier engages at sizes where the
-# oracle is still cheap enough to run against it.
+# Every build in this file pins the tier's out-of-place floor to 8 — a tuning
+# threshold, not a strategy switch, which the in-place builds here do not read —
+# so no case depends on its default.
 _ac_env(extra) = merge(Dict("ESS_ARRAY_CONTRACTION_MIN" => "8"), extra)
 
 # `compiler` is the only thing that chooses an evaluator here: `:native` emits
@@ -171,7 +177,7 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         @test _ac_fired(tn) == 1
         @test _ac_fired(to) == 0
         f = red == "*" ? (*) : red == "max" ? max : min
-        ex = [foldl(f, [_ac_sr_frac(s, r) * _ac_e0_frac(s) for s in 1:NS])
+        ex = [foldl(f, [_ac_sr_frac(s, r) * _ac_e0_frac(s) for s in NS:-1:1])
               for r in 1:NR]
         A = _ac_outs(dn, vn, NR)
         @test all(A[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
@@ -203,7 +209,9 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         C2 = [[c2(s, r) for r in 1:NR2] for s in 1:NS2]
         srng = ["s1" => Any[1, NS1], "s2" => Any[1, NS2]]
         orng = ["r1" => Any[R1LO, R1HI], "r2" => Any[1, NR2]]
-        agg = merge(ax(("r1", "r2"), vcat(orng, srng)),
+        # Descending contracted ranges, as `_ac_doc`'s, so the nest has it.
+        crng = ["s1" => Any[NS1, -1, 1], "s2" => Any[NS2, -1, 1]]
+        agg = merge(ax(("r1", "r2"), vcat(orng, crng)),
             Dict("semiring" => "sum_product",
                  "expr" => Dict("op" => "*", "args" => Any[
                     Dict("op" => "index", "args" => Any[cst(C1), "s1", "r1"]),
@@ -242,7 +250,10 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         (f!, u0, p, _, _), tally = _ac_build(_ac_doc(NS, NR), _ac_ics(NS, NR))
         @test _ac_fired(tally) == 1
         du = similar(u0)
-        @test rhs_alloc_bytes(f!, du, u0, p, 0.0) == 0
+        # Julia >= 1.12 only: older versions box across RuntimeGeneratedFunction inner functions and @testset-scope reads.
+        if VERSION >= v"1.12"
+            @test rhs_alloc_bytes(f!, du, u0, p, 0.0) == 0
+        end
     end
 
     @testset "ForwardDiff differentiates through the nest" begin
@@ -288,36 +299,107 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         @test o1 == o2 == o3
     end
 
-    @testset "under the floor, the nest is what is left instead of the per-cell build" begin
-        # ∏|k…| = 16 < 32, and under the per-cell loop's floor too. The affine
-        # tier declines this body (it does not index an inline `const` at a
-        # loop subscript), so what is left is the per-cell build, and the nest
-        # is offered the equation ahead of it whatever the floor. The answer is
-        # the one the per-cell expansion gives.
+    @testset "the nest has no length floor in the in-place build" begin
+        # A contraction the affine tier leaves (see `_ac_doc`) takes the nest
+        # whatever the nest's out-of-place floor says, and never the per-cell
+        # contraction loop, which only the out-of-place build has.
         NS, NR = 16, 16
         doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
-        dl, vl, tl = _ac_du(doc, ics; env=Dict("ESS_ARRAY_CONTRACTION_MIN" => "32",
-                                               "ESS_CONTRACTION_LOOP_MIN" => "32"))
+        dl, vl, tl = _ac_du(doc, ics; env=Dict("ESS_ARRAY_CONTRACTION_MIN" => "100000",
+                                               "ESS_CONTRACTION_LOOP_MIN" => "8"))
         @test _ac_fired(tl) == 1
+        @test _ac_tally(tl, :percell_loop) == 0
         @test _ac_tally(tl, :percell_acc) == 0
         do_, vo, _ = _ac_du(doc, ics; compiler=:interpreter)
         @test all(_ac_outs(dl, vl, NR)[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
         @test all(_ac_outs(dl, vl, NR)[r] === _ac_exact(NS, NR)[r] for r in 1:NR)
     end
 
-    @testset "under the floor, a per-cell loop candidate still takes the nest" begin
-        # Same reduction, now at or above the per-cell loop's floor: the loop's
-        # cells would be walked per cell on every call, so the in-place build
-        # hands the equation to the nest instead, whatever the nest's floor says.
+    @testset "a contraction under the loop floor is the affine tier's unroll" begin
+        # ∏|k…| = 16 < 32: a SHORT contraction, which the affine tier unrolls into
+        # its kernel whatever the range's direction. The answer is the one the
+        # per-cell expansion gives.
         NS, NR = 16, 16
         doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
-        dl, vl, tl = _ac_du(doc, ics; env=Dict("ESS_ARRAY_CONTRACTION_MIN" => "32",
-                                               "ESS_CONTRACTION_LOOP_MIN" => "8"))
-        @test _ac_fired(tl) == 1
-        @test _ac_tally(tl, :percell_loop) == 0
+        dl, vl, tl = _ac_du(doc, ics; env=Dict("ESS_CONTRACTION_LOOP_MIN" => "32"))
+        @test _ac_fired(tl) == 0
+        @test _ac_tally(tl, :affine) == 2
         do_, vo, _ = _ac_du(doc, ics; compiler=:interpreter)
         @test all(_ac_outs(dl, vl, NR)[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
-        @test all(_ac_outs(dl, vl, NR)[r] === _ac_exact(NS, NR)[r] for r in 1:NR)
+    end
+
+    @testset "an ascending contraction is the affine tier's run-time fold" begin
+        # The inline `const` read at the contracted index is a const lane of the
+        # affine tier (interned as the resolver interns it), so the fold takes
+        # the ascending source-receptor shape, at any length.
+        for (NS, NR) in ((16, 16), (64, 8))
+            doc, ics = _ac_doc(NS, NR; asc=true), _ac_ics(NS, NR)
+            dn, vn, tn = _ac_du(doc, ics)
+            do_, vo, _ = _ac_du(doc, ics; compiler=:interpreter)
+            @test _ac_fired(tn) == 0
+            @test _ac_tally(tn, :affine_reduce) == 1
+            A = _ac_outs(dn, vn, NR)
+            @test all(A[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
+            @test all(A[r] === _ac_exact(NS, NR)[r] for r in 1:NR)
+        end
+    end
+
+    # The fold is seeded with the `Float64` 0̄ itself, as the per-cell fold
+    # (`_eval_contraction`) seeds it, not with 0̄ converted to the value type. The
+    # two agree on values and differ on a `Dual`'s partials: every term here is
+    # `-0.0 · E[s]`, so every partial of every term is `-0.0`, and only the
+    # `Float64` seed leaves their sum `-0.0`. `==` cannot see that, so this
+    # compares with `isequal` and reads `signbit`, for the nest and for the
+    # affine tier's fold alike.
+    @testset "the fold's 0̄ seed keeps a -0.0 partial ($(asc ? "affine fold" : "nest"))" for
+            asc in (false, true)
+        NS, NR = 12, 4
+        doc = _ac_doc(NS, NR; coef=(s, r) -> -0.0, asc=asc)
+        ics = _ac_ics(NS, NR; e=s -> 1.0 + s)
+        (fn!, un, pn, _, vn), tn = _ac_build(doc, ics)
+        (fi!, ui, pi_, _, vi), _ = _ac_build(doc, ics; compiler=:interpreter)
+        @test (asc ? _ac_tally(tn, :affine_reduce) : _ac_fired(tn)) == 1
+        gn(u) = (d = similar(u, eltype(u)); fn!(d, u, pn, 0.0); d[vn["conc[2]"]])
+        gi(u) = (d = similar(u, eltype(u)); fi!(d, u, pi_, 0.0); d[vi["conc[2]"]])
+        @test isequal(gn(un), gi(ui))
+        Jn = ForwardDiff.gradient(gn, un)
+        Ji = ForwardDiff.gradient(gi, ui)
+        @test all(signbit(Jn[vn["E[$s]"]]) for s in 1:NS)
+        @test all(isequal(Jn[vn["E[$s]"]], Ji[vi["E[$s]"]]) for s in 1:NS)
+    end
+
+    # bool_and_or's ⊕ is `or`, folded from 0̄ = false on the evaluator's 1.0/0.0
+    # encoding. A long one is the nest's (the affine tier has no run-time fold
+    # for `or` and unrolls only a short one, which it does here); both agree
+    # with the per-cell fold and with the closed form, `any` over the terms.
+    @testset "a bool_and_or contraction of $NS terms folds as the per-cell build" for
+            (NS, nest, thr) in ((16, true, 36.0), (4, false, 20.0))
+        NR = 6
+        doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
+        agg = doc["models"]["R"]["equations"][2]["rhs"]
+        agg["semiring"] = "bool_and_or"
+        agg["expr"] = Dict("op" => ">", "args" => Any[agg["expr"], thr])
+        dn, vn, tn = _ac_du(doc, ics)
+        do_, vo, _ = _ac_du(doc, ics; compiler=:interpreter)
+        @test _ac_fired(tn) == (nest ? 1 : 0)
+        A = _ac_outs(dn, vn, NR)
+        @test all(A[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
+        ex = [any(_ac_sr(s, r) * _ac_e0(s) > thr for s in 1:NS) ? 1.0 : 0.0 for r in 1:NR]
+        @test A == ex
+        @test 0.0 < sum(ex) < NR    # both answers occur
+    end
+
+    # An output range with no cell (an extent a metaparameter can set to 0)
+    # holds a long contraction: there is nothing to build or run, and every
+    # compiler builds it, native included, filing it as `:empty_output`.
+    @testset "an empty output range builds under every compiler" begin
+        doc, ics = _ac_doc(16, 0), _ac_ics(16, 0)
+        for c in (:native, :interpreter)
+            (f!, u0, p, _, vm), tally = _ac_build(doc, ics; compiler=c)
+            du = similar(u0); f!(du, u0, p, 0.0)
+            @test length(u0) == 16
+            @test _ac_tally(tally, :empty_output) == 1
+        end
     end
 
     # ── A nest on a materialized observed LEVEL ───────────────────────
@@ -330,9 +412,10 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
             ranges=Dict("i" => _AC_ESS.IndexSetRef("x")), expr_body=b)
         weq = _AC_ESS.Equation(_v("w"), ag1(_op("*", _n(2.0), _idx("u", _v("i")))))
         Cm = [[_ac_sr(j, i) for i in 1:N] for j in 1:N]
+        # `j` descending, as `_ac_doc`'s contracted range, so the nest has it.
         nest = _AC_ESS.OpExpr("faq", _AC_ESS.ASTExpr[]; output_idx=Any["i"],
             reduce="+", ranges=Dict("i" => _AC_ESS.IndexSetRef("x"),
-                                    "j" => _AC_ESS.IndexSetRef("x")),
+                                    "j" => Any[N, -1, 1]),
             expr_body=_op("*", _op("index", _AC_ESS.OpExpr("const", _AC_ESS.ASTExpr[];
                                                            value=Cm), _v("j"), _v("i")),
                           _idx("w", _v("j"))))

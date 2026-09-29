@@ -115,7 +115,7 @@
     },
     "no_steady_alloc": {
       "kind": "deterministic",
-      "description": "allocs_per_call is 0 bytes. On a document that built, a null allocs_per_call is a missing measurement and fails, unless the result's unmeasurable map names the field.",
+      "description": "allocs_per_call is 0 bytes. On a document that built, a null allocs_per_call is a missing measurement and fails, unless the result's unmeasurable map names the field. A ledger entry for this gate states max_bytes_per_call, the most it excuses; a measure past it fails.",
       "max_bytes_per_call": 0
     },
     "hand_loop_agrees": {
@@ -137,20 +137,6 @@
   },
   "ledger": {
     "rust": [
-      {
-        "family": "regrid",
-        "gate": "builds",
-        "measured": "refused: compiler 'native' cannot run the const-cadence observed 'A_ij': op: unsupported operator `polygon_intersection_area`/2",
-        "reason": "geometry leaf ops (polygon_intersection_area) have no tape lowering",
-        "phase": 3
-      },
-      {
-        "family": "unstructured_gather",
-        "gate": "builds",
-        "measured": "refused: compiler 'native' cannot run the continuous-cadence state derivative 'D(u)': index: axis 0 is neither an affine/wrap map of an unclaimed output symbol nor a constant select",
-        "reason": "indirect gather u[nbr[i,k]] has no tape lowering",
-        "phase": 3
-      },
       {
         "family": "chemistry_grid",
         "gate": "speed",
@@ -648,6 +634,102 @@
         "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x (a prefix scan's threaded reference is the serial loop; the size did not finish at 0082083c5)",
         "phase": 5,
         "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 11.8-13.0 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p2-rust-strided"
+      },
+      {
+        "family": "regrid",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": 3769.0,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..3162); the document carries both cell tables as inline const rings (about 55 bytes of JSON per state), and loading and lowering it is the whole build (0.03 s of 0.032 s at N=3162); the dense source x target overlap and weight arrays, and the geometry over the candidate pairs, are computed in the first call's build-once section (0.10 s at N=3162), which this gate does not time",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "regrid",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": 3824.0,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..3162); the document carries both cell tables as inline const rings (about 55 bytes of JSON per state), and loading and lowering it is the whole build (0.03 s of 0.032 s at N=3162); the dense source x target overlap and weight arrays, and the geometry over the candidate pairs, are computed in the first call's build-once section (0.10 s at N=3162), which this gate does not time",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": 863.1,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000); the document carries the neighbour table as an inline const array (about 30 bytes of JSON per state), and loading it is most of the build (0.66 s of 0.87 s at 10^6 cells); the tape is 5 instructions at every N",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "gate": "build_slope",
+        "threads": "threaded",
+        "measured": 1010.0,
+        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000); the document carries the neighbour table as an inline const array (about 30 bytes of JSON per state), and loading it is most of the build (0.66 s of 0.87 s at 10^6 cells); the tape is 5 instructions at every N",
+        "phase": 2,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.812,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x; per call the fused gather rounds and range-checks each of the 4N floating-point subscripts where the hand loop reads integer indices, and the call also pays the whole-state passes (the row-major state copy, the zeroed dy)",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 3.348,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x; per call the fused gather rounds and range-checks each of the 4N floating-point subscripts where the hand loop reads integer indices, and the call also pays the whole-state passes (the row-major state copy, the zeroed dy)",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.052,
+        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x; per call the fused gather rounds and range-checks each of the 4N floating-point subscripts where the hand loop reads integer indices, and the call also pays the whole-state passes (the row-major state copy, the zeroed dy)",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 8.008,
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 14.68,
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 11.75,
+        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "phase": 5,
+        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
       }
     ],
     "julia": [
@@ -859,6 +941,7 @@
         "gate": "no_steady_alloc",
         "threads": "threaded",
         "measured": "bytes per steady call with 4 threads: 100:544, 1000:544, 10000:544, 100000:544, 1000000:544",
+        "max_bytes_per_call": 1088,
         "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
         "phase": 5
       },
@@ -867,6 +950,7 @@
         "gate": "no_steady_alloc",
         "threads": "threaded",
         "measured": "bytes per steady call with 4 threads: 10000:384, 100000:384, 1000000:384",
+        "max_bytes_per_call": 768,
         "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path; each of prefix_scan's three threaded sections now allocates 32 bytes more per dispatch, because the chunk closure carries the section's tab tuple, which holds one more container (the run-time box geometry)",
         "phase": 5
       },
@@ -875,6 +959,7 @@
         "gate": "no_steady_alloc",
         "threads": "threaded",
         "measured": "bytes per steady call with 4 threads: 1000:160, 3162:352",
+        "max_bytes_per_call": 704,
         "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
         "phase": 5
       },
@@ -883,6 +968,7 @@
         "gate": "no_steady_alloc",
         "threads": "threaded",
         "measured": "bytes per steady call with 4 threads: 100:128, 1000:256, 3162:256",
+        "max_bytes_per_call": 512,
         "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
         "phase": 5
       },
@@ -891,6 +977,7 @@
         "gate": "no_steady_alloc",
         "threads": "threaded",
         "measured": "bytes per steady call with 4 threads: 10000:128, 100000:128, 1000000:128",
+        "max_bytes_per_call": 256,
         "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
         "phase": 5
       },
@@ -899,6 +986,7 @@
         "gate": "no_steady_alloc",
         "threads": "threaded",
         "measured": "bytes per steady call with 4 threads: 1000:128, 10000:128, 100000:128, 1000000:128",
+        "max_bytes_per_call": 256,
         "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
         "phase": 5
       },
@@ -907,6 +995,7 @@
         "gate": "no_steady_alloc",
         "threads": "threaded",
         "measured": "bytes per steady call with 4 threads: 10000:128, 100000:128, 1000000:128",
+        "max_bytes_per_call": 256,
         "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
         "phase": 5
       },
@@ -915,6 +1004,7 @@
         "gate": "no_steady_alloc",
         "threads": "threaded",
         "measured": "bytes per steady call with 4 threads: 1000:128, 10000:128, 100000:128",
+        "max_bytes_per_call": 256,
         "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
         "phase": 5
       },
@@ -923,6 +1013,7 @@
         "gate": "no_steady_alloc",
         "threads": "threaded",
         "measured": "bytes per steady call with 4 threads: 10000:128, 100000:128, 1000000:128",
+        "max_bytes_per_call": 256,
         "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
         "phase": 5
       },
@@ -931,6 +1022,7 @@
         "gate": "no_steady_alloc",
         "threads": "threaded",
         "measured": "bytes per steady call with 4 threads: 1000:128, 10000:128, 100000:128",
+        "max_bytes_per_call": 256,
         "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
         "phase": 5
       },

@@ -137,6 +137,15 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
             Value::Array(Box::new(a.clone()))
         };
     }
+    latch_unbound_read(name, ctx.declared);
+    Value::Scalar(f64::NAN)
+}
+
+/// Latch the fault for a read that NOTHING in scope produced a value for:
+/// [`lookup_variable`]'s last resort, shared with the tape's forcing load
+/// (`Instr::LoadForcing`), which reads the same forcing channel and has to fail
+/// the same way when the channel holds no entry for the name.
+pub(super) fn latch_unbound_read(name: &str, declared: &HashSet<String>) {
     // Nothing produced a value for this name. Two very different defects reach
     // this point and they MUST NOT be reported as one (issue #181).
     //
@@ -149,7 +158,7 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
     //     routinely false — the reported name was typically an observed that is
     //     declared, defined and referenced perfectly well, and had nothing to
     //     do with the cycle. Bisecting from that message costs an afternoon.
-    if ctx.declared.contains(name) {
+    if declared.contains(name) {
         latch_gather_fault(format!(
             "E_TREEWALK_UNRESOLVED_ORDER: '{name}' IS declared in this model, but nothing had \
              produced a value for it at the point this expression was evaluated. For an observed \
@@ -159,7 +168,7 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
              observeds on it. This is NOT an undeclared name — see E_TREEWALK_UNBOUND_NAME for \
              that (CONFORMANCE_SPEC §5.23)."
         ));
-        return Value::Scalar(f64::NAN);
+        return;
     }
     // (2) NOTHING bound this name — not `t`, not a loop binder, not a state, not
     // an observed, not a parameter, not a forcing channel, and the model does
@@ -184,7 +193,20 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
          CONFORMANCE_SPEC §5.23: never a NaN sentinel, which `max(x, floor)` or any \
          comparison would launder into a plausible number by dropping the operand."
     ));
-    Value::Scalar(f64::NAN)
+}
+
+/// Latch the fault for a forcing-buffer entry whose shape is not the box a
+/// compiled program was built against (`Instr::LoadForcing`). The interpreter
+/// reads whatever array the buffer holds; a compiled program fixed each box at
+/// build, so it cannot, and says so rather than reading the entry through the
+/// wrong box.
+pub(super) fn latch_forcing_shape_mismatch(name: &str, built: &[usize], held: &[usize]) {
+    latch_gather_fault(format!(
+        "the forcing buffer holds '{name}' with shape {held:?}, but the compiled program \
+         reads it as {built:?} (the shape the buffer held, or else the variable declared, \
+         when the program was built). A compiled program's boxes are fixed at build: a \
+         forcing field that changes shape between refreshes cannot be read by it."
+    ));
 }
 
 /// Bind (or rebind) a loop index in `binds` without reallocating the key on the
@@ -1936,8 +1958,10 @@ pub fn take_const_array_oob() -> Option<String> {
     CONST_OOB.with(|c| c.borrow_mut().take())
 }
 
-/// Latch the FIRST fail-closed gather diagnostic of this evaluation.
-fn latch_gather_fault(msg: String) {
+/// Latch the FIRST fail-closed gather diagnostic of this evaluation. The
+/// tape's `Instr::Fault` latches through here too, so both evaluators keep
+/// the same first-wins record.
+pub(crate) fn latch_gather_fault(msg: String) {
     CONST_OOB.with(|c| {
         let mut slot = c.borrow_mut();
         if slot.is_none() {
@@ -1974,29 +1998,40 @@ fn latch_recur_unavailable(name: &str, raw: &[i64]) {
 /// goes on to apply — the document then reports a number that was never
 /// computed.
 fn latch_index_on_scalar(base: &Expr, subscripts: usize) {
+    latch_gather_fault(index_on_scalar_message(base, subscripts));
+}
+
+/// The text [`latch_index_on_scalar`] latches, shared with the tape lowering,
+/// which emits it as an `Instr::Fault`.
+pub(crate) fn index_on_scalar_message(base: &Expr, subscripts: usize) -> String {
     let what = match base {
         Expr::Variable(name) => format!("'{name}'"),
         Expr::Operator(node) => format!("the `{}` result", node.op),
         Expr::Integer(_) | Expr::Number(_) => "a numeric literal".to_string(),
     };
-    latch_gather_fault(format!(
+    format!(
         "E_TREEWALK_INDEX_ON_SCALAR: {what} has no axes, so the {subscripts} subscript(s) \
          applied to it name nothing (esm-spec §4.3.4; CONFORMANCE_SPEC.md §7.1). Fail-closed: \
          never the §5.5.5 zero ghost, which is the boundary convention for a gather that HAS \
          an axis to fall outside of, and never a bare NaN. Read an unshaped quantity by its \
          bare name or as `index(<name>)` with no subscript, or give it a `shape` if it was \
          meant to have axes."
-    ));
+    )
 }
 
 /// Latch the FIRST const-array out-of-range diagnostic of this evaluation.
 fn latch_const_oob(name: &str, one_based: i64, n: i64, d: usize) {
-    latch_gather_fault(format!(
+    latch_gather_fault(const_oob_message(name, one_based, n, d));
+}
+
+/// The text [`latch_const_oob`] latches, shared with the tape lowering.
+pub(crate) fn const_oob_message(name: &str, one_based: i64, n: i64, d: usize) -> String {
+    format!(
         "E_TREEWALK_CONSTARRAY_OOB: const array '{name}' index {one_based} out of range \
          1..{n} in dim {d} (CONFORMANCE_SPEC.md §5.5.5: the zero-ghost convention is \
          never applied to a const-array gather; declare a per-dimension boundary policy \
          to resolve it as `periodic` or `clamp`)"
-    ));
+    )
 }
 
 /// The out-of-range boundary policy of the gather being resolved
@@ -2422,18 +2457,27 @@ pub(super) fn eval_polygon_intersection_area(node: &ExpressionNode, ctx: &mut Ev
     let Some((manifold, va, vb)) = eval_clip_operands(node, ctx) else {
         return Value::Scalar(f64::NAN);
     };
-    // Clip, then measure — the fused composition. The clip kernel returns the
-    // `n` distinct overlap vertices; `polygon_area`'s shoelace / spherical body
-    // reads the wrap edge `n→1` itself, so no explicit ring closure is needed
-    // here (and no derived ring is registered — the fused leaf exposes none).
-    match crate::geometry::intersect_polygon(&va, &vb, manifold)
+    Value::Scalar(clip_area_value(&va, &vb, manifold))
+}
+
+/// The value of one `polygon_intersection_area` of two `(lon, lat)` rings: the
+/// ONE definition the interpreter above and the tape's geometry instruction
+/// both call, so a compiled area is the interpreter's by shared code.
+///
+/// Clip, then measure — the fused composition. The clip kernel returns the `n`
+/// distinct overlap vertices; `polygon_area`'s shoelace / spherical body reads
+/// the wrap edge `n→1` itself, so no explicit ring closure is needed here (and
+/// no derived ring is registered — the fused leaf exposes none).
+pub(crate) fn clip_area_value(
+    va: &[(f64, f64)],
+    vb: &[(f64, f64)],
+    manifold: crate::geometry::Manifold,
+) -> f64 {
+    // A degenerate input ring or unavailable backend surfaces as NaN, the
+    // same not-a-value sentinel the evaluator uses for unevaluable nodes.
+    crate::geometry::intersect_polygon(va, vb, manifold)
         .and_then(|ring| crate::geometry::polygon_area(&ring, manifold))
-    {
-        Ok(area) => Value::Scalar(area),
-        // A degenerate input ring or unavailable backend surfaces as NaN, the
-        // same not-a-value sentinel the evaluator uses for unevaluable nodes.
-        Err(_) => Value::Scalar(f64::NAN),
-    }
+        .unwrap_or(f64::NAN)
 }
 
 /// Close a ring by repeating its first vertex (RFC §8.1; mirrors Python
@@ -3070,7 +3114,7 @@ impl JoinGate {
 
 /// Where one of a gate's two symbols sits in the aggregate being evaluated.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum GateAxis {
+pub(super) enum GateAxis {
     /// A contracted index — free, at this position in `contract_names`.
     Contracted(usize),
     /// An output index — already bound in `ctx.loop_binds` for this cell.
@@ -3085,7 +3129,7 @@ pub(super) struct GatePlacement {
     tgt: GateAxis,
 }
 
-fn gate_axis(sym: &str, idx_names: &[String], contract_names: &[String]) -> GateAxis {
+pub(super) fn gate_axis(sym: &str, idx_names: &[String], contract_names: &[String]) -> GateAxis {
     if let Some(d) = contract_names.iter().position(|n| n == sym) {
         return GateAxis::Contracted(d);
     }
@@ -3632,7 +3676,7 @@ pub(super) fn resolve_join_gates(join: &[JoinClause], ctx: &EvalCtx) -> Vec<Join
 
 /// Both sides of an `on` gate as the planner carries them: `(positions, keys)`
 /// per side, left then right.
-type EqSides = (
+pub(super) type EqSides = (
     Vec<i64>,
     Vec<crate::relational::Key>,
     Vec<i64>,
@@ -3826,34 +3870,45 @@ fn key_column_values(
     col: &crate::join::KeyColumn,
     ctx: &EvalCtx,
 ) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
-    use crate::join::{JoinKey, KeyColumn};
+    use crate::join::KeyColumn;
     match col {
-        KeyColumn::Const { positions, values } => {
-            let keys = values
-                .iter()
-                .map(|v| match v {
-                    JoinKey::Int(i) => crate::relational::Key::Int(*i),
-                    JoinKey::Cat(c) => crate::relational::Key::Str(c.clone()),
-                })
-                .collect();
-            Some((positions.clone(), keys))
-        }
-        KeyColumn::Column(name) => with_named_array(name, ctx, |a| {
-            if a.ndim() != 1 {
-                return None;
-            }
-            let mut keys = Vec::with_capacity(a.len());
-            for &v in a.iter() {
-                if !v.is_finite() || v.fract() != 0.0 {
-                    return None;
-                }
-                keys.push(crate::relational::Key::Int(v as i64));
-            }
-            // A 1-D data column is addressed 1-based by `index(col, sym)`, and
-            // its shape index set resolves the symbol's range to `[1, N]`.
-            Some(((1..=a.len() as i64).collect(), keys))
-        })?,
+        KeyColumn::Const { positions, values } => Some(const_key_column(positions, values)),
+        KeyColumn::Column(name) => with_named_array(name, ctx, data_key_column)?,
     }
+}
+
+/// The `(positions, keys)` of a build-time constant key column.
+pub(super) fn const_key_column(
+    positions: &[i64],
+    values: &[crate::join::JoinKey],
+) -> (Vec<i64>, Vec<crate::relational::Key>) {
+    use crate::join::JoinKey;
+    let keys = values
+        .iter()
+        .map(|v| match v {
+            JoinKey::Int(i) => crate::relational::Key::Int(*i),
+            JoinKey::Cat(c) => crate::relational::Key::Str(c.clone()),
+        })
+        .collect();
+    (positions.to_vec(), keys)
+}
+
+/// The `(positions, keys)` of a 1-D data column, or `None` when it is not one
+/// or holds a value that is not EXACTLY integral (see [`key_column_values`]).
+pub(super) fn data_key_column(a: &ArrayD<f64>) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
+    if a.ndim() != 1 {
+        return None;
+    }
+    let mut keys = Vec::with_capacity(a.len());
+    for &v in a.iter() {
+        if !v.is_finite() || v.fract() != 0.0 {
+            return None;
+        }
+        keys.push(crate::relational::Key::Int(v as i64));
+    }
+    // A 1-D data column is addressed 1-based by `index(col, sym)`, and
+    // its shape index set resolves the symbol's range to `[1, N]`.
+    Some(((1..=a.len() as i64).collect(), keys))
 }
 
 /// One side's per-position key: the single column's key for a simple `on`, or
@@ -3867,23 +3922,31 @@ fn side_keys(
     cols: &[crate::join::KeyColumn],
     ctx: &EvalCtx,
 ) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
-    let (positions, first) = key_column_values(cols.first()?, ctx)?;
-    if cols.len() == 1 {
-        return Some((positions, first));
+    let parts = cols
+        .iter()
+        .map(|c| key_column_values(c, ctx))
+        .collect::<Option<Vec<_>>>()?;
+    composite_side_keys(parts)
+}
+
+/// Combine one side's per-column `(positions, keys)` into its per-position
+/// key (see [`side_keys`]). `None` for no columns, or for columns that do
+/// not run over the same positions.
+pub(super) fn composite_side_keys(
+    mut parts: Vec<(Vec<i64>, Vec<crate::relational::Key>)>,
+) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
+    if parts.len() == 1 {
+        return parts.pop();
     }
-    let mut parts: Vec<Vec<crate::relational::Key>> = Vec::with_capacity(cols.len());
-    parts.push(first);
-    for c in &cols[1..] {
-        let (p, k) = key_column_values(c, ctx)?;
-        // Every column of one side runs over the SAME loop symbol, so a length
-        // or position disagreement means the gate does not describe this node.
-        if p != positions {
-            return None;
-        }
-        parts.push(k);
+    let (positions, _) = parts.first()?;
+    let positions = positions.clone();
+    // Every column of one side runs over the SAME loop symbol, so a length
+    // or position disagreement means the gate does not describe this node.
+    if parts.iter().any(|(p, _)| *p != positions) {
+        return None;
     }
     let keys = (0..positions.len())
-        .map(|t| crate::relational::skolem(parts.iter().map(|p| p[t].clone()).collect(), false))
+        .map(|t| crate::relational::skolem(parts.iter().map(|p| p.1[t].clone()).collect(), false))
         .collect();
     Some((positions, keys))
 }
@@ -3928,7 +3991,7 @@ fn equality_sides(g: &crate::join::OnGate, ctx: &EvalCtx) -> Option<EqSides> {
 /// Takes the keyed sides rather than reading them, because the planner has
 /// already read them to price this gate and reading a multi-million-row key
 /// column twice is the term issue #418 left standing.
-fn index_from_sides(sides: EqSides) -> (crate::broad_phase::OverlapIndex, usize, usize) {
+pub(super) fn index_from_sides(sides: EqSides) -> (crate::broad_phase::OverlapIndex, usize, usize) {
     let (pos_l, keys_l, pos_r, keys_r) = sides;
     let (n_l, n_r) = (pos_l.len(), pos_r.len());
     // Canonical-key-ordered matches (§5.5 rule 5) mapped back onto the two
@@ -5241,9 +5304,12 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
                 .iter()
                 .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
                 .collect();
-            if a.shape() != region_shape.as_slice() {
+            // The value must fit the region, excluding its singleton axes
+            // (esm-spec §4.3.2): the face region `[[1,1],[1,n]]` takes an
+            // `[n]` value.
+            let Some(covered) = region_value_axes(a.shape(), &region_shape) else {
                 return Value::Scalar(f64::NAN);
-            }
+            };
             // The legal EMPTY region spelling (`stop == start - 1`, §4.3.2)
             // writes nothing — and its `start` may sit one past the bounding
             // box, which is not a slicable offset. The per-cell walk produced no
@@ -5264,7 +5330,7 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
                 let s0 = (ranges[d].0 - origin[d]) as usize;
                 ndarray::Slice::from(s0..s0 + region_shape[d])
             })
-            .assign(a);
+            .assign(&region_value_view(a.view(), &covered));
             continue;
         }
         let scalar = match &v {

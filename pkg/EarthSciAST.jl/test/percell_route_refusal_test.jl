@@ -39,18 +39,106 @@ end
 
 _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
 
+# `D(out[a,b,c,d]) = Σ_k W[k]·F[a,b,c,d]` over a single output cell: `W` an
+# inline `const` read at the contracted index `k` (which runs `past` terms beyond
+# it), `F` a live forcing buffer read at the output index; with `filt`, only
+# the terms `k ≥ 2`.
+function _pr_rank4_doc(W::Vector{Float64}; past::Int = 0, filt::Bool = false)
+    rng = Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d"))
+    agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+        "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
+        "ranges" => merge(rng, Dict{String,Any}("k" => Any[1, length(W) + past])),
+        "expr" => Dict("op" => "*", "args" => Any[
+            Dict("op" => "index", "args" => Any[
+                Dict("op" => "const", "args" => Any[], "value" => W), "k"]),
+            Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])]))
+    filt && (agg["filter"] = Dict("op" => ">=", "args" => Any["k", 2]))
+    Dict{String,Any}("esm" => "1.1.0",
+        "metadata" => Dict("name" => "pr_rank4_contraction"),
+        "models" => Dict("R" => Dict{String,Any}(
+            "variables" => Dict(
+                "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
+                "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
+            "equations" => Any[Dict(
+                "lhs" => Dict("op" => "faq", "args" => Any[],
+                    "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
+                    "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
+                        "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
+                "rhs" => agg)])))
+end
+_pr_rank4_build(doc, compiler; kw...) =
+    withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
+        _PR._build_evaluator(doc; initial_conditions = Dict("out[1,1,1,1]" => 0.0),
+            param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)), compiler = compiler, kw...)
+    end
+
 @testset "per-cell routes under strict native" begin
 
     # ── The short-contraction route (#479) ────────────────────────────────────
-    # `D(out[a,b,c,d]) = Σ_k W[k]·F[a,b,c,d]`: a constant-bound contraction the
-    # per-cell contraction loop's gate admits, whose body reads a LIVE forcing
+    # `D(out[a,b,c,d]) = Σ_k W[k]·F[a,b,c,d]`: a constant-bound contraction whose
+    # body reads an inline `const` at the contracted index and a LIVE forcing
     # buffer `F` at the output index. The whole-array nest cannot keep that
-    # read symbolic, and the affine tier does not model a rank-4 output, so the
-    # only tier left is the per-cell loop — whose cells the in-place `f!` walks
-    # as trees on every call.
-    @testset "a contraction left to the per-cell loop refuses" begin
+    # forcing read symbolic; the affine tier's run-time fold reads both, the
+    # inline `const` as a const lane, so it compiles the equation once.
+    @testset "a short contraction over a live forcing read compiles once" begin
         W = Float64[1, 2, 3, 4, 5, 6, 7, 8]
-        rng = Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d"))
+        doc = _pr_rank4_doc(W)
+        insp = _PR.BuildInspection()
+        f!, u0, p, _, vm = _pr_rank4_build(doc, :native; inspect = insp)
+        fi!, ui, pi_, _, vi = _pr_rank4_build(doc, :interpreter)
+        du = similar(u0); f!(du, u0, p, 0.0)
+        di = similar(ui); fi!(di, ui, pi_, 0.0)
+        @test du[vm["out[1,1,1,1]"]] === di[vi["out[1,1,1,1]"]] == 3.0 * sum(W)
+        @test length(_pr_rows(_PR.compiler_report(insp), :affine)) == 1
+    end
+
+    # ── The discrete-cadence materializer (#480) ──────────────────────────────
+    # `g[j] = Σ_i W[i,j]·src[i]` over a live buffer `src` is state-free and
+    # forcing-derived, so the materializer cuts it into a cache filled at build
+    # and at every refresh: one compiled whole-array kernel under `native`, a
+    # per-cell walk under `interpreter`, bit for bit the same cache.
+    @testset "the discrete-cadence materializer compiles once, and is reported" begin
+        file = _PR.load_path(joinpath(@__DIR__, "fixtures", "discrete_materialize.esm"))
+        W = [1.0 2.0 3.0; 4.0 5.0 6.0]
+        ics = Dict{String,Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+        function build(compiler)
+            dm = _PR.DiscreteMaterializer(); insp = _PR.BuildInspection()
+            src = [0.3, 1.7]
+            r = _PR._build_evaluator(file; initial_conditions = ics,
+                const_arrays = Dict("W" => W), param_arrays = Dict("src" => src),
+                materialize_out = dm, inspect = insp, compiler = compiler)
+            (dm = dm, src = src, report = insp.compiler_report, r = r)
+        end
+        n, i = build(:native), build(:interpreter)
+        g0 = [W[1, j] * 0.3 + W[2, j] * 1.7 for j in 1:3]
+        @test n.dm.caches["g"] == g0
+        @test all(n.dm.caches["g"] .=== i.dm.caches["g"])
+        # A refill after an in-place refresh of the live buffer: the same bits again.
+        n.src .= [2.5, -0.1]; i.src .= [2.5, -0.1]
+        n.dm.materialize!(); i.dm.materialize!()
+        @test all(n.dm.caches["g"] .=== i.dm.caches["g"])
+        @test n.dm.caches["g"] == [W[1, j] * 2.5 + W[2, j] * -0.1 for j in 1:3]
+        g_rows(rep) = [(r.kind, r.tier) for r in rep.rules if r.rule == "g"]
+        @test g_rows(n.report) == [(:observed, :affine)]
+        @test g_rows(i.report) == [(:observed, :discrete_percell)]
+        # The right-hand side reads the refreshed cache under both compilers.
+        for b in (n, i)
+            f!, u0, p, _, vm = b.r
+            du = similar(u0); f!(du, u0, p, 0.0)
+            @test du[vm["c[1]"]] == b.dm.caches["g"][1] + (W[1, 1] + W[2, 1]) * 1.0
+        end
+    end
+
+    # A discrete-cadence fill goes through the right-hand side's cascade. The
+    # rank-4 contraction of the short-contraction route above, as a
+    # discrete-cadence field instead of a derivative, compiles once there (the
+    # affine tier's run-time fold), bit for bit with the interpreter's per-cell
+    # walk; a fill the cascade cannot compile, a RAGGED contraction over the live
+    # forcing read (see "a contraction no compile-once form takes" below), is
+    # refused, naming the field.
+    @testset "a discrete-cadence fill compiles once, or refuses by name" begin
+        W = Float64[1, 2, 3, 4, 5, 6, 7, 8]
+        rng = Dict{String,Any}(n => Any[1, 2] for n in ("a", "b", "c", "d"))
         agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
             "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
             "ranges" => merge(rng, Dict{String,Any}("k" => Any[1, length(W)])),
@@ -59,55 +147,59 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
                     Dict("op" => "const", "args" => Any[], "value" => W), "k"]),
                 Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])]))
         doc = Dict{String,Any}("esm" => "1.1.0",
-            "metadata" => Dict("name" => "pr_short_contraction"),
+            "metadata" => Dict("name" => "pr_discrete_rank4"),
             "models" => Dict("R" => Dict{String,Any}(
                 "variables" => Dict(
                     "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
+                    "g" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"]),
                     "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
-                "equations" => Any[Dict(
-                    "lhs" => Dict("op" => "faq", "args" => Any[],
-                        "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
-                        "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
-                            "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
-                    "rhs" => agg)])))
+                "equations" => Any[
+                    Dict("lhs" => "g", "rhs" => agg),
+                    Dict("lhs" => Dict("op" => "faq", "args" => Any[],
+                            "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
+                            "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
+                                "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
+                         "rhs" => Dict("op" => "faq", "args" => Any[],
+                            "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
+                            "expr" => Dict("op" => "index",
+                                "args" => Any["g", "a", "b", "c", "d"])))])))
+        ics = Dict("out[$a,$b,$c,$d]" => 0.0 for a in 1:2, b in 1:2, c in 1:2, d in 1:2)
+        F = reshape(collect(1.0:16.0), 2, 2, 2, 2)
         build(compiler) = withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
-            _PR._build_evaluator(doc;
-                initial_conditions = Dict("out[1,1,1,1]" => 0.0),
-                param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)),
-                compiler = compiler)
+            dm = _PR.DiscreteMaterializer(); insp = _PR.BuildInspection()
+            _PR._build_evaluator(doc; initial_conditions = ics,
+                param_arrays = Dict("F" => copy(F)), materialize_out = dm,
+                inspect = insp, compiler = compiler)
+            (dm, insp.compiler_report)
         end
-        @test _pr_refuses(() -> build(:native), "per-cell contraction loop"; one_cell = true)
-        f!, u0, p, _, vm = build(:interpreter)
-        du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vm["out[1,1,1,1]"]] == 3.0 * sum(W)
-    end
+        (dn, rn), (di, _) = build(:native), build(:interpreter)
+        @test vec(di.caches["g"]) == sum(W) .* vec(F)
+        @test all(dn.caches["g"] .=== di.caches["g"])
+        @test [r.tier for r in rn.rules if r.rule == "g"] == [:affine]
 
-    # ── The discrete-cadence materializer (#480) ──────────────────────────────
-    # `g[j] = Σ_i W[i,j]·src[i]` over a live buffer `src` is state-free and
-    # forcing-derived, so the materializer cuts it into a cache filled per cell
-    # at build and at every refresh.
-    @testset "the discrete-cadence materializer refuses, and is reported" begin
-        file = _PR.load_path(joinpath(@__DIR__, "fixtures", "discrete_materialize.esm"))
-        W = [1.0 2.0 3.0; 4.0 5.0 6.0]
-        ics = Dict{String,Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
-        build(compiler, dm, insp) = _PR._build_evaluator(file; initial_conditions = ics,
-            const_arrays = Dict("W" => W), param_arrays = Dict("src" => [1.0, 1.0]),
-            materialize_out = dm, inspect = insp, compiler = compiler)
-        @test _pr_refuses(() -> build(:native, _PR.DiscreteMaterializer(),
-                                      _PR.BuildInspection()),
-                          "the discrete-cadence materializer"; one_cell = true)
-        dm = _PR.DiscreteMaterializer()
-        insp = _PR.BuildInspection()
-        build(:interpreter, dm, insp)
-        @test dm.caches["g"] == [5.0, 7.0, 9.0]
-        @test [r.rule for r in _pr_rows(insp.compiler_report, :discrete_percell)] ==
-              ["g"]
-        # No sink, no cut: the field is inlined into the compiled right-hand side
-        # and `native` builds it.
-        f!, u0, p, _, vm = _PR._build_evaluator(file; initial_conditions = ics,
-            const_arrays = Dict("W" => W), param_arrays = Dict("src" => [1.0, 1.0]))
-        du = similar(u0); f!(du, u0, p, 0.0)
-        @test isfinite(du[vm["c[1]"]])
+        N = 3
+        ragged = deepcopy(doc)
+        m = ragged["models"]["R"]
+        m["variables"] = Dict(n => Dict(v..., "shape" => Any["a"]) for (n, v) in m["variables"])
+        m["equations"][1]["rhs"] = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+            "args" => Any[], "output_idx" => Any["a"],
+            "ranges" => Dict{String,Any}("a" => Any[1, N], "k" => Any[1,
+                Dict("op" => "-", "args" => Any[Dict("op" => "+", "args" => Any["a", 4]), "a"])]),
+            "expr" => Dict("op" => "*", "args" => Any[
+                Dict("op" => "index", "args" => Any["F", "a"]), "k"]))
+        m["equations"][2] = Dict("lhs" => Dict("op" => "faq", "args" => Any[],
+                "output_idx" => Any["a"], "ranges" => Dict("a" => Any[1, N]),
+                "expr" => Dict("op" => "D", "wrt" => "t", "args" => Any[
+                    Dict("op" => "index", "args" => Any["out", "a"])])),
+            "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["a"],
+                "ranges" => Dict("a" => Any[1, N]),
+                "expr" => Dict("op" => "index", "args" => Any["g", "a"])))
+        build_r(compiler) = (dm = _PR.DiscreteMaterializer();
+            _PR._build_evaluator(ragged; initial_conditions = Dict("out[$a]" => 0.0 for a in 1:N),
+                param_arrays = Dict("F" => collect(1.0:N)), materialize_out = dm,
+                compiler = compiler); dm)
+        @test _pr_refuses(() -> build_r(:native), "refuses 'g'"; one_cell = true)
+        @test build_r(:interpreter).caches["g"] == [10.0 * a for a in 1:N]
     end
 
     # ── faq-valued initialization equations (#482) ────────────────────────────
@@ -123,7 +215,7 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         (r[2], r[5], insp.compiler_report)
     end
 
-    @testset "a faq initialization equation compiles once, bit-identically" begin
+    @testset "a faq initialization equation is a compiled fill, bit-identically" begin
         body = _op("+", _op("*", _n(0.37), _v("i")), _op("/", _n(1.0), _op("+", _v("i"), _n(2.0))))
         m = _PR.Model(uvar(), [zero_eq()];
                       initialization_equations = [_PR.Equation(_v("u"), faq1(body))])
@@ -131,22 +223,85 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         ui, vi, ri = seed(m, :interpreter)
         @test all(un[vn["u[$i]"]] === ui[vi["u[$i]"]] for i in 1:5)
         @test all(un[vn["u[$i]"]] == 0.37 * i + 1.0 / (i + 2.0) for i in 1:5)
-        @test [r.rule for r in _pr_rows(rn, :setup_compiled)] == ["init(u)"]
+        @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(u)"]
         @test [r.rule for r in _pr_rows(ri, :setup_percell)] == ["init(u)"]
     end
 
-    @testset "a faq initialization equation left per cell refuses" begin
-        # A live forcing buffer read at the output index does not resolve with
-        # that index symbolic.
-        m = _PR.Model(merge(uvar(), Dict("F" => _PR.ModelVariable(
-                          _PR.ParameterVariable; shape = ["x"]))), [zero_eq()];
+    # A pointwise filter: a cell whose predicate is false is the semiring's 0̄
+    # (esm-schema `filter`), in the compiled fill and in the per-cell reference
+    # alike. `max_sum`'s 0̄ is -Inf, so a filter read as 0.0 would show.
+    @testset "a faq initialization equation with a pointwise filter" begin
+        for (sr, zb) in (("sum_product", 0.0), ("max_sum", -Inf))
+            agg = _PR.OpExpr("faq", _PR.ASTExpr[]; output_idx = Any["i"],
+                             ranges = Dict("i" => Any[1, 5]), semiring = sr,
+                             expr_body = _op("*", _n(10.0), _v("i")),
+                             filter = _op("<=", _v("i"), _n(2.0)))
+            m = _PR.Model(uvar(), [zero_eq()];
+                          initialization_equations = [_PR.Equation(_v("u"), agg)])
+            un, vn, rn = seed(m, :native)
+            ui, vi, _ = seed(m, :interpreter)
+            @test [ui[vi["u[$i]"]] for i in 1:5] == [10.0, 20.0, zb, zb, zb]
+            @test all(un[vn["u[$i]"]] === ui[vi["u[$i]"]] for i in 1:5)
+            @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(u)"]
+        end
+    end
+
+    # A live forcing buffer read at the output index: the fill reads the buffer
+    # the way the right-hand side does.
+    Fvar() = Dict("F" => _PR.ModelVariable(_PR.ParameterVariable; shape = ["x"]))
+    @testset "a faq initialization equation reading a forcing buffer is a compiled fill" begin
+        m = _PR.Model(merge(uvar(), Fvar()), [zero_eq()];
                       initialization_equations = [_PR.Equation(_v("u"),
                           faq1(_op("*", _n(2.0), _idx("F", _v("i")))))])
+        F = collect(1.0:5.0)
+        un, vn, rn = seed(m, :native; param_arrays = Dict("F" => F))
+        ui, vi, _ = seed(m, :interpreter; param_arrays = Dict("F" => F))
+        @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* F
+        @test all(un[vn["u[$i]"]] === ui[vi["u[$i]"]] for i in 1:5)
+        @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(u)"]
+    end
+
+    @testset "a faq initialization equation left per cell refuses" begin
+        # A body that reads a STATE is left to the routes that evaluate it
+        # against the initial state seeded so far, and a live forcing buffer
+        # read at the output index does not resolve with that index symbolic,
+        # so the only route left is the per-cell one.
+        vvar = Dict("v" => _PR.ModelVariable(_PR.UnknownVariable; shape = ["x"],
+                                             default = 0.5))
+        vzero = _PR.Equation(faq1(_Didx("v", _v("i"))), faq1(_n(0.0)))
+        m = _PR.Model(merge(uvar(), Fvar(), vvar), [zero_eq(), vzero];
+                      initialization_equations = [_PR.Equation(_v("u"),
+                          faq1(_op("+", _op("*", _n(2.0), _idx("F", _v("i"))),
+                                   _idx("v", _v("i")))))])
         F = collect(1.0:5.0)
         @test _pr_refuses(() -> seed(m, :native; param_arrays = Dict("F" => F)),
                           "init(u)"; one_cell = true)
         ui, vi, _ = seed(m, :interpreter; param_arrays = Dict("F" => F))
-        @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* F
+        @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* F .+ 0.5
+    end
+
+    # A body that reads a STATE but resolves with its index symbolic has a
+    # compile-once form, which walks its compiled tree at every cell against the
+    # initial state seeded so far. That is a tree walk per cell too, so a strict
+    # compiler refuses it by name rather than take it; the interpreter takes it.
+    @testset "a state-reading faq initialization equation refuses under native" begin
+        vvar = Dict("v" => _PR.ModelVariable(_PR.UnknownVariable; shape = ["x"],
+                                             default = 0.5))
+        vzero = _PR.Equation(faq1(_Didx("v", _v("i"))), faq1(_n(0.0)))
+        m = _PR.Model(merge(uvar(), vvar), [zero_eq(), vzero];
+                      initialization_equations = [_PR.Equation(_v("u"),
+                          faq1(_op("+", _op("*", _n(2.0), _v("i")), _idx("v", _v("i")))))])
+        e = try
+            seed(m, :native); nothing
+        catch err
+            err
+        end
+        @test e isa _PR.TreeWalkError && e.code == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test occursin("init(u)", e.detail) && occursin("tree walk per cell", e.detail)
+        @test occursin(_PR._ONE_CELL_NOTE, e.detail)
+        ui, vi, ri = seed(m, :interpreter)
+        @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* (1:5) .+ 0.5
+        @test [r.rule for r in _pr_rows(ri, :setup_percell)] == ["init(u)"]
     end
 
     # ── Field initial conditions answered once per field (#482) ───────────────
@@ -162,9 +317,14 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
     end
 
     # ── Output-time observeds and inline-test assertions (#481, #482) ─────────
-    # `h` is a makearray observed: the compile-once cellwise sweep cannot keep a
-    # region choice symbolic, so reading it takes the per-cell resolve-and-compile
-    # fallback. `k[i] = 2·i` is an ordinary compile-once observed.
+    # `h` is a makearray observed: the build-time cellwise sweep cannot keep a
+    # region choice symbolic, so under `interpreter` reading it takes the
+    # per-cell resolve-and-compile route. Under `native` both it and the
+    # ordinary `k[i] = 2·i` are read through the compiled observed program,
+    # and with both code-generation budgets at zero (refusal boundaries under
+    # `native`) that program cannot be built — which is how a read native
+    # cannot compile is provoked here. The document's right-hand side is
+    # scalar, so the budgets refuse nothing else.
     mk_doc() = Dict{String,Any}("esm" => "1.1.0",
         "metadata" => Dict("name" => "pr_observed_routes"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
@@ -188,40 +348,54 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
                 "assertions" => Any[Dict("variable" => "h", "time" => 0.0,
                     "coords" => Dict("x" => 2), "expected" => 7.0)])])))
 
-    @testset "observed_field: the per-cell fallback refuses under native" begin
+    no_codegen(f) = withenv(f, "ESS_CODEGEN_NODE_BUDGET" => "0",
+                            "ESS_DUAL_CODEGEN_NODE_BUDGET" => "0")
+
+    @testset "observed_field: a read native cannot compile refuses" begin
+        @test _pr_refuses(() -> no_codegen() do
+                              observed_field(esm_problem(mk_doc(), (0.0, 1.0)), "h")
+                          end, "refuses 'M.h'")
         pn = esm_problem(mk_doc(), (0.0, 1.0))
-        @test _pr_refuses(() -> observed_field(pn, "h"),
-                          "the build-time cellwise evaluator")
         pi_ = esm_problem(mk_doc(), (0.0, 1.0); compiler = :interpreter)
-        @test observed_field(pi_, "h") == [5.0, 7.0, 7.0]
+        @test observed_field(pn, "h") == observed_field(pi_, "h") == [5.0, 7.0, 7.0]
     end
 
     @testset "observed_field: compiled once, memoized, and reported" begin
         pn = esm_problem(mk_doc(), (0.0, 1.0))
-        hits0 = _PR._CELLWISE_FASTPATH_HITS[]
-        @test observed_field(pn, "k") == [2.0, 4.0, 6.0]
-        hits1 = _PR._CELLWISE_FASTPATH_HITS[]
-        @test hits1 > hits0
+        read_k() = _PR._counting_program_reads(() -> observed_field(pn, "k"))
+        v, n = read_k()
+        @test v == [2.0, 4.0, 6.0] && n == 1
         # The second read evaluates nothing.
-        @test observed_field(pn, "k") == [2.0, 4.0, 6.0]
-        @test _PR._CELLWISE_FASTPATH_HITS[] == hits1
+        v, n = read_k()
+        @test v == [2.0, 4.0, 6.0] && n == 0
         rows = [r for r in compiler_report(pn).rules if r.kind === :observed]
-        @test [(r.rule, r.tier) for r in rows] == [("k", :output_compiled_once)]
+        @test [(r.rule, r.tier) for r in rows] == [("k", :output_compiled)]
         # …until a live buffer is refreshed in place.
         _PR.notify_forcing_refresh!()
-        @test observed_field(pn, "k") == [2.0, 4.0, 6.0]
-        @test _PR._CELLWISE_FASTPATH_HITS[] > hits1
+        v, n = read_k()
+        @test v == [2.0, 4.0, 6.0] && n == 1
+        @test count(r -> r.kind === :observed, compiler_report(pn).rules) == 1
+        # Under `interpreter` the same read is the build-time cellwise sweep.
+        pi_ = esm_problem(mk_doc(), (0.0, 1.0); compiler = :interpreter)
+        hits0 = _PR._CELLWISE_FASTPATH_HITS[]
+        @test observed_field(pi_, "k") == [2.0, 4.0, 6.0]
+        @test _PR._CELLWISE_FASTPATH_HITS[] > hits0
+        @test [r.tier for r in compiler_report(pi_).rules if r.kind === :observed] ==
+              [:output_compiled_once]
     end
 
     @testset "inline-test assertions run under the problem's compiler" begin
         f = _PR.load_string(JSON3.write(mk_doc()))
-        rn = run_inline_tests(f)
+        rn = no_codegen(() -> run_inline_tests(f))
         @test length(rn) == 1
         @test rn[1].status == _PR.ERROR
         @test occursin("compiler_refused_rule", rn[1].message)
         ri = run_inline_tests(f; compiler = :interpreter)
         @test ri[1].status == _PR.PASS
         @test ri[1].actual == 7.0
+        rc = run_inline_tests(f)
+        @test rc[1].status == _PR.PASS
+        @test rc[1].actual === ri[1].actual
     end
 
     # ── seed_expression_ic! (#482) ─────────────────────────────────────────────
@@ -241,10 +415,10 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
     end
 
     # ── observed_field's memo and report row (review of #485) ────────────────
-    # `y[i] = s·i` compiles once and reads the parameter `s`, which the
-    # right-hand side reads too. `T[i] = h[1]·i` compiles once as well, but its
-    # un-inlined definition names the makearray observed `h`, so reading it
-    # first tries to materialize `h` — which only the per-cell route can do.
+    # `y[i] = s·i` reads the parameter `s`, which the right-hand side reads
+    # too. `T[i] = h[1]·i` names the makearray observed `h`: under `native` the
+    # compiled program materializes `h` as a level of its own, and under
+    # `interpreter` the build-time route materializes it per cell.
     obs_doc() = Dict{String,Any}("esm" => "1.1.0",
         "metadata" => Dict("name" => "pr_observed_memo"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
@@ -291,9 +465,10 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         p1 = esm_problem(obs_doc(), (0.0, 1.0); inspect = insp)
         p2 = esm_problem(obs_doc(), (0.0, 1.0); p = Dict("s" => 2.0), inspect = insp)
         y1 = observed_field(p1, "y")
+        @test y1 == [1.0, 2.0, 3.0]          # p1's own build, not the record's latest
         @test isempty(obs_rows(p2, "y"))
         @test observed_field(p2, "y") == [2.0, 4.0, 6.0]
-        @test [r.tier for r in obs_rows(p2, "y")] == [:output_compiled_once]
+        @test [r.tier for r in obs_rows(p2, "y")] == [:output_compiled]
         hits = _PR._CELLWISE_FASTPATH_HITS[]
         @test observed_field(p1, "y") == y1
         @test observed_field(p2, "y") == [2.0, 4.0, 6.0]
@@ -316,12 +491,10 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
     end
 
     @testset "observed_field: the report row says what this read did" begin
-        # Under `native` the attempt to materialize `h` walks per cell and is
-        # refused, the refusal is swallowed, and the value comes from the
-        # compiled-once body. The row names that route, not the failed attempt.
+        # Under `native` the compiled program served it, `h` included.
         pn = esm_problem(obs_doc(), (0.0, 1.0))
         @test observed_field(pn, "T") == [5.0, 10.0, 15.0]
-        @test [r.tier for r in obs_rows(pn, "T")] == [:output_compiled_once]
+        @test [r.tier for r in obs_rows(pn, "T")] == [:output_compiled]
         # Under `interpreter` `h` IS materialized per cell and served the value.
         pi_ = esm_problem(obs_doc(), (0.0, 1.0); compiler = :interpreter)
         @test observed_field(pi_, "T") == [5.0, 10.0, 15.0]
@@ -367,6 +540,13 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         @test _pr_refuses(() -> native(() -> seed_expression_ic!(zeros(3), vm, "M.u", tx,
                                                                  ["t" => [1.0, 2.0, 3.0]])),
                           "seed_expression_ic!(M.u)"; one_cell = true)
+        # Over no cell at all (a variable the map does not hold), nothing is
+        # evaluated first, and the refusal does not say one cell was.
+        e = err_of(() -> native(() -> seed_expression_ic!(zeros(3), vm, "M.v", tx,
+                                                          ["t" => [1.0, 2.0, 3.0]])))
+        @test code_of(e) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test occursin("over 0 cells", e.detail)
+        @test !occursin(_PR._ONE_CELL_NOTE, e.detail)
     end
 
     @testset "faq initialization equation: an undeclared name, an out-of-range gather" begin
@@ -404,157 +584,116 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
         end
     end
 
-    @testset "a contraction left to the per-cell loop: an out-of-range gather" begin
+    @testset "a contraction's out-of-range gather is the document's error" begin
+        # One term past the end of `W`, under both compilers.
         W = Float64[1, 2, 3, 4, 5, 6, 7, 8]
-        rng = Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d"))
-        agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
-            "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
-            # One term past the end of `W`.
-            "ranges" => merge(rng, Dict{String,Any}("k" => Any[1, length(W) + 1])),
-            "expr" => Dict("op" => "*", "args" => Any[
-                Dict("op" => "index", "args" => Any[
-                    Dict("op" => "const", "args" => Any[], "value" => W), "k"]),
-                Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])]))
-        doc = Dict{String,Any}("esm" => "1.1.0",
-            "metadata" => Dict("name" => "pr_short_contraction_oob"),
-            "models" => Dict("R" => Dict{String,Any}(
-                "variables" => Dict(
-                    "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
-                    "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
-                "equations" => Any[Dict(
-                    "lhs" => Dict("op" => "faq", "args" => Any[],
-                        "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
-                        "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
-                            "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
-                    "rhs" => agg)])))
         for c in (:native, :interpreter)
-            e = err_of(() -> withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
-                _PR._build_evaluator(doc; initial_conditions = Dict("out[1,1,1,1]" => 0.0),
-                    param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)), compiler = c)
-            end)
+            e = err_of(() -> _pr_rank4_build(_pr_rank4_doc(W; past = 1), c))
             @test code_of(e) == "E_TREEWALK_CONSTARRAY_OOB"
         end
     end
 
-    @testset "a long contraction left to the per-cell loop refuses without unrolling" begin
-        # The diagnostic build ahead of the refusal unrolls one output cell, and
-        # past `_REFUSAL_DIAGNOSTIC_TERMS` terms only the ends of the contracted
-        # range: the refusal costs the same at 10^5 terms as at 8, and a gather
-        # out of range at the end is still the document's error.
-        long_doc(K, past) = Dict{String,Any}("esm" => "1.1.0",
-            "metadata" => Dict("name" => "pr_long_contraction"),
-            "models" => Dict("R" => Dict{String,Any}(
-                "variables" => Dict(
-                    "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
-                    "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
-                "equations" => Any[Dict(
-                    "lhs" => Dict("op" => "faq", "args" => Any[],
-                        "output_idx" => Any["a", "b", "c", "d"],
-                        "ranges" => Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d")),
-                        "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
-                            "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
-                    "rhs" => Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
-                        "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
-                        "ranges" => merge(
-                            Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d")),
-                            Dict{String,Any}("k" => Any[1, K + past])),
-                        "expr" => Dict("op" => "*", "args" => Any[
-                            Dict("op" => "index", "args" => Any[
-                                Dict("op" => "const", "args" => Any[],
-                                     "value" => collect(1.0:K)), "k"]),
-                            Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])])))])))
+    # A long contraction is the affine tier's run-time fold at any length: its
+    # build lowers no more at 10^5 terms than at 8, and a gather out of range at
+    # the far end is still the document's error. With a filter too.
+    @testset "a long contraction compiles once$(filt ? ", filtered" : "")" for filt in (false, true)
         function lowerings(K, past)
-            insp = _PR.BuildInspection()
             _PR._bench_reset!()
             _PR._BENCH_ON[] = true
-            e = try
-                err_of(() -> withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
-                    _PR._build_evaluator(long_doc(K, past);
-                        initial_conditions = Dict("out[1,1,1,1]" => 0.0),
-                        param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)),
-                        compiler = :native, inspect = insp)
-                end)
+            r = try
+                _pr_rank4_build(_pr_rank4_doc(collect(1.0:K); past, filt), :native)
+            catch e
+                e
             finally
                 _PR._BENCH_ON[] = false
             end
-            return e, _PR._BENCH_COMPILE_CALLS[], _PR.compiler_report(insp)
+            return r, _PR._BENCH_COMPILE_CALLS[]
         end
-        e_short, n_short, _ = lowerings(8, 0)
-        @test code_of(e_short) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
-        e_long, n_long, rep = lowerings(100_000, 0)
-        @test code_of(e_long) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
-        @test n_long <= n_short
-        # The build that is refused leaves no tally behind it.
-        @test isempty(rep.tally)
-        e_oob, _, _ = lowerings(100_000, 1)
+        want(K) = 3.0 * sum(filt ? (2.0:K) : (1.0:K))
+        for K in (8, 100_000)
+            (f!, u0, p, _, vm), _ = lowerings(K, 0)
+            du = similar(u0); f!(du, u0, p, 0.0)
+            @test du[vm["out[1,1,1,1]"]] == want(K)
+        end
+        _, n_short = lowerings(8, 0)
+        _, n_long = lowerings(100_000, 0)
+        @test n_long == n_short
+        e_oob, _ = lowerings(100_000, 1)
         @test code_of(e_oob) == "E_TREEWALK_CONSTARRAY_OOB"
+        fi!, ui, pi_, _, vi = _pr_rank4_build(_pr_rank4_doc(collect(1.0:8.0); filt),
+                                              :interpreter)
+        di = similar(ui); fi!(di, ui, pi_, 0.0)
+        @test di[vi["out[1,1,1,1]"]] == want(8)
     end
 
-    # A long contraction that is NO per-cell-loop candidate — it carries a
-    # filter, which the loop's gate does not admit — and that neither the affine
-    # tier's run-time fold (an inline `const` at a loop subscript) nor the
-    # whole-array nest (a live forcing read) takes. What is left is the per-cell
-    # build, which unrolls the contraction into every output cell, so a strict
-    # compiler refuses it; and the affine tier's own unroll is not offered it
-    # either: the build's lowerings do not grow with the contraction.
-    @testset "a long contraction nothing compiles once is refused, not unrolled" begin
-        filt_doc(K) = Dict{String,Any}("esm" => "1.1.0",
-            "metadata" => Dict("name" => "pr_long_filtered_contraction"),
+    # What no compile-once form takes. A RAGGED contraction (its bound an
+    # expression of the output index) is not the affine tier's, and the nest
+    # cannot keep its live forcing read symbolic, so the only form left is the
+    # per-cell build: a strict compiler refuses it by name, naming the tier that
+    # was offered it and declined, and not claiming a decline from one that was
+    # not. Its one cell is evaluated first, in full when it is short, and only
+    # at the ends of its contracted range when it is long, which the note says.
+    @testset "a contraction no compile-once form takes is refused by name" begin
+        N = 3
+        rag(len) = Dict{String,Any}("esm" => "1.1.0",
+            "metadata" => Dict("name" => "pr_ragged_forcing"),
             "models" => Dict("R" => Dict{String,Any}(
                 "variables" => Dict(
-                    "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
-                    "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
+                    "F" => Dict("type" => "parameter", "shape" => Any["i"]),
+                    "u" => Dict("type" => "unknown", "shape" => Any["i"])),
                 "equations" => Any[Dict(
-                    "lhs" => Dict("op" => "faq", "args" => Any[],
-                        "output_idx" => Any["a", "b", "c", "d"],
-                        "ranges" => Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d")),
-                        "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
-                            "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
-                    "rhs" => Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
-                        "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
-                        "ranges" => merge(
-                            Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d")),
-                            Dict{String,Any}("k" => Any[1, K])),
-                        "filter" => Dict("op" => ">=", "args" => Any["k", 2]),
+                    "lhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                        "ranges" => Dict("i" => Any[1, N]),
+                        "expr" => Dict("op" => "D", "wrt" => "t", "args" => Any[
+                            Dict("op" => "index", "args" => Any["u", "i"])])),
+                    "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                        "ranges" => Dict("i" => Any[1, N], "k" => Any[1,
+                            Dict("op" => "-", "args" => Any[
+                                Dict("op" => "+", "args" => Any["i", len]), "i"])]),
                         "expr" => Dict("op" => "*", "args" => Any[
-                            Dict("op" => "index", "args" => Any[
-                                Dict("op" => "const", "args" => Any[],
-                                     "value" => collect(1.0:K)), "k"]),
-                            Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])])))])))
-        function build(K, compiler)
-            _PR._bench_reset!()
-            _PR._BENCH_ON[] = true
-            try
-                r = try
-                    withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
-                        _PR._build_evaluator(filt_doc(K);
-                            initial_conditions = Dict("out[1,1,1,1]" => 0.0),
-                            param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)),
-                            compiler = compiler)
-                    end
-                catch err
-                    err
-                end
-                return r, _PR._BENCH_COMPILE_CALLS[]
-            finally
-                _PR._BENCH_ON[] = false
-            end
-        end
-        e_short, n_short = build(8, :native)
-        @test e_short isa _PR.TreeWalkError &&
-              e_short.code == _PR.ERROR_CODES.COMPILER_REFUSED_RULE &&
-              occursin("per-cell build, which unrolls", e_short.detail) &&
-              occursin(_PR._ONE_CELL_NOTE, e_short.detail)
-        e_long, n_long = build(100_000, :native)
-        @test e_long isa _PR.TreeWalkError &&
-              e_long.code == _PR.ERROR_CODES.COMPILER_REFUSED_RULE &&
-              occursin("per-cell build, which unrolls", e_long.detail)
-        # The ends-only diagnostic build: the refusal lowers as little at
-        # 10^5 terms as at 8.
-        @test n_long <= n_short
-        (f!, u0, p, _, vm), _ = build(8, :interpreter)
+                            Dict("op" => "index", "args" => Any["F", "i"]), "k"])))])))
+        build(len, c) = _PR._build_evaluator(rag(len);
+            initial_conditions = Dict("u[$i]" => 0.0 for i in 1:N),
+            param_arrays = Dict("F" => collect(1.0:N)), compiler = c)
+        e = err_of(() -> build(4, :native))
+        @test code_of(e) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test occursin("declined by the whole-array contraction tier", e.detail)
+        @test occursin("takes no ragged contraction", e.detail)
+        @test !occursin("declined by the affine", e.detail)
+        @test occursin("per-cell build", e.detail)
+        @test occursin(_PR._ONE_CELL_NOTE, e.detail)
+        e_long = err_of(() -> build(5000, :native))
+        @test code_of(e_long) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test occursin(_PR._PART_CELL_NOTE, e_long.detail)
+        f!, u0, p, _, vm = build(4, :interpreter)
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vm["out[1,1,1,1]"]] == 3.0 * sum(2.0:8.0)
+        @test [du[vm["u[$i]"]] for i in 1:N] == [i * 10.0 for i in 1:N]
+    end
+
+    # The diagnostic reports what it evaluated. A join gate that admits none of
+    # the tuples tried (here the ends of a range too long to build in full)
+    # leaves no term built, and the refusal says so rather than the one-cell
+    # note, which would claim a document error could have surfaced.
+    @testset "the refusal diagnostic says how much of the cell it evaluated" begin
+        body = _PR.OpExpr("*", _PR.ASTExpr[_PR.VarExpr("k"),
+            _PR.OpExpr("index", _PR.ASTExpr[_PR.VarExpr("u"), _PR.VarExpr("i")])])
+        lhs = _PR.OpExpr("D", _PR.ASTExpr[
+            _PR.OpExpr("index", _PR.ASTExpr[_PR.VarExpr("u"), _PR.VarExpr("i")])])
+        K = 2000
+        gate = [_PR._JoinGate("i", "k", Dict(1 => 7),
+                              Dict(k => (k == K ÷ 2 ? 7 : 0) for k in 1:K))]
+        diag(gates, n) = _PR._faq_diagnostic_cell(lhs, body;
+            idx_names = ["i"], range_iters = [[1]], contract_names = ["k"],
+            contract_ranges = [Any[1, n]], contract_const = [collect(1:n)],
+            rhs_zerobar = 0.0, agg_gates = gates, agg_filter = nothing,
+            resolved_obs = Dict{String,_PR.ASTExpr}(),
+            array_var_info = Dict("u" => ([1], [1])),
+            var_map = Dict("u[1]" => 1), const_registry = Dict{String,Any}(),
+            pgather = Dict{String,Any}(), param_sym_set = Dict{Symbol,Int}(),
+            reg_funcs = Dict{String,Any}())
+        @test diag(nothing, 8) === :cell
+        @test diag(nothing, K) === :part
+        @test diag(gate, K) === :none
     end
 
     @testset "setup materializers: an out-of-range gather, an undeclared name" begin
@@ -584,13 +723,22 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
                 nothing, idx, ["X"], Dict{String,Function}())))
             @test code_of(e) == "E_TREEWALK_UNBOUND_VARIABLE"
         end
-        # …and a makearray that evaluates still refuses.
+        # …and a makearray that evaluates is a compiled fill under native, equal
+        # to the interpreter's per-cell materialization bit for bit.
         ok = _PR.expression_from_json(Dict{String,Any}("op" => "makearray",
-            "args" => Any[], "regions" => Any[Any[Any[1, 5]]],
-            "values" => Any[Dict{String,Any}("op" => "index", "args" => Any["B", 1, 1])]))
-        @test _pr_refuses(() -> native(() -> _PR._materialize_setup_wholearray(ok, copy(env),
-                              nothing, idx, ["X"], Dict{String,Function}())),
-                          "the whole-array setup materializer"; one_cell = true)
+            "args" => Any[], "regions" => Any[Any[Any[1, 2]], Any[Any[3, 5]]],
+            "values" => Any[Dict{String,Any}("op" => "index", "args" => Any["B", 1, 1]),
+                            Dict{String,Any}("op" => "*", "args" => Any[
+                                Dict{String,Any}("op" => "index", "args" => Any["B", 2, 3]),
+                                0.5])]))
+        mat() = _PR._materialize_setup_wholearray(ok, copy(env), nothing, idx, ["X"],
+                                                  Dict{String,Function}())
+        insp = _PR._BuildRecord(_PR._compiler_plan(:native))
+        an = native(() -> _PR._with_build_record(mat, insp))
+        ai = interp(mat)
+        @test isequal(an, ai)
+        @test an == [1.0, 1.0, 6.0, 6.0, 6.0]
+        @test [r.tier for r in insp.rules] == [:setup_codegen]
     end
 
     # ── Field initial conditions: the cell-independent forms, once ────────────

@@ -48,17 +48,16 @@ fn fixture(name: &str) -> std::path::PathBuf {
 }
 
 fn run(name: &str) -> Vec<AssertionResult> {
+    run_with(name, earthsci_ast::Compiler::Interpreter)
+}
+
+fn run_with(name: &str, compiler: earthsci_ast::Compiler) -> Vec<AssertionResult> {
     let file = load_path(fixture(name)).expect("fixture parses");
     earthsci_ast::run_inline_tests_with_options(
         &file,
-        // A per-variable `element_type` (esm-spec §11.3.1) is the one
-        // document condition under which the array runtime installs NO tape
-        // — it resolves its kernels at execution from one thread-local
-        // precision and fuses across rules — so `native` refuses these
-        // fixtures by NAME (API_SPEC §5.8).
         &earthsci_ast::InlineTestOptions {
             solve: SolveOptions::default(),
-            compiler: Some(earthsci_ast::Compiler::Interpreter),
+            compiler: Some(compiler),
             ..Default::default()
         },
         None,
@@ -279,6 +278,23 @@ fn a_binary64_variable_in_a_float32_document_stays_exact() {
         (0.99999994_f32 as f64).to_bits(),
         "declaring some variables Float64 must not make the Float32 ones more accurate"
     );
+    // The tape runs each instruction at its own precision, so `native` gives
+    // the same four values, bit for bit.
+    let native = run_with(
+        "f32_per_variable_element_type.esm",
+        earthsci_ast::Compiler::Native,
+    );
+    assert_eq!(native.len(), results.len());
+    for (n, r) in native.iter().zip(&results) {
+        assert_eq!(n.variable, r.variable);
+        assert!(n.passed, "native {}: {}", n.variable, n.message);
+        assert_eq!(
+            n.actual.map(f64::to_bits),
+            r.actual.map(f64::to_bits),
+            "native {} disagrees with the interpreter",
+            n.variable
+        );
+    }
 }
 
 /// The guard. An operator whose operands carry different declared element types

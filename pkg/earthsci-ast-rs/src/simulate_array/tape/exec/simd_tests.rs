@@ -99,6 +99,7 @@ fn drive(with_nan: bool) {
             src_shape: DimU::from_elem(N, 1),
             elem_stride: 1,
             load_reg: GroupIx::MAX,
+            index: None,
         },
         FusedInput {
             src: SrcRef::Slot(1),
@@ -106,6 +107,7 @@ fn drive(with_nan: bool) {
             src_shape: DimU::from_elem(N, 1),
             elem_stride: 1,
             load_reg: GroupIx::MAX,
+            index: None,
         },
         // 2: shifted stride-1 read (ghost over the last run).
         FusedInput {
@@ -114,6 +116,7 @@ fn drive(with_nan: bool) {
             src_shape: DimU::from_elem(N + 16, 1),
             elem_stride: 1,
             load_reg: GroupIx::MAX,
+            index: None,
         },
         // 3: strided (elem_stride 2) read through a pre-load register.
         FusedInput {
@@ -122,6 +125,7 @@ fn drive(with_nan: bool) {
             src_shape: DimU::from_elem(2 * N + 8, 1),
             elem_stride: 2,
             load_reg: GroupIx::MAX, // patched below once n_regs is known
+            index: None,
         },
     ];
 

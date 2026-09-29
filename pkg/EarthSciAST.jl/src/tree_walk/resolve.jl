@@ -581,25 +581,21 @@ end
 
 # ── Whole-array contraction loop nest (ess-array-contraction) ────────────────
 # Kill-switch + coverage floor for the tier that keeps the OUTPUT indices
-# symbolic too (see `_try_build_array_contraction`). The floor is on the
-# CONTRACTED length alone, and it is only a conservative guard on the
-# small-reduction surface: WHICH tier gets an equation is decided by POSITION in
-# the cascade — `_compile_faq_equation!` offers this one only once the affine
-# tier has declined, so the alternative is always the per-cell fallback, which
-# pays ∏|k…| per OUTPUT CELL. Below the floor nothing changes: the existing
-# loop-vs-affine order decides the equation exactly as before, so every
-# small-reduction fixture stays byte-for-byte identical.
+# symbolic too (see `_resolve_array_contraction_term`). WHICH tier gets an
+# equation is decided by POSITION in the cascade: `_compile_faq_equation!`
+# offers this one once the affine tier has declined, so the alternative is
+# always the per-cell build. The in-place build offers it every such equation;
+# the floor applies only to the out-of-place build, whose emitters compile the
+# per-cell build's cells and have no arm for this tier's section, so there an
+# equation under the floor keeps the per-cell build they can emit.
 #
 # The contraction-loop gate disables this tier too: it forces the pure-unroll
 # reference EVERYWHERE, and this tier is a contraction loop — one that also
-# loops the output index. The plan's own bit for this tier is the narrower one,
-# dropping only this tier and leaving the per-cell loop in play, which is the
-# differential test's oracle.
+# loops the output index.
 #
 # The floor is overridden with ESS_ARRAY_CONTRACTION_MIN. It is a tuning
-# threshold, not a refusal boundary: the tier emits what it accepts
-# (array_contraction.jl), so moving the floor moves an equation between two
-# compiled tiers rather than in or out of the set that builds.
+# threshold, not a refusal boundary: moving it moves an out-of-place equation
+# between this tier and the per-cell build.
 _array_contraction_enabled() =
     _compiler_plan_now().array_contraction && _contraction_loop_enabled()
 function _array_contraction_min()

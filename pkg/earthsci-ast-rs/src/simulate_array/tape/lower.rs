@@ -50,7 +50,10 @@ use super::super::driver::{
 };
 use super::super::*;
 use super::ir::*;
+use crate::precision::Precision;
+use crate::simulate_array::eval::const_oob_message;
 use crate::types::ExpressionNode;
+use crate::value_invention::BoundaryKind;
 use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -88,6 +91,19 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 
 type LResult<T> = Result<T, Bail>;
 
+mod tuples;
+
+/// What a build knows about the forcing buffer: the box a read of each name
+/// it can serve compiles against, and which of them a provider refreshes
+/// between segments (see `ArrayCompiled::forcing_inputs`).
+pub(super) struct ForcingInputs<'a> {
+    pub shapes: FxHashMap<String, DimU>,
+    /// Externally refreshed parameters with no box to compile against: the
+    /// buffer does not hold them and their declared shape does not size.
+    pub unsized_: HashSet<String>,
+    pub discrete: &'a HashSet<String>,
+}
+
 /// Most contracted indices one contraction may carry.
 const MAX_CONTRACT: usize = 4;
 
@@ -106,6 +122,59 @@ struct ContractWindow<'a> {
     names: &'a [String],
     lo: &'a [i64],
     hi: &'a [i64],
+}
+
+/// One run of output positions along an axis of a const-array gather, with
+/// the read its boundary policy resolves it to ([`TapeBuilder::lower_const_gather`]).
+#[derive(Clone, Debug)]
+enum ConstRun {
+    /// Copy segments `(out_off, len, src_off)`, relative to the run's start.
+    Copy(SmallVec<[(usize, usize, usize); 2]>),
+    /// One source position (a clamped edge, 0-based), read by every cell.
+    Edge(usize),
+    /// An output axis no source dim maps to (a broadcast axis).
+    Bcast,
+    /// Out of range with no policy: `NaN`, and a fault.
+    Oob,
+}
+
+/// `index_into`'s resolution of the 1-based subscript `raw` into a dim of
+/// extent `n` under `policy`: the 0-based position, or `None` for the fault.
+fn resolve_const_index(policy: BoundaryKind, raw: i64, n: i64) -> Option<usize> {
+    if (1..=n).contains(&raw) {
+        return Some((raw - 1) as usize);
+    }
+    match policy {
+        BoundaryKind::Periodic if n >= 1 => Some((raw - 1).rem_euclid(n) as usize),
+        BoundaryKind::Clamp if n >= 1 => Some((raw.clamp(1, n) - 1) as usize),
+        _ => None,
+    }
+}
+
+/// The copy segments of a periodic wrap axis, which the tape lowers only as a
+/// full-period roll: source and output both span exactly one period from the
+/// same origin.
+fn full_roll_segs(
+    src_origin: i64,
+    src_len: i64,
+    out_lo: i64,
+    out_len: usize,
+    k: i64,
+    period: i64,
+) -> LResult<SmallVec<[(usize, usize, usize); 2]>> {
+    if src_origin != out_lo || src_len != period || out_len as i64 != period {
+        bail_tape!("index: periodic wrap axis is not a full-period roll");
+    }
+    let p = period as usize;
+    let s = (((k % period) + period) % period) as usize;
+    let mut segs = SmallVec::new();
+    if s == 0 {
+        segs.push((0usize, p, 0usize));
+    } else {
+        segs.push((0usize, p - s, s));
+        segs.push((p - s, s, 0usize));
+    }
+    Ok(segs)
 }
 
 // ---------------------------------------------------------------------------
@@ -143,9 +212,28 @@ struct LBox<'a> {
     shape: DimU,
     cnames: &'a [String],
     cvals: SmallVec<[i64; 4]>,
+    /// Nonzero for a TUPLE-LIST box (see `tuples`): the 1-D box of a
+    /// contraction's admitted tuples, whose loop symbols are build-time
+    /// columns in the builder's frame with this id rather than axes.
+    tuple: u32,
+    /// The box's axes in the order the per-cell oracle visits their cells,
+    /// slowest first; empty means row-major (axis 0 slowest). Only the
+    /// promoted contraction box differs: its contracted axes lead, but the
+    /// oracle walks the output cells first and the contraction tuples within
+    /// each. Consulted only to place a fail-closed fault ([`FaultKey`]).
+    visit: SmallVec<[u8; 4]>,
 }
 
 impl<'a> LBox<'a> {
+    /// Axis `k` of the visiting order (see [`LBox::visit`]).
+    fn visit_axis(&self, k: usize) -> usize {
+        if self.visit.is_empty() {
+            k
+        } else {
+            self.visit[k] as usize
+        }
+    }
+
     fn as_vecbox(&self) -> VecBox<'_> {
         VecBox {
             syms: self.syms,
@@ -173,6 +261,8 @@ struct BoxKey {
     shape: Vec<usize>,
     cnames: Vec<String>,
     cvals: Vec<i64>,
+    /// Two tuple-list boxes of one length are different boxes.
+    tuple: u32,
 }
 
 impl BoxKey {
@@ -183,6 +273,7 @@ impl BoxKey {
             shape: bx.shape.to_vec(),
             cnames: bx.cnames.to_vec(),
             cvals: bx.cvals.to_vec(),
+            tuple: bx.tuple,
         }
     }
 }
@@ -214,13 +305,26 @@ enum ObsVal {
     External { shape: Option<DimU>, tier: Cadence },
 }
 
+/// Where, in the per-cell oracle's evaluation of one rule, a fail-closed
+/// fault first fires: compared lexicographically, the smallest is the fault
+/// the oracle latches first. It is the path of nested boxes down to the fault
+/// site, each level contributing its first faulting cell in visiting order
+/// (and the bound contraction tuple of an unrolled term), then a sequence
+/// number in lowering order, which is the oracle's expression order within
+/// one cell.
+type FaultKey = SmallVec<[i64; 12]>;
+
 // ---------------------------------------------------------------------------
 // Builder.
 // ---------------------------------------------------------------------------
 
+/// An instruction and the precision its kernels run at: the one in force
+/// while it was lowered (esm-spec §11.3.1).
+type Tagged = (Instr, Precision);
+
 struct Chunk {
     rule: u32,
-    instrs: Vec<Instr>,
+    instrs: Vec<Tagged>,
 }
 
 pub(crate) struct TapeBuilder<'m> {
@@ -258,12 +362,46 @@ pub(crate) struct TapeBuilder<'m> {
     /// Inline array-literal payloads, one per lowered array-valued `const`.
     const_data: Vec<ConstArrayData>,
     interp_tables: Vec<InterpTable>,
+    geoms: Vec<GeomSpec>,
+    index_gathers: Vec<IndexGatherSpec>,
+    /// `(producer id, distinct-vertex count)` of every `intersect_polygon`
+    /// ring evaluated at build ([`TapeBuilder::lower_intersect_polygon`]):
+    /// the extent a `kind: "derived"` range over that ring has, which the
+    /// interpreter reads off its runtime ring registry (`derived_extent`).
+    rings: Vec<(String, i64)>,
+    gather_tables: Vec<GatherTable>,
+    seg_tables: Vec<SegTable>,
+    /// Slots whose VALUES the build knows: array literals, and what the
+    /// tuple-list lowering derives from them (`tuples`). Read only to resolve
+    /// build-time data — a gather's subscripts, a join's key columns, a
+    /// ragged bound — never to fold a value the program computes.
+    known: FxHashMap<SlotId, Known>,
+    /// Open tuple-list boxes, innermost last (`tuples`).
+    tuple_frames: Vec<tuples::TupleFrame>,
+    /// The id the next tuple-list box gets (0 means "not a tuple box").
+    next_tuple: u32,
+    /// Fail-closed fault messages (`Instr::Fault` indexes here).
+    faults: Vec<String>,
     state_vars: Vec<StateRef>,
     /// Position in `state_vars`; narrowed to the IR's `u32` by [`tape_index`]
     /// where it is emitted.
     state_ix: FxHashMap<String, usize>,
     obs_reads: Vec<String>,
     obs_read_ix: FxHashMap<String, u32>,
+    /// Every name the forcing buffer can serve, with the box a read of it
+    /// compiles against ([`ForcingInputs`]).
+    forcing_shapes: FxHashMap<String, DimU>,
+    forcing_unsized: HashSet<String>,
+    /// The forcing names a provider refreshes between segments; their loads
+    /// go in the SEGMENT section, every other forcing load in CONST.
+    discrete_forcing: &'m HashSet<String>,
+    forcings: Vec<ForcingRef>,
+    forcing_ix: FxHashMap<String, u32>,
+    /// The slot an UNCONDITIONAL load of `forcings[i]` defined, so every later
+    /// read shares it; `forcing_journal` records the insertions of the current
+    /// rule for rollback.
+    forcing_loaded: FxHashMap<u32, LV>,
+    forcing_journal: Vec<u32>,
     dy_writes: Vec<DyWrite>,
     rules: Vec<RuleInfo>,
     /// Per-section chunk streams (index = Cadence as usize).
@@ -276,16 +414,39 @@ pub(crate) struct TapeBuilder<'m> {
     home: Cadence,
     scope_frames: Vec<ScopeFrame>,
     /// Nested conditional-branch buffers (top = innermost).
-    branch_bufs: Vec<Vec<Instr>>,
+    branch_bufs: Vec<Vec<Tagged>>,
     hoist: FxHashMap<(BoxKey, VnKey), LV>,
     /// Hoist insertions of the CURRENT rule (rollback on bail).
     hoist_journal: Vec<(BoxKey, VnKey)>,
     /// Observed values defined so far, in rule order.
     obs_defined: FxHashMap<String, ObsVal>,
+    /// The current rule's first fail-closed fault in the oracle's evaluation
+    /// order, with its message: emitted as one [`Instr::Fault`] when the rule
+    /// lowers ([`Self::flush_rule_fault`]).
+    fault_first: Option<(FaultKey, String)>,
+    /// Sequence number for the next fault site or nested box (lowering order).
+    fault_seq: i64,
+    /// The [`FaultKey`] prefix of the box being lowered: one entry per
+    /// enclosing box the oracle evaluates whole at each cell of its parent.
+    fault_prefix: FaultKey,
+    /// Depth of positions the oracle evaluates for only SOME cells or tuples:
+    /// the arms of an elementwise `ifelse`, a filtered term. A fault there
+    /// may not fire where the tape would place it, so it is lowered only
+    /// when an earlier certain fault makes it irrelevant.
+    lazy_depth: u32,
 
     // Diagnostics ------------------------------------------------------------
     vn_scope_hits: usize,
     vn_hoist_hits: usize,
+}
+
+/// A slot's build-time value (see `TapeBuilder::known`).
+#[derive(Clone, Debug)]
+enum Known {
+    /// The payload of the `ConstArray` that defines it.
+    Data(u32),
+    /// Values the build computed itself, row-major.
+    Vals(std::rc::Rc<Vec<f64>>),
 }
 
 /// Snapshot for transactional per-rule lowering.
@@ -296,9 +457,16 @@ struct RuleTxn {
     assemblies: usize,
     const_data: usize,
     interp_tables: usize,
+    geoms: usize,
+    index_gathers: usize,
+    rings: usize,
+    gather_tables: usize,
+    seg_tables: usize,
+    faults: usize,
     dy_writes: usize,
     stream_lens: [usize; 3],
     hoist_journal: usize,
+    forcing_journal: usize,
 }
 
 /// Snapshot for undoing a failed ATTEMPT inside one rule (a looped form that
@@ -313,10 +481,17 @@ struct SubTxn {
     assemblies: usize,
     const_data: usize,
     interp_tables: usize,
+    geoms: usize,
+    index_gathers: usize,
+    gather_tables: usize,
+    seg_tables: usize,
     /// Per stream: `(chunk count, instructions in the last chunk)`.
     streams: [(usize, usize); 3],
     branch_len: Option<usize>,
     hoist_journal: usize,
+    forcing_journal: usize,
+    fault_first: Option<(FaultKey, String)>,
+    fault_seq: i64,
 }
 
 impl<'m> TapeBuilder<'m> {
@@ -326,6 +501,7 @@ impl<'m> TapeBuilder<'m> {
         obs_tier: FxHashMap<String, Cadence>,
         const_arrays: &'m ConstArrayScope,
         f32_document: bool,
+        forcing: &ForcingInputs<'m>,
     ) -> Self {
         let mut state_vars = Vec::with_capacity(var_shapes.len());
         let mut state_ix = FxHashMap::default();
@@ -351,10 +527,26 @@ impl<'m> TapeBuilder<'m> {
             assemblies: Vec::new(),
             const_data: Vec::new(),
             interp_tables: Vec::new(),
+            geoms: Vec::new(),
+            index_gathers: Vec::new(),
+            rings: Vec::new(),
+            gather_tables: Vec::new(),
+            seg_tables: Vec::new(),
+            known: FxHashMap::default(),
+            tuple_frames: Vec::new(),
+            next_tuple: 1,
+            faults: Vec::new(),
             state_vars,
             state_ix,
             obs_reads: Vec::new(),
             obs_read_ix: FxHashMap::default(),
+            forcing_shapes: forcing.shapes.clone(),
+            forcing_unsized: forcing.unsized_.clone(),
+            discrete_forcing: forcing.discrete,
+            forcings: Vec::new(),
+            forcing_ix: FxHashMap::default(),
+            forcing_loaded: FxHashMap::default(),
+            forcing_journal: Vec::new(),
             dy_writes: Vec::new(),
             rules: Vec::new(),
             streams: [Vec::new(), Vec::new(), Vec::new()],
@@ -366,6 +558,10 @@ impl<'m> TapeBuilder<'m> {
             hoist: FxHashMap::default(),
             hoist_journal: Vec::new(),
             obs_defined: FxHashMap::default(),
+            fault_first: None,
+            fault_seq: 0,
+            fault_prefix: FaultKey::new(),
+            lazy_depth: 0,
             vn_scope_hits: 0,
             vn_hoist_hits: 0,
         }
@@ -392,16 +588,36 @@ impl<'m> TapeBuilder<'m> {
     }
 
     fn emit(&mut self, instr: Instr, section: Cadence) {
+        self.emit_tagged(instr, crate::precision::active(), section);
+    }
+
+    /// [`Self::emit`] at a stated precision (a branch's buffered
+    /// instructions keep the precision they were lowered at).
+    fn emit_tagged(&mut self, instr: Instr, prec: Precision, section: Cadence) {
+        match &instr {
+            Instr::ConstArray { data, out } => {
+                self.known.insert(*out, Known::Data(*data));
+            }
+            Instr::Copy {
+                a: Operand::Slot(a),
+                out,
+            } if !self.slots[*out as usize].scalar => {
+                if let Some(k) = self.known.get(a).cloned() {
+                    self.known.insert(*out, k);
+                }
+            }
+            _ => {}
+        }
         if let Some(buf) = self.branch_bufs.last_mut() {
-            buf.push(instr);
+            buf.push((instr, prec));
             return;
         }
         let stream = &mut self.streams[section as usize];
         match stream.last_mut() {
-            Some(c) if c.rule == self.cur_rule => c.instrs.push(instr),
+            Some(c) if c.rule == self.cur_rule => c.instrs.push((instr, prec)),
             _ => stream.push(Chunk {
                 rule: self.cur_rule,
-                instrs: vec![instr],
+                instrs: vec![(instr, prec)],
             }),
         }
     }
@@ -491,6 +707,61 @@ impl<'m> TapeBuilder<'m> {
         Ok(ix)
     }
 
+    /// A read of `name` served by the forcing buffer: `lookup_variable`'s last
+    /// arm, reached only after `t`, the state, the observeds and the
+    /// parameters, exactly as there. `None` when the buffer cannot serve the
+    /// name.
+    ///
+    /// One [`Instr::LoadForcing`] per forcing, in the section its cadence
+    /// allows, shared by every later read. A load made inside a conditional
+    /// branch is not shared, since the branch may not run.
+    fn forcing_read(&mut self, name: &str) -> LResult<Option<LV>> {
+        let Some(shape) = self.forcing_shapes.get(name).cloned() else {
+            if self.forcing_unsized.contains(name) {
+                bail_tape!(
+                    "forcing `{name}`: its declared shape names an index set the registry \
+                     cannot size, and the forcing buffer held no entry for it when the tape \
+                     was built, so there is no box to compile its read against"
+                );
+            }
+            return Ok(None);
+        };
+        let ix = match self.forcing_ix.get(name) {
+            Some(&ix) => ix,
+            None => {
+                let ix = tape_index(self.forcings.len(), "forcing reads")?;
+                self.forcings.push(ForcingRef {
+                    name: name.to_string(),
+                    shape: shape.clone(),
+                });
+                self.forcing_ix.insert(name.to_string(), ix);
+                ix
+            }
+        };
+        if let Some(lv) = self.forcing_loaded.get(&ix) {
+            return Ok(Some(lv.clone()));
+        }
+        let cadence = if self.discrete_forcing.contains(name) {
+            Cadence::Segment
+        } else {
+            Cadence::Const
+        };
+        let sec = self.placement(cadence);
+        let scalar = shape.is_empty();
+        let out = self.new_slot(&shape, &DimI::from_elem(1, shape.len()), scalar, sec);
+        self.emit(Instr::LoadForcing { forcing: ix, out }, sec);
+        let lv = if scalar {
+            LV::Scalar(out)
+        } else {
+            LV::Arr(out)
+        };
+        if !self.in_branch() {
+            self.forcing_loaded.insert(ix, lv.clone());
+            self.forcing_journal.push(ix);
+        }
+        Ok(Some(lv))
+    }
+
     // -- scopes / VN ----------------------------------------------------------
 
     fn push_scope(&mut self) {
@@ -546,7 +817,7 @@ impl<'m> TapeBuilder<'m> {
 
     /// Close the innermost branch: roll back VN insertions made inside it and
     /// return its instruction buffer.
-    fn pop_branch(&mut self, journal_mark: usize) -> Vec<Instr> {
+    fn pop_branch(&mut self, journal_mark: usize) -> Vec<Tagged> {
         let buf = self.branch_bufs.pop().expect("branch buffer open");
         if let Some(frame) = self.scope_frames.last_mut() {
             while frame.journal.len() > journal_mark {
@@ -562,6 +833,81 @@ impl<'m> TapeBuilder<'m> {
             }
         }
         buf
+    }
+
+    // -- fail-closed faults -------------------------------------------------
+    //
+    // The per-cell oracle has no error channel: a fault (an out-of-range read
+    // of a const array with no boundary policy, a subscript on a 0-D
+    // parameter) latches a message, the read yields `NaN`, and the caller
+    // drains the FIRST latched message. The tape reproduces both halves: the
+    // `NaN` in ordinary instructions at the faulting positions, and one
+    // `Instr::Fault` per rule carrying the message of the rule's first fault
+    // in the oracle's order (see [`FaultKey`]).
+
+    /// The [`FaultKey`] entries of `cell` of `bx`: the cell's absolute
+    /// coordinates in visiting order, then the bound contraction tuple. A box
+    /// with no symbols is evaluated once, not per cell, and adds nothing.
+    fn fault_cell_key(bx: &LBox, cell: &[i64]) -> FaultKey {
+        let mut key = FaultKey::new();
+        if !bx.syms.is_empty() {
+            for k in 0..bx.shape.len() {
+                let a = bx.visit_axis(k);
+                key.push(bx.lo[a] + cell[a]);
+            }
+        }
+        key.extend(bx.cvals.iter().copied());
+        key
+    }
+
+    /// Record a fault the oracle latches at `cell` (0-based) of `bx` — or,
+    /// with `None`, at the point of a single evaluation — keeping the rule's
+    /// first. A fault that may not fire (in a branch, or a lazily evaluated
+    /// position) is admitted only when an earlier certain fault makes it
+    /// unobservable.
+    fn note_fault(&mut self, at: Option<(&LBox, &[i64])>, msg: String) -> LResult<()> {
+        let mut key = self.fault_prefix.clone();
+        if let Some((bx, cell)) = at {
+            key.extend(Self::fault_cell_key(bx, cell));
+        }
+        key.push(self.fault_seq);
+        self.fault_seq += 1;
+        let preceded = self.fault_first.as_ref().is_some_and(|(k, _)| *k < key);
+        if self.in_branch() || self.lazy_depth > 0 {
+            if preceded {
+                return Ok(());
+            }
+            let head: String = msg.chars().take_while(|c| *c != ':').collect();
+            bail_tape!(
+                "fault: `{head}` where the oracle evaluates only some cells (a conditional \
+                 branch or a filtered term), with no earlier fault in the rule to settle \
+                 which one it latches"
+            );
+        }
+        if !preceded {
+            self.fault_first = Some((key, msg));
+        }
+        Ok(())
+    }
+
+    /// Enter a box the oracle evaluates whole at each cell of `parent` (a
+    /// nested aggregate; with `None`, an aggregate on the wholesale path):
+    /// its faults sort at the parent's first cell, in expression order.
+    /// Returns the prefix [`Self::leave_fault_level`] restores.
+    fn enter_fault_level(&mut self, parent: Option<&LBox>) -> FaultKey {
+        let saved = self.fault_prefix.clone();
+        if let Some(p) = parent {
+            let first: SmallVec<[i64; 4]> = SmallVec::from_elem(0, p.shape.len());
+            let k = Self::fault_cell_key(p, &first);
+            self.fault_prefix.extend(k);
+        }
+        self.fault_prefix.push(self.fault_seq);
+        self.fault_seq += 1;
+        saved
+    }
+
+    fn leave_fault_level(&mut self, saved: FaultKey) {
+        self.fault_prefix = saved;
     }
 
     // -- expression lowering (the eval_vec mirror) ---------------------------
@@ -595,6 +941,27 @@ impl<'m> TapeBuilder<'m> {
         }
         if let Some(v) = bx.cbind(name) {
             return Ok(LV::Lit(v as f64));
+        }
+        if bx.tuple != 0 {
+            if let Some(col) = self.tuple_column(bx.tuple, name)? {
+                return Ok(col);
+            }
+            // Anything else a tuple-list body reads is one value for every
+            // tuple; a whole array there is not an element of the list.
+            let plain = LBox {
+                syms: &[],
+                lo: DimI::new(),
+                shape: DimU::new(),
+                cnames: &[],
+                cvals: SmallVec::new(),
+                tuple: 0,
+                visit: SmallVec::new(),
+            };
+            let v = self.resolve_var(name, &plain)?;
+            if self.lv_box(&v).is_some() {
+                bail_tape!("variable: whole array `{name}` read inside a tuple-list body");
+            }
+            return Ok(v);
         }
         if let Some(a) = bx.syms.iter().position(|s| s == name) {
             let key = VnKey::Ramp(a);
@@ -638,6 +1005,9 @@ impl<'m> TapeBuilder<'m> {
         if let Some(i) = self.param_names.iter().position(|p| p == name) {
             return Ok(LV::Param(tape_index(i, "parameters")?));
         }
+        if let Some(lv) = self.forcing_read(name)? {
+            return Ok(lv);
+        }
         bail_tape!("variable: unresolved symbol (forcing/loop-bind?): {name}")
     }
 
@@ -652,6 +1022,12 @@ impl<'m> TapeBuilder<'m> {
     fn lower_op(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
         if node.op == "fn" {
             return self.lower_closed_fn(node, bx);
+        }
+        // The overlay has no geometry arm either (`vec_op_code` classifies it
+        // `Unsupported`), so the reference here is the per-cell oracle's
+        // `eval_polygon_intersection_area`, called on each cell's two rings.
+        if node.op == "polygon_intersection_area" {
+            return self.lower_poly_area(node, Some(bx));
         }
         self.lower_op_code(vec_op_code(&node.op), node, bx)
     }
@@ -670,10 +1046,10 @@ impl<'m> TapeBuilder<'m> {
             // overlay / per-cell oracle, both of which evaluate the marker
             // where its guard is still standing. Reachable only in a document
             // that declares a per-variable `element_type`.
-            VecOp::Precision => bail_tape!(
-                "op: `{}` precision boundary (the tape resolves kernels at execution)",
-                node.op
-            ),
+            VecOp::Precision => {
+                let (arg, _precision) = self.marker_operand(node)?;
+                self.lower_expr(arg, bx)
+            }
             VecOp::Arith(code) => {
                 let Some((first, rest)) = node.args.split_first() else {
                     bail_tape!("op: `{}` with no arguments", node.op);
@@ -1575,6 +1951,22 @@ impl<'m> TapeBuilder<'m> {
 
     // -- ifelse ---------------------------------------------------------------
 
+    /// The operand of a precision-boundary marker (`crate::precision_infer`)
+    /// and the precision it names, which the operand is lowered under: every
+    /// instruction it emits is tagged with that precision and runs at it.
+    fn marker_operand<'n>(
+        &self,
+        node: &'n Arc<ExpressionNode>,
+    ) -> LResult<(&'n Expr, Option<crate::precision::PrecisionGuard>)> {
+        let [arg] = &node.args[..] else {
+            bail_tape!("op: `{}` with arity {}", node.op, node.args.len());
+        };
+        Ok((
+            arg,
+            crate::precision_infer::marker_precision(node).map(crate::precision::enter),
+        ))
+    }
+
     fn lower_ifelse(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
         if node.args.len() != 3 {
             bail_tape!("op: `ifelse` with arity {}", node.args.len());
@@ -1598,10 +1990,16 @@ impl<'m> TapeBuilder<'m> {
                 s.lower_expr(e, bx)
             }),
             // ARRAY condition: evaluate BOTH branches and select elementwise
-            // (`vec_select`).
+            // (`vec_select`). The oracle, walking the box cell by cell, takes
+            // one arm per cell, so each arm is a lazily evaluated position.
             Some(_) => {
-                let a = self.lower_expr(&node.args[1], bx)?;
-                let b = self.lower_expr(&node.args[2], bx)?;
+                let lazy = u32::from(!bx.syms.is_empty());
+                self.lazy_depth += lazy;
+                let arms = self
+                    .lower_expr(&node.args[1], bx)
+                    .and_then(|a| Ok((a, self.lower_expr(&node.args[2], bx)?)));
+                self.lazy_depth -= lazy;
+                let (a, b) = arms?;
                 self.emit_select(cond, a, b)
             }
         }
@@ -1660,24 +2058,65 @@ impl<'m> TapeBuilder<'m> {
         })
     }
 
+    /// A `faq` term under an optional §5.3 `filter`, over one box: the
+    /// filter first, then the body, which the oracle evaluates only where
+    /// the filter keeps the cell or tuple (a lazily evaluated position); an
+    /// excluded term reads `excluded`. `None` when the filter is the literal
+    /// false — no term is kept and the body is never evaluated.
+    fn lower_filtered(
+        &mut self,
+        body: &Expr,
+        filter: Option<&Expr>,
+        bx: &LBox,
+        excluded: LV,
+    ) -> LResult<Option<LV>> {
+        let keep = match filter {
+            None => return self.lower_expr(body, bx).map(Some),
+            Some(f) => self.lower_expr(f, bx)?,
+        };
+        match keep {
+            LV::Lit(0.0) => Ok(None),
+            LV::Lit(_) => self.lower_expr(body, bx).map(Some),
+            keep => {
+                self.lazy_depth += 1;
+                let term = self.lower_expr(body, bx);
+                self.lazy_depth -= 1;
+                self.emit_select(keep, term?, excluded).map(Some)
+            }
+        }
+    }
+
     // -- index (gather) -------------------------------------------------------
 
     /// Compile-time mirror of `eval_vec_index`, reusing the overlay's OWN axis
     /// classifier. Everything is static except the source data.
     fn lower_index(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
+        if bx.tuple != 0 {
+            return self.lower_tuple_index(node, bx);
+        }
         if node.args.is_empty() {
             bail_tape!("index: no arguments");
         }
         // See the same guard in `eval_vec_index`: a const-array gather may not
         // use the ghost-0 fill (§5.5.5).
         let const_base = self.const_arrays.is_const_base(&node.args[0]);
-        let arg0 = self.lower_expr(&node.args[0], bx)?;
+        // An inline array literal as the base is read whole, as the oracle's
+        // gather reads it (`const_lit_array`): one CONST-section literal. It
+        // is lowered here and nowhere else in a box, where an array value in
+        // an elementwise position would mean something else per cell.
+        let arg0 = match &node.args[0] {
+            Expr::Operator(lit) if lit.op == "const" => match eval_const(lit) {
+                Value::Array(a) => self.emit_const_array(&a)?,
+                Value::Scalar(s) => LV::Lit(s),
+            },
+            base => self.lower_expr(base, bx)?,
+        };
         let n = node.args.len() - 1;
         let Some((src_shape, src_origin)) = self.lv_box(&arg0) else {
             return if n == 0 {
                 Ok(arg0)
             } else {
-                bail_tape!("index: base is a scalar but {n} index args given")
+                self.index_on_scalar(&node.args[0], &arg0, n, Some(bx))
             };
         };
         let src_ndim = src_shape.len();
@@ -1690,8 +2129,11 @@ impl<'m> TapeBuilder<'m> {
         let mut mapped: SmallVec<[Option<(usize, AxisIndex)>; 4]> =
             (0..out_ndim).map(|_| None).collect();
         let mut n_mapped = 0usize;
-        let mut fixed: SmallVec<[(usize, i64); 4]> = SmallVec::new();
-        let mut any_fixed_oob = false;
+        // `(source dim, 1-based index)` of every constant subscript.
+        let mut fixed_raw: SmallVec<[(usize, i64); 4]> = SmallVec::new();
+        // The one source axis whose subscript is DATA (`u[nbr[i, k]]`), if
+        // any: an indexed gather rather than a segment copy.
+        let mut data_axis: Option<usize> = None;
         for d in 0..n {
             let e = &node.args[1 + d];
             match classify_axis_role(e, &vb) {
@@ -1699,26 +2141,41 @@ impl<'m> TapeBuilder<'m> {
                     mapped[out_axis] = Some((d, ax));
                     n_mapped += 1;
                 }
-                Some(AxisRole::Const(idx1)) => {
-                    let i0 = idx1 - src_origin[d];
-                    if i0 < 0 || i0 >= src_shape[d] as i64 {
-                        any_fixed_oob = true;
-                        fixed.push((d, 0));
-                    } else {
-                        fixed.push((d, i0));
-                    }
-                }
+                Some(AxisRole::Const(idx1)) => fixed_raw.push((d, idx1)),
+                None if data_axis.is_none() && !const_base => data_axis = Some(d),
                 _ => bail_tape!(
                     "index: axis {d} is neither an affine/wrap map of an unclaimed output symbol nor a constant select"
                 ),
             }
         }
+        if const_base {
+            return self.lower_const_gather(
+                node,
+                bx,
+                arg0,
+                &src_shape,
+                &src_origin,
+                &mapped,
+                &fixed_raw,
+            );
+        }
+        let mut fixed: SmallVec<[(usize, i64); 4]> = SmallVec::new();
+        let mut any_fixed_oob = false;
+        for &(d, idx1) in &fixed_raw {
+            let i0 = idx1 - src_origin[d];
+            if i0 < 0 || i0 >= src_shape[d] as i64 {
+                any_fixed_oob = true;
+                fixed.push((d, 0));
+            } else {
+                fixed.push((d, i0));
+            }
+        }
+        if let Some(d) = data_axis {
+            return self.lower_index_gather(node, bx, &arg0, d, &mapped, &fixed, any_fixed_oob);
+        }
 
         // A fixed axis out of bounds ⇒ every read is the Dirichlet ghost 0.
         if any_fixed_oob {
-            if const_base {
-                bail_tape!("index: const-array gather with an out-of-range fixed axis (§5.5.5)");
-            }
             return Ok(if n_mapped == 0 {
                 LV::Lit(0.0)
             } else {
@@ -1728,19 +2185,7 @@ impl<'m> TapeBuilder<'m> {
 
         // All-fixed ⇒ a single source element, broadcast as a scalar.
         if n_mapped == 0 {
-            let mut idx: SmallVec<[usize; 4]> = SmallVec::from_elem(0usize, n);
-            for &(d, i0) in &fixed {
-                idx[d] = i0 as usize;
-            }
-            let sec = self.placement(self.lv_cadence(&arg0));
-            let out = self.new_slot(&[], &[], true, sec);
-            let instr = Instr::LoadElem {
-                src: self.src_of(&arg0),
-                idx,
-                out,
-            };
-            self.emit(instr, sec);
-            return Ok(LV::Scalar(out));
+            return Ok(self.emit_load_elem(&arg0, &fixed));
         }
 
         // Per-axis copy segments, verbatim from `eval_vec_index`.
@@ -1761,17 +2206,7 @@ impl<'m> TapeBuilder<'m> {
                     let hi_p = (so + ssz - bx.lo[a] - k).min(bx.shape[a] as i64); // exclusive
                     if lo_p >= hi_p {
                         // Entirely out of bounds ⇒ the whole result is ghost-0.
-                        if const_base {
-                            bail_tape!(
-                                "index: const-array gather entirely out of range on an axis (§5.5.5)"
-                            );
-                        }
                         return Ok(self.emit_zero_array(&bx.shape, &bx.lo));
-                    }
-                    if const_base && (lo_p != 0 || hi_p != bx.shape[a] as i64) {
-                        bail_tape!(
-                            "index: const-array gather partially out of range on an axis (§5.5.5)"
-                        );
                     }
                     let mut segs = SmallVec::new();
                     segs.push((
@@ -1782,69 +2217,785 @@ impl<'m> TapeBuilder<'m> {
                     axis_segs.push(segs);
                 }
                 AxisIndex::Wrap { k, period } => {
-                    let (k, period) = (*k, *period);
-                    if so != bx.lo[a] || ssz != period || bx.shape[a] as i64 != period {
-                        bail_tape!("index: periodic wrap axis is not a full-period roll");
-                    }
-                    let p = period as usize;
-                    let s = (((k % period) + period) % period) as usize;
-                    let mut segs = SmallVec::new();
-                    if s == 0 {
-                        segs.push((0usize, p, 0usize));
-                    } else {
-                        segs.push((0usize, p - s, s));
-                        segs.push((p - s, s, 0usize));
-                    }
-                    axis_segs.push(segs);
+                    axis_segs.push(full_roll_segs(so, ssz, bx.lo[a], bx.shape[a], *k, *period)?);
                 }
             }
         }
-
-        // Reduction schedule: fixed axes (descending), then the permutation of
-        // the mapped source axes into output order, then broadcast axes.
-        let mut fixed_desc: SmallVec<[(usize, usize); 4]> =
+        let fixed_desc: SmallVec<[(usize, usize); 4]> =
             fixed.iter().map(|&(d, i0)| (d, i0 as usize)).collect();
+        let mapped_flags: SmallVec<[bool; 4]> =
+            (0..out_ndim).map(|a| mapped[a].is_some()).collect();
+        let mapped_src: SmallVec<[usize; 4]> = (0..out_ndim)
+            .filter_map(|a| mapped[a].as_ref().map(|(d, _)| *d))
+            .collect();
+        Ok(self.emit_gather(
+            &arg0,
+            fixed_desc,
+            &mapped_src,
+            mapped_flags,
+            axis_segs,
+            &bx.shape,
+            &bx.lo,
+        ))
+    }
+
+    /// `LoadElem` of the element `fixed` (0-based, per source dim) names.
+    fn emit_load_elem(&mut self, src: &LV, fixed: &[(usize, i64)]) -> LV {
+        let mut idx: SmallVec<[usize; 4]> = SmallVec::from_elem(0usize, fixed.len());
+        for &(d, i0) in fixed {
+            idx[d] = i0 as usize;
+        }
+        let sec = self.placement(self.lv_cadence(src));
+        let out = self.new_slot(&[], &[], true, sec);
+        let instr = Instr::LoadElem {
+            src: self.src_of(src),
+            idx,
+            out,
+        };
+        self.emit(instr, sec);
+        LV::Scalar(out)
+    }
+
+    /// Emit one [`Instr::Gather`] of `src` into the box `shape`@`origin`.
+    /// `mapped_src[j]` is the source dim the `j`-th mapped output axis reads;
+    /// the reduction schedule — fixed axes descending, then the permutation of
+    /// the mapped source axes into output order — is `eval_vec_index`'s.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_gather(
+        &mut self,
+        src: &LV,
+        mut fixed_desc: SmallVec<[(usize, usize); 4]>,
+        mapped_src: &[usize],
+        mapped: SmallVec<[bool; 4]>,
+        segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]>,
+        shape: &[usize],
+        origin: &[i64],
+    ) -> LV {
+        let (src_shape, src_origin) = self.lv_box(src).expect("gather source is an array");
         fixed_desc.sort_by_key(|x| std::cmp::Reverse(x.0));
-        let mut mapped_src: SmallVec<[usize; 4]> =
-            mapped.iter().flatten().map(|(d, _)| *d).collect();
-        mapped_src.sort_unstable();
-        let perm: SmallVec<[usize; 4]> = (0..out_ndim)
-            .filter_map(|a| mapped[a].as_ref())
-            .map(|(d, _)| {
-                mapped_src
+        let mut sorted: SmallVec<[usize; 4]> = mapped_src.iter().copied().collect();
+        sorted.sort_unstable();
+        let perm: SmallVec<[usize; 4]> = mapped_src
+            .iter()
+            .map(|d| {
+                sorted
                     .iter()
                     .position(|s| s == d)
                     .expect("mapped source axis is in mapped_src")
             })
             .collect();
-        let mapped_flags: SmallVec<[bool; 4]> =
-            (0..out_ndim).map(|a| mapped[a].is_some()).collect();
-
         let plan_ix = self.plans.len() as u32;
         self.plans.push(GatherPlan {
             fixed_desc,
             perm,
-            mapped: mapped_flags,
-            segs: axis_segs,
-            shape: bx.shape.clone(),
-            origin: bx.lo.clone(),
+            mapped,
+            segs,
+            shape: shape.iter().copied().collect(),
+            origin: origin.iter().copied().collect(),
             src_shape,
             src_origin,
         });
-        let sec = self.placement(self.lv_cadence(&arg0));
-        let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
+        let sec = self.placement(self.lv_cadence(src));
+        let out = self.new_slot(shape, origin, false, sec);
         let instr = Instr::Gather {
-            src: self.src_of(&arg0),
+            src: self.src_of(src),
             plan: plan_ix,
+            out,
+        };
+        self.emit(instr, sec);
+        LV::Arr(out)
+    }
+
+    /// `index(x, i…)` where `x` has no axes. The oracle latches
+    /// `E_TREEWALK_INDEX_ON_SCALAR` and reads `NaN`, without evaluating the
+    /// subscripts — for certain only when `x` is a parameter or a numeric
+    /// literal, which it evaluates to a bare scalar. (A 0-D state or observed
+    /// is served as a 0-D array, which the oracle's gather reads differently.)
+    fn index_on_scalar(
+        &mut self,
+        base: &Expr,
+        v: &LV,
+        subscripts: usize,
+        bx: Option<&LBox>,
+    ) -> LResult<LV> {
+        let certain = match base {
+            Expr::Number(_) | Expr::Integer(_) => true,
+            Expr::Variable(_) => matches!(v, LV::Param(_)),
+            Expr::Operator(_) => false,
+        };
+        if !certain {
+            bail_tape!("index: base is a scalar but {subscripts} index args given");
+        }
+        let msg = crate::simulate_array::eval::index_on_scalar_message(base, subscripts);
+        match bx {
+            Some(b) => {
+                let first: SmallVec<[i64; 4]> = SmallVec::from_elem(0, b.shape.len());
+                self.note_fault(Some((b, &first)), msg)?;
+            }
+            None => self.note_fault(None, msg)?,
+        }
+        Ok(LV::Lit(f64::NAN))
+    }
+
+    /// A gather on a CONST array (CONFORMANCE_SPEC §5.5.5), which never reads
+    /// the state gather's zero ghost. Each source dim resolves an out-of-range
+    /// subscript by the factor's declared policy, at build time: `periodic`
+    /// wraps (more copy segments), `clamp` edge-extends (the edge element
+    /// broadcast over the out-of-range run), and no policy is the oracle's
+    /// fail-closed fault — `NaN` at those cells and one
+    /// `E_TREEWALK_CONSTARRAY_OOB` for the first of them. The result is the
+    /// plain gather when every read is in range, else an [`Instr::Assemble`]
+    /// of per-run sub-gathers over a `NaN` fill: at most three runs per axis,
+    /// so its size does not depend on the box.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_const_gather(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+        src: LV,
+        src_shape: &[usize],
+        src_origin: &[i64],
+        mapped: &[Option<(usize, AxisIndex)>],
+        fixed_raw: &[(usize, i64)],
+    ) -> LResult<LV> {
+        if src_origin.iter().any(|&o| o != 1) {
+            // A const array is a literal or a materialized observed, both
+            // served at origin 1; the policy arithmetic below assumes it.
+            bail_tape!("index: const-array gather on a source not at origin 1");
+        }
+        let name = match &node.args[0] {
+            Expr::Variable(v) => v.as_str(),
+            _ => INLINE_CONST_NAME,
+        };
+        let policy = |d: usize| -> BoundaryKind {
+            if src_shape[d] == 0 {
+                // `index_into`: an empty dimension is the error whatever the
+                // policy.
+                BoundaryKind::Error
+            } else {
+                self.const_arrays.boundary(name, d)
+            }
+        };
+        // Fixed source dims, resolved (0-based), or `None` out of range.
+        let mut fixed: SmallVec<[(usize, Option<usize>); 4]> = SmallVec::new();
+        for &(d, raw) in fixed_raw {
+            fixed.push((d, resolve_const_index(policy(d), raw, src_shape[d] as i64)));
+        }
+        let out_ndim = bx.shape.len();
+        // Per output axis: its runs `(start, len, run)`, ascending, tiling it.
+        let mut runs: SmallVec<[SmallVec<[(usize, usize, ConstRun); 3]>; 4]> = SmallVec::new();
+        for a in 0..out_ndim {
+            let n_a = bx.shape[a];
+            let mut rs: SmallVec<[(usize, usize, ConstRun); 3]> = SmallVec::new();
+            match &mapped[a] {
+                None => rs.push((0, n_a, ConstRun::Bcast)),
+                Some((d, AxisIndex::Wrap { k, period })) => {
+                    let segs = full_roll_segs(1, src_shape[*d] as i64, bx.lo[a], n_a, *k, *period)?;
+                    rs.push((0, n_a, ConstRun::Copy(segs)));
+                }
+                Some((d, AxisIndex::Affine(k))) => {
+                    let n_d = src_shape[*d] as i64;
+                    // The 1-based subscript at position `p` is `base + p`.
+                    let base = bx.lo[a] + *k;
+                    let na = n_a as i64;
+                    let below = (1 - base).clamp(0, na) as usize;
+                    let above = (n_d + 1 - base).clamp(0, na) as usize;
+                    match policy(*d) {
+                        BoundaryKind::Periodic if n_d > 1 => {
+                            let mut segs: SmallVec<[(usize, usize, usize); 2]> = SmallVec::new();
+                            let mut p = 0i64;
+                            while p < na {
+                                let s = (base + p - 1).rem_euclid(n_d);
+                                let len = (n_d - s).min(na - p);
+                                segs.push((p as usize, len as usize, s as usize));
+                                p += len;
+                            }
+                            rs.push((0, n_a, ConstRun::Copy(segs)));
+                        }
+                        // A period of one reads its one element everywhere.
+                        BoundaryKind::Periodic => rs.push((0, n_a, ConstRun::Edge(0))),
+                        kind => {
+                            let (lo_run, hi_run) = match kind {
+                                BoundaryKind::Clamp => {
+                                    (ConstRun::Edge(0), ConstRun::Edge(n_d as usize - 1))
+                                }
+                                _ => (ConstRun::Oob, ConstRun::Oob),
+                            };
+                            if below > 0 {
+                                rs.push((0, below, lo_run));
+                            }
+                            if above > below {
+                                let mut segs = SmallVec::new();
+                                segs.push((0, above - below, (base + below as i64 - 1) as usize));
+                                rs.push((below, above - below, ConstRun::Copy(segs)));
+                            }
+                            if n_a > above.max(below) {
+                                let from = above.max(below);
+                                rs.push((from, n_a - from, hi_run));
+                            }
+                        }
+                    }
+                }
+            }
+            runs.push(rs);
+        }
+
+        let fixed_oob = fixed.iter().any(|(_, r)| r.is_none());
+        let any_oob = fixed_oob
+            || runs
+                .iter()
+                .any(|rs| rs.iter().any(|(_, _, r)| matches!(r, ConstRun::Oob)));
+        if any_oob {
+            let msg =
+                self.const_oob_first(bx, name, src_shape, mapped, fixed_raw, fixed_oob, &runs);
+            let cell = msg.0;
+            self.note_fault(Some((bx, &cell)), msg.1)?;
+        }
+
+        let n_mapped = mapped.iter().filter(|m| m.is_some()).count();
+        if n_mapped == 0 {
+            if fixed_oob {
+                return Ok(LV::Lit(f64::NAN));
+            }
+            let at: SmallVec<[(usize, i64); 4]> = fixed
+                .iter()
+                .map(|&(d, r)| (d, r.expect("resolved") as i64))
+                .collect();
+            return Ok(self.emit_load_elem(&src, &at));
+        }
+        if fixed_oob {
+            return Ok(self.emit_fill(&LV::Lit(f64::NAN), &bx.shape, &bx.lo, Cadence::Const));
+        }
+
+        // One sub-gather per combination of in-range runs.
+        let mut parts: Vec<(LV, DimU, DimU)> = Vec::new();
+        let mut pick: SmallVec<[usize; 4]> = SmallVec::from_elem(0, out_ndim);
+        'combos: loop {
+            let chosen: SmallVec<[&(usize, usize, ConstRun); 4]> =
+                (0..out_ndim).map(|a| &runs[a][pick[a]]).collect();
+            if !chosen.iter().any(|(_, _, r)| matches!(r, ConstRun::Oob)) {
+                let mut fixed_desc: SmallVec<[(usize, usize); 4]> = fixed
+                    .iter()
+                    .map(|&(d, r)| (d, r.expect("resolved")))
+                    .collect();
+                let mut mapped_src: SmallVec<[usize; 4]> = SmallVec::new();
+                let mut flags: SmallVec<[bool; 4]> = SmallVec::new();
+                let mut segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> = SmallVec::new();
+                let mut sub_lo = DimI::new();
+                let mut sub_shape = DimU::new();
+                let mut dest = DimU::new();
+                for (a, (start, len, run)) in chosen.iter().enumerate() {
+                    sub_lo.push(bx.lo[a] + *start as i64);
+                    sub_shape.push(*len);
+                    dest.push(*start);
+                    match run {
+                        ConstRun::Copy(s) => {
+                            let d = mapped[a].as_ref().expect("a copy run reads a source dim").0;
+                            mapped_src.push(d);
+                            flags.push(true);
+                            // Segment offsets are relative to the run's start.
+                            segs.push(s.clone());
+                        }
+                        ConstRun::Edge(e) => {
+                            let d = mapped[a]
+                                .as_ref()
+                                .expect("an edge run reads a source dim")
+                                .0;
+                            fixed_desc.push((d, *e));
+                            flags.push(false);
+                            let mut one = SmallVec::new();
+                            one.push((0usize, *len, 0usize));
+                            segs.push(one);
+                        }
+                        ConstRun::Bcast => {
+                            flags.push(false);
+                            let mut one = SmallVec::new();
+                            one.push((0usize, *len, 0usize));
+                            segs.push(one);
+                        }
+                        ConstRun::Oob => unreachable!("an out-of-range run is skipped"),
+                    }
+                }
+                let v = self.emit_gather(
+                    &src,
+                    fixed_desc,
+                    &mapped_src,
+                    flags,
+                    segs,
+                    &sub_shape,
+                    &sub_lo,
+                );
+                parts.push((v, dest, sub_shape));
+            }
+            let mut a = out_ndim;
+            loop {
+                if a == 0 {
+                    break 'combos;
+                }
+                a -= 1;
+                pick[a] += 1;
+                if pick[a] < runs[a].len() {
+                    break;
+                }
+                pick[a] = 0;
+            }
+        }
+        if !any_oob && parts.len() == 1 {
+            return Ok(parts.pop().expect("one part").0);
+        }
+        if parts.is_empty() {
+            return Ok(self.emit_fill(&LV::Lit(f64::NAN), &bx.shape, &bx.lo, Cadence::Const));
+        }
+        let mut spec_parts: Vec<(Operand, u32)> = Vec::with_capacity(parts.len() + 1);
+        if any_oob {
+            let region = tape_index(self.regions.len(), "makearray regions")?;
+            self.regions.push(RegionSpec {
+                dest_lo: DimU::from_elem(0, out_ndim),
+                shape: bx.shape.clone(),
+            });
+            spec_parts.push((Operand::Lit(f64::NAN), region));
+        }
+        let mut want = Cadence::Const;
+        for (v, dest, shape) in &parts {
+            want = want.max(self.lv_cadence(v));
+            let region = tape_index(self.regions.len(), "makearray regions")?;
+            self.regions.push(RegionSpec {
+                dest_lo: dest.clone(),
+                shape: shape.clone(),
+            });
+            spec_parts.push((self.op_of(v), region));
+        }
+        let table = tape_index(self.assemblies.len(), "makearray assemblies")?;
+        self.assemblies.push(AssembleSpec { parts: spec_parts });
+        let sec = self.placement(want);
+        let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
+        self.emit(Instr::Assemble { table, out }, sec);
+        Ok(LV::Arr(out))
+    }
+
+    // -- geometry -------------------------------------------------------------
+
+    /// `polygon_intersection_area` (esm-spec §4.2): one [`Instr::PolyArea`]
+    /// over the box `bx`, or over a scalar slot when `bx` is `None` (the
+    /// wholesale form, or a box neither ring varies over).
+    ///
+    /// Mirrors `eval_polygon_intersection_area` / `eval_clip_operands`: a
+    /// required in-enum `manifold`, exactly two operands, each a `[V, 2]`
+    /// ring, and the NaN sentinel wherever that contract fails in a way the
+    /// box alone decides (the wrong arity, no manifold, an operand that is a
+    /// scalar or not `[V, 2]`). What the tape takes as a ring is narrower than
+    /// what the oracle evaluates — a partial `index(table, s…)` whose
+    /// subscripts are affine in one output symbol or constant, or a whole
+    /// array — and every other operand, and any ring position outside its
+    /// table, is a refusal naming it rather than a guess at the oracle.
+    fn lower_poly_area(&mut self, node: &Arc<ExpressionNode>, bx: Option<&LBox>) -> LResult<LV> {
+        use crate::geometry::Manifold;
+        if self.f32_document {
+            bail_tape!("geometry: `polygon_intersection_area` in a Float32 document");
+        }
+        let [a_expr, b_expr] = node.args.as_slice() else {
+            return Ok(LV::Lit(f64::NAN));
+        };
+        let Some(manifold) = node.manifold.as_deref().and_then(Manifold::from_flag) else {
+            return Ok(LV::Lit(f64::NAN));
+        };
+        let Some((ta, ra)) = self.lower_ring_operand(a_expr, bx)? else {
+            return Ok(LV::Lit(f64::NAN));
+        };
+        let Some((tb, rb)) = self.lower_ring_operand(b_expr, bx)? else {
+            return Ok(LV::Lit(f64::NAN));
+        };
+        let (axes_a, axes_b) = (ra.axes(), rb.axes());
+        // A box neither ring varies over holds one value: compute it once.
+        let bx = bx.filter(|_| !axes_a.is_empty() || !axes_b.is_empty());
+        let pairs = match (&axes_a[..], &axes_b[..]) {
+            ([x], [y]) if manifold == Manifold::Planar && x != y => Some((*x, *y)),
+            _ => None,
+        };
+        let (shape, lo) = match bx {
+            Some(bx) => (bx.shape.clone(), bx.lo.clone()),
+            None => (DimU::new(), DimI::new()),
+        };
+        let cad = self.lv_cadence(&ta).max(self.lv_cadence(&tb));
+        let sec = self.placement(cad);
+        let geom = self.geoms.len() as u32;
+        self.geoms.push(GeomSpec {
+            manifold,
+            a: ra,
+            b: rb,
+            shape: shape.clone(),
+            pairs,
+        });
+        let scalar = bx.is_none();
+        let out = self.new_slot(&shape, &lo, scalar, sec);
+        let instr = Instr::PolyArea {
+            a: self.src_of(&ta),
+            b: self.src_of(&tb),
+            geom,
+            out,
+        };
+        self.emit(instr, sec);
+        Ok(if scalar {
+            LV::Scalar(out)
+        } else {
+            LV::Arr(out)
+        })
+    }
+
+    /// One ring operand of [`Self::lower_poly_area`]: the table it reads
+    /// (the WHOLE array, as the oracle's `eval` of the base yields it) and how
+    /// each leading table axis is addressed. `None` when the operand is, for
+    /// every cell, not a `[V, 2]` array — a scalar, or a table whose ring is
+    /// not two-column — which `eval_clip_operands` answers with NaN.
+    fn lower_ring_operand(
+        &mut self,
+        e: &Expr,
+        bx: Option<&LBox>,
+    ) -> LResult<Option<(LV, RingRef)>> {
+        let (base, subs): (&Expr, &[Expr]) = match e {
+            Expr::Operator(n) if n.op == "index" => match n.args.split_first() {
+                Some((base, subs)) => (base, subs),
+                None => return Ok(None),
+            },
+            other => (other, &[]),
+        };
+        let table = self.lower_wholesale(base)?;
+        let Some((tshape, torigin)) = self.lv_box(&table) else {
+            if subs.is_empty() {
+                return Ok(None);
+            }
+            // Subscripts on a 0-D value are the interpreter's fail-closed
+            // fault, which only the oracle can raise.
+            bail_tape!("geometry: ring operand subscripts a scalar");
+        };
+        if torigin.iter().any(|&o| o != 1) {
+            bail_tape!("geometry: ring table is not origin-1");
+        }
+        if tshape.len() != subs.len() + 2 || tshape[tshape.len() - 1] != 2 {
+            if subs.is_empty() {
+                return Ok(None);
+            }
+            bail_tape!(
+                "geometry: ring operand of box {:?} with {} subscripts is not a [V, 2] ring",
+                &tshape[..],
+                subs.len()
+            );
+        }
+        let mut sel: SmallVec<[RingSel; 3]> = SmallVec::new();
+        for (d, sub) in subs.iter().enumerate() {
+            let extent = tshape[d] as i64;
+            let s = match bx {
+                Some(bx) => match classify_axis_role(sub, &bx.as_vecbox()) {
+                    Some(AxisRole::Map {
+                        out_axis,
+                        ax: AxisIndex::Affine(k),
+                    }) => {
+                        // 0-based table position `p + off` at output position p.
+                        let off = bx.lo[out_axis] + k - 1;
+                        let last = off + bx.shape[out_axis] as i64 - 1;
+                        if off < 0 || last >= extent {
+                            bail_tape!(
+                                "geometry: ring subscript {d} leaves its table (1..{extent})"
+                            );
+                        }
+                        RingSel::Axis {
+                            axis: out_axis as u8,
+                            off,
+                        }
+                    }
+                    Some(AxisRole::Const(i1)) => Self::ring_fixed(i1, extent, d)?,
+                    _ => bail_tape!(
+                        "geometry: ring subscript {d} is neither affine in one output symbol nor constant"
+                    ),
+                },
+                None => match self.lower_wholesale(sub)? {
+                    LV::Lit(f) => Self::ring_fixed(f.round() as i64, extent, d)?,
+                    _ => bail_tape!("geometry: ring subscript {d} is not a literal"),
+                },
+            };
+            sel.push(s);
+        }
+        Ok(Some((
+            table,
+            RingRef {
+                src_shape: tshape,
+                sel,
+            },
+        )))
+    }
+
+    /// `intersect_polygon` (RFC §8.1) evaluated wholesale: the closed overlap
+    /// ring, `[n + 1, 2]`, with `n` data-dependent.
+    ///
+    /// A slot's box is fixed when the tape is built, and the length of a clip
+    /// is known only once the clip has run, so the ring is computed HERE, at
+    /// build, when both operands are compile-time constants (literal `const`
+    /// data), by the interpreter's own `eval_intersect_polygon` steps: the
+    /// kernel clip, then `close_ring`. The ring becomes an ordinary
+    /// [`Instr::ConstArray`], and its distinct-vertex count is recorded under
+    /// the node's `id` for a `kind: "derived"` range over it, which is what the
+    /// interpreter's ring registry would answer. Where the interpreter's clip
+    /// yields its NaN sentinel and registers nothing (an operand that is not a
+    /// `[V, 2]` array, no manifold, a clip the kernel refuses), so does this,
+    /// and the derived range is empty. Operands that are rings but not
+    /// constants (a parameter, the state, an observed computed at run time)
+    /// and an empty ring are refusals naming the reason.
+    fn lower_intersect_polygon(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
+        use crate::geometry::Manifold;
+        if self.f32_document {
+            bail_tape!("geometry: `intersect_polygon` in a Float32 document");
+        }
+        let no_ring = |b: &mut Self| {
+            if let Some(id) = &node.id {
+                b.rings.push((id.clone(), 0));
+            }
+            Ok(LV::Lit(f64::NAN))
+        };
+        let [a_expr, b_expr] = node.args.as_slice() else {
+            return no_ring(self);
+        };
+        let Some(manifold) = node.manifold.as_deref().and_then(Manifold::from_flag) else {
+            return no_ring(self);
+        };
+        let mut rings: [Vec<(f64, f64)>; 2] = [Vec::new(), Vec::new()];
+        for (k, e) in [a_expr, b_expr].into_iter().enumerate() {
+            let Some((table, r)) = self.lower_ring_operand(e, None)? else {
+                return no_ring(self);
+            };
+            let Some(data) = self.const_slot_data(&table) else {
+                bail_tape!(
+                    "geometry: `intersect_polygon` of a ring that is not a compile-time \
+                     constant: its overlap has a data-dependent length, and a tape slot's \
+                     box is fixed when the tape is built"
+                );
+            };
+            let lead = r.sel.len();
+            // Row-major strides of the literal, which is how it is stored.
+            let mut st = vec![1usize; data.shape.len()];
+            for d in (0..data.shape.len().saturating_sub(1)).rev() {
+                st[d] = st[d + 1] * data.shape[d + 1];
+            }
+            let mut base = 0usize;
+            for (d, s) in r.sel.iter().enumerate() {
+                let RingSel::Fixed(i) = *s else {
+                    unreachable!("a wholesale ring subscript is fixed");
+                };
+                base += st[d] * i;
+            }
+            rings[k] = (0..data.shape[lead])
+                .map(|v| {
+                    let p = base + st[lead] * v;
+                    (data.values[p], data.values[p + st[lead + 1]])
+                })
+                .collect();
+        }
+        let ring = match crate::geometry::intersect_polygon(&rings[0], &rings[1], manifold) {
+            Ok(ring) => super::super::eval::close_ring(&ring),
+            Err(_) => return no_ring(self),
+        };
+        if ring.is_empty() {
+            bail_tape!("geometry: `intersect_polygon` ring is empty (a disjoint clip)");
+        }
+        let arr = super::super::eval::lonlat_to_arrayd(&ring);
+        if let Some(id) = &node.id {
+            self.rings.push((id.clone(), ring.len() as i64 - 1));
+        }
+        self.emit_const_array(&arr)
+    }
+
+    /// The literal data behind an array LV the tape stores with an
+    /// [`Instr::ConstArray`] in the CONST section, if that is what it is.
+    fn const_slot_data(&self, lv: &LV) -> Option<&ConstArrayData> {
+        let LV::Arr(slot) = lv else {
+            return None;
+        };
+        self.streams[Cadence::Const as usize]
+            .iter()
+            .flat_map(|c| c.instrs.iter())
+            .find_map(|(i, _)| match i {
+                Instr::ConstArray { data, out } if out == slot => {
+                    Some(&self.const_data[*data as usize])
+                }
+                _ => None,
+            })
+    }
+
+    /// The distinct-vertex count of the build-time ring produced under `id`.
+    fn ring_extent(&self, id: &str) -> Option<i64> {
+        self.rings
+            .iter()
+            .rev()
+            .find(|(r, _)| r == id)
+            .map(|(_, n)| *n)
+    }
+
+    /// Whether a contracted dimension has one extent for every output cell: a
+    /// static interval, or a derived range over an `intersect_polygon` ring
+    /// evaluated at build ([`Self::ring_extent`]).
+    fn dim_is_fixed(&self, d: &ContractDim) -> bool {
+        match d {
+            ContractDim::Static(..) => true,
+            ContractDim::Derived { from_faq } => self.ring_extent(from_faq).is_some(),
+            ContractDim::Ragged { .. } => false,
+        }
+    }
+
+    /// A constant 1-based ring subscript as a fixed 0-based table position.
+    fn ring_fixed(one_based: i64, extent: i64, d: usize) -> LResult<RingSel> {
+        if one_based < 1 || one_based > extent {
+            bail_tape!("geometry: ring subscript {d} leaves its table (1..{extent})");
+        }
+        Ok(RingSel::Fixed((one_based - 1) as usize))
+    }
+
+    /// The indexed-gather arm of [`Self::lower_index`]: source axis `data_d`
+    /// is subscripted by a value (`u[nbr[i, k]]` on an unstructured mesh), so
+    /// the read position is data, not a shift. One [`Instr::IndexGather`]
+    /// over the box, whatever its size.
+    ///
+    /// The oracle's rule is `eval_index` → `index_into` with a state or
+    /// observed base: the subscript is `round()`ed to an integer and a
+    /// position outside the source reads the zero ghost. The other axes stay
+    /// what the segment gather supports, in range for every cell (a shifted
+    /// read that leaves the source, or a periodic wrap, is refused here rather
+    /// than mixed with a data subscript). A const-array base never reaches
+    /// here: its out-of-range rule is the factor's boundary policy, which
+    /// needs the subscript values to decide.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_index_gather(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+        base: &LV,
+        data_d: usize,
+        mapped: &[Option<(usize, AxisIndex)>],
+        fixed: &[(usize, i64)],
+        any_fixed_oob: bool,
+    ) -> LResult<LV> {
+        let (src_shape, src_origin) = self.lv_box(base).expect("an array base");
+        if src_origin.iter().any(|&o| o != 1) {
+            bail_tape!("index: data subscript into a base that is not origin-1");
+        }
+        if any_fixed_oob {
+            bail_tape!("index: data subscript with an out-of-range fixed axis");
+        }
+        let mut axes: SmallVec<[GatherAxis; 4]> =
+            SmallVec::from_elem(GatherAxis::Fixed(0), src_shape.len());
+        axes[data_d] = GatherAxis::Data;
+        for &(d, i0) in fixed {
+            axes[d] = GatherAxis::Fixed(i0 as usize);
+        }
+        for (a, m) in mapped.iter().enumerate() {
+            let Some((d, ax)) = m else { continue };
+            let AxisIndex::Affine(k) = ax else {
+                bail_tape!("index: data subscript with a periodic-wrap axis");
+            };
+            // 0-based source position `p + off` at output position p.
+            let off = bx.lo[a] + k - src_origin[*d];
+            let last = off + bx.shape[a] as i64 - 1;
+            if off < 0 || last >= src_shape[*d] as i64 {
+                bail_tape!("index: data subscript with a shifted axis that leaves the source");
+            }
+            axes[*d] = GatherAxis::Affine { axis: a as u8, off };
+        }
+        let sub = self.lower_expr(&node.args[1 + data_d], bx)?;
+        if let Some((s, o)) = self.lv_box(&sub)
+            && (s != bx.shape || o != bx.lo)
+        {
+            bail_tape!("index: data subscript box does not match the output box");
+        }
+        let cad = self.lv_cadence(base).max(self.lv_cadence(&sub));
+        let sec = self.placement(cad);
+        let spec = self.index_gathers.len() as u32;
+        self.index_gathers.push(IndexGatherSpec {
+            axes,
+            src_shape,
+            shape: bx.shape.clone(),
+        });
+        let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
+        let instr = Instr::IndexGather {
+            src: self.src_of(base),
+            idx: self.op_of(&sub),
+            spec,
             out,
         };
         self.emit(instr, sec);
         Ok(LV::Arr(out))
     }
 
+    /// The first cell (0-based, in `bx`) at which an out-of-range const gather
+    /// faults in the oracle's visiting order, and the message it latches
+    /// there: `index_into` checks the source dims in order and reports the
+    /// first one out of range with no policy.
+    #[allow(clippy::too_many_arguments)]
+    fn const_oob_first(
+        &self,
+        bx: &LBox,
+        name: &str,
+        src_shape: &[usize],
+        mapped: &[Option<(usize, AxisIndex)>],
+        fixed_raw: &[(usize, i64)],
+        fixed_oob: bool,
+        runs: &[SmallVec<[(usize, usize, ConstRun); 3]>],
+    ) -> (SmallVec<[i64; 4]>, String) {
+        let nd = bx.shape.len();
+        // Every out-of-range cell set is a union of axis-aligned slabs, so its
+        // first cell in any visiting order is one slab's corner: the origin
+        // (a fixed dim out of range), or the first position of an
+        // out-of-range run along one axis with every other axis at 0.
+        let mut candidates: Vec<SmallVec<[i64; 4]>> = Vec::new();
+        let origin: SmallVec<[i64; 4]> = SmallVec::from_elem(0, nd);
+        if fixed_oob {
+            candidates.push(origin.clone());
+        }
+        for (a, rs) in runs.iter().enumerate() {
+            if let Some((start, _, _)) = rs.iter().find(|(_, _, r)| matches!(r, ConstRun::Oob)) {
+                let mut c = origin.clone();
+                c[a] = *start as i64;
+                candidates.push(c);
+            }
+        }
+        let visit_key = |c: &SmallVec<[i64; 4]>| -> SmallVec<[i64; 4]> {
+            (0..nd).map(|k| c[bx.visit_axis(k)]).collect()
+        };
+        let cell = candidates
+            .into_iter()
+            .min_by_key(|c| visit_key(c))
+            .expect("an out-of-range gather has an out-of-range cell");
+        // The subscript of every source dim at that cell, in dim order.
+        let mut raw_at: SmallVec<[i64; 4]> = SmallVec::from_elem(0, src_shape.len());
+        for &(d, raw) in fixed_raw {
+            raw_at[d] = raw;
+        }
+        for (a, m) in mapped.iter().enumerate() {
+            if let Some((d, ax)) = m {
+                raw_at[*d] = match ax {
+                    AxisIndex::Affine(k) => bx.lo[a] + cell[a] + k,
+                    // A full roll never leaves the axis.
+                    AxisIndex::Wrap { .. } => 1,
+                };
+            }
+        }
+        for (d, &raw) in raw_at.iter().enumerate() {
+            let n_d = src_shape[d] as i64;
+            let policy = if n_d == 0 {
+                BoundaryKind::Error
+            } else {
+                self.const_arrays.boundary(name, d)
+            };
+            if (raw < 1 || raw > n_d) && matches!(policy, BoundaryKind::Error) {
+                return (cell, const_oob_message(name, raw, n_d, d));
+            }
+        }
+        unreachable!("the first out-of-range cell has an out-of-range dim")
+    }
+
     // -- makearray ------------------------------------------------------------
 
     fn lower_makearray(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
+        if bx.tuple != 0 {
+            bail_tape!("makearray: inside a tuple-list contraction body");
+        }
         let Some(regions) = node.regions.as_ref() else {
             bail_tape!("makearray: no `regions`");
         };
@@ -1873,8 +3024,11 @@ impl<'m> TapeBuilder<'m> {
             }
         }
         let bb_shape: DimU = (0..ndim)
-            .map(|d| (hi_bb[d] - lo_bb[d] + 1) as usize)
+            .map(|d| (hi_bb[d] - lo_bb[d] + 1).max(0) as usize)
             .collect();
+        if bb_shape.contains(&0) {
+            bail_tape!("makearray: empty bounding box");
+        }
 
         // Every region value first, then ONE instruction assembling them: a
         // makearray whose values are all literals is a constant array, built
@@ -1895,28 +3049,75 @@ impl<'m> TapeBuilder<'m> {
                     (hi - lo + 1) as usize
                 })
                 .collect();
-            if r_shape.contains(&0) {
-                bail_tape!("makearray: empty region");
-            }
             // A region is its own box (and CSE scope): a ramp / shifted gather
             // means something different inside it.
-            self.push_scope();
             let rbx = LBox {
                 syms: bx.syms,
                 lo: r_lo.clone(),
                 shape: r_shape.clone(),
                 cnames: bx.cnames,
                 cvals: bx.cvals.clone(),
+                tuple: bx.tuple,
+                visit: SmallVec::new(),
             };
+            // The legal EMPTY spelling (`stop == start - 1`, §4.3.2) covers no
+            // cell, but the oracle still evaluates its value, and an array
+            // value that does not fit poisons the whole makearray with `NaN`.
+            // Its instructions are dropped; a fault it raises is kept.
+            if r_shape.contains(&0) {
+                let txn = self.sub_txn();
+                self.push_scope();
+                let v = self.lower_expr(value_expr, &rbx);
+                self.pop_scope();
+                let v = v?;
+                let fits = match self.lv_box(&v) {
+                    None => true,
+                    Some((s, _)) => s.is_empty() || region_value_axes(&s, &r_shape).is_some(),
+                };
+                let fault = (self.fault_first.take(), self.fault_seq);
+                self.sub_rollback(txn);
+                (self.fault_first, self.fault_seq) = fault;
+                if !fits {
+                    bail_tape!("makearray: an empty region's array value does not fit it");
+                }
+                continue;
+            }
+            self.push_scope();
             let v = self.lower_expr(value_expr, &rbx);
             self.pop_scope();
             let v = v?;
-            // An array region value must match the region box exactly.
-            if let Some((s, o)) = self.lv_box(&v) {
-                if s != r_shape || o != r_lo {
-                    bail_tape!("makearray: region value box does not match the region");
-                }
-            }
+            // An array region value must fit the region, excluding its
+            // singleton axes (esm-spec §4.3.2). It is placed by shape: the
+            // oracle's arrays carry no origin. A lower-rank value — a face
+            // region's aggregate over its one free axis — is broadcast over
+            // the singleton axes it does not name.
+            let v = match self.lv_box(&v) {
+                None => v,
+                Some((s, _)) => match region_value_axes(&s, &r_shape) {
+                    Some(covered) if covered.iter().all(|&c| c) => v,
+                    Some(covered) => {
+                        let src_axes: SmallVec<[usize; 4]> = (0..s.len()).collect();
+                        let segs = r_shape
+                            .iter()
+                            .map(|&n| {
+                                let mut one = SmallVec::new();
+                                one.push((0usize, n, 0usize));
+                                one
+                            })
+                            .collect();
+                        self.emit_gather(
+                            &v,
+                            SmallVec::new(),
+                            &src_axes,
+                            covered,
+                            segs,
+                            &r_shape,
+                            &r_lo,
+                        )
+                    }
+                    None => bail_tape!("makearray: region value box does not match the region"),
+                },
+            };
             let region_ix = tape_index(self.regions.len(), "makearray regions")?;
             self.regions.push(RegionSpec {
                 dest_lo: (0..ndim).map(|d| (r_lo[d] - lo_bb[d]) as usize).collect(),
@@ -1986,16 +3187,28 @@ impl<'m> TapeBuilder<'m> {
         if spec.ranges.is_empty() {
             bail_tape!("aggregate: rank-0 output (scalar reduction, nested in a box)");
         }
-        // See the same guard in `eval_vec_nested_aggregate`: an overlap gate
-        // drives the contraction, and the tape lowering has no driven form.
-        if spec.has_drivable_overlap() {
-            bail_tape!("aggregate: carries an overlap join gate that drives enumeration");
+        if bx.tuple != 0 {
+            bail_tape!("aggregate: nested inside a tuple-list contraction body");
         }
         if let Some(name) = nested_aggregate_capture(&spec, bx.syms.iter().chain(bx.cnames.iter()))
         {
             bail_tape!("aggregate: nested body depends on an enclosing bound index `{name}`");
         }
-        self.lower_faq(
+        // A join gate drives the contraction: the tuple-list form.
+        if spec.has_drivable_overlap() {
+            return self.lower_tuple_contraction(
+                spec.idx_names,
+                &spec.ranges,
+                spec.body,
+                &spec.contract_names,
+                &spec.contract_dims,
+                spec.reduce,
+                spec.filter,
+                spec.join,
+            );
+        }
+        let level = self.enter_fault_level(Some(bx));
+        let v = self.lower_faq(
             spec.idx_names,
             &spec.ranges,
             spec.body,
@@ -2003,7 +3216,9 @@ impl<'m> TapeBuilder<'m> {
             &spec.contract_dims,
             spec.reduce,
             spec.filter,
-        )
+        );
+        self.leave_fault_level(level);
+        v
     }
 
     // -- faq (the try_eval_faq_vectorized mirror) ---------------------
@@ -2020,9 +3235,15 @@ impl<'m> TapeBuilder<'m> {
         filter: Option<&Expr>,
     ) -> LResult<LV> {
         let lo: DimI = ranges.iter().map(|(l, _)| *l).collect();
-        let shape: DimU = ranges.iter().map(|(l, h)| (h - l + 1) as usize).collect();
+        let shape: DimU = ranges
+            .iter()
+            .map(|(l, h)| (h - l + 1).max(0) as usize)
+            .collect();
+        // An empty output box (a size-0 index set) has no cell to evaluate:
+        // the oracle's result is the empty array, and nothing in the body or
+        // filter runs.
         if shape.contains(&0) {
-            bail_tape!("faq: empty output box");
+            return Ok(self.emit_zero_array(&shape, &lo));
         }
         self.push_scope();
         let v = if contract_names.is_empty() {
@@ -2032,28 +3253,15 @@ impl<'m> TapeBuilder<'m> {
                 shape: shape.clone(),
                 cnames: &[],
                 cvals: SmallVec::new(),
+                tuple: 0,
+                visit: SmallVec::new(),
             };
-            let r = self.lower_expr(body, &bx).and_then(|body_v| match filter {
-                None => Ok(body_v),
-                Some(f) => {
-                    let fv = self.lower_expr(f, &bx)?;
-                    match fv {
-                        LV::Lit(c) => {
-                            if c != 0.0 {
-                                Ok(body_v)
-                            } else {
-                                Ok(self.emit_fill(
-                                    &LV::Lit(reduce.identity()),
-                                    &shape,
-                                    &lo,
-                                    Cadence::Const,
-                                ))
-                            }
-                        }
-                        fv => self.emit_select(fv, body_v, LV::Lit(reduce.identity())),
-                    }
-                }
-            });
+            let identity = LV::Lit(reduce.identity());
+            let r = self
+                .lower_filtered(body, filter, &bx, identity.clone())
+                .map(|v| {
+                    v.unwrap_or_else(|| self.emit_fill(&identity, &shape, &lo, Cadence::Const))
+                });
             self.pop_scope();
             r?
         } else {
@@ -2111,6 +3319,24 @@ impl<'m> TapeBuilder<'m> {
         if nc == 0 || nc > MAX_CONTRACT {
             bail_tape!("contracted: contraction rank out of range ({nc})");
         }
+        if contract_dims.iter().any(|d| !self.dim_is_fixed(d)) {
+            // A ragged bound varies per output cell: the tuple-list form.
+            let ranges: Vec<(i64, i64)> = lo
+                .iter()
+                .zip(shape)
+                .map(|(&l, &n)| (l, l + n as i64 - 1))
+                .collect();
+            return self.lower_tuple_contraction(
+                idx_names,
+                &ranges,
+                body,
+                contract_names,
+                contract_dims,
+                reduce,
+                filter,
+                None,
+            );
+        }
         let mut clo = [0i64; MAX_CONTRACT];
         let mut chi = [0i64; MAX_CONTRACT];
         for (i, d) in contract_dims.iter().enumerate() {
@@ -2118,6 +3344,10 @@ impl<'m> TapeBuilder<'m> {
                 ContractDim::Static(l, h) => {
                     clo[i] = *l;
                     chi[i] = *h;
+                }
+                ContractDim::Derived { from_faq } if self.ring_extent(from_faq).is_some() => {
+                    clo[i] = 1;
+                    chi[i] = self.ring_extent(from_faq).unwrap_or(0);
                 }
                 other => bail_tape!("contracted: non-static contraction dim ({other:?})"),
             }
@@ -2195,21 +3425,16 @@ impl<'m> TapeBuilder<'m> {
             shape: ext_shape.clone(),
             cnames: &[],
             cvals: SmallVec::new(),
+            tuple: 0,
+            // The oracle walks the output cells, and each cell's tuples.
+            visit: (nc..ext_shape.len())
+                .chain(0..nc)
+                .map(|a| a as u8)
+                .collect(),
         };
-        let term = (|| -> LResult<LV> {
-            let term = self.lower_expr(body, &bx)?;
-            match filter {
-                None => Ok(term),
-                Some(f) => {
-                    let fv = self.lower_expr(f, &bx)?;
-                    match fv {
-                        LV::Lit(c) if c != 0.0 => Ok(term),
-                        LV::Lit(_) => Ok(LV::Lit(identity)),
-                        fv => self.emit_select(fv, term, LV::Lit(identity)),
-                    }
-                }
-            }
-        })();
+        let term = self
+            .lower_filtered(body, filter, &bx, LV::Lit(identity))
+            .map(|t| t.unwrap_or(LV::Lit(identity)));
         self.pop_scope();
         let term = term?;
         if matches!(&term, LV::State(_) | LV::Obs { .. }) && self.lv_box(&term).is_some() {
@@ -2271,31 +3496,16 @@ impl<'m> TapeBuilder<'m> {
                 shape: shape.clone(),
                 cnames: contract_names,
                 cvals: SmallVec::from_slice(&cvals[..nc]),
+                tuple: 0,
+                visit: SmallVec::new(),
             };
-            let term = (|| -> LResult<LV> {
-                let term = self.lower_expr(body, &bx)?;
-                match filter {
-                    None => Ok(term),
-                    Some(f) => {
-                        let fv = self.lower_expr(f, &bx)?;
-                        match fv {
-                            LV::Lit(c) => {
-                                if c != 0.0 {
-                                    Ok(term)
-                                } else {
-                                    Ok(self.emit_fill(
-                                        &LV::Lit(identity),
-                                        shape,
-                                        lo,
-                                        Cadence::Const,
-                                    ))
-                                }
-                            }
-                            fv => self.emit_select(fv, term, LV::Lit(identity)),
-                        }
-                    }
-                }
-            })();
+            let term = self
+                .lower_filtered(body, filter, &bx, LV::Lit(identity))
+                .map(|t| {
+                    t.unwrap_or_else(|| {
+                        self.emit_fill(&LV::Lit(identity), shape, lo, Cadence::Const)
+                    })
+                });
             self.pop_scope();
             let term = term?;
             acc = self.emit_bin(combine_op, acc, term)?;
@@ -2373,6 +3583,9 @@ impl<'m> TapeBuilder<'m> {
         if let Some(i) = self.param_names.iter().position(|p| p == name) {
             return Ok(LV::Param(tape_index(i, "parameters")?));
         }
+        if let Some(lv) = self.forcing_read(name)? {
+            return Ok(lv);
+        }
         bail_tape!("wholesale: unresolved symbol (forcing/NaN sentinel?) `{name}`")
     }
 
@@ -2401,7 +3614,7 @@ impl<'m> TapeBuilder<'m> {
                 let mut acc = self.lower_wholesale(first)?;
                 for a in rest {
                     let v = self.lower_wholesale(a)?;
-                    acc = self.emit_bin(BinCode::of(op), acc, v)?;
+                    acc = self.emit_bin_wholesale(BinCode::of(op), acc, v)?;
                 }
                 Ok(acc)
             }
@@ -2429,7 +3642,7 @@ impl<'m> TapeBuilder<'m> {
                 };
                 let av = self.lower_wholesale(a)?;
                 let bv = self.lower_wholesale(b)?;
-                self.emit_bin(BinCode::Atan2, av, bv)
+                self.emit_bin_wholesale(BinCode::Atan2, av, bv)
             }
             "==" | "!=" | "<" | "<=" | ">" | ">=" => {
                 if node.args.len() != 2 {
@@ -2437,7 +3650,7 @@ impl<'m> TapeBuilder<'m> {
                 }
                 let av = self.lower_wholesale(&node.args[0])?;
                 let bv = self.lower_wholesale(&node.args[1])?;
-                self.emit_bin(BinCode::of(op), av, bv)
+                self.emit_bin_wholesale(BinCode::of(op), av, bv)
             }
             "ifelse" => {
                 if node.args.len() != 3 {
@@ -2461,7 +3674,7 @@ impl<'m> TapeBuilder<'m> {
                     Some(_) => {
                         let a = self.lower_wholesale(&node.args[1])?;
                         let b = self.lower_wholesale(&node.args[2])?;
-                        self.emit_select(cond, a, b)
+                        self.emit_select_wholesale(cond, a, b)
                     }
                 }
             }
@@ -2495,11 +3708,304 @@ impl<'m> TapeBuilder<'m> {
                 self.lower_wholesale_op_named(fn_name, node)
             }
             "fn" => self.lower_wholesale_closed_fn(node),
+            crate::precision_infer::MARKER_OP => {
+                let (arg, _precision) = self.marker_operand(node)?;
+                self.lower_wholesale(arg)
+            }
+            "reshape" => self.lower_wholesale_reshape(node),
+            "transpose" => self.lower_wholesale_transpose(node),
+            "concat" => self.lower_wholesale_concat(node),
             "index" => self.lower_wholesale_index(node),
             "faq" => self.lower_wholesale_aggregate(node),
             "makearray" => self.lower_wholesale_makearray(node),
+            "polygon_intersection_area" => self.lower_poly_area(node, None),
+            "intersect_polygon" => self.lower_intersect_polygon(node),
             other => bail_tape!("wholesale: unsupported op `{other}`"),
         }
+    }
+
+    /// `combine` on the wholesale path: two arrays of different shapes
+    /// broadcast first (`broadcast_binary` — esm-spec §4.3.4's positional
+    /// rule for operands with no declared index sets: left-aligned, the
+    /// lower rank padded with TRAILING singletons). Shapes that do not
+    /// broadcast give the oracle's `NaN` array.
+    fn emit_bin_wholesale(&mut self, code: BinCode, a: LV, b: LV) -> LResult<LV> {
+        if let (Some((sa, _)), Some((sb, _))) = (self.lv_box(&a), self.lv_box(&b))
+            && sa != sb
+        {
+            if sa.contains(&0) || sb.contains(&0) {
+                bail_tape!("wholesale: broadcast of an empty array");
+            }
+            let target = broadcast_shape(&sa, &sb);
+            if target.contains(&0) {
+                // `broadcast_binary`'s NaN sentinel, over the target with the
+                // clashing extent read as 1.
+                let nan_shape: DimU = target.iter().map(|&d| d.max(1)).collect();
+                let ones = DimI::from_elem(1, nan_shape.len());
+                return Ok(self.emit_fill(&LV::Lit(f64::NAN), &nan_shape, &ones, Cadence::Const));
+            }
+            let a = self.broadcast_to(a, &target)?;
+            let b = self.broadcast_to(b, &target)?;
+            return self.emit_bin(code, a, b);
+        }
+        self.emit_bin(code, a, b)
+    }
+
+    /// `eval_ifelse` under an ARRAY condition: the condition and both arms
+    /// broadcast to one target, then select element by element.
+    fn emit_select_wholesale(&mut self, cond: LV, a: LV, b: LV) -> LResult<LV> {
+        let mut target: SmallVec<[usize; 4]> = SmallVec::new();
+        for v in [&cond, &a, &b] {
+            if let Some((sh, _)) = self.lv_box(v) {
+                target = broadcast_shape(&target, &sh).into();
+            }
+        }
+        if target.contains(&0) {
+            bail_tape!("wholesale: `ifelse` operands whose shapes do not broadcast");
+        }
+        let cond = self.broadcast_to(cond, &target)?;
+        let a = self.broadcast_to(a, &target)?;
+        let b = self.broadcast_to(b, &target)?;
+        self.emit_select(cond, a, b)
+    }
+
+    /// The body of an observed that DECLARES `shape`, which the oracle
+    /// materializes as `eval(body)` with a scalar filled over `shape`.
+    ///
+    /// Plain [`Self::lower_wholesale`] plus that fill — except that an
+    /// `ifelse` under a runtime SCALAR condition returns ONE of its arms
+    /// verbatim, scalar or array, so the fill belongs inside each arm: both
+    /// arms then carry the declared box and join on one phi. (Filling after
+    /// the join is not expressible: the phi needs one box on both arms.)
+    fn lower_wholesale_shaped(&mut self, e: &Expr, shape: &[usize]) -> LResult<LV> {
+        let ones = DimI::from_elem(1, shape.len());
+        if let Expr::Operator(node) = e
+            && node.op == "ifelse"
+            && node.args.len() == 3
+        {
+            let cond = self.lower_wholesale(&node.args[0])?;
+            if let LV::Lit(c) = cond {
+                let taken = if c != 0.0 {
+                    &node.args[1]
+                } else {
+                    &node.args[2]
+                };
+                return self.lower_wholesale_shaped(taken, shape);
+            }
+            if self.lv_box(&cond).is_none() {
+                return self.lower_branchy_ifelse(cond, &node.args[1], &node.args[2], |s, e| {
+                    s.lower_wholesale_shaped(e, shape)
+                });
+            }
+            let a = self.lower_wholesale(&node.args[1])?;
+            let b = self.lower_wholesale(&node.args[2])?;
+            let v = self.emit_select_wholesale(cond, a, b)?;
+            return Ok(v);
+        }
+        let v = self.lower_wholesale(e)?;
+        Ok(if self.lv_box(&v).is_none() {
+            self.emit_fill(&v, shape, &ones, Cadence::Const)
+        } else {
+            v
+        })
+    }
+
+    /// `v` broadcast to the whole-array box `target` (origin all-1s) under
+    /// the trailing-pad rule: a scalar stays a scalar (every instruction
+    /// broadcasts it), an array of that shape stays as it is, and any other
+    /// array is gathered — each of its axes of extent 1 held at its one
+    /// element, each padded axis broadcast.
+    fn broadcast_to(&mut self, v: LV, target: &[usize]) -> LResult<LV> {
+        let Some((shape, _)) = self.lv_box(&v) else {
+            return Ok(v);
+        };
+        if shape.as_slice() == target {
+            return Ok(v);
+        }
+        if shape.len() > target.len() {
+            bail_tape!("wholesale: broadcast to a lower rank");
+        }
+        let mut fixed_desc: SmallVec<[(usize, usize); 4]> = SmallVec::new();
+        let mut mapped_src: SmallVec<[usize; 4]> = SmallVec::new();
+        let mut flags: SmallVec<[bool; 4]> = SmallVec::new();
+        let mut segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> = SmallVec::new();
+        for (a, &n) in target.iter().enumerate() {
+            let mut one = SmallVec::new();
+            one.push((0usize, n, 0usize));
+            segs.push(one);
+            match shape.get(a) {
+                Some(&m) if m == n => {
+                    mapped_src.push(a);
+                    flags.push(true);
+                }
+                Some(&1) => {
+                    fixed_desc.push((a, 0));
+                    flags.push(false);
+                }
+                Some(_) => bail_tape!("wholesale: shapes that do not broadcast"),
+                None => flags.push(false),
+            }
+        }
+        let ones = DimI::from_elem(1, target.len());
+        Ok(self.emit_gather(&v, fixed_desc, &mapped_src, flags, segs, target, &ones))
+    }
+
+    /// `eval_transpose`: the operand's axes permuted (`perm`, default the
+    /// reversal) — one [`Instr::Gather`] with the permutation and no shift.
+    fn lower_wholesale_transpose(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
+        let Some(arg0) = node.args.first() else {
+            return Ok(LV::Lit(f64::NAN));
+        };
+        let v = self.lower_wholesale(arg0)?;
+        let Some((shape, _)) = self.lv_box(&v) else {
+            return Ok(v);
+        };
+        let nd = shape.len();
+        let perm: SmallVec<[usize; 4]> = match &node.perm {
+            Some(p) => {
+                let mut seen = SmallVec::<[bool; 4]>::from_elem(false, nd);
+                let mut out = SmallVec::new();
+                for &x in p {
+                    let ok = x >= 0 && (x as usize) < nd && !seen[x as usize];
+                    if !ok {
+                        return Ok(LV::Lit(f64::NAN)); // `is_valid_permutation`
+                    }
+                    seen[x as usize] = true;
+                    out.push(x as usize);
+                }
+                if out.len() != nd {
+                    return Ok(LV::Lit(f64::NAN));
+                }
+                out
+            }
+            None => (0..nd).rev().collect(),
+        };
+        Ok(self.emit_permute(&v, &shape, &perm))
+    }
+
+    /// Output axis `j` of the result reads source axis `perm[j]`.
+    fn emit_permute(&mut self, v: &LV, shape: &[usize], perm: &[usize]) -> LV {
+        if perm.iter().enumerate().all(|(j, &p)| j == p) {
+            return v.clone();
+        }
+        let out_shape: DimU = perm.iter().map(|&p| shape[p]).collect();
+        let segs = out_shape
+            .iter()
+            .map(|&n| {
+                let mut one = SmallVec::new();
+                one.push((0usize, n, 0usize));
+                one
+            })
+            .collect();
+        let ones = DimI::from_elem(1, out_shape.len());
+        let flags = SmallVec::from_elem(true, out_shape.len());
+        self.emit_gather(v, SmallVec::new(), perm, flags, segs, &out_shape, &ones)
+    }
+
+    /// `eval_reshape`, which is COLUMN-major: flatten in column-major order,
+    /// refill the new shape in column-major order. On row-major slots that is
+    /// an axis reversal, a row-major [`Instr::Reshape`] to the reversed target,
+    /// and an axis reversal back (a reversal of a rank-1 box is nothing).
+    fn lower_wholesale_reshape(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
+        let Some(arg0) = node.args.first() else {
+            return Ok(LV::Lit(f64::NAN));
+        };
+        let v = self.lower_wholesale(arg0)?;
+        let target_raw = node.shape.clone().unwrap_or_default();
+        if target_raw.is_empty() || target_raw.iter().any(|&d| d < 1) {
+            bail_tape!("wholesale: `reshape` to an empty or rank-0 shape");
+        }
+        let target: DimU = target_raw.iter().map(|&d| d as usize).collect();
+        let n_target: usize = target.iter().product();
+        let ones = DimI::from_elem(1, target.len());
+        let Some((shape, _)) = self.lv_box(&v) else {
+            // A scalar is one element.
+            return Ok(if n_target == 1 {
+                self.emit_fill(&v, &target, &ones, Cadence::Const)
+            } else {
+                LV::Lit(f64::NAN)
+            });
+        };
+        if shape.iter().product::<usize>() != n_target {
+            return Ok(LV::Lit(f64::NAN)); // the element count disagrees
+        }
+        if shape == target {
+            return Ok(v);
+        }
+        let rev_src: SmallVec<[usize; 4]> = (0..shape.len()).rev().collect();
+        let flipped = self.emit_permute(&v, &shape, &rev_src);
+        let rev_target: DimU = target.iter().rev().copied().collect();
+        let sec = self.placement(self.lv_cadence(&flipped));
+        let out = self.new_slot(&rev_target, &ones, false, sec);
+        let instr = Instr::Reshape {
+            src: self.src_of(&flipped),
+            out,
+        };
+        self.emit(instr, sec);
+        let rev_out: SmallVec<[usize; 4]> = (0..target.len()).rev().collect();
+        Ok(self.emit_permute(&LV::Arr(out), &rev_target, &rev_out))
+    }
+
+    /// `eval_concat`: the operands joined along `axis` (a scalar is a
+    /// one-element array) — one [`Instr::Assemble`], each operand written
+    /// over its slab of the result. Operands `ndarray::concatenate` would
+    /// refuse give the oracle's `NaN`.
+    fn lower_wholesale_concat(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
+        let axis = node.axis.unwrap_or(0);
+        let mut parts: Vec<(LV, DimU)> = Vec::with_capacity(node.args.len());
+        for a in &node.args {
+            let v = self.lower_wholesale(a)?;
+            let shape = match self.lv_box(&v) {
+                Some((sh, _)) => sh,
+                None => DimU::from_elem(1, 1),
+            };
+            parts.push((v, shape));
+        }
+        let Some((_, first)) = parts.first() else {
+            return Ok(LV::Lit(f64::NAN));
+        };
+        let nd = first.len();
+        if axis < 0 || axis as usize >= nd {
+            return Ok(LV::Lit(f64::NAN));
+        }
+        let ax = axis as usize;
+        let mut out_shape = first.clone();
+        out_shape[ax] = 0;
+        for (_, sh) in &parts {
+            let fits = sh.len() == nd && (0..nd).all(|d| d == ax || sh[d] == first[d]);
+            if !fits {
+                return Ok(LV::Lit(f64::NAN));
+            }
+            out_shape[ax] += sh[ax];
+        }
+        if out_shape.contains(&0) {
+            bail_tape!("wholesale: `concat` into an empty array");
+        }
+        let mut spec_parts: Vec<(Operand, u32)> = Vec::with_capacity(parts.len());
+        let mut want = Cadence::Const;
+        let mut at = 0usize;
+        for (v, sh) in &parts {
+            if sh[ax] == 0 {
+                continue;
+            }
+            let mut dest_lo = DimU::from_elem(0, nd);
+            dest_lo[ax] = at;
+            at += sh[ax];
+            want = want.max(self.lv_cadence(v));
+            let region = tape_index(self.regions.len(), "makearray regions")?;
+            self.regions.push(RegionSpec {
+                dest_lo,
+                shape: sh.clone(),
+            });
+            spec_parts.push((self.op_of(v), region));
+        }
+        let table = tape_index(self.assemblies.len(), "makearray assemblies")?;
+        self.assemblies.push(AssembleSpec { parts: spec_parts });
+        let sec = self.placement(want);
+        let ones = DimI::from_elem(1, nd);
+        let out = self.new_slot(&out_shape, &ones, false, sec);
+        self.emit(Instr::Assemble { table, out }, sec);
+        Ok(LV::Arr(out))
     }
 
     /// `eval_index` mirror (wholesale): LITERAL 1-based indices into a known
@@ -2516,15 +4022,10 @@ impl<'m> TapeBuilder<'m> {
             if idx_args.is_empty() {
                 return Ok(basev);
             }
-            // Subscripts on a 0-D value are a fail-closed fault
-            // (`E_TREEWALK_INDEX_ON_SCALAR`), and only the per-cell oracle can
-            // raise one — the tape has no diagnostic channel. Bail to it, as
-            // the out-of-range const-array arms do, so the refusal does not
-            // depend on which backend ran.
-            bail_tape!(
-                "wholesale: index base is a scalar but has {} subscripts",
-                idx_args.len()
-            );
+            // Subscripts on a 0-D value: the fail-closed
+            // `E_TREEWALK_INDEX_ON_SCALAR`, where the oracle is certain to
+            // raise it.
+            return self.index_on_scalar(base, &basev, idx_args.len(), None);
         };
         if origin.iter().any(|&o| o != 1) {
             bail_tape!("wholesale: index base is not origin-1");
@@ -2546,15 +4047,34 @@ impl<'m> TapeBuilder<'m> {
         let mut in_bounds = true;
         for (d, &one_based) in raw.iter().enumerate() {
             let dim = shape[d] as i64;
+            if const_base {
+                // §5.5.5, as `index_into` resolves it: the declared policy of
+                // each dim in turn, and the first one out of range with none
+                // is the fault (the gather reads `NaN`).
+                let name = match base {
+                    Expr::Variable(v) => v.as_str(),
+                    _ => INLINE_CONST_NAME,
+                };
+                let policy = if dim == 0 {
+                    BoundaryKind::Error
+                } else {
+                    self.const_arrays.boundary(name, d)
+                };
+                match resolve_const_index(policy, one_based, dim) {
+                    Some(i0) => idx.push(i0),
+                    None => {
+                        self.note_fault(None, const_oob_message(name, one_based, dim, d))?;
+                        return Ok(LV::Lit(f64::NAN));
+                    }
+                }
+                continue;
+            }
             if one_based < 1 || one_based > dim {
                 in_bounds = false;
             }
             idx.push((one_based - 1).max(0) as usize);
         }
         if !in_bounds {
-            if const_base {
-                bail_tape!("index: const-array gather out of range (§5.5.5)");
-            }
             return Ok(LV::Lit(0.0));
         }
         let cad = self.lv_cadence(&basev);
@@ -2570,12 +4090,16 @@ impl<'m> TapeBuilder<'m> {
     /// per-cell (fallback), everything else goes through the same overlay
     /// entry as the compiled rules.
     fn lower_wholesale_aggregate(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
+        let level = self.enter_fault_level(None);
+        let v = self.lower_wholesale_aggregate_in_level(node);
+        self.leave_fault_level(level);
+        v
+    }
+
+    fn lower_wholesale_aggregate_in_level(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
         let Some(spec) = faq_spec(node) else {
             return Ok(LV::Lit(f64::NAN)); // eval_faq's missing-body sentinel
         };
-        if spec.has_drivable_overlap() {
-            bail_tape!("aggregate: carries an overlap join gate that drives enumeration");
-        }
         let static_ranges = static_contract_ranges(&spec.contract_dims);
         if let Some(scan) = detect_prefix_scan(
             spec.idx_names,
@@ -2592,6 +4116,21 @@ impl<'m> TapeBuilder<'m> {
                 &spec.contract_names[0],
                 spec.body,
                 spec.reduce,
+            )?;
+            return Ok(self.reorigin_to_one(v));
+        }
+        // A join gate drives the contraction (`eval_faq` resolves its gates
+        // for everything but a prefix scan): the tuple-list form.
+        if spec.has_drivable_overlap() {
+            let v = self.lower_tuple_contraction(
+                spec.idx_names,
+                &spec.ranges,
+                spec.body,
+                &spec.contract_names,
+                &spec.contract_dims,
+                spec.reduce,
+                spec.filter,
+                spec.join,
             )?;
             return Ok(self.reorigin_to_one(v));
         }
@@ -2623,19 +4162,18 @@ impl<'m> TapeBuilder<'m> {
     /// names as axes in that same order, so the two fold the same terms in the
     /// same association.
     ///
-    /// Two shapes stay per-cell:
-    /// * a `filter`, because the oracle SKIPS an excluded tuple rather than
-    ///   combining the identity into it (`continue`, not `acc ⊕ 0̄`) — and the
-    ///   two differ on signed zero and on NaN, so a mask-to-identity lowering
-    ///   would not be bit-identical;
-    /// * a boolean reduction (`or`/`and`), which has no binary kernel.
+    /// A `filter` is lowered as a SKIP: the oracle skips an excluded tuple
+    /// (`continue`, not `acc ⊕ 0̄`), so an excluded term is replaced by a value
+    /// `v` with `acc ⊕ v == acc`, bit for bit, for EVERY accumulator: `-0.0`
+    /// for a sum (`+0.0` would turn a `-0.0` accumulator positive), and the
+    /// identity for the others — `acc · 1` is exact, and a `max`/`min`
+    /// accumulator is never `NaN` (the kernels ignore a `NaN` operand), so
+    /// `max(acc, -∞)` is `acc`. The fold then combines the oracle's terms in
+    /// the oracle's order and nothing else.
+    ///
+    /// A boolean reduction (`or`/`and`) stays per-cell: it has no binary
+    /// kernel.
     fn lower_scalar_reduction(&mut self, spec: &ArrayOpSpec) -> LResult<LV> {
-        if spec.filter.is_some() {
-            bail_tape!(
-                "reduction: rank-0 reduction with a filter (the oracle SKIPS excluded \
-                 tuples; a mask-to-identity fold is not bit-identical)"
-            );
-        }
         let Some(combine_op) = reduce_combine_op(spec.reduce) else {
             bail_tape!("reduction: boolean reduction (or/and) has no combine kernel");
         };
@@ -2658,7 +4196,22 @@ impl<'m> TapeBuilder<'m> {
                     lo.push(*l);
                     shape.push((h - l + 1).max(0) as usize);
                 }
-                other => bail_tape!("reduction: non-static contraction dim ({other:?})"),
+                ContractDim::Derived { from_faq } if self.ring_extent(from_faq).is_some() => {
+                    lo.push(1);
+                    shape.push(self.ring_extent(from_faq).unwrap_or(0).max(0) as usize);
+                }
+                _ => {
+                    return self.lower_tuple_contraction(
+                        spec.idx_names,
+                        &spec.ranges,
+                        spec.body,
+                        &spec.contract_names,
+                        &spec.contract_dims,
+                        spec.reduce,
+                        spec.filter,
+                        None,
+                    );
+                }
             }
         }
         // An empty window enumerates no tuples: the fold is the identity.
@@ -2666,7 +4219,8 @@ impl<'m> TapeBuilder<'m> {
             return Ok(LV::Lit(identity));
         }
         // The body over the contraction box: the contracted names ARE its
-        // axis symbols, in `faq_spec`'s (sorted) order.
+        // axis symbols, in `faq_spec`'s (sorted) order. The filter first: the
+        // oracle tests it before the body at every tuple.
         self.push_scope();
         let bx = LBox {
             syms: &spec.contract_names,
@@ -2674,16 +4228,55 @@ impl<'m> TapeBuilder<'m> {
             shape: shape.clone(),
             cnames: &[],
             cvals: SmallVec::new(),
+            tuple: 0,
+            visit: SmallVec::new(),
         };
-        let v = self.lower_expr(spec.body, &bx);
+        let lowered = (|| -> LResult<Option<LV>> {
+            let keep = match spec.filter {
+                None => None,
+                Some(f) => {
+                    let fv = self.lower_expr(f, &bx)?;
+                    match fv {
+                        // No tuple is kept: the body never runs.
+                        LV::Lit(0.0) => return Ok(None),
+                        LV::Lit(_) => None,
+                        LV::State(_) | LV::Obs { .. } if self.lv_box(&fv).is_some() => {
+                            bail_tape!("reduction: filter reduced to a bare whole-array view")
+                        }
+                        fv => Some(fv),
+                    }
+                }
+            };
+            // A kept-only body is evaluated by the oracle at kept tuples alone.
+            if keep.is_some() {
+                self.lazy_depth += 1;
+            }
+            let v = self.lower_expr(spec.body, &bx);
+            if keep.is_some() {
+                self.lazy_depth -= 1;
+            }
+            let v = v?;
+            // Same bail as `lower_faq`: the oracle scalarizes a bare
+            // whole-array body (`eval(body).as_scalar()` ⇒ NaN), which this
+            // box lowering does not reproduce.
+            if matches!(&v, LV::State(_) | LV::Obs { .. }) && self.lv_box(&v).is_some() {
+                bail_tape!("reduction: body reduced to a bare whole-array view");
+            }
+            Ok(Some(match keep {
+                None => v,
+                Some(fv) => {
+                    let skip = match spec.reduce {
+                        ReduceKind::Sum => -0.0,
+                        other => other.identity(),
+                    };
+                    self.emit_select(fv, v, LV::Lit(skip))?
+                }
+            }))
+        })();
         self.pop_scope();
-        let v = v?;
-        // Same bail as `lower_faq`: the oracle scalarizes a bare whole-array
-        // body (`eval(body).as_scalar()` ⇒ NaN), which this box lowering does
-        // not reproduce.
-        if matches!(&v, LV::State(_) | LV::Obs { .. }) && self.lv_box(&v).is_some() {
-            bail_tape!("reduction: body reduced to a bare whole-array view");
-        }
+        let Some(v) = lowered? else {
+            return Ok(LV::Lit(identity));
+        };
         // A body constant over the window still contributes one term PER
         // tuple, so broadcast it over the box and fold that.
         let src = match self.lv_box(&v) {
@@ -2754,9 +4347,13 @@ impl<'m> TapeBuilder<'m> {
             shape,
             cnames: &[],
             cvals: SmallVec::new(),
+            tuple: 0,
+            visit: SmallVec::new(),
         };
-        let v = self.lower_makearray(node, &bx)?;
-        Ok(self.reorigin_to_one(v))
+        let level = self.enter_fault_level(None);
+        let v = self.lower_makearray(node, &bx);
+        self.leave_fault_level(level);
+        Ok(self.reorigin_to_one(v?))
     }
 
     /// A forward prefix scan (esm-spec §4.3.1): the term over the whole
@@ -2792,7 +4389,8 @@ impl<'m> TapeBuilder<'m> {
             .map(|(l, h)| (h - l + 1).max(0) as usize)
             .collect();
         if full_shape.contains(&0) {
-            bail_tape!("scan: empty output box (per-cell path)");
+            // No cell to scan: the empty array.
+            return Ok(self.emit_zero_array(&full_shape, &full_lo));
         }
         let txn = self.sub_txn();
         let mut syms: Vec<String> = idx_names.to_vec();
@@ -2804,6 +4402,8 @@ impl<'m> TapeBuilder<'m> {
             shape: full_shape.clone(),
             cnames: &[],
             cvals: SmallVec::new(),
+            tuple: 0,
+            visit: SmallVec::new(),
         };
         let term = self.lower_expr(body, &bx);
         self.pop_scope();
@@ -2900,6 +4500,8 @@ impl<'m> TapeBuilder<'m> {
                 shape: step_shape.clone(),
                 cnames: &cnames,
                 cvals: SmallVec::from_slice(&[i, i]),
+                tuple: 0,
+                visit: SmallVec::new(),
             };
             let term = self.lower_expr(body, &bx);
             self.pop_scope();
@@ -2979,14 +4581,21 @@ impl<'m> TapeBuilder<'m> {
             _ => bail_tape!("ifelse: branch value boxes differ under a runtime scalar condition"),
         };
         let phi = self.new_slot(&shape, &origin, scalar, self.home);
-        tbuf.push(Instr::Copy {
-            a: self.op_of(&tv),
-            out: phi,
-        });
-        fbuf.push(Instr::Copy {
-            a: self.op_of(&fv),
-            out: phi,
-        });
+        let prec = crate::precision::active();
+        tbuf.push((
+            Instr::Copy {
+                a: self.op_of(&tv),
+                out: phi,
+            },
+            prec,
+        ));
+        fbuf.push((
+            Instr::Copy {
+                a: self.op_of(&fv),
+                out: phi,
+            },
+            prec,
+        ));
         let jmp = Instr::JmpIfZero {
             cond: self.op_of(&cond),
             n_true: tbuf.len() as u32,
@@ -2994,11 +4603,26 @@ impl<'m> TapeBuilder<'m> {
         };
         let sec = self.home;
         self.emit(jmp, sec);
-        for i in tbuf {
-            self.emit(i, sec);
+        for (i, p) in tbuf.into_iter().chain(fbuf) {
+            self.emit_tagged(i, p, sec);
         }
-        for i in fbuf {
-            self.emit(i, sec);
+        // Each Copy into the join carried its branch's build-time value, the
+        // false branch's last. Which branch runs is a runtime question, so
+        // the join is build-time data only when the two agree bit for bit.
+        let agree = match (&tv, &fv) {
+            (LV::Arr(a), LV::Arr(b)) => match (self.known_values(*a), self.known_values(*b)) {
+                (Some(x), Some(y)) => {
+                    x.len() == y.len()
+                        && x.iter()
+                            .zip(y.iter())
+                            .all(|(p, q)| p.to_bits() == q.to_bits())
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if !agree {
+            self.known.remove(&phi);
         }
         Ok(if scalar {
             LV::Scalar(phi)
@@ -3055,6 +4679,7 @@ pub(super) fn build_tape_program(
     compiled: &ArrayCompiled,
     const_names: &HashSet<String>,
     seg_invariant_names: &HashSet<String>,
+    forcing: &ForcingInputs<'_>,
     // Step 4: run the kernel-fusion post-pass with the given superop
     // configuration (`None` = the unfused program, bitwise-identical
     // results — the arm `build_tape_opts` gives the fused-vs-unfused tests).
@@ -3088,6 +4713,7 @@ pub(super) fn build_tape_program(
         obs_tier,
         const_arrays,
         compiled.precision.is_f32(),
+        forcing,
     );
     b.inline_params = Some(&compiled.inline_param_arrays);
 
@@ -3102,7 +4728,13 @@ pub(super) fn build_tape_program(
             status: RuleStatus::Taped,
         });
         let txn = b.txn();
-        let lowered = b.lower_observed_rule(rule);
+        // The rule's own working precision, as `materialize_observeds_pass`
+        // arms it: every instruction it emits is tagged with it.
+        let _rule_precision = crate::precision::has_variable_overrides()
+            .then(|| crate::precision::enter(crate::precision::of_variable(&name)));
+        let lowered = b
+            .lower_observed_rule(rule)
+            .and_then(|v| b.flush_rule_fault().map(|()| v));
         match lowered {
             Ok(obs_val) => {
                 b.obs_defined.insert(name, obs_val);
@@ -3143,7 +4775,7 @@ pub(super) fn build_tape_program(
             status: RuleStatus::Taped,
         });
         let txn = b.txn();
-        match b.lower_rhs_rule(rule) {
+        match b.lower_rhs_rule(rule).and_then(|()| b.flush_rule_fault()) {
             Ok(()) => {}
             Err(bail) => {
                 b.rollback(txn);
@@ -3244,8 +4876,9 @@ impl<'m> TapeBuilder<'m> {
         if self.param_names.iter().any(|p| p == name) {
             return Some(DimU::new());
         }
-        // Forcing / the NaN sentinel: shape unknowable without the runtime.
-        None
+        // A forcing read compiles against the box `forcing_read` loads; any
+        // other name is the NaN sentinel, whose shape nothing pins.
+        self.forcing_shapes.get(name).cloned()
     }
 
     /// Broadcast two operand shapes the way `combine` does for the shapes the
@@ -3310,6 +4943,8 @@ impl<'m> TapeBuilder<'m> {
                 Self::broadcast_shape(Self::broadcast_shape(Some(c), Some(t)), Some(f))
             }
             "D" => Some(DimU::new()), // the NaN sentinel
+            // The fused geometry leaf is a scalar area (or the NaN sentinel).
+            "polygon_intersection_area" => Some(DimU::new()),
             "const" => match eval_const(node) {
                 Value::Scalar(_) => Some(DimU::new()),
                 Value::Array(a) => Some(a.shape().iter().copied().collect()),
@@ -3370,6 +5005,33 @@ impl<'m> TapeBuilder<'m> {
         self.scope_frames.clear();
         self.branch_bufs.clear();
         self.hoist_journal.clear();
+        self.fault_first = None;
+        self.fault_seq = 0;
+        self.fault_prefix.clear();
+        self.lazy_depth = 0;
+    }
+
+    /// Emit the lowered rule's first fault (if any) as one [`Instr::Fault`],
+    /// AHEAD of the rule's CONST-section instructions. It reads nothing, and
+    /// the CONST section runs first, so it latches before anything else of
+    /// this rule — which is where the oracle, walking the rule cell by cell,
+    /// latches its first fault — and after every earlier rule's.
+    fn flush_rule_fault(&mut self) -> LResult<()> {
+        let Some((_, msg)) = self.fault_first.take() else {
+            return Ok(());
+        };
+        let fault = tape_index(self.faults.len(), "faults")?;
+        self.faults.push(msg);
+        let instr = (Instr::Fault { fault }, crate::precision::active());
+        let stream = &mut self.streams[Cadence::Const as usize];
+        match stream.last_mut() {
+            Some(c) if c.rule == self.cur_rule => c.instrs.insert(0, instr),
+            _ => stream.push(Chunk {
+                rule: self.cur_rule,
+                instrs: vec![instr],
+            }),
+        }
+        Ok(())
     }
 
     fn end_rule(&mut self) {
@@ -3392,6 +5054,12 @@ impl<'m> TapeBuilder<'m> {
             assemblies: self.assemblies.len(),
             const_data: self.const_data.len(),
             interp_tables: self.interp_tables.len(),
+            geoms: self.geoms.len(),
+            index_gathers: self.index_gathers.len(),
+            rings: self.rings.len(),
+            gather_tables: self.gather_tables.len(),
+            seg_tables: self.seg_tables.len(),
+            faults: self.faults.len(),
             dy_writes: self.dy_writes.len(),
             stream_lens: [
                 self.streams[0].len(),
@@ -3399,6 +5067,7 @@ impl<'m> TapeBuilder<'m> {
                 self.streams[2].len(),
             ],
             hoist_journal: self.hoist_journal.len(),
+            forcing_journal: self.forcing_journal.len(),
         }
     }
 
@@ -3410,6 +5079,15 @@ impl<'m> TapeBuilder<'m> {
         self.assemblies.truncate(txn.assemblies);
         self.const_data.truncate(txn.const_data);
         self.interp_tables.truncate(txn.interp_tables);
+        self.geoms.truncate(txn.geoms);
+        self.index_gathers.truncate(txn.index_gathers);
+        self.rings.truncate(txn.rings);
+        self.gather_tables.truncate(txn.gather_tables);
+        self.seg_tables.truncate(txn.seg_tables);
+        let n_slots = self.slots.len() as SlotId;
+        self.known.retain(|s, _| *s < n_slots);
+        self.tuple_frames.clear();
+        self.faults.truncate(txn.faults);
         self.dy_writes.truncate(txn.dy_writes);
         for s in 0..3 {
             let stream = &mut self.streams[s];
@@ -3422,8 +5100,21 @@ impl<'m> TapeBuilder<'m> {
             let key = self.hoist_journal.pop().expect("journal entry");
             self.hoist.remove(&key);
         }
+        self.rollback_forcing_loads(txn.forcing_journal);
         self.scope_frames.clear();
         self.branch_bufs.clear();
+        self.fault_first = None;
+        self.fault_prefix.clear();
+        self.lazy_depth = 0;
+    }
+
+    /// Forget the forcing loads recorded since `mark`: their instructions were
+    /// just discarded.
+    fn rollback_forcing_loads(&mut self, mark: usize) {
+        while self.forcing_journal.len() > mark {
+            let ix = self.forcing_journal.pop().expect("journal entry");
+            self.forcing_loaded.remove(&ix);
+        }
     }
 
     fn sub_txn(&self) -> SubTxn {
@@ -3438,9 +5129,16 @@ impl<'m> TapeBuilder<'m> {
             assemblies: self.assemblies.len(),
             const_data: self.const_data.len(),
             interp_tables: self.interp_tables.len(),
+            geoms: self.geoms.len(),
+            index_gathers: self.index_gathers.len(),
+            gather_tables: self.gather_tables.len(),
+            seg_tables: self.seg_tables.len(),
             streams: [stream(0), stream(1), stream(2)],
             branch_len: self.branch_bufs.last().map(Vec::len),
             hoist_journal: self.hoist_journal.len(),
+            forcing_journal: self.forcing_journal.len(),
+            fault_first: self.fault_first.clone(),
+            fault_seq: self.fault_seq,
         }
     }
 
@@ -3452,6 +5150,12 @@ impl<'m> TapeBuilder<'m> {
         self.assemblies.truncate(txn.assemblies);
         self.const_data.truncate(txn.const_data);
         self.interp_tables.truncate(txn.interp_tables);
+        self.geoms.truncate(txn.geoms);
+        self.index_gathers.truncate(txn.index_gathers);
+        self.gather_tables.truncate(txn.gather_tables);
+        self.seg_tables.truncate(txn.seg_tables);
+        let n_slots = self.slots.len() as SlotId;
+        self.known.retain(|s, _| *s < n_slots);
         for (s, &(n_chunks, last_len)) in txn.streams.iter().enumerate() {
             let stream = &mut self.streams[s];
             stream.truncate(n_chunks);
@@ -3466,6 +5170,9 @@ impl<'m> TapeBuilder<'m> {
             let key = self.hoist_journal.pop().expect("journal entry");
             self.hoist.remove(&key);
         }
+        self.rollback_forcing_loads(txn.forcing_journal);
+        self.fault_first = txn.fault_first;
+        self.fault_seq = txn.fault_seq;
     }
 
     /// Lower one observed rule; returns the recorded observed value.
@@ -3500,7 +5207,10 @@ impl<'m> TapeBuilder<'m> {
                     bail_tape!("observed: non-unit-origin output ranges (per-cell path)");
                 }
                 if padded_shape.contains(&0) {
-                    bail_tape!("observed: empty padded box (per-cell path)");
+                    // No cell to evaluate: the empty array the oracle
+                    // materializes.
+                    let ones = DimI::from_elem(1, padded_shape.len());
+                    return Ok(ObsVal::Taped(self.emit_zero_array(&padded_shape, &ones)));
                 }
                 let v = self.lower_faq(
                     output_idx_names,
@@ -3524,9 +5234,10 @@ impl<'m> TapeBuilder<'m> {
                 // prefix-scan sweep) and makearrays. Readers see materialized
                 // arrays at origin 1s. A scalar on a shaped variable fills its
                 // declared box, as the interpreter does.
-                let v = match self.inline_param_literal(var, body) {
-                    Some(a) => self.emit_const_array(&a)?,
-                    None => self.lower_wholesale(body)?,
+                let v = match (self.inline_param_literal(var, body), declared_shape) {
+                    (Some(a), _) => self.emit_const_array(&a)?,
+                    (None, Some(shape)) => self.lower_wholesale_shaped(body, shape)?,
+                    (None, None) => self.lower_wholesale(body)?,
                 };
                 let v = match declared_shape {
                     Some(shape) if self.lv_box(&v).is_none() => {
@@ -3770,14 +5481,18 @@ impl<'m> TapeBuilder<'m> {
                 export: export_ix,
             };
             match chunk {
-                Some(ci) => self.streams[home as usize][ci].instrs.push(instr),
+                Some(ci) => self.streams[home as usize][ci]
+                    .instrs
+                    .push((instr, crate::precision::active())),
                 None => {
                     // The rule emitted nothing into its home stream (its whole
                     // value hoisted to an earlier section): open a chunk now,
                     // AT THE RULE'S OWN PLACE in the stream (see
                     // [`Self::open_home_chunk`]) rather than at the end.
                     let ci = self.open_home_chunk(rule_ord as u32, home);
-                    self.streams[home as usize][ci].instrs.push(instr);
+                    self.streams[home as usize][ci]
+                        .instrs
+                        .push((instr, crate::precision::active()));
                 }
             }
             exports.push((name, slot));
@@ -3867,13 +5582,17 @@ impl<'m> TapeBuilder<'m> {
                     },
                 };
                 match self.rule_home_chunk[rule as usize] {
-                    Some(ci) => self.streams[home as usize][ci].instrs.push(instr),
+                    Some(ci) => self.streams[home as usize][ci]
+                        .instrs
+                        .push((instr, crate::precision::active())),
                     // Same ordering rule as the export itself: the chunk goes
                     // at the rule's own place in the stream, never at the end
                     // (issue #207; see [`Self::open_home_chunk`]).
                     None => {
                         let ci = self.open_home_chunk(rule, home);
-                        self.streams[home as usize][ci].instrs.push(instr);
+                        self.streams[home as usize][ci]
+                            .instrs
+                            .push((instr, crate::precision::active()));
                     }
                 }
                 out
@@ -3889,6 +5608,7 @@ impl<'m> TapeBuilder<'m> {
         fuse: Option<super::fuse::SuperopCfg>,
     ) -> TapeProgram {
         let mut instrs: Vec<Instr> = Vec::new();
+        let mut precision: Vec<Precision> = Vec::new();
         let mut provenance: Vec<u32> = Vec::new();
         let mut n_const = 0u32;
         let mut n_segment = 0u32;
@@ -3896,7 +5616,10 @@ impl<'m> TapeBuilder<'m> {
             let start = instrs.len();
             for chunk in stream.drain(..) {
                 provenance.extend(std::iter::repeat_n(chunk.rule, chunk.instrs.len()));
-                instrs.extend(chunk.instrs);
+                for (i, p) in chunk.instrs {
+                    instrs.push(i);
+                    precision.push(p);
+                }
             }
             let count = (instrs.len() - start) as u32;
             match sec {
@@ -3906,8 +5629,15 @@ impl<'m> TapeBuilder<'m> {
             }
         }
 
+        // Uniform — the precision the program runs under — for every document
+        // without a per-variable element type, and then not stored at all.
+        let build = crate::precision::active();
+        if precision.iter().all(|&p| p == build) {
+            precision.clear();
+        }
         let mut prog = TapeProgram {
             instrs,
+            precision,
             n_const,
             n_segment,
             slots: std::mem::take(&mut self.slots),
@@ -3916,8 +5646,14 @@ impl<'m> TapeBuilder<'m> {
             assemblies: std::mem::take(&mut self.assemblies),
             const_data: std::mem::take(&mut self.const_data),
             interp_tables: std::mem::take(&mut self.interp_tables),
+            geoms: std::mem::take(&mut self.geoms),
+            index_gathers: std::mem::take(&mut self.index_gathers),
+            gather_tables: std::mem::take(&mut self.gather_tables),
+            seg_tables: std::mem::take(&mut self.seg_tables),
+            faults: std::mem::take(&mut self.faults),
             state_vars: std::mem::take(&mut self.state_vars),
             obs_reads: std::mem::take(&mut self.obs_reads),
+            forcings: std::mem::take(&mut self.forcings),
             dy_writes: std::mem::take(&mut self.dy_writes),
             exports,
             rules: std::mem::take(&mut self.rules),
@@ -4009,6 +5745,11 @@ fn color_slab(prog: &mut TapeProgram) {
                 | Instr::Reduce { .. }
                 | Instr::Scan { .. }
                 | Instr::Assemble { .. }
+                | Instr::PolyArea { .. }
+                | Instr::IndexGather { .. }
+                | Instr::TableGather { .. }
+                | Instr::SegReduce { .. }
+                | Instr::Reshape { .. }
         );
         let mut defs_here: SmallVec<[SlotId; 2]> = SmallVec::new();
         prog.instrs[i].for_each_def(&prog.fused, |o| {

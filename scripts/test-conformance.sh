@@ -1117,7 +1117,7 @@ INLINE_TESTS_RUNNER="$SCRIPT_DIR/run-inline-tests-conformance.py"
 # Every tier whose manifest declares `"runner": "inline_tests"`. Listed
 # explicitly rather than globbed: a tier appears in the gate because someone put
 # it there, and a manifest that lands without a stage should be noticed.
-INLINE_TESTS_TIERS=(broadcast_alignment scalar_operator_semantics)
+INLINE_TESTS_TIERS=(broadcast_alignment scalar_operator_semantics faq_pointwise_filter)
 
 run_inline_tests_conformance_self_test() {
     local rc=0 tier manifest
@@ -1233,8 +1233,8 @@ run_inline_tests_interpreter_julia()  { _run_inline_tests_stage julia interprete
 run_inline_tests_interpreter_rust()   { _run_inline_tests_stage rust interpreter; }
 run_inline_tests_interpreter_python() { _run_inline_tests_stage python interpreter; }
 
-# `native` is the strict default, and every fixture of both tiers BUILDS under
-# it today, so this stage additionally asserts that none of them refuses.
+# `native` is the strict default, and every fixture of every tier here BUILDS
+# under it today, so this stage additionally asserts that none of them refuses.
 run_inline_tests_native_julia()  { _run_inline_tests_stage julia native; }
 run_inline_tests_native_rust()   { _run_inline_tests_stage rust native; }
 run_inline_tests_native_python() { _run_inline_tests_stage python native; }

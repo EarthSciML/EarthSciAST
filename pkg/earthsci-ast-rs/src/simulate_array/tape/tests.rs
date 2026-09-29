@@ -23,7 +23,7 @@ fn typed(doc: serde_json::Value) -> EsmFile {
     crate::parse::load_string(&doc.to_string()).expect("fixture document loads")
 }
 
-fn compile(doc: serde_json::Value) -> ArrayCompiled {
+pub(super) fn compile(doc: serde_json::Value) -> ArrayCompiled {
     ArrayCompiled::from_file(&typed(doc)).expect("fixture compiles")
 }
 
@@ -44,7 +44,7 @@ fn all_superops_cfg() -> super::fuse::SuperopCfg {
 }
 
 /// Deterministic pseudo-random state in `[lo, hi)` (xorshift-style LCG).
-fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
+pub(super) fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
     let mut x = seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1);
     (0..n)
         .map(|_| {
@@ -63,7 +63,12 @@ fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
 /// the reference executor (fresh run per state) and the Step 3b fast
 /// executor (one warm taped scratch per program across all of them). Returns
 /// the FUSED program.
-fn ab_check(doc: serde_json::Value, expect_fallbacks: usize, lo: f64, hi: f64) -> TapeProgram {
+pub(super) fn ab_check(
+    doc: serde_json::Value,
+    expect_fallbacks: usize,
+    lo: f64,
+    hi: f64,
+) -> TapeProgram {
     let compiled = compile(doc);
     let (prog, report) = compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()));
     let (prog_uf, report_uf) = compiled.build_tape_opts(&HashSet::new(), None);
@@ -2134,11 +2139,11 @@ fn ab_rank0_reduction_two_contracted_axes() {
     assert_eq!(&src_shape[..], &[n as usize, n as usize]);
 }
 
-/// A rank-0 reduction carrying a §5.3 `filter` stays per-cell on purpose: the
-/// oracle SKIPS an excluded tuple (`continue`), and a mask-to-identity fold is
-/// not bit-identical to skipping. The rule must fall back, not be taped.
+/// A filtered rank-0 reduction tapes: the excluded tuples are SKIPPED (their
+/// term replaced by a value the fold leaves unchanged), so the fold visits
+/// the oracle's terms in the oracle's order.
 #[test]
-fn rank0_reduction_with_a_filter_falls_back() {
+fn ab_rank0_reduction_with_a_filter() {
     let n = 4;
     let doc = json!({
         "esm": "1.1.0",
@@ -2159,20 +2164,8 @@ fn rank0_reduction_with_a_filter_falls_back() {
             ]
         }}
     });
-    // `tot` falls back; `D(s)` still tapes, because the fallback producer's
-    // shape (0-d) is inferable — that is the shape-cascade fix at work.
-    let prog = ab_check(doc, 1, -2.0, 2.0);
-    assert_eq!(opcount(&prog, "Reduce"), 0);
-    let (name, reason) = prog
-        .rules
-        .iter()
-        .find_map(|r| match &r.status {
-            RuleStatus::Fallback(why) => Some((r.name.clone(), why.clone())),
-            RuleStatus::Taped => None,
-        })
-        .expect("one fallback");
-    assert_eq!(name, "tot");
-    assert!(reason.contains("filter"), "{reason}");
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    assert_eq!(reductions(&prog).len(), 1, "one fold");
 }
 
 /// The shape cascade: an observed produced by a rule the tape REFUSES (a
@@ -2696,4 +2689,390 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
     );
     let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
     assert_eq!(bits(&dy), bits(&dy_oracle));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: `Instr::PolyArea` (with its planar broad phase), the build-time
+// `intersect_polygon` ring, and `Instr::IndexGather`.
+// ---------------------------------------------------------------------------
+
+/// A square ring `[x0, x0 + w] × [y0, y0 + h]`, counter-clockwise.
+fn quad(x0: f64, y0: f64, w: f64, h: f64) -> serde_json::Value {
+    json!([[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h]])
+}
+
+/// A regrid-shaped document: `A[i, j] = polygon_intersection_area(src[i],
+/// tgt[j])` over `src × tgt`, and `D(F[j]) = Σ_i A[i, j] · G[i] - F[j]`, so
+/// every element of `A` reaches `dy`.
+fn regrid_doc(
+    manifold: &str,
+    src: Vec<serde_json::Value>,
+    tgt: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let (ns, nt) = (src.len() as i64, tgt.len() as i64);
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_poly_area"},
+        "index_sets": {
+            "s": {"kind": "interval", "size": ns},
+            "t": {"kind": "interval", "size": nt},
+            "v": {"kind": "interval", "size": 4},
+            "c": {"kind": "interval", "size": 2}
+        },
+        "models": {"M": {
+            "variables": {
+                "src": {"type": "unknown", "shape": ["s", "v", "c"]},
+                "tgt": {"type": "unknown", "shape": ["t", "v", "c"]},
+                "A": {"type": "unknown", "shape": ["s", "t"]},
+                "G": {"type": "unknown", "shape": ["s"]},
+                "F": {"type": "unknown", "shape": ["t"]}
+            },
+            "equations": [
+                {"lhs": "src", "rhs": {"op": "const", "args": [], "value": src}},
+                {"lhs": "tgt", "rhs": {"op": "const", "args": [], "value": tgt}},
+                {"lhs": "A", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                    "ranges": {"i": {"from": "s"}, "j": {"from": "t"}},
+                    "expr": {"op": "polygon_intersection_area", "manifold": manifold,
+                             "args": [idx("src", json!("i")), idx("tgt", json!("j"))]}}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                         "expr": {"op": "D", "args": [idx("G", json!("i"))], "wrt": "t"},
+                         "ranges": {"i": {"from": "s"}}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                         "ranges": {"i": {"from": "s"}},
+                         "expr": {"op": "-", "args": [idx("G", json!("i"))]}}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["j"],
+                         "expr": {"op": "D", "args": [idx("F", json!("j"))], "wrt": "t"},
+                         "ranges": {"j": {"from": "t"}}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["j"],
+                         "ranges": {"i": {"from": "s"}, "j": {"from": "t"}},
+                         "expr": {"op": "-", "args": [
+                             {"op": "*", "args": [
+                                 {"op": "index", "args": ["A", "i", "j"]},
+                                 idx("G", json!("i"))]},
+                             {"op": "/", "args": [idx("F", json!("j")), ns]}]}}}
+            ]
+        }}
+    })
+}
+
+/// The one `PolyArea` of a program and its spec.
+fn only_poly_area(prog: &TapeProgram) -> &GeomSpec {
+    assert_eq!(opcount(prog, "PolyArea"), 1, "one geometry instruction");
+    assert_eq!(prog.geoms.len(), 1);
+    let at = prog
+        .instrs
+        .iter()
+        .position(|i| matches!(i, Instr::PolyArea { .. }))
+        .expect("PolyArea emitted");
+    assert_eq!(
+        prog.section_of(at),
+        Cadence::Const,
+        "clipped once per solve"
+    );
+    &prog.geoms[0]
+}
+
+/// The planar broad phase against the dense definition: the fast executor
+/// clips only the candidate pairs, the reference executor clips every pair,
+/// and both must reproduce the interpreter's `dy` bit for bit. The rings
+/// cover what the candidate enumeration has to get right: a strip layout
+/// with a single diagonal band of overlaps, an edge-touching pair (a
+/// candidate whose clip is a zero-area sliver), a corner-touching pair, a
+/// target overlapping nothing, a padded ring, a clockwise ring, and a ring
+/// with a NaN vertex (a box the R*-tree is never shown).
+#[test]
+fn ab_poly_area_planar_broad_phase() {
+    let mut src: Vec<serde_json::Value> = (0..6).map(|k| quad(k as f64, 0.0, 1.0, 1.0)).collect();
+    // Padded: the last vertex repeated in place of the fourth.
+    src.push(json!([[6.0, 0.0], [7.0, 0.0], [7.0, 1.0], [7.0, 1.0]]));
+    // Clockwise.
+    src.push(json!([[8.0, 0.0], [8.0, 1.0], [9.0, 1.0], [9.0, 0.0]]));
+    // A NaN coordinate: the ring's box is not finite.
+    src.push(json!([[10.0, 0.0], [11.0, 0.0], [null, 1.0], [10.0, 1.0]]));
+    let mut tgt: Vec<serde_json::Value> = (0..6)
+        .map(|k| quad(k as f64 + 0.5, 0.25, 1.0, 1.0))
+        .collect();
+    tgt.push(quad(3.0, 1.0, 1.0, 1.0)); // shares an edge with src[3]
+    tgt.push(quad(7.0, 1.0, 1.0, 1.0)); // shares a corner with src[6]
+    tgt.push(quad(40.0, 40.0, 1.0, 1.0)); // overlaps nothing
+    let prog = ab_check(regrid_doc("planar", src, tgt), 0, 0.5, 2.0);
+    let spec = only_poly_area(&prog);
+    assert_eq!(
+        spec.pairs,
+        Some((0, 1)),
+        "the pair axes drive the broad phase"
+    );
+}
+
+/// A null (NaN) literal is not what a document carries; keep the broad-phase
+/// test's NaN ring honest by checking the same pairs without it too.
+#[test]
+fn ab_poly_area_planar_regular_grids() {
+    let src: Vec<serde_json::Value> = (0..5)
+        .flat_map(|i| (0..4).map(move |j| quad(i as f64, j as f64, 1.0, 1.0)))
+        .collect();
+    let tgt: Vec<serde_json::Value> = (0..3)
+        .flat_map(|i| (0..3).map(move |j| quad(1.7 * i as f64 - 0.3, 1.3 * j as f64, 1.7, 1.3)))
+        .collect();
+    let prog = ab_check(regrid_doc("planar", src, tgt), 0, 0.5, 2.0);
+    assert!(only_poly_area(&prog).pairs.is_some());
+}
+
+/// A spherical clip has no broad phase: every pair is clipped, densely, by
+/// the same S2 kernel the interpreter calls.
+#[test]
+fn ab_poly_area_spherical_dense() {
+    let src: Vec<serde_json::Value> = (0..3)
+        .map(|k| quad(10.0 * k as f64, 0.0, 10.0, 10.0))
+        .collect();
+    let tgt: Vec<serde_json::Value> = (0..2)
+        .map(|k| quad(10.0 * k as f64 + 5.0, 5.0, 10.0, 10.0))
+        .collect();
+    let prog = ab_check(regrid_doc("spherical", src, tgt), 0, 0.5, 2.0);
+    assert_eq!(only_poly_area(&prog).pairs, None);
+}
+
+/// The wholesale form — `polygon_intersection_area` of two whole `[V, 2]`
+/// arrays — is one scalar area; a ring drawn by a literal subscript is the
+/// same instruction with a fixed selector, and a same-axis pair (`poly[c]`
+/// against itself) is the dense per-element form.
+#[test]
+fn ab_poly_area_wholesale_and_same_axis() {
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_poly_area_scalar"},
+        "index_sets": {"c": {"kind": "interval", "size": 3},
+                       "v": {"kind": "interval", "size": 4},
+                       "x": {"kind": "interval", "size": 2}},
+        "models": {"M": {
+            "variables": {
+                "a": {"type": "unknown", "shape": ["v", "x"]},
+                "b": {"type": "unknown", "shape": ["v", "x"]},
+                "poly": {"type": "unknown", "shape": ["c", "v", "x"]},
+                "whole": {"type": "unknown"},
+                "picked": {"type": "unknown"},
+                "self_area": {"type": "unknown", "shape": ["c"]},
+                "y": {"type": "unknown", "default": 1.0},
+                "u": {"type": "unknown", "shape": ["c"]}
+            },
+            "equations": [
+                {"lhs": "a", "rhs": {"op": "const", "args": [], "value": quad(0.0, 0.0, 2.0, 2.0)}},
+                {"lhs": "b", "rhs": {"op": "const", "args": [], "value": quad(1.0, 1.0, 2.0, 2.0)}},
+                {"lhs": "poly", "rhs": {"op": "const", "args": [], "value": [
+                    quad(0.0, 0.0, 1.0, 1.0), quad(0.0, 0.0, 2.0, 3.0), quad(5.0, 5.0, 0.5, 0.25)]}},
+                {"lhs": "whole", "rhs": {"op": "polygon_intersection_area", "manifold": "planar",
+                                         "args": ["a", "b"]}},
+                {"lhs": "picked", "rhs": {"op": "polygon_intersection_area", "manifold": "planar",
+                                          "args": [{"op": "index", "args": ["poly", 2]}, "b"]}},
+                {"lhs": "self_area", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                    "ranges": {"i": {"from": "c"}},
+                    "expr": {"op": "polygon_intersection_area", "manifold": "planar",
+                             "args": [idx("poly", json!("i")), idx("poly", json!("i"))]}}},
+                {"lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+                 "rhs": {"op": "*", "args": [-1.0, "whole", "picked", "y"]}},
+                d_eq("u", 3, agg(3, json!({"op": "*", "args": [
+                    idx("self_area", json!("i")), idx("u", json!("i"))]})))
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, 0.5, 2.0);
+    assert_eq!(opcount(&prog, "PolyArea"), 3);
+    assert!(prog.geoms.iter().all(|g| g.pairs.is_none()));
+}
+
+/// `intersect_polygon` of two literal rings is evaluated at build: the closed
+/// ring is a literal, and the derived range over it (`from_faq` naming the
+/// clip's `id`) has the ring's distinct-vertex count, as the interpreter's
+/// ring registry says.
+#[test]
+fn ab_intersect_polygon_build_time_ring() {
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_intersect_polygon"},
+        "index_sets": {
+            "sv": {"kind": "interval", "size": 4},
+            "tv": {"kind": "interval", "size": 4},
+            "coord": {"kind": "interval", "size": 2},
+            "clip_ring": {"kind": "derived", "from_faq": "ov"}
+        },
+        "models": {"M": {
+            "variables": {
+                "src": {"type": "unknown", "shape": ["sv", "coord"]},
+                "tgt": {"type": "unknown", "shape": ["tv", "coord"]},
+                "clip": {"type": "unknown", "shape": ["clip_ring", "coord"]},
+                "area": {"type": "unknown"},
+                "y": {"type": "unknown", "default": 1.0}
+            },
+            "equations": [
+                {"lhs": "src", "rhs": {"op": "const", "args": [], "value": quad(0.0, 0.0, 2.0, 2.0)}},
+                {"lhs": "tgt", "rhs": {"op": "const", "args": [],
+                    "value": [[1.0, 1.0], [3.0, 1.5], [2.5, 3.0], [0.5, 2.5]]}},
+                {"lhs": "clip", "rhs": {"op": "intersect_polygon", "id": "ov", "manifold": "planar",
+                                        "args": ["src", "tgt"]}},
+                {"lhs": "area", "rhs": {"op": "faq", "args": [], "output_idx": [],
+                    "ranges": {"k": {"from": "clip_ring"}},
+                    "expr": {"op": "*", "args": [0.5, {"op": "-", "args": [
+                        {"op": "*", "args": [
+                            {"op": "index", "args": ["clip", "k", 1]},
+                            {"op": "index", "args": ["clip", {"op": "+", "args": ["k", 1]}, 2]}]},
+                        {"op": "*", "args": [
+                            {"op": "index", "args": ["clip", {"op": "+", "args": ["k", 1]}, 1]},
+                            {"op": "index", "args": ["clip", "k", 2]}]}]}]}}},
+                {"lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+                 "rhs": {"op": "*", "args": [-1.0, "area", "y"]}}
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, 0.5, 2.0);
+    assert_eq!(opcount(&prog, "PolyArea"), 0);
+    assert!(
+        prog.const_data
+            .iter()
+            .any(|d| d.shape[1] == 2 && d.shape[0] >= 4),
+        "the closed ring is a literal"
+    );
+}
+
+/// `D(u[i]) = Σ_k κ (u[nbr[i, k]] - u[i])` on an unstructured neighbour
+/// table: one `IndexGather` over the promoted `(k, i)` box, with subscripts
+/// that exercise the interpreter's rounding (`2.5` rounds away from zero,
+/// `2.49` down) and its zero ghost (0, n + 1, a negative subscript).
+#[test]
+fn ab_index_gather_unstructured() {
+    let n = 6;
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_index_gather"},
+        "index_sets": {"cells": {"kind": "interval", "size": n},
+                       "nb": {"kind": "interval", "size": 3}},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["cells"], "default": 1.0},
+                "nbr": {"type": "unknown", "shape": ["cells", "nb"]},
+                "kappa": {"type": "parameter", "default": 0.3}
+            },
+            "equations": [
+                {"lhs": "nbr", "rhs": {"op": "const", "args": [], "value": [
+                    [2, 6, 3], [1, 3, 0], [2.5, 4, 7], [3, 5, -1], [2.49, 6, 1], [5, 1, 4]]}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                         "expr": {"op": "D", "args": [idx("u", json!("i"))], "wrt": "t"},
+                         "ranges": {"i": {"from": "cells"}}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                         "ranges": {"i": {"from": "cells"}, "k": {"from": "nb"}},
+                         "expr": {"op": "*", "args": ["kappa", {"op": "-", "args": [
+                             {"op": "index", "args": ["u",
+                                 {"op": "index", "args": ["nbr", "i", "k"]}]},
+                             idx("u", json!("i"))]}]}}}
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -1.0, 2.0);
+    // Fusion folds the gather into the group that consumes it: a pre-loaded
+    // input rather than a materialized [k, i] box.
+    assert_eq!(prog.index_gathers.len(), 1);
+    assert_eq!(opcount(&prog, "IndexGather"), 0, "folded away");
+    assert!(
+        prog.fused.iter().any(|f| f
+            .inputs
+            .iter()
+            .any(|i| i.index.is_some_and(|(_, m)| m == n as usize))),
+        "a fused group reads the source through the subscript"
+    );
+    let spec = &prog.index_gathers[0];
+    assert_eq!(spec.axes[..], [GatherAxis::Data]);
+    assert_eq!(&spec.shape[..], &[3, n as usize], "the promoted (k, i) box");
+}
+
+/// A two-axis source with one data subscript and one affine axis
+/// (`w[nbr[i], j]`), and a data subscript that is a scalar. Neither is the
+/// rank-1 form fusion folds, so both stay instructions.
+#[test]
+fn ab_index_gather_mixed_axes() {
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_index_gather_mixed"},
+        "index_sets": {"cells": {"kind": "interval", "size": 4},
+                       "lev": {"kind": "interval", "size": 3}},
+        "models": {"M": {
+            "variables": {
+                "w": {"type": "unknown", "shape": ["cells", "lev"], "default": 1.0},
+                "nbr": {"type": "unknown", "shape": ["cells"]},
+                "pick": {"type": "parameter", "default": 3.0}
+            },
+            "equations": [
+                {"lhs": "nbr", "rhs": {"op": "const", "args": [], "value": [4, 1, 0, 2]}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                         "expr": {"op": "D", "args": [{"op": "index", "args": ["w", "i", "j"]}],
+                                  "wrt": "t"},
+                         "ranges": {"i": {"from": "cells"}, "j": {"from": "lev"}}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                         "ranges": {"i": {"from": "cells"}, "j": {"from": "lev"}},
+                         "expr": {"op": "+", "args": [
+                             {"op": "index", "args": ["w",
+                                 {"op": "index", "args": ["nbr", "i"]}, "j"]},
+                             {"op": "index", "args": ["w", "pick", "j"]}]}}}
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -1.0, 2.0);
+    assert_eq!(opcount(&prog, "IndexGather"), 2);
+}
+
+/// Per-variable element types (esm-spec §11.3.1) on the tape: a binary32
+/// observed beside a binary64 one, each with a predicate at the other
+/// precision inside it. Every instruction carries the precision it was
+/// lowered at, fusion keeps the two apart, and both executors agree with the
+/// interpreter bit for bit, fused and unfused.
+#[test]
+fn ab_float32_variables_beside_float64_neighbours() {
+    use crate::precision::Precision;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/element_type/float32_state_float64_neighbour.esm");
+    let text = std::fs::read_to_string(&path).expect("fixture reads");
+    let doc: serde_json::Value = serde_json::from_str(&text).expect("fixture is JSON");
+    let file = typed(doc);
+    let env = crate::precision_infer::env_of_file(&file).expect("precision environment");
+    let annotated = crate::precision_infer::annotated(&file)
+        .expect("precision inference")
+        .expect("the fixture declares element types");
+    let _env = env.enter();
+    let compiled = ArrayCompiled::from_file(&annotated).expect("fixture compiles");
+    let (prog, report) = compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()));
+    assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
+    assert_eq!(prog.precision.len(), prog.instrs.len());
+    assert!(prog.precision.contains(&Precision::Float32));
+    assert!(prog.precision.contains(&Precision::Float64));
+
+    let n = compiled.state_variable_names().len();
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let prog_uf = compiled.build_tape_opts(&HashSet::new(), None).0;
+    let mut fast = compiled.debug_new_scratch_taped();
+    assert!(fast.has_tape());
+    for seed in 0..4u64 {
+        let state = seeded_state(n, seed, -1.0, 1.0);
+        let (want, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+        let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&want), bits(&oracle), "seed {seed}: overlay vs oracle");
+        for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
+            let mut dy = vec![0.0f64; n];
+            run_reference(p, &compiled, &state, &param_vec, 0.0, &mut dy);
+            assert_eq!(
+                bits(&dy),
+                bits(&want),
+                "seed {seed}: {label} reference executor"
+            );
+        }
+        let mut dy = vec![0.0f64; n];
+        compiled.debug_eval_rhs_into(
+            &state,
+            0.0,
+            &param_vec,
+            &mut dy,
+            &mut fast,
+            &mut RhsStats::default(),
+        );
+        assert_eq!(bits(&dy), bits(&want), "seed {seed}: fast executor");
+    }
 }

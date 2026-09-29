@@ -34,9 +34,14 @@
 # in the same child order, with the same seeds and the same short-circuits. In
 # particular the ⊕-fold is the per-cell expansion's (`_eval_contraction`): one
 # accumulator seeded from the `Float64` 0̄, the terms in `Iterators.product`
-# order (the first contracted index fastest), which conformance pins for
-# reductions; and the output odometer is a division rather than a nested loop,
-# so a chunk can start at any cell.
+# order (the first contracted index fastest), so this tier and the interpreter
+# fold in one association; and the output odometer is a division rather than a
+# nested loop, so a chunk can start at any cell. That order is this binding's,
+# not the spec's: esm-spec §4.3.1 reduces over the contracted indices as a SET
+# and pins an order only for a single-index scan, and CONFORMANCE_SPEC §5.2
+# holds any other contraction across bindings to the §5.9 simulation
+# tolerance, not to the bit (Rust's interpreter varies the last contracted
+# index fastest).
 #
 # What the emitter models is the SCALAR `_Node` spine — the kinds `_eval_node`
 # dispatches on. `_cg_emit`'s other method models the ACCESS-KERNEL spine
@@ -57,8 +62,8 @@ struct _ArrayContraction{F,TB}
 end
 
 # Emission context for a scalar spine. `loops` maps a loop counter `Ref` — the
-# object an `_NK_LOOPVAR` leaf carries and an `_NK_CONTRACTION_LOOP` drives — to
-# the generated local holding that counter's current value. Keyed by identity,
+# object an `_NK_LOOPVAR` leaf carries and the nest's odometer or fold drives —
+# to the generated local holding that counter's current value. Keyed by identity,
 # because that is how the walker resolves it: the leaf and its loop share one
 # `Ref`, and two loops over the same index name in different equations are
 # different objects.
@@ -102,8 +107,6 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         # `T(ref[])` — a contracted or output index is an integer, so this is a
         # constant of the value type and carries no derivative.
         return :(_cgT($s))
-    elseif k === _NK_CONTRACTION_LOOP
-        return _cg_contraction_loop(ctx, kc, nd)
     elseif k === _NK_CONTRACTION
         # Seeded sequential ⊕-fold in child order, `_eval_contraction` arm for
         # arm (the seed is the node's 0̄, a `Float64` there and here).
@@ -129,7 +132,7 @@ end
 
 _cg_oplus_fn(op::Symbol) =
     op === :+ ? :+ : op === :* ? :* : op === :max ? :max : op === :min ? :min :
-    throw(_CodegenDecline(:unsupported_op))
+    op === :or ? :_or_combine : throw(_CodegenDecline(:unsupported_op))
 
 # `_NK_CONST_GATHER`: evaluate the subscripts in dimension order, resolve each on
 # its own axis through the SAME `_const_gather_sub` the walker calls (so an
@@ -182,39 +185,6 @@ function _cg_state_gather_dim(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node,
         Expr(:block, :(($lo <= $sd <= $hi) ? $nxt : zero(eltype(u)))))
 end
 
-# `_NK_CONTRACTION_LOOP`: the static range walked in `_expand_int_range` order,
-# `acc = acc ⊕ body` from the node's 0̄ — the fold `_eval_contraction_loop`
-# performs, statement for statement. The seed is the `Float64` 0̄ itself, as the
-# unrolled fold (`_eval_contraction`, the interpreter's form of the same
-# reduction) seeds it: under a `Dual` value type `0̄ ⊕ term` then carries the
-# term's partials exactly, where a seed converted to the value type would add
-# zero partials to them and turn a `-0.0` partial into `0.0`. The counter is a
-# plain loop local here instead of the shared `Ref` the walker writes, which is
-# also what makes the emitted nest safe to run on several threads.
-function _cg_contraction_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
-    spec = nd.payload::_ContractLoop
-    op = nd.op
-    fnsym = _cg_oplus_fn(op)
-    acc = _cg_name(ctx, "acc")
-    kv = _cg_name(ctx, "kk")
-    haskey(kc.loops, spec.ref) && throw(_CodegenDecline(:loopvar_reused))
-    kc.loops[spec.ref] = kv
-    body = try
-        _cg_emit(ctx, kc, nd.children[1])
-    finally
-        delete!(kc.loops, spec.ref)
-    end
-    step = Expr(:(=), acc, Expr(:call, fnsym, acc, body))
-    lo = _cg_geo!(ctx, spec.lo, (spec.ref, :lo))
-    st = _cg_geo!(ctx, spec.step, (spec.ref, :step), true)
-    hi = _cg_geo!(ctx, spec.hi, (spec.ref, :hi))
-    return Expr(:let, Expr(:block, :($acc = $(nd.literal))),
-        Expr(:block,
-             Expr(:for, :($kv = $lo:$st:$hi),
-                  Expr(:block, step)),
-             acc))
-end
-
 # ---- One contraction → its generated function -------------------------------
 # Every extent, bound and fixed slot is run-time geometry (`_cg_geo!`,
 # codegen_kernel.jl), read into locals ahead of the cell loop, so the function is
@@ -236,8 +206,8 @@ end
 #
 #   * STATIC — constant ranges, walked as nested loops, the first contracted
 #     index innermost (the expansion's `Iterators.product` order). One
-#     accumulator across the whole nest: nested `_NK_CONTRACTION_LOOP`s would
-#     each fold from their own 0̄ and add up the partial folds, a different
+#     accumulator across the whole nest: a fold per contracted index would
+#     start each from its own 0̄ and add up the partial folds, a different
 #     association once there are two contracted indices.
 #   * TABLE — a contraction whose admitted tuples differ per output cell (a join
 #     gate drops some, a ragged bound gives each cell its own length) cannot be
@@ -325,10 +295,12 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
     return _ArrayContraction(f, tabpack, _SecTCache(length(outs), true))
 end
 
-# The fold around the term for cell `cv`: the `Float64` 0̄ (the static nest's
-# `_cg_contraction_loop` seed), then `acc = acc ⊕ term` innermost, with the
-# contracted counters `kvs` bound by the loops (STATIC) or from the cell's
-# table entries (TABLE).
+# The fold around the term for cell `cv`: `acc = acc ⊕ term` innermost, with the
+# contracted counters `kvs` bound by the loops (STATIC) or from the cell's table
+# entries (TABLE). The seed is the `Float64` 0̄ itself, as the per-cell fold
+# (`_eval_contraction`) seeds it: under a `Dual` value type `0̄ ⊕ term` then
+# carries the term's partials exactly, where a seed converted to the value type
+# would add zero partials to them and turn a `-0.0` partial into `0.0`.
 function _cg_fold(ctx::_CGCtx, fold::_ACFold, cv::Symbol, kvs::Vector{Symbol}, term)
     fnsym = _cg_oplus_fn(fold.op)
     acc = _cg_name(ctx, "acc")

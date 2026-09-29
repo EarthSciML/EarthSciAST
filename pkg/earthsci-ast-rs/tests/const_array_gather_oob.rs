@@ -161,23 +161,33 @@ fn an_inline_const_gather_over_a_whole_axis_fails_closed() {
         alg: Alg::Erk,
         ..Default::default()
     };
-    let run = |offset: i64| {
+    let run_with = |offset: i64, compiler| {
         let file = load_string(&gather(offset)).expect("document loads");
         let results = earthsci_ast::run_inline_tests_with_options(
             &file,
-            // As `const_array_gather_bounds_conformance`: §5.5.5's out-of-
-            // range gather is a per-cell policy the tape has no form for, so
-            // `native` refuses it by NAME.
             &earthsci_ast::InlineTestOptions {
                 model_name: Some("Gather".to_string()),
                 solve: opts.clone(),
-                compiler: Some(earthsci_ast::Compiler::Interpreter),
+                compiler: Some(compiler),
                 ..Default::default()
             },
             None,
         );
         assert_eq!(results.len(), 1);
         results.into_iter().next().unwrap()
+    };
+    // `native` resolves the gather at build time and raises the fault the
+    // reference evaluator raises, where it raises it: the two agree to the
+    // message.
+    let run = |offset: i64| {
+        let r = run_with(offset, earthsci_ast::Compiler::Interpreter);
+        let native = run_with(offset, earthsci_ast::Compiler::Native);
+        assert_eq!(
+            (native.passed, &native.message, native.actual),
+            (r.passed, &r.message, r.actual),
+            "offset {offset}: native and the interpreter disagree"
+        );
+        r
     };
     // In range (`C[i]`): the whole-axis read is unchanged.
     let ok = run(0);

@@ -278,12 +278,21 @@ end
         let g = gather(nocon)
             @test ESM._unwrap_identity_gather(g, ["_mo0"], ranges_d) === g
         end
+        # …unless it carries a FILTER: the affine tier does not model one inside
+        # a gather, and the bare form carries it as the body's guard.
+        let nf = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["gke"],
+                expr_body=_idx("u", _v("gke")), filter=_op(">=", _v("gke"), _i(2)),
+                ranges=Dict{String,Any}("gke" => Any[1, n + 1]), reduce="+")
+            got = ESM._unwrap_identity_gather(gather(nf), ["_mo0"], ranges_d)
+            @test got isa ESM.OpExpr && ESM._is_faq_op(got.op) &&
+                  ESM._output_idx_strings(got) == ["_mo0"]
+        end
         # A VARIABLE-VALENCE contracted bound unwraps too: the whole-array
         # contraction nest takes the bare producer with each cell's admitted
         # indices as a table, where the gather form hides the contraction from
-        # it and leaves the per-cell build. The per-cell path expands the bare
-        # form term for term as it expands the gather form, so an equation the
-        # nest declines lowers as before.
+        # it and leaves the per-cell build. The bare form's fold is seeded with
+        # 0̄ where the gather form's started from the first term, so the two
+        # differ in value only when every term of a cell is -0.0 (bare: 0.0).
         varb = mkagg(; filt=nothing, jrange=Any[1, "nedges"])
         @test unwrapped(varb)
         # A non-identity gather (a real reindex) is left alone.

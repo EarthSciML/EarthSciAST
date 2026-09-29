@@ -107,7 +107,10 @@ end
         @test !haskey(tiers, :percell_build)
         du = similar(u)
         pn.f!(du, u, pn.p, 0.0)
-        @test (@allocated pn.f!(du, u, pn.p, 0.0)) == 0
+        # Julia >= 1.12 only: older versions box across RuntimeGeneratedFunction inner functions and @testset-scope reads.
+        if VERSION >= v"1.12"
+            @test (@allocated pn.f!(du, u, pn.p, 0.0)) == 0
+        end
         seed = Float64[0.2 + 0.01 * cos(i) for i in eachindex(u)]
         seedi = similar(seed)
         for (k, j) in pi_.var_map
@@ -118,11 +121,14 @@ end
         @test all(gn[pn.var_map[k]] == gi[j] for (k, j) in pi_.var_map)
     end
 
-    @testset "two contracted indices fold into one accumulator" begin
+    @testset "two contracted indices fold into one accumulator ($(tier))" for
+            (asc, tier) in ((false, :array_contraction_codegen), (true, :affine_reduce))
         # Non-integer data, so the association of the fold shows in the last
         # bit: the expansion's fold is ((0̄ ⊕ t₁₁) ⊕ t₂₁) ⊕ …, one accumulator
         # over the whole (k, l) product, never a sum of per-l partial folds.
-        # The inline `const` keeps the affine tier out, so the nest takes it.
+        # Walked descending, the contraction is the nest's (the affine tier's
+        # run-time fold walks ascending unit-step ranges only); ascending, it is
+        # that fold's, which holds the same one accumulator.
         n, m1, m2 = 5, 7, 6
         w(i, k, l) = (0.001 * (1 + sin(0.7i * k + 0.3)) + 0.25 / (i + k)) * (1 + 0.1l)
         W = [[[w(i, k, l) for l in 1:m2] for k in 1:m1] for i in 1:n]
@@ -147,14 +153,15 @@ end
                     Dict("lhs" => dlhs("y", "i", n),
                          "rhs" => Dict("op" => "faq", "args" => Any[], "reduce" => "+",
                              "output_idx" => Any["i"],
-                             "ranges" => Dict("i" => Any[1, n], "k" => Any[1, m1],
-                                              "l" => Any[1, m2]),
+                             "ranges" => Dict("i" => Any[1, n],
+                                              "k" => asc ? Any[1, m1] : Any[m1, -1, 1],
+                                              "l" => asc ? Any[1, m2] : Any[m2, -1, 1]),
                              "expr" => body))])))
         path = joinpath(mktempdir(), "act_two.esm")
         open(io -> JSON3.write(io, doc), path, "w")
         same, tally, tiers, _, _ = _act_agree(path)
         @test same
-        @test get(tally, :array_contraction_codegen, 0) == 1
+        @test get(tally, tier, 0) == 1
         @test !haskey(tiers, :percell_build)
     end
 
@@ -218,5 +225,51 @@ end
             push!(nodes, _act_emitted(pn.f!))
         end
         @test allequal(nodes)
+    end
+
+    # A FILTER with no contracted index: each output cell is one combination,
+    # 0̄ where the predicate is false (esm-schema `filter`). The array-equation
+    # path puts it on the term as the same `ifelse` guard, ahead of every tier,
+    # so every tier and the interpreter compute it. The conformance fixture filters an equation's own right-hand
+    # side and, through a materialized observed, an identity gather.
+    @testset "a pointwise filter, with no contracted index" begin
+        same, _, tiers, (pn, u), _ = _act_agree(_act_fixture(
+            "tests/conformance/faq_pointwise_filter/fixtures/pointwise_filter.esm"))
+        @test same
+        @test !haskey(tiers, :percell_build)
+        du = _act_du(pn, u)
+        rd(v) = [du[pn.var_map["pointwise_filter.$v[$i]"]] for i in 1:5]
+        @test rd("a") == [0.0, 0.0, 7.0, 9.0, 11.0]
+        @test rd("b") == [10.0, 20.0, 0.0, 0.0, 0.0]
+        # A state-reading `max_sum` body (0̄ = -Inf, so a filtered cell read as
+        # 0.0 would show) over a live forcing buffer.
+        n = 8
+        idx(v, a...) = Dict("op" => "index", "args" => Any[v, a...])
+        doc = Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "act_pf"),
+            "models" => Dict("M" => Dict{String,Any}(
+                "variables" => Dict{String,Any}(
+                    "u" => Dict("type" => "unknown", "shape" => Any["i"]),
+                    "c" => Dict("type" => "parameter", "shape" => Any["i"])),
+                "equations" => Any[Dict(
+                    "lhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                        "ranges" => Dict("i" => Any[1, n]),
+                        "expr" => Dict("op" => "D", "args" => Any[idx("u", "i")], "wrt" => "t")),
+                    "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                        "ranges" => Dict("i" => Any[1, n]), "semiring" => "max_sum",
+                        "expr" => Dict("op" => "+", "args" => Any[
+                            Dict("op" => "*", "args" => Any[-0.5, idx("u", "i")]), idx("c", "i")]),
+                        "filter" => Dict("op" => "and", "args" => Any[
+                            Dict("op" => ">=", "args" => Any["i", 3]),
+                            Dict("op" => "<=", "args" => Any["i", n - 2])])))])))
+        function pf_du(c)
+            f!, u0, p, _, vm = _ACT._build_evaluator(doc; compiler = c,
+                initial_conditions = Dict("u[$i]" => 0.1i + 0.3 for i in 1:n),
+                param_arrays = Dict("c" => collect(1.0:n)))
+            d = similar(u0); f!(d, u0, p, 0.0)
+            [d[vm["u[$i]"]] for i in 1:n]
+        end
+        dn, di = pf_du(:native), pf_du(:interpreter)
+        @test all(isequal.(dn, di))
+        @test di == [i in 3:(n - 2) ? -0.5 * (0.1i + 0.3) + i : -Inf for i in 1:n]
     end
 end

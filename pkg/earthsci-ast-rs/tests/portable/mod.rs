@@ -89,6 +89,25 @@ macro_rules! tier_doc {
     };
 }
 
+macro_rules! corpus_doc {
+    ($path:literal) => {
+        ($path, include_str!(concat!("../../../../tests/", $path)))
+    };
+}
+
+/// Documents whose contractions run over a tuple list (a join gate, a ragged
+/// bound) and one that mixes per-variable element types.
+pub const TUPLE_LIST_AND_PRECISION_DOCS: &[(&str, &str)] = &[
+    corpus_doc!("valid/faq/join_disaggregation_m2m.esm"),
+    corpus_doc!("valid/faq/join_disaggregation_m2m_permuted.esm"),
+    corpus_doc!("valid/faq/join_on_data_columns.esm"),
+    corpus_doc!("valid/faq/join_on_self_join.esm"),
+    corpus_doc!("valid/faq/join_on_self_join_syms.esm"),
+    corpus_doc!("valid/faq/ragged_member_gather.esm"),
+    corpus_doc!("conformance/expression_templates/import_rebind_keyed_factors/expanded.esm"),
+    corpus_doc!("fixtures/element_type/float32_state_float64_neighbour.esm"),
+];
+
 /// `(tier/fixture id, model, document)` for the inline-test tiers' documents.
 pub const INLINE_TIER_DOCS: &[(&str, &str, &str)] = &[
     tier_doc!(
@@ -231,6 +250,32 @@ pub const INLINE_TIER_DOCS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+macro_rules! corpus_doc {
+    ($path:literal) => {
+        ($path, include_str!(concat!("../../../../tests/", $path)))
+    };
+}
+
+/// `(path under tests/, document)` for the corpus documents whose geometry
+/// (`polygon_intersection_area`, a build-time `intersect_polygon` ring) the
+/// tape lowers: native must build each one, and agree with the interpreter on
+/// the build-time fields and the right-hand side.
+pub const GEOMETRY_DOCS: &[(&str, &str)] = &[
+    corpus_doc!("conformance/build_once_spatial_field/fixtures/build_once_spatial_ode.esm"),
+    corpus_doc!("conformance/expression_templates/scalar_field_param/expanded.esm"),
+    corpus_doc!("conformance/expression_templates/scalar_field_param/fixture.esm"),
+    corpus_doc!("conformance/pushdown/fixtures/pushdown_polygon_area.esm"),
+    corpus_doc!("coupling/cross_domain_coupling.esm"),
+    corpus_doc!("coupling/interfaces.esm"),
+    corpus_doc!("valid/geometry/conservative_regrid_assembly.esm"),
+    corpus_doc!("valid/geometry/intersect_polygon_clip_area.esm"),
+    corpus_doc!("valid/geometry/intersect_polygon_planar_area.esm"),
+    corpus_doc!("valid/geometry/intersect_polygon_planar_ode.esm"),
+    corpus_doc!("valid/geometry/polygon_intersection_area_padded_ring.esm"),
+    corpus_doc!("valid/geometry/polygon_intersection_area_planar.esm"),
+    corpus_doc!("valid/wildfire_atmosphere_ocean.esm"),
+];
+
 fn options(compiler: Compiler, model: Option<&str>) -> ProblemOptions {
     ProblemOptions {
         compiler: Some(compiler),
@@ -297,16 +342,38 @@ pub fn check_scaling_fixture(family: &str, n: u64, text: &str) {
         !expected_refusal,
         "{family} N={n}: native builds it now; remove its `builds` entry from the Rust ledger"
     );
+    assert_rhs_agrees(&format!("{family} N={n}"), &native, &interp);
+}
+
+/// Native builds `text` with every rule on the tape, and its right-hand side
+/// at one state is the interpreter's, bit for bit.
+pub fn check_native_rhs_doc(id: &str, text: &str) {
+    let doc: Value = serde_json::from_str(text).expect("the document parses");
+    let interp = esm_problem(&doc, (0.0, 1.0), options(Compiler::Interpreter, None))
+        .unwrap_or_else(|e| panic!("{id}: the interpreter does not build it: {e}"));
+    let native = esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None))
+        .unwrap_or_else(|e| panic!("{id}: native does not build it: {e}"));
+    assert_rhs_agrees(id, &native, &interp);
+}
+
+/// The two problems' right-hand sides at one state, compared bit for bit.
+fn assert_rhs_agrees(
+    label: &str,
+    native: &earthsci_ast::EsmProblem,
+    interp: &earthsci_ast::EsmProblem,
+) {
     let nc = native
         .debug_array_compiled()
         .expect("native has a right-hand side");
     let ic = interp
         .debug_array_compiled()
         .expect("the interpreter has a right-hand side");
+    // What a solve arms for its whole run: the document's element types.
+    let _precision = nc.debug_precision_env().enter();
     assert_eq!(
         nc.state_variable_names(),
         ic.state_variable_names(),
-        "{family} N={n}: state order"
+        "{label}: state order"
     );
     let state: Vec<f64> = (0..nc.state_variable_names().len())
         .map(|p| 1.0 + 0.1 * (0.37 * p as f64).sin())
@@ -316,14 +383,11 @@ pub fn check_scaling_fixture(family: &str, n: u64, text: &str) {
     let mut scratch = nc.debug_new_scratch_taped();
     let mut stats = RhsStats::default();
     nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
-    assert_eq!(
-        stats.fallback_rules, 0,
-        "{family} N={n}: a rule left the tape"
-    );
+    assert_eq!(stats.fallback_rules, 0, "{label}: a rule left the tape");
     let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p(), true);
     if let Some((i, a, b)) = first_bit_difference(&dy, &idy) {
         panic!(
-            "{family} N={n}: native dy differs from the interpreter's at {} ({a} vs {b})",
+            "{label}: native dy differs from the interpreter's at {} ({a} vs {b})",
             nc.state_variable_names()[i]
         );
     }
@@ -427,5 +491,53 @@ pub fn check_inline_tier_doc(id: &str, model: &str, text: &str) {
                 is.time[i]
             );
         }
+    }
+}
+
+/// Native builds one geometry document with no rule off the tape, and agrees
+/// with the interpreter bit for bit on every build-time field and on the
+/// right-hand side at one state, with the right-hand side forced on.
+pub fn check_geometry_doc(id: &str, text: &str) {
+    let doc: Value = serde_json::from_str(text).expect("the document parses");
+    let interp = esm_problem(&doc, (0.0, 1.0), options(Compiler::Interpreter, None))
+        .unwrap_or_else(|e| panic!("{id}: the interpreter does not build it: {e}"));
+    let native = esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None))
+        .unwrap_or_else(|e| panic!("{id}: native does not build it: {e}"));
+    let mut names: Vec<&String> = interp.observed_fields().keys().collect();
+    names.sort();
+    let mut native_names: Vec<&String> = native.observed_fields().keys().collect();
+    native_names.sort();
+    assert_eq!(names, native_names, "{id}: build-time field names");
+    for name in names {
+        let a: Vec<f64> = interp.observed_fields()[name].iter().copied().collect();
+        let b: Vec<f64> = native.observed_fields()[name].iter().copied().collect();
+        if let Some((i, x, y)) = first_bit_difference(&a, &b) {
+            panic!("{id}: build-time field {name}[{i}]: interpreter {x}, native {y}");
+        }
+    }
+    let (Some(nc), Some(ic)) = (native.debug_array_compiled(), interp.debug_array_compiled())
+    else {
+        return;
+    };
+    assert_eq!(
+        nc.state_variable_names(),
+        ic.state_variable_names(),
+        "{id}: state order"
+    );
+    let state: Vec<f64> = (0..nc.state_variable_names().len())
+        .map(|p| 1.0 + 0.1 * (0.37 * p as f64).sin())
+        .collect();
+    let params = nc.debug_resolve_params(native.p());
+    let mut dy = vec![0.0f64; state.len()];
+    let mut scratch = nc.debug_new_scratch_taped();
+    let mut stats = RhsStats::default();
+    nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
+    assert_eq!(stats.fallback_rules, 0, "{id}: a rule left the tape");
+    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p(), true);
+    if let Some((i, a, b)) = first_bit_difference(&dy, &idy) {
+        panic!(
+            "{id}: native dy differs from the interpreter's at {} ({a} vs {b})",
+            nc.state_variable_names()[i]
+        );
     }
 }

@@ -48,6 +48,31 @@
 //! * [`Instr::Scan`] is `run_prefix_scan` over a whole box: a running fold
 //!   along one axis, ascending, independently for every position of the
 //!   other axes, writing the inclusive or exclusive partial result.
+//! * [`Instr::PolyArea`] is `eval_polygon_intersection_area` per element of
+//!   its box: each element's two rings are read out of the two ring tables
+//!   and measured by the interpreter's own `clip_area_value`. Pairs a planar
+//!   broad phase proves bounding-box disjoint are not clipped; they hold the
+//!   value the kernel's own bounding-box reject returns for them.
+//! * [`Instr::IndexGather`] is `index_into` with one subscript that is DATA:
+//!   the subscript operand is rounded (`f64::round`, then `as i64`, exactly
+//!   `eval_index_args`) and an out-of-range position reads the zero ghost.
+//! * [`Instr::TableGather`] reads its source at positions fixed at build
+//!   time (one per output element, or the ghost `+0.0`): an `index` whose
+//!   subscripts are build-time data rather than an affine map of the box.
+//! * [`Instr::SegReduce`] is a compressed-row reduction: each output cell
+//!   folds its own contiguous run of a term list, skipping the terms a mask
+//!   excludes, which is `reduce_contraction`'s loop over an explicit list of
+//!   admitted contraction tuples (a join-gated or ragged contraction).
+//! * [`Instr::LoadForcing`] is `lookup_variable`'s forcing arm: the entry the
+//!   forcing buffer holds for the name, copied in row-major order (a 0-d entry
+//!   read as a scalar, rounded to the active precision), and the same
+//!   fail-closed fault when the buffer holds none.
+//! * [`Instr::Reshape`] is a row-major reinterpretation: the source's
+//!   elements, in row-major order, under the output slot's box.
+//! * [`Instr::Fault`] latches one fail-closed evaluation fault
+//!   (`E_TREEWALK_CONSTARRAY_OOB`, `E_TREEWALK_INDEX_ON_SCALAR`) exactly as
+//!   the per-cell oracle's `latch_gather_fault` does at the same point: the
+//!   FIRST fault latched in an evaluation wins, and the caller drains it.
 //!
 //! Array operands within one instruction share one box (shape + 1-based
 //! origin), checked at lowering time — the same precondition `vec_combine`
@@ -197,6 +222,17 @@ pub(crate) enum Instr {
     /// XlaBuilder emitter lowers this to a `ConstantLiteral` of the same
     /// row-major buffer.)
     ConstArray { data: u32, out: SlotId },
+    /// Copy the forcing-buffer entry `forcings[forcing]` names into `out`
+    /// (row-major, origin all-1s; a scalar slot for a 0-d entry).
+    ///
+    /// The forcing buffer only changes between integration segments, so this
+    /// runs in the CONST section for a forcing nothing refreshes and in the
+    /// SEGMENT section for a DISCRETE one, and every reader takes the slot:
+    /// no instruction ever reads the buffer itself. A missing entry latches
+    /// the fault the interpreter's lookup raises and fills `out` with `NaN`;
+    /// an entry whose shape is not the one the program was built against
+    /// latches a fault naming both.
+    LoadForcing { forcing: u32, out: SlotId },
     /// Reduce `src` over `axes` with `op`'s kernel, from `init`:
     ///
     /// ```text
@@ -254,6 +290,81 @@ pub(crate) enum Instr {
         src_shape: DimU,
         out: SlotId,
     },
+    /// `polygon_intersection_area` over `out`'s box (a scalar slot for a
+    /// single pair): element `k`'s rings are `a` and `b` read at the positions
+    /// `geoms[geom]` derives from `k`, and its value is the interpreter's
+    /// `clip_area_value` of the two. See [`GeomSpec`] for the broad phase.
+    PolyArea {
+        a: SrcRef,
+        b: SrcRef,
+        geom: u32,
+        out: SlotId,
+    },
+    /// `out[k] = src[pos(k)]`, where source axis `index_gathers[spec].data_axis`
+    /// is addressed by the 1-based subscript `idx[k]` (a data value, rounded
+    /// as the interpreter rounds it) and every other source axis by an affine
+    /// map of an output axis or a fixed position. A subscript outside the
+    /// source extent reads the zero ghost, `eval_index`'s state and observed
+    /// rule; a const-array base is never lowered here.
+    IndexGather {
+        src: SrcRef,
+        idx: Operand,
+        spec: u32,
+        out: SlotId,
+    },
+    /// `out[k] = src[pos[k]]`, with `pos = gather_tables[table].pos` the
+    /// ROW-MAJOR flat position of each element's source cell, resolved at
+    /// build time; a [`GATHER_GHOST`] position reads `+0.0` (the zero ghost of
+    /// an out-of-range read). `out` is a 1-D box of `pos.len()` elements.
+    ///
+    /// This is `eval_index` with every subscript already evaluated: the
+    /// lowering computes each position exactly as `index_into` does (the
+    /// subscript rounded, then the zero ghost or the const-array boundary
+    /// policy), so the element read is the one the interpreter reads.
+    TableGather {
+        src: SrcRef,
+        table: u32,
+        out: SlotId,
+    },
+    /// A compressed-row reduction over the 1-D term list `src`:
+    ///
+    /// ```text
+    /// for c in 0..n_out:
+    ///     acc = init
+    ///     for k in rows[c] .. rows[c + 1]:
+    ///         if mask is None or mask[k] != 0:  acc = kernel(op)(acc, src[k])
+    ///     out[c] = acc
+    /// ```
+    ///
+    /// with `rows = seg_tables[table].rows` (`n_out + 1` ascending offsets,
+    /// the last equal to `src`'s length) and `c` the ROW-MAJOR cell of
+    /// `out`'s box (a scalar `out` has one cell). Each cell's run lists its
+    /// admitted contraction tuples in the interpreter's odometer order (the
+    /// last contracted name fastest), and an excluded term is SKIPPED, not
+    /// combined as the identity, exactly as `reduce_contraction`'s `continue`
+    /// does — so the fold is bit-identical, signed zeros and NaNs included.
+    SegReduce {
+        op: BinCode,
+        init: f64,
+        src: SlotId,
+        mask: Option<SlotId>,
+        table: u32,
+        out: SlotId,
+    },
+    /// `out`'s elements, in ROW-MAJOR order, are `src`'s elements in
+    /// row-major order: the same element count under a different box. A
+    /// column-major reshape (`eval_reshape`) is this between two axis
+    /// reversals, which are plain [`Instr::Gather`] permutations.
+    Reshape { src: SrcRef, out: SlotId },
+    /// Latch `faults[fault]` as the evaluation's fail-closed fault, unless an
+    /// earlier one is already latched (the oracle's `latch_gather_fault`,
+    /// which keeps the FIRST). The lowering emits one where the per-cell
+    /// oracle latches for certain whenever this point executes — an
+    /// out-of-range read of a const array with no boundary policy, a
+    /// subscript on a 0-D parameter — and it defines no slot: the value the
+    /// oracle substitutes there (`NaN`) is carried by the ordinary
+    /// instructions around it.
+    Fault { fault: u32 },
     /// Scalar-`ifelse` short circuit: if `cond != 0`, execute the next
     /// `n_true` instructions then skip the following `n_false`; else skip
     /// `n_true` and execute the following `n_false`. The untaken branch is
@@ -299,10 +410,17 @@ impl Instr {
             | Instr::Region { out, .. }
             | Instr::Assemble { out, .. }
             | Instr::ConstArray { out, .. }
+            | Instr::LoadForcing { out, .. }
             | Instr::Interp { out, .. }
             | Instr::Reduce { out, .. }
-            | Instr::Scan { out, .. } => Some(*out),
+            | Instr::Scan { out, .. }
+            | Instr::PolyArea { out, .. }
+            | Instr::IndexGather { out, .. }
+            | Instr::TableGather { out, .. }
+            | Instr::SegReduce { out, .. }
+            | Instr::Reshape { out, .. } => Some(*out),
             Instr::JmpIfZero { .. }
+            | Instr::Fault { .. }
             | Instr::Fallback { .. }
             | Instr::Export { .. }
             | Instr::DyWrite { .. }
@@ -358,12 +476,33 @@ impl Instr {
             Instr::Gather { src, .. }
             | Instr::LoadElem { src, .. }
             | Instr::Reduce { src, .. }
-            | Instr::Scan { src, .. } => {
+            | Instr::Scan { src, .. }
+            | Instr::TableGather { src, .. }
+            | Instr::Reshape { src, .. } => {
                 if let SrcRef::Slot(s) = src {
                     f(*s);
                 }
             }
-            Instr::Ramp { .. } | Instr::ConstArray { .. } => {}
+            Instr::PolyArea { a, b, .. } => {
+                for src in [a, b] {
+                    if let SrcRef::Slot(s) = src {
+                        f(*s);
+                    }
+                }
+            }
+            Instr::IndexGather { src, idx, .. } => {
+                if let SrcRef::Slot(s) = src {
+                    op(&Operand::Slot(*s));
+                }
+                op(idx);
+            }
+            Instr::SegReduce { src, mask, .. } => {
+                f(*src);
+                if let Some(m) = mask {
+                    f(*m);
+                }
+            }
+            Instr::Ramp { .. } | Instr::ConstArray { .. } | Instr::LoadForcing { .. } => {}
             Instr::Interp { x, y, .. } => {
                 op(x);
                 if let Some(y) = y {
@@ -382,7 +521,7 @@ impl Instr {
                 }
             }
             Instr::JmpIfZero { cond, .. } => op(cond),
-            Instr::Fallback { .. } => {}
+            Instr::Fallback { .. } | Instr::Fault { .. } => {}
             Instr::Export { slot, .. } => f(*slot),
             Instr::DyWrite { write } => f(dy_writes[*write as usize].slot),
             Instr::Fused { spec } => {
@@ -414,9 +553,16 @@ impl Instr {
             Instr::Region { .. } => "Region",
             Instr::Assemble { .. } => "Assemble",
             Instr::ConstArray { .. } => "ConstArray",
+            Instr::LoadForcing { .. } => "LoadForcing",
             Instr::Interp { .. } => "Interp",
             Instr::Reduce { .. } => "Reduce",
             Instr::Scan { .. } => "Scan",
+            Instr::PolyArea { .. } => "PolyArea",
+            Instr::IndexGather { .. } => "IndexGather",
+            Instr::TableGather { .. } => "TableGather",
+            Instr::SegReduce { .. } => "SegReduce",
+            Instr::Reshape { .. } => "Reshape",
+            Instr::Fault { .. } => "Fault",
             Instr::JmpIfZero { .. } => "JmpIfZero",
             Instr::Fallback { .. } => "Fallback",
             Instr::Export { .. } => "Export",
@@ -544,8 +690,14 @@ pub(crate) struct FusedInput {
     /// For a shifted input with `elem_stride` other than 1 and 0 (and 0 too in
     /// a group with a `Bin3` superop): the chunk register the executor
     /// pre-loads this input into (`GroupIx::MAX` otherwise; a zero-stride
-    /// input is then read as the run's one element).
+    /// input is then read as the run's one element). A folded data-subscript
+    /// gather is always pre-loaded.
     pub load_reg: GroupIx,
+    /// `Some((by, n))`: a folded [`Instr::IndexGather`] of a rank-1 source
+    /// of extent `n`. The element at output offset `k` is
+    /// `src[data_subscript(inputs[by][k], n)]`, the zero ghost when that is
+    /// `None`; `inputs[by]` is the subscript array, an aligned input.
+    pub index: Option<(GroupIx, usize)>,
 }
 
 /// Sentinel source offset: the input reads the gather's Dirichlet ghost
@@ -843,6 +995,38 @@ pub(crate) struct ConstArrayData {
     pub values: Vec<f64>,
 }
 
+/// The position an [`Instr::TableGather`] element reads when its source cell
+/// is out of range: the element is the zero ghost `+0.0`.
+pub(crate) const GATHER_GHOST: u32 = u32::MAX;
+
+/// The build-time positions of one [`Instr::TableGather`].
+#[derive(Clone, Debug)]
+pub(crate) struct GatherTable {
+    /// The source box the positions are row-major flat offsets into.
+    pub src_shape: DimU,
+    /// One source position per output element, or [`GATHER_GHOST`].
+    pub pos: Vec<u32>,
+}
+
+/// The row offsets of one [`Instr::SegReduce`]: output cell `c` folds terms
+/// `rows[c] .. rows[c + 1]`.
+#[derive(Clone, Debug)]
+pub(crate) struct SegTable {
+    pub rows: Vec<u32>,
+}
+
+/// One forcing-buffer entry the program reads ([`Instr::LoadForcing`]).
+#[derive(Clone, Debug)]
+pub(crate) struct ForcingRef {
+    /// The buffer key, which is the variable's name as the compiled model
+    /// spells it.
+    pub name: String,
+    /// The box the program was built against (empty for a 0-d entry): the
+    /// entry's shape when the buffer held it at build time, else the
+    /// variable's declared shape.
+    pub shape: DimU,
+}
+
 /// Which esm-spec §9.2 `interp.*` entry an [`Instr::Interp`] evaluates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InterpKind {
@@ -914,6 +1098,110 @@ impl InterpTable {
             InterpKind::SearchSorted => searchsorted_at(x, &self.axis_x) as f64,
         }
     }
+}
+
+/// Where one [`Instr::PolyArea`] element reads a ring along one LEADING axis
+/// of the ring table (the table is `[.., V, 2]`: the last two axes are the
+/// ring's vertices and its `(lon, lat)` pair).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RingSel {
+    /// This 0-based position, for every element.
+    Fixed(usize),
+    /// Position `p + off` for the element at position `p` along output axis
+    /// `axis` (a partial `index(table, i)` whose subscript is `i + k`). Every
+    /// position the box reaches is inside the table, checked at lowering.
+    Axis { axis: u8, off: i64 },
+}
+
+/// One ring operand of an [`Instr::PolyArea`]: the table's box and how each
+/// of its leading axes is addressed. No selectors means the operand is the
+/// whole `[V, 2]` array, the same ring for every element.
+#[derive(Clone, Debug)]
+pub(crate) struct RingRef {
+    /// The expected table box (validation).
+    pub src_shape: DimU,
+    pub sel: SmallVec<[RingSel; 3]>,
+}
+
+impl RingRef {
+    /// The output axes this operand's ring varies along.
+    pub(crate) fn axes(&self) -> SmallVec<[u8; 3]> {
+        let mut v: SmallVec<[u8; 3]> = SmallVec::new();
+        for s in &self.sel {
+            if let RingSel::Axis { axis, .. } = s
+                && !v.contains(axis)
+            {
+                v.push(*axis);
+            }
+        }
+        v
+    }
+}
+
+/// The constant part of one [`Instr::PolyArea`].
+///
+/// `pairs` is the broad phase: `Some((axis_a, axis_b))` when the manifold is
+/// planar and ring `a` varies along output axis `axis_a` only and ring `b`
+/// along the different axis `axis_b` only. The instruction then clips just
+/// the candidate pairs whose bounding boxes are not strictly disjoint (an
+/// R*-tree query over the two rings' boxes, so the work is `O(n log n)` plus
+/// the candidates, not the product) and writes every other element the value
+/// the kernel's own disjoint-box reject returns. That reject is part of
+/// `crate::geometry::intersect_polygon`, which is what makes the skipped
+/// pairs exact rather than approximately zero. Every element is still a pure
+/// function of its own pair, so the order pairs are visited in cannot reach
+/// a result, and a fold over the box downstream is unchanged.
+#[derive(Clone, Debug)]
+pub(crate) struct GeomSpec {
+    pub manifold: crate::geometry::Manifold,
+    pub a: RingRef,
+    pub b: RingRef,
+    /// The output box (empty for a scalar slot).
+    pub shape: DimU,
+    pub pairs: Option<(u8, u8)>,
+}
+
+/// How one source axis of an [`Instr::IndexGather`] is addressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GatherAxis {
+    /// By the data subscript (the instruction's `idx` operand).
+    Data,
+    /// 0-based position `p + off` for output position `p` along `axis`; in
+    /// range for every position, checked at lowering.
+    Affine { axis: u8, off: i64 },
+    /// This 0-based position.
+    Fixed(usize),
+}
+
+/// The constant part of one [`Instr::IndexGather`].
+#[derive(Clone, Debug)]
+pub(crate) struct IndexGatherSpec {
+    /// One entry per source axis; exactly one is [`GatherAxis::Data`].
+    pub axes: SmallVec<[GatherAxis; 4]>,
+    /// The expected source box (validation).
+    pub src_shape: DimU,
+    /// The output box.
+    pub shape: DimU,
+}
+
+impl IndexGatherSpec {
+    /// The source axis the data subscript addresses.
+    pub(crate) fn data_axis(&self) -> usize {
+        self.axes
+            .iter()
+            .position(|a| *a == GatherAxis::Data)
+            .expect("an IndexGather has one data axis")
+    }
+}
+
+/// The 0-based source position a data subscript `v` addresses along an axis
+/// of extent `n`, or `None` for the zero ghost — `eval_index_args` then
+/// `index_into` exactly: `v.round() as i64` (NaN reads as 0, out-of-range
+/// values saturate), and a 1-based position outside `1..=n` is out of range.
+#[inline]
+pub(crate) fn data_subscript(v: f64, n: usize) -> Option<usize> {
+    let one_based = v.round() as i64;
+    (one_based >= 1 && one_based <= n as i64).then(|| (one_based - 1) as usize)
 }
 
 /// One makearray region: placement of a region write within its bounding box.
@@ -1018,6 +1306,13 @@ pub(crate) struct SlabLayout {
 pub(crate) struct TapeProgram {
     /// All instructions: CONST section, then SEGMENT, then CONTINUOUS.
     pub instrs: Vec<Instr>,
+    /// Per instruction, the precision its kernels run at (esm-spec §11.3.1):
+    /// the precision in force while it was lowered — its observed rule's
+    /// variable's, or a precision-boundary marker's inside it. Every executor
+    /// arms it around the instruction. EMPTY when every instruction runs at
+    /// the precision the program executes under, which is every document that
+    /// declares no per-variable element type.
+    pub precision: Vec<crate::precision::Precision>,
     /// Instruction count of the CONST section.
     pub n_const: u32,
     /// Instruction count of the SEGMENT section.
@@ -1031,10 +1326,25 @@ pub(crate) struct TapeProgram {
     pub const_data: Vec<ConstArrayData>,
     /// §9.2 `interp.*` constant tables (`Instr::Interp` indexes here).
     pub interp_tables: Vec<InterpTable>,
+    /// Geometry instructions' constant parts (`Instr::PolyArea` indexes here).
+    pub geoms: Vec<GeomSpec>,
+    /// Data-subscript gathers' constant parts (`Instr::IndexGather` indexes
+    /// here).
+    pub index_gathers: Vec<IndexGatherSpec>,
+    /// Build-time gather positions (`Instr::TableGather` indexes here).
+    pub gather_tables: Vec<GatherTable>,
+    /// Compressed-row offsets (`Instr::SegReduce` indexes here).
+    pub seg_tables: Vec<SegTable>,
+    /// Fail-closed fault messages (`Instr::Fault` indexes here), each the
+    /// text the per-cell oracle latches at the same point.
+    pub faults: Vec<String>,
     pub state_vars: Vec<StateRef>,
     /// Observed names resolved through the runtime observed map
     /// (`Operand::Obs`/`SrcRef::Obs` index here).
     pub obs_reads: Vec<String>,
+    /// Forcing-buffer entries the program loads (`Instr::LoadForcing`
+    /// indexes here).
+    pub forcings: Vec<ForcingRef>,
     pub dy_writes: Vec<DyWrite>,
     /// Observed values published back into the runtime observed map: names a
     /// fallback rule or the samples/observed-trajectory dependency cone reads.

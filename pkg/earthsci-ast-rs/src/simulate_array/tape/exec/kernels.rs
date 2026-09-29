@@ -640,3 +640,135 @@ pub(super) unsafe fn reduce_rows(
         }
     }
 }
+
+/// `Instr::IndexGather`: `dst` (contiguous row-major over `spec.shape`)
+/// receives, per output position, the source element the data subscript
+/// `idx` selects along the spec's data axis (the zero ghost when
+/// [`data_subscript`] says it is out of range), the other source axes being
+/// affine in an output axis or fixed.
+///
+/// # Safety
+/// `src` must be a live view of `spec.src_shape`, `idx` a scalar or a live
+/// view aligned to `spec.shape`, and `dst` must hold `spec.shape`'s elements
+/// without aliasing either (the coloring treats the instruction as
+/// alias-unsafe).
+pub(super) unsafe fn index_gather(dst: *mut f64, spec: &IndexGatherSpec, src: &SrcView, idx: &Rv) {
+    debug_assert_eq!(
+        &src.shape[..],
+        &spec.src_shape[..],
+        "IndexGather source box"
+    );
+    let shape = &spec.shape[..];
+    let nd = shape.len();
+    let data_d = spec.data_axis();
+    let n_data = src.shape[data_d];
+    let s_data = src.strides[data_d];
+    // The source offset of every non-data axis, as `base + Σ step[a]·pos[a]`.
+    let mut base = 0i64;
+    let mut step_out: DimI = DimI::from_elem(0, nd);
+    for (d, ax) in spec.axes.iter().enumerate() {
+        match *ax {
+            GatherAxis::Data => {}
+            GatherAxis::Fixed(i) => base += src.strides[d] * i as i64,
+            GatherAxis::Affine { axis, off } => {
+                base += src.strides[d] * off;
+                step_out[axis as usize] += src.strides[d];
+            }
+        }
+    }
+    let (ip, istr): (*const f64, DimI) = match idx {
+        Rv::S(v) => (v as *const f64, DimI::from_elem(0, nd)),
+        Rv::V { ptr, strides } => (*ptr, strides.clone()),
+    };
+    let n = total(shape);
+    let mut pos: DimU = DimU::from_elem(0, nd);
+    let (mut soff, mut ioff) = (base, 0i64);
+    for k in 0..n {
+        let v = unsafe { *ip.offset(ioff as isize) };
+        let x = match data_subscript(v, n_data) {
+            Some(p) => unsafe { *src.ptr.offset((soff + s_data * p as i64) as isize) },
+            None => 0.0,
+        };
+        unsafe { *dst.add(k) = x };
+        // Row-major odometer, carrying both running offsets.
+        let mut d = nd;
+        while d > 0 {
+            d -= 1;
+            pos[d] += 1;
+            soff += step_out[d];
+            ioff += istr[d];
+            if pos[d] < shape[d] {
+                break;
+            }
+            soff -= step_out[d] * shape[d] as i64;
+            ioff -= istr[d] * shape[d] as i64;
+            pos[d] = 0;
+        }
+    }
+}
+
+/// `Instr::TableGather`: `dst[k] = src[pos[k]]`, the zero ghost where
+/// `pos[k]` is [`GATHER_GHOST`]. `pos` holds ROW-MAJOR flat positions into
+/// `src.shape`, which a source with other strides (a state array read in
+/// place, column-major) reaches by unravelling each one.
+pub(super) unsafe fn table_gather(dst: *mut f64, src: &SrcView, pos: &[u32]) {
+    let rm = rm_strides(&src.shape);
+    unsafe {
+        if src.strides[..] == rm[..] {
+            for (k, &p) in pos.iter().enumerate() {
+                *dst.add(k) = if p == GATHER_GHOST {
+                    0.0
+                } else {
+                    *src.ptr.add(p as usize)
+                };
+            }
+            return;
+        }
+        for (k, &p) in pos.iter().enumerate() {
+            *dst.add(k) = if p == GATHER_GHOST {
+                0.0
+            } else {
+                let mut rest = p as i64;
+                let mut off = 0i64;
+                for d in 0..src.shape.len() {
+                    off += (rest / rm[d]) * src.strides[d];
+                    rest %= rm[d];
+                }
+                *src.ptr.offset(off as isize)
+            };
+        }
+    }
+}
+
+/// `Instr::SegReduce`: output cell `c` folds `src[rows[c] .. rows[c + 1]]`
+/// from `init`, in order, skipping every term whose `mask` entry is `0`.
+pub(super) unsafe fn seg_reduce(
+    dst: *mut f64,
+    src: *const f64,
+    mask: Option<*const f64>,
+    rows: &[u32],
+    init: f64,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    unsafe {
+        for c in 0..rows.len() - 1 {
+            let (a, b) = (rows[c] as usize, rows[c + 1] as usize);
+            let mut acc = init;
+            match mask {
+                None => {
+                    for k in a..b {
+                        acc = f(acc, *src.add(k));
+                    }
+                }
+                Some(m) => {
+                    for k in a..b {
+                        if *m.add(k) != 0.0 {
+                            acc = f(acc, *src.add(k));
+                        }
+                    }
+                }
+            }
+            *dst.add(c) = acc;
+        }
+    }
+}

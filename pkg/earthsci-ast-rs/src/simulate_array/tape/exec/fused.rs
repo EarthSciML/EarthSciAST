@@ -634,6 +634,22 @@ unsafe fn exec_fused_runs(
                 if inp.load_reg == GroupIx::MAX {
                     continue;
                 }
+                // A folded data-subscript gather: one random read per element,
+                // through the subscript array's aligned chunk.
+                if let Some((by, n)) = inp.index {
+                    unsafe {
+                        let dst = rp.add(inp.load_reg as usize * FCHUNK);
+                        let sub = bases[by as usize].add(at);
+                        let src = bases[i];
+                        for k in 0..c {
+                            *dst.add(k) = match data_subscript(*sub.add(k), n) {
+                                Some(p) => *src.add(p),
+                                None => 0.0,
+                            };
+                        }
+                    }
+                    continue;
+                }
                 let sx = inp.shifted_ix.expect("load_reg implies shifted");
                 let o = in_off[sx as usize];
                 if o == GHOST_OFF {
@@ -655,6 +671,9 @@ unsafe fn exec_fused_runs(
                     MRef::In(i) => {
                         let inp = &fs.inputs[*i as usize];
                         match inp.shifted_ix {
+                            None if inp.index.is_some() => MSrc::P(unsafe {
+                                rp.add(inp.load_reg as usize * FCHUNK) as *const f64
+                            }),
                             None => MSrc::P(unsafe { bases[*i as usize].add(at) }),
                             Some(s) => {
                                 let o = in_off[s as usize];

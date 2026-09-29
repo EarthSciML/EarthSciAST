@@ -1,0 +1,71 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "shaped_param_no_default",
+    "description": "A shaped parameter `k` with NO default, whose value only the caller's `const_arrays` supplies, read per cell by the state-free observed `g[i] = 2*k[i] + 1`. The caller may key the array by the flattened name `Column.k` or by the model-local name `k` (esm-spec \u00a76.6.2, CONFORMANCE_SPEC \u00a75.32.5)."
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "description": "The shaped parameter under test, bound from the caller's const_arrays."
+        },
+        "g": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "description": "g[i] = 2*k[i] + 1, a state-free observed read back through observed_field."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "g",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    2,
+                    {
+                      "op": "index",
+                      "args": [
+                        "k",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                1
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -157,6 +157,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # Every per-cell route under a strict `native`: refused by name, or compiled
     # once and reported under a tier that says so.
     include("percell_route_refusal_test.jl")
+    # The compiled observed program: observed_field(prob, name; u, t), inline
+    # assertions and sink fields read through it, bit for bit the interpreter's.
+    include("observed_program_test.jl")
 
     # ---- Tree-walk evaluator (src/tree_walk.jl) + discrete-cadence data refresh ----
     include("tree_walk_test.jl")
@@ -285,6 +288,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("array_contraction_test.jl")            # whole-array contraction loop nest (ess-array-contraction)
     include("array_contraction_table_test.jl")      # …its gated / ragged / filtered form, table-driven
     include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
+    include("native_probe_fixtures_test.jl")        # native's probe fixtures: rank > 3, fill sections, const subscripts
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
     # `compiler=:interpreter`: an in-place build that skips no prelude slot,
     # which is what the tiering tests above use as their differential oracle.
@@ -318,6 +322,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("geometry_overlap_join_conformance_test.jl")
     include("geometry_ranged_clip_test.jl")
     include("setup_map_compile_once_test.jl")  # promoted-physics MAP: compile-once == per-cell, bitwise
+    include("setup_fill_test.jl")  # construction-time fills through the cascade: bitwise, one compile across N
     include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == rank-abstract, bitwise
     include("geom_overlap_drive_test.jl")     # setup overlap broad phase: candidate-DRIVEN, and what it changes
     include("geom_on_drive_test.jl")          # setup bin-equality broad phase: key matches DRIVE the sweep
@@ -361,6 +366,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_scalar_ic_test.jl")
     include("conformance_static_evaluation_assertions_test.jl")  # §6.6.3 an assertion's `time` is when it is EVALUATED (#406)
     include("conformance_shaped_parameter_broadcast_test.jl")  # §6.3 scalar-on-a-shaped-parameter broadcast
+    include("conformance_shaped_parameter_const_arrays_test.jl")  # §5.32.5 const_arrays keys for a shaped parameter
     include("conformance_shaped_observed_scalar_broadcast_test.jl")  # §4.3.4 scalar right-hand side on a shaped observed (#262)
     include("conformance_override_key_diagnostics_test.jl")
     include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names

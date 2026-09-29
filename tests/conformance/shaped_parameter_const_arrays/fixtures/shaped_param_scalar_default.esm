@@ -1,0 +1,72 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "shaped_param_scalar_default",
+    "description": "The same document with a scalar `default` of 0.5 on `k`. The caller's `const_arrays` entry, under either spelling of its key, outranks the default; with no entry the default broadcasts (esm-spec \u00a76.3)."
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "description": "The shaped parameter under test, with a scalar default the caller's const array must outrank.",
+          "default": 0.5
+        },
+        "g": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "description": "g[i] = 2*k[i] + 1, a state-free observed read back through observed_field."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "g",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    2,
+                    {
+                      "op": "index",
+                      "args": [
+                        "k",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                1
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

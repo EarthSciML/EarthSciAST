@@ -5,8 +5,9 @@
 //! slab coloring entirely (per-slot owned buffers) so that a coloring bug
 //! cannot mask a lowering bug, and it clones freely.
 
+use super::super::eval::clip_area_value;
 use super::super::*;
-use super::exec::{eval_micro_op, run_rhs_oracle};
+use super::exec::{eval_micro_op, forcing_len, load_forcing, run_rhs_oracle};
 use super::ir::*;
 use ndarray::{ArrayD, ArrayViewD, Axis, IxDyn, Slice};
 use std::cell::RefCell;
@@ -60,6 +61,11 @@ pub(super) fn run_reference(
             break;
         }
         let instr = &prog.instrs[pc];
+        let _precision = prog
+            .precision
+            .get(pc)
+            .filter(|&&p| p != crate::precision::active())
+            .map(|&p| crate::precision::enter(p));
         match instr {
             Instr::Bin { op, a, b, out } => {
                 let f = binary_kernel_of(*op);
@@ -213,6 +219,24 @@ pub(super) fn run_reference(
                     .expect("ConstArray payload matches its shape");
                 slots[*out as usize] = Some(RefVal::Arr(arr));
             }
+            Instr::LoadForcing { forcing, out } => {
+                let fr = &prog.forcings[*forcing as usize];
+                let mut buf = vec![0.0f64; forcing_len(fr)];
+                load_forcing(
+                    fr,
+                    &compiled.forcing.borrow(),
+                    &compiled.declared_names,
+                    &mut buf,
+                );
+                slots[*out as usize] = Some(if fr.shape.is_empty() {
+                    RefVal::Scalar(buf[0])
+                } else {
+                    RefVal::Arr(
+                        ArrayD::from_shape_vec(IxDyn(&fr.shape[..]), buf)
+                            .expect("a forcing load fills its whole box"),
+                    )
+                });
+            }
             Instr::Interp { table, x, y, out } => {
                 let tbl = &prog.interp_tables[*table as usize];
                 let xv = resolve(prog, &slots, &state_arrays, &obs, params, t, x);
@@ -308,6 +332,156 @@ pub(super) fn run_reference(
                     }
                 }
                 slots[*out as usize] = Some(RefVal::Arr(o));
+            }
+            Instr::PolyArea { a, b, geom, out } => {
+                // Every element clipped DENSELY, with no broad phase: the
+                // definition the fast executor's candidate enumeration is
+                // pinned against.
+                let spec = &prog.geoms[*geom as usize];
+                let av = resolve_src(prog, &slots, &state_arrays, &obs, a);
+                let bv = resolve_src(prog, &slots, &state_arrays, &obs, b);
+                assert_eq!(av.shape(), &spec.a.src_shape[..], "PolyArea table a");
+                assert_eq!(bv.shape(), &spec.b.src_shape[..], "PolyArea table b");
+                let ring = |t: &ArrayD<f64>, r: &RingRef, pos: &[usize]| -> Vec<(f64, f64)> {
+                    let mut view = t.view();
+                    for s in &r.sel {
+                        let i = match *s {
+                            RingSel::Fixed(i) => i,
+                            RingSel::Axis { axis, off } => {
+                                (pos[axis as usize] as i64 + off) as usize
+                            }
+                        };
+                        view = view.index_axis_move(Axis(0), i);
+                    }
+                    (0..view.shape()[0])
+                        .map(|v| (view[IxDyn(&[v, 0])], view[IxDyn(&[v, 1])]))
+                        .collect()
+                };
+                let desc = &prog.slots[*out as usize];
+                let val = if desc.scalar {
+                    let (ra, rb) = (ring(&av, &spec.a, &[]), ring(&bv, &spec.b, &[]));
+                    RefVal::Scalar(clip_area_value(&ra, &rb, spec.manifold))
+                } else {
+                    let mut o = ArrayD::<f64>::zeros(IxDyn(&desc.shape[..]));
+                    for (pos, y) in o.indexed_iter_mut() {
+                        let pos = ndarray::Dimension::slice(&pos).to_vec();
+                        let pos = &pos[..];
+                        let (ra, rb) = (ring(&av, &spec.a, pos), ring(&bv, &spec.b, pos));
+                        *y = clip_area_value(&ra, &rb, spec.manifold);
+                    }
+                    RefVal::Arr(o)
+                };
+                slots[*out as usize] = Some(val);
+            }
+            Instr::IndexGather {
+                src,
+                idx,
+                spec,
+                out,
+            } => {
+                let spec = &prog.index_gathers[*spec as usize];
+                let sv = resolve_src(prog, &slots, &state_arrays, &obs, src);
+                assert_eq!(sv.shape(), &spec.src_shape[..], "IndexGather source box");
+                let iv = resolve(prog, &slots, &state_arrays, &obs, params, t, idx);
+                let iv = to_shape(&iv, &spec.shape);
+                let mut o = ArrayD::<f64>::zeros(IxDyn(&spec.shape[..]));
+                let mut at: Vec<usize> = vec![0; spec.axes.len()];
+                for (pos, y) in o.indexed_iter_mut() {
+                    let pos = ndarray::Dimension::slice(&pos).to_vec();
+                    let pos = &pos[..];
+                    let mut ghost = false;
+                    for (d, ax) in spec.axes.iter().enumerate() {
+                        at[d] = match *ax {
+                            GatherAxis::Fixed(i) => i,
+                            GatherAxis::Affine { axis, off } => {
+                                (pos[axis as usize] as i64 + off) as usize
+                            }
+                            GatherAxis::Data => match data_subscript(iv[IxDyn(pos)], sv.shape()[d])
+                            {
+                                Some(p) => p,
+                                None => {
+                                    ghost = true;
+                                    0
+                                }
+                            },
+                        };
+                    }
+                    *y = if ghost { 0.0 } else { sv[IxDyn(&at)] };
+                }
+                slots[*out as usize] = Some(RefVal::Arr(o));
+            }
+            Instr::TableGather { src, table, out } => {
+                let sv = resolve_src(prog, &slots, &state_arrays, &obs, src);
+                let tbl = &prog.gather_tables[*table as usize];
+                assert_eq!(sv.shape(), &tbl.src_shape[..], "TableGather source box");
+                let flat: Vec<f64> = sv.iter().copied().collect();
+                let vals: Vec<f64> = tbl
+                    .pos
+                    .iter()
+                    .map(|&p| {
+                        if p == GATHER_GHOST {
+                            0.0
+                        } else {
+                            flat[p as usize]
+                        }
+                    })
+                    .collect();
+                let n = vals.len();
+                let o = ArrayD::from_shape_vec(IxDyn(&[n]), vals).expect("1-D gather box");
+                slots[*out as usize] = Some(RefVal::Arr(o));
+            }
+            Instr::SegReduce {
+                op,
+                init,
+                src,
+                mask,
+                table,
+                out,
+            } => {
+                let f = binary_kernel_of(*op);
+                let terms = match slots[*src as usize].as_ref() {
+                    Some(RefVal::Arr(a)) => a.iter().copied().collect::<Vec<f64>>(),
+                    other => panic!("SegReduce source is not an array slot: {other:?}"),
+                };
+                let keep: Option<Vec<f64>> = mask.map(|m| match slots[m as usize].as_ref() {
+                    Some(RefVal::Arr(a)) => a.iter().copied().collect(),
+                    other => panic!("SegReduce mask is not an array slot: {other:?}"),
+                });
+                let rows = &prog.seg_tables[*table as usize].rows;
+                let mut cells = Vec::with_capacity(rows.len() - 1);
+                for c in 0..rows.len() - 1 {
+                    let mut acc = *init;
+                    for k in rows[c] as usize..rows[c + 1] as usize {
+                        if keep.as_ref().is_none_or(|m| m[k] != 0.0) {
+                            acc = f(acc, terms[k]);
+                        }
+                    }
+                    cells.push(acc);
+                }
+                let desc = &prog.slots[*out as usize];
+                let val = if desc.scalar {
+                    RefVal::Scalar(cells[0])
+                } else {
+                    RefVal::Arr(
+                        ArrayD::from_shape_vec(IxDyn(&desc.shape[..]), cells)
+                            .expect("SegReduce output box"),
+                    )
+                };
+                slots[*out as usize] = Some(val);
+            }
+            Instr::Reshape { src, out } => {
+                let sv = resolve_src(prog, &slots, &state_arrays, &obs, src);
+                let desc = &prog.slots[*out as usize];
+                // `iter()` is the logical row-major walk.
+                let flat: Vec<f64> = sv.iter().copied().collect();
+                let arr = ArrayD::from_shape_vec(IxDyn(&desc.shape[..]), flat)
+                    .expect("Reshape keeps the element count");
+                slots[*out as usize] = Some(RefVal::Arr(arr));
+            }
+            Instr::Fault { fault } => {
+                crate::simulate_array::eval::latch_gather_fault(
+                    prog.faults[*fault as usize].clone(),
+                );
             }
             Instr::JmpIfZero {
                 cond,
@@ -432,7 +606,15 @@ pub(super) fn run_reference(
                                 MRef::In(i) => {
                                     let inp = &fs.inputs[*i as usize];
                                     match inp.shifted_ix {
-                                        None => flats[*i as usize][at],
+                                        None => match inp.index {
+                                            Some((by, n)) => {
+                                                match data_subscript(flats[by as usize][at], n) {
+                                                    Some(p) => flats[*i as usize][p],
+                                                    None => 0.0,
+                                                }
+                                            }
+                                            None => flats[*i as usize][at],
+                                        },
                                         Some(s) => {
                                             let o = run.in_off[s as usize];
                                             if o == GHOST_OFF {
