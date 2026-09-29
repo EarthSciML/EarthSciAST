@@ -1191,16 +1191,21 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # side's cascade, reading the state `u` through the build's own layout. An
     # observed it does not take (one the build dropped, a build constant, a
     # shape it cannot factor) falls through to the build-time route below.
-    if ctx !== nothing && _array_cascade_on()
-        bname = _program_build_name(ctx, qualified, bare)
-        prog = bname === nothing ? nothing : _observed_program!(ctx, bname)
+    # A causal self-reference (esm-spec §4.3.1.1) has no cellwise form — its
+    # self-read reads the buffer its sweep writes — so a read that reaches one
+    # takes the program under every compiler (observed_program.jl).
+    bname = ctx === nothing ? nothing : _program_build_name(ctx, qualified, bare)
+    cascade = _array_cascade_on()
+    if bname !== nothing && (cascade || _obs_reaches_recurrence(ctx, bname))
+        prog = _observed_program!(ctx, bname)
         if prog !== nothing && prog.dims == exts
             (u === nothing && prog.reads_state) && throw(SimulateError(
                 "observed '$(variable)' reads the continuous state, so it is not " *
                 "a build-time field; pass the state to read it at, " *
                 "`observed_field(prob, name; u = …, t = …)`"))
             vals = _run_observed_program(ctx, prog, u, tval, p)
-            _note_program_read!()
+            # Under the interpreter the program's fills are walked per cell.
+            cascade ? _note_program_read!() : _note_percell!()
             return (vals, prog.cells)
         end
     end

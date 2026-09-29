@@ -33,70 +33,10 @@
       "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `WeatherModel.external_temperature_forcing`"
     },
     {
-      "path": "tests/fixtures/recurrence/01_recurrence_doubling.esm",
-      "code": "compiler_refused_rule",
-      "rule": "RecurrenceDoubling.s",
-      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
-    },
-    {
-      "path": "tests/fixtures/recurrence/02_recurrence_cancellation_ladder.esm",
-      "code": "compiler_refused_rule",
-      "rule": "RecurrenceCancellationLadder.s",
-      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
-    },
-    {
-      "path": "tests/fixtures/recurrence/03_recurrence_multi_lag.esm",
-      "code": "compiler_refused_rule",
-      "rule": "RecurrenceMultiLag.s",
-      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
-    },
-    {
-      "path": "tests/fixtures/recurrence/04_recurrence_banded_lag_fold.esm",
-      "code": "compiler_refused_rule",
-      "rule": "RecurrenceBandedLagFold.r",
-      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
-    },
-    {
-      "path": "tests/fixtures/recurrence/05_recurrence_two_axes.esm",
-      "code": "compiler_refused_rule",
-      "rule": "RecurrenceOnOneOfTwoAxes.m",
-      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
-    },
-    {
-      "path": "tests/fixtures/recurrence/06_recurrence_float32_state.esm",
-      "code": "compiler_refused_rule",
-      "rule": "RecurrenceFloat32State.s",
-      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
-    },
-    {
-      "path": "tests/fixtures/recurrence/07_recurrence_thirty_eight_lags.esm",
-      "code": "compiler_refused_rule",
-      "rule": "RecurrenceThirtyEightLags.r",
-      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
-    },
-    {
-      "path": "tests/fixtures/recurrence/08_recurrence_parameter_valued_lag.esm",
-      "code": "compiler_refused_rule",
-      "rule": "RecurrenceParameterValuedLag.s",
-      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
-    },
-    {
-      "path": "tests/fixtures/recurrence/09_recurrence_through_expression_template.esm",
-      "code": "compiler_refused_rule",
-      "rule": "RecurrenceThroughExpressionTemplate.s",
-      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
-    },
-    {
       "path": "tests/scoping/hierarchical_scoped_references.esm",
       "code": "compiler_refused_rule",
       "rule": "D(SubsystemA.local_state)",
       "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `ParentSystem.SubsystemA.DeepSubA.deep_variable`"
-    },
-    {
-      "path": "tests/valid/recurrence_causal_self_reference.esm",
-      "code": "compiler_refused_rule",
-      "rule": "RecurrenceCausalSelfReference.r",
-      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
     },
     {
       "path": "tests/valid/scoped_refs_nested.esm",

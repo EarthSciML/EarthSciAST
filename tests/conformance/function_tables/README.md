@@ -49,14 +49,20 @@ that, because their harnesses do the lowering themselves.
 ### `out_of_bounds_error/fixture.esm`
 
 A table declaring `out_of_bounds: "error"`, the §9.5.1 mode that is
-"conformant when implemented" and that no binding implements as of v1.0.0.
-The document **loads** — it is schema-valid and §9.5.5 lists no load-time
-diagnostic for it — and it **round-trips**. What it must not do is evaluate as
-though it said `"clamp"`: every binding refuses the lookup with
-`table_out_of_bounds_unsupported` at the point it would otherwise lower or
-dispatch the node (esm-spec §9.5.3a). Answering in the mode the binding
-happens to have, rather than the one the author declared, is a wrong number
-with nothing in the result to say so.
+"conformant when implemented". The document **loads** — it is schema-valid and
+§9.5.5 lists no load-time diagnostic for it — and it **round-trips**. What it
+must not do is evaluate as though it said `"clamp"`. A binding that does not
+implement the mode refuses the lookup with `table_out_of_bounds_unsupported`
+at the point it would otherwise lower or dispatch the node (esm-spec §9.5.3a).
+A binding that does implement it (Rust) answers the fixture's in-range query
+(`p = 2.5`) with exactly the clamp lowering's 25.0, and raises
+`table_lookup_out_of_bounds` at evaluation time for a query strictly outside
+the axis `[1, 4]` (a query on an end knot is in range, and a NaN query is
+not out of bounds: it passes through and yields NaN, per esm-spec §9.5.3a) —
+under every compiler it offers, or refuses the compiler by
+name (Rust's `xla`, which has no channel to raise a run-time error). Answering
+in the mode the binding happens to have, rather than the one the author
+declared, is a wrong number with nothing in the result to say so.
 
 ## Per-binding contract
 
@@ -71,7 +77,8 @@ All five language bindings (Julia, Python, TypeScript, Rust, Go) MUST:
    esm-spec §9.2 tolerance contract).
 3. Apply that materialization **on the path that evaluates a document**, not
    only inside the binding's own test harness — pinned by `inline_test/`.
-4. Refuse `out_of_bounds: "error"` by name — pinned by `out_of_bounds_error/`.
+4. Refuse `out_of_bounds: "error"` by name, or implement it — pinned by
+   `out_of_bounds_error/`.
 5. Round-trip the loaded file: `parse → serialize → parse → serialize`
    yields bit-identical bytes (modulo whitespace), preserving the authored
    `function_tables` block and `table_lookup` nodes.

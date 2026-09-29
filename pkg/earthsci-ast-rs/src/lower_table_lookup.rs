@@ -25,13 +25,16 @@
 //! [`crate::registered_functions`] `interp.linear` / `interp.bilinear`
 //! implementations an author would have invoked by hand.
 //!
-//! **`out_of_bounds: "error"` is REFUSED, not silently clamped.** `"clamp"` is
-//! required of every binding and `"error"` is "conformant when implemented"
-//! (§9.5.1); this binding does not implement it, so §9.5.3a makes the lookup a
-//! `table_out_of_bounds_unsupported` error here rather than an `interp.*` tree
-//! that answers in a mode the author did not ask for. That would be the same
-//! defect as the one this module exists to fix: a wrong number with nothing in
-//! the result to say so.
+//! **`out_of_bounds: "error"` lowers to the same tree, marked.** `"clamp"` is
+//! exactly what `interp.linear` / `interp.bilinear` do at the ends, so the
+//! §9.5.3 tree IS the clamp semantics. An `"error"` table lowers to that same
+//! tree with the table's id on the `interp.*` node's `table` field (on the
+//! `interp.searchsorted` node for `nearest`): the marker tells both evaluators
+//! to check each query against its axis before the interpolation core and to
+//! raise `table_lookup_out_of_bounds` for a query outside it
+//! ([`out_of_bounds_fault`]). An in-range query computes the very same `f64`
+//! the clamp tree would. A marker on a `fn` node is never authored — `table`
+//! belongs to `table_lookup` — so it cannot collide with a document.
 
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -285,22 +288,11 @@ fn lower_node(
             ),
         )
     })?;
-    // esm-spec §9.5.3a. `clamp` (the default) is exactly what `interp.linear`
-    // / `interp.bilinear` do at the ends, so the lowering IS the semantics
-    // there; `error` has no lowered form at all, and answering it with the
-    // clamping one would hand back a number the author did not ask for with
-    // nothing in the result to say so.
-    if table.out_of_bounds.as_deref() == Some("error") {
-        return Err(err(
-            codes::TABLE_OUT_OF_BOUNDS_UNSUPPORTED,
-            format!(
-                "table `{table_id}` declares `out_of_bounds: \"error\"`, which this binding does \
-                 not implement; only `\"clamp\"` (the default) is available, and answering an \
-                 `\"error\"` table under clamp semantics would be a silently different result \
-                 (esm-spec §9.5.3a)"
-            ),
-        ));
-    }
+    // esm-spec §9.5.1. `clamp` (the default) is exactly what `interp.linear` /
+    // `interp.bilinear` do at the ends, so the lowering IS the semantics there;
+    // `error` is the same tree carrying the table id, which makes the
+    // evaluators check each query against its axis first.
+    let strict = (table.out_of_bounds.as_deref() == Some("error")).then_some(table_id);
     let inputs = axis_inputs(node, table, table_id)?;
     let output = output_index(node, table, table_id)?;
     let data = output_slice(table, output, table_id)?;
@@ -308,6 +300,7 @@ fn lower_node(
     let kind = table.interpolation.as_deref().unwrap_or("linear");
     match (kind, table.axes.as_slice()) {
         ("linear", [x]) => Ok(closed_fn(
+            strict,
             "interp.linear",
             vec![
                 const_expr(data.clone()),
@@ -316,6 +309,7 @@ fn lower_node(
             ],
         )),
         ("bilinear", [x, y]) => Ok(closed_fn(
+            strict,
             "interp.bilinear",
             vec![
                 const_expr(data.clone()),
@@ -332,6 +326,7 @@ fn lower_node(
             args: vec![
                 const_expr(data.clone()),
                 closed_fn(
+                    strict,
                     "interp.searchsorted",
                     vec![inputs[0].clone(), axis_const(x, table_id)?],
                 ),
@@ -501,12 +496,53 @@ fn const_expr(value: Value) -> Expr {
     })
 }
 
-fn closed_fn(name: &str, args: Vec<Expr>) -> Expr {
+/// A §9.2 `fn` node; `strict` is the id of an `out_of_bounds: "error"` table,
+/// carried as the marker the evaluators check.
+fn closed_fn(strict: Option<&str>, name: &str, args: Vec<Expr>) -> Expr {
     Expr::operator(ExpressionNode {
         op: "fn".to_string(),
         name: Some(name.to_string()),
+        table: strict.map(str::to_string),
         args,
         ..Default::default()
+    })
+}
+
+/// The id of the `out_of_bounds: "error"` table a lowered `fn` node was
+/// produced from, or `None` for every other node (every authored `fn`, and
+/// every lookup into a `clamp` table).
+pub(crate) fn strict_table(node: &ExpressionNode) -> Option<&str> {
+    if node.op == "fn" {
+        node.table.as_deref()
+    } else {
+        None
+    }
+}
+
+/// The `table_lookup_out_of_bounds` diagnostic for query `x` on axis number
+/// `which` (1-based, in the table's declared order) of the
+/// `out_of_bounds: "error"` table `table_id`, or `None` when `x` is in range.
+///
+/// Out of range means strictly below the first knot or strictly above the
+/// last: exactly the queries `clamp` would answer with an end value it did not
+/// interpolate. A query ON an end knot is in range (`clamp` returns that knot's
+/// value there too), and a NaN query is not out of range — both comparisons
+/// are false — so it propagates through the blend as §9.2 says for
+/// `interp.linear`. One function for both evaluators, so the tape and the
+/// per-cell oracle raise the same text.
+pub(crate) fn out_of_bounds_fault(
+    table_id: &str,
+    which: usize,
+    axis: &[f64],
+    x: f64,
+) -> Option<String> {
+    let (&lo, &hi) = (axis.first()?, axis.last()?);
+    (x < lo || x > hi).then(|| {
+        format!(
+            "{}: table `{table_id}` declares `out_of_bounds: \"error\"`, and the query {x} on its \
+             axis {which} lies outside the axis range [{lo}, {hi}] (esm-spec §9.5.1)",
+            codes::TABLE_LOOKUP_OUT_OF_BOUNDS
+        )
     })
 }
 
@@ -683,17 +719,61 @@ mod tests {
         );
     }
 
-    /// esm-spec §9.5.3a: `out_of_bounds: "error"` is not implemented here, so
-    /// the lookup is REFUSED rather than answered under `"clamp"`.
+    /// esm-spec §9.5.1: an `out_of_bounds: "error"` table lowers to the clamp
+    /// tree with the table id on the `interp.*` node, and nothing else about
+    /// the tree changes — the in-range arithmetic is the clamp arithmetic.
     #[test]
-    fn an_error_out_of_bounds_mode_is_refused_rather_than_clamped() {
-        assert_refused_with(
-            &FIXTURE.replace(
-                "\"interpolation\": \"linear\",",
-                "\"interpolation\": \"linear\", \"out_of_bounds\": \"error\",",
-            ),
-            codes::TABLE_OUT_OF_BOUNDS_UNSUPPORTED,
-        );
+    fn an_error_out_of_bounds_table_lowers_to_the_marked_spec_form() {
+        let mut file = load_string(&FIXTURE.replace(
+            "\"interpolation\": \"linear\",",
+            "\"interpolation\": \"linear\", \"out_of_bounds\": \"error\",",
+        ))
+        .expect("loads");
+        lower_table_lookups(&mut file).expect("`error` is implemented");
+        let lowered = serde_json::to_value(rhs(&file)).unwrap();
+        assert_eq!(lowered["name"], "interp.linear");
+        assert_eq!(lowered["table"], "t_prof", "the strict-table marker");
+
+        let mut clamp = load_string(FIXTURE).expect("loads");
+        lower_table_lookups(&mut clamp).expect("lowers");
+        let mut unmarked = lowered.clone();
+        unmarked.as_object_mut().unwrap().remove("table");
+        assert_eq!(unmarked, serde_json::to_value(rhs(&clamp)).unwrap());
+    }
+
+    /// `nearest` carries the marker on its `interp.searchsorted`, the node
+    /// that reads the query.
+    #[test]
+    fn a_nearest_error_table_marks_its_searchsorted() {
+        let mut file = load_string(&FIXTURE.replace(
+            "\"interpolation\": \"linear\",",
+            "\"interpolation\": \"nearest\", \"out_of_bounds\": \"error\",",
+        ))
+        .expect("loads");
+        lower_table_lookups(&mut file).expect("lowers");
+        let lowered = serde_json::to_value(rhs(&file)).unwrap();
+        assert_eq!(lowered["op"], "index");
+        assert!(lowered.get("table").is_none());
+        assert_eq!(lowered["args"][1]["name"], "interp.searchsorted");
+        assert_eq!(lowered["args"][1]["table"], "t_prof");
+    }
+
+    /// The range test: strictly outside the end knots raises, an end knot and
+    /// a NaN do not.
+    #[test]
+    fn out_of_bounds_is_strictly_outside_the_end_knots() {
+        let axis = [1.0, 2.0, 4.0];
+        for x in [1.0, 1.5, 4.0, f64::NAN] {
+            assert_eq!(out_of_bounds_fault("t", 1, &axis, x), None, "x = {x}");
+        }
+        for x in [0.999, -1.0, 4.0000001, f64::INFINITY, f64::NEG_INFINITY] {
+            let msg = out_of_bounds_fault("t", 2, &axis, x).expect("out of range");
+            assert!(
+                msg.starts_with("table_lookup_out_of_bounds: table `t`"),
+                "{msg}"
+            );
+            assert!(msg.contains("axis 2"), "{msg}");
+        }
     }
 
     /// …and `"clamp"` — the mode every binding implements — still lowers.

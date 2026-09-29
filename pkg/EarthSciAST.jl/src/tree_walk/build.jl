@@ -1834,47 +1834,37 @@ function _split_observed_and_derivatives(equations::Vector{Equation},
     # A CAUSAL SELF-REFERENCE is not a cycle (esm-spec §4.3.1.1), and it must
     # not reach `_resolve_observed` — which would substitute the body into
     # itself, hit its iteration cap, and report `E_TREEWALK_OBSERVED_CYCLE` for
-    # a document the spec calls acyclic. Told apart here, before the fixed
-    # point, so a bare self-reference keeps the cycle diagnosis it earns and a
-    # recurrence gets its own.
-    _decline_recurrence_definitions(observed_exprs, mat_defs, array_shaped_vars)
+    # a document the spec calls acyclic. A recurrence is materialized (its fill
+    # is an ordered sweep, recurrence_sweep.jl), so it sits in `mat_defs`; one
+    # left in the substitution map is one whose buffer could not be laid out,
+    # and is refused here by name. A bare self-reference keeps the cycle
+    # diagnosis it earns.
+    _decline_unmaterialized_recurrences(observed_exprs, array_shaped_vars)
     return derivative_eqs, _resolve_observed(observed_exprs), observed_exprs, mat_defs
 end
 
-# Fail closed on a recurrence definition this backend cannot honour.
-#
-# The array backend builds per-cell INDEPENDENT kernels and CLASS-MERGES them,
-# and the merge reorders cells; the one sequential-across-cells construct it has
-# is the prefix scan's post-pass fold (tree_walk/scan.jl), whose combine step is
-# a fixed `combine(acc, du[slot])` rather than an evaluated expression. A
-# recurrence needs a compiled cell body evaluated INSIDE the sweep loop, so
-# there is no path here it can take — and CONFORMANCE_SPEC §5.19.2 is explicit
-# that a binding whose default array path reorders cells MUST decline that path
-# for this construct specifically rather than "approximate" it: the cells are
-# not independent, so a reordering is a different computation, not an equivalent
-# one. Declining loudly is therefore the correct behaviour, and the only wrong
-# one is running it anyway. Tracked as Julia binding debt in
-# `docs/content/rfcs/causal-self-reference-recurrence.md` §6.1.
-function _decline_recurrence_definitions(observed_exprs::Dict{String,ASTExpr},
-                                         mat_defs::Dict{String,ASTExpr},
-                                         array_shaped_vars)
-    for defs in (observed_exprs, mat_defs)
-        for name in sort!(collect(keys(defs)))
-            # CANDIDACY, exactly as CONFORMANCE_SPEC §5.19.5 defines it: an
-            # array-shaped unknown with at least one `index` self-read, well
-            # founded or not. A scalar self-reference has no axis to fold along
-            # and can never be a recurrence, so it keeps whatever diagnosis it
-            # had — the self-edge exemption must not weaken cycle handling.
-            name in array_shaped_vars || continue
-            recurrence_self_reference_kind(name, defs[name]) === :indexed || continue
-            throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_RECURRENCE",
-                "'$name' is defined by a causal self-reference (esm-spec §4.3.1.1): its " *
-                "own right-hand side reads `index($name, …)`. This is a well-founded " *
-                "recurrence, NOT a dependency cycle — but this backend's array path " *
-                "class-merges per-cell kernels and so reorders cells, which " *
-                "CONFORMANCE_SPEC §5.19.2 forbids for a construct whose cells are not " *
-                "independent. Declining rather than returning a reordered answer."))
-        end
+# Fail closed on a recurrence definition that did not become a materialized
+# observed. Its cells are defined by one another, so there is no inlined form of
+# it (CONFORMANCE_SPEC §5.19.2): without the buffer its sweep writes, it cannot
+# be evaluated at all, and declining loudly is the only correct behaviour.
+function _decline_unmaterialized_recurrences(observed_exprs::Dict{String,ASTExpr},
+                                             array_shaped_vars)
+    for name in sort!(collect(keys(observed_exprs)))
+        # CANDIDACY, exactly as CONFORMANCE_SPEC §5.19.5 defines it: an
+        # array-shaped unknown with at least one `index` self-read, well
+        # founded or not. A scalar self-reference has no axis to fold along
+        # and can never be a recurrence, so it keeps whatever diagnosis it
+        # had — the self-edge exemption must not weaken cycle handling.
+        name in array_shaped_vars || continue
+        recurrence_self_reference_kind(name, observed_exprs[name]) === :indexed || continue
+        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_RECURRENCE",
+            "'$name' is defined by a causal self-reference (esm-spec §4.3.1.1): its " *
+            "own right-hand side reads `index($name, …)`. This is a well-founded " *
+            "recurrence, NOT a dependency cycle, and it is evaluated by an ordered " *
+            "sweep into a buffer laid out over its frame — but this build could not " *
+            "lay one out: its defining `faq`'s output ranges are not the dense `1…n` " *
+            "box of its declared shape, or it is owned by a mechanism that builds it " *
+            "some other way (a setup-time geometry array, a discrete-cadence cache)."))
     end
     return nothing
 end
@@ -2627,7 +2617,7 @@ function _compile_discrete_fill(name::String, def::OpExpr, dims::Vector{Int},
     rec === nothing || (rec.current = name)
     section = _make_kernel_section(merged)
     rec === nothing || (rec.current = "")
-    levels = ((scal, section, sfs, _make_contraction_section(acs)),)
+    levels = ((scal, section, sfs, _make_contraction_section(acs), ()),)
     return () -> (_fill_obs_levels!(levels, cvec, pp, 0.0, Float64); nothing)
 end
 
@@ -2731,8 +2721,7 @@ end
 # walk expands through every non-materialized observed definition and stops at
 # the materialized ones (their buffers are the dependency).
 #
-# A fill that reaches its OWN buffer through an inlined observed (an `index`
-# self-read in its own body is declined earlier, as a recurrence) is an
+# A fill that reaches its OWN buffer through an inlined observed is an
 # observed cycle, and is refused here with the code the inlining build
 # (`_resolve_observed`) and `validate()` give it. It must be: a level's kernel
 # section runs in an alias scope that asserts no store to the buffers it fills
@@ -2741,16 +2730,24 @@ end
 # from a `Model` that skipped `validate()` would otherwise put a load of a slot
 # the same section stores into that scope, which is undefined, not merely
 # stale. The check is per observed and per name it reaches, never per cell.
+#
+# The one self-edge that is not a cycle is a recurrence's DIRECT self-read
+# (esm-spec §4.3.1.1): its fill is an ordered sweep that reads only the cells it
+# has already written (recurrence_sweep.jl), not a kernel section. So a
+# recurrence's direct reads of its own name are left out of its edges; reaching
+# itself through an inlined observed is still the cycle above.
 function _materialized_obs_levels(mat_defs::Dict{String,ASTExpr}, names,
                                   inline_obs::Dict{String,ASTExpr})
     nm = Set{String}(names)
+    recur = _recurrence_names(mat_defs, nm)
     # The materialized buffers `root` reads, and for each the inlined observed
-    # it was reached through (`nothing` for a direct read).
-    function reach(root::ASTExpr)
+    # it was reached through (`nothing` for a direct read). A direct read of
+    # `skip` is not followed.
+    function reach(root::ASTExpr, skip::Union{Nothing,String}=nothing)
         out = Dict{String,Union{Nothing,String}}()
         via = Dict{String,Union{Nothing,String}}()
         frontier = Tuple{String,Union{Nothing,String}}[
-            (r, nothing) for r in _referenced_var_names(root)]
+            (r, nothing) for r in _referenced_var_names(root) if r != skip]
         while !isempty(frontier)
             r, from = pop!(frontier)
             if r in nm
@@ -2764,7 +2761,7 @@ function _materialized_obs_levels(mat_defs::Dict{String,ASTExpr}, names,
     end
     deps = Dict{String,Set{String}}()
     for n in sort!(collect(names))
-        out, via = reach(mat_defs[n])
+        out, via = reach(mat_defs[n], n in recur ? n : nothing)
         if haskey(out, n)
             path = String[n]
             step = out[n]
@@ -2793,8 +2790,8 @@ end
 # UNCHANGED when nothing is materialized, so every model without a factored array
 # observed keeps a byte-identical closure (and its zero-allocation property).
 # `levels` is a vector of
-# `(scalar_nodes, kernel_section, scan_folds, array_contractions)` in dependency
-# order.
+# `(scalar_nodes, kernel_section, scan_folds, array_contractions,
+# recurrence_sweeps)` in dependency order.
 function _make_rhs_with_obs_buffers(f_state!, n_total::Int, n_states::Int,
                                     levels::Tuple)
     isempty(levels) && return f_state!
@@ -2835,6 +2832,9 @@ end
     # same position behind the kernel section that `_make_rhs` puts them in.
     ac = lv[4]
     isempty(ac) || _apply_array_contractions!(ue, ue, p, t, ac, T)
+    # This level's causal self-references, each one ordered sweep over its own
+    # buffer (recurrence_sweep.jl). Nothing else in the level reads them.
+    _run_recurrence_sweeps!(lv[5], ue, p, t, T)
     return _fill_obs_levels!(Base.tail(levels), ue, p, t, T)
 end
 
@@ -2896,6 +2896,17 @@ function _build_lower_and_classify(model::Model;
     # physics over it) stay inlined: after the discrete cut they reduce to affine blends
     # of the discrete caches that the symbolic-stencil folder handles. Without the sink
     # both sets are empty and the inline sets are untouched (byte-identical pre-cut).
+    # ---- Causal self-references (esm-spec §4.3.1.1, recurrence_sweep.jl) ----
+    # Array observeds whose own definition reads `index(self, …)`. Each is
+    # materialized into a buffer by an ordered sweep under every compiler, so it
+    # is kept out of every cut below that would move it elsewhere, together with
+    # everything that reads it (a discrete- or const-cadence fill runs outside
+    # the right-hand side, where its buffer is not filled).
+    recur_vars = _recurrence_names(
+        Dict{String,ASTExpr}((eq.lhs::VarExpr).name => eq.rhs
+                             for eq in equations if eq.lhs isa VarExpr &&
+                             (eq.lhs::VarExpr).name in array_inline_vars),
+        array_inline_vars)
     discrete_vars = Set{String}()
     if materialize_out !== nothing
         pre_state = setdiff(Set{String}(solver_unknowns(model)), vi_vars)
@@ -2905,6 +2916,11 @@ function _build_lower_and_classify(model::Model;
             equations, union(geom_inline_vars, array_inline_vars),
             copy(array_inline_vars), pre_state,
             Set{String}(String(k) for k in keys(param_arrays)), scalar_params)
+        if !isempty(recur_vars)
+            reach = _recurrence_readers(equations, recur_vars)
+            setdiff!(discrete_vars, reach)
+            setdiff!(const_mat_vars, reach)
+        end
         setdiff!(geom_inline_vars, discrete_vars)
         setdiff!(array_inline_vars, discrete_vars)
         setdiff!(array_inline_vars, const_mat_vars)
@@ -2954,6 +2970,10 @@ function _build_lower_and_classify(model::Model;
     # forms now carry the same materialized-observed fill levels.
     mat_array_vars = _collect_materialized_array_obs(model, equations,
                                                      array_inline_vars, discrete_vars)
+    # A recurrence cannot be inlined into its readers — its cells are defined by
+    # one another — so it is materialized whatever the compiler, and whether or
+    # not anything reads it: the output-time routes read the same buffer.
+    union!(mat_array_vars, recur_vars)
 
     return (; equations, folded_array_obs,
             has_geometry=geo.has_geometry,
@@ -2961,7 +2981,28 @@ function _build_lower_and_classify(model::Model;
             geom_ring_vars=geo.ring_vars, geom_setup_vars=geo.setup_vars,
             geom_defs=geo.defs, geom_inline_vars, array_inline_vars,
             discrete_vars, pia_operand_vars, pia_operand_arrays,
-            const_obs_vars, const_obs_arrays, mat_array_vars)
+            const_obs_vars, const_obs_arrays, mat_array_vars, recur_vars)
+end
+
+# The names in `recur_vars` and every observed that reads one of them, directly
+# or through other observed definitions.
+function _recurrence_readers(equations::Vector{Equation}, recur_vars::Set{String})
+    defs = Dict{String,ASTExpr}()
+    for eq in equations
+        eq.lhs isa VarExpr && (defs[(eq.lhs::VarExpr).name] = eq.rhs)
+    end
+    reach = copy(recur_vars)
+    _saturate!() do
+        changed = false
+        for (n, rhs) in defs
+            n in reach && continue
+            if any(r -> r in reach, _referenced_var_names(rhs))
+                push!(reach, n); changed = true
+            end
+        end
+        changed
+    end
+    return reach
 end
 
 # ---- Phase 2: ODE variable partition + setup materialization + equation rewrites ----
@@ -3341,8 +3382,19 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         # in it must be substituted — including references between factored
         # observeds. Re-resolving the merged map restores exactly that, and only
         # when a sink asked for it.
+        # A recurrence's definition reads itself, so it has no fully substituted
+        # form: it is published as authored, and the others around it.
+        recur_pub = _recurrence_names(mat_defs, mat_vars)
         published = isempty(mat_defs) ? resolved_obs :
-            _resolve_observed(merge(Dict{String,ASTExpr}(resolved_obs), mat_defs))
+            _resolve_observed(merge(Dict{String,ASTExpr}(resolved_obs),
+                                    Dict{String,ASTExpr}(k => v for (k, v) in mat_defs
+                                                         if !(k in recur_pub))))
+        if !isempty(recur_pub)
+            published = Dict{String,ASTExpr}(published)
+            for k in recur_pub
+                published[k] = mat_defs[k]
+            end
+        end
         for (k, e) in published
             inspect.observed_exprs[String(k)] = e
         end
@@ -3468,13 +3520,34 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     mat_levels_oop = Any[]
     mat_scan_fold_count = 0
     mat_array_contraction_count = 0
+    mat_recurrence_count = 0
+    recur_names = _recurrence_names(mat_defs, mat_vars)
     if !isempty(mat_vars)
         for lvl in _materialized_obs_levels(mat_defs, mat_vars, raw_obs)
             lvl_scalars = Tuple{Int,_Node}[]
             lvl_kernels = _AccKernel[]
             lvl_scans = _ScanFold[]
             lvl_acs = _ArrayContraction[]
+            lvl_recurs = Any[]
             for name in lvl
+                if name in recur_names
+                    # A causal self-reference: an ordered sweep, not a fill
+                    # equation (recurrence_sweep.jl). The out-of-place product
+                    # has no sweep section, so a compiler that builds it
+                    # refuses the rule by name.
+                    form === :oop && _refuse_rule(name,
+                        "an ordered recurrence sweep (esm-spec §4.3.1.1) has no " *
+                        "lowering in the out-of-place product this compiler emits; " *
+                        "its cells cannot be computed as one whole-array program " *
+                        "(CONFORMANCE_SPEC §5.19.2)")
+                    sw = _compile_recurrence_sweep(name, mat_defs[name],
+                        layout.mat_dims[name], get(model.variables, name, nothing),
+                        resolved_obs, array_var_info, var_map, const_registry,
+                        pgather, param_sym_set, reg_funcs)
+                    _record_rule!(name, :observed, _recurrence_tier(sw))
+                    push!(lvl_recurs, sw)
+                    continue
+                end
                 feq = _materialized_fill_equation(name, mat_defs[name],
                                                   layout.mat_dims[name])
                 se, pcs, aks, sfs, acs = _compile_derivative_equations(Equation[feq],
@@ -3494,6 +3567,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             merged, _ = _merge_acc_kernel_classes(lvl_kernels)
             mat_scan_fold_count += length(lvl_scans)
             mat_array_contraction_count += length(lvl_acs)
+            mat_recurrence_count += length(lvl_recurs)
             if form === :oop
                 push!(mat_levels_oop,
                       (lvl_scalars, merged,
@@ -3502,7 +3576,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             else
                 push!(mat_levels,
                       (lvl_scalars, _make_kernel_section(merged), lvl_scans,
-                       _make_contraction_section(lvl_acs)))
+                       _make_contraction_section(lvl_acs), Tuple(lvl_recurs)))
             end
         end
     end
@@ -3673,6 +3747,9 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               # to the kernel counts above.
               n_array_contractions = length(array_contractions) +
                                      mat_array_contraction_count,
+              # Causal self-references (recurrence_sweep.jl), each one ordered
+              # sweep in the observed fill levels.
+              n_recurrence_sweeps = mat_recurrence_count,
               n_acc_kernels = length(acc_kernels),
               n_acc_cse_slots = sum(length(K.cse.recipes) for K in acc_kernels; init=0),
               n_acc_inv_slots = sum(length(K.cse.inv_recipes) for K in acc_kernels; init=0),
@@ -3897,6 +3974,9 @@ function _build_evaluator_impl_inner(model::Model;
     # does not integrate (esm-spec §9.6.6); refused on the same terms.
     wiener = _first_wiener_parameter(model)
     wiener === nothing || throw(_wiener_refusal(wiener))
+    # A parameter recomputed by a symbolic update is an event in all but name.
+    symbolic = _first_symbolic_update(model)
+    symbolic === nothing || throw(_symbolic_update_refusal(symbolic...))
     # Runtime contraction-loop var registry (ess-runtime-contraction) is a
     # build-scoped resolve→compile side channel; clear any stale entries from a
     # prior build so it never accumulates across builds. Loop-var names are
@@ -6345,6 +6425,7 @@ function _build_evaluator(flat::FlattenedSystem; kwargs...)
     # the flattened system still holds them (esm-spec §9.6.6).
     _refuse_flat_events(flat)
     _refuse_flat_wiener_noise(flat)
+    _refuse_flat_symbolic_updates(flat)
     return _build_evaluator(flattened_to_esm(flat); kwargs...)
 end
 

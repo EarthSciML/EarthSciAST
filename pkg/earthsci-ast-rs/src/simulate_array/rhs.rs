@@ -575,12 +575,6 @@ pub(super) fn materialize_observeds_pass(
                 dst.insert(var.clone(), arr);
             }
             // Causal self-reference (esm-spec §4.3.1.1). The one rule kind whose
-            // output cells are NOT independent, so it gets its own arm rather
-            // than sharing the `ArrayLoop` per-cell walk: the recurrence axis
-            // must be the outer loop, each cell must be published before the
-            // axis advances, and neither the whole-array overlay nor the tape
-            // may touch it (CONFORMANCE_SPEC §5.19.2).
-            // Causal self-reference (esm-spec §4.3.1.1). The one rule kind whose
             // output cells are NOT independent, so the sweep is factored into
             // `sweep_recurrence` and shared with the BUILD-PIPELINE path
             // (`prepare::eval_observed`). That sharing is not tidiness: the two

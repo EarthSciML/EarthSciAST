@@ -678,6 +678,11 @@ pub(crate) struct BuildProducts {
     /// Parameters baked into the build. Substituting one of these needs a
     /// rebuild, so [`remake`] refuses rather than lying.
     pub baked_parameters: Vec<String>,
+    /// Why a state-free document's observed graph could not be evaluated at
+    /// construction — a fail-closed evaluation fault such as
+    /// `table_lookup_out_of_bounds` — so [`observed_field`] can name the cause
+    /// instead of only the name it cannot answer.
+    pub static_eval_error: Option<String>,
 }
 
 /// A simulation problem: a document, an interval, and the bindings that fix
@@ -1160,9 +1165,16 @@ pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, Simu
             )),
         ));
     }
+    let cause = prob
+        .build
+        .static_eval_error
+        .as_deref()
+        .map(|e| format!("; evaluating the state-free observed graph failed: {e}"))
+        .unwrap_or_default();
     Err(SimulateError::Compile(
         crate::compile_error::CompileError::build_err(format!(
-            "observed_field: '{name}' is not a build-time-evaluable observed of this EsmProblem"
+            "observed_field: '{name}' is not a build-time-evaluable observed of this \
+             EsmProblem{cause}"
         )),
     ))
 }
@@ -1584,6 +1596,10 @@ pub fn esm_problem<'a>(
     // `owned_json` is exactly what the parser made of the file's text, so it
     // nests within the parser's recursion limit (see stage (3)).
     let mut json_from_text = false;
+    // Whether the build pipeline rewrote the document. Only a rewritten one
+    // may fail the typed parse and still build (see stage (3)).
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut rewritten_by_pipeline = false;
 
     match input {
         ProblemInput::Path(path) => {
@@ -1601,6 +1617,15 @@ pub fn esm_problem<'a>(
             })?;
             owned_json = Some(raw);
             json_from_text = true;
+            // A relative `{ref}` or template import resolves against the
+            // referencing file's directory (esm-spec §4.7), not the process's
+            // working directory; a caller's explicit `base_path` still wins.
+            if opts.base_path.is_none() {
+                opts.base_path = Some(match path.parent() {
+                    Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+                    _ => PathBuf::from("."),
+                });
+            }
         }
         ProblemInput::Json(v) => owned_json = Some(v.clone()),
         ProblemInput::File(f) => owned_file = Some(f.clone()),
@@ -1801,6 +1826,7 @@ pub fn esm_problem<'a>(
             }));
             *raw = prepared.doc;
             json_from_text = false;
+            rewritten_by_pipeline = true;
             model_name = Some(prepared.model_name);
             build.fields = prepared.fields;
             build.members = prepared.members;
@@ -1824,19 +1850,43 @@ pub fn esm_problem<'a>(
             // nested that deep still takes the round trip, to get the same
             // refusal. A document parsed from a file's text and not rewritten
             // since is within that limit already.
+            // The loader-API metaparameters close the AUTHORED document
+            // (esm-spec §9.7.6 site 4); a pipeline-rewritten one has had them
+            // closed already, and may no longer declare the names.
+            let load_opts = crate::parse::LoadOptions {
+                base_path: opts.base_path.clone(),
+                metaparameters: if rewritten_by_pipeline {
+                    BTreeMap::new()
+                } else {
+                    opts.metaparameters.clone()
+                },
+            };
             let loaded = if json_from_text || nesting_within(raw, NESTING_WITHOUT_ROUND_TRIP) {
-                crate::parse::load_document(raw)
+                crate::parse::load_document_with_options(raw, &load_opts)
             } else {
                 let text = serde_json::to_string(raw).map_err(|e| {
                     SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
                         "re-serializing the prepared document: {e}"
                     )))
                 })?;
-                crate::parse::load_string(&text)
+                crate::parse::load_string_with_options(&text, &load_opts)
             };
             match loaded {
                 Ok(f) => owned_file = Some(f),
                 Err(e) => {
+                    // The AUTHORED document failing to load — a schema
+                    // violation, an unresolved import, a removed op, a version
+                    // the library does not read — is fatal under every `Rhs`
+                    // mode: esm-libraries-spec §2.1a says a library MUST NOT
+                    // silently accept an invalid file, and a Problem built
+                    // from one would answer for a document that does not load.
+                    if !rewritten_by_pipeline {
+                        return Err(SimulateError::Compile(
+                            crate::compile_error::CompileError::build_err(format!(
+                                "loading the document: {e}"
+                            )),
+                        ));
+                    }
                     // A document the build pipeline rewrote may no longer be a
                     // *typed* ESM document (the pushdown desugar emits engine
                     // constructs). Its build-time products are still valid, so
@@ -1925,7 +1975,7 @@ pub fn esm_problem<'a>(
         && let Backend::Static(_) = &backend
     {
         let t0 = opts.sample_time.unwrap_or(tspan.0);
-        let (fields, rows) = static_observed_fields(
+        let (fields, rows, eval_error) = static_observed_fields(
             owned_file.as_ref(),
             flat_only,
             &opts.p,
@@ -1934,6 +1984,7 @@ pub fn esm_problem<'a>(
             compiler,
         )?;
         build.fields = fields;
+        build.static_eval_error = eval_error;
         route_rows.extend(rows);
     }
 
@@ -2323,7 +2374,9 @@ pub(crate) fn has_nothing_to_integrate(prob: &EsmProblem) -> bool {
 /// that will not build. Python makes the same call for the same reason
 /// (`problem.py`, the scalar no-state branch). Only the compiler's own refusal is
 /// raised: that one says the document evaluates under `interpreter` and not
-/// under the compiler the caller named.
+/// under the compiler the caller named. An EVALUATION failure of a runtime
+/// that did build (a fail-closed fault) comes back as the third element, for
+/// [`observed_field`] to report.
 #[allow(clippy::type_complexity)]
 fn static_observed_fields(
     file: Option<&EsmFile>,
@@ -2332,20 +2385,38 @@ fn static_observed_fields(
     t0: f64,
     model_name: Option<&str>,
     compiler: Compiler,
-) -> Result<(HashMap<String, ArrayD<f64>>, Vec<CompilerRuleReport>), SimulateError> {
-    let nothing = || Ok((HashMap::new(), Vec::new()));
+) -> Result<
+    (
+        HashMap<String, ArrayD<f64>>,
+        Vec<CompilerRuleReport>,
+        Option<String>,
+    ),
+    SimulateError,
+> {
+    let nothing = || Ok((HashMap::new(), Vec::new(), None));
     let owned_flat;
     let flat = match (flat_only, file) {
         (Some(f), _) => f,
-        (None, Some(file)) => match crate::flatten::flatten(file) {
-            Ok(f) => {
-                owned_flat = f;
-                &owned_flat
-            }
-            Err(_) => return nothing(),
-        },
+        // A document that does not flatten — an unresolved coupling endpoint,
+        // a coupling-import error — is a build failure, raised as one
+        // (esm-libraries-spec §2.5.2) rather than answered with no fields.
+        (None, Some(file)) => {
+            owned_flat = crate::flatten::flatten(file).map_err(|e| {
+                SimulateError::Compile(crate::compile_error::CompileError::Flatten(e))
+            })?;
+            &owned_flat
+        }
         (None, None) => return nothing(),
     };
+    // The evaluable-core gate runs first (esm-spec §9.6.3 constraint 6): it
+    // walks every equation, so an unknown no equation defines — which makes
+    // the system not state-free below — does not let a rewrite-target operator
+    // through unreported.
+    if let Some(op) = crate::flatten::first_unlowered_operator(flat) {
+        return Err(SimulateError::Compile(
+            crate::compile_error::CompileError::UnloweredOperatorError { op },
+        ));
+    }
     // A system WITH state is not state-free evaluable: an observed may read
     // state, and there is none to read. Reachable when `model_name` selects an
     // ODE-free model out of a document that has ODEs elsewhere, since
@@ -2355,10 +2426,9 @@ fn static_observed_fields(
     }
     // An ill-formed document is not a compiler's to refuse: a name declared
     // nowhere fails the same free-variable gate the array build and the build
-    // pipeline run (CONFORMANCE_SPEC §5.23), and like any build failure here it
-    // yields no fields — so the pipeline, which runs that gate before
-    // evaluating anything, is what names it — rather than surfacing as a
-    // strict compiler "declining" a rule no compiler could evaluate.
+    // pipeline run (CONFORMANCE_SPEC §5.23), and is raised as that build
+    // failure rather than surfacing as a strict compiler "declining" a rule no
+    // compiler could evaluate — or as a Problem with no fields at all.
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(file) = file
         && crate::simulate::whole_document_is_one_model(file)
@@ -2370,13 +2440,13 @@ fn static_observed_fields(
             .unwrap_or_default()
             .into_iter()
             .collect();
-        if crate::simulate_array::check_free_variables(model, &index_sets, &[]).is_err() {
-            return nothing();
-        }
+        crate::simulate_array::check_free_variables(model, &index_sets, &[])
+            .map_err(SimulateError::Compile)?;
     }
-    let Ok(mut compiled) = ArrayCompiled::from_flattened(flat) else {
-        return nothing();
-    };
+    // The same gates the array route runs — the evaluable-core operator gate
+    // (esm-spec §9.6.3 constraint 6), events, operator arity — fire here too:
+    // a state-free document is evaluated, so it is built.
+    let mut compiled = ArrayCompiled::from_flattened(flat).map_err(SimulateError::Compile)?;
     compiled.runtime_mode = match compiler {
         Compiler::Interpreter => crate::simulate_array::RuntimeMode::Interpreter,
         _ => crate::simulate_array::RuntimeMode::Native,
@@ -2389,8 +2459,9 @@ fn static_observed_fields(
         &std::collections::HashSet::new(),
         false,
     )?;
-    let Ok(values) = compiled.evaluate_stateless_fields(p, t0) else {
-        return Ok((HashMap::new(), report.rules));
+    let values = match compiled.evaluate_stateless_fields(p, t0) {
+        Ok(values) => values,
+        Err(e) => return Ok((HashMap::new(), report.rules, Some(e.to_string()))),
     };
     let fields = values
         .into_iter()
@@ -2406,7 +2477,7 @@ fn static_observed_fields(
             declared.map(|_| (name, arr))
         })
         .collect();
-    Ok((fields, report.rules))
+    Ok((fields, report.rules, None))
 }
 
 /// Build the per-rule record, and — under a STRICT compiler ([`Compiler::Native`]
@@ -2777,7 +2848,31 @@ fn compile_backend(
         ));
     };
 
+    // A document with no component at all — a template or coupling library, a
+    // `data_sources` registry — has nothing to build. Julia's and Python's
+    // `flatten` refuse it the same way, rather than hand back an empty Problem.
+    let n_components = file.models.as_ref().map_or(0, |m| m.len())
+        + file.reaction_systems.as_ref().map_or(0, |r| r.len());
+    if n_components == 0 {
+        return Err(SimulateError::Compile(
+            crate::compile_error::CompileError::build_err(format!(
+                "nothing to flatten: '{}' declares no `models` and no `reaction_systems`. A \
+                 file carrying only `expression_templates` is a template LIBRARY (esm-spec \
+                 §9.7); import it from a document that declares components rather than \
+                 building it directly",
+                file.metadata.name.as_deref().unwrap_or("")
+            )),
+        ));
+    }
+
+    refuse_structurally_unreachable(file)?;
+
     if mode == Rhs::Auto && !has_differential_equations(file, model_name) {
+        // Nothing to integrate is not nothing to run: an event, an implicit
+        // equation or a noise term still changes what the document means, and
+        // the static evaluation below honours none of them. The array route
+        // refuses each by name, and so does this one.
+        refuse_static_unsupported_construct(file, model_name)?;
         return Ok(Backend::Static(
             "the document declares no differential equations".to_string(),
         ));
@@ -2790,6 +2885,115 @@ fn compile_backend(
     let mut compiled = crate::simulate::build_array_compiled(file)?;
     compiled.runtime_mode = runtime_mode;
     Ok(Backend::Array(Rc::new(compiled)))
+}
+
+/// Refuse two declarations the document can hold but no build may run, each a
+/// structural error `validate` also reports, which built anyway would be
+/// finite, plausible and wrong:
+///
+/// * a declaration spelled with the independent variable or `_var`
+///   (`reserved_variable_name`, esm-spec §4.9.1.1): every reader of the name
+///   gets the implicit symbol, never the declared quantity;
+/// * an `ic` equation among a reaction system's `constraint_equations`
+///   (`ic_in_reaction_system`, esm-spec §11.4.1), which no evaluator applies.
+///
+/// Julia and Python refuse both at their front doors too.
+fn refuse_structurally_unreachable(file: &EsmFile) -> Result<(), SimulateError> {
+    let refuse = |code: &str, path: &str, message: &str, section: &str| {
+        SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
+            "[{code}] {path}: {message} (esm-spec {section})"
+        )))
+    };
+    if let Some(e) = crate::structural::reserved_declaration_errors(file).first() {
+        return Err(refuse(&e.code.to_string(), &e.path, &e.message, "§4.9.1.1"));
+    }
+    if let Some(systems) = &file.reaction_systems {
+        for (rs_name, rs) in systems {
+            for (i, eq) in rs.constraint_equations.iter().flatten().enumerate() {
+                if matches!(&eq.lhs, crate::types::Expr::Operator(n) if n.op == "ic") {
+                    return Err(refuse(
+                        crate::diagnostic::codes::IC_IN_REACTION_SYSTEM,
+                        &format!("/reaction_systems/{rs_name}/constraint_equations/{i}"),
+                        "ic equation not allowed in a reaction system; a reaction system \
+                         hosts no ic equations (a species' initial value is its \
+                         `species.default`, or a scoped-reference ic equation in a model)",
+                        "§11.4.1",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuse, with `unsupported_construct` (esm-spec §9.6.6), a document with
+/// nothing to integrate that still carries an event, an implicit equation or a
+/// Wiener-noise parameter — in the named model, or in any model when none is
+/// named, subsystems included. The array route refuses the same three while
+/// compiling; a state-free document never reaches it.
+fn refuse_static_unsupported_construct(
+    file: &EsmFile,
+    model_name: Option<&str>,
+) -> Result<(), SimulateError> {
+    if model_name.is_none()
+        && let Some((construct, event)) = crate::compile_error::first_event_in_file(file)
+    {
+        return Err(crate::compile_error::event_refusal(
+            construct,
+            crate::compile_error::ARRAY_EVALUATOR,
+            event.as_deref(),
+        )
+        .into());
+    }
+    let Some(models) = file.models.as_ref() else {
+        return Ok(());
+    };
+    for (_, model) in models
+        .iter()
+        .filter(|(name, _)| model_name.is_none_or(|want| want == name.as_str()))
+    {
+        if let Some(refusal) = static_unsupported_construct(model) {
+            return Err(refusal.into());
+        }
+    }
+    Ok(())
+}
+
+/// The first construct of `model` or its inline subsystems that
+/// [`refuse_static_unsupported_construct`] refuses, as its refusal.
+fn static_unsupported_construct(
+    model: &crate::types::Model,
+) -> Option<crate::compile_error::CompileError> {
+    use crate::compile_error::ARRAY_EVALUATOR;
+    if let Some((construct, event)) = crate::compile_error::first_event(model) {
+        return Some(crate::compile_error::event_refusal(
+            construct,
+            ARRAY_EVALUATOR,
+            event.as_deref(),
+        ));
+    }
+    if let Some(eq) = crate::compile_error::first_implicit_equation(&model.equations) {
+        return Some(crate::compile_error::implicit_equation_refusal(
+            ARRAY_EVALUATOR,
+            eq,
+        ));
+    }
+    let class = crate::classification::Classification::of(model);
+    if let Some(name) = class.brownian_parameters.first() {
+        return Some(crate::compile_error::CompileError::UnsupportedConstruct {
+            construct: crate::compile_error::WIENER_NOISE,
+            evaluator: ARRAY_EVALUATOR,
+            detail: format!("parameter '{name}'"),
+        });
+    }
+    let subs = model.subsystems.as_ref()?;
+    let mut names: Vec<&String> = subs.keys().collect();
+    names.sort();
+    names.into_iter().find_map(|name| {
+        crate::simulate_array::parse_subsystem_model(name, &subs[name])
+            .ok()
+            .and_then(|(sub, _)| static_unsupported_construct(&sub))
+    })
 }
 
 /// Whether the document (or the named model within it) declares at least one

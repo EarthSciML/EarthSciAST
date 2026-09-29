@@ -270,11 +270,14 @@ diagnostic_code_registry! {
     /// An axis's `values` carries a non-finite entry; §9.5.1 requires
     /// strictly-increasing FINITE floats.
     TABLE_AXIS_NAN = "table_axis_nan";
-    /// The referenced table declares `out_of_bounds: "error"`, which no
-    /// binding implements as of v1.0.0 (esm-spec §9.5.3a). Refused rather
-    /// than evaluated under `"clamp"`: answering in the mode the binding
-    /// happens to have, rather than the one the author declared, is a wrong
-    /// answer with nothing in the result to say so.
+    /// A lookup into an `out_of_bounds: "error"` table was queried outside an
+    /// axis range (esm-spec §9.5.1). Raised at evaluation time, through the
+    /// evaluators' fail-closed fault channel.
+    TABLE_LOOKUP_OUT_OF_BOUNDS = "table_lookup_out_of_bounds";
+    /// The referenced table declares `out_of_bounds: "error"` and the binding
+    /// does not implement that mode (esm-spec §9.5.3a). This binding
+    /// implements it, so it no longer raises this code; the constant stays
+    /// because the value is a cross-binding contract the other bindings emit.
     TABLE_OUT_OF_BOUNDS_UNSUPPORTED = "table_out_of_bounds_unsupported";
 
     // ---- subsystem refs: §4.7 reference resolution (`ref_loading.rs`) ----
@@ -636,6 +639,7 @@ mod error_code_tests {
             "table_data_shape_mismatch",
             "table_interpolation_axes_mismatch",
             "table_lookup_axis_name_mismatch",
+            "table_lookup_out_of_bounds",
             "table_lookup_output_out_of_range",
             "table_lookup_unknown_table",
             "table_out_of_bounds_unsupported",

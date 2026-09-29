@@ -277,7 +277,7 @@ near-zero residual can be load-bearing in the motivating consumer.
 |---|---|---|
 | Rust | yes | `AlgebraicRule::Recurrence` + `RecurScope` in the per-cell oracle |
 | Python | yes (bare-LHS form) | `_RecurScope` + `sweep_recurrence` in `numpy_interpreter.py` |
-| Julia | no — see §6.1 | validation only |
+| Julia | yes, both compilers — see §6.1 | `_RecurrenceSweep` in `tree_walk/recurrence_sweep.jl`: walked under `interpreter`, one generated function under `native` |
 | TypeScript | no (no numeric array executor) | validation only |
 | Go | no (no numeric array executor) | validation only |
 
@@ -320,15 +320,20 @@ a self-read — none of it on the per-step hot path.
 ### 6.1 Julia
 
 Julia's array backend builds per-cell **independent** kernels and class-merges
-them, and the merge reorders cells; its one sequential-across-cells construct is
-the prefix scan's post-pass fold over the output vector (`tree_walk/scan.jl`),
-whose body is a fixed `combine(acc, du[slot])` rather than an evaluated
-expression. A recurrence needs a compiled per-cell body evaluated *inside* the
-lane loop, plus an out-of-place mirror. That is a larger change than the other
-two executing bindings needed and is tracked as binding debt rather than
-half-landed; the conformance fixtures declare Julia a `skip_bindings` port for
-this category with that reason, exactly as `20_faq_contraction_embedded`
-already does for the embedded-aggregate form.
+them, and the merge reorders cells, so a recurrence never enters it. A
+recurrence observed is always a materialized observed — a buffer block in the
+extended value vector — and its fill is an ordered sweep instead of a fill
+equation (`tree_walk/recurrence_sweep.jl`). The cell body is the `faq`'s term
+resolved and compiled once with every index symbolic, folded as the whole-array
+contraction tier folds; a self-read lowers to its own node kind, which reads only
+a cell the sweep has published and otherwise raises
+`E_TREEWALK_RECUR_UNAVAILABLE`. `interpreter` walks that body per cell; `native`
+emits the sweep as one generated function through the scalar-spine emitter, bit
+for bit with the walk and independent of the number of cells. The per-call fill
+levels of the right-hand side and the observed program behind `observed_field`,
+the inline-test runner and the output sinks share the one sweep (§5.19.3b). The
+out-of-place product `compiler = xla` lowers is refused by name, and so is a
+`Float32` recurrence: Julia evaluates in binary64 only (§5.19.3a).
 
 Julia does implement the static half, and its own vacuity probe settled a
 question the other bindings could not answer from outside: Julia's cycle

@@ -404,9 +404,11 @@ enum AlgebraicRule {
     ///
     /// Structurally an [`AlgebraicRule::ArrayLoop`] plus the recurrence axis,
     /// but a SEPARATE variant on purpose: its cells are not independent, so it
-    /// must never reach the whole-array overlay, the tape, or any other path
-    /// that evaluates cells out of order or in a batch (CONFORMANCE_SPEC
-    /// §5.19.2). Being a distinct variant means every `match` over the rule
+    /// must never reach the whole-array overlay or any other path that
+    /// evaluates cells out of order or in a batch (CONFORMANCE_SPEC §5.19.2).
+    /// The interpreter evaluates it with `sweep_recurrence`; the tape with an
+    /// ordered `Sweep` that runs its cell body one cell at a time in the same
+    /// order. Being a distinct variant means every `match` over the rule
     /// kinds has to say what it does with a recurrence instead of silently
     /// inheriting a reordering path.
     Recurrence {

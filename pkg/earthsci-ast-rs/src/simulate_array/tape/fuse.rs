@@ -1458,9 +1458,7 @@ pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
     // Global reader index sets per slot.
     let mut readers: Vec<SmallVec<[u32; 4]>> = vec![SmallVec::new(); prog.slots.len()];
     for (i, ins) in prog.instrs.iter().enumerate() {
-        ins.for_each_read(&prog.dy_writes, &prog.fused, &prog.assemblies, |s| {
-            readers[s as usize].push(i as u32)
-        });
+        ins.for_each_read(&prog.tables(), |s| readers[s as usize].push(i as u32));
     }
 
     let sink = Sink {
@@ -1791,18 +1789,13 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
         fx: &mut FuseCtx,
     ) {
         let mut hazard: Vec<usize> = Vec::new();
-        ins.for_each_read(
-            &fx.prog.dy_writes,
-            &fx.prog.fused,
-            &fx.prog.assemblies,
-            |s| {
-                for (gi, g) in open.iter().enumerate() {
-                    if keep != Some((&g.shape, g.prec)) && g.defines(s) && !hazard.contains(&gi) {
-                        hazard.push(gi);
-                    }
+        ins.for_each_read(&fx.prog.tables(), |s| {
+            for (gi, g) in open.iter().enumerate() {
+                if keep != Some((&g.shape, g.prec)) && g.defines(s) && !hazard.contains(&gi) {
+                    hazard.push(gi);
                 }
-            },
-        );
+            }
+        });
         hazard.sort_unstable();
         for &gi in hazard.iter().rev() {
             let g = open.remove(gi);
@@ -1839,9 +1832,24 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
     while i < range.end {
         let ins = &prog.instrs[i];
 
-        // Hard barriers: conditional regions (copied verbatim — their skip
-        // counts must stay exact and phi slots are double-defined inside) and
+        // Hard barriers: a recurrence sweep and its body (copied verbatim —
+        // the body runs once per cell, in order, and its cells are not
+        // independent, so nothing in it may join a group: CONFORMANCE_SPEC
+        // §5.19.2), conditional regions (copied verbatim — their skip counts
+        // must stay exact and phi slots are double-defined inside) and
         // fallback rules (interpreter side effects).
+        if let Instr::Sweep { spec } = ins {
+            for g in open.drain(..) {
+                flush_one(g, fx);
+            }
+            let body = prog.sweeps[*spec as usize].body_len as usize;
+            let zone_end = (i + 1 + body).min(range.end);
+            for j in i..zone_end {
+                fx.sink.passthrough(prog, j);
+            }
+            i = zone_end;
+            continue;
+        }
         if let Instr::JmpIfZero {
             n_true, n_false, ..
         } = ins

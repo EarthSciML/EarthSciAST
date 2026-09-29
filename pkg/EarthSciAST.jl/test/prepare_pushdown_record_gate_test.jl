@@ -277,7 +277,7 @@ end
     # observeds — exercises the binding path on more than just coordinates.
 
     doc = Dict{String,Any}(
-        "esm" => "0.9.0",
+        "esm" => "1.0.0",
         "metadata" => Dict{String,Any}("name" => "prepare_pushdown_L1"),
         "index_sets" => Dict{String,Any}(
             "src_cells"    => Dict("kind"=>"interval", "size"=>GRID),

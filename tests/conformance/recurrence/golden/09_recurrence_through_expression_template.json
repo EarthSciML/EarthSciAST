@@ -1,0 +1,31 @@
+{
+  "fixture": "09_recurrence_through_expression_template",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "self_read_through_a_template_binding_evaluates",
+      "assertion_idx": 1,
+      "variable": "s",
+      "actual": 1.0
+    },
+    {
+      "test_id": "self_read_through_a_template_binding_evaluates",
+      "assertion_idx": 2,
+      "variable": "s",
+      "actual": 2.0
+    },
+    {
+      "test_id": "self_read_through_a_template_binding_evaluates",
+      "assertion_idx": 3,
+      "variable": "s",
+      "actual": 4.0
+    },
+    {
+      "test_id": "self_read_through_a_template_binding_evaluates",
+      "assertion_idx": 4,
+      "variable": "s",
+      "actual": 8.0
+    }
+  ]
+}
