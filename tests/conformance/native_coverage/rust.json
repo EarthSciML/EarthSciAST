@@ -105,18 +105,6 @@
       "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `ParentSystem.SubsystemA.DeepSubA.deep_variable`"
     },
     {
-      "path": "tests/valid/cadence/discrete_remesh_stencil.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(u)",
-      "reason": "[continuous] index: axis 0 is neither an affine/wrap map of an unclaimed output symbol nor a constant select"
-    },
-    {
-      "path": "tests/valid/cadence/mixed_stencil.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(u)",
-      "reason": "[continuous] index: base is a scalar but 2 index args given"
-    },
-    {
       "path": "tests/valid/recurrence_causal_self_reference.esm",
       "code": "compiler_refused_rule",
       "rule": "RecurrenceCausalSelfReference.r",
