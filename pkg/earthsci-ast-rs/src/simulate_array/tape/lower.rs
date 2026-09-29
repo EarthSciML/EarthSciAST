@@ -4010,7 +4010,8 @@ impl<'m> TapeBuilder<'m> {
             return term(self);
         };
         match self.lower_expr(f, bx)? {
-            LV::Lit(c) if c == 0.0 => Ok(skip),
+            // `-0.0` matches too: `filter_excludes` is `value == 0.0`.
+            LV::Lit(0.0) => Ok(skip),
             LV::Lit(_) => term(self),
             keep if self.lv_box(&keep).is_none() => {
                 let mut term = Some(term);
@@ -6277,7 +6278,6 @@ fn color_slab(prog: &mut TapeProgram) {
             last_use[s as usize] = last_use[s as usize].max(last);
         }
     }
-    drop(tables);
 
     // Persistence: read from a later section than the defining one.
     let mut dedicated: Vec<bool> = vec![false; n_slots];
