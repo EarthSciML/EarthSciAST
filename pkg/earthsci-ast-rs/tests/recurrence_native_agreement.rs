@@ -135,8 +135,12 @@ fn assert_all_taped(label: &str, prob: &EsmProblem) {
 fn every_recurrence_document_builds_on_the_tape_and_agrees_bit_for_bit() {
     for &(rel, model, var, _) in DOCS {
         let path = tests_dir().join(rel);
-        let native = esm_problem(path.as_path(), (0.0, 1.0), opts(Compiler::Native, Rhs::Auto))
-            .unwrap_or_else(|e| panic!("{rel}: native must build it: {e}"));
+        let native = esm_problem(
+            path.as_path(),
+            (0.0, 1.0),
+            opts(Compiler::Native, Rhs::Auto),
+        )
+        .unwrap_or_else(|e| panic!("{rel}: native must build it: {e}"));
         let interp = esm_problem(
             path.as_path(),
             (0.0, 1.0),
@@ -213,13 +217,16 @@ fn with_a_state(doc: &Value, var: &str, rank: usize) -> Value {
     }
     let mut at = vec![json!(var)];
     at.extend(std::iter::repeat_n(json!(1), rank));
-    m["equations"].as_array_mut().expect("equations").push(json!({
-        "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
-        "rhs": {"op": "+", "args": [
-            {"op": "*", "args": [-0.5, "u"]},
-            {"op": "*", "args": [0.0, {"op": "index", "args": at}]}
-        ]}
-    }));
+    m["equations"]
+        .as_array_mut()
+        .expect("equations")
+        .push(json!({
+            "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+            "rhs": {"op": "+", "args": [
+                {"op": "*", "args": [-0.5, "u"]},
+                {"op": "*", "args": [0.0, {"op": "index", "args": at}]}
+            ]}
+        }));
     // The fixtures' own assertions are about the state-free document.
     m.as_object_mut().expect("model").remove("tests");
     doc
@@ -228,7 +235,9 @@ fn with_a_state(doc: &Value, var: &str, rank: usize) -> Value {
 /// The two right-hand sides at one state, bit for bit, with native's on the
 /// tape alone.
 fn assert_rhs_agrees(label: &str, native: &EsmProblem, interp: &EsmProblem) {
-    let nc = native.debug_array_compiled().expect("native has a right-hand side");
+    let nc = native
+        .debug_array_compiled()
+        .expect("native has a right-hand side");
     let ic = interp
         .debug_array_compiled()
         .expect("the interpreter has a right-hand side");
@@ -243,7 +252,11 @@ fn assert_rhs_agrees(label: &str, native: &EsmProblem, interp: &EsmProblem) {
     nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
     assert_eq!(stats.fallback_rules, 0, "{label}: a rule left the tape");
     let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p(), true);
-    assert_eq!(bits(dy.clone()), bits(idy.clone()), "{label}: native {dy:?}, interpreter {idy:?}");
+    assert_eq!(
+        bits(dy.clone()),
+        bits(idy.clone()),
+        "{label}: native {dy:?}, interpreter {idy:?}"
+    );
     assert!(dy.iter().all(|v| v.is_finite()), "{label}: {dy:?}");
 }
 
@@ -261,14 +274,25 @@ fn assert_trajectory_agrees(label: &str, native: &EsmProblem, interp: &EsmProble
     let a = solve(native, &o).unwrap_or_else(|e| panic!("{label}: native solve: {e}"));
     let b = solve(interp, &o).unwrap_or_else(|e| panic!("{label}: interpreter solve: {e}"));
     assert_eq!(bits(a.time.clone()), bits(b.time.clone()), "{label}: times");
-    assert_eq!(a.state_variable_names, b.state_variable_names, "{label}: rows");
+    assert_eq!(
+        a.state_variable_names, b.state_variable_names,
+        "{label}: rows"
+    );
     // The recurrence's cells are appended as rows of their own.
     let cells = a
         .state_variable_names
         .iter()
-        .filter(|n| n.rsplit('.').next().is_some_and(|b| b.starts_with(&format!("{var}["))))
+        .filter(|n| {
+            n.rsplit('.')
+                .next()
+                .is_some_and(|b| b.starts_with(&format!("{var}[")))
+        })
         .count();
-    assert!(cells > 0, "{label}: no rows for `{var}` in {:?}", a.state_variable_names);
+    assert!(
+        cells > 0,
+        "{label}: no rows for `{var}` in {:?}",
+        a.state_variable_names
+    );
     for (k, (ra, rb)) in a.state.iter().zip(&b.state).enumerate() {
         assert_eq!(
             bits(ra.clone()),
@@ -276,7 +300,11 @@ fn assert_trajectory_agrees(label: &str, native: &EsmProblem, interp: &EsmProble
             "{label}: {}: native {ra:?}, interpreter {rb:?}",
             a.state_variable_names[k]
         );
-        assert!(ra.iter().all(|v| v.is_finite()), "{label}: {}", a.state_variable_names[k]);
+        assert!(
+            ra.iter().all(|v| v.is_finite()),
+            "{label}: {}",
+            a.state_variable_names[k]
+        );
     }
 }
 
@@ -356,8 +384,12 @@ fn the_program_is_the_same_length_at_every_frame_size() {
     let lens: Vec<(usize, usize)> = [10usize, 1_000, 100_000]
         .iter()
         .map(|&n| {
-            let prob = esm_problem(&state_driven(n), (0.0, 0.5), opts(Compiler::Native, Rhs::Always))
-                .expect("native builds it");
+            let prob = esm_problem(
+                &state_driven(n),
+                (0.0, 0.5),
+                opts(Compiler::Native, Rhs::Always),
+            )
+            .expect("native builds it");
             let r = prob
                 .debug_array_compiled()
                 .expect("a right-hand side")

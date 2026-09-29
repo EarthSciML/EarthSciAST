@@ -540,10 +540,12 @@ pub(super) fn run_reference(
                 let raw: Vec<i64> = sp
                     .subs
                     .iter()
-                    .map(|o| match resolve(prog, &slots, &state_arrays, &obs, params, t, o) {
-                        RefVal::Scalar(x) => subscript_of(x),
-                        RefVal::Arr(_) => panic!("a run-time subscript is a scalar"),
-                    })
+                    .map(
+                        |o| match resolve(prog, &slots, &state_arrays, &obs, params, t, o) {
+                            RefVal::Scalar(x) => subscript_of(x),
+                            RefVal::Arr(_) => panic!("a run-time subscript is a scalar"),
+                        },
+                    )
                     .collect();
                 let cur = sweep.as_ref().map_or(&[][..], |(_, c)| &c[..]);
                 let v = match sp.resolve(&raw, sv.shape(), &prog.sweeps, cur) {

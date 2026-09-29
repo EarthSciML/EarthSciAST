@@ -3146,8 +3146,12 @@ fn ab_recurrence_sweep() {
     // The body is lowered once: the program and the sweep's body do not grow
     // with the frame.
     let body_len = |p: &TapeProgram| p.sweeps[0].body_len;
-    let small = compile(recurrence_doc(6)).build_tape_opts(&HashSet::new(), None).0;
-    let large = compile(recurrence_doc(600)).build_tape_opts(&HashSet::new(), None).0;
+    let small = compile(recurrence_doc(6))
+        .build_tape_opts(&HashSet::new(), None)
+        .0;
+    let large = compile(recurrence_doc(600))
+        .build_tape_opts(&HashSet::new(), None)
+        .0;
     assert_eq!(body_len(&small), body_len(&large));
     assert_eq!(small.instrs.len(), large.instrs.len());
 }

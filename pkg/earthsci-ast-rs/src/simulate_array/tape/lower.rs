@@ -2428,7 +2428,10 @@ impl<'m> TapeBuilder<'m> {
     fn lower_cell_index(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
         let base = &node.args[0];
         let n = node.args.len() - 1;
-        let sweep = self.sweep.as_ref().map(|sw| (sw.spec, sw.out, sw.var.clone()));
+        let sweep = self
+            .sweep
+            .as_ref()
+            .map(|sw| (sw.spec, sw.out, sw.var.clone()));
         let (src, src_shape, kind) = match (&sweep, base) {
             (Some((spec, out, var)), Expr::Variable(v)) if v == var => {
                 let shape = self.sweeps[*spec as usize].shape.clone();
@@ -3448,8 +3451,7 @@ impl<'m> TapeBuilder<'m> {
         };
         // A rank-0 aggregate evaluated at one recurrence cell — the cell body
         // of a recurrence with a contraction is exactly this.
-        if self.sweep.is_some() && spec.ranges.is_empty() && bx.shape.is_empty() && bx.tuple == 0
-        {
+        if self.sweep.is_some() && spec.ranges.is_empty() && bx.shape.is_empty() && bx.tuple == 0 {
             if spec.join.is_some() || node.key.is_some() || node.distinct == Some(true) {
                 bail_tape!("aggregate: a gated or keyed contraction inside a recurrence body");
             }
@@ -3866,7 +3868,11 @@ impl<'m> TapeBuilder<'m> {
             spec,
             var: var.to_string(),
             out,
-            binds: idx_names.iter().cloned().zip(coords.iter().copied()).collect(),
+            binds: idx_names
+                .iter()
+                .cloned()
+                .zip(coords.iter().copied())
+                .collect(),
             body_slots,
             body: Vec::new(),
         });
@@ -3953,7 +3959,8 @@ impl<'m> TapeBuilder<'m> {
                 visit: SmallVec::new(),
             };
             self.push_scope();
-            let r = self.lower_cell_term(spec.body, spec.filter, &tbx, Some(acc), identity, combine);
+            let r =
+                self.lower_cell_term(spec.body, spec.filter, &tbx, Some(acc), identity, combine);
             self.pop_scope();
             acc = r?;
             let mut d = nc;
@@ -5044,9 +5051,7 @@ impl<'m> TapeBuilder<'m> {
     where
         F: FnMut(&mut Self, &Expr) -> LResult<LV>,
     {
-        self.lower_branchy(cond, |s, taken| {
-            low(s, if taken { t_expr } else { f_expr })
-        })
+        self.lower_branchy(cond, |s, taken| low(s, if taken { t_expr } else { f_expr }))
     }
 
     /// A runtime-scalar-condition branch (JmpIfZero + phi) whose arms are

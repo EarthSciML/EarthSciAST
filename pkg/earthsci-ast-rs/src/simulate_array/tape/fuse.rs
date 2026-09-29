@@ -1789,16 +1789,13 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
         fx: &mut FuseCtx,
     ) {
         let mut hazard: Vec<usize> = Vec::new();
-        ins.for_each_read(
-            &fx.prog.tables(),
-            |s| {
-                for (gi, g) in open.iter().enumerate() {
-                    if keep != Some((&g.shape, g.prec)) && g.defines(s) && !hazard.contains(&gi) {
-                        hazard.push(gi);
-                    }
+        ins.for_each_read(&fx.prog.tables(), |s| {
+            for (gi, g) in open.iter().enumerate() {
+                if keep != Some((&g.shape, g.prec)) && g.defines(s) && !hazard.contains(&gi) {
+                    hazard.push(gi);
                 }
-            },
-        );
+            }
+        });
         hazard.sort_unstable();
         for &gi in hazard.iter().rev() {
             let g = open.remove(gi);
