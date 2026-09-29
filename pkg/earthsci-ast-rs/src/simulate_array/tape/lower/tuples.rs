@@ -159,17 +159,36 @@ impl TapeBuilder<'_> {
             tuple: id,
             visit: SmallVec::new(),
         };
-        let lowered = (|| -> LResult<(LV, Option<LV>)> {
-            let term = self.lower_expr(body, &bx)?;
+        // The filter first: the oracle tests it before the body at every
+        // tuple, and evaluates the body only at the tuples it keeps (a lazily
+        // evaluated position). `None` for the term when no tuple is kept.
+        let lowered = (|| -> LResult<(Option<LV>, Option<LV>)> {
             let mask = match filter {
                 None => None,
                 Some(f) => Some(self.lower_expr(f, &bx)?),
             };
-            Ok((term, mask))
+            let lazy = match &mask {
+                None => false,
+                Some(LV::Lit(c)) if *c == 0.0 => return Ok((None, mask)),
+                Some(LV::Lit(_)) => false,
+                Some(_) => true,
+            };
+            self.lazy_depth += u32::from(lazy);
+            let term = self.lower_expr(body, &bx);
+            self.lazy_depth -= u32::from(lazy);
+            Ok((Some(term?), mask))
         })();
         self.pop_scope();
         self.tuple_frames.pop();
         let (term, mask) = lowered?;
+        let Some(term) = term else {
+            // The filter excludes every tuple.
+            return Ok(if rank0 {
+                LV::Lit(identity)
+            } else {
+                self.emit_fill(&LV::Lit(identity), &shape, &lo, Cadence::Const)
+            });
+        };
 
         let tuple_box = |s: &Self, v: &LV| -> LResult<Option<SlotId>> {
             match (v, s.lv_box(v)) {
@@ -188,16 +207,7 @@ impl TapeBuilder<'_> {
             },
         };
         let mask = match mask {
-            None => None,
-            Some(LV::Lit(c)) if c != 0.0 => None,
-            Some(LV::Lit(_)) => {
-                // The filter excludes every tuple.
-                return Ok(if rank0 {
-                    LV::Lit(identity)
-                } else {
-                    self.emit_fill(&LV::Lit(identity), &shape, &lo, Cadence::Const)
-                });
-            }
+            None | Some(LV::Lit(_)) => None,
             Some(v) => match tuple_box(self, &v)? {
                 Some(slot) => Some(slot),
                 None => match self.emit_fill(&v, &[m], &[1], Cadence::Const) {

@@ -386,3 +386,26 @@ fn a_loop_symbol_first_read_in_a_branch_is_defined_on_both_paths() {
     let compiled = super::array_tests::compile(ragged_doc(cnst(json!([2, 3, 1])), body, None));
     super::array_tests::ab(&compiled, &both_branches());
 }
+
+/// A fault site in a filtered body is reached only at the tuples the filter
+/// keeps: with no earlier fault to settle it the tape refuses, rather than
+/// raising the fault where the oracle (every tuple excluded) raises none. The
+/// fault is `index(p, 1)` on the scalar parameter, inside the base of a
+/// gather.
+#[test]
+fn a_fault_in_a_filtered_tuple_body_is_not_certain() {
+    let base =
+        json!({"op": "+", "args": [cnst(json!([1.0, 2.0, 3.0])), idx(json!("p"), &[json!(1)])]});
+    let body =
+        json!({"op": "*", "args": [idx(base, &[json!("k")]), idx(json!("v"), &[json!("k")])]});
+    let filter = json!({"op": ">", "args": [idx(json!("v"), &[json!("k")]), 0]});
+    let compiled =
+        super::array_tests::compile(ragged_doc(cnst(json!([2, 3, 1])), body, Some(filter)));
+    let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
+    assert!(
+        refused
+            .iter()
+            .any(|(_, r)| r.starts_with("fault: `E_TREEWALK_INDEX_ON_SCALAR`")),
+        "{refused:?}"
+    );
+}
