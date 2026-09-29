@@ -55,7 +55,7 @@ function _pc_doc(; fold_ic::Bool = true)
     fold_ic && push!(eqs, Dict{String,Any}(
         "lhs" => _pc_o("ic", "y"), "rhs" => _pc_o("*", "y0", 2.0)))
     Dict{String,Any}(
-        "esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "PC"),
+        "esm" => "1.0.0", "metadata" => Dict{String,Any}("name" => "PC"),
         "index_sets" => Dict{String,Any}(
             "n" => Dict{String,Any}("kind" => "interval", "size" => 2)),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(

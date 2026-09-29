@@ -58,7 +58,7 @@ _gi_param(v) = Dict{String,Any}("type" => "parameter", "default" => v)
 
 function _gi_doc(name, vars, eqs; index_sets = nothing)
     d = Dict{String,Any}(
-        "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => name),
+        "esm" => "1.0.0", "metadata" => Dict{String,Any}("name" => name),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => vars, "equations" => eqs)))
     index_sets === nothing ||

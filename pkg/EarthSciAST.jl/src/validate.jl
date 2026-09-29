@@ -510,27 +510,7 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # symbol instead of the declared quantity (issue #200). All three
     # declaration maps are covered: a species and a reaction parameter become
     # symbols of the derived ODE system exactly as a `variables` entry does.
-    let indep = _indep_var(file)
-        if file.models !== nothing
-            for model_name in sort!(collect(keys(file.models)))
-                _check_reserved_model_names!(errors, file.models[model_name],
-                                             "/models/$model_name",
-                                             "Model '$model_name'"; indep=indep)
-            end
-        end
-        if file.reaction_systems !== nothing
-            for rs_name in sort!(collect(keys(file.reaction_systems)))
-                rs = file.reaction_systems[rs_name]
-                owner = "Reaction system '$rs_name'"
-                _check_reserved_declaration_names!(errors, (s.name for s in rs.species),
-                                                   "/reaction_systems/$rs_name/species",
-                                                   owner, "species"; indep=indep)
-                _check_reserved_declaration_names!(errors, (p.name for p in rs.parameters),
-                                                   "/reaction_systems/$rs_name/parameters",
-                                                   owner, "parameter"; indep=indep)
-            end
-        end
-    end
+    _check_reserved_file_names!(errors, file)
 
     # 3f. Inline array data is a SHAPED variable's value (esm-spec §6.3,
     # `array_default_without_shape`): on a variable with no `shape` it has
@@ -1126,6 +1106,38 @@ function _check_reserved_declaration_names!(errors::Vector{StructuralError},
             "$owner declares a $kind named '$name', which is $role",
             ERROR_CODES.RESERVED_VARIABLE_NAME,
             Dict{String,Any}("name" => name, "reserved_as" => why)))
+    end
+    return errors
+end
+
+"""
+    _check_reserved_file_names!(errors, file)
+
+[`_check_reserved_declaration_names!`](@ref) over all three declaration maps of
+`file` — every model's `variables` (subsystems included) and every reaction
+system's `species` and `parameters` — in sorted order. Shared by `validate` and
+by the build, which refuses the same declarations (see `esm_problem`).
+"""
+function _check_reserved_file_names!(errors::Vector{StructuralError}, file::EsmFile)
+    indep = _indep_var(file)
+    if file.models !== nothing
+        for model_name in sort!(collect(keys(file.models)))
+            _check_reserved_model_names!(errors, file.models[model_name],
+                                         "/models/$model_name",
+                                         "Model '$model_name'"; indep=indep)
+        end
+    end
+    if file.reaction_systems !== nothing
+        for rs_name in sort!(collect(keys(file.reaction_systems)))
+            rs = file.reaction_systems[rs_name]
+            owner = "Reaction system '$rs_name'"
+            _check_reserved_declaration_names!(errors, (s.name for s in rs.species),
+                                               "/reaction_systems/$rs_name/species",
+                                               owner, "species"; indep=indep)
+            _check_reserved_declaration_names!(errors, (p.name for p in rs.parameters),
+                                               "/reaction_systems/$rs_name/parameters",
+                                               owner, "parameter"; indep=indep)
+        end
     end
     return errors
 end
