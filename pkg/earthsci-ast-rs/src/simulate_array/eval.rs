@@ -626,6 +626,9 @@ pub(super) fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         return Value::Scalar(f64::NAN);
     };
     let vals: ValVec = node.args.iter().map(|a| eval(a, ctx)).collect();
+    // A lookup into an `out_of_bounds: "error"` table (esm-spec §9.5.1)
+    // checks every query against its axis BEFORE the interpolation core.
+    let strict = crate::lower_table_lookup::strict_table(node);
 
     // Broadcast the 1-D interpolation kernel over an ARRAY query: the table +
     // axis (args 0,1) stay fixed as the lookup table, only the query point
@@ -639,6 +642,12 @@ pub(super) fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         let table: Vec<f64> = value_flat(&vals[0]);
         let axis: Vec<f64> = value_flat(&vals[1]);
         let out = q.mapv(|x| {
+            if let Some(id) = strict
+                && let Some(fault) = crate::lower_table_lookup::out_of_bounds_fault(id, 1, &axis, x)
+            {
+                latch_gather_fault(fault);
+                return f64::NAN;
+            }
             let call = [
                 ClosedArg::Array(table.clone()),
                 ClosedArg::Array(axis.clone()),
@@ -675,9 +684,41 @@ pub(super) fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         };
         args.push(arg);
     }
+    if let Some(id) = strict
+        && let Some(fault) = strict_query_fault(id, name, &args)
+    {
+        latch_gather_fault(fault);
+        return Value::Scalar(f64::NAN);
+    }
     match evaluate_closed_function(name, &args) {
         Ok(v) => Value::Scalar(v.as_f64()),
         Err(_) => Value::Scalar(f64::NAN),
+    }
+}
+
+/// The first out-of-range query of a strict-table `interp.*` call, in the
+/// order the tape checks them (the first axis, then the second), or `None`.
+/// §9.2 puts the query last for the two tensor entries and first for
+/// `interp.searchsorted`; an argument of the wrong kind is left to the
+/// registry, which rejects the call on its own terms.
+fn strict_query_fault(
+    table_id: &str,
+    name: &str,
+    args: &[crate::registered_functions::ClosedArg],
+) -> Option<String> {
+    use crate::lower_table_lookup::out_of_bounds_fault;
+    use crate::registered_functions::ClosedArg;
+    let scalar_on = |q: usize, a: usize, which: usize| match (args.get(q), args.get(a)) {
+        (Some(ClosedArg::Scalar(x)), Some(ClosedArg::Array(axis))) => {
+            out_of_bounds_fault(table_id, which, axis, *x)
+        }
+        _ => None,
+    };
+    match name {
+        "interp.linear" => scalar_on(2, 1, 1),
+        "interp.bilinear" => scalar_on(3, 1, 1).or_else(|| scalar_on(4, 2, 2)),
+        "interp.searchsorted" => scalar_on(0, 1, 1),
+        _ => None,
     }
 }
 

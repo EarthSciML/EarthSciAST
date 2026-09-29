@@ -1203,3 +1203,67 @@ fn geometry_and_data_subscript_gathers_lower() {
         }
     }
 }
+
+/// A lookup into an `out_of_bounds: "error"` table (esm-spec §9.5.1) must raise
+/// `table_lookup_out_of_bounds` for a query outside its axis, which a compiled
+/// program has no channel to do; the emitter refuses it by name rather than
+/// compiling the clamp. `esm_problem(compiler = Xla)` surfaces that refusal.
+#[test]
+fn a_strict_table_lookup_is_refused_by_name() {
+    if !runtime_available() {
+        return;
+    }
+    let doc = r#"{
+  "esm": "1.0.0",
+  "metadata": { "name": "XlaStrictTable", "authors": ["test"] },
+  "function_tables": {
+    "ramp_tab": {
+      "axes": [{ "name": "q", "values": [0.0, 1.0, 2.0, 3.0] }],
+      "interpolation": "linear", "out_of_bounds": "error",
+      "data": [1.0, 3.0, 2.0, 5.0]
+    }
+  },
+  "models": { "M": {
+    "variables": {
+      "q": { "type": "unknown", "default": 0.0 },
+      "y": { "type": "unknown", "default": 0.0 }
+    },
+    "equations": [
+      { "lhs": { "op": "D", "args": ["q"], "wrt": "t" }, "rhs": 1.0 },
+      { "lhs": { "op": "D", "args": ["y"], "wrt": "t" },
+        "rhs": { "op": "table_lookup", "table": "ramp_tab", "axes": { "q": "q" }, "args": [] } }
+    ]
+  } }
+}"#;
+    let file = load_string(doc).expect("loads");
+    let native = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            compiler: Some(earthsci_ast::Compiler::Native),
+            ..Default::default()
+        },
+    )
+    .expect("native builds a strict table");
+    let compiled = native.debug_array_compiled().expect("an array backend");
+    match CompiledRhs::compile(&compiled) {
+        Ok(_) => panic!("a strict-table program compiled"),
+        Err(CompileRhsError::Refused(e)) => assert!(
+            e.reason.contains("ramp_tab") && e.reason.contains("out_of_bounds"),
+            "the refusal does not name the table and its mode: {}",
+            e.reason
+        ),
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+    }
+    let err = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            compiler: Some(earthsci_ast::Compiler::Xla),
+            ..Default::default()
+        },
+    )
+    .err()
+    .expect("xla refuses");
+    assert!(err.to_string().contains("ramp_tab"), "{err}");
+}
