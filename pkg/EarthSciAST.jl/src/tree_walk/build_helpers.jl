@@ -433,7 +433,8 @@ end
 # where the shell's `output_idx` is exactly the identity gather's subscripts in
 # order, its `ranges` bind exactly those symbols, it carries no contraction or
 # gating clause (`filter` / `join` / `key` / `distinct`), and `V` is an
-# ARRAY-shaped OBSERVED unknown of this model whose declared rank matches. A
+# OBSERVED unknown of this model whose declared rank matches, or whose shape is
+# undeclared (the frame then gives it). A
 # derivative LHS (`aggregate{k}(D(index(u,k)))`) has a `D` body, not an `index`
 # body, so the ODE partition is untouched; so is an ODE state, an algebraic
 # unknown, and any genuine expression LHS.
@@ -503,7 +504,11 @@ function _rewrite_indexed_observed_lhs(eq::Equation, model::Model,
     name = (head::VarExpr).name
     name in observed_here || return nothing
     var = get(model.variables, name, nothing)
-    (var !== nothing && _is_array_shape(var.shape)) || return nothing
+    var === nothing && return nothing
+    # An observed whose `shape` was never declared takes its rank and extent
+    # from this frame (it is anonymous, esm-spec §4.3.4); a declared shape must
+    # agree in rank.
+    declared = _is_array_shape(var.shape)
     idx = shell.output_idx
     idx === nothing && return nothing
     syms = String[]
@@ -512,7 +517,7 @@ function _rewrite_indexed_observed_lhs(eq::Equation, model::Model,
         push!(syms, String(x))
     end
     isempty(syms) && return nothing                 # a SCALAR reduction, not a frame
-    length(syms) == length(var.shape) || return nothing
+    (!declared || length(syms) == length(var.shape)) || return nothing
     # The gather must be the IDENTITY on the frame: `index(V, k…)`, same symbols,
     # same order. `index(V, k+1)` or a permutation writes something else.
     length(gather.args) == length(syms) + 1 || return nothing
