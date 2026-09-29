@@ -765,6 +765,18 @@ fn fold_structural_sites(x: &mut Value, ctx: &str) -> Result<(), ExpressionTempl
     })
 }
 
+/// Whether the document's own `index_sets` carry a `size` that is not an
+/// integer literal: a metaparameter name, or an expression still to fold.
+fn has_open_index_set_size(raw: &Value) -> bool {
+    raw.get("index_sets")
+        .and_then(Value::as_object)
+        .is_some_and(|isets| {
+            isets
+                .values()
+                .any(|decl| decl.get("size").is_some_and(|sz| as_int(sz).is_none()))
+        })
+}
+
 /// Fold interval `size` metaparameter expressions in an `index_sets`
 /// registry. With `strict = true` (the root document, after its
 /// metaparameters closed) any remaining bare name is `metaparameter_unbound`;
@@ -2753,6 +2765,18 @@ pub(crate) fn resolve_template_machinery_scoped(
                     unknown.join(", ")
                 ),
             ));
+        }
+        // A ROOT document has no enclosing scope to close an axis it cannot
+        // size, so a `size` naming a metaparameter nothing declares is
+        // `metaparameter_unbound` here too (esm-spec §4.7, §9.7.6) rather than
+        // a type error in the typed parse. A mounted leaf's stays symbolic for
+        // the mounting registry to close.
+        if !mounted_leaf && has_open_index_set_size(raw_data) {
+            let mut root = raw_data.clone();
+            if let Some(isets) = root.get_mut("index_sets").and_then(Value::as_object_mut) {
+                fold_index_set_sizes(isets, "document", true)?;
+            }
+            return Ok(Some(root));
         }
         return Ok(None);
     }
