@@ -41,6 +41,11 @@ tests/conformance/
 │   ├── manifest.json               #   `"runner": "inline_tests"`
 │   ├── fixtures/<id>.esm           #   one document: a filter on an equation and on an observed
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+├── value_invention_geometry/       # value invention and setup geometry feeding a right-hand side (CONFORMANCE_SPEC §5.45.4)
+│   ├── README.md                   #   the contract, and what each binding refused before it
+│   ├── manifest.json               #   `"runner": "inline_tests"`; one named exclusion (Python native)
+│   ├── fixtures/<id>.esm           #   three documents authored here (three more are REFERENCED)
+│   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
 ├── deprecated_op_alias/            # the `aggregate` -> `faq` alias contract (esm 1.1.0)
 │   ├── aliased.esm                 #   input, authored with the deprecated spelling
 │   ├── canonical.esm               #   expected output, and a no-warning input
