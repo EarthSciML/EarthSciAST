@@ -388,3 +388,96 @@ fn a_segmented_native_solve_refreshes_through_the_forcing_epoch() {
     assert_eq!(full, full_one, "full primes per solve");
     assert!(seg_one >= 1 && seg_one < seg, "{seg_one} vs {seg}");
 }
+
+/// A 0-d forcing read by rules of two precisions (esm-spec §11.3.1). The
+/// interpreter rounds a 0-d forcing to the precision in force at the read, and
+/// precision inference puts every read of a variable at that variable's own
+/// precision (inside a binary32 rule, `k > 0.1` is a binary64 subtree), so one
+/// load serves every reader. Both orders of the two rules are checked, since
+/// the first reader is the one whose load the later reader reuses.
+#[test]
+fn a_scalar_forcing_is_shared_by_readers_of_two_precisions() {
+    let fed = json!({"kind": "data", "source": "met", "from": {"file_variable": "k"}});
+    let flagged = json!({"lhs": "a", "rhs": {"op": "*", "args": [
+        "x", {"op": ">", "args": ["k", 0.1]}]}});
+    let scaled = json!({"lhs": "b", "rhs": {"op": "*", "args": ["y", "k"]}});
+    let tendency = |v: &str, rhs: serde_json::Value| {
+        json!({
+            "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                "ranges": {"i": {"from": "cells"}},
+                "expr": {"op": "D", "args": [{"op": "index", "args": [v, "i"]}], "wrt": "t"}},
+            "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                "ranges": {"i": {"from": "cells"}}, "expr": rhs}
+        })
+    };
+    let dx = tendency(
+        "x",
+        json!({"op": "-", "args": [{"op": "index", "args": ["a", "i"]},
+            {"op": "*", "args": [0.25, {"op": "index", "args": ["x", "i"]}]}]}),
+    );
+    let dy = tendency(
+        "y",
+        json!({"op": "-", "args": [{"op": "index", "args": ["b", "i"]}, "k"]}),
+    );
+    for a_first in [true, false] {
+        let observeds = if a_first {
+            [flagged.clone(), scaled.clone()]
+        } else {
+            [scaled.clone(), flagged.clone()]
+        };
+        let doc = json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "ForcedMixedPrecision"},
+            "index_sets": {"cells": {"kind": "interval", "size": 3}},
+            "data_sources": {"met": {"kind": "grid", "source": {"url_template": "file:///met.nc"}}},
+            "models": {"M": {
+                "variables": {
+                    "x": {"type": "unknown", "units": "1", "shape": ["cells"], "default": 0.3,
+                        "element_type": "Float32"},
+                    "y": {"type": "unknown", "units": "1", "shape": ["cells"], "default": 1.7},
+                    "k": {"type": "parameter", "units": "1", "shape": [], "update": fed},
+                    "a": {"type": "unknown", "units": "1", "shape": ["cells"],
+                        "element_type": "Float32"},
+                    "b": {"type": "unknown", "units": "1", "shape": ["cells"]}
+                },
+                "equations": [observeds[0], observeds[1], dx, dy]
+            }}
+        });
+        let file = crate::parse::load_string(&doc.to_string()).expect("fixture loads");
+        let env = crate::precision_infer::env_of_file(&file).expect("precision environment");
+        let annotated = crate::precision_infer::annotated(&file)
+            .expect("precision inference")
+            .expect("the fixture declares element types");
+        let _env = env.enter();
+        let compiled = ArrayCompiled::from_file(&annotated).expect("fixture compiles");
+        // Not a binary32 value, so a load rounded at the binary32 rule's
+        // precision would change `b`.
+        let k = 0.1 + 2f64.powi(-40);
+        compiled
+            .forcing_buffer()
+            .borrow_mut()
+            .insert("k".into(), ArrayD::from_elem(IxDyn(&[]), k));
+        let params = HashMap::new();
+        let param_vec = compiled.debug_resolve_params(&params);
+        let cfg = Some(super::fuse::SuperopCfg::from_env());
+        let (prog, report) = compiled.build_tape_opts(&HashSet::new(), cfg);
+        assert!(report.fallbacks.is_empty(), "{report}");
+        assert_eq!(opcount(&prog, "LoadForcing"), 1, "{report}");
+        let prog_uf = compiled.build_tape_opts(&HashSet::new(), None).0;
+        let mut fused = taped_scratch(&compiled, compiled.build_tape_opts(&HashSet::new(), cfg).0);
+        let n = compiled.state_variable_names().len();
+        let state = state_of(n, 3);
+        let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
+        let label = |s: &str| format!("{s}, a first: {a_first}");
+        for (l, p) in [("fused", &prog), ("unfused", &prog_uf)] {
+            let mut dy = vec![0.0; n];
+            run_reference(p, &compiled, &state, &param_vec, 0.0, &mut dy);
+            assert_bits(&dy, &oracle, &label(&format!("reference executor, {l}")));
+        }
+        assert_bits(
+            &fast(&compiled, &mut fused, &state, 0.0, &param_vec),
+            &oracle,
+            &label("fast executor"),
+        );
+    }
+}
