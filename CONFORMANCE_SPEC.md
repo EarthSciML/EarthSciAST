@@ -6587,6 +6587,7 @@ binding that got better is the one way a ratchet can run backwards.
 | `broadcast_alignment` | esm-spec §4.3.4 name-based operand alignment in an array-level equation, its ANONYMOUS-shape boundary, and the one-operand `broadcast` node |
 | `scalar_operator_semantics` | what each scalar operator of esm-spec §9.2's evaluable core COMPUTES |
 | `faq_pointwise_filter` | a `faq` `filter` on a node with no contracted index: each output cell is one combination, and a false predicate makes it the semiring's 0̄ (esm-schema `filter`) |
+| `array_expression_forms` | esm-spec §4.3.5 `index` over a `reshape` / `transpose` / `concat` (an element of the operand at other subscripts), a positional §4.3.4 `broadcast` of anonymous operands, and a §6.3.1 arrayed definition of an observed whose shape was never declared |
 
 Each tier's `README.md` is its contract and records what did NOT move into it.
 A tier is added by writing that README, a manifest with `"runner":

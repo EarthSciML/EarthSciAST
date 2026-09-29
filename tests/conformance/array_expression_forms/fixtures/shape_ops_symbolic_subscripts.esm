@@ -1,0 +1,618 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "shape_ops_symbolic_subscripts",
+    "description": "esm-spec 4.3.5: `index(reshape|transpose|concat(X), k...)` is an element of X at other subscripts, including when a subscript is an faq loop symbol. Each probe state integrates one constant gather out of a shape op, so its value at t = 1 is that element: v[i] = u[2,i] through a transpose, w[j] = a[j] through a reshape that inserts a unit axis, z[i] = a[i] + b[2] through a positional `broadcast` of a vector against a reshaped row, q[i] = c[i] through a concat whose joined-axis subscript is literal, and s = u[1,3] through an explicit perm. Every source array is held constant and every value is distinct, so a wrong axis order, a wrong element order or a wrong operand reads a different number.",
+    "authors": [
+      "EarthSciAST Test Suite"
+    ],
+    "tags": [
+      "faq",
+      "reshape",
+      "transpose",
+      "concat",
+      "broadcast",
+      "conformance",
+      "esm-spec-4.3.5"
+    ]
+  },
+  "models": {
+    "shape_ops_symbolic_subscripts": {
+      "tolerance": {
+        "rel": 1e-09,
+        "abs": 1e-12
+      },
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "a": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "b": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "c": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "v": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "w": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "z": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "q": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "s": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                2
+              ],
+              "j": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                2
+              ],
+              "j": [
+                1,
+                3
+              ]
+            },
+            "expr": 0.0
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "a",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                3
+              ]
+            },
+            "expr": 0.0
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                2
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "b",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                2
+              ]
+            },
+            "expr": 0.0
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                2
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "c",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                2
+              ]
+            },
+            "expr": 0.0
+          }
+        },
+        {
+          "_comment": "v[i] = transpose(u)[i, 2] = u[2, i]: a symbolic subscript through a transpose is the permuted gather.",
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "v",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "transpose",
+                  "args": [
+                    "u"
+                  ]
+                },
+                "i",
+                2
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "w[j] = reshape(a, [1, 3])[1, j] = a[j]: a reshape that only inserts a unit axis relabels it.",
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "w",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "reshape",
+                  "args": [
+                    "a"
+                  ],
+                  "shape": [
+                    1,
+                    3
+                  ]
+                },
+                1,
+                "j"
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "z[i] = broadcast(+, a, reshape(b, [1, 2]))[i, 2] = a[i] + b[2]: positional broadcast of anonymous operands (esm-spec 4.3.4).",
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "z",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "broadcast",
+                  "fn": "+",
+                  "args": [
+                    "a",
+                    {
+                      "op": "reshape",
+                      "args": [
+                        "b"
+                      ],
+                      "shape": [
+                        1,
+                        2
+                      ]
+                    }
+                  ]
+                },
+                "i",
+                2
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "q[i] = concat(u, reshape(c, [2, 1]), axis = 1)[i, 4] = c[i]: a literal subscript on the joined axis picks the operand.",
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                2
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "q",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                2
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "concat",
+                  "args": [
+                    "u",
+                    {
+                      "op": "reshape",
+                      "args": [
+                        "c"
+                      ],
+                      "shape": [
+                        2,
+                        1
+                      ]
+                    }
+                  ],
+                  "axis": 1
+                },
+                "i",
+                4
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "s = transpose(u, perm = [1, 0])[3, 1] = u[1, 3].",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "index",
+            "args": [
+              {
+                "op": "transpose",
+                "args": [
+                  "u"
+                ],
+                "perm": [
+                  1,
+                  0
+                ]
+              },
+              3,
+              1
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "symbolic_subscript_gathers",
+          "description": "Each probe integrates a constant element of a shape op for one unit of time.",
+          "initial_conditions": {
+            "u[1,1]": 11.0,
+            "u[2,1]": 21.0,
+            "u[1,2]": 12.0,
+            "u[2,2]": 22.0,
+            "u[1,3]": 13.0,
+            "u[2,3]": 23.0,
+            "a[1]": 1.5,
+            "a[2]": 2.5,
+            "a[3]": 3.5,
+            "b[1]": 0.25,
+            "b[2]": 0.75,
+            "c[1]": -4.0,
+            "c[2]": -8.0,
+            "v[1]": 0.0,
+            "v[2]": 0.0,
+            "v[3]": 0.0,
+            "w[1]": 0.0,
+            "w[2]": 0.0,
+            "w[3]": 0.0,
+            "z[1]": 0.0,
+            "z[2]": 0.0,
+            "z[3]": 0.0,
+            "q[1]": 0.0,
+            "q[2]": 0.0,
+            "s": 0.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "v[1]",
+              "time": 1.0,
+              "expected": 21.0
+            },
+            {
+              "variable": "v[2]",
+              "time": 1.0,
+              "expected": 22.0
+            },
+            {
+              "variable": "v[3]",
+              "time": 1.0,
+              "expected": 23.0
+            },
+            {
+              "variable": "w[1]",
+              "time": 1.0,
+              "expected": 1.5
+            },
+            {
+              "variable": "w[2]",
+              "time": 1.0,
+              "expected": 2.5
+            },
+            {
+              "variable": "w[3]",
+              "time": 1.0,
+              "expected": 3.5
+            },
+            {
+              "variable": "z[1]",
+              "time": 1.0,
+              "expected": 2.25
+            },
+            {
+              "variable": "z[2]",
+              "time": 1.0,
+              "expected": 3.25
+            },
+            {
+              "variable": "z[3]",
+              "time": 1.0,
+              "expected": 4.25
+            },
+            {
+              "variable": "q[1]",
+              "time": 1.0,
+              "expected": -4.0
+            },
+            {
+              "variable": "q[2]",
+              "time": 1.0,
+              "expected": -8.0
+            },
+            {
+              "variable": "s",
+              "time": 1.0,
+              "expected": 13.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
