@@ -6588,6 +6588,7 @@ binding that got better is the one way a ratchet can run backwards.
 | `scalar_operator_semantics` | what each scalar operator of esm-spec §9.2's evaluable core COMPUTES |
 | `faq_pointwise_filter` | a `faq` `filter` on a node with no contracted index: each output cell is one combination, and a false predicate makes it the semiring's 0̄ (esm-schema `filter`) |
 | `recurrence` | a causal self-reference along one index axis (esm-spec §4.3.1.1): the ordered sweep's values at zero tolerance, under every compiler each fixture's `required` map names (§5.19) |
+| `value_invention_geometry` | build-time value invention (a `distinct` producer over a ragged set, an `argmin` arg-witness buffer, a bin-skolem candidate set) and setup-time polygon geometry (`intersect_polygon`, `polygon_intersection_area` over unequal rings) feeding a right-hand side, every producer input a constant factor held in the document (esm-spec §4.2) |
 
 Each tier's `README.md` is its contract and records what did NOT move into it.
 A tier is added by writing that README, a manifest with `"runner":

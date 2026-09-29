@@ -1,0 +1,13 @@
+{
+  "fixture": "polygon_intersection_area_padded_ring",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "padded_ring_overlap_area",
+      "assertion_idx": 1,
+      "variable": "area_state",
+      "actual": 0.9999999999999998
+    }
+  ]
+}

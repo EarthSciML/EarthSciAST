@@ -294,7 +294,7 @@ impl TapeBuilder<'_> {
     /// The build-time value of the variable `name` — an observed whose value
     /// the build knows — as `(shape, row-major values)`; a scalar has an
     /// empty shape and one value.
-    fn known_named(&self, name: &str) -> Option<(DimU, Rc<Vec<f64>>)> {
+    pub(super) fn known_named(&self, name: &str) -> Option<(DimU, Rc<Vec<f64>>)> {
         match self.obs_defined.get(name)? {
             ObsVal::Taped(LV::Lit(x)) => Some((DimU::new(), Rc::new(vec![*x]))),
             ObsVal::Taped(LV::Arr(s)) => {

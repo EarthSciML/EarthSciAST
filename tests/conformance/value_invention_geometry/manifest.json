@@ -1,0 +1,214 @@
+{
+ "category": "value_invention_geometry",
+ "runner": "inline_tests",
+ "version": "1.0",
+ "description": "Build-time value invention and setup-time polygon geometry feeding a right-hand side, under every compiler. Each document's producer inputs are constant factors held in the document itself (unknowns defined by array `const` nodes, esm-spec §4.2), so no caller data is involved: a `distinct` producer over a ragged set whose size a state integrates, an `argmin` arg-witness buffer a state gathers through, a bin-skolem candidate-pair set a state counts, an `intersect_polygon` clip of two const rings whose area drives a state, and `polygon_intersection_area` over rings of different vertex counts. Before this tier, Julia refused the ragged, arg-witness and clip documents under both compilers and failed the unequal-ring documents with a shape-promotion conflict, and Rust's native compiler refused the arg-witness gather.",
+ "reference_binding": "julia",
+ "reference_compiler": "interpreter",
+ "bindings_required": [
+  "julia",
+  "python",
+  "rust"
+ ],
+ "scope_excluded": {
+  "go": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). This is an exclusion from the CATEGORY, not from the rule.",
+  "typescript": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). This is an exclusion from the CATEGORY, not from the rule."
+ },
+ "integrators": {
+  "julia": {
+   "algorithm": "Tsit5",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  },
+  "python": {
+   "method": "LSODA",
+   "rtol": 1e-12,
+   "atol": 1e-14
+  },
+  "rust": {
+   "solver": "Erk",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  }
+ },
+ "tolerances": {
+  "golden_rtol": 1e-09,
+  "golden_atol": 1e-12,
+  "detail": "Most states have a constant rate over one unit of time, so their values are exact up to the integrator's rounding; the clip document's tracer decays as exp(-t), so the band covers three integrator families at a 1e-12 tolerance. The absolute floor covers a zero expectation."
+ },
+ "fixtures": [
+  {
+   "id": "edge_enumeration_ode",
+   "path": "fixtures/edge_enumeration_ode.esm",
+   "model": "EdgeEnumerationODE",
+   "golden": "golden/edge_enumeration_ode.json",
+   "tags": [
+    "value-invention",
+    "distinct",
+    "skolem",
+    "ragged",
+    "derived-index-set"
+   ],
+   "note": "Authored here.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": [
+    {
+     "binding": "python",
+     "compilers": [
+      "native"
+     ],
+     "code": "compiler_refused_rule",
+     "reason": "Python's native compiler has no form for a ragged contracted range (the bound depends on the enclosing output index through its `offsets` factor) and refuses D(area_eff) by name. Python native is outside the phase-4 plan; its interpreter answers."
+    }
+   ]
+  },
+  {
+   "id": "nearest_generator_ode",
+   "path": "fixtures/nearest_generator_ode.esm",
+   "model": "NearestGeneratorODE",
+   "golden": "golden/nearest_generator_ode.json",
+   "tags": [
+    "value-invention",
+    "argmin",
+    "arg-witness",
+    "gather"
+   ],
+   "note": "Authored here.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "bin_skolem_count_ode",
+   "path": "fixtures/bin_skolem_count_ode.esm",
+   "model": "BinSkolemCountODE",
+   "golden": "golden/bin_skolem_count_ode.json",
+   "tags": [
+    "value-invention",
+    "skolem",
+    "join",
+    "derived-index-set"
+   ],
+   "note": "Authored here.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "intersect_polygon_planar_ode",
+   "path": "valid/geometry/intersect_polygon_planar_ode.esm",
+   "model": "PolygonClipAreaPlanarODE",
+   "golden": "golden/intersect_polygon_planar_ode.json",
+   "tags": [
+    "geometry",
+    "intersect_polygon",
+    "const-factor"
+   ],
+   "note": "Owned by tests/valid/geometry.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "polygon_intersection_area_padded_ring",
+   "path": "valid/geometry/polygon_intersection_area_padded_ring.esm",
+   "model": "PolygonIntersectionAreaPaddedRing",
+   "golden": "golden/polygon_intersection_area_padded_ring.json",
+   "tags": [
+    "geometry",
+    "polygon_intersection_area",
+    "padded-ring"
+   ],
+   "note": "Owned by tests/valid/geometry.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "polygon_intersection_area_planar",
+   "path": "valid/geometry/polygon_intersection_area_planar.esm",
+   "model": "PolygonIntersectionAreaPlanar",
+   "golden": "golden/polygon_intersection_area_planar.json",
+   "tags": [
+    "geometry",
+    "polygon_intersection_area"
+   ],
+   "note": "Owned by tests/valid/geometry.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  }
+ ]
+}

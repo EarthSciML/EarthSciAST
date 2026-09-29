@@ -1,0 +1,396 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ValueInventionEdgeEnumerationODE",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "description": "Build-time value invention feeding a right-hand side. Two triangles {1,2,3} and {2,3,4} share the edge (2,3), so the `distinct` producer over the ragged face_vertices set, keyed by skolem(a, b) with a < b, invents 5 undirected edges. Every key column is an unknown defined by an array `const` node, a constant factor (esm-spec §4.2), so no caller data is needed. `n_edges` integrates the size of the derived set; `area_eff[i]` integrates a contraction over each cell's ragged edge list, gathering per-edge lengths by edge id. From zero initial values at t = 1: n_edges = 5, area_eff = [43, 143.75]."
+  },
+  "index_sets": {
+    "faces": {
+      "kind": "interval",
+      "size": 2
+    },
+    "cells": {
+      "kind": "interval",
+      "size": 2
+    },
+    "local_verts": {
+      "kind": "interval",
+      "size": 3
+    },
+    "local_edges": {
+      "kind": "interval",
+      "size": 3
+    },
+    "edge_ids": {
+      "kind": "interval",
+      "size": 5
+    },
+    "face_vertices": {
+      "kind": "ragged",
+      "of": [
+        "faces"
+      ],
+      "offsets": "n_verts_on_face",
+      "values": "verts_on_face"
+    },
+    "edges": {
+      "kind": "derived",
+      "from_faq": "edge_set"
+    },
+    "edges_of_cell": {
+      "kind": "ragged",
+      "of": [
+        "cells"
+      ],
+      "offsets": "n_edges_on_cell",
+      "values": "edges_on_cell"
+    }
+  },
+  "models": {
+    "EdgeEnumerationODE": {
+      "variables": {
+        "n_verts_on_face": {
+          "type": "unknown",
+          "shape": [
+            "faces"
+          ]
+        },
+        "verts_on_face": {
+          "type": "unknown",
+          "shape": [
+            "faces",
+            "local_verts"
+          ]
+        },
+        "n_edges_on_cell": {
+          "type": "unknown",
+          "shape": [
+            "cells"
+          ]
+        },
+        "edges_on_cell": {
+          "type": "unknown",
+          "shape": [
+            "cells",
+            "local_edges"
+          ]
+        },
+        "dc": {
+          "type": "unknown",
+          "shape": [
+            "edge_ids"
+          ]
+        },
+        "dv": {
+          "type": "unknown",
+          "shape": [
+            "edge_ids"
+          ]
+        },
+        "edge_exists": {
+          "type": "unknown",
+          "shape": [
+            "edges"
+          ]
+        },
+        "n_edges": {
+          "type": "unknown",
+          "default": 0.0
+        },
+        "area_eff": {
+          "type": "unknown",
+          "shape": [
+            "cells"
+          ],
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": "n_verts_on_face",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              3,
+              3
+            ]
+          }
+        },
+        {
+          "lhs": "verts_on_face",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              [
+                1,
+                2,
+                3
+              ],
+              [
+                2,
+                3,
+                4
+              ]
+            ]
+          }
+        },
+        {
+          "lhs": "n_edges_on_cell",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              3,
+              3
+            ]
+          }
+        },
+        {
+          "lhs": "edges_on_cell",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              [
+                1,
+                2,
+                3
+              ],
+              [
+                3,
+                4,
+                5
+              ]
+            ]
+          }
+        },
+        {
+          "lhs": "dc",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              2.0,
+              3.0,
+              5.0,
+              7.0,
+              11.0
+            ]
+          }
+        },
+        {
+          "lhs": "dv",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              13.0,
+              17.0,
+              19.0,
+              23.0,
+              29.0
+            ]
+          }
+        },
+        {
+          "_comment": "The derived edge set: one member per distinct undirected vertex pair of a face.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "edge_exists",
+              "edge"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "id": "edge_set",
+            "args": [],
+            "semiring": "bool_and_or",
+            "distinct": true,
+            "output_idx": [
+              "edge"
+            ],
+            "ranges": {
+              "f": {
+                "from": "faces"
+              },
+              "a": {
+                "from": "face_vertices",
+                "of": [
+                  "f"
+                ]
+              },
+              "b": {
+                "from": "face_vertices",
+                "of": [
+                  "f"
+                ]
+              }
+            },
+            "filter": {
+              "op": "<",
+              "args": [
+                "a",
+                "b"
+              ]
+            },
+            "key": {
+              "op": "skolem",
+              "label": "edge",
+              "args": [
+                "a",
+                "b"
+              ]
+            },
+            "expr": {
+              "op": "true",
+              "args": []
+            }
+          }
+        },
+        {
+          "_comment": "d(n_edges)/dt = |edges|.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "n_edges"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "semiring": "sum_product",
+            "output_idx": [],
+            "ranges": {
+              "e": {
+                "from": "edges"
+              }
+            },
+            "expr": 1.0
+          }
+        },
+        {
+          "_comment": "d(area_eff[i])/dt = 1/4 sum over the cell's edges of dc[e] dv[e].",
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "area_eff",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [
+              "dc",
+              "dv",
+              "edges_on_cell"
+            ],
+            "semiring": "sum_product",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              },
+              "k": {
+                "from": "edges_of_cell",
+                "of": [
+                  "i"
+                ]
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                0.25,
+                {
+                  "op": "index",
+                  "args": [
+                    "dc",
+                    {
+                      "op": "index",
+                      "args": [
+                        "edges_on_cell",
+                        "i",
+                        "k"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "dv",
+                    {
+                      "op": "index",
+                      "args": [
+                        "edges_on_cell",
+                        "i",
+                        "k"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "edge_enumeration_ode",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "tolerance": {
+            "rel": 1e-09,
+            "abs": 1e-12
+          },
+          "assertions": [
+            {
+              "variable": "n_edges",
+              "time": 1.0,
+              "expected": 5.0
+            },
+            {
+              "variable": "area_eff[1]",
+              "time": 1.0,
+              "expected": 43.0
+            },
+            {
+              "variable": "area_eff[2]",
+              "time": 1.0,
+              "expected": 143.75
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
