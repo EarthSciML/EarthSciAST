@@ -2126,6 +2126,15 @@ impl<'m> TapeBuilder<'m> {
         let out_ndim = bx.shape.len();
         let vb = bx.as_vecbox();
 
+        // A const array read at a subscript that is itself build-time data
+        // (`gx[assign[i]]`, an arg-witness buffer gathered by a right-hand
+        // side) has no affine form; its positions are resolved here.
+        if const_base
+            && out_ndim == 1
+            && (0..n).any(|d| classify_axis_role(&node.args[1 + d], &vb).is_none())
+        {
+            return self.lower_const_data_gather(node, bx, &arg0, &src_shape, &src_origin);
+        }
         let mut mapped: SmallVec<[Option<(usize, AxisIndex)>; 4]> =
             (0..out_ndim).map(|_| None).collect();
         let mut n_mapped = 0usize;
@@ -2237,6 +2246,138 @@ impl<'m> TapeBuilder<'m> {
             &bx.shape,
             &bx.lo,
         ))
+    }
+
+    /// `index(c, s…)` over a rank-1 box, `c` a const array and some subscript
+    /// build-time data rather than an affine map of the box. Each cell's
+    /// source position is resolved here, as `index_into` resolves it (the
+    /// subscript rounded; out of range obeys `c`'s boundary policy), into one
+    /// [`Instr::TableGather`]. A subscript the build cannot evaluate, or a
+    /// position out of range under the `error` policy, is a refusal.
+    fn lower_const_data_gather(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+        base: &LV,
+        src_shape: &[usize],
+        src_origin: &[i64],
+    ) -> LResult<LV> {
+        if src_origin.iter().any(|&o| o != 1) {
+            bail_tape!("index: const-array gather on a source not at origin 1");
+        }
+        let name = match &node.args[0] {
+            Expr::Variable(v) => v.as_str(),
+            _ => INLINE_CONST_NAME,
+        };
+        let m = bx.shape[0];
+        let mut sub_vals: Vec<Vec<f64>> = Vec::with_capacity(src_shape.len());
+        for e in &node.args[1..] {
+            match self.build_time_subscript(e, bx)? {
+                Some(v) => sub_vals.push(v),
+                None => bail_tape!("index: a const-array subscript that is not build-time data"),
+            }
+        }
+        let n_src: usize = src_shape.iter().product();
+        if n_src >= GATHER_GHOST as usize {
+            bail_tape!("index: gather source too large for a position table");
+        }
+        let pos = self.const_positions(name, src_shape, &sub_vals, m)?;
+        let vals = match base {
+            LV::Arr(s) => self
+                .known_values(*s)
+                .map(|b| pos.iter().map(|&p| b[p as usize]).collect::<Vec<f64>>()),
+            _ => None,
+        };
+        let table = tape_index(self.gather_tables.len(), "gather tables")?;
+        self.gather_tables.push(GatherTable {
+            src_shape: src_shape.iter().copied().collect(),
+            pos,
+        });
+        let sec = self.placement(self.lv_cadence(base));
+        let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
+        let instr = Instr::TableGather {
+            src: self.src_of(base),
+            table,
+            out,
+        };
+        self.emit(instr, sec);
+        if let Some(v) = vals {
+            self.known.insert(out, Known::Vals(std::rc::Rc::new(v)));
+        }
+        Ok(LV::Arr(out))
+    }
+
+    /// Flat row-major source positions of a const-array gather whose
+    /// per-cell subscripts (1-based, before rounding) are `sub_vals`.
+    fn const_positions(
+        &self,
+        name: &str,
+        src_shape: &[usize],
+        sub_vals: &[Vec<f64>],
+        m: usize,
+    ) -> LResult<Vec<u32>> {
+        let mut strides: Vec<usize> = vec![1; src_shape.len()];
+        for d in (0..src_shape.len().saturating_sub(1)).rev() {
+            strides[d] = strides[d + 1] * src_shape[d + 1];
+        }
+        let mut pos: Vec<u32> = Vec::with_capacity(m);
+        for k in 0..m {
+            let mut flat = 0usize;
+            for (d, vals) in sub_vals.iter().enumerate() {
+                // `eval_index_args`: the subscript rounded (NaN reads as 0).
+                let raw = vals[k].round() as i64;
+                let n = src_shape[d] as i64;
+                let kind = if n == 0 {
+                    BoundaryKind::Error
+                } else {
+                    self.const_arrays.boundary(name, d)
+                };
+                let Some(i0) = resolve_const_index(kind, raw, n) else {
+                    bail_tape!("index: const-array gather out of range (§5.5.5)");
+                };
+                flat += i0 * strides[d];
+            }
+            pos.push(flat as u32);
+        }
+        Ok(pos)
+    }
+
+    /// The per-cell values of an `index` subscript over a rank-1 box, when the
+    /// build knows them: an affine map of the box's symbol, a constant, a
+    /// const-array gather at build-time subscripts, or a slot whose values the
+    /// build computed. `None` otherwise.
+    fn build_time_subscript(&mut self, e: &Expr, bx: &LBox) -> LResult<Option<Vec<f64>>> {
+        let m = bx.shape[0];
+        match classify_axis_role(e, &bx.as_vecbox()) {
+            Some(AxisRole::Map {
+                out_axis: 0,
+                ax: AxisIndex::Affine(k),
+            }) => {
+                return Ok(Some(
+                    (0..m).map(|p| (bx.lo[0] + p as i64 + k) as f64).collect(),
+                ));
+            }
+            Some(AxisRole::Const(i)) => return Ok(Some(vec![i as f64; m])),
+            _ => {}
+        }
+        if let Expr::Operator(n) = e
+            && n.op == "index"
+            && let Some(Expr::Variable(name)) = n.args.first()
+            && self.const_arrays.is_const(name)
+            && let Some((shape, vals)) = self.known_named(name)
+            && shape.len() + 1 == n.args.len()
+        {
+            let mut subs: Vec<Vec<f64>> = Vec::with_capacity(shape.len());
+            for a in &n.args[1..] {
+                match self.build_time_subscript(a, bx)? {
+                    Some(v) => subs.push(v),
+                    None => return Ok(None),
+                }
+            }
+            let pos = self.const_positions(name, &shape, &subs, m)?;
+            return Ok(Some(pos.iter().map(|&p| vals[p as usize]).collect()));
+        }
+        Ok(None)
     }
 
     /// `LoadElem` of the element `fixed` (0-based, per source dim) names.
