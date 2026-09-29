@@ -58,7 +58,7 @@ is one or the other, never a silent skip. As of this writing:
 |---|---|---|
 | Julia | all but `06` | all but `06` — an emitted ordered sweep, bit for bit with the interpreter's walk |
 | Python | all ten | all but `04`, `07` and the `tests/valid` document, whose cell body is a reduction (named exclusions) |
-| Rust | all ten | none yet: the tape has no ordered-sweep instruction and refuses every recurrence by name (named exclusions, to be removed when it does) |
+| Rust | all ten | all ten — an ordered `Sweep` on the tape whose cell body runs one cell at a time, bit for bit with the interpreter's walk (`06` included, rounded to binary32 at every cell) |
 
 `06` (binary32) is refused by Julia under both compilers: Julia evaluates in
 binary64 only, and §5.19.3a forbids folding a `Float32` recurrence in binary64.

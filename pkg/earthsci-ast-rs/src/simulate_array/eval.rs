@@ -2014,19 +2014,25 @@ pub(crate) fn latch_gather_fault(msg: String) {
 /// Latch an unavailable causal self-read (esm-spec §4.3.1.1): the position is
 /// outside the recurrence axis, or names a cell the sweep has not published.
 fn latch_recur_unavailable(name: &str, raw: &[i64]) {
+    latch_gather_fault(recur_unavailable_message(name, raw));
+}
+
+/// The text [`latch_recur_unavailable`] latches, shared with the tape's
+/// causal self-read (`Instr::ScalarRead`).
+pub(crate) fn recur_unavailable_message(name: &str, raw: &[i64]) -> String {
     let at = raw
         .iter()
         .map(|i| i.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    latch_gather_fault(format!(
+    format!(
         "E_TREEWALK_RECUR_UNAVAILABLE: causal self-read of '{name}' at cell [{at}] is not \
          available — the position is outside the recurrence axis, or the sweep has not \
          published that cell yet (esm-spec §4.3.1.1; CONFORMANCE_SPEC.md §5.19.4: a causal \
          self-read is fail-closed, never the §5.5.5 zero ghost and never a NaN a `max(x, 0)` \
          could launder). Guard the base case inside the body, e.g. \
          `ifelse(k <= 1, <base>, <recurrence>)`."
-    ));
+    )
 }
 
 /// Latch a subscript applied to a value that has NO axes (esm-spec §4.3.4: a
