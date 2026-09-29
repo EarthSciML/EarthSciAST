@@ -4589,6 +4589,24 @@ impl<'m> TapeBuilder<'m> {
         for (i, p) in tbuf.into_iter().chain(fbuf) {
             self.emit_tagged(i, p, sec);
         }
+        // Each Copy into the join carried its branch's build-time value, the
+        // false branch's last. Which branch runs is a runtime question, so
+        // the join is build-time data only when the two agree bit for bit.
+        let agree = match (&tv, &fv) {
+            (LV::Arr(a), LV::Arr(b)) => match (self.known_values(*a), self.known_values(*b)) {
+                (Some(x), Some(y)) => {
+                    x.len() == y.len()
+                        && x.iter()
+                            .zip(y.iter())
+                            .all(|(p, q)| p.to_bits() == q.to_bits())
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if !agree {
+            self.known.remove(&phi);
+        }
         Ok(if scalar {
             LV::Scalar(phi)
         } else {
