@@ -1489,13 +1489,17 @@ impl<'m> TapeBuilder<'m> {
             }
         }
 
-        // A call whose queries are all compile-time known is one number.
+        // A call whose queries are all compile-time known is one number —
+        // unless it is a strict table's out-of-range query, whose fault must
+        // be raised by the evaluation that reads it, not by this lowering.
         let lit_y = match &y {
             None => Some(f64::NAN),
             Some(LV::Lit(v)) => Some(*v),
             Some(_) => None,
         };
-        if let (LV::Lit(xv), Some(yv)) = (&x, lit_y) {
+        if let (LV::Lit(xv), Some(yv)) = (&x, lit_y)
+            && table.out_of_bounds(*xv, yv).is_none()
+        {
             return Ok(LV::Lit(table.at(*xv, yv)));
         }
 
@@ -1588,6 +1592,7 @@ impl<'m> TapeBuilder<'m> {
             table,
             axis_x,
             axis_y,
+            strict: crate::lower_table_lookup::strict_table(node).map(str::to_string),
         })
     }
 

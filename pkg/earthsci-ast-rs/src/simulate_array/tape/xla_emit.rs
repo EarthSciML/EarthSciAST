@@ -1199,6 +1199,17 @@ impl<'a> Emitter<'a> {
             }
             Instr::Interp { table, x, y, out } => {
                 let tbl = &self.prog.interp_tables[*table as usize];
+                if let Some(id) = &tbl.strict {
+                    // Like `Instr::Fault`: a computation has no channel to
+                    // raise the out-of-range error through, and returning the
+                    // clamp or a bare `NaN` without it is the wrong answer
+                    // §9.5.3a forbids. Refused by name instead.
+                    return Err(self.err(format!(
+                        "a lookup into table `{id}`, which declares `out_of_bounds: \"error\"` \
+                         (esm-spec §9.5.1): a compiled program cannot raise \
+                         `table_lookup_out_of_bounds` at run time"
+                    )));
+                }
                 let dims = self.out_dims(*out);
                 let xv = self.operand(x)?;
                 let xv = self.to_shape(&xv, &dims)?;

@@ -678,6 +678,11 @@ pub(crate) struct BuildProducts {
     /// Parameters baked into the build. Substituting one of these needs a
     /// rebuild, so [`remake`] refuses rather than lying.
     pub baked_parameters: Vec<String>,
+    /// Why a state-free document's observed graph could not be evaluated at
+    /// construction — a fail-closed evaluation fault such as
+    /// `table_lookup_out_of_bounds` — so [`observed_field`] can name the cause
+    /// instead of only the name it cannot answer.
+    pub static_eval_error: Option<String>,
 }
 
 /// A simulation problem: a document, an interval, and the bindings that fix
@@ -1160,9 +1165,16 @@ pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, Simu
             )),
         ));
     }
+    let cause = prob
+        .build
+        .static_eval_error
+        .as_deref()
+        .map(|e| format!("; evaluating the state-free observed graph failed: {e}"))
+        .unwrap_or_default();
     Err(SimulateError::Compile(
         crate::compile_error::CompileError::build_err(format!(
-            "observed_field: '{name}' is not a build-time-evaluable observed of this EsmProblem"
+            "observed_field: '{name}' is not a build-time-evaluable observed of this \
+             EsmProblem{cause}"
         )),
     ))
 }
@@ -1895,7 +1907,7 @@ pub fn esm_problem<'a>(
         && let Backend::Static(_) = &backend
     {
         let t0 = opts.sample_time.unwrap_or(tspan.0);
-        let (fields, rows) = static_observed_fields(
+        let (fields, rows, eval_error) = static_observed_fields(
             owned_file.as_ref(),
             flat_only,
             &opts.p,
@@ -1904,6 +1916,7 @@ pub fn esm_problem<'a>(
             compiler,
         )?;
         build.fields = fields;
+        build.static_eval_error = eval_error;
         route_rows.extend(rows);
     }
 
@@ -2290,7 +2303,9 @@ pub(crate) fn has_nothing_to_integrate(prob: &EsmProblem) -> bool {
 /// that will not build. Python makes the same call for the same reason
 /// (`problem.py`, the scalar no-state branch). Only the compiler's own refusal is
 /// raised: that one says the document evaluates under `interpreter` and not
-/// under the compiler the caller named.
+/// under the compiler the caller named. An EVALUATION failure of a runtime
+/// that did build (a fail-closed fault) comes back as the third element, for
+/// [`observed_field`] to report.
 #[allow(clippy::type_complexity)]
 fn static_observed_fields(
     file: Option<&EsmFile>,
@@ -2299,8 +2314,15 @@ fn static_observed_fields(
     t0: f64,
     model_name: Option<&str>,
     compiler: Compiler,
-) -> Result<(HashMap<String, ArrayD<f64>>, Vec<CompilerRuleReport>), SimulateError> {
-    let nothing = || Ok((HashMap::new(), Vec::new()));
+) -> Result<
+    (
+        HashMap<String, ArrayD<f64>>,
+        Vec<CompilerRuleReport>,
+        Option<String>,
+    ),
+    SimulateError,
+> {
+    let nothing = || Ok((HashMap::new(), Vec::new(), None));
     let owned_flat;
     let flat = match (flat_only, file) {
         (Some(f), _) => f,
@@ -2356,8 +2378,9 @@ fn static_observed_fields(
         &std::collections::HashSet::new(),
         false,
     )?;
-    let Ok(values) = compiled.evaluate_stateless_fields(p, t0) else {
-        return Ok((HashMap::new(), report.rules));
+    let values = match compiled.evaluate_stateless_fields(p, t0) {
+        Ok(values) => values,
+        Err(e) => return Ok((HashMap::new(), report.rules, Some(e.to_string()))),
     };
     let fields = values
         .into_iter()
@@ -2373,7 +2396,7 @@ fn static_observed_fields(
             declared.map(|_| (name, arr))
         })
         .collect();
-    Ok((fields, report.rules))
+    Ok((fields, report.rules, None))
 }
 
 /// Build the per-rule record, and — under a STRICT compiler ([`Compiler::Native`]
