@@ -3869,6 +3869,9 @@ function _build_evaluator_impl_inner(model::Model;
     # does not integrate (esm-spec §9.6.6); refused on the same terms.
     wiener = _first_wiener_parameter(model)
     wiener === nothing || throw(_wiener_refusal(wiener))
+    # A parameter recomputed by a symbolic update is an event in all but name.
+    symbolic = _first_symbolic_update(model)
+    symbolic === nothing || throw(_symbolic_update_refusal(symbolic...))
     # Runtime contraction-loop var registry (ess-runtime-contraction) is a
     # build-scoped resolve→compile side channel; clear any stale entries from a
     # prior build so it never accumulates across builds. Loop-var names are
@@ -6294,6 +6297,7 @@ function _build_evaluator(flat::FlattenedSystem; kwargs...)
     # the flattened system still holds them (esm-spec §9.6.6).
     _refuse_flat_events(flat)
     _refuse_flat_wiener_noise(flat)
+    _refuse_flat_symbolic_updates(flat)
     return _build_evaluator(flattened_to_esm(flat); kwargs...)
 end
 
