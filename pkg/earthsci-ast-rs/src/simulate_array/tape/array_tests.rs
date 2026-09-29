@@ -20,7 +20,7 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-fn compile(doc: serde_json::Value) -> ArrayCompiled {
+pub(super) fn compile(doc: serde_json::Value) -> ArrayCompiled {
     let file = crate::parse::load_string(&doc.to_string()).expect("fixture document loads");
     ArrayCompiled::from_file(&file).expect("fixture compiles")
 }
@@ -72,7 +72,7 @@ fn scratch_with(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsScratch {
 /// on a FRESH scratch per evaluation: a CONST-section fault latches when the
 /// section primes, which a warm scratch has already done. Returns the fused
 /// program.
-fn ab(compiled: &ArrayCompiled, param_maps: &[HashMap<String, f64>]) -> TapeProgram {
+pub(super) fn ab(compiled: &ArrayCompiled, param_maps: &[HashMap<String, f64>]) -> TapeProgram {
     let (prog, report) = compiled.build_tape_opts(&HashSet::new(), Some(cfg()));
     assert!(
         report.fallbacks.is_empty(),
@@ -81,55 +81,82 @@ fn ab(compiled: &ArrayCompiled, param_maps: &[HashMap<String, f64>]) -> TapeProg
     );
     let n = compiled.state_variable_names().len();
     for params in param_maps {
-        let pv = compiled.debug_resolve_params(params);
         for seed in 0..3u64 {
             let state = seeded_state(n, seed, -2.0, 2.0);
             for &t in &[0.0, 0.7] {
-                take_const_array_oob();
-                let (dy_oracle, _) = compiled.debug_eval_rhs(&state, t, params, true);
-                let f_oracle = take_const_array_oob();
-                let (dy_overlay, _) = compiled.debug_eval_rhs(&state, t, params, false);
-                let f_overlay = take_const_array_oob();
-                assert_bits_eq(&dy_overlay, &dy_oracle, "overlay vs oracle");
-                assert_eq!(f_overlay, f_oracle, "overlay fault");
-                for fused in [true, false] {
-                    let label = if fused { "fused" } else { "unfused" };
-                    let p = compiled.build_tape_opts(&HashSet::new(), fused.then(cfg)).0;
-                    let mut dy = vec![0.0f64; n];
-                    run_reference(&p, compiled, &state, &pv, t, &mut dy);
-                    let f_ref = take_const_array_oob();
-                    assert_bits_eq(&dy, &dy_oracle, &format!("{label} reference executor"));
-                    assert_eq!(f_ref, f_oracle, "{label} reference executor fault");
-                    let mut scratch = scratch_with(compiled, p);
-                    let mut dy = vec![0.0f64; n];
-                    compiled.debug_eval_rhs_into(
-                        &state,
-                        t,
-                        &pv,
-                        &mut dy,
-                        &mut scratch,
-                        &mut RhsStats::default(),
-                    );
-                    let f_fast = take_const_array_oob();
-                    assert_bits_eq(&dy, &dy_oracle, &format!("{label} fast executor"));
-                    assert_eq!(f_fast, f_oracle, "{label} fast executor fault");
-                }
+                compare_at(compiled, params, &state, t);
             }
         }
     }
     prog
 }
 
-fn no_params() -> Vec<HashMap<String, f64>> {
+/// Compare the fused and unfused tapes, in both executors, against the
+/// oracle and the overlay at one state, time and parameter map: `dy` bit for
+/// bit and the latched fault.
+fn compare_at(compiled: &ArrayCompiled, params: &HashMap<String, f64>, state: &[f64], t: f64) {
+    let n = state.len();
+    let pv = compiled.debug_resolve_params(params);
+    take_const_array_oob();
+    let (dy_oracle, _) = compiled.debug_eval_rhs(state, t, params, true);
+    let f_oracle = take_const_array_oob();
+    let (dy_overlay, _) = compiled.debug_eval_rhs(state, t, params, false);
+    let f_overlay = take_const_array_oob();
+    assert_bits_eq(&dy_overlay, &dy_oracle, "overlay vs oracle");
+    assert_eq!(f_overlay, f_oracle, "overlay fault");
+    for fused in [true, false] {
+        let label = if fused { "fused" } else { "unfused" };
+        let p = compiled.build_tape_opts(&HashSet::new(), fused.then(cfg)).0;
+        let mut dy = vec![0.0f64; n];
+        run_reference(&p, compiled, state, &pv, t, &mut dy);
+        let f_ref = take_const_array_oob();
+        assert_bits_eq(&dy, &dy_oracle, &format!("{label} reference executor"));
+        assert_eq!(f_ref, f_oracle, "{label} reference executor fault");
+        let mut scratch = scratch_with(compiled, p);
+        let mut dy = vec![0.0f64; n];
+        compiled.debug_eval_rhs_into(
+            state,
+            t,
+            &pv,
+            &mut dy,
+            &mut scratch,
+            &mut RhsStats::default(),
+        );
+        let f_fast = take_const_array_oob();
+        assert_bits_eq(&dy, &dy_oracle, &format!("{label} fast executor"));
+        assert_eq!(f_fast, f_oracle, "{label} fast executor fault");
+    }
+}
+
+/// The tape's refusals when it refuses any rule; otherwise [`compare_at`] at
+/// each of `states` under each parameter map, and no refusals.
+pub(super) fn agrees_or_refuses(
+    compiled: &ArrayCompiled,
+    param_maps: &[HashMap<String, f64>],
+    states: &[Vec<f64>],
+) -> Vec<(String, String)> {
+    let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(cfg()));
+    if !report.fallbacks.is_empty() {
+        return report.fallbacks;
+    }
+    for params in param_maps {
+        for state in states {
+            compare_at(compiled, params, state, 0.0);
+        }
+    }
+    Vec::new()
+}
+
+pub(super) fn no_params() -> Vec<HashMap<String, f64>> {
     vec![HashMap::new()]
 }
 
-fn opcount(prog: &TapeProgram, opcode: &str) -> usize {
+pub(super) fn opcount(prog: &TapeProgram, opcode: &str) -> usize {
     prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
 }
 
 /// `D(u[i]) = rhs` over `i ∈ [1, n]`.
-fn d_eq(var: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
+pub(super) fn d_eq(var: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
     json!({
         "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
                 "expr": {"op": "D", "args": [{"op": "index", "args": [var, "i"]}], "wrt": "t"},
@@ -138,21 +165,21 @@ fn d_eq(var: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
     })
 }
 
-fn idx(base: serde_json::Value, subs: &[serde_json::Value]) -> serde_json::Value {
+pub(super) fn idx(base: serde_json::Value, subs: &[serde_json::Value]) -> serde_json::Value {
     let mut args = vec![base];
     args.extend(subs.iter().cloned());
     json!({"op": "index", "args": args})
 }
 
-fn plus(a: serde_json::Value, b: serde_json::Value) -> serde_json::Value {
+pub(super) fn plus(a: serde_json::Value, b: serde_json::Value) -> serde_json::Value {
     json!({"op": "+", "args": [a, b]})
 }
 
-fn lit(v: &[f64]) -> serde_json::Value {
+pub(super) fn lit(v: &[f64]) -> serde_json::Value {
     json!({"op": "const", "args": [], "value": v})
 }
 
-fn doc(vars: serde_json::Value, eqs: Vec<serde_json::Value>) -> serde_json::Value {
+pub(super) fn doc(vars: serde_json::Value, eqs: Vec<serde_json::Value>) -> serde_json::Value {
     json!({
         "esm": "1.1.0",
         "metadata": {"name": "tape_array_forms"},
