@@ -78,7 +78,7 @@
       "path": "tests/fixtures/recurrence/06_recurrence_float32_state.esm",
       "code": "compiler_refused_rule",
       "rule": "RecurrenceFloat32State.s",
-      "reason": "[const] the variable declares its own `element_type` (esm-spec §11.3.1), and the tape resolves its kernels at execution from ONE thread-local precision and fuses ACROSS rules, so a subtree in a precision its neighbours are not is the one thing it cannot express"
+      "reason": "[const] observed: causal self-reference (recurrence) — sequential sweep only (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
     },
     {
       "path": "tests/fixtures/recurrence/07_recurrence_thirty_eight_lags.esm",
