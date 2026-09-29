@@ -3011,7 +3011,7 @@ impl SuppliedData {
                 let shaped = shaped_parameter_keys(raw, file);
                 let several_models =
                     opts.model_name.is_none() && model_count(raw, file).is_some_and(|n| n > 1);
-                let only_trigger = several_models
+                let only_trigger = (several_models || raw.is_some_and(declares_derivative))
                     && !opts.build_pipeline
                     && !opts.pushdown_rewrite
                     && opts.build_providers.is_empty()
@@ -3172,6 +3172,38 @@ impl SuppliedData {
         }
         Ok(())
     }
+}
+
+/// Whether any equation of the raw document has a time derivative on its
+/// left-hand side, or the document holds a reaction system: a document with a
+/// right-hand side to compile, whose caller arrays the compile binds itself.
+#[cfg(not(target_arch = "wasm32"))]
+fn declares_derivative(raw: &JsonValue) -> bool {
+    fn has_d(v: &JsonValue) -> bool {
+        match v {
+            JsonValue::Object(o) => {
+                o.get("op").and_then(JsonValue::as_str) == Some("D") || o.values().any(has_d)
+            }
+            JsonValue::Array(a) => a.iter().any(has_d),
+            _ => false,
+        }
+    }
+    if raw
+        .get("reaction_systems")
+        .and_then(JsonValue::as_object)
+        .is_some_and(|r| !r.is_empty())
+    {
+        return true;
+    }
+    raw.get("models")
+        .and_then(JsonValue::as_object)
+        .is_some_and(|ms| {
+            ms.values().any(|m| {
+                m.get("equations")
+                    .and_then(JsonValue::as_array)
+                    .is_some_and(|eqs| eqs.iter().any(|e| e.get("lhs").is_some_and(has_d)))
+            })
+        })
 }
 
 /// How many `models` the document declares, off the raw JSON when there is one.
