@@ -72,6 +72,8 @@ mod geom;
 mod ir;
 mod lower;
 #[cfg(test)]
+mod lowering_limit_tests;
+#[cfg(test)]
 mod refexec;
 #[cfg(test)]
 mod tests;

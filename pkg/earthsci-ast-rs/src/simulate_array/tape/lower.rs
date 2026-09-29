@@ -104,12 +104,11 @@ pub(super) struct ForcingInputs<'a> {
     pub discrete: &'a HashSet<String>,
 }
 
-/// Most contracted indices one contraction may carry.
-const MAX_CONTRACT: usize = 4;
-
-/// Highest rank a contraction is promoted to: the executor's per-axis tables
-/// hold four axes inline, so a deeper box would allocate on every call.
-const MAX_RANK: usize = 4;
+/// Highest rank a contraction is promoted to. The executor's per-axis tables
+/// hold four axes inline and spill past that, so a box of rank five or more
+/// costs an allocation per instruction per call; past this rank the
+/// contraction is unrolled instead.
+const MAX_RANK: usize = 8;
 
 /// Largest box a contraction is promoted to (`window × output` elements, one
 /// term each): beyond it the contraction stays unrolled rather than
@@ -151,30 +150,183 @@ fn resolve_const_index(policy: BoundaryKind, raw: i64, n: i64) -> Option<usize> 
     }
 }
 
-/// The copy segments of a periodic wrap axis, which the tape lowers only as a
-/// full-period roll: source and output both span exactly one period from the
-/// same origin.
-fn full_roll_segs(
+/// The copy segments of a periodic wrap axis read from a source dim of
+/// `src_len` cells at `src_origin`: each run of [`wrap_pieces`] clipped to the
+/// source exactly as an affine shift is, so a subscript the wrap leaves
+/// outside the source reads the zero ghost. Over one full period of the
+/// source this is the two-segment roll. Empty when no subscript lands inside.
+fn wrap_segs(
     src_origin: i64,
     src_len: i64,
     out_lo: i64,
     out_len: usize,
-    k: i64,
-    period: i64,
-) -> LResult<SmallVec<[(usize, usize, usize); 2]>> {
-    if src_origin != out_lo || src_len != period || out_len as i64 != period {
-        bail_tape!("index: periodic wrap axis is not a full-period roll");
-    }
-    let p = period as usize;
-    let s = (((k % period) + period) % period) as usize;
+    (k, lo, period): (i64, i64, i64),
+) -> SmallVec<[(usize, usize, usize); 2]> {
     let mut segs = SmallVec::new();
-    if s == 0 {
-        segs.push((0usize, p, 0usize));
-    } else {
-        segs.push((0usize, p - s, s));
-        segs.push((p - s, s, 0usize));
+    for (start, len, shift) in wrap_pieces(out_lo, out_len, k, lo, period) {
+        // Position `p` reads the 0-based source cell `out_lo + p + shift − src_origin`.
+        let lo_p = (start as i64).max(src_origin - out_lo - shift);
+        let hi_p = ((start + len) as i64).min(src_origin + src_len - out_lo - shift);
+        if lo_p < hi_p {
+            segs.push((
+                lo_p as usize,
+                (hi_p - lo_p) as usize,
+                (out_lo + lo_p + shift - src_origin) as usize,
+            ));
+        }
     }
-    Ok(segs)
+    segs
+}
+
+/// The 1-based subscript a periodic wrap axis reads at output position `p`.
+fn wrap_subscript(out_lo: i64, p: i64, (k, lo, period): (i64, i64, i64)) -> i64 {
+    let inner = out_lo + p + k;
+    if inner < lo {
+        inner + period
+    } else if inner > lo + period - 1 {
+        inner - period
+    } else {
+        inner
+    }
+}
+
+/// The runs of one output axis of a const-array gather whose 1-based
+/// subscript is `base + p` at position `p`, over `n_a` positions of a source
+/// dim of `n_d` cells, resolved by the dim's boundary `policy`.
+fn affine_const_runs(
+    base: i64,
+    n_a: usize,
+    n_d: i64,
+    policy: BoundaryKind,
+) -> SmallVec<[(usize, usize, ConstRun); 3]> {
+    let mut rs: SmallVec<[(usize, usize, ConstRun); 3]> = SmallVec::new();
+    let na = n_a as i64;
+    let below = (1 - base).clamp(0, na) as usize;
+    let above = (n_d + 1 - base).clamp(0, na) as usize;
+    match policy {
+        BoundaryKind::Periodic if n_d > 1 => {
+            let mut segs: SmallVec<[(usize, usize, usize); 2]> = SmallVec::new();
+            let mut p = 0i64;
+            while p < na {
+                let s = (base + p - 1).rem_euclid(n_d);
+                let len = (n_d - s).min(na - p);
+                segs.push((p as usize, len as usize, s as usize));
+                p += len;
+            }
+            rs.push((0, n_a, ConstRun::Copy(segs)));
+        }
+        // A period of one reads its one element everywhere.
+        BoundaryKind::Periodic => rs.push((0, n_a, ConstRun::Edge(0))),
+        kind => {
+            let (lo_run, hi_run) = match kind {
+                BoundaryKind::Clamp => (ConstRun::Edge(0), ConstRun::Edge(n_d as usize - 1)),
+                _ => (ConstRun::Oob, ConstRun::Oob),
+            };
+            if below > 0 {
+                rs.push((0, below, lo_run));
+            }
+            if above > below {
+                let mut segs = SmallVec::new();
+                segs.push((0, above - below, (base + below as i64 - 1) as usize));
+                rs.push((below, above - below, ConstRun::Copy(segs)));
+            }
+            if n_a > above.max(below) {
+                let from = above.max(below);
+                rs.push((from, n_a - from, hi_run));
+            }
+        }
+    }
+    rs
+}
+
+/// The absolute `dy` position of every cell of a derivative rule's output
+/// box, in ROW-MAJOR order, for a left-hand side that is not a constant shift
+/// of the output indices — the per-cell oracle's placement of each cell
+/// (`eval_simple_index` of every subscript, then `multi_to_flat_col_major`),
+/// computed once. Each subscript must be an integer sum or difference of
+/// output indices and integer literals, which is the grammar the oracle
+/// reads, and every position must lie inside the variable: the oracle's
+/// placement of anything else is not a cell of it.
+fn lhs_scatter_positions(
+    vs: &VarShape,
+    names: &[String],
+    ranges: &[(i64, i64)],
+    lhs: &[Expr],
+) -> LResult<Vec<usize>> {
+    /// `e` as `c0 + Σ coeff[j]·names[j]`, or `None` outside the grammar.
+    fn affine(e: &Expr, names: &[String], coeff: &mut [i64], sign: i64) -> Option<i64> {
+        match e {
+            Expr::Integer(n) => n.checked_mul(sign),
+            Expr::Number(n) if n.fract() == 0.0 && n.abs() < 9.0e15 => {
+                (*n as i64).checked_mul(sign)
+            }
+            Expr::Variable(v) => {
+                let j = names.iter().position(|n| n == v)?;
+                coeff[j] = coeff[j].checked_add(sign)?;
+                Some(0)
+            }
+            Expr::Operator(node) if (node.op == "+" || node.op == "-") && node.args.len() == 2 => {
+                let a = affine(&node.args[0], names, coeff, sign)?;
+                let s2 = if node.op == "+" { sign } else { -sign };
+                let b = affine(&node.args[1], names, coeff, s2)?;
+                a.checked_add(b)
+            }
+            _ => None,
+        }
+    }
+    let nd = vs.shape.len();
+    if lhs.len() != nd || ranges.len() != names.len() || names.is_empty() {
+        bail_tape!("rule: LHS rank does not match its variable");
+    }
+    let mut forms: Vec<(i64, Vec<i64>)> = Vec::with_capacity(nd);
+    for e in lhs {
+        let mut coeff = vec![0i64; names.len()];
+        let Some(c0) = affine(e, names, &mut coeff, 1) else {
+            bail_tape!("rule: LHS subscript is not an integer sum of output indices");
+        };
+        forms.push((c0, coeff));
+    }
+    let extents: Vec<i64> = ranges.iter().map(|(lo, hi)| (hi - lo + 1).max(0)).collect();
+    let total = extents
+        .iter()
+        .try_fold(1usize, |acc, &n| acc.checked_mul(n as usize));
+    let Some(total) = total else {
+        bail_tape!("rule: output box too large");
+    };
+    let cm = {
+        let mut st = Vec::with_capacity(nd);
+        let mut acc = 1usize;
+        for &n in &vs.shape {
+            st.push(acc);
+            acc *= n;
+        }
+        st
+    };
+    let mut pos = Vec::with_capacity(total);
+    let mut cell: Vec<i64> = ranges.iter().map(|(lo, _)| *lo).collect();
+    for _ in 0..total {
+        let mut flat = vs.flat_offset;
+        for (d, (c0, coeff)) in forms.iter().enumerate() {
+            let sub = c0 + coeff.iter().zip(&cell).map(|(c, x)| c * x).sum::<i64>();
+            let off = sub - vs.origin[d];
+            if off < 0 || off >= vs.shape[d] as i64 {
+                bail_tape!("rule: LHS addresses a cell outside its variable");
+            }
+            flat += off as usize * cm[d];
+        }
+        pos.push(flat);
+        // Row-major odometer: the last output index fastest.
+        let mut d = cell.len();
+        while d > 0 {
+            d -= 1;
+            cell[d] += 1;
+            if cell[d] <= ranges[d].1 {
+                break;
+            }
+            cell[d] = ranges[d].0;
+        }
+    }
+    Ok(pos)
 }
 
 // ---------------------------------------------------------------------------
@@ -343,10 +495,11 @@ pub(crate) struct TapeBuilder<'m> {
     /// The DOCUMENT's working precision, read off the compiled model rather
     /// than off the thread-local (`crate::precision::is_f32`), which is not
     /// guaranteed to be standing while the tape is built. Only the §9.2
-    /// closed-function lowering consults it: that lowering is exact integer
-    /// arithmetic carried in `f64`, and the kernels it emits are resolved at
-    /// EXECUTION, so under Float32 they would be binary32 kernels running on
-    /// day counts and Julian day numbers that binary32 cannot hold.
+    /// closed-function lowering consults it: the `datetime.*` expansion is
+    /// exact integer arithmetic carried in `f64`, and the kernels it emits are
+    /// resolved at EXECUTION, so under Float32 they would be binary32 kernels
+    /// running on day counts and Julian day numbers that binary32 cannot hold
+    /// ([`Self::lower_calendar`] takes [`Instr::Calendar`] instead).
     f32_document: bool,
     /// The shaped parameters whose declared default the compiler lowered into
     /// a `const` observed, as the dense row-major data that literal was
@@ -1318,7 +1471,7 @@ impl<'m> TapeBuilder<'m> {
                  takes a scalar `t_utc`)"
             );
         }
-        self.lower_datetime(name, t)
+        self.lower_calendar(name, t)
     }
 
     /// [`Self::lower_closed_fn`] on the wholesale (scalar-`eval` mirror) path,
@@ -1337,7 +1490,7 @@ impl<'m> TapeBuilder<'m> {
                  registry takes a scalar `t_utc`)"
             );
         }
-        self.lower_datetime(name, t)
+        self.lower_calendar(name, t)
     }
 
     /// The name of a `fn` node this lowering can expand, or a bail saying why
@@ -1347,27 +1500,15 @@ impl<'m> TapeBuilder<'m> {
         let Some(name) = node.name.as_deref() else {
             bail_tape!("op: `fn` with no `name`");
         };
-        /// The nine calendar entries of the v1 closed-function registry.
-        const DATETIME: &[&str] = &[
-            "datetime.year",
-            "datetime.month",
-            "datetime.day",
-            "datetime.hour",
-            "datetime.minute",
-            "datetime.second",
-            "datetime.day_of_year",
-            "datetime.julian_day",
-            "datetime.is_leap_year",
-        ];
-        if !DATETIME.contains(&name) && InterpKind::from_name(name).is_none() {
+        if !CALENDAR_FNS.contains(&name) && InterpKind::from_name(name).is_none() {
             bail_tape!("op: closed function `{name}` has no tape lowering (esm-spec §9.2)");
         }
         Ok(name)
     }
 
     /// The `datetime.*`-only half of what [`Self::closed_fn_name`] used to
-    /// check: unary arity and the binary64 precision precondition. Both call
-    /// sites run it, so they agree on what they refuse.
+    /// check: unary arity. Both call sites run it, so they agree on what they
+    /// refuse.
     fn datetime_call_ok(&self, name: &str, node: &Arc<ExpressionNode>) -> LResult<()> {
         if node.args.len() != 1 {
             // The registry answers a wrong arity with `closed_function_arity`,
@@ -1378,14 +1519,45 @@ impl<'m> TapeBuilder<'m> {
                 node.args.len()
             );
         }
-        if self.f32_document {
-            bail_tape!(
-                "op: closed function `{name}` under a Float32 document (the calendar \
-                 decomposition is exact integer arithmetic in binary64, and the tape \
-                 resolves its kernels at execution)"
-            );
-        }
         Ok(())
+    }
+
+    /// Lower one `datetime.*` entry over an already-lowered `t_utc`: the
+    /// arithmetic expansion where every kernel is binary64, one
+    /// [`Instr::Calendar`] wherever one might be binary32 — a Float32
+    /// document, or a Float32 variable's rule. There the expansion's kernels
+    /// would round the exact integer decomposition at every step, where the
+    /// oracle runs the registry in binary64 and lifts its answer unrounded.
+    /// The instruction is that same registry call, so it is right at either
+    /// precision.
+    fn lower_calendar(&mut self, name: &str, t: LV) -> LResult<LV> {
+        if !self.f32_document && !crate::precision::is_f32() {
+            return self.lower_datetime(name, t);
+        }
+        let func = CALENDAR_FNS
+            .iter()
+            .position(|n| *n == name)
+            .expect("a calendar entry") as u8;
+        if let LV::Lit(x) = t {
+            return Ok(LV::Lit(calendar_at(func, x)));
+        }
+        let sec = self.placement(self.lv_cadence(&t));
+        let (shape, origin, scalar) = match self.lv_box(&t) {
+            None => (DimU::new(), DimI::new(), true),
+            Some((s, o)) => (s, o, false),
+        };
+        let out = self.new_slot(&shape, &origin, scalar, sec);
+        let instr = Instr::Calendar {
+            func,
+            a: self.op_of(&t),
+            out,
+        };
+        self.emit(instr, sec);
+        Ok(if scalar {
+            LV::Scalar(out)
+        } else {
+            LV::Arr(out)
+        })
     }
 
     // -- closed functions (esm-spec §9.2): the `interp.*` family -------------
@@ -1399,11 +1571,10 @@ impl<'m> TapeBuilder<'m> {
     // (`Instr::Interp`), which is what `eval_fn` calls: the taped rule and the
     // per-cell oracle run the same code on the same operands.
     //
-    // That also removes the reason `datetime.*` bails under a Float32
-    // document. The calendar lowering emits ordinary tape instructions, whose
-    // kernels resolve to binary32 there; this one does not emit any, and
-    // `eval_fn` lifts the registry's binary64 result without rounding it, so
-    // the two agree at either document precision.
+    // The instruction agrees with the oracle at either document precision:
+    // it emits no arithmetic kernel, and `eval_fn` lifts the registry's
+    // binary64 result without rounding it. A Float32 document's `datetime.*`
+    // takes the same road (`Instr::Calendar`), for the same reason.
     //
     // The table and the axes are read at build time, which the format
     // guarantees: §9.2's argument shape contract requires them to be literal
@@ -2216,8 +2387,13 @@ impl<'m> TapeBuilder<'m> {
                     ));
                     axis_segs.push(segs);
                 }
-                AxisIndex::Wrap { k, period } => {
-                    axis_segs.push(full_roll_segs(so, ssz, bx.lo[a], bx.shape[a], *k, *period)?);
+                AxisIndex::Wrap { k, period, lo } => {
+                    let segs = wrap_segs(so, ssz, bx.lo[a], bx.shape[a], (*k, *lo, *period));
+                    if segs.is_empty() {
+                        // Every subscript leaves the source: all ghost-0.
+                        return Ok(self.emit_zero_array(&bx.shape, &bx.lo));
+                    }
+                    axis_segs.push(segs);
                 }
             }
         }
@@ -2389,52 +2565,32 @@ impl<'m> TapeBuilder<'m> {
             let mut rs: SmallVec<[(usize, usize, ConstRun); 3]> = SmallVec::new();
             match &mapped[a] {
                 None => rs.push((0, n_a, ConstRun::Bcast)),
-                Some((d, AxisIndex::Wrap { k, period })) => {
-                    let segs = full_roll_segs(1, src_shape[*d] as i64, bx.lo[a], n_a, *k, *period)?;
-                    rs.push((0, n_a, ConstRun::Copy(segs)));
-                }
-                Some((d, AxisIndex::Affine(k))) => {
+                Some((d, AxisIndex::Wrap { k, period, lo })) => {
+                    // Each run of the wrap is an affine read of its own, and
+                    // neighbouring copy runs merge back into one, so a full
+                    // roll stays the single two-segment copy it always was.
                     let n_d = src_shape[*d] as i64;
-                    // The 1-based subscript at position `p` is `base + p`.
-                    let base = bx.lo[a] + *k;
-                    let na = n_a as i64;
-                    let below = (1 - base).clamp(0, na) as usize;
-                    let above = (n_d + 1 - base).clamp(0, na) as usize;
-                    match policy(*d) {
-                        BoundaryKind::Periodic if n_d > 1 => {
-                            let mut segs: SmallVec<[(usize, usize, usize); 2]> = SmallVec::new();
-                            let mut p = 0i64;
-                            while p < na {
-                                let s = (base + p - 1).rem_euclid(n_d);
-                                let len = (n_d - s).min(na - p);
-                                segs.push((p as usize, len as usize, s as usize));
-                                p += len;
+                    for (start, len, shift) in wrap_pieces(bx.lo[a], n_a, *k, *lo, *period) {
+                        let base = bx.lo[a] + start as i64 + shift;
+                        for (s0, l0, run) in affine_const_runs(base, len, n_d, policy(*d)) {
+                            let at = start + s0;
+                            if let (ConstRun::Copy(segs), Some((ps, pl, ConstRun::Copy(prev)))) =
+                                (&run, rs.last_mut())
+                            {
+                                debug_assert_eq!(*ps + *pl, at, "runs tile the axis");
+                                let off = at - *ps;
+                                prev.extend(segs.iter().map(|&(o, l, so)| (o + off, l, so)));
+                                *pl += l0;
+                                continue;
                             }
-                            rs.push((0, n_a, ConstRun::Copy(segs)));
-                        }
-                        // A period of one reads its one element everywhere.
-                        BoundaryKind::Periodic => rs.push((0, n_a, ConstRun::Edge(0))),
-                        kind => {
-                            let (lo_run, hi_run) = match kind {
-                                BoundaryKind::Clamp => {
-                                    (ConstRun::Edge(0), ConstRun::Edge(n_d as usize - 1))
-                                }
-                                _ => (ConstRun::Oob, ConstRun::Oob),
-                            };
-                            if below > 0 {
-                                rs.push((0, below, lo_run));
-                            }
-                            if above > below {
-                                let mut segs = SmallVec::new();
-                                segs.push((0, above - below, (base + below as i64 - 1) as usize));
-                                rs.push((below, above - below, ConstRun::Copy(segs)));
-                            }
-                            if n_a > above.max(below) {
-                                let from = above.max(below);
-                                rs.push((from, n_a - from, hi_run));
-                            }
+                            rs.push((at, l0, run));
                         }
                     }
+                }
+                Some((d, AxisIndex::Affine(k))) => {
+                    // The 1-based subscript at position `p` is `base + p`.
+                    let n_d = src_shape[*d] as i64;
+                    rs.extend(affine_const_runs(bx.lo[a] + *k, n_a, n_d, policy(*d)));
                 }
             }
             runs.push(rs);
@@ -2971,8 +3127,9 @@ impl<'m> TapeBuilder<'m> {
             if let Some((d, ax)) = m {
                 raw_at[*d] = match ax {
                     AxisIndex::Affine(k) => bx.lo[a] + cell[a] + k,
-                    // A full roll never leaves the axis.
-                    AxisIndex::Wrap { .. } => 1,
+                    AxisIndex::Wrap { k, period, lo } => {
+                        wrap_subscript(bx.lo[a], cell[a], (*k, *lo, *period))
+                    }
                 };
             }
         }
@@ -3313,11 +3470,14 @@ impl<'m> TapeBuilder<'m> {
         filter: Option<&Expr>,
     ) -> LResult<LV> {
         let Some(combine_op) = reduce_combine_op(reduce) else {
-            bail_tape!("contracted: boolean reduction (or/and) not vectorized");
+            bail_tape!(
+                "contracted: an array-valued bool_and_or reduction (the numeric evaluators \
+                 reject it, CONFORMANCE_SPEC §5.6.1)"
+            );
         };
         let nc = contract_names.len();
-        if nc == 0 || nc > MAX_CONTRACT {
-            bail_tape!("contracted: contraction rank out of range ({nc})");
+        if nc == 0 {
+            bail_tape!("contracted: no contracted index");
         }
         if contract_dims.iter().any(|d| !self.dim_is_fixed(d)) {
             // A ragged bound varies per output cell: the tuple-list form.
@@ -3337,8 +3497,8 @@ impl<'m> TapeBuilder<'m> {
                 None,
             );
         }
-        let mut clo = [0i64; MAX_CONTRACT];
-        let mut chi = [0i64; MAX_CONTRACT];
+        let mut clo: SmallVec<[i64; 4]> = SmallVec::from_elem(0, nc);
+        let mut chi: SmallVec<[i64; 4]> = SmallVec::from_elem(0, nc);
         for (i, d) in contract_dims.iter().enumerate() {
             match d {
                 ContractDim::Static(l, h) => {
@@ -3485,8 +3645,7 @@ impl<'m> TapeBuilder<'m> {
         // Accumulator: identity-filled buffer over the output box.
         let mut acc = self.emit_fill(&LV::Lit(identity), shape, lo, Cadence::Const);
 
-        let mut cvals = [0i64; MAX_CONTRACT];
-        cvals[..nc].copy_from_slice(clo);
+        let mut cvals: SmallVec<[i64; 4]> = SmallVec::from_slice(clo);
         loop {
             // Each contraction tuple is a DISTINCT box (and CSE scope).
             self.push_scope();
@@ -4171,11 +4330,15 @@ impl<'m> TapeBuilder<'m> {
     /// `max(acc, -∞)` is `acc`. The fold then combines the oracle's terms in
     /// the oracle's order and nothing else.
     ///
-    /// A boolean reduction (`or`/`and`) stays per-cell: it has no binary
-    /// kernel.
+    /// A boolean (`bool_and_or`) reduction is refused: whether a numeric
+    /// evaluator runs a SCALAR one is not settled (CONFORMANCE_SPEC §5.6.1
+    /// rejects the array-valued ones only).
     fn lower_scalar_reduction(&mut self, spec: &ArrayOpSpec) -> LResult<LV> {
         let Some(combine_op) = reduce_combine_op(spec.reduce) else {
-            bail_tape!("reduction: boolean reduction (or/and) has no combine kernel");
+            bail_tape!(
+                "reduction: a scalar bool_and_or reduction (CONFORMANCE_SPEC §5.6.1 does not \
+                 say a numeric evaluator runs one)"
+            );
         };
         let identity = spec.reduce.identity();
         if spec.contract_names.is_empty() {
@@ -4381,7 +4544,10 @@ impl<'m> TapeBuilder<'m> {
         reduce: ReduceKind,
     ) -> LResult<LV> {
         let Some(combine_op) = reduce_combine_op(reduce) else {
-            bail_tape!("scan: boolean reduction not compiled (per-cell path)");
+            bail_tape!(
+                "scan: an array-valued bool_and_or reduction (the numeric evaluators reject it, \
+                 CONFORMANCE_SPEC §5.6.1)"
+            );
         };
         let full_lo: DimI = ranges.iter().map(|(l, _)| *l).collect();
         let full_shape: DimU = ranges
@@ -5196,20 +5362,23 @@ impl<'m> TapeBuilder<'m> {
                 body,
                 ..
             } => {
-                // Mirror of `materialize_observeds_pass`'s vectorized-path
-                // guard: 1-origin ranges over a non-empty padded box.
+                // `materialize_observeds_pass` materializes the observed at its
+                // PADDED box, `[1, hi]` on every axis: the cells of the ranges
+                // hold the body and the cells below a range that starts past 1
+                // hold `0.0`.
                 let padded_shape: Vec<usize> =
                     output_ranges.iter().map(|(_, hi)| *hi as usize).collect();
                 if output_ranges.is_empty() {
                     bail_tape!("observed: rank-0 ArrayLoop");
                 }
-                if !output_ranges.iter().all(|(lo, _)| *lo == 1) {
-                    bail_tape!("observed: non-unit-origin output ranges (per-cell path)");
+                if output_ranges.iter().any(|(lo, _)| *lo < 1) {
+                    // The oracle clamps a subscript below 1 onto the first
+                    // cell, so several cells write one; nothing to mirror.
+                    bail_tape!("observed: output range starts below 1");
                 }
-                if padded_shape.contains(&0) {
-                    // No cell to evaluate: the empty array the oracle
-                    // materializes.
-                    let ones = DimI::from_elem(1, padded_shape.len());
+                let ones = DimI::from_elem(1, padded_shape.len());
+                if padded_shape.contains(&0) || output_ranges.iter().any(|(lo, hi)| lo > hi) {
+                    // No cell to evaluate: the zeros the oracle materializes.
                     return Ok(ObsVal::Taped(self.emit_zero_array(&padded_shape, &ones)));
                 }
                 let v = self.lower_faq(
@@ -5221,8 +5390,37 @@ impl<'m> TapeBuilder<'m> {
                     ReduceKind::Sum,
                     None,
                 )?;
-                // Origin is all-1 by the guard, so no re-origin copy needed.
-                Ok(ObsVal::Taped(v))
+                if output_ranges.iter().all(|(lo, _)| *lo == 1) {
+                    return Ok(ObsVal::Taped(v));
+                }
+                // The ranges' box written over a zero fill of the padded box.
+                let region_ix = self.regions.len() as u32;
+                self.regions.push(RegionSpec {
+                    dest_lo: output_ranges
+                        .iter()
+                        .map(|(lo, _)| (*lo - 1) as usize)
+                        .collect(),
+                    shape: output_ranges
+                        .iter()
+                        .map(|(lo, hi)| (hi - lo + 1) as usize)
+                        .collect(),
+                });
+                let LV::Arr(base) = self.emit_zero_array(&padded_shape, &ones) else {
+                    unreachable!("a zero fill is an array slot");
+                };
+                let src = self.ensure_slot(&v);
+                let sec = self.placement(self.lv_cadence(&v));
+                let out = self.new_slot(&padded_shape, &ones, false, sec);
+                self.emit(
+                    Instr::Region {
+                        base,
+                        src: Operand::Slot(src),
+                        region: region_ix,
+                        out,
+                    },
+                    sec,
+                );
+                Ok(ObsVal::Taped(LV::Arr(out)))
             }
             AlgebraicRule::Scalar {
                 var,
@@ -5319,6 +5517,7 @@ impl<'m> TapeBuilder<'m> {
                     var: 0,
                     dest_lo: SmallVec::new(),
                     scalar_flat: Some(*slot),
+                    scatter: None,
                 });
                 self.emit(Instr::DyWrite { write: w }, Cadence::Continuous);
                 Ok(())
@@ -5335,11 +5534,22 @@ impl<'m> TapeBuilder<'m> {
                 filter,
             } => {
                 let vs = &self.var_shapes[var_name];
-                let Some(shifts) = lhs_constant_shifts(lhs_idx_exprs, output_idx_names) else {
-                    bail_tape!("rule: LHS is not a constant per-axis shift of the output indices");
-                };
-                let Some(dest_lo) = subblock_dest(vs, output_ranges, &shifts) else {
-                    bail_tape!("rule: shifted output box does not fit the variable block");
+                // A constant per-axis shift places the output box as one
+                // sub-block of the variable; any other left-hand side writes
+                // through a per-cell position table.
+                let (dest_lo, scatter) = match lhs_constant_shifts(lhs_idx_exprs, output_idx_names)
+                    .and_then(|shifts| subblock_dest(vs, output_ranges, &shifts))
+                {
+                    Some(dest_lo) => (dest_lo, None),
+                    None => (
+                        SmallVec::new(),
+                        Some(lhs_scatter_positions(
+                            vs,
+                            output_idx_names,
+                            output_ranges,
+                            lhs_idx_exprs,
+                        )?),
+                    ),
                 };
                 let v = self.lower_faq(
                     output_idx_names,
@@ -5361,6 +5571,7 @@ impl<'m> TapeBuilder<'m> {
                     var: var_ix,
                     dest_lo,
                     scalar_flat: None,
+                    scatter,
                 });
                 self.emit(Instr::DyWrite { write: w }, Cadence::Continuous);
                 Ok(())

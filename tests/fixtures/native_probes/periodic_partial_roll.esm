@@ -1,0 +1,985 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "native_probe_periodic_partial_roll",
+    "description": "The periodic-wrap index idiom over boxes that are not one full period of their source: an interior-only update reading both wrapped neighbours of a period-6 ring and a const table two cells ahead, an update over a period-8 ring whose wrap window covers only its first six cells, an update over the second half of a ring reading three cells ahead, and a 4-cell source read through a period-6 window, where subscript 5 and a read thirteen ahead (folded once, still past the window) fall off the source and read the zero ghost.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "native",
+      "probe"
+    ]
+  },
+  "models": {
+    "W": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": [
+            "i"
+          ],
+          "default": 1.0
+        },
+        "v": {
+          "type": "unknown",
+          "shape": [
+            "i"
+          ],
+          "default": 2.0
+        },
+        "q": {
+          "type": "unknown",
+          "shape": [
+            "i"
+          ],
+          "default": 0.5
+        },
+        "r": {
+          "type": "unknown",
+          "shape": [
+            "i"
+          ],
+          "default": 0.75
+        },
+        "c": {
+          "type": "unknown",
+          "shape": [
+            "i"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                2,
+                5
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                2,
+                5
+              ]
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            {
+                              "op": "ifelse",
+                              "args": [
+                                {
+                                  "op": "<",
+                                  "args": [
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "i",
+                                        -1
+                                      ]
+                                    },
+                                    1
+                                  ]
+                                },
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "i",
+                                        -1
+                                      ]
+                                    },
+                                    6
+                                  ]
+                                },
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    {
+                                      "op": ">",
+                                      "args": [
+                                        {
+                                          "op": "+",
+                                          "args": [
+                                            "i",
+                                            -1
+                                          ]
+                                        },
+                                        6
+                                      ]
+                                    },
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        {
+                                          "op": "+",
+                                          "args": [
+                                            "i",
+                                            -1
+                                          ]
+                                        },
+                                        6
+                                      ]
+                                    },
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "i",
+                                        -1
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            {
+                              "op": "ifelse",
+                              "args": [
+                                {
+                                  "op": "<",
+                                  "args": [
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "i",
+                                        1
+                                      ]
+                                    },
+                                    1
+                                  ]
+                                },
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "i",
+                                        1
+                                      ]
+                                    },
+                                    6
+                                  ]
+                                },
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    {
+                                      "op": ">",
+                                      "args": [
+                                        {
+                                          "op": "+",
+                                          "args": [
+                                            "i",
+                                            1
+                                          ]
+                                        },
+                                        6
+                                      ]
+                                    },
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        {
+                                          "op": "+",
+                                          "args": [
+                                            "i",
+                                            1
+                                          ]
+                                        },
+                                        6
+                                      ]
+                                    },
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "i",
+                                        1
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        2,
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "i"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.01,
+                    {
+                      "op": "index",
+                      "args": [
+                        "c",
+                        {
+                          "op": "ifelse",
+                          "args": [
+                            {
+                              "op": "<",
+                              "args": [
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    2
+                                  ]
+                                },
+                                1
+                              ]
+                            },
+                            {
+                              "op": "+",
+                              "args": [
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    2
+                                  ]
+                                },
+                                6
+                              ]
+                            },
+                            {
+                              "op": "ifelse",
+                              "args": [
+                                {
+                                  "op": ">",
+                                  "args": [
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "i",
+                                        2
+                                      ]
+                                    },
+                                    6
+                                  ]
+                                },
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "i",
+                                        2
+                                      ]
+                                    },
+                                    6
+                                  ]
+                                },
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    2
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                8
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "v",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                8
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                -0.1,
+                {
+                  "op": "index",
+                  "args": [
+                    "v",
+                    {
+                      "op": "ifelse",
+                      "args": [
+                        {
+                          "op": "<",
+                          "args": [
+                            {
+                              "op": "+",
+                              "args": [
+                                "i",
+                                2
+                              ]
+                            },
+                            1
+                          ]
+                        },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "+",
+                              "args": [
+                                "i",
+                                2
+                              ]
+                            },
+                            6
+                          ]
+                        },
+                        {
+                          "op": "ifelse",
+                          "args": [
+                            {
+                              "op": ">",
+                              "args": [
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    2
+                                  ]
+                                },
+                                6
+                              ]
+                            },
+                            {
+                              "op": "-",
+                              "args": [
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    2
+                                  ]
+                                },
+                                6
+                              ]
+                            },
+                            {
+                              "op": "+",
+                              "args": [
+                                "i",
+                                2
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                4,
+                6
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "q",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                4,
+                6
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                0.3,
+                {
+                  "op": "index",
+                  "args": [
+                    "q",
+                    {
+                      "op": "ifelse",
+                      "args": [
+                        {
+                          "op": "<",
+                          "args": [
+                            {
+                              "op": "+",
+                              "args": [
+                                "i",
+                                3
+                              ]
+                            },
+                            1
+                          ]
+                        },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "+",
+                              "args": [
+                                "i",
+                                3
+                              ]
+                            },
+                            6
+                          ]
+                        },
+                        {
+                          "op": "ifelse",
+                          "args": [
+                            {
+                              "op": ">",
+                              "args": [
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    3
+                                  ]
+                                },
+                                6
+                              ]
+                            },
+                            {
+                              "op": "-",
+                              "args": [
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    3
+                                  ]
+                                },
+                                6
+                              ]
+                            },
+                            {
+                              "op": "+",
+                              "args": [
+                                "i",
+                                3
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                1
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                1
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                -0.2,
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                6,
+                6
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                6,
+                6
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                -0.3,
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "q",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                -0.1,
+                {
+                  "op": "index",
+                  "args": [
+                    "q",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "r",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    -0.2,
+                    {
+                      "op": "index",
+                      "args": [
+                        "r",
+                        {
+                          "op": "ifelse",
+                          "args": [
+                            {
+                              "op": "<",
+                              "args": [
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    1
+                                  ]
+                                },
+                                1
+                              ]
+                            },
+                            {
+                              "op": "+",
+                              "args": [
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    1
+                                  ]
+                                },
+                                6
+                              ]
+                            },
+                            {
+                              "op": "ifelse",
+                              "args": [
+                                {
+                                  "op": ">",
+                                  "args": [
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "i",
+                                        1
+                                      ]
+                                    },
+                                    6
+                                  ]
+                                },
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "i",
+                                        1
+                                      ]
+                                    },
+                                    6
+                                  ]
+                                },
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    1
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.1,
+                    {
+                      "op": "index",
+                      "args": [
+                        "r",
+                        {
+                          "op": "ifelse",
+                          "args": [
+                            {
+                              "op": "<",
+                              "args": [
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    13
+                                  ]
+                                },
+                                1
+                              ]
+                            },
+                            {
+                              "op": "+",
+                              "args": [
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    13
+                                  ]
+                                },
+                                6
+                              ]
+                            },
+                            {
+                              "op": "ifelse",
+                              "args": [
+                                {
+                                  "op": ">",
+                                  "args": [
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "i",
+                                        13
+                                      ]
+                                    },
+                                    6
+                                  ]
+                                },
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "i",
+                                        13
+                                      ]
+                                    },
+                                    6
+                                  ]
+                                },
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    13
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "c",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              1.5,
+              -2.0,
+              3.25,
+              0.5,
+              4.0,
+              -1.0
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

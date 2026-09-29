@@ -265,6 +265,20 @@ pub(super) fn run_reference(
                 };
                 slots[*out as usize] = Some(v);
             }
+            Instr::Calendar { func, a, out } => {
+                let av = resolve(prog, &slots, &state_arrays, &obs, params, t, a);
+                let desc = &prog.slots[*out as usize];
+                let v = if desc.scalar {
+                    let RefVal::Scalar(x) = av else {
+                        panic!("scalar Calendar with an array operand");
+                    };
+                    RefVal::Scalar(calendar_at(*func, x))
+                } else {
+                    let shape: Vec<usize> = desc.shape.to_vec();
+                    RefVal::Arr(to_shape(&av, &shape).mapv(|x| calendar_at(*func, x)))
+                };
+                slots[*out as usize] = Some(v);
+            }
             Instr::Reduce {
                 op,
                 init,
@@ -665,6 +679,14 @@ pub(super) fn run_reference(
                 let v = slots[w.slot as usize]
                     .as_ref()
                     .expect("dy-write slot is defined");
+                if let (Some(pos), RefVal::Arr(a)) = (&w.scatter, v) {
+                    // `iter()` is the logical row-major walk.
+                    for (&p, &x) in pos.iter().zip(a.iter()) {
+                        dy[p] = x;
+                    }
+                    pc += 1;
+                    continue;
+                }
                 match (w.scalar_flat, v) {
                     (Some(flat), RefVal::Scalar(s)) => dy[flat] = *s,
                     (Some(flat), RefVal::Arr(a)) if a.ndim() == 0 => dy[flat] = a[IxDyn(&[])],

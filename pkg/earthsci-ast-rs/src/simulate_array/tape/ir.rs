@@ -39,6 +39,11 @@
 //!   compile-time-constant table, elementwise in the query. Its element
 //!   semantics are the registry functions themselves, which is what the
 //!   per-cell oracle's `eval_fn` calls, so the agreement is by shared code.
+//! * [`Instr::Calendar`] evaluates one esm-spec §9.2 `datetime.*` entry
+//!   elementwise through the registry, on the binary64 argument, and keeps the
+//!   binary64 result: `eval_fn`'s arithmetic, by sharing its code. Only a
+//!   Float32 document emits it; under Float64 the family is expanded into the
+//!   instructions above.
 //! * [`Instr::Reduce`] folds a source box down over a set of axes with a
 //!   binary kernel, visiting the source in ROW-MAJOR order. That order is the
 //!   per-cell oracle's contraction odometer (`CartesianTuples`, LAST name
@@ -213,6 +218,19 @@ pub(crate) enum Instr {
         y: Option<Operand>,
         out: SlotId,
     },
+    /// `out[k] = f(a[k])` for the §9.2 calendar entry `f =
+    /// CALENDAR_FNS[func]`, evaluated by the closed-function registry on the
+    /// binary64 value of `a[k]`, the result kept unrounded and a registry
+    /// error read as `NaN` ([`calendar_at`]) — what the per-cell oracle's
+    /// `eval_fn` computes, by calling the same function. A scalar `a`
+    /// broadcasts as [`Instr::Un`]'s operand does.
+    ///
+    /// Emitted for a Float32 document only. There the tape's arithmetic
+    /// kernels are binary32, so the expansion the Float64 lowering uses (an
+    /// exact integer decomposition in binary64) would round at every step,
+    /// while the oracle runs the registry in binary64 and hands back its
+    /// result without rounding it.
+    Calendar { func: u8, a: Operand, out: SlotId },
     /// Materialize the inline array literal `const_data[data]` into `out`:
     /// a straight row-major store of the literal's elements, origin all-1s.
     ///
@@ -412,6 +430,7 @@ impl Instr {
             | Instr::ConstArray { out, .. }
             | Instr::LoadForcing { out, .. }
             | Instr::Interp { out, .. }
+            | Instr::Calendar { out, .. }
             | Instr::Reduce { out, .. }
             | Instr::Scan { out, .. }
             | Instr::PolyArea { out, .. }
@@ -467,7 +486,7 @@ impl Instr {
                 op(a);
                 op(b);
             }
-            Instr::Un { a, .. } | Instr::Neg { a, .. } => op(a),
+            Instr::Un { a, .. } | Instr::Neg { a, .. } | Instr::Calendar { a, .. } => op(a),
             Instr::Select { cond, a, b, .. } => {
                 op(cond);
                 op(a);
@@ -555,6 +574,7 @@ impl Instr {
             Instr::ConstArray { .. } => "ConstArray",
             Instr::LoadForcing { .. } => "LoadForcing",
             Instr::Interp { .. } => "Interp",
+            Instr::Calendar { .. } => "Calendar",
             Instr::Reduce { .. } => "Reduce",
             Instr::Scan { .. } => "Scan",
             Instr::PolyArea { .. } => "PolyArea",
@@ -1027,6 +1047,30 @@ pub(crate) struct ForcingRef {
     pub shape: DimU,
 }
 
+/// The nine calendar entries of the esm-spec §9.2 closed-function registry;
+/// [`Instr::Calendar`]'s `func` indexes here.
+pub(crate) const CALENDAR_FNS: [&str; 9] = [
+    "datetime.year",
+    "datetime.month",
+    "datetime.day",
+    "datetime.hour",
+    "datetime.minute",
+    "datetime.second",
+    "datetime.day_of_year",
+    "datetime.julian_day",
+    "datetime.is_leap_year",
+];
+
+/// [`Instr::Calendar`]'s element: the registry's answer for `CALENDAR_FNS[func]`
+/// at the binary64 `t_utc`, promoted to `f64` without rounding, or `NaN` when
+/// the registry refuses the argument — `eval_fn`'s own reading of a `fn` node.
+pub(crate) fn calendar_at(func: u8, t_utc: f64) -> f64 {
+    use crate::registered_functions::{ClosedArg, evaluate_closed_function};
+    evaluate_closed_function(CALENDAR_FNS[func as usize], &[ClosedArg::Scalar(t_utc)])
+        .map(|v| v.as_f64())
+        .unwrap_or(f64::NAN)
+}
+
 /// Which esm-spec §9.2 `interp.*` entry an [`Instr::Interp`] evaluates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InterpKind {
@@ -1243,6 +1287,13 @@ pub(crate) struct DyWrite {
     /// Single flat slot for scalar rules (`RhsRule::Scalar`/`IndexedScalar`):
     /// when `Some`, `slot` is scalar and is written to `dy[flat]` directly.
     pub scalar_flat: Option<usize>,
+    /// A left-hand side that is not a constant shift of the output indices
+    /// (`D(u[n + 1 - i])`, `D(m[j, i])` over `[i, j]`): the absolute `dy`
+    /// position of each element of `slot`, in its ROW-MAJOR order, written in
+    /// that order, so where two cells address one position the later one
+    /// stands — the per-cell oracle's walk over the output box. `dest_lo` is
+    /// unused when this is `Some`.
+    pub scatter: Option<Vec<usize>>,
 }
 
 /// What kind of source rule a program rule entry describes.

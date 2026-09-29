@@ -1,0 +1,186 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "native_probe_permuted_derivative_lhs",
+    "description": "Derivative left-hand sides that are not a constant shift of the output indices: a reversal D(u[7 - i]) and a transpose D(m[j, i]) over output indices [i, j]. Each writes every cell of its variable exactly once.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "native",
+      "probe"
+    ]
+  },
+  "models": {
+    "L": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": [
+            "i"
+          ],
+          "default": 1.0
+        },
+        "m": {
+          "type": "unknown",
+          "shape": [
+            "j2",
+            "i3"
+          ],
+          "default": 0.25
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    {
+                      "op": "-",
+                      "args": [
+                        7,
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    -0.1,
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.01,
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                3
+              ],
+              "j": [
+                1,
+                2
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "m",
+                    "j",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                3
+              ],
+              "j": [
+                1,
+                2
+              ]
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    0.1,
+                    "i"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.2,
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "j"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

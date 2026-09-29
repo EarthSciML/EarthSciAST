@@ -1197,6 +1197,13 @@ impl<'a> Emitter<'a> {
                 let v = self.wrap(v.reshape(&d), "segmented reduce: output box")?;
                 self.define(*out, v);
             }
+            Instr::Calendar { func, .. } => {
+                return Err(self.err(format!(
+                    "`{}` in a Float32 document has no XLA lowering (the calendar is \
+                     evaluated by the closed-function registry in binary64)",
+                    CALENDAR_FNS[*func as usize]
+                )));
+            }
             Instr::Interp { table, x, y, out } => {
                 let tbl = &self.prog.interp_tables[*table as usize];
                 let dims = self.out_dims(*out);
@@ -1818,6 +1825,12 @@ impl<'a> Emitter<'a> {
     /// write is a plain `dynamic_update_slice` at `dest_lo` rather than a
     /// strided scatter.
     fn emit_dy_write(&mut self, w: &DyWrite) -> R<()> {
+        if w.scatter.is_some() {
+            return Err(self.err(
+                "a state derivative whose left-hand side is not a constant shift of its \
+                 output indices (a per-cell dy scatter) has no XLA lowering",
+            ));
+        }
         // `DyWrite::var` is only meaningful for the ARRAY form. A scalar rule
         // (`RhsRule::Scalar` / `IndexedScalar`) carries `var: 0` as a dummy
         // and addresses `dy` by the absolute flat slot in `scalar_flat`, so
