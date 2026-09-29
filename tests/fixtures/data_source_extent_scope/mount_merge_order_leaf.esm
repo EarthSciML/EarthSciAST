@@ -12,10 +12,10 @@
     "Column": {
       "system_kind": "nonlinear",
       "variables": {
-        "t": { "type": "unknown", "units": "K", "shape": ["lev"], "description": "Temperature." }
+        "temp": { "type": "unknown", "units": "K", "shape": ["lev"], "description": "Temperature." }
       },
       "equations": [
-        { "lhs": "t",
+        { "lhs": "temp",
           "rhs": { "op": "faq", "output_idx": ["i"], "ranges": { "i": { "from": "lev" } }, "args": [],
                    "expr": { "op": "const", "args": [], "value": 0.0 } } }
       ]

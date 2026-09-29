@@ -709,6 +709,7 @@ def _esm_problem_under(
     # document declaring no `function_tables`.
     if file is not None:
         file = lower_table_lookups(file)
+        _refuse_ic_in_reaction_system(file)
 
     # A caller-flattened system has no document, but `flatten` carries
     # `function_tables` so that this carrier can be lowered too.
@@ -1314,6 +1315,24 @@ def _assert_no_redundant_definition(flat: FlattenedSystem) -> None:
     )
 
 
+def _refuse_ic_in_reaction_system(file: EsmFile) -> None:
+    """esm-spec §11.4.1 ``ic_in_reaction_system``: an ``ic`` equation among a
+    reaction system's ``constraint_equations`` is a structural error ``validate``
+    reports, and no pathway applies it, so a build would run the species from its
+    ``default`` with no diagnostic. Refused here, as Julia refuses it at load and
+    Rust at its build."""
+    for rs_name, rs in (file.reaction_systems or {}).items():
+        for ce_idx, eq in enumerate(rs.constraint_equations or []):
+            if getattr(getattr(eq, "lhs", None), "op", None) == "ic":
+                raise SimulationError(
+                    f"ic_in_reaction_system: /reaction_systems/{rs_name}/constraint_equations/"
+                    f"{ce_idx}: ic equation not allowed in a reaction system; a reaction "
+                    f"system hosts no ic equations (a species' initial value is its "
+                    f"`species.default`, or a scoped-reference ic equation in a model, "
+                    f"esm-spec §11.4.1)"
+                )
+
+
 def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:
     """esm-spec §9.6.6 ``unsupported_construct`` — refuse an event (continuous or
     discrete), an implicit equation or a Wiener-noise parameter before any
@@ -1366,6 +1385,24 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) 
     if flat.brownian_parameters:
         name = next(iter(flat.brownian_parameters))
         raise UnsupportedConstructError("Wiener noise", f"parameter '{name}'", evaluator)
+    # A parameter that recomputes ITSELF from a symbolic ``expression`` update
+    # (esm-spec §5.4) is the 1.0.0 spelling of an event that writes it:
+    # ``crossing`` replaces a continuous event, ``schedule`` / ``condition`` a
+    # discrete one. Neither pathway fires events, so building it anyway freezes
+    # the parameter at its default. An update read ``from`` a data source or
+    # supplied by a registered ``handler`` is filled from outside the model.
+    for name in sorted(flat.discrete_parameters):
+        update = flat.discrete_parameters[name].update
+        rules = update if isinstance(update, list) else [update] if update else []
+        for rule in rules:
+            if rule.kind != "wiener" and rule.expression is not None:
+                construct = "continuous event" if rule.kind == "crossing" else "discrete event"
+                raise UnsupportedConstructError(
+                    construct,
+                    f"(the `{rule.kind}` update of parameter '{name}', which recomputes "
+                    f"it from an expression)",
+                    evaluator,
+                )
 
 
 def _first_subsystem_event(file: EsmFile) -> tuple[str, Any] | None:

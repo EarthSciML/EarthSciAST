@@ -394,7 +394,7 @@ end
     # ========================================================
     @testset "Dict entry point (simple_ode style)" begin
         esm = Dict(
-            "esm" => "0.2.0",
+            "esm" => "1.0.0",
             "metadata" => Dict("name" => "DecayDict"),
             "models" => Dict(
                 "Decay" => Dict(

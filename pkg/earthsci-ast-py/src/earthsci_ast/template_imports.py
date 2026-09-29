@@ -678,6 +678,18 @@ def fold_mount_contribution(decl: Any, env: dict[str, int]) -> Any:
     return out
 
 
+def _has_open_index_set_size(raw: Any) -> bool:
+    """Whether the document's own ``index_sets`` carry a ``size`` that is not an
+    integer literal: a metaparameter name, or an expression still to fold."""
+    isets = raw.get("index_sets") if _is_object(raw) else None
+    if not _is_object(isets):
+        return False
+    return any(
+        _is_object(decl) and decl.get("size") is not None and not _is_int(decl.get("size"))
+        for decl in isets.values()
+    )
+
+
 def _fold_index_set_sizes(index_sets: dict[str, Any], ctx: str, *, strict: bool) -> None:
     """Fold interval ``size`` metaparameter expressions in an ``index_sets``
     registry. With ``strict=True`` (the root document, after its
@@ -2355,6 +2367,14 @@ def resolve_template_machinery(
                 "neither this document nor any document it mounts declares "
                 "(esm-spec §9.7.6)",
             )
+        # A ROOT document has no enclosing scope to close an axis it cannot
+        # size, so a ``size`` naming a metaparameter nothing declares is
+        # ``metaparameter_unbound`` here too (esm-spec §4.7, §9.7.6). A mounted
+        # leaf's stays symbolic for the mounting registry to close.
+        if not mounted_leaf and _has_open_index_set_size(raw):
+            folded: dict[str, Any] = copy.deepcopy(raw)
+            _fold_index_set_sizes(folded["index_sets"], "document", strict=True)
+            return folded
         return None
 
     root: dict[str, Any] = copy.deepcopy(raw)
