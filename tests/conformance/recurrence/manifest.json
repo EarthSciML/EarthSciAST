@@ -75,19 +75,10 @@
           "native"
         ],
         "rust": [
-          "interpreter"
+          "interpreter",
+          "native"
         ]
-      },
-      "named_exclusions": [
-        {
-          "binding": "rust",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
-        }
-      ]
+      }
     },
     {
       "id": "02_recurrence_cancellation_ladder",
@@ -111,19 +102,10 @@
           "native"
         ],
         "rust": [
-          "interpreter"
+          "interpreter",
+          "native"
         ]
-      },
-      "named_exclusions": [
-        {
-          "binding": "rust",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
-        }
-      ]
+      }
     },
     {
       "id": "03_recurrence_multi_lag",
@@ -146,19 +128,10 @@
           "native"
         ],
         "rust": [
-          "interpreter"
+          "interpreter",
+          "native"
         ]
-      },
-      "named_exclusions": [
-        {
-          "binding": "rust",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
-        }
-      ]
+      }
     },
     {
       "id": "04_recurrence_banded_lag_fold",
@@ -184,7 +157,8 @@
           "interpreter"
         ],
         "rust": [
-          "interpreter"
+          "interpreter",
+          "native"
         ]
       },
       "named_exclusions": [
@@ -195,14 +169,6 @@
           ],
           "code": "compiler_refused_rule",
           "reason": "Python's native compiler refuses a recurrence whose cell body is a reduction: it has no ordered-sweep form of the fold, and its vectorized tiers reorder or batch, which CONFORMANCE_SPEC 5.19.2 forbids. The interpreter runs it."
-        },
-        {
-          "binding": "rust",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
         }
       ]
     },
@@ -228,19 +194,10 @@
           "native"
         ],
         "rust": [
-          "interpreter"
+          "interpreter",
+          "native"
         ]
-      },
-      "named_exclusions": [
-        {
-          "binding": "rust",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
-        }
-      ]
+      }
     },
     {
       "id": "06_recurrence_float32_state",
@@ -261,7 +218,8 @@
           "native"
         ],
         "rust": [
-          "interpreter"
+          "interpreter",
+          "native"
         ]
       },
       "named_exclusions": [
@@ -273,14 +231,6 @@
           ],
           "code": "E_TREEWALK_UNSUPPORTED_RECURRENCE",
           "reason": "The variable declares element_type Float32 and Julia evaluates in binary64 only (no binary32 arithmetic, esm-spec 11.3.1); CONFORMANCE_SPEC 5.19.3a forbids folding it in binary64, so both compilers refuse the recurrence by name."
-        },
-        {
-          "binding": "rust",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
         }
       ],
       "golden_absent_reason": "The reference (Julia interpreter) refuses this document: Julia evaluates in binary64 only and has no binary32 arithmetic, and 5.19.3a forbids carrying binary64 through a Float32 fold, so it declines rather than return the more precise 0.9999999999999999. The assertions are still gated against the document's own expected values, the binary32 fold, in every binding that runs it."
@@ -308,7 +258,8 @@
           "interpreter"
         ],
         "rust": [
-          "interpreter"
+          "interpreter",
+          "native"
         ]
       },
       "named_exclusions": [
@@ -319,14 +270,6 @@
           ],
           "code": "compiler_refused_rule",
           "reason": "Python's native compiler refuses a recurrence whose cell body is a reduction: it has no ordered-sweep form of the fold, and its vectorized tiers reorder or batch, which CONFORMANCE_SPEC 5.19.2 forbids. The interpreter runs it."
-        },
-        {
-          "binding": "rust",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
         }
       ]
     },
@@ -352,19 +295,10 @@
           "native"
         ],
         "rust": [
-          "interpreter"
+          "interpreter",
+          "native"
         ]
-      },
-      "named_exclusions": [
-        {
-          "binding": "rust",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
-        }
-      ]
+      }
     },
     {
       "id": "09_recurrence_through_expression_template",
@@ -387,19 +321,10 @@
           "native"
         ],
         "rust": [
-          "interpreter"
+          "interpreter",
+          "native"
         ]
-      },
-      "named_exclusions": [
-        {
-          "binding": "rust",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
-        }
-      ]
+      }
     },
     {
       "id": "valid_recurrence_causal_self_reference",
@@ -425,7 +350,8 @@
           "interpreter"
         ],
         "rust": [
-          "interpreter"
+          "interpreter",
+          "native"
         ]
       },
       "named_exclusions": [
@@ -436,14 +362,6 @@
           ],
           "code": "compiler_refused_rule",
           "reason": "Python's native compiler refuses a recurrence whose cell body is a reduction: it has no ordered-sweep form of the fold, and its vectorized tiers reorder or batch, which CONFORMANCE_SPEC 5.19.2 forbids. The interpreter runs it."
-        },
-        {
-          "binding": "rust",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
         }
       ]
     }
