@@ -4212,6 +4212,21 @@ function _affine_reduce_form(contract_names::Vector{String}, contract_const,
     return _AffineReduce(copy(contract_names), rngs, Symbol(oplus), zerobar)
 end
 
+# Which of `_affine_reduce_form`'s conditions a join-free contraction fails, in
+# words, for a refusal to name the construct it actually refuses.
+function _fold_form_refusal(contract_names::Vector{String}, contract_const, oplus::String)
+    oplus in ("+", "*", "max", "min") ||
+        return "its ⊕ must be +, *, max or min, and this one is `$(oplus)`"
+    for (name, c) in zip(contract_names, contract_const)
+        (c === nothing || isempty(c)) && continue
+        c == collect(first(c):last(c)) ||
+            return "it folds unit-step ranges only, and `$(name)` steps " *
+                   (length(c) >= 2 ? "by $(c[2] - c[1]) " : "") *
+                   "from $(first(c)) to $(last(c))"
+    end
+    return "it needs at least two terms over constant ranges"
+end
+
 # ess-scan: recognize a CUMULATIVE (prefix) reduction — an aggregate whose
 # filter admits the monotone window `j ⋚ i` against one output index — so the
 # equation can be evaluated as a term pass plus an O(N) accumulation instead of
@@ -5128,8 +5143,8 @@ function _refuse_faq_percell(label::AbstractString, lhs_body::OpExpr, rhs_body::
         " (the affine tier takes no ragged contraction, whose terms vary per output cell)"
     elseif long_contraction && !has_fold_form
         " (the affine tier does not unroll a contraction this long, and its " *
-        "run-time fold needs unit-step constant ranges, no join gate and a ⊕ of " *
-        "+, *, max or min; this one is `$(rhs_oplus)`)"
+        "run-time fold does not take this one: " * _fold_form_refusal(contract_names,
+            contract_const, rhs_oplus) * ")"
     else
         ""
     end

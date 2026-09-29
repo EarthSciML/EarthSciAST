@@ -463,4 +463,17 @@ end
         di, _ = _cl_long_du(_cl_long_doc(n, 10; orsr = true), n, :interpreter)
         @test di == [Float64(i / 3 > 1.125) for i in 1:n]
     end
+    @testset "strict native's refusal names the stepped range, not the ⊕" begin
+        # Its ⊕ is `+`, which the affine run-time fold takes; the step of 2 on
+        # `k` is what it does not.
+        e = try
+            _cl_long_du(_cl_long_doc(n, 10), n, :native); nothing
+        catch err
+            err
+        end
+        @test e isa _CL_ESS.TreeWalkError &&
+              e.code == _CL_ESS.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test occursin("unit-step ranges only, and `k` steps by 2 from 1 to 19", e.detail)
+        @test !occursin("this one is `+`", e.detail)
+    end
 end
