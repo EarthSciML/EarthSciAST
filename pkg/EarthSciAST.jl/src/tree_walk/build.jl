@@ -3054,21 +3054,7 @@ function _build_partition_and_materialize(model::Model, cls;
     # mounted subsystem's original) — unique at that depth, else left bare so
     # the existing unbound-name error surfaces. Empty (byte-identical) for
     # documents without ragged index sets.
-    factor_scope = Dict{String,String}()
-    for (_, iset) in index_sets
-        (iset isa IndexSet && iset.kind == "ragged") || continue
-        for f in (iset.offsets, iset.values)
-            f === nothing && continue
-            fname = String(f)
-            (haskey(factor_scope, fname) || haskey(model.variables, fname)) && continue
-            cands = String[n for n in keys(model.variables)
-                           if endswith(n, "." * fname)]
-            isempty(cands) && continue
-            mindepth = minimum(count(==('.'), c) for c in cands)
-            best = String[c for c in cands if count(==('.'), c) == mindepth]
-            length(best) == 1 && (factor_scope[fname] = best[1])
-        end
-    end
+    factor_scope = _ragged_factor_scope(index_sets, model.variables)
     let pre = equations
         equations = _resolve_index_set_ranges(equations, index_sets, derived_extents,
                                               factor_scope)
@@ -6204,6 +6190,21 @@ function _build_evaluator_dict(esm::AbstractDict;
               @_bench :value_invention materialize_value_invention(model, file.index_sets,
                                                                    _vi_ca, _params)
           end
+
+    # ---- Arg-witness and grouped buffers as const factors ----
+    # An `argmin`/`argmax` assignment and the grouped / derived buffers keyed on
+    # it are CONST-cadence data materialized above and dropped from the ODE; a
+    # right-hand side that reads one (`index(gx, index(assign, i))`) reads that
+    # buffer, exactly as it reads a supplied const array.
+    if _vi !== nothing && (!isempty(_vi.assignments) || !isempty(_vi.groups))
+        for (n, buf) in _vi.assignments
+            haskey(_ca, n) || (_ca[n] = Float64.(buf))
+        end
+        for (n, buf) in _vi.groups
+            haskey(_ca, n) || (_ca[n] = Vector{Float64}(buf))
+        end
+        kwd[:const_arrays] = _ca
+    end
 
     # ---- Phase 2b Hook 1: value-invention MEMBERS fed back as const factors ----
     # A `kind:"derived"` index set may name a `member_factor` — a model parameter
