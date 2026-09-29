@@ -1,0 +1,31 @@
+{
+  "fixture": "08_recurrence_parameter_valued_lag",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "parameter_valued_lag_evaluates",
+      "assertion_idx": 1,
+      "variable": "s",
+      "actual": 1.0
+    },
+    {
+      "test_id": "parameter_valued_lag_evaluates",
+      "assertion_idx": 2,
+      "variable": "s",
+      "actual": 3.0
+    },
+    {
+      "test_id": "parameter_valued_lag_evaluates",
+      "assertion_idx": 3,
+      "variable": "s",
+      "actual": 3.0
+    },
+    {
+      "test_id": "parameter_valued_lag_evaluates",
+      "assertion_idx": 4,
+      "variable": "s",
+      "actual": 9.0
+    }
+  ]
+}

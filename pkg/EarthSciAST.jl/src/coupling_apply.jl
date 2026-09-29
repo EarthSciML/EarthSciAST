@@ -1211,7 +1211,8 @@ function _apply_expression_transform!(equations::Vector{Equation},
         observeds[to] = ModelVariable(UnknownVariable;
             units=to_var === nothing ? nothing : to_var.units,
             description=to_var === nothing ? nothing : to_var.description,
-            shape=to_var === nothing ? nothing : to_var.shape)
+            shape=to_var === nothing ? nothing : to_var.shape,
+            element_type=to_var === nothing ? nothing : to_var.element_type)
     end
     # The defining equation (`to ~ transform`) is what MAKES `to` an observed
     # unknown from esm 1.0.0 — the declaration carries no expression, so this

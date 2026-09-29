@@ -1,7 +1,41 @@
 {
   "category": "recurrence",
-  "version": "1.0",
-  "description": "Cross-port fixtures for the CAUSAL SELF-REFERENCE along one index axis (esm-spec 4.3.1.1, CONFORMANCE_SPEC 5.19): an equation defining an array-shaped unknown V whose defining `faq` body reads index(V, ...) at a strictly earlier position along one of that faq's output axes, materialized cell by cell with that axis outermost and ascending, each cell published before the axis advances.\n\nEXECUTING ports must simulate each fixture and match every inline assertion at ZERO tolerance (5.19.1: the sweep order is fixed and each cell is published before the axis advances, so the value is a fully determined function of the document exactly as a left fold is -- there is no reassociation left to choose, and a divergence is a defect rather than a floating-point fact).\n\nNON-EXECUTING ports must still VALIDATE all nine, and must reject the eight malformed shapes in rejections.json (5.19.5 rejection parity). Rejection parity cuts both ways: a binding whose cycle detector or trivial-DAE factoring treats a self-read as a cycle rejects a LEGAL document, which is the same defect as admitting an illegal one. A skip is a documented gap, not a pass.",
+  "runner": "inline_tests",
+  "version": "2.0",
+  "description": "Cross-port fixtures for the CAUSAL SELF-REFERENCE along one index axis (esm-spec 4.3.1.1, CONFORMANCE_SPEC 5.19): an equation defining an array-shaped unknown V whose defining `faq` body reads index(V, ...) at a strictly earlier position along one of that faq's output axes, materialized cell by cell with that axis outermost and ascending, each cell published before the axis advances.\n\nEXECUTING ports run each fixture through their OWN inline-test runner under each compiler its `required` map names (CONFORMANCE_SPEC 5.45) and must match every inline assertion at ZERO tolerance (5.19.1: the sweep order is fixed and each cell is published before the axis advances, so the value is a fully determined function of the document exactly as a left fold is -- there is no reassociation left to choose, and a divergence is a defect rather than a floating-point fact).\n\nNON-EXECUTING ports must still VALIDATE all nine, and must reject the eight malformed shapes in rejections.json (5.19.5 rejection parity). Rejection parity cuts both ways: a binding whose cycle detector or trivial-DAE factoring treats a self-read as a cycle rejects a LEGAL document, which is the same defect as admitting an illegal one. A skip is a documented gap, not a pass.",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust"
+  ],
+  "scope_excluded": {
+    "go": "Go has no faq numeric executor and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). It implements the VALIDATION half of this construct (5.19.5) and drives rejections.json.",
+    "typescript": "TypeScript has no faq numeric executor and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). It implements the VALIDATION half of this construct (5.19.5) and drives rejections.json."
+  },
+  "integrators": {
+    "julia": {
+      "algorithm": "Tsit5",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    },
+    "python": {
+      "method": "LSODA",
+      "rtol": 1e-12,
+      "atol": 1e-14
+    },
+    "rust": {
+      "solver": "Erk",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    }
+  },
+  "tolerances": {
+    "golden_rtol": 0.0,
+    "golden_atol": 0.0,
+    "detail": "Zero, the band 5.19.1 gives this category: the sweep order is fixed and each cell is published before the axis advances, so the value is a fully determined function of the document and every binding reaches the same bits. Every fixture is state-free and asserted at t = 0, so no integrator stands between the sweep and the number."
+  },
   "pins": {
     "tolerance": "zero (rel 0.0, abs 0.0) on every assertion of every fixture",
     "order": "REQUIRED, not optional: 5.19.3 obliges this category to pin the arithmetic ORDER rather than an answer within a tolerance. The construct's textbook example is [1, 2, 4, 8], every value of which is exactly representable and several WRONG orders also reach, so a fixture set that stopped there would pass a binding that batched the cells, reassociated the body, or carried binary64 partials through a Float32 fold.",
@@ -21,66 +55,116 @@
   },
   "fixtures": [
     {
-      "id": "fixtures/recurrence/01_recurrence_doubling",
+      "id": "01_recurrence_doubling",
       "path": "fixtures/recurrence/01_recurrence_doubling.esm",
+      "model": "RecurrenceDoubling",
+      "golden": "golden/01_recurrence_doubling.json",
       "tags": [
         "faq",
         "causal-self-reference",
         "recurrence"
       ],
-      "executing_bindings": [
-        "python",
-        "rust"
-      ],
-      "skip_bindings": {
-        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
-        "typescript": "TypeScript binding has no faq numeric executor; validation and round-trip only.",
-        "go": "Go binding has no faq numeric executor; validation and round-trip only."
+      "note": "The minimal construct. Pins the VALUE only — every number is exactly representable — so it is the fixtures beside it that pin the order. Base case is an `ifelse` guard INSIDE the body, which is the required spelling: a self-read of an unpublished cell is a fault, not a zero, so nothing else keeps the first cell from reading position 0.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter"
+        ]
       },
-      "notes": "The minimal construct. Pins the VALUE only \u2014 every number is exactly representable \u2014 so it is the fixtures beside it that pin the order. Base case is an `ifelse` guard INSIDE the body, which is the required spelling: a self-read of an unpublished cell is a fault, not a zero, so nothing else keeps the first cell from reading position 0."
+      "named_exclusions": [
+        {
+          "binding": "rust",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
+        }
+      ]
     },
     {
-      "id": "fixtures/recurrence/02_recurrence_cancellation_ladder",
+      "id": "02_recurrence_cancellation_ladder",
       "path": "fixtures/recurrence/02_recurrence_cancellation_ladder.esm",
+      "model": "RecurrenceCancellationLadder",
+      "golden": "golden/02_recurrence_cancellation_ladder.json",
       "tags": [
         "order",
         "catastrophic-cancellation",
         "bit-identical",
         "recurrence"
       ],
-      "executing_bindings": [
-        "python",
-        "rust"
-      ],
-      "skip_bindings": {
-        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
-        "typescript": "TypeScript binding has no faq numeric executor; validation and round-trip only.",
-        "go": "Go binding has no faq numeric executor; validation and round-trip only."
+      "note": "THE ORDER PIN. The ascending sweep is the left fold, [1e16, 1e16, 0, 1]; any reassociation or reordering reaches [1e16, 1e16, 1, 2]. A binding that batches or reorders these cells fails here rather than agreeing to a tolerance.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter"
+        ]
       },
-      "notes": "THE ORDER PIN. The ascending sweep is the left fold, [1e16, 1e16, 0, 1]; any reassociation or reordering reaches [1e16, 1e16, 1, 2]. A binding that batches or reorders these cells fails here rather than agreeing to a tolerance."
+      "named_exclusions": [
+        {
+          "binding": "rust",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
+        }
+      ]
     },
     {
-      "id": "fixtures/recurrence/03_recurrence_multi_lag",
+      "id": "03_recurrence_multi_lag",
       "path": "fixtures/recurrence/03_recurrence_multi_lag.esm",
+      "model": "RecurrenceMultiLag",
+      "golden": "golden/03_recurrence_multi_lag.json",
       "tags": [
         "multi-lag",
         "bounded-lag",
         "recurrence"
       ],
-      "executing_bindings": [
-        "python",
-        "rust"
-      ],
-      "skip_bindings": {
-        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
-        "typescript": "TypeScript binding has no faq numeric executor; validation and round-trip only.",
-        "go": "Go binding has no faq numeric executor; validation and round-trip only."
+      "note": "Two LITERAL lags in one body. A single-step `acc[i] = f(acc[i-1], body[i])` accumulator cannot express this at all, so a binding implementing only that shape fails rather than passing on the subset it covers.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter"
+        ]
       },
-      "notes": "Two LITERAL lags in one body. A single-step `acc[i] = f(acc[i-1], body[i])` accumulator cannot express this at all, so a binding implementing only that shape fails rather than passing on the subset it covers."
+      "named_exclusions": [
+        {
+          "binding": "rust",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
+        }
+      ]
     },
     {
-      "id": "fixtures/recurrence/04_recurrence_banded_lag_fold",
+      "id": "04_recurrence_banded_lag_fold",
       "path": "fixtures/recurrence/04_recurrence_banded_lag_fold.esm",
+      "model": "RecurrenceBandedLagFold",
+      "golden": "golden/04_recurrence_banded_lag_fold.json",
       "tags": [
         "bounded-lag",
         "symbol-lag",
@@ -90,60 +174,122 @@
         "order",
         "recurrence"
       ],
-      "executing_bindings": [
-        "python",
-        "rust"
-      ],
-      "skip_bindings": {
-        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
-        "typescript": "TypeScript binding has no faq numeric executor; validation and round-trip only.",
-        "go": "Go binding has no faq numeric executor; validation and round-trip only."
+      "note": "A SYMBOL-valued lag under a banded filter, with a clamp inside the fold, and the IN-BODY reduction order pinned to the bit: r[3] is -1.0 folded ascending in `a` and -1.0000000000000002 folded from the high end. Catches a pairwise or reverse contraction.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter"
+        ],
+        "rust": [
+          "interpreter"
+        ]
       },
-      "notes": "A SYMBOL-valued lag under a banded filter, with a clamp inside the fold, and the IN-BODY reduction order pinned to the bit: r[3] is -1.0 folded ascending in `a` and -1.0000000000000002 folded from the high end. Catches a pairwise or reverse contraction."
+      "named_exclusions": [
+        {
+          "binding": "python",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Python's native compiler refuses a recurrence whose cell body is a reduction: it has no ordered-sweep form of the fold, and its vectorized tiers reorder or batch, which CONFORMANCE_SPEC 5.19.2 forbids. The interpreter runs it."
+        },
+        {
+          "binding": "rust",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
+        }
+      ]
     },
     {
-      "id": "fixtures/recurrence/05_recurrence_two_axes",
+      "id": "05_recurrence_two_axes",
       "path": "fixtures/recurrence/05_recurrence_two_axes.esm",
+      "model": "RecurrenceOnOneOfTwoAxes",
+      "golden": "golden/05_recurrence_two_axes.json",
       "tags": [
         "rank-2",
         "array-valued-state",
         "sweep-order",
         "recurrence"
       ],
-      "executing_bindings": [
-        "python",
-        "rust"
-      ],
-      "skip_bindings": {
-        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
-        "typescript": "TypeScript binding has no faq numeric executor; validation and round-trip only.",
-        "go": "Go binding has no faq numeric executor; validation and round-trip only."
+      "note": "Rank-2, folding along ONE axis and free in the other, so the carried state is a whole column — array-valued accumulator state with no extra machinery. Also pins the sweep order: recurrence axis outermost, free axis inside it.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter"
+        ]
       },
-      "notes": "Rank-2, folding along ONE axis and free in the other, so the carried state is a whole column \u2014 array-valued accumulator state with no extra machinery. Also pins the sweep order: recurrence axis outermost, free axis inside it."
+      "named_exclusions": [
+        {
+          "binding": "rust",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
+        }
+      ]
     },
     {
-      "id": "fixtures/recurrence/06_recurrence_float32_state",
+      "id": "06_recurrence_float32_state",
       "path": "fixtures/recurrence/06_recurrence_float32_state.esm",
+      "model": "RecurrenceFloat32State",
+      "golden": null,
       "tags": [
         "element_type",
         "float32",
         "precision",
         "recurrence"
       ],
-      "executing_bindings": [
-        "python",
-        "rust"
-      ],
-      "skip_bindings": {
-        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
-        "typescript": "TypeScript binding has no faq numeric executor; validation and round-trip only.",
-        "go": "Go binding has no faq numeric executor; validation and round-trip only."
+      "note": "The carried value is rounded to the variable's element_type at EVERY cell (§5.19.3a). A binding that carries binary64 partials and narrows once at the end reaches 0.9999999999999999 — a BETTER answer than the real*4 reference this construct exists to reproduce, and the hardest kind of wrong to notice.",
+      "required": {
+        "julia": [],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter"
+        ]
       },
-      "notes": "The carried value is rounded to the variable's element_type at EVERY cell (\u00a75.19.3a). A binding that carries binary64 partials and narrows once at the end reaches 0.9999999999999999 \u2014 a BETTER answer than the real*4 reference this construct exists to reproduce, and the hardest kind of wrong to notice."
+      "named_exclusions": [
+        {
+          "binding": "julia",
+          "compilers": [
+            "interpreter",
+            "native"
+          ],
+          "code": "E_TREEWALK_UNSUPPORTED_RECURRENCE",
+          "reason": "The variable declares element_type Float32 and Julia evaluates in binary64 only (no binary32 arithmetic, esm-spec 11.3.1); CONFORMANCE_SPEC 5.19.3a forbids folding it in binary64, so both compilers refuse the recurrence by name."
+        },
+        {
+          "binding": "rust",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
+        }
+      ],
+      "golden_absent_reason": "The reference (Julia interpreter) refuses this document: Julia evaluates in binary64 only and has no binary32 arithmetic, and 5.19.3a forbids carrying binary64 through a Float32 fold, so it declines rather than return the more precise 0.9999999999999999. The assertions are still gated against the document's own expected values, the binary32 fold, in every binding that runs it."
     },
     {
-      "id": "fixtures/recurrence/07_recurrence_thirty_eight_lags",
+      "id": "07_recurrence_thirty_eight_lags",
       "path": "fixtures/recurrence/07_recurrence_thirty_eight_lags.esm",
+      "model": "RecurrenceThirtyEightLags",
+      "golden": "golden/07_recurrence_thirty_eight_lags.json",
       "tags": [
         "bounded-lag",
         "symbol-lag",
@@ -152,55 +298,154 @@
         "independent-oracle",
         "recurrence"
       ],
-      "executing_bindings": [
-        "python",
-        "rust"
-      ],
-      "skip_bindings": {
-        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
-        "typescript": "TypeScript binding has no faq numeric executor; validation and round-trip only.",
-        "go": "Go binding has no faq numeric executor; validation and round-trip only."
+      "note": "The real lag scale: 38 distinct lags with 38 distinct weights in ONE node, clamp firing at 19 of 40 cells and altering 38 of the 40 values. Defeats three cheaper designs at once — a literal-lag-only primitive (would need 38 authored terms), any single carried accumulator (the weights all differ), any linear closed form (the clamp). Expected values from an INDEPENDENT ascending fold in Python, not from running the document.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter"
+        ],
+        "rust": [
+          "interpreter"
+        ]
       },
-      "notes": "The real lag scale: 38 distinct lags with 38 distinct weights in ONE node, clamp firing at 19 of 40 cells and altering 38 of the 40 values. Defeats three cheaper designs at once \u2014 a literal-lag-only primitive (would need 38 authored terms), any single carried accumulator (the weights all differ), any linear closed form (the clamp). Expected values from an INDEPENDENT ascending fold in Python, not from running the document."
+      "named_exclusions": [
+        {
+          "binding": "python",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Python's native compiler refuses a recurrence whose cell body is a reduction: it has no ordered-sweep form of the fold, and its vectorized tiers reorder or batch, which CONFORMANCE_SPEC 5.19.2 forbids. The interpreter runs it."
+        },
+        {
+          "binding": "rust",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
+        }
+      ]
     },
     {
-      "id": "fixtures/recurrence/08_recurrence_parameter_valued_lag",
+      "id": "08_recurrence_parameter_valued_lag",
       "path": "fixtures/recurrence/08_recurrence_parameter_valued_lag.esm",
+      "model": "RecurrenceParameterValuedLag",
+      "golden": "golden/08_recurrence_parameter_valued_lag.json",
       "tags": [
         "unprovable-lag",
         "parameter-lag",
         "validator-parity",
         "recurrence"
       ],
-      "executing_bindings": [
-        "python",
-        "rust"
-      ],
-      "skip_bindings": {
-        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
-        "typescript": "TypeScript binding has no faq numeric executor; validation and round-trip only.",
-        "go": "Go binding has no faq numeric executor; validation and round-trip only."
+      "note": "A lag NOTHING static can bound (`s[k] = 3*s[k-n]`, n a parameter) must be ADMITTED. Catches a validator that treats 'unproven' as 'illegal' — it would reject a document its own evaluator accepts, which is the one validator/evaluator disagreement that is never defensible.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter"
+        ]
       },
-      "notes": "A lag NOTHING static can bound (`s[k] = 3*s[k-n]`, n a parameter) must be ADMITTED. Catches a validator that treats 'unproven' as 'illegal' \u2014 it would reject a document its own evaluator accepts, which is the one validator/evaluator disagreement that is never defensible."
+      "named_exclusions": [
+        {
+          "binding": "rust",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
+        }
+      ]
     },
     {
-      "id": "fixtures/recurrence/09_recurrence_through_expression_template",
+      "id": "09_recurrence_through_expression_template",
       "path": "fixtures/recurrence/09_recurrence_through_expression_template.esm",
+      "model": "RecurrenceThroughExpressionTemplate",
+      "golden": "golden/09_recurrence_through_expression_template.json",
       "tags": [
         "expression-templates",
         "composition",
         "recurrence"
       ],
-      "executing_bindings": [
-        "python",
-        "rust"
-      ],
-      "skip_bindings": {
-        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
-        "typescript": "TypeScript binding has no faq numeric executor; validation and round-trip only.",
-        "go": "Go binding has no faq numeric executor; validation and round-trip only."
+      "note": "A self-read reached through an `apply_expression_template` BINDING. Closes a hole rather than showing a feature: `apply_expression_template` is off the cell-restriction blocking list and no binding's self-read walk visits `bindings`, which sounds like a self-read could hide there and be evaluated as a gather on a name nothing binds. Measured: it cannot, because a template application is expanded AT LOAD (esm-spec 9.6.4). If a binding ever defers expansion past recognition, this is what fails.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter"
+        ]
       },
-      "notes": "A self-read reached through an `apply_expression_template` BINDING. Closes a hole rather than showing a feature: `apply_expression_template` is off the cell-restriction blocking list and no binding's self-read walk visits `bindings`, which sounds like a self-read could hide there and be evaluated as a gather on a name nothing binds. Measured: it cannot, because a template application is expanded AT LOAD (esm-spec 9.6.4). If a binding ever defers expansion past recognition, this is what fails."
+      "named_exclusions": [
+        {
+          "binding": "rust",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
+        }
+      ]
+    },
+    {
+      "id": "valid_recurrence_causal_self_reference",
+      "path": "valid/recurrence_causal_self_reference.esm",
+      "model": "RecurrenceCausalSelfReference",
+      "golden": "golden/valid_recurrence_causal_self_reference.json",
+      "tags": [
+        "bounded-lag",
+        "symbol-lag",
+        "contraction",
+        "filter",
+        "clamp",
+        "order",
+        "recurrence"
+      ],
+      "note": "The tests/valid document of the construct, owned by the validation corpus and re-checked here: the same banded lag fold as 04, reached as a document every validator also accepts.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter"
+        ],
+        "rust": [
+          "interpreter"
+        ]
+      },
+      "named_exclusions": [
+        {
+          "binding": "python",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Python's native compiler refuses a recurrence whose cell body is a reduction: it has no ordered-sweep form of the fold, and its vectorized tiers reorder or batch, which CONFORMANCE_SPEC 5.19.2 forbids. The interpreter runs it."
+        },
+        {
+          "binding": "rust",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Rust's native compiler (the tape) has no ordered-sweep instruction yet, so it refuses every recurrence by name rather than reorder its cells (CONFORMANCE_SPEC 5.19.2); the interpreter runs it. Tracked by the phase-4 recurrence work in the Rust binding: remove this exclusion and add native to `required.rust` when it lands."
+        }
+      ]
     }
   ]
 }
