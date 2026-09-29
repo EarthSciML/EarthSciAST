@@ -710,8 +710,10 @@ def _namespace_expr(
         # binder NAMES, not child expressions — expr_walk never visits them —
         # so the only special handling needed is adding them to ``leave_alone``
         # for the children that may reference them.
+        # An ``argmin`` / ``argmax`` arg-witness binds its own ``ranges`` keys
+        # (and names one of them as ``arg``) exactly as a ``faq`` does.
         local_leave = set(leave_alone)
-        if expr.op == "faq":
+        if expr.op in ("faq", "argmin", "argmax"):
             if expr.output_idx:
                 for sym in expr.output_idx:
                     if isinstance(sym, str):
