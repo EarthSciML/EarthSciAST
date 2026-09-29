@@ -228,6 +228,45 @@ _OP.sink_observed_names(s::_OPSink) = s.names
         @test sink.records[end][3]["M.q"][1] ≈ 4.5 * exp(-0.4) rtol = 1e-6
     end
 
+    @testset "a remade parameter reaches the program and the sink" begin
+        # `remake(prob; p)` shares the build, and so the program context whose
+        # parameters are the build's; a read at a state, and a sink's record,
+        # must see the remade problem's `p`.
+        for compiler in (:native, :interpreter)
+            sink = _OPSink([0.5, 1.0], ["M.w", "M.q"])
+            p1 = esm_problem(_op_doc(3; decay = 0.4), (0.0, 1.0); sinks = [sink],
+                             compiler = compiler)
+            ref = esm_problem(_op_doc(3; decay = 0.4), (0.0, 1.0);
+                              p = Dict("s" => 3.0), compiler = :interpreter)
+            u = collect(range(0.3, 1.1; length = length(p1.u0)))
+            c = u[p1.var_map["M.c"]]
+            # Read the original first, so a context or memo shared with the
+            # remade problem is already warm.
+            @test observed_field(p1, "q"; u = u, t = 0.2) == [c * 1.5 * 3.0]
+            p2 = remake(p1; p = Dict("s" => 3.0))
+            for n in ("q", "w", "tot")
+                v2 = observed_field(p2, n; u = u, t = 0.2)
+                @test _op_bits(v2, observed_field(ref, n; u = u, t = 0.2))
+            end
+            @test observed_field(p2, "q"; u = u, t = 0.2) == [c * 3.0 * 3.0]
+            # The problem it came from is unchanged.
+            @test observed_field(p1, "q"; u = u, t = 0.2) == [c * 1.5 * 3.0]
+            # A positional carrier, in the build's parameter order.
+            pv = Float64[Float64(v) for v in values(p1.p)]
+            pv[_OP.param_map(p1.p)["M.s"]] = 3.0
+            p3 = remake(p1; p = pv)
+            @test _op_bits(observed_field(p3, "w"; u = u, t = 0.2),
+                           observed_field(ref, "w"; u = u, t = 0.2))
+            solve(p2, Tsit5(); reltol = 1e-9, abstol = 1e-12)
+            @test [r[1] for r in sink.records] == [0.5, 1.0]
+            for (t, us, obs) in sink.records
+                @test _op_bits(obs["M.q"], observed_field(ref, "M.q"; u = us, t = t))
+                @test _op_bits(obs["M.w"], observed_field(ref, "M.w"; u = us, t = t))
+            end
+            @test sink.records[end][3]["M.q"][1] ≈ 9.0 * exp(-0.4) rtol = 1e-6
+        end
+    end
+
     @testset "an observed native cannot compile is refused by name" begin
         # With both code-generation budgets at zero (refusal boundaries under
         # `native`) every kernel the program needs is left to the per-cell

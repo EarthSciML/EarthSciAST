@@ -17,7 +17,9 @@
 #
 # The program reads the STATE through the build's own layout, so the same
 # program answers at any `(u, t)` — which is what makes a state-dependent
-# observed readable at all — and the parameters the build bound.
+# observed readable at all — and the parameters it is handed at the read (the
+# reading problem's, which `remake(prob; p)` swaps without a rebuild), the ones
+# the build bound when it is handed none.
 #
 # `interpreter` does not come here: it keeps the build-time cellwise evaluator
 # (`evaluate_cellwise`), the oracle this program is checked against bit for bit.
@@ -34,7 +36,7 @@ mutable struct _ObsProgramCtx
     var_map::Any                         # the ODE layout (a `StateLayout`)
     array_var_info::Any
     n_states::Int
-    p::Any                               # the parameter NamedTuple the build bound
+    p::Any                               # the parameter NamedTuple the build bound (the fallback)
     param_sym_set::Any
     const_registry::AbstractDict
     pgather::AbstractDict
@@ -306,11 +308,13 @@ function _program_materialized_set(ctx::_ObsProgramCtx, name::String, shaped::Bo
     return out
 end
 
-# Run `prog` at state `u` (`nothing` for a program that reads none) and time
-# `t`. Returns the field in row-major cell order. Kernel sections carry scratch,
-# so one program runs one call at a time.
+# Run `prog` at state `u` (`nothing` for a program that reads none), time `t`
+# and parameters `p` — the reading problem's own, which a `remake` may have
+# swapped; `nothing` reads the build's. Returns the field in row-major cell
+# order. Kernel sections carry scratch, so one program runs one call at a time.
 function _run_observed_program(ctx::_ObsProgramCtx, prog::_ObservedProgram,
-                               u::Union{Nothing,AbstractVector}, t::Float64)
+                               u::Union{Nothing,AbstractVector}, t::Float64,
+                               p = nothing)
     if prog.cache !== nothing
         c = prog.cache
         return ndims(c) > 1 ? vec(permutedims(c, reverse(1:ndims(c)))) : vec(copy(c))
@@ -319,7 +323,7 @@ function _run_observed_program(ctx::_ObsProgramCtx, prog::_ObservedProgram,
         throw(SimulateError("observed_field: `u` has $(length(u)) elements but the " *
                             "problem's state vector has $(prog.n_states)"))
     end
-    pp = ctx.p === nothing ? NamedTuple() : ctx.p
+    pp = p !== nothing ? p : ctx.p === nothing ? NamedTuple() : ctx.p
     return lock(ctx.lock) do
         ue = zeros(Float64, prog.n_total)
         u === nothing || copyto!(ue, 1, u, 1, prog.n_states)

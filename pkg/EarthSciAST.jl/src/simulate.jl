@@ -1286,7 +1286,9 @@ end
 # one, or when no sink names an observed field (`sink_observed_names`);
 # otherwise the state snapshot with each named field read at the record's
 # state and time, `observed_field(prob, name; u, t)` — the flat row-major
-# vector that returns. `prob_ref` holds the problem once it is built.
+# vector that returns — with the integrator's parameters, so a solve of a
+# `remake`d problem (which shares this callback) records its own `p`.
+# `prob_ref` holds the problem once it is built.
 function _observed_snapshot(snapshot, sinks, prob_ref::Base.RefValue{Any})
     snapshot === state_snapshot || return snapshot
     names = String[]
@@ -1297,7 +1299,8 @@ function _observed_snapshot(snapshot, sinks, prob_ref::Base.RefValue{Any})
     return function (integrator)
         u = integrator.u
         t = Float64(integrator.t)
-        obs = Dict{String,Array}(n => observed_field(prob_ref[], n; u = Array(u), t = t)
+        obs = Dict{String,Array}(n => _observed_field_read(prob_ref[], n, Array(u), t,
+                                                           integrator.p)
                                  for n in names)
         return StateSnapshot(t, state_snapshot(integrator), obs)
     end
@@ -1361,6 +1364,8 @@ with the parameters the problem was built with, at `t = 0` unless `t` is given.
 With `u` — a state vector laid out like `prob.u0`, such as `sol.u[k]` — it is
 the observed at that state and time `t` (default `0`), which is how a
 STATE-DEPENDENT observed is read; `t` is `sol.t[k]` for a saved solution point.
+A read at a state or time binds the problem's own parameters `prob.p`, so on a
+`remake(prob; p = …)` it answers with the substituted values.
 
 Under `compiler = :native` the value comes from a program compiled once per
 problem and name — the same array cascade as the right-hand side, run over the
@@ -1396,18 +1401,26 @@ given.
 function observed_field(prob::EsmProblem, name::AbstractString;
                         u::Union{Nothing,AbstractVector} = nothing,
                         t::Union{Nothing,Real} = nothing)
+    return _observed_field_read(prob, String(name), u, t, prob.p)
+end
+
+# `observed_field` with the parameter carrier `p` to read at: the problem's own,
+# or a running integrator's (an output sink's snapshot).
+function _observed_field_read(prob::EsmProblem, name::String,
+                              u::Union{Nothing,AbstractVector},
+                              t::Union{Nothing,Real}, p)
     # A compiler that built its own program answers for its own observeds: under
     # `:mtk` the value lives in the compiled system's OBSERVED EQUATIONS, which
     # this package's build-time observed graph knows nothing about.
     backend = _compiler_backend(prob.f!)
     backend === nothing ||
-        return _backend_observed_field(backend, prob, String(name); u = u, t = t)
+        return _backend_observed_field(backend, prob, name; u = u, t = t)
     # Reading an observed at output time is one of the evaluations
     # esm-libraries-spec §2.5.10 puts under the compiler's refusal rule, so it
     # runs under the plan that BUILT the problem rather than under whatever
     # plan (if any) happens to be in scope on the reader's task.
     return _with_compiler_plan(_compiler_plan(compiler(prob))) do
-        _observed_field_memo(prob, String(name), u, t)
+        _observed_field_memo(prob, name, u, t, p)
     end
 end
 
@@ -1421,14 +1434,17 @@ const _OUTPUT_TIERS = (:output_compiled, :output_compiled_once, :output_percell)
 # `_counting_percell`). A memoized read at the same forcing epoch returns the
 # stored field without evaluating anything: that read is state-free, so only an
 # in-place refresh of a live buffer (which bumps the epoch) can move it. A
-# `remake` of the problem shares the build and so the memo: `observed_field`
-# reports what the build materialized (API_SPEC §5.8), which a `p` or `u0` swap
-# does not change.
+# `remake` of the problem shares the build and so the memo: the build-time read
+# reports what the build materialized (API_SPEC §5.8), with the build's
+# parameters, which a `p` or `u0` swap does not change. A read at a state or
+# time is the observed as a function of `(u, p, t)`, so it binds `p` — the
+# reading problem's, or the running integrator's.
 function _observed_field_memo(prob::EsmProblem, name::String,
                               u::Union{Nothing,AbstractVector} = nothing,
-                              t::Union{Nothing,Real} = nothing)
+                              t::Union{Nothing,Real} = nothing, p = nothing)
     insp = prob.inspection
     memoizable = u === nothing && t === nothing
+    memoizable && (p = nothing)
     epoch = _FORCING_EPOCH[]
     key = (prob.run_file, name)
     if memoizable
@@ -1437,7 +1453,7 @@ function _observed_field_memo(prob::EsmProblem, name::String,
     end
     (v, nprog), percell = _counting_percell() do
         _counting_program_reads() do
-            _observed_field_impl(prob, name; u = u, t = t)
+            _observed_field_impl(prob, name; u = u, t = t, p = p)
         end
     end
     lock(insp.observed_lock) do
@@ -1459,7 +1475,7 @@ end
 
 function _observed_field_impl(prob::EsmProblem, name::AbstractString;
                               u::Union{Nothing,AbstractVector} = nothing,
-                              t::Union{Nothing,Real} = nothing)
+                              t::Union{Nothing,Real} = nothing, p = nothing)
     insp = prob.inspection
     ctx = _obs_ctx(prob)
     if prob.run_file[] === nothing
@@ -1470,7 +1486,7 @@ function _observed_field_impl(prob::EsmProblem, name::AbstractString;
         "observed_field: prepared document has no model"))
     mname = String(first(keys(file.models)))
     field_of(k) = _observed_field(insp, file, mname, k; ctx = ctx, u = u, t = t,
-                                  var_map = prob.var_map)
+                                  var_map = prob.var_map, p = p)
     # A name an `operator_compose` renaming match DELETED addresses a field that
     # MOVED (issue #230). The merge only ever REMOVES a spelling, so resolving
     # here can never shadow a live field.

@@ -1131,6 +1131,26 @@ function _scoped_state_cells(var_map::AbstractDict, owner::AbstractString,
     return out
 end
 
+# The build's resolved scalar parameter values with the scalar slots of the
+# carrier `p` laid over them — the values a read against a remade problem binds.
+# A positional carrier (a `ComponentVector`, a plain vector) is in the order of
+# the build's own parameter NamedTuple, `ctx.p`.
+_params_at(params::AbstractDict, ::Nothing, ctx) = params
+function _params_at(params::AbstractDict, p::NamedTuple, ctx)
+    out = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in params)
+    for (k, v) in pairs(p)
+        v isa Real && (out[String(k)] = Float64(v))
+    end
+    return out
+end
+function _params_at(params::AbstractDict, p::AbstractVector, ctx)
+    names = ctx === nothing || !(ctx.p isa NamedTuple) ? () : keys(ctx.p)
+    length(names) == length(p) || throw(SimulateError(
+        "observed_field: the parameter vector has $(length(p)) elements but the " *
+        "build's parameter set has $(length(names))"))
+    return _params_at(params, NamedTuple{names}(Tuple(p)), ctx)
+end
+
 function _observed_field(insp::BuildInspection, file::EsmFile,
                          mname::AbstractString, variable::AbstractString;
                          state_arrays::AbstractDict=Dict{String,Any}(),
@@ -1138,7 +1158,10 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
                          ctx=nothing,
                          u::Union{Nothing,AbstractVector}=nothing,
                          t::Union{Nothing,Real}=nothing,
-                         var_map::Union{Nothing,AbstractDict}=nothing)
+                         var_map::Union{Nothing,AbstractDict}=nothing,
+                         p=nothing)
+    # `p` is the reading problem's parameter carrier (a `remake` may have
+    # swapped it since the build); `nothing` reads the build's own values.
     # `models === nothing` for a document that is reaction systems only, whose
     # components declare SPECIES rather than variables and so have no observed
     # to find here; the assertion falls through to the scalar-slot path.
@@ -1176,7 +1199,7 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
                 "observed '$(variable)' reads the continuous state, so it is not " *
                 "a build-time field; pass the state to read it at, " *
                 "`observed_field(prob, name; u = …, t = …)`"))
-            vals = _run_observed_program(ctx, prog, u, tval)
+            vals = _run_observed_program(ctx, prog, u, tval, p)
             _note_program_read!()
             return (vals, prog.cells)
         end
@@ -1236,7 +1259,7 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
                                        state_scalars=state_scalars)
     end
     expr === nothing && return nothing
-    params = _param_scope_with_aliases(insp.params, String(mname))
+    params = _param_scope_with_aliases(_params_at(insp.params, p, ctx), String(mname))
     # The trajectory sample wins over a same-named build constant: a name that
     # is a STATE is not a constant, and its value at this time is the answer.
     isempty(state_scalars) || (params = merge(params, Dict{String,Float64}(
