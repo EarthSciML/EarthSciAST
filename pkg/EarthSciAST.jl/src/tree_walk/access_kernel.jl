@@ -670,35 +670,31 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
         pl = nd.payload
         if pl isa Tuple{String,_InterpLinearSpec}
             spec = pl[2]
-            return _interp_linear_core(spec.table, spec.axis, ev(ch[1]))
+            return _interp_linear_core(spec, ev(ch[1]))
         elseif pl isa Tuple{String,_InterpBilinearSpec}
             spec = pl[2]
-            return _interp_bilinear_core(spec.table, spec.axis_x, spec.axis_y,
-                                         ev(ch[1]), ev(ch[2]))
+            return _interp_bilinear_core(spec, ev(ch[1]), ev(ch[2]))
         elseif pl isa Tuple{String,_InterpSearchsortedSpec}
             spec = pl[2]
             # `convert(T, …)` not `Float64(…)` — same reasoning as the mirrored
             # `:fn` arm in compile.jl: keep the arm in the evaluator's value type
             # so it stays AD-clean and concretely inferred.
-            return convert(T, _interp_searchsorted_core("interp.searchsorted",
-                                                        ev(ch[1]), spec.xs))
+            return convert(T, _interp_searchsorted_core(spec, ev(ch[1])))
         elseif pl isa Tuple{String,_InterpLinearLaneSpec}
             # Per-LANE spec table (kernel-class merge): select THIS cell's
             # member spec by the box lane addressing, then call the SAME core
             # the member kernel called — bit-identical per lane by construction.
             h = pl[2]
             sp = @inbounds h.specs[_interp_lane(h, midx)]
-            return _interp_linear_core(sp.table, sp.axis, ev(ch[1]))
+            return _interp_linear_core(sp, ev(ch[1]))
         elseif pl isa Tuple{String,_InterpBilinearLaneSpec}
             h = pl[2]
             sp = @inbounds h.specs[_interp_lane(h, midx)]
-            return _interp_bilinear_core(sp.table, sp.axis_x, sp.axis_y,
-                                         ev(ch[1]), ev(ch[2]))
+            return _interp_bilinear_core(sp, ev(ch[1]), ev(ch[2]))
         elseif pl isa Tuple{String,_InterpSearchsortedLaneSpec}
             h = pl[2]
             sp = @inbounds h.specs[_interp_lane(h, midx)]
-            return convert(T, _interp_searchsorted_core("interp.searchsorted",
-                                                        ev(ch[1]), sp.xs))
+            return convert(T, _interp_searchsorted_core(sp, ev(ch[1])))
         elseif pl isa Tuple{String,_FnTypedCoreSpec}
             # Registry-declared typed scalar core — MIRRORS compile.jl's `:fn`
             # arm: `T === Float64` folds at compile time and calls the unary

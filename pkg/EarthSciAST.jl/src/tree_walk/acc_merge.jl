@@ -349,10 +349,10 @@ end
 # exact check `_check_fn_group_specs` re-runs on the resulting group, so a COLLISION
 # degrades to a loud build error instead of back to silent wrong numbers.
 _fn_spec_hash(::Nothing) = UInt(0)                      # boxed all-scalar fn
-_fn_spec_hash(s::_InterpLinearSpec) = hash(s.axis, hash(s.table, UInt(0x11)))
+_fn_spec_hash(s::_InterpLinearSpec) = hash(s.strict, hash(s.axis, hash(s.table, UInt(0x11))))
 _fn_spec_hash(s::_InterpBilinearSpec) =
-    hash(s.axis_y, hash(s.axis_x, hash(s.table, UInt(0x22))))
-_fn_spec_hash(s::_InterpSearchsortedSpec) = hash(s.xs, UInt(0x33))
+    hash(s.strict, hash(s.axis_y, hash(s.axis_x, hash(s.table, UInt(0x22)))))
+_fn_spec_hash(s::_InterpSearchsortedSpec) = hash(s.strict, hash(s.xs, UInt(0x33)))
 # A typed-core spec's content IS its two ints (`_fn_typed_core_spec` mints it
 # deterministically from the fname), so same-name nodes always content-match —
 # the payload analog of the `Nothing` it replaced (ess-dtcore).
@@ -367,11 +367,12 @@ _fn_spec_hash(s) = objectid(s)
 _fn_spec_content_equal(a, b) = false                    # different spec types never match
 _fn_spec_content_equal(::Nothing, ::Nothing) = true
 _fn_spec_content_equal(a::_InterpLinearSpec, b::_InterpLinearSpec) =
-    isequal(a.table, b.table) && isequal(a.axis, b.axis)
+    isequal(a.table, b.table) && isequal(a.axis, b.axis) && a.strict == b.strict
 _fn_spec_content_equal(a::_InterpBilinearSpec, b::_InterpBilinearSpec) =
-    isequal(a.table, b.table) && isequal(a.axis_x, b.axis_x) && isequal(a.axis_y, b.axis_y)
+    isequal(a.table, b.table) && isequal(a.axis_x, b.axis_x) &&
+    isequal(a.axis_y, b.axis_y) && a.strict == b.strict
 _fn_spec_content_equal(a::_InterpSearchsortedSpec, b::_InterpSearchsortedSpec) =
-    isequal(a.xs, b.xs)
+    isequal(a.xs, b.xs) && a.strict == b.strict
 _fn_spec_content_equal(a::_FnTypedCoreSpec, b::_FnTypedCoreSpec) =
     a.id == b.id && a.arity == b.arity
 

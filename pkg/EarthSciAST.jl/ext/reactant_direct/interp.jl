@@ -95,6 +95,12 @@ _de_fn(ctx::_DECtx, nd::_E._Node, ev::F) where {F} =
 function _de_fn_pl(ctx::_DECtx, pl, args::Vector{_DEVal})::_DEVal
     ch = args
     q(i::Int) = _de_traced(args[i])
+    sid = _E._interp_strict_id(pl[2])
+    isempty(sid) || _de_refuse(
+        "a lookup into the `out_of_bounds: \"error\"` table `$(sid)`",
+        "a compiled XLA program has no channel to raise the run-time " *
+        "`table_lookup_out_of_bounds` error, and answering with the clamp result " *
+        "would be the mode the author did not declare (esm-spec §9.5.1).")
     if pl isa Tuple{String,_E._InterpLinearSpec} ||
        pl isa Tuple{String,_E._InterpLinearLaneSpec}
         _de_tally!(ctx, :interp_linear)

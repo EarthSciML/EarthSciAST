@@ -287,12 +287,14 @@ const ERROR_CODES = (
     TABLE_DATA_SHAPE_MISMATCH = "table_data_shape_mismatch",
     TABLE_AXIS_NAN = "table_axis_nan",
     # esm-spec §9.5.3a: `out_of_bounds: "clamp"` is required of every binding
-    # and `"error"` is "conformant when implemented" (§9.5.1). This binding
-    # implements only the first, so a table declaring the second is REFUSED
-    # where it would otherwise lower — answering in the mode we happen to have
-    # rather than the one the author declared is a wrong number with nothing in
-    # the result to say so.
+    # and `"error"` is "conformant when implemented" (§9.5.1). A compiler that
+    # cannot run the second (`:mtk`) refuses the lookup where it would otherwise
+    # lower — answering in the mode it happens to have rather than the one the
+    # author declared is a wrong number with nothing in the result to say so.
     TABLE_OUT_OF_BOUNDS_UNSUPPORTED = "table_out_of_bounds_unsupported",
+    # esm-spec §9.5.1 `out_of_bounds: "error"`, implemented: a query strictly
+    # outside a strict table's axis raises this at evaluation time.
+    TABLE_LOOKUP_OUT_OF_BOUNDS = "table_lookup_out_of_bounds",
 
     # ── Discretization pipeline (tree_walk/; esm-spec §4.2 / §9.6.8). The one
     #    `TreeWalkError` code that is NOT an `E_TREEWALK_*` Julia-local name:

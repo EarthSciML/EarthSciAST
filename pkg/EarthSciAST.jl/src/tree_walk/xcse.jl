@@ -200,12 +200,12 @@ function _xfn_content_key(payload)
         # fname, so the name plus the row id is the whole content.
         return (fname, :typed_core, spec.id)
     elseif spec isa _InterpLinearSpec
-        return (fname, :linear, _xf64_bits(spec.table), _xf64_bits(spec.axis))
+        return (fname, :linear, _xf64_bits(spec.table), _xf64_bits(spec.axis), spec.strict)
     elseif spec isa _InterpBilinearSpec
         return (fname, :bilinear, [_xf64_bits(r) for r in spec.table],
-                _xf64_bits(spec.axis_x), _xf64_bits(spec.axis_y))
+                _xf64_bits(spec.axis_x), _xf64_bits(spec.axis_y), spec.strict)
     elseif spec isa _InterpSearchsortedSpec
-        return (fname, :searchsorted, _xf64_bits(spec.xs))
+        return (fname, :searchsorted, _xf64_bits(spec.xs), spec.strict)
     end
     return nothing
 end

@@ -54,11 +54,12 @@ A table declaring `out_of_bounds: "error"`, the §9.5.1 mode that is
 must not do is evaluate as though it said `"clamp"`. A binding that does not
 implement the mode refuses the lookup with `table_out_of_bounds_unsupported`
 at the point it would otherwise lower or dispatch the node (esm-spec §9.5.3a).
-A binding that does implement it (Rust) answers the fixture's in-range query
-(`p = 2.5`) with exactly the clamp lowering's 25.0, and raises
+A binding that does implement it (Rust, Julia) answers the fixture's in-range
+query (`p = 2.5`) with exactly the clamp lowering's 25.0, and raises
 `table_lookup_out_of_bounds` at evaluation time for a query strictly outside
 the axis `[1, 4]` — under every compiler it offers, or refuses the compiler by
-name (Rust's `xla`, which has no channel to raise a run-time error). Answering
+name (Rust's and Julia's `xla`, which have no channel to raise a run-time
+error, and Julia's `mtk`). Answering
 in the mode the binding happens to have, rather than the one the author
 declared, is a wrong number with nothing in the result to say so.
 

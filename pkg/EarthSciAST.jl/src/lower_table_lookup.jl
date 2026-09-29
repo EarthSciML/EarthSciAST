@@ -47,8 +47,10 @@ and [`ClosedFunctionError`](@ref).
 
 Codes: `table_lookup_unknown_table`, `table_lookup_axis_name_mismatch`,
 `table_lookup_output_out_of_range`, `table_interpolation_axes_mismatch`,
-`table_data_shape_mismatch`, `table_axis_nan`, and the §9.5.3a refusal
-`table_out_of_bounds_unsupported`.
+`table_data_shape_mismatch`, `table_axis_nan`, the §9.5.3a refusal
+`table_out_of_bounds_unsupported` (from a compiler that cannot run an
+`out_of_bounds: "error"` table), and the evaluation-time
+`table_lookup_out_of_bounds` a strict table raises for a query outside its axis.
 
 A build diagnostic, not a load one: the offending document still loads and
 still round-trips (§9.5.4) — it simply does not evaluate.
@@ -368,14 +370,16 @@ function _lower_table_lookup_node(node::OpExpr,
         "`table_lookup` references table `$(table_id)`, which the document's " *
         "`function_tables` block does not declare"))
     table = tables[table_id]
-    # esm-spec §9.5.3a. Raised HERE — at the point the node would otherwise
-    # lower — so the document still loads and still round-trips; what it does
-    # not do is evaluate in a mode its author did not ask for.
-    table.out_of_bounds == "error" && throw(TableLookupError(
-        ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED,
-        "table `$(table_id)` declares `out_of_bounds: \"error\"`; this binding " *
-        "implements only the required `\"clamp\"` mode (esm-spec §9.5.1), so the " *
-        "lookup is refused rather than answered with clamping semantics"))
+    # esm-spec §9.5.1. `clamp` (the default) is exactly what the `interp.*`
+    # cores do at the ends, so the lowered tree IS the clamp semantics. An
+    # `error` table lowers to the same tree with its id on the node that reads
+    # the query (`interp.linear` / `interp.bilinear`, or `interp.searchsorted`
+    # for `nearest`): the evaluator checks each query against its axis before
+    # the core and raises `table_lookup_out_of_bounds` outside it. A `table`
+    # field on a `fn` node is never authored (it belongs to `table_lookup`), so
+    # the marker cannot collide with a document. A compiler that cannot run the
+    # check refuses the marked node by name.
+    strict = table.out_of_bounds == "error" ? String(table_id) : nothing
 
     inputs = _table_axis_inputs(node, table, table_id)
     slice = _table_output_slice(table, _table_output_index(node, table, table_id),
@@ -384,19 +388,20 @@ function _lower_table_lookup_node(node::OpExpr,
     if kind == "linear" && length(table.axes) == 1
         return OpExpr("fn", ASTExpr[_table_const(slice),
                                     _table_axis_const(table.axes[1], table_id),
-                                    inputs[1]]; name="interp.linear")
+                                    inputs[1]]; name="interp.linear", table=strict)
     elseif kind == "bilinear" && length(table.axes) == 2
         return OpExpr("fn", ASTExpr[_table_const(slice),
                                     _table_axis_const(table.axes[1], table_id),
                                     _table_axis_const(table.axes[2], table_id),
-                                    inputs[1], inputs[2]]; name="interp.bilinear")
+                                    inputs[1], inputs[2]]; name="interp.bilinear",
+                      table=strict)
     elseif kind == "nearest" && length(table.axes) == 1
         # `nearest` is an `index` of the table slice at the searchsorted
         # position, not an `interp` blend.
         return OpExpr("index", ASTExpr[_table_const(slice),
             OpExpr("fn", ASTExpr[inputs[1],
                                  _table_axis_const(table.axes[1], table_id)];
-                   name="interp.searchsorted")])
+                   name="interp.searchsorted", table=strict)])
     end
     throw(TableLookupError(ERROR_CODES.TABLE_INTERPOLATION_AXES_MISMATCH,
         "table `$(table_id)` declares `interpolation: \"$(kind)\"` over " *
