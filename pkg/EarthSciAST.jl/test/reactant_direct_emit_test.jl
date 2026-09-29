@@ -339,8 +339,11 @@ end
 # so the whole surface is ONE group of `NI*NJ` lanes — and each of the tent's
 # `M*M` iterations is one whole-lane read instead of one one-element slice per
 # cell. `NI = NJ = 6` because the read cost model wants at least eight pieces
-# before it prefers a gather: at four lanes there is nothing to decide.
-function _de_halo(; NI = 6, NJ = 6, M = 3)
+# before it prefers a gather: at four lanes there is nothing to decide. `M = 7`
+# because the per-cell loop takes the tent only when it has more terms than the
+# output has cells (`M*M > NI*NJ`, see `_de_halo_build`); a shorter tent is the
+# affine tier's, compiled once for the whole array, and leaves nothing to batch.
+function _de_halo(; NI = 6, NJ = 6, M = 7)
     NQ = max(NI, NJ) + M - 1
     W = [[[[Float64((i + 2j + 3k + 5l) % 7) for l in 1:M] for k in 1:M]
           for j in 1:NJ] for i in 1:NI]
@@ -389,7 +392,9 @@ end
 # The routing this fixture depends on is named rather than inherited: the
 # contraction loop tier has to take the reduction (so there ARE per-cell
 # `rhs_list` entries to batch) and the whole-array contraction tier must not
-# take it first.
+# take it first. The loop's floor is lowered to 8 terms here, and the loop
+# preempts the affine tier only when the output has fewer cells than the
+# contraction has terms, which `_de_halo`'s default `M` is sized for.
 _de_halo_build(doc, ics; form = :oop, batch = true) =
     withenv("ESS_CONTRACTION_LOOP_MIN" => "8",
             "ESS_ARRAY_CONTRACTION_MIN" => "1024") do
