@@ -2964,7 +2964,8 @@ function _build_partition_and_materialize(model::Model, cls;
         Dict{String,Int}() : _EMPTY_DERIVED_EXTENTS
     if cls.has_geometry
         geom_rings, geom_extents =
-            _materialize_geometry_rings(cls.equations, const_arrays, cls.geom_ring_vars)
+            _materialize_geometry_rings(cls.equations, const_arrays, cls.geom_ring_vars,
+                                        cls.const_obs_arrays)
         merge!(derived_extents, geom_extents)
     end
     # Value-invention derived index sets (skolem/distinct/rank) materialized via
