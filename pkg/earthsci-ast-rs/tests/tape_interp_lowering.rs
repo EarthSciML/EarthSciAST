@@ -770,6 +770,9 @@ fn a_strict_linear_table_is_taped_and_faults_exactly_where_the_oracle_does() {
     for x in linear_probes() {
         let mut u = vec![0.0; compiled.state_variable_names().len()];
         u[iq] = x;
+        // Not `!(lo..=hi).contains(&x)`: that is true for a NaN query, which
+        // is not out of range (§9.2 propagates it).
+        #[allow(clippy::manual_range_contains)]
         let out = x < AXIS[0] || x > AXIS[4];
         assert_strict_agreement(&compiled, &u, out, &format!("strict linear q={x:?}"));
         if !out {
@@ -817,6 +820,8 @@ fn a_strict_bilinear_table_checks_both_axes() {
             let mut u = vec![0.0; compiled.state_variable_names().len()];
             u[ia] = a;
             u[ib] = b;
+            // NaN is in range on either axis, so not `!contains` (see above).
+            #[allow(clippy::manual_range_contains)]
             let out = a < 0.0 || a > 2.0 || b < 0.0 || b > 30.0;
             assert_strict_agreement(
                 &compiled,
