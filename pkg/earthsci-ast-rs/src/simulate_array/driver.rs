@@ -391,6 +391,27 @@ impl ArrayCompiled {
         &self.merged_renames
     }
 
+    /// The shaped parameters this build left with no value (see the field).
+    pub(crate) fn unvalued_shaped_params(&self) -> &[String] {
+        &self.unvalued_shaped_params
+    }
+
+    /// The names the forcing buffer serves: every parameter refreshed from
+    /// outside the model (a data source or a registered handler).
+    pub(crate) fn forcing_names(&self) -> impl Iterator<Item = &String> {
+        self.forcing_decls.keys()
+    }
+
+    /// The declared default of forcing parameter `name`: `None` when it
+    /// declares none, `Some(None)` when its shape does not resolve yet, and
+    /// otherwise the dense field it denotes over that shape.
+    pub(crate) fn forcing_default(&self, name: &str) -> Option<Option<ArrayD<f64>>> {
+        let entry = self.forcing_defaults.get(name)?;
+        Some(entry.as_ref().and_then(|(shape, values)| {
+            ArrayD::from_shape_vec(ndarray::IxDyn(shape), values.clone()).ok()
+        }))
+    }
+
     /// A clonable handle to the external forcing buffer (PR-1, ess-14f.7). A
     /// driver that integrates this model in discrete-cadence segments holds the
     /// returned `Rc` and, at each cadence boundary, refreshes a loader-fed
@@ -415,7 +436,6 @@ impl ArrayCompiled {
     /// where [`FieldIcMemo`] allows: before construction records the memo, or
     /// after the initial state is built. Unlike [`Self::forcing_handle`] it
     /// leaves the memo standing.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn forcing_buffer(&self) -> Rc<RefCell<HashMap<String, ArrayD<f64>>>> {
         Rc::clone(&self.forcing)
     }

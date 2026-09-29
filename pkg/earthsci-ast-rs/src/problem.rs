@@ -1723,6 +1723,12 @@ pub fn esm_problem<'a>(
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut route_rows: Vec<CompilerRuleReport> = Vec::new();
 
+    // What the caller supplied for the document's shaped parameters, captured
+    // before the build pipeline consumes `const_arrays` and `build_providers`:
+    // the compiled model binds the arrays too (stage 3d), and the missing-data
+    // gate asks which names any channel serves.
+    let supplied = SuppliedData::capture(&mut opts, owned_json.as_ref(), owned_file.as_ref());
+
     // A TYPED document is a legitimate input to the build pipeline, and it used
     // to be the one input shape that silently was not: the pipeline reads raw
     // JSON, so `ProblemInput::File` skipped it entirely — `build_providers`,
@@ -1867,6 +1873,18 @@ pub fn esm_problem<'a>(
         crate::lower_table_lookup::lower_table_lookups(f).map_err(SimulateError::Compile)?;
     }
 
+    // ---- (3d) Caller arrays for shaped parameters. ------------------------
+    // CONFORMANCE_SPEC §5.32.5: a caller's `const_arrays` entry that gives a
+    // shaped parameter its value is the same binding as an inline-array
+    // override, so it lands where that override does — on the parameter's
+    // `default`, which the array compile lowers. The build pipeline above only
+    // evaluates the observed graph; without this the compiled right-hand side
+    // never saw the array and ran on the declared default instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(f) = owned_file.as_mut() {
+        supplied.bind_arrays(f, &opts.p);
+    }
+
     // ---- (4) Compile the right-hand side. ---------------------------------
     let backend = compile_backend(
         owned_file.as_ref(),
@@ -1875,6 +1893,18 @@ pub fn esm_problem<'a>(
         opts.rhs,
         compiler,
     )?;
+
+    // ---- (4a) The missing-data gate (esm-spec §10.10). ---------------------
+    // A shaped parameter with neither a default nor a supplied value is a
+    // construction error, raised here naming the parameter rather than as an
+    // unbound read at the first evaluation. An array model is checked on its
+    // compiled tables (after step 5 has bound the providers); a static one on
+    // its flattened parameters, before its observed graph is evaluated.
+    if let Backend::Static(_) = &backend
+        && let Some(f) = owned_file.as_ref()
+    {
+        supplied.refuse_missing_static(f, &opts.p)?;
+    }
 
     // ---- (4b) State-free static evaluation. -------------------------------
     // A document that declares no differential equations has nothing to
@@ -1911,6 +1941,9 @@ pub fn esm_problem<'a>(
     #[cfg(not(target_arch = "wasm32"))]
     let (refresh, discrete_forcing, refresh_boundaries) =
         bind_providers(&backend, &mut opts, tspan)?;
+    if let Backend::Array(c) = &backend {
+        supplied.refuse_missing_array(c, owned_file.as_ref(), &opts.p)?;
+    }
 
     // esm-spec §2.2: the document's own solver hints. Read from whichever
     // carrier survived to here — the raw JSON when there is one, else the typed
@@ -2811,6 +2844,376 @@ fn model_has_derivative(model: &crate::types::Model) -> bool {
         .equations
         .iter()
         .any(|eq| crate::classification::has_time_derivative(&eq.lhs))
+}
+
+/// Whether `var` is a parameter with a non-empty declared `shape`.
+fn is_shaped_parameter(var: &crate::types::ModelVariable) -> bool {
+    var.var_type == crate::types::VariableType::Parameter
+        && var.shape.as_ref().is_some_and(|s| !s.is_empty())
+}
+
+/// Whether every `update` rule of `var` takes its value from outside the model
+/// — a data source (`from`) or a registered handler — which is what makes the
+/// array runtime serve it from the forcing buffer.
+fn is_externally_fed(var: &crate::types::ModelVariable) -> bool {
+    var.update.as_ref().is_some_and(|spec| {
+        spec.rules().iter().all(|rule| {
+            rule.value()
+                .is_some_and(|v| v.from.is_some() || v.handler.is_some())
+        })
+    })
+}
+
+/// Whether `name` — a compiled or flattened name — or its model-local tail is a
+/// key of `keys`.
+fn names_key<V>(keys: &HashMap<String, V>, name: &str) -> bool {
+    keys.contains_key(name)
+        || name
+            .split_once('.')
+            .is_some_and(|(_, tail)| keys.contains_key(tail))
+}
+
+/// The declared variable a compiled or flattened `name` refers to, for a
+/// diagnostic: `Model.var` in a top-level model, or a bare name one model
+/// declares.
+fn declared_variable<'f>(
+    file: Option<&'f EsmFile>,
+    name: &str,
+) -> Option<&'f crate::types::ModelVariable> {
+    let models = file?.models.as_ref()?;
+    if let Some((model, var)) = name.split_once('.')
+        && let Some(v) = models.get(model).and_then(|m| m.variables.get(var))
+    {
+        return Some(v);
+    }
+    models.values().find_map(|m| m.variables.get(name))
+}
+
+/// The `E_TREEWALK_MISSING_DATA` refusal for shaped parameter `name`, naming
+/// what the document says feeds it and how a caller supplies it.
+fn missing_data_error(name: &str, var: Option<&crate::types::ModelVariable>) -> SimulateError {
+    let shape = var
+        .and_then(|v| v.shape.as_ref())
+        .map(|s| format!(" (shape [{}])", s.join(", ")))
+        .unwrap_or_default();
+    let mut feeds: Vec<String> = Vec::new();
+    for rule in var
+        .and_then(|v| v.update.as_ref())
+        .map(|u| u.rules())
+        .unwrap_or_default()
+    {
+        let Some(value) = rule.value() else { continue };
+        if let Some(from) = &value.from {
+            feeds.push(format!(
+                "the data source '{}' (file_variable '{}')",
+                rule.data_source().unwrap_or("?"),
+                from.file_variable
+            ));
+        } else if let Some(h) = &value.handler {
+            feeds.push(format!(
+                "the registered handler '{}' (update kind '{}'), which writes it only when it fires",
+                h.handler_id,
+                rule.kind()
+            ));
+        }
+    }
+    let (fed, how) = if feeds.is_empty() {
+        (
+            "Nothing in the document gives it a value.".to_string(),
+            format!(
+                "pass its array in `ProblemOptions::const_arrays` under \"{name}\", or declare a \
+                 `default` on it"
+            ),
+        )
+    } else {
+        (
+            format!(
+                "The document feeds it from {}, and no data for it was supplied at construction.",
+                feeds.join(" and ")
+            ),
+            format!(
+                "pass a provider for it in `ProblemOptions::providers` under \"{name}\", or its \
+                 array in `ProblemOptions::const_arrays` (a constant snapshot), or declare a \
+                 `default` on it"
+            ),
+        )
+    };
+    SimulateError::Compile(crate::compile_error::CompileError::MissingData {
+        parameter: name.to_string(),
+        detail: format!(
+            "no data supplied for the shaped parameter '{name}'{shape}, which declares no \
+             `default`. {fed} A parameter with neither a default nor a supplied value is an error \
+             when a problem is built (esm-spec §10.10). To supply it, {how}."
+        ),
+    })
+}
+
+/// The nested [`crate::types::InlineValue`] an array denotes, row-major — the
+/// spelling a shaped parameter's inline `default` takes (esm-spec §6.3).
+#[cfg(not(target_arch = "wasm32"))]
+fn inline_value_of(a: &ArrayD<f64>) -> crate::types::InlineValue {
+    use crate::types::InlineValue;
+    fn nest(shape: &[usize], values: &[f64]) -> InlineValue {
+        let Some((&axis, rest)) = shape.split_first() else {
+            return InlineValue::Scalar(values[0]);
+        };
+        let stride = rest.iter().product::<usize>();
+        InlineValue::Array(
+            (0..axis)
+                .map(|i| nest(rest, &values[i * stride..(i + 1) * stride]))
+                .collect(),
+        )
+    }
+    let values: Vec<f64> = a.iter().copied().collect();
+    if a.ndim() == 0 {
+        return InlineValue::Scalar(values[0]);
+    }
+    nest(a.shape(), &values)
+}
+
+/// The data a caller supplied for a document's shaped parameters, captured at
+/// the top of [`esm_problem`] because the build pipeline consumes
+/// `const_arrays` and `build_providers`.
+#[derive(Default)]
+struct SuppliedData {
+    /// Each `const_arrays` entry whose key names a shaped parameter of the
+    /// document, as `Model.param` or as the bare `param`.
+    #[cfg(not(target_arch = "wasm32"))]
+    arrays: HashMap<String, ArrayD<f64>>,
+    /// The keys of the run-time providers and of the build-time providers.
+    provider_keys: HashMap<String, ()>,
+    /// The captured arrays for parameters the document feeds from outside
+    /// (a data source or a handler) and no provider serves, keyed
+    /// `Model.param`: [`Self::bind_arrays`] routes them to the forcing buffer,
+    /// the channel such a parameter is read through, as a constant snapshot.
+    #[cfg(not(target_arch = "wasm32"))]
+    forcing_arrays: std::cell::RefCell<HashMap<String, ArrayD<f64>>>,
+}
+
+impl SuppliedData {
+    /// Capture what `opts` supplies. The shaped-parameter arrays are MOVED out
+    /// of `opts.const_arrays` when they are the only reason the build pipeline
+    /// would run: they need nothing from it (stage 3d binds each onto its
+    /// parameter), and the pipeline refuses a coupled document it cannot
+    /// select one model of. Otherwise the pipeline keeps them and they are
+    /// copied here.
+    fn capture(opts: &mut ProblemOptions, raw: Option<&JsonValue>, file: Option<&EsmFile>) -> Self {
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let mut out = SuppliedData::default();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            out.provider_keys
+                .extend(opts.providers.keys().map(|k| (k.clone(), ())));
+            out.provider_keys
+                .extend(opts.build_providers.iter().map(|(k, _)| (k.clone(), ())));
+            if !opts.const_arrays.is_empty() {
+                let shaped = shaped_parameter_keys(raw, file);
+                let only_trigger = !opts.build_pipeline
+                    && !opts.pushdown_rewrite
+                    && opts.build_providers.is_empty()
+                    && opts.const_arrays.keys().all(|k| shaped.contains(k));
+                if only_trigger {
+                    out.arrays = std::mem::take(&mut opts.const_arrays);
+                } else {
+                    for (k, a) in &opts.const_arrays {
+                        if shaped.contains(k) {
+                            out.arrays.insert(k.clone(), a.clone());
+                        }
+                    }
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (opts, raw, file);
+        out
+    }
+
+    /// Bind each captured array to the shaped parameter it names — keyed
+    /// `Model.param`, or by a bare name only one model's shaped parameter
+    /// carries. A scalar override in `p` outranks it, and so does a provider
+    /// for a parameter the document feeds from outside. Otherwise it becomes
+    /// the parameter's inline `default`, or, for a parameter fed from outside,
+    /// a constant snapshot in the forcing buffer (served by
+    /// [`Self::refuse_missing_array`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bind_arrays(&self, file: &mut EsmFile, p: &HashMap<String, f64>) {
+        if self.arrays.is_empty() {
+            return;
+        }
+        let Some(models) = file.models.as_mut() else {
+            return;
+        };
+        let mut owners: HashMap<String, usize> = HashMap::new();
+        for m in models.values() {
+            for (v, var) in &m.variables {
+                if is_shaped_parameter(var) {
+                    *owners.entry(v.clone()).or_default() += 1;
+                }
+            }
+        }
+        for (mname, m) in models.iter_mut() {
+            for (v, var) in m.variables.iter_mut() {
+                if !is_shaped_parameter(var) {
+                    continue;
+                }
+                let qualified = format!("{mname}.{v}");
+                let arr = self.arrays.get(&qualified).or_else(|| {
+                    if owners.get(v) == Some(&1) {
+                        self.arrays.get(v)
+                    } else {
+                        None
+                    }
+                });
+                let Some(arr) = arr else { continue };
+                if p.contains_key(&qualified) || p.contains_key(v) {
+                    continue;
+                }
+                if is_externally_fed(var) {
+                    if !names_key(&self.provider_keys, &qualified) {
+                        self.forcing_arrays
+                            .borrow_mut()
+                            .insert(qualified, arr.clone());
+                    }
+                    continue;
+                }
+                var.default = Some(inline_value_of(arr));
+            }
+        }
+    }
+
+    /// The missing-data gate for an array model: serve every forcing name no
+    /// provider or caller array supplied from its declared `default`, and
+    /// refuse a forcing name with none, or a shaped parameter the build left
+    /// with no value at all.
+    fn refuse_missing_array(
+        &self,
+        c: &ArrayCompiled,
+        file: Option<&EsmFile>,
+        p: &HashMap<String, f64>,
+    ) -> Result<(), SimulateError> {
+        let forcing = c.forcing_buffer();
+        for name in c.forcing_names() {
+            if forcing.borrow().contains_key(name) || names_key(&self.provider_keys, name) {
+                continue;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(arr) = self.forcing_array(name) {
+                forcing.borrow_mut().insert(name.clone(), arr);
+                continue;
+            }
+            let mut value = match c.forcing_default(name) {
+                None => return Err(missing_data_error(name, declared_variable(file, name))),
+                // A default over a shape that does not resolve yet (an
+                // unmaterialized derived set) has no field to fill here.
+                Some(None) => continue,
+                Some(Some(value)) => value,
+            };
+            let prec = precision::of_variable(name);
+            if prec.is_f32() {
+                value.mapv_inplace(|x| prec.round(x));
+            }
+            forcing.borrow_mut().insert(name.clone(), value);
+        }
+        for name in c.unvalued_shaped_params() {
+            if !names_key(p, name) {
+                return Err(missing_data_error(name, declared_variable(file, name)));
+            }
+        }
+        Ok(())
+    }
+
+    /// The captured snapshot for forcing name `name` — a compiled name, which
+    /// is `Model.param` on a coupled build and the bare `param` on a
+    /// single-model one.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn forcing_array(&self, name: &str) -> Option<ArrayD<f64>> {
+        let arrays = self.forcing_arrays.borrow();
+        if let Some(a) = arrays.get(name) {
+            return Some(a.clone());
+        }
+        let mut tails = arrays
+            .iter()
+            .filter(|(k, _)| k.split_once('.').is_some_and(|(_, tail)| tail == name));
+        match (tails.next(), tails.next()) {
+            (Some((_, a)), None) => Some(a.clone()),
+            _ => None,
+        }
+    }
+
+    /// The missing-data gate for a document with nothing to integrate, read
+    /// off its flattened parameters (coupling may bind a declared parameter to
+    /// another component's variable, and then it needs no value of its own).
+    /// Flattens only when some shaped parameter declares no value.
+    fn refuse_missing_static(
+        &self,
+        file: &EsmFile,
+        p: &HashMap<String, f64>,
+    ) -> Result<(), SimulateError> {
+        let unvalued = |v: &crate::types::ModelVariable| {
+            is_shaped_parameter(v) && v.default.is_none() && v.distribution.is_none()
+        };
+        let any = file
+            .models
+            .as_ref()
+            .is_some_and(|ms| ms.values().any(|m| m.variables.values().any(unvalued)));
+        if !any {
+            return Ok(());
+        }
+        let Ok(flat) = crate::flatten::flatten(file) else {
+            return Ok(());
+        };
+        for (name, var) in &flat.parameters {
+            if !unvalued(var) || names_key(p, name) {
+                continue;
+            }
+            if is_externally_fed(var) && names_key(&self.provider_keys, name) {
+                continue;
+            }
+            return Err(missing_data_error(name, Some(var)));
+        }
+        Ok(())
+    }
+}
+
+/// Every name a caller's `const_arrays` key may use for a shaped parameter of
+/// the document: `Model.param` and the bare `param`, read off the raw JSON when
+/// there is one and the typed document otherwise.
+#[cfg(not(target_arch = "wasm32"))]
+fn shaped_parameter_keys(
+    raw: Option<&JsonValue>,
+    file: Option<&EsmFile>,
+) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    if let Some(models) = raw
+        .and_then(|v| v.get("models"))
+        .and_then(JsonValue::as_object)
+    {
+        for (m, model) in models {
+            let Some(vars) = model.get("variables").and_then(JsonValue::as_object) else {
+                continue;
+            };
+            for (v, var) in vars {
+                let shaped = var
+                    .get("shape")
+                    .and_then(JsonValue::as_array)
+                    .is_some_and(|s| !s.is_empty());
+                if shaped && var.get("type").and_then(JsonValue::as_str) == Some("parameter") {
+                    out.insert(format!("{m}.{v}"));
+                    out.insert(v.clone());
+                }
+            }
+        }
+    } else if let Some(models) = file.and_then(|f| f.models.as_ref()) {
+        for (m, model) in models {
+            for (v, var) in &model.variables {
+                if is_shaped_parameter(var) {
+                    out.insert(format!("{m}.{v}"));
+                    out.insert(v.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 #[cfg(not(target_arch = "wasm32"))]

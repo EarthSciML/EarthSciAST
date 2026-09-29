@@ -349,6 +349,20 @@ pub enum CompileError {
         cycle: Vec<String>,
     },
 
+    /// A shaped parameter reached construction with no value: no `default`, no
+    /// caller array, and — for one the document refreshes from a data source
+    /// or a registered handler — no provider data either. esm-spec §10.10 makes
+    /// "a parameter with neither a default nor a supplied value" an error when
+    /// a problem is built. `detail` names what the document says feeds the
+    /// parameter and how a caller supplies it.
+    #[error("E_TREEWALK_MISSING_DATA: {detail}")]
+    MissingData {
+        /// The parameter, as the compiled model names it.
+        parameter: String,
+        /// The whole diagnostic after the code.
+        detail: String,
+    },
+
     /// The convenience constructors flattened the input first; that step
     /// failed.
     #[error("Flatten failed: {0}")]

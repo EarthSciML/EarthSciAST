@@ -772,6 +772,19 @@ pub struct ArrayCompiled {
     /// registry cannot size. The tape compiles a read of one of these into a
     /// forcing load (`tape::Instr::LoadForcing`) rather than declining it.
     forcing_decls: IndexMap<String, Option<Vec<usize>>>,
+    /// The declared `default` of each [`Self::forcing_decls`] entry that has
+    /// one, as the dense row-major field it denotes over the resolved shape
+    /// (`None` while that shape does not resolve). Construction serves it from
+    /// the forcing buffer when no provider or caller array supplies the name
+    /// (esm-spec §6.3: the default is the value until data arrives).
+    #[allow(clippy::type_complexity)]
+    forcing_defaults: HashMap<String, Option<(Vec<usize>, Vec<f64>)>>,
+    /// Every SHAPED parameter the build left with no value at all: no
+    /// `default`, no inline data, no `distribution`, and no refresh from
+    /// outside the model. It holds a scalar-table slot with no value, which a
+    /// per-cell read cannot index; [`crate::problem::esm_problem`] refuses the
+    /// build naming each one (esm-spec §10.10).
+    unvalued_shaped_params: Vec<String>,
     /// The tape programs this model has built ([`tape::TapeCache`], which says
     /// what a kept program depends on).
     tape_cache: tape::TapeCache,

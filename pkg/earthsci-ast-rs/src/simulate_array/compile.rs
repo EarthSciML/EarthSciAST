@@ -812,6 +812,8 @@ impl ArrayCompiled {
             param_names,
             param_index,
             param_defaults,
+            unvalued_shaped_params,
+            forcing_defaults,
         ) = {
             let model = &model_owned;
 
@@ -856,6 +858,22 @@ impl ArrayCompiled {
 
             // (5) Build the param tables.
             let (param_names, param_index, param_defaults) = build_param_tables(model, &param_vars);
+            // A SHAPED parameter that reached the scalar table with no value —
+            // no `default`, no `distribution`, no inline data, not refreshed
+            // from outside. The front door refuses these by name
+            // (`crate::problem::esm_problem`, esm-spec §10.10); a lower-level
+            // caller reaches them as a solve-time missing parameter.
+            let unvalued_shaped_params: Vec<String> = param_vars
+                .iter()
+                .filter(|name| {
+                    model.variables.get(**name).is_some_and(|v| {
+                        v.shape.as_ref().is_some_and(|s| !s.is_empty())
+                            && v.default.is_none()
+                            && v.distribution.is_none()
+                    })
+                })
+                .map(|name| (*name).clone())
+                .collect();
 
             // Stage (6) consumes the observed bodies by NAME (sorted order,
             // exactly the order `classify_variables` produced them in).
@@ -876,6 +894,7 @@ impl ArrayCompiled {
                 })
                 .collect();
             infer_unsized_forcing_shapes(&mut forcing_decls, &model.equations);
+            let forcing_defaults = forcing_default_values(&observed_vars, &forcing_decls)?;
             (
                 observed_names,
                 forcing_decls,
@@ -885,6 +904,8 @@ impl ArrayCompiled {
                 param_names,
                 param_index,
                 param_defaults,
+                unvalued_shaped_params,
+                forcing_defaults,
             )
         };
 
@@ -951,6 +972,8 @@ impl ArrayCompiled {
             field_ic_memo: RefCell::new(None),
             inline_param_arrays,
             forcing_decls,
+            forcing_defaults,
+            unvalued_shaped_params,
             tape_cache: tape::TapeCache::new(),
             shared_observed: std::cell::OnceCell::new(),
         })
@@ -3483,6 +3506,54 @@ fn model_contains_arg_witness(model: &Model) -> bool {
 /// own (CONFORMANCE_SPEC §5.10.1, §5.13.2). A rule with an `expression` value
 /// form is the opposite case — the model computes it, and something has to run
 /// that computation on each refresh.
+/// The declared `default` of every parameter the forcing buffer serves that
+/// declares one, as the dense field it denotes over the parameter's resolved
+/// shape: a scalar broadcast over the whole grid (esm-spec §6.3), or its inline
+/// array data. `None` for a parameter whose shape does not resolve yet (an
+/// unmaterialized derived set), which has no field to fill.
+///
+/// This is the value such a parameter holds when the caller supplies no data
+/// for it: construction writes it into the buffer rather than leaving the
+/// name unserved ([`crate::problem::esm_problem`]).
+///
+/// # Errors
+///
+/// [`CompileError::InterpreterBuildError`] when inline array data does not
+/// match the declared shape (esm-spec §6.6.2).
+#[allow(clippy::type_complexity)]
+fn forcing_default_values(
+    observed_vars: &[(&String, &ModelVariable)],
+    forcing_decls: &IndexMap<String, Option<Vec<usize>>>,
+) -> Result<HashMap<String, Option<(Vec<usize>, Vec<f64>)>>, CompileError> {
+    let mut out = HashMap::new();
+    for (name, var) in observed_vars {
+        let (Some(default), Some(decl)) = (var.default.as_ref(), forcing_decls.get(name.as_str()))
+        else {
+            continue;
+        };
+        let Some(want) = decl else {
+            out.insert((*name).clone(), None);
+            continue;
+        };
+        let values = if let Some(scalar) = default.as_scalar() {
+            vec![scalar; want.iter().product::<usize>()]
+        } else {
+            let (shape, values) = default.to_dense().map_err(|e| {
+                CompileError::build_err(format!("parameter '{name}': {e} (esm-spec §6.3)"))
+            })?;
+            if &shape != want {
+                return Err(CompileError::build_err(format!(
+                    "parameter '{name}': inline array data has shape {shape:?}, which does not \
+                     match the declared shape {want:?} (esm-spec §6.6.2)"
+                )));
+            }
+            values
+        };
+        out.insert((*name).clone(), Some((want.clone(), values)));
+    }
+    Ok(out)
+}
+
 fn externally_refreshed(var: &ModelVariable) -> bool {
     let Some(spec) = &var.update else {
         return false;
