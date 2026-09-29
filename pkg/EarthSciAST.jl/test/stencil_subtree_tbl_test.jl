@@ -27,8 +27,8 @@
 # plus a ForwardDiff state-Jacobian equality (Dual numerics), a grid-structure
 # pin (kernel count grid-independent, table length scales with the box — the
 # grid_invariance_test idiom), and a NEGATIVE control (state reference inside
-# the offending subtree still declines to per-cell and still matches the
-# oracle).
+# the offending subtree still declines the affine tier; the whole-array nest
+# takes the equation instead, and it still matches the oracle).
 using Test
 using EarthSciAST
 using ForwardDiff
@@ -143,14 +143,16 @@ _stt_tbl_len(kernels) = sum(sum(Int[length(d.arr) for d in K.acc
     @testset "NEGATIVE control: state inside the subtree still declines (N=$N)" for N in (8,)
         b = _stt_build3(_stt_model(N; state_in_agg=true), _stt_ics(N), _stt_W(N))
         # `_exprtbl_evaluable` rejects the state reference BEFORE any recipe
-        # or tally: the equation takes today's whole-equation per-cell path.
-        @test get(b[:tbl][4], :percell_acc, 0) == 1
+        # or tally, so the affine tier declines the equation, and the
+        # whole-array nest compiles it once rather than the per-cell build.
+        @test get(b[:tbl][4], :array_contraction_codegen, 0) == 1
+        @test get(b[:tbl][4], :percell_acc, 0) == 0
         @test get(b[:tbl][4], :affine, 0) == 0
         @test get(b[:tbl][4], :affine_subtree_tbl, 0) == 0
         du = Dict(tag => _stt_du(b[tag]) for tag in (:tbl, :ref))
         @test du[:tbl] == du[:ref]
         @test any(!iszero, du[:ref])
-        # And the state factor is LIVE through the fallback (Jacobian picks up
+        # And the state factor is LIVE through the nest (Jacobian picks up
         # the Σ_k W[i,k] diagonal contribution identically on both paths).
         @test _stt_jac(b[:tbl]) == _stt_jac(b[:ref])
     end

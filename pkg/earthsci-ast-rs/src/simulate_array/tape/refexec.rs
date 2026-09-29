@@ -7,7 +7,7 @@
 
 use super::super::eval::clip_area_value;
 use super::super::*;
-use super::exec::{eval_micro_op, run_rhs_oracle};
+use super::exec::{eval_micro_op, forcing_len, load_forcing, run_rhs_oracle};
 use super::ir::*;
 use ndarray::{ArrayD, ArrayViewD, Axis, IxDyn, Slice};
 use std::cell::RefCell;
@@ -61,6 +61,11 @@ pub(super) fn run_reference(
             break;
         }
         let instr = &prog.instrs[pc];
+        let _precision = prog
+            .precision
+            .get(pc)
+            .filter(|&&p| p != crate::precision::active())
+            .map(|&p| crate::precision::enter(p));
         match instr {
             Instr::Bin { op, a, b, out } => {
                 let f = binary_kernel_of(*op);
@@ -213,6 +218,24 @@ pub(super) fn run_reference(
                 let arr = ArrayD::from_shape_vec(IxDyn(&d.shape[..]), d.values.clone())
                     .expect("ConstArray payload matches its shape");
                 slots[*out as usize] = Some(RefVal::Arr(arr));
+            }
+            Instr::LoadForcing { forcing, out } => {
+                let fr = &prog.forcings[*forcing as usize];
+                let mut buf = vec![0.0f64; forcing_len(fr)];
+                load_forcing(
+                    fr,
+                    &compiled.forcing.borrow(),
+                    &compiled.declared_names,
+                    &mut buf,
+                );
+                slots[*out as usize] = Some(if fr.shape.is_empty() {
+                    RefVal::Scalar(buf[0])
+                } else {
+                    RefVal::Arr(
+                        ArrayD::from_shape_vec(IxDyn(&fr.shape[..]), buf)
+                            .expect("a forcing load fills its whole box"),
+                    )
+                });
             }
             Instr::Interp { table, x, y, out } => {
                 let tbl = &prog.interp_tables[*table as usize];
@@ -386,6 +409,65 @@ pub(super) fn run_reference(
                     *y = if ghost { 0.0 } else { sv[IxDyn(&at)] };
                 }
                 slots[*out as usize] = Some(RefVal::Arr(o));
+            }
+            Instr::TableGather { src, table, out } => {
+                let sv = resolve_src(prog, &slots, &state_arrays, &obs, src);
+                let tbl = &prog.gather_tables[*table as usize];
+                assert_eq!(sv.shape(), &tbl.src_shape[..], "TableGather source box");
+                let flat: Vec<f64> = sv.iter().copied().collect();
+                let vals: Vec<f64> = tbl
+                    .pos
+                    .iter()
+                    .map(|&p| {
+                        if p == GATHER_GHOST {
+                            0.0
+                        } else {
+                            flat[p as usize]
+                        }
+                    })
+                    .collect();
+                let n = vals.len();
+                let o = ArrayD::from_shape_vec(IxDyn(&[n]), vals).expect("1-D gather box");
+                slots[*out as usize] = Some(RefVal::Arr(o));
+            }
+            Instr::SegReduce {
+                op,
+                init,
+                src,
+                mask,
+                table,
+                out,
+            } => {
+                let f = binary_kernel_of(*op);
+                let terms = match slots[*src as usize].as_ref() {
+                    Some(RefVal::Arr(a)) => a.iter().copied().collect::<Vec<f64>>(),
+                    other => panic!("SegReduce source is not an array slot: {other:?}"),
+                };
+                let keep: Option<Vec<f64>> = mask.map(|m| match slots[m as usize].as_ref() {
+                    Some(RefVal::Arr(a)) => a.iter().copied().collect(),
+                    other => panic!("SegReduce mask is not an array slot: {other:?}"),
+                });
+                let rows = &prog.seg_tables[*table as usize].rows;
+                let mut cells = Vec::with_capacity(rows.len() - 1);
+                for c in 0..rows.len() - 1 {
+                    let mut acc = *init;
+                    for k in rows[c] as usize..rows[c + 1] as usize {
+                        if keep.as_ref().is_none_or(|m| m[k] != 0.0) {
+                            acc = f(acc, terms[k]);
+                        }
+                    }
+                    cells.push(acc);
+                }
+                let desc = &prog.slots[*out as usize];
+                let val = if desc.scalar {
+                    RefVal::Scalar(cells[0])
+                } else {
+                    RefVal::Arr(
+                        ArrayD::from_shape_vec(IxDyn(&desc.shape[..]), cells)
+                            .expect("SegReduce output box"),
+                    )
+                };
+                slots[*out as usize] = Some(val);
             }
             Instr::Reshape { src, out } => {
                 let sv = resolve_src(prog, &slots, &state_arrays, &obs, src);

@@ -52,11 +52,13 @@ _csel_lhs(v, idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[
 _csel_zero(idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[idx],
     "ranges" => Dict(idx => Any[1, n]), "expr" => 0.0)
 
+# The contracted range runs DESCENDING, which the affine tier's run-time fold
+# (ascending unit-step ranges only) leaves to the whole-array contraction nest.
 function _csel_contraction_doc(NS::Int = 16, NR::Int = 16)
     SR = [[Float64((3s + 7r) % 11) for r in 1:NR] for s in 1:NS]
     agg = Dict{String,Any}("op" => "faq", "args" => Any[],
         "output_idx" => Any["rcv"],
-        "ranges" => Dict("rcv" => Any[1, NR], "s" => Any[1, NS]),
+        "ranges" => Dict("rcv" => Any[1, NR], "s" => Any[NS, -1, 1]),
         "semiring" => "sum_product",
         "expr" => Dict("op" => "*", "args" => Any[
             Dict("op" => "index", "args" => Any[

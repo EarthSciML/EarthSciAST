@@ -815,6 +815,17 @@ fn scans_assemblies_and_promoted_contractions_lower() {
         }
         Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
     };
+    // The three rules lowered to the loop-owning instructions this test is
+    // about, one each, and not to the per-step or unrolled forms: without
+    // this the agreement below would hold just as well over those.
+    for op in ["Scan", "Assemble", "Reduce"] {
+        assert_eq!(
+            program.opcode_count(op),
+            1,
+            "the lowered tape carries {} `{op}` instructions, expected one",
+            program.opcode_count(op)
+        );
+    }
     let params: HashMap<String, f64> = HashMap::new();
     let pv = compiled.debug_resolve_params(&params);
     let m = compiled.state_variable_names().len();
@@ -832,6 +843,208 @@ fn scans_assemblies_and_promoted_contractions_lower() {
             );
         }
     }
+}
+
+/// A prefix-scan document over `n` cells: one inclusive and one exclusive
+/// running sum, both read by the state's tendency.
+fn scan_doc(n: usize) -> String {
+    let u_j = r#"{"op": "index", "args": ["u", "j"]}"#;
+    format!(
+        r#"{{
+  "esm": "1.1.0",
+  "metadata": {{"name": "XlaScanProbe"}},
+  "index_sets": {{"x": {{"kind": "interval", "size": {n}}}}},
+  "models": {{"M": {{
+    "variables": {{
+      "u": {{"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0}},
+      "incl": {{"type": "unknown", "units": "1", "shape": ["x"]}},
+      "excl": {{"type": "unknown", "units": "1", "shape": ["x"]}}
+    }},
+    "equations": [
+      {{"lhs": "incl", "rhs": {{"op": "faq", "args": [], "output_idx": ["i"],
+          "ranges": {{"i": {{"from": "x"}}, "j": {{"from": "x"}}}},
+          "filter": {{"op": "<=", "args": ["j", "i"]}},
+          "expr": {{"op": "*", "args": [{u_j}, 0.1]}}}}}},
+      {{"lhs": "excl", "rhs": {{"op": "faq", "args": [], "output_idx": ["i"],
+          "ranges": {{"i": {{"from": "x"}}, "j": {{"from": "x"}}}},
+          "filter": {{"op": "<", "args": ["j", "i"]}},
+          "expr": {{"op": "*", "args": [{u_j}, 0.3]}}}}}},
+      {{"lhs": {{"op": "faq", "args": [], "output_idx": ["i"],
+               "expr": {{"op": "D", "args": [{{"op": "index", "args": ["u", "i"]}}], "wrt": "t"}},
+               "ranges": {{"i": {{"from": "x"}}}}}},
+       "rhs": {{"op": "faq", "args": [], "output_idx": ["i"], "ranges": {{"i": {{"from": "x"}}}},
+          "expr": {{"op": "-", "args": [
+            {{"op": "index", "args": ["incl", "i"]}},
+            {{"op": "index", "args": ["excl", "i"]}}]}}}}}}
+    ]
+  }}}}
+}}"#
+    )
+}
+
+/// `Instr::Scan` lowers to one `while` loop, so the emitted program does not
+/// grow with the scanned length — and because the loop folds plane after
+/// plane in ascending order, each running sum is the interpreter's own
+/// association, bit for bit.
+#[test]
+fn scan_lowering_is_flat_in_the_scanned_length() {
+    if !runtime_available() {
+        return;
+    }
+    use earthsci_ast::simulate_array::tape::xla_emit::emit_rhs;
+    let hlo_len = |n: usize| {
+        let file = load_string(&scan_doc(n)).expect("the probe document loads");
+        let compiled = ArrayCompiled::from_file(&file).expect("it compiles");
+        let emitted = emit_rhs(&compiled).expect("the emitter lowers the scans");
+        emitted.hlo_text().expect("HLO text").len()
+    };
+    let (small, large) = (hlo_len(8), hlo_len(512));
+    // The lengths differ only in the digits of the extents and loop bounds.
+    assert!(
+        large.abs_diff(small) < 256,
+        "the emitted program grew with the scan: {small} bytes at n = 8, {large} at n = 512"
+    );
+
+    let n = 300;
+    let file = load_string(&scan_doc(n)).expect("the probe document loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("it compiles");
+    let program = match CompiledRhs::compile(&compiled) {
+        Ok(p) => p,
+        Err(CompileRhsError::Refused(e)) => {
+            panic!("the emitter refused rule {}: {}", e.rule, e.reason)
+        }
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+    };
+    assert_eq!(program.opcode_count("Scan"), 2);
+    let params: HashMap<String, f64> = HashMap::new();
+    let pv = compiled.debug_resolve_params(&params);
+    let m = compiled.state_variable_names().len();
+    let u: Vec<f64> = (0..m)
+        .map(|k| ((k * 37) % 101) as f64 * 0.013 - 0.61)
+        .collect();
+    let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, true);
+    let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
+    for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+        assert_eq!(
+            g.to_bits(),
+            w.to_bits(),
+            "tendency {i}: compiled {g:e} vs interpreter {w:e}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Forcing reads (`Instr::LoadForcing`)
+// ---------------------------------------------------------------------------
+
+/// `D(c[i]) = g[i]*k - r*c[i] + bc[i-1]` with `g = 2*bc + k`, where `bc`
+/// (shaped) and `k` (0-d) are data-fed parameters the forcing buffer serves.
+fn forced_doc(n: i64) -> String {
+    let fed = |var: &str| serde_json::json!({"kind": "data", "source": "met", "from": {"file_variable": var}});
+    serde_json::json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "Forced"},
+        "index_sets": {"cells": {"kind": "interval", "size": n}},
+        "data_sources": {"met": {"kind": "grid", "source": {"url_template": "file:///met.nc"}}},
+        "models": {"M": {
+            "variables": {
+                "c": {"type": "unknown", "units": "1", "shape": ["cells"], "default": 0.5},
+                "bc": {"type": "parameter", "units": "1", "shape": ["cells"], "update": fed("bc")},
+                "k": {"type": "parameter", "units": "1", "shape": [], "update": fed("k")},
+                "g": {"type": "unknown", "units": "1", "shape": ["cells"]},
+                "r": {"type": "parameter", "units": "1", "default": 0.3}
+            },
+            "equations": [
+                {"lhs": "g", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                    "ranges": {"i": [1, n]},
+                    "expr": {"op": "+", "args": [
+                        {"op": "*", "args": [2.0, {"op": "index", "args": ["bc", "i"]}]},
+                        "k"]}}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                    "expr": {"op": "D", "args": [{"op": "index", "args": ["c", "i"]}], "wrt": "t"},
+                    "ranges": {"i": [1, n]}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                    "ranges": {"i": [1, n]},
+                    "expr": {"op": "+", "args": [
+                        {"op": "-", "args": [
+                            {"op": "*", "args": [{"op": "index", "args": ["g", "i"]}, "k"]},
+                            {"op": "*", "args": ["r", {"op": "index", "args": ["c", "i"]}]}]},
+                        {"op": "index", "args": ["bc", {"op": "-", "args": ["i", 1]}]}]}}}
+            ]
+        }}
+    })
+    .to_string()
+}
+
+fn feed_forced(compiled: &ArrayCompiled, n: usize, scale: f64, k: f64) {
+    let buf = compiled.forcing_handle();
+    let mut buf = buf.borrow_mut();
+    buf.insert(
+        "bc".into(),
+        ndarray::ArrayD::from_shape_vec(
+            ndarray::IxDyn(&[n]),
+            (0..n).map(|i| scale * (0.1 + i as f64 * 0.37)).collect(),
+        )
+        .expect("1-D"),
+    );
+    buf.insert(
+        "k".into(),
+        ndarray::ArrayD::from_elem(ndarray::IxDyn(&[]), k),
+    );
+}
+
+/// A forcing read lowers to a slice of the program's fourth parameter, which
+/// the runtime packs from the model's live buffer on every call: the numbers
+/// agree with the interpreter (to the FMA contraction XLA may make of
+/// `g*k - r*c`), a refreshed buffer is read on the next call, and a missing
+/// entry fails with the interpreter's own fault.
+#[test]
+fn forcing_reads_lower_and_follow_the_buffer() {
+    if !runtime_available() {
+        return;
+    }
+    let n = 6usize;
+    let file = load_string(&forced_doc(n as i64)).expect("loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+    feed_forced(&compiled, n, 1.0, 0.7);
+    let program = match CompiledRhs::compile(&compiled) {
+        Ok(p) => p,
+        Err(CompileRhsError::Refused(e)) => panic!("refused rule {}: {}", e.rule, e.reason),
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+    };
+    let params: HashMap<String, f64> = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let u: Vec<f64> = (0..n).map(|i| 0.2 + i as f64 * 0.11).collect();
+    let close = |got: &[f64], want: &[f64], label: &str| {
+        for (i, (g, w)) in got.iter().zip(want).enumerate() {
+            assert!(
+                (g - w).abs() <= 4e-16 * w.abs().max(1.0),
+                "{label}: du[{i}] compiled {g:e} vs interpreter {w:e}"
+            );
+        }
+    };
+    for scale in [1.0, 3.0] {
+        feed_forced(&compiled, n, scale, 0.7);
+        let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, false);
+        let got = program.eval(&u, &param_vec, 0.0).expect("compiled eval");
+        close(&got, &want, &format!("scale {scale}"));
+        let mut dev = program.on_device(&u, &param_vec).expect("upload");
+        dev.eval_at(0.0).expect("device eval");
+        close(
+            &dev.du_to_host().expect("download"),
+            &want,
+            "device-resident",
+        );
+    }
+
+    compiled.forcing_handle().borrow_mut().remove("bc");
+    earthsci_ast::simulate_array::take_const_array_oob();
+    compiled.debug_eval_rhs(&u, 0.0, &params, true);
+    let want = earthsci_ast::simulate_array::take_const_array_oob().expect("the oracle faults");
+    let got = program.eval(&u, &param_vec, 0.0).expect("compiled eval");
+    let fault = earthsci_ast::simulate_array::take_const_array_oob().expect("the program faults");
+    assert_eq!(fault, want);
+    assert!(got.iter().any(|v| v.is_nan()));
 }
 
 /// The array forms phase 3 put on the tape — a column-major `reshape` (an

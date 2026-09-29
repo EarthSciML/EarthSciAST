@@ -575,6 +575,48 @@ fn declared_args(expr: &Expr, out: &mut HashSet<String>) {
     }
 }
 
+/// The observeds whose definitions read a state, directly or through another
+/// observed.
+///
+/// The build-time observed pass does not evaluate these: there is no state at
+/// build time, so a read of one is unbound there. They are evaluated at run
+/// time like every other observed, by the compiler the Problem names. This
+/// includes a mounted subsystem's observeds, which join the model's own once
+/// the subsystem is mounted.
+fn state_dependent_observeds(model: &Model, defs: &HashMap<String, Expr>) -> HashSet<String> {
+    let class = crate::classification::Classification::of(model);
+    let states: HashSet<&str> = model
+        .variables
+        .iter()
+        .filter(|(name, var)| var.var_type == VariableType::Unknown && !class.is_observed(name))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let refs: HashMap<&str, HashSet<String>> = defs
+        .iter()
+        .map(|(name, e)| {
+            let mut a = HashSet::new();
+            declared_args(e, &mut a);
+            (name.as_str(), a)
+        })
+        .collect();
+    let mut dependent: HashSet<String> = HashSet::new();
+    loop {
+        let before = dependent.len();
+        for (name, reads) in &refs {
+            if !dependent.contains(*name)
+                && reads
+                    .iter()
+                    .any(|r| states.contains(r.as_str()) || dependent.contains(r))
+            {
+                dependent.insert((*name).to_string());
+            }
+        }
+        if dependent.len() == before {
+            return dependent;
+        }
+    }
+}
+
 /// Dependency order over observed definitions: an observed follows every
 /// observed it names. A cycle is a malformed model and is a hard error.
 fn observed_order(defs: &HashMap<String, Expr>) -> Result<Vec<String>, PrepareError> {
@@ -1780,6 +1822,7 @@ impl<'o> BuildState<'o> {
     ///   compiled path.
     fn collect_observed_defs(&mut self) -> Result<(), PrepareError> {
         let mut defs = observed_defs(&self.model);
+        let state_dependent = state_dependent_observeds(&self.model, &defs);
         {
             let var_shapes = crate::join::declared_var_shapes(&self.model);
             for e in defs.values_mut() {
@@ -1797,6 +1840,8 @@ impl<'o> BuildState<'o> {
             .map(|(n, _)| n.clone())
             .collect();
         self.order = observed_order(&defs)?;
+        self.order
+            .retain(|name| !state_dependent.contains(name.as_str()));
         self.defs = defs;
         Ok(())
     }
@@ -2550,8 +2595,8 @@ mod mounted_subsystem_tests {
     use serde_json::{Value, json};
 
     /// `P` holds a state `c` with `D(c) = -c` and the observed `name = rhs`;
-    /// its subsystem `North` holds a state `u` with `D(u) = k` and an angle
-    /// `theta = 40 deg`.
+    /// its subsystem `North` holds a state `u` with `D(u) = k`, an angle
+    /// `theta = 40 deg` and the state-dependent observed `v = 2*u`.
     fn doc(name: &str, units: &str, rhs: Value) -> Value {
         json!({
             "esm": "1.1.0",
@@ -2570,11 +2615,13 @@ mod mounted_subsystem_tests {
                     "variables": {
                         "u": {"type": "unknown", "units": "1", "default": 2.0},
                         "k": {"type": "parameter", "units": "1/s", "default": 0.5},
-                        "theta": {"type": "parameter", "units": "deg", "default": 40.0}
+                        "theta": {"type": "parameter", "units": "deg", "default": 40.0},
+                        "v": {"type": "unknown", "units": "1"}
                     },
                     "equations": [
                         {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
-                         "rhs": "k"}
+                         "rhs": "k"},
+                        {"lhs": "v", "rhs": {"op": "*", "args": [2.0, "u"]}}
                     ]
                 }}
             }}
@@ -2650,6 +2697,45 @@ mod mounted_subsystem_tests {
             let prob = built(&d, compiler, true);
             let z = observed_field(&prob, "z").expect("z");
             assert_eq!(z.iter().copied().collect::<Vec<_>>(), [0.5], "[{compiler}]");
+        }
+    }
+
+    /// A mounted subsystem's observed that reads its state, `North.v = 2*North.u`,
+    /// has no value at build time. The pipeline leaves it to the run, where it
+    /// is evaluated like any other observed, rather than failing the build on
+    /// the state it cannot read.
+    #[test]
+    fn a_mounted_state_dependent_observed_is_evaluated_at_run_time() {
+        let d = doc("y", "1", json!({"op": "sin", "args": ["North.theta"]}));
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            for pipeline in [false, true] {
+                let prob = built(&d, compiler, pipeline);
+                let sol = solve(
+                    &prob,
+                    &crate::SolveOptions {
+                        saveat: Some(vec![0.0]),
+                        output_observed: vec!["North.v".to_string()],
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_else(|e| panic!("[{compiler}, pipeline {pipeline}] {e}"));
+                let v = sol
+                    .get("P.North.v")
+                    .unwrap_or_else(|| panic!("no North.v row: {:?}", sol.state_variable_names));
+                assert_eq!(v[0], 4.0, "[{compiler}, pipeline {pipeline}]");
+            }
+        }
+    }
+
+    /// The same for a top-level observed that reads a state, `w = 2*c`.
+    #[test]
+    fn a_top_level_state_dependent_observed_is_evaluated_at_run_time() {
+        let d = doc("w", "1", json!({"op": "*", "args": [2.0, "c"]}));
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            for pipeline in [false, true] {
+                let prob = built(&d, compiler, pipeline);
+                assert_eq!(at_t0(&prob, "w"), 2.0, "[{compiler}, pipeline {pipeline}]");
+            }
         }
     }
 }

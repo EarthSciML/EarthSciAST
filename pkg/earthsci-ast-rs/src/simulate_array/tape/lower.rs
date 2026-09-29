@@ -50,6 +50,7 @@ use super::super::driver::{
 };
 use super::super::*;
 use super::ir::*;
+use crate::precision::Precision;
 use crate::simulate_array::eval::const_oob_message;
 use crate::types::ExpressionNode;
 use crate::value_invention::BoundaryKind;
@@ -89,6 +90,19 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 }
 
 type LResult<T> = Result<T, Bail>;
+
+mod tuples;
+
+/// What a build knows about the forcing buffer: the box a read of each name
+/// it can serve compiles against, and which of them a provider refreshes
+/// between segments (see `ArrayCompiled::forcing_inputs`).
+pub(super) struct ForcingInputs<'a> {
+    pub shapes: FxHashMap<String, DimU>,
+    /// Externally refreshed parameters with no box to compile against: the
+    /// buffer does not hold them and their declared shape does not size.
+    pub unsized_: HashSet<String>,
+    pub discrete: &'a HashSet<String>,
+}
 
 /// Most contracted indices one contraction may carry.
 const MAX_CONTRACT: usize = 4;
@@ -198,6 +212,10 @@ struct LBox<'a> {
     shape: DimU,
     cnames: &'a [String],
     cvals: SmallVec<[i64; 4]>,
+    /// Nonzero for a TUPLE-LIST box (see `tuples`): the 1-D box of a
+    /// contraction's admitted tuples, whose loop symbols are build-time
+    /// columns in the builder's frame with this id rather than axes.
+    tuple: u32,
     /// The box's axes in the order the per-cell oracle visits their cells,
     /// slowest first; empty means row-major (axis 0 slowest). Only the
     /// promoted contraction box differs: its contracted axes lead, but the
@@ -243,6 +261,8 @@ struct BoxKey {
     shape: Vec<usize>,
     cnames: Vec<String>,
     cvals: Vec<i64>,
+    /// Two tuple-list boxes of one length are different boxes.
+    tuple: u32,
 }
 
 impl BoxKey {
@@ -253,6 +273,7 @@ impl BoxKey {
             shape: bx.shape.to_vec(),
             cnames: bx.cnames.to_vec(),
             cvals: bx.cvals.to_vec(),
+            tuple: bx.tuple,
         }
     }
 }
@@ -297,9 +318,13 @@ type FaultKey = SmallVec<[i64; 12]>;
 // Builder.
 // ---------------------------------------------------------------------------
 
+/// An instruction and the precision its kernels run at: the one in force
+/// while it was lowered (esm-spec §11.3.1).
+type Tagged = (Instr, Precision);
+
 struct Chunk {
     rule: u32,
-    instrs: Vec<Instr>,
+    instrs: Vec<Tagged>,
 }
 
 pub(crate) struct TapeBuilder<'m> {
@@ -344,6 +369,17 @@ pub(crate) struct TapeBuilder<'m> {
     /// the extent a `kind: "derived"` range over that ring has, which the
     /// interpreter reads off its runtime ring registry (`derived_extent`).
     rings: Vec<(String, i64)>,
+    gather_tables: Vec<GatherTable>,
+    seg_tables: Vec<SegTable>,
+    /// Slots whose VALUES the build knows: array literals, and what the
+    /// tuple-list lowering derives from them (`tuples`). Read only to resolve
+    /// build-time data — a gather's subscripts, a join's key columns, a
+    /// ragged bound — never to fold a value the program computes.
+    known: FxHashMap<SlotId, Known>,
+    /// Open tuple-list boxes, innermost last (`tuples`).
+    tuple_frames: Vec<tuples::TupleFrame>,
+    /// The id the next tuple-list box gets (0 means "not a tuple box").
+    next_tuple: u32,
     /// Fail-closed fault messages (`Instr::Fault` indexes here).
     faults: Vec<String>,
     state_vars: Vec<StateRef>,
@@ -352,6 +388,20 @@ pub(crate) struct TapeBuilder<'m> {
     state_ix: FxHashMap<String, usize>,
     obs_reads: Vec<String>,
     obs_read_ix: FxHashMap<String, u32>,
+    /// Every name the forcing buffer can serve, with the box a read of it
+    /// compiles against ([`ForcingInputs`]).
+    forcing_shapes: FxHashMap<String, DimU>,
+    forcing_unsized: HashSet<String>,
+    /// The forcing names a provider refreshes between segments; their loads
+    /// go in the SEGMENT section, every other forcing load in CONST.
+    discrete_forcing: &'m HashSet<String>,
+    forcings: Vec<ForcingRef>,
+    forcing_ix: FxHashMap<String, u32>,
+    /// The slot an UNCONDITIONAL load of `forcings[i]` defined, so every later
+    /// read shares it; `forcing_journal` records the insertions of the current
+    /// rule for rollback.
+    forcing_loaded: FxHashMap<u32, LV>,
+    forcing_journal: Vec<u32>,
     dy_writes: Vec<DyWrite>,
     rules: Vec<RuleInfo>,
     /// Per-section chunk streams (index = Cadence as usize).
@@ -364,7 +414,7 @@ pub(crate) struct TapeBuilder<'m> {
     home: Cadence,
     scope_frames: Vec<ScopeFrame>,
     /// Nested conditional-branch buffers (top = innermost).
-    branch_bufs: Vec<Vec<Instr>>,
+    branch_bufs: Vec<Vec<Tagged>>,
     hoist: FxHashMap<(BoxKey, VnKey), LV>,
     /// Hoist insertions of the CURRENT rule (rollback on bail).
     hoist_journal: Vec<(BoxKey, VnKey)>,
@@ -390,6 +440,15 @@ pub(crate) struct TapeBuilder<'m> {
     vn_hoist_hits: usize,
 }
 
+/// A slot's build-time value (see `TapeBuilder::known`).
+#[derive(Clone, Debug)]
+enum Known {
+    /// The payload of the `ConstArray` that defines it.
+    Data(u32),
+    /// Values the build computed itself, row-major.
+    Vals(std::rc::Rc<Vec<f64>>),
+}
+
 /// Snapshot for transactional per-rule lowering.
 struct RuleTxn {
     slots: usize,
@@ -401,10 +460,13 @@ struct RuleTxn {
     geoms: usize,
     index_gathers: usize,
     rings: usize,
+    gather_tables: usize,
+    seg_tables: usize,
     faults: usize,
     dy_writes: usize,
     stream_lens: [usize; 3],
     hoist_journal: usize,
+    forcing_journal: usize,
 }
 
 /// Snapshot for undoing a failed ATTEMPT inside one rule (a looped form that
@@ -421,10 +483,13 @@ struct SubTxn {
     interp_tables: usize,
     geoms: usize,
     index_gathers: usize,
+    gather_tables: usize,
+    seg_tables: usize,
     /// Per stream: `(chunk count, instructions in the last chunk)`.
     streams: [(usize, usize); 3],
     branch_len: Option<usize>,
     hoist_journal: usize,
+    forcing_journal: usize,
     fault_first: Option<(FaultKey, String)>,
     fault_seq: i64,
 }
@@ -436,6 +501,7 @@ impl<'m> TapeBuilder<'m> {
         obs_tier: FxHashMap<String, Cadence>,
         const_arrays: &'m ConstArrayScope,
         f32_document: bool,
+        forcing: &ForcingInputs<'m>,
     ) -> Self {
         let mut state_vars = Vec::with_capacity(var_shapes.len());
         let mut state_ix = FxHashMap::default();
@@ -464,11 +530,23 @@ impl<'m> TapeBuilder<'m> {
             geoms: Vec::new(),
             index_gathers: Vec::new(),
             rings: Vec::new(),
+            gather_tables: Vec::new(),
+            seg_tables: Vec::new(),
+            known: FxHashMap::default(),
+            tuple_frames: Vec::new(),
+            next_tuple: 1,
             faults: Vec::new(),
             state_vars,
             state_ix,
             obs_reads: Vec::new(),
             obs_read_ix: FxHashMap::default(),
+            forcing_shapes: forcing.shapes.clone(),
+            forcing_unsized: forcing.unsized_.clone(),
+            discrete_forcing: forcing.discrete,
+            forcings: Vec::new(),
+            forcing_ix: FxHashMap::default(),
+            forcing_loaded: FxHashMap::default(),
+            forcing_journal: Vec::new(),
             dy_writes: Vec::new(),
             rules: Vec::new(),
             streams: [Vec::new(), Vec::new(), Vec::new()],
@@ -510,16 +588,36 @@ impl<'m> TapeBuilder<'m> {
     }
 
     fn emit(&mut self, instr: Instr, section: Cadence) {
+        self.emit_tagged(instr, crate::precision::active(), section);
+    }
+
+    /// [`Self::emit`] at a stated precision (a branch's buffered
+    /// instructions keep the precision they were lowered at).
+    fn emit_tagged(&mut self, instr: Instr, prec: Precision, section: Cadence) {
+        match &instr {
+            Instr::ConstArray { data, out } => {
+                self.known.insert(*out, Known::Data(*data));
+            }
+            Instr::Copy {
+                a: Operand::Slot(a),
+                out,
+            } if !self.slots[*out as usize].scalar => {
+                if let Some(k) = self.known.get(a).cloned() {
+                    self.known.insert(*out, k);
+                }
+            }
+            _ => {}
+        }
         if let Some(buf) = self.branch_bufs.last_mut() {
-            buf.push(instr);
+            buf.push((instr, prec));
             return;
         }
         let stream = &mut self.streams[section as usize];
         match stream.last_mut() {
-            Some(c) if c.rule == self.cur_rule => c.instrs.push(instr),
+            Some(c) if c.rule == self.cur_rule => c.instrs.push((instr, prec)),
             _ => stream.push(Chunk {
                 rule: self.cur_rule,
-                instrs: vec![instr],
+                instrs: vec![(instr, prec)],
             }),
         }
     }
@@ -609,6 +707,61 @@ impl<'m> TapeBuilder<'m> {
         Ok(ix)
     }
 
+    /// A read of `name` served by the forcing buffer: `lookup_variable`'s last
+    /// arm, reached only after `t`, the state, the observeds and the
+    /// parameters, exactly as there. `None` when the buffer cannot serve the
+    /// name.
+    ///
+    /// One [`Instr::LoadForcing`] per forcing, in the section its cadence
+    /// allows, shared by every later read. A load made inside a conditional
+    /// branch is not shared, since the branch may not run.
+    fn forcing_read(&mut self, name: &str) -> LResult<Option<LV>> {
+        let Some(shape) = self.forcing_shapes.get(name).cloned() else {
+            if self.forcing_unsized.contains(name) {
+                bail_tape!(
+                    "forcing `{name}`: its declared shape names an index set the registry \
+                     cannot size, and the forcing buffer held no entry for it when the tape \
+                     was built, so there is no box to compile its read against"
+                );
+            }
+            return Ok(None);
+        };
+        let ix = match self.forcing_ix.get(name) {
+            Some(&ix) => ix,
+            None => {
+                let ix = tape_index(self.forcings.len(), "forcing reads")?;
+                self.forcings.push(ForcingRef {
+                    name: name.to_string(),
+                    shape: shape.clone(),
+                });
+                self.forcing_ix.insert(name.to_string(), ix);
+                ix
+            }
+        };
+        if let Some(lv) = self.forcing_loaded.get(&ix) {
+            return Ok(Some(lv.clone()));
+        }
+        let cadence = if self.discrete_forcing.contains(name) {
+            Cadence::Segment
+        } else {
+            Cadence::Const
+        };
+        let sec = self.placement(cadence);
+        let scalar = shape.is_empty();
+        let out = self.new_slot(&shape, &DimI::from_elem(1, shape.len()), scalar, sec);
+        self.emit(Instr::LoadForcing { forcing: ix, out }, sec);
+        let lv = if scalar {
+            LV::Scalar(out)
+        } else {
+            LV::Arr(out)
+        };
+        if !self.in_branch() {
+            self.forcing_loaded.insert(ix, lv.clone());
+            self.forcing_journal.push(ix);
+        }
+        Ok(Some(lv))
+    }
+
     // -- scopes / VN ----------------------------------------------------------
 
     fn push_scope(&mut self) {
@@ -664,7 +817,7 @@ impl<'m> TapeBuilder<'m> {
 
     /// Close the innermost branch: roll back VN insertions made inside it and
     /// return its instruction buffer.
-    fn pop_branch(&mut self, journal_mark: usize) -> Vec<Instr> {
+    fn pop_branch(&mut self, journal_mark: usize) -> Vec<Tagged> {
         let buf = self.branch_bufs.pop().expect("branch buffer open");
         if let Some(frame) = self.scope_frames.last_mut() {
             while frame.journal.len() > journal_mark {
@@ -789,6 +942,27 @@ impl<'m> TapeBuilder<'m> {
         if let Some(v) = bx.cbind(name) {
             return Ok(LV::Lit(v as f64));
         }
+        if bx.tuple != 0 {
+            if let Some(col) = self.tuple_column(bx.tuple, name)? {
+                return Ok(col);
+            }
+            // Anything else a tuple-list body reads is one value for every
+            // tuple; a whole array there is not an element of the list.
+            let plain = LBox {
+                syms: &[],
+                lo: DimI::new(),
+                shape: DimU::new(),
+                cnames: &[],
+                cvals: SmallVec::new(),
+                tuple: 0,
+                visit: SmallVec::new(),
+            };
+            let v = self.resolve_var(name, &plain)?;
+            if self.lv_box(&v).is_some() {
+                bail_tape!("variable: whole array `{name}` read inside a tuple-list body");
+            }
+            return Ok(v);
+        }
         if let Some(a) = bx.syms.iter().position(|s| s == name) {
             let key = VnKey::Ramp(a);
             if let Some(hit) = self.vn_get(key, bx) {
@@ -831,6 +1005,9 @@ impl<'m> TapeBuilder<'m> {
         if let Some(i) = self.param_names.iter().position(|p| p == name) {
             return Ok(LV::Param(tape_index(i, "parameters")?));
         }
+        if let Some(lv) = self.forcing_read(name)? {
+            return Ok(lv);
+        }
         bail_tape!("variable: unresolved symbol (forcing/loop-bind?): {name}")
     }
 
@@ -869,10 +1046,10 @@ impl<'m> TapeBuilder<'m> {
             // overlay / per-cell oracle, both of which evaluate the marker
             // where its guard is still standing. Reachable only in a document
             // that declares a per-variable `element_type`.
-            VecOp::Precision => bail_tape!(
-                "op: `{}` precision boundary (the tape resolves kernels at execution)",
-                node.op
-            ),
+            VecOp::Precision => {
+                let (arg, _precision) = self.marker_operand(node)?;
+                self.lower_expr(arg, bx)
+            }
             VecOp::Arith(code) => {
                 let Some((first, rest)) = node.args.split_first() else {
                     bail_tape!("op: `{}` with no arguments", node.op);
@@ -1774,6 +1951,22 @@ impl<'m> TapeBuilder<'m> {
 
     // -- ifelse ---------------------------------------------------------------
 
+    /// The operand of a precision-boundary marker (`crate::precision_infer`)
+    /// and the precision it names, which the operand is lowered under: every
+    /// instruction it emits is tagged with that precision and runs at it.
+    fn marker_operand<'n>(
+        &self,
+        node: &'n Arc<ExpressionNode>,
+    ) -> LResult<(&'n Expr, Option<crate::precision::PrecisionGuard>)> {
+        let [arg] = &node.args[..] else {
+            bail_tape!("op: `{}` with arity {}", node.op, node.args.len());
+        };
+        Ok((
+            arg,
+            crate::precision_infer::marker_precision(node).map(crate::precision::enter),
+        ))
+    }
+
     fn lower_ifelse(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
         if node.args.len() != 3 {
             bail_tape!("op: `ifelse` with arity {}", node.args.len());
@@ -1898,6 +2091,9 @@ impl<'m> TapeBuilder<'m> {
     /// Compile-time mirror of `eval_vec_index`, reusing the overlay's OWN axis
     /// classifier. Everything is static except the source data.
     fn lower_index(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
+        if bx.tuple != 0 {
+            return self.lower_tuple_index(node, bx);
+        }
         if node.args.is_empty() {
             bail_tape!("index: no arguments");
         }
@@ -2616,7 +2812,7 @@ impl<'m> TapeBuilder<'m> {
         self.streams[Cadence::Const as usize]
             .iter()
             .flat_map(|c| c.instrs.iter())
-            .find_map(|i| match i {
+            .find_map(|(i, _)| match i {
                 Instr::ConstArray { data, out } if out == slot => {
                     Some(&self.const_data[*data as usize])
                 }
@@ -2631,6 +2827,17 @@ impl<'m> TapeBuilder<'m> {
             .rev()
             .find(|(r, _)| r == id)
             .map(|(_, n)| *n)
+    }
+
+    /// Whether a contracted dimension has one extent for every output cell: a
+    /// static interval, or a derived range over an `intersect_polygon` ring
+    /// evaluated at build ([`Self::ring_extent`]).
+    fn dim_is_fixed(&self, d: &ContractDim) -> bool {
+        match d {
+            ContractDim::Static(..) => true,
+            ContractDim::Derived { from_faq } => self.ring_extent(from_faq).is_some(),
+            ContractDim::Ragged { .. } => false,
+        }
     }
 
     /// A constant 1-based ring subscript as a fixed 0-based table position.
@@ -2786,6 +2993,9 @@ impl<'m> TapeBuilder<'m> {
     // -- makearray ------------------------------------------------------------
 
     fn lower_makearray(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
+        if bx.tuple != 0 {
+            bail_tape!("makearray: inside a tuple-list contraction body");
+        }
         let Some(regions) = node.regions.as_ref() else {
             bail_tape!("makearray: no `regions`");
         };
@@ -2853,6 +3063,7 @@ impl<'m> TapeBuilder<'m> {
                 shape: r_shape.clone(),
                 cnames: bx.cnames,
                 cvals: bx.cvals.clone(),
+                tuple: bx.tuple,
                 visit: SmallVec::new(),
             };
             let v = self.lower_expr(value_expr, &rbx);
@@ -2959,14 +3170,25 @@ impl<'m> TapeBuilder<'m> {
         if spec.ranges.is_empty() {
             bail_tape!("aggregate: rank-0 output (scalar reduction, nested in a box)");
         }
-        // See the same guard in `eval_vec_nested_aggregate`: an overlap gate
-        // drives the contraction, and the tape lowering has no driven form.
-        if spec.has_drivable_overlap() {
-            bail_tape!("aggregate: carries an overlap join gate that drives enumeration");
+        if bx.tuple != 0 {
+            bail_tape!("aggregate: nested inside a tuple-list contraction body");
         }
         if let Some(name) = nested_aggregate_capture(&spec, bx.syms.iter().chain(bx.cnames.iter()))
         {
             bail_tape!("aggregate: nested body depends on an enclosing bound index `{name}`");
+        }
+        // A join gate drives the contraction: the tuple-list form.
+        if spec.has_drivable_overlap() {
+            return self.lower_tuple_contraction(
+                spec.idx_names,
+                &spec.ranges,
+                spec.body,
+                &spec.contract_names,
+                &spec.contract_dims,
+                spec.reduce,
+                spec.filter,
+                spec.join,
+            );
         }
         let level = self.enter_fault_level(Some(bx));
         let v = self.lower_faq(
@@ -3014,6 +3236,7 @@ impl<'m> TapeBuilder<'m> {
                 shape: shape.clone(),
                 cnames: &[],
                 cvals: SmallVec::new(),
+                tuple: 0,
                 visit: SmallVec::new(),
             };
             let identity = LV::Lit(reduce.identity());
@@ -3078,6 +3301,24 @@ impl<'m> TapeBuilder<'m> {
         let nc = contract_names.len();
         if nc == 0 || nc > MAX_CONTRACT {
             bail_tape!("contracted: contraction rank out of range ({nc})");
+        }
+        if contract_dims.iter().any(|d| !self.dim_is_fixed(d)) {
+            // A ragged bound varies per output cell: the tuple-list form.
+            let ranges: Vec<(i64, i64)> = lo
+                .iter()
+                .zip(shape)
+                .map(|(&l, &n)| (l, l + n as i64 - 1))
+                .collect();
+            return self.lower_tuple_contraction(
+                idx_names,
+                &ranges,
+                body,
+                contract_names,
+                contract_dims,
+                reduce,
+                filter,
+                None,
+            );
         }
         let mut clo = [0i64; MAX_CONTRACT];
         let mut chi = [0i64; MAX_CONTRACT];
@@ -3167,6 +3408,7 @@ impl<'m> TapeBuilder<'m> {
             shape: ext_shape.clone(),
             cnames: &[],
             cvals: SmallVec::new(),
+            tuple: 0,
             // The oracle walks the output cells, and each cell's tuples.
             visit: (nc..ext_shape.len())
                 .chain(0..nc)
@@ -3237,6 +3479,7 @@ impl<'m> TapeBuilder<'m> {
                 shape: shape.clone(),
                 cnames: contract_names,
                 cvals: SmallVec::from_slice(&cvals[..nc]),
+                tuple: 0,
                 visit: SmallVec::new(),
             };
             let term = self
@@ -3322,6 +3565,9 @@ impl<'m> TapeBuilder<'m> {
         }
         if let Some(i) = self.param_names.iter().position(|p| p == name) {
             return Ok(LV::Param(tape_index(i, "parameters")?));
+        }
+        if let Some(lv) = self.forcing_read(name)? {
+            return Ok(lv);
         }
         bail_tape!("wholesale: unresolved symbol (forcing/NaN sentinel?) `{name}`")
     }
@@ -3445,6 +3691,10 @@ impl<'m> TapeBuilder<'m> {
                 self.lower_wholesale_op_named(fn_name, node)
             }
             "fn" => self.lower_wholesale_closed_fn(node),
+            crate::precision_infer::MARKER_OP => {
+                let (arg, _precision) = self.marker_operand(node)?;
+                self.lower_wholesale(arg)
+            }
             "reshape" => self.lower_wholesale_reshape(node),
             "transpose" => self.lower_wholesale_transpose(node),
             "concat" => self.lower_wholesale_concat(node),
@@ -3833,9 +4083,6 @@ impl<'m> TapeBuilder<'m> {
         let Some(spec) = faq_spec(node) else {
             return Ok(LV::Lit(f64::NAN)); // eval_faq's missing-body sentinel
         };
-        if spec.has_drivable_overlap() {
-            bail_tape!("aggregate: carries an overlap join gate that drives enumeration");
-        }
         let static_ranges = static_contract_ranges(&spec.contract_dims);
         if let Some(scan) = detect_prefix_scan(
             spec.idx_names,
@@ -3852,6 +4099,21 @@ impl<'m> TapeBuilder<'m> {
                 &spec.contract_names[0],
                 spec.body,
                 spec.reduce,
+            )?;
+            return Ok(self.reorigin_to_one(v));
+        }
+        // A join gate drives the contraction (`eval_faq` resolves its gates
+        // for everything but a prefix scan): the tuple-list form.
+        if spec.has_drivable_overlap() {
+            let v = self.lower_tuple_contraction(
+                spec.idx_names,
+                &spec.ranges,
+                spec.body,
+                &spec.contract_names,
+                &spec.contract_dims,
+                spec.reduce,
+                spec.filter,
+                spec.join,
             )?;
             return Ok(self.reorigin_to_one(v));
         }
@@ -3921,7 +4183,18 @@ impl<'m> TapeBuilder<'m> {
                     lo.push(1);
                     shape.push(self.ring_extent(from_faq).unwrap_or(0).max(0) as usize);
                 }
-                other => bail_tape!("reduction: non-static contraction dim ({other:?})"),
+                _ => {
+                    return self.lower_tuple_contraction(
+                        spec.idx_names,
+                        &spec.ranges,
+                        spec.body,
+                        &spec.contract_names,
+                        &spec.contract_dims,
+                        spec.reduce,
+                        spec.filter,
+                        None,
+                    );
+                }
             }
         }
         // An empty window enumerates no tuples: the fold is the identity.
@@ -3938,6 +4211,7 @@ impl<'m> TapeBuilder<'m> {
             shape: shape.clone(),
             cnames: &[],
             cvals: SmallVec::new(),
+            tuple: 0,
             visit: SmallVec::new(),
         };
         let lowered = (|| -> LResult<Option<LV>> {
@@ -4056,6 +4330,7 @@ impl<'m> TapeBuilder<'m> {
             shape,
             cnames: &[],
             cvals: SmallVec::new(),
+            tuple: 0,
             visit: SmallVec::new(),
         };
         let level = self.enter_fault_level(None);
@@ -4110,6 +4385,7 @@ impl<'m> TapeBuilder<'m> {
             shape: full_shape.clone(),
             cnames: &[],
             cvals: SmallVec::new(),
+            tuple: 0,
             visit: SmallVec::new(),
         };
         let term = self.lower_expr(body, &bx);
@@ -4207,6 +4483,7 @@ impl<'m> TapeBuilder<'m> {
                 shape: step_shape.clone(),
                 cnames: &cnames,
                 cvals: SmallVec::from_slice(&[i, i]),
+                tuple: 0,
                 visit: SmallVec::new(),
             };
             let term = self.lower_expr(body, &bx);
@@ -4287,14 +4564,21 @@ impl<'m> TapeBuilder<'m> {
             _ => bail_tape!("ifelse: branch value boxes differ under a runtime scalar condition"),
         };
         let phi = self.new_slot(&shape, &origin, scalar, self.home);
-        tbuf.push(Instr::Copy {
-            a: self.op_of(&tv),
-            out: phi,
-        });
-        fbuf.push(Instr::Copy {
-            a: self.op_of(&fv),
-            out: phi,
-        });
+        let prec = crate::precision::active();
+        tbuf.push((
+            Instr::Copy {
+                a: self.op_of(&tv),
+                out: phi,
+            },
+            prec,
+        ));
+        fbuf.push((
+            Instr::Copy {
+                a: self.op_of(&fv),
+                out: phi,
+            },
+            prec,
+        ));
         let jmp = Instr::JmpIfZero {
             cond: self.op_of(&cond),
             n_true: tbuf.len() as u32,
@@ -4302,11 +4586,8 @@ impl<'m> TapeBuilder<'m> {
         };
         let sec = self.home;
         self.emit(jmp, sec);
-        for i in tbuf {
-            self.emit(i, sec);
-        }
-        for i in fbuf {
-            self.emit(i, sec);
+        for (i, p) in tbuf.into_iter().chain(fbuf) {
+            self.emit_tagged(i, p, sec);
         }
         Ok(if scalar {
             LV::Scalar(phi)
@@ -4363,6 +4644,7 @@ pub(super) fn build_tape_program(
     compiled: &ArrayCompiled,
     const_names: &HashSet<String>,
     seg_invariant_names: &HashSet<String>,
+    forcing: &ForcingInputs<'_>,
     // Step 4: run the kernel-fusion post-pass with the given superop
     // configuration (`None` = the unfused program, bitwise-identical
     // results — the arm `build_tape_opts` gives the fused-vs-unfused tests).
@@ -4396,6 +4678,7 @@ pub(super) fn build_tape_program(
         obs_tier,
         const_arrays,
         compiled.precision.is_f32(),
+        forcing,
     );
     b.inline_params = Some(&compiled.inline_param_arrays);
 
@@ -4410,6 +4693,10 @@ pub(super) fn build_tape_program(
             status: RuleStatus::Taped,
         });
         let txn = b.txn();
+        // The rule's own working precision, as `materialize_observeds_pass`
+        // arms it: every instruction it emits is tagged with it.
+        let _rule_precision = crate::precision::has_variable_overrides()
+            .then(|| crate::precision::enter(crate::precision::of_variable(&name)));
         let lowered = b
             .lower_observed_rule(rule)
             .and_then(|v| b.flush_rule_fault().map(|()| v));
@@ -4554,8 +4841,9 @@ impl<'m> TapeBuilder<'m> {
         if self.param_names.iter().any(|p| p == name) {
             return Some(DimU::new());
         }
-        // Forcing / the NaN sentinel: shape unknowable without the runtime.
-        None
+        // A forcing read compiles against the box `forcing_read` loads; any
+        // other name is the NaN sentinel, whose shape nothing pins.
+        self.forcing_shapes.get(name).cloned()
     }
 
     /// Broadcast two operand shapes the way `combine` does for the shapes the
@@ -4699,7 +4987,7 @@ impl<'m> TapeBuilder<'m> {
         };
         let fault = tape_index(self.faults.len(), "faults")?;
         self.faults.push(msg);
-        let instr = Instr::Fault { fault };
+        let instr = (Instr::Fault { fault }, crate::precision::active());
         let stream = &mut self.streams[Cadence::Const as usize];
         match stream.last_mut() {
             Some(c) if c.rule == self.cur_rule => c.instrs.insert(0, instr),
@@ -4734,6 +5022,8 @@ impl<'m> TapeBuilder<'m> {
             geoms: self.geoms.len(),
             index_gathers: self.index_gathers.len(),
             rings: self.rings.len(),
+            gather_tables: self.gather_tables.len(),
+            seg_tables: self.seg_tables.len(),
             faults: self.faults.len(),
             dy_writes: self.dy_writes.len(),
             stream_lens: [
@@ -4742,6 +5032,7 @@ impl<'m> TapeBuilder<'m> {
                 self.streams[2].len(),
             ],
             hoist_journal: self.hoist_journal.len(),
+            forcing_journal: self.forcing_journal.len(),
         }
     }
 
@@ -4756,6 +5047,11 @@ impl<'m> TapeBuilder<'m> {
         self.geoms.truncate(txn.geoms);
         self.index_gathers.truncate(txn.index_gathers);
         self.rings.truncate(txn.rings);
+        self.gather_tables.truncate(txn.gather_tables);
+        self.seg_tables.truncate(txn.seg_tables);
+        let n_slots = self.slots.len() as SlotId;
+        self.known.retain(|s, _| *s < n_slots);
+        self.tuple_frames.clear();
         self.faults.truncate(txn.faults);
         self.dy_writes.truncate(txn.dy_writes);
         for s in 0..3 {
@@ -4769,11 +5065,21 @@ impl<'m> TapeBuilder<'m> {
             let key = self.hoist_journal.pop().expect("journal entry");
             self.hoist.remove(&key);
         }
+        self.rollback_forcing_loads(txn.forcing_journal);
         self.scope_frames.clear();
         self.branch_bufs.clear();
         self.fault_first = None;
         self.fault_prefix.clear();
         self.lazy_depth = 0;
+    }
+
+    /// Forget the forcing loads recorded since `mark`: their instructions were
+    /// just discarded.
+    fn rollback_forcing_loads(&mut self, mark: usize) {
+        while self.forcing_journal.len() > mark {
+            let ix = self.forcing_journal.pop().expect("journal entry");
+            self.forcing_loaded.remove(&ix);
+        }
     }
 
     fn sub_txn(&self) -> SubTxn {
@@ -4790,9 +5096,12 @@ impl<'m> TapeBuilder<'m> {
             interp_tables: self.interp_tables.len(),
             geoms: self.geoms.len(),
             index_gathers: self.index_gathers.len(),
+            gather_tables: self.gather_tables.len(),
+            seg_tables: self.seg_tables.len(),
             streams: [stream(0), stream(1), stream(2)],
             branch_len: self.branch_bufs.last().map(Vec::len),
             hoist_journal: self.hoist_journal.len(),
+            forcing_journal: self.forcing_journal.len(),
             fault_first: self.fault_first.clone(),
             fault_seq: self.fault_seq,
         }
@@ -4808,6 +5117,10 @@ impl<'m> TapeBuilder<'m> {
         self.interp_tables.truncate(txn.interp_tables);
         self.geoms.truncate(txn.geoms);
         self.index_gathers.truncate(txn.index_gathers);
+        self.gather_tables.truncate(txn.gather_tables);
+        self.seg_tables.truncate(txn.seg_tables);
+        let n_slots = self.slots.len() as SlotId;
+        self.known.retain(|s, _| *s < n_slots);
         for (s, &(n_chunks, last_len)) in txn.streams.iter().enumerate() {
             let stream = &mut self.streams[s];
             stream.truncate(n_chunks);
@@ -4822,6 +5135,7 @@ impl<'m> TapeBuilder<'m> {
             let key = self.hoist_journal.pop().expect("journal entry");
             self.hoist.remove(&key);
         }
+        self.rollback_forcing_loads(txn.forcing_journal);
         self.fault_first = txn.fault_first;
         self.fault_seq = txn.fault_seq;
     }
@@ -5132,14 +5446,18 @@ impl<'m> TapeBuilder<'m> {
                 export: export_ix,
             };
             match chunk {
-                Some(ci) => self.streams[home as usize][ci].instrs.push(instr),
+                Some(ci) => self.streams[home as usize][ci]
+                    .instrs
+                    .push((instr, crate::precision::active())),
                 None => {
                     // The rule emitted nothing into its home stream (its whole
                     // value hoisted to an earlier section): open a chunk now,
                     // AT THE RULE'S OWN PLACE in the stream (see
                     // [`Self::open_home_chunk`]) rather than at the end.
                     let ci = self.open_home_chunk(rule_ord as u32, home);
-                    self.streams[home as usize][ci].instrs.push(instr);
+                    self.streams[home as usize][ci]
+                        .instrs
+                        .push((instr, crate::precision::active()));
                 }
             }
             exports.push((name, slot));
@@ -5229,13 +5547,17 @@ impl<'m> TapeBuilder<'m> {
                     },
                 };
                 match self.rule_home_chunk[rule as usize] {
-                    Some(ci) => self.streams[home as usize][ci].instrs.push(instr),
+                    Some(ci) => self.streams[home as usize][ci]
+                        .instrs
+                        .push((instr, crate::precision::active())),
                     // Same ordering rule as the export itself: the chunk goes
                     // at the rule's own place in the stream, never at the end
                     // (issue #207; see [`Self::open_home_chunk`]).
                     None => {
                         let ci = self.open_home_chunk(rule, home);
-                        self.streams[home as usize][ci].instrs.push(instr);
+                        self.streams[home as usize][ci]
+                            .instrs
+                            .push((instr, crate::precision::active()));
                     }
                 }
                 out
@@ -5251,6 +5573,7 @@ impl<'m> TapeBuilder<'m> {
         fuse: Option<super::fuse::SuperopCfg>,
     ) -> TapeProgram {
         let mut instrs: Vec<Instr> = Vec::new();
+        let mut precision: Vec<Precision> = Vec::new();
         let mut provenance: Vec<u32> = Vec::new();
         let mut n_const = 0u32;
         let mut n_segment = 0u32;
@@ -5258,7 +5581,10 @@ impl<'m> TapeBuilder<'m> {
             let start = instrs.len();
             for chunk in stream.drain(..) {
                 provenance.extend(std::iter::repeat_n(chunk.rule, chunk.instrs.len()));
-                instrs.extend(chunk.instrs);
+                for (i, p) in chunk.instrs {
+                    instrs.push(i);
+                    precision.push(p);
+                }
             }
             let count = (instrs.len() - start) as u32;
             match sec {
@@ -5268,8 +5594,15 @@ impl<'m> TapeBuilder<'m> {
             }
         }
 
+        // Uniform — the precision the program runs under — for every document
+        // without a per-variable element type, and then not stored at all.
+        let build = crate::precision::active();
+        if precision.iter().all(|&p| p == build) {
+            precision.clear();
+        }
         let mut prog = TapeProgram {
             instrs,
+            precision,
             n_const,
             n_segment,
             slots: std::mem::take(&mut self.slots),
@@ -5280,9 +5613,12 @@ impl<'m> TapeBuilder<'m> {
             interp_tables: std::mem::take(&mut self.interp_tables),
             geoms: std::mem::take(&mut self.geoms),
             index_gathers: std::mem::take(&mut self.index_gathers),
+            gather_tables: std::mem::take(&mut self.gather_tables),
+            seg_tables: std::mem::take(&mut self.seg_tables),
             faults: std::mem::take(&mut self.faults),
             state_vars: std::mem::take(&mut self.state_vars),
             obs_reads: std::mem::take(&mut self.obs_reads),
+            forcings: std::mem::take(&mut self.forcings),
             dy_writes: std::mem::take(&mut self.dy_writes),
             exports,
             rules: std::mem::take(&mut self.rules),
@@ -5376,6 +5712,8 @@ fn color_slab(prog: &mut TapeProgram) {
                 | Instr::Assemble { .. }
                 | Instr::PolyArea { .. }
                 | Instr::IndexGather { .. }
+                | Instr::TableGather { .. }
+                | Instr::SegReduce { .. }
                 | Instr::Reshape { .. }
         );
         let mut defs_here: SmallVec<[SlotId; 2]> = SmallVec::new();

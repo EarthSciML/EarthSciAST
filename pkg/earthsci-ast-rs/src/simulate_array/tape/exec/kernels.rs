@@ -706,3 +706,69 @@ pub(super) unsafe fn index_gather(dst: *mut f64, spec: &IndexGatherSpec, src: &S
         }
     }
 }
+
+/// `Instr::TableGather`: `dst[k] = src[pos[k]]`, the zero ghost where
+/// `pos[k]` is [`GATHER_GHOST`]. `pos` holds ROW-MAJOR flat positions into
+/// `src.shape`, which a source with other strides (a state array read in
+/// place, column-major) reaches by unravelling each one.
+pub(super) unsafe fn table_gather(dst: *mut f64, src: &SrcView, pos: &[u32]) {
+    let rm = rm_strides(&src.shape);
+    unsafe {
+        if src.strides[..] == rm[..] {
+            for (k, &p) in pos.iter().enumerate() {
+                *dst.add(k) = if p == GATHER_GHOST {
+                    0.0
+                } else {
+                    *src.ptr.add(p as usize)
+                };
+            }
+            return;
+        }
+        for (k, &p) in pos.iter().enumerate() {
+            *dst.add(k) = if p == GATHER_GHOST {
+                0.0
+            } else {
+                let mut rest = p as i64;
+                let mut off = 0i64;
+                for d in 0..src.shape.len() {
+                    off += (rest / rm[d]) * src.strides[d];
+                    rest %= rm[d];
+                }
+                *src.ptr.offset(off as isize)
+            };
+        }
+    }
+}
+
+/// `Instr::SegReduce`: output cell `c` folds `src[rows[c] .. rows[c + 1]]`
+/// from `init`, in order, skipping every term whose `mask` entry is `0`.
+pub(super) unsafe fn seg_reduce(
+    dst: *mut f64,
+    src: *const f64,
+    mask: Option<*const f64>,
+    rows: &[u32],
+    init: f64,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    unsafe {
+        for c in 0..rows.len() - 1 {
+            let (a, b) = (rows[c] as usize, rows[c + 1] as usize);
+            let mut acc = init;
+            match mask {
+                None => {
+                    for k in a..b {
+                        acc = f(acc, *src.add(k));
+                    }
+                }
+                Some(m) => {
+                    for k in a..b {
+                        if *m.add(k) != 0.0 {
+                            acc = f(acc, *src.add(k));
+                        }
+                    }
+                }
+            }
+            *dst.add(c) = acc;
+        }
+    }
+}

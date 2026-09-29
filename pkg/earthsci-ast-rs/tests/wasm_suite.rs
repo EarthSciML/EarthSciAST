@@ -344,6 +344,14 @@ fn geometry_documents() {
     }
 }
 
+/// Join-gated and ragged contractions, and per-variable element types.
+#[wasm_bindgen_test]
+fn tuple_list_contractions_and_element_types() {
+    for (id, text) in portable::TUPLE_LIST_AND_PRECISION_DOCS {
+        portable::check_native_rhs_doc(id, text);
+    }
+}
+
 /// One wasm test per inline-test tier, over its documents.
 macro_rules! inline_tier {
     ($test:ident, $tier:literal) => {

@@ -5,7 +5,6 @@
 
 #[cfg(feature = "solve")]
 use super::tape::TapeProgram;
-use super::tape::tape_disabled;
 use super::*;
 #[cfg_attr(not(feature = "solve"), allow(unused_imports))]
 use crate::simulate::SimulateError;
@@ -569,21 +568,26 @@ impl ArrayCompiled {
     }
 
     /// Build a scratch with the compiled tape installed (Step 3b) — what the
-    /// production RHS closure carries. A document the tape cannot express at
-    /// all ([`tape_disabled`]) gets a legacy scratch, so a caller can observe
-    /// the routing through [`RhsScratch::has_tape`] /
-    /// [`RhsStats::taped_rules`]. Exposed for the fast-executor A/B,
+    /// production RHS closure carries. Exposed for the fast-executor A/B,
     /// allocation-steady-state and invalidation tests, driven through
     /// [`Self::debug_eval_rhs_into`].
     #[doc(hidden)]
     pub fn debug_new_scratch_taped(&self) -> RhsScratch {
         let mut s = RhsScratch::new(&self.var_shapes);
         s.set_const_arrays(Rc::clone(&self.const_scope));
-        if !tape_disabled() {
-            let (prog, _report) = self.tape(&HashSet::new());
-            s.install_tape(prog, self.shared_observed_rules());
-        }
+        let (prog, _report) = self.tape(&HashSet::new());
+        s.install_tape(prog, self.shared_observed_rules());
         s
+    }
+
+    /// The precision environment this model was compiled under (the
+    /// document's element type and its per-variable ones), which a solve arms
+    /// for its whole run. The `debug_*` right-hand-side entries do not arm it;
+    /// a caller comparing them on a document that declares element types
+    /// holds this guard around the calls, as a solve would.
+    #[doc(hidden)]
+    pub fn debug_precision_env(&self) -> crate::precision::Env {
+        self.precision.clone()
     }
 
     /// Resolve a parameter map into the positional parameter vector once, so the
@@ -749,7 +753,7 @@ impl ArrayCompiled {
         let param_vec = self.build_param_vec(params)?;
         let mut scratch = RhsScratch::new(&self.var_shapes);
         scratch.set_const_arrays(Rc::clone(&self.const_scope));
-        if self.tape_serves_passes() && !tape_disabled() {
+        if self.tape_serves_passes() {
             let (prog, _report) = self.tape(&HashSet::new());
             scratch.install_tape(prog, self.shared_observed_rules());
             scratch.set_exports_active(true);
@@ -1236,6 +1240,7 @@ impl ArrayCompiled {
 
         let cadence = self.partition_observed_cadence(discrete_forcing);
         let setup = self.hoist_static_observeds(cadence, &ic_vec, &param_vec, t0, tape.as_ref());
+        let scratches = (self.tape_serves_passes() && tape.is_some()).then(SolveScratches::new);
 
         if let Some(insp) = inspect {
             self.fill_solve_inspection(
@@ -1270,6 +1275,7 @@ impl ArrayCompiled {
                     &setup.cadence.continuous_rules,
                     opts,
                     tape.as_ref(),
+                    scratches.as_ref(),
                 )
                 .map_err(Self::const_oob_first)?;
             return self.assemble_solution(
@@ -1299,6 +1305,7 @@ impl ArrayCompiled {
             setup: &setup,
             opts,
             tape: tape.as_ref(),
+            scratches: scratches.as_ref(),
         };
         let (time, state, stats, retcode) = self.run_segmented(&run, &mut refresh_fn)?;
 
@@ -1551,9 +1558,7 @@ impl ArrayCompiled {
     /// every integration segment (each segment's fresh RHS scratch gets its
     /// own slab and re-runs the CONST/SEGMENT sections — the same cadence as
     /// the static-observed hoist above). [`crate::Compiler::Interpreter`]
-    /// builds no tape at all — it IS the per-cell oracle — and neither does a
-    /// document whose per-variable element types the tape cannot express
-    /// ([`tape_disabled`]).
+    /// builds no tape at all — it IS the per-cell oracle.
     ///
     /// The build report's fallback list is kept, not dropped: a rule the
     /// tape could not compile is evaluated by the per-cell oracle, whose
@@ -1572,7 +1577,7 @@ impl ArrayCompiled {
         // tape, and the whole-array overlay off under it, so every rule is
         // walked per cell. It is the compiler the caller named, and the only
         // way to reach the oracle.
-        let tape: SolveTape = if self.is_interpreter() || tape_disabled() {
+        let tape: SolveTape = if self.is_interpreter() {
             None
         } else {
             let (prog, report) = self.tape(discrete_forcing);
@@ -1599,6 +1604,7 @@ impl ArrayCompiled {
             setup,
             opts,
             tape,
+            scratches,
         } = run;
         let n_states = self.n_states;
 
@@ -1627,6 +1633,9 @@ impl ArrayCompiled {
             // first (t0 was already primed by `refresh_fn(t0)` in `solve_core`).
             if a != t0 {
                 refresh_fn(a)?;
+                if let Some(s) = scratches {
+                    s.forcing_refreshed();
+                }
             }
             // Requested outputs falling in this segment: (a, b] — or [a, b] for
             // the first. Always run the solver's grid up to `b` (append if
@@ -1675,6 +1684,7 @@ impl ArrayCompiled {
                     &setup.cadence.continuous_rules,
                     &seg_opts,
                     tape,
+                    scratches,
                 )
                 .map_err(Self::const_oob_first)?;
             stats += seg_stats;
@@ -1783,6 +1793,9 @@ impl ArrayCompiled {
         // Step 3b: the solve-wide tape program + the FULL observed rule list
         // its fallback indices resolve against. `None` ⇒ legacy interpreter.
         tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
+        // The solve's kept scratches, or `None` for a pair built for this
+        // segment alone (see [`SolveScratches`]).
+        scratches: Option<&SolveScratches>,
     ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode), SimulateError> {
         // A segment that never advances is answered from its own initial state,
         // before any closure, scratch buffer or diffsol problem is built
@@ -1903,18 +1916,22 @@ impl ArrayCompiled {
         #[cfg(not(feature = "xla"))]
         let tape_rhs = true;
         let seg_seed = Rc::new(seg_seed);
-        let rhs_scratch: RefCell<Option<RhsScratch>> = RefCell::new(tape_rhs.then(|| {
+        let (rhs_scratch, jac_scratch) = match scratches {
+            Some(s) => (Rc::clone(&s.rhs), Rc::clone(&s.jac)),
+            None => (Rc::new(RefCell::new(None)), Rc::new(RefCell::new(None))),
+        };
+        if tape_rhs && rhs_scratch.borrow().is_none() {
             let mut s = RhsScratch::new(&var_shapes);
             s.set_const_arrays(Rc::clone(&self.const_scope));
             s.set_static((*seg_seed).clone());
             // Step 3b: the production RHS closure's scratch gets the compiled
-            // tape (fresh slab per segment; CONST/SEGMENT sections prime on the
-            // segment's first call).
+            // tape. Its CONST/SEGMENT sections prime on the first call, and a
+            // kept scratch re-runs SEGMENT after each forcing refresh.
             if let Some((prog, full_obs)) = tape {
                 s.install_tape(Rc::clone(prog), Rc::clone(full_obs));
             }
-            s
-        }));
+            *rhs_scratch.borrow_mut() = Some(s);
+        }
         // The Jacobian scratch is built LAZILY on the first Jacobian call:
         // diffsol's `rhs_implicit` builder demands a Jacobian closure even for
         // the explicit (ERK) solver, which then never invokes it — so an eager
@@ -1924,7 +1941,6 @@ impl ArrayCompiled {
         // construction is deterministic, so results are bit-identical either way.
         let jac_seed = Rc::clone(&seg_seed);
         let const_scope_jac = Rc::clone(&self.const_scope);
-        let jac_scratch: RefCell<Option<RhsScratch>> = RefCell::new(None);
         let tape_jac: Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)> =
             match (self.tape_serves_passes(), tape) {
                 (true, Some((prog, full_obs))) => Some((Rc::clone(prog), Rc::clone(full_obs))),
@@ -3011,6 +3027,47 @@ struct SegmentedRun<'a> {
     setup: &'a SolveSetup,
     opts: &'a SolveOptions,
     tape: Option<&'a (Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
+    scratches: Option<&'a SolveScratches>,
+}
+
+/// The right-hand-side and Jacobian scratches of a solve the TAPE serves,
+/// kept across all of its integration segments.
+///
+/// Each segment builds a fresh solver and fresh closures, but not fresh
+/// scratches: the tape's CONST section primes once per solve (the parameter
+/// vector does not change between segments), and after the driver refreshes
+/// the forcing buffer at a segment boundary it bumps each scratch's forcing
+/// epoch, which re-runs the SEGMENT section, where the DISCRETE forcing loads
+/// and everything computed from them live, on the next call.
+///
+/// Only under a strict compiler: there every rule is taped and the scratch
+/// carries no per-segment seed, so a kept scratch is exactly the state a fresh
+/// one would reach. Under the historical routing the scratch is seeded with
+/// the segment's own materialized observeds, and each segment builds its own.
+#[cfg(feature = "solve")]
+pub(super) struct SolveScratches {
+    rhs: Rc<RefCell<Option<RhsScratch>>>,
+    jac: Rc<RefCell<Option<RhsScratch>>>,
+}
+
+#[cfg(feature = "solve")]
+impl SolveScratches {
+    fn new() -> Self {
+        SolveScratches {
+            rhs: Rc::new(RefCell::new(None)),
+            jac: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    /// The driver refreshed the forcing buffer: every scratch built so far
+    /// re-runs its SEGMENT section on its next call.
+    fn forcing_refreshed(&self) {
+        for s in [&self.rhs, &self.jac] {
+            if let Some(scratch) = s.borrow_mut().as_mut() {
+                scratch.bump_forcing_epoch();
+            }
+        }
+    }
 }
 
 /// The transitive dependency cone of `seeds` within a dependency-ORDERED rule

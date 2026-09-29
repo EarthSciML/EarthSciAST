@@ -1,0 +1,239 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "native_probe_rank5_stencil",
+    "description": "An output box of rank 5: a 3-point stencil along the first and last of five axes, with zero ghost cells. Native builds it as one affine box and emits its kernel with the rank-N output odometer; the interpreter builds it per cell. The two must agree bit for bit.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "native",
+      "probe"
+    ]
+  },
+  "models": {
+    "R5": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": [
+            "a",
+            "b",
+            "c",
+            "d",
+            "e"
+          ],
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "default": 1.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "a",
+              "b",
+              "c",
+              "d",
+              "e"
+            ],
+            "ranges": {
+              "a": [
+                1,
+                3
+              ],
+              "b": [
+                1,
+                2
+              ],
+              "c": [
+                1,
+                2
+              ],
+              "d": [
+                1,
+                2
+              ],
+              "e": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "a",
+                    "b",
+                    "c",
+                    "d",
+                    "e"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "a",
+              "b",
+              "c",
+              "d",
+              "e"
+            ],
+            "ranges": {
+              "a": [
+                1,
+                3
+              ],
+              "b": [
+                1,
+                2
+              ],
+              "c": [
+                1,
+                2
+              ],
+              "d": [
+                1,
+                2
+              ],
+              "e": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        0.5,
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "a",
+                                    -1
+                                  ]
+                                },
+                                "b",
+                                "c",
+                                "d",
+                                "e"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "a",
+                                    1
+                                  ]
+                                },
+                                "b",
+                                "c",
+                                "d",
+                                "e"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        0.25,
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "a",
+                                "b",
+                                "c",
+                                "d",
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "e",
+                                    -1
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "a",
+                                "b",
+                                "c",
+                                "d",
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "e",
+                                    1
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    "k",
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "a",
+                        "b",
+                        "c",
+                        "d",
+                        "e"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

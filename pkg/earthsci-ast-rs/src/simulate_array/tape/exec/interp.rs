@@ -9,7 +9,7 @@ use super::super::geom::{RingTable, run_poly_area};
 use super::fused::{dispatch_bin_kernel, dispatch_un_kernel, exec_fused};
 use super::kernels::{
     copy_strided, ew_select, ew1, ew2, exec_gather, fill_strided, index_gather, reduce_rows,
-    scan_axis,
+    scan_axis, seg_reduce, table_gather,
 };
 use super::oracle::run_rhs_oracle;
 use super::resolve::{
@@ -84,6 +84,13 @@ pub(super) fn run_range(
         if pc >= range.end {
             break;
         }
+        // The instruction's own precision, armed for it alone (esm-spec
+        // §11.3.1); a program without per-instruction precision skips this.
+        let _precision = prog
+            .precision
+            .get(pc)
+            .filter(|&&p| p != crate::precision::active())
+            .map(|&p| crate::precision::enter(p));
         match &prog.instrs[pc] {
             Instr::Bin { op, a, b, out } => {
                 let desc = &prog.slots[*out as usize];
@@ -328,6 +335,13 @@ pub(super) fn run_range(
                     );
                 }
             }
+            Instr::LoadForcing { forcing, out } => {
+                let fr = &prog.forcings[*forcing as usize];
+                let off = slot_off[*out as usize];
+                let dst =
+                    unsafe { std::slice::from_raw_parts_mut(slab_ptr.add(off), forcing_len(fr)) };
+                load_forcing(fr, &env.forcing.borrow(), env.declared, dst);
+            }
             Instr::Reduce {
                 op,
                 init,
@@ -439,6 +453,34 @@ pub(super) fn run_range(
                 let iv = resolve_rv(idx, &spec.shape, env, slab_ptr, slot_off, obs);
                 let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
                 unsafe { index_gather(dst, spec, &sv, &iv) };
+            }
+            Instr::TableGather { src, table, out } => {
+                let sv = resolve_src(src, env, slab_ptr, slot_off, obs);
+                let tbl = &prog.gather_tables[*table as usize];
+                debug_assert_eq!(&sv.shape[..], &tbl.src_shape[..], "TableGather source box");
+                let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+                unsafe { table_gather(dst, &sv, &tbl.pos) };
+            }
+            Instr::SegReduce {
+                op,
+                init,
+                src,
+                mask,
+                table,
+                out,
+            } => {
+                let rows = &prog.seg_tables[*table as usize].rows;
+                let src = unsafe { slab_ptr.add(slot_off[*src as usize]) as *const f64 };
+                let mask =
+                    mask.map(|m| unsafe { slab_ptr.add(slot_off[m as usize]) as *const f64 });
+                let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+                let init = *init;
+                macro_rules! fold {
+                    ($f:expr) => {
+                        unsafe { seg_reduce(dst, src, mask, rows, init, $f) }
+                    };
+                }
+                dispatch_bin_kernel!(op, fold);
             }
             Instr::Reshape { src, out } => {
                 let sv = resolve_src(src, env, slab_ptr, slot_off, obs);

@@ -56,6 +56,17 @@
 //! * [`Instr::IndexGather`] is `index_into` with one subscript that is DATA:
 //!   the subscript operand is rounded (`f64::round`, then `as i64`, exactly
 //!   `eval_index_args`) and an out-of-range position reads the zero ghost.
+//! * [`Instr::TableGather`] reads its source at positions fixed at build
+//!   time (one per output element, or the ghost `+0.0`): an `index` whose
+//!   subscripts are build-time data rather than an affine map of the box.
+//! * [`Instr::SegReduce`] is a compressed-row reduction: each output cell
+//!   folds its own contiguous run of a term list, skipping the terms a mask
+//!   excludes, which is `reduce_contraction`'s loop over an explicit list of
+//!   admitted contraction tuples (a join-gated or ragged contraction).
+//! * [`Instr::LoadForcing`] is `lookup_variable`'s forcing arm: the entry the
+//!   forcing buffer holds for the name, copied in row-major order (a 0-d entry
+//!   read as a scalar, rounded to the active precision), and the same
+//!   fail-closed fault when the buffer holds none.
 //! * [`Instr::Reshape`] is a row-major reinterpretation: the source's
 //!   elements, in row-major order, under the output slot's box.
 //! * [`Instr::Fault`] latches one fail-closed evaluation fault
@@ -211,6 +222,17 @@ pub(crate) enum Instr {
     /// XlaBuilder emitter lowers this to a `ConstantLiteral` of the same
     /// row-major buffer.)
     ConstArray { data: u32, out: SlotId },
+    /// Copy the forcing-buffer entry `forcings[forcing]` names into `out`
+    /// (row-major, origin all-1s; a scalar slot for a 0-d entry).
+    ///
+    /// The forcing buffer only changes between integration segments, so this
+    /// runs in the CONST section for a forcing nothing refreshes and in the
+    /// SEGMENT section for a DISCRETE one, and every reader takes the slot:
+    /// no instruction ever reads the buffer itself. A missing entry latches
+    /// the fault the interpreter's lookup raises and fills `out` with `NaN`;
+    /// an entry whose shape is not the one the program was built against
+    /// latches a fault naming both.
+    LoadForcing { forcing: u32, out: SlotId },
     /// Reduce `src` over `axes` with `op`'s kernel, from `init`:
     ///
     /// ```text
@@ -290,6 +312,45 @@ pub(crate) enum Instr {
         spec: u32,
         out: SlotId,
     },
+    /// `out[k] = src[pos[k]]`, with `pos = gather_tables[table].pos` the
+    /// ROW-MAJOR flat position of each element's source cell, resolved at
+    /// build time; a [`GATHER_GHOST`] position reads `+0.0` (the zero ghost of
+    /// an out-of-range read). `out` is a 1-D box of `pos.len()` elements.
+    ///
+    /// This is `eval_index` with every subscript already evaluated: the
+    /// lowering computes each position exactly as `index_into` does (the
+    /// subscript rounded, then the zero ghost or the const-array boundary
+    /// policy), so the element read is the one the interpreter reads.
+    TableGather {
+        src: SrcRef,
+        table: u32,
+        out: SlotId,
+    },
+    /// A compressed-row reduction over the 1-D term list `src`:
+    ///
+    /// ```text
+    /// for c in 0..n_out:
+    ///     acc = init
+    ///     for k in rows[c] .. rows[c + 1]:
+    ///         if mask is None or mask[k] != 0:  acc = kernel(op)(acc, src[k])
+    ///     out[c] = acc
+    /// ```
+    ///
+    /// with `rows = seg_tables[table].rows` (`n_out + 1` ascending offsets,
+    /// the last equal to `src`'s length) and `c` the ROW-MAJOR cell of
+    /// `out`'s box (a scalar `out` has one cell). Each cell's run lists its
+    /// admitted contraction tuples in the interpreter's odometer order (the
+    /// last contracted name fastest), and an excluded term is SKIPPED, not
+    /// combined as the identity, exactly as `reduce_contraction`'s `continue`
+    /// does — so the fold is bit-identical, signed zeros and NaNs included.
+    SegReduce {
+        op: BinCode,
+        init: f64,
+        src: SlotId,
+        mask: Option<SlotId>,
+        table: u32,
+        out: SlotId,
+    },
     /// `out`'s elements, in ROW-MAJOR order, are `src`'s elements in
     /// row-major order: the same element count under a different box. A
     /// column-major reshape (`eval_reshape`) is this between two axis
@@ -349,11 +410,14 @@ impl Instr {
             | Instr::Region { out, .. }
             | Instr::Assemble { out, .. }
             | Instr::ConstArray { out, .. }
+            | Instr::LoadForcing { out, .. }
             | Instr::Interp { out, .. }
             | Instr::Reduce { out, .. }
             | Instr::Scan { out, .. }
             | Instr::PolyArea { out, .. }
             | Instr::IndexGather { out, .. }
+            | Instr::TableGather { out, .. }
+            | Instr::SegReduce { out, .. }
             | Instr::Reshape { out, .. } => Some(*out),
             Instr::JmpIfZero { .. }
             | Instr::Fault { .. }
@@ -413,6 +477,7 @@ impl Instr {
             | Instr::LoadElem { src, .. }
             | Instr::Reduce { src, .. }
             | Instr::Scan { src, .. }
+            | Instr::TableGather { src, .. }
             | Instr::Reshape { src, .. } => {
                 if let SrcRef::Slot(s) = src {
                     f(*s);
@@ -431,7 +496,13 @@ impl Instr {
                 }
                 op(idx);
             }
-            Instr::Ramp { .. } | Instr::ConstArray { .. } => {}
+            Instr::SegReduce { src, mask, .. } => {
+                f(*src);
+                if let Some(m) = mask {
+                    f(*m);
+                }
+            }
+            Instr::Ramp { .. } | Instr::ConstArray { .. } | Instr::LoadForcing { .. } => {}
             Instr::Interp { x, y, .. } => {
                 op(x);
                 if let Some(y) = y {
@@ -482,11 +553,14 @@ impl Instr {
             Instr::Region { .. } => "Region",
             Instr::Assemble { .. } => "Assemble",
             Instr::ConstArray { .. } => "ConstArray",
+            Instr::LoadForcing { .. } => "LoadForcing",
             Instr::Interp { .. } => "Interp",
             Instr::Reduce { .. } => "Reduce",
             Instr::Scan { .. } => "Scan",
             Instr::PolyArea { .. } => "PolyArea",
             Instr::IndexGather { .. } => "IndexGather",
+            Instr::TableGather { .. } => "TableGather",
+            Instr::SegReduce { .. } => "SegReduce",
             Instr::Reshape { .. } => "Reshape",
             Instr::Fault { .. } => "Fault",
             Instr::JmpIfZero { .. } => "JmpIfZero",
@@ -921,6 +995,38 @@ pub(crate) struct ConstArrayData {
     pub values: Vec<f64>,
 }
 
+/// The position an [`Instr::TableGather`] element reads when its source cell
+/// is out of range: the element is the zero ghost `+0.0`.
+pub(crate) const GATHER_GHOST: u32 = u32::MAX;
+
+/// The build-time positions of one [`Instr::TableGather`].
+#[derive(Clone, Debug)]
+pub(crate) struct GatherTable {
+    /// The source box the positions are row-major flat offsets into.
+    pub src_shape: DimU,
+    /// One source position per output element, or [`GATHER_GHOST`].
+    pub pos: Vec<u32>,
+}
+
+/// The row offsets of one [`Instr::SegReduce`]: output cell `c` folds terms
+/// `rows[c] .. rows[c + 1]`.
+#[derive(Clone, Debug)]
+pub(crate) struct SegTable {
+    pub rows: Vec<u32>,
+}
+
+/// One forcing-buffer entry the program reads ([`Instr::LoadForcing`]).
+#[derive(Clone, Debug)]
+pub(crate) struct ForcingRef {
+    /// The buffer key, which is the variable's name as the compiled model
+    /// spells it.
+    pub name: String,
+    /// The box the program was built against (empty for a 0-d entry): the
+    /// entry's shape when the buffer held it at build time, else the
+    /// variable's declared shape.
+    pub shape: DimU,
+}
+
 /// Which esm-spec §9.2 `interp.*` entry an [`Instr::Interp`] evaluates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InterpKind {
@@ -1200,6 +1306,13 @@ pub(crate) struct SlabLayout {
 pub(crate) struct TapeProgram {
     /// All instructions: CONST section, then SEGMENT, then CONTINUOUS.
     pub instrs: Vec<Instr>,
+    /// Per instruction, the precision its kernels run at (esm-spec §11.3.1):
+    /// the precision in force while it was lowered — its observed rule's
+    /// variable's, or a precision-boundary marker's inside it. Every executor
+    /// arms it around the instruction. EMPTY when every instruction runs at
+    /// the precision the program executes under, which is every document that
+    /// declares no per-variable element type.
+    pub precision: Vec<crate::precision::Precision>,
     /// Instruction count of the CONST section.
     pub n_const: u32,
     /// Instruction count of the SEGMENT section.
@@ -1218,6 +1331,10 @@ pub(crate) struct TapeProgram {
     /// Data-subscript gathers' constant parts (`Instr::IndexGather` indexes
     /// here).
     pub index_gathers: Vec<IndexGatherSpec>,
+    /// Build-time gather positions (`Instr::TableGather` indexes here).
+    pub gather_tables: Vec<GatherTable>,
+    /// Compressed-row offsets (`Instr::SegReduce` indexes here).
+    pub seg_tables: Vec<SegTable>,
     /// Fail-closed fault messages (`Instr::Fault` indexes here), each the
     /// text the per-cell oracle latches at the same point.
     pub faults: Vec<String>,
@@ -1225,6 +1342,9 @@ pub(crate) struct TapeProgram {
     /// Observed names resolved through the runtime observed map
     /// (`Operand::Obs`/`SrcRef::Obs` index here).
     pub obs_reads: Vec<String>,
+    /// Forcing-buffer entries the program loads (`Instr::LoadForcing`
+    /// indexes here).
+    pub forcings: Vec<ForcingRef>,
     pub dy_writes: Vec<DyWrite>,
     /// Observed values published back into the runtime observed map: names a
     /// fallback rule or the samples/observed-trajectory dependency cone reads.

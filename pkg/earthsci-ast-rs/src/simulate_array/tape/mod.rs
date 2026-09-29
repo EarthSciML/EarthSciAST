@@ -25,7 +25,8 @@
 //! [`Instr::Copy`] / [`Instr::Region`] / [`Instr::Fill`] / [`Instr::Ramp`];
 //! control flow is the one structured [`Instr::JmpIfZero`]; and the
 //! boundaries with the rest of the runtime are [`Instr::Export`],
-//! [`Instr::DyWrite`] and [`Instr::Fallback`].
+//! [`Instr::DyWrite`], [`Instr::LoadForcing`] (the forcing buffer, read in the
+//! CONST or SEGMENT section) and [`Instr::Fallback`].
 //!
 //! Two instructions carry data or a fold rather than a per-element map, and
 //! both exist so a whole downstream cone of rules stops falling back:
@@ -64,6 +65,8 @@
 #[cfg(test)]
 mod array_tests;
 mod exec;
+#[cfg(test)]
+mod forcing_tests;
 mod fuse;
 mod geom;
 mod ir;
@@ -72,12 +75,15 @@ mod lower;
 mod refexec;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tuple_tests;
 // Phase 2: the XLA emitter over this IR (feature `xla`, OFF by default). Last
 // in the list because it is the only optional one.
 #[cfg(feature = "xla")]
 pub mod xla_emit;
 
-pub(crate) use exec::tape_disabled;
+#[cfg(test)]
+pub(crate) use exec::section_primes;
 pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
 pub(crate) use ir::*;
 use lower::build_tape_program;
@@ -269,24 +275,30 @@ pub(crate) fn make_report(prog: &TapeProgram, vn_hits: (usize, usize)) -> TapeBu
 ///   const-array registry. These are fixed when the model is constructed and
 ///   nothing mutates them through `&self`; a changed document is a new model,
 ///   with an empty cache.
-/// * the DISCRETE-forcing set, which decides each observed's cadence tier;
+/// * the DISCRETE-forcing set, which decides each observed's cadence tier and
+///   the section each forcing load runs in;
+/// * the NAMES and SHAPES the forcing buffer holds, which decide which reads
+///   are forcing loads and the box each one compiles against (a name the
+///   buffer does not hold compiles against its declared shape);
 /// * the precision in force (`crate::precision::active`), which rounds every
 ///   literal the build folds;
 /// * whether the tape serves the observed passes (the runtime mode), which
 ///   decides what it exports.
 ///
-/// The last three are the key an entry is looked up by. Parameter VALUES and
-/// the forcing buffer's contents are not inputs: the program reads parameters
-/// on every call, and it cannot read the forcing buffer at all. So a new
-/// parameter vector, or new forcing data, needs no rebuild — the CONST and
-/// SEGMENT sections the program primes from them are per-scratch state, re-run
-/// when the parameter vector changes.
+/// The last four are the key an entry is looked up by. Parameter VALUES and
+/// the forcing buffer's VALUES are not inputs: the program reads parameters
+/// on every call and loads the forcing buffer in its CONST and SEGMENT
+/// sections. So a new parameter vector, or new forcing data, needs no rebuild:
+/// those sections are per-scratch state, re-run when the parameter vector
+/// changes, and the SEGMENT section again when the driver bumps the forcing
+/// epoch after a refresh (`TapeCtx::bump_forcing_epoch`).
 pub(crate) struct TapeCache {
     entries: RefCell<Vec<CachedTape>>,
 }
 
 struct CachedTape {
     discrete_forcing: Vec<String>,
+    forcing_buffer: Vec<(String, Vec<usize>)>,
     precision: crate::precision::Precision,
     serves_passes: bool,
     prog: Rc<TapeProgram>,
@@ -310,10 +322,12 @@ impl ArrayCompiled {
     ) -> (Rc<TapeProgram>, Rc<TapeBuildReport>) {
         let mut forcing: Vec<String> = discrete_forcing.iter().cloned().collect();
         forcing.sort();
+        let forcing_buffer = self.forcing_buffer_signature();
         let precision = crate::precision::active();
         let serves_passes = self.tape_serves_passes();
         if let Some(e) = self.tape_cache.entries.borrow().iter().find(|e| {
             e.discrete_forcing == forcing
+                && e.forcing_buffer == forcing_buffer
                 && e.precision == precision
                 && e.serves_passes == serves_passes
         }) {
@@ -323,6 +337,7 @@ impl ArrayCompiled {
         let (prog, report) = (Rc::new(prog), Rc::new(report));
         self.tape_cache.entries.borrow_mut().push(CachedTape {
             discrete_forcing: forcing,
+            forcing_buffer,
             precision,
             serves_passes,
             prog: Rc::clone(&prog),
@@ -333,6 +348,57 @@ impl ArrayCompiled {
 
     /// The observed rules a taped scratch carries beside its program, shared
     /// rather than copied per install.
+    /// Every entry the forcing buffer holds, as `(name, shape)` sorted by name:
+    /// the part of the buffer a tape build reads (see [`TapeCache`]).
+    fn forcing_buffer_signature(&self) -> Vec<(String, Vec<usize>)> {
+        let mut sig: Vec<(String, Vec<usize>)> = self
+            .forcing
+            .borrow()
+            .iter()
+            .map(|(name, a)| (name.clone(), a.shape().to_vec()))
+            .collect();
+        sig.sort();
+        sig
+    }
+
+    /// The forcing half of a build's inputs: every name the forcing buffer can
+    /// serve, with the box a read of it compiles against, and the refreshed
+    /// parameters it cannot.
+    ///
+    /// That is every entry the buffer holds now, at its own shape (the
+    /// interpreter's lookup resolves any name the buffer holds that nothing
+    /// else binds), then every externally refreshed parameter the buffer does
+    /// not hold yet, at its declared shape. A parameter whose declared shape
+    /// the registry cannot size, and which the buffer does not hold, is not
+    /// served: a read of it stays unresolved.
+    fn forcing_inputs<'a>(&self, discrete: &'a HashSet<String>) -> lower::ForcingInputs<'a> {
+        let mut shapes: rustc_hash::FxHashMap<String, super::DimU> = self
+            .forcing
+            .borrow()
+            .iter()
+            .map(|(name, a)| (name.clone(), a.shape().iter().copied().collect()))
+            .collect();
+        let mut unsized_ = HashSet::new();
+        for (name, decl) in &self.forcing_decls {
+            if shapes.contains_key(name) {
+                continue;
+            }
+            match decl {
+                Some(shape) => {
+                    shapes.insert(name.clone(), shape.iter().copied().collect());
+                }
+                None => {
+                    unsized_.insert(name.clone());
+                }
+            }
+        }
+        lower::ForcingInputs {
+            shapes,
+            unsized_,
+            discrete,
+        }
+    }
+
     pub(super) fn shared_observed_rules(&self) -> Rc<Vec<AlgebraicRule>> {
         Rc::clone(
             self.shared_observed
@@ -359,7 +425,8 @@ impl ArrayCompiled {
     ) -> (TapeProgram, TapeBuildReport) {
         let const_names = self.classify_static_observeds(discrete_forcing);
         let seg_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
-        let (prog, vn_hits) = build_tape_program(self, &const_names, &seg_names, fuse);
+        let forcing = self.forcing_inputs(discrete_forcing);
+        let (prog, vn_hits) = build_tape_program(self, &const_names, &seg_names, &forcing, fuse);
         let report = make_report(&prog, vn_hits);
         (prog, report)
     }

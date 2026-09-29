@@ -8,6 +8,10 @@
 //! rhs(u: f64[N], p: f64[M], t: f64[]) -> du: f64[N]
 //! ```
 //!
+//! A program that reads the forcing buffer ([`Instr::LoadForcing`]) takes a
+//! fourth parameter, `f: f64[F]`: every forcing it loads, row-major, one after
+//! another ([`ForcingFeed`] says where each one sits and packs it).
+//!
 //! that reproduces what [`super::exec`] / `super::refexec` compute for the
 //! same inputs — numerically, within the tier's tolerance classes, never bit
 //! for bit (XLA's `exp`/`log`/`pow` are not Rust's libm).
@@ -74,8 +78,11 @@
 
 use super::super::{ArrayCompiled, BinCode, UnCode, VarShape};
 use super::ir::*;
-use std::collections::HashMap;
+use ndarray::ArrayD;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::rc::Rc;
 use xla::{ArrayElement, ElementType, PrimitiveType, XlaBuilder, XlaComputation, XlaOp};
 
 /// A model the emitter refuses to lower.
@@ -136,6 +143,46 @@ pub struct EmittedRhs {
     n_states: usize,
     params_len: usize,
     n_instrs: usize,
+    opcode_counts: Vec<(&'static str, usize)>,
+    forcing: Option<ForcingFeed>,
+}
+
+/// Where the forcing parameter `f` of a program that reads the forcing buffer
+/// comes from, and how it is laid out.
+///
+/// Each entry is one forcing the program loads, at its offset in `f`, in the
+/// order the program first loads them. [`Self::pack`] fills `f` from the
+/// model's live buffer with exactly the tape's load semantics, faults
+/// included, so a missing entry fails the solve with the interpreter's own
+/// error rather than as a device failure.
+pub struct ForcingFeed {
+    buffer: Rc<RefCell<HashMap<String, ArrayD<f64>>>>,
+    declared: HashSet<String>,
+    layout: Vec<(ForcingRef, usize)>,
+    len: usize,
+}
+
+impl ForcingFeed {
+    /// Length of `f` (at least one element, like `p`).
+    pub fn len(&self) -> usize {
+        self.len.max(1)
+    }
+
+    /// Always false: `f` is never zero-length (see [`Self::len`]).
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// `f` as the buffer stands now.
+    pub fn pack(&self) -> Vec<f64> {
+        let mut f = vec![0.0f64; self.len()];
+        let buffer = self.buffer.borrow();
+        for (fr, off) in &self.layout {
+            let n = super::exec::forcing_len(fr);
+            super::exec::load_forcing(fr, &buffer, &self.declared, &mut f[*off..*off + n]);
+        }
+        f
+    }
 }
 
 impl EmittedRhs {
@@ -158,6 +205,20 @@ impl EmittedRhs {
     /// Tape instruction count that was lowered (diagnostics only).
     pub fn n_instrs(&self) -> usize {
         self.n_instrs
+    }
+    /// How many instructions of each opcode the lowered tape carried
+    /// (diagnostics only), in first-seen program order.
+    pub fn opcode_counts(&self) -> &[(&'static str, usize)] {
+        &self.opcode_counts
+    }
+    /// The forcing parameter's feed, for a program that reads the forcing
+    /// buffer; `None` for the three-parameter form.
+    pub fn forcing(&self) -> Option<&ForcingFeed> {
+        self.forcing.as_ref()
+    }
+    /// Take the forcing feed, for the runtime that will own it.
+    pub fn take_forcing(&mut self) -> Option<ForcingFeed> {
+        self.forcing.take()
     }
     /// HLO text of the computation, for a debug dump. NEVER a gate: the tier
     /// compares numbers, never programs.
@@ -208,6 +269,12 @@ pub(crate) fn emit_program(
     let builder = XlaBuilder::new("earthsci_rhs");
     let mut em = Emitter::new(&builder, prog, compiled)?;
     let du = em.run()?;
+    let forcing = em.forcing_param.take().map(|_| ForcingFeed {
+        buffer: Rc::clone(&compiled.forcing),
+        declared: compiled.declared_names.clone(),
+        layout: em.forcing_layout.clone(),
+        len: em.forcing_len,
+    });
     let computation = du
         .build()
         .map_err(|e| XlaEmitError::new("<program>", format!("XlaBuilder::build failed: {e}")))?;
@@ -218,7 +285,22 @@ pub(crate) fn emit_program(
         // `Emitter::new` widens a zero-parameter model to `f64[1]`.
         params_len: prog.params_len.max(1),
         n_instrs: prog.instrs.len(),
+        opcode_counts: opcode_counts(prog),
+        forcing,
     })
+}
+
+/// Instructions per opcode, in first-seen program order.
+fn opcode_counts(prog: &TapeProgram) -> Vec<(&'static str, usize)> {
+    let mut counts: Vec<(&'static str, usize)> = Vec::new();
+    for i in &prog.instrs {
+        let op = i.opcode();
+        match counts.iter_mut().find(|(o, _)| *o == op) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((op, 1)),
+        }
+    }
+    counts
 }
 
 // ---------------------------------------------------------------------------
@@ -252,6 +334,13 @@ struct Emitter<'a> {
     /// Rule name attached to whatever instruction is being lowered, for the
     /// error's `rule` field.
     cur_rule: String,
+    /// The fourth parameter `f`, present when the program loads a forcing.
+    forcing_param: Option<XlaOp>,
+    /// Per `prog.forcings` index: its offset in `f`.
+    forcing_offsets: Vec<Option<usize>>,
+    /// The loaded forcings in `f` order, and `f`'s length.
+    forcing_layout: Vec<(ForcingRef, usize)>,
+    forcing_len: usize,
 }
 
 impl<'a> Emitter<'a> {
@@ -302,6 +391,31 @@ impl<'a> Emitter<'a> {
             .map(|(i, (n, _))| (n.clone(), i))
             .collect();
 
+        // `f` holds only the forcings an instruction loads, in the order the
+        // program first loads them.
+        let mut forcing_offsets: Vec<Option<usize>> = vec![None; prog.forcings.len()];
+        let mut forcing_layout: Vec<(ForcingRef, usize)> = Vec::new();
+        let mut forcing_len = 0usize;
+        for ins in &prog.instrs {
+            if let Instr::LoadForcing { forcing, .. } = ins {
+                let ix = *forcing as usize;
+                if forcing_offsets[ix].is_none() {
+                    let fr = prog.forcings[ix].clone();
+                    forcing_offsets[ix] = Some(forcing_len);
+                    forcing_len += super::exec::forcing_len(&fr);
+                    forcing_layout.push((fr, forcing_offsets[ix].expect("just set")));
+                }
+            }
+        }
+        let forcing_param = if forcing_layout.is_empty() {
+            None
+        } else {
+            Some(
+                b.parameter(3, f64::TY, &[forcing_len.max(1) as i64], "f")
+                    .map_err(|e| XlaEmitError::new("<program>", format!("parameter f: {e}")))?,
+            )
+        };
+
         let mut em = Emitter {
             b,
             prog,
@@ -315,6 +429,10 @@ impl<'a> Emitter<'a> {
             var_order,
             var_ix,
             cur_rule: "<program>".to_string(),
+            forcing_param,
+            forcing_offsets,
+            forcing_layout,
+            forcing_len,
         };
         em.state = em.build_state_views()?;
         Ok(em)
@@ -977,6 +1095,24 @@ impl<'a> Emitter<'a> {
                 };
                 self.define(*out, v);
             }
+            Instr::LoadForcing { forcing, out } => {
+                let fr = &self.prog.forcings[*forcing as usize];
+                let off = self.forcing_offsets[*forcing as usize]
+                    .ok_or_else(|| self.err("forcing load with no place in `f`"))?;
+                let n = super::exec::forcing_len(fr);
+                let f = self
+                    .forcing_param
+                    .clone()
+                    .ok_or_else(|| self.err("forcing load in a program without `f`"))?;
+                let flat = self.wrap(
+                    f.slice_in_dim(off as i64, (off + n) as i64, 1, 0),
+                    "forcing: slice",
+                )?;
+                let dims = self.out_dims(*out);
+                let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+                let v = self.wrap(flat.reshape(&d), "forcing: reshape")?;
+                self.define(*out, v);
+            }
             Instr::Reduce {
                 op,
                 init,
@@ -1025,36 +1161,41 @@ impl<'a> Emitter<'a> {
                         &src_shape[..]
                     )));
                 }
-                // One plane per scanned position, folded ascending and written
-                // back in place: the tape's own sweep, so the association is
-                // the interpreter's.
-                let ax = *axis as usize;
-                let plane_at = |k: usize| {
-                    self.wrap(
-                        s.slice_in_dim(k as i64, k as i64 + 1, 1, ax as i64),
-                        "scan: plane",
-                    )
-                };
-                let first = plane_at(0)?;
-                let mut acc = self.splat_like(&first, *init)?;
-                let mut cur = self.zeros(&have)?;
-                for k in 0..have[ax] {
-                    let plane = plane_at(k)?;
-                    if *inclusive {
-                        acc = self.bin(*op, &acc, &plane)?;
-                    }
-                    let starts: Vec<XlaOp> = (0..have.len())
-                        .map(|d| self.ci(if d == ax { k as i64 } else { 0 }))
-                        .collect::<R<Vec<_>>>()?;
-                    cur = self.wrap(
-                        cur.dynamic_update_slice(&acc, &starts),
-                        "scan: dynamic_update_slice",
-                    )?;
-                    if !*inclusive {
-                        acc = self.bin(*op, &acc, &plane)?;
-                    }
+                let v = self.emit_scan_loop(*op, *init, &s, &have, *axis as usize, *inclusive)?;
+                self.define(*out, v);
+            }
+            Instr::TableGather { src, table, out } => {
+                let s = self.src(src)?;
+                let tbl = &self.prog.gather_tables[*table as usize];
+                let have = self.dims(&s)?;
+                if have != tbl.src_shape.as_slice() {
+                    return Err(self.err(format!(
+                        "table gather source has shape {have:?} but its table expects {:?}",
+                        &tbl.src_shape[..]
+                    )));
                 }
-                self.define(*out, cur);
+                let v = self.emit_table_gather(&s, &have, &tbl.pos)?;
+                self.define(*out, v);
+            }
+            Instr::SegReduce {
+                op,
+                init,
+                src,
+                mask,
+                table,
+                out,
+            } => {
+                let terms = self.operand(&Operand::Slot(*src))?;
+                let mask = match mask {
+                    Some(m) => Some(self.operand(&Operand::Slot(*m))?),
+                    None => None,
+                };
+                let rows = &self.prog.seg_tables[*table as usize].rows;
+                let v = self.emit_seg_reduce(*op, *init, &terms, mask.as_ref(), rows)?;
+                let want = self.out_dims(*out);
+                let d: Vec<i64> = want.iter().map(|&x| x as i64).collect();
+                let v = self.wrap(v.reshape(&d), "segmented reduce: output box")?;
+                self.define(*out, v);
             }
             Instr::Interp { table, x, y, out } => {
                 let tbl = &self.prog.interp_tables[*table as usize];
@@ -1781,6 +1922,156 @@ impl<'a> Emitter<'a> {
         let body = self.bin(op, &a, &b)?;
         body.build()
             .map_err(|e| self.err(format!("reduce kernel build: {e}")))
+    }
+
+    /// Lower one [`Instr::TableGather`]: the source flattened row-major, one
+    /// `take` at the build-time positions, and the ghost positions selected
+    /// to `+0.0`.
+    fn emit_table_gather(&self, src: &XlaOp, dims: &[usize], pos: &[u32]) -> R<XlaOp> {
+        let n: usize = dims.iter().product::<usize>().max(1);
+        let flat = self.wrap(src.reshape(&[n as i64]), "table gather: flatten")?;
+        let at: Vec<i64> = pos
+            .iter()
+            .map(|&p| if p == GATHER_GHOST { 0 } else { p as i64 })
+            .collect();
+        let at = self.wrap(self.b.constant_r1(&at[..]), "table gather: positions")?;
+        let taken = self.wrap(flat.take(&at, 0), "table gather: take")?;
+        if !pos.contains(&GATHER_GHOST) {
+            return Ok(taken);
+        }
+        let live: Vec<f64> = pos
+            .iter()
+            .map(|&p| if p == GATHER_GHOST { 0.0 } else { 1.0 })
+            .collect();
+        let live = self.wrap(self.b.constant_r1(&live[..]), "table gather: live mask")?;
+        let z = self.splat_like(&taken, 0.0)?;
+        let keep = self.wrap(live.ne(&z), "table gather: live != 0")?;
+        self.wrap(keep.select(&taken, &z), "table gather: ghost")
+    }
+
+    /// Lower one [`Instr::SegReduce`] as a scatter-combine of each term into
+    /// its output cell, excluded terms first replaced by the identity. Like
+    /// [`Instr::Reduce`] this is equal to the interpreter numerically, not
+    /// bit for bit: XLA does not order the updates a scatter combines.
+    /// Returns the flat `n_out` result.
+    fn emit_seg_reduce(
+        &self,
+        op: BinCode,
+        init: f64,
+        terms: &XlaOp,
+        mask: Option<&XlaOp>,
+        rows: &[u32],
+    ) -> R<XlaOp> {
+        let n_out = rows.len() - 1;
+        let m = rows[n_out] as usize;
+        let base = {
+            let c = self.c(init)?;
+            self.wrap(c.broadcast(&[n_out as i64]), "segmented reduce: identity")?
+        };
+        if m == 0 {
+            return Ok(base);
+        }
+        let terms = match mask {
+            None => terms.clone(),
+            Some(mk) => {
+                let z = self.splat_like(mk, 0.0)?;
+                let keep = self.wrap(mk.ne(&z), "segmented reduce: mask != 0")?;
+                let id = self.splat_like(terms, init)?;
+                self.wrap(keep.select(terms, &id), "segmented reduce: mask")?
+            }
+        };
+        let mut cell: Vec<i64> = Vec::with_capacity(m);
+        for c in 0..n_out {
+            cell.extend(std::iter::repeat_n(
+                c as i64,
+                (rows[c + 1] - rows[c]) as usize,
+            ));
+        }
+        let cell = self.wrap(
+            self.b
+                .constant_r1(&cell[..])
+                .and_then(|c| c.reshape(&[m as i64, 1])),
+            "segmented reduce: cell ids",
+        )?;
+        let comp = self.reduce_computation(op)?;
+        self.wrap(
+            base.scatter(&cell, &terms, &comp, &[], &[0], &[0], 1),
+            "segmented reduce: scatter",
+        )
+    }
+
+    /// Lower one [`Instr::Scan`] as ONE `while` loop over the scanned axis,
+    /// so the program's size does not grow with the scan's length.
+    ///
+    /// The loop carries `(k, src, acc, out)`: step `k` slices plane `k` of
+    /// `src`, combines it into the running `acc` (a plane-shaped value), and
+    /// writes the inclusive or exclusive partial into plane `k` of `out`.
+    /// Planes are folded strictly in ascending order, one elementwise combine
+    /// per step, so every position folds its terms in the tape's own
+    /// association: this lowering adds no reordering of its own.
+    fn emit_scan_loop(
+        &self,
+        op: BinCode,
+        init: f64,
+        src: &XlaOp,
+        dims: &[usize],
+        ax: usize,
+        inclusive: bool,
+    ) -> R<XlaOp> {
+        use xla::Shape;
+        let full: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+        let mut plane = full.clone();
+        plane[ax] = 1;
+        let carried = Shape::tuple(vec![
+            Shape::array::<i64>(vec![]),
+            Shape::array::<f64>(full.clone()),
+            Shape::array::<f64>(plane.clone()),
+            Shape::array::<f64>(full.clone()),
+        ]);
+        let n = full[ax];
+
+        let cb = XlaBuilder::new("scan_cond");
+        let st = self.wrap(cb.parameter_s(0, &carried, "st"), "scan cond: parameter")?;
+        let k = self.wrap(st.get_tuple_element(0), "scan cond: k")?;
+        let bound = self.wrap(cb.c0(n), "scan cond: bound")?;
+        let cond = self.wrap(k.lt(&bound), "scan cond: k < n")?;
+        let cond = cond
+            .build()
+            .map_err(|e| self.err(format!("scan cond build: {e}")))?;
+
+        let bb = XlaBuilder::new("scan_body");
+        let st = self.wrap(bb.parameter_s(0, &carried, "st"), "scan body: parameter")?;
+        let part = |i: i64| self.wrap(st.get_tuple_element(i), "scan body: unpack");
+        let (k, s, acc, out) = (part(0)?, part(1)?, part(2)?, part(3)?);
+        let zero = self.wrap(bb.c0(0i64), "scan body: zero")?;
+        let starts: Vec<XlaOp> = (0..full.len())
+            .map(|d| if d == ax { k.clone() } else { zero.clone() })
+            .collect();
+        let pl = self.wrap(s.dynamic_slice(&starts, &plane), "scan body: plane")?;
+        let next = self.bin(op, &acc, &pl)?;
+        let written = if inclusive { &next } else { &acc };
+        let out = self.wrap(
+            out.dynamic_update_slice(written, &starts),
+            "scan body: write plane",
+        )?;
+        let one = self.wrap(bb.c0(1i64), "scan body: one")?;
+        let k1 = self.wrap(k.add_(&one), "scan body: k + 1")?;
+        let body = self.wrap(bb.tuple(&[k1, s, next, out]), "scan body: pack")?;
+        let body = body
+            .build()
+            .map_err(|e| self.err(format!("scan body build: {e}")))?;
+
+        let acc0 = {
+            let c = self.c(init)?;
+            self.wrap(c.broadcast(&plane), "scan: initial accumulator")?
+        };
+        let start = self.wrap(
+            self.b
+                .tuple(&[self.ci(0)?, src.clone(), acc0, self.zeros(dims)?]),
+            "scan: initial state",
+        )?;
+        let res = self.wrap(XlaOp::while_(cond, body, start), "scan: while")?;
+        self.wrap(res.get_tuple_element(3), "scan: result")
     }
 
     /// The variable whose flat block contains `flat`.
