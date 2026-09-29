@@ -272,23 +272,18 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
     # converges, and the iteration cap surfaced as `E_TREEWALK_OBSERVED_CYCLE`.
     # These two testsets pin the distinction from both sides.
     @testset "a legal recurrence is not reported as a cycle" begin
+        # It builds, under both compilers, and its sweep is what the report
+        # shows for it (recurrence_sweep_test.jl pins the values).
         path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
                         "recurrence_causal_self_reference.esm")
         if _require_fixture(path)
-            err = try
-                EarthSciAST._build_evaluator(load_path(path))
-                nothing
-            catch e
-                e
+            for c in (:native, :interpreter)
+                insp = EarthSciAST.BuildInspection()
+                EarthSciAST._build_evaluator(load_path(path); compiler=c, inspect=insp)
+                rows = [r for r in insp.compiler_report.rules if endswith(r.rule, "r")]
+                @test length(rows) == 1
+                @test only(rows).tier === (c === :native ? :recurrence_sweep : :interpreter)
             end
-            @test err isa EarthSciAST.TreeWalkError
-            # The decline names the construct. What it must NOT say is "cycle":
-            # this backend reorders per-cell kernels and so cannot honour the
-            # fixed sweep order (CONFORMANCE_SPEC §5.19.2), which is a statement
-            # about the BACKEND, not about the document.
-            @test err.code == "E_TREEWALK_UNSUPPORTED_RECURRENCE"
-            @test err.code != "E_TREEWALK_OBSERVED_CYCLE"
-            @test occursin("r", err.detail)
         end
     end
 
