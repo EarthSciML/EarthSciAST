@@ -19,9 +19,11 @@
 #     on every call): an equation the loop gate admits takes the whole-array
 #     contraction nest instead, whatever the nest's own floor — so pinning that
 #     floor above every reduction here no longer holds the nest off, and the
-#     same identities now pin the nest. The per-cell loop itself survives only
-#     in the out-of-place build, whose emitters compile it
-#     (test/reactant_direct_emit_test.jl, test/scalar_batch_test.jl);
+#     same identities now pin the nest. The per-cell loop itself survives in
+#     the out-of-place build, whose emitters compile it
+#     (test/reactant_direct_emit_test.jl, test/scalar_batch_test.jl), and in a
+#     NON-STRICT in-place build for a long contraction no compile-once form
+#     takes, which must not unroll (the last testset below);
 #   * raising the per-cell tier's own floor above the reduction length then
 #     forces the pure-unroll reference.
 
@@ -385,5 +387,80 @@ end
         J = ForwardDiff.gradient(g, u0)
         W11(a,b) = Float64((1+2+3a+5b) % 7)
         @test all(J[vml["q[$a,$b]"]] == ((1<=a<=M && 1<=b<=M) ? W11(a,b) : 0.0) for a in 1:3, b in 1:3)
+    end
+end
+
+# A LONG contraction no compile-once form takes, in a NON-STRICT in-place build
+# (the plan a strict compiler's refusal sends a test to): it must not unroll, so
+# it takes the per-cell contraction loop when the loop takes it and is refused
+# by name when not. `out[i] = ⊕_{k ∈ 1:2:2K-1} body(F[i], W[k])` with `F` a live
+# forcing buffer, which the whole-array nest cannot keep symbolic, and a
+# non-unit step, which the affine tier's run-time fold does not take.
+function _cl_long_doc(n::Int, K::Int; orsr::Bool = false)
+    W = [1.0 + k / 8 for k in 1:(2K - 1)]
+    Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "cl_long_nonstrict"),
+        "models" => Dict("M" => Dict{String,Any}(
+            "variables" => Dict{String,Any}(
+                "u" => Dict("type" => "unknown", "shape" => Any["i"]),
+                "F" => Dict("type" => "parameter", "shape" => Any["i"])),
+            "equations" => Any[Dict(
+                "lhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                    "ranges" => Dict("i" => Any[1, n]),
+                    "expr" => Dict("op" => "D", "wrt" => "t",
+                        "args" => Any[Dict("op" => "index", "args" => Any["u", "i"])])),
+                "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                    "semiring" => orsr ? "bool_and_or" : "sum_product",
+                    "ranges" => Dict("i" => Any[1, n], "k" => Any[1, 2, 2K - 1]),
+                    "expr" => Dict("op" => orsr ? ">" : "*", "args" => Any[
+                        Dict("op" => "index", "args" => Any["F", "i"]),
+                        Dict("op" => "index", "args" => Any[
+                            Dict("op" => "const", "args" => Any[], "value" => W), "k"])])))])))
+end
+const _CL_NONSTRICT = _CL_ESS._plan_with(_CL_ESS._compiler_plan(:native); strict = false)
+function _cl_long_du(doc, n, compiler)
+    withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
+        _CL_ESS._reset_cascade_tally!()
+        kw = (; initial_conditions = Dict("u[$i]" => 0.0 for i in 1:n),
+                param_arrays = Dict("F" => collect(1.0:n) ./ 3))
+        f!, u0, p, _, vm = compiler isa Symbol ?
+            _CL_ESS._build_evaluator(doc; compiler = compiler, kw...) :
+            _CL_ESS._with_compiler_plan(compiler) do
+                _CL_ESS._build_evaluator_dict(doc; compiler = compiler, kw...)
+            end
+        du = similar(u0); f!(du, u0, p, 0.0)
+        ([du[vm["u[$i]"]] for i in 1:n], copy(_CL_ESS._CASCADE_TALLY))
+    end
+end
+
+@testset "runtime contraction loop — a long contraction in a non-strict in-place build" begin
+    n = 6
+    @testset "the loop takes it, bit for bit with the interpreter" begin
+        dl, tl = _cl_long_du(_cl_long_doc(n, 10), n, _CL_NONSTRICT)
+        di, _ = _cl_long_du(_cl_long_doc(n, 10), n, :interpreter)
+        @test get(tl, :percell_loop, 0) == 1
+        @test all(isequal.(dl, di))
+        # At 10^5 terms the loop is one node per output cell, not an unroll: the
+        # fold is the sequential one, seeded from 0̄.
+        K = 100_000
+        dL, tL = _cl_long_du(_cl_long_doc(n, K), n, _CL_NONSTRICT)
+        @test get(tL, :percell_loop, 0) == 1
+        W = [1.0 + k / 8 for k in 1:2:(2K - 1)]
+        @test all(dL[i] === foldl(+, (i / 3) * w for w in W; init = 0.0) for i in 1:n)
+    end
+    @testset "a ⊕ the loop does not fold is refused by name, at any length" begin
+        for K in (10, 100_000)
+            e = try
+                _cl_long_du(_cl_long_doc(n, K; orsr = true), n, _CL_NONSTRICT); nothing
+            catch err
+                err
+            end
+            @test e isa _CL_ESS.TreeWalkError &&
+                  e.code == _CL_ESS.ERROR_CODES.COMPILER_REFUSED_RULE
+            @test occursin("per-cell contraction loop does not take it: its ⊕ is `or`", e.detail)
+            @test occursin("contraction of $K terms", e.detail)
+            @test occursin("compiler=:interpreter", e.detail)
+        end
+        di, _ = _cl_long_du(_cl_long_doc(n, 10; orsr = true), n, :interpreter)
+        @test di == [Float64(i / 3 > 1.125) for i in 1:n]
     end
 end

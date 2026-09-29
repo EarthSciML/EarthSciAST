@@ -4818,26 +4818,35 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # `#output cells < ∏|k…|` is the most optimistic form of "the unroll cannot
     # be cheaper", and the loop takes the equation when it holds. Otherwise the
     # affine tier is offered it first and the loop stays behind as the fallback.
+    # `nothing` when the equation is a loop candidate and its body passes the
+    # probe, else why the loop does not take it (the refusal below says so).
+    loop_decline() = begin
+        _contraction_loop_enabled() || return "the per-cell contraction loop is off in this build"
+        isempty(contract_names) && return "it has no contracted index"
+        agg_gates === nothing || return "it has a join gate"
+        agg_filter === nothing || return "it has a filter"
+        all(c -> c !== nothing, contract_const) || return "a contracted bound is not constant"
+        (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") ||
+            return "its ⊕ is `$(rhs_oplus)`, and the loop folds only +, *, max or min"
+        isempty(range_iters) && return "it has no output index"
+        prod(length(c) for c in contract_const) >= _contraction_loop_min() ||
+            return "it is shorter than the loop's floor"
+        first_idx = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(first(range_iters[d])))
+                                         for d in 1:length(idx_names))
+        probe = _sub_preserving(rhs_body, first_idx)
+        probe = isempty(resolved_obs) ? probe : _sub_preserving(probe, resolved_obs)
+        pranges = [_expand_int_range(contract_ranges[d]) for d in 1:length(contract_names)]
+        _try_build_contraction_loop(probe, contract_names, pranges, rhs_oplus,
+            rhs_zerobar, array_var_info, var_map, const_registry, pgather) === nothing ?
+            "its body does not resolve with the contracted index kept symbolic " *
+            "(a state read at a contracted index, say)" : nothing
+    end
     use_contraction_loop = false
     loop_preempts_affine = false
-    if rhs_list_compiled && _contraction_loop_enabled() && !isempty(contract_names) &&
-       agg_gates === nothing && agg_filter === nothing &&
-       all(c -> c !== nothing, contract_const) &&
-       (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
-       !isempty(range_iters)
-        total_contract = prod(length(c) for c in contract_const)
-        if total_contract >= _contraction_loop_min()
-            first_idx = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(first(range_iters[d])))
-                                             for d in 1:length(idx_names))
-            probe = _sub_preserving(rhs_body, first_idx)
-            probe = isempty(resolved_obs) ? probe : _sub_preserving(probe, resolved_obs)
-            pranges = [_expand_int_range(contract_ranges[d]) for d in 1:length(contract_names)]
-            use_contraction_loop = _try_build_contraction_loop(probe, contract_names,
-                pranges, rhs_oplus, rhs_zerobar, array_var_info, var_map,
-                const_registry, pgather) !== nothing
-            n_out_cells = prod(length(r) for r in range_iters)
-            loop_preempts_affine = use_contraction_loop && n_out_cells < total_contract
-        end
+    if rhs_list_compiled && loop_decline() === nothing
+        use_contraction_loop = true
+        loop_preempts_affine = prod(length(r) for r in range_iters) <
+                               prod(length(c) for c in contract_const)
     end
     # The affine tier's LOOP form of the contraction (`_AffineReduce`, below):
     # it keeps the contracted indices as loop dims and folds them at run time,
@@ -5041,6 +5050,25 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
             resolved_obs=resolved_obs, array_var_info=array_var_info,
             var_map=var_map, const_registry=const_registry, pgather=pgather,
             param_sym_set=param_sym_set, reg_funcs=reg_funcs)
+    end
+    # A non-strict in-place build reaches here too, and a LONG contraction must
+    # not unroll in it either: the per-cell build would write every one of its
+    # terms into every output cell (and a 10^5-term fold is deep enough to
+    # overflow the stack where it is compiled). It takes the per-cell
+    # contraction loop when the loop takes it, and is refused by name when not.
+    # (`:interpreter` never gets here: its affine tier is off, so
+    # `long_contraction` is false and it unrolls, as the reference does.)
+    if long_contraction && !rhs_list_compiled
+        why_not = loop_decline()
+        use_contraction_loop = why_not === nothing
+        use_contraction_loop || _refuse_rule(label,
+            (isempty(offered) ? "no compile-once form was offered this contraction of " :
+             "every compile-once form offered declined this contraction of ") *
+            "$(prod(length(c) for c in contract_const)) terms, and the per-cell " *
+            "contraction loop does not take it: $(why_not). What is left is the " *
+            "per-cell build, which would unroll all of its terms into each of its " *
+            "$(prod(length(r) for r in range_iters)) output cells. Build with " *
+            "compiler=:interpreter to run it")
     end
     # Anything the affine build cannot model takes the per-cell fallback, whose
     # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,
