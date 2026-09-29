@@ -923,14 +923,14 @@ fn coloring_invariants() {
     let mut def = vec![usize::MAX; prog.slots.len()];
     let mut last = vec![0usize; prog.slots.len()];
     for (i, ins) in prog.instrs.iter().enumerate() {
-        ins.for_each_def(&prog.fused, |o| {
+        ins.for_each_def(&prog.tables(), |o| {
             if def[o as usize] == usize::MAX {
                 def[o as usize] = i;
             } else {
                 last[o as usize] = last[o as usize].max(i);
             }
         });
-        ins.for_each_read(&prog.dy_writes, &prog.fused, &prog.assemblies, |s| {
+        ins.for_each_read(&prog.tables(), |s| {
             last[s as usize] = last[s as usize].max(i);
         });
     }
@@ -3075,4 +3075,79 @@ fn ab_float32_variables_beside_float64_neighbours() {
         );
         assert_eq!(bits(&dy), bits(&want), "seed {seed}: fast executor");
     }
+}
+
+/// A state-driven causal self-reference (esm-spec §4.3.1.1) over a 2-D frame
+/// whose recurrence axis is the SECOND one (so the sweep's outer loop is not
+/// the row-major one), with a banded lag window under a `filter`, an `ifelse`
+/// on the contracted symbol, a const-array read by a frame symbol, a state read
+/// and a parameter-valued lag — read back by the derivative, so every executor
+/// runs the sweep on every call. `n` is the recurrence axis's extent.
+fn recurrence_doc(n: i64) -> serde_json::Value {
+    let w = json!({"op": "const", "args": [], "value": [0.0, 0.5, -0.25, 0.125]});
+    let body = json!({"op": "ifelse", "args": [
+        {"op": "==", "args": ["a", 0]},
+        {"op": "+", "args": [
+            {"op": "index", "args": ["u", "i"]},
+            {"op": "*", "args": [0.1, "j"]}
+        ]},
+        {"op": "*", "args": [
+            {"op": "max", "args": [
+                {"op": "index", "args": ["r", "i", {"op": "-", "args": ["j", "a"]}]}, -1.0]},
+            {"op": "index", "args": [w, {"op": "+", "args": ["a", 1]}]}
+        ]}
+    ]});
+    let lagged = json!({"op": "ifelse", "args": [
+        {"op": "<=", "args": ["j", "L"]},
+        0.0,
+        {"op": "index", "args": ["r", "i", {"op": "-", "args": ["j", "L"]}]}
+    ]});
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_recurrence"},
+        "models": {"M": {
+            "variables": {
+                "L": {"type": "parameter", "default": 2},
+                "u": {"type": "unknown", "shape": ["i"]},
+                "r": {"type": "unknown", "shape": ["i", "j"]},
+                "q": {"type": "unknown", "shape": ["i", "j"]}
+            },
+            "equations": [
+                {"lhs": "r", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                    "reduce": "+",
+                    "ranges": {"i": [1, 3], "j": [1, n], "a": [0, 3]},
+                    "filter": {"op": "<=", "args": ["a", {"op": "-", "args": ["j", 1]}]},
+                    "expr": body}},
+                {"lhs": "q", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                    "ranges": {"i": [1, 3], "j": [1, n]},
+                    "expr": {"op": "+", "args": [
+                        {"op": "index", "args": ["r", "i", "j"]}, lagged]}}},
+                {
+                    "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                            "expr": {"op": "D", "args": [
+                                {"op": "index", "args": ["u", "i"]}], "wrt": "t"},
+                            "ranges": {"i": [1, 3]}},
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                            "ranges": {"i": [1, 3]},
+                            "expr": {"op": "*", "args": [-0.01,
+                                {"op": "index", "args": ["q", "i", n]}]}}
+                }
+            ]
+        }}
+    })
+}
+
+#[test]
+fn ab_recurrence_sweep() {
+    let prog = ab_check(recurrence_doc(6), 0, -2.0, 2.0);
+    // One sweep, and nothing in its body fused.
+    assert_eq!(opcount(&prog, "Sweep"), 1);
+    assert!(opcount(&prog, "ScalarRead") > 0);
+    // The body is lowered once: the program and the sweep's body do not grow
+    // with the frame.
+    let body_len = |p: &TapeProgram| p.sweeps[0].body_len;
+    let small = compile(recurrence_doc(6)).build_tape_opts(&HashSet::new(), None).0;
+    let large = compile(recurrence_doc(600)).build_tape_opts(&HashSet::new(), None).0;
+    assert_eq!(body_len(&small), body_len(&large));
+    assert_eq!(small.instrs.len(), large.instrs.len());
 }
