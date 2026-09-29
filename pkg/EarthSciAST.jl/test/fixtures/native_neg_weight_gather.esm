@@ -1,0 +1,118 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "native_probe_neg_weight_gather",
+    "description": "A negated inline-const weight times a state read through an inline permutation table, D(u[i]) = -W[i] * u[P[i]]. Every Jacobian entry off the permutation is the product of -W[i] with a zero partial, which is -0.0 when -W[i] multiplies the state's dual number as a plain Float64. Native's emitter shares -W[i] as a per-cell recipe; converting that recipe to the dual type gives it zero partials, and the product rule then adds u[P[i]] * 0.0 = +0.0 to every partial. Both compilers must build it and agree bit for bit on the right-hand side and on its ForwardDiff Jacobian, the sign of zero included.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "native",
+      "probe"
+    ]
+  },
+  "models": {
+    "NegW": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": [
+            "i"
+          ],
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "neg",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        {
+                          "op": "const",
+                          "args": [],
+                          "value": [
+                            1.0,
+                            2.0,
+                            3.0,
+                            4.0
+                          ]
+                        },
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    {
+                      "op": "index",
+                      "args": [
+                        {
+                          "op": "const",
+                          "args": [],
+                          "value": [
+                            3,
+                            1,
+                            4,
+                            2
+                          ]
+                        },
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

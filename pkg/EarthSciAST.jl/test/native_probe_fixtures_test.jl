@@ -1,5 +1,5 @@
 # Probe fixtures for native's emitter and lowering holes the corpus census does
-# not reach (tests/fixtures/native_probes/, and one Julia-only document under
+# not reach (tests/fixtures/native_probes/, and two Julia-only documents under
 # test/fixtures/, see below): each document must BUILD under
 # `compiler = :native`, land on compile-once tiers only, and agree with
 # `compiler = :interpreter` bit for bit (`===` per element, so a NaN or a -0.0
@@ -20,7 +20,12 @@
 #     table inside a state subscript. It lives under test/fixtures/ rather than
 #     tests/, because the Rust binding's compiled form has no array-valued
 #     `const` yet, and every document under tests/ is in both bindings' native
-#     census.
+#     census;
+#   * native_neg_weight_gather — `-W[i] * u[P[i]]` with inline `const` tables
+#     (also under test/fixtures/, for the same reason): the emitter shares
+#     `-W[i]` as a per-cell recipe, which must keep its own `Float64` type
+#     rather than become a dual number with zero partials, or every Jacobian
+#     entry off the permutation turns from the reference's -0.0 into +0.0.
 using Test
 using EarthSciAST
 using ForwardDiff
@@ -28,7 +33,7 @@ include("testutils.jl")
 
 const _NPF = EarthSciAST
 const _NPF_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "fixtures", "native_probes")
-_npf_path(f) = f == "native_inline_const_subscript.esm" ?
+_npf_path(f) = f in ("native_inline_const_subscript.esm", "native_neg_weight_gather.esm") ?
     joinpath(@__DIR__, "fixtures", f) : joinpath(_NPF_DIR, f)
 
 function _npf_build(path, compiler)
@@ -74,7 +79,8 @@ end
 @testset "native probe fixtures" begin
     @testset "$(f)" for f in ("rank5_stencil.esm", "rank4_contraction.esm",
                               "fill_shared_invariant.esm",
-                              "native_inline_const_subscript.esm")
+                              "native_inline_const_subscript.esm",
+                              "native_neg_weight_gather.esm")
         r = _npf_agree(_npf_path(f))
         @test r.same
         @test r.jsame
