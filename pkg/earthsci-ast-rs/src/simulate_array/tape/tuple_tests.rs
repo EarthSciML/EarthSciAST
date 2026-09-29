@@ -409,3 +409,29 @@ fn a_fault_in_a_filtered_tuple_body_is_not_certain() {
         "{refused:?}"
     );
 }
+
+/// A gather from a const array with an EMPTY axis under a boundary policy:
+/// no index can be wrapped or clamped into it, so, as `index_into` does, the
+/// build treats it as out of range whatever the policy (and refuses) rather
+/// than dividing by the empty extent.
+#[test]
+fn a_tuple_gather_from_an_empty_const_axis_is_refused_under_any_policy() {
+    use crate::simulate_array::ConstArrayScope;
+    use crate::value_invention::BoundaryKind;
+    for kind in [BoundaryKind::Periodic, BoundaryKind::Clamp] {
+        let body = json!({"op": "*", "args": [idx(json!("C"), &[json!("k")]), idx(json!("v"), &[json!("i")])]});
+        let mut doc = ragged_doc(cnst(json!([2, 3, 1])), body, None);
+        doc["index_sets"]["none"] = json!({"kind": "interval", "size": 0});
+        doc["models"]["M"]["variables"]["C"] =
+            json!({"type": "unknown", "units": "1", "shape": ["none"]});
+        doc["models"]["M"]["equations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"lhs": "C", "rhs": cnst(json!([]))}));
+        let mut compiled = super::array_tests::compile(doc);
+        let scope: ConstArrayScope = (*compiled.const_scope).clone();
+        compiled.const_scope = std::rc::Rc::new(scope.with_boundary("C", vec![kind]));
+        let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
+        assert!(!refused.is_empty(), "{kind:?}");
+    }
+}
