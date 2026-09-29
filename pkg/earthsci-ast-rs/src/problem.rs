@@ -2353,6 +2353,15 @@ fn static_observed_fields(
         }
         (None, None) => return nothing(),
     };
+    // The evaluable-core gate runs first (esm-spec §9.6.3 constraint 6): it
+    // walks every equation, so an unknown no equation defines — which makes
+    // the system not state-free below — does not let a rewrite-target operator
+    // through unreported.
+    if let Some(op) = crate::flatten::first_unlowered_operator(flat) {
+        return Err(SimulateError::Compile(
+            crate::compile_error::CompileError::UnloweredOperatorError { op },
+        ));
+    }
     // A system WITH state is not state-free evaluable: an observed may read
     // state, and there is none to read. Reachable when `model_name` selects an
     // ODE-free model out of a document that has ODEs elsewhere, since
