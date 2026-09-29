@@ -660,6 +660,17 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
             ref = expr.value::_ConstGatherRef
             return _const_gather_node(ref.vals, children; name=ref.name)
         end
+        # A gather `_resolve_indices` left alone because its base names no
+        # array it knows: a variable with no declared or inferred shape, no
+        # const/forcing data, and no equation defining its cells.
+        base = isempty(expr.args) ? nothing : expr.args[1]
+        if base isa VarExpr
+            bn = (base::VarExpr).name
+            throw(TreeWalkError("E_TREEWALK_INDEX_NOT_ARRAY",
+                "index($(bn), …): '$(bn)' is not an array the build can gather from — " *
+                "it has no declared `shape`, no data bound to it, and no equation " *
+                "that defines its cells, so it has no element to read"))
+        end
         # Otherwise: index ops must be resolved to state-slot references by
         # _resolve_indices before reaching _compile; encountering one here
         # means the caller skipped that pass.

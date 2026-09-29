@@ -477,6 +477,11 @@ function _vi_range_values(spec, ctx::_ViCtx, bindings::AbstractDict)
         isempty(of) && throw(TreeWalkError("E_TREEWALK_VI_RANGE",
             "ragged value-invention range '$(spec.from)' needs an `of` parent"))
         parent = Int(bindings[of[1]])
+        for arr in (is.offsets, is.values)
+            haskey(ctx.const_arrays, arr) || throw(TreeWalkError("E_TREEWALK_VI_RANGE",
+                "ragged value-invention range '$(spec.from)' reads its member table " *
+                "'$(arr)', which no data source or const array supplied at setup"))
+        end
         offs = ctx.const_arrays[is.offsets]
         vals = ctx.const_arrays[is.values]
         nmem = Int(offs[parent])

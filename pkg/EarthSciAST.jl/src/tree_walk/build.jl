@@ -1486,7 +1486,8 @@ function _fold_ic_equations(equations::Vector{Equation}, model::Model,
             lop = eq.lhs::OpExpr
             (length(lop.args) == 1 && lop.args[1] isa VarExpr) ||
                 throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
-                    "ic(...) LHS must name a single state variable"))
+                    "ic(...) LHS must name a single state variable; got " *
+                    "$(first(to_ascii(eq.lhs), 200))"))
             vn = (lop.args[1]::VarExpr).name
             # An `ic` whose target is an array-shaped state variable is a
             # scoped-reference / field IC: defer it (its RHS is a field, not
@@ -1508,6 +1509,15 @@ function _fold_ic_equations(equations::Vector{Equation}, model::Model,
                     # swallowed as an ordinary decline further up
                     # (`_is_resource_error`).
                     _is_resource_error(err) && rethrow()
+                    rv = err isa UnboundVariableError ?
+                         get(model.variables, err.variable_name, nothing) : nothing
+                    rv !== nothing && rv.type == UnknownVariable &&
+                        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
+                            "ic($(vn)): the right-hand side reads the unknown " *
+                            "'$(err.variable_name)'. An initial condition is evaluated " *
+                            "before the run, when no unknown has a value, so a build-time " *
+                            "reference to one is an error (esm-spec §6.6.5 build-time " *
+                            "evaluation scope)"))
                     throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
                         "ic($(vn)) RHS must const-fold to a scalar for the " *
                         "tree-walk path ($(sprint(showerror, err)))"))
@@ -1783,9 +1793,16 @@ function _split_observed_and_derivatives(equations::Vector{Equation},
                                 "implicit equation `$(to_ascii(eq))` is not " *
                                 "supported by the Julia tree-walk evaluator; refusing " *
                                 "the build rather than running the model without it"))
+        elseif eq.lhs isa VarExpr
+            # A bare LHS naming no observed: a parameter, or a state.
+            throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
+                "equation `$(first(to_ascii(eq), 200))`: its left-hand side " *
+                "'$((eq.lhs::VarExpr).name)' " *
+                "is not an unknown this equation can define (esm-spec §6.3.1): an " *
+                "equation defines an unknown, and a parameter takes its value from " *
+                "its default, an override or a coupling"))
         else
-            # Any other unsupported equation form (a spatial derivative LHS, a
-            # bare LHS naming no observed).
+            # Any other unsupported equation form (a spatial derivative LHS).
             throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
                                 _equation_tag(eq)))
         end
