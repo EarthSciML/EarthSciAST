@@ -1729,6 +1729,20 @@ def _binning_coord_arrays(
     return {**ctx.observed_values, **ctx.derived_rings}
 
 
+def _has_arg_witness(flat: FlattenedSystem) -> bool:
+    """Whether an equation carries an ``argmin`` / ``argmax`` arg-witness, whose
+    assignment the value-invention front door materializes (§5.7 rule 6)."""
+
+    def walk(e: Any) -> bool:
+        if isinstance(e, ExprNode):
+            if e.op in ("argmin", "argmax"):
+                return True
+            return any(walk(a) for a in (e.args or [])) or walk(e.expr)
+        return False
+
+    return any(walk(eq.rhs) for eq in flat.equations)
+
+
 def _frontdoor_join_keys_and_extents(
     flat: FlattenedSystem,
     ordered_observed: list[tuple[str, Expr]],
@@ -1739,11 +1753,15 @@ def _frontdoor_join_keys_and_extents(
     total_size: int,
     factor_scope: dict[str, str],
     loader_arrays: dict[str, np.ndarray],
-) -> tuple[dict[str, np.ndarray], dict[str, str], dict[str, int], dict[str, list]]:
+) -> tuple[
+    dict[str, np.ndarray], dict[str, str], dict[str, int], dict[str, list], dict[str, np.ndarray]
+]:
     """Run the value-invention front-door ONCE at setup and return the broad-phase
     join-key buffers plus the derived-index-set extents AND the derived-set
     MEMBERS (RFC §5.3 / §6.1; members feed the Phase-3 pushdown hooks — the
-    ``member_factor`` const feedback and the gated-provider selection).
+    ``member_factor`` const feedback and the gated-provider selection), and the
+    arg-witness assignment and grouped / derived buffers, which a right-hand side
+    reads as build-time data.
 
     This is the single source of truth that RETIRES the former per-cell mirror
     (``_materialize_join_key_buffers`` + ``_value_invention_extents``): the
@@ -1767,8 +1785,8 @@ def _frontdoor_join_keys_and_extents(
         isinstance(s, dict) and s.get("kind") == "derived" and s.get("from_faq") is not None
         for s in flat.index_sets.values()
     )
-    if not bin_specs and not has_derived:
-        return {}, {}, {}, {}
+    if not bin_specs and not has_derived and not _has_arg_witness(flat):
+        return {}, {}, {}, {}, {}
     model_json = _reconstruct_model_json(flat)
     # Phase 3 pushdown hook 3: an OVERLAP-GATED `distinct` producer (the
     # auto-rewrite's generated support-set aggregate) carries no bin_spec, but
@@ -1850,7 +1868,11 @@ def _frontdoor_join_keys_and_extents(
             model_json, const_arrays, param_values, index_sets=flat.index_sets
         )
         buffers, idx_sets = _buffers(res)
-        return buffers, idx_sets, dict(res.extents), dict(res.members)
+        outputs = {
+            str(k): np.asarray(v, dtype=float)
+            for k, v in {**res.assignments, **res.groups}.items()
+        }
+        return buffers, idx_sets, dict(res.extents), dict(res.members), outputs
     except ValueInventionError as exc:
         # A producer a derived index set names could not run, so that set has no
         # members. Degrading its extent to {} would let a contraction over it fold
@@ -1872,7 +1894,7 @@ def _frontdoor_join_keys_and_extents(
             model_json, const_arrays, param_values, index_sets=flat.index_sets, maps_only=True
         )
         buffers, idx_sets = _buffers(res)
-        return buffers, idx_sets, {}, {}
+        return buffers, idx_sets, {}, {}, {}
 
 
 # --------------------------------------------------------------------------- #
@@ -2910,8 +2932,9 @@ def _build_numpy_rhs(
         join_key_index_sets = static_cache["join_key_index_sets"]
         derived_extents = static_cache["derived_extents"]
         vi_members = static_cache.get("vi_members", {})
+        vi_outputs = static_cache.get("vi_outputs", {})
     else:
-        join_key_buffers, join_key_index_sets, derived_extents, vi_members = (
+        join_key_buffers, join_key_index_sets, derived_extents, vi_members, vi_outputs = (
             _frontdoor_join_keys_and_extents(
                 flat,
                 ordered_observed,
@@ -2929,6 +2952,7 @@ def _build_numpy_rhs(
             static_cache["join_key_index_sets"] = join_key_index_sets
             static_cache["derived_extents"] = derived_extents
             static_cache["vi_members"] = vi_members
+            static_cache["vi_outputs"] = vi_outputs
 
     # ---- Phase 3 pushdown hook 1: value-invention MEMBERS fed back as const
     # factors. A `kind:"derived"` index set naming a `member_factor` gets that
@@ -2950,6 +2974,15 @@ def _build_numpy_rhs(
         for _k, _v in _feed_back_vi_members(flat.index_sets, vi_members, _all_var_names).items():
             loader_arrays[_k] = _v  # engine-derived: overwrites, like Julia merge!
             axis_valued_input_names.add(_k)
+    # An arg-witness assignment (`assign[i] = argmin_g …`) and the grouped /
+    # derived buffers keyed on it are CONST-cadence data the front door has just
+    # materialized: a right-hand side reads them as it reads a supplied const
+    # array, and the observed hoist does not re-evaluate their definitions.
+    if vi_outputs:
+        for _k, _v in vi_outputs.items():
+            loader_arrays[_k] = _v
+            axis_valued_input_names.add(_k)
+        ordered_observed = [(n, r) for n, r in ordered_observed if n not in vi_outputs]
 
     # ---- Phase 3 pushdown hook 2: gated-provider deferral → post-VI selective
     # fetch. Providers stashed by `prepare` (skipped by its eager const loop)

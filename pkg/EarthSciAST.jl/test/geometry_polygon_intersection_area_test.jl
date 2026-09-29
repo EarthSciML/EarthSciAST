@@ -132,3 +132,43 @@ const _PIA_SQUARE_B = [1.0 1.0; 3.0 1.0; 3.0 3.0; 1.0 3.0]
         @test isapprox(sol.u[end][vmap["area_state"]], 1.0; atol=1e-9)
     end
 end
+
+
+# The front door (`esm_problem`) runs the downstream shape promotion before the
+# build. A geometry kernel consumes each operand as a whole ring, so two rings of
+# different vertex counts (`[src_verts, coord]` vs `[tgt_verts, coord]`) are not a
+# broadcast conflict, and two rings of the SAME shape must not promote the scalar
+# area to that shape. Both compilers build each document, and their right-hand
+# sides agree bit for bit.
+@testset "polygon geometry through esm_problem, both compilers" begin
+    _scalar_field_param = joinpath(_PIA_REPO_ROOT, "tests", "conformance",
+                                   "expression_templates", "scalar_field_param")
+    cases = [
+        (joinpath(_PIA_VALID_GEOM, "polygon_intersection_area_padded_ring.esm"),
+         Dict{String,Any}(), "area_state", 1.0),
+        (joinpath(_PIA_VALID_GEOM, "polygon_intersection_area_planar.esm"),
+         Dict{String,Any}(), "area_state", 1.0),
+        # An unknown defined by an array `const` node is a constant factor
+        # (esm-spec §4.2), so it is an `intersect_polygon` operand like a
+        # caller-supplied array.
+        (joinpath(_PIA_VALID_GEOM, "intersect_polygon_planar_ode.esm"),
+         Dict{String,Any}(), "tracer", -1.0),
+        (joinpath(_scalar_field_param, "expanded.esm"),
+         Dict{String,Any}("poly_a" => _PIA_SQUARE_A, "poly_b" => _PIA_SQUARE_B), "u", -1.0),
+        (joinpath(_scalar_field_param, "fixture.esm"),
+         Dict{String,Any}("poly_a" => _PIA_SQUARE_A, "poly_b" => _PIA_SQUARE_B), "u", -1.0),
+    ]
+    for (path, ca, var, want) in cases
+        dus = Dict{Symbol,Vector{Float64}}()
+        for c in (:interpreter, :native)
+            prob = _PIA.esm_problem(path, (0.0, 1.0); compiler = c, const_arrays = ca)
+            u = ones(length(prob.u0))
+            du = fill(NaN, length(u))
+            prob.f!(du, u, prob.p, 0.0)
+            dus[c] = du
+            k = only(k for k in keys(prob.var_map) if k == var || endswith(k, "." * var))
+            @test du[prob.var_map[k]] ≈ want atol = 1e-12
+        end
+        @test reinterpret(UInt64, dus[:native]) == reinterpret(UInt64, dus[:interpreter])
+    end
+end
