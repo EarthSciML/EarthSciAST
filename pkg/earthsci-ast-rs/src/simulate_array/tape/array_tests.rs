@@ -442,6 +442,42 @@ fn makearray_empty_region_is_skipped() {
     ab(&compiled, &no_params());
 }
 
+/// An empty region's value is still evaluated by the oracle, and an ARRAY
+/// value that does not fit the (empty) region poisons the whole makearray
+/// with `NaN`, as a mismatched value in any region does. The overlay agrees,
+/// and the tape, which cannot place that `NaN`, refuses the rule.
+#[test]
+fn makearray_empty_region_with_a_mismatched_value_is_the_oracles_nan() {
+    let n = 3;
+    let compiled = compile(json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_makearray_empty_mismatch"},
+        "index_sets": {"x": {"kind": "interval", "size": n}},
+        "models": {"M": {
+            "variables": {"c": {"type": "unknown", "shape": ["x"]}},
+            "equations": [{"lhs": {"op": "D", "args": ["c"], "wrt": "t"}, "rhs":
+                {"op": "makearray", "args": [],
+                 "regions": [[[3, 2]], [[1, 3]]],
+                 "values": [
+                    lit(&[1.0, 2.0, 3.0, 4.0, 5.0]),
+                    {"op": "faq", "output_idx": ["i"], "args": [], "ranges": {"i": [1, 3]},
+                     "expr": {"op": "-", "args": [idx(json!("c"), &[json!("i")])]}}
+                 ]}}]
+        }}
+    }));
+    let state = vec![0.5, -1.25, 2.0];
+    let params = HashMap::new();
+    let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
+    let (dy_overlay, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+    assert!(dy_oracle.iter().all(|x| x.is_nan()), "{dy_oracle:?}");
+    assert_bits_eq(&dy_overlay, &dy_oracle, "overlay vs oracle");
+    let refused = agrees_or_refuses(&compiled, &no_params(), &[state]);
+    assert!(
+        !refused.is_empty(),
+        "the tape assembled a mismatched makearray"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Empty output boxes.
 // ---------------------------------------------------------------------------

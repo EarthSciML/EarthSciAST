@@ -1891,9 +1891,12 @@ pub(super) fn eval_vec_makearray<'a>(
             })
             .collect();
         // The legal EMPTY spelling (`stop == start - 1`, §4.3.2) covers no
-        // cell and its value is never consulted.
+        // cell, but `eval_makearray` still evaluates its value, and an array
+        // value that does not fit poisons the result with `NaN`. This
+        // evaluator has no empty box to evaluate it over, so it declines.
         if r_shape.contains(&0) {
-            continue;
+            pool.give_array(result);
+            bail_vec!("makearray: empty region");
         }
         // ess-cse: a region has its own `lo`/extent, so a coordinate ramp and
         // every shifted gather mean something different in it — a distinct box,
