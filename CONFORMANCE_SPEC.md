@@ -4831,6 +4831,38 @@ compared exactly. Runners: **Julia** —
 `bindings_required` is `["julia", "python", "rust"]`; TypeScript and Go are
 `scope_excluded`.
 
+#### 5.32.6 A shaped parameter with no data is refused by name
+
+esm-spec §10.10: a parameter with neither a default nor a supplied value is an
+error when a problem is built. For a SHAPED parameter the supplied value is an
+override, a caller's `const_arrays` entry (§5.32.5), a provider for the data
+source its `update` names, or a live forcing buffer; a registered handler that
+writes the parameter only when it fires supplies nothing before then. With none
+of these, every compiler refuses the construction with
+`E_TREEWALK_MISSING_DATA`, naming the parameter, what the document says feeds
+it (a data source, a handler, or nothing) and how to supply it. A binding that
+runs on an invented value — the scalar stand-in `0.0`, a `NaN`, a scalar slot a
+per-cell read cannot index — or that defers the failure to the first
+evaluation, is not conforming. Julia refused as `E_TREEWALK_UNSUPPORTED_SHAPE:
+<name>`; Rust built every such document and failed at the solve with an
+unrelated message; Python bound the stand-in as a scalar.
+
+With the case's arrays supplied, every compiler builds and the right-hand side
+at a fixed probe state is bit-for-bit the same under `native` and
+`interpreter` within each binding. One case that builds either way pins that a
+caller's array outranks a declared scalar default in a DIFFERENTIAL document
+(Rust's compiled right-hand side read the default and ignored the array).
+
+Python's default provider reads a document's own `data_sources` when the caller
+supplies no provider; an unreadable source refuses the construction with the
+same code, naming the parameter it could not read.
+
+**Gate:** `tests/conformance/missing_data/`. Runners: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_missing_data_test.jl`; **Python** —
+`pkg/earthsci-ast-py/tests/test_missing_data_conformance.py`; **Rust** —
+`pkg/earthsci-ast-rs/tests/missing_data_conformance.rs`. `bindings_required` is
+`["julia", "python", "rust"]`; TypeScript and Go are `scope_excluded`.
+
 ### 5.33 `operator_compose` Merge Intent (normative)
 
 esm-libraries-spec §4.7.1 step 5 preserves an equation the merge did not match.
