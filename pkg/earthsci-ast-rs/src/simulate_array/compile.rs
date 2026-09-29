@@ -438,14 +438,12 @@ impl ArrayCompiled {
             .into_iter()
             .collect();
         // `from_model` clones the model internally anyway, so taking the clone
-        // here to rewrite it costs nothing extra — same shape as
-        // `from_file_owned` below, which owns its model outright.
-        let hits = self_qualified_references(model, model_name);
-        let mut local = model.clone();
-        if !hits.is_empty() {
-            resolve_self_qualified_references(&mut local, &hits);
-        }
-        let mut compiled = Self::from_model_owned(local, &index_sets)?;
+        // here costs nothing extra — same shape as `from_file_owned` below,
+        // which owns its model outright. The model's name rides along so the
+        // pipeline can resolve self-qualified references once the subsystems
+        // are mounted.
+        let mut compiled =
+            Self::compile_pipeline(model.clone(), &index_sets, None, Some(model_name))?;
         // Record the model's namespace so overrides may be keyed `Model.param`
         // (the scalar/flatten/Julia convention) as well as the raw `param` this
         // single-model path builds (WS3 override-naming parity).
@@ -456,7 +454,7 @@ impl ArrayCompiled {
     /// [`Self::from_file`], consuming the file. The peak-memory-lean build for
     /// a large expanded discretization: the single model is MOVED out of the
     /// file (nothing is cloned), the rest of the document is dropped here, and
-    /// [`Self::from_model_owned`] then moves each observed body into its
+    /// [`Self::compile_pipeline`] then moves each observed body into its
     /// compiled rule instead of deep-copying it. For `simpleclimate.esm` at
     /// the production grid the borrowed `from_file` holds three ~1 GiB copies
     /// live at once (the caller's file, the compile's private model clone, the
@@ -472,12 +470,8 @@ impl ArrayCompiled {
         }
         let index_sets: HashMap<String, IndexSet> =
             file.index_sets.unwrap_or_default().into_iter().collect();
-        let (model_name, mut model) = models.into_iter().next().unwrap();
-        let hits = self_qualified_references(&model, &model_name);
-        if !hits.is_empty() {
-            resolve_self_qualified_references(&mut model, &hits);
-        }
-        let mut compiled = Self::from_model_owned(model, &index_sets)?;
+        let (model_name, model) = models.into_iter().next().unwrap();
+        let mut compiled = Self::compile_pipeline(model, &index_sets, None, Some(&model_name))?;
         compiled.namespace = Some(model_name);
         Ok(compiled)
     }
@@ -649,33 +643,37 @@ impl ArrayCompiled {
     ) -> Result<Self, CompileError> {
         // The rewrite passes below need an owned model; clone so the caller's
         // model — and its serialized form — is untouched. A caller that can
-        // give up its model avoids this copy via [`Self::from_model_owned`]
+        // give up its model avoids this copy via [`Self::compile_pipeline`]
         // (reached through [`Self::from_file_owned`] / `compile_array`).
         Self::from_model_owned_with_arrays(model.clone(), index_sets, vi_arrays)
     }
 
-    /// [`Self::from_model`], consuming the model: the compile pipeline's
-    /// rewrite passes mutate it in place (no private clone), and the observed
-    /// bodies — the dominant allocation of a large expanded discretization —
-    /// are MOVED into the compiled rules rather than deep-copied
-    /// (`build_observed_rules` takes each `var.expression`). Behaviourally
-    /// identical to `from_model`: every stage runs in the same order on the
-    /// same values.
-    fn from_model_owned(
+    /// [`Self::from_model_with_arrays`], consuming the model: the compile
+    /// pipeline's rewrite passes mutate it in place (no private clone), and
+    /// the observed bodies — the dominant allocation of a large expanded
+    /// discretization — are MOVED into the compiled rules rather than
+    /// deep-copied (`build_observed_rules` takes each `var.expression`).
+    /// Behaviourally identical to `from_model`: every stage runs in the same
+    /// order on the same values.
+    fn from_model_owned_with_arrays(
         model_owned: Model,
         index_sets: &HashMap<String, IndexSet>,
+        vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
     ) -> Result<Self, CompileError> {
-        Self::from_model_owned_with_arrays(model_owned, index_sets, None)
+        Self::compile_pipeline(model_owned, index_sets, vi_arrays, None)
     }
 
-    /// The compile pipeline itself: [`Self::from_model_owned`] with the
-    /// caller-supplied factor-array channel of
-    /// [`Self::from_model_with_arrays`]. Every public entry point above
-    /// delegates here.
-    fn from_model_owned_with_arrays(
+    /// The compile pipeline itself; every public entry point above delegates
+    /// here. `model_name` names the document model being compiled on the
+    /// single-model route. With a name, every self-qualified reference (`M.x`,
+    /// `M.sub.x`) is resolved to its local spelling right after the subsystems
+    /// are mounted, so one authored inside a subsystem body resolves as well
+    /// as one in the parent's own equations.
+    fn compile_pipeline(
         mut model_owned: Model,
         index_sets: &HashMap<String, IndexSet>,
         vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+        model_name: Option<&str>,
     ) -> Result<Self, CompileError> {
         // Resolve `{ "from": <index set> }` range references (RFC
         // semiring-faq-unified-ir §5.2) into concrete `[lo, hi]` intervals
@@ -701,6 +699,9 @@ impl ArrayCompiled {
         }
         let mut index_sets_owned = index_sets.clone();
         mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
+        if let Some(name) = model_name {
+            resolve_self_references(&mut model_owned, name);
+        }
         // `flatten`'s rewrites, which this SINGLE-MODEL route never gets
         // (see `from_file_owned`). Runs after mounting so a subsystem's
         // equations and declarations are in scope under their mounted names.
@@ -3927,8 +3928,14 @@ pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
 /// Resolve every self-qualified reference in `model` (`M.a` written inside
 /// model `M`) to its local name, as the single-model route does before it
 /// compiles — for the build pipeline, which reads the same authored model.
+/// Run it after [`mount_subsystems`], so a reference authored inside a
+/// subsystem body is resolved too.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn resolve_model_self_references(model: &mut Model, model_name: &str) {
+    resolve_self_references(model, model_name);
+}
+
+fn resolve_self_references(model: &mut Model, model_name: &str) {
     let hits = self_qualified_references(model, model_name);
     if !hits.is_empty() {
         resolve_self_qualified_references(model, &hits);
@@ -3948,11 +3955,11 @@ pub(crate) fn resolve_model_self_references(model: &mut Model, model_name: &str)
 /// left alone for the usual unbound-name diagnostics. Empty — the common case,
 /// costing one read-only walk — means the model is used untouched.
 ///
-/// Scope: the PARENT's own expressions. This runs before `mount_subsystems`,
-/// and `Model::subsystems` is still raw `serde_json::Value`, so a self-qualified
-/// reference authored INSIDE a subsystem body is not collected — an
-/// incompleteness of this rule, not a regression (that spelling never resolved
-/// on this path).
+/// Scope: every expression of the model as it stands. The callers run this
+/// after `mount_subsystems`, so a subsystem's equations are already the
+/// model's own under their mounted names, and a self-qualified reference
+/// authored inside a subsystem body (`M.Ocean.Surface.sst` in
+/// `M.Atmosphere`'s equation) is collected like one in the parent's.
 fn self_qualified_references(model: &Model, model_name: &str) -> Vec<(String, String)> {
     let prefix = format!("{model_name}.");
     let subsystems: HashSet<&str> = model
@@ -5558,5 +5565,60 @@ mod subsystem_ragged_and_inspection_tests {
             "a node binding `i` must keep the qualified spelling, got {:?}",
             mul.args[0]
         );
+    }
+
+    /// esm-spec §4.6: a self-qualified reference authored INSIDE a subsystem
+    /// body — `M.B.y` in `M.A`'s equation, `M.k` two levels down — names the
+    /// same variable as the mounted spelling, and resolves on the single-model
+    /// route like one in the parent's own equations. Each tendency reads a
+    /// value no other rule supplies, so an unresolved name cannot hide.
+    #[test]
+    fn self_qualified_references_inside_subsystem_bodies_resolve() {
+        let file = typed(json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "nested_self_refs"},
+            "models": {"M": {
+                "variables": {"k": {"type": "parameter", "units": "1", "default": 2.0}},
+                "equations": [],
+                "subsystems": {
+                    "A": {
+                        "variables": {"x": {"type": "unknown", "units": "1", "default": 1.0}},
+                        "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                       "rhs": {"op": "*", "args": ["M.k", "M.B.C.z"]}}],
+                        "subsystems": {"C": {
+                            "variables": {"z": {"type": "unknown", "units": "1", "default": 3.0}},
+                            "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"},
+                                           "rhs": {"op": "-", "args": ["M.A.x"]}}]
+                        }}
+                    },
+                    "B": {
+                        "variables": {},
+                        "equations": [],
+                        "subsystems": {"C": {
+                            "variables": {"z": {"type": "unknown", "units": "1", "default": 5.0}},
+                            "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"},
+                                           "rhs": {"op": "*", "args": ["M.k", "M.A.C.z"]}}]
+                        }}
+                    }
+                }
+            }}
+        }));
+        let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+        let (_, report) = compiled.build_tape(&HashSet::new());
+        assert!(
+            report.fallbacks.is_empty(),
+            "every self-qualified read must resolve: {:?}",
+            report.fallbacks
+        );
+        let names = compiled.state_variable_names();
+        let at = |n: &str| names.iter().position(|s| s == n).expect(n);
+        let mut state = vec![0.0; names.len()];
+        state[at("A.x")] = 1.0;
+        state[at("A.C.z")] = 3.0;
+        state[at("B.C.z")] = 5.0;
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+        assert_eq!(dy[at("A.x")], 10.0, "D(A.x) = k * B.C.z");
+        assert_eq!(dy[at("A.C.z")], -1.0, "D(A.C.z) = -A.x");
+        assert_eq!(dy[at("B.C.z")], 6.0, "D(B.C.z) = k * A.C.z");
     }
 }
