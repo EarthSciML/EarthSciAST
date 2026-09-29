@@ -1,0 +1,43 @@
+{
+  "fixture": "valid_recurrence_causal_self_reference",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "banded_lag_fold_is_the_ascending_left_fold",
+      "assertion_idx": 1,
+      "variable": "r",
+      "actual": 1e-16
+    },
+    {
+      "test_id": "banded_lag_fold_is_the_ascending_left_fold",
+      "assertion_idx": 2,
+      "variable": "r",
+      "actual": 0.9999999999999999
+    },
+    {
+      "test_id": "banded_lag_fold_is_the_ascending_left_fold",
+      "assertion_idx": 3,
+      "variable": "r",
+      "actual": -1.0
+    },
+    {
+      "test_id": "banded_lag_fold_is_the_ascending_left_fold",
+      "assertion_idx": 4,
+      "variable": "r",
+      "actual": 99999997.0
+    },
+    {
+      "test_id": "banded_lag_fold_is_the_ascending_left_fold",
+      "assertion_idx": 5,
+      "variable": "r",
+      "actual": -99999997.0
+    },
+    {
+      "test_id": "banded_lag_fold_is_the_ascending_left_fold",
+      "assertion_idx": 6,
+      "variable": "r",
+      "actual": -1.0000000299999992e+16
+    }
+  ]
+}

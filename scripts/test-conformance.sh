@@ -1117,7 +1117,7 @@ INLINE_TESTS_RUNNER="$SCRIPT_DIR/run-inline-tests-conformance.py"
 # Every tier whose manifest declares `"runner": "inline_tests"`. Listed
 # explicitly rather than globbed: a tier appears in the gate because someone put
 # it there, and a manifest that lands without a stage should be noticed.
-INLINE_TESTS_TIERS=(broadcast_alignment scalar_operator_semantics faq_pointwise_filter)
+INLINE_TESTS_TIERS=(broadcast_alignment scalar_operator_semantics faq_pointwise_filter recurrence)
 
 run_inline_tests_conformance_self_test() {
     local rc=0 tier manifest

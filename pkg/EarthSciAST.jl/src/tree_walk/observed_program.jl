@@ -23,6 +23,11 @@
 #
 # `interpreter` does not come here: it keeps the build-time cellwise evaluator
 # (`evaluate_cellwise`), the oracle this program is checked against bit for bit.
+# The one exception is an observed whose definitions reach a causal
+# self-reference (esm-spec §4.3.1.1): a cellwise evaluation has no buffer for the
+# self-read to read, so under `interpreter` such a read also takes this route,
+# with the program built under the interpreter's plan — its fills walked per cell
+# and its recurrence sweeps in their walked form (`_obs_reaches_recurrence`).
 
 # Everything a program build needs from the build that produced the problem.
 # Captured by `_build_compile_evaluator` into the problem's `BuildInspection`,
@@ -183,10 +188,14 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     mat_vars = collect(mat)
     parts = ctx.parts
     cls = ctx.cls
+    # Every recurrence of the build stays out of the substitution map, the ones
+    # this program does not read included: a self-reference has no inlined form
+    # (the right-hand side's build already materialized each of them).
+    shaped_vars = Set{String}(n for (n, vv) in model.variables if _is_array_shape(vv.shape))
     _, resolved_obs, raw_obs, mat_defs = _split_observed_and_derivatives(
         parts.equations, parts.observed_names, cls.geom_ring_vars,
-        cls.geom_setup_vars, cls.geom_inline_vars, cls.array_inline_vars, mat,
-        Set{String}(n for (n, vv) in model.variables if _is_array_shape(vv.shape)))
+        cls.geom_setup_vars, cls.geom_inline_vars, cls.array_inline_vars,
+        union(mat, _recurrence_names(ctx.defs, shaped_vars)), shaped_vars)
     # The extended layout: the state, then one block per materialized observed.
     mat_dims = Dict{String,Vector{Int}}()
     for m in mat_vars
@@ -213,12 +222,25 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     end
     levels = Any[]
     if !isempty(mat_vars)
+        recur_names = _recurrence_names(mat_defs, mat)
         for lvl in _materialized_obs_levels(mat_defs, mat, raw_obs)
             lvl_scalars = Tuple{Int,_Node}[]
             lvl_kernels = _AccKernel[]
             lvl_scans = _ScanFold[]
             lvl_acs = _ArrayContraction[]
+            lvl_recurs = Any[]
             for m in lvl
+                if m in recur_names
+                    # The same sweep the right-hand side's fill levels run
+                    # (recurrence_sweep.jl), against this program's layout.
+                    push!(lvl_recurs, _with_open_rule_label(m) do
+                        _compile_recurrence_sweep(m, mat_defs[m], mat_dims[m],
+                            get(model.variables, m, nothing), resolved_obs, avi, vm,
+                            ctx.const_registry, ctx.pgather, ctx.param_sym_set,
+                            ctx.reg_funcs)
+                    end)
+                    continue
+                end
                 feq = _materialized_fill_equation(m, mat_defs[m], mat_dims[m])
                 se, pcs, aks, sfs, acs = _with_rule_alias(m, m) do
                     _compile_derivative_equations(Equation[feq], resolved_obs, avi, vm,
@@ -239,7 +261,7 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
                 _make_kernel_section(merged)
             end
             push!(levels, (lvl_scalars, section, lvl_scans,
-                           _make_contraction_section(lvl_acs)))
+                           _make_contraction_section(lvl_acs), Tuple(lvl_recurs)))
         end
     end
     scalar = nothing
@@ -258,6 +280,25 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     end
     return _ObservedProgram(name, dims, cells, Tuple(levels), scalar, nothing,
                             n_total, ctx.n_states, out_slots, st, tm)
+end
+
+# Whether the observed `name`'s definition reaches a causal self-reference —
+# itself or an observed it reads, directly or through other observeds.
+function _obs_reaches_recurrence(ctx::_ObsProgramCtx, name::String)
+    defs = ctx.defs
+    haskey(defs, name) || return false
+    shaped = Set{String}(n for (n, v) in ctx.model.variables if _is_array_shape(v.shape))
+    seen = Set{String}()
+    frontier = String[name]
+    while !isempty(frontier)
+        n = pop!(frontier)
+        (n in seen || !haskey(defs, n)) && continue
+        push!(seen, n)
+        (n in shaped && recurrence_self_reference_kind(n, defs[n]) === :indexed) &&
+            return true
+        append!(frontier, collect(_referenced_var_names(defs[n])))
+    end
+    return false
 end
 
 # Run `f` with `label` as the rule a refusal raised inside it names, outside

@@ -1079,6 +1079,9 @@ struct ModelVariable
     location::Union{String,Nothing}
     distribution::Union{Distribution,Nothing}
     update::Union{Vector{ParameterUpdate},Nothing}
+    # The variable's own floating-point precision (esm-spec §6.3, §11.3.1):
+    # "Float32" or "Float64", or `nothing` for the document's.
+    element_type::Union{String,Nothing}
 
     # Constructor with optional parameters
     ModelVariable(type::ModelVariableType;
@@ -1089,9 +1092,11 @@ struct ModelVariable
                   shape=nothing,
                   location=nothing,
                   distribution=nothing,
-                  update=nothing) =
+                  update=nothing,
+                  element_type=nothing) =
         new(type, _coerce_inline_value(default), description, units, default_units,
-            shape, location, distribution, _coerce_update_vector(update))
+            shape, location, distribution, _coerce_update_vector(update),
+            element_type === nothing ? nothing : String(element_type))
 end
 
 # ---- Inline value coercion (esm-spec §6.3 / §6.6.2) --------------------------
@@ -1241,11 +1246,13 @@ function reconstruct(v::ModelVariable;
         shape = v.shape,
         location = v.location,
         distribution = v.distribution,
-        update = v.update)
+        update = v.update,
+        element_type = v.element_type)
     return ModelVariable(type;
         default=default, description=description,
         units=units, default_units=default_units, shape=shape,
-        location=location, distribution=distribution, update=update)
+        location=location, distribution=distribution, update=update,
+        element_type=element_type)
 end
 
 """
@@ -2916,6 +2923,7 @@ const RECORD_FIELD_TABLES = (
         (f = :update, wire = "update", kind = :custom,
          parse_fn = :_coerce_parameter_update_spec, mode = :opt,
          emit = :custom, emit_fn = :_emit_parameter_update_spec),
+        (f = :element_type, wire = "element_type", kind = :string, mode = :opt, emit = :nonnothing),
     )),
     (T = :FunctionalUpdate, fn = :functional_update, rows = (
         (f = :handler_id,  wire = "handler_id",  kind = :string_strict, mode = :req_err,

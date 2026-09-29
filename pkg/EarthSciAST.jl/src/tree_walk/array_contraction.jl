@@ -101,6 +101,8 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         return _cg_const_gather(ctx, kc, nd)
     elseif k === _NK_STATE_GATHER
         return _cg_state_gather(ctx, kc, nd)
+    elseif k === _NK_RECUR_GATHER
+        return _cg_recur_gather(ctx, kc, nd)
     elseif k === _NK_LOOPVAR
         s = get(kc.loops, nd.payload, nothing)
         s === nothing && throw(_CodegenDecline(:loopvar_out_of_scope))

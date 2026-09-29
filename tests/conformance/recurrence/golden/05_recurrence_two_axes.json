@@ -1,0 +1,79 @@
+{
+  "fixture": "05_recurrence_two_axes",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "folds_along_one_axis_only",
+      "assertion_idx": 1,
+      "variable": "m",
+      "actual": 1.0
+    },
+    {
+      "test_id": "folds_along_one_axis_only",
+      "assertion_idx": 2,
+      "variable": "m",
+      "actual": 10.0
+    },
+    {
+      "test_id": "folds_along_one_axis_only",
+      "assertion_idx": 3,
+      "variable": "m",
+      "actual": 100.0
+    },
+    {
+      "test_id": "folds_along_one_axis_only",
+      "assertion_idx": 4,
+      "variable": "m",
+      "actual": 1000.0
+    },
+    {
+      "test_id": "folds_along_one_axis_only",
+      "assertion_idx": 5,
+      "variable": "m",
+      "actual": 2.0
+    },
+    {
+      "test_id": "folds_along_one_axis_only",
+      "assertion_idx": 6,
+      "variable": "m",
+      "actual": 20.0
+    },
+    {
+      "test_id": "folds_along_one_axis_only",
+      "assertion_idx": 7,
+      "variable": "m",
+      "actual": 200.0
+    },
+    {
+      "test_id": "folds_along_one_axis_only",
+      "assertion_idx": 8,
+      "variable": "m",
+      "actual": 2000.0
+    },
+    {
+      "test_id": "folds_along_one_axis_only",
+      "assertion_idx": 9,
+      "variable": "m",
+      "actual": 3.0
+    },
+    {
+      "test_id": "folds_along_one_axis_only",
+      "assertion_idx": 10,
+      "variable": "m",
+      "actual": 30.0
+    },
+    {
+      "test_id": "folds_along_one_axis_only",
+      "assertion_idx": 11,
+      "variable": "m",
+      "actual": 300.0
+    },
+    {
+      "test_id": "folds_along_one_axis_only",
+      "assertion_idx": 12,
+      "variable": "m",
+      "actual": 3000.0
+    }
+  ]
+}
