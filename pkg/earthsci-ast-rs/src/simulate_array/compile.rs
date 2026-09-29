@@ -903,6 +903,7 @@ impl ArrayCompiled {
         // Classify scoped-reference / array `ic` equations (esm-spec §11.4.1)
         // out of the rule builder into `field_ics` (see [`classify_field_ics`]).
         let field_ics = classify_field_ics(model);
+        let init_faqs = classify_initialization_faqs(model);
 
         // (7)+(7b)+(8) Build the RHS rules, cover held-at-ic slots, and
         // validate that every state slot has a defining equation.
@@ -942,6 +943,7 @@ impl ArrayCompiled {
             forcing: Rc::new(RefCell::new(HashMap::new())),
             forcing_generation: std::cell::Cell::new(0),
             field_ics,
+            init_faqs,
             ic_scope_defs,
             index_sets: index_sets.clone(),
             namespace: None,
@@ -2616,6 +2618,29 @@ fn classify_field_ics(model: &Model) -> Vec<(String, Expr)> {
         }
     }
     field_ics
+}
+
+/// The `faq`-valued initialization equations (esm-spec §6.2, "equations that
+/// hold only at t=0"): `u ~ faq(…)` with a bare-variable left-hand side and an
+/// array-valued right-hand side, in document order. Each assigns the cells of
+/// its ranges at `u0` build time ([`ArrayCompiled::seed_initialization_faqs`]);
+/// the other spellings name no cells to assign and are not evaluated, as in
+/// the Julia reference's `_seed_faq_init_u0!`.
+fn classify_initialization_faqs(model: &Model) -> Vec<(String, Expr)> {
+    model
+        .initialization_equations
+        .iter()
+        .flatten()
+        .filter_map(|eq| match (&eq.lhs, &eq.rhs) {
+            (Expr::Variable(target), Expr::Operator(node))
+                if is_faq_op(&node.op)
+                    && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
+            {
+                Some((target.clone(), eq.rhs.clone()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// (7) Build the RHS rules. Each equation with a derivative LHS produces

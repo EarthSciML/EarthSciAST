@@ -303,8 +303,9 @@ def _apply_initial_conditions(
     shapes: dict[str, tuple[int, ...]],
     state_names: list[str],
     initial_conditions: dict[str, Any],
-) -> None:
-    """Write initial-value overrides into ``y0``.
+) -> set[int]:
+    """Write initial-value overrides into ``y0``, returning the flat positions
+    they wrote.
 
     Keys may be bare (``"u[1]"``) or namespaced (``"Chem.u[1]"``); scalar state
     variables use a bare name without brackets. A whole-state key may carry a
@@ -312,6 +313,7 @@ def _apply_initial_conditions(
     row-major nested JSON array matching the state's declared shape (esm-spec
     §6.6.2), which is what lets a column test supply a whole profile.
     """
+    written: set[int] = set()
     for key, value in initial_conditions.items():
         resolved = (
             None
@@ -340,6 +342,8 @@ def _apply_initial_conditions(
                         value,
                         origin="initial_conditions",
                     )
+                    sl = state_layout[name]
+                    written.update(range(sl.start, sl.stop))
                     continue
             if is_inline_array_value(value):
                 raise SimulationError(
@@ -349,6 +353,83 @@ def _apply_initial_conditions(
             continue
         _, flat_pos = resolved
         y0[flat_pos] = float(value)
+        written.add(flat_pos)
+    return written
+
+
+def _faq_output_ranges(node: ExprNode, index_sets: dict[str, Any]) -> list[tuple[int, int]]:
+    """The dense ``(lo, hi)`` range of each of ``node``'s output indices, in
+    ``output_idx`` order: a ``[lo, hi]`` tuple, or an interval / categorical
+    index-set reference."""
+    out: list[tuple[int, int]] = []
+    for name in node.output_idx or []:
+        spec = (node.ranges or {}).get(name)
+        if isinstance(spec, dict) and "from" in spec:
+            entry = (index_sets or {}).get(spec["from"]) or {}
+            if entry.get("kind") == "interval":
+                spec = [1, int(entry["size"])]
+            elif entry.get("kind") == "categorical":
+                spec = [1, len(entry.get("members") or [])]
+        if not (isinstance(spec, (list, tuple)) and len(spec) == 2):
+            raise SimulationError(f"output index {name!r} has no static [lo, hi] range")
+        out.append((int(spec[0]), int(spec[1])))
+    return out
+
+
+def _seed_initialization_faqs(
+    y0: np.ndarray,
+    init_faqs: list[tuple[str, Expr]],
+    shapes: dict[str, tuple[int, ...]],
+    state_layout: dict[str, slice],
+    scope_arrays: dict[str, np.ndarray],
+    *,
+    keep: set[int],
+    index_sets: dict[str, Any] | None = None,
+    param_values: dict[str, float] | None = None,
+) -> None:
+    """Evaluate the ``faq``-valued initialization equations (esm-spec §6.2:
+    equations that hold at t = 0) into ``y0``, in document order.
+
+    Each assigns every cell of its ranges the value its body takes there, read
+    against the initial state seeded so far (defaults, field ``ic``s, the
+    caller's overrides and the equations before it), the parameters and the
+    loaded fields, at t = 0. A cell in ``keep`` — one the caller's initial
+    conditions name — keeps its value. Mirrors the Julia reference's
+    ``_seed_faq_init_u0!`` and Rust's ``seed_initialization_faqs``.
+    """
+    for target, rhs in init_faqs:
+        rule = f"init({target})"
+        if target not in state_layout:
+            raise SimulationError(
+                f"{rule}: the left-hand side of a faq initialization equation is not a "
+                f"state variable of the flattened system"
+            )
+        shape = tuple(shapes.get(target, ()))
+        ranges = _faq_output_ranges(rhs, index_sets or {})
+        if len(ranges) != len(shape):
+            raise SimulationError(
+                f"{rule}: {len(ranges)} output indices for a {len(shape)}-D state"
+            )
+        arrays = dict(scope_arrays)
+        for name, sl in state_layout.items():
+            arrays[name] = y0[sl].reshape(shapes.get(name, ()))
+        value = np.asarray(
+            _eval_buildtime_field(
+                rhs, index_sets=index_sets, param_values=param_values, input_arrays=arrays
+            ),
+            dtype=float,
+        )
+        extents = tuple(max(hi - lo + 1, 0) for lo, hi in ranges)
+        if value.shape != extents:
+            raise SimulationError(
+                f"{rule}: the faq evaluated to shape {value.shape}, not its box {extents}"
+            )
+        start = state_layout[target].start
+        for multi in np.ndindex(*extents):
+            cell = [lo + int(k) for k, (lo, _) in zip(multi, ranges)]
+            pos = start + _linear_pos(shape, cell)
+            if pos not in keep:
+                y0[pos] = float(value[multi])
 
 
 def _collect_algebraic_substitutions(
@@ -3024,7 +3105,22 @@ def _build_numpy_rhs(
         index_sets=flat.index_sets,
         param_values=param_values,
     )
-    _apply_initial_conditions(y0, state_layout, shapes, state_names, initial_conditions)
+    overridden = _apply_initial_conditions(
+        y0, state_layout, shapes, state_names, initial_conditions
+    )
+    # The faq-valued initialization equations (esm-spec §6.2): after the
+    # overrides, so a body reading a state reads the caller's value, and
+    # around them, so the caller's value stands.
+    _seed_initialization_faqs(
+        y0,
+        flat.initialization_faqs,
+        shapes,
+        state_layout,
+        ic_scope_arrays,
+        keep=overridden,
+        index_sets=flat.index_sets,
+        param_values=param_values,
+    )
 
     # Const-geometry hoist + cadence split of the observeds: materialize the
     # STATE-FREE (loader-invariant, then loader-volatile) observeds ONCE here and
