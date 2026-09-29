@@ -2993,10 +2993,11 @@ struct SuppliedData {
 impl SuppliedData {
     /// Capture what `opts` supplies. The shaped-parameter arrays are MOVED out
     /// of `opts.const_arrays` when they are the only reason the build pipeline
-    /// would run: they need nothing from it (stage 3d binds each onto its
-    /// parameter), and the pipeline refuses a coupled document it cannot
-    /// select one model of. Otherwise the pipeline keeps them and they are
-    /// copied here.
+    /// would run on a document of several models with none selected, which the
+    /// pipeline refuses: they need nothing from it there (stage 3d binds each
+    /// onto its parameter). Otherwise the pipeline keeps them — it evaluates a
+    /// state-free document's observed graph with them — and they are copied
+    /// here.
     fn capture(opts: &mut ProblemOptions, raw: Option<&JsonValue>, file: Option<&EsmFile>) -> Self {
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut out = SuppliedData::default();
@@ -3008,7 +3009,10 @@ impl SuppliedData {
                 .extend(opts.build_providers.iter().map(|(k, _)| (k.clone(), ())));
             if !opts.const_arrays.is_empty() {
                 let shaped = shaped_parameter_keys(raw, file);
-                let only_trigger = !opts.build_pipeline
+                let several_models =
+                    opts.model_name.is_none() && model_count(raw, file).is_some_and(|n| n > 1);
+                let only_trigger = several_models
+                    && !opts.build_pipeline
                     && !opts.pushdown_rewrite
                     && opts.build_providers.is_empty()
                     && opts.const_arrays.keys().all(|k| shaped.contains(k));
@@ -3081,10 +3085,10 @@ impl SuppliedData {
         }
     }
 
-    /// The missing-data gate for an array model: serve every forcing name no
-    /// provider or caller array supplied from its declared `default`, and
-    /// refuse a forcing name with none, or a shaped parameter the build left
-    /// with no value at all.
+    /// The missing-data gate for an array model: serve a caller's array to a
+    /// forcing name no provider supplies, and refuse a forcing name with
+    /// neither data nor a declared `default`, or a shaped parameter the build
+    /// left with no value at all.
     fn refuse_missing_array(
         &self,
         c: &ArrayCompiled,
@@ -3101,18 +3105,13 @@ impl SuppliedData {
                 forcing.borrow_mut().insert(name.clone(), arr);
                 continue;
             }
-            let mut value = match c.forcing_default(name) {
-                None => return Err(missing_data_error(name, declared_variable(file, name))),
-                // A default over a shape that does not resolve yet (an
-                // unmaterialized derived set) has no field to fill here.
-                Some(None) => continue,
-                Some(Some(value)) => value,
-            };
-            let prec = precision::of_variable(name);
-            if prec.is_f32() {
-                value.mapv_inplace(|x| prec.round(x));
+            // A parameter that declares a default is not missing data (§10.10);
+            // whether that default is its value when no data is supplied is
+            // left as it was: the name stays unserved and its first read
+            // fails, naming it.
+            if !c.has_forcing_default(name) {
+                return Err(missing_data_error(name, declared_variable(file, name)));
             }
-            forcing.borrow_mut().insert(name.clone(), value);
         }
         for name in c.unvalued_shaped_params() {
             if !names_key(p, name) {
@@ -3172,6 +3171,18 @@ impl SuppliedData {
             return Err(missing_data_error(name, Some(var)));
         }
         Ok(())
+    }
+}
+
+/// How many `models` the document declares, off the raw JSON when there is one.
+#[cfg(not(target_arch = "wasm32"))]
+fn model_count(raw: Option<&JsonValue>, file: Option<&EsmFile>) -> Option<usize> {
+    match raw {
+        Some(r) => r
+            .get("models")
+            .and_then(JsonValue::as_object)
+            .map(|m| m.len()),
+        None => file.and_then(|f| f.models.as_ref()).map(|m| m.len()),
     }
 }
 

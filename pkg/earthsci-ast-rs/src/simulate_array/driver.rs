@@ -402,14 +402,9 @@ impl ArrayCompiled {
         self.forcing_decls.keys()
     }
 
-    /// The declared default of forcing parameter `name`: `None` when it
-    /// declares none, `Some(None)` when its shape does not resolve yet, and
-    /// otherwise the dense field it denotes over that shape.
-    pub(crate) fn forcing_default(&self, name: &str) -> Option<Option<ArrayD<f64>>> {
-        let entry = self.forcing_defaults.get(name)?;
-        Some(entry.as_ref().and_then(|(shape, values)| {
-            ArrayD::from_shape_vec(ndarray::IxDyn(shape), values.clone()).ok()
-        }))
+    /// Whether forcing parameter `name` declares a `default`.
+    pub(crate) fn has_forcing_default(&self, name: &str) -> bool {
+        self.forcing_defaults.contains(name)
     }
 
     /// A clonable handle to the external forcing buffer (PR-1, ess-14f.7). A

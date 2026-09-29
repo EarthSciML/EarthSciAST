@@ -1,13 +1,11 @@
 {
  "category": "missing_data",
  "version": "1.0",
- "description": "Cross-binding conformance for a SHAPED parameter with no data supplied at the front door (esm-spec §10.10: a parameter with neither a default nor a supplied value is an error when a problem is built; §6.3 and CONFORMANCE_SPEC §5.32.5 for what supplies one). Each case builds its fixture through `esm_problem` under every listed compiler twice. Without data, every binding must refuse the construction with `E_TREEWALK_MISSING_DATA`, naming a parameter that has no value (one of `missing`: the message must contain the model-local name of at least one); a binding that runs the document on an invented value (zero, NaN, or its scalar slot) is wrong, and so is one that defers the failure to the first evaluation. With the case's `const_arrays` (keyed by flattened name, which every binding resolves by the §6.6.2 rules), the construction must succeed under every compiler, and where `rhs` is true the right-hand side evaluated at the manifest's probe state must be bit-for-bit identical between `native` and `interpreter` within each binding. Each binding's message also names what the document says fills the parameter: its data source, its registered handler, or nothing. A case whose `missing` is null is not refused: it builds without data too, and its `expected_rhs_without_data` / `expected_rhs` pin the exact right-hand side (at any state; it reads no state) without and with the case's arrays — which value wins when both a default and a caller array exist, and that a loaded field's declared default is its value when no data is supplied.",
+ "description": "Cross-binding conformance for a SHAPED parameter with no data supplied at the front door (esm-spec §10.10: a parameter with neither a default nor a supplied value is an error when a problem is built; §6.3 and CONFORMANCE_SPEC §5.32.5 for what supplies one). Each case builds its fixture through `esm_problem` under every listed compiler twice. Without data, every binding must refuse the construction with `E_TREEWALK_MISSING_DATA`, naming a parameter that has no value (one of `missing`: the message must contain the model-local name of at least one); a binding that runs the document on an invented value (zero, NaN, or its scalar slot) is wrong, and so is one that defers the failure to the first evaluation. With the case's `const_arrays` (keyed by flattened name, which every binding resolves by the §6.6.2 rules), the construction must succeed under every compiler, and where `rhs` is true the right-hand side evaluated at the manifest's probe state must be bit-for-bit identical between `native` and `interpreter` within each binding. Each binding's message also names what the document says fills the parameter: its data source, its registered handler, or nothing. A case whose `missing` is null is not refused: it builds without data too, and its `expected_rhs_without_data` / `expected_rhs` pin the exact right-hand side (at any state; it reads no state) without and with the case's arrays — which value wins when both a default and a caller array exist.",
  "bindings_required": [
   "julia",
+  "python",
   "rust"
- ],
- "bindings_optional": [
-  "python"
  ],
  "scope_excluded": {
   "go": "rewrite-only port; no esm_problem",
@@ -311,7 +309,8 @@
    ],
    "const_arrays": null,
    "rhs": false,
-   "note": "the source-receptor document without its source-cell envelopes; refusal only"
+   "note": "the source-receptor document without its source-cell envelopes; refusal only",
+   "python_without_data": "refuses_unreadable_source"
   },
   {
    "id": "caller_array_outranks_default",
@@ -336,33 +335,7 @@
     1.0
    ],
    "note": "not a missing-data case: it builds either way, and pins which value wins"
-  },
-  {
-   "id": "loaded_field_default_served",
-   "fixture": "fixtures/loaded_field_default_served.esm",
-   "missing": null,
-   "const_arrays": {
-    "LoadedDefault.bc": [
-     0.25,
-     0.5,
-     1.0,
-     2.0
-    ]
-   },
-   "rhs": true,
-   "expected_rhs_without_data": [
-    0.5,
-    0.5,
-    0.5,
-    0.5
-   ],
-   "expected_rhs": [
-    0.25,
-    0.5,
-    1.0,
-    2.0
-   ],
-   "note": "not a missing-data case: a loaded field that declares a default builds without data and reads the default"
   }
- ]
+ ],
+ "python_note": "Python's default provider reads a document's own data_sources when the caller supplies neither a provider nor an array; an unreadable source then refuses the construction with the same code, naming the first parameter it could not read, which may be one that declares a default. A case marked `python_without_data: refuses_unreadable_source` is one where that happens first, and the Python runner checks the code only."
 }

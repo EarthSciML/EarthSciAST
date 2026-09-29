@@ -18,6 +18,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .compiler import CompilerRefusedRuleError
+from .errors import MissingDataError
 from .flatten import (
     FlattenedSystem,
     LoaderField,
@@ -582,17 +583,33 @@ def _simulate_with_loaders(
         # rebound) so every per-step EvalContext sees the current segment's data.
         loader_arrays: dict[str, np.ndarray] = {}
 
+        def _read(f: LoaderField, thunk: Callable[[], Any]) -> np.ndarray:
+            # A field whose source cannot be read has no value: name the
+            # parameter and its source rather than the transport error alone.
+            try:
+                return thunk()
+            except MissingDataError:
+                raise
+            except Exception as e:
+                raise MissingDataError(
+                    f.name, flat.parameters.get(f.name), reason=f"{type(e).__name__}: {e}"
+                ) from e
+
         if loader_provider is not None:
             # Legacy seam: a per-call callable, kept for offline stub tests and
             # backward compatibility. Invoked once per segment (never per RHS);
             # boundaries from local frequency arithmetic.
             def _seed_const() -> None:
                 for f in const_fields:
-                    loader_arrays[f.name] = np.asarray(loader_provider(f, t0), dtype=float)
+                    loader_arrays[f.name] = _read(
+                        f, lambda f=f: np.asarray(loader_provider(f, t0), dtype=float)
+                    )
 
             def _refresh_discrete(when: float) -> None:
                 for f in discrete_fields:
-                    loader_arrays[f.name] = np.asarray(loader_provider(f, when), dtype=float)
+                    loader_arrays[f.name] = _read(
+                        f, lambda f=f: np.asarray(loader_provider(f, when), dtype=float)
+                    )
 
             seg_ends = [
                 b for b in _loader_cadence_boundaries(discrete_fields, t0, t1) if t0 < b < t1
@@ -639,12 +656,15 @@ def _simulate_with_loaders(
 
             def _seed_const() -> None:
                 for f in const_fields:
-                    loader_arrays[f.name] = _provider_array(f, providers[f.name].materialize())
+                    loader_arrays[f.name] = _read(
+                        f, lambda f=f: _provider_array(f, providers[f.name].materialize())
+                    )
 
             def _refresh_discrete(when: float) -> None:
                 for f in discrete_fields:
-                    loader_arrays[f.name] = _provider_array(
-                        f, providers[f.name].refresh(_abs(f, when))
+                    loader_arrays[f.name] = _read(
+                        f,
+                        lambda f=f: _provider_array(f, providers[f.name].refresh(_abs(f, when))),
                     )
 
             seg_ends = _provider_segment_boundaries(discrete_fields, providers, epochs, t0, t1) + [
@@ -693,6 +713,12 @@ def _simulate_with_loaders(
         # A compiler refusal is a BUILD failure, and esm-libraries-spec §2.5.2
         # makes a build failure raise rather than come back as a return code.
         raise
+    except MissingDataError as e:
+        # So is a field with no data at construction (the seed); during a run a
+        # refresh that cannot be read is that run's failure.
+        if seed_only:
+            raise
+        return _failure_result(f"Simulation failed: {e}", retcode=_retcode_for_error(e))
     except Exception as e:
         return _failure_result(f"Simulation failed: {e}", retcode=_retcode_for_error(e))
 

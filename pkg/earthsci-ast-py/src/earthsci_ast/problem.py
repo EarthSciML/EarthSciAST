@@ -64,6 +64,7 @@ from .compiler import (
     resolve_compiler,
     use_policy,
 )
+from .errors import MissingDataError
 from .esm_types import EsmFile, ExprNode
 from .expr_walk import iter_children
 from .expression import UnsupportedConstructError
@@ -1000,6 +1001,9 @@ def _seed_segmented_engine(
     except CompilerRefusedRuleError:
         raise
     except UnsupportedConstructError:
+        raise
+    except MissingDataError:
+        # A parameter with no value is a construction error (esm-spec §10.10).
         raise
     except Exception:  # noqa: BLE001 — a non-refusal failure stays a run failure
         return None

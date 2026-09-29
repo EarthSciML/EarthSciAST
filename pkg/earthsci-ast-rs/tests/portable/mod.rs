@@ -494,11 +494,44 @@ pub fn check_inline_tier_doc(id: &str, model: &str, text: &str) {
     }
 }
 
+/// Give every `[vertices, 2]` parameter the document leaves with no value a
+/// square vertex ring, the k-th one (in name order) shifted by k along both
+/// coordinates so consecutive rings overlap. Several geometry documents
+/// declare their polygon operands as data the caller supplies; built without
+/// it they are refused (`E_TREEWALK_MISSING_DATA`, esm-spec §10.10).
+fn supply_polygon_rings(doc: &mut Value) {
+    let Some(models) = doc.get_mut("models").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for model in models.values_mut() {
+        let Some(vars) = model.get_mut("variables").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        let mut names: Vec<String> = vars
+            .iter()
+            .filter(|(_, v)| {
+                v["type"] == "parameter"
+                    && v.get("default").is_none()
+                    && v.get("update").is_none()
+                    && v["shape"].as_array().is_some_and(|s| s.len() == 2)
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        names.sort();
+        for (k, name) in names.iter().enumerate() {
+            let o = k as f64;
+            vars[name]["default"] =
+                serde_json::json!([[o, o], [o + 2.0, o], [o + 2.0, o + 2.0], [o, o + 2.0]]);
+        }
+    }
+}
+
 /// Native builds one geometry document with no rule off the tape, and agrees
 /// with the interpreter bit for bit on every build-time field and on the
 /// right-hand side at one state, with the right-hand side forced on.
 pub fn check_geometry_doc(id: &str, text: &str) {
-    let doc: Value = serde_json::from_str(text).expect("the document parses");
+    let mut doc: Value = serde_json::from_str(text).expect("the document parses");
+    supply_polygon_rings(&mut doc);
     let interp = esm_problem(&doc, (0.0, 1.0), options(Compiler::Interpreter, None))
         .unwrap_or_else(|e| panic!("{id}: the interpreter does not build it: {e}"));
     let native = esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None))
