@@ -197,6 +197,25 @@ _pr_rank4_build(doc, compiler; kw...) =
         @test [r.rule for r in _pr_rows(ri, :setup_percell)] == ["init(u)"]
     end
 
+    # A pointwise filter: a cell whose predicate is false is the semiring's 0̄
+    # (esm-schema `filter`), in the compiled fill and in the per-cell reference
+    # alike. `max_sum`'s 0̄ is -Inf, so a filter read as 0.0 would show.
+    @testset "a faq initialization equation with a pointwise filter" begin
+        for (sr, zb) in (("sum_product", 0.0), ("max_sum", -Inf))
+            agg = _PR.OpExpr("faq", _PR.ASTExpr[]; output_idx = Any["i"],
+                             ranges = Dict("i" => Any[1, 5]), semiring = sr,
+                             expr_body = _op("*", _n(10.0), _v("i")),
+                             filter = _op("<=", _v("i"), _n(2.0)))
+            m = _PR.Model(uvar(), [zero_eq()];
+                          initialization_equations = [_PR.Equation(_v("u"), agg)])
+            un, vn, rn = seed(m, :native)
+            ui, vi, _ = seed(m, :interpreter)
+            @test [ui[vi["u[$i]"]] for i in 1:5] == [10.0, 20.0, zb, zb, zb]
+            @test all(un[vn["u[$i]"]] === ui[vi["u[$i]"]] for i in 1:5)
+            @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(u)"]
+        end
+    end
+
     # A live forcing buffer read at the output index: the fill reads the buffer
     # the way the right-hand side does.
     Fvar() = Dict("F" => _PR.ModelVariable(_PR.ParameterVariable; shape = ["x"]))
