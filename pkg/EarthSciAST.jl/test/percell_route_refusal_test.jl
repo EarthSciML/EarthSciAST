@@ -129,10 +129,14 @@ _pr_rank4_build(doc, compiler; kw...) =
         end
     end
 
-    # A fill the cascade cannot compile is refused, naming the field: the
+    # A discrete-cadence fill goes through the right-hand side's cascade. The
     # rank-4 contraction of the short-contraction route above, as a
-    # discrete-cadence field instead of a derivative.
-    @testset "a discrete-cadence fill left to the per-cell loop refuses by name" begin
+    # discrete-cadence field instead of a derivative, compiles once there (the
+    # affine tier's run-time fold), bit for bit with the interpreter's per-cell
+    # walk; a fill the cascade cannot compile, a RAGGED contraction over the live
+    # forcing read (see "a contraction no compile-once form takes" below), is
+    # refused, naming the field.
+    @testset "a discrete-cadence fill compiles once, or refuses by name" begin
         W = Float64[1, 2, 3, 4, 5, 6, 7, 8]
         rng = Dict{String,Any}(n => Any[1, 2] for n in ("a", "b", "c", "d"))
         agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
@@ -162,14 +166,40 @@ _pr_rank4_build(doc, compiler; kw...) =
         ics = Dict("out[$a,$b,$c,$d]" => 0.0 for a in 1:2, b in 1:2, c in 1:2, d in 1:2)
         F = reshape(collect(1.0:16.0), 2, 2, 2, 2)
         build(compiler) = withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
-            dm = _PR.DiscreteMaterializer()
+            dm = _PR.DiscreteMaterializer(); insp = _PR.BuildInspection()
             _PR._build_evaluator(doc; initial_conditions = ics,
                 param_arrays = Dict("F" => copy(F)), materialize_out = dm,
-                compiler = compiler)
-            dm
+                inspect = insp, compiler = compiler)
+            (dm, insp.compiler_report)
         end
-        @test _pr_refuses(() -> build(:native), "refuses 'g'"; one_cell = true)
-        @test vec(build(:interpreter).caches["g"]) == sum(W) .* vec(F)
+        (dn, rn), (di, _) = build(:native), build(:interpreter)
+        @test vec(di.caches["g"]) == sum(W) .* vec(F)
+        @test all(dn.caches["g"] .=== di.caches["g"])
+        @test [r.tier for r in rn.rules if r.rule == "g"] == [:affine]
+
+        N = 3
+        ragged = deepcopy(doc)
+        m = ragged["models"]["R"]
+        m["variables"] = Dict(n => Dict(v..., "shape" => Any["a"]) for (n, v) in m["variables"])
+        m["equations"][1]["rhs"] = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+            "args" => Any[], "output_idx" => Any["a"],
+            "ranges" => Dict{String,Any}("a" => Any[1, N], "k" => Any[1,
+                Dict("op" => "-", "args" => Any[Dict("op" => "+", "args" => Any["a", 4]), "a"])]),
+            "expr" => Dict("op" => "*", "args" => Any[
+                Dict("op" => "index", "args" => Any["F", "a"]), "k"]))
+        m["equations"][2] = Dict("lhs" => Dict("op" => "faq", "args" => Any[],
+                "output_idx" => Any["a"], "ranges" => Dict("a" => Any[1, N]),
+                "expr" => Dict("op" => "D", "wrt" => "t", "args" => Any[
+                    Dict("op" => "index", "args" => Any["out", "a"])])),
+            "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["a"],
+                "ranges" => Dict("a" => Any[1, N]),
+                "expr" => Dict("op" => "index", "args" => Any["g", "a"])))
+        build_r(compiler) = (dm = _PR.DiscreteMaterializer();
+            _PR._build_evaluator(ragged; initial_conditions = Dict("out[$a]" => 0.0 for a in 1:N),
+                param_arrays = Dict("F" => collect(1.0:N)), materialize_out = dm,
+                compiler = compiler); dm)
+        @test _pr_refuses(() -> build_r(:native), "refuses 'g'"; one_cell = true)
+        @test build_r(:interpreter).caches["g"] == [10.0 * a for a in 1:N]
     end
 
     # ── faq-valued initialization equations (#482) ────────────────────────────
@@ -195,6 +225,25 @@ _pr_rank4_build(doc, compiler; kw...) =
         @test all(un[vn["u[$i]"]] == 0.37 * i + 1.0 / (i + 2.0) for i in 1:5)
         @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(u)"]
         @test [r.rule for r in _pr_rows(ri, :setup_percell)] == ["init(u)"]
+    end
+
+    # A pointwise filter: a cell whose predicate is false is the semiring's 0̄
+    # (esm-schema `filter`), in the compiled fill and in the per-cell reference
+    # alike. `max_sum`'s 0̄ is -Inf, so a filter read as 0.0 would show.
+    @testset "a faq initialization equation with a pointwise filter" begin
+        for (sr, zb) in (("sum_product", 0.0), ("max_sum", -Inf))
+            agg = _PR.OpExpr("faq", _PR.ASTExpr[]; output_idx = Any["i"],
+                             ranges = Dict("i" => Any[1, 5]), semiring = sr,
+                             expr_body = _op("*", _n(10.0), _v("i")),
+                             filter = _op("<=", _v("i"), _n(2.0)))
+            m = _PR.Model(uvar(), [zero_eq()];
+                          initialization_equations = [_PR.Equation(_v("u"), agg)])
+            un, vn, rn = seed(m, :native)
+            ui, vi, _ = seed(m, :interpreter)
+            @test [ui[vi["u[$i]"]] for i in 1:5] == [10.0, 20.0, zb, zb, zb]
+            @test all(un[vn["u[$i]"]] === ui[vi["u[$i]"]] for i in 1:5)
+            @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(u)"]
+        end
     end
 
     # A live forcing buffer read at the output index: the fill reads the buffer

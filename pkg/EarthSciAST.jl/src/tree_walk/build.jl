@@ -2067,6 +2067,16 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
         ranges_dict = _ranges_dict(rhs_op)
         body = rhs_op.expr_body
         body === nothing && continue
+        # A POINTWISE filter (no contracted index): a cell whose predicate is
+        # false is the semiring's 0̄ (esm-schema `filter`). It goes on the body as
+        # the `ifelse` guard the array-equation path builds for it
+        # (`_compile_faq_equation!`), so the compiled fill and every per-cell
+        # form below compute it.
+        if rhs_op.filter !== nothing && isempty(_contracted_index_names(ranges_dict, idx_names))
+            _, zb = _aggregate_oplus_identity(rhs_op.semiring, rhs_op.reduce)
+            body = OpExpr("ifelse", ASTExpr[rhs_op.filter, body, NumExpr(zb)])
+            rhs_op = reconstruct(rhs_op; expr_body = body, filter = nothing)
+        end
         range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
         todo = Tuple{Any,Int}[]
         may_override = _ics_may_name_cells(initial_conditions)
@@ -4317,10 +4327,11 @@ end
 # fooled by adversarial data and the restriction is no longer needed.
 #
 # STILL DELIBERATELY NARROW: the bare form is adopted only when it UNLOCKS
-# something — i.e. only when the producer actually contracts. A non-contracting
-# aggregate lowers identically either way, so it keeps the gather form and the
-# default above governs it unchanged. A join-gated or ragged producer unwraps
-# too: the whole-array contraction nest takes the bare form as a table.
+# something — i.e. only when the producer actually contracts, or carries a
+# filter. Any other non-contracting aggregate lowers identically either way, so
+# it keeps the gather form and the default above governs it unchanged. A
+# join-gated or ragged producer unwraps too: the whole-array contraction nest
+# takes the bare form as a table.
 #
 # THE FOLD CHANGES WITH THE FORM. The bare form is a contraction, which every
 # tier folds from the semiring's 0̄ (`_NK_CONTRACTION` in the per-cell build,
@@ -4331,7 +4342,7 @@ end
 # compiler alike.
 #
 # Returns the bare producer when the gather is the identity one and the
-# producer contracts, else `rhs` unchanged.
+# producer contracts or carries a filter, else `rhs` unchanged.
 function _unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
                                  ranges_dict)
     rhs isa OpExpr || return rhs
@@ -4389,8 +4400,11 @@ function _unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
     # The contracted names as `_compile_faq_equation!` will derive them from
     # `bare`.
     cnames = _contracted_index_names(newranges, idx_names)
-    # No contraction ⇒ the gather form already lowers identically. Keep it.
-    isempty(cnames) && return rhs
+    # No contraction ⇒ the gather form already lowers identically. Keep it —
+    # unless the producer carries a filter, which the affine tier does not model
+    # inside a gather, and the bare form puts on the body as its `ifelse` guard
+    # (`_compile_faq_equation!`), the value the gather form's resolve computes.
+    isempty(cnames) && bare.filter === nothing && return rhs
     all(n -> haskey(ranges_dict, n), idx_names) || return rhs
     # A forward prefix scan, a constant-bound contraction, a join-gated or a
     # ragged one: each is a tier's in the bare form (the scan tier, the affine
@@ -4750,6 +4764,17 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
                   _is_const_int_range(rspec) ?
                       collect(_expand_int_range(rspec)) : nothing)
         end
+        # A POINTWISE aggregate (no contracted index) with a filter: each output
+        # cell is one combination, which contributes its term where the
+        # predicate holds and 0̄ where it does not (esm-schema `filter`, RFC
+        # semiring-faq-unified-ir §5.3). That is the guard the expression-position
+        # form builds for it (`_resolve_index_of_faq`: one term, `ifelse(filter,
+        # term, 0̄)`, no seed), put on the body here so every tier below — none of
+        # which reads `agg_filter` without a contracted index — computes it.
+        if isempty(contract_names) && agg_filter !== nothing
+            rhs_body = OpExpr("ifelse", ASTExpr[agg_filter, rhs_body, NumExpr(rhs_zerobar)])
+            agg_filter = nothing
+        end
     end
 
     range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
@@ -4793,26 +4818,35 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # `#output cells < ∏|k…|` is the most optimistic form of "the unroll cannot
     # be cheaper", and the loop takes the equation when it holds. Otherwise the
     # affine tier is offered it first and the loop stays behind as the fallback.
+    # `nothing` when the equation is a loop candidate and its body passes the
+    # probe, else why the loop does not take it (the refusal below says so).
+    loop_decline() = begin
+        _contraction_loop_enabled() || return "the per-cell contraction loop is off in this build"
+        isempty(contract_names) && return "it has no contracted index"
+        agg_gates === nothing || return "it has a join gate"
+        agg_filter === nothing || return "it has a filter"
+        all(c -> c !== nothing, contract_const) || return "a contracted bound is not constant"
+        (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") ||
+            return "its ⊕ is `$(rhs_oplus)`, and the loop folds only +, *, max or min"
+        isempty(range_iters) && return "it has no output index"
+        prod(length(c) for c in contract_const) >= _contraction_loop_min() ||
+            return "it is shorter than the loop's floor"
+        first_idx = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(first(range_iters[d])))
+                                         for d in 1:length(idx_names))
+        probe = _sub_preserving(rhs_body, first_idx)
+        probe = isempty(resolved_obs) ? probe : _sub_preserving(probe, resolved_obs)
+        pranges = [_expand_int_range(contract_ranges[d]) for d in 1:length(contract_names)]
+        _try_build_contraction_loop(probe, contract_names, pranges, rhs_oplus,
+            rhs_zerobar, array_var_info, var_map, const_registry, pgather) === nothing ?
+            "its body does not resolve with the contracted index kept symbolic " *
+            "(a state read at a contracted index, say)" : nothing
+    end
     use_contraction_loop = false
     loop_preempts_affine = false
-    if rhs_list_compiled && _contraction_loop_enabled() && !isempty(contract_names) &&
-       agg_gates === nothing && agg_filter === nothing &&
-       all(c -> c !== nothing, contract_const) &&
-       (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
-       !isempty(range_iters)
-        total_contract = prod(length(c) for c in contract_const)
-        if total_contract >= _contraction_loop_min()
-            first_idx = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(first(range_iters[d])))
-                                             for d in 1:length(idx_names))
-            probe = _sub_preserving(rhs_body, first_idx)
-            probe = isempty(resolved_obs) ? probe : _sub_preserving(probe, resolved_obs)
-            pranges = [_expand_int_range(contract_ranges[d]) for d in 1:length(contract_names)]
-            use_contraction_loop = _try_build_contraction_loop(probe, contract_names,
-                pranges, rhs_oplus, rhs_zerobar, array_var_info, var_map,
-                const_registry, pgather) !== nothing
-            n_out_cells = prod(length(r) for r in range_iters)
-            loop_preempts_affine = use_contraction_loop && n_out_cells < total_contract
-        end
+    if rhs_list_compiled && loop_decline() === nothing
+        use_contraction_loop = true
+        loop_preempts_affine = prod(length(r) for r in range_iters) <
+                               prod(length(c) for c in contract_const)
     end
     # The affine tier's LOOP form of the contraction (`_AffineReduce`, below):
     # it keeps the contracted indices as loop dims and folds them at run time,
@@ -5017,6 +5051,25 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
             var_map=var_map, const_registry=const_registry, pgather=pgather,
             param_sym_set=param_sym_set, reg_funcs=reg_funcs)
     end
+    # A non-strict in-place build reaches here too, and a LONG contraction must
+    # not unroll in it either: the per-cell build would write every one of its
+    # terms into every output cell (and a 10^5-term fold is deep enough to
+    # overflow the stack where it is compiled). It takes the per-cell
+    # contraction loop when the loop takes it, and is refused by name when not.
+    # (`:interpreter` never gets here: its affine tier is off, so
+    # `long_contraction` is false and it unrolls, as the reference does.)
+    if long_contraction && !rhs_list_compiled
+        why_not = loop_decline()
+        use_contraction_loop = why_not === nothing
+        use_contraction_loop || _refuse_rule(label,
+            (isempty(offered) ? "no compile-once form was offered this contraction of " :
+             "every compile-once form offered declined this contraction of ") *
+            "$(prod(length(c) for c in contract_const)) terms, and the per-cell " *
+            "contraction loop does not take it: $(why_not). What is left is the " *
+            "per-cell build, which would unroll all of its terms into each of its " *
+            "$(prod(length(r) for r in range_iters)) output cells. Build with " *
+            "compiler=:interpreter to run it")
+    end
     # Anything the affine build cannot model takes the per-cell fallback, whose
     # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,
     # with the affine stencil tier off, stay plain per-cell scalar nodes (the
@@ -5198,9 +5251,8 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         # kept symbolic in the term.
         agg_gates=nothing, agg_filter=nothing, contract_const=nothing)
     # With no contracted index the equation is elementwise: the cell's value is
-    # its term, written as it is with no fold and no seed, and a gate or filter
-    # on the right-hand side does nothing to it — which is what the per-cell
-    # build and the affine tier do with such an equation too.
+    # its term, written as it is with no fold and no seed (a pointwise filter is
+    # already the term's `ifelse` guard, see `_compile_faq_equation!`).
     elementwise = isempty(contract_names)
     table_form = !elementwise && (agg_gates !== nothing ||
                  (contract_const !== nothing && any(c -> c === nothing, contract_const)))

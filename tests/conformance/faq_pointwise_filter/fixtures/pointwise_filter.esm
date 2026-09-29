@@ -1,0 +1,286 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "pointwise_filter",
+    "description": "A `faq` with no contracted index and a `filter`: each output cell is one index combination, which contributes its term where the predicate holds and the semiring's additive identity where it does not (esm-schema `filter`, RFC semiring-faq-unified-ir \u00a75.3). `a` carries the filter on the right-hand side of its own array equation, `b` reads it through an array observed `w`. Both are constant-rate, so at t = 1 each cell holds its rate: a = [0, 0, 7, 9, 11] (2i + 1 where i >= 3) and b = [10, 20, 0, 0, 0] (10 i where i <= 2). A binding that ignores a filter without a contracted index reads 2i + 1 and 10 i at every cell.",
+    "authors": [
+      "EarthSciAST Test Suite"
+    ],
+    "tags": [
+      "faq",
+      "filter",
+      "conformance",
+      "pointwise"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 5
+    }
+  },
+  "models": {
+    "pointwise_filter": {
+      "tolerance": {
+        "rel": 1e-10,
+        "abs": 1e-12
+      },
+      "variables": {
+        "a": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 0.0,
+          "description": "Rate filtered in its own equation."
+        },
+        "b": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 0.0,
+          "description": "Rate read through the filtered observed w."
+        },
+        "w": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "description": "w[i] = 10 i where i <= 2, else 0."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "a",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    2,
+                    "i"
+                  ]
+                },
+                1
+              ]
+            },
+            "filter": {
+              "op": ">=",
+              "args": [
+                "i",
+                3
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "w",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                10,
+                "i"
+              ]
+            },
+            "filter": {
+              "op": "<=",
+              "args": [
+                "i",
+                2
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "b",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "w",
+                "i"
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "pointwise_filter_t1",
+          "description": "Every cell of a and b at t = 1, the filtered-out ones included.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "a",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "x": 1
+              }
+            },
+            {
+              "variable": "a",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "x": 2
+              }
+            },
+            {
+              "variable": "a",
+              "time": 1.0,
+              "expected": 7.0,
+              "coords": {
+                "x": 3
+              }
+            },
+            {
+              "variable": "a",
+              "time": 1.0,
+              "expected": 9.0,
+              "coords": {
+                "x": 4
+              }
+            },
+            {
+              "variable": "a",
+              "time": 1.0,
+              "expected": 11.0,
+              "coords": {
+                "x": 5
+              }
+            },
+            {
+              "variable": "b",
+              "time": 1.0,
+              "expected": 10.0,
+              "coords": {
+                "x": 1
+              }
+            },
+            {
+              "variable": "b",
+              "time": 1.0,
+              "expected": 20.0,
+              "coords": {
+                "x": 2
+              }
+            },
+            {
+              "variable": "b",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "x": 3
+              }
+            },
+            {
+              "variable": "b",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "x": 4
+              }
+            },
+            {
+              "variable": "b",
+              "time": 1.0,
+              "expected": 0.0,
+              "coords": {
+                "x": 5
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

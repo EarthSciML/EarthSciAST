@@ -36,6 +36,11 @@ tests/conformance/
 │   ├── manifest.json               #   `"runner": "inline_tests"`
 │   ├── fixtures/<id>.esm           #   one algebraic document, plus a fixture per contested operator
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+├── faq_pointwise_filter/           # a `faq` filter with no contracted index (CONFORMANCE_SPEC §5.45.4)
+│   ├── README.md                   #   the contract, and the divergence it pins
+│   ├── manifest.json               #   `"runner": "inline_tests"`
+│   ├── fixtures/<id>.esm           #   one document: a filter on an equation and on an observed
+│   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
 ├── deprecated_op_alias/            # the `aggregate` -> `faq` alias contract (esm 1.1.0)
 │   ├── aliased.esm                 #   input, authored with the deprecated spelling
 │   ├── canonical.esm               #   expected output, and a no-warning input

@@ -544,8 +544,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
             # and the `alt::Vector{T}` buffer under any other `T`, both filled
             # by `_make_rhs`'s prelude tiers (at this same `T`) before the
             # kernel section runs; see the fill-ordering note at the tier docs
-            # above. The enclosing recipe's `convert(_cgT, …)` store matches
-            # `_fill_invariant!`'s `buf[i] = …` conversion exactly.
+            # above.
             ctx.fscratch += 1
             return :(_cse_read($(_cg_tab!(ctx, pl)), $(nd.idx), _cgT))
         end
@@ -625,17 +624,26 @@ function _cg_emit_areduce(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
     end
 end
 
-# Emit a kernel's per-cell CSE recipes as `local q = convert(T, …)` statements
-# appended to `stmts`, registering each local on `kc.cellsyms` so later recipes
-# and the spine resolve their `_NK_CACHED` reads (recipes only ever read LOWER
-# slots, so each name exists before its first read). The `convert` is exactly
-# where the interpreter's scratch store (`buf[i] = _eval_acc(…)`, a `Vector{T}`
-# setindex!) converts. Shared by the kernel cell body and the subcall inliner.
+# Emit a kernel's per-cell CSE recipes as `local q = …` statements appended to
+# `stmts`, registering each local on `kc.cellsyms` so later recipes and the
+# spine resolve their `_NK_CACHED` reads (recipes only ever read LOWER slots, so
+# each name exists before its first read). Shared by the kernel cell body and
+# the subcall inliner.
+#
+# A recipe keeps the type its expression has, and is NOT converted to the value
+# type `T`. The reference build (`compiler = :interpreter`) has no recipes: it
+# computes a shared subexpression in place, so a `Float64` one (a const lane,
+# `-W[i]`) stays `Float64` and multiplies a `Dual` as a scalar. Converting it
+# would make it a `Dual` with zero partials, and `Dual * Dual` then adds
+# `value · 0.0` to every partial: a `-0.0` partial of the reference turns into
+# `+0.0`, and an infinite value into a `NaN` partial. The interpreted
+# access-kernel runner stores its recipes in a `Vector{T}` scratch and does
+# convert; it is not the reference, and a strict build never runs it.
 function _cg_emit_recipes!(stmts::Vector{Any}, ctx::_CGCtx, kc::_CGKernCtx)
     for r in kc.K.cse.recipes
         e = _cg_bound_body!(ctx, _cg_emit(ctx, kc, r))
         s = _cg_name(ctx, "q")
-        push!(stmts, :(local $s = convert(_cgT, $e)))
+        push!(stmts, :(local $s = $e))
         push!(kc.cellsyms, s)
     end
     return stmts
@@ -655,8 +663,8 @@ end
 #
 # Bit-exactness and the zero-alloc discipline follow the split helpers'
 # (`_cg_spill!`) conventions exactly: per-cell CSE recipes stay function-local
-# `convert(_cgT, …)` locals (the interpreter refills the body's scratch at
-# every evaluation — a fresh call frame computes the identical values), `_cgT`
+# locals of their own type (`_cg_emit_recipes!`; a fresh call frame computes
+# the identical values), `_cgT`
 # is recomputed inside from `(u, p, t)` (never passed — constant-propagation),
 # the function captures nothing, and the name shares the split helpers'
 # `_cgh…` namespace so `_cg_is_spill_call` (partition irreducibility) and
@@ -741,7 +749,7 @@ function _cg_subcall_fn!(ctx::_CGCtx, S::_AccKernel, invsyms::Vector{Symbol})
         for r in S.cse.recipes
             e = _cg_emit(ctx, inner, r)
             s = _cg_name(ctx, "q")
-            push!(stmts, :(local $s = convert(_cgT, $e)))
+            push!(stmts, :(local $s = $e))
             push!(inner.cellsyms, s)
         end
         spine = _cg_emit(ctx, inner, S.spine)
@@ -1010,7 +1018,7 @@ function _cg_inv!(ctx::_CGCtx, K::_AccKernel)
         for r in K.cse.inv_recipes
             e = _cg_bound_body!(ctx, _cg_emit(ctx, kc, r))
             s = _cg_name(ctx, "v")
-            push!(ctx.prologue, :(local $s = convert(_cgT, $e)))
+            push!(ctx.prologue, :(local $s = $e))
             push!(syms, s)
         end
     end
@@ -1056,7 +1064,7 @@ function _cg_cell_fn!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbol})
         for r in K.cse.recipes
             e = _cg_emit(ctx, inner, r)
             s = _cg_name(ctx, "q")
-            push!(stmts, :(local $s = convert(_cgT, $e)))
+            push!(stmts, :(local $s = $e))
             push!(inner.cellsyms, s)
         end
         spine = _cg_emit(ctx, inner, K.spine)
