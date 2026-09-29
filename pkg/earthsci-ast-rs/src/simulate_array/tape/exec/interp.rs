@@ -323,6 +323,13 @@ pub(super) fn run_range(
                     );
                 }
             }
+            Instr::LoadForcing { forcing, out } => {
+                let fr = &prog.forcings[*forcing as usize];
+                let off = slot_off[*out as usize];
+                let dst =
+                    unsafe { std::slice::from_raw_parts_mut(slab_ptr.add(off), forcing_len(fr)) };
+                load_forcing(fr, &env.forcing.borrow(), env.declared, dst);
+            }
             Instr::Reduce {
                 op,
                 init,

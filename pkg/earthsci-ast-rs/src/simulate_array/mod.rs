@@ -765,6 +765,13 @@ pub struct ArrayCompiled {
     /// lowered from. The literal's JSON is the per-cell oracle's form; the tape
     /// reads these numbers instead of parsing it back.
     inline_param_arrays: HashMap<String, (Vec<usize>, Vec<f64>)>,
+    /// Every parameter refreshed from OUTSIDE the model (a data-source `from`
+    /// binding or a registered handler), with its declared shape resolved
+    /// against the index-set registry: the names the forcing buffer serves
+    /// ([`Self::forcing`]). `None` when the declared shape names a set the
+    /// registry cannot size. The tape compiles a read of one of these into a
+    /// forcing load (`tape::Instr::LoadForcing`) rather than declining it.
+    forcing_decls: IndexMap<String, Option<Vec<usize>>>,
     /// The tape programs this model has built ([`tape::TapeCache`], which says
     /// what a kept program depends on).
     tape_cache: tape::TapeCache,

@@ -8,6 +8,10 @@
 //! rhs(u: f64[N], p: f64[M], t: f64[]) -> du: f64[N]
 //! ```
 //!
+//! A program that reads the forcing buffer ([`Instr::LoadForcing`]) takes a
+//! fourth parameter, `f: f64[F]`: every forcing it loads, row-major, one after
+//! another ([`ForcingFeed`] says where each one sits and packs it).
+//!
 //! that reproduces what [`super::exec`] / `super::refexec` compute for the
 //! same inputs — numerically, within the tier's tolerance classes, never bit
 //! for bit (XLA's `exp`/`log`/`pow` are not Rust's libm).
@@ -74,8 +78,11 @@
 
 use super::super::{ArrayCompiled, BinCode, UnCode, VarShape};
 use super::ir::*;
-use std::collections::HashMap;
+use ndarray::ArrayD;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::rc::Rc;
 use xla::{ArrayElement, ElementType, PrimitiveType, XlaBuilder, XlaComputation, XlaOp};
 
 /// A model the emitter refuses to lower.
@@ -126,6 +133,45 @@ pub struct EmittedRhs {
     params_len: usize,
     n_instrs: usize,
     opcode_counts: Vec<(&'static str, usize)>,
+    forcing: Option<ForcingFeed>,
+}
+
+/// Where the forcing parameter `f` of a program that reads the forcing buffer
+/// comes from, and how it is laid out.
+///
+/// Each entry is one forcing the program loads, at its offset in `f`, in the
+/// order the program first loads them. [`Self::pack`] fills `f` from the
+/// model's live buffer with exactly the tape's load semantics, faults
+/// included, so a missing entry fails the solve with the interpreter's own
+/// error rather than as a device failure.
+pub struct ForcingFeed {
+    buffer: Rc<RefCell<HashMap<String, ArrayD<f64>>>>,
+    declared: HashSet<String>,
+    layout: Vec<(ForcingRef, usize)>,
+    len: usize,
+}
+
+impl ForcingFeed {
+    /// Length of `f` (at least one element, like `p`).
+    pub fn len(&self) -> usize {
+        self.len.max(1)
+    }
+
+    /// Always false: `f` is never zero-length (see [`Self::len`]).
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// `f` as the buffer stands now.
+    pub fn pack(&self) -> Vec<f64> {
+        let mut f = vec![0.0f64; self.len()];
+        let buffer = self.buffer.borrow();
+        for (fr, off) in &self.layout {
+            let n = super::exec::forcing_len(fr);
+            super::exec::load_forcing(fr, &buffer, &self.declared, &mut f[*off..*off + n]);
+        }
+        f
+    }
 }
 
 impl EmittedRhs {
@@ -153,6 +199,15 @@ impl EmittedRhs {
     /// (diagnostics only), in first-seen program order.
     pub fn opcode_counts(&self) -> &[(&'static str, usize)] {
         &self.opcode_counts
+    }
+    /// The forcing parameter's feed, for a program that reads the forcing
+    /// buffer; `None` for the three-parameter form.
+    pub fn forcing(&self) -> Option<&ForcingFeed> {
+        self.forcing.as_ref()
+    }
+    /// Take the forcing feed, for the runtime that will own it.
+    pub fn take_forcing(&mut self) -> Option<ForcingFeed> {
+        self.forcing.take()
     }
     /// HLO text of the computation, for a debug dump. NEVER a gate: the tier
     /// compares numbers, never programs.
@@ -203,6 +258,12 @@ pub(crate) fn emit_program(
     let builder = XlaBuilder::new("earthsci_rhs");
     let mut em = Emitter::new(&builder, prog, compiled)?;
     let du = em.run()?;
+    let forcing = em.forcing_param.take().map(|_| ForcingFeed {
+        buffer: Rc::clone(&compiled.forcing),
+        declared: compiled.declared_names.clone(),
+        layout: em.forcing_layout.clone(),
+        len: em.forcing_len,
+    });
     let computation = du
         .build()
         .map_err(|e| XlaEmitError::new("<program>", format!("XlaBuilder::build failed: {e}")))?;
@@ -214,6 +275,7 @@ pub(crate) fn emit_program(
         params_len: prog.params_len.max(1),
         n_instrs: prog.instrs.len(),
         opcode_counts: opcode_counts(prog),
+        forcing,
     })
 }
 
@@ -261,6 +323,13 @@ struct Emitter<'a> {
     /// Rule name attached to whatever instruction is being lowered, for the
     /// error's `rule` field.
     cur_rule: String,
+    /// The fourth parameter `f`, present when the program loads a forcing.
+    forcing_param: Option<XlaOp>,
+    /// Per `prog.forcings` index: its offset in `f`.
+    forcing_offsets: Vec<Option<usize>>,
+    /// The loaded forcings in `f` order, and `f`'s length.
+    forcing_layout: Vec<(ForcingRef, usize)>,
+    forcing_len: usize,
 }
 
 impl<'a> Emitter<'a> {
@@ -311,6 +380,31 @@ impl<'a> Emitter<'a> {
             .map(|(i, (n, _))| (n.clone(), i))
             .collect();
 
+        // `f` holds only the forcings an instruction loads, in the order the
+        // program first loads them.
+        let mut forcing_offsets: Vec<Option<usize>> = vec![None; prog.forcings.len()];
+        let mut forcing_layout: Vec<(ForcingRef, usize)> = Vec::new();
+        let mut forcing_len = 0usize;
+        for ins in &prog.instrs {
+            if let Instr::LoadForcing { forcing, .. } = ins {
+                let ix = *forcing as usize;
+                if forcing_offsets[ix].is_none() {
+                    let fr = prog.forcings[ix].clone();
+                    forcing_offsets[ix] = Some(forcing_len);
+                    forcing_len += super::exec::forcing_len(&fr);
+                    forcing_layout.push((fr, forcing_offsets[ix].expect("just set")));
+                }
+            }
+        }
+        let forcing_param = if forcing_layout.is_empty() {
+            None
+        } else {
+            Some(
+                b.parameter(3, f64::TY, &[forcing_len.max(1) as i64], "f")
+                    .map_err(|e| XlaEmitError::new("<program>", format!("parameter f: {e}")))?,
+            )
+        };
+
         let mut em = Emitter {
             b,
             prog,
@@ -324,6 +418,10 @@ impl<'a> Emitter<'a> {
             var_order,
             var_ix,
             cur_rule: "<program>".to_string(),
+            forcing_param,
+            forcing_offsets,
+            forcing_layout,
+            forcing_len,
         };
         em.state = em.build_state_views()?;
         Ok(em)
@@ -984,6 +1082,24 @@ impl<'a> Emitter<'a> {
                     let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
                     self.wrap(flat.reshape(&d), "const array: reshape")?
                 };
+                self.define(*out, v);
+            }
+            Instr::LoadForcing { forcing, out } => {
+                let fr = &self.prog.forcings[*forcing as usize];
+                let off = self.forcing_offsets[*forcing as usize]
+                    .ok_or_else(|| self.err("forcing load with no place in `f`"))?;
+                let n = super::exec::forcing_len(fr);
+                let f = self
+                    .forcing_param
+                    .clone()
+                    .ok_or_else(|| self.err("forcing load in a program without `f`"))?;
+                let flat = self.wrap(
+                    f.slice_in_dim(off as i64, (off + n) as i64, 1, 0),
+                    "forcing: slice",
+                )?;
+                let dims = self.out_dims(*out);
+                let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+                let v = self.wrap(flat.reshape(&d), "forcing: reshape")?;
                 self.define(*out, v);
             }
             Instr::Reduce {

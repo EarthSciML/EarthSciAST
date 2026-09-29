@@ -137,6 +137,15 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
             Value::Array(Box::new(a.clone()))
         };
     }
+    latch_unbound_read(name, ctx.declared);
+    Value::Scalar(f64::NAN)
+}
+
+/// Latch the fault for a read that NOTHING in scope produced a value for:
+/// [`lookup_variable`]'s last resort, shared with the tape's forcing load
+/// (`Instr::LoadForcing`), which reads the same forcing channel and has to fail
+/// the same way when the channel holds no entry for the name.
+pub(super) fn latch_unbound_read(name: &str, declared: &HashSet<String>) {
     // Nothing produced a value for this name. Two very different defects reach
     // this point and they MUST NOT be reported as one (issue #181).
     //
@@ -149,7 +158,7 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
     //     routinely false — the reported name was typically an observed that is
     //     declared, defined and referenced perfectly well, and had nothing to
     //     do with the cycle. Bisecting from that message costs an afternoon.
-    if ctx.declared.contains(name) {
+    if declared.contains(name) {
         latch_gather_fault(format!(
             "E_TREEWALK_UNRESOLVED_ORDER: '{name}' IS declared in this model, but nothing had \
              produced a value for it at the point this expression was evaluated. For an observed \
@@ -159,7 +168,7 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
              observeds on it. This is NOT an undeclared name — see E_TREEWALK_UNBOUND_NAME for \
              that (CONFORMANCE_SPEC §5.23)."
         ));
-        return Value::Scalar(f64::NAN);
+        return;
     }
     // (2) NOTHING bound this name — not `t`, not a loop binder, not a state, not
     // an observed, not a parameter, not a forcing channel, and the model does
@@ -184,7 +193,20 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
          CONFORMANCE_SPEC §5.23: never a NaN sentinel, which `max(x, floor)` or any \
          comparison would launder into a plausible number by dropping the operand."
     ));
-    Value::Scalar(f64::NAN)
+}
+
+/// Latch the fault for a forcing-buffer entry whose shape is not the box a
+/// compiled program was built against (`Instr::LoadForcing`). The interpreter
+/// reads whatever array the buffer holds; a compiled program fixed each box at
+/// build, so it cannot, and says so rather than reading the entry through the
+/// wrong box.
+pub(super) fn latch_forcing_shape_mismatch(name: &str, built: &[usize], held: &[usize]) {
+    latch_gather_fault(format!(
+        "the forcing buffer holds '{name}' with shape {held:?}, but the compiled program \
+         reads it as {built:?} (the shape the buffer held, or else the variable declared, \
+         when the program was built). A compiled program's boxes are fixed at build: a \
+         forcing field that changes shape between refreshes cannot be read by it."
+    ));
 }
 
 /// Bind (or rebind) a loop index in `binds` without reallocating the key on the

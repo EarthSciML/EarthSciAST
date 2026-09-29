@@ -116,6 +116,15 @@ impl RhsScratch {
         self.tape = Some(TapeCtx::new(prog, observed_rules));
     }
 
+    /// The forcing buffer was refreshed: an installed tape re-runs its
+    /// SEGMENT section on the next call. No-op on a scratch with no tape,
+    /// which reads the buffer on every call.
+    pub(super) fn bump_forcing_epoch(&mut self) {
+        if let Some(tape) = self.tape.as_mut() {
+            tape.bump_forcing_epoch();
+        }
+    }
+
     /// Whether this scratch carries a compiled tape (test observability).
     pub fn has_tape(&self) -> bool {
         self.tape.is_some()

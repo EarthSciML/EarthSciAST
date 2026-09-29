@@ -933,6 +933,120 @@ fn scan_lowering_is_flat_in_the_scanned_length() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Forcing reads (`Instr::LoadForcing`)
+// ---------------------------------------------------------------------------
+
+/// `D(c[i]) = g[i]*k - r*c[i] + bc[i-1]` with `g = 2*bc + k`, where `bc`
+/// (shaped) and `k` (0-d) are data-fed parameters the forcing buffer serves.
+fn forced_doc(n: i64) -> String {
+    let fed = |var: &str| serde_json::json!({"kind": "data", "source": "met", "from": {"file_variable": var}});
+    serde_json::json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "Forced"},
+        "index_sets": {"cells": {"kind": "interval", "size": n}},
+        "data_sources": {"met": {"kind": "grid", "source": {"url_template": "file:///met.nc"}}},
+        "models": {"M": {
+            "variables": {
+                "c": {"type": "unknown", "units": "1", "shape": ["cells"], "default": 0.5},
+                "bc": {"type": "parameter", "units": "1", "shape": ["cells"], "update": fed("bc")},
+                "k": {"type": "parameter", "units": "1", "shape": [], "update": fed("k")},
+                "g": {"type": "unknown", "units": "1", "shape": ["cells"]},
+                "r": {"type": "parameter", "units": "1", "default": 0.3}
+            },
+            "equations": [
+                {"lhs": "g", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                    "ranges": {"i": [1, n]},
+                    "expr": {"op": "+", "args": [
+                        {"op": "*", "args": [2.0, {"op": "index", "args": ["bc", "i"]}]},
+                        "k"]}}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                    "expr": {"op": "D", "args": [{"op": "index", "args": ["c", "i"]}], "wrt": "t"},
+                    "ranges": {"i": [1, n]}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                    "ranges": {"i": [1, n]},
+                    "expr": {"op": "+", "args": [
+                        {"op": "-", "args": [
+                            {"op": "*", "args": [{"op": "index", "args": ["g", "i"]}, "k"]},
+                            {"op": "*", "args": ["r", {"op": "index", "args": ["c", "i"]}]}]},
+                        {"op": "index", "args": ["bc", {"op": "-", "args": ["i", 1]}]}]}}}
+            ]
+        }}
+    })
+    .to_string()
+}
+
+fn feed_forced(compiled: &ArrayCompiled, n: usize, scale: f64, k: f64) {
+    let buf = compiled.forcing_handle();
+    let mut buf = buf.borrow_mut();
+    buf.insert(
+        "bc".into(),
+        ndarray::ArrayD::from_shape_vec(
+            ndarray::IxDyn(&[n]),
+            (0..n).map(|i| scale * (0.1 + i as f64 * 0.37)).collect(),
+        )
+        .expect("1-D"),
+    );
+    buf.insert(
+        "k".into(),
+        ndarray::ArrayD::from_elem(ndarray::IxDyn(&[]), k),
+    );
+}
+
+/// A forcing read lowers to a slice of the program's fourth parameter, which
+/// the runtime packs from the model's live buffer on every call: the numbers
+/// agree with the interpreter (to the FMA contraction XLA may make of
+/// `g*k - r*c`), a refreshed buffer is read on the next call, and a missing
+/// entry fails with the interpreter's own fault.
+#[test]
+fn forcing_reads_lower_and_follow_the_buffer() {
+    if !runtime_available() {
+        return;
+    }
+    let n = 6usize;
+    let file = load_string(&forced_doc(n as i64)).expect("loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+    feed_forced(&compiled, n, 1.0, 0.7);
+    let program = match CompiledRhs::compile(&compiled) {
+        Ok(p) => p,
+        Err(CompileRhsError::Refused(e)) => panic!("refused rule {}: {}", e.rule, e.reason),
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+    };
+    let params: HashMap<String, f64> = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let u: Vec<f64> = (0..n).map(|i| 0.2 + i as f64 * 0.11).collect();
+    let close = |got: &[f64], want: &[f64], label: &str| {
+        for (i, (g, w)) in got.iter().zip(want).enumerate() {
+            assert!(
+                (g - w).abs() <= 4e-16 * w.abs().max(1.0),
+                "{label}: du[{i}] compiled {g:e} vs interpreter {w:e}"
+            );
+        }
+    };
+    for scale in [1.0, 3.0] {
+        feed_forced(&compiled, n, scale, 0.7);
+        let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, false);
+        let got = program.eval(&u, &param_vec, 0.0).expect("compiled eval");
+        close(&got, &want, &format!("scale {scale}"));
+        let mut dev = program.on_device(&u, &param_vec).expect("upload");
+        dev.eval_at(0.0).expect("device eval");
+        close(
+            &dev.du_to_host().expect("download"),
+            &want,
+            "device-resident",
+        );
+    }
+
+    compiled.forcing_handle().borrow_mut().remove("bc");
+    earthsci_ast::simulate_array::take_const_array_oob();
+    compiled.debug_eval_rhs(&u, 0.0, &params, true);
+    let want = earthsci_ast::simulate_array::take_const_array_oob().expect("the oracle faults");
+    let got = program.eval(&u, &param_vec, 0.0).expect("compiled eval");
+    let fault = earthsci_ast::simulate_array::take_const_array_oob().expect("the program faults");
+    assert_eq!(fault, want);
+    assert!(got.iter().any(|v| v.is_nan()));
+}
+
 /// The array forms phase 3 put on the tape — a column-major `reshape` (an
 /// `Instr::Reshape` between two reversal gathers), `transpose`, `concat`, the
 /// positional broadcast of anonymous operands, a makearray whose face regions
