@@ -1999,7 +1999,7 @@ end
 #     neither can ever be a recurrence — they are cycles of length one and MUST
 #     keep the cycle diagnosis they have always had.
 #
-# The predicate is character-for-character the one `_decline_recurrence_definitions`
+# The predicate is character-for-character the one `_decline_unmaterialized_recurrences`
 # (tree_walk/build.jl) uses, which is the point: §5.19.5 asks that the two sites
 # agree, not that either be clever.
 function _recurrence_candidate_names(model::Model,
