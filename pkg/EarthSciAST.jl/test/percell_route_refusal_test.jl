@@ -129,10 +129,14 @@ _pr_rank4_build(doc, compiler; kw...) =
         end
     end
 
-    # A fill the cascade cannot compile is refused, naming the field: the
+    # A discrete-cadence fill goes through the right-hand side's cascade. The
     # rank-4 contraction of the short-contraction route above, as a
-    # discrete-cadence field instead of a derivative.
-    @testset "a discrete-cadence fill left to the per-cell loop refuses by name" begin
+    # discrete-cadence field instead of a derivative, compiles once there (the
+    # affine tier's run-time fold), bit for bit with the interpreter's per-cell
+    # walk; a fill the cascade cannot compile, a RAGGED contraction over the live
+    # forcing read (see "a contraction no compile-once form takes" below), is
+    # refused, naming the field.
+    @testset "a discrete-cadence fill compiles once, or refuses by name" begin
         W = Float64[1, 2, 3, 4, 5, 6, 7, 8]
         rng = Dict{String,Any}(n => Any[1, 2] for n in ("a", "b", "c", "d"))
         agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
@@ -162,14 +166,40 @@ _pr_rank4_build(doc, compiler; kw...) =
         ics = Dict("out[$a,$b,$c,$d]" => 0.0 for a in 1:2, b in 1:2, c in 1:2, d in 1:2)
         F = reshape(collect(1.0:16.0), 2, 2, 2, 2)
         build(compiler) = withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
-            dm = _PR.DiscreteMaterializer()
+            dm = _PR.DiscreteMaterializer(); insp = _PR.BuildInspection()
             _PR._build_evaluator(doc; initial_conditions = ics,
                 param_arrays = Dict("F" => copy(F)), materialize_out = dm,
-                compiler = compiler)
-            dm
+                inspect = insp, compiler = compiler)
+            (dm, insp.compiler_report)
         end
-        @test _pr_refuses(() -> build(:native), "refuses 'g'"; one_cell = true)
-        @test vec(build(:interpreter).caches["g"]) == sum(W) .* vec(F)
+        (dn, rn), (di, _) = build(:native), build(:interpreter)
+        @test vec(di.caches["g"]) == sum(W) .* vec(F)
+        @test all(dn.caches["g"] .=== di.caches["g"])
+        @test [r.tier for r in rn.rules if r.rule == "g"] == [:affine]
+
+        N = 3
+        ragged = deepcopy(doc)
+        m = ragged["models"]["R"]
+        m["variables"] = Dict(n => Dict(v..., "shape" => Any["a"]) for (n, v) in m["variables"])
+        m["equations"][1]["rhs"] = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+            "args" => Any[], "output_idx" => Any["a"],
+            "ranges" => Dict{String,Any}("a" => Any[1, N], "k" => Any[1,
+                Dict("op" => "-", "args" => Any[Dict("op" => "+", "args" => Any["a", 4]), "a"])]),
+            "expr" => Dict("op" => "*", "args" => Any[
+                Dict("op" => "index", "args" => Any["F", "a"]), "k"]))
+        m["equations"][2] = Dict("lhs" => Dict("op" => "faq", "args" => Any[],
+                "output_idx" => Any["a"], "ranges" => Dict("a" => Any[1, N]),
+                "expr" => Dict("op" => "D", "wrt" => "t", "args" => Any[
+                    Dict("op" => "index", "args" => Any["out", "a"])])),
+            "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["a"],
+                "ranges" => Dict("a" => Any[1, N]),
+                "expr" => Dict("op" => "index", "args" => Any["g", "a"])))
+        build_r(compiler) = (dm = _PR.DiscreteMaterializer();
+            _PR._build_evaluator(ragged; initial_conditions = Dict("out[$a]" => 0.0 for a in 1:N),
+                param_arrays = Dict("F" => collect(1.0:N)), materialize_out = dm,
+                compiler = compiler); dm)
+        @test _pr_refuses(() -> build_r(:native), "refuses 'g'"; one_cell = true)
+        @test build_r(:interpreter).caches["g"] == [10.0 * a for a in 1:N]
     end
 
     # ── faq-valued initialization equations (#482) ────────────────────────────
