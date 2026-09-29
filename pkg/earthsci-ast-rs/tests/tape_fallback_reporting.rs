@@ -23,16 +23,13 @@ use std::collections::HashMap;
 
 use earthsci_ast::{SolveOptions, load_string};
 
-/// `k` is a CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1): `k[i]` reads `k[i-1]`,
-/// with the required `ifelse` base-case guard. Its cells are not independent,
-/// so CONFORMANCE_SPEC §5.19.2 forbids the tape (whose scheduler reorders and
-/// batches) from ever lowering it — which is what makes it a durable fixture
-/// here: this file must keep falling back for the assertion to mean anything.
+/// `k` is a CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) whose self-read sits
+/// inside an ARRAY-VALUED part of its cell body: `k[i] = (j ↦ k[i-1]·j)[2]`,
+/// a nested `faq` over `j`. The tape lowers a recurrence as a sweep that
+/// evaluates each self-read one scalar cell at a time, so this one falls back.
 ///
-/// It used to be an array-valued `const`, which the tape lowered as of the
-/// phase-2 `Instr::ConstArray` work; the overlay still declines that one
-/// (`vec_coverage_frontier::frontier_array_valued_const_falls_back`), but the
-/// tape no longer does, so it stopped exercising this path.
+/// It used to be an array-valued `const`, and then a plain recurrence; the
+/// tape lowers both now, so neither exercises this path any more.
 const FALLBACK_MODEL: &str = r#"
     {
       "esm": "1.1.0",
@@ -110,22 +107,34 @@ const FALLBACK_MODEL: &str = r#"
                     },
                     1.0,
                     {
-                      "op": "*",
+                      "op": "index",
                       "args": [
                         {
-                          "op": "index",
-                          "args": [
-                            "k",
-                            {
-                              "op": "-",
-                              "args": [
-                                "i",
-                                1
-                              ]
-                            }
-                          ]
+                          "op": "faq",
+                          "args": [],
+                          "output_idx": ["j"],
+                          "ranges": {"j": [1, 2]},
+                          "expr": {
+                            "op": "*",
+                            "args": [
+                              {
+                                "op": "index",
+                                "args": [
+                                  "k",
+                                  {
+                                    "op": "-",
+                                    "args": [
+                                      "i",
+                                      1
+                                    ]
+                                  }
+                                ]
+                              },
+                              "j"
+                            ]
+                          }
                         },
-                        2.0
+                        2
                       ]
                     }
                   ]

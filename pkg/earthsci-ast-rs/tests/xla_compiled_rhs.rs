@@ -237,25 +237,54 @@ fn compiled_rhs_matches_the_interpreter_over_the_tier() {
 /// A model with a `Fallback` rule is a HARD refusal naming the rule, never a
 /// mixed run and never a silent pass.
 ///
-/// The fixture is a CAUSAL SELF-REFERENCE (`k[i]` reads `k[i-1]`), which
-/// CONFORMANCE_SPEC §5.19.2 forbids the tape from ever lowering — its cells
-/// are not independent and the tape's scheduler reorders and batches. That is
-/// what makes it durable here: unlike the array-valued `const` this test used
-/// to lean on, it cannot quietly become tapeable and turn the assertion into a
-/// tautology.
+/// The fixture is a CAUSAL SELF-REFERENCE whose self-read sits inside an
+/// array-valued part of its cell body (a nested `faq` over `j`): the tape
+/// lowers a recurrence as a sweep that evaluates each self-read one scalar
+/// cell at a time, so this rule stays a `Fallback`. (A plain recurrence is on
+/// the tape now, and is refused for a different reason — see
+/// [`a_recurrence_sweep_is_refused_by_name`].)
 #[test]
 fn a_fallback_rule_is_refused_by_name() {
     if !runtime_available() {
         return;
     }
-    let path = repo_root().join("tests/fixtures/recurrence/01_recurrence_doubling.esm");
-    let compiled = build(&path);
+    let text = r#"{
+        "esm": "1.1.0",
+        "metadata": {"name": "XlaFallback"},
+        "index_sets": {"steps": {"kind": "interval", "size": 4}},
+        "models": {"R": {
+            "variables": {
+                "u": {"type": "unknown", "units": "1", "default": 1.0},
+                "s": {"type": "unknown", "units": "1", "shape": ["steps"]}
+            },
+            "equations": [
+                {"lhs": "s", "rhs": {
+                    "op": "faq", "args": [], "output_idx": ["k"],
+                    "ranges": {"k": {"from": "steps"}},
+                    "expr": {"op": "ifelse", "args": [
+                        {"op": "<=", "args": ["k", 1]},
+                        1.0,
+                        {"op": "index", "args": [
+                            {"op": "faq", "args": [], "output_idx": ["j"],
+                             "ranges": {"j": [1, 2]},
+                             "expr": {"op": "*", "args": [
+                                 {"op": "index", "args": ["s", {"op": "-", "args": ["k", 1]}]},
+                                 "j"]}},
+                            2]}
+                    ]}}},
+                {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                 "rhs": {"op": "*", "args": [-0.01, "u", {"op": "index", "args": ["s", 4]}]}}
+            ]
+        }}
+    }"#;
+    let file = load_string(text).expect("fixture loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
     match CompiledRhs::compile(&compiled) {
         Ok(_) => panic!(
-            "{} now lowers completely. If the tape really did learn causal \
-             self-reference, move this to another fallback-carrying fixture; if it \
-             did not, the emitter is silently dropping a Fallback instruction.",
-            path.display()
+            "the fixture now lowers completely. If the tape really did learn a \
+             self-read inside an array-valued part of a recurrence body, move this to \
+             another fallback-carrying fixture; if it did not, the emitter is silently \
+             dropping a Fallback instruction."
         ),
         Err(CompileRhsError::Refused(e)) => {
             assert!(!e.rule.is_empty(), "refusal names no rule");
@@ -265,6 +294,30 @@ fn a_fallback_rule_is_refused_by_name() {
                 e.reason
             );
             eprintln!("refused rule {}: {}", e.rule, e.reason);
+        }
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+    }
+}
+
+/// A recurrence is on the tape as an ordered `Sweep`, which this emitter does
+/// not lower (it has no per-cell loop and no channel for the self-read's
+/// fail-closed fault): a refusal naming the rule and the construct, never a
+/// number (CONFORMANCE_SPEC §5.19.3b).
+#[test]
+fn a_recurrence_sweep_is_refused_by_name() {
+    if !runtime_available() {
+        return;
+    }
+    let path = repo_root().join("tests/fixtures/recurrence/01_recurrence_doubling.esm");
+    let compiled = build(&path);
+    match CompiledRhs::compile(&compiled) {
+        Ok(_) => panic!(
+            "{} lowered to XLA: the sweep must be refused",
+            path.display()
+        ),
+        Err(CompileRhsError::Refused(e)) => {
+            assert!(!e.rule.is_empty(), "refusal names no rule");
+            assert!(e.reason.contains("recurrence"), "{}", e.reason);
         }
         Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
     }
