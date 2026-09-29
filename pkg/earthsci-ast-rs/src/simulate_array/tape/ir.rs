@@ -1080,14 +1080,26 @@ pub(crate) struct InterpTable {
     pub axis_x: Vec<f64>,
     /// `axis_y`; empty for every kind but [`InterpKind::Bilinear`].
     pub axis_y: Vec<f64>,
+    /// The id of the `out_of_bounds: "error"` table this call was lowered
+    /// from (esm-spec §9.5.1), or `None` for a clamping lookup. When set,
+    /// every query is checked against its axis before the blend.
+    pub strict: Option<String>,
 }
 
 impl InterpTable {
     /// Evaluate this entry at one query point — the SINGLE definition the fast
     /// executor, the reference executor and the build-time constant fold all
     /// call. `y` is read only by [`InterpKind::Bilinear`].
+    ///
+    /// A strict table's out-of-range query latches the oracle's
+    /// `table_lookup_out_of_bounds` fault and yields the `NaN` the oracle
+    /// substitutes alongside it.
     pub(crate) fn at(&self, x: f64, y: f64) -> f64 {
         use crate::registered_functions::{interp_bilinear_at, interp_linear_at, searchsorted_at};
+        if let Some(fault) = self.out_of_bounds(x, y) {
+            crate::simulate_array::eval::latch_gather_fault(fault);
+            return f64::NAN;
+        }
         match self.kind {
             InterpKind::Linear => interp_linear_at(&self.table, &self.axis_x, x),
             InterpKind::Bilinear => {
@@ -1097,6 +1109,17 @@ impl InterpTable {
             // `ClosedValue::as_f64`, so the tape stores the same `f64`.
             InterpKind::SearchSorted => searchsorted_at(x, &self.axis_x) as f64,
         }
+    }
+
+    /// The fault a strict table raises for this query point, checked in the
+    /// oracle's order (the first axis, then the second), or `None`.
+    pub(crate) fn out_of_bounds(&self, x: f64, y: f64) -> Option<String> {
+        use crate::lower_table_lookup::out_of_bounds_fault;
+        let id = self.strict.as_deref()?;
+        out_of_bounds_fault(id, 1, &self.axis_x, x).or_else(|| match self.kind {
+            InterpKind::Bilinear => out_of_bounds_fault(id, 2, &self.axis_y, y),
+            InterpKind::Linear | InterpKind::SearchSorted => None,
+        })
     }
 }
 
