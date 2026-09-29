@@ -477,10 +477,10 @@ function _vi_range_values(spec, ctx::_ViCtx, bindings::AbstractDict)
         isempty(of) && throw(TreeWalkError("E_TREEWALK_VI_RANGE",
             "ragged value-invention range '$(spec.from)' needs an `of` parent"))
         parent = Int(bindings[of[1]])
-        for arr in (is.offsets, is.values)
-            haskey(ctx.const_arrays, arr) || throw(TreeWalkError("E_TREEWALK_VI_RANGE",
-                "ragged value-invention range '$(spec.from)' reads its member table " *
-                "'$(arr)', which no data source or const array supplied at setup"))
+        for f in (is.offsets, is.values)
+            haskey(ctx.const_arrays, f) || throw(TreeWalkError("E_TREEWALK_VI_INDEX",
+                "ragged keyed factor '$f' of index set '$(spec.from)' is not bound in " *
+                "const_arrays: it must be a constant factor (esm-spec §4.2)"))
         end
         offs = ctx.const_arrays[is.offsets]
         vals = ctx.const_arrays[is.values]
@@ -1098,8 +1098,14 @@ function materialize_value_invention(model::Model, index_sets::AbstractDict,
                           groups=groups, vi_var_names=det.vi_var_names,
                           maps=Dict{String,Dict{Any,Any}}(), map_sets=map_sets)
 
+    ca = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
+    # A ragged range binds its members through keyed factors named by BARE name;
+    # a const-backed factor may be registered under its in-scope (flattened) name.
+    for (bare, scoped) in _ragged_factor_scope(index_sets, model.variables)
+        !haskey(ca, bare) && haskey(ca, scoped) && (ca[bare] = ca[scoped])
+    end
     ctx = _ViCtx(
-        Dict{String,Any}(String(k) => v for (k, v) in const_arrays),
+        ca,
         Dict{String,Float64}(String(k) => Float64(v) for (k, v) in params),
         Dict{String,IndexSet}(String(k) => v for (k, v) in index_sets),
         model.variables,

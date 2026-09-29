@@ -188,6 +188,18 @@ fn idx(var: &str, e: serde_json::Value) -> serde_json::Value {
 
 /// Evaluate through the Step 3b FAST executor (warm taped scratch) and assert
 /// bitwise `dy` equality against `dy_ref`.
+/// A causal self-read of `var` at `pos` that the tape does NOT lower, so the
+/// recurrence around it stays a fallback rule: the read sits inside an
+/// array-valued part of the cell body (`(j ↦ var[pos])[1]`, a one-element
+/// nested `faq`), and the tape's sweep evaluates a self-read one scalar cell
+/// at a time. Its value is the plain self-read's, bit for bit.
+fn untaped_self_read(var: &str, pos: serde_json::Value) -> serde_json::Value {
+    json!({"op": "index", "args": [
+        {"op": "faq", "args": [], "output_idx": ["j"], "ranges": {"j": [1, 1]},
+         "expr": idx(var, pos)},
+        1]})
+}
+
 fn assert_fast_matches(
     compiled: &ArrayCompiled,
     scratch: &mut super::super::RhsScratch,
@@ -776,9 +788,10 @@ fn ab_observed_chain_and_broadcast() {
     );
 }
 
-/// A model with a construct the overlay cannot vectorize (an array-valued
-/// recurrence observed) becomes a FALLBACK rule; taped readers of the runtime
-/// observed map and dy still match the interpreter bit for bit.
+/// A model with a construct the tape cannot lower (a recurrence whose
+/// self-read sits in an array-valued part of its body) becomes a FALLBACK
+/// rule; taped readers of the runtime observed map and dy still match the
+/// interpreter bit for bit.
 #[test]
 fn ab_fallback_rule_interop() {
     let n = 3;
@@ -793,16 +806,16 @@ fn ab_fallback_rule_interop() {
                 "a": {"type": "unknown", "shape": ["c"]}
             },
             "equations": [
-                // A causal self-reference: the ONE observed kind the tape may
-                // never lower (CONFORMANCE_SPEC §5.19.2), so it is a stable
-                // way to put a fallback rule in the middle of a taped program.
+                // A recurrence the tape does not lower
+                // ([`untaped_self_read`]): a fallback rule in the middle of a
+                // taped program.
                 {"lhs": "k", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                     "ranges": {"i": [1, n]},
                     "expr": {"op": "ifelse", "args": [
                         {"op": "<=", "args": ["i", 1]},
                         1.0,
                         {"op": "*", "args": [
-                            idx("k", json!({"op": "-", "args": ["i", 1]})), 2.0]}
+                            untaped_self_read("k", json!({"op": "-", "args": ["i", 1]})), 2.0]}
                     ]}}},
                 {"lhs": "a", "rhs": {"op": "+", "args": ["psi", "k"]}},
                 {"lhs": {"op": "ic", "args": ["psi"]}, "rhs": 0.0},
@@ -815,7 +828,7 @@ fn ab_fallback_rule_interop() {
     let (prog, report) = compiled.build_tape(&HashSet::new());
     assert!(
         !report.fallbacks.is_empty(),
-        "the recurrence must produce at least one fallback"
+        "the untaped recurrence must produce at least one fallback"
     );
     let nstates = compiled.state_variable_names().len();
     let params = HashMap::new();
@@ -923,14 +936,14 @@ fn coloring_invariants() {
     let mut def = vec![usize::MAX; prog.slots.len()];
     let mut last = vec![0usize; prog.slots.len()];
     for (i, ins) in prog.instrs.iter().enumerate() {
-        ins.for_each_def(&prog.fused, |o| {
+        ins.for_each_def(&prog.tables(), |o| {
             if def[o as usize] == usize::MAX {
                 def[o as usize] = i;
             } else {
                 last[o as usize] = last[o as usize].max(i);
             }
         });
-        ins.for_each_read(&prog.dy_writes, &prog.fused, &prog.assemblies, |s| {
+        ins.for_each_read(&prog.tables(), |s| {
             last[s as usize] = last[s as usize].max(i);
         });
     }
@@ -1534,7 +1547,8 @@ fn unpublished_export_read_by_a_fallback_fails_closed() {
             "equations": [
                 // Taped, and exported because the fallback below reads it.
                 {"lhs": "s", "rhs": {"op": "+", "args": [1.0, "psi"]}},
-                // A causal recurrence: never taped (§5.19.2), so a Fallback.
+                // A recurrence the tape does not lower
+                // ([`untaped_self_read`]), so a Fallback.
                 {"lhs": "k", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                     "ranges": {"i": [1, n]},
                     "expr": {"op": "ifelse", "args": [
@@ -1543,7 +1557,8 @@ fn unpublished_export_read_by_a_fallback_fails_closed() {
                         {"op": "+", "args": [
                             idx("s", json!("i")),
                             {"op": "*", "args": [
-                                0.5, idx("k", json!({"op": "-", "args": ["i", 1]}))]}
+                                0.5,
+                                untaped_self_read("k", json!({"op": "-", "args": ["i", 1]}))]}
                         ]}
                     ]}}},
                 {"lhs": {"op": "ic", "args": ["psi"]}, "rhs": 0.0},
@@ -2169,9 +2184,9 @@ fn ab_rank0_reduction_with_a_filter() {
 }
 
 /// The shape cascade: an observed produced by a rule the tape REFUSES (a
-/// causal recurrence, which may never be taped) is still read on the tape by
-/// later rules, because its published box is inferable. Before, every reader
-/// bailed too.
+/// recurrence it does not lower, [`untaped_self_read`]) is still read on the
+/// tape by later rules, because its published box is inferable. Before, every
+/// reader bailed too.
 #[test]
 fn ab_reader_of_a_fallback_producer_stays_taped() {
     let n = 6;
@@ -2185,8 +2200,8 @@ fn ab_reader_of_a_fallback_producer_stays_taped() {
                 "g": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
-                // A causal self-reference: `r[i]` reads `r[i-1]`. Sequential
-                // sweep only (CONFORMANCE_SPEC §5.19.2) — never taped.
+                // A causal self-reference: `r[i]` reads `r[i-1]`, through a
+                // part of the body the tape's sweep does not lower.
                 {"lhs": "r", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                     "ranges": {"i": [1, n]},
                     // The base case is an `ifelse` guard INSIDE the body: a
@@ -2198,7 +2213,8 @@ fn ab_reader_of_a_fallback_producer_stays_taped() {
                         {"op": "+", "args": [
                             idx("u", json!("i")),
                             {"op": "*", "args": [
-                                0.5, idx("r", json!({"op": "-", "args": ["i", 1]}))]}
+                                0.5,
+                                untaped_self_read("r", json!({"op": "-", "args": ["i", 1]}))]}
                         ]}
                     ]}}},
                 // …read elementwise, and through a shifted gather.
@@ -3075,4 +3091,83 @@ fn ab_float32_variables_beside_float64_neighbours() {
         );
         assert_eq!(bits(&dy), bits(&want), "seed {seed}: fast executor");
     }
+}
+
+/// A state-driven causal self-reference (esm-spec §4.3.1.1) over a 2-D frame
+/// whose recurrence axis is the SECOND one (so the sweep's outer loop is not
+/// the row-major one), with a banded lag window under a `filter`, an `ifelse`
+/// on the contracted symbol, a const-array read by a frame symbol, a state read
+/// and a parameter-valued lag — read back by the derivative, so every executor
+/// runs the sweep on every call. `n` is the recurrence axis's extent.
+fn recurrence_doc(n: i64) -> serde_json::Value {
+    let w = json!({"op": "const", "args": [], "value": [0.0, 0.5, -0.25, 0.125]});
+    let body = json!({"op": "ifelse", "args": [
+        {"op": "==", "args": ["a", 0]},
+        {"op": "+", "args": [
+            {"op": "index", "args": ["u", "i"]},
+            {"op": "*", "args": [0.1, "j"]}
+        ]},
+        {"op": "*", "args": [
+            {"op": "max", "args": [
+                {"op": "index", "args": ["r", "i", {"op": "-", "args": ["j", "a"]}]}, -1.0]},
+            {"op": "index", "args": [w, {"op": "+", "args": ["a", 1]}]}
+        ]}
+    ]});
+    let lagged = json!({"op": "ifelse", "args": [
+        {"op": "<=", "args": ["j", "L"]},
+        0.0,
+        {"op": "index", "args": ["r", "i", {"op": "-", "args": ["j", "L"]}]}
+    ]});
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_recurrence"},
+        "models": {"M": {
+            "variables": {
+                "L": {"type": "parameter", "default": 2},
+                "u": {"type": "unknown", "shape": ["i"]},
+                "r": {"type": "unknown", "shape": ["i", "j"]},
+                "q": {"type": "unknown", "shape": ["i", "j"]}
+            },
+            "equations": [
+                {"lhs": "r", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                    "reduce": "+",
+                    "ranges": {"i": [1, 3], "j": [1, n], "a": [0, 3]},
+                    "filter": {"op": "<=", "args": ["a", {"op": "-", "args": ["j", 1]}]},
+                    "expr": body}},
+                {"lhs": "q", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                    "ranges": {"i": [1, 3], "j": [1, n]},
+                    "expr": {"op": "+", "args": [
+                        {"op": "index", "args": ["r", "i", "j"]}, lagged]}}},
+                {
+                    "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                            "expr": {"op": "D", "args": [
+                                {"op": "index", "args": ["u", "i"]}], "wrt": "t"},
+                            "ranges": {"i": [1, 3]}},
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                            "ranges": {"i": [1, 3]},
+                            "expr": {"op": "*", "args": [-0.01,
+                                {"op": "index", "args": ["q", "i", n]}]}}
+                }
+            ]
+        }}
+    })
+}
+
+#[test]
+fn ab_recurrence_sweep() {
+    let prog = ab_check(recurrence_doc(6), 0, -2.0, 2.0);
+    // One sweep, and nothing in its body fused.
+    assert_eq!(opcount(&prog, "Sweep"), 1);
+    assert!(opcount(&prog, "ScalarRead") > 0);
+    // The body is lowered once: the program and the sweep's body do not grow
+    // with the frame.
+    let body_len = |p: &TapeProgram| p.sweeps[0].body_len;
+    let small = compile(recurrence_doc(6))
+        .build_tape_opts(&HashSet::new(), None)
+        .0;
+    let large = compile(recurrence_doc(600))
+        .build_tape_opts(&HashSet::new(), None)
+        .0;
+    assert_eq!(body_len(&small), body_len(&large));
+    assert_eq!(small.instrs.len(), large.instrs.len());
 }

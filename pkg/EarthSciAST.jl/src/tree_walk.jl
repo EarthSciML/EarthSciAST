@@ -60,6 +60,7 @@ include("tree_walk/oop_merge.jl")        #      kernel-CLASS merge, for both for
 include("tree_walk/xcse.jl")             #      cross-kernel / kernel↔prelude fn-CSE
 include("tree_walk/codegen_kernel.jl")   # §4f  Julia-codegen tier for access kernels
 include("tree_walk/array_contraction.jl") # §4f  …and for the whole-array contraction nest
+include("tree_walk/recurrence_sweep.jl") #      the ordered sweep of a causal self-reference
 include("tree_walk/const_tier.jl")       # §4g  cadence partition of the scalar prelude
 include("tree_walk/stencil.jl")          # §4c  symbolic stencilizer (spines + recipes)
 include("tree_walk/stencil_affine.jl")   #      affine box processor (the default build)

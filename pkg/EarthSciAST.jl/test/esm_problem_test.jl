@@ -47,7 +47,7 @@ end
 @testset "EsmProblem — build once, solve many" begin
     _D(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
     scalar_esm(rhs) = Dict{String,Any}(
-        "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "S"),
+        "esm" => "1.0.0", "metadata" => Dict{String,Any}("name" => "S"),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => Dict{String,Any}(
                 "y" => Dict{String,Any}("type" => "unknown", "default" => 0.0),

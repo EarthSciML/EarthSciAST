@@ -37,6 +37,13 @@ function _infer_expr_shape(expr::ASTExpr,
             # A gather selects one element (or a fixed slice) — scalar output for
             # promotion purposes (the level-set already indexes its own field).
             return String[]
+        elseif op in _GEOMETRY_KERNEL_OPS
+            # A geometry kernel consumes each operand as a WHOLE ring, not per
+            # cell, so its operands' shapes do not broadcast: two rings of
+            # different vertex counts are independent operands. The scalar
+            # `polygon_intersection_area` is scalar; an `intersect_polygon` clip
+            # ring takes the shape its defining variable declares.
+            return String[]
         elseif op in _ARRAY_PRODUCER_OPS
             # Output is exactly the uncontracted axes named in output_idx.
             return expr.output_idx === nothing ? String[] :
@@ -82,6 +89,10 @@ function _infer_expr_shape(expr::ASTExpr,
     end
     return String[]
 end
+
+# The geometry kernel leaves (esm-spec §4.2 "Relational / value-invention &
+# geometry"), whose operands are whole polygon rings.
+const _GEOMETRY_KERNEL_OPS = Set{String}(s.name for s in _OP_TABLE if s.category === :geometry)
 
 # Op-class memberships for the array rewrites below and in pointwise_lift.jl,
 # derived from the registry flags (src/op_registry.jl); memberships are

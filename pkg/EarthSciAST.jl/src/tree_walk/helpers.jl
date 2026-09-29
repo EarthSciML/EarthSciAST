@@ -73,6 +73,56 @@ function _first_wiener_parameter(model::Model)::Union{Nothing,String}
     return nothing
 end
 
+# A parameter that recomputes ITSELF from a symbolic `expression` update
+# (esm-spec §5.4) is the 1.0.0 spelling of an event that writes it: `crossing`
+# replaces a continuous event, `schedule` and `condition` a discrete one. This
+# evaluator fires no events, so building it anyway freezes the parameter at its
+# default and reports a different model. Refused as the event it stands for
+# (esm-spec §9.6.6). An update read `from` a data source, or supplied by a
+# registered `handler`, is filled from outside the model and is not refused.
+_symbolic_update_construct(kind::AbstractString) =
+    kind == "crossing" ? "continuous event" : "discrete event"
+
+_symbolic_update_refusal(name::AbstractString, kind::AbstractString) = TreeWalkError(
+    ERROR_CODES.UNSUPPORTED_CONSTRUCT,
+    "$(_symbolic_update_construct(kind)) (the `$(kind)` update of parameter '$name', " *
+    "which recomputes it from an expression) is not supported by the Julia tree-walk " *
+    "evaluator; refusing the build rather than running the model without it")
+
+# The first (name, kind) among `vars` whose update carries a symbolic
+# `expression` rule; `nothing` when there is none. Sorted by name, so the
+# refusal names the same parameter on every run.
+function _first_symbolic_update(vars::AbstractDict)
+    for name in sort!(collect(String, keys(vars)))
+        v = vars[name]
+        v isa ModelVariable && v.type == ParameterVariable || continue
+        for rule in _update_rules(v)
+            rule.kind != "wiener" && rule.expression !== nothing &&
+                return (name, rule.kind)
+        end
+    end
+    return nothing
+end
+
+function _first_symbolic_update(model::Model)
+    found = _first_symbolic_update(model.variables)
+    found === nothing || return found
+    for sub in values(model.subsystems)
+        sub isa Model || continue
+        found = _first_symbolic_update(sub)
+        found === nothing || return found
+    end
+    return nothing
+end
+
+# Throw the refusal when a flattened system carries a self-recomputing
+# parameter. Called next to `_refuse_flat_wiener_noise`.
+function _refuse_flat_symbolic_updates(flat::FlattenedSystem)
+    found = _first_symbolic_update(flat.discrete_parameters)
+    found === nothing || throw(_symbolic_update_refusal(found...))
+    return nothing
+end
+
 # The first event `model` or any of its subsystems declares, a continuous one
 # before a discrete one; `nothing` when there is none.
 function _first_event(model::Model)::Union{Nothing,ContinuousEvent,DiscreteEvent}

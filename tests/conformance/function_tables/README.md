@@ -57,7 +57,9 @@ at the point it would otherwise lower or dispatch the node (esm-spec §9.5.3a).
 A binding that does implement it (Rust, Julia) answers the fixture's in-range
 query (`p = 2.5`) with exactly the clamp lowering's 25.0, and raises
 `table_lookup_out_of_bounds` at evaluation time for a query strictly outside
-the axis `[1, 4]` — under every compiler it offers, or refuses the compiler by
+the axis `[1, 4]` (a query on an end knot is in range, and a NaN query is
+not out of bounds: it passes through and yields NaN, per esm-spec §9.5.3a) —
+under every compiler it offers, or refuses the compiler by
 name (Rust's and Julia's `xla`, which have no channel to raise a run-time
 error, and Julia's `mtk`). Answering
 in the mode the binding happens to have, rather than the one the author

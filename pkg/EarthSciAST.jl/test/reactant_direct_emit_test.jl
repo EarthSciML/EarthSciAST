@@ -64,7 +64,7 @@ _de_ao(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
     "args" => Any[], "expr" => e)
 _de_doc(name, vars, eqs; index_sets = nothing) = begin
     d = Dict{String,Any}(
-        "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => name),
+        "esm" => "1.0.0", "metadata" => Dict{String,Any}("name" => name),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => vars, "equations" => eqs)))
     index_sets === nothing || (d["index_sets"] = index_sets)

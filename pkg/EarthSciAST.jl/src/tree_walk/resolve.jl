@@ -27,6 +27,32 @@
 # `_EMPTY_DERIVED_EXTENTS`.
 const _EMPTY_FACTOR_SCOPE = Dict{String,String}()
 
+# A ragged set's `offsets` / `values` keyed factors bind by BARE name in the
+# model scope (§5.4), but flattening prefixes every variable with its owning
+# component path while the document-scoped registry keeps the authored bare
+# name. Map each bare factor name to its in-scope variable: an exact-name
+# variable wins (and needs no entry); otherwise the dot-suffix match at the
+# SHALLOWEST namespace depth (the model's own re-exposed alias, not the mounted
+# subsystem's original) — unique at that depth, else left bare so the unbound-
+# name error surfaces. Empty for documents without ragged index sets.
+function _ragged_factor_scope(index_sets::AbstractDict, variables::AbstractDict)
+    factor_scope = Dict{String,String}()
+    for (_, iset) in index_sets
+        (iset isa IndexSet && iset.kind == "ragged") || continue
+        for f in (iset.offsets, iset.values)
+            f === nothing && continue
+            fname = String(f)
+            (haskey(factor_scope, fname) || haskey(variables, fname)) && continue
+            cands = String[n for n in keys(variables) if endswith(n, "." * fname)]
+            isempty(cands) && continue
+            mindepth = minimum(count(==('.'), c) for c in cands)
+            best = String[c for c in cands if count(==('.'), c) == mindepth]
+            length(best) == 1 && (factor_scope[fname] = best[1])
+        end
+    end
+    return factor_scope
+end
+
 # Resolve ONE IndexSetRef to a concrete `ranges` value. Errors clearly on an
 # undeclared name — no implicit interval is inferred, so a typo can't silently
 # become an empty set (§5.2). `factor_scope` maps a ragged set's bare keyed-factor

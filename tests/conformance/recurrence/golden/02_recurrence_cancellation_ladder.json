@@ -1,0 +1,31 @@
+{
+  "fixture": "02_recurrence_cancellation_ladder",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "ladder_is_the_left_fold",
+      "assertion_idx": 1,
+      "variable": "s",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "ladder_is_the_left_fold",
+      "assertion_idx": 2,
+      "variable": "s",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "ladder_is_the_left_fold",
+      "assertion_idx": 3,
+      "variable": "s",
+      "actual": 0.0
+    },
+    {
+      "test_id": "ladder_is_the_left_fold",
+      "assertion_idx": 4,
+      "variable": "s",
+      "actual": 1.0
+    }
+  ]
+}

@@ -41,6 +41,7 @@ const _NK_CONST_GATHER = UInt8(9)   # read a captured const/provider array at an
 const _NK_LOOPVAR       = UInt8(10)  # read the current value of an enclosing runtime contraction loop counter (ess-runtime-contraction)
 const _NK_CONTRACTION_LOOP = UInt8(11)  # compile-once ⊕-reduction: iterate a static range, fold ONE body per iteration (ess-runtime-contraction)
 const _NK_STATE_GATHER = UInt8(12)  # read u at a slot computed at eval time from loop-var-dependent subscripts (ess-runtime-contraction)
+const _NK_RECUR_GATHER = UInt8(13)  # a recurrence's causal self-read: a PUBLISHED cell of its own buffer, or a fault (recurrence_sweep.jl)
 
 # The ONE compiled IR node — scalar spines and access-kernel spines are both trees
 # of these. `kind` selects which fields are live. The catch-all `payload::Any` slot
@@ -212,6 +213,30 @@ struct _StateGatherRef
     strides::Vector{Int}
     lo::Vector{Int}
     hi::Vector{Int}
+end
+
+# ── A recurrence's causal self-read (esm-spec §4.3.1.1; recurrence_sweep.jl) ──
+# The payload of an `_NK_RECUR_GATHER` node. The subscripts are the node's
+# `children`; each is checked against its axis of the recurrence's own dense
+# `1…dims[d]` frame, and the cell it names is then read only if the sweep has
+# already PUBLISHED it — its position in the sweep order (`sweep_w`, the weight of
+# each axis in that order) is before `cur[]`, the position of the cell being
+# evaluated. Anything else is `E_TREEWALK_RECUR_UNAVAILABLE`: never the zero
+# ghost an out-of-range state gather reads (CONFORMANCE_SPEC §5.19.4). `base` and
+# `strides` address the observed's buffer block in the extended value vector.
+struct _RecurGather
+    name::String
+    dims::Vector{Int}
+    sweep_w::Vector{Int}
+    base::Int
+    strides::Vector{Int}
+    cur::Base.RefValue{Int}
+end
+
+# Build→compile side channel for it, like `_StateGatherRef`: rides on a
+# `__recur_read` marker op's `.value`, whose `args` are the subscripts.
+struct _RecurGatherRef
+    gather::_RecurGather
 end
 
 # Build-scoped cache of a state array's flat slot table (vname → (slot_flat,
@@ -574,6 +599,14 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
                        payload=_StateGather(ref.slot_flat, ref.strides, ref.lo, ref.hi,
                                             length(ref.slot_flat)),
                        children=subs)
+    end
+
+    # A recurrence's causal self-read (recurrence_sweep.jl): the subscripts
+    # compile as children, the published-cell check rides on `.value`.
+    if op_sym === :__recur_read
+        ref = expr.value::_RecurGatherRef
+        subs = _Node[_compile(a, var_map, param_syms, reg_funcs, memo) for a in expr.args]
+        return _mknode(kind=_NK_RECUR_GATHER, payload=ref.gather, children=subs)
     end
 
     children = _Node[_compile(a, var_map, param_syms, reg_funcs, memo)
@@ -1733,6 +1766,8 @@ end
         return _eval_contraction_loop(n, u, p, t, T)
     elseif k === _NK_STATE_GATHER
         return _eval_state_gather(n, u, p, t, T)
+    elseif k === _NK_RECUR_GATHER
+        return _eval_recur_gather(n, u, p, t, T)
     else
         return _eval_node_op(n, u, p, t, T)
     end
@@ -1756,6 +1791,58 @@ function _eval_state_gather(n::_Node, u, p, t, ::Type{T}) where {T}
     end
     slot = @inbounds sg.slot_flat[off + 1]
     @inbounds return u[slot]
+end
+
+# A recurrence's causal self-read (`_RecurGather`). The subscripts are evaluated
+# and range-checked in dimension order, as `_eval_state_gather` does (a later one
+# is not evaluated once one is out of the frame), and the read is served only
+# from a cell the sweep has already published.
+function _eval_recur_gather(n::_Node, u, p, t, ::Type{T}) where {T}
+    rg = n.payload::_RecurGather
+    children = n.children
+    ord = 0
+    slot = rg.base
+    @inbounds for d in eachindex(children)
+        sub = round(Int, _eval_node(children[d], u, p, t, T))
+        (1 <= sub <= rg.dims[d]) || _recur_unavailable(rg, children, d, u, p, t, T)
+        ord += (sub - 1) * rg.sweep_w[d]
+        slot += (sub - 1) * rg.strides[d]
+    end
+    ord < rg.cur[] || _recur_unavailable(rg, children, length(children), u, p, t, T)
+    @inbounds return u[slot]
+end
+
+# The fault, off the hot path: the first `nd` subscripts (the ones the read
+# evaluated) are evaluated again for the message.
+@noinline function _recur_unavailable(rg::_RecurGather, children, nd::Int, u, p, t,
+                                      ::Type{T}) where {T}
+    subs = Int[round(Int, _eval_node(children[d], u, p, t, T)) for d in 1:nd]
+    _recur_unavailable_at(rg, rg.cur[], subs)
+end
+
+# `E_TREEWALK_RECUR_UNAVAILABLE` for a self-read of `rg`'s variable at `subs` (the
+# subscripts evaluated before the read stopped) while the sweep is at position
+# `cur`. The emitted sweep (recurrence_sweep.jl) raises it through here too, so
+# both forms say the same thing.
+@noinline function _recur_unavailable_at(rg::_RecurGather, cur::Int, subs::Vector{Int})
+    r = cur
+    cell = zeros(Int, length(rg.dims))
+    for d in sortperm(rg.sweep_w; rev=true)
+        q, r = divrem(r, rg.sweep_w[d])
+        cell[d] = q + 1
+    end
+    inframe = length(subs) == length(rg.dims) &&
+              all(d -> 1 <= subs[d] <= rg.dims[d], eachindex(subs))
+    throw(TreeWalkError("E_TREEWALK_RECUR_UNAVAILABLE",
+        "causal self-read of '$(rg.name)' at [$(join(subs, ", "))" *
+        (length(subs) < length(rg.dims) ? ", …" : "") *
+        "] while evaluating cell [$(join(cell, ", "))]: " *
+        (inframe ? "that cell has not been published yet" :
+                   "that position is outside the recurrence's frame " *
+                   "[$(join(("1:$e" for e in rg.dims), ", "))]") *
+        " (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.4). A self-read is never " *
+        "resolved to a value it cannot have; write the base case as an `ifelse` " *
+        "guard in the body"))
 end
 
 # Compile-once runtime ⊕-reduction (ess-runtime-contraction). Iterates the static

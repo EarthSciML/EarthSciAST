@@ -655,6 +655,19 @@ function _fold_index_set_sizes!(index_sets::AbstractDict, ctx::String; strict::B
     return
 end
 
+# Whether the document's own `index_sets` carry a `size` that is not an integer
+# literal: a metaparameter name, or an expression still to fold.
+function _has_open_index_set_size(raw)
+    _is_object(raw) || return false
+    isets = get(raw, "index_sets", nothing)
+    _is_object(isets) || return false
+    return any(values(isets)) do decl
+        _is_object(decl) || return false
+        sz = get(decl, "size", nothing)
+        sz !== nothing && !(sz isa Integer && !(sz isa Bool))
+    end
+end
+
 # ---------------------------------------------------------------------------
 # Registration-time body composition (esm-spec §9.7.3)
 # ---------------------------------------------------------------------------
@@ -2213,6 +2226,16 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
             ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
             "loader API binds metaparameter(s) $(join(unknown, ", ")) which neither " *
             "this document nor any document it mounts declares (esm-spec §9.7.6)"))
+        # A ROOT document has no enclosing scope to close an axis it cannot
+        # size, so a `size` naming a metaparameter nothing declares is
+        # `metaparameter_unbound` here too (esm-spec §4.7, §9.7.6) rather than a
+        # raw conversion failure in the typed coercion. A mounted leaf's stays
+        # symbolic for the mounting registry to close.
+        if !mounted_leaf && _has_open_index_set_size(raw_data)
+            root = _to_ordered(raw_data)::OrderedDict{String,Any}
+            _fold_index_set_sizes!(root["index_sets"], "document"; strict=true)
+            return root
+        end
         return nothing
     end
     loader = load_ref === nothing ? _load_import_raw : load_ref

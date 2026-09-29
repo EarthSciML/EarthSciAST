@@ -1,0 +1,37 @@
+{
+  "fixture": "intersect_polygon_planar_ode",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "planar_clip_area_decay_t2",
+      "assertion_idx": 1,
+      "variable": "area",
+      "actual": 1.0
+    },
+    {
+      "test_id": "planar_clip_area_decay_t2",
+      "assertion_idx": 2,
+      "variable": "area",
+      "actual": 1.0
+    },
+    {
+      "test_id": "planar_clip_area_decay_t2",
+      "assertion_idx": 3,
+      "variable": "tracer",
+      "actual": 1.0
+    },
+    {
+      "test_id": "planar_clip_area_decay_t2",
+      "assertion_idx": 4,
+      "variable": "tracer",
+      "actual": 0.36787944117145305
+    },
+    {
+      "test_id": "planar_clip_area_decay_t2",
+      "assertion_idx": 5,
+      "variable": "tracer",
+      "actual": 0.1353352832366178
+    }
+  ]
+}

@@ -248,6 +248,24 @@ pub const INLINE_TIER_DOCS: &[(&str, &str, &str)] = &[
         "conformance/pde_inline_reference_dimension_names/fixtures/reference_dimension_names.esm",
         "M"
     ),
+    tier_doc!(
+        "value_invention_geometry",
+        "edge_enumeration_ode",
+        "conformance/value_invention_geometry/fixtures/edge_enumeration_ode.esm",
+        "EdgeEnumerationODE"
+    ),
+    tier_doc!(
+        "value_invention_geometry",
+        "nearest_generator_ode",
+        "conformance/value_invention_geometry/fixtures/nearest_generator_ode.esm",
+        "NearestGeneratorODE"
+    ),
+    tier_doc!(
+        "value_invention_geometry",
+        "bin_skolem_count_ode",
+        "conformance/value_invention_geometry/fixtures/bin_skolem_count_ode.esm",
+        "BinSkolemCountODE"
+    ),
 ];
 
 macro_rules! corpus_doc {

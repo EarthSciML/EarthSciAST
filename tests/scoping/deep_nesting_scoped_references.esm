@@ -29,15 +29,6 @@
           "lhs": {
             "op": "ic",
             "args": [
-              "orbital_forcing"
-            ]
-          },
-          "rhs": 1361.0
-        },
-        {
-          "lhs": {
-            "op": "ic",
-            "args": [
               "AtmosphereComponent.total_column_ozone"
             ]
           },
@@ -51,15 +42,6 @@
             ]
           },
           "rhs": 0.001
-        },
-        {
-          "lhs": {
-            "op": "ic",
-            "args": [
-              "AtmosphereComponent.TroposphereSubsystem.BoundaryLayerModule.SurfaceChemistryProcess.PhotolysisRateCalculation.WavelengthDependentCalculation.quantum_yield"
-            ]
-          },
-          "rhs": 0.8
         }
       ],
       "subsystems": {
@@ -151,10 +133,9 @@
                             "WavelengthDependentCalculation": {
                               "variables": {
                                 "quantum_yield": {
-                                  "type": "parameter",
+                                  "type": "unknown",
                                   "units": "dimensionless",
-                                  "default": 0.8,
-                                  "description": "Quantum yield"
+                                  "description": "Quantum yield, an observed: solar_spectrum_weight * 0.8"
                                 },
                                 "solar_spectrum_weight": {
                                   "type": "parameter",
@@ -165,13 +146,7 @@
                               },
                               "equations": [
                                 {
-                                  "lhs": {
-                                    "op": "==",
-                                    "args": [
-                                      "quantum_yield"
-                                    ],
-                                    "wrt": "update"
-                                  },
+                                  "lhs": "quantum_yield",
                                   "rhs": {
                                     "op": "*",
                                     "args": [
@@ -280,23 +255,39 @@
                       "units": "umol/L",
                       "default": 10.0,
                       "description": "Nitrate concentration"
+                    },
+                    "nitrate_deposition_rate": {
+                      "type": "parameter",
+                      "units": "umol/L/day",
+                      "default": 0.0,
+                      "description": "Nitrate deposited from the atmosphere; replaced by the atmospheric deposition velocity through a 5-level scoped variable_map"
                     }
                   },
-                  "equations": [],
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "D",
+                        "args": [
+                          "nitrate_concentration"
+                        ],
+                        "wrt": "t"
+                      },
+                      "rhs": "nitrate_deposition_rate"
+                    }
+                  ],
                   "subsystems": {
                     "Denitrification": {
-                      "variables": {
-                        "denitrification_rate": {
-                          "type": "parameter",
-                          "units": "umol/L/day",
-                          "default": 0.1,
-                          "description": "Denitrification rate (micromoles of NITRATE per litre per day). `d` is not a registry symbol; the day is `day` (esm-spec §4.8.1)."
-                        }
-                      },
+                      "variables": {},
                       "equations": [],
                       "subsystems": {
                         "AnoxicMicroenvironment": {
                           "variables": {
+                            "denitrification_rate": {
+                              "type": "parameter",
+                              "units": "umol/L/day",
+                              "default": 0.1,
+                              "description": "Denitrification rate (micromoles of NITRATE per litre per day). `d` is not a registry symbol; the day is `day` (esm-spec §4.8.1)."
+                            },
                             "oxygen_threshold": {
                               "type": "parameter",
                               "units": "umol/L",
@@ -345,7 +336,7 @@
     {
       "type": "variable_map",
       "from": "EarthClimateSystem.AtmosphereComponent.TroposphereSubsystem.BoundaryLayerModule.SurfaceChemistryProcess.deposition_velocity",
-      "to": "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.nitrate_concentration",
+      "to": "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.nitrate_deposition_rate",
       "transform": "multiplicative",
       "factor": 1000000.0,
       "description": "Atmospheric deposition affects ocean nitrogen via 5-level scoped reference"
@@ -353,15 +344,15 @@
     {
       "type": "variable_map",
       "from": "EarthClimateSystem.AtmosphereComponent.TroposphereSubsystem.BoundaryLayerModule.SurfaceChemistryProcess.PhotolysisRateCalculation.J_NO2",
-      "to": "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.Denitrification.denitrification_rate",
+      "to": "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.Denitrification.AnoxicMicroenvironment.denitrification_rate",
       "transform": "multiplicative",
       "factor": 100000000.0,
-      "description": "Photolysis rate affects ocean denitrification via 6-level scoped reference"
+      "description": "Photolysis rate affects ocean denitrification via a 7-level scoped reference"
     },
     {
       "type": "variable_map",
       "from": "EarthClimateSystem.AtmosphereComponent.TroposphereSubsystem.BoundaryLayerModule.SurfaceChemistryProcess.PhotolysisRateCalculation.WavelengthDependentCalculation.quantum_yield",
-      "to": "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.Denitrification.AnoxicMicroenvironment.enzyme_activity",
+      "to": "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.Denitrification.AnoxicMicroenvironment.oxygen_threshold",
       "transform": "additive",
       "factor": 0.1,
       "description": "Quantum yield affects enzyme activity via deepest 7-level scoped reference"
@@ -370,44 +361,12 @@
       "type": "operator_compose",
       "systems": [
         "EarthClimateSystem.AtmosphereComponent.TroposphereSubsystem.BoundaryLayerModule.SurfaceChemistryProcess.PhotolysisRateCalculation",
-        "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.Denitrification"
+        "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.Denitrification.AnoxicMicroenvironment"
       ],
       "translate": {
-        "EarthClimateSystem.AtmosphereComponent.TroposphereSubsystem.BoundaryLayerModule.SurfaceChemistryProcess.PhotolysisRateCalculation.actinic_flux": "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.Denitrification.denitrification_rate"
+        "EarthClimateSystem.AtmosphereComponent.TroposphereSubsystem.BoundaryLayerModule.SurfaceChemistryProcess.PhotolysisRateCalculation.actinic_flux": "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.Denitrification.AnoxicMicroenvironment.denitrification_rate"
       },
-      "description": "Compose deeply nested systems using 6-level scoped references"
-    },
-    {
-      "type": "event",
-      "event_type": "continuous",
-      "name": "deep_nesting_cascade",
-      "conditions": [
-        {
-          "op": ">",
-          "args": [
-            "EarthClimateSystem.AtmosphereComponent.TroposphereSubsystem.BoundaryLayerModule.SurfaceChemistryProcess.PhotolysisRateCalculation.WavelengthDependentCalculation.quantum_yield",
-            0.9
-          ]
-        }
-      ],
-      "affects": [
-        {
-          "lhs": "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.Denitrification.AnoxicMicroenvironment.oxygen_threshold",
-          "rhs": {
-            "op": "*",
-            "args": [
-              {
-                "op": "Pre",
-                "args": [
-                  "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.Denitrification.AnoxicMicroenvironment.oxygen_threshold"
-                ]
-              },
-              1.2
-            ]
-          }
-        }
-      ],
-      "description": "Event triggering with maximum depth (7-level) scoped references"
+      "description": "Compose deeply nested systems using 6- and 7-level scoped references"
     },
     {
       "type": "couple",

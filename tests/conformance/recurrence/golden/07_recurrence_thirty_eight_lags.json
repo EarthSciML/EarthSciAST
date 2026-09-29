@@ -1,0 +1,247 @@
+{
+  "fixture": "07_recurrence_thirty_eight_lags",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 1,
+      "variable": "r",
+      "actual": 1.05
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 2,
+      "variable": "r",
+      "actual": -1.2625000000000002
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 3,
+      "variable": "r",
+      "actual": -0.2675000000000003
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 4,
+      "variable": "r",
+      "actual": 0.2431874999999999
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 5,
+      "variable": "r",
+      "actual": 0.013923125000000147
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 6,
+      "variable": "r",
+      "actual": 0.4236910937499999
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 7,
+      "variable": "r",
+      "actual": -0.24228653906279987
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 8,
+      "variable": "r",
+      "actual": 0.34189191640624983
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 9,
+      "variable": "r",
+      "actual": -0.08525264496874968
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 10,
+      "variable": "r",
+      "actual": 0.457901059077386
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 11,
+      "variable": "r",
+      "actual": -0.2447115170541569
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 12,
+      "variable": "r",
+      "actual": 0.397072675389364
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 13,
+      "variable": "r",
+      "actual": -0.12006434579958901
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 14,
+      "variable": "r",
+      "actual": 0.4958556633047492
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 15,
+      "variable": "r",
+      "actual": -0.25117963100369367
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 16,
+      "variable": "r",
+      "actual": 0.4515468907508029
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 17,
+      "variable": "r",
+      "actual": -0.15254370542391546
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 18,
+      "variable": "r",
+      "actual": 0.5361844605477583
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 19,
+      "variable": "r",
+      "actual": -0.2606336923822507
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 20,
+      "variable": "r",
+      "actual": 0.505074622381576
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 21,
+      "variable": "r",
+      "actual": -0.18294617721232806
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 22,
+      "variable": "r",
+      "actual": 0.5781709444407822
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 23,
+      "variable": "r",
+      "actual": -0.2723668051771326
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 24,
+      "variable": "r",
+      "actual": 0.5576624579507073
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 25,
+      "variable": "r",
+      "actual": -0.21157947351983178
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 26,
+      "variable": "r",
+      "actual": 0.6213821789058463
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 27,
+      "variable": "r",
+      "actual": -0.28588306876624137
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 28,
+      "variable": "r",
+      "actual": 0.60941376374518
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 29,
+      "variable": "r",
+      "actual": -0.23874316262189524
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 30,
+      "variable": "r",
+      "actual": 0.665532116640967
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 31,
+      "variable": "r",
+      "actual": -0.3008146551291641
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 32,
+      "variable": "r",
+      "actual": 0.6604538082203542
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 33,
+      "variable": "r",
+      "actual": -0.26470093886126717
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 34,
+      "variable": "r",
+      "actual": 0.7104169239899387
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 35,
+      "variable": "r",
+      "actual": -0.31687828212381713
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 36,
+      "variable": "r",
+      "actual": 0.7109021167907741
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 37,
+      "variable": "r",
+      "actual": -0.2896753328112515
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 38,
+      "variable": "r",
+      "actual": 0.755884108413216
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 39,
+      "variable": "r",
+      "actual": -0.3338512018146796
+    },
+    {
+      "test_id": "thirty_eight_lags_in_one_node",
+      "assertion_idx": 40,
+      "variable": "r",
+      "actual": 0.7630192556962501
+    }
+  ]
+}
