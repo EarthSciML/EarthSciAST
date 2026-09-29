@@ -375,3 +375,14 @@ fn a_branch_join_subscript_is_not_build_time_data() {
         "{refused:?}"
     );
 }
+
+/// A loop symbol first read inside one branch of a runtime `ifelse` and then
+/// in the other: its column is defined whichever branch runs.
+#[test]
+fn a_loop_symbol_first_read_in_a_branch_is_defined_on_both_paths() {
+    let body = json!({"op": "*", "args": [
+        {"op": "ifelse", "args": [p_positive(), "k", {"op": "*", "args": [2, "k"]}]},
+        wv()]});
+    let compiled = super::array_tests::compile(ragged_doc(cnst(json!([2, 3, 1])), body, None));
+    super::array_tests::ab(&compiled, &both_branches());
+}

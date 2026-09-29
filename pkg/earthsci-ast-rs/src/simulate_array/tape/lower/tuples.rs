@@ -434,7 +434,12 @@ impl TapeBuilder<'_> {
         });
         let sec = self.placement(Cadence::Const);
         let out = self.new_slot(&[len], &[1], false, sec);
+        // Every later read shares this slot, so it is defined unconditionally:
+        // a first read inside a conditional branch still places the column
+        // ahead of the branch, not in it.
+        let branches = std::mem::take(&mut self.branch_bufs);
         self.emit(Instr::ConstArray { data, out }, sec);
+        self.branch_bufs = branches;
         self.tuple_frames[fi].slots[ci] = Some(out);
         Ok(Some(LV::Arr(out)))
     }
