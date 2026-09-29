@@ -1588,15 +1588,33 @@ fn classify_variables(
                     }
                     // What is left is a parameter that recomputes itself from a
                     // symbolic `expression` at each refresh, which needs event
-                    // machinery this backend does not have. Binning it as a
-                    // state (integrated) or a plain parameter (frozen) would
-                    // both be WRONG — and silently so. Fail loudly instead; the
-                    // document still VALIDATES, it just cannot be simulated by
-                    // this backend yet.
+                    // machinery this backend does not have: esm-spec §5.4 makes
+                    // `schedule` / `condition` / `crossing` updates the 1.0.0
+                    // spelling of the discrete and continuous events that
+                    // wrote parameters. Binning it as a state (integrated) or a
+                    // plain parameter (frozen) would both be WRONG — and
+                    // silently so. Fail loudly instead, naming the rule kinds;
+                    // the document still VALIDATES, it just cannot be simulated
+                    // by this backend yet.
+                    let kinds: Vec<&str> = var
+                        .update
+                        .iter()
+                        .flat_map(|spec| spec.rules())
+                        .filter(|rule| {
+                            rule.value()
+                                .is_some_and(|v| v.from.is_none() && v.handler.is_none())
+                        })
+                        .map(|rule| rule.kind())
+                        .collect();
                     return Err(CompileError::UnsupportedFeatureError {
                         feature: "discrete".to_string(),
                         message: format!(
-                            "Rust array simulation backend does not yet support a discrete parameter that recomputes itself symbolically; parameter '{name}' carries an `expression` update"
+                            "Rust array simulation backend does not yet support a discrete parameter that recomputes itself symbolically; parameter '{name}' carries an `expression` update of kind {} (esm-spec §5.4: the event-driven parameter update)",
+                            kinds
+                                .iter()
+                                .map(|k| format!("`{k}`"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         ),
                     });
                 }
@@ -5645,5 +5663,44 @@ mod subsystem_ragged_and_inspection_tests {
         assert_eq!(dy[at("A.x")], 10.0, "D(A.x) = k * B.C.z");
         assert_eq!(dy[at("A.C.z")], -1.0, "D(A.C.z) = -A.x");
         assert_eq!(dy[at("B.C.z")], 6.0, "D(B.C.z) = k * A.C.z");
+    }
+}
+
+#[cfg(test)]
+mod event_driven_update_refusal_tests {
+    use super::*;
+
+    /// A parameter whose `update` recomputes it from an `expression` on a
+    /// `schedule` / `condition` / `crossing` trigger (esm-spec §5.4) is
+    /// refused, never frozen at its default, and the refusal names the rule
+    /// kinds it cannot run. A `data` rule on another parameter is the forcing
+    /// seam and is not named.
+    #[test]
+    fn an_expression_update_is_refused_naming_its_kinds() {
+        let file = crate::parse::load_string(
+            r#"{
+  "esm": "1.0.0",
+  "metadata": { "name": "ExprUpdates", "authors": ["test"] },
+  "models": { "M": {
+    "variables": {
+      "x": { "type": "unknown", "default": 0.0 },
+      "k": { "type": "parameter", "default": 1.0, "shape": [],
+             "update": [
+               { "kind": "schedule", "interval": 2.0, "expression": 2.0 },
+               { "kind": "crossing", "when": { "op": "-", "args": ["x", 1.0] }, "expression": 3.0 }
+             ] }
+    },
+    "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": "k" } ]
+  } }
+}"#,
+        )
+        .expect("loads");
+        let model = &file.models.as_ref().unwrap()["M"];
+        let err = classify_variables(model).expect_err("refused");
+        let text = err.to_string();
+        assert!(
+            text.contains("parameter 'k'") && text.contains("`schedule`, `crossing`"),
+            "{text}"
+        );
     }
 }

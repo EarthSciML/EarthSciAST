@@ -60,16 +60,22 @@ _model_has_intersect_polygon(model::Model) =
     _equations_have_intersect_polygon(model.equations)
 
 # Resolve an intersect_polygon polygon operand to its const-array matrix. The clip
-# runs at setup, so each operand must be a variable name supplied in `const_arrays`.
-function _geometry_operand(arg::ASTExpr, const_arrays_kw::AbstractDict, who::AbstractString)
+# runs at setup, so each operand must be a constant factor (esm-spec §4.2): a
+# variable supplied in `const_arrays`, or an unknown whose defining equation is an
+# array `const` node (materialized into `const_obs`).
+function _geometry_operand(arg::ASTExpr, const_arrays_kw::AbstractDict, who::AbstractString,
+                           const_obs::AbstractDict = _EMPTY_CONST_OBS)
     arg isa VarExpr || throw(TreeWalkError("E_TREEWALK_GEOMETRY_OPERAND",
         "intersect_polygon operand for '$who' must be a polygon variable name"))
     name = (arg::VarExpr).name
-    haskey(const_arrays_kw, name) || throw(TreeWalkError("E_TREEWALK_GEOMETRY_OPERAND",
-        "intersect_polygon operand '$name' for '$who' must be supplied in `const_arrays` " *
-        "(the clip runs at setup time; RFC Appendix B.1)"))
-    return const_arrays_kw[name]
+    haskey(const_arrays_kw, name) && return const_arrays_kw[name]
+    haskey(const_obs, name) && return const_obs[name]
+    throw(TreeWalkError("E_TREEWALK_GEOMETRY_OPERAND",
+        "intersect_polygon operand '$name' for '$who' must be a constant factor: supplied " *
+        "in `const_arrays`, or an unknown defined by an array `const` node (the clip runs " *
+        "at setup time; RFC Appendix B.1)"))
 end
+const _EMPTY_CONST_OBS = Dict{String,Array{Float64}}()
 
 # Run one setup-time polygon clip, translating the geometry kernel's
 # `GeometryError` into the build-time diagnostic (`E_TREEWALK_GEOMETRY_CLIP`).
@@ -93,7 +99,8 @@ end
 # `from_faq` key (the clip node `id` AND the observed var name) → distinct vertex
 # count `n`. `geom_ring_vars` are the observed vars whose RHS is intersect_polygon.
 function _materialize_geometry_rings(equations, const_arrays_kw::AbstractDict,
-                                     geom_ring_vars::Set{String})
+                                     geom_ring_vars::Set{String},
+                                     const_obs::AbstractDict = _EMPTY_CONST_OBS)
     rings = Dict{String,Matrix{Float64}}()
     extents = Dict{String,Int}()
     for eq in equations
@@ -108,8 +115,8 @@ function _materialize_geometry_rings(equations, const_arrays_kw::AbstractDict,
             "intersect_polygon observed '$vname' requires a `manifold` (planar / spherical / geodesic)"))
         length(op.args) == 2 || throw(TreeWalkError("E_TREEWALK_GEOMETRY_ARITY",
             "intersect_polygon is strictly binary; '$vname' has $(length(op.args)) operand(s)"))
-        poly_a = _geometry_operand(op.args[1], const_arrays_kw, vname)
-        poly_b = _geometry_operand(op.args[2], const_arrays_kw, vname)
+        poly_a = _geometry_operand(op.args[1], const_arrays_kw, vname, const_obs)
+        poly_b = _geometry_operand(op.args[2], const_arrays_kw, vname, const_obs)
         ring = _clip_or_treewalk_error(poly_a, poly_b, manifold)
         closed = close_ring(ring)
         rings[vname] = closed

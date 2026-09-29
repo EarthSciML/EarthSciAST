@@ -121,6 +121,32 @@ function _resolve_merged_renames(renames::AbstractDict, overrides::AbstractDict)
     return out
 end
 
+# esm-libraries-spec §8.1: a library MUST reject a document whose major version
+# it does not implement. Python and Rust refuse it at load; here it is refused at
+# the build, before a document of another major is run as if it were this one.
+function _refuse_unsupported_major_version(version)
+    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(version))
+    m === nothing && return nothing
+    supported = parse(Int, match(r"^(\d+)\.", SCHEMA_VERSION).captures[1])
+    major = parse(Int, m.captures[1])
+    major == supported || throw(ParseError(
+        "Unsupported major version $major. This library supports major version " *
+        "$supported only."))
+    return nothing
+end
+
+# esm-spec §4.9.1.1: a declaration spelled with the independent variable or
+# `_var` is unreachable — every reader gets the implicit symbol instead of the
+# declared quantity, and the run is finite, plausible and wrong. `validate`
+# reports it; the build refuses it rather than run that document.
+function _refuse_reserved_declaration_names(file::EsmFile)
+    errors = _check_reserved_file_names!(StructuralError[], file)
+    isempty(errors) && return nothing
+    e = first(errors)
+    throw(ParseError("[$(e.error_type)] $(e.path): $(e.message) (esm-spec §4.9.1.1)";
+                     code=e.error_type, path=e.path, details=e.details))
+end
+
 #
 # `renames_out`, when given, is filled with the flattened system's
 # `merged_variable_renames` (issue #230) — the states an `operator_compose`
@@ -155,6 +181,8 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
     # (`_seed_faq_init_u0!`).
     run_init = Equation[]
     if input isa EsmFile
+        _refuse_unsupported_major_version(input.esm)
+        _refuse_reserved_declaration_names(input)
         run_coordinates = input.coordinates
         run_solver = input.solver
         for (mname, model) in something(input.models, ())
@@ -172,6 +200,7 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         # model without it.
         _refuse_flat_events(input)
         _refuse_flat_wiener_noise(input)
+        _refuse_flat_symbolic_updates(input)
         # esm-spec §9.5.3: lower `table_lookup` to its `interp.*` form HERE —
         # the one point every input kind (path, native Dict, EsmFile,
         # already-flattened system) has funnelled into, and the first point

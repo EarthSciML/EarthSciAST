@@ -1,0 +1,13 @@
+{
+  "fixture": "bin_skolem_count_ode",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "bin_skolem_count_ode",
+      "assertion_idx": 1,
+      "variable": "n_pairs",
+      "actual": 4.999999999999999
+    }
+  ]
+}

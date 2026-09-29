@@ -907,6 +907,60 @@ fn check_reserved_declaration_names<'a, I: IntoIterator<Item = &'a String>>(
     }
 }
 
+/// Every `reserved_variable_name` finding of `esm_file` (esm-spec §4.9.1.1),
+/// over all three declaration maps — each model's `variables` with its inline
+/// subsystems, and each reaction system's `species` and `parameters` — in
+/// sorted order. The same findings `validate` reports; the build refuses on
+/// them too (`crate::problem`).
+pub(crate) fn reserved_declaration_errors(esm_file: &EsmFile) -> Vec<StructuralError> {
+    let mut errors = Vec::new();
+    if let Some(models) = &esm_file.models {
+        let mut names: Vec<&String> = models.keys().collect();
+        names.sort();
+        for model_name in names {
+            let model = &models[model_name];
+            check_reserved_declaration_names(
+                esm_file,
+                model.variables.keys(),
+                &format!("/models/{model_name}/variables"),
+                &format!("Model '{model_name}'"),
+                "variable",
+                &mut errors,
+            );
+            if let Some(subsystems) = &model.subsystems {
+                check_reserved_subsystem_names(
+                    esm_file,
+                    subsystems.iter(),
+                    &format!("/models/{model_name}/subsystems"),
+                    &mut errors,
+                );
+            }
+        }
+    }
+    if let Some(systems) = &esm_file.reaction_systems {
+        let mut names: Vec<&String> = systems.keys().collect();
+        names.sort();
+        for rs_name in names {
+            let rs = &systems[rs_name];
+            let owner = format!("Reaction system '{rs_name}'");
+            for (map, kind, keys) in [
+                ("species", "species", rs.species.keys().collect::<Vec<_>>()),
+                ("parameters", "parameter", rs.parameters.keys().collect()),
+            ] {
+                check_reserved_declaration_names(
+                    esm_file,
+                    keys,
+                    &format!("/reaction_systems/{rs_name}/{map}"),
+                    &owner,
+                    kind,
+                    &mut errors,
+                );
+            }
+        }
+    }
+    errors
+}
+
 /// [`check_reserved_declaration_names`] over every INLINE subsystem of a model,
 /// recursively (esm-spec §4.9.1.1).
 ///
@@ -3256,12 +3310,32 @@ fn validate_rate_expression(
 /// own equations may reference it (`raw.k`, `index(raw.wind, …)`) even though
 /// `raw` is not a top-level system. A nested MODEL subsystem is not a DataSource
 /// and contributes nothing. Empty for a model with no subsystems.
+///
+/// Nested subsystems expose their members at every depth, under the relative
+/// dotted path from the owning model (`A.B.C.var`, esm-spec §4.9.2): stopping at
+/// the first level is the two-segment shortcut §4.9.2 rules out, and rejected
+/// an `ic` of a state five subsystems down.
 fn subsystem_scoped_refs(model: &crate::Model) -> HashSet<String> {
     let mut refs = HashSet::new();
-    let Some(subs) = &model.subsystems else {
-        return refs;
-    };
+    if let Some(subs) = &model.subsystems {
+        collect_subsystem_scoped_refs("", subs.iter(), &mut refs);
+    }
+    refs
+}
+
+/// [`subsystem_scoped_refs`] for one `subsystems` map, whose entries sit under
+/// the dotted `prefix` (empty at the owning model).
+fn collect_subsystem_scoped_refs<'a>(
+    prefix: &str,
+    subs: impl Iterator<Item = (&'a String, &'a serde_json::Value)>,
+    refs: &mut HashSet<String>,
+) {
     for (sub_name, value) in subs {
+        let path = if prefix.is_empty() {
+            sub_name.clone()
+        } else {
+            format!("{prefix}.{sub_name}")
+        };
         // ANY mounted subsystem exposes `<sub>.<var>` to the owning model — a
         // DataSource (RFC pure-io-data-loaders §4.3) and equally a MODEL mounted
         // by `ref` (§4.7 subsystem inclusion, e.g. `Solar` from lib/solar.esm,
@@ -3277,11 +3351,13 @@ fn subsystem_scoped_refs(model: &crate::Model) -> HashSet<String> {
                 continue;
             };
             for var in members.keys() {
-                refs.insert(format!("{sub_name}.{var}"));
+                refs.insert(format!("{path}.{var}"));
             }
         }
+        if let Some(nested) = value.get("subsystems").and_then(|v| v.as_object()) {
+            collect_subsystem_scoped_refs(&path, nested.iter(), refs);
+        }
     }
-    refs
 }
 
 pub(crate) fn validate_expression_references_with_systems(

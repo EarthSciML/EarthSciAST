@@ -17,8 +17,10 @@
 //!   `table_lookup` past the last knot, exercising the default clamp) fail
 //!   while `z` (the hand-lowered twin) passes, for exactly as long as the
 //!   lowering is missing from the evaluation path.
-//! * `out_of_bounds_error/` — §9.5.3a: a mode this binding does not implement
-//!   is REFUSED, not silently answered under `clamp`.
+//! * `out_of_bounds_error/` — §9.5.1: this binding implements
+//!   `out_of_bounds: "error"`, so an in-range query answers what `clamp`
+//!   answers and an out-of-range one raises `table_lookup_out_of_bounds` —
+//!   never the clamped value.
 //!
 //! The last test is the other half of the contract: §9.5.4 makes the authored
 //! form first-class, so the lowering must NOT follow the document back out
@@ -81,25 +83,171 @@ fn a_table_lookup_observed_evaluates_like_its_hand_lowered_twin() {
     );
 }
 
-/// esm-spec §9.5.3a. `out_of_bounds: "error"` is "conformant when implemented"
-/// and this binding has not implemented it, so the lookup is refused by name.
-/// The alternative — lowering it to the clamping `interp.*` form — would answer
-/// in a mode the author did not declare, which is the defect class this whole
-/// module exists to remove.
+/// esm-spec §9.5.1 `out_of_bounds: "error"`. This binding implements the mode,
+/// so the fixture BUILDS under both compilers, and an in-range query answers
+/// exactly what the clamp lowering answers: `p = 2.5` blends the 20.0 and 30.0
+/// knots to 25.0, the same bits under `interpreter` and `native`.
+#[cfg(feature = "solve")]
 #[test]
-fn an_error_out_of_bounds_table_is_refused_by_name() {
+fn an_error_out_of_bounds_table_answers_an_in_range_query_under_both_compilers() {
     let path = common::repo_fixture("conformance/function_tables/out_of_bounds_error/fixture.esm");
     // The document is schema-valid and §9.5.5 lists no LOAD-time diagnostic
-    // for it: the refusal belongs to the evaluation path, not the loader.
+    // for it: the check belongs to the evaluation path, not the loader.
     let file = load_path(&path).expect("fixture loads");
-
-    let err = earthsci_ast::esm_problem(&file, (0.0, 1.0), Default::default())
-        .expect_err("must not build");
-    let text = err.to_string();
-    assert!(
-        text.contains("table_out_of_bounds_unsupported"),
-        "expected the §9.5.3a refusal by name, got: {text}"
+    let mut answers = Vec::new();
+    for compiler in [
+        earthsci_ast::Compiler::Interpreter,
+        earthsci_ast::Compiler::Native,
+    ] {
+        let prob = earthsci_ast::esm_problem(
+            &file,
+            (0.0, 1.0),
+            earthsci_ast::ProblemOptions {
+                compiler: Some(compiler),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("[{compiler:?}] esm_problem: {e}"));
+        // A state-free document: `y` is a build-time field, not a trajectory.
+        let y = observed_scalar(&prob, "M.y")
+            .unwrap_or_else(|e| panic!("[{compiler:?}] observed_field: {e}"));
+        assert_eq!(
+            y, 25.0,
+            "[{compiler:?}] p=2.5 blends the 20.0 and 30.0 knots"
+        );
+        answers.push(y.to_bits());
+    }
+    assert_eq!(
+        answers[0], answers[1],
+        "interpreter and native agree bit for bit"
     );
+}
+
+/// The fixture with its query moved outside the axis `[1, 4]` — below, and
+/// above — raises `table_lookup_out_of_bounds` under both compilers instead
+/// of answering the clamped 10.0 / 40.0. An end knot is in range.
+#[cfg(feature = "solve")]
+#[test]
+fn an_out_of_range_query_raises_table_lookup_out_of_bounds_under_both_compilers() {
+    let path = common::repo_fixture("conformance/function_tables/out_of_bounds_error/fixture.esm");
+    let source = std::fs::read_to_string(&path).expect("fixture reads");
+    assert!(
+        source.contains("\"default\": 2.5"),
+        "the fixture's query default moved"
+    );
+    for compiler in [
+        earthsci_ast::Compiler::Interpreter,
+        earthsci_ast::Compiler::Native,
+    ] {
+        for (p, expected) in [
+            ("0.5", None),
+            ("4.5", None),
+            ("1.0", Some(10.0)),
+            ("4.0", Some(40.0)),
+        ] {
+            let file = earthsci_ast::load_string(
+                &source.replace("\"default\": 2.5", &format!("\"default\": {p}")),
+            )
+            .expect("variant loads");
+            let run = earthsci_ast::esm_problem(
+                &file,
+                (0.0, 1.0),
+                earthsci_ast::ProblemOptions {
+                    compiler: Some(compiler),
+                    ..Default::default()
+                },
+            )
+            .and_then(|prob| observed_scalar(&prob, "M.y"));
+            match (expected, run) {
+                (Some(want), Ok(y)) => assert_eq!(y, want, "[{compiler:?}] p={p}"),
+                (None, Err(e)) => {
+                    let text = e.to_string();
+                    assert!(
+                        text.contains("table_lookup_out_of_bounds") && text.contains("strict_tab"),
+                        "[{compiler:?}] p={p}: expected the §9.5.1 error by name, got: {text}"
+                    );
+                }
+                (Some(_), Err(e)) => panic!("[{compiler:?}] p={p} is in range, got: {e}"),
+                (None, Ok(y)) => {
+                    panic!("[{compiler:?}] p={p} is out of range, but the run answered y={y}")
+                }
+            }
+        }
+    }
+}
+
+/// The query read at every right-hand-side call: `q` ramps at unit rate from
+/// 0 across the axis `[0, 3]` of an `out_of_bounds: "error"` table. Over
+/// `(0, 2)` the run answers, and matches the clamp table's run bit for bit
+/// under both compilers; over `(0, 5)` `q` leaves the axis at `t = 3` and the
+/// solve fails with the table's error rather than integrating the clamp.
+#[cfg(feature = "solve")]
+#[test]
+fn a_state_driven_query_leaving_the_axis_fails_the_solve_by_name() {
+    let doc = |mode: &str| {
+        format!(
+            r#"{{
+  "esm": "1.0.0",
+  "metadata": {{ "name": "StrictTableRamp", "authors": ["test"] }},
+  "function_tables": {{
+    "ramp_tab": {{
+      "axes": [{{ "name": "q", "values": [0.0, 1.0, 2.0, 3.0] }}],
+      "interpolation": "linear",
+      "out_of_bounds": "{mode}",
+      "data": [1.0, 3.0, 2.0, 5.0]
+    }}
+  }},
+  "models": {{ "M": {{
+    "variables": {{
+      "q": {{ "type": "unknown", "default": 0.0 }},
+      "y": {{ "type": "unknown", "default": 0.0 }}
+    }},
+    "equations": [
+      {{ "lhs": {{ "op": "D", "args": ["q"], "wrt": "t" }}, "rhs": 1.0 }},
+      {{ "lhs": {{ "op": "D", "args": ["y"], "wrt": "t" }},
+         "rhs": {{ "op": "table_lookup", "table": "ramp_tab", "axes": {{ "q": "q" }}, "args": [] }} }}
+    ]
+  }} }}
+}}"#
+        )
+    };
+    let run = |mode: &str, compiler, tspan| {
+        let file = earthsci_ast::load_string(&doc(mode)).expect("loads");
+        earthsci_ast::esm_problem(
+            &file,
+            tspan,
+            earthsci_ast::ProblemOptions {
+                compiler: Some(compiler),
+                ..Default::default()
+            },
+        )
+        .and_then(|prob| earthsci_ast::solve(&prob, &SolveOptions::default()))
+    };
+    for compiler in [
+        earthsci_ast::Compiler::Interpreter,
+        earthsci_ast::Compiler::Native,
+    ] {
+        let strict = run("error", compiler, (0.0, 2.0))
+            .unwrap_or_else(|e| panic!("[{compiler:?}] in range: {e}"));
+        let clamp = run("clamp", compiler, (0.0, 2.0)).expect("clamp run");
+        let (a, b) = (strict.get("M.y").unwrap(), clamp.get("M.y").unwrap());
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b) {
+            assert_eq!(
+                x.to_bits(),
+                y.to_bits(),
+                "[{compiler:?}] strict vs clamp in range"
+            );
+        }
+
+        let err =
+            run("error", compiler, (0.0, 5.0)).expect_err("the query leaves the axis at t = 3");
+        let text = err.to_string();
+        assert!(
+            text.contains("table_lookup_out_of_bounds") && text.contains("ramp_tab"),
+            "[{compiler:?}] expected the §9.5.1 error by name, got: {text}"
+        );
+    }
 }
 
 /// `esm_problem` takes a caller-flattened system as well as a document, and
@@ -156,21 +304,28 @@ fn both_problem_carriers_lower_a_table_lookup() {
     );
 }
 
-/// The §9.5.3a refusal reaches the flattened carrier too, rather than that
-/// carrier skipping the pass and building an unevaluable tree.
+/// The flattened carrier lowers the strict table too, rather than skipping
+/// the pass and building an unevaluable tree.
+#[cfg(feature = "solve")]
 #[test]
-fn an_error_out_of_bounds_table_is_refused_on_the_flattened_carrier() {
+fn an_error_out_of_bounds_table_answers_on_the_flattened_carrier() {
     let path = common::repo_fixture("conformance/function_tables/out_of_bounds_error/fixture.esm");
     let file = load_path(&path).expect("fixture loads");
     let flat = earthsci_ast::flatten(&file).expect("fixture flattens");
 
-    let err = earthsci_ast::esm_problem(&flat, (0.0, 1.0), Default::default())
-        .expect_err("must not build");
-    let text = err.to_string();
-    assert!(
-        text.contains("table_out_of_bounds_unsupported"),
-        "expected the §9.5.3a refusal by name, got: {text}"
-    );
+    let prob = earthsci_ast::esm_problem(&flat, (0.0, 1.0), Default::default())
+        .unwrap_or_else(|e| panic!("esm_problem: {e}"));
+    assert_eq!(observed_scalar(&prob, "M.y").expect("observed_field"), 25.0);
+}
+
+/// A 0-d build-time field as a number.
+fn observed_scalar(
+    prob: &earthsci_ast::EsmProblem,
+    name: &str,
+) -> Result<f64, earthsci_ast::SimulateError> {
+    let field = earthsci_ast::observed_field(prob, name)?;
+    assert_eq!(field.len(), 1, "{name} is a scalar: {field:?}");
+    Ok(*field.iter().next().unwrap())
 }
 
 /// Lowering is a transformation on the way into an evaluation: the loaded

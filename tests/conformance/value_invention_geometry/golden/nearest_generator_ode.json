@@ -1,0 +1,31 @@
+{
+  "fixture": "nearest_generator_ode",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "nearest_generator_ode",
+      "assertion_idx": 1,
+      "variable": "w[1]",
+      "actual": 0.0
+    },
+    {
+      "test_id": "nearest_generator_ode",
+      "assertion_idx": 2,
+      "variable": "w[2]",
+      "actual": 0.9999999999999998
+    },
+    {
+      "test_id": "nearest_generator_ode",
+      "assertion_idx": 3,
+      "variable": "w[3]",
+      "actual": 0.9999999999999998
+    },
+    {
+      "test_id": "nearest_generator_ode",
+      "assertion_idx": 4,
+      "variable": "w[4]",
+      "actual": 1.9999999999999996
+    }
+  ]
+}

@@ -47,6 +47,8 @@ pub(super) fn run_reference(
     // Pending skip regions from taken JmpIfZero branches:
     // (position at which to skip, how many instructions to skip).
     let mut pending: Vec<(usize, usize)> = Vec::new();
+    // The open recurrence sweep: its `Sweep`'s position and current cell.
+    let mut sweep: Option<(usize, Vec<usize>)> = None;
     let mut pc = 0usize;
     while pc < prog.instrs.len() {
         while let Some(&(pos, skip)) = pending.last() {
@@ -55,6 +57,38 @@ pub(super) fn run_reference(
                 pc += skip;
             } else {
                 break;
+            }
+        }
+        if let Some((spc, mut cell)) = sweep.take() {
+            let Instr::Sweep { spec } = &prog.instrs[spc] else {
+                unreachable!("an open sweep starts at a Sweep")
+            };
+            let sw = &prog.sweeps[*spec as usize];
+            if pc == spc + 1 + sw.body_len as usize {
+                let RefVal::Scalar(v) =
+                    resolve(prog, &slots, &state_arrays, &obs, params, t, &sw.result)
+                else {
+                    panic!("a recurrence cell is a scalar");
+                };
+                let prec = prog
+                    .precision
+                    .get(spc)
+                    .copied()
+                    .unwrap_or_else(crate::precision::active);
+                let Some(RefVal::Arr(a)) = &mut slots[sw.out as usize] else {
+                    panic!("the sweep's array is defined");
+                };
+                a[IxDyn(&cell)] = prec.round(v);
+                if sw.advance(&mut cell) {
+                    for (&c, &x) in sw.coords.iter().zip(&cell) {
+                        slots[c as usize] = Some(RefVal::Scalar((x + 1) as f64));
+                    }
+                    pc = spc + 1;
+                    sweep = Some((spc, cell));
+                    continue;
+                }
+            } else {
+                sweep = Some((spc, cell));
             }
         }
         if pc >= prog.instrs.len() {
@@ -496,6 +530,54 @@ pub(super) fn run_reference(
                 crate::simulate_array::eval::latch_gather_fault(
                     prog.faults[*fault as usize].clone(),
                 );
+            }
+            Instr::Sweep { spec } => {
+                let sw = &prog.sweeps[*spec as usize];
+                assert!(sweep.is_none(), "recurrence sweeps do not nest");
+                if sw.n_cells() == 0 {
+                    pc += 1 + sw.body_len as usize;
+                    continue;
+                }
+                slots[sw.out as usize] = Some(RefVal::Arr(ArrayD::from_elem(
+                    IxDyn(&sw.shape[..]),
+                    f64::NAN,
+                )));
+                let cell = vec![0usize; sw.shape.len()];
+                for &c in &sw.coords {
+                    slots[c as usize] = Some(RefVal::Scalar(1.0));
+                }
+                sweep = Some((pc, cell));
+            }
+            Instr::ScalarRead { src, spec, out } => {
+                let sp = &prog.scalar_reads[*spec as usize];
+                let sv = resolve_src(prog, &slots, &state_arrays, &obs, src);
+                let raw: Vec<i64> = sp
+                    .subs
+                    .iter()
+                    .map(
+                        |o| match resolve(prog, &slots, &state_arrays, &obs, params, t, o) {
+                            RefVal::Scalar(x) => subscript_of(x),
+                            RefVal::Arr(_) => panic!("a run-time subscript is a scalar"),
+                        },
+                    )
+                    .collect();
+                let cur = sweep.as_ref().map_or(&[][..], |(_, c)| &c[..]);
+                let v = match sp.resolve(&raw, sv.shape(), &prog.sweeps, cur) {
+                    ScalarReadAt::Elem(ix) => {
+                        let x = sv[IxDyn(&ix)];
+                        if matches!(sp.kind, ScalarReadKind::SelfRead { .. }) {
+                            crate::precision::active().round(x)
+                        } else {
+                            x
+                        }
+                    }
+                    ScalarReadAt::Ghost => 0.0,
+                    ScalarReadAt::Fault(msg) => {
+                        crate::simulate_array::eval::latch_gather_fault(msg);
+                        f64::NAN
+                    }
+                };
+                slots[*out as usize] = Some(RefVal::Scalar(v));
             }
             Instr::JmpIfZero {
                 cond,

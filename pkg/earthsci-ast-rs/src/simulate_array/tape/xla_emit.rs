@@ -85,6 +85,15 @@ use std::fmt;
 use std::rc::Rc;
 use xla::{ArrayElement, ElementType, PrimitiveType, XlaBuilder, XlaComputation, XlaOp};
 
+/// Why a recurrence sweep ([`Instr::Sweep`]) is refused: the emitter lowers
+/// neither the ordered per-cell loop nor a channel for the causal self-read's
+/// fail-closed fault, and CONFORMANCE_SPEC §5.19.3b wants a route that cannot
+/// agree to decline loudly rather than return a number.
+const RECURRENCE_REFUSAL: &str = "a causal self-reference (recurrence, esm-spec §4.3.1.1) is a \
+     sequential sweep whose self-read fails closed at run time; this emitter lowers neither \
+     the ordered per-cell loop nor a channel for that fault, so the model is refused \
+     (CONFORMANCE_SPEC §5.19.3b)";
+
 /// A model the emitter refuses to lower.
 ///
 /// `rule` names the tape rule (or the pseudo-rule `<program>` for a
@@ -827,6 +836,9 @@ impl<'a> Emitter<'a> {
                 pc = f_end;
                 continue;
             }
+            if let Instr::Sweep { .. } = &self.prog.instrs[pc] {
+                return Err(self.err(RECURRENCE_REFUSAL));
+            }
             self.emit_one(pc)?;
             pc += 1;
         }
@@ -1206,6 +1218,17 @@ impl<'a> Emitter<'a> {
             }
             Instr::Interp { table, x, y, out } => {
                 let tbl = &self.prog.interp_tables[*table as usize];
+                if let Some(id) = &tbl.strict {
+                    // Like `Instr::Fault`: a computation has no channel to
+                    // raise the out-of-range error through, and returning the
+                    // clamp or a bare `NaN` without it is the wrong answer
+                    // §9.5.3a forbids. Refused by name instead.
+                    return Err(self.err(format!(
+                        "a lookup into table `{id}`, which declares `out_of_bounds: \"error\"` \
+                         (esm-spec §9.5.1): a compiled program cannot raise \
+                         `table_lookup_out_of_bounds` at run time"
+                    )));
+                }
                 let dims = self.out_dims(*out);
                 let xv = self.operand(x)?;
                 let xv = self.to_shape(&xv, &dims)?;
@@ -1275,6 +1298,16 @@ impl<'a> Emitter<'a> {
             }
             Instr::JmpIfZero { .. } => {
                 return Err(self.err("JmpIfZero reached emit_one (handled by emit_range)"));
+            }
+            Instr::Sweep { .. } => return Err(self.err(RECURRENCE_REFUSAL)),
+            Instr::ScalarRead { .. } => {
+                // Only a recurrence body holds one, and the sweep is refused
+                // before its body is reached; this arm keeps the refusal named
+                // should another construct start using it.
+                return Err(self.err(
+                    "a run-time-subscript read (`ScalarRead`) can raise a fail-closed \
+                     fault, which a compiled program cannot report",
+                ));
             }
             Instr::Fused { .. } => {
                 return Err(self.err(

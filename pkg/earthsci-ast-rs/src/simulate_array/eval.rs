@@ -626,6 +626,9 @@ pub(super) fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         return Value::Scalar(f64::NAN);
     };
     let vals: ValVec = node.args.iter().map(|a| eval(a, ctx)).collect();
+    // A lookup into an `out_of_bounds: "error"` table (esm-spec §9.5.1)
+    // checks every query against its axis BEFORE the interpolation core.
+    let strict = crate::lower_table_lookup::strict_table(node);
 
     // Broadcast the 1-D interpolation kernel over an ARRAY query: the table +
     // axis (args 0,1) stay fixed as the lookup table, only the query point
@@ -639,6 +642,12 @@ pub(super) fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         let table: Vec<f64> = value_flat(&vals[0]);
         let axis: Vec<f64> = value_flat(&vals[1]);
         let out = q.mapv(|x| {
+            if let Some(id) = strict
+                && let Some(fault) = crate::lower_table_lookup::out_of_bounds_fault(id, 1, &axis, x)
+            {
+                latch_gather_fault(fault);
+                return f64::NAN;
+            }
             let call = [
                 ClosedArg::Array(table.clone()),
                 ClosedArg::Array(axis.clone()),
@@ -675,9 +684,41 @@ pub(super) fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         };
         args.push(arg);
     }
+    if let Some(id) = strict
+        && let Some(fault) = strict_query_fault(id, name, &args)
+    {
+        latch_gather_fault(fault);
+        return Value::Scalar(f64::NAN);
+    }
     match evaluate_closed_function(name, &args) {
         Ok(v) => Value::Scalar(v.as_f64()),
         Err(_) => Value::Scalar(f64::NAN),
+    }
+}
+
+/// The first out-of-range query of a strict-table `interp.*` call, in the
+/// order the tape checks them (the first axis, then the second), or `None`.
+/// §9.2 puts the query last for the two tensor entries and first for
+/// `interp.searchsorted`; an argument of the wrong kind is left to the
+/// registry, which rejects the call on its own terms.
+fn strict_query_fault(
+    table_id: &str,
+    name: &str,
+    args: &[crate::registered_functions::ClosedArg],
+) -> Option<String> {
+    use crate::lower_table_lookup::out_of_bounds_fault;
+    use crate::registered_functions::ClosedArg;
+    let scalar_on = |q: usize, a: usize, which: usize| match (args.get(q), args.get(a)) {
+        (Some(ClosedArg::Scalar(x)), Some(ClosedArg::Array(axis))) => {
+            out_of_bounds_fault(table_id, which, axis, *x)
+        }
+        _ => None,
+    };
+    match name {
+        "interp.linear" => scalar_on(2, 1, 1),
+        "interp.bilinear" => scalar_on(3, 1, 1).or_else(|| scalar_on(4, 2, 2)),
+        "interp.searchsorted" => scalar_on(0, 1, 1),
+        _ => None,
     }
 }
 
@@ -1973,19 +2014,25 @@ pub(crate) fn latch_gather_fault(msg: String) {
 /// Latch an unavailable causal self-read (esm-spec §4.3.1.1): the position is
 /// outside the recurrence axis, or names a cell the sweep has not published.
 fn latch_recur_unavailable(name: &str, raw: &[i64]) {
+    latch_gather_fault(recur_unavailable_message(name, raw));
+}
+
+/// The text [`latch_recur_unavailable`] latches, shared with the tape's
+/// causal self-read (`Instr::ScalarRead`).
+pub(crate) fn recur_unavailable_message(name: &str, raw: &[i64]) -> String {
     let at = raw
         .iter()
         .map(|i| i.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    latch_gather_fault(format!(
+    format!(
         "E_TREEWALK_RECUR_UNAVAILABLE: causal self-read of '{name}' at cell [{at}] is not \
          available — the position is outside the recurrence axis, or the sweep has not \
          published that cell yet (esm-spec §4.3.1.1; CONFORMANCE_SPEC.md §5.19.4: a causal \
          self-read is fail-closed, never the §5.5.5 zero ghost and never a NaN a `max(x, 0)` \
          could launder). Guard the base case inside the body, e.g. \
          `ifelse(k <= 1, <base>, <recurrence>)`."
-    ));
+    )
 }
 
 /// Latch a subscript applied to a value that has NO axes (esm-spec §4.3.4: a

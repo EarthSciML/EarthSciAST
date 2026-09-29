@@ -233,7 +233,7 @@ import Symbolics
         # boundary (RFC out-of-line-expression-templates §7.7) — `_esm_to_symbolic`
         # has no apply arm, so without the expansion this construction throws.
         doc = Dict{String,Any}(
-            "esm" => "0.9.0",
+            "esm" => "1.0.0",
             "metadata" => Dict{String,Any}("name" => "mtk_tpl"),
             "models" => Dict{String,Any}("M" => Dict{String,Any}(
                 "expression_templates" => Dict{String,Any}("scale" => Dict{String,Any}(

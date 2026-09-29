@@ -34,6 +34,7 @@ use earthsci_ast::{
     CompileError, Compiler, EsmProblem, ProblemOptions, Rhs, SimulateError, SolveOptions,
     esm_problem, solve,
 };
+use serde_json::{Value, json};
 
 fn repo_root() -> PathBuf {
     // CARGO_MANIFEST_DIR is pkg/earthsci-ast-rs.
@@ -158,13 +159,48 @@ fn a_value_outside_the_vocabulary_is_compiler_unknown() {
 
 /// The document `native` refuses, and the reason it refuses for.
 ///
-/// This was first an `interp.linear` fixture and then a
-/// `polygon_intersection_area` one; both families are on the tape now. The
-/// canonical refusal is a causal self-reference (esm-spec §4.3.1.1): a
-/// recurrence's cells are not independent, the interpreter's sequential sweep
-/// is its one implementation, and the tape refuses it by construction rather
-/// than by a missing lowering that could quietly land.
-const REFUSED_FIXTURE: &str = "tests/valid/recurrence_causal_self_reference.esm";
+/// This was an `interp.linear` fixture, then a `polygon_intersection_area`
+/// one, then a causal self-reference; all three are on the tape now. What
+/// stays refused is a recurrence whose self-read sits inside an ARRAY-VALUED
+/// part of its cell body — here a nested `faq` over `j` — which the tape's
+/// sweep does not lower (it evaluates a self-read one scalar cell at a time)
+/// and the interpreter evaluates. Inline rather than a corpus file: a corpus
+/// document native refuses would be a coverage-ledger entry.
+fn refused_doc() -> Value {
+    // `j ↦ s[k-1]·j`: an array-valued value holding the self-read.
+    let inner = json!({"op": "faq", "args": [], "output_idx": ["j"],
+        "ranges": {"j": [1, 2]},
+        "expr": {"op": "*", "args": [
+            {"op": "index", "args": ["s", {"op": "-", "args": ["k", 1]}]}, "j"]}});
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "RefusedRecurrence"},
+        "index_sets": {"steps": {"kind": "interval", "size": 4}},
+        "models": {"R": {
+            "variables": {"s": {"type": "unknown", "units": "1", "shape": ["steps"]}},
+            "equations": [{"lhs": "s", "rhs": {
+                "op": "faq", "args": [], "output_idx": ["k"],
+                "ranges": {"k": {"from": "steps"}},
+                "expr": {"op": "ifelse", "args": [
+                    {"op": "<=", "args": ["k", 1]},
+                    1.0,
+                    {"op": "index", "args": [inner, 2]}
+                ]}}}]
+        }}
+    })
+}
+
+/// Build [`refused_doc`] under `compiler`.
+fn build_refused(compiler: Compiler) -> Result<EsmProblem, SimulateError> {
+    esm_problem(
+        &refused_doc(),
+        (0.0, 1.0),
+        ProblemOptions {
+            compiler: Some(compiler),
+            ..Default::default()
+        },
+    )
+}
 
 /// What the refusal's reason names.
 const REFUSED_CONSTRUCT: &str = "recurrence";
@@ -172,8 +208,7 @@ const REFUSED_CONSTRUCT: &str = "recurrence";
 /// The refusal must name the RULE, not just the document.
 #[test]
 fn native_refuses_a_rule_the_tape_cannot_lower_and_names_it() {
-    let path = fixture(REFUSED_FIXTURE);
-    match build(&path, Compiler::Native) {
+    match build_refused(Compiler::Native) {
         Err(SimulateError::Compile(CompileError::CompilerRefusedRule {
             compiler,
             kind,
@@ -204,8 +239,7 @@ fn native_refuses_a_rule_the_tape_cannot_lower_and_names_it() {
 fn the_default_compiler_is_the_strict_native() {
     // No `compiler` at all: the same refusal, because an unspecified compiler
     // IS `native` and `native` is strict (§2.5.10).
-    let path = fixture(REFUSED_FIXTURE);
-    let err = esm_problem(path.as_path(), (0.0, 1.0), ProblemOptions::default())
+    let err = esm_problem(&refused_doc(), (0.0, 1.0), ProblemOptions::default())
         .expect_err("the default is strict");
     assert!(
         matches!(
@@ -218,8 +252,7 @@ fn the_default_compiler_is_the_strict_native() {
 
 #[test]
 fn the_interpreter_takes_the_document_native_refused() {
-    let path = fixture(REFUSED_FIXTURE);
-    let prob = build(&path, Compiler::Interpreter).expect("the reference evaluates the core");
+    let prob = build_refused(Compiler::Interpreter).expect("the reference evaluates the core");
     assert_eq!(prob.compiler(), Compiler::Interpreter);
     let report = prob.compiler_report();
     assert_eq!(report.compiler(), Compiler::Interpreter);
@@ -590,8 +623,7 @@ fn xla_solves_and_agrees_with_the_interpreter() {
 #[cfg(feature = "xla")]
 #[test]
 fn xla_refuses_a_rule_the_tape_cannot_lower_and_names_it() {
-    let path = fixture(REFUSED_FIXTURE);
-    match build(&path, Compiler::Xla) {
+    match build_refused(Compiler::Xla) {
         Err(SimulateError::Compile(CompileError::CompilerRefusedRule {
             compiler,
             rule,

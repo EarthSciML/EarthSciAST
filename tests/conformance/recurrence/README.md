@@ -39,25 +39,50 @@ determined function of the document, in the same sense a left fold is, so there 
 no reassociation left for a binding to choose and a divergence is a defect rather
 than a floating-point fact.
 
-## The skip contract
+## How the tier runs, and its ledgers
 
-A non-executing port MUST still **validate** every fixture here — accepting all
-eight, and rejecting the malformed shapes each binding's own tests construct
-(§5.19.5 rejection parity). Rejection parity is the whole of a non-evaluating
-binding's duty for this construct, and it cuts both ways: a binding whose
-cycle detector or trivial-DAE factoring treats a self-read as a cycle *rejects a
-legal document*, which is the same defect as admitting an illegal one.
+This is an **inline-test** tier (CONFORMANCE_SPEC §5.45): `manifest.json`
+declares `"runner": "inline_tests"`, and `scripts/run-inline-tests-conformance.py`
+drives each executing binding's OWN inline-test runner over the documents in
+`tests/fixtures/recurrence/` (plus `tests/valid/recurrence_causal_self_reference.esm`)
+under a NAMED compiler. Each stage gates two things: the binding's verdict on
+every authored assertion, and its actual value against `golden/<id>.json`, the
+Julia `interpreter`'s, at a **zero** golden band — §5.19.1's bit-identity, so a
+cross-binding drift in the last bit is red.
 
-`skip_bindings` in `manifest.json` records, per fixture, which ports do not
-evaluate it and why. A skip is a documented gap, not a pass. As of this
-writing: Rust and Python execute all nine; Julia validates them and drives
-`rejections.json` but does not evaluate (its array backend class-merges per-cell
-kernels and the merge reorders cells, which §5.19.2 forbids — tracked as binding
-debt); TypeScript and Go have no array numeric executor at all and validate only.
+Each fixture's `required` map names the compilers that MUST run it, and its
+`named_exclusions` the refusals that are expected, each with its code. A refusal
+is one or the other, never a silent skip. As of this writing:
+
+| Binding | `interpreter` | `native` |
+|---|---|---|
+| Julia | all but `06` | all but `06` — an emitted ordered sweep, bit for bit with the interpreter's walk |
+| Python | all ten | all but `04`, `07` and the `tests/valid` document, whose cell body is a reduction (named exclusions) |
+| Rust | all ten | all ten — an ordered `Sweep` on the tape whose cell body runs one cell at a time, bit for bit with the interpreter's walk (`06` included, rounded to binary32 at every cell) |
+
+`06` (binary32) is refused by Julia under both compilers: Julia evaluates in
+binary64 only, and §5.19.3a forbids folding a `Float32` recurrence in binary64.
+It therefore has no golden (`golden_absent_reason`); its assertions are still
+gated against the document's own binary32 values in the bindings that run it.
+
+TypeScript and Go have no array numeric executor and are `scope_excluded`: a
+non-executing port MUST still **validate** every fixture here, and must reject
+the malformed shapes in `rejections.json` (§5.19.5 rejection parity), which is
+the whole of its duty for this construct. Rejection parity cuts both ways: a
+binding whose cycle detector or trivial-DAE factoring treats a self-read as a
+cycle *rejects a legal document*, which is the same defect as admitting an
+illegal one.
 
 `rejections.json` beside this file is the negative half: eight malformed
 self-references, each pinned on its `(code, path)` pair and driven by **all
 five** bindings. It pins no message prose, deliberately — see its `pinned` block.
+
+```bash
+EARTHSCI_INLINE_TESTS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/inline_tests_adapter.jl" \
+  python3 scripts/run-inline-tests-conformance.py \
+    --manifest tests/conformance/recurrence/manifest.json \
+    --bindings julia --compiler native
+```
 
 ## Exercise every evaluation route (§5.19.3b)
 
@@ -76,7 +101,7 @@ all nine drove one route. The self-read resolved to `NaN` and the body's
 `max(x, 0)` laundered it to `0.0`, so the answer was finite, plausible and
 wrong.
 
-So: one shared sweep implementation, and per-route assertions on values. "Both
+So: one shared sweep implementation, and per-route assertions on values. This tier drives each binding's output-time route (its inline-test runner); the per-step route is re-checked against the same values in each binding's own suite (Julia: `pkg/EarthSciAST.jl/test/recurrence_sweep_test.jl`, which asserts the right-hand side's fill level against `observed_field` to the bit). "Both
 routes produced something plausible" is the state that persisted here.
 
 ## What a binding must NOT do
