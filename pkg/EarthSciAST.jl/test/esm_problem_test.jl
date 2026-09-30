@@ -267,3 +267,35 @@ end
         @test [r2[Symbol("M.d[$k]")][end] for k in 1:3] ≈ d_f atol = 1e-9
     end
 end
+
+# What the front door refuses at construction (esm-libraries-spec §2.5.2), each
+# with the spec's named error. Python and Rust pin the same documents.
+@testset "esm_problem refuses what it cannot answer for" begin
+    doc(rel) = joinpath(TESTUTILS_REPO_ROOT, rel)
+    function refusal(rel)
+        try
+            EarthSciAST.esm_problem(doc(rel), (0.0, 1.0); compiler = :interpreter)
+        catch e
+            return sprint(showerror, e)
+        end
+        return "BUILT"
+    end
+    # esm-spec §9.6.6 `callback_unregistered`.
+    msg = refusal("tests/coupling/callback_examples.esm")
+    @test occursin("callback_unregistered", msg) && occursin("CropWeatherCoupling", msg)
+    # A self-recomputing parameter update is an event in esm 1.0.0 (§5.4).
+    msg = refusal("tests/events/mixed_event_interactions.esm")
+    @test occursin("unsupported_construct", msg) && occursin("update of parameter", msg)
+    # A document of another major version (esm-libraries-spec §8.1).
+    @test occursin("Unsupported major version 0",
+                   refusal("tests/version_compatibility/version_0_1_0_pre_break.esm"))
+    # reserved_variable_name (§4.9.1.1) and undefined_species.
+    @test occursin("reserved_variable_name", refusal("tests/invalid/reserved_variable_name_observed.esm"))
+    @test occursin("undefined_species", refusal("tests/invalid/undefined_species.esm"))
+    # A degenerate polygon operand in a state-free observed nothing reads (§8.6.1).
+    @test occursin("E_TREEWALK_GEOMETRY_CLIP",
+                   refusal("tests/conformance/pushdown/fixtures/pushdown_polygon_area.esm"))
+    # A NUL in a declared name is a schema error at load (§4.9.1.2), not a crash.
+    @test_throws EarthSciAST.SchemaValidationError EarthSciAST.load_path(
+        doc("tests/future/security/null_byte_injection.esm"))
+end
