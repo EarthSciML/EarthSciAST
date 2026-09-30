@@ -993,7 +993,7 @@ function _resolve_scalar_faq(faq_expr::OpExpr, array_var_info, var_map, const_ar
         push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays,
                                       pgather, memo, bound_syms))
     end
-    return _combine_with_reducer(oplus, zerobar, terms)
+    return _combine_with_reducer(oplus, zerobar, terms; scalar = true)
 end
 
 # Replace index(var, k1, k2, ...) nodes:

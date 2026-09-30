@@ -426,6 +426,19 @@ pub(super) fn reduce_combine_op(reduce: ReduceKind) -> Option<BinCode> {
     }
 }
 
+/// The binary kernel that folds a SCALAR (rank-0) reduction: [`reduce_combine_op`],
+/// plus the boolean `or` (`bool_and_or`'s ⊕), which a scalar reduction runs and
+/// an array-valued one may not (CONFORMANCE_SPEC §5.6.1). `BinCode::Or` returns
+/// [`ReduceKind::combine`]'s crisp `0.0`/`1.0` for every operand pair at either
+/// precision, a `NaN` operand (which is not `0`) reading as true in both.
+pub(super) fn scalar_combine_op(reduce: ReduceKind) -> BinCode {
+    match reduce {
+        ReduceKind::Or => BinCode::Or,
+        ReduceKind::And => BinCode::And,
+        other => reduce_combine_op(other).expect("a numeric ⊕ has a kernel"),
+    }
+}
+
 /// Evaluate an einsum faq body as a whole-array fold over its contracted
 /// indices: for each contraction tuple `k` (a small static window — fixed-width
 /// neighbour stencil), bind `k` and evaluate the body once as whole-array
