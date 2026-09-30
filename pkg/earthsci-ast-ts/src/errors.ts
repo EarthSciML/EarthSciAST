@@ -206,6 +206,14 @@ export const ERROR_CODES = {
   //   which asked whether a parameter was correctly DECLARED on a list that no
   //   longer exists; touching a parameter from an event is now wrong outright.
   EVENT_AFFECTS_PARAMETER: 'event_affects_parameter',
+  // `equation_defines_parameter` — an equation's left-hand side names a
+  //   PARAMETER: bare, indexed, inside a `faq`, or through a scoped reference
+  //   into a subsystem (esm-spec §6.3.1). An equation defines unknowns only.
+  EQUATION_DEFINES_PARAMETER: 'equation_defines_parameter',
+  // `unbound_index_symbol` — a string subscript of an `index` on an equation's
+  //   left-hand side names no declared variable or metaparameter and no `faq`
+  //   binds it (esm-spec §6.3.1).
+  UNBOUND_INDEX_SYMBOL: 'unbound_index_symbol',
   EVENT_VAR_UNDECLARED: 'event_var_undeclared',
   FACTOR_WITH_EXPRESSION_TRANSFORM: 'factor_with_expression_transform',
   IC_IN_REACTION_SYSTEM: 'ic_in_reaction_system',
