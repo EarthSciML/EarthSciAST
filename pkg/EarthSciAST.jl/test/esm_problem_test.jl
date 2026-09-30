@@ -22,6 +22,7 @@ using Test
 using EarthSciAST
 using DiffEqCallbacks            # loads EarthSciASTDataRefreshExt (discrete runs)
 using SciMLBase                  # ext co-trigger (u_modified!) + solve/remake/retcodes
+include("testutils.jl")         # TESTUTILS_REPO_ROOT
 import SciMLBase: successful_retcode   # defined, not exported
 import OrdinaryDiffEqTsit5: Tsit5
 const ESM_P = EarthSciAST
