@@ -2461,6 +2461,16 @@ fn static_observed_fields(
     )?;
     let values = match compiled.evaluate_stateless_fields(p, t0) {
         Ok(values) => values,
+        // A value the spec makes invalid (a degenerate polygon operand,
+        // esm-spec §8.6.1) is refused, not handed back as a Problem with no
+        // fields; a value that is only not yet available (a parameter with no
+        // default, a field a provider fills later) still is.
+        Err(e)
+            if e.to_string()
+                .contains(crate::simulate_array::GEOMETRY_CLIP_CODE) =>
+        {
+            return Err(e);
+        }
         Err(e) => return Ok((HashMap::new(), report.rules, Some(e.to_string()))),
     };
     let fields = values
@@ -2866,6 +2876,7 @@ fn compile_backend(
     }
 
     refuse_structurally_unreachable(file)?;
+    refuse_unregistered_callback_reads(file)?;
 
     if mode == Rhs::Auto && !has_differential_equations(file, model_name) {
         // Nothing to integrate is not nothing to run: an event, an implicit
@@ -2920,6 +2931,89 @@ fn refuse_structurally_unreachable(file: &EsmFile) -> Result<(), SimulateError> 
                         "§11.4.1",
                     ));
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuse, with `callback_unregistered` (esm-spec §9.6.6), an equation that
+/// reads a variable a `callback` coupling injects
+/// (`config.callback_variables[].name`). Only a registered callback supplies
+/// that value, and nothing registers one at construction, so a build would read
+/// a placeholder the document does not describe. The interpreter would read
+/// an unset forcing slot at its first call instead.
+fn refuse_unregistered_callback_reads(file: &EsmFile) -> Result<(), SimulateError> {
+    let mut injected: BTreeMap<String, String> = BTreeMap::new();
+    for entry in file.coupling.iter().flatten() {
+        let crate::CouplingEntry::Callback {
+            callback_id,
+            config,
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        let names = config
+            .as_ref()
+            .and_then(|c| c.get("callback_variables"))
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|cv| cv.get("name").and_then(|n| n.as_str()));
+        for name in names {
+            injected.insert(name.to_string(), callback_id.clone());
+        }
+    }
+    if injected.is_empty() {
+        return Ok(());
+    }
+    let Some(models) = file.models.as_ref() else {
+        return Ok(());
+    };
+    let mut names: Vec<&String> = models.keys().collect();
+    names.sort();
+    for name in names {
+        callback_reads_in(&models[name], name, &injected)?;
+    }
+    Ok(())
+}
+
+/// [`refuse_unregistered_callback_reads`] over one model and its inline
+/// subsystems. A name the model declares itself is not the injected one.
+fn callback_reads_in(
+    model: &crate::types::Model,
+    path: &str,
+    injected: &BTreeMap<String, String>,
+) -> Result<(), SimulateError> {
+    for eq in &model.equations {
+        for side in [&eq.lhs, &eq.rhs] {
+            let mut vars: Vec<String> = crate::free_variables(side).into_iter().collect();
+            vars.sort();
+            for v in vars {
+                if model.variables.contains_key(&v) {
+                    continue;
+                }
+                if let Some(id) = injected.get(&v) {
+                    return Err(SimulateError::Compile(
+                        crate::compile_error::CompileError::build_err(format!(
+                            "[{}] '{path}' reads '{v}', which the `callback` coupling '{id}' \
+                             supplies, but no callback is registered to supply it at \
+                             construction; refusing the build rather than reading a value \
+                             the document does not give (esm-spec §9.6.6)",
+                            crate::diagnostic::codes::CALLBACK_UNREGISTERED
+                        )),
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(subs) = model.subsystems.as_ref() {
+        let mut names: Vec<&String> = subs.keys().collect();
+        names.sort();
+        for name in names {
+            if let Ok((sub, _)) = crate::simulate_array::parse_subsystem_model(name, &subs[name]) {
+                callback_reads_in(&sub, &format!("{path}.{name}"), injected)?;
             }
         }
     }

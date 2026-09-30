@@ -484,9 +484,9 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         }
 
         // Unary / scalar transcendentals.
-        "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
-        | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
-        | "acosh" | "atanh" => eval_unary(op, &node.args, ctx),
+        "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin" | "cos"
+        | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh"
+        | "atanh" => eval_unary(op, &node.args, ctx),
 
         "atan2" => eval_binary(op, &node.args, ctx),
 
@@ -2482,11 +2482,33 @@ pub(super) fn eval_intersect_polygon(node: &ExpressionNode, ctx: &mut EvalCtx) -
             }
             Value::Array(Box::new(arr))
         }
-        // A degenerate input ring or unavailable backend surfaces as NaN, the
-        // same not-a-value sentinel the evaluator uses for unevaluable nodes.
-        Err(_) => Value::Scalar(f64::NAN),
+        // A degenerate operand ring is an invalid value (esm-spec §8.6.1) and
+        // latches a fault; any other clip failure surfaces as NaN, the same
+        // not-a-value sentinel the evaluator uses for unevaluable nodes.
+        Err(e) => {
+            latch_degenerate_operand(&e);
+            Value::Scalar(f64::NAN)
+        }
     }
 }
+
+/// Latch a degenerate polygon operand (esm-spec §8.6.1: a ring with fewer than 3
+/// distinct vertices is rejected) as a fail-closed fault, so the evaluation
+/// that met it fails, on the interpreter and on the tape alike, instead of
+/// carrying a NaN area onward. The code is the one Julia raises for the same
+/// ring. Any other clip failure is left to its NaN sentinel.
+pub(crate) fn latch_degenerate_operand(e: &crate::geometry::GeometryError) {
+    if e.is_degenerate_operand() {
+        latch_gather_fault(format!(
+            "{GEOMETRY_CLIP_CODE}: {} (esm-spec §8.6.1: a polygon operand needs at least 3 \
+             distinct vertices)",
+            e.message()
+        ));
+    }
+}
+
+/// The code a degenerate polygon operand is refused with.
+pub(crate) const GEOMETRY_CLIP_CODE: &str = "E_TREEWALK_GEOMETRY_CLIP";
 
 /// Evaluate the fused `polygon_intersection_area` leaf op (esm-spec §4.2 /
 /// §8.6.1): the **scalar** overlap area of the two polygon operands under the
@@ -2519,11 +2541,15 @@ pub(crate) fn clip_area_value(
     vb: &[(f64, f64)],
     manifold: crate::geometry::Manifold,
 ) -> f64 {
-    // A degenerate input ring or unavailable backend surfaces as NaN, the
+    // A degenerate operand ring latches a fault (see
+    // [`latch_degenerate_operand`]); any other failure surfaces as NaN, the
     // same not-a-value sentinel the evaluator uses for unevaluable nodes.
     crate::geometry::intersect_polygon(va, vb, manifold)
         .and_then(|ring| crate::geometry::polygon_area(&ring, manifold))
-        .unwrap_or(f64::NAN)
+        .unwrap_or_else(|e| {
+            latch_degenerate_operand(&e);
+            f64::NAN
+        })
 }
 
 /// Close a ring by repeating its first vertex (RFC §8.1; mirrors Python
