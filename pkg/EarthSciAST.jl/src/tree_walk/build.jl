@@ -1527,7 +1527,8 @@ function _fold_ic_equations(equations::Vector{Equation}, model::Model,
             lop = eq.lhs::OpExpr
             (length(lop.args) == 1 && lop.args[1] isa VarExpr) ||
                 throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
-                    "ic(...) LHS must name a single state variable"))
+                    "ic(...) LHS must name a single state variable; got " *
+                    "$(first(to_ascii(eq.lhs), 200))"))
             vn = (lop.args[1]::VarExpr).name
             # An `ic` whose target is an array-shaped state variable is a
             # scoped-reference / field IC: defer it (its RHS is a field, not
@@ -1549,6 +1550,15 @@ function _fold_ic_equations(equations::Vector{Equation}, model::Model,
                     # swallowed as an ordinary decline further up
                     # (`_is_resource_error`).
                     _is_resource_error(err) && rethrow()
+                    rv = err isa UnboundVariableError ?
+                         get(model.variables, err.variable_name, nothing) : nothing
+                    rv !== nothing && rv.type == UnknownVariable &&
+                        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
+                            "ic($(vn)): the right-hand side reads the unknown " *
+                            "'$(err.variable_name)'. An initial condition is evaluated " *
+                            "before the run, when no unknown has a value, so a build-time " *
+                            "reference to one is an error (esm-spec §6.6.5 build-time " *
+                            "evaluation scope)"))
                     throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
                         "ic($(vn)) RHS must const-fold to a scalar for the " *
                         "tree-walk path ($(sprint(showerror, err)))"))
@@ -1824,9 +1834,16 @@ function _split_observed_and_derivatives(equations::Vector{Equation},
                                 "implicit equation `$(to_ascii(eq))` is not " *
                                 "supported by the Julia tree-walk evaluator; refusing " *
                                 "the build rather than running the model without it"))
+        elseif eq.lhs isa VarExpr
+            # A bare LHS naming no observed: a parameter, or a state.
+            throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
+                "equation `$(first(to_ascii(eq), 200))`: its left-hand side " *
+                "'$((eq.lhs::VarExpr).name)' " *
+                "is not an unknown this equation can define (esm-spec §6.3.1): an " *
+                "equation defines an unknown, and a parameter takes its value from " *
+                "its default, an override or a coupling"))
         else
-            # Any other unsupported equation form (a spatial derivative LHS, a
-            # bare LHS naming no observed).
+            # Any other unsupported equation form (a spatial derivative LHS).
             throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
                                 _equation_tag(eq)))
         end
@@ -2398,6 +2415,13 @@ end
 #     as `index(<def>, j…)` and walked with `_eval_node` at each refill —
 #     the `_seed_faq_init_u0!` pattern, writing a cache buffer instead of a u0
 #     slot. Reported `:discrete_percell`, and refused by a strict plan.
+#
+# A fill may read scalar parameters, so the caches belong to the `p` they were
+# filled with. `materialize!(q)` fills them with `q` (with no argument, the `p`
+# of the last fill), and the returned `_DiscreteRefill` — which the in-place
+# right-hand side calls first on every call — refills them when the call's `p` is
+# not that one. That is what makes `remake(prob; p = …)` reach a
+# forcing-derived field. Returns `nothing` when there is nothing to fill.
 function _build_discrete_materializer!(mut::DiscreteMaterializer,
         discrete_vars, discrete_defs::Dict{String,ASTExpr}, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::AbstractDict{String,Int}, const_arrays::AbstractDict,
@@ -2454,7 +2478,7 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
             # cannot compile at all rather than read u = 0.
             _check_discrete_def_state_free(rop_res, name, state_names)
             push!(fills, _compile_discrete_fill(name, rop, Int[length(r) for r in rngs],
-                cvec, resolved_obs, const_arrays, pgather, param_sym_set, reg_funcs, pp))
+                cvec, resolved_obs, const_arrays, pgather, param_sym_set, reg_funcs))
             continue
         end
         # The per-cell route, and a rank-0 field under either plan (one cell,
@@ -2494,14 +2518,17 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
             l = isempty(idx_tuple) ? 1 : lin[idx_tuple...]
             push!(cell_fills, (l, node))
         end
-        push!(fills, _percell_discrete_fill(cvec, cell_fills, uz, pp))
+        push!(fills, _percell_discrete_fill(cvec, cell_fills, uz))
         _record_rule!(name, :observed, isempty(idx_names) ? :scalar : :discrete_percell)
     end
-    # 3. `materialize!`: every fill into its cache, in dependency order.
-    function materialize!()
+    # 3. `materialize!`: every fill into its cache, in dependency order, with the
+    #    `p` given (by default the one the caches already hold).
+    filled_p = Ref{Any}(pp)
+    function materialize!(q = filled_p[])
         for fill in fills
-            fill()
+            fill(q)
         end
+        filled_p[] = q
         # The caches just changed IN PLACE under readers gathering them via
         # `_NK_PARAM_GATHER` — invalidate the memoized time-cadence prelude slots
         # (B3, const_tier.jl): a refresh fires AT its tstop, so the next RHS call
@@ -2513,17 +2540,43 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
     mut.caches = caches
     mut.materialize! = materialize!
     mut.var_order = order
+    return _DiscreteRefill{typeof(pp),typeof(materialize!)}(filled_p, materialize!)
+end
+
+# The right-hand side's check that the discrete caches hold its own `p`, and the
+# refill when they do not. The compare is the const tier's (`_cse_const_stale`):
+# egal on an `isbits` `p`, so a same-`p` call is a load and a bit compare and
+# never allocates, and a `p` that is not `isbits` refills on every call rather
+# than trust object identity. A `p` of another type than the build's — dual
+# numbers, for a derivative with respect to parameters — leaves the caches as
+# they are: they hold Float64 values and cannot carry a derivative.
+struct _DiscreteRefill{P,F}
+    filled_p::Base.RefValue{Any}
+    materialize!::F
+end
+@inline function (g::_DiscreteRefill{P})(p::P) where {P}
+    (isbits(p) && g.filled_p[] === p) || g.materialize!(p)
     return nothing
+end
+@inline (g::_DiscreteRefill)(p) = nothing
+
+# The in-place right-hand side with the discrete caches brought up to its `p`
+# before the state equations read them.
+function _make_rhs_discrete_refill(inner::F, refill::G) where {F,G}
+    return function (du, u, p, t)
+        refill(p)
+        return inner(du, u, p, t)
+    end
 end
 
 # The per-cell route's fill of one cache. Every node was CHECKED state-free, so
 # the zero `u` / `t = 0` passed to `_eval_node` is provably never read; `p`
 # carries the scalar params a fill may use.
 function _percell_discrete_fill(cvec::Vector{Float64}, cell_fills,
-                                uz::Vector{Float64}, pp)
-    return function ()
+                                uz::Vector{Float64})
+    return function (p)
         @inbounds for (l, node) in cell_fills
-            cvec[l] = _eval_node(node, uz, pp, 0.0)
+            cvec[l] = _eval_node(node, uz, p, 0.0)
         end
         return nothing
     end
@@ -2586,7 +2639,7 @@ end
 # variable's own name (`_with_rule_alias`), and the row is filed as an observed.
 function _compile_discrete_fill(name::String, def::OpExpr, dims::Vector{Int},
                                 cvec::Vector{Float64}, resolved_obs, const_arrays,
-                                pgather, param_sym_set, reg_funcs, pp)
+                                pgather, param_sym_set, reg_funcs)
     nd = length(dims)
     blk = name => (ones(Int, nd), copy(dims))
     L = StateLayout(String[], [blk])
@@ -2618,7 +2671,7 @@ function _compile_discrete_fill(name::String, def::OpExpr, dims::Vector{Int},
     section = _make_kernel_section(merged)
     rec === nothing || (rec.current = "")
     levels = ((scal, section, sfs, _make_contraction_section(acs), ()),)
-    return () -> (_fill_obs_levels!(levels, cvec, pp, 0.0, Float64); nothing)
+    return p -> (_fill_obs_levels!(levels, cvec, p, 0.0, Float64); nothing)
 end
 
 # ============================================================
@@ -3434,11 +3487,10 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # they compile against the ODE-ONLY layout: an observed buffer holds nothing
     # valid there (a name that reaches one keeps the inline path — see
     # `_collect_materialized_array_obs`).
-    if materialize_out !== nothing
+    discrete_refill = materialize_out === nothing ? nothing :
         @_bench :discrete_mat _build_discrete_materializer!(materialize_out, cls.discrete_vars,
             parts.discrete_defs, resolved_obs, layout.array_var_info, layout.var_map,
             const_registry, pgather, param_sym_set, reg_funcs, p, n_states)
-    end
 
     # ---- The compiled observed program's context (observed_program.jl) ----
     # Output-time reads compile against this build's ODE layout, its const
@@ -3692,11 +3744,14 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         # closure (and its zero-allocation property) is byte-identical.
         # The inner state RHS keeps its own `scan_folds` (the prefix reductions
         # among the STATE equations); each fill level carries its own.
-        _make_rhs_with_obs_buffers(
+        # The discrete caches are brought up to the call's `p` first (see
+        # `_DiscreteRefill`); without a cache the wrapper is not applied.
+        rhs0 = _make_rhs_with_obs_buffers(
             _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
                       const_slots, time_slots, dyn_slots, scan_folds,
                       _make_contraction_section(array_contractions)),
             n_total, n_states, Tuple(mat_levels))
+        discrete_refill === nothing ? rhs0 : _make_rhs_discrete_refill(rhs0, discrete_refill)
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
         # along so the out-of-place build can expose its live forcing buffers as
@@ -4326,6 +4381,21 @@ function _affine_reduce_form(contract_names::Vector{String}, contract_const,
     end
     prod(length, rngs) >= 2 || return nothing
     return _AffineReduce(copy(contract_names), rngs, Symbol(oplus), zerobar)
+end
+
+# Which of `_affine_reduce_form`'s conditions a join-free contraction fails, in
+# words, for a refusal to name the construct it actually refuses.
+function _fold_form_refusal(contract_names::Vector{String}, contract_const, oplus::String)
+    oplus in ("+", "*", "max", "min") ||
+        return "its ⊕ must be +, *, max or min, and this one is `$(oplus)`"
+    for (name, c) in zip(contract_names, contract_const)
+        (c === nothing || isempty(c)) && continue
+        c == collect(first(c):last(c)) ||
+            return "it folds unit-step ranges only, and `$(name)` steps " *
+                   (length(c) >= 2 ? "by $(c[2] - c[1]) " : "") *
+                   "from $(first(c)) to $(last(c))"
+    end
+    return "it needs at least two terms over constant ranges"
 end
 
 # ess-scan: recognize a CUMULATIVE (prefix) reduction — an aggregate whose
@@ -5244,8 +5314,8 @@ function _refuse_faq_percell(label::AbstractString, lhs_body::OpExpr, rhs_body::
         " (the affine tier takes no ragged contraction, whose terms vary per output cell)"
     elseif long_contraction && !has_fold_form
         " (the affine tier does not unroll a contraction this long, and its " *
-        "run-time fold needs unit-step constant ranges, no join gate and a ⊕ of " *
-        "+, *, max or min; this one is `$(rhs_oplus)`)"
+        "run-time fold does not take this one: " * _fold_form_refusal(contract_names,
+            contract_const, rhs_oplus) * ")"
     else
         ""
     end
@@ -5704,8 +5774,10 @@ assumes equations have already been scalarized by the discretize
 pipeline. `faq` and `makearray` are supported in expression
 position: scalar `faq` (empty `output_idx`) is expanded inline;
 `index(faq(...), k...)` and `index(makearray(...), k...)` are
-resolved at build time. Other array-typed ops (`broadcast`, `reshape`,
-`transpose`, `concat`) are refused at build with `unevaluable_operator`.
+resolved at build time, and so are `index(reshape|transpose|concat(...), k...)`
+(each is a gather of its operand) and `broadcast` (lowered to its `fn`). A bare
+`reshape`, `transpose` or `concat` outside an `index` is refused at build with
+`unevaluable_operator`.
 
 The returned `f!` closure reads `u`, the captured parameter vector
 `p` (a NamedTuple keyed by parameter name), and `t`, and writes

@@ -409,13 +409,14 @@ end
 # (the merge guard, `_check_fn_group_specs`) hit and a merged kernel's per-lane
 # spec table shares one object per distinct content. Identity when the pool is
 # off (outside a build, or with lane interning off).
-function _build_interp_spec(fname::AbstractString, const_args::Vector{Any})
+function _build_interp_spec(fname::AbstractString, const_args::Vector{Any};
+                            strict::String = "")
     if fname == "interp.linear"
-        return _lane_intern(_build_interp_linear_spec(fname, const_args...))
+        return _lane_intern(_build_interp_linear_spec(fname, const_args...; strict))
     elseif fname == "interp.bilinear"
-        return _lane_intern(_build_interp_bilinear_spec(fname, const_args...))
+        return _lane_intern(_build_interp_bilinear_spec(fname, const_args...; strict))
     elseif fname == "interp.searchsorted"
-        return _lane_intern(_build_interp_searchsorted_spec(fname, const_args...))
+        return _lane_intern(_build_interp_searchsorted_spec(fname, const_args...; strict))
     end
     throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
         "fn '$(fname)' carries const args but has no interp.* spec builder"))
@@ -550,7 +551,11 @@ function _compile_fn_node(expr::OpExpr, compile_child)
                          for (k, pos) in enumerate(cspec.const_positions)]
         children = _Node[compile_child(expr.args[pos])
                          for pos in 1:cspec.arity if !(pos in cspec.const_positions)]
-        payload = (fname, _build_interp_spec(fname, const_args))
+        # A lookup lowered from an `out_of_bounds: "error"` table carries the
+        # table id on this node (lower_table_lookup.jl); the spec checks its
+        # query against the axis before the core runs.
+        payload = (fname, _build_interp_spec(fname, const_args;
+                                             strict = something(expr.table, "")))
     end
     return _mknode(kind=_NK_OP, op=:fn, children=children, payload=payload)
 end
@@ -666,7 +671,8 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     elseif op_sym === :broadcast || op_sym === :reshape ||
            op_sym === :transpose || op_sym === :concat
         throw(_unevaluable_operator(expr.op,
-                            "the tree-walk path has no rule for this shape op"))
+                            "outside an index(...) the tree-walk path has no rule for " *
+                            "this shape op; index(op(...), k1, k2, ...) is a gather of its operand"))
     elseif op_sym === :index
         # A forcing gather over a live `param_arrays` buffer (ess-14f.3): the
         # `index` branch of `_resolve_indices` already bounds-checked and
@@ -691,6 +697,17 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         if expr.value isa _ConstGatherRef
             ref = expr.value::_ConstGatherRef
             return _const_gather_node(ref.vals, children; name=ref.name)
+        end
+        # A gather `_resolve_indices` left alone because its base names no
+        # array it knows: a variable with no declared or inferred shape, no
+        # const/forcing data, and no equation defining its cells.
+        base = isempty(expr.args) ? nothing : expr.args[1]
+        if base isa VarExpr
+            bn = (base::VarExpr).name
+            throw(TreeWalkError("E_TREEWALK_INDEX_NOT_ARRAY",
+                "index($(bn), …): '$(bn)' is not an array the build can gather from — " *
+                "it has no declared `shape`, no data bound to it, and no equation " *
+                "that defines its cells, so it has no element to read"))
         end
         # Otherwise: index ops must be resolved to state-slot references by
         # _resolve_indices before reaching _compile; encountering one here
@@ -2135,19 +2152,19 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         if pl isa Tuple{String,_InterpLinearSpec}
             spec = pl[2]
             x = _eval_node(c[1], u, p, t, T)
-            return _interp_linear_core(spec.table, spec.axis, x)
+            return _interp_linear_core(spec, x)
         elseif pl isa Tuple{String,_InterpBilinearSpec}
             spec = pl[2]
             x = _eval_node(c[1], u, p, t, T)
             y = _eval_node(c[2], u, p, t, T)
-            return _interp_bilinear_core(spec.table, spec.axis_x, spec.axis_y, x, y)
+            return _interp_bilinear_core(spec, x, y)
         elseif pl isa Tuple{String,_InterpSearchsortedSpec}
             spec = pl[2]
             x = _eval_node(c[1], u, p, t, T)
             # `convert(T, …)`, not `Float64(…)`: the index is discrete (no
             # derivative), but the ARM must still land in the evaluator's value
             # type or the `:fn` arm infers as a `Union` under ForwardDiff.
-            return convert(T, _interp_searchsorted_core("interp.searchsorted", x, spec.xs))
+            return convert(T, _interp_searchsorted_core(spec, x))
         elseif pl isa Tuple{String,_FnTypedCoreSpec}
             # Registry-declared typed scalar core (registered_functions.jl,
             # ess-dtcore). `T === Float64` folds at compile time (the same

@@ -51,6 +51,11 @@ tests/conformance/
 │   ├── manifest.json               #   `"runner": "inline_tests"`; one named exclusion (Python native)
 │   ├── fixtures/<id>.esm           #   three documents authored here (three more are REFERENCED)
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+├── array_expression_forms/         # shape ops under `index`, positional broadcast, arrayed definitions (§5.45.4)
+│   ├── README.md                   #   the contract, and its one named exclusion
+│   ├── manifest.json               #   `"runner": "inline_tests"`
+│   ├── fixtures/<id>.esm           #   one document authored here (six more are REFERENCED)
+│   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
 ├── deprecated_op_alias/            # the `aggregate` -> `faq` alias contract (esm 1.1.0)
 │   ├── aliased.esm                 #   input, authored with the deprecated spelling
 │   ├── canonical.esm               #   expected output, and a no-warning input

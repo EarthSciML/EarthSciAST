@@ -988,17 +988,78 @@ end
 # (same callee). The validation throw simply moves to build time (fail-fast); the
 # conformance error fixtures call `evaluate_closed_function` directly and are
 # unaffected.
+#
+# `strict` is the id of the `out_of_bounds: "error"` table (esm-spec §9.5.1) the
+# lookup was lowered from, or "" for every other call. A strict spec's query is
+# checked against its axis before the core runs (`_interp_strict_check`), and the
+# core itself is the clamp core, so an in-range answer is the clamp answer.
 struct _InterpLinearSpec
     table::Vector{Float64}
     axis::Vector{Float64}
+    strict::String
 end
+_InterpLinearSpec(table, axis) = _InterpLinearSpec(table, axis, "")
 struct _InterpBilinearSpec
     table::Vector{Vector{Float64}}
     axis_x::Vector{Float64}
     axis_y::Vector{Float64}
+    strict::String
 end
+_InterpBilinearSpec(table, axis_x, axis_y) = _InterpBilinearSpec(table, axis_x, axis_y, "")
 struct _InterpSearchsortedSpec
     xs::Vector{Float64}
+    strict::String
+end
+_InterpSearchsortedSpec(xs) = _InterpSearchsortedSpec(xs, "")
+
+# A strict-table query outside its axis raises `table_lookup_out_of_bounds`.
+# Out of range is strictly below the first knot or strictly above the last —
+# exactly the queries `clamp` would answer with an end value; a query on an end
+# knot is in range, and a NaN query fails both compares and propagates through
+# the core (the Rust binding's rule, which this matches). `which` is the axis
+# number in the table's declared order.
+@inline function _interp_strict_check(strict::String, which::Int, axis::Vector{Float64},
+                                      x::Real)
+    isempty(strict) && return nothing
+    (x < axis[1] || x > axis[end]) && _throw_table_oob(strict, which, axis, x)
+    return nothing
+end
+@noinline function _throw_table_oob(strict::String, which::Int, axis::Vector{Float64}, x)
+    xv = x isa AbstractFloat ? x : float(x)
+    throw(TableLookupError(ERROR_CODES.TABLE_LOOKUP_OUT_OF_BOUNDS,
+        "table `$(strict)` declares `out_of_bounds: \"error\"`, and the query " *
+        "$(xv) on its axis $(which) lies outside the axis range " *
+        "[$(axis[1]), $(axis[end])] (esm-spec §9.5.1)"))
+end
+
+# The strict table id a `:fn` payload's spec carries, or "" (per-lane specs
+# answer for their first strict member). For the compiled backends that cannot
+# raise at run time, which refuse such a lookup by name.
+_interp_strict_id(s::Union{_InterpLinearSpec,_InterpBilinearSpec,_InterpSearchsortedSpec}) =
+    s.strict
+function _interp_strict_id(s)
+    hasproperty(s, :specs) || return ""
+    for m in s.specs
+        id = _interp_strict_id(m)
+        isempty(id) || return id
+    end
+    return ""
+end
+
+# The cores on a spec: the strict check, then the clamp core on the spec's own
+# arrays. Every evaluator tier calls these, so the check cannot be skipped by one.
+@inline function _interp_linear_core(sp::_InterpLinearSpec, x::Real)
+    _interp_strict_check(sp.strict, 1, sp.axis, x)
+    return _interp_linear_core(sp.table, sp.axis, x)
+end
+@inline function _interp_bilinear_core(sp::_InterpBilinearSpec, x::Real, y::Real)
+    _interp_strict_check(sp.strict, 1, sp.axis_x, x)
+    _interp_strict_check(sp.strict, 2, sp.axis_y, y)
+    return _interp_bilinear_core(sp.table, sp.axis_x, sp.axis_y, x, y)
+end
+@inline function _interp_searchsorted_core(sp::_InterpSearchsortedSpec, x::Real)
+    _interp_strict_check(sp.strict, 1, sp.xs, x)
+    return _interp_searchsorted_core("interp.searchsorted", x, sp.xs)
 end
 
 # Coerce a const-op array (statically `Any`-typed) to a concrete `Vector{Float64}`
@@ -1017,18 +1078,19 @@ function _coerce_f64_vec(name::String, v, label::String)::Vector{Float64}
     return out
 end
 
-function _build_interp_linear_spec(name::String, table_raw, axis_raw)::_InterpLinearSpec
+function _build_interp_linear_spec(name::String, table_raw, axis_raw;
+                                   strict::String = "")::_InterpLinearSpec
     table = _coerce_f64_vec(name, table_raw, "table")
     axis  = _validate_interp_axis(name, axis_raw, "axis")
     if length(table) != length(axis)
         throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
             "$(name): `len(table)` = $(length(table)) but `len(axis)` = $(length(axis))."))
     end
-    return _InterpLinearSpec(table, axis)
+    return _InterpLinearSpec(table, axis, strict)
 end
 
 function _build_interp_bilinear_spec(name::String, table_raw, axis_x_raw,
-                                     axis_y_raw)::_InterpBilinearSpec
+                                     axis_y_raw; strict::String = "")::_InterpBilinearSpec
     if !(table_raw isa AbstractVector)
         throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
             "$(name): `table` must be an array (got $(typeof(table_raw)))"))
@@ -1058,12 +1120,13 @@ function _build_interp_bilinear_spec(name::String, table_raw, axis_x_raw,
         end
         table[i] = col
     end
-    return _InterpBilinearSpec(table, axis_x, axis_y)
+    return _InterpBilinearSpec(table, axis_x, axis_y, strict)
 end
 
-function _build_interp_searchsorted_spec(name::String, xs_raw)::_InterpSearchsortedSpec
+function _build_interp_searchsorted_spec(name::String, xs_raw;
+                                         strict::String = "")::_InterpSearchsortedSpec
     _validate_searchsorted_table(name, xs_raw)
-    return _InterpSearchsortedSpec(_coerce_f64_vec(name, xs_raw, "xs"))
+    return _InterpSearchsortedSpec(_coerce_f64_vec(name, xs_raw, "xs"), strict)
 end
 
 # ---- Per-LANE interp specs (kernel-class merge; tree_walk/oop_merge.jl) -----

@@ -17,9 +17,10 @@
 #      (`run_esm_tests`, over the shared `inline_test` fixture, which asserts a
 #      `table_lookup` observed, its hand-lowered twin, and a clamped lookup all
 #      answer the same numbers) and the tree-walk `esm_problem`.
-#   4. A table declaring the unimplemented `out_of_bounds: "error"` mode is
-#      REFUSED by name (§9.5.3a) rather than silently answered with clamping
-#      semantics.
+#   4. A table declaring `out_of_bounds: "error"` answers an in-range query with
+#      the clamp answer and raises `table_lookup_out_of_bounds` for one outside
+#      its axis (§9.5.1), under both tree-walk compilers; `:mtk` refuses it by
+#      name (§9.5.3a) rather than clamp.
 
 using Test
 using EarthSciAST
@@ -168,31 +169,102 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         @test fsol.u[end][fprob.var_map["M.k_O3"]] ≈ expected rtol = 1e-9
     end
 
-    @testset "out_of_bounds: \"error\" is refused by name (§9.5.3a)" begin
+    @testset "out_of_bounds: \"error\" raises outside the axis (§9.5.1)" begin
         path = _ft_path_fixture("out_of_bounds_error")
         # It LOADS, and it round-trips: §9.5.5 lists no load-time diagnostic for
-        # the mode, and refusing at load would take the document's authored form
-        # with it.
+        # the mode.
         file = _FTP.load_path(path)
         @test file.function_tables["strict_tab"].out_of_bounds == "error"
         json = JSON3.read(_FTP.to_json(file))
         @test json.models.M.equations[1].rhs.op == "table_lookup"
         @test json.function_tables.strict_tab.out_of_bounds == "error"
 
-        # What it does not do is EVALUATE — at the point it would otherwise
-        # lower, on either build front door.
-        refusal(f) = try
-            f()
-            nothing
+        # The lowering is the clamp tree, marked with the table id on the node
+        # that reads the query.
+        lowered = _FTP.lower_table_lookups(file).models["M"].equations[1].rhs::OpExpr
+        @test lowered.name == "interp.linear"
+        @test lowered.table == "strict_tab"
+
+        raised(f) = try
+            f(); nothing
         catch err
             err
         end
-        e1 = refusal(() -> _FTP.lower_table_lookups(file))
-        @test e1 isa _FTP.TableLookupError
-        @test e1 isa EarthSciASTError
-        @test e1.code == ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED
-        e2 = refusal(() -> _FTP.esm_problem(path, (0.0, 1.0)))
-        @test e2 isa _FTP.TableLookupError
-        @test e2.code == ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED
+        doc = JSON3.read(read(path, String), Dict{String,Any})
+        # A state reads the strict table through a scalar lookup and a lookup in
+        # an array equation (the array tiers), and a bilinear one on each axis.
+        # (`nearest` with a run-time query is an index computed at run time,
+        # which this binding's evaluator does not take for any table.)
+        doc["function_tables"]["bi_tab"] = Dict{String,Any}(
+            "axes" => Any[Dict("name" => "a", "values" => [0.0, 1.0]),
+                          Dict("name" => "b", "values" => [0.0, 2.0, 4.0])],
+            "interpolation" => "bilinear", "out_of_bounds" => "error",
+            "data" => [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        lk(tab, ax) = Dict{String,Any}("op" => "table_lookup", "table" => tab,
+                                       "axes" => ax, "args" => Any[])
+        ix(v, i) = Dict{String,Any}("op" => "index", "args" => Any[v, i])
+        m = doc["models"]["M"]
+        m["variables"]["x"] = Dict{String,Any}("type" => "unknown", "default" => 2.5)
+        m["variables"]["z"] = Dict{String,Any}("type" => "unknown", "default" => 2.0)
+        m["variables"]["v"] = Dict{String,Any}("type" => "unknown", "shape" => Any["i"])
+        m["variables"]["w"] = Dict{String,Any}("type" => "unknown", "shape" => Any["i"])
+        doc["index_sets"] = Dict{String,Any}("i" => Dict("kind" => "interval", "size" => 3))
+        faq(body) = Dict{String,Any}("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                                     "ranges" => Dict("i" => Any[1, 3]), "expr" => body)
+        dD(x) = Dict{String,Any}("op" => "D", "args" => Any[x], "wrt" => "t")
+        append!(m["equations"], Any[
+            Dict("lhs" => dD("x"), "rhs" => lk("strict_tab", Dict("p" => "x"))),
+            Dict("lhs" => dD("z"), "rhs" => Dict("op" => "+", "args" => Any[
+                lk("bi_tab", Dict("a" => 0.5, "b" => "z")),
+                lk("bi_tab", Dict("a" => Dict("op" => "*", "args" => Any[0.25, "z"]),
+                                  "b" => 1.0))])),
+            Dict("lhs" => dD("w"), "rhs" => 0.0),
+            Dict("lhs" => faq(dD(ix("v", "i"))),
+                 "rhs" => faq(lk("strict_tab", Dict("p" => ix("w", "i")))))])
+        du_at(prob, set) = begin
+            u = copy(prob.u0)
+            for (k, val) in set
+                u[prob.var_map[k]] = val
+            end
+            du = zero(u)
+            prob.f!(du, u, prob.p, 0.0)
+            du
+        end
+        inrange = Dict("M.x" => 1.0, "M.z" => 2.0, "M.w[1]" => 1.5, "M.w[2]" => 4.0,
+                       "M.w[3]" => 3.25)
+        answers = Dict{Symbol,Any}()
+        for compiler in (:interpreter, :native)
+            prob = _FTP.esm_problem(doc, (0.0, 1.0); compiler = compiler)
+            du = du_at(prob, inrange)
+            # In range (an end knot included) the answer is the clamp answer.
+            @test du[prob.var_map["M.x"]] == 10.0
+            # bi_tab(0.5, 2) = 3.5 and bi_tab(0.5, 1) = 3.0.
+            @test du[prob.var_map["M.z"]] == 3.5 + 3.0
+            @test [du[prob.var_map["M.v[$i]"]] for i in 1:3] == [15.0, 40.0, 32.5]
+            answers[compiler] = du
+            # A NaN query is not out of range: it propagates.
+            @test isnan(du_at(prob, merge(inrange, Dict("M.x" => NaN)))[prob.var_map["M.x"]])
+            # Strictly outside the axis, every lookup raises by name.
+            # z = 4.5 leaves the second axis; z = -1 leaves both, and the first
+            # axis (through 0.25 z) is checked first.
+            for bad in (Dict("M.x" => 0.5), Dict("M.x" => 4.25), Dict("M.z" => 4.5),
+                        Dict("M.z" => -1.0), Dict("M.w[2]" => 4.000001))
+                e = raised(() -> du_at(prob, merge(inrange, bad)))
+                @test e isa _FTP.TableLookupError
+                @test e isa _FTP.TableLookupError &&
+                      e.code == ERROR_CODES.TABLE_LOOKUP_OUT_OF_BOUNDS
+            end
+        end
+        @test all(answers[:native] .=== answers[:interpreter])
+        # The fixture itself: its in-range query answers 25.0, the clamp value.
+        fx = _FTP.esm_problem(path, (0.0, 1.0); compiler = :native)
+        @test only(_FTP.observed_field(fx, "M.y")) == 25.0
+
+        # The ModelingToolkit lowering has no raising form, so it refuses the
+        # table by name rather than clamp.
+        e3 = raised(() -> _FTP.esm_problem(path, (0.0, 1.0); compiler = :mtk))
+        @test e3 isa _FTP.TableLookupError
+        @test e3 isa _FTP.TableLookupError &&
+              e3.code == ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED
     end
 end

@@ -1,0 +1,31 @@
+{
+  "fixture": "weno_wide_stencil",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "zero_ic_stability",
+      "assertion_idx": 1,
+      "variable": "u[1]",
+      "actual": 0.0
+    },
+    {
+      "test_id": "zero_ic_stability",
+      "assertion_idx": 2,
+      "variable": "u[10]",
+      "actual": 0.0
+    },
+    {
+      "test_id": "zero_ic_stability",
+      "assertion_idx": 3,
+      "variable": "u[17]",
+      "actual": 0.0
+    },
+    {
+      "test_id": "zero_ic_stability",
+      "assertion_idx": 4,
+      "variable": "u[20]",
+      "actual": 0.0
+    }
+  ]
+}

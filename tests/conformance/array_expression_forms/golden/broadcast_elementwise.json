@@ -1,0 +1,25 @@
+{
+  "fixture": "broadcast_elementwise",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "broadcast_shape_check",
+      "assertion_idx": 1,
+      "variable": "corner",
+      "actual": 100.99999999999999
+    },
+    {
+      "test_id": "broadcast_shape_check",
+      "assertion_idx": 2,
+      "variable": "middle",
+      "actual": 301.99999999999994
+    },
+    {
+      "test_id": "broadcast_shape_check",
+      "assertion_idx": 3,
+      "variable": "far",
+      "actual": 203.0
+    }
+  ]
+}

@@ -592,6 +592,15 @@ function _build_fn(expr::OpExpr, var_dict::Dict{String,Any},
                    t_sym, dim_dict::Dict{String,Any})
     fname = expr.name
     fname === nothing && throw(ArgumentError("`fn` op missing required `name` field (esm-spec §4.4)"))
+    # A lookup lowered from an `out_of_bounds: "error"` table (lower_table_lookup.jl)
+    # must raise for a query outside its axis; the registered symbolic `interp.*`
+    # functions clamp, and a solve has no channel for the error, so the lookup is
+    # refused rather than answered in the mode the author did not declare.
+    expr.table === nothing || throw(EarthSciAST.TableLookupError(
+        EarthSciAST.ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED,
+        "table `$(expr.table)` declares `out_of_bounds: \"error\"`, which the " *
+        "ModelingToolkit lowering does not implement; it would answer with " *
+        "clamping semantics (esm-spec §9.5.3a)"))
     if fname == "interp.linear"
         length(expr.args) == 3 ||
             throw(ArgumentError("interp.linear expects 3 args, got $(length(expr.args))"))

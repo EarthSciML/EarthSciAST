@@ -1,0 +1,19 @@
+{
+  "fixture": "transpose_2d",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "transpose_element_check",
+      "assertion_idx": 1,
+      "variable": "diff",
+      "actual": 0.0
+    },
+    {
+      "test_id": "transpose_element_check",
+      "assertion_idx": 2,
+      "variable": "sample",
+      "actual": 32.99999999999999
+    }
+  ]
+}

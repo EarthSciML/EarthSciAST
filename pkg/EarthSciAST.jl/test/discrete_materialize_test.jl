@@ -330,3 +330,75 @@ end
         @test tier(repi) == [(:observed, :discrete_percell)]
     end
 end
+
+# ════════════════════════════════════════════════════════════════════════════
+# A fill that reads a scalar parameter follows the `p` the right-hand side is
+# called with, under both compilers — the caches belong to the `p` they were
+# filled with, so `remake(prob; p = …)` must reach them rather than leave the
+# build's values in place.
+# ════════════════════════════════════════════════════════════════════════════
+using JSON3
+
+# The fixture with `g[j] = Σ_i W[i,j]·src[i]·offset`: the discrete field now
+# reads the scalar parameter `offset` as well as the live buffer.
+function _dmp_file()
+    d = JSON3.read(read(_dm_fixture(), String), Dict{String,Any})
+    g = d["models"]["M"]["equations"][2]["rhs"]
+    g["expr"]["args"] = Any[g["expr"]["args"]..., "offset"]
+    return _DM_ESS.load_string(JSON3.write(d))
+end
+_dmp_expected(src, offset) = _dm_g(src) .* offset .+ _dm_k(offset)
+
+@testset "a discrete fill that reads a parameter follows the call's p" begin
+    ics = Dict{String,Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+    src = [1.0, 2.0]
+    for compiler in (:native, :interpreter)
+        @testset "$compiler" begin
+            dm = _DM_ESS.DiscreteMaterializer()
+            f!, u0, p, _, vm = _DM_ESS._build_evaluator(_dmp_file(); compiler = compiler,
+                initial_conditions = ics, const_arrays = Dict("W" => _DM_W),
+                param_arrays = Dict("src" => src), materialize_out = dm)
+            @test haskey(dm.caches, "g")
+            key = only(k for k in keys(p) if endswith(String(k), "offset"))
+            rhs(q) = (du = zero(u0); f!(du, u0, q, 0.0); [du[vm["c[$j]"]] for j in 1:3])
+            @test rhs(p) ≈ _dmp_expected(src, 1.0)
+            p2 = merge(p, NamedTuple{(key,)}((2.0,)))
+            @test rhs(p2) ≈ _dmp_expected(src, 2.0)
+            @test dm.caches["g"] ≈ _dm_g(src) .* 2.0
+            # A refresh with no `p` refills with the one the caches hold.
+            src .= [3.0, 5.0]
+            dm.materialize!()
+            @test dm.caches["g"] ≈ _dm_g(src) .* 2.0
+            @test rhs(p) ≈ _dmp_expected(src, 1.0)          # and back again
+            src .= [1.0, 2.0]
+            dm.materialize!()
+        end
+    end
+    @testset "esm_problem + remake, bit for bit across the compilers" begin
+        runs = Dict{Symbol,Any}()
+        for compiler in (:native, :interpreter)
+            prob = _DM_ESS.esm_problem(_dmp_file(), (0.0, 1.0); compiler = compiler,
+                const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => copy(src)))
+            prob2 = _DM_ESS.remake(prob; p = Dict("offset" => 2.0))
+            rhs(pr) = (du = zero(pr.u0); pr.f!(du, pr.u0, pr.p, 0.0); du)
+            d2 = rhs(prob2)
+            d1 = rhs(prob)
+            @test [d2[prob2.var_map["M.c[$j]"]] for j in 1:3] ≈ _dmp_expected(src, 2.0)
+            @test [d1[prob.var_map["M.c[$j]"]] for j in 1:3] ≈ _dmp_expected(src, 1.0)
+            runs[compiler] = (d1, d2)
+        end
+        @test all(runs[:native][1] .=== runs[:interpreter][1])
+        @test all(runs[:native][2] .=== runs[:interpreter][2])
+    end
+    if VERSION >= v"1.12"
+        @testset "a same-p call does not allocate" begin
+            dm = _DM_ESS.DiscreteMaterializer()
+            f!, u0, p, _, _ = _DM_ESS._build_evaluator(_dmp_file(); compiler = :native,
+                initial_conditions = ics, const_arrays = Dict("W" => _DM_W),
+                param_arrays = Dict("src" => copy(src)), materialize_out = dm)
+            du = zero(u0)
+            f!(du, u0, p, 0.0); f!(du, u0, p, 0.0)
+            @test (@allocated f!(du, u0, p, 0.0)) == 0
+        end
+    end
+end

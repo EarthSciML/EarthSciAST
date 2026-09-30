@@ -1,0 +1,19 @@
+{
+  "fixture": "reshape_roundtrip",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "roundtrip_and_column_major",
+      "assertion_idx": 1,
+      "variable": "diff",
+      "actual": 0.0
+    },
+    {
+      "test_id": "roundtrip_and_column_major",
+      "assertion_idx": 2,
+      "variable": "col",
+      "actual": 2.9999999999999996
+    }
+  ]
+}
