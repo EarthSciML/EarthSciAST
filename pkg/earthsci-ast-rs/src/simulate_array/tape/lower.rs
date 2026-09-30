@@ -4268,7 +4268,7 @@ impl<'m> TapeBuilder<'m> {
                 let v = self.lower_wholesale(&node.args[0])?;
                 self.emit_neg(v)
             }
-            "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
+            "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
             | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
             | "acosh" | "atanh" | "not" => {
                 // `eval_unary` evaluates args[0] only; no args ⇒ NaN sentinel.
@@ -5593,7 +5593,7 @@ impl<'m> TapeBuilder<'m> {
                 }
                 Some(acc)
             }
-            "neg" | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
+            "neg" | "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
             | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh"
             | "asinh" | "acosh" | "atanh" | "not" | "Pre" => {
                 self.wholesale_shape(node.args.first()?)

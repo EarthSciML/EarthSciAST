@@ -248,7 +248,7 @@ pub fn is_evaluable_op(op: &str) -> bool {
         // Arithmetic. `pow` is the word spelling of `^`.
         "+" | "-" | "*" | "/" | "^" | "pow" | "neg"
         // Elementary functions.
-        | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
+        | "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
         | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
         | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh"
         | "atan2" | "min" | "max"
@@ -484,7 +484,7 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         }
 
         // Unary / scalar transcendentals.
-        "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
+        "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
         | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
         | "acosh" | "atanh" => eval_unary(op, &node.args, ctx),
 
@@ -1190,7 +1190,7 @@ pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
     }
     match op {
         "exp" => x.exp(),
-        "log" | "ln" => x.ln(),
+        "log" => x.ln(),
         "log10" => x.log10(),
         "sqrt" => x.sqrt(),
         "abs" => x.abs(),
@@ -1265,7 +1265,7 @@ impl UnCode {
     pub(crate) fn of(op: &str) -> UnCode {
         match op {
             "exp" => UnCode::Exp,
-            "log" | "ln" => UnCode::Ln,
+            "log" => UnCode::Ln,
             "log10" => UnCode::Log10,
             "sqrt" => UnCode::Sqrt,
             "abs" => UnCode::Abs,
@@ -1416,7 +1416,7 @@ mod kernel_equivalence_tests {
 
     #[rustfmt::skip]
     const UN_OPS: &[&str] = &[
-        "exp", "log", "ln", "log10", "sqrt", "abs", "sign", "floor", "ceil", "sin", "cos",
+        "exp", "log", "log10", "sqrt", "abs", "sign", "floor", "ceil", "sin", "cos",
         "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
         "not", "no_such_op",
     ];
@@ -1538,7 +1538,6 @@ mod kernel_equivalence_tests {
             let cases: &[(&str, f64)] = &[
                 ("exp", xf.exp() as f64),
                 ("log", xf.ln() as f64),
-                ("ln", xf.ln() as f64),
                 ("log10", xf.log10() as f64),
                 ("sqrt", xf.sqrt() as f64),
                 ("abs", xf.abs() as f64),
@@ -5788,7 +5787,6 @@ mod evaluability_gate_tests {
             "neg",
             "exp",
             "log",
-            "ln",
             "log10",
             "sqrt",
             "abs",

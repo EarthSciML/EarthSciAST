@@ -27,7 +27,7 @@
         {
           "lhs": "invalid_log",
           "rhs": {
-            "op": "ln",
+            "op": "log",
             "args": [
               "mass"
             ]
