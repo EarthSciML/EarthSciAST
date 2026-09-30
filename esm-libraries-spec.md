@@ -325,7 +325,8 @@ pointer and message:
 - `data_source_undefined`;
 - `missing_required_field`.
 
-Each one names something the document uses and does not declare, so a build
+A finding inside a component's inline `tests` is the test runner's to report
+(esm-spec §6.6), because construction does not evaluate tests. Each one names something the document uses and does not declare, so a build
 that went ahead would read a value the document does not describe (the silent
 failure CONFORMANCE_SPEC §5.23 forbids). The equation-count and unit findings
 (`equation_count_mismatch`, `unit_inconsistency`, `unit_parse_error`, …) are NOT

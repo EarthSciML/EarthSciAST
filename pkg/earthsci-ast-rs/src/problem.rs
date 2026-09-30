@@ -2978,11 +2978,12 @@ const BUILD_REFUSED_VALIDATION_CODES: &[&str] = &[
 /// reports for `file`, with the validator's code, pointer and message.
 fn refuse_reference_integrity_errors(file: &EsmFile) -> Result<(), SimulateError> {
     let result = crate::validate::validate(file);
-    if let Some(e) = result
-        .structural_errors
-        .iter()
-        .find(|e| BUILD_REFUSED_VALIDATION_CODES.contains(&e.code.to_string().as_str()))
-    {
+    if let Some(e) = result.structural_errors.iter().find(|e| {
+        // An inline test's references are the test runner's to report
+        // (esm-spec §6.6); the build does not evaluate them.
+        BUILD_REFUSED_VALIDATION_CODES.contains(&e.code.to_string().as_str())
+            && !e.path.contains("/tests/")
+    }) {
         return Err(SimulateError::Compile(
             crate::compile_error::CompileError::build_err(format!(
                 "[{}] {}: {} (esm-libraries-spec §2.5.2)",

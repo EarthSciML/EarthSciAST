@@ -200,6 +200,9 @@ const _BUILD_REFUSED_VALIDATION_CODES = ("undefined_variable", "undefined_parame
 function _refuse_reference_integrity_errors(file::EsmFile)
     for e in validate_structural(file)
         e.error_type in _BUILD_REFUSED_VALIDATION_CODES || continue
+        # An inline test's references are the test runner's to report (§6.6);
+        # the build does not evaluate them.
+        occursin("/tests/", e.path) && continue
         throw(ParseError("[$(e.error_type)] $(e.path): $(e.message) (esm-libraries-spec §2.5.2)";
                          code=e.error_type, path=e.path, details=e.details))
     end

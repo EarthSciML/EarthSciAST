@@ -1362,7 +1362,9 @@ def _refuse_reference_integrity_errors(file: EsmFile, base_path: str | None) -> 
     from .validation import validate
 
     for e in validate(file, base_path=base_path).structural_errors:
-        if e.code in _BUILD_REFUSED_VALIDATION_CODES:
+        # An inline test's references are the test runner's to report (esm-spec
+        # §6.6); the build does not evaluate them.
+        if e.code in _BUILD_REFUSED_VALIDATION_CODES and "/tests/" not in (e.path or ""):
             raise SimulationError(f"[{e.code}] {e.path}: {e.message} (esm-libraries-spec §2.5.2)")
 
 
