@@ -774,6 +774,15 @@ pub struct ArrayCompiled {
     /// registry cannot size. The tape compiles a read of one of these into a
     /// forcing load (`tape::Instr::LoadForcing`) rather than declining it.
     forcing_decls: IndexMap<String, Option<Vec<usize>>>,
+    /// The [`Self::forcing_decls`] entries whose parameter declares a
+    /// `default`, which the front door's missing-data gate does not refuse.
+    forcing_defaults: HashSet<String>,
+    /// Every SHAPED parameter the build left with no value at all: no
+    /// `default`, no inline data, no `distribution`, and no refresh from
+    /// outside the model. It holds a scalar-table slot with no value, which a
+    /// per-cell read cannot index; [`crate::problem::esm_problem`] refuses the
+    /// build naming each one (esm-spec §10.10).
+    unvalued_shaped_params: Vec<String>,
     /// The tape programs this model has built ([`tape::TapeCache`], which says
     /// what a kept program depends on).
     tape_cache: tape::TapeCache,

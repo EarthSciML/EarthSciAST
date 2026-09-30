@@ -856,7 +856,7 @@ function _partition_variables(model::Model;
                 # buffer, ess-14f.3). Either way it is array-backed, not a scalar
                 # parameter, so it is NOT added to param_names.
                 haskey(const_arrays, name) || haskey(param_arrays, name) ||
-                    throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE", name))
+                    throw(_missing_data_error(name, v))
             else
                 push!(param_names, name)
             end
@@ -874,6 +874,44 @@ function _partition_variables(model::Model;
     end
     sort!(param_names)
     return param_names, observed_names, state_var_names
+end
+
+# A shaped parameter that reached the partition with no value: no `default`,
+# no override, no caller array and no live forcing buffer. esm-spec §10.10 makes
+# "a parameter with neither a default nor a supplied value" an error when a
+# problem is built, so this is a construction error naming the parameter, what
+# the document says feeds it, and the channels that would supply it.
+function _missing_data_error(name::AbstractString, v::ModelVariable)
+    shape = v.shape === nothing ? "" : " (shape [$(join(v.shape, ", "))])"
+    # A declared default that never reached the const-array channel: its shape
+    # did not resolve to extents when the default was broadcast.
+    v.default === nothing || return TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE",
+        "the shaped parameter '$(name)'$(shape) declares a `default`, but its shape does " *
+        "not resolve to extents where the default is broadcast over it (an index set " *
+        "with no known size); supply its array in `const_arrays` instead")
+    feeds = String[]
+    for u in something(v.update, ParameterUpdate[])
+        if u.from !== nothing
+            push!(feeds, "the data source '$(something(u.source, "?"))' " *
+                         "(file_variable '$(u.from.file_variable)')")
+        elseif u.handler !== nothing
+            push!(feeds, "the registered handler '$(u.handler.handler_id)' " *
+                         "(update kind '$(u.kind)'), which writes it only when it fires")
+        end
+    end
+    fed = isempty(feeds) ? "Nothing in the document gives it a value." :
+          "The document feeds it from $(join(feeds, " and ")), and no data for it " *
+          "was supplied at construction."
+    how = isempty(feeds) ?
+          "pass its array to `esm_problem` as `const_arrays = Dict(\"$(name)\" => array)`, " *
+          "or declare a `default` on it" :
+          "pass a provider for it in `providers`, or its array as " *
+          "`const_arrays = Dict(\"$(name)\" => array)` (a constant snapshot) or " *
+          "`param_arrays` (a live buffer the caller refreshes), or declare a `default` on it"
+    return TreeWalkError("E_TREEWALK_MISSING_DATA",
+        "no data supplied for the shaped parameter '$(name)'$(shape), which declares no " *
+        "`default`. $(fed) A parameter with neither a default nor a supplied value is an " *
+        "error when a problem is built (esm-spec §10.10). To supply it, $(how).")
 end
 
 # ---- Stage: inline array data (esm-spec §6.3 / §6.6.2) ----------------------
@@ -904,7 +942,8 @@ end
 function _register_inline_array_parameters(model::Model, const_arrays::AbstractDict,
                                            parameter_overrides::AbstractDict,
                                            index_sets::AbstractDict;
-                                           param_arrays::AbstractDict=Dict{String,Any}())
+                                           param_arrays::AbstractDict=Dict{String,Any}(),
+                                           derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS)
     additions = Dict{String,Any}()
     for (name, v) in model.variables
         v.type == ParameterVariable && _is_array_shape(v.shape) || continue
@@ -919,7 +958,7 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
             # already outranks). Tested after it, a scalar override of a
             # parameter whose declared `default` is an inline array was silently
             # DROPPED and the default used instead.
-            exts = _declared_shape_extents(v.shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+            exts = _declared_shape_extents(v.shape, index_sets, derived_extents)
             exts === nothing && continue
             fill(Float64(ov), Tuple(exts))
         elseif haskey(const_arrays, name)
@@ -932,14 +971,15 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
             # not resolve (an unmaterialized derived set has no extent to fill) —
             # the build's own extent checks then report any real disagreement.
             haskey(param_arrays, name) && continue
-            exts = _declared_shape_extents(v.shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+            exts = _declared_shape_extents(v.shape, index_sets, derived_extents)
             exts === nothing && continue
             fill(Float64(v.default), Tuple(exts))
         else
             continue
         end
         _check_inline_shape(name, value, v.shape, index_sets,
-                            ov === nothing ? "default" : "parameter_overrides")
+                            ov === nothing ? "default" : "parameter_overrides";
+                            derived_extents=derived_extents)
         additions[name] = value
     end
     isempty(additions) && return const_arrays
@@ -984,11 +1024,12 @@ end
 # accepted as authored — the build's own extent checks then report any real
 # disagreement.
 function _check_inline_shape(name::AbstractString, value, shape, index_sets::AbstractDict,
-                             origin::AbstractString)
+                             origin::AbstractString;
+                             derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS)
     _is_array_shape(shape) || throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE",
         "$(origin)[$(name)]: inline array data was supplied for a variable with no " *
         "declared `shape`; only a SHAPED variable takes a nested array (esm-spec §6.3)"))
-    exts = _declared_shape_extents(shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+    exts = _declared_shape_extents(shape, index_sets, derived_extents)
     exts === nothing && return nothing
     size(value) == Tuple(exts) || throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE",
         "$(origin)[$(name)]: inline array data has shape $(size(value)), which does not " *
@@ -4027,9 +4068,17 @@ function _build_evaluator_impl_inner(model::Model;
     # seeds from. Both are no-ops (and the registries byte-identical) for a
     # document that declares no shaped parameter.
     const_arrays = _normalize_const_array_keys(model, const_arrays; model_name=_model_name)
+    # A derived index set value invention has already sized (the front door
+    # ran it) resolves a declared shape here too, keyed by the SET's name.
+    vi_set_extents = isempty(_vi_extents) ? _EMPTY_DERIVED_EXTENTS :
+        Dict{String,Int}(String(k) => Int(_vi_extents[is.from_faq])
+                         for (k, is) in index_sets
+                         if is.kind == "derived" && is.from_faq !== nothing &&
+                            haskey(_vi_extents, is.from_faq))
     const_arrays = _register_inline_array_parameters(model, const_arrays,
                                                      parameter_overrides, index_sets;
-                                                     param_arrays=param_arrays)
+                                                     param_arrays=param_arrays,
+                                                     derived_extents=vi_set_extents)
     initial_conditions = _expand_inline_array_ics(model, initial_conditions, index_sets)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;

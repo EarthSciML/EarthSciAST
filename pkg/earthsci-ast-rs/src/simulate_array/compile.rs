@@ -812,6 +812,8 @@ impl ArrayCompiled {
             param_names,
             param_index,
             param_defaults,
+            unvalued_shaped_params,
+            forcing_defaults,
         ) = {
             let model = &model_owned;
 
@@ -856,6 +858,22 @@ impl ArrayCompiled {
 
             // (5) Build the param tables.
             let (param_names, param_index, param_defaults) = build_param_tables(model, &param_vars);
+            // A SHAPED parameter that reached the scalar table with no value —
+            // no `default`, no `distribution`, no inline data, not refreshed
+            // from outside. The front door refuses these by name
+            // (`crate::problem::esm_problem`, esm-spec §10.10); a lower-level
+            // caller reaches them as a solve-time missing parameter.
+            let unvalued_shaped_params: Vec<String> = param_vars
+                .iter()
+                .filter(|name| {
+                    model.variables.get(**name).is_some_and(|v| {
+                        v.shape.as_ref().is_some_and(|s| !s.is_empty())
+                            && v.default.is_none()
+                            && v.distribution.is_none()
+                    })
+                })
+                .map(|name| (*name).clone())
+                .collect();
 
             // Stage (6) consumes the observed bodies by NAME (sorted order,
             // exactly the order `classify_variables` produced them in).
@@ -876,6 +894,13 @@ impl ArrayCompiled {
                 })
                 .collect();
             infer_unsized_forcing_shapes(&mut forcing_decls, &model.equations);
+            // The forcing names whose parameter declares a `default`: not
+            // missing data, whatever the caller supplies (esm-spec §10.10).
+            let forcing_defaults: HashSet<String> = observed_vars
+                .iter()
+                .filter(|(name, var)| var.default.is_some() && forcing_decls.contains_key(*name))
+                .map(|(name, _)| (*name).clone())
+                .collect();
             (
                 observed_names,
                 forcing_decls,
@@ -885,6 +910,8 @@ impl ArrayCompiled {
                 param_names,
                 param_index,
                 param_defaults,
+                unvalued_shaped_params,
+                forcing_defaults,
             )
         };
 
@@ -951,6 +978,8 @@ impl ArrayCompiled {
             field_ic_memo: RefCell::new(None),
             inline_param_arrays,
             forcing_decls,
+            forcing_defaults,
+            unvalued_shaped_params,
             tape_cache: tape::TapeCache::new(),
             shared_observed: std::cell::OnceCell::new(),
         })
@@ -1144,7 +1173,7 @@ pub(crate) fn check_free_variables(
             continue;
         }
         collect_binders(&eq.lhs, &mut binders);
-        collect_binders(&eq.rhs, &mut binders);
+        collect_rhs_binders(&eq.rhs, false, &mut binders);
         with_binders(&mut bound, &mut binders, |scope| {
             check_expr_free_vars(&eq.lhs, scope)?;
             check_expr_free_vars(&eq.rhs, scope)
@@ -1238,6 +1267,30 @@ fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
         node_binders(node, out);
         node.for_each_child(&mut |child| collect_binders(child, out));
     }
+}
+
+/// [`collect_binders`] for an equation's right-hand side, less one case: a
+/// bare `index(array, i)` subscript that no enclosing node binds and the
+/// left-hand side does not bind either. There it is a READ of `i` with nothing
+/// in scope to give it a value — `d ~ index(faq{i}(…), i)` reads the `i` of no
+/// loop, since the `faq`'s own `i` is bound only inside it — so it is checked
+/// rather than credited. Under any node that carries binders (`faq`,
+/// `makearray`, `integral`, a template call…) every bare subscript still
+/// counts as a binder, as [`collect_binders`] has it.
+fn collect_rhs_binders(expr: &Expr, enclosed: bool, out: &mut HashSet<String>) {
+    let Expr::Operator(node) = expr else {
+        return;
+    };
+    let carries = node.output_idx.is_some()
+        || node.ranges.is_some()
+        || node.int_var.is_some()
+        || node.arg.is_some()
+        || node.bindings.is_some();
+    if enclosed || node.op != "index" {
+        node_binders(node, out);
+    }
+    let enclosed = enclosed || carries;
+    node.for_each_child(&mut |child| collect_rhs_binders(child, enclosed, out));
 }
 
 /// Collect every free BARE (non-dotted, non-builtin) symbol in the subtree —

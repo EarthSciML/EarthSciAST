@@ -30,6 +30,7 @@ from .compiler import (
     use_policy,
 )
 from .error_handling import INDEXED_DEFINITION_UNSUPPORTED_FORM
+from .errors import MissingDataError
 from .esm_types import EsmFile, Expr, ExprNode, is_aggregate_op
 from .expr_walk import iter_children, map_children
 from .expression import UnsupportedConstructError
@@ -3001,6 +3002,21 @@ def _build_numpy_rhs(
             loader_arrays[_k] = _v
             axis_valued_input_names.add(_k)
     axis_valued_names = frozenset(axis_valued_input_names)
+
+    # esm-spec §10.10: a parameter with neither a default nor a supplied value
+    # is an error when a problem is built. A SHAPED one no channel above filled
+    # would otherwise keep the scalar 0.0 stand-in ``_resolve_override`` binds:
+    # a bare read runs on it, and a per-cell read fails far from the name.
+    for pname, pvar in flat.parameters.items():
+        if not getattr(pvar, "shape", None) or pname in loader_arrays:
+            continue
+        if getattr(pvar, "distribution", None) is not None:
+            continue
+        raw = resolve_override_raw(
+            pname, parameters, pvar.default, known=known_params, namespaces=param_namespaces
+        )
+        if raw is None:
+            raise MissingDataError(pname, pvar)
 
     # Initial conditions.
     y0 = np.zeros(total_size, dtype=float)
