@@ -55,19 +55,27 @@ def test_without_data(case: dict, compiler: str) -> None:
     with pytest.raises(Exception) as info:
         esm_problem(fixture, (0.0, 1.0), compiler=compiler)
     msg = str(info.value)
-    assert _manifest()["error_code"] in msg, msg
+    assert case.get("error_code", _manifest()["error_code"]) in msg, msg
     assert any(f"'{m}'" in msg or f"'{m.rsplit('.', 1)[-1]}'" in msg for m in case["missing"]), msg
 
 
 @pytest.mark.parametrize("case", _manifest()["cases"], ids=lambda c: c["id"])
 def test_with_data(case: dict) -> None:
-    if case["const_arrays"] is None:
+    supply = case.get("supply") or {}
+    if case["const_arrays"] is None and not supply:
         pytest.skip("refusal-only case")
     fixture = str(_ROOT / case["fixture"])
     answers = []
     for compiler in _manifest()["compilers"]:
-        arrays = {k: np.asarray(v, dtype=float) for k, v in case["const_arrays"].items()}
-        prob = esm_problem(fixture, (0.0, 1.0), compiler=compiler, const_arrays=arrays)
+        arrays = {k: np.asarray(v, dtype=float) for k, v in (case["const_arrays"] or {}).items()}
+        prob = esm_problem(
+            fixture,
+            (0.0, 1.0),
+            compiler=compiler,
+            const_arrays=arrays,
+            p=supply.get("p"),
+            u0=supply.get("u0"),
+        )
         if not case["rhs"]:
             continue
         dy = _rhs(prob)

@@ -135,6 +135,7 @@ def test_undeclared_shape_axis_with_indexed_equations_still_builds():
     from earthsci_ast.problem import esm_problem
 
     path = _FIXTURES_ROOT_DIR / "conformance" / "pde_simulation" / "fixtures"
-    prob = esm_problem(load_path(path / "diffusion_1d_periodic_n4.esm"), (0.0, 1.0))
+    # The fixture leaves its state's starting value to the harness (esm-spec §11.4).
+    prob = esm_problem(load_path(path / "diffusion_1d_periodic_n4.esm"), (0.0, 1.0), u0={"u": 0.0})
     assert prob.compiler == "native"
     assert prob.build is not None

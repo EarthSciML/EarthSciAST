@@ -126,6 +126,11 @@ mutable struct BuildInspection
     # since.
     observed_ctx::Any
     observed_ctxs::WeakKeyDict{Base.RefValue{Any},Any}
+    # The state slots (by position in `u0`) nothing in the document gave a
+    # starting value: no `default`, no `ic` equation, no initial condition.
+    # The build writes 0.0 there only as a placeholder; `esm_problem` refuses
+    # any the caller's `u0` does not then cover (esm-spec §11.4).
+    unvalued_slots::Vector{Int}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -137,7 +142,8 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     NamedTuple(), Dict{String,Int}(),
                                     Dict{Tuple{Base.RefValue{Any},String},_ObservedMemo}(),
                                     ReentrantLock(), Ref{Any}(nothing),
-                                    nothing, WeakKeyDict{Base.RefValue{Any},Any}())
+                                    nothing, WeakKeyDict{Base.RefValue{Any},Any}(),
+                                    Int[])
 
 """
     DiscreteMaterializer()
@@ -882,7 +888,8 @@ end
 # problem is built, so this is a construction error naming the parameter, what
 # the document says feeds it, and the channels that would supply it.
 function _missing_data_error(name::AbstractString, v::ModelVariable)
-    shape = v.shape === nothing ? "" : " (shape [$(join(v.shape, ", "))])"
+    shaped = _is_array_shape(v.shape)
+    shape = shaped ? " (shape [$(join(v.shape, ", "))])" : ""
     # A declared default that never reached the const-array channel: its shape
     # did not resolve to extents when the default was broadcast.
     v.default === nothing || return TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE",
@@ -903,13 +910,16 @@ function _missing_data_error(name::AbstractString, v::ModelVariable)
           "The document feeds it from $(join(feeds, " and ")), and no data for it " *
           "was supplied at construction."
     how = isempty(feeds) ?
-          "pass its array to `esm_problem` as `const_arrays = Dict(\"$(name)\" => array)`, " *
-          "or declare a `default` on it" :
+          (shaped ?
+           "pass its array to `esm_problem` as `const_arrays = Dict(\"$(name)\" => array)`, " *
+           "or declare a `default` on it" :
+           "pass it to `esm_problem` as `p = Dict(\"$(name)\" => value)`, or declare a " *
+           "`default` on it") :
           "pass a provider for it in `providers`, or its array as " *
           "`const_arrays = Dict(\"$(name)\" => array)` (a constant snapshot) or " *
           "`param_arrays` (a live buffer the caller refreshes), or declare a `default` on it"
     return TreeWalkError("E_TREEWALK_MISSING_DATA",
-        "no data supplied for the shaped parameter '$(name)'$(shape), which declares no " *
+        "no data supplied for the $(shaped ? "shaped " : "")parameter '$(name)'$(shape), which declares no " *
         "`default`. $(fed) A parameter with neither a default nor a supplied value is an " *
         "error when a problem is built (esm-spec §10.10). To supply it, $(how).")
 end
@@ -1366,13 +1376,23 @@ end
 # assertions), while STATE stays out of scope. Computed before the ic fold so
 # the same map feeds both the seed path and the parameter NamedTuple.
 function _resolve_param_scope(model::Model, param_names::Vector{String},
-                              parameter_overrides::AbstractDict)
+                              parameter_overrides::AbstractDict;
+                              supplied::AbstractDict=_EMPTY_PARAMS,
+                              supplied_live::AbstractDict=_EMPTY_PARAMS)
     param_scope = Dict{String,Float64}()
     for name in param_names
-        param_scope[name] = haskey(parameter_overrides, name) ?
-            Float64(parameter_overrides[name]) :
-            (model.variables[name].default === nothing ? 0.0 :
-             Float64(model.variables[name].default))
+        v = model.variables[name]
+        param_scope[name] = if haskey(parameter_overrides, name)
+            Float64(parameter_overrides[name])
+        elseif v.default !== nothing
+            Float64(v.default)
+        elseif v.distribution !== nothing || haskey(supplied, name) ||
+               haskey(supplied_live, name)
+            0.0   # drawn at setup, or read from the caller's / a provider's data
+        else
+            # esm-spec §10.10: neither a default nor a supplied value.
+            throw(_missing_data_error(name, v))
+        end
     end
     return param_scope
 end
@@ -1702,8 +1722,12 @@ end
 # `fold_fields!(set)` hands the field-`ic` values to `set(slot, value)`.
 function _build_u0(model::Model, layout::StateLayout,
                    initial_conditions::AbstractDict,
-                   eq_ics::Dict{String,Float64}, fold_fields!)
+                   eq_ics::Dict{String,Float64}, fold_fields!;
+                   unvalued::Union{Nothing,Vector{Int}}=nothing)
     u0 = Vector{Float64}(undef, length(layout))
+    # Slots with a starting value; the rest hold a 0.0 placeholder, reported
+    # through `unvalued` (esm-spec §11.4).
+    valued = trues(length(u0))
     scalar_names = _layout_scalar_names(layout)
     for (i, name) in enumerate(scalar_names)
         if haskey(initial_conditions, name)
@@ -1713,6 +1737,7 @@ function _build_u0(model::Model, layout::StateLayout,
         else
             d = model.variables[name].default
             u0[i] = d === nothing ? 0.0 : Float64(d)
+            d === nothing && (valued[i] = false)
         end
     end
     # Array cells: the parent variable's declared default first (a scalar
@@ -1733,6 +1758,7 @@ function _build_u0(model::Model, layout::StateLayout,
         d = model.variables[b.name].default
         if d === nothing
             fill!(view(u0, rng), 0.0)
+            valued[rng] .= false
         elseif is_inline_array(d)
             inside = eltype(d) <: Real && ndims(d) == length(b.lo) &&
                      all(dd -> b.lo[dd] >= 1 && b.hi[dd] <= size(d, dd), eachindex(b.lo))
@@ -1753,7 +1779,7 @@ function _build_u0(model::Model, layout::StateLayout,
     end
     n_scalar = length(scalar_names)
     covered = isempty(deferred) ? nothing : falses(length(u0))
-    mark = s -> (covered === nothing || (covered[s] = true); nothing)
+    mark = s -> (valued[s] = true; covered === nothing || (covered[s] = true); nothing)
     fold_fields!((s, v) -> (s == 0 || (u0[s] = v; mark(s)); nothing))
     _apply_ics_by_slot!((s, v) -> (s > n_scalar && (u0[s] = Float64(v); mark(s)); nothing),
                         layout, initial_conditions)
@@ -1761,10 +1787,30 @@ function _build_u0(model::Model, layout::StateLayout,
         idxs = Vector{Int}(undef, length(b.lo))
         for s in (b.base):(b.base + b.len - 1)
             covered[s] && continue
-            u0[s] = _cell_default(model, b.name, _block_cell!(idxs, b, s))
+            cell = _block_cell!(idxs, b, s)
+            u0[s] = _cell_default(model, b.name, cell)
+            valued[s] = any(<(0), cell) || !haskey(model.variables, b.name) ||
+                        model.variables[b.name].default !== nothing
+        end
+    end
+    if unvalued !== nothing
+        # Only an ODE state needs a starting value; an algebraic unknown the
+        # build solves for takes it from its definition.
+        ode = Set{String}(ode_states(model))
+        for s in findall(!, valued)
+            name = s <= n_scalar ? scalar_names[s] : _layout_block_name(layout, s)
+            name in ode && push!(unvalued, s)
         end
     end
     return u0
+end
+
+# The array variable whose block holds state slot `s` (a slot past the scalars).
+function _layout_block_name(layout::StateLayout, s::Int)
+    for b in _layout_blocks(layout)
+        b.base <= s < b.base + b.len && return b.name
+    end
+    return ""
 end
 
 # One array cell's default value: its parent variable's declared default, or 0
@@ -3087,7 +3133,8 @@ function _build_partition_and_materialize(model::Model, cls;
         discrete_vars=cls.discrete_vars)
 
     # ---- Scalar parameter scope (load-time constants) ----
-    param_scope = _resolve_param_scope(model, param_names, parameter_overrides)
+    param_scope = _resolve_param_scope(model, param_names, parameter_overrides;
+                                       supplied=const_arrays, supplied_live=param_arrays)
 
     # ---- M4: materialize intersect_polygon clip rings at setup time ----
     # Each clip is evaluated now (operands are const_arrays) into a CLOSED ring,
@@ -3253,7 +3300,9 @@ function _build_state_layout(model::Model, cls, parts;
         registered_functions::AbstractDict, const_arrays::AbstractDict, vi_vars,
         # Build-time parameter-read sink (see `_PARAM_READS`): the field-ic fold
         # below is the fourth build-time consumer of the parameter scope.
-        param_reads::Union{Nothing,Set{String}}=nothing)
+        param_reads::Union{Nothing,Set{String}}=nothing,
+        # Filled with the slots nothing gave a starting value (`_build_u0`).
+        unvalued::Union{Nothing,Vector{Int}}=nothing)
     # ---- Discover array cells from equations and initial conditions ----
     # Array variable detection: a variable is treated as an array if it has
     # an explicit non-empty shape, OR if it appears inside index(var, k...)
@@ -3303,7 +3352,7 @@ function _build_state_layout(model::Model, cls, parts;
         set -> _with_param_reads(param_reads) do
             _fold_field_ics!(set, parts.field_ics, array_cells, var_map,
                              parts.param_scope, registered_functions, const_arrays)
-        end)
+        end; unvalued=unvalued)
 
     # ---- Parameter NamedTuple ----
     p_vals = Float64[]
@@ -4176,7 +4225,8 @@ function _build_evaluator_impl_inner(model::Model;
     layout = @_bench :state_layout _build_state_layout(model, cls, parts;
         initial_conditions=initial_conditions, index_sets=index_sets,
         registered_functions=registered_functions, const_arrays=ic_const_arrays,
-        vi_vars=_vi_vars, param_reads=param_reads)
+        vi_vars=_vi_vars, param_reads=param_reads,
+        unvalued=inspect === nothing ? nothing : empty!(inspect.unvalued_slots))
 
     # ---- The parameter partition (differentiability plan §3 Phase 5) ----
     # Every build-time consumer has now run, so the read set is complete.

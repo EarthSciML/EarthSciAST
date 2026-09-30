@@ -797,6 +797,11 @@ pub struct ArrayCompiled {
     /// per-cell read cannot index; [`crate::problem::esm_problem`] refuses the
     /// build naming each one (esm-spec §10.10).
     unvalued_shaped_params: Vec<String>,
+    /// The state variables with neither a `D` equation nor an algebraic
+    /// definition, held at their initial value. Not ODE states, so the
+    /// front door's missing-initial-value gate leaves them alone, as the
+    /// other bindings do.
+    held_at_ic: HashSet<String>,
     /// The tape programs this model has built ([`tape::TapeCache`], which says
     /// what a kept program depends on).
     tape_cache: tape::TapeCache,

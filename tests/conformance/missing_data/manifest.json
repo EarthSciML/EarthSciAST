@@ -1,7 +1,7 @@
 {
  "category": "missing_data",
  "version": "1.0",
- "description": "Cross-binding conformance for a SHAPED parameter with no data supplied at the front door (esm-spec §10.10: a parameter with neither a default nor a supplied value is an error when a problem is built; §6.3 and CONFORMANCE_SPEC §5.32.5 for what supplies one). Each case builds its fixture through `esm_problem` under every listed compiler twice. Without data, every binding must refuse the construction with `E_TREEWALK_MISSING_DATA`, naming a parameter that has no value (one of `missing`: the message must contain the model-local name of at least one); a binding that runs the document on an invented value (zero, NaN, or its scalar slot) is wrong, and so is one that defers the failure to the first evaluation. With the case's `const_arrays` (keyed by flattened name, which every binding resolves by the §6.6.2 rules), the construction must succeed under every compiler, and where `rhs` is true the right-hand side evaluated at the manifest's probe state must be bit-for-bit identical between `native` and `interpreter` within each binding. Each binding's message also names what the document says fills the parameter: its data source, its registered handler, or nothing. A case whose `missing` is null is not refused: it builds without data too, and its `expected_rhs_without_data` / `expected_rhs` pin the exact right-hand side (at any state; it reads no state) without and with the case's arrays — which value wins when both a default and a caller array exist, and that a data-fed parameter's declared default is its value when no data is supplied (no binding reads the document's own data source unless the caller registers a provider for it).",
+ "description": "Cross-binding conformance for a SHAPED parameter with no data supplied at the front door (esm-spec §10.10: a parameter with neither a default nor a supplied value is an error when a problem is built; §6.3 and CONFORMANCE_SPEC §5.32.5 for what supplies one). Each case builds its fixture through `esm_problem` under every listed compiler twice. Without data, every binding must refuse the construction with `E_TREEWALK_MISSING_DATA`, naming a parameter that has no value (one of `missing`: the message must contain the model-local name of at least one); a binding that runs the document on an invented value (zero, NaN, or its scalar slot) is wrong, and so is one that defers the failure to the first evaluation. With the case's `const_arrays` (keyed by flattened name, which every binding resolves by the §6.6.2 rules), the construction must succeed under every compiler, and where `rhs` is true the right-hand side evaluated at the manifest's probe state must be bit-for-bit identical between `native` and `interpreter` within each binding. Each binding's message also names what the document says fills the parameter: its data source, its registered handler, or nothing. A case whose `missing` is null is not refused: it builds without data too, and its `expected_rhs_without_data` / `expected_rhs` pin the exact right-hand side (at any state; it reads no state) without and with the case's arrays — which value wins when both a default and a caller array exist, and that a data-fed parameter's declared default is its value when no data is supplied (no binding reads the document's own data source unless the caller registers a provider for it). A case with `supply` builds with the caller's `p` / `u0` instead of arrays: a scalar parameter nothing supplies is refused with the tier's code, and an unknown with no starting value with a case-level `error_code` (`E_TREEWALK_MISSING_INITIAL_VALUE`), both at construction and only when nothing — default, override, caller value, provider or distribution — supplies the value. Where the fixture's own state declares no starting value, `supply.u0` gives it one alongside the arrays.",
  "bindings_required": [
   "julia",
   "python",
@@ -79,7 +79,15 @@
      0.53
     ]
    },
-   "rhs": true
+   "rhs": true,
+   "supply": {
+    "u0": {
+     "LoaderConstSeed.c[1]": 0.0,
+     "LoaderConstSeed.c[2]": 0.0,
+     "LoaderConstSeed.c[3]": 0.0,
+     "LoaderConstSeed.c[4]": 0.0
+    }
+   }
   },
   {
    "id": "loader_temporal_seed",
@@ -95,7 +103,15 @@
      0.53
     ]
    },
-   "rhs": true
+   "rhs": true,
+   "supply": {
+    "u0": {
+     "LoaderTemporalSeed.c[1]": 0.0,
+     "LoaderTemporalSeed.c[2]": 0.0,
+     "LoaderTemporalSeed.c[3]": 0.0,
+     "LoaderTemporalSeed.c[4]": 0.0
+    }
+   }
   },
   {
    "id": "mixed_stencil",
@@ -157,7 +173,15 @@
      2.75
     ]
    },
-   "rhs": true
+   "rhs": true,
+   "supply": {
+    "u0": {
+     "MixedStencilDiffusion.u[1]": 0.0,
+     "MixedStencilDiffusion.u[2]": 0.0,
+     "MixedStencilDiffusion.u[3]": 0.0,
+     "MixedStencilDiffusion.u[4]": 0.0
+    }
+   }
   },
   {
    "id": "discrete_remesh_stencil",
@@ -212,7 +236,15 @@
      ]
     ]
    },
-   "rhs": true
+   "rhs": true,
+   "supply": {
+    "u0": {
+     "DiscreteRemeshStencil.u[1]": 0.0,
+     "DiscreteRemeshStencil.u[2]": 0.0,
+     "DiscreteRemeshStencil.u[3]": 0.0,
+     "DiscreteRemeshStencil.u[4]": 0.0
+    }
+   }
   },
   {
    "id": "advection_reaction_loaded_ic_bc",
@@ -361,6 +393,43 @@
     2.0
    ],
    "note": "not a missing-data case: a data-fed parameter that declares a default, with no provider and no caller array, takes the default (user ruling 2026-09-29); a caller array takes its place"
+  },
+  {
+   "id": "scalar_parameter_no_value",
+   "fixture": "fixtures/scalar_parameter_no_value.esm",
+   "missing": [
+    "Decay.k"
+   ],
+   "const_arrays": null,
+   "supply": {
+    "p": {
+     "k": 2.0
+    }
+   },
+   "rhs": true,
+   "expected_rhs": [
+    -2.0
+   ],
+   "note": "a SCALAR parameter nothing supplies (esm-spec §10.10); the caller's `p` supplies it. The probe state is u = 1."
+  },
+  {
+   "id": "state_no_initial_value",
+   "fixture": "fixtures/state_no_initial_value.esm",
+   "missing": [
+    "Decay.u"
+   ],
+   "error_code": "E_TREEWALK_MISSING_INITIAL_VALUE",
+   "const_arrays": null,
+   "supply": {
+    "u0": {
+     "u": 3.0
+    }
+   },
+   "rhs": true,
+   "expected_rhs": [
+    -0.5
+   ],
+   "note": "an unknown with no starting value (esm-spec §6.3.2); the caller's `u0` supplies it. The probe state is u = 1."
   }
  ]
 }

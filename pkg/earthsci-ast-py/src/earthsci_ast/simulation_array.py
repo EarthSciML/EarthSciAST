@@ -21,7 +21,7 @@ from typing import Any, Callable
 import numpy as np
 
 from . import compiler as _compiler
-from .classification import is_implicit_lhs
+from .classification import _derivative_targets, is_implicit_lhs
 from .compiler import (
     CompilerPolicy,
     CompilerRefusedRuleError,
@@ -30,7 +30,7 @@ from .compiler import (
     use_policy,
 )
 from .error_handling import INDEXED_DEFINITION_UNSUPPORTED_FORM
-from .errors import MissingDataError
+from .errors import MissingDataError, MissingInitialValueError
 from .esm_types import EsmFile, Expr, ExprNode, is_aggregate_op
 from .expr_walk import iter_children, map_children
 from .expression import UnsupportedConstructError
@@ -1951,8 +1951,7 @@ def _frontdoor_join_keys_and_extents(
         )
         buffers, idx_sets = _buffers(res)
         outputs = {
-            str(k): np.asarray(v, dtype=float)
-            for k, v in {**res.assignments, **res.groups}.items()
+            str(k): np.asarray(v, dtype=float) for k, v in {**res.assignments, **res.groups}.items()
         }
         return buffers, idx_sets, dict(res.extents), dict(res.members), outputs
     except ValueInventionError as exc:
@@ -3086,11 +3085,10 @@ def _build_numpy_rhs(
     axis_valued_names = frozenset(axis_valued_input_names)
 
     # esm-spec §10.10: a parameter with neither a default nor a supplied value
-    # is an error when a problem is built. A SHAPED one no channel above filled
-    # would otherwise keep the scalar 0.0 stand-in ``_resolve_override`` binds:
-    # a bare read runs on it, and a per-cell read fails far from the name.
+    # is an error when a problem is built. One no channel above filled would
+    # otherwise keep the 0.0 stand-in ``_resolve_override`` binds.
     for pname, pvar in flat.parameters.items():
-        if not getattr(pvar, "shape", None) or pname in loader_arrays:
+        if pname in loader_arrays:
             continue
         if getattr(pvar, "distribution", None) is not None:
             continue
@@ -3100,8 +3098,11 @@ def _build_numpy_rhs(
         if raw is None:
             raise MissingDataError(pname, pvar)
 
-    # Initial conditions.
+    # Initial conditions. A state with no declared default starts as NaN, a
+    # marker the checks after the folds and overrides below read: a slot
+    # nothing then set is refused (esm-spec §11.4), not run from 0.0.
     y0 = np.zeros(total_size, dtype=float)
+    no_default: list[str] = []
     for name in state_names:
         default = flat.state_variables[name].default
         if is_inline_array_value(default):
@@ -3113,6 +3114,9 @@ def _build_numpy_rhs(
         elif isinstance(default, (int, float)) and not isinstance(default, bool):
             sl = state_layout[name]
             y0[sl] = float(default)
+        else:
+            y0[state_layout[name]] = np.nan
+            no_default.append(name)
     # Scoped-reference / array ``ic`` fold (esm-spec §11.4.1): now that each array
     # state's grid shape is known, fold every deferred field-ic into per-element
     # initial values. The RHS may be a LOADED FIELD (a ``loader_arrays`` entry —
@@ -3171,6 +3175,18 @@ def _build_numpy_rhs(
         index_sets=flat.index_sets,
         param_values=param_values,
     )
+    # Only an ODE state needs a starting value; an unknown the build solves for
+    # or eliminates takes it from its definition.
+    # A state some of whose cells were set is not refused: the cells left over
+    # are layout (a grid widened past the cells the document names), and keep
+    # the 0.0 they always had.
+    ode = set().union(*(_derivative_targets(eq.lhs) for eq in flat.equations))
+    unset = [n for n in no_default if n in ode and np.isnan(y0[state_layout[n]]).all()]
+    if unset:
+        raise MissingInitialValueError(unset)
+    for n in no_default:
+        seg = y0[state_layout[n]]
+        seg[np.isnan(seg)] = 0.0
 
     # Const-geometry hoist + cadence split of the observeds: materialize the
     # STATE-FREE (loader-invariant, then loader-volatile) observeds ONCE here and

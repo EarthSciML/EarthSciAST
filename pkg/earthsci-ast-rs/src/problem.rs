@@ -2035,6 +2035,13 @@ pub fn esm_problem<'a>(
     )?;
     compiler_report.rules.splice(0..0, route_rows);
 
+    // ---- (5b') Every state slot has a starting value (esm-spec §11.4). ------
+    // After (5b), which resolved the field `ic`s this reads.
+    #[cfg(feature = "solve")]
+    if let Backend::Array(c) = &backend {
+        refuse_missing_initial_values(c, &opts.u0)?;
+    }
+
     // ---- (5c) `xla`: emit and compile, here, once. ------------------------
     // AFTER the gate above, so a rule that never reached the tape is refused
     // by name (with its cadence tier) rather than as whatever `Instr::Fallback`
@@ -3209,8 +3216,10 @@ fn declared_variable<'f>(
 /// The `E_TREEWALK_MISSING_DATA` refusal for shaped parameter `name`, naming
 /// what the document says feeds it and how a caller supplies it.
 fn missing_data_error(name: &str, var: Option<&crate::types::ModelVariable>) -> SimulateError {
+    let shaped = var.is_some_and(is_shaped_parameter);
     let shape = var
         .and_then(|v| v.shape.as_ref())
+        .filter(|s| !s.is_empty())
         .map(|s| format!(" (shape [{}])", s.join(", ")))
         .unwrap_or_default();
     let mut feeds: Vec<String> = Vec::new();
@@ -3237,10 +3246,16 @@ fn missing_data_error(name: &str, var: Option<&crate::types::ModelVariable>) -> 
     let (fed, how) = if feeds.is_empty() {
         (
             "Nothing in the document gives it a value.".to_string(),
-            format!(
-                "pass its array in `ProblemOptions::const_arrays` under \"{name}\", or declare a \
-                 `default` on it"
-            ),
+            if shaped {
+                format!(
+                    "pass its array in `ProblemOptions::const_arrays` under \"{name}\", or declare \
+                     a `default` on it"
+                )
+            } else {
+                format!(
+                    "pass it in `ProblemOptions::p` under \"{name}\", or declare a `default` on it"
+                )
+            },
         )
     } else {
         (
@@ -3258,11 +3273,43 @@ fn missing_data_error(name: &str, var: Option<&crate::types::ModelVariable>) -> 
     SimulateError::Compile(crate::compile_error::CompileError::MissingData {
         parameter: name.to_string(),
         detail: format!(
-            "no data supplied for the shaped parameter '{name}'{shape}, which declares no \
+            "no data supplied for the {kind}parameter '{name}'{shape}, which declares no \
              `default`. {fed} A parameter with neither a default nor a supplied value is an error \
-             when a problem is built (esm-spec §10.10). To supply it, {how}."
+             when a problem is built (esm-spec §10.10). To supply it, {how}.",
+            kind = if shaped { "shaped " } else { "" }
         ),
     })
+}
+
+/// The `E_TREEWALK_MISSING_INITIAL_VALUE` refusal: a state slot no default,
+/// initial condition, `ic` equation or caller `u0` gives a starting value.
+#[cfg(feature = "solve")]
+fn refuse_missing_initial_values(
+    c: &ArrayCompiled,
+    u0: &HashMap<String, f64>,
+) -> Result<(), SimulateError> {
+    let unset = c.unset_initial_slots(u0);
+    let Some(first) = unset.first() else {
+        return Ok(());
+    };
+    let mut shown: Vec<String> = unset.iter().take(5).map(|n| format!("'{n}'")).collect();
+    if unset.len() > 5 {
+        shown.push("…".to_string());
+    }
+    Err(SimulateError::Compile(
+        crate::compile_error::CompileError::MissingInitialValue {
+            slot: first.clone(),
+            detail: format!(
+                "no starting value for {} unknown(s) ({}): the unknown declares no `default`, \
+                 and no initial condition, `ic` equation or caller `u0` sets it. An unknown with \
+                 no starting value is an error when a problem is built (esm-spec §11.4). To \
+                 supply it, pass it in `ProblemOptions::u0` under \"{first}\", or declare a \
+                 `default` on the unknown.",
+                unset.len(),
+                shown.join(", ")
+            ),
+        },
+    ))
 }
 
 /// The nested [`crate::types::InlineValue`] an array denotes, row-major — the
@@ -3448,6 +3495,17 @@ impl SuppliedData {
                 return Err(missing_data_error(name, declared_variable(file, name)));
             }
         }
+        // A scalar parameter no default, caller `p` or `distribution` gives a
+        // value (esm-spec §10.10).
+        for name in c.unsupplied_params(p) {
+            let var = declared_variable(file, &name);
+            if c.unvalued_shaped_params().contains(&name)
+                || var.is_some_and(|v| v.distribution.is_some())
+            {
+                continue;
+            }
+            return Err(missing_data_error(&name, var));
+        }
         Ok(())
     }
 
@@ -3472,7 +3530,7 @@ impl SuppliedData {
     /// The missing-data gate for a document with nothing to integrate, read
     /// off its flattened parameters (coupling may bind a declared parameter to
     /// another component's variable, and then it needs no value of its own).
-    /// Flattens only when some shaped parameter declares no value.
+    /// Flattens only when some parameter declares no value.
     fn refuse_missing_static(
         &self,
         file: &EsmFile,
@@ -3480,7 +3538,9 @@ impl SuppliedData {
         selected: Option<&str>,
     ) -> Result<(), SimulateError> {
         let unvalued = |v: &crate::types::ModelVariable| {
-            is_shaped_parameter(v) && v.default.is_none() && v.distribution.is_none()
+            v.var_type == crate::types::VariableType::Parameter
+                && v.default.is_none()
+                && v.distribution.is_none()
         };
         let any = file
             .models

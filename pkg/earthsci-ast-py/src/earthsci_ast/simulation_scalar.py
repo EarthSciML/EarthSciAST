@@ -28,6 +28,8 @@ from typing import Any, Callable
 import numpy as np
 import sympy as sp
 
+from .classification import _derivative_targets
+from .errors import MissingDataError, MissingInitialValueError
 from .esm_types import ContinuousEvent
 from .flatten import (
     FlattenedSystem,
@@ -49,6 +51,7 @@ from .simulation_common import (
     _retcode_for_error,
     _retcode_from_scipy,
     flat_namespace_scope,
+    resolve_override_raw,
     solve_ivp,
 )
 from .sympy_bridge import (
@@ -184,6 +187,16 @@ def _resolve_parameter_values(
     namespaces = flat_namespace_scope(flat)
     values: list[float] = []
     for pname in parameter_names:
+        pvar = flat.parameters[pname]
+        if (
+            getattr(pvar, "distribution", None) is None
+            and resolve_override_raw(
+                pname, parameter_overrides, pvar.default, known=known, namespaces=namespaces
+            )
+            is None
+        ):
+            # esm-spec §10.10: neither a default nor a supplied value.
+            raise MissingDataError(pname, pvar)
         values.append(
             _resolve_override(
                 pname,
@@ -269,8 +282,25 @@ def _build_scalar_rhs(
     y0_list: list[float] = []
     known_states = set(flat.state_variables)
     state_namespaces = flat_namespace_scope(flat)
+    unset: list[str] = []
+    # Only an ODE state needs a starting value; an algebraic one is overwritten
+    # from its definition below.
+    ode = set().union(*(_derivative_targets(eq.lhs) for eq in flat.equations))
     for name in state_names:
         default = eq_ics.get(name, flat.state_variables[name].default)
+        if name in ode and (
+            resolve_override_raw(
+                name,
+                initial_conditions,
+                default,
+                known=known_states,
+                namespaces=state_namespaces,
+                surface="initial_conditions",
+                kind="state",
+            )
+            is None
+        ):
+            unset.append(name)
         y0_list.append(
             _resolve_override(
                 name,
@@ -282,6 +312,9 @@ def _build_scalar_rhs(
                 kind="state",
             )
         )
+    if unset:
+        # esm-spec §11.4: an unknown with no starting value.
+        raise MissingInitialValueError(unset)
     y0 = np.array(y0_list)
 
     # Override y0 for algebraic states so the t=0 sample is consistent.

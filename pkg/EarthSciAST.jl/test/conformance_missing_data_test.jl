@@ -58,8 +58,9 @@ end
                     catch e
                         e
                     end
+                    want = haskey(case, :error_code) ? String(case.error_code) : code
                     @test err isa EarthSciAST.TreeWalkError
-                    @test err isa EarthSciAST.TreeWalkError && err.code == code
+                    @test err isa EarthSciAST.TreeWalkError && err.code == want
                     msg = err === nothing ? "" : sprint(showerror, err)
                     @test any(m -> occursin("'$(String(m))'", msg) ||
                                    occursin("'$(last(split(String(m), '.')))'", msg),
@@ -67,13 +68,19 @@ end
                 end
             end
         end
-        case.const_arrays === nothing && continue
-        arrays = Dict{String,Any}(String(k) => _md_dense(v) for (k, v) in pairs(case.const_arrays))
+        supply = get(case, :supply, nothing)
+        case.const_arrays === nothing && supply === nothing && continue
+        arrays = case.const_arrays === nothing ? Dict{String,Any}() :
+                 Dict{String,Any}(String(k) => _md_dense(v) for (k, v) in pairs(case.const_arrays))
+        p = Dict{String,Float64}(String(k) => Float64(v)
+                                 for (k, v) in pairs(something(get(something(supply, Dict()), :p, nothing), Dict())))
+        u0 = Dict{String,Float64}(String(k) => Float64(v)
+                                  for (k, v) in pairs(something(get(something(supply, Dict()), :u0, nothing), Dict())))
         answers = Dict{String,Vector{Float64}}()
         for compiler in manifest.compilers
             @testset "$(case.id) [$(compiler)] with data" begin
                 prob = esm_problem(fixture, (0.0, 1.0); compiler = Symbol(compiler),
-                                   const_arrays = arrays)
+                                   const_arrays = arrays, p = p, u0 = u0)
                 if case.rhs
                     du = _md_rhs(prob)
                     @test all(isfinite, du)

@@ -1,0 +1,48 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "state_no_initial_value",
+    "description": "An unknown that needs a starting value and declares no default, with no initial condition: esm-spec \u00a76.3.2 makes it an error when a problem is built unless the caller's `u0` supplies it (user ruling 2026-09-29). Julia used 0.0; Rust refused only at the solve.",
+    "authors": [
+      "missing_data conformance"
+    ]
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        },
+        "u": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "u"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

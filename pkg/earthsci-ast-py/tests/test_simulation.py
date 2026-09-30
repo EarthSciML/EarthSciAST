@@ -16,22 +16,24 @@ This module tests the core simulation functionality including:
 # floor it claims to support -- taking the whole suite's collection down with it.
 from __future__ import annotations
 
-import pytest
 import numpy as np
-from earthsci_ast.problem import ReturnCode, Solution, esm_problem, solve
-from earthsci_ast.sympy_bridge import _expr_to_sympy
-from earthsci_ast.numpy_interpreter import UnreachableSpatialOperatorError
+import pytest
+import sympy as sp
+
+from earthsci_ast.errors import MissingInitialValueError
 from earthsci_ast.esm_types import (
+    ContinuousEvent,
     EsmFile,
+    ExprNode,
     Metadata,
-    ReactionSystem,
-    Species,
     Parameter,
     Reaction,
-    ContinuousEvent,
-    ExprNode,
+    ReactionSystem,
+    Species,
 )
-import sympy as sp
+from earthsci_ast.numpy_interpreter import UnreachableSpatialOperatorError
+from earthsci_ast.problem import ReturnCode, Solution, esm_problem, solve
+from earthsci_ast.sympy_bridge import _expr_to_sympy
 
 
 def _reaction_file(
@@ -290,11 +292,12 @@ class TestSimulationErrors:
         """The build seeds y0 from each species' `default`.
 
         When an initial condition is omitted, the species' declared scalar
-        `default` (here 3.0) must be used instead of 0.0; an explicit override
-        still wins, and a species with no default falls back to 0.0.
+        `default` (here 3.0) must be used; an explicit override still wins, and
+        a species with no default and no initial value is refused at
+        construction (esm-spec §11.4) rather than started at 0.0.
         """
         species_A = Species(name="A", default=3.0)
-        species_B = Species(name="B")  # no default -> 0.0 fallback
+        species_B = Species(name="B")  # no default: the caller must supply it
         # Effectively frozen reaction so the reported t=0 state is exactly y0.
         reaction = Reaction(
             name="slow",
@@ -304,15 +307,18 @@ class TestSimulationErrors:
         )
         file = _reaction_file("Def", [species_A, species_B], [reaction])
 
-        # No initial conditions: A starts at its declared default, B at 0.0.
-        result = solve(esm_problem(file, (0.0, 1.0), u0={}))
+        with pytest.raises(MissingInitialValueError, match="Def.B"):
+            esm_problem(file, (0.0, 1.0), u0={})
+
+        # A starts at its declared default, B at the value the caller supplies.
+        result = solve(esm_problem(file, (0.0, 1.0), u0={"B": 0.0}))
         assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
         idx = {name: i for i, name in enumerate(result.vars)}
         assert result.y[idx["Def.A"], 0] == pytest.approx(3.0)
         assert result.y[idx["Def.B"], 0] == pytest.approx(0.0)
 
         # An explicit override still wins over the species default.
-        result2 = solve(esm_problem(file, (0.0, 1.0), u0={"A": 0.5}))
+        result2 = solve(esm_problem(file, (0.0, 1.0), u0={"A": 0.5, "B": 0.0}))
         assert result2.retcode is ReturnCode.Success, f"solve() did not succeed: {result2.message}"
         idx2 = {name: i for i, name in enumerate(result2.vars)}
         assert result2.y[idx2["Def.A"], 0] == pytest.approx(0.5)

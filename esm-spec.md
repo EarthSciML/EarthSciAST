@@ -5312,7 +5312,7 @@ default nor a supplied value is an error when a problem is built from the docume
 fails loudly at build instead of silently running with a placeholder value. A target that does
 carry a `default` is, by that declaration, optional: omitting its import is not an error. `validate`
 cannot reject an uncoupled default-less parameter on its own, because the value may legitimately
-arrive at run time.
+arrive at run time. This holds for a SCALAR parameter exactly as for a shaped one: the check runs at problem construction, after the caller's `p`, any provider and any `distribution` are applied, and a parameter nothing supplies is refused with `E_TREEWALK_MISSING_DATA` naming it. A binding MUST NOT substitute `0.0` (or any other value it chose) for the missing one, and MUST NOT defer the failure to the solve.
 
 ### 10.11 Coupling-import diagnostics
 
@@ -5476,6 +5476,8 @@ The RHS is an ordinary Expression:
 - **state-free array observed** → a reference to an observed whose defining expression closes over parameters, inline `const` data and other state-free observeds — no state, no `t`. Such a field is resolvable **before the simulation runs**, which is exactly the build-time evaluation scope §6.6.5 already defines, so a binding resolves it through the same evaluator it reaches from the coordinate-expression and analytic-`reference` positions. `ic(u) ~ theta0`, where `theta0` is a `const` gather or a shaped parameter's inline column (§6.3), is the column-physics case: the initial profile is data the document carries, not a closed-form function of the coordinates.
 
 A 0-D component's `ic` RHS is a scalar; a PDE component's may be a coordinate expression. Every ODE state SHOULD have exactly one `ic` equation; a missing one defaults to the variable's declared `default`.
+
+**No starting value is an error.** An unknown that needs a starting value — an ODE state or an algebraic unknown, not an observed one — and gets none from its declared `default`, an `ic` equation, an initialization equation (§6.2), a run-time override, or the caller's `u0` at problem construction, is an error when the problem is built, reported with `E_TREEWALK_MISSING_INITIAL_VALUE` naming the unknown. The check runs at construction, after the caller's values are applied; a binding MUST NOT start such an unknown at `0.0` (or any other value it chose), and MUST NOT defer the failure to the solve.
 
 **Run-time overrides.** A test or analysis MAY override the initial value of an unknown for one run via `test.initial_conditions` / `analysis.initial_state` (§6.6 / §6.7) — this overrides the `ic` equation's value for that run without changing the model. The value is a number, or — for a **shaped** unknown — a row-major nested JSON array matching its declared `shape` (§6.6.2).
 

@@ -186,7 +186,8 @@ def test_a_tier_that_declined_on_a_BROKEN_body_reports_the_body_s_own_error() ->
     a missing tier and hide the defect that is actually there — and the per-cell
     walk would not have answered either.
     """
-    prob = esm_problem(str(BROKEN_BODY), (0.0, 1.0))
+    # The document leaves its states' starting values to the caller (esm-spec §11.4).
+    prob = esm_problem(str(BROKEN_BODY), (0.0, 1.0), u0={"u": 0.0, "total": 0.0})
     assert prob.compiler == "native"
     sol = solve(prob)
     assert sol.retcode is not ReturnCode.Success
@@ -209,13 +210,15 @@ def test_native_runs_a_gated_pure_map_and_agrees_with_the_interpreter_bitwise() 
     whole-box evaluation is the per-cell walk's arithmetic in one pass. A
     difference of one bit would mean the tier is computing something else.
     """
-    fast = esm_problem(str(GATED_PURE_MAP), (0.0, 1.0))
+    # The document leaves its states' starting values to the caller (esm-spec §11.4).
+    u0 = {"A_j_check": 0.0, "F_tgt": 0.0}
+    fast = esm_problem(str(GATED_PURE_MAP), (0.0, 1.0), u0=u0)
     assert fast.compiler == "native"
     assert fast.compiler_report.per_cell_rules() == ()
     landings = fast.compiler_report.tiers()
     assert landings.get("gated-map"), f"the gated pure-map tier did not serve it: {landings}"
 
-    ref = esm_problem(str(GATED_PURE_MAP), (0.0, 1.0), compiler="interpreter")
+    ref = esm_problem(str(GATED_PURE_MAP), (0.0, 1.0), compiler="interpreter", u0=u0)
     # The rule that used to earn the refusal, and the one the new tier answers.
     assert "observed ConservativeRegridAssembly.W_ij" in ref.compiler_report.per_cell_rules()
 
@@ -249,9 +252,12 @@ def test_native_carries_no_per_cell_landing_on_a_document_it_accepts() -> None:
     ],
 )
 def test_native_and_the_interpreter_agree_bit_for_bit(fixture: Path) -> None:
-    kw = {"tspan": (0.0, 1.0)}
-    native = solve(esm_problem(str(fixture), kw["tspan"]), alg="LSODA")
-    oracle = solve(esm_problem(str(fixture), kw["tspan"], compiler="interpreter"), alg="LSODA")
+    # The PDE fixture leaves its state's starting value to the harness (esm-spec §11.4).
+    kw = {"tspan": (0.0, 1.0), "u0": {"u": 0.0} if fixture == PDE_DIFFUSION else None}
+    native = solve(esm_problem(str(fixture), kw["tspan"], u0=kw["u0"]), alg="LSODA")
+    oracle = solve(
+        esm_problem(str(fixture), kw["tspan"], compiler="interpreter", u0=kw["u0"]), alg="LSODA"
+    )
     assert native.retcode is ReturnCode.Success, native.message
     assert oracle.retcode is ReturnCode.Success, oracle.message
     assert native.vars == oracle.vars
