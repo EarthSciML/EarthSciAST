@@ -820,12 +820,17 @@ def _esm_problem_under(
     # ---- the engine, and the compile ----------------------------------------
     # WHICH machinery runs is the compiler's (the caller's); how OFTEN it runs
     # is the document's. `_segmenting_engine` answers only the second question.
+    # The document's own data sources are read only through a loader seam the
+    # caller registers. With none, a data-fed parameter takes its declared
+    # `default` like any other parameter (and one with no default is refused
+    # as missing data), exactly as in Julia and Rust.
+    loader_seam = loader_provider is not None or provider_factory is not None
     if policy.compiler == "sympy":
         _refuse_array_document_under_sympy(flat)
-        _refuse_bound_data_under_sympy(flat, discrete_providers, merged, gated)
+        _refuse_bound_data_under_sympy(flat, discrete_providers, merged, gated, loader_seam)
         engine = "scalar"
     else:
-        engine = _segmenting_engine(flat, discrete_providers, merged, gated)
+        engine = _segmenting_engine(flat, discrete_providers, merged, gated, loader_seam)
     static_cache: dict[str, Any] = {}
     segment_seed: Any = None
     build: _NumpyRhsBuild | None = None
@@ -1017,6 +1022,7 @@ def _segmenting_engine(
     discrete_providers: dict[str, Any],
     merged: dict[str, Any],
     gated: dict[str, Any],
+    loader_seam: bool = False,
 ) -> str:
     """How OFTEN the NumPy compilers rebuild — not WHICH machinery they use.
 
@@ -1032,14 +1038,16 @@ def _segmenting_engine(
     deferred gated fetch — are already bound, so one build covers the whole
     span and takes precedence over the in-document data-loader seam (a document
     with both binds the injected arrays, as the pre-Problem entry points did).
-    ``loader_fields`` alone means cadence segmentation. Everything else is one
-    build for the whole span.
+    ``loader_fields`` read through a caller's loader seam (``loader_provider``
+    or ``provider_factory``) mean cadence segmentation; with no seam the
+    document's data sources are not read and its data-fed parameters take their
+    declared defaults. Everything else is one build for the whole span.
     """
     if discrete_providers:
         return "discrete_providers"
     if merged or gated:
         return "array"
-    if flat.loader_fields:
+    if flat.loader_fields and loader_seam:
         return "loaders"
     return "array"
 
@@ -1049,6 +1057,7 @@ def _refuse_bound_data_under_sympy(
     discrete_providers: dict[str, Any],
     merged: dict[str, Any],
     gated: dict[str, Any],
+    loader_seam: bool = False,
 ) -> None:
     """``compiler="sympy"`` binds no data; a problem that carries some is refused.
 
@@ -1062,7 +1071,7 @@ def _refuse_bound_data_under_sympy(
         ("a time-varying provider", discrete_providers),
         ("an injected array (a provider or const_arrays)", merged),
         ("a gated provider", gated),
-        ("an in-document data loader", flat.loader_fields),
+        ("an in-document data loader", flat.loader_fields if loader_seam else []),
     ):
         if names:
             first = sorted(str(getattr(n, "name", n)) for n in names)[0]

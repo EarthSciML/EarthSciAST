@@ -3383,9 +3383,9 @@ impl SuppliedData {
         }
     }
 
-    /// The missing-data gate for an array model: serve a caller's array to a
-    /// forcing name no provider supplies, and refuse a forcing name with
-    /// neither data nor a declared `default`, or a shaped parameter the build
+    /// The missing-data gate for an array model: serve a forcing name no
+    /// provider supplies from the caller's array, else from its declared
+    /// `default`, and refuse one with neither, or a shaped parameter the build
     /// left with no value at all.
     fn refuse_missing_array(
         &self,
@@ -3403,13 +3403,20 @@ impl SuppliedData {
                 forcing.borrow_mut().insert(name.clone(), arr);
                 continue;
             }
-            // A parameter that declares a default is not missing data (§10.10);
-            // whether that default is its value when no data is supplied is
-            // left as it was: the name stays unserved and its first read
-            // fails, naming it.
-            if !c.has_forcing_default(name) {
-                return Err(missing_data_error(name, declared_variable(file, name)));
+            // No data is supplied: a declared default is the value (esm-spec
+            // §6.3), and with none the parameter is missing data (§10.10).
+            let mut value = match c.forcing_default(name) {
+                None => return Err(missing_data_error(name, declared_variable(file, name))),
+                // A default over a shape that does not resolve yet (an
+                // unmaterialized derived set) has no field to fill here.
+                Some(None) => continue,
+                Some(Some(value)) => value,
+            };
+            let prec = precision::of_variable(name);
+            if prec.is_f32() {
+                value.mapv_inplace(|x| prec.round(x));
             }
+            forcing.borrow_mut().insert(name.clone(), value);
         }
         for name in c.unvalued_shaped_params() {
             if !names_key(p, name) {
