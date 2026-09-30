@@ -52,9 +52,14 @@ tests/conformance/
 │   ├── fixtures/<id>.esm           #   three documents authored here (three more are REFERENCED)
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
 ├── array_expression_forms/         # shape ops under `index`, positional broadcast, arrayed definitions (§5.45.4)
-│   ├── README.md                   #   the contract, and its one named exclusion
+│   ├── README.md                   #   the contract
 │   ├── manifest.json               #   `"runner": "inline_tests"`
 │   ├── fixtures/<id>.esm           #   one document authored here (six more are REFERENCED)
+│   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+├── bool_and_or_reductions/         # scalar `bool_and_or` reductions run everywhere (CONFORMANCE_SPEC §5.6.1, §5.45.4)
+│   ├── README.md                   #   the contract, and the divergence it closed
+│   ├── manifest.json               #   `"runner": "inline_tests"`
+│   ├── fixtures/<id>.esm           #   one document: three scalar reductions, one filtered
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
 ├── deprecated_op_alias/            # the `aggregate` -> `faq` alias contract (esm 1.1.0)
 │   ├── aliased.esm                 #   input, authored with the deprecated spelling

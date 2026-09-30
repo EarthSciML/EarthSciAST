@@ -367,6 +367,42 @@ fn native_runs_the_lowering_limit_probes_bit_for_bit() {
     }
 }
 
+/// esm-libraries-spec §4.7.1 step 4: when `operator_compose` bare-name-matches
+/// an observed's defining equation with a state's tendency, the merged
+/// equation is the tendency (`D(Sink.O3) = …`), not a bare definition of the
+/// state in terms of itself. Both argument orders build under both compilers
+/// and integrate the same state from the same initial condition.
+#[test]
+fn operator_compose_observed_meets_tendency_builds_as_the_tendency() {
+    let dir = "tests/conformance/operator_compose_merge/fixtures";
+    for f in [
+        "owner_rename_state_wins_observed_first.esm",
+        "owner_rename_state_wins_state_first.esm",
+    ] {
+        assert_native_agrees(&format!("{dir}/{f}"), &[]);
+    }
+    let opts = SolveOptions {
+        saveat: Some(vec![0.0, 1.0]),
+        ..Default::default()
+    };
+    let end = |f: &str| {
+        let p = build_rhs(
+            &fixture(&format!("{dir}/{f}")),
+            Compiler::Native,
+            Rhs::Always,
+        )
+        .expect("builds");
+        let s = solve(&p, &opts).expect("solves");
+        assert_eq!(s.state_variable_names, vec!["Sink.O3".to_string()]);
+        (s.state[0][0], *s.state[0].last().expect("a final value"))
+    };
+    let (a0, a1) = end("owner_rename_state_wins_observed_first.esm");
+    let (b0, b1) = end("owner_rename_state_wins_state_first.esm");
+    assert_eq!(a0, 40.0, "the state's own initial condition");
+    assert_eq!(b0, 40.0);
+    assert!((a1 - b1).abs() <= 1e-9 * b1.abs(), "{a1} vs {b1}");
+}
+
 /// Solve `rel` under `native` and under `interpreter` and require the same
 /// trajectory, bit for bit.
 fn assert_native_agrees(rel: &str, u0: &[(&str, f64)]) {

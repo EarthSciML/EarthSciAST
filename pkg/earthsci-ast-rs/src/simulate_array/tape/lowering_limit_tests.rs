@@ -72,8 +72,9 @@ fn doc(name: &str, variables: Value, equations: Vec<Value>, domain: Option<Value
 /// Build `doc` under its own precision environment, require that the tape
 /// lowers every rule, and require that the reference executor and the fast
 /// executor, over the fused and the unfused program, write the per-cell
-/// oracle's `dy` bit for bit. Returns the fused program.
-fn oracle_ab(doc: Value) -> TapeProgram {
+/// oracle's `dy` bit for bit. Returns the fused program and the unfused one's
+/// length.
+fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
     let file = crate::parse::load_string(&doc.to_string()).expect("fixture document loads");
     let env = crate::precision_infer::env_of_file(&file).expect("precision environment");
     let file = crate::precision_infer::annotated(&file)
@@ -87,6 +88,7 @@ fn oracle_ab(doc: Value) -> TapeProgram {
     };
     let (prog, report) = compiled.build_tape_opts(&HashSet::new(), Some(cfg));
     let (prog_uf, report_uf) = compiled.build_tape_opts(&HashSet::new(), None);
+    let unfused_len = prog_uf.instrs.len();
     for rep in [&report, &report_uf] {
         assert!(
             rep.fallbacks.is_empty(),
@@ -135,16 +137,16 @@ fn oracle_ab(doc: Value) -> TapeProgram {
             }
         }
     }
-    prog
+    (prog, unfused_len)
 }
 
-/// [`oracle_ab`] at two grid sizes, requiring the same program length.
+/// [`oracle_ab`] at two grid sizes, requiring the same lowered program length
+/// (the unfused one: fusion's grouping may differ with the box size).
 fn flat_in_n(make: impl Fn(i64) -> Value, small: i64, large: i64) -> TapeProgram {
-    let a = oracle_ab(make(small));
-    let b = oracle_ab(make(large));
+    let (_, a) = oracle_ab(make(small));
+    let (b, b_len) = oracle_ab(make(large));
     assert_eq!(
-        a.instrs.len(),
-        b.instrs.len(),
+        a, b_len,
         "the program must not grow with the grid ({small} vs {large} cells)"
     );
     b
@@ -456,49 +458,115 @@ fn datetime_at_single_precision() {
     );
 }
 
-/// A `bool_and_or` reduction stays refused, by name: CONFORMANCE_SPEC §5.6.1
-/// has the numeric evaluators reject the array-valued ones, and does not say
-/// whether they run a scalar one.
+/// A scalar `bool_and_or` reduction runs on the tape (CONFORMANCE_SPEC
+/// §5.6.1): one fold with `BinCode::Or` from `0.0`, over one contracted index
+/// and over two under a filter, bit for bit with the oracle and flat in N. An
+/// array-valued one is rejected at build, under every compiler.
 #[test]
-fn boolean_reductions_are_refused_by_name() {
-    let d = doc(
-        "boolean_reduction",
-        json!({
-            "u": {"type": "unknown", "shape": ["x"], "default": 1.0},
-            "v": {"type": "unknown", "shape": ["x"], "default": 1.0},
-            "any_hot": {"type": "unknown"}
-        }),
-        vec![
-            json!({"lhs": "any_hot", "rhs": {"op": "faq", "args": [], "output_idx": [],
-                "ranges": {"k": [1, 4]}, "semiring": "bool_and_or",
-                "expr": op(">", vec![ix("u", vec![json!("k")]), json!(1.2)])}}),
-            d_eq(
-                "u",
-                &["i"],
-                json!({"i": [1, 4]}),
-                op("*", vec![json!(-0.1), json!("any_hot")]),
-            ),
+fn scalar_boolean_reductions_lower_and_array_valued_ones_are_rejected() {
+    let make = |n: i64| {
+        doc(
+            "boolean_reduction",
             json!({
-                "lhs": faq(&["i"], json!({"i": [1, 4]}),
-                    json!({"op": "D", "wrt": "t", "args": [ix("v", vec![json!("i")])]})),
-                "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
-                    "ranges": {"i": [1, 4], "k": [1, 4]}, "semiring": "bool_and_or",
-                    "expr": op(">", vec![ix("v", vec![json!("k")]), ix("v", vec![json!("i")])])}
+                "u": {"type": "unknown", "shape": ["x"], "default": 1.0},
+                "any_hot": {"type": "unknown"},
+                "spread": {"type": "unknown"}
             }),
-        ],
+            vec![
+                json!({"lhs": "any_hot", "rhs": {"op": "faq", "args": [], "output_idx": [],
+                    "ranges": {"k": [1, n]}, "semiring": "bool_and_or",
+                    "expr": op(">", vec![ix("u", vec![json!("k")]), json!(1.2)])}}),
+                json!({"lhs": "spread", "rhs": {"op": "faq", "args": [], "output_idx": [],
+                    "ranges": {"k": [1, n], "m": [1, n]}, "semiring": "bool_and_or",
+                    "filter": op("!=", vec![json!("k"), json!("m")]),
+                    "expr": op(">", vec![op("-", vec![ix("u", vec![json!("k")]),
+                        ix("u", vec![json!("m")])]), json!(0.5)])}}),
+                d_eq(
+                    "u",
+                    &["i"],
+                    json!({"i": [1, n]}),
+                    op(
+                        "*",
+                        vec![
+                            op("+", vec![json!(-0.1), json!("any_hot"), json!("spread")]),
+                            ix("u", vec![json!("i")]),
+                        ],
+                    ),
+                ),
+            ],
+            None,
+        )
+    };
+    flat_in_n(make, 4, 40);
+
+    let array_valued = doc(
+        "array_boolean_reduction",
+        json!({"v": {"type": "unknown", "shape": ["x"], "default": 1.0}}),
+        vec![json!({
+            "lhs": faq(&["i"], json!({"i": [1, 4]}),
+                json!({"op": "D", "wrt": "t", "args": [ix("v", vec![json!("i")])]})),
+            "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                "ranges": {"i": [1, 4], "k": [1, 4]}, "semiring": "bool_and_or",
+                "expr": op(">", vec![ix("v", vec![json!("k")]), ix("v", vec![json!("i")])])}
+        })],
         None,
     );
-    let file = crate::parse::load_string(&d.to_string()).expect("loads");
-    let compiled = ArrayCompiled::from_file(&file).expect("compiles");
-    let (_, report) = compiled.build_tape(&HashSet::new());
-    for (rule, kind) in [("any_hot", "scalar"), ("D(v)", "array-valued")] {
-        assert!(
-            report.fallbacks.iter().any(|(name, why)| name == rule
-                && why.contains(kind)
-                && why.contains("bool_and_or")
-                && why.contains("§5.6.1")),
-            "{rule} must be refused naming the construct and the spec: {:?}",
-            report.fallbacks
-        );
-    }
+    let file = crate::parse::load_string(&array_valued.to_string()).expect("loads");
+    let err = ArrayCompiled::from_file(&file)
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(
+        err.contains("bool_and_or") && err.contains("§5.6.1"),
+        "an array-valued bool_and_or reduction is rejected at build, naming the spec: {err}"
+    );
+}
+
+/// `index` over a `transpose`, a `reshape` or a `broadcast` with a loop symbol
+/// as a subscript (esm-spec §4.3.4, §4.3.5): the base is lowered whole, as the
+/// oracle's gather evaluates it, then read at the subscripts.
+#[test]
+fn shape_op_bases_under_loop_symbol_subscripts() {
+    let make = |n: i64| {
+        let zero = |v: &str, out: &[&str], r: Value| d_eq(v, out, r, json!(0.0));
+        doc(
+            "shape_op_bases",
+            json!({
+                "u": {"type": "unknown", "shape": ["x", "y"], "default": 1.0},
+                "a": {"type": "unknown", "shape": ["y"], "default": 2.0},
+                "b": {"type": "unknown", "shape": ["x"], "default": 3.0},
+                "v": {"type": "unknown", "shape": ["y"], "default": 0.0},
+                "w": {"type": "unknown", "shape": ["y"], "default": 0.0},
+                "z": {"type": "unknown", "shape": ["y"], "default": 0.0}
+            }),
+            vec![
+                zero("u", &["i", "j"], json!({"i": [1, 2], "j": [1, n]})),
+                zero("a", &["i"], json!({"i": [1, n]})),
+                zero("b", &["i"], json!({"i": [1, 2]})),
+                d_eq(
+                    "v",
+                    &["i"],
+                    json!({"i": [1, n]}),
+                    json!({"op": "index", "args": [op("transpose", vec![json!("u")]), "i", 2]}),
+                ),
+                d_eq(
+                    "w",
+                    &["j"],
+                    json!({"j": [1, n]}),
+                    json!({"op": "index", "args": [
+                        {"op": "reshape", "args": ["a"], "shape": [1, n]}, 1, "j"]}),
+                ),
+                d_eq(
+                    "z",
+                    &["i"],
+                    json!({"i": [1, n]}),
+                    json!({"op": "index", "args": [
+                        {"op": "broadcast", "fn": "+", "args": ["a",
+                            {"op": "reshape", "args": ["b"], "shape": [1, 2]}]}, "i", 2]}),
+                ),
+            ],
+            None,
+        )
+    };
+    flat_in_n(make, 3, 40);
 }

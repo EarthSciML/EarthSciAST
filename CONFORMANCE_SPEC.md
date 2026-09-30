@@ -1644,7 +1644,18 @@ The enum spelling is normative: `"sum_product"`, `"max_product"`, `"min_sum"`,
 property on `ExpressionNode`) restates the identities inline and pins the
 `default` to `sum_product`. `bool_and_or` is the only index-set-producing
 semiring (it drives `distinct` / `skolem`, §5.5); the M1 numeric evaluators
-reject it for array-valued reductions.
+reject it for array-valued reductions — a `faq` with an output index that
+contracts another, other than a value-invention node (`distinct`, a `key`) or
+an addressable producer (`id`).
+
+A SCALAR `bool_and_or` reduction — a `faq` with no output index — is a number,
+and every numeric evaluator runs it under every compiler: `acc = 0` (`false`),
+then for each admitted combination in turn `acc = (acc ≠ 0 ∨ term ≠ 0) ? 1 : 0`.
+The result is exactly `0` or `1`; a `NaN` term is not `0` and so reads as
+true; a combination the `filter` excludes contributes nothing, and an empty
+reduction is `0`. Because every step is crisp, the result does not depend on
+the order the combinations are visited in. Tier:
+`tests/conformance/bool_and_or_reductions/`.
 
 #### 5.6.2 Identity resolution and back-compat
 
@@ -6630,6 +6641,7 @@ binding that got better is the one way a ratchet can run backwards.
 | `recurrence` | a causal self-reference along one index axis (esm-spec §4.3.1.1): the ordered sweep's values at zero tolerance, under every compiler each fixture's `required` map names (§5.19) |
 | `value_invention_geometry` | build-time value invention (a `distinct` producer over a ragged set, an `argmin` arg-witness buffer, a bin-skolem candidate set) and setup-time polygon geometry (`intersect_polygon`, `polygon_intersection_area` over unequal rings) feeding a right-hand side, every producer input a constant factor held in the document (esm-spec §4.2) |
 | `array_expression_forms` | esm-spec §4.3.5 `index` over a `reshape` / `transpose` / `concat` (an element of the operand at other subscripts), a positional §4.3.4 `broadcast` of anonymous operands, and a §6.3.1 arrayed definition of an observed whose shape was never declared |
+| `bool_and_or_reductions` | §5.6.1 scalar (rank-0) `bool_and_or` reductions: a crisp OR over the admitted terms, 0 when none is non-zero, under every compiler |
 
 Each tier's `README.md` is its contract and records what did NOT move into it.
 A tier is added by writing that README, a manifest with `"runner":
