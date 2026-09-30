@@ -331,7 +331,19 @@ function _read_json_document(json_string::AbstractString)
         msg = hasfield(typeof(e), :msg) ? e.msg : sprint(showerror, e)
         throw(ParseError("Invalid JSON: $(msg)", e))
     end
-    doc = _to_ordered(parsed)
+    doc = try
+        _to_ordered(parsed)
+    catch e
+        # JSON3 interns object keys as `Symbol`s, and a `Symbol` cannot hold a
+        # NUL, so a key carrying one fails here, before the schema's
+        # `$defs/Identifier` pattern can reject it. Report it as that schema
+        # violation (esm-spec §4.9.1.2), not as a raw language-level error.
+        (e isa ArgumentError && occursin("\\0", e.msg)) || rethrow()
+        err = SchemaError("", "an object key contains a NUL character; a declared name " *
+                              "MUST NOT contain a control character (esm-spec §4.9.1.2)",
+                          "propertyNames")
+        throw(SchemaValidationError(_format_schema_errors([err]), [err]))
+    end
     # Expression-node `op` spellings are settled HERE, at the one wire boundary,
     # so every document gets identical treatment — root, `{ref}`-loaded child,
     # template library, coupling library (docs/content/rfcs/faq-node-rename.md
