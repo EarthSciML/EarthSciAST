@@ -95,17 +95,17 @@
     }
   },
   "counts": {
-    "symbols": 928,
+    "symbols": 931,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 309,
       "typescript": 239,
       "python": 257,
       "rust": 342,
-      "go": 439
+      "go": 442
     },
     "by_tier": {
-      "extension": 653,
+      "extension": 656,
       "stable": 275
     }
   },
@@ -1107,6 +1107,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeCadenceObservedCycle"
+      }
+    },
+    {
+      "name": "code_callback_unregistered",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCallbackUnregistered"
       }
     },
     {
@@ -3254,6 +3262,14 @@
       }
     },
     {
+      "name": "error_equation_defines_parameter",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorEquationDefinesParameter"
+      }
+    },
+    {
       "name": "error_event_affects_parameter",
       "kind": "constant",
       "tier": "extension",
@@ -3299,6 +3315,14 @@
       "tier": "extension",
       "bindings": {
         "go": "ErrorSystemKindMismatch"
+      }
+    },
+    {
+      "name": "error_unbound_index_symbol",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorUnboundIndexSymbol"
       }
     },
     {
