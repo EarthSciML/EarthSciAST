@@ -63,6 +63,9 @@ export const schema: AnySchemaObject = {
       "$ref": "#/$defs/Metadata"
     },
     "models": {
+      "propertyNames": {
+        "$ref": "#/$defs/Identifier"
+      },
       "type": "object",
       "description": "ODE-based model components, keyed by unique identifier. Each component may be defined inline or included by reference to an external ESM file containing exactly one top-level model (esm-spec.md §4.7).",
       "additionalProperties": {
@@ -77,6 +80,9 @@ export const schema: AnySchemaObject = {
       }
     },
     "reaction_systems": {
+      "propertyNames": {
+        "$ref": "#/$defs/Identifier"
+      },
       "type": "object",
       "description": "Reaction network components, keyed by unique identifier. Each component may be defined inline or included by reference to an external ESM file containing exactly one top-level reaction system (esm-spec.md §4.7).",
       "additionalProperties": {
@@ -91,6 +97,9 @@ export const schema: AnySchemaObject = {
       }
     },
     "data_sources": {
+      "propertyNames": {
+        "$ref": "#/$defs/Identifier"
+      },
       "type": "object",
       "description": "Document-scoped registry of external data sources, keyed by name. A data source is INGEST CONFIGURATION, not a component: it says where bytes live and how to decode, slice, and filter them, and it exposes no variables of its own. A model consumes one by declaring a parameter whose `update` names the source and binds a `file_variable` from it. The shared parts stay here because their guarantees are source-wide and cannot be stated per-parameter: `record_filter` computes the surviving-record mask ONCE and applies it to every parameter drawing from this source, which is what makes it impossible for two columns of one points table to fall out of alignment, and `extent` binds ONE metaparameter from that single shared record count.",
       "additionalProperties": {
@@ -98,6 +107,9 @@ export const schema: AnySchemaObject = {
       }
     },
     "enums": {
+      "propertyNames": {
+        "$ref": "#/$defs/Identifier"
+      },
       "type": "object",
       "description": "File-local symbol-to-integer mappings used by the 'enum' AST op to make categorical lookups cross-binding-portable. Each entry is an enum name; its value is an object mapping symbolic names (strings) to integers — any integer, negative, zero or positive, since an enum member is a categorical code rather than a 1-based position. Two .esm files may declare an enum of the same name with different mappings; enums are file-local and never merged across files. See esm-spec.md §9.3.",
       "additionalProperties": {
@@ -116,6 +128,9 @@ export const schema: AnySchemaObject = {
       "description": "The single temporal domain shared by every component in the document (temporal extent + numeric representation). A document has at most one domain; all spatial models live on it, and 0-D models simply have scalar-shaped variables."
     },
     "function_tables": {
+      "propertyNames": {
+        "$ref": "#/$defs/Identifier"
+      },
       "type": "object",
       "description": "Component-scoped sampled function tables (v0.4.0). Each entry declares ordered named axes plus a literal nested-array data block, optionally tagged with output names; the `table_lookup` AST op references a table by id, supplies a per-axis input-coordinate expression map, and selects which output to return. Tables are syntactic sugar over `interp.linear` / `interp.bilinear` / `index`: a `table_lookup` MUST be bit-equivalent to the equivalent inline-const lookup. See esm-spec.md §9.5 and docs/rfcs/sampled-tables.md.",
       "additionalProperties": {
@@ -123,6 +138,9 @@ export const schema: AnySchemaObject = {
       }
     },
     "index_sets": {
+      "propertyNames": {
+        "$ref": "#/$defs/Identifier"
+      },
       "type": "object",
       "description": "Document-scoped registry of named index sets (RFC semiring-faq-unified-ir §5.2), keyed by name — the single, document-level declaration site for every iteration domain (grid axes, categorical dimensions, data-derived sets) shared by all models in the document. A `faq` range references one by name as { \"from\": <name> }. Each entry is an interval (dense axis), categorical enumeration, data-derived set, or ragged / dependent inner set. A reference resolves by name to exactly one entry; resolvers MUST error on an undeclared name.",
       "additionalProperties": {
@@ -130,6 +148,9 @@ export const schema: AnySchemaObject = {
       }
     },
     "coordinates": {
+      "propertyNames": {
+        "$ref": "#/$defs/Identifier"
+      },
       "type": "object",
       "description": "Document-scoped, OPTIONAL registry of coordinate variables (RFC streaming-output-sinks §8), keyed by name. Purely additive: a document without it validates and emits exactly as before (bare integer axes). Each entry marks an existing data array — a model unknown or parameter referenced BY NAME (including a parameter fed from a `data_sources` entry) (exactly as a ragged `IndexSet` references its `offsets`/`values` factors), or an inline literal `values` vector — as a physical coordinate and attaches CF metadata (`standard_name`, `units`, optional `axis`). The coordinate's SHAPE is read from its source, so it is NOT attached to any single axis: this is the CF coordinate data model, covering rectilinear (1-D monotonic → CF dimension coordinate), unstructured (1-D over a shared dimension → CF auxiliary coordinate) and curvilinear (2-D `lat(y,x)`/`lon(y,x)` → auxiliary coordinate) grids under one rule. A streaming writer derives each data variable's CF `coordinates` attribute mechanically: every coordinate whose source DIMENSIONS (by identity, NOT by length) are a subset of the data variable's dimensions applies to it.",
       "additionalProperties": {
@@ -140,6 +161,9 @@ export const schema: AnySchemaObject = {
       "$ref": "#/$defs/Solver"
     },
     "expression_templates": {
+      "propertyNames": {
+        "$ref": "#/$defs/Identifier"
+      },
       "type": "object",
       "description": "Top-level rewrite rules / templates — the payload of a template-library file (esm-spec §9.7.1). Only valid in a library file (which carries no models/reaction_systems/data_loaders/coupling/domain, `template_import_not_library` when imported otherwise); component-local templates stay inside their model/reaction_system (§9.6.1). Arrives at esm 0.8.0 (`template_import_version_too_old`).",
       "additionalProperties": {
@@ -157,6 +181,9 @@ export const schema: AnySchemaObject = {
       "$ref": "#/$defs/Metaparameters"
     },
     "coupling_roles": {
+      "propertyNames": {
+        "$ref": "#/$defs/Identifier"
+      },
       "type": "object",
       "description": "Coupling-library formal component roles (esm-spec §10.9). Present only in a coupling-library file, which pairs it with a role-scoped `coupling` array and declares no models/reaction_systems/data_loaders/domain/index_sets/metaparameters/expression_templates (enforced by the resolver as `coupling_library_illegal_payload`). Presence of this key is the sole positive identifier of the coupling-library file kind. Each entry is a role descriptor carrying an optional human-readable `description`; roles are formal parameters (names, not types), bound to actual components at a `coupling_import` (esm-spec §10.10).",
       "additionalProperties": {
@@ -171,6 +198,11 @@ export const schema: AnySchemaObject = {
     }
   },
   "$defs": {
+    "Identifier": {
+      "type": "string",
+      "pattern": "^[^\\x00-\\x1f\\x7f]*$",
+      "description": "A declared name: a component, variable, species, parameter, index set, data source, enum, table, template or metaparameter key. It MUST NOT contain a NUL or any other C0 control character or DEL (esm-spec §4.9.1.2): such a name cannot be written in the expression syntax, and a binding that interns names (Julia `Symbol`) cannot represent a NUL at all."
+    },
     "Metadata": {
       "type": "object",
       "description": "Authorship, provenance, and description.",
@@ -1934,6 +1966,9 @@ export const schema: AnySchemaObject = {
           "$ref": "#/$defs/Reference"
         },
         "variables": {
+          "propertyNames": {
+            "$ref": "#/$defs/Identifier"
+          },
           "type": "object",
           "description": "All variables, keyed by name.",
           "additionalProperties": {
@@ -1984,6 +2019,9 @@ export const schema: AnySchemaObject = {
           }
         },
         "subsystems": {
+          "propertyNames": {
+            "$ref": "#/$defs/Identifier"
+          },
           "type": "object",
           "description": "Named child subsystems, keyed by unique identifier. A subsystem is a child model, or a reference to an external file containing exactly one. Enables hierarchical model composition. Variables in subsystems are referenced via dot notation: \"ParentModel.ChildModel.var\". Each subsystem can be defined inline or included by reference via a local file path or URL. A `data_sources` entry is NOT a component and cannot be a subsystem: a model reaches external data through a parameter whose `update` names the source.",
           "additionalProperties": {
@@ -2016,6 +2054,9 @@ export const schema: AnySchemaObject = {
           }
         },
         "expression_templates": {
+          "propertyNames": {
+            "$ref": "#/$defs/Identifier"
+          },
           "type": "object",
           "description": "Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this model's expression positions. A body MAY reference other match-less in-scope templates as a statically-checked acyclic DAG — no cycles, no recursion (esm-spec §9.7.3). From esm 0.9.0 the round-trip is Option B (reference-preserving, esm-spec §9.6.4): references survive load and parse-then-emit and denote their expansion (`Expand`); eager (target-bearing) references still expand at load; emit materializes referenced templates into this registry — authored entries first in authored order, then materialized entries in lexicographic UTF-8 name order; keys may be dotted post-rename names. Pre-0.9.0 loaders expanded every reference at load (Option A) and emitted the expanded form.",
           "additionalProperties": {
@@ -2326,6 +2367,9 @@ export const schema: AnySchemaObject = {
           "$ref": "#/$defs/Reference"
         },
         "species": {
+          "propertyNames": {
+            "$ref": "#/$defs/Identifier"
+          },
           "type": "object",
           "description": "Named reactive species.",
           "additionalProperties": {
@@ -2333,6 +2377,9 @@ export const schema: AnySchemaObject = {
           }
         },
         "parameters": {
+          "propertyNames": {
+            "$ref": "#/$defs/Identifier"
+          },
           "type": "object",
           "description": "Named parameters (rate constants, temperature, photolysis rates, etc.).",
           "additionalProperties": {
@@ -2367,6 +2414,9 @@ export const schema: AnySchemaObject = {
           }
         },
         "subsystems": {
+          "propertyNames": {
+            "$ref": "#/$defs/Identifier"
+          },
           "type": "object",
           "description": "Named child reaction systems (subsystems), keyed by unique identifier. Enables hierarchical system composition. Variables in subsystems are referenced via dot notation: \"ParentSystem.ChildSystem.species\". Each subsystem can be defined inline or included by reference via a local file path or URL.",
           "additionalProperties": {
@@ -2399,6 +2449,9 @@ export const schema: AnySchemaObject = {
           }
         },
         "expression_templates": {
+          "propertyNames": {
+            "$ref": "#/$defs/Identifier"
+          },
           "type": "object",
           "description": "Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component (typically inside `reactions[*].rate`) reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this reaction system's expression positions. A body MAY reference other match-less in-scope templates as a statically-checked acyclic DAG — no cycles, no recursion (esm-spec §9.7.3). From esm 0.9.0 the round-trip is Option B (reference-preserving, esm-spec §9.6.4): references survive load and parse-then-emit and denote their expansion (`Expand`); eager (target-bearing) references still expand at load; emit materializes referenced templates into this registry — authored entries first in authored order, then materialized entries in lexicographic UTF-8 name order; keys may be dotted post-rename names. Pre-0.9.0 loaders expanded every reference at load (Option A) and emitted the expanded form.",
           "additionalProperties": {
@@ -2526,6 +2579,9 @@ export const schema: AnySchemaObject = {
       }
     },
     "Metaparameters": {
+      "propertyNames": {
+        "$ref": "#/$defs/Identifier"
+      },
       "type": "object",
       "description": "Document-scoped named integers bound at load (esm-spec §9.7.6): at import/subsystem edges via `bindings`, at the loader API for the root document, or by `default`. Admissible — as names or `{op, args}` integer expressions — in `index_sets` interval sizes, `faq` dense ranges, and `makearray` regions (folded exactly at load), and substituted as integer literals in ordinary expression positions. A metaparameter name MUST NOT collide with any visible variable/parameter/species/index-set name (`metaparameter_name_conflict`).",
       "additionalProperties": {

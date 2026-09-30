@@ -1667,6 +1667,21 @@ shape of #200), `…_renamed_independent.esm` and its valid twin
 `domain.independent_variable`; a binding that hard-codes `"t"` fails one of the
 two).
 
+##### 4.9.1.2 A declared name MUST NOT contain a control character
+
+A key of a declaration map MUST NOT contain a NUL or any other C0 control
+character (U+0000–U+001F) or DEL (U+007F). The declaration maps are the
+top-level `models`, `reaction_systems`, `data_sources`, `enums`,
+`function_tables`, `index_sets`, `coordinates`, `expression_templates` and
+`coupling_roles`, each component's `variables`, `species`, `parameters`,
+`subsystems` and `expression_templates`, and a `metaparameters` block. Such a
+name cannot be written in the expression syntax (§4.1). A reference to it is
+just as unreadable, and a binding that interns names cannot represent a NUL at
+all (Julia's `Symbol` rejects one). The schema enforces the rule through
+`$defs/Identifier`, so a document carrying such a name fails schema validation
+at load, in every binding, before any build sees it.
+`tests/future/security/null_byte_injection.esm` exercises it.
+
 #### 4.9.2 Scoped references are ARBITRARY DEPTH
 
 §4.6 defines a scoped reference as a dot path of unbounded length: `A.B.C.variable` walks `A` → `B` → `C`. A resolver MUST **walk** the path — take the last segment as the name and resolve the preceding segments one at a time against each parent's `subsystems` map.
