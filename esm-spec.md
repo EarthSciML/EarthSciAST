@@ -2382,6 +2382,26 @@ resolves through its defining equation's RHS — so misclassifying an arrayed
 definition as algebraic pushes build-time work (const-backed geometry and
 regridding arrays) onto the per-timestep hot path.
 
+**What a left-hand side may name.** An equation defines, or constrains, the
+unknowns its left-hand side names; it never defines a **parameter**. An
+equation whose left-hand side names a parameter — bare (`k ~ …`), indexed
+(`k[i] ~ …`), wrapped in a `faq`, or through a scoped reference into a
+subsystem (`Top.sub.k ~ …`) — is invalid, with the structural diagnostic
+`equation_defines_parameter`: a parameter's value comes from its `default`,
+a `distribution`, an override, its `update` (§5.4) or a coupling, and a
+binding that silently drops the equation, or silently lets it override the
+parameter, reports an answer the document does not describe. A binding MUST
+reject such a document in validation and MUST refuse to build it.
+
+Likewise, an index symbol is local to the `faq` that binds it (§4.3). A string
+subscript of an `index` on an equation's left-hand side that names no declared
+variable or metaparameter MUST be bound by a `faq` enclosing it on that
+left-hand side, or — for the bare-index definition `index(V, k) ~ faq{k}(…)` —
+by the right-hand side's `faq` `output_idx`. A free one (`index(D(u), i) ~ …`
+with no `faq` binding `i`) makes the document invalid, with the structural
+diagnostic `unbound_index_symbol`; the pointwise form is written with an
+explicit `faq` on both sides.
+
 Note that *eliminable* and *inlineable* are not the same thing. A scalar
 observed is eliminated by substituting its definition into every consumer; an
 arrayed observed materializes into a buffer its consumers index. Both are

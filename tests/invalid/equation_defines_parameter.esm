@@ -1,0 +1,84 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "equation_defines_parameter",
+    "description": "An equation whose left-hand side names a PARAMETER (esm-spec 6.3.1): the parent model assigns its subsystem's parameter `sub.L`, and a second equation assigns its own parameter `k`. Both are `equation_defines_parameter`. A parameter's value comes from its default, an override, an update or a coupling; an equation never defines it, and a binding that dropped the equation silently would answer with the parameter's default.",
+    "authors": [
+      "EarthSciAST conformance"
+    ]
+  },
+  "models": {
+    "Top": {
+      "variables": {
+        "L": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": "Top.sub.L",
+          "rhs": "L"
+        },
+        {
+          "lhs": "k",
+          "rhs": 3.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "k",
+              "Top.sub.x"
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "sub": {
+          "variables": {
+            "L": {
+              "type": "parameter",
+              "units": "1",
+              "default": 1.0
+            },
+            "x": {
+              "type": "unknown",
+              "units": "1"
+            }
+          },
+          "equations": [
+            {
+              "lhs": "x",
+              "rhs": {
+                "op": "*",
+                "args": [
+                  10.0,
+                  "L"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

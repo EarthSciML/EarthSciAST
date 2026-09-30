@@ -6722,6 +6722,8 @@ ever emitted it, and the code had zero real coverage.
 | `unresolved_subsystem_ref` | Structural | A §4.7 subsystem `ref` does not resolve — the target file does not exist, or is not reachable. **Canonical spelling.** (Formerly also spelled `ref_not_found`; see §7.1.3.) |
 | `ambiguous_subsystem_ref` | Structural | A §4.7 subsystem `ref` resolves to a file containing zero, or more than one, top-level model/reaction system, so the mount target is not unique. **Canonical spelling.** (Formerly `ref_ambiguous_system`; see §7.1.3.) |
 | `null_reaction` | Structural | Reaction with both null substrates and products |
+| `equation_defines_parameter` | Structural | An equation's left-hand side names a parameter — bare, indexed, inside a `faq`, or through a scoped reference into a subsystem (esm-spec §6.3.1). Pointer: the equation's `lhs`. Every binding rejects it in validation and refuses to build it; none may drop the equation or let it override the parameter. |
+| `unbound_index_symbol` | Structural | A string subscript of an `index` on an equation's left-hand side names no declared variable or metaparameter and is bound by no enclosing left-hand-side `faq` and, for the bare-index definition, by no right-hand-side `faq` `output_idx` (esm-spec §6.3.1). Pointer: the equation's `lhs`. |
 | `event_affects_parameter` | Structural | An event `affects` LHS names a parameter; parameter mutation belongs in the parameter's own `update` (esm-spec §5.4) |
 | `event_var_undeclared` | Structural | Event affects undeclared variable. NOT emitted for `_var` (esm-spec §6.4, §4.9.1) or for the independent variable. |
 | `equation_count_mismatch` (see above) | Structural | Unknowns vs equations. Algebraic and expression-LHS equations COUNT (esm-spec §4.9.4). |
