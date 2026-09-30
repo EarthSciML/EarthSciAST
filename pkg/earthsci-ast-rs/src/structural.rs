@@ -2675,6 +2675,12 @@ pub(crate) fn validate_reaction_system(
         errors,
     );
 
+    let rate_scope: HashSet<String> = defined_parameters
+        .union(&defined_species)
+        .cloned()
+        .chain(implicitly_declared_symbols(esm_file))
+        .collect();
+
     // Check that all reaction references are defined
     for (rxn_idx, reaction) in rs.reactions.iter().enumerate() {
         let rxn_path = format!("{rs_path}/reactions/{rxn_idx}");
@@ -2744,9 +2750,13 @@ pub(crate) fn validate_reaction_system(
 
         // Validate rate expression references. The carrying field is the
         // reaction's `rate` (§7.1.2), so the pointer is `.../reactions/<i>/rate`.
+        // A rate law reads species concentrations as well as parameters (a
+        // non-mass-action `k*A*B`, a water-vapour factor `H2O`), and the
+        // implicit symbols (§4.9.1) are in scope as everywhere else, so none
+        // of those is an undeclared parameter.
         validate_rate_expression(
             &reaction.rate,
-            &defined_parameters,
+            &rate_scope,
             system_refs,
             &format!("{rxn_path}/rate"),
             reaction_label,
