@@ -2466,7 +2466,9 @@ function _validate_test_references(file::EsmFile, tests, path::String,
     for (i, t) in enumerate(tests)
         for (j, a) in enumerate(t.assertions)
             ref = a.reference
-            ref === nothing && continue
+            # A `from_file` reference (esm-spec §6.6.5 convention 3) is data, not
+            # an expression, and carries no names to resolve.
+            ref isa ASTExpr || continue
             append!(errors, validate_expression_references(
                 file, ref, "$path/tests/$(i-1)/assertions/$(j-1)/reference"; scope=scope))
         end
