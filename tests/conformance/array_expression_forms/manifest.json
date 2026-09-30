@@ -220,19 +220,11 @@
      "native"
     ],
     "rust": [
-     "interpreter"
+     "interpreter",
+     "native"
     ]
    },
-   "named_exclusions": [
-    {
-     "binding": "rust",
-     "compilers": [
-      "native"
-     ],
-     "code": "compiler_refused_rule",
-     "reason": "Rust's tape has no lowering for a `transpose` whose subscript is an faq loop symbol ('D(v)': unsupported operator `transpose`/1); the interpreter runs it. Measured 2026-09-29."
-    }
-   ]
+   "named_exclusions": []
   }
  ]
 }

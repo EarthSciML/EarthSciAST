@@ -2463,6 +2463,12 @@ impl<'m> TapeBuilder<'m> {
                 Value::Array(a) => self.emit_const_array(&a)?,
                 Value::Scalar(s) => LV::Lit(s),
             },
+            // A base that is, or combines, a shape op (`index(transpose(u), i,
+            // 2)`, `index(broadcast(+, a, reshape(b, [1, 3])), i, 2)`) is an
+            // array the box has no per-cell form for, so it is lowered whole,
+            // as the oracle evaluates it, and the gather below reads its slots
+            // at the subscripts.
+            base @ Expr::Operator(_) if mentions_shape_op(base) => self.lower_wholesale(base)?,
             base => self.lower_expr(base, bx)?,
         };
         let n = node.args.len() - 1;
@@ -6761,4 +6767,16 @@ fn color_slab(prog: &mut TapeProgram) {
         segment_elems,
         recycled_elems,
     };
+}
+
+/// True iff `e` is a `reshape` / `transpose` / `concat`, or an operator one of
+/// whose operands (looking through operators) is.
+fn mentions_shape_op(e: &Expr) -> bool {
+    match e {
+        Expr::Operator(n) => {
+            matches!(n.op.as_str(), "reshape" | "transpose" | "concat")
+                || n.args.iter().any(mentions_shape_op)
+        }
+        _ => false,
+    }
 }
