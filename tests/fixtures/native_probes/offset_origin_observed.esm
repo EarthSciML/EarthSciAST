@@ -1,0 +1,161 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "native_probe_offset_origin_observed",
+    "description": "An array observed defined per cell over ranges that do not start at 1: g[i] for i in [3, 6] of a 6-cell state. The interpreter materializes it at its full shape from index 1 with zeros below the range; a reader sees those zeros.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "native",
+      "probe"
+    ]
+  },
+  "models": {
+    "O": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": [
+            "i"
+          ],
+          "default": 1.0
+        },
+        "g": {
+          "type": "unknown",
+          "shape": [
+            "i"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                3,
+                6
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "g",
+                "i"
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                3,
+                6
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    1,
+                    "i"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    0.01,
+                    {
+                      "op": "index",
+                      "args": [
+                        "g",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.1,
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

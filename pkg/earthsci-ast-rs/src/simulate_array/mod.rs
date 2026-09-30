@@ -709,6 +709,12 @@ pub struct ArrayCompiled {
     /// coordinate expression over grid-geometry aggregates — into the flat state
     /// vector cell-by-cell (DESIGN pde_simulation_pipeline §2 R2).
     field_ics: Vec<(String, Expr)>,
+    /// The `faq`-valued initialization equations (esm-spec §6.2), each
+    /// `(target_state, faq)`, in document order. At `u0` build time each
+    /// assigns the cells of its ranges, read against the initial state seeded
+    /// so far, except a cell the caller's `u0` names
+    /// ([`Self::seed_initialization_faqs`]).
+    init_faqs: Vec<(String, Expr)>,
     /// The STATE-FREE observed definitions a field `ic` RHS may read, in name
     /// order (esm-spec §6.6.5 "Build-time evaluation scope").
     ///

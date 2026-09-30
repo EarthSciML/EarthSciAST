@@ -31,18 +31,6 @@
       "code": "compiler_refused_rule",
       "rule": "D(WeatherModel.temperature)",
       "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `WeatherModel.external_temperature_forcing`"
-    },
-    {
-      "path": "tests/scoping/hierarchical_scoped_references.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(SubsystemA.local_state)",
-      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `ParentSystem.SubsystemA.DeepSubA.deep_variable`"
-    },
-    {
-      "path": "tests/valid/scoped_refs_nested.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(system_energy)",
-      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `EarthSystem.Ocean.Surface.sst`"
     }
   ]
 }
