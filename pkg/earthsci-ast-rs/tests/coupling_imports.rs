@@ -578,11 +578,15 @@ fn a_default_less_coupling_target_makes_an_omitted_import_an_error() {
         )
         .and_then(|prob| earthsci_ast::solve(&prob, &opts))
     };
+    // Refused at construction, naming the parameter (esm-spec §10.10).
     match run(std::collections::HashMap::new()) {
-        Err(earthsci_ast::SimulateError::InvalidParameter { name }) => {
-            assert_eq!(name, "Spread.sigma")
+        Err(earthsci_ast::SimulateError::Compile(earthsci_ast::CompileError::MissingData {
+            parameter,
+            ..
+        })) => {
+            assert_eq!(parameter, "Spread.sigma")
         }
-        other => panic!("expected InvalidParameter for the uncoupled target, got {other:?}"),
+        other => panic!("expected MissingData for the uncoupled target, got {other:?}"),
     }
     run(std::collections::HashMap::from([(
         "Spread.sigma".to_string(),

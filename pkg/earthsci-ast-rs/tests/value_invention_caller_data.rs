@@ -42,7 +42,12 @@ fn build(
         p: p.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
         ..Default::default()
     };
-    esm_problem(common::repo_fixture(rel).as_path(), (0.0, 1.0), opts).map_err(|e| e.to_string())
+    // These documents leave their states' starting values to the harness
+    // (esm-spec §11.4).
+    let text = std::fs::read_to_string(common::repo_fixture(rel)).map_err(|e| e.to_string())?;
+    let mut doc: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    common::supply_state_defaults(&mut doc);
+    esm_problem(&doc, (0.0, 1.0), opts).map_err(|e| e.to_string())
 }
 
 /// `dy` at `u = 1 + 0.1 sin(0.37 k)` under both compilers: the same bits, and

@@ -887,11 +887,14 @@ fn test_error_missing_initial_condition() {
     )
     .and_then(|prob| earthsci_ast::solve(&prob, &opts))
     .unwrap_err();
+    // Refused at construction, naming the state (esm-spec §11.4).
     match err {
-        SimulateError::InvalidInitialCondition { name } => {
-            assert!(name.contains("N"), "expected N in error, got {name}");
+        SimulateError::Compile(earthsci_ast::CompileError::MissingInitialValue {
+            slot, ..
+        }) => {
+            assert!(slot.contains("N"), "expected N in error, got {slot}");
         }
-        other => panic!("expected InvalidInitialCondition, got {other:?}"),
+        other => panic!("expected MissingInitialValue, got {other:?}"),
     }
 }
 
