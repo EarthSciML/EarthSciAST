@@ -1499,6 +1499,26 @@ function _classify_parameters(model::Model, param_names::Vector{String},
     return classes
 end
 
+# esm-spec §6.3.1: an equation whose left-hand side names a parameter is
+# invalid, and a build refuses it by name rather than drop it or let it override
+# the parameter. `variables` is the flattened registry, so a scoped reference
+# into a subsystem is already its qualified name.
+function _refuse_parameter_definitions(equations, variables::AbstractDict)
+    for eq in equations
+        (eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "ic") && continue
+        dn = _lhs_defined_name(eq.lhs)
+        dn === nothing && continue
+        v = get(variables, dn, nothing)
+        (v !== nothing && v.type == ParameterVariable) || continue
+        throw(TreeWalkError(ERROR_CODES.EQUATION_DEFINES_PARAMETER,
+            "equation `$(first(to_ascii(eq), 200))` defines '$(dn)', which is a " *
+            "parameter; an equation defines unknowns only, and a parameter takes its " *
+            "value from its default, an override, its update or a coupling " *
+            "(esm-spec §6.3.1)"))
+    end
+    return nothing
+end
+
 # ---- Stage: fold `ic(var) = <initial value>` equations (esm-spec v0.8.0) ----
 # An `ic`-LHS equation declares an initial condition. The tree-walk path seeds
 # u0 from the `initial_conditions` kwarg / variable defaults, so pull each ic
@@ -4106,6 +4126,8 @@ function _build_evaluator_impl_inner(model::Model;
     # BEFORE any pass that drops a tree (the elementwise fold, dead-observed
     # elimination), so an op in a tree the build would discard is still refused.
     _reject_unlowered_operators(model)
+    # ---- esm-spec §6.3.1: an equation never defines a parameter ----
+    _refuse_parameter_definitions(model.equations, model.variables)
     # ---- `broadcast` lowering (esm-spec §4.3.4; see `_lower_broadcast_model`) ----
     # Rewrite every `broadcast(fn=F, …)` node to its plain scalar-op spelling
     # `F(…)` BEFORE any other pass sees it, so `broadcast` has exactly the

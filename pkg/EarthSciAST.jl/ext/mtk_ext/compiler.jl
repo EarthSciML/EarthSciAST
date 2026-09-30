@@ -476,6 +476,8 @@ function _mtk_run_system(input; metaparameters, base_path, renames_out)
         "esm_problem: unsupported input of type $(typeof(input)); pass a path, " *
         "EsmFile, FlattenedSystem, or native ESM Dict"))
     flat = EarthSciAST.lower_table_lookups(input)
+    EarthSciAST._refuse_parameter_definitions(flat.equations,
+        merge(flat.state_variables, flat.observed_variables, flat.parameters))
     merge!(renames_out, flat.metadata.merged_variable_renames)
     # The run DOCUMENT is metadata only: output naming / CF coordinates, the
     # §2.2 `solver` block, the equation count `show` prints, and the component

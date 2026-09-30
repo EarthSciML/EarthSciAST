@@ -790,3 +790,18 @@ end
         @test cells(p3, "w") == [2.0, -1.0, 2.0]
     end
 end
+
+# esm-spec §6.3.1 (user ruling): an equation whose left-hand side names a
+# parameter is refused at build by name, under every compiler, never dropped.
+@testset "esm_problem refuses an equation that defines a parameter" begin
+    path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "equation_defines_parameter.esm")
+    for compiler in (:interpreter, :native)
+        e = try
+            _PR.esm_problem(path, (0.0, 1.0); compiler = compiler); nothing
+        catch err
+            err
+        end
+        @test e isa _PR.TreeWalkError &&
+              e.code == _PR.ERROR_CODES.EQUATION_DEFINES_PARAMETER
+    end
+end

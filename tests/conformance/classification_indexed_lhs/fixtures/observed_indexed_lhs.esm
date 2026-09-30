@@ -94,9 +94,9 @@
           }
         },
         {
-          "_comment": "wb[i] ~ 5 -- BARE-INDEX LHS, the §6.3.1 worked-example spelling. Observed; cadence const.",
+          "_comment": "wb[i] ~ 5 -- BARE-INDEX LHS, the §6.3.1 worked-example spelling, its subscript bound by the right-hand faq (a free one is unbound_index_symbol). Observed; cadence const.",
           "lhs": { "op": "index", "args": ["wb", "i"] },
-          "rhs": 5.0
+          "rhs": { "op": "faq", "args": [], "output_idx": ["i"], "ranges": { "i": { "from": "lev" } }, "expr": 5.0 }
         },
         {
           "_comment": "sc ~ 7 -- the scalar control. Observed; cadence const.",

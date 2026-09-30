@@ -2359,7 +2359,7 @@ Python, Rust, and Go; `odeStates` in TypeScript).
 | Function | Returns |
 |---|---|
 | `ode_states(model)` | unknowns appearing under `D(·, t)` on some equation LHS |
-| `observed_unknowns(model)` | unknowns **defined** by an equation whose LHS names them — a bare-variable LHS (`y ~ f(…)`) or an indexed-variable LHS (`y[i] ~ f(…)`, which defines the whole array `y`) — eliminable, materializable |
+| `observed_unknowns(model)` | unknowns **defined** by an equation whose LHS names them — a bare-variable LHS (`y ~ f(…)`) or an indexed-variable LHS (`y[i] ~ f(…)`, with `i` bound by a `faq`, which defines the whole array `y`) — eliminable, materializable |
 | `algebraic_unknowns(model)` | unknowns constrained only implicitly — no equation names them on its LHS (`H*H*SO4 ~ Ksp`) |
 | `is_ode_state(model, name)` | membership test for the first |
 
@@ -2513,9 +2513,10 @@ to answer a derived question is precisely what 1.0.0 removes.
 `system_kind` → `"sde"`.
 
 Adding an arrayed unknown `w` shaped over `bins` and the equation
-`{"lhs": {"op": "index", "args": ["w", "i"]}, "rhs": …}` puts `w` in
-`observed_unknowns`, not `algebraic_unknowns`: the LHS's base name is `w`, so
-the equation defines it.
+`{"lhs": {"op": "index", "args": ["w", "i"]}, "rhs": {"op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "bins"}}, …}}`
+puts `w` in `observed_unknowns`, not `algebraic_unknowns`: the LHS's base name
+is `w`, so the equation defines it. (The right-hand `faq` is what binds `i`;
+with `i` bound by nothing the document is `unbound_index_symbol`.)
 
 ### 6.4 Advection Model Example
 
