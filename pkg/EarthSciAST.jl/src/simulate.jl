@@ -147,6 +147,49 @@ function _refuse_reserved_declaration_names(file::EsmFile)
                      code=e.error_type, path=e.path, details=e.details))
 end
 
+# esm-spec §9.6.6 `callback_unregistered`: an equation that reads a variable a
+# `callback` coupling injects (`config.callback_variables[].name`) reads a value
+# only a registered callback supplies. Nothing registers one at construction, so
+# a build would read a placeholder the document does not describe.
+function _refuse_unregistered_callback_reads(file::EsmFile)
+    injected = Dict{String,String}()          # variable name => callback_id
+    for entry in file.coupling
+        entry isa CouplingCallback || continue
+        cfg = entry.config
+        cvs = cfg === nothing ? nothing : get(cfg, "callback_variables", nothing)
+        cvs isa AbstractVector || continue
+        for cv in cvs
+            nm = cv isa AbstractDict ? get(cv, "name", nothing) : nothing
+            nm isa AbstractString && (injected[String(nm)] = entry.callback_id)
+        end
+    end
+    (isempty(injected) || file.models === nothing) && return nothing
+    for name in sort!(collect(keys(file.models)))
+        _refuse_callback_reads_in(file.models[name], name, injected)
+    end
+    return nothing
+end
+
+function _refuse_callback_reads_in(model::Model, path::AbstractString,
+                                   injected::AbstractDict{String,String})
+    for eq in model.equations, side in (eq.lhs, eq.rhs)
+        for v in sort!(collect(free_variables(side)))
+            haskey(model.variables, v) && continue
+            id = get(injected, v, nothing)
+            id === nothing && continue
+            throw(TreeWalkError(ERROR_CODES.CALLBACK_UNREGISTERED,
+                "'$path' reads '$v', which the `callback` coupling '$id' supplies, " *
+                "but no callback is registered to supply it at construction; refusing " *
+                "the build rather than reading a value the document does not give " *
+                "(esm-spec §9.6.6)"))
+        end
+    end
+    for (sub_name, sub) in model.subsystems
+        sub isa Model && _refuse_callback_reads_in(sub, "$path.$sub_name", injected)
+    end
+    return nothing
+end
+
 #
 # `renames_out`, when given, is filled with the flattened system's
 # `merged_variable_renames` (issue #230) — the states an `operator_compose`
@@ -183,6 +226,7 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
     if input isa EsmFile
         _refuse_unsupported_major_version(input.esm)
         _refuse_reserved_declaration_names(input)
+        _refuse_unregistered_callback_reads(input)
         run_coordinates = input.coordinates
         run_solver = input.solver
         for (mname, model) in something(input.models, ())

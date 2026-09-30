@@ -507,6 +507,10 @@ const (
 	// equation, reached an evaluator that cannot run it (esm-spec §9.6.6). Go does not simulate,
 	// so it never raises this; the constant keeps the §9.6.6 vocabulary uniform.
 	CodeUnsupportedConstruct = "unsupported_construct"
+	// CodeCallbackUnregistered: an equation reads a `callback` coupling variable
+	// and no callback supplies it at construction (esm-spec §9.6.6). Go does not
+	// simulate, so it never raises this.
+	CodeCallbackUnregistered = "callback_unregistered"
 	// CodeCompilerUnknown: `esm_problem`'s `compiler` option named a value
 	// outside the closed vocabulary of API_SPEC §5.8 (`interpreter`, `native`,
 	// `xla`, `mtk`, `sympy`).
