@@ -34,11 +34,12 @@ fn fixture() -> std::path::PathBuf {
         .join("../../tests/fixtures/undeclared_operand/undeclared_operand_in_max.esm")
 }
 
-/// The one sentence both routes must produce. Pinned as a substring rather than
+/// The phrase both routes must produce. Pinned as a substring rather than
 /// a whole message so the two are held to naming the SAME variable in the SAME
-/// words — an error that says only "build failed" would let the routes drift
+/// words (the build refuses it by the validator's `undefined_variable`, the
+/// pipeline by its free-variable gate; both say "'<name>' referenced in") — an error that says only "build failed" would let the routes drift
 /// apart again while both looked red.
-const NAMED: &str = "Unknown variable 'undeclaredFloor' referenced in expression";
+const NAMED: &str = "'undeclaredFloor' referenced in";
 
 /// The number the defect produced: `max(known)` with `known = 2.0`. Asserted
 /// against explicitly, because "the run failed" is a weaker claim than "the run

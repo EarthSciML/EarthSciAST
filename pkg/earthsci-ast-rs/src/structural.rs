@@ -179,11 +179,25 @@ impl<'a> ModelCtx<'a> {
         idx: usize,
         errs: &mut Vec<StructuralError>,
     ) {
+        self.check_refs_bound(expr, path, idx, &HashSet::new(), errs);
+    }
+
+    /// [`Self::check_refs`] with `bound` — binders the surrounding construct
+    /// (the other side of an equation) introduces — also in scope.
+    fn check_refs_bound(
+        &self,
+        expr: &crate::Expr,
+        path: &str,
+        idx: usize,
+        bound: &HashSet<String>,
+        errs: &mut Vec<StructuralError>,
+    ) {
         // Any binder introduced ANYWHERE in this expression is in scope
         // throughout it (a `makearray` binds its grid indices for every
         // value; see `collect_bound_symbols`). Seed those before the descent,
         // which then adds nested binders on top per node.
         let mut scope = self.defined_vars.clone();
+        scope.extend(bound.iter().cloned());
         collect_bound_symbols(expr, &mut scope);
         validate_expression_references_with_systems(
             expr,
@@ -293,8 +307,20 @@ impl<'a> ModelCtx<'a> {
             let eq_path = format!("{}/initialization_equations/{eq_idx}", self.model_path);
             // The pointer is the containing expression FIELD (§7.1.2) — `.../<eq>/lhs`
             // or `.../<eq>/rhs` — not the whole equation.
+            // A binder either side introduces is in scope on both: an indexed
+            // definition `w[k+1] ~ faq{k}(…)` subscripts its LHS with the
+            // RHS's loop index.
+            let mut eq_bound = HashSet::new();
+            collect_bound_symbols(&equation.lhs, &mut eq_bound);
+            collect_bound_symbols(&equation.rhs, &mut eq_bound);
             for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
-                self.check_refs(expr, &format!("{eq_path}/{field}"), eq_idx, errors);
+                self.check_refs_bound(
+                    expr,
+                    &format!("{eq_path}/{field}"),
+                    eq_idx,
+                    &eq_bound,
+                    errors,
+                );
             }
         }
     }
@@ -355,8 +381,20 @@ impl<'a> ModelCtx<'a> {
             // `.../equations/<i>/rhs`, not at the whole equation. (Dimensional
             // findings below stay at the equation level — an inconsistency is a
             // property of the equation, not of one side.)
+            // A binder either side introduces is in scope on both: an indexed
+            // definition `w[k+1] ~ faq{k}(…)` subscripts its LHS with the
+            // RHS's loop index.
+            let mut eq_bound = HashSet::new();
+            collect_bound_symbols(&equation.lhs, &mut eq_bound);
+            collect_bound_symbols(&equation.rhs, &mut eq_bound);
             for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
-                self.check_refs(expr, &format!("{eq_path}/{field}"), eq_idx, errors);
+                self.check_refs_bound(
+                    expr,
+                    &format!("{eq_path}/{field}"),
+                    eq_idx,
+                    &eq_bound,
+                    errors,
+                );
                 // A declared `const` unit string that does not resolve is a
                 // defect at the containing expression field (esm-spec §4.8.5).
                 for units in crate::units::unresolvable_const_units(expr) {
@@ -3356,15 +3394,27 @@ fn collect_subsystem_scoped_refs<'a>(
         // has already flattened the mount to `{variables, equations}` by now, so
         // one pass over `variables` (plus `species`, for a reaction subsystem)
         // covers every mount kind.
+        //
+        // An inlined `ref` may also still carry the WHOLE referenced document —
+        // `{esm, metadata, models: {<one>: …}}`, the post-resolution shape the
+        // simulator's `parse_subsystem_model` accepts — so its single component
+        // is the one whose members are exposed.
+        let component = value
+            .get("models")
+            .or_else(|| value.get("reaction_systems"))
+            .and_then(|m| m.as_object())
+            .filter(|m| m.len() == 1)
+            .and_then(|m| m.values().next())
+            .unwrap_or(value);
         for field in ["variables", "species"] {
-            let Some(members) = value.get(field).and_then(|v| v.as_object()) else {
+            let Some(members) = component.get(field).and_then(|v| v.as_object()) else {
                 continue;
             };
             for var in members.keys() {
                 refs.insert(format!("{path}.{var}"));
             }
         }
-        if let Some(nested) = value.get("subsystems").and_then(|v| v.as_object()) {
+        if let Some(nested) = component.get("subsystems").and_then(|v| v.as_object()) {
             collect_subsystem_scoped_refs(&path, nested.iter(), refs);
         }
     }
@@ -3460,6 +3510,13 @@ pub(crate) fn validate_expression_references_with_systems(
             // have had to re-enumerate all of them and would have drifted.
             if op_node.op == "broadcast" {
                 check_broadcast_fn_node(op_node, base_path, equation_index, errors);
+            }
+            // An `enum` node's operands are an enum NAME and a SYMBOL (esm-spec
+            // §9.3), resolved against the `enums` block, not variable
+            // references. Reading them as variables reported every `enum` use
+            // as two undefined variables.
+            if op_node.op == "enum" {
+                return;
             }
             // Recursively validate every expression-bearing child via the
             // canonical walker — args PLUS the sidecar fields (integral bounds,

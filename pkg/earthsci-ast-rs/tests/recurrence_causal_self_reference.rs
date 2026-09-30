@@ -262,7 +262,9 @@ fn doc_with_body(body: Value) -> String {
       "index_sets": { "steps": { "kind": "interval", "size": 4 } },
       "models": { "R": {
         "tolerance": { "rel": 0.0, "abs": 0.0 },
-        "variables": { "s": { "type": "unknown", "shape": ["steps"], "units": "1" } },
+        "variables": { "s": { "type": "unknown", "shape": ["steps"], "units": "1" },
+                       "lag": { "type": "parameter", "shape": ["steps"], "units": "1",
+                                "default": 1.0 } },
         "equations": [ { "lhs": "s", "rhs": {
           "op": "faq", "args": [], "output_idx": ["k"],
           "ranges": { "k": { "from": "steps" } }, "expr": body } } ],
