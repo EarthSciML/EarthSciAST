@@ -296,6 +296,10 @@ end
     # A degenerate polygon operand in a state-free observed nothing reads (§8.6.1).
     @test occursin("E_TREEWALK_GEOMETRY_CLIP",
                    refusal("tests/conformance/pushdown/fixtures/pushdown_polygon_area.esm"))
+    # A reference-integrity finding refuses the build with the validator's code
+    # (esm-libraries-spec §2.5.2).
+    @test occursin("[undefined_variable]",
+                   refusal("tests/invalid/undefined_variable_in_observed_expression.esm"))
     # A NUL in a declared name is a schema error at load (§4.9.1.2), not a crash.
     @test_throws EarthSciAST.SchemaValidationError EarthSciAST.load_path(
         doc("tests/future/security/null_byte_injection.esm"))

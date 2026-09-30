@@ -47,3 +47,13 @@ def test_ic_in_reaction_system_is_refused():
 def test_control_character_in_a_declared_name_is_a_schema_error():
     with pytest.raises(SchemaValidationError):
         load_path(str(REPO / "tests/future/security/null_byte_injection.esm"))
+
+
+def test_reference_integrity_error_is_refused():
+    # Python's load already refuses this document structurally; the build-time
+    # reference-integrity gate (esm-libraries-spec §2.5.2) covers typed inputs.
+    assert "undefined_xyz" in _refusal("tests/invalid/undefined_variable_in_faq_key.esm")
+
+
+def test_rate_law_reading_a_species_builds():
+    esm_problem(str(REPO / "tests/simulation/mass_action_substrate_cancellation.esm"), (0.0, 1.0))
