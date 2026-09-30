@@ -230,9 +230,9 @@ pub fn arity_of(op: &str) -> Option<Arity> {
 
         // --- Elementary functions (§4.2). All unary except `atan2` and
         // `min`/`max`.
-        "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
-        | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
-        | "acosh" | "atanh" => Arity::Exact(1),
+        "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin" | "cos"
+        | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh"
+        | "atanh" => Arity::Exact(1),
         "atan2" => Arity::Exact(2),
         // "n-ary with arity >= 2 … Conforming bindings MUST reject `min`/`max`
         // nodes with fewer than two arguments." (§4.2)
@@ -808,10 +808,10 @@ mod tests {
     /// §4.3.4) are defined by this partition, and a new op silently defaulting
     /// to "not scalar" is a decision, not an accident.
     const SCALAR: &[&str] = &[
-        "+", "-", "*", "/", "^", "neg", "exp", "log", "log10", "sqrt", "abs", "sign",
-        "floor", "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
-        "asinh", "acosh", "atanh", "atan2", "min", "max", "ifelse", "==", "!=", "<", "<=", ">",
-        ">=", "and", "or", "not",
+        "+", "-", "*", "/", "^", "neg", "exp", "log", "log10", "sqrt", "abs", "sign", "floor",
+        "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh",
+        "acosh", "atanh", "atan2", "min", "max", "ifelse", "==", "!=", "<", "<=", ">", ">=", "and",
+        "or", "not",
     ];
     const NOT_SCALAR: &[&str] = &[
         "D",
