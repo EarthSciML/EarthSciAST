@@ -37,10 +37,18 @@
           "type": "unknown"
         },
         "edge_lo": {
-          "type": "parameter"
+          "type": "parameter",
+          "shape": [
+            "faces",
+            "local_edges"
+          ]
         },
         "edge_hi": {
-          "type": "parameter"
+          "type": "parameter",
+          "shape": [
+            "faces",
+            "local_edges"
+          ]
         },
         "edge_exists": {
           "type": "unknown"
