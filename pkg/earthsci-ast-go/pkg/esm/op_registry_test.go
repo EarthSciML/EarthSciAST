@@ -78,7 +78,6 @@ func TestCheckBroadcastFn(t *testing.T) {
 		{"unary minus is negation", bcast(strPtr("-"), 1), ""},
 		{"neg is unary", bcast(strPtr("neg"), 1), ""},
 		{"log is unary", bcast(strPtr("log"), 1), ""},
-		{"ln is unary", bcast(strPtr("ln"), 1), ""},
 		{"binary times", bcast(strPtr("*"), 2), ""},
 		{"n-ary times", bcast(strPtr("*"), 3), ""},
 		{"binary min", bcast(strPtr("min"), 2), ""},

@@ -261,6 +261,12 @@ class ConstArrayOutOfRangeError(NumpyInterpreterError):
     merely not evaluable yet, so a tolerant build pass must not skip it."""
 
 
+class DegenerateOperandError(NumpyInterpreterError):
+    """``E_TREEWALK_GEOMETRY_CLIP``: a polygon operand has fewer than 3 distinct
+    vertices (esm-spec §8.6.1). An invalid value in the document, not an observed
+    that is merely not evaluable yet, so a tolerant build pass must not skip it."""
+
+
 class UnreachableSpatialOperatorError(NumpyInterpreterError):
     """Raised when an unlowered rewrite-target operator reaches the simulator's
     RHS evaluator — a spatial/right-hand-side ``D``, one of the open-tier sugar
@@ -1462,6 +1468,8 @@ def _eval_intersect_polygon(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     poly_b = _as_array(eval_expr(expr.args[1], ctx))
     try:
         ring = geometry.intersect_polygon(poly_a, poly_b, manifold)
+    except geometry.DegenerateRingError as exc:
+        raise DegenerateOperandError(f"E_TREEWALK_GEOMETRY_CLIP: {exc}") from exc
     except geometry.GeometryError as exc:
         raise NumpyInterpreterError(str(exc)) from exc
     closed = geometry.close_ring(ring)
@@ -1508,6 +1516,8 @@ def _eval_polygon_intersection_area(expr: ExprNode, ctx: EvalContext) -> float:
     poly_b = _as_array(eval_expr(expr.args[1], ctx))
     try:
         ring = geometry.intersect_polygon(poly_a, poly_b, manifold)
+    except geometry.DegenerateRingError as exc:
+        raise DegenerateOperandError(f"E_TREEWALK_GEOMETRY_CLIP: {exc}") from exc
     except geometry.GeometryError as exc:
         raise NumpyInterpreterError(str(exc)) from exc
     return float(polygon_area_via_faq(ring, manifold))

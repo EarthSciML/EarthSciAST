@@ -89,13 +89,22 @@ impl Manifold {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeometryError {
     message: String,
+    degenerate_operand: bool,
 }
 
 impl GeometryError {
     pub(crate) fn new(message: impl Into<String>) -> Self {
         GeometryError {
             message: message.into(),
+            degenerate_operand: false,
         }
+    }
+
+    /// Whether an OPERAND ring was degenerate — fewer than 3 distinct vertices
+    /// after deduplication (esm-spec §8.6.1). That is an invalid input value,
+    /// as opposed to a clip the backend could not complete.
+    pub fn is_degenerate_operand(&self) -> bool {
+        self.degenerate_operand
     }
 
     /// The underlying failure reason.
@@ -220,10 +229,13 @@ fn dedup_consecutive(ring: &[(f64, f64)]) -> Vec<(f64, f64)> {
 fn as_ring(poly: &[(f64, f64)], who: &str) -> Result<Vec<(f64, f64)>, GeometryError> {
     let arr = dedup_consecutive(poly);
     if arr.len() < 3 {
-        return Err(GeometryError::new(format!(
-            "intersect_polygon {who} needs >=3 distinct vertices, got {}",
-            arr.len()
-        )));
+        return Err(GeometryError {
+            degenerate_operand: true,
+            ..GeometryError::new(format!(
+                "intersect_polygon {who} needs >=3 distinct vertices, got {}",
+                arr.len()
+            ))
+        });
     }
     Ok(arr)
 }

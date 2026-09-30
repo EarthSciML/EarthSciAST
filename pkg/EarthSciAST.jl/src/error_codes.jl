@@ -317,6 +317,9 @@ const ERROR_CODES = (
     #    run without the construct reports a wrong answer. The ModelingToolkit
     #    export runs all three and never raises it. ───────────────────────────
     UNSUPPORTED_CONSTRUCT = "unsupported_construct",
+    # An equation reads a `callback` coupling variable, and no callback is
+    #    registered to supply it at construction (esm-spec §9.6.6).
+    CALLBACK_UNREGISTERED = "callback_unregistered",
     # ── Compiler selection (API_SPEC §5.8; esm-spec §9.6.6). The `compiler`
     #    keyword of `esm_problem` names one member of a closed vocabulary, and
     #    the three codes below are the three ways naming one can fail. None of

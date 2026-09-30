@@ -819,7 +819,7 @@ pub(super) fn vec_op_code(op: &str) -> VecOp {
         ">" => VecOp::Cmp(BinCode::Gt),
         ">=" => VecOp::Cmp(BinCode::Ge),
         "exp" => VecOp::Unary(UnCode::Exp),
-        "log" | "ln" => VecOp::Unary(UnCode::Ln),
+        "log" => VecOp::Unary(UnCode::Ln),
         "log10" => VecOp::Unary(UnCode::Log10),
         "sqrt" => VecOp::Unary(UnCode::Sqrt),
         "abs" => VecOp::Unary(UnCode::Abs),
@@ -2587,7 +2587,7 @@ mod op_dispatch_equivalence {
     const CMP: &[&str] = &["==", "!=", "<", "<=", ">", ">="];
     #[rustfmt::skip]
     const UNARY: &[&str] = &[
-        "exp", "log", "ln", "log10", "sqrt", "abs", "sign", "floor", "ceil", "sin",
+        "exp", "log", "log10", "sqrt", "abs", "sign", "floor", "ceil", "sin",
         "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh",
         "acosh", "atanh", "not",
     ];

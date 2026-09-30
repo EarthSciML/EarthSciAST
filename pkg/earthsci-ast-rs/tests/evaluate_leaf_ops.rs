@@ -54,11 +54,9 @@ fn exp_log_log10_sqrt() {
         1.0,
         1e-12
     ));
-    assert!(approx(
-        eval(&op("ln", vec![n(std::f64::consts::E)])),
-        1.0,
-        1e-12
-    ));
+    // `ln` is not an evaluable-core op (esm-spec §4.2): it is refused, not
+    // evaluated as a synonym of `log`.
+    assert!(evaluate(&op("ln", vec![n(std::f64::consts::E)]), &HashMap::new()).is_err());
     assert!(approx(eval(&op("log10", vec![n(1000.0)])), 3.0, 1e-12));
     assert!(approx(
         eval(&op("sqrt", vec![n(2.0)])),

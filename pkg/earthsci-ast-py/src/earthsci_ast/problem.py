@@ -65,9 +65,10 @@ from .compiler import (
     use_policy,
 )
 from .errors import MissingDataError
-from .esm_types import EsmFile, ExprNode
+from .error_handling import CALLBACK_UNREGISTERED
+from .esm_types import CouplingType, EsmFile, ExprNode
 from .expr_walk import iter_children
-from .expression import UnsupportedConstructError
+from .expression import UnsupportedConstructError, free_variables
 from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
@@ -711,6 +712,7 @@ def _esm_problem_under(
     if file is not None:
         file = lower_table_lookups(file)
         _refuse_ic_in_reaction_system(file)
+        _refuse_unregistered_callback_reads(file)
 
     # A caller-flattened system has no document, but `flatten` carries
     # `function_tables` so that this carrier can be lowered too.
@@ -1335,6 +1337,50 @@ def _refuse_ic_in_reaction_system(file: EsmFile) -> None:
                     f"`species.default`, or a scoped-reference ic equation in a model, "
                     f"esm-spec §11.4.1)"
                 )
+
+
+class CallbackUnregisteredError(SimulationError):
+    """An equation reads a ``callback`` coupling variable, and no callback is
+    registered to supply it at construction (esm-spec §9.6.6)."""
+
+    code = CALLBACK_UNREGISTERED
+
+
+def _refuse_unregistered_callback_reads(file: EsmFile) -> None:
+    """esm-spec §9.6.6 ``callback_unregistered``: an equation that reads a variable
+    a ``callback`` coupling injects (``config.callback_variables[].name``) reads a
+    value only a registered callback supplies. Nothing registers one at
+    construction, so a build would read a placeholder the document does not
+    describe."""
+    injected: dict[str, str] = {}
+    for entry in file.coupling or []:
+        if getattr(entry, "coupling_type", None) != CouplingType.CALLBACK:
+            continue
+        for cv in (getattr(entry, "config", None) or {}).get("callback_variables") or []:
+            name = cv.get("name") if isinstance(cv, dict) else None
+            if isinstance(name, str):
+                injected[name] = str(getattr(entry, "callback_id", None))
+    if not injected:
+        return
+
+    def visit(model: Any, path: str) -> None:
+        for eq in model.equations or []:
+            for side in (eq.lhs, eq.rhs):
+                for v in sorted(free_variables(side)):
+                    if v in (model.variables or {}) or v not in injected:
+                        continue
+                    raise CallbackUnregisteredError(
+                        f"{CALLBACK_UNREGISTERED}: '{path}' reads '{v}', which the `callback` "
+                        f"coupling '{injected[v]}' supplies, but no callback is registered to "
+                        f"supply it at construction; refusing the build rather than reading a "
+                        f"value the document does not give (esm-spec §9.6.6)"
+                    )
+        for sub_name, sub in sorted((getattr(model, "subsystems", None) or {}).items()):
+            if hasattr(sub, "equations"):
+                visit(sub, f"{path}.{sub_name}")
+
+    for name, model in sorted((file.models or {}).items()):
+        visit(model, name)
 
 
 def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:

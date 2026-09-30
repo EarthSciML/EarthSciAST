@@ -406,6 +406,9 @@ diagnostic_code_registry! {
     /// A continuous or discrete event, or an implicit equation, reached an
     /// evaluator that cannot run it (esm-spec §9.6.6).
     UNSUPPORTED_CONSTRUCT = "unsupported_construct";
+    /// An equation reads a `callback` coupling variable, and no callback is
+    /// registered to supply it at construction (esm-spec §9.6.6).
+    CALLBACK_UNREGISTERED = "callback_unregistered";
     /// `ProblemOptions::compiler` named a value outside the closed vocabulary
     /// of API_SPEC §5.8 (`interpreter`, `native`, `xla`, `mtk`, `sympy`).
     COMPILER_UNKNOWN = "compiler_unknown";
@@ -572,6 +575,7 @@ mod error_code_tests {
             "array_default_without_shape",
             "array_shape_mismatch",
             "assertion_rank_mismatch",
+            "callback_unregistered",
             "circular_dependency",
             "closed_function_arg_type",
             "closed_function_arity",
