@@ -320,10 +320,22 @@ fn check_expr_oplus(expr: &Expr) -> Result<(), CompileError> {
     let Expr::Operator(node) = expr else {
         return Ok(());
     };
-    if is_faq_op(&node.op)
-        && let Err(bad) = effective_reduce_kind(node.semiring.as_deref(), node.reduce.as_deref())
-    {
-        return Err(CompileError::build_err(bad.to_string()));
+    if is_faq_op(&node.op) {
+        match effective_reduce_kind(node.semiring.as_deref(), node.reduce.as_deref()) {
+            Err(bad) => return Err(CompileError::build_err(bad.to_string())),
+            Ok(ReduceKind::Or) if is_array_valued_numeric_reduction(node) => {
+                return Err(CompileError::build_err(format!(
+                    "array-valued `bool_and_or` reduction{}: the numeric evaluators reject a \
+                     `bool_and_or` faq that has output indices and contracts one \
+                     (CONFORMANCE_SPEC §5.6.1); a scalar one, with no output index, runs",
+                    node.id
+                        .as_deref()
+                        .map(|id| format!(" `{id}`"))
+                        .unwrap_or_default()
+                )));
+            }
+            Ok(_) => {}
+        }
     }
     let mut failure = None;
     node.for_each_child(&mut |child| {
@@ -337,6 +349,27 @@ fn check_expr_oplus(expr: &Expr) -> Result<(), CompileError> {
         Some(e) => Err(e),
         None => Ok(()),
     }
+}
+
+/// A `faq` a numeric evaluator reduces to an ARRAY: it names an output index
+/// and contracts at least one other. A value-invention node (`distinct`, a
+/// `key`) and an addressable producer (`id`, named by a derived index set's
+/// `from_faq`) produce an index set instead (§5.5) and are not this.
+fn is_array_valued_numeric_reduction(node: &crate::types::ExpressionNode) -> bool {
+    if node.distinct == Some(true) || node.key.is_some() || node.id.is_some() {
+        return false;
+    }
+    let out: Vec<&str> = node
+        .output_idx
+        .iter()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    !out.is_empty()
+        && node
+            .ranges
+            .as_ref()
+            .is_some_and(|r| r.keys().any(|k| !out.contains(&k.as_str())))
 }
 
 /// Whether `op` is the Functional Aggregate Query node tag.
