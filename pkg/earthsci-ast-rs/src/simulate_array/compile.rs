@@ -749,6 +749,14 @@ impl ArrayCompiled {
         // producer. A producer that cannot run is recorded rather than raised, and
         // is refused below only if a surviving expression ranges over its set.
         let derived = materialize_derived_extents(&model_owned, &index_sets_owned, vi_arrays);
+        // A skolem map buffer (a broad-phase bin key per cell) becomes constant
+        // data, so a `join.on` gate comparing two of them stays a gate — a
+        // value-equality filter on data columns — rather than being dropped.
+        let mut map_names: Vec<&String> = derived.map_codes.keys().collect();
+        map_names.sort();
+        for name in map_names {
+            rewrite_equation_to_const(&mut model_owned, name, &derived.map_codes[name]);
+        }
         let index_sets = &index_sets_owned;
         // Drop value-invention (relational) scaffolding — skolem-id bin maps and
         // membership sets over `kind: "derived"` index sets — plus the broad-phase
@@ -758,7 +766,13 @@ impl ArrayCompiled {
         // inert only where a dense narrow phase follows (see
         // `strip_value_invention`). A no-op unless a `skolem` op or a
         // derived-set-shaped variable is present.
-        strip_value_invention(&mut model_owned, index_sets)?;
+        // A producer that could not run leaves its derived set with no
+        // members: a stage that then trips over the stripped producer (a
+        // surviving read of one of its outputs, an output shaped on its set)
+        // names that set (`derived_index_set_unmaterialized`, esm-spec §4.2)
+        // rather than the operator or the axis it met.
+        strip_value_invention(&mut model_owned, index_sets)
+            .or_else(|e| derived.refuse_on_failure(index_sets).and(Err(e)))?;
         // The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5): the
         // `const`-literal factor variables — Fornberg weights, mesh
         // connectivity, a geometry table — that [`collect_const_factor_arrays`]
@@ -789,7 +803,8 @@ impl ArrayCompiled {
             &mut model_owned,
             index_sets,
             &derived.extents,
-        )?;
+        )
+        .or_else(|e| derived.refuse_on_failure(index_sets).and(Err(e)))?;
         // A range over a non-geometry derived set that value invention did not
         // size would contract as empty and read 0 (esm-spec §9.6.6): refuse it.
         refuse_unmaterialized_derived_ranges(&model_owned, index_sets, &derived)?;
@@ -3280,6 +3295,22 @@ pub(super) fn expr_contains_skolem(expr: &Expr) -> bool {
     }
 }
 
+/// Whether `expr` contains a `rank` over a `kind: "derived"` index set — the
+/// dense ids of an invented set, a build-time relational output.
+fn ranks_a_derived_set(expr: &Expr, index_sets: &HashMap<String, IndexSet>) -> bool {
+    match expr {
+        Expr::Operator(node) => {
+            (node.op == "rank"
+                && node.args.iter().any(|a| {
+                    matches!(a, Expr::Variable(v)
+                        if index_sets.get(v).is_some_and(|is| is.kind == "derived"))
+                }))
+                || node.any_child(&mut |c| ranks_a_derived_set(c, index_sets))
+        }
+        _ => false,
+    }
+}
+
 /// Collect the `id`s of every geometry ring producer (`intersect_polygon` /
 /// `polygon_intersection_area`) reachable from `expr`. A `kind: "derived"` index
 /// set whose `from_faq` names one of these is the materialized clip ring (kept),
@@ -3340,6 +3371,12 @@ pub(super) fn strip_vi_joins(expr: &mut Expr, vi_cols: &HashSet<String>) {
         if joins.is_empty() {
             node.join = None;
         }
+        // A `faq`'s `args` is the declarative operand list (esm-spec §4.3.1);
+        // the key columns the gate read leave it with the gate.
+        if is_faq_op(&node.op) {
+            node.args
+                .retain(|a| !matches!(a, Expr::Variable(v) if vi_cols.contains(v)));
+        }
     }
     node.for_each_child_mut(&mut |child| strip_vi_joins(child, vi_cols));
 }
@@ -3381,8 +3418,20 @@ pub(super) fn strip_value_invention(
     }
     // (a) A variable shaped over a `kind: "derived"` index set whose FAQ producer
     //     is NOT a geometry ring producer — a relational membership / candidate
-    //     set the dense runtime does not enumerate.
+    //     set the dense runtime does not enumerate. Build-time DATA over such a
+    //     set (a parameter, or an unknown defined by a `const` node, e.g. a
+    //     per-edge length over invented edges) is an ordinary array sized by the
+    //     set's extent, and is kept.
+    let const_defined: HashSet<String> = model
+        .equations
+        .iter()
+        .filter(|eq| matches!(&eq.rhs, Expr::Operator(n) if n.op == "const"))
+        .filter_map(|eq| equation_defined_var(&eq.lhs))
+        .collect();
     for (name, var) in &model.variables {
+        if var.var_type == VariableType::Parameter || const_defined.contains(name) {
+            continue;
+        }
         if let Some(shape) = &var.shape {
             if shape.iter().any(|s| {
                 index_sets
@@ -3400,9 +3449,11 @@ pub(super) fn strip_value_invention(
             }
         }
     }
-    // (b) A variable defined by an equation whose RHS produces a skolem id.
+    // (b) A variable defined by an equation whose RHS produces a skolem id, or
+    //     a `rank` dense id over an invented set: build-time relational
+    //     outputs, dropped as the other bindings drop them.
     for eq in &model.equations {
-        if expr_contains_skolem(&eq.rhs) {
+        if expr_contains_skolem(&eq.rhs) || ranks_a_derived_set(&eq.rhs, index_sets) {
             if let Some(v) = equation_defined_var(&eq.lhs) {
                 vi_vars.insert(v);
             }
@@ -3634,18 +3685,27 @@ fn vi_factor_arrays<S: std::hash::BuildHasher>(
     arrays
 }
 
-/// Scalar parameter defaults, the value-invention engine's scalar `params` map
-/// (e.g. the bin width of a broad-phase skolem quantization). Only 0-D
-/// parameters with a `default` contribute — an array parameter carries no inline
-/// data and is supplied (if at all) through [`collect_const_factor_arrays`].
-fn collect_scalar_param_defaults(model: &Model) -> HashMap<String, f64> {
+/// The value-invention engine's scalar `params` map (e.g. the bin width of a
+/// broad-phase skolem quantization): each 0-D parameter's caller override —
+/// keyed by its name or its model-local tail — else its `default`. An array
+/// parameter carries no scalar and is supplied (if at all) through
+/// [`collect_const_factor_arrays`].
+fn collect_scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> HashMap<String, f64> {
     let mut out: HashMap<String, f64> = HashMap::new();
     for (name, var) in &model.variables {
-        if var.var_type == VariableType::Parameter
-            && var.shape.as_ref().map(|s| s.is_empty()).unwrap_or(true)
-            && let Some(d) = var.default_scalar()
+        if var.var_type != VariableType::Parameter
+            || !var.shape.as_ref().map(|s| s.is_empty()).unwrap_or(true)
         {
-            out.insert(name.clone(), d);
+            continue;
+        }
+        let tail = name.rsplit('.').next().unwrap_or(name);
+        let value = overrides
+            .get(name)
+            .or_else(|| overrides.get(tail))
+            .copied()
+            .or_else(|| var.default_scalar());
+        if let Some(v) = value {
+            out.insert(name.clone(), v);
         }
     }
     out
@@ -3727,8 +3787,20 @@ pub fn run_value_invention<S: std::hash::BuildHasher>(
     index_sets: &HashMap<String, IndexSet>,
     caller_arrays: Option<&HashMap<String, ArrayD<f64>, S>>,
 ) -> Result<ValueInventionResult, CompileError> {
+    run_value_invention_with_params(model, index_sets, caller_arrays, &HashMap::new())
+}
+
+/// [`run_value_invention`] with the caller's scalar parameter overrides (the
+/// SciML `p`), which a producer reads in place of the declared defaults: a
+/// bin width is build-time data, so a `p` entry for it sizes the invented set.
+pub fn run_value_invention_with_params<S: std::hash::BuildHasher>(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>, S>>,
+    overrides: &HashMap<String, f64>,
+) -> Result<ValueInventionResult, CompileError> {
     let const_arrays = vi_factor_arrays(model, caller_arrays);
-    let params = collect_scalar_param_defaults(model);
+    let params = collect_scalar_params(model, overrides);
 
     // The engine walks the RAW `serde_json::Value` document (it preserves the
     // aggregate `key`/`distinct`/`arg` fields), with the document-scoped
@@ -3760,6 +3832,9 @@ pub(super) struct DerivedMaterialization {
     geometry_ids: HashSet<String>,
     /// The engine's error, if it could not run.
     failure: Option<String>,
+    /// The skolem map buffers as integer codes
+    /// ([`ValueInventionResult::map_codes`]).
+    map_codes: HashMap<String, Vec<f64>>,
 }
 
 /// Run value invention when the model has a derived index set whose producer is
@@ -3780,6 +3855,7 @@ fn materialize_derived_extents(
         extents: HashMap::new(),
         geometry_ids,
         failure: None,
+        map_codes: HashMap::new(),
     };
     let needs_value_invention = index_sets.values().any(|is| {
         is.kind == "derived"
@@ -3790,7 +3866,10 @@ fn materialize_derived_extents(
     });
     if needs_value_invention {
         match run_value_invention(model, index_sets, caller_arrays) {
-            Ok(result) => out.extents = result.extents,
+            Ok(result) => {
+                out.extents = result.extents;
+                out.map_codes = result.map_codes;
+            }
             Err(e) => out.failure = Some(e.to_string()),
         }
     }
@@ -3860,6 +3939,34 @@ pub(super) fn unmaterialized_derived_error(
                 failure.unwrap_or("no geometry or value-invention producer supplied its extent")
             ),
         },
+    }
+}
+
+impl DerivedMaterialization {
+    /// The refusal for the first (by set name) non-geometry derived set, when
+    /// value invention failed.
+    fn refuse_on_failure(
+        &self,
+        index_sets: &HashMap<String, IndexSet>,
+    ) -> Result<(), CompileError> {
+        let Some(failure) = self.failure.as_deref() else {
+            return Ok(());
+        };
+        let mut sets: Vec<(&String, &str)> = index_sets
+            .iter()
+            .filter(|(_, is)| is.kind == "derived")
+            .filter_map(|(n, is)| Some((n, is.from_faq.as_deref()?)))
+            .filter(|(_, f)| !self.geometry_ids.contains(*f))
+            .collect();
+        sets.sort();
+        match sets.first() {
+            Some((_, from_faq)) => Err(unmaterialized_derived_error(
+                from_faq,
+                index_sets,
+                Some(failure),
+            )),
+            None => Ok(()),
+        }
     }
 }
 

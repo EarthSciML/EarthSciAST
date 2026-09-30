@@ -75,7 +75,10 @@ mod vectorized;
 // native-only, so gate it to avoid an unused-import warning on wasm.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::{eval_buildtime_field, eval_buildtime_field_in_scope};
-pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_invention};
+pub use compile::{
+    file_has_array_ops, file_has_spatial_model, run_value_invention,
+    run_value_invention_with_params,
+};
 // The ONE free-variable gate (CONFORMANCE_SPEC §5.23), shared with the build
 // pipeline: `crate::prepare` runs the same check the compile path runs, so the
 // two routes cannot disagree about which names a document declares.
