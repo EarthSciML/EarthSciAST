@@ -713,6 +713,7 @@ def _esm_problem_under(
         file = lower_table_lookups(file)
         _refuse_ic_in_reaction_system(file)
         _refuse_unregistered_callback_reads(file)
+        _refuse_reference_integrity_errors(file, base_path)
 
     # A caller-flattened system has no document, but `flatten` carries
     # `function_tables` so that this carrier can be lowered too.
@@ -1346,6 +1347,23 @@ def _refuse_ic_in_reaction_system(file: EsmFile) -> None:
                     f"`species.default`, or a scoped-reference ic equation in a model, "
                     f"esm-spec §11.4.1)"
                 )
+
+
+#: The structural-validation codes a build refuses on (esm-libraries-spec
+#: §2.5.2). They are the reference-integrity findings: a name, reference or data
+#: source the document uses and does not declare. Equation-count and unit
+#: findings are not here: they stay ``validate``'s to report.
+_BUILD_REFUSED_VALIDATION_CODES = frozenset({"undefined_variable", "undefined_parameter", "undefined_species", "undefined_system", "undefined_index_set", "unresolved_scoped_ref", "event_var_undeclared", "data_source_undefined", "missing_required_field"})
+
+
+def _refuse_reference_integrity_errors(file: EsmFile, base_path: str | None) -> None:
+    """Refuse the first reference-integrity finding ``validate`` reports for
+    ``file``, with the validator's code, pointer and message."""
+    from .validation import validate
+
+    for e in validate(file, base_path=base_path).structural_errors:
+        if e.code in _BUILD_REFUSED_VALIDATION_CODES:
+            raise SimulationError(f"[{e.code}] {e.path}: {e.message} (esm-libraries-spec §2.5.2)")
 
 
 class CallbackUnregisteredError(SimulationError):

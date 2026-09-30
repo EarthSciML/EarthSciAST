@@ -190,6 +190,22 @@ function _refuse_callback_reads_in(model::Model, path::AbstractString,
     return nothing
 end
 
+# esm-libraries-spec §2.5.2: the structural-validation codes a build refuses on.
+# They are the reference-integrity findings: a name, reference or data source the
+# document uses and does not declare. A build that went ahead would read a value
+# the document does not describe. Equation-count and unit findings are not here:
+# they stay `validate`'s to report.
+const _BUILD_REFUSED_VALIDATION_CODES = ("undefined_variable", "undefined_parameter", "undefined_species", "undefined_system", "undefined_index_set", "unresolved_scoped_ref", "event_var_undeclared", "data_source_undefined", "missing_required_field")
+
+function _refuse_reference_integrity_errors(file::EsmFile)
+    for e in validate_structural(file)
+        e.error_type in _BUILD_REFUSED_VALIDATION_CODES || continue
+        throw(ParseError("[$(e.error_type)] $(e.path): $(e.message) (esm-libraries-spec §2.5.2)";
+                         code=e.error_type, path=e.path, details=e.details))
+    end
+    return nothing
+end
+
 #
 # `renames_out`, when given, is filled with the flattened system's
 # `merged_variable_renames` (issue #230) — the states an `operator_compose`
@@ -227,6 +243,7 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         _refuse_unsupported_major_version(input.esm)
         _refuse_reserved_declaration_names(input)
         _refuse_unregistered_callback_reads(input)
+        _refuse_reference_integrity_errors(input)
         run_coordinates = input.coordinates
         run_solver = input.solver
         for (mname, model) in something(input.models, ())
