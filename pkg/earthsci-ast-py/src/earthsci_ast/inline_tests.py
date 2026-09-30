@@ -1757,6 +1757,66 @@ def _expand_inputs(inputs: Any) -> list[str | EsmFile]:
     return out
 
 
+def _validation_refusal_rows(
+    source: str, err: Exception, model_name: str | None
+) -> list[AssertionResult]:
+    """One refused row per assertion of a document that PARSES but fails
+    structural validation, or ``[]`` for any other load failure.
+
+    Such a document is refused, not unreadable: its tests are there to
+    enumerate, and a conformance tier that pins a refusal (CONFORMANCE_SPEC
+    §5.36.2) expects every assertion reported unpassed with no actual and the
+    diagnostic in its message — which is what the other bindings produce when
+    the same document's build refuses it. This binding validates at load, so
+    the refusal arrives here instead of at the build."""
+    from .structural_checks import _structural_validation_error_cls
+
+    if not isinstance(err, _structural_validation_error_cls()):
+        return []
+    try:
+        with open(source) as fh:
+            raw = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(raw, dict):
+        return []
+    findings = getattr(err, "findings", None) or []
+    detail = "; ".join(f"{code}: {msg}" for code, msg in findings) or str(err)
+    message = f"structural validation failed: {detail}"
+    rows: list[AssertionResult] = []
+    for kind in ("models", "reaction_systems"):
+        for name, component in (raw.get(kind) or {}).items():
+            if model_name is not None and str(name) != str(model_name):
+                continue
+            if not isinstance(component, dict):
+                continue
+            for t in component.get("tests") or []:
+                if not isinstance(t, dict):
+                    continue
+                for i, a in enumerate(t.get("assertions") or [], start=1):
+                    if not isinstance(a, dict):
+                        continue
+                    expected = a.get("expected")
+                    rows.append(
+                        AssertionResult(
+                            str(name),
+                            str(t.get("id", "")),
+                            i,
+                            str(a.get("variable", "")),
+                            float(a.get("time", math.nan)),
+                            a.get("reduce"),
+                            float(expected) if isinstance(expected, (int, float)) else math.nan,
+                            None,
+                            0.0,
+                            0.0,
+                            False,
+                            message,
+                            str(source),
+                        )
+                    )
+    return rows
+
+
 def _load_failure_result(source: str, err: Exception) -> AssertionResult:
     """The one ERROR row a document that could not be LOADED contributes to a
     batch.
@@ -1909,7 +1969,10 @@ def run_inline_tests(
     A document that fails to LOAD raises when ``inputs`` names a single
     document, exactly as before. In a BATCH — an iterable or a directory — it
     instead contributes one ERROR row naming the path, so one unreadable file
-    cannot cost the run every other file's verdicts.
+    cannot cost the run every other file's verdicts. The exception is a
+    document that parses but fails STRUCTURAL validation: it is refused rather
+    than unreadable, so each of its assertions becomes a refused row (no
+    actual, the diagnostic in the message), single document or batch.
 
     Every OTHER row names its document too: ``AssertionResult.file`` is the
     path the document was loaded from (``""`` only for a document passed in as
@@ -1940,6 +2003,10 @@ def run_inline_tests(
         try:
             file = load_path(document)
         except Exception as err:  # noqa: BLE001 — one bad file must not end a batch
+            refused = _validation_refusal_rows(document, err, opts.model_name)
+            if refused:
+                results.extend(refused)
+                continue
             if not batch:
                 raise
             results.append(_load_failure_result(document, err))
