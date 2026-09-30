@@ -97,3 +97,51 @@ fn a_state_free_document_with_an_implicit_equation_is_refused() {
         );
     }
 }
+
+fn refusal(rel: &str, compiler: Compiler) -> String {
+    build(rel, compiler)
+        .err()
+        .unwrap_or_else(|| panic!("{compiler:?} built {rel}"))
+        .to_string()
+}
+
+#[test]
+fn a_callback_variable_no_callback_supplies_is_refused() {
+    // esm-spec §9.6.6 `callback_unregistered`: at construction, and under the
+    // interpreter too, which used to build and fault at its first call.
+    for compiler in COMPILERS {
+        let msg = refusal("tests/coupling/callback_examples.esm", compiler);
+        assert!(
+            msg.contains("callback_unregistered") && msg.contains("CropWeatherCoupling"),
+            "{compiler:?}: {msg}"
+        );
+    }
+}
+
+#[test]
+fn a_degenerate_polygon_operand_nothing_reads_is_refused() {
+    // esm-spec §8.6.1: the all-zero default rings are degenerate operands; the
+    // state-free observed that clips them is evaluated at build, so refused.
+    for compiler in COMPILERS {
+        let msg = refusal(
+            "tests/conformance/pushdown/fixtures/pushdown_polygon_area.esm",
+            compiler,
+        );
+        assert!(
+            msg.contains("E_TREEWALK_GEOMETRY_CLIP"),
+            "{compiler:?}: {msg}"
+        );
+    }
+}
+
+#[test]
+fn a_control_character_in_a_declared_name_is_a_load_error() {
+    // esm-spec §4.9.1.2, enforced by the schema's `$defs/Identifier`.
+    for compiler in COMPILERS {
+        let msg = refusal("tests/future/security/null_byte_injection.esm", compiler);
+        assert!(
+            msg.contains("loading the document") && msg.contains("does not match"),
+            "{compiler:?}: {msg}"
+        );
+    }
+}

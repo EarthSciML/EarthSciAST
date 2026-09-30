@@ -2042,7 +2042,7 @@
         "message": "Logarithm argument must be dimensionless, got units 'kg'",
         "details": {
           "operation": "logarithm",
-          "function": "ln",
+          "function": "log",
           "argument_units": "kg",
           "variable": "invalid_log"
         }

@@ -182,6 +182,10 @@ export const ERROR_CODES = {
   //   This binding does not simulate, so it never raises it; the entry keeps
   //   the §9.6.6 vocabulary uniform across the five registries.
   UNSUPPORTED_CONSTRUCT: 'unsupported_construct',
+  // `callback_unregistered` — an equation reads a `callback` coupling
+  //   variable and no callback supplies it at construction (esm-spec §9.6.6).
+  //   This binding does not simulate, so it never raises it.
+  CALLBACK_UNREGISTERED: 'callback_unregistered',
   // `compiler_unknown` / `compiler_unavailable` / `compiler_refused_rule` —
   //   the three ways naming a compiler can fail (API_SPEC §5.8,
   //   esm-libraries-spec §2.5.10). `esm_problem(..., compiler=...)` draws from a

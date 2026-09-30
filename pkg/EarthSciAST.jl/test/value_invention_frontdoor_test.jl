@@ -137,6 +137,23 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
         @test reinterpret(UInt64, dus[:native]) == reinterpret(UInt64, dus[:interpreter])
     end
 
+    @testset "skolem_distinct_rank: shaped edge endpoints build with data" begin
+        # edge_lo / edge_hi are shaped [faces, local_edges]; with their data the
+        # derived edge set is sized and the ODE builds under both compilers.
+        path = _vi_fixture("tests/valid/faq/skolem_distinct_rank.esm")
+        lo = Float64[mod1(f + l, 5) for f in 1:12, l in 1:3]
+        ca = Dict{String,Any}("edge_lo" => lo, "edge_hi" => lo .+ 1)
+        dus = Dict{Symbol,Vector{Float64}}()
+        for c in (:interpreter, :native)
+            prob = ESS.esm_problem(path, (0.0, 1.0); compiler = c, const_arrays = ca)
+            du = fill(NaN, length(prob.u0))
+            prob.f!(du, ones(length(prob.u0)), prob.p, 0.0)
+            dus[c] = du
+            @test du == [-1.0]
+        end
+        @test reinterpret(UInt64, dus[:native]) == reinterpret(UInt64, dus[:interpreter])
+    end
+
     @testset "argmin: a right-hand side gathers through the assignment buffer" begin
         path = _vi_fixture("tests/conformance/value_invention_geometry/fixtures/nearest_generator_ode.esm")
         dus = Dict{Symbol,Vector{Float64}}()

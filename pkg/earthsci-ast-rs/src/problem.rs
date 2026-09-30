@@ -1932,7 +1932,19 @@ pub fn esm_problem<'a>(
     // never saw the array and ran on the declared default instead.
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(f) = owned_file.as_mut() {
-        supplied.bind_arrays(f, &opts.p);
+        supplied.bind_arrays(f, &opts.p, model_name.as_deref());
+    }
+    // A scalar parameter value invention reads (a skolem bin width) is
+    // build-time data: the invented set's size depends on it, so the caller's
+    // `p` entry lands on its `default`, which the compile's value invention
+    // reads, and the parameter is baked into the build.
+    if let Some(f) = owned_file.as_mut() {
+        for name in bind_value_invention_params(f, &opts.p) {
+            if !build.baked_parameters.contains(&name) {
+                build.baked_parameters.push(name);
+            }
+        }
+        build.baked_parameters.sort();
     }
 
     // ---- (4) Compile the right-hand side. ---------------------------------
@@ -1953,7 +1965,7 @@ pub fn esm_problem<'a>(
     if let Backend::Static(_) = &backend
         && let Some(f) = owned_file.as_ref()
     {
-        supplied.refuse_missing_static(f, &opts.p)?;
+        supplied.refuse_missing_static(f, &opts.p, model_name.as_deref())?;
     }
 
     // ---- (4b) State-free static evaluation. -------------------------------
@@ -2421,7 +2433,14 @@ fn static_observed_fields(
     // state, and there is none to read. Reachable when `model_name` selects an
     // ODE-free model out of a document that has ODEs elsewhere, since
     // `flatten` is document-wide.
-    if !flat.state_variables.is_empty() {
+    // An unknown defined by an element-wise equation (`index(a, i) = …`) is
+    // listed as an observed as well as a state; only a state no equation
+    // defines has anything to integrate.
+    if flat
+        .state_variables
+        .keys()
+        .any(|k| !flat.observed_variables.contains_key(k))
+    {
         return nothing();
     }
     // An ill-formed document is not a compiler's to refuse: a name declared
@@ -2461,6 +2480,16 @@ fn static_observed_fields(
     )?;
     let values = match compiled.evaluate_stateless_fields(p, t0) {
         Ok(values) => values,
+        // A value the spec makes invalid (a degenerate polygon operand,
+        // esm-spec §8.6.1) is refused, not handed back as a Problem with no
+        // fields; a value that is only not yet available (a parameter with no
+        // default, a field a provider fills later) still is.
+        Err(e)
+            if e.to_string()
+                .contains(crate::simulate_array::GEOMETRY_CLIP_CODE) =>
+        {
+            return Err(e);
+        }
         Err(e) => return Ok((HashMap::new(), report.rules, Some(e.to_string()))),
     };
     let fields = values
@@ -2870,6 +2899,7 @@ fn compile_backend(
     }
 
     refuse_structurally_unreachable(file)?;
+    refuse_unregistered_callback_reads(file)?;
 
     if mode == Rhs::Auto && !has_differential_equations(file, model_name) {
         // Nothing to integrate is not nothing to run: an event, an implicit
@@ -2978,6 +3008,89 @@ fn refuse_structurally_unreachable(file: &EsmFile) -> Result<(), SimulateError> 
                         "§11.4.1",
                     ));
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuse, with `callback_unregistered` (esm-spec §9.6.6), an equation that
+/// reads a variable a `callback` coupling injects
+/// (`config.callback_variables[].name`). Only a registered callback supplies
+/// that value, and nothing registers one at construction, so a build would read
+/// a placeholder the document does not describe. The interpreter would read
+/// an unset forcing slot at its first call instead.
+fn refuse_unregistered_callback_reads(file: &EsmFile) -> Result<(), SimulateError> {
+    let mut injected: BTreeMap<String, String> = BTreeMap::new();
+    for entry in file.coupling.iter().flatten() {
+        let crate::CouplingEntry::Callback {
+            callback_id,
+            config,
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        let names = config
+            .as_ref()
+            .and_then(|c| c.get("callback_variables"))
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|cv| cv.get("name").and_then(|n| n.as_str()));
+        for name in names {
+            injected.insert(name.to_string(), callback_id.clone());
+        }
+    }
+    if injected.is_empty() {
+        return Ok(());
+    }
+    let Some(models) = file.models.as_ref() else {
+        return Ok(());
+    };
+    let mut names: Vec<&String> = models.keys().collect();
+    names.sort();
+    for name in names {
+        callback_reads_in(&models[name], name, &injected)?;
+    }
+    Ok(())
+}
+
+/// [`refuse_unregistered_callback_reads`] over one model and its inline
+/// subsystems. A name the model declares itself is not the injected one.
+fn callback_reads_in(
+    model: &crate::types::Model,
+    path: &str,
+    injected: &BTreeMap<String, String>,
+) -> Result<(), SimulateError> {
+    for eq in &model.equations {
+        for side in [&eq.lhs, &eq.rhs] {
+            let mut vars: Vec<String> = crate::free_variables(side).into_iter().collect();
+            vars.sort();
+            for v in vars {
+                if model.variables.contains_key(&v) {
+                    continue;
+                }
+                if let Some(id) = injected.get(&v) {
+                    return Err(SimulateError::Compile(
+                        crate::compile_error::CompileError::build_err(format!(
+                            "[{}] '{path}' reads '{v}', which the `callback` coupling '{id}' \
+                             supplies, but no callback is registered to supply it at \
+                             construction; refusing the build rather than reading a value \
+                             the document does not give (esm-spec §9.6.6)",
+                            crate::diagnostic::codes::CALLBACK_UNREGISTERED
+                        )),
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(subs) = model.subsystems.as_ref() {
+        let mut names: Vec<&String> = subs.keys().collect();
+        names.sort();
+        for name in names {
+            if let Ok((sub, _)) = crate::simulate_array::parse_subsystem_model(name, &subs[name]) {
+                callback_reads_in(&sub, &format!("{path}.{name}"), injected)?;
             }
         }
     }
@@ -3302,15 +3415,18 @@ impl SuppliedData {
     /// a constant snapshot in the forcing buffer (served by
     /// [`Self::refuse_missing_array`]).
     #[cfg(not(target_arch = "wasm32"))]
-    fn bind_arrays(&self, file: &mut EsmFile, p: &HashMap<String, f64>) {
+    fn bind_arrays(&self, file: &mut EsmFile, p: &HashMap<String, f64>, selected: Option<&str>) {
         if self.arrays.is_empty() {
             return;
         }
         let Some(models) = file.models.as_mut() else {
             return;
         };
+        // With one model selected, a bare key names that model's parameter;
+        // the other models are not built, so they cannot make it ambiguous.
+        let in_scope = |mname: &str| selected.is_none_or(|s| s == mname);
         let mut owners: HashMap<String, usize> = HashMap::new();
-        for m in models.values() {
+        for (_, m) in models.iter().filter(|(n, _)| in_scope(n)) {
             for (v, var) in &m.variables {
                 if is_shaped_parameter(var) {
                     *owners.entry(v.clone()).or_default() += 1;
@@ -3318,6 +3434,9 @@ impl SuppliedData {
             }
         }
         for (mname, m) in models.iter_mut() {
+            if !in_scope(mname) {
+                continue;
+            }
             for (v, var) in m.variables.iter_mut() {
                 if !is_shaped_parameter(var) {
                     continue;
@@ -3347,9 +3466,9 @@ impl SuppliedData {
         }
     }
 
-    /// The missing-data gate for an array model: serve a caller's array to a
-    /// forcing name no provider supplies, and refuse a forcing name with
-    /// neither data nor a declared `default`, or a shaped parameter the build
+    /// The missing-data gate for an array model: serve a forcing name no
+    /// provider supplies from the caller's array, else from its declared
+    /// `default`, and refuse one with neither, or a shaped parameter the build
     /// left with no value at all.
     fn refuse_missing_array(
         &self,
@@ -3367,13 +3486,20 @@ impl SuppliedData {
                 forcing.borrow_mut().insert(name.clone(), arr);
                 continue;
             }
-            // A parameter that declares a default is not missing data (§10.10);
-            // whether that default is its value when no data is supplied is
-            // left as it was: the name stays unserved and its first read
-            // fails, naming it.
-            if !c.has_forcing_default(name) {
-                return Err(missing_data_error(name, declared_variable(file, name)));
+            // No data is supplied: a declared default is the value (esm-spec
+            // §6.3), and with none the parameter is missing data (§10.10).
+            let mut value = match c.forcing_default(name) {
+                None => return Err(missing_data_error(name, declared_variable(file, name))),
+                // A default over a shape that does not resolve yet (an
+                // unmaterialized derived set) has no field to fill here.
+                Some(None) => continue,
+                Some(Some(value)) => value,
+            };
+            let prec = precision::of_variable(name);
+            if prec.is_f32() {
+                value.mapv_inplace(|x| prec.round(x));
             }
+            forcing.borrow_mut().insert(name.clone(), value);
         }
         for name in c.unvalued_shaped_params() {
             if !names_key(p, name) {
@@ -3409,6 +3535,7 @@ impl SuppliedData {
         &self,
         file: &EsmFile,
         p: &HashMap<String, f64>,
+        selected: Option<&str>,
     ) -> Result<(), SimulateError> {
         let unvalued = |v: &crate::types::ModelVariable| {
             is_shaped_parameter(v) && v.default.is_none() && v.distribution.is_none()
@@ -3427,6 +3554,10 @@ impl SuppliedData {
             if !unvalued(var) || names_key(p, name) {
                 continue;
             }
+            // With one model selected, only its parameters are built.
+            if selected.is_some_and(|m| !name.starts_with(&format!("{m}."))) {
+                continue;
+            }
             if is_externally_fed(var) && names_key(&self.provider_keys, name) {
                 continue;
             }
@@ -3434,6 +3565,62 @@ impl SuppliedData {
         }
         Ok(())
     }
+}
+
+/// Set each 0-D parameter a value-invention node reads (inside a `skolem`,
+/// `rank` or arg-witness node, or a `distinct` / keyed `faq`) to the caller's
+/// `p` entry for it — keyed `Model.param` or bare — and return the `p` keys
+/// used.
+fn bind_value_invention_params(file: &mut EsmFile, p: &HashMap<String, f64>) -> Vec<String> {
+    use crate::types::Expr;
+    use std::collections::HashSet;
+    fn collect(e: &Expr, inside: bool, out: &mut HashSet<String>) {
+        match e {
+            Expr::Variable(v) if inside => {
+                out.insert(v.clone());
+            }
+            Expr::Operator(n) => {
+                let vi = inside
+                    || matches!(n.op.as_str(), "skolem" | "rank" | "argmin" | "argmax")
+                    || n.distinct == Some(true)
+                    || n.key.is_some();
+                n.for_each_child(&mut |c| collect(c, vi, out));
+            }
+            _ => {}
+        }
+    }
+    let mut used = Vec::new();
+    if p.is_empty() {
+        return used;
+    }
+    let Some(models) = file.models.as_mut() else {
+        return used;
+    };
+    for (mname, m) in models.iter_mut() {
+        let mut read: HashSet<String> = HashSet::new();
+        for eq in &m.equations {
+            collect(&eq.rhs, false, &mut read);
+        }
+        for (v, var) in m.variables.iter_mut() {
+            if var.var_type != crate::types::VariableType::Parameter
+                || var.shape.as_ref().is_some_and(|s| !s.is_empty())
+                || !read.contains(v)
+            {
+                continue;
+            }
+            let qualified = format!("{mname}.{v}");
+            let key = if p.contains_key(&qualified) {
+                qualified
+            } else if p.contains_key(v) {
+                v.clone()
+            } else {
+                continue;
+            };
+            var.default = Some(crate::types::InlineValue::Scalar(p[&key]));
+            used.push(key);
+        }
+    }
+    used
 }
 
 /// Whether any equation of the raw document has a time derivative on its

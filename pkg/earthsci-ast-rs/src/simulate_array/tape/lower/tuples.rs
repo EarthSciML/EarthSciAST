@@ -108,9 +108,10 @@ impl TapeBuilder<'_> {
             bail_tape!("contracted: boolean reduction (or/and) not vectorized");
         };
         // With nothing contracted the interpreter returns the body itself,
-        // not `identity ⊕ body` (they differ on a `-0.0` term).
+        // not `identity ⊕ body` (they differ on a `-0.0` term): each output
+        // cell is one combination, kept or not by the gate.
         if contract_names.is_empty() {
-            bail_tape!("aggregate: a join gate on an aggregate with no contracted index");
+            return self.lower_pointwise_gated(idx_names, ranges, body, reduce, filter, join);
         }
         let lo: DimI = ranges.iter().map(|(l, _)| *l).collect();
         let shape: DimU = ranges
@@ -241,6 +242,85 @@ impl TapeBuilder<'_> {
             sec,
         );
         Ok(if rank0 { LV::Scalar(out) } else { LV::Arr(out) })
+    }
+
+    /// A join-gated aggregate with no contracted index: the gate admits or
+    /// rejects each output cell, which the build resolves from its data into a
+    /// constant mask. An admitted cell is the body (under the `filter`); a
+    /// rejected one is the semiring's identity, and its body is not evaluated
+    /// (a lazily evaluated position).
+    fn lower_pointwise_gated(
+        &mut self,
+        idx_names: &[String],
+        ranges: &[(i64, i64)],
+        body: &Expr,
+        reduce: ReduceKind,
+        filter: Option<&Expr>,
+        join: Option<&[JoinClause]>,
+    ) -> LResult<LV> {
+        let identity = reduce.identity();
+        let gates = match join {
+            Some(j) => self.build_join_gates(j)?,
+            None => Vec::new(),
+        };
+        let lo: DimI = ranges.iter().map(|(l, _)| *l).collect();
+        let shape: DimU = ranges
+            .iter()
+            .map(|(l, h)| (h - l + 1).max(0) as usize)
+            .collect();
+        if shape.contains(&0) {
+            bail_tape!("faq: empty output box");
+        }
+        let list = enumerate_tuples(idx_names, ranges, &[], &[], &gates)?;
+        let keep: Vec<f64> = list
+            .rows
+            .windows(2)
+            .map(|w| if w[1] > w[0] { 1.0 } else { 0.0 })
+            .collect();
+        if keep.iter().all(|&k| k == 0.0) {
+            return Ok(if ranges.is_empty() {
+                LV::Lit(identity)
+            } else {
+                self.emit_fill(&LV::Lit(identity), &shape, &lo, Cadence::Const)
+            });
+        }
+        let bx = LBox {
+            syms: idx_names,
+            lo: lo.clone(),
+            shape: shape.clone(),
+            cnames: &[],
+            cvals: SmallVec::new(),
+            tuple: 0,
+            visit: SmallVec::new(),
+        };
+        if keep.iter().all(|&k| k != 0.0) {
+            return self
+                .lower_filtered(body, filter, &bx, LV::Lit(identity))
+                .map(|t| t.unwrap_or(LV::Lit(identity)));
+        }
+        if ranges.is_empty() {
+            bail_tape!("aggregate: a rank-0 join gate");
+        }
+        let data = tape_index(self.const_data.len(), "array constants")?;
+        self.const_data.push(ConstArrayData {
+            shape: shape.clone(),
+            values: keep,
+        });
+        let sec = self.placement(Cadence::Const);
+        let mask_slot = self.new_slot(&shape, &lo, false, sec);
+        self.emit(
+            Instr::ConstArray {
+                data,
+                out: mask_slot,
+            },
+            sec,
+        );
+        self.known.insert(mask_slot, Known::Data(data));
+        self.lazy_depth += 1;
+        let term = self.lower_filtered(body, filter, &bx, LV::Lit(identity));
+        self.lazy_depth -= 1;
+        let term = term?.unwrap_or(LV::Lit(identity));
+        self.emit_select(LV::Arr(mask_slot), term, LV::Lit(identity))
     }
 
     /// Resolve each contracted dimension's bound: a static interval as it

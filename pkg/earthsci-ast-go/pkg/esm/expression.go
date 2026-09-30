@@ -352,10 +352,6 @@ var arithOpTable = map[string]arithOp{
 	"**":  {2, 2, powApply}, // evaluator leniency for ^; not a format operator
 	"exp": unaryMath(math.Exp),
 	"log": {1, 1, logApply},
-	// `ln` is the §4.3.4 spelling of the natural logarithm (it appears in the
-	// schema's scalar-operator enumeration and in units.go's dimensionless-
-	// argument set); it denotes exactly what `log` denotes here.
-	"ln": {1, 1, logApply},
 	"log10": {1, 1, func(a []float64) (float64, error) {
 		if a[0] <= 0 {
 			return 0, fmt.Errorf("log10 of non-positive number: %g", a[0])

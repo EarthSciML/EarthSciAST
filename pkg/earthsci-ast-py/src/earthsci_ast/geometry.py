@@ -60,6 +60,12 @@ class GeometryError(EarthSciAstError):
     """A polygon-clip / area evaluation failed (bad operand, degenerate input)."""
 
 
+class DegenerateRingError(GeometryError):
+    """A polygon operand has fewer than 3 distinct vertices after
+    deduplication: an invalid input value (esm-spec §8.6.1), not a clip the
+    backend could not complete."""
+
+
 class GeometryBackendUnavailable(GeometryError):
     """A spherical/geodesic clip was requested but `spherely` is not installed.
 
@@ -105,7 +111,7 @@ def _as_ring(poly: object, *, who: str) -> np.ndarray:
     # collapse to the n distinct vertices with implicit closure.
     arr = _dedup_consecutive(arr)
     if arr.shape[0] < 3:
-        raise GeometryError(
+        raise DegenerateRingError(
             f"intersect_polygon {who} needs ≥3 distinct vertices, got {arr.shape[0]}"
         )
     return arr

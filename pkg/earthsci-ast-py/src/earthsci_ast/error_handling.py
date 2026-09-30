@@ -365,6 +365,10 @@ RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered"
 #: skipped: a run without the construct reports a wrong answer.
 UNSUPPORTED_CONSTRUCT = "unsupported_construct"
 
+#: An equation reads a ``callback`` coupling variable, and no callback is
+#: registered to supply it at construction (esm-spec §9.6.6).
+CALLBACK_UNREGISTERED = "callback_unregistered"
+
 
 # ===========================================================================
 # Compiler selection (API_SPEC.md §5.8, esm-libraries-spec.md §2.5.10,

@@ -47,13 +47,6 @@ def test_manifest_declares_its_bindings() -> None:
 @pytest.mark.parametrize("case", _manifest()["cases"], ids=lambda c: c["id"])
 def test_without_data(case: dict, compiler: str) -> None:
     fixture = str(_ROOT / case["fixture"])
-    if case.get("python_without_data") == "refuses_unreadable_source":
-        # This binding reads the document's own data sources when the caller
-        # supplies none (the manifest's `python_note`); one is unreachable here.
-        with pytest.raises(Exception) as info:
-            esm_problem(fixture, (0.0, 1.0), compiler=compiler)
-        assert _manifest()["error_code"] in str(info.value), str(info.value)
-        return
     if case["missing"] is None:
         prob = esm_problem(fixture, (0.0, 1.0), compiler=compiler)
         if "expected_rhs_without_data" in case:

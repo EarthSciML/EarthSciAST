@@ -19,10 +19,10 @@ A case whose `missing` is `null` builds without data too; its
 without and with its arrays (`caller_array_outranks_default`: a caller's array
 is the value of a shaped parameter that declares a scalar default).
 
-`python_without_data: refuses_unreadable_source` marks a case where Python's
-default provider tries to read one of the document's own `data_sources` first
-and refuses on the unreadable source (same code, a different parameter named),
-so the Python runner checks the code only.
+`loaded_field_default_served`: a data-fed parameter that declares a default,
+with no provider and no caller array, takes the default in every binding; no
+binding reads the document's own data source unless the caller registers a
+provider for it.
 
 The arrays are synthesized: ramps for fields, a wrapped neighbour table for the
 stencil documents. They exercise the build and the compiled right-hand side,
