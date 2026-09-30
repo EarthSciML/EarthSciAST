@@ -357,6 +357,10 @@ diagnostic_code_registry! {
     DOMAIN_UNIT_MISMATCH = "domain_unit_mismatch";
     /// A model whose equation count cannot match its unknown count.
     EQUATION_COUNT_MISMATCH = "equation_count_mismatch";
+    /// An equation whose left-hand side names a parameter — bare, indexed,
+    /// inside a `faq`, or through a scoped reference into a subsystem
+    /// (esm-spec §6.3.1). An equation defines unknowns only.
+    EQUATION_DEFINES_PARAMETER = "equation_defines_parameter";
     /// An event `affect` writing a parameter rather than an unknown.
     EVENT_AFFECTS_PARAMETER = "event_affects_parameter";
     /// An event referring to a variable the model does not declare.
@@ -455,6 +459,10 @@ diagnostic_code_registry! {
     UNDEFINED_SYSTEM = "undefined_system";
     /// A reference to a variable the component does not declare.
     UNDEFINED_VARIABLE = "undefined_variable";
+    /// A string subscript of an `index` on an equation's left-hand side that
+    /// no enclosing left-hand `faq` binds — nor, for the bare-index definition,
+    /// the right-hand `faq`'s `output_idx` (esm-spec §6.3.1).
+    UNBOUND_INDEX_SYMBOL = "unbound_index_symbol";
     /// An evaluable-core op (esm-spec §4.2) with no evaluation rule in the
     /// evaluator a model was built for (esm-spec §9.6.6). Carried by
     /// `CompileError::UnevaluableOperatorError`.
@@ -597,6 +605,7 @@ mod error_code_tests {
             "enum_invalid_args",
             "enum_lowering_residual",
             "equation_count_mismatch",
+            "equation_defines_parameter",
             "event_affects_parameter",
             "event_var_undeclared",
             "factor_with_expression_transform",
@@ -663,6 +672,7 @@ mod error_code_tests {
             "template_inject_target_unknown",
             "template_library_illegal_payload",
             "toplevel_model_ref_unresolved",
+            "unbound_index_symbol",
             "undefined_index_set",
             "undefined_operator",
             "undefined_parameter",

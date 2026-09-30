@@ -133,6 +133,10 @@ pub enum StructuralErrorCode {
     UndefinedParameter,
     /// Reaction with both substrates and products null
     NullReaction,
+    /// An equation whose left-hand side names a parameter (esm-spec §6.3.1)
+    EquationDefinesParameter,
+    /// A left-hand-side subscript bound by no `faq` (esm-spec §6.3.1)
+    UnboundIndexSymbol,
     /// An event `affects` LHS names a PARAMETER (esm-spec §5.4/§5.5): esm
     /// 1.0.0 events may affect UNKNOWNS only, and a parameter that changes
     /// during a run declares its own `update` block instead.
@@ -288,6 +292,8 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::UndefinedSpecies => codes::UNDEFINED_SPECIES,
             Self::UndefinedParameter => codes::UNDEFINED_PARAMETER,
             Self::NullReaction => codes::NULL_REACTION,
+            Self::EquationDefinesParameter => codes::EQUATION_DEFINES_PARAMETER,
+            Self::UnboundIndexSymbol => codes::UNBOUND_INDEX_SYMBOL,
             Self::EventAffectsParameter => codes::EVENT_AFFECTS_PARAMETER,
             Self::UnresolvedScopedRef => codes::UNRESOLVED_SCOPED_REF,
             Self::EventVarUndeclared => codes::EVENT_VAR_UNDECLARED,
