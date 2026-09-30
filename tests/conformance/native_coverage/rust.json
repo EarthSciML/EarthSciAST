@@ -21,12 +21,6 @@
   },
   "entries": [
     {
-      "path": "tests/conformance/operator_compose_merge/fixtures/owner_rename_state_wins_observed_first.esm",
-      "code": "compiler_refused_rule",
-      "rule": "Sink.O3",
-      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `Sink.O3`"
-    },
-    {
       "path": "tests/coupling/callback_examples.esm",
       "code": "compiler_refused_rule",
       "rule": "D(WeatherModel.temperature)",
