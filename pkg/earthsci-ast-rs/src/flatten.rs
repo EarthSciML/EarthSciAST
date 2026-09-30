@@ -3455,6 +3455,22 @@ fn apply_operator_compose(
         }
         let rhs_a = std::mem::replace(&mut per_system[a_idx].equations[i].rhs, Expr::Integer(0));
         per_system[a_idx].equations[i].rhs = sum_exprs(rhs_a, rhs_b);
+        // Step 4: "the final equation for variable x has the original LHS:
+        // D(x, t)". Where A defines the quantity by a bare equation and B
+        // gives it a tendency, the merged equation is that tendency, spelled
+        // in A's name (which the ownership rule below may still retarget).
+        let a_lhs = &per_system[a_idx].equations[i].lhs;
+        if !matches!(
+            crate::classification::lhs_form(a_lhs),
+            crate::classification::LhsForm::Derivative(_)
+        ) && matches!(
+            crate::classification::lhs_form(&b_eq.lhs),
+            crate::classification::LhsForm::Derivative(_)
+        ) {
+            let subs: HashMap<String, Expr> =
+                std::iter::once((b_dep.clone(), Expr::Variable(target.clone()))).collect();
+            per_system[a_idx].equations[i].lhs = crate::substitute::substitute(&b_eq.lhs, &subs);
+        }
         merged_positions.insert(i);
         if target != b_dep {
             if is_bare_match {

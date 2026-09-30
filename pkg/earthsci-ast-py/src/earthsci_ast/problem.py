@@ -1538,8 +1538,35 @@ def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
     for eq in flat.equations:
         _walk_for_unlowered(eq.lhs, structural_derivative_ok=True)
         _walk_for_unlowered(eq.rhs, structural_derivative_ok=False)
+        _refuse_array_valued_bool_and_or(eq.rhs)
     for _target, rhs in flat.field_ics:
         _walk_for_unlowered(rhs, structural_derivative_ok=False)
+
+
+def _refuse_array_valued_bool_and_or(expr: Any) -> None:
+    """CONFORMANCE_SPEC §5.6.1: the numeric evaluators reject an ARRAY-valued
+    ``bool_and_or`` reduction — a ``faq`` with an output index that contracts
+    another — at build, under every compiler. A scalar one runs. A
+    value-invention node (``distinct``, a ``key``) or an addressable producer
+    (``id``) yields an index set, not an array, and is not this."""
+    if not isinstance(expr, ExprNode):
+        return
+    if (
+        expr.op == "faq"
+        and expr.semiring == "bool_and_or"
+        and not expr.distinct
+        and expr.key is None
+        and expr.id is None
+    ):
+        out = [o for o in (expr.output_idx or []) if isinstance(o, str)]
+        if out and any(k not in out for k in (expr.ranges or {})):
+            raise SimulationError(
+                "array-valued `bool_and_or` reduction: the numeric evaluators reject a "
+                "`bool_and_or` faq that has output indices and contracts one "
+                "(CONFORMANCE_SPEC §5.6.1); a scalar one, with no output index, runs"
+            )
+    for child in iter_children(expr):
+        _refuse_array_valued_bool_and_or(child)
 
 
 #: Evaluable-core ops no Python pathway evaluates, refused at the front door with

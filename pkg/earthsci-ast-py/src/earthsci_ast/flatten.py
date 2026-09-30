@@ -1768,8 +1768,16 @@ def _apply_operator_compose(
             if factor != 1.0:
                 substituted_rhs = ExprNode(op="*", args=[factor, substituted_rhs])
             new_rhs = _add_exprs(a_eq.rhs, substituted_rhs)
+            # Step 4: "the final equation for variable x has the original LHS:
+            # D(x, t)". Where A defines the quantity by a bare equation and B
+            # gives it a tendency, the merged equation takes B's `D` left-hand
+            # side, spelled in A's name (the ownership rule below may still
+            # retarget it).
+            new_lhs = a_eq.lhs
+            if _is_d_lhs(b_eq.lhs) and not _is_d_lhs(a_eq.lhs):
+                new_lhs = substitute(b_eq.lhs, {b_dep: target_dep})
             a.equations[i] = FlattenedEquation(
-                lhs=a_eq.lhs,
+                lhs=new_lhs,
                 rhs=new_rhs,
                 source_system=a_eq.source_system,
             )
@@ -1900,6 +1908,11 @@ def _bare_name_owner(
     if b_state:
         return b_dep
     return target_dep
+
+
+def _is_d_lhs(lhs: Expr) -> bool:
+    """Whether an equation's left-hand side is a time derivative ``D(x, t)``."""
+    return isinstance(lhs, ExprNode) and lhs.op == "D"
 
 
 def _report_operator_compose_merge(
