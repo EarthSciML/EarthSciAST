@@ -366,6 +366,18 @@ pub(super) fn run_range(
                     }
                 }
             }
+            Instr::Calendar { func, a, out } => {
+                let desc = &prog.slots[*out as usize];
+                let off = slot_off[*out as usize];
+                if desc.scalar {
+                    let av = resolve_scalar(a, env, slab_ptr, slot_off, obs);
+                    unsafe { *slab_ptr.add(off) = calendar_at(*func, av) };
+                } else {
+                    let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off, obs);
+                    let dst = unsafe { slab_ptr.add(off) };
+                    unsafe { ew1(dst, &desc.shape, &av, |x| calendar_at(*func, x)) };
+                }
+            }
             Instr::ConstArray { data, out } => {
                 let d = &prog.const_data[*data as usize];
                 let off = slot_off[*out as usize];
@@ -657,6 +669,15 @@ pub(super) fn run_range(
                 let w = &prog.dy_writes[*write as usize];
                 let desc = &prog.slots[w.slot as usize];
                 let off = slot_off[w.slot as usize];
+                if let Some(pos) = &w.scatter {
+                    // The slot is contiguous row-major, the order `pos` lists.
+                    debug_assert_eq!(pos.len(), desc.elems());
+                    for (k, &p) in pos.iter().enumerate() {
+                        dy[p] = unsafe { *slab_ptr.add(off + k) };
+                    }
+                    pc += 1;
+                    continue;
+                }
                 match w.scalar_flat {
                     Some(flat) => {
                         debug_assert!(desc.scalar);

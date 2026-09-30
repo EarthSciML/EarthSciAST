@@ -1,7 +1,7 @@
 {
     "category": "scalar_ic",
     "version": "1.0",
-    "description": "Cross-binding conformance for esm-spec §11.4 'Initial conditions (the `ic` op)' at rank ZERO: an `ic`-LHS equation is the initial value of its target, a 0-D component's `ic` RHS is a scalar, a state with no `ic` falls back to its declared `default`, and a test's `initial_conditions` overrides the `ic` for that run. Model PARAMETERS bind in an `ic` RHS's build-time evaluation scope (§6.6.5), keyed by LOCAL parameter name (§6.6). Every state of `scalar_ic.esm` declares a `default` that DIFFERS from its `ic`, so a binding that drops the equation reads the default and is caught rather than masked; `y` integrates `D(y)/dt = u` so the seeded value also has to reach the trajectory. `scalar_ic_in_array_model.esm` re-runs the same contract for a 0-D state that shares a model with an ARRAY state, which routes the document through each binding's ARRAY runtime instead of its scalar one. Before this category, Python dropped every 0-D `ic` on BOTH pathways (the scalar-SymPy one lowers only `D(x)/dt` and algebraic equations; the array-NumPy one folded only array-shaped targets and no-op'd the rest) and Rust dropped it on its scalar interpreter (`ic` matched neither `state_lhs_name` nor `observed_lhs_name` in `classify_equations`). Both were SILENT: `ic(u) ~ 3.0` ran from the default and the inline test still reported a verdict. Julia folded both ranks correctly and is the reference binding: its `run_inline_tests` minted both goldens.",
+    "description": "Cross-binding conformance for esm-spec §11.4 'Initial conditions (the `ic` op)' at rank ZERO: an `ic`-LHS equation is the initial value of its target, a 0-D component's `ic` RHS is a scalar, a state with no `ic` falls back to its declared `default`, and a test's `initial_conditions` overrides the `ic` for that run. Model PARAMETERS bind in an `ic` RHS's build-time evaluation scope (§6.6.5), keyed by LOCAL parameter name (§6.6). Every state of `scalar_ic.esm` declares a `default` that DIFFERS from its `ic`, so a binding that drops the equation reads the default and is caught rather than masked; `y` integrates `D(y)/dt = u` so the seeded value also has to reach the trajectory. `scalar_ic_in_array_model.esm` re-runs the same contract for a 0-D state that shares a model with an ARRAY state, which routes the document through each binding's ARRAY runtime instead of its scalar one. Before this category, Python dropped every 0-D `ic` on BOTH pathways (the scalar-SymPy one lowers only `D(x)/dt` and algebraic equations; the array-NumPy one folded only array-shaped targets and no-op'd the rest) and Rust dropped it on its scalar interpreter (`ic` matched neither `state_lhs_name` nor `observed_lhs_name` in `classify_equations`). Both were SILENT: `ic(u) ~ 3.0` ran from the default and the inline test still reported a verdict. Julia folded both ranks correctly and is the reference binding: its `run_inline_tests` minted both goldens. `faq_initialization_equation.esm` gates the esm-spec §6.2 initialization equations in their `faq`-valued form (`u ~ faq(…)`): each assigns the cells of its ranges when the initial state is built, after the defaults, a pointwise filter's excluded cell taking the semiring's 0, a parameter override reaching its scope, and a run's `initial_conditions` entry beating it for that cell only. Before it Rust and Python never evaluated them, and Julia evaluated them only in its internal builder: its front door (`esm_problem`, `run_inline_tests`) flattened them away.",
     "reference_binding": "julia",
     "bindings_required": [
         "julia",
@@ -91,6 +91,38 @@
                 { "test_id": "array_and_scalar_ic_param_override",     "assertion_idx": 2, "variable": "f", "reduce": null,  "expected": 1.5 }
             ],
             "golden": "golden/scalar_ic_in_array_model.json"
+        },
+        {
+            "id": "faq_initialization_equation",
+            "path": "fixtures/faq_initialization_equation.esm",
+            "model": "F",
+            "tags": [
+                "inline-test",
+                "esm-spec-6.2",
+                "initialization-equations",
+                "faq",
+                "initial-conditions",
+                "parameter-overrides"
+            ],
+            "shape": {
+                "x": 5
+            },
+            "assertions": [
+                { "test_id": "faq_init_defaults", "assertion_idx": 1, "variable": "u", "expected": 3.5 },
+                { "test_id": "faq_init_defaults", "assertion_idx": 2, "variable": "u", "expected": 5.5 },
+                { "test_id": "faq_init_defaults", "assertion_idx": 3, "variable": "y", "expected": 4.5 },
+                { "test_id": "faq_init_defaults", "assertion_idx": 4, "variable": "w", "expected": 9.0 },
+                { "test_id": "faq_init_defaults", "assertion_idx": 5, "variable": "w", "expected": 20.0 },
+                { "test_id": "faq_init_defaults", "assertion_idx": 6, "variable": "w", "expected": 0.0 },
+                { "test_id": "faq_init_defaults", "assertion_idx": 7, "variable": "w", "expected": 40.0 },
+                { "test_id": "faq_init_defaults", "assertion_idx": 8, "variable": "w", "expected": 9.0 },
+                { "test_id": "faq_init_parameter_override", "assertion_idx": 1, "variable": "u", "expected": 5.0 },
+                { "test_id": "faq_init_parameter_override", "assertion_idx": 2, "variable": "y", "expected": 7.0 },
+                { "test_id": "faq_init_run_override", "assertion_idx": 1, "variable": "u", "expected": 7.0 },
+                { "test_id": "faq_init_run_override", "assertion_idx": 2, "variable": "u", "expected": 4.5 },
+                { "test_id": "faq_init_run_override", "assertion_idx": 3, "variable": "y", "expected": 7.0 }
+            ],
+            "golden": "golden/faq_initialization_equation.json"
         }
     ]
 }

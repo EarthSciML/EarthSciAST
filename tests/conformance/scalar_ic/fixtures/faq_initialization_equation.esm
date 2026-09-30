@@ -1,0 +1,409 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "faq_initialization_equation",
+    "description": "esm-spec 6.2 initialization equations that hold at t = 0, in the faq-valued form `u ~ faq(...)`: each assigns the cells of its ranges at the build of the initial state, after the declared defaults and before the run. `u` covers every cell with a parameter expression of the cell index (u = A*i + B); `w` covers only cells 2..4, under a pointwise filter that excludes cell 3, so cells 1 and 5 keep their declared default and cell 3 takes the semiring's 0 (esm-schema `filter`). `y` integrates `u`, so the seeded values also have to reach the trajectory. A parameter override reaches the equation's scope, and a run's `initial_conditions` entry for one cell beats the equation for that cell only. The Julia reference seeds these in `_seed_faq_init_u0!`; before this fixture Rust and Python never evaluated them and every state started from its default.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "inline-test",
+      "esm-spec-6.2",
+      "initialization-equations",
+      "faq",
+      "initial-conditions"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 5
+    }
+  },
+  "models": {
+    "F": {
+      "variables": {
+        "A": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "Slope of u's initialization equation."
+        },
+        "B": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Offset of u's initialization equation."
+        },
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 0.0,
+          "description": "Seeded over every cell by u = A*i + B; held constant."
+        },
+        "w": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 9.0,
+          "description": "Seeded over cells 2..4 except 3; the other cells keep this default."
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 0.0,
+          "description": "Integrates u from 0, so y(1) = u(0)."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                5
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                5
+              ]
+            },
+            "expr": 0
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                5
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "w",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                5
+              ]
+            },
+            "expr": 0
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                5
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "y",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                5
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "u",
+                "i"
+              ]
+            }
+          }
+        }
+      ],
+      "initialization_equations": [
+        {
+          "lhs": "u",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                5
+              ]
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    "A",
+                    "i"
+                  ]
+                },
+                "B"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "w",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                2,
+                4
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                10.0,
+                "i"
+              ]
+            },
+            "filter": {
+              "op": "!=",
+              "args": [
+                "i",
+                3
+              ]
+            }
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-09,
+        "abs": 1e-11
+      },
+      "tests": [
+        {
+          "id": "faq_init_defaults",
+          "description": "u = 0.5*i + 3 over every cell; w = 10*i over cells 2 and 4, 0 at the filtered-out cell 3, and its declared 9 at the cells outside the ranges; y(1) = u(0).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "u",
+              "time": 0.0,
+              "coords": {
+                "x": 1
+              },
+              "expected": 3.5
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "coords": {
+                "x": 5
+              },
+              "expected": 5.5
+            },
+            {
+              "variable": "y",
+              "time": 1.0,
+              "coords": {
+                "x": 3
+              },
+              "expected": 4.5
+            },
+            {
+              "variable": "w",
+              "time": 0.0,
+              "coords": {
+                "x": 1
+              },
+              "expected": 9.0
+            },
+            {
+              "variable": "w",
+              "time": 0.0,
+              "coords": {
+                "x": 2
+              },
+              "expected": 20.0
+            },
+            {
+              "variable": "w",
+              "time": 0.0,
+              "coords": {
+                "x": 3
+              },
+              "expected": 0.0
+            },
+            {
+              "variable": "w",
+              "time": 0.0,
+              "coords": {
+                "x": 4
+              },
+              "expected": 40.0
+            },
+            {
+              "variable": "w",
+              "time": 0.0,
+              "coords": {
+                "x": 5
+              },
+              "expected": 9.0
+            }
+          ]
+        },
+        {
+          "id": "faq_init_parameter_override",
+          "description": "parameter_overrides {A: 1} reaches the initialization equation: u = i + 3.",
+          "parameter_overrides": {
+            "A": 1.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "u",
+              "time": 0.0,
+              "coords": {
+                "x": 2
+              },
+              "expected": 5.0
+            },
+            {
+              "variable": "y",
+              "time": 1.0,
+              "coords": {
+                "x": 4
+              },
+              "expected": 7.0
+            }
+          ]
+        },
+        {
+          "id": "faq_init_run_override",
+          "description": "A run's initial_conditions entry for u[2] beats the initialization equation for that cell only.",
+          "initial_conditions": {
+            "u[2]": 7.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "u",
+              "time": 0.0,
+              "coords": {
+                "x": 2
+              },
+              "expected": 7.0
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "coords": {
+                "x": 3
+              },
+              "expected": 4.5
+            },
+            {
+              "variable": "y",
+              "time": 1.0,
+              "coords": {
+                "x": 2
+              },
+              "expected": 7.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

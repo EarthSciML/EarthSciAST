@@ -709,6 +709,12 @@ pub struct ArrayCompiled {
     /// coordinate expression over grid-geometry aggregates — into the flat state
     /// vector cell-by-cell (DESIGN pde_simulation_pipeline §2 R2).
     field_ics: Vec<(String, Expr)>,
+    /// The `faq`-valued initialization equations (esm-spec §6.2), each
+    /// `(target_state, faq)`, in document order. At `u0` build time each
+    /// assigns the cells of its ranges, read against the initial state seeded
+    /// so far, except a cell the caller's `u0` names
+    /// ([`Self::seed_initialization_faqs`]).
+    init_faqs: Vec<(String, Expr)>,
     /// The STATE-FREE observed definitions a field `ic` RHS may read, in name
     /// order (esm-spec §6.6.5 "Build-time evaluation scope").
     ///
@@ -774,6 +780,15 @@ pub struct ArrayCompiled {
     /// registry cannot size. The tape compiles a read of one of these into a
     /// forcing load (`tape::Instr::LoadForcing`) rather than declining it.
     forcing_decls: IndexMap<String, Option<Vec<usize>>>,
+    /// The [`Self::forcing_decls`] entries whose parameter declares a
+    /// `default`, which the front door's missing-data gate does not refuse.
+    forcing_defaults: HashSet<String>,
+    /// Every SHAPED parameter the build left with no value at all: no
+    /// `default`, no inline data, no `distribution`, and no refresh from
+    /// outside the model. It holds a scalar-table slot with no value, which a
+    /// per-cell read cannot index; [`crate::problem::esm_problem`] refuses the
+    /// build naming each one (esm-spec §10.10).
+    unvalued_shaped_params: Vec<String>,
     /// The tape programs this model has built ([`tape::TapeCache`], which says
     /// what a kept program depends on).
     tape_cache: tape::TapeCache,

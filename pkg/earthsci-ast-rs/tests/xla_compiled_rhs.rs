@@ -1308,15 +1308,15 @@ fn a_strict_table_lookup_is_refused_by_name() {
         ),
         Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
     }
-    let err = earthsci_ast::esm_problem(
+    let Err(err) = earthsci_ast::esm_problem(
         &file,
         (0.0, 1.0),
         earthsci_ast::ProblemOptions {
             compiler: Some(earthsci_ast::Compiler::Xla),
             ..Default::default()
         },
-    )
-    .err()
-    .expect("xla refuses");
+    ) else {
+        panic!("xla refuses");
+    };
     assert!(err.to_string().contains("ramp_tab"), "{err}");
 }

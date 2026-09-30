@@ -1,0 +1,341 @@
+{
+ "category": "missing_data",
+ "version": "1.0",
+ "description": "Cross-binding conformance for a SHAPED parameter with no data supplied at the front door (esm-spec §10.10: a parameter with neither a default nor a supplied value is an error when a problem is built; §6.3 and CONFORMANCE_SPEC §5.32.5 for what supplies one). Each case builds its fixture through `esm_problem` under every listed compiler twice. Without data, every binding must refuse the construction with `E_TREEWALK_MISSING_DATA`, naming a parameter that has no value (one of `missing`: the message must contain the model-local name of at least one); a binding that runs the document on an invented value (zero, NaN, or its scalar slot) is wrong, and so is one that defers the failure to the first evaluation. With the case's `const_arrays` (keyed by flattened name, which every binding resolves by the §6.6.2 rules), the construction must succeed under every compiler, and where `rhs` is true the right-hand side evaluated at the manifest's probe state must be bit-for-bit identical between `native` and `interpreter` within each binding. Each binding's message also names what the document says fills the parameter: its data source, its registered handler, or nothing. A case whose `missing` is null is not refused: it builds without data too, and its `expected_rhs_without_data` / `expected_rhs` pin the exact right-hand side (at any state; it reads no state) without and with the case's arrays — which value wins when both a default and a caller array exist.",
+ "bindings_required": [
+  "julia",
+  "python",
+  "rust"
+ ],
+ "scope_excluded": {
+  "go": "rewrite-only port; no esm_problem",
+  "typescript": "no esm_problem with a const-array channel"
+ },
+ "compilers": [
+  "native",
+  "interpreter"
+ ],
+ "error_code": "E_TREEWALK_MISSING_DATA",
+ "probe_state": "u[k] = 1 + 0.1*sin(0.37*k) for the k-th state slot (0-based), the same vector for both compilers of one binding",
+ "cases": [
+  {
+   "id": "shaped_param_no_default",
+   "fixture": "../shaped_parameter_const_arrays/fixtures/shaped_param_no_default.esm",
+   "missing": [
+    "Column.k"
+   ],
+   "const_arrays": {
+    "Column.k": [
+     0.5,
+     0.51,
+     0.52
+    ]
+   },
+   "rhs": false,
+   "note": "a shaped parameter nothing in the document gives a value; state-free, so only the refusal is compared here (shaped_parameter_const_arrays compares the observed with data)"
+  },
+  {
+   "id": "coordinates_registry",
+   "fixture": "../../valid/coordinates_registry.esm",
+   "missing": [
+    "AtmosphereField.lev_pressure",
+    "AtmosphereField.mesh_lat",
+    "AtmosphereField.mesh_lon"
+   ],
+   "const_arrays": {
+    "AtmosphereField.lev_pressure": [
+     1000.0,
+     900.0
+    ],
+    "AtmosphereField.mesh_lat": [
+     10.0,
+     11.0,
+     12.0,
+     13.0,
+     14.0
+    ],
+    "AtmosphereField.mesh_lon": [
+     -100.0,
+     -99.0,
+     -98.0,
+     -97.0,
+     -96.0
+    ]
+   },
+   "rhs": true,
+   "note": "coordinate tables no equation reads: esm-spec §10.10 still makes a parameter with no value an error when the problem is built"
+  },
+  {
+   "id": "loader_const_seed",
+   "fixture": "../../valid/cadence/loader_const_seed.esm",
+   "missing": [
+    "LoaderConstSeed.bc"
+   ],
+   "const_arrays": {
+    "LoaderConstSeed.bc": [
+     0.5,
+     0.51,
+     0.52,
+     0.53
+    ]
+   },
+   "rhs": true
+  },
+  {
+   "id": "loader_temporal_seed",
+   "fixture": "../../valid/cadence/loader_temporal_seed.esm",
+   "missing": [
+    "LoaderTemporalSeed.bc"
+   ],
+   "const_arrays": {
+    "LoaderTemporalSeed.bc": [
+     0.5,
+     0.51,
+     0.52,
+     0.53
+    ]
+   },
+   "rhs": true
+  },
+  {
+   "id": "mixed_stencil",
+   "fixture": "../../valid/cadence/mixed_stencil.esm",
+   "missing": [
+    "MixedStencilDiffusion.nbr",
+    "MixedStencilDiffusion.coeff",
+    "MixedStencilDiffusion.Kdiff"
+   ],
+   "const_arrays": {
+    "MixedStencilDiffusion.nbr": [
+     [
+      3,
+      4,
+      1
+     ],
+     [
+      4,
+      1,
+      2
+     ],
+     [
+      1,
+      2,
+      3
+     ],
+     [
+      2,
+      3,
+      4
+     ]
+    ],
+    "MixedStencilDiffusion.coeff": [
+     [
+      0.5,
+      0.51,
+      0.52
+     ],
+     [
+      0.53,
+      0.54,
+      0.55
+     ],
+     [
+      0.56,
+      0.57,
+      0.58
+     ],
+     [
+      0.59,
+      0.6,
+      0.61
+     ]
+    ],
+    "MixedStencilDiffusion.Kdiff": [
+     2.0,
+     2.25,
+     2.5,
+     2.75
+    ]
+   },
+   "rhs": true
+  },
+  {
+   "id": "discrete_remesh_stencil",
+   "fixture": "../../valid/cadence/discrete_remesh_stencil.esm",
+   "missing": [
+    "DiscreteRemeshStencil.nbr",
+    "DiscreteRemeshStencil.coeff"
+   ],
+   "const_arrays": {
+    "DiscreteRemeshStencil.nbr": [
+     [
+      3,
+      4,
+      1
+     ],
+     [
+      4,
+      1,
+      2
+     ],
+     [
+      1,
+      2,
+      3
+     ],
+     [
+      2,
+      3,
+      4
+     ]
+    ],
+    "DiscreteRemeshStencil.coeff": [
+     [
+      0.5,
+      0.51,
+      0.52
+     ],
+     [
+      0.53,
+      0.54,
+      0.55
+     ],
+     [
+      0.56,
+      0.57,
+      0.58
+     ],
+     [
+      0.59,
+      0.6,
+      0.61
+     ]
+    ]
+   },
+   "rhs": true
+  },
+  {
+   "id": "advection_reaction_loaded_ic_bc",
+   "fixture": "../../valid/advection_reaction_loaded_ic_bc.esm",
+   "missing": [
+    "Advection.u_wind",
+    "Advection.O3_inflow",
+    "Advection.NO_inflow",
+    "Advection.NO2_inflow"
+   ],
+   "const_arrays": {
+    "Advection.u_wind": [
+     [
+      2.0,
+      2.5
+     ],
+     [
+      3.0,
+      3.5
+     ],
+     [
+      4.0,
+      4.5
+     ],
+     [
+      5.0,
+      5.5
+     ]
+    ],
+    "Advection.O3_inflow": [
+     3e-08,
+     3.1e-08
+    ],
+    "Advection.NO_inflow": [
+     1e-09,
+     1.1e-09
+    ],
+    "Advection.NO2_inflow": [
+     2e-09,
+     2.1e-09
+    ]
+   },
+   "rhs": true
+  },
+  {
+   "id": "coupled_refresh_regrid",
+   "fixture": "../refresh/fixtures/coupled_refresh_regrid.esm",
+   "missing": [
+    "M.F_src",
+    "M.scale_src"
+   ],
+   "const_arrays": {
+    "M.F_src": [
+     1.0,
+     1.5,
+     2.0,
+     2.5,
+     3.0,
+     3.5
+    ],
+    "M.scale_src": [
+     0.5,
+     0.6,
+     0.7,
+     0.8,
+     0.9,
+     1.0
+    ]
+   },
+   "rhs": true
+  },
+  {
+   "id": "discrete_materialize_contraction",
+   "fixture": "../discrete_materialize/fixtures/discrete_materialize_contraction.esm",
+   "missing": [
+    "M.src"
+   ],
+   "const_arrays": {
+    "M.src": [
+     1.0,
+     2.0
+    ]
+   },
+   "rhs": true
+  },
+  {
+   "id": "isrm",
+   "fixture": "../pushdown/fixtures/isrm.esm",
+   "missing": [
+    "ISRM.src_E",
+    "ISRM.src_N",
+    "ISRM.src_S",
+    "ISRM.src_W"
+   ],
+   "const_arrays": null,
+   "rhs": false,
+   "note": "the source-receptor document without its source-cell envelopes; refusal only",
+   "python_without_data": "refuses_unreadable_source"
+  },
+  {
+   "id": "caller_array_outranks_default",
+   "fixture": "fixtures/caller_array_outranks_default.esm",
+   "missing": null,
+   "const_arrays": {
+    "Column.k": [
+     0.25,
+     0.5,
+     1.0
+    ]
+   },
+   "rhs": true,
+   "expected_rhs_without_data": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "expected_rhs": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "note": "not a missing-data case: it builds either way, and pins which value wins"
+  }
+ ],
+ "python_note": "Python's default provider reads a document's own data_sources when the caller supplies neither a provider nor an array; an unreadable source then refuses the construction with the same code, naming the first parameter it could not read, which may be one that declares a default. A case marked `python_without_data: refuses_unreadable_source` is one where that happens first, and the Python runner checks the code only."
+}

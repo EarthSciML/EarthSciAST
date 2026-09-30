@@ -1,0 +1,85 @@
+{
+    "fixture": "faq_initialization_equation",
+    "assertions": [
+        {
+            "test_id": "faq_init_defaults",
+            "assertion_idx": 1,
+            "variable": "u",
+            "actual": 3.5
+        },
+        {
+            "test_id": "faq_init_defaults",
+            "assertion_idx": 2,
+            "variable": "u",
+            "actual": 5.5
+        },
+        {
+            "test_id": "faq_init_defaults",
+            "assertion_idx": 3,
+            "variable": "y",
+            "actual": 4.5
+        },
+        {
+            "test_id": "faq_init_defaults",
+            "assertion_idx": 4,
+            "variable": "w",
+            "actual": 9
+        },
+        {
+            "test_id": "faq_init_defaults",
+            "assertion_idx": 5,
+            "variable": "w",
+            "actual": 20
+        },
+        {
+            "test_id": "faq_init_defaults",
+            "assertion_idx": 6,
+            "variable": "w",
+            "actual": 0
+        },
+        {
+            "test_id": "faq_init_defaults",
+            "assertion_idx": 7,
+            "variable": "w",
+            "actual": 40
+        },
+        {
+            "test_id": "faq_init_defaults",
+            "assertion_idx": 8,
+            "variable": "w",
+            "actual": 9
+        },
+        {
+            "test_id": "faq_init_parameter_override",
+            "assertion_idx": 1,
+            "variable": "u",
+            "actual": 5
+        },
+        {
+            "test_id": "faq_init_parameter_override",
+            "assertion_idx": 2,
+            "variable": "y",
+            "actual": 6.999999999999997
+        },
+        {
+            "test_id": "faq_init_run_override",
+            "assertion_idx": 1,
+            "variable": "u",
+            "actual": 7
+        },
+        {
+            "test_id": "faq_init_run_override",
+            "assertion_idx": 2,
+            "variable": "u",
+            "actual": 4.5
+        },
+        {
+            "test_id": "faq_init_run_override",
+            "assertion_idx": 3,
+            "variable": "y",
+            "actual": 6.999999999999997
+        }
+    ],
+    "reference_binding": "julia",
+    "_comment": "Minted by the Julia reference binding's `run_inline_tests` (Tsit5, reltol=1e-12, abstol=1e-14) over fixtures/faq_initialization_equation.esm. u and w are held constant by a zero RHS, so their actuals are exact; y integrates u, so its actuals carry the integrator's error."
+}

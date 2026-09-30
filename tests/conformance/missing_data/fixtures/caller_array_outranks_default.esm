@@ -1,0 +1,86 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "caller_array_outranks_default",
+    "description": "A shaped parameter with a SCALAR default read per cell by a differential equation. A caller's const_arrays entry for it is the parameter's value and outranks the default (CONFORMANCE_SPEC \u00a75.32.5); without one the default broadcasts (esm-spec \u00a76.3). Rust's compiled right-hand side used to read the default even when the caller supplied the array.",
+    "authors": [
+      "missing_data conformance"
+    ]
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "default": 0.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "k",
+                "i"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

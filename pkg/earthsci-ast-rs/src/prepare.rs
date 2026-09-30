@@ -1608,9 +1608,9 @@ impl<'o> BuildState<'o> {
         // array runtime, so a mounted subsystem's equations and declarations
         // are in scope under their mounted names (`D(North.u)`, a `deg`
         // `North.theta`).
-        crate::simulate_array::resolve_model_self_references(&mut model, &model_name);
         crate::simulate_array::mount_subsystems(&mut model, &mut index_sets)
             .map_err(|e| err(format!("model '{model_name}': {e}")))?;
+        crate::simulate_array::resolve_model_self_references(&mut model, &model_name);
         crate::simulate_array::apply_flatten_rewrites(&mut model)
             .map_err(|e| err(format!("model '{model_name}': {e}")))?;
 

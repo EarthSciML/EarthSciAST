@@ -175,11 +175,19 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
     # all; without it the run doc never carries the key and the document's
     # declared tolerances were silently dropped.
     run_solver = nothing
+    # And the `faq`-valued initialization equations (esm-spec §6.2), which ride
+    # on each `Model`, not on `FlattenedSystem`: namespaced here, re-attached to
+    # the run doc's model below, where the tree-walk build seeds `u0` from them
+    # (`_seed_faq_init_u0!`).
+    run_init = Equation[]
     if input isa EsmFile
         _refuse_unsupported_major_version(input.esm)
         _refuse_reserved_declaration_names(input)
         run_coordinates = input.coordinates
         run_solver = input.solver
+        for (mname, model) in something(input.models, ())
+            _collect_initialization_faqs!(run_init, model, String(mname))
+        end
         # esm-spec §9.6.4 Option B: `flatten` ALWAYS carries surviving
         # `apply_expression_template` references into the FlattenedSystem; they
         # ride to the tree-walk build boundary below.
@@ -239,10 +247,38 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
             block = serialize_solver(run_solver)
             isempty(block) || (doc["solver"] = block)
         end
+        if !isempty(run_init)
+            for (_, m) in doc["models"]
+                m["initialization_equations"] = Any[serialize_equation(eq) for eq in run_init]
+            end
+        end
         return doc
     end
     throw(SimulateError("simulate: unsupported input of type $(typeof(input)); " *
                         "pass a path, EsmFile, FlattenedSystem, or native ESM Dict"))
+end
+
+# The `faq`-valued initialization equations of `model` and its subsystems —
+# `u ~ faq(…)`, a bare-variable left-hand side and an array-valued right-hand
+# side (esm-spec §6.2) — namespaced under `prefix` exactly as `flatten`
+# namespaces the model's equations, appended to `out` in document order. The
+# other spellings name no cells for the tree-walk seed to assign.
+function _collect_initialization_faqs!(out::Vector{Equation}, model::Model, prefix::String)
+    local_names = Set{String}(keys(model.variables))
+    for (sub_name, _) in model.subsystems
+        push!(local_names, sub_name)
+    end
+    for eq in model.initialization_equations
+        (eq.lhs isa VarExpr && eq.rhs isa OpExpr && _is_faq_op(eq.rhs.op) &&
+         eq.rhs.output_idx !== nothing && !isempty(eq.rhs.output_idx)) || continue
+        push!(out, Equation(namespace_expr(eq.lhs, prefix, local_names),
+                            namespace_expr(eq.rhs, prefix, local_names)))
+    end
+    for (sub_name, sub_model) in model.subsystems
+        sub_model isa Model || continue
+        _collect_initialization_faqs!(out, sub_model, "$(prefix).$(sub_name)")
+    end
+    return out
 end
 
 # --------------------------------------------------------------------------- #
