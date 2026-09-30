@@ -3610,8 +3610,8 @@ function _check_equation_lhs_names!(errors::Vector{StructuralError}, model::Mode
         free = unique!(_free_lhs_index_symbols!(String[], lhs, rb, names))
         for sym in free
             push!(errors, StructuralError(lpath,
-                "Equation $(k-1)'s left-hand side subscripts with '$(sym)', which no " *
-                "faq binds",
+                "Equation $(k-1)" * (dn === nothing ? "" : " (defining '$(dn)')") *
+                " subscripts its left-hand side with '$(sym)', which no faq binds",
                 ERROR_CODES.UNBOUND_INDEX_SYMBOL,
                 Dict{String,Any}("symbol" => sym)))
         end

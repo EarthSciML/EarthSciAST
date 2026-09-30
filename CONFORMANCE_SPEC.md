@@ -5369,7 +5369,10 @@ A bare `index(V, k…) ~ rhs` runs exactly when the gather names `V` directly
 `faq` whose `output_idx` names those symbols in the same order, and the subscript
 count equals `V`'s rank if `V` declares a `shape`. It then means `V ~ rhs`
 (esm-spec §6.3.1). Any other bare-index definition of an observed MUST
-be **refused** with `indexed_definition_unsupported_form` (esm-spec §9.6.6):
+be **refused** with `indexed_definition_unsupported_form` (esm-spec §9.6.6) —
+or, when a subscript is a symbol no `faq` binds (not the right-hand `faq`'s
+`output_idx`, and not an enclosing one), with `unbound_index_symbol`, since the
+document is then invalid (esm-spec §6.3.1):
 every assertion reports **no actual** and is not passed, and the message carries
 the code and **names the offending variable**. A best-effort answer is not
 allowed, because each wrong answer here is plausible: filling the array from a
@@ -5387,10 +5390,12 @@ per-binding runners:
   through the shaped state `z` it drives (`D(z) = wn`) rather than asserted
   directly, because an inline assertion needs a declared axis to address and
   Rust reports an unshaped array observed as having no cells.
-* `fixtures/refuse_scalar_rhs.esm` — `w_scalar[k] ~ 5.0`.
+* `fixtures/refuse_scalar_rhs.esm` — `w_scalar[k] ~ 5.0`, whose `k` nothing
+  binds: `unbound_index_symbol`.
 * `fixtures/refuse_offset_subscript.esm` — `w_offset[k+1] ~ faq{k}(2*k)`.
 * `fixtures/refuse_nested_index.esm` — `index(index(w_nested, j), k) ~ faq{k}(2*k)`,
-  whose base name is `w_nested` but which addresses a cell of a cell. Until the
+  whose base name is `w_nested` but which addresses a cell of a cell; its `j` is
+  bound by nothing, so it is `unbound_index_symbol`. Until the
   head check, Rust and Python RAN it (both answering as though the right-hand
   `faq` were the whole of `w_nested`) while Julia refused it with
   `E_TREEWALK_UNSUPPORTED_SHAPE` — a divergence window in the same class this
