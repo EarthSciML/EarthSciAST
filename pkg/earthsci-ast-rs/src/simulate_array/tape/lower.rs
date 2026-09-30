@@ -4231,12 +4231,8 @@ impl<'m> TapeBuilder<'m> {
     /// `continue` — and a runtime filter short-circuits. The program grows
     /// with the contraction window (a body property), not with the frame.
     fn lower_cell_contraction(&mut self, spec: &ArrayOpSpec, bx: &LBox) -> LResult<LV> {
-        let Some(combine) = reduce_combine_op(spec.reduce) else {
-            bail_tape!(
-                "reduction: a scalar bool_and_or reduction (CONFORMANCE_SPEC §5.6.1 does not \
-                 say a numeric evaluator runs one)"
-            );
-        };
+        // A reduction at one cell is a scalar one, `bool_and_or` included.
+        let combine = scalar_combine_op(spec.reduce);
         let identity = spec.reduce.identity();
         let nc = spec.contract_names.len();
         if nc == 0 {
@@ -4985,16 +4981,11 @@ impl<'m> TapeBuilder<'m> {
     /// `max(acc, -∞)` is `acc`. The fold then combines the oracle's terms in
     /// the oracle's order and nothing else.
     ///
-    /// A boolean (`bool_and_or`) reduction is refused: whether a numeric
-    /// evaluator runs a SCALAR one is not settled (CONFORMANCE_SPEC §5.6.1
-    /// rejects the array-valued ones only).
+    /// A scalar `bool_and_or` reduction folds with `BinCode::Or` from `0.0`
+    /// (CONFORMANCE_SPEC §5.6.1): every accumulator is a crisp `0.0`/`1.0`, so
+    /// the skip value `0.0` leaves it unchanged, as the oracle's `continue` does.
     fn lower_scalar_reduction(&mut self, spec: &ArrayOpSpec) -> LResult<LV> {
-        let Some(combine_op) = reduce_combine_op(spec.reduce) else {
-            bail_tape!(
-                "reduction: a scalar bool_and_or reduction (CONFORMANCE_SPEC §5.6.1 does not \
-                 say a numeric evaluator runs one)"
-            );
-        };
+        let combine_op = scalar_combine_op(spec.reduce);
         let identity = spec.reduce.identity();
         if spec.contract_names.is_empty() {
             // No axes at all: `reduce_contraction`'s pointwise arm evaluates

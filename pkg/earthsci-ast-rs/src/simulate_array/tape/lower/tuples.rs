@@ -104,8 +104,18 @@ impl TapeBuilder<'_> {
         filter: Option<&Expr>,
         join: Option<&[JoinClause]>,
     ) -> LResult<LV> {
-        let Some(combine_op) = reduce_combine_op(reduce) else {
-            bail_tape!("contracted: boolean reduction (or/and) not vectorized");
+        // A scalar reduction may be `bool_and_or`; an array-valued one may not
+        // (CONFORMANCE_SPEC §5.6.1).
+        let combine_op = if ranges.is_empty() {
+            scalar_combine_op(reduce)
+        } else {
+            let Some(op) = reduce_combine_op(reduce) else {
+                bail_tape!(
+                    "contracted: an array-valued bool_and_or reduction (the numeric \
+                     evaluators reject it, CONFORMANCE_SPEC §5.6.1)"
+                );
+            };
+            op
         };
         // With nothing contracted the interpreter returns the body itself,
         // not `identity ⊕ body` (they differ on a `-0.0` term).

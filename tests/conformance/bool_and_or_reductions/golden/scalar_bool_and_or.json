@@ -1,0 +1,43 @@
+{
+  "fixture": "scalar_bool_and_or",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "scalar_bool_and_or_t0",
+      "assertion_idx": 1,
+      "variable": "any_hot",
+      "actual": 1.0
+    },
+    {
+      "test_id": "scalar_bool_and_or_t0",
+      "assertion_idx": 2,
+      "variable": "spread",
+      "actual": 1.0
+    },
+    {
+      "test_id": "scalar_bool_and_or_t0",
+      "assertion_idx": 3,
+      "variable": "never",
+      "actual": 0.0
+    },
+    {
+      "test_id": "scalar_bool_and_or_t1",
+      "assertion_idx": 1,
+      "variable": "any_hot",
+      "actual": 0.0
+    },
+    {
+      "test_id": "scalar_bool_and_or_t1",
+      "assertion_idx": 2,
+      "variable": "spread",
+      "actual": 0.0
+    },
+    {
+      "test_id": "scalar_bool_and_or_t1",
+      "assertion_idx": 3,
+      "variable": "never",
+      "actual": 0.0
+    }
+  ]
+}

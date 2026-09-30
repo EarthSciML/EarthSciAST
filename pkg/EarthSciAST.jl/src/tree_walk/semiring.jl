@@ -73,8 +73,18 @@ end
 # For "max"/"min" we emit left-folded binary OpExprs to avoid adding n-ary
 # variants to _eval_node_op (which already handles them as ≥2-arg ops, but
 # the build-time fold keeps runtime dispatch uniform).
-function _combine_with_reducer(oplus::String, zerobar::Float64, terms::Vector{ASTExpr})
+#
+# `scalar = true` marks a RANK-0 faq (no output index). Only there does ⊕ = `or`
+# (bool_and_or) fold, as the n-ary logical `or` from its identity `false`: a
+# crisp 0/1 whatever the terms, a NaN term reading as true, which is the other
+# bindings' `acc = combine(acc, term)` fold. An array-valued `bool_and_or`
+# reduction stays refused (CONFORMANCE_SPEC §5.6.1).
+function _combine_with_reducer(oplus::String, zerobar::Float64, terms::Vector{ASTExpr};
+                               scalar::Bool=false)
     isempty(terms) && return NumExpr(zerobar)
+    if oplus == "or" && scalar
+        return OpExpr("or", ASTExpr[NumExpr(zerobar); terms])
+    end
     length(terms) == 1 && return terms[1]
     if oplus == "+"
         return OpExpr("+", terms)
@@ -98,7 +108,8 @@ function _combine_with_reducer(oplus::String, zerobar::Float64, terms::Vector{AS
         throw(TreeWalkError("E_TREEWALK_ARRAYOP_UNSUPPORTED_SEMIRING",
             "array-producing aggregate with ⊕='$oplus' is not supported by the " *
             "tree-walk evaluator (M1); only numeric semirings (+, *, max, min) " *
-            "reduce to an array — bool_and_or is index-set-producing (§5.5)"))
+            "reduce to an array — bool_and_or is index-set-producing (§5.5), and " *
+            "only a scalar (rank-0) bool_and_or faq runs (CONFORMANCE_SPEC §5.6.1)"))
     end
 end
 
