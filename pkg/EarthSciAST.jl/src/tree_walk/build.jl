@@ -2100,11 +2100,42 @@ end
 # substitute → resolve → compile, which a strict compiler refuses. The coord_<dim> const_array must be provided
 # by the caller. Explicit initial_conditions values take precedence (already
 # seeded in u0).
+# The caller's u0 override, visible to the build while `esm_problem` builds: an
+# initialization equation reads the state the caller set (the Rust and Python
+# front doors seed the same way).
+const _CALLER_U0_KEY = :esm_caller_u0
+_with_caller_u0(f, u0) = u0 === nothing ? f() : task_local_storage(f, _CALLER_U0_KEY, u0)
+
+# Write the caller's u0 into `u0` before the initialization equations run and
+# return the slots it names (they keep the caller's value). Nothing to do, and
+# an empty set, without a caller u0 or without an initialization equation.
+function _apply_caller_u0!(u0::Vector{Float64}, var_map, init_equations)
+    isempty(init_equations) && return Set{Int}()
+    cu = get(task_local_storage(), _CALLER_U0_KEY, nothing)
+    cu === nothing && return Set{Int}()
+    if cu isa AbstractVector
+        length(cu) == length(u0) || return Set{Int}()
+        u0 .= cu
+        return Set{Int}(eachindex(u0))
+    end
+    cu isa AbstractDict || return Set{Int}()
+    # The slots the override names: those it writes over either of two
+    # backgrounds (a NaN it writes shows against the zero one).
+    a = fill(NaN, length(u0)); _apply_initial_conditions!(a, var_map, cu)
+    b = zeros(length(u0));     _apply_initial_conditions!(b, var_map, cu)
+    slots = Set{Int}(i for i in eachindex(u0) if !isnan(a[i]) || !iszero(b[i]))
+    for i in slots
+        u0[i] = b[i]
+    end
+    return slots
+end
+
 function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
                                 initial_conditions::AbstractDict,
                                 var_map::AbstractDict{String,Int}, array_var_info,
                                 const_arrays::AbstractDict,
-                                pgather::AbstractDict, param_sym_set, reg_funcs, p)
+                                pgather::AbstractDict, param_sym_set, reg_funcs, p;
+                                skip_slots::Set{Int} = Set{Int}())
     pp = isnothing(p) ? NamedTuple() : p
     for eq in init_equations
         eq.lhs isa VarExpr || continue
@@ -2137,6 +2168,7 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
             slot == 0 && continue
             # explicit override wins
             may_override && haskey(initial_conditions, _cell_key(var_name, cell)) && continue
+            slot in skip_slots && continue
             push!(todo, (idx_tuple, slot))
         end
         isempty(todo) && continue
@@ -2146,7 +2178,8 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
         filled = _init_equation_fill(rhs_op,
                                      [_expand_int_range(ranges_dict[n]) for n in idx_names],
                                      var_map, const_arrays,
-                                     pgather, param_sym_set, reg_funcs, p)
+                                     pgather, param_sym_set, reg_funcs, p;
+                                     u0 = u0, target = var_name)
         if filled !== nothing
             sf, buf = filled
             _record_rule!(rule, :equation, :setup_codegen)
@@ -2192,7 +2225,8 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
             percell(first(todo)[1])
             _refuse_rule(rule,
                 "no compiled fill serves this faq-valued initialization equation " *
-                "(a fill reads no state and takes no join gate, filter or " *
+                "(a fill reads another state only as a unit-origin array or a " *
+                "scalar, never its own target, and takes no join gate, filter or " *
                 "contraction), and the forms left walk a tree at each of its " *
                 "$(length(todo)) cell" * (length(todo) == 1 ? "" : "s") * ": one " *
                 "compiled once, or one resolved and compiled per cell. That is a " *
@@ -3508,9 +3542,12 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     end
 
     # ---- Evaluate faq-valued initialization_equations into u0 ----
+    # A caller's u0 override (esm_problem's `u0`, through `_with_caller_u0`) is
+    # part of the state the equations read, and a cell it names keeps it.
+    caller_slots = _apply_caller_u0!(u0, layout.var_map, parts.init_equations)
     @_bench :seed_u0 _seed_faq_init_u0!(u0, parts.init_equations, initial_conditions, layout.var_map,
                            layout.array_var_info, const_registry, pgather,
-                           param_sym_set, reg_funcs, p)
+                           param_sym_set, reg_funcs, p; skip_slots = caller_slots)
 
     # ---- Scalar-observed slot plan (named prelude defs; ess-obs-slots) ----
     # Decide which scalar observeds compile as named prelude slots and which
