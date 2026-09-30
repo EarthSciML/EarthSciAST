@@ -2463,6 +2463,18 @@ impl<'m> TapeBuilder<'m> {
                 Value::Array(a) => self.emit_const_array(&a)?,
                 Value::Scalar(s) => LV::Lit(s),
             },
+            // A shape-op or `broadcast` base (esm-spec §4.3.4, §4.3.5) is a
+            // whole array whatever the box, as the oracle's gather evaluates
+            // it: relabelled (or broadcast) once by the wholesale lowering,
+            // then read at the subscripts.
+            Expr::Operator(t)
+                if matches!(
+                    t.op.as_str(),
+                    "transpose" | "reshape" | "concat" | "broadcast"
+                ) =>
+            {
+                self.lower_wholesale(&node.args[0])?
+            }
             base => self.lower_expr(base, bx)?,
         };
         let n = node.args.len() - 1;

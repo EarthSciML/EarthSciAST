@@ -502,3 +502,54 @@ fn boolean_reductions_are_refused_by_name() {
         );
     }
 }
+
+/// `index` over a `transpose`, a `reshape` or a `broadcast` with a loop symbol
+/// as a subscript (esm-spec §4.3.4, §4.3.5): the base is lowered whole, as the
+/// oracle's gather evaluates it, then read at the subscripts.
+#[test]
+fn shape_op_bases_under_loop_symbol_subscripts() {
+    let make = |n: i64| {
+        let zero = |v: &str, out: &[&str], r: Value| d_eq(v, out, r, json!(0.0));
+        doc(
+            "shape_op_bases",
+            json!({
+                "u": {"type": "unknown", "shape": ["x", "y"], "default": 1.0},
+                "a": {"type": "unknown", "shape": ["y"], "default": 2.0},
+                "b": {"type": "unknown", "shape": ["x"], "default": 3.0},
+                "v": {"type": "unknown", "shape": ["y"], "default": 0.0},
+                "w": {"type": "unknown", "shape": ["y"], "default": 0.0},
+                "z": {"type": "unknown", "shape": ["y"], "default": 0.0}
+            }),
+            vec![
+                zero("u", &["i", "j"], json!({"i": [1, 2], "j": [1, n]})),
+                zero("a", &["i"], json!({"i": [1, n]})),
+                zero("b", &["i"], json!({"i": [1, 2]})),
+                d_eq(
+                    "v",
+                    &["i"],
+                    json!({"i": [1, n]}),
+                    json!({"op": "index", "args": [op("transpose", vec![json!("u")]), "i", 2]}),
+                ),
+                d_eq(
+                    "w",
+                    &["j"],
+                    json!({"j": [1, n]}),
+                    json!({"op": "index", "args": [
+                        {"op": "reshape", "args": ["a"], "shape": [1, n]}, 1, "j"]}),
+                ),
+                d_eq(
+                    "z",
+                    &["i"],
+                    json!({"i": [1, n]}),
+                    json!({"op": "index", "args": [
+                        {"op": "broadcast", "fn": "+", "args": ["a",
+                            {"op": "reshape", "args": ["b"], "shape": [1, 2]}]}, "i", 2]}),
+                ),
+            ],
+            None,
+        )
+    };
+    // At three cells fusion takes the broadcast's small box whole, so the
+    // lengths are compared past that.
+    flat_in_n(make, 40, 400);
+}
