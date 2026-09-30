@@ -118,6 +118,11 @@ pub enum BoundaryKind {
 ///   rule 5) and an elementwise derived buffer (`centroid[g] = num[g]/den[g]`) —
 ///   the SCVT centroid-update step.
 /// - `vi_var_names` — value-invention LHS vars to drop from the ODE.
+/// - `map_codes` — each skolem MAP buffer (a broad-phase bin key per cell, the
+///   column a `join.on` gate compares), dense in output-index order, as one
+///   integer code per key: the key's 1-based position in the sorted set of
+///   every map's keys. Codes are equal exactly where keys are, across all maps
+///   of one build, so a gate on two buffers compares codes as it would keys.
 #[derive(Debug, Clone, Default)]
 pub struct ValueInventionResult {
     pub extents: HashMap<String, i64>,
@@ -125,6 +130,7 @@ pub struct ValueInventionResult {
     pub assignments: HashMap<String, Vec<i64>>,
     pub groups: HashMap<String, Vec<f64>>,
     pub vi_var_names: HashSet<String>,
+    pub map_codes: HashMap<String, Vec<f64>>,
 }
 
 // --------------------------------------------------------------------------- //
@@ -1832,6 +1838,43 @@ pub fn materialize_value_invention(
         // a per-variable `element_type`.
         let _prec = vi_variable_precision(vname);
         vi_materialize_map(&mut ctx, vname, node)?;
+    }
+
+    // Surface the skolem map buffers as codes (see `map_codes`). A map whose
+    // values are not all keys or integers is not surfaced.
+    {
+        let mut per_map: Vec<(&String, Vec<Key>)> = Vec::new();
+        for (vname, node) in &det.maps {
+            if is_argwitness(node) {
+                continue;
+            }
+            let m = &ctx.maps[vname];
+            let mut idx: Vec<i64> = m.keys().copied().collect();
+            idx.sort_unstable();
+            let keys: Option<Vec<Key>> = idx
+                .iter()
+                .map(|k| match m.get(k) {
+                    Some(Val::Key(key)) => Some(key.clone()),
+                    Some(Val::Int(i)) => Some(Key::Int(*i)),
+                    _ => None,
+                })
+                .collect();
+            if let Some(keys) = keys {
+                per_map.push((vname, keys));
+            }
+        }
+        let mut all: Vec<&Key> = per_map.iter().flat_map(|(_, ks)| ks.iter()).collect();
+        all.sort();
+        all.dedup();
+        let code: HashMap<&Key, f64> = all
+            .into_iter()
+            .enumerate()
+            .map(|(i, k)| (k, (i + 1) as f64))
+            .collect();
+        for (vname, keys) in &per_map {
+            let buf = keys.iter().map(|k| code[k]).collect();
+            result.map_codes.insert((*vname).clone(), buf);
+        }
     }
 
     // Surface the arg-witness buffers (the integer nearest-generator INDEX

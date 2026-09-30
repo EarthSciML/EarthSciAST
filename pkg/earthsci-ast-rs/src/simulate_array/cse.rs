@@ -206,7 +206,6 @@ pub(super) const BOX_TRANSPARENT_OPS: &[&str] = &[
     "ifelse",
     "exp",
     "log",
-    "ln",
     "log10",
     "sqrt",
     "abs",

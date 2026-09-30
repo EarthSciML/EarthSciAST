@@ -266,21 +266,18 @@ fn a_reaction_system_is_not_mistaken_for_a_static_document() {
         eprintln!("· skipping: no {POLLU}");
         return;
     }
-    let prob = esm_problem(
-        ProblemInput::Path(Path::new(POLLU)),
-        (0.0, 1.0),
-        ProblemOptions {
-            // The reference compiler, because the CLASSIFICATION is what this
-            // test is about and `native` does not get as far as answering it:
-            // the fixture's photolysis rates are data-fed parameters
-            // (`update: { kind: "data" }`) with no source bound here, so the
-            // tape refuses `PureChemistry.jO3` as an unresolved symbol
-            // (API_SPEC §5.8).
-            compiler: Some(earthsci_ast::Compiler::Interpreter),
-            ..Default::default()
-        },
-    )
-    .expect("esm_problem");
+    let build = |compiler| {
+        esm_problem(
+            ProblemInput::Path(Path::new(POLLU)),
+            (0.0, 1.0),
+            ProblemOptions {
+                compiler: Some(compiler),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("[{compiler}] esm_problem: {e}"))
+    };
+    let prob = build(earthsci_ast::Compiler::Interpreter);
     assert!(
         prob.is_dynamic(),
         "a document of 25 reactions was classified static",
@@ -298,17 +295,25 @@ fn a_reaction_system_is_not_mistaken_for_a_static_document() {
         "twenty-five reactions are twenty-five state derivatives, not a static evaluation"
     );
 
-    // The RUN, and why it is a refusal rather than a trajectory: the array
-    // runtime binds a data-fed parameter from its SOURCE, not from its
-    // `default`, and this call supplies no source. Running on the declared
-    // defaults would produce a trajectory that looks like an answer and is
-    // not one, so the refusal names the parameter it could not bind.
+    // The RUN. The fixture's photolysis rates are data-fed parameters
+    // (`update: { kind: "data" }`) with no provider bound here, so each takes
+    // its declared `default` (esm-spec §6.3; user ruling 2026-09-29), under
+    // either compiler, and the two agree bit for bit.
     let mut o = SolveOptions::default();
     o.sample_evenly(0.0, 1.0, 3);
-    let err = solve(&prob, &o).expect_err("no data source is bound here");
-    let text = err.to_string();
-    assert!(
-        text.contains("jO3"),
-        "the refusal must name the unbound data-fed parameter: {text}"
-    );
+    let interp = solve(&prob, &o).expect("the interpreter runs on the declared defaults");
+    let native = solve(&build(earthsci_ast::Compiler::Native), &o)
+        .expect("native runs on the declared defaults");
+    assert_eq!(interp.state_variable_names, native.state_variable_names);
+    for (row, name) in interp.state_variable_names.iter().enumerate() {
+        let (a, b) = (&interp.state[row], &native.state[row]);
+        assert!(
+            a.iter().all(|v| v.is_finite()),
+            "{name}: a non-finite value in {a:?}"
+        );
+        assert!(
+            a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits()),
+            "{name}: interpreter {a:?} != native {b:?}"
+        );
+    }
 }

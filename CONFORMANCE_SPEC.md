@@ -4860,13 +4860,16 @@ unrelated message; Python bound the stand-in as a scalar.
 
 With the case's arrays supplied, every compiler builds and the right-hand side
 at a fixed probe state is bit-for-bit the same under `native` and
-`interpreter` within each binding. One case that builds either way pins that a
+`interpreter` within each binding. `caller_array_outranks_default` pins that a
 caller's array outranks a declared scalar default in a DIFFERENTIAL document
 (Rust's compiled right-hand side read the default and ignored the array).
 
-Python's default provider reads a document's own `data_sources` when the caller
-supplies no provider; an unreadable source refuses the construction with the
-same code, naming the parameter it could not read.
+A data-fed parameter that DECLARES a default, built with no provider and no
+caller array, takes that default in every binding (esm-spec §6.3: supplied data
+takes the place of the default, so without data the default stands). No binding
+reads a document's own `data_sources` unless the caller registers a provider or
+loader for them; Python used to, and Rust used to leave the parameter unserved
+until its first read failed. `loaded_field_default_served` pins it.
 
 **Gate:** `tests/conformance/missing_data/`. Runners: **Julia** —
 `pkg/EarthSciAST.jl/test/conformance_missing_data_test.jl`; **Python** —

@@ -86,7 +86,7 @@ use crate::pushdown_rewrite::{
 };
 use crate::simulate_array::{
     ArrMap, ConstArrayScope, Value as EvalValue, eval_expression_with_extents_and_consts_shared,
-    run_value_invention,
+    run_value_invention_with_params,
 };
 use crate::template_imports::resolve_template_machinery;
 use crate::types::{Expr, IndexSet, Model, VariableType};
@@ -1518,6 +1518,8 @@ struct BuildState<'o> {
     fields: HashMap<String, ArrayD<f64>>,
     /// Value-invention products.
     members: HashMap<String, Vec<i64>>,
+    /// Producers whose members are tuples, so carry no member ids.
+    tuple_keyed: HashSet<String>,
     extents: HashMap<String, i64>,
     /// The gated providers' keys, sorted — [`PreparedBuild::gated_provider_keys`].
     gated_keys: Vec<String>,
@@ -1630,6 +1632,7 @@ impl<'o> BuildState<'o> {
             order: Vec::new(),
             fields: HashMap::new(),
             members: HashMap::new(),
+            tuple_keyed: HashSet::new(),
             extents: HashMap::new(),
             gated_keys: Vec::new(),
             rules: Vec::new(),
@@ -1934,25 +1937,41 @@ impl<'o> BuildState<'o> {
     /// VALUE INVENTION: the graph derives its own support set.
     fn invent_values(&mut self) -> Result<(), PrepareError> {
         self.report(PreparePhase::ValueInvention, 0, None, "")?;
-        let vi = run_value_invention(&self.model, &self.index_sets, Some(&self.arrays))
-            .map_err(|e| err(format!("value invention: {e}")))?;
+        let vi = run_value_invention_with_params(
+            &self.model,
+            &self.index_sets,
+            Some(&self.arrays),
+            &self.opts.parameters,
+        )
+        .map_err(|e| err(format!("value invention: {e}")))?;
+        // A member id is only needed where a set feeds one back (a
+        // `member_factor`, a gated fetch), and only a scalar key is an id. A
+        // tuple-keyed producer (an undirected edge `skolem(a, b)`, a composite
+        // key) is sized by its extent alone; a consumer that needs its ids
+        // refuses where it looks them up.
         let mut members: HashMap<String, Vec<i64>> = HashMap::new();
+        let mut tuple_keyed: HashSet<String> = HashSet::new();
         for (faq, mem) in &vi.members {
-            let ids: Vec<i64> = mem
+            let ids: Option<Vec<i64>> = mem
                 .iter()
                 .map(|k| match k {
-                    crate::relational::Key::Int(i) => Ok(*i),
-                    other => Err(err(format!(
-                        "faq '{faq}': expected scalar integer member keys, got {other:?}"
-                    ))),
+                    crate::relational::Key::Int(i) => Some(*i),
+                    _ => None,
                 })
-                .collect::<Result<_, _>>()?;
-            members.insert(faq.clone(), ids);
+                .collect();
+            match ids {
+                Some(ids) => {
+                    members.insert(faq.clone(), ids);
+                }
+                None => {
+                    tuple_keyed.insert(faq.clone());
+                }
+            }
         }
         // Recorded, not refused: the array runtime's own build runs the same
         // relational pass for every compiler, so refusing it here alone would
         // make the pipeline stricter than the route it feeds.
-        let mut producers: Vec<&String> = members.keys().collect();
+        let mut producers: Vec<&String> = members.keys().chain(tuple_keyed.iter()).collect();
         producers.sort();
         for faq in producers {
             self.rules.push(PipelineRule {
@@ -1962,7 +1981,24 @@ impl<'o> BuildState<'o> {
             });
         }
         self.members = members;
+        self.tuple_keyed = tuple_keyed;
         self.extents = vi.extents.clone();
+        // An arg-witness assignment and the grouped / derived buffers keyed on
+        // it are build-time products: later observeds read them (`den[g]` sums
+        // over `assign`), and they are fields in their own right, so the
+        // observed graph does not evaluate their defining relational bodies.
+        let buffers = vi
+            .assignments
+            .iter()
+            .map(|(n, b)| (n, b.iter().map(|&i| i as f64).collect::<Vec<f64>>()))
+            .chain(vi.groups.iter().map(|(n, b)| (n, b.clone())));
+        for (name, values) in buffers {
+            let n = values.len();
+            let a = ArrayD::from_shape_vec(ndarray::IxDyn(&[n]), values)
+                .map_err(|e| err(format!("value-invention buffer '{name}': {e}")))?;
+            self.arrays.insert(name.clone(), a.clone());
+            self.fields.insert(name.clone(), a);
+        }
         Ok(())
     }
 
@@ -1972,6 +2008,24 @@ impl<'o> BuildState<'o> {
     /// verbose narration are deterministic; `index_sets` is a `HashMap` and
     /// iterating it directly made the order vary run to run.
     fn feed_member_factors(&mut self) -> Result<(), PrepareError> {
+        let mut tuple_fed: Vec<&String> = self
+            .index_sets
+            .iter()
+            .filter(|(_, is)| is.kind == "derived" && is.member_factor.is_some())
+            .filter(|(_, is)| {
+                is.from_faq
+                    .as_ref()
+                    .is_some_and(|f| self.tuple_keyed.contains(f))
+            })
+            .map(|(sname, _)| sname)
+            .collect();
+        tuple_fed.sort();
+        if let Some(sname) = tuple_fed.first() {
+            return Err(err(format!(
+                "derived index set '{sname}' names a member_factor, but its producer's members \
+                 are tuples, not scalar member ids"
+            )));
+        }
         let mut mf_sets: Vec<(&String, &String, &Vec<i64>)> = self
             .index_sets
             .iter()

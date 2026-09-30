@@ -1,0 +1,101 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "loaded_field_default_served",
+    "description": "A shaped parameter fed by a data source that ALSO declares a scalar default. With no provider and no caller array the default is its value (esm-spec \u00a76.3: supplied data takes the place of the default, so without data the default stands); with a caller array the array is its value. Rust used to leave the loaded field unserved and fail at the first evaluation.",
+    "authors": [
+      "missing_data conformance"
+    ]
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "data_sources": {
+    "bc_loader": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/bc/o3_climatology.nc"
+      }
+    }
+  },
+  "models": {
+    "LoadedDefault": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "shape": [
+            "cells"
+          ],
+          "default": 0.0
+        },
+        "bc": {
+          "type": "parameter",
+          "units": "mol/mol",
+          "shape": [
+            "cells"
+          ],
+          "default": 0.5,
+          "update": {
+            "kind": "data",
+            "source": "bc_loader",
+            "from": {
+              "file_variable": "boundary_o3"
+            }
+          }
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "c",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "bc",
+                "i"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

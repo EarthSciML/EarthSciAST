@@ -79,7 +79,7 @@ var scalarOperators = map[string]struct{}{
 	// canonicalizer emits.
 	"+": {}, "-": {}, "*": {}, "/": {}, "^": {}, "neg": {},
 	// Elementary functions (§4.2).
-	"exp": {}, "log": {}, "ln": {}, "log10": {}, "sqrt": {},
+	"exp": {}, "log": {}, "log10": {}, "sqrt": {},
 	"abs": {}, "sign": {}, "floor": {}, "ceil": {},
 	"sin": {}, "cos": {}, "tan": {}, "asin": {}, "acos": {}, "atan": {},
 	"sinh": {}, "cosh": {}, "tanh": {}, "asinh": {}, "acosh": {}, "atanh": {},

@@ -75,7 +75,10 @@ mod vectorized;
 // native-only, so gate it to avoid an unused-import warning on wasm.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::{eval_buildtime_field, eval_buildtime_field_in_scope};
-pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_invention};
+pub use compile::{
+    file_has_array_ops, file_has_spatial_model, run_value_invention,
+    run_value_invention_with_params,
+};
 // The ONE free-variable gate (CONFORMANCE_SPEC §5.23), shared with the build
 // pipeline: `crate::prepare` runs the same check the compile path runs, so the
 // two routes cannot disagree about which names a document declares.
@@ -93,6 +96,7 @@ pub(crate) use eval::{
     per_cell_walk_refused, per_cell_walks,
 };
 // Read only by `crate::expression`'s tests.
+pub(crate) use eval::GEOMETRY_CLIP_CODE;
 #[cfg(test)]
 pub(crate) use eval::check_scalar_evaluable;
 pub use eval::{
@@ -780,9 +784,13 @@ pub struct ArrayCompiled {
     /// registry cannot size. The tape compiles a read of one of these into a
     /// forcing load (`tape::Instr::LoadForcing`) rather than declining it.
     forcing_decls: IndexMap<String, Option<Vec<usize>>>,
-    /// The [`Self::forcing_decls`] entries whose parameter declares a
-    /// `default`, which the front door's missing-data gate does not refuse.
-    forcing_defaults: HashSet<String>,
+    /// The declared `default` of each [`Self::forcing_decls`] entry that has
+    /// one, as the dense row-major field it denotes over the resolved shape
+    /// (`None` while that shape does not resolve). Construction serves it from
+    /// the forcing buffer when no provider or caller array supplies the name:
+    /// the default is the value until data arrives (esm-spec §6.3).
+    #[allow(clippy::type_complexity)]
+    forcing_defaults: HashMap<String, Option<(Vec<usize>, Vec<f64>)>>,
     /// Every SHAPED parameter the build left with no value at all: no
     /// `default`, no inline data, no `distribution`, and no refresh from
     /// outside the model. It holds a scalar-table slot with no value, which a

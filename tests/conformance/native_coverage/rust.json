@@ -19,12 +19,5 @@
       "native gap": 79
     }
   },
-  "entries": [
-    {
-      "path": "tests/coupling/callback_examples.esm",
-      "code": "compiler_refused_rule",
-      "rule": "D(WeatherModel.temperature)",
-      "reason": "[continuous] wholesale: unresolved symbol (forcing/NaN sentinel?) `WeatherModel.external_temperature_forcing`"
-    }
-  ]
+  "entries": []
 }
