@@ -8,14 +8,26 @@
 # OOM the Julia compiler as one function). This pins:
 #   * a forced-split build (tiny ESS_CODEGEN_FN_NODE_CAP) still CODEGENS the
 #     kernel (`:codegen_kernel` fires) and does NOT decline it to the interpreter;
-#   * its du is BIT-identical to the un-split build (ESS_CODEGEN_BODY_SPLIT_DISABLE)
-#     at Float64 and under ForwardDiff (the split is value-exact, order-preserving);
-#   * the pre-split build is byte-restored by ESS_CODEGEN_BODY_SPLIT_DISABLE=1.
-# On Julia < 1.12 the split is unavailable (`_cg_split_supported`: RGF turns a
-# sub-function into an UNTYPED opaque closure there, which boxes per cell and
-# segfaults when nested), so an oversized body DECLINES to the interpreter
-# instead. This pins that fallback on those versions -- and, on every version,
-# that the du is the same either way.
+#   * its du is BIT-identical to the un-split build — the same build with the
+#     cap left at its default, which the kernel fits inside — at Float64 and
+#     under ForwardDiff (the split is value-exact, order-preserving).
+# The split has TWO transports, and this pins both, on every Julia. Which one a
+# build takes is `_cg_split_by_value`:
+#
+#   * inner `@noinline` definitions inside the generated body, called by name —
+#     the cheapest, and the only one on Julia >= 1.12, where RGF's rewrite of an
+#     inner definition into an opaque closure is typed;
+#   * BY VALUE — each sub-function compiled as its own RuntimeGeneratedFunction
+#     and handed to the body in a tuple appended to `tabs`, called as
+#     `_cgfns[k](...)` at a literal index. Julia < 1.12 takes this one (an inner
+#     definition is an UNTYPED opaque closure there: it boxes per cell and
+#     segfaults when nested), and `ESS_CODEGEN_SPLIT_TRANSPORT=value` forces it
+#     anywhere, which is how the transport is testable on 1.12 as well.
+#
+# Both emit the SAME partitioned expression, so this pins that the split
+# codegens and is bit-identical under EITHER transport -- there is no Julia on
+# which an oversized body has to decline to the per-cell interpreter, which
+# under `compiler=:native` would be a refusal.
 using Test
 using EarthSciAST
 using ForwardDiff
@@ -41,11 +53,13 @@ function _bs_model(N)
     ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 
-# Build under an explicit (fn_node_cap, split_disable) env pair; return RHS +
-# a tally snapshot.
-function _bs_build(model, ics; fncap=nothing, split_off=false)
+# Build at an explicit per-function node cap (a retained tuning threshold);
+# `fncap = nothing` is the shipped cap, which this kernel fits inside, so that
+# build is the un-split reference. `transport` forces the by-value transport.
+# Returns RHS + a tally snapshot.
+function _bs_build(model, ics; fncap=nothing, transport=nothing)
     withenv("ESS_CODEGEN_FN_NODE_CAP" => (fncap === nothing ? nothing : string(fncap)),
-            "ESS_CODEGEN_BODY_SPLIT_DISABLE" => (split_off ? "1" : nothing)) do
+            "ESS_CODEGEN_SPLIT_TRANSPORT" => transport) do
         ESM._reset_cascade_tally!()
         f!, u0, p, _t, vm, _diag = ESM._build_evaluator_impl(model; initial_conditions=ics)
         (f!, u0, p, copy(ESM._CASCADE_TALLY))
@@ -61,23 +75,18 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
     model = _bs_model(6)
     ics = Dict("u" => 1.0)
 
-    # Reference: split OFF (one function per kernel, the pre-change layout).
-    fr, u0, pr, rt = _bs_build(model, ics; split_off=true)
+    # Reference: the shipped cap, which this kernel fits inside — so the split
+    # is a no-op and the emission is one function per kernel.
+    fr, u0, pr, rt = _bs_build(model, ics)
     @test get(rt, :codegen_kernel, 0) >= 1        # kernel codegens (not interpreter)
     @test _decl(rt) == 0                          # nothing declined
 
-    # Forced split: a small fn-node cap makes the body exceed one function.
+    # Forced split: a small fn-node cap makes the body exceed one function. It is
+    # partitioned into sub-functions — and STILL codegens, on EVERY Julia. The
+    # transport differs by version; whether the kernel compiles does not.
     fs, v0, ps, st = _bs_build(model, ics; fncap=40)
-    if ESM._cg_split_supported()
-        # It is partitioned into helpers — and STILL codegens (no decline).
-        @test get(st, :codegen_kernel, 0) >= 1    # STILL codegen'd (split, not declined)
-        @test _decl(st) == 0                      # the split never falls back to the interpreter
-    else
-        # The documented fallback: no split is emitted, and the oversized body
-        # declines to the interpreter rather than to a boxing closure nest.
-        @test _decl(st) >= 1
-        @test get(st, :codegen_kernel, 0) == 0
-    end
+    @test get(st, :codegen_kernel, 0) >= 1    # STILL codegen'd (split, not declined)
+    @test _decl(st) == 0                      # the split never falls back to the interpreter
 
     @test u0 == v0
 
@@ -89,4 +98,26 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
     Js = ForwardDiff.jacobian(uu -> _bs_du(fs, uu, ps, 0.4), u0)
     Jr = ForwardDiff.jacobian(uu -> _bs_du(fr, uu, pr, 0.4), u0)
     @test _bs_same(Js, Jr)
+
+    # The BY-VALUE transport, forced. On Julia < 1.12 this is the same build the
+    # block above already made; on 1.12+ it is the one that would otherwise
+    # never run here, which is the point — a transport a version cannot
+    # exercise is the one that rots.
+    fv, w0, pv, vt = _bs_build(model, ics; fncap=40, transport="value")
+    @test get(vt, :codegen_kernel, 0) >= 1
+    @test _decl(vt) == 0
+    @test u0 == w0
+    for k in 1:5, t in (0.0, 0.7, 3.25)
+        u = k == 1 ? copy(u0) : _bs_probe(length(u0), k)
+        @test _bs_same(_bs_du(fv, u, pv, t), _bs_du(fr, u, pr, t))
+    end
+    @test _bs_same(ForwardDiff.jacobian(uu -> _bs_du(fv, uu, pv, 0.4), u0), Jr)
+
+    # A by-value build that does NOT split is unchanged by the transport: no
+    # sub-function is minted, so nothing is appended to `tabs`.
+    fn, x0, pn, nt = _bs_build(model, ics; transport="value")
+    @test get(nt, :codegen_kernel, 0) >= 1
+    @test _decl(nt) == 0
+    @test u0 == x0
+    @test _bs_same(_bs_du(fn, copy(u0), pn, 0.7), _bs_du(fr, copy(u0), pr, 0.7))
 end

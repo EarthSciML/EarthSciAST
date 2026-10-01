@@ -606,11 +606,55 @@ def intersect_polygon(poly_a: object, poly_b: object, manifold: str) -> np.ndarr
         )
     if manifold not in MANIFOLDS:
         raise GeometryError(f"unknown manifold {manifold!r}; the closed set is {list(MANIFOLDS)}")
+    # Planar broad phase: a strictly disjoint bounding box is an EXACT reject,
+    # taken before ring coercion exactly as the Julia reference does
+    # (`_bbox_disjoint` at the top of its `intersect_polygon`) and as the Rust
+    # kernel does, so the three bindings agree on every such pair.
+    if manifold == "planar" and _bbox_disjoint(poly_a, poly_b):
+        return np.zeros((0, 2), dtype=float)
     a = _as_ring(poly_a, who="poly_a")
     b = _as_ring(poly_b, who="poly_b")
     if manifold == "planar":
         return _planar_clip(a, b)
     return _spherical_clip(a, b)
+
+
+def _ring_xybbox(m: np.ndarray) -> tuple[float, float, float, float]:
+    """``(xmin, xmax, ymin, ymax)`` of a raw ``[n, >=2]`` operand, scanned as
+    the Julia ``_ring_xybbox`` scans it: seeded from the first vertex and widened
+    only by a strict comparison, so a NaN never widens a bound."""
+    xmin = xmax = float(m[0, 0])
+    ymin = ymax = float(m[0, 1])
+    for i in range(1, m.shape[0]):
+        x = float(m[i, 0])
+        y = float(m[i, 1])
+        if x < xmin:
+            xmin = x
+        if x > xmax:
+            xmax = x
+        if y < ymin:
+            ymin = y
+        if y > ymax:
+            ymax = y
+    return xmin, xmax, ymin, ymax
+
+
+def _bbox_disjoint(poly_a: object, poly_b: object) -> bool:
+    """The planar reject: an empty operand, or two strictly separated bounding
+    boxes (an edge-touching pair is not disjoint). Mirrors the Julia
+    ``_bbox_disjoint``; an operand that is not a 2-D array is left to the ring
+    coercion to reject."""
+    a = np.asarray(poly_a, dtype=float)
+    b = np.asarray(poly_b, dtype=float)
+    if a.ndim != 2 or b.ndim != 2:
+        return False
+    if a.shape[0] == 0 or b.shape[0] == 0:
+        return True
+    if a.shape[1] < 2 or b.shape[1] < 2:
+        return False
+    axmin, axmax, aymin, aymax = _ring_xybbox(a)
+    bxmin, bxmax, bymin, bymax = _ring_xybbox(b)
+    return axmax < bxmin or bxmax < axmin or aymax < bymin or bymax < aymin
 
 
 def close_ring(ring: np.ndarray) -> np.ndarray:

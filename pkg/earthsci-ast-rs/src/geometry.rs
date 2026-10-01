@@ -124,6 +124,14 @@ pub fn intersect_polygon(
     b: &[(f64, f64)],
     manifold: Manifold,
 ) -> Result<Vec<(f64, f64)>, GeometryError> {
+    // Planar broad phase: a strictly disjoint axis-aligned bounding box is an
+    // EXACT reject — the overlap is empty — taken before ring coercion, as the
+    // Julia reference does (`_bbox_disjoint` at the top of its
+    // `intersect_polygon`). Being part of the kernel is what lets a compiled
+    // broad phase skip such a pair and still produce this function's answer.
+    if manifold == Manifold::Planar && planar_bbox_disjoint(a, b) {
+        return Ok(Vec::new());
+    }
     // Coerce both operands to their distinct-vertex rings BEFORE the backend
     // clip (esm-spec §8.6.1): a padded ring — e.g. an MPAS pentagon stored in a
     // hexagon-shaped `[cells, NVERT, 2]` slot with its final vertex repeated to
@@ -137,6 +145,47 @@ pub fn intersect_polygon(
     match manifold {
         Manifold::Spherical | Manifold::Geodesic => intersect_spherical(&a, &b),
         Manifold::Planar => Ok(intersect_planar_convex(&a, &b)),
+    }
+}
+
+/// The raw operand's axis-aligned bounding box `(xmin, xmax, ymin, ymax)`,
+/// scanned the way the Julia `_ring_xybbox` scans it: seeded from the first
+/// vertex and widened only by a strict comparison, so a NaN coordinate never
+/// widens a bound (and a NaN first vertex leaves that bound NaN). `None` for an
+/// empty ring.
+pub(crate) fn planar_ring_bbox(ring: &[(f64, f64)]) -> Option<[f64; 4]> {
+    let (&(x0, y0), rest) = ring.split_first()?;
+    let (mut xmin, mut xmax, mut ymin, mut ymax) = (x0, x0, y0, y0);
+    for &(x, y) in rest {
+        if x < xmin {
+            xmin = x;
+        }
+        if x > xmax {
+            xmax = x;
+        }
+        if y < ymin {
+            ymin = y;
+        }
+        if y > ymax {
+            ymax = y;
+        }
+    }
+    Some([xmin, xmax, ymin, ymax])
+}
+
+/// Are two `(xmin, xmax, ymin, ymax)` boxes strictly separated on an axis? An
+/// edge-touching pair (`a.xmax == b.xmin`) is NOT disjoint, and neither is any
+/// comparison involving NaN: both fall through to the clip.
+pub(crate) fn bboxes_disjoint(a: &[f64; 4], b: &[f64; 4]) -> bool {
+    a[1] < b[0] || b[1] < a[0] || a[3] < b[2] || b[3] < a[2]
+}
+
+/// The planar reject [`intersect_polygon`] applies before clipping: an empty
+/// operand, or two strictly separated bounding boxes (Julia `_bbox_disjoint`).
+pub(crate) fn planar_bbox_disjoint(a: &[(f64, f64)], b: &[(f64, f64)]) -> bool {
+    match (planar_ring_bbox(a), planar_ring_bbox(b)) {
+        (Some(ba), Some(bb)) => bboxes_disjoint(&ba, &bb),
+        _ => true,
     }
 }
 
@@ -594,6 +643,37 @@ mod tests {
             "area {}",
             shoelace_area(&ring)
         );
+    }
+
+    /// The planar reject is the Julia `_bbox_disjoint`: strict, before ring
+    /// coercion. A degenerate ring whose box is disjoint clips to nothing; an
+    /// edge-touching pair is NOT rejected and reaches the clip.
+    #[test]
+    fn planar_bbox_reject_is_strict_and_precedes_coercion() {
+        let degenerate = [(10.0, 10.0), (11.0, 11.0)];
+        let square = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let ring = intersect_polygon(&degenerate, &square, Manifold::Planar).expect("rejected");
+        assert!(ring.is_empty());
+        assert!(
+            intersect_polygon(&[], &square, Manifold::Planar)
+                .unwrap()
+                .is_empty()
+        );
+        // Sharing the edge x = 1: boxes touch, so the degenerate operand is
+        // coerced (and refused) rather than rejected.
+        let touching = [(1.0, 0.0), (1.0, 1.0)];
+        assert!(intersect_polygon(&touching, &square, Manifold::Planar).is_err());
+        // The spherical path takes no planar shortcut.
+        assert!(intersect_polygon(&degenerate, &square, Manifold::Spherical).is_err());
+        // A NaN never widens a box, and a NaN bound is never disjoint.
+        assert_eq!(
+            planar_ring_bbox(&[(f64::NAN, 0.0), (5.0, 1.0)]).map(|b| b[1].is_nan()),
+            Some(true)
+        );
+        assert!(!bboxes_disjoint(
+            &[f64::NAN, f64::NAN, 0.0, 1.0],
+            &[5.0, 6.0, 0.0, 1.0]
+        ));
     }
 
     #[test]

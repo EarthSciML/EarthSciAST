@@ -86,7 +86,7 @@ fn run_model_test(
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: initial_conditions.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -111,11 +111,9 @@ fn check_one_assertion(
     a: &ModelTestAssertion,
     sol: &Solution,
 ) {
-    let slot = match sol
-        .state_variable_names
-        .iter()
-        .position(|n| n == &a.variable)
-    {
+    // See `Solution::index_of`: an assertion written against the bare
+    // spelling resolves against the qualified rows, and the reverse.
+    let slot = match sol.index_of(&a.variable) {
         Some(i) => i,
         None => panic!(
             "[{fixture_name}/{model_name}/{}] unknown assertion variable '{}'. Known: {:?}",

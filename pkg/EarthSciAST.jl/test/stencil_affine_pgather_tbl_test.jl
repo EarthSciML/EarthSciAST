@@ -10,10 +10,10 @@
 # It now lowers to `_AccArrTblBox`: a per-box table of linear INDICES into the
 # ALIASED live buffer (indices static, values read live).
 #
-# Three-way oracle per model, everything bit-identical:
+# Two-way oracle per model, everything bit-identical:
 #   :tbl — the default build (A2 table lowering);  cascade must land :affine
-#   :off — ESS_OBSREF_DISABLE=1, the pre-A2 whole-equation per-cell fallback
-#   :ref — ESS_STENCIL_DISABLE=1, the maximally independent per-cell reference
+#   :ref — `compiler=:interpreter`, the per-cell reference — which is also the
+#          pre-A2 whole-equation fallback, since the tier does not run there
 # plus the LIVENESS invariant: an in-place buffer refresh is seen by every
 # path (a copied buffer would fail), matching stencil_affine_pgather_test.jl.
 using Test
@@ -22,27 +22,14 @@ using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
-# Build `model` under the three env modes; returns tag → (f!, u0, p, tally).
+# Build `model` under both compilers; returns tag → (f!, u0, p, tally).
 function _pgt_build3(model, ics, bufs)
     out = Dict{Symbol,Any}()
-    for (tag, envs) in (
-            (:tbl, ("ESS_OBSREF_DISABLE" => nothing, "ESS_STENCIL_DISABLE" => nothing)),
-            # `ESS_OBSREF_DISABLE=1` alone no longer forces the whole-equation
-            # decline: with the LANE-AFFINE signature the clamp transition opens
-            # a box cut of its own, so the forcing subscript is affine WITHIN
-            # each box and the equation stays on the affine path with no table
-            # at all. The oracle needs a genuinely divergent second path, so the
-            # `:off` arm restores the Δ-keyed signature too — which is exactly
-            # the build this switch was written against.
-            (:off, ("ESS_OBSREF_DISABLE" => "1", "ESS_STENCIL_DISABLE" => nothing,
-                    "ESS_LANE_AFFINE_KEY_DISABLE" => "1")),
-            (:ref, ("ESS_OBSREF_DISABLE" => nothing, "ESS_STENCIL_DISABLE" => "1")))
-        withenv(envs...) do
-            ESM._reset_cascade_tally!()
-            f!, u0, p, _t, _vm, _diag = ESM._build_evaluator_impl(model;
-                initial_conditions=ics, param_arrays=bufs)
-            out[tag] = (f!, u0, p, copy(ESM._CASCADE_TALLY))
-        end
+    for (tag, compiler) in ((:tbl, :native), (:ref, :interpreter))
+        ESM._reset_cascade_tally!()
+        f!, u0, p, _t, _vm, _diag = ESM._build_evaluator_impl(model;
+            initial_conditions=ics, param_arrays=bufs, compiler=compiler)
+        out[tag] = (f!, u0, p, copy(ESM._CASCADE_TALLY))
     end
     out
 end
@@ -115,26 +102,16 @@ function _pgt_oracle(model, ics, bufs; refresh!)
     # if the two paths genuinely diverge).
     @test get(b[:tbl][4], :affine, 0) >= 1
     @test get(b[:tbl][4], :percell_acc, 0) == 0
-    @test get(b[:off][4], :percell_acc, 0) >= 1
-    # And with the lane-affine signature on, the table is not merely optional —
-    # a clamped forcing subscript needs NO per-box table, because the clamp
-    # transition is a box cut. (`_AK_TBL_LOG` counts every table materialised.)
-    withenv("ESS_AK_TBL_DEBUG" => "1") do
-        ESM._reset_ak_tbl_log!()
-        ESM._build_evaluator_impl(model; initial_conditions=ics, param_arrays=bufs)
-        @test sum(v[2] for v in values(ESM._AK_TBL_LOG); init=0) == 0
-    end
-    du = Dict(tag => _pgt_eval(b[tag]) for tag in (:tbl, :off, :ref))
+    @test get(b[:ref][4], :percell_disabled, 0) >= 1
+    du = Dict(tag => _pgt_eval(b[tag]) for tag in (:tbl, :ref))
     @test du[:tbl] == du[:ref]
-    @test du[:off] == du[:ref]
     @test any(!iszero, du[:ref])
     # LIVENESS: refresh the buffers in place; every path sees the new values
     # (the index tables are static, the VALUES are read through the aliased
     # buffer) and they still agree bit-for-bit.
     refresh!()
-    du2 = Dict(tag => _pgt_eval(b[tag]) for tag in (:tbl, :off, :ref))
+    du2 = Dict(tag => _pgt_eval(b[tag]) for tag in (:tbl, :ref))
     @test du2[:tbl] == du2[:ref]
-    @test du2[:off] == du2[:ref]
     @test du2[:tbl] != du[:tbl]
     return nothing
 end
@@ -165,14 +142,10 @@ end
         counts = map((8, 32, 128)) do N
             buf = Float64[0.2k for k in 1:N]
             ics = Dict("u[$k]" => 0.1k for k in 1:N)
-            b = _pgt_build3(_pgt_mixed_model(N), ics, Dict("forcing" => buf))
-            f!, u0, p, _ = b[:tbl]
-            withenv("ESS_OBSREF_DISABLE" => nothing) do
-                _f, _u, _p, _t, _vm, diag = ESM._build_evaluator_impl(
-                    _pgt_mixed_model(N); initial_conditions=ics,
-                    param_arrays=Dict("forcing" => Float64[0.2k for k in 1:N]))
-                diag.n_acc_kernels
-            end
+            _f, _u, _p, _t, _vm, diag = ESM._build_evaluator_impl(
+                _pgt_mixed_model(N); initial_conditions=ics,
+                param_arrays=Dict("forcing" => Float64[0.2k for k in 1:N]))
+            diag.n_acc_kernels
         end
         @test all(==(counts[1]), counts)
     end
@@ -185,12 +158,11 @@ end
         buf = Float64[0.5 + 0.2k for k in 1:N]
         ics = Dict("u[$k]" => 0.1k for k in 1:N)
         model = _pgt_clamped_model(N)
-        build(env) = withenv(env => (env === "ESS_OBSREF_DISABLE" ? nothing : "1")) do
-            ESM._build_evaluator_impl(model; initial_conditions=ics,
-                                      param_arrays=Dict("forcing" => buf))
-        end
-        f!, u0, p, _t, _vm, _d = build("ESS_OBSREF_DISABLE")
-        fr!, _, _, _, _, _ = build("ESS_STENCIL_DISABLE")
+        build(compiler) = ESM._build_evaluator_impl(model;
+            initial_conditions=ics, param_arrays=Dict("forcing" => buf),
+            compiler=compiler)
+        f!, u0, p, _t, _vm, _d = build(:native)
+        fr!, _, _, _, _, _ = build(:interpreter)
         jac(g) = ForwardDiff.jacobian(
             uu -> (d = similar(uu, eltype(uu)); fill!(d, 0); g(d, uu, p, 0.0); d), u0)
         @test jac(f!) == jac(fr!)

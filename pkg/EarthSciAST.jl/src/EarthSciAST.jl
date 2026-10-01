@@ -11,7 +11,7 @@ Deep ModelingToolkit/Catalyst integration is provided by package extensions
 (`EarthSciASTMTKExt`, `EarthSciASTCatalystExt`) that load
 automatically when the user imports `ModelingToolkit` or `Catalyst`. Without
 those packages loaded, `flatten` still produces a pure-Julia `FlattenedSystem`
-snapshot, and the MTK-free tree-walk runtime (`build_evaluator`, `esm_problem`)
+snapshot, and the MTK-free tree-walk runtime (`esm_problem`)
 runs it end to end.
 
 Two features live in namespaced submodules rather than the flat namespace:
@@ -47,6 +47,12 @@ include("errors.jl")
 # Central diagnostic-code registry. Pure data, no dependencies; must precede
 # every raise site that names a code.
 include("error_codes.jl")
+# Compiler selection (API_SPEC §5.8, esm-libraries-spec §2.5.10): the closed
+# vocabulary, the per-tier plan each value expands to, the per-build report and
+# the strict-`native` refusal. Pure data plus task-local accessors; the types
+# it raises (`SimulateError`, `TreeWalkError`) are resolved at call time, so it
+# sits here, ahead of every tier that reads a plan.
+include("compiler.jl")
 # Core data model + validation
 include("types.jl")
 # Derived variable classification (esm-spec §6.3.1). Must follow types.jl (it
@@ -136,7 +142,12 @@ include("tree_walk.jl")
 include("unit_conversion.jl")
 include("data_refresh.jl")
 include("data_output.jl")
+# `compiler=:xla` (API_SPEC §5.8): after the tree walk, because it names the
+# emitter's `DirectEmitError`, and before simulate.jl, which dispatches on it.
+include("compiler_xla.jl")
 include("simulate.jl")
+# Names that have left the public surface, kept for one minor version.
+include("deprecated.jl")
 include("reference_graph.jl")
 include("cadence.jl")
 include("value_invention.jl")
@@ -312,7 +323,12 @@ export
     # dependency-free fallback + conformance oracle.
     broad_phase_candidates, build_spatial_index,
     # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)
-    build_evaluator, evaluate_expr, TreeWalkError, BuildInspection,
+    evaluate_expr, TreeWalkError, BuildInspection,
+    # DEPRECATED (API_SPEC §8 item 23, src/deprecated.jl), exported until it is
+    # removed: a downstream that calls the bare name after `using EarthSciAST`
+    # (EarthSciASTDiff does, throughout its tests) must hear the deprecation
+    # warning, not an `UndefVarError`.
+    build_evaluator,
     # Public template-expansion seam (esm-spec §9.6.4 Option B): the typed
     # model exactly as `build_evaluator` sees it post-expansion, for
     # downstream analyzers (EarthSciASTDiff differentiates this tree). Two
@@ -322,12 +338,14 @@ export
     # — whose surviving references resolve against the flattener's MERGED
     # `template_registry` (§9.6.4 rule 7), not a per-model
     # `component_templates` entry, so `expanded_model` cannot serve there.
+    # `expanded_file(file)` is the whole-document third half, for a consumer
+    # that wants the fused DOCUMENT rather than a build input.
     # `flatten` ALWAYS hands its consumers reference-preserving expressions, so
     # any consumer without its own template handling must call this at its
     # entry ("Expand at your boundary", RFC out-of-line-expression-templates
     # §7.7) — the MTK `System`/`PDESystem` constructors and EarthSciASTDiff's
     # `sysview` both do.
-    expanded_model, expand_flattened_refs,
+    expanded_model, expand_flattened_refs, expanded_file,
     # Parameter-vector ABI: name → position in a `p` that is an AbstractVector
     # (the `p`-side mirror of `var_map`). See `param_map`'s docstring for why it
     # is a function of `p` and not a sixth `build_evaluator` return value.
@@ -389,6 +407,12 @@ export
     # and cannot collide with the solver package that defines them.
     esm_problem, EsmProblem, callbacks, SimulateError, seed_expression_ic!,
     final_state, observed_field,
+    # Which strategy built the right-hand side, and where each rule landed
+    # (API_SPEC §5.8, esm-libraries-spec §2.5.10). `compiler` is also the name
+    # of the `esm_problem` keyword that CHOOSES one, over the closed vocabulary
+    # in `COMPILER_VOCABULARY`.
+    compiler, compiler_report, CompilerReport, CompilerRuleRecord,
+    tier_histogram, COMPILER_VOCABULARY,
     # Inline-test runner (esm-ol5qa; spec §6.6)
     AssertionStatus, AssertionResult, PASS, FAIL, ERROR, SKIP,
     esm_root, esm_path,

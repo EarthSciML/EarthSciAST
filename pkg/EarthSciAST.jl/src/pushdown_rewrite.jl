@@ -14,7 +14,7 @@
 # (`_aggregate_oplus_identity == ("+", 0.0)`); a `max_product` / `min_sum` /
 # etc. aggregate of the SAME shape is left untouched (the soundness guard).
 #
-# Hooked in the AbstractDict front door (`build_evaluator(esm; …)`), opt-in
+# Hooked in the AbstractDict front door (`_build_evaluator(esm; …)`), opt-in
 # behind the `pushdown_rewrite=true` kwarg, BEFORE `coerce_esm_file` so both
 # the typed value-invention path and the impl re-parse see the generated
 # constructs. Off by default so every existing test is byte-identical.
@@ -204,7 +204,7 @@ function _pd_detection_defs(model::Model, reg)
     # one expansion. Rule 2 requires exactly that they be structurally identical
     # with bit-equal constants, and this walk is read-only, so the sharing is
     # unobservable — the same guarantee `_expand_model_refs!` relies on.
-    memo = _expand_memo_disabled() ? nothing : Dict{Tuple{String,String},OpExpr}()
+    memo = Dict{Tuple{String,String},OpExpr}()
     for (name, ex) in defs
         _pd_has_apply(ex) || continue
         lowered = try

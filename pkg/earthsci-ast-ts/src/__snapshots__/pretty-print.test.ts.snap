@@ -4970,6 +4970,16 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
     "unicode": "true",
   },
   {
+    "ascii": "false",
+    "input": {
+      "args": [],
+      "op": "false",
+    },
+    "latex": "false",
+    "mathml": "<mi>false</mi>",
+    "unicode": "false",
+  },
+  {
     "ascii": "datetime.year(t)",
     "input": {
       "args": [

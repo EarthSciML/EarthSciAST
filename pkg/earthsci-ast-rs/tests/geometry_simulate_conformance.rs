@@ -124,7 +124,12 @@ fn run_model_test(fixture: &str, model_name: &str, file: &EsmFile, model: &Model
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
+            // The geometry ops these fixtures are about — `polygon_intersection_area`,
+            // `intersect_polygon` — have no tape lowering, so `native` refuses every
+            // one of them by NAME (API_SPEC §5.8). The fixtures are about the areas,
+            // which is the reference evaluator's answer to give.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )
@@ -241,7 +246,12 @@ fn polygon_intersection_area_planar_fixture_area_is_one() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
+            // The geometry ops these fixtures are about — `polygon_intersection_area`,
+            // `intersect_polygon` — have no tape lowering, so `native` refuses every
+            // one of them by NAME (API_SPEC §5.8). The fixtures are about the areas,
+            // which is the reference evaluator's answer to give.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )
@@ -307,7 +317,12 @@ fn planar_ode_fixture_is_runnable_and_exposes_area() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: ics.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
+            // The geometry ops these fixtures are about — `polygon_intersection_area`,
+            // `intersect_polygon` — have no tape lowering, so `native` refuses every
+            // one of them by NAME (API_SPEC §5.8). The fixtures are about the areas,
+            // which is the reference evaluator's answer to give.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
     )
@@ -315,7 +330,7 @@ fn planar_ode_fixture_is_runnable_and_exposes_area() {
     .unwrap_or_else(|e| panic!("[{model_name}] planar_ode simulate failed: {e}"));
 
     assert!(
-        sol.state_variable_names.iter().any(|n| n == "area"),
+        sol.index_of("area").is_some(),
         "scalar observed `area` must be exposed in the solution; got vars {:?}",
         sol.state_variable_names
     );

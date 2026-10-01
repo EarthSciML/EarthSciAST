@@ -1,11 +1,10 @@
 //! Native array runtime for `faq`, `makearray`, `index`, `reshape`,
 //! `transpose`, `concat`, and `broadcast` expression nodes (gt-oxr).
 //!
-//! This module sits alongside [`crate::simulate`] and handles the subset of
-//! ESM models that use array-shaped state variables and the array-op AST
-//! nodes introduced in gt-t5c. It is invoked from [`crate::simulate`] when
-//! the top-level dispatcher detects array-op nodes in the file; pure-scalar
-//! models continue to go through the existing scalar interpreter.
+//! This is the crate's one evaluator: [`crate::problem::esm_problem`] builds it
+//! for every document, scalar or gridded — its tape under `native` / `xla` and
+//! its per-cell oracle under `interpreter` (API_SPEC §5.8). The solver
+//! plumbing and run vocabulary around it live in [`crate::simulate`].
 //!
 //! ## Approach
 //!
@@ -54,9 +53,9 @@
 // This runtime is compiled for wasm too (EarthSciAST-akz): it reaches
 // s2geometry only through the already-wasm-safe `crate::geometry` API (planar
 // clips work; spherical/geodesic returns a runtime `GeometryError` stub on
-// wasm), and its solver is the same diffsol/Faer path the scalar solver
-// export already runs client-side — so no native-only dependency remains, and
-// planar / geometry-free PDEs run in the browser via `crate::simulate::simulate`.
+// wasm), and its solver is the diffsol/Faer path, which is pure Rust — so no
+// native-only dependency remains, and planar / geometry-free PDEs run in the
+// browser.
 #![allow(
     clippy::type_complexity,
     clippy::collapsible_if,
@@ -83,18 +82,28 @@ pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_inventio
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
 pub(crate) use compile::{model_tree_any, parse_subsystem_model};
-pub(crate) use eval::eval_observed_recurrence;
+// The build pipeline reads the authored model, as the single-model route does,
+// so it applies the same stand-ins for `flatten`'s rewrites.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use compile::{apply_flatten_rewrites, mount_subsystems, resolve_model_self_references};
+#[cfg(test)]
+pub(crate) use eval::per_cell_cells;
+pub(crate) use eval::{
+    ONE_CELL_NOTE, StopAtFirstCell, eval_observed_recurrence, eval_scalar_expression,
+    per_cell_walk_refused, per_cell_walks,
+};
+// Read only by `crate::expression`'s tests.
+#[cfg(test)]
+pub(crate) use eval::check_scalar_evaluable;
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
     take_const_array_oob,
 };
 // The scalar-op leaf kernel is defined once here (backs the per-cell oracle and
-// the vectorized overlay); re-exported crate-wide so the scalar interpreter
-// `crate::simulate::eval_op` routes through the SAME definition instead of
-// re-implementing the arithmetic/comparison/logical algebra (knot #3a).
-pub(crate) use eval::{
-    apply_binary, apply_unary, eval_expression_with_extents_and_consts_shared, fold_scalar,
-};
+// the vectorized overlay); re-exported crate-wide so a caller outside the
+// runtime that needs one operator's numeric meaning (the expression
+// simplifier) routes through the SAME definition.
+pub(crate) use eval::{apply_binary, eval_expression_with_extents_and_consts_shared};
 pub use rhs::RhsScratch;
 
 use compile::*;
@@ -196,6 +205,18 @@ pub struct VarShape {
     pub origin: Vec<i64>,
     /// Flat offset in the state vector.
     pub flat_offset: usize,
+}
+
+/// One state variable's declared default (esm-spec §6.3): one value
+/// broadcast over every cell (or none declared), or inline array data.
+#[derive(Debug, Clone)]
+pub(crate) enum StateDefault {
+    /// The same value in every cell, or `None` when the variable declares no
+    /// default.
+    Scalar(Option<f64>),
+    /// One value per cell, ROW-major over the variable's shape (the authored
+    /// nesting's order), which the slots' column-major order gathers from.
+    Field(Vec<f64>),
 }
 
 /// One contracted (reduction) index's loop bound in a `faq`
@@ -555,8 +576,66 @@ pub struct RecurrenceInfo {
     pub lag_proven: bool,
 }
 
+/// Which compiler this compiled model is serving (API_SPEC §5.8).
+///
+/// The array runtime has three evaluation tiers under it — the tape, the
+/// whole-array overlay and the per-cell oracle — and the historical routing
+/// walks down them silently. A named compiler fixes which of them may run, so
+/// that what ran is a property of the NAME and not of the input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum RuntimeMode {
+    /// The historical routing: the tape where it lowers, the overlay and the
+    /// per-cell oracle beneath it. Every entry point that is not
+    /// [`crate::problem::esm_problem`] — `compile_array`, the `debug_*` seams,
+    /// the adapters — builds this.
+    #[default]
+    Legacy,
+    /// [`crate::Compiler::Native`]: the tape and nothing under it. Every rule
+    /// is taped (construction refused otherwise), so the build-time and
+    /// output-time observed passes are served from the tape rather than from
+    /// the overlay.
+    Native,
+    /// [`crate::Compiler::Interpreter`]: no tape and no overlay — the per-cell
+    /// oracle everywhere, as the reference the other compilers are checked
+    /// against.
+    Interpreter,
+    /// [`crate::Compiler::Xla`]: the specialty compiler that needs a heavy
+    /// external dependency. The tape is lowered to a StableHLO computation by
+    /// `tape::xla_emit` and run through PJRT (`crate::xla_runtime::CompiledRhs`),
+    /// so the right-hand side — and the
+    /// finite-difference Jacobian built out of it — are the compiled
+    /// executable, not the tape's own interpreter.
+    ///
+    /// It is as STRICT as [`Self::Native`] and strict twice over: every rule
+    /// must lower to the tape (or construction refuses it), and the whole tape
+    /// must lower to XLA (or construction refuses that, naming the rule). The
+    /// passes the tape serves under `native` — the build-time materialization,
+    /// the per-segment seed, the inspection snapshot and the observeds
+    /// reported at output times — are served from the tape here too, because
+    /// the emitted program's only output is `du`. That is one evaluator, not
+    /// two: the same tape both feeds the emitter and answers those passes.
+    Xla,
+}
+
 /// Compiled, parameter-sweep-ready ODE model for array-op models.
 pub struct ArrayCompiled {
+    /// Which compiler this model serves. See [`RuntimeMode`]; set by
+    /// [`crate::problem::esm_problem`] right after the build, and
+    /// [`RuntimeMode::Legacy`] for every other entry point.
+    pub(crate) runtime_mode: RuntimeMode,
+    /// The XLA executable this model's right-hand side runs on under
+    /// [`RuntimeMode::Xla`], installed by
+    /// [`crate::problem::esm_problem`] at CONSTRUCTION — so a model the
+    /// emitter cannot lower is a build refusal rather than a surprise on the
+    /// first step — and empty under every other mode.
+    ///
+    /// A cell rather than a plain field because the program is emitted from a
+    /// finished [`ArrayCompiled`]: the emitter reads the model it is going to
+    /// be installed on. `Rc` so the per-segment RHS and Jacobian closures can
+    /// each hold the ONE executable; compiling it is the expensive step and
+    /// there must never be a second.
+    #[cfg(feature = "xla")]
+    pub(crate) xla_rhs: std::cell::OnceCell<Rc<crate::xla_runtime::CompiledRhs>>,
     /// Every state spelling an `operator_compose` renaming match DELETED,
     /// mapped onto the survivor (issue #230). Carried from
     /// `FlattenMetadata::merged_variable_renames` by
@@ -564,14 +643,20 @@ pub struct ArrayCompiled {
     /// merge moved resolves instead of silently designating nothing. Empty on
     /// the `from_model` path, which has no coupling to have renamed anything.
     merged_renames: HashMap<String, String>,
+    /// Every state variable's slot range — its base slot in the flat state
+    /// vector and its extents — in slot order. This is the whole state
+    /// layout: a slot's name (`"u[2,3]"`, `"s"`) is computed from it
+    /// (`layout::slot_name`, `layout::lookup_slot`) rather than stored.
     var_shapes: IndexMap<String, VarShape>,
-    /// Names of every scalar slot (`"u[1]"`, `"u[2,3]"`, `"s"`, etc.),
-    /// parallel to the flat state vector.
-    scalar_state_names: Vec<String>,
-    /// Name → flat slot lookup.
-    scalar_state_index: HashMap<String, usize>,
-    /// Per-slot default value (from variable.default or None).
-    state_defaults: Vec<Option<f64>>,
+    /// Every slot's name, parallel to the flat state vector, built the first
+    /// time [`Self::state_variable_names`] is asked. Nothing inside the build
+    /// or a solve's setup reads it; it is the public surface's spelling.
+    state_names: std::cell::OnceCell<Vec<String>>,
+    /// The same names qualified by `namespace`, built on first ask
+    /// ([`Self::qualified_state_names`]).
+    qualified_state_names: std::cell::OnceCell<Vec<String>>,
+    /// Each state variable's default, parallel to `var_shapes`.
+    state_defaults: Vec<StateDefault>,
     param_names: Vec<String>,
     param_index: HashMap<String, usize>,
     param_defaults: Vec<Option<f64>>,
@@ -609,6 +694,10 @@ pub struct ArrayCompiled {
     /// `ModelVariable.refresh` field (plan PR-2) is deferred: forcing resolves
     /// by name at runtime and does not need it.
     forcing: Rc<RefCell<HashMap<String, ArrayD<f64>>>>,
+    /// How many times [`Self::forcing_handle`] has handed out the buffer: a
+    /// host holding a handle can have written it since, which is what
+    /// [`driver::FieldIcMemo`] checks.
+    forcing_generation: std::cell::Cell<u64>,
     /// Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1),
     /// classified out of the equation list by [`Self::from_model`] (single-model
     /// path) or carried from [`crate::flatten::FlattenedSystem::field_ics`]
@@ -646,8 +735,8 @@ pub struct ArrayCompiled {
     const_scope: Rc<ConstArrayScope>,
     /// The single-model namespace (the top-level `models` map key), set by
     /// [`Self::from_file`]. The raw single-model path keys params/states by their
-    /// BARE variable names (`R_0`, `psi[i,j]`), but the scalar backend, the
-    /// `flatten` path, and the Julia toolkit all namespace them (`Model.R_0`).
+    /// BARE variable names (`R_0`, `psi[i,j]`), but the `flatten` path and the
+    /// Julia toolkit namespace them (`Model.R_0`).
     /// So a caller's `parameters` / `initial_conditions` override key is accepted
     /// in EITHER form: a `<namespace>.` prefix is stripped before lookup (WS3
     /// cross-toolkit override-naming parity). `None` on the `from_flattened`
@@ -666,6 +755,29 @@ pub struct ArrayCompiled {
     /// document never declared from one it declared but had not produced a
     /// value for yet. See [`EvalCtx::declared`]; issue #181.
     declared_names: HashSet<String>,
+    /// The field initial conditions construction resolved
+    /// ([`Self::field_ic_records`]), held for the first solve to take instead
+    /// of resolving them again. See [`driver::FieldIcMemo`].
+    #[cfg(feature = "solve")]
+    field_ic_memo: RefCell<Option<driver::FieldIcMemo>>,
+    /// Each shaped parameter whose declared default the build lowered into a
+    /// `const` observed, with the dense row-major `(shape, values)` it was
+    /// lowered from. The literal's JSON is the per-cell oracle's form; the tape
+    /// reads these numbers instead of parsing it back.
+    inline_param_arrays: HashMap<String, (Vec<usize>, Vec<f64>)>,
+    /// Every parameter refreshed from OUTSIDE the model (a data-source `from`
+    /// binding or a registered handler), with its declared shape resolved
+    /// against the index-set registry: the names the forcing buffer serves
+    /// ([`Self::forcing`]). `None` when the declared shape names a set the
+    /// registry cannot size. The tape compiles a read of one of these into a
+    /// forcing load (`tape::Instr::LoadForcing`) rather than declining it.
+    forcing_decls: IndexMap<String, Option<Vec<usize>>>,
+    /// The tape programs this model has built ([`tape::TapeCache`], which says
+    /// what a kept program depends on).
+    tape_cache: tape::TapeCache,
+    /// `observed_rules` behind one `Rc`, for the taped scratches that carry
+    /// them beside the program.
+    shared_observed: std::cell::OnceCell<Rc<Vec<AlgebraicRule>>>,
 }
 
 /// A reuse pool of `f64` backing buffers for vectorized kernel intermediates.

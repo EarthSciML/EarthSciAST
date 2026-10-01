@@ -397,7 +397,7 @@ end
         "applies_to" => PATHS)
     mock = MockSRP5(fullSR, gate, Any[])
     insp = EA.BuildInspection()
-    f!, u0, p, _tspan, var_map = EA.build_evaluator(doc;
+    f!, u0, p, _tspan, var_map = EA._build_evaluator(doc;
         model_name = "ISRM", const_arrays = ca, inspect = insp,
         pushdown_rewrite = true,
         _gated_providers = Dict{String,Any}("ISRM_SR" => mock), _sample_time = 0.0)

@@ -407,8 +407,15 @@ def test_rewritten_polygon_allocation_matches_the_dense_evaluation():
     which is on the full receptor axis, exactly."""
     ca = _const_arrays()
 
+    # `interpreter` on both arms: the binned aggregate's body subscripts a
+    # rect-envelope array the whole-box contraction cannot bind, so the strict
+    # `native` default refuses both documents (API_SPEC §5.8). The claim under
+    # test is that the two arms AGREE, which needs one compiler for both.
     dense_prep = esm_problem(
-        copy.deepcopy(_doc()), (0.0, 1.0), const_arrays=dict(ca, **{"Binned.SR_PM25": SR})
+        copy.deepcopy(_doc()),
+        (0.0, 1.0),
+        const_arrays=dict(ca, **{"Binned.SR_PM25": SR}),
+        compiler="interpreter",
     )
     dense = {v: np.asarray(observed_field(dense_prep, v)) for v in ("E_PM25", "conc_PM25")}
     # The dense arm is itself checked against a hand oracle, so a shared bug in
@@ -423,6 +430,7 @@ def test_rewritten_polygon_allocation_matches_the_dense_evaluation():
         const_arrays=ca,
         providers={"Binned.SR_PM25": gated},
         pushdown_rewrite=True,
+        compiler="interpreter",
     )
     push = {v: np.asarray(observed_field(push_prep, v)) for v in ("E_PM25", "conc_PM25")}
 

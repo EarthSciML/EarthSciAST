@@ -69,7 +69,7 @@ import { expandCouplingImports, type CouplingImportOptions } from './coupling-im
 import { mapChildren } from './expression.js'
 import {
   angleNormalizationFactor,
-  checkDimensions,
+  checkElementDimensions,
   tryParseUnit,
   type ParsedUnit,
 } from './units.js'
@@ -3089,7 +3089,7 @@ function normalizeAngleArguments(expr: Expression, env: Map<string, ParsedUnit>)
   const out = childChanged ? mapped : node
   if (out.op === 'sin' || out.op === 'cos' || out.op === 'tan') {
     if (out.args !== undefined && out.args.length === 1) {
-      const arg = checkDimensions(out.args[0] as Expression, env).dimensions
+      const arg = checkElementDimensions(out.args[0] as Expression, env).dimensions
       const factor = arg === null ? null : angleNormalizationFactor(arg)
       if (factor !== null) {
         return { ...out, args: [{ op: '*', args: [out.args[0], factor] } as ExpressionNode] }

@@ -300,8 +300,8 @@ def _op_literals_in_source(module) -> set[str]:
 
 
 # Registered ops for which display's generic `op(args)` fallback IS the intended
-# rendering (they carry no dedicated math notation): the build-time relational /
-# boolean-literal ops. Every OTHER registered op must be specifically rendered.
+# rendering (they carry no dedicated math notation): the equation-LHS `ic` and the
+# build-time relational ops. Every OTHER registered op must be specifically rendered.
 # (The open-tier spatial sugar grad/div/laplacian/curl is UNregistered — it also
 # renders via the generic fallback, but is not a *registered* op, so it is not
 # listed here.)
@@ -311,7 +311,6 @@ DISPLAY_GENERIC_OK = {
     "rank",
     "distinct",
     "join",  # build-time value-invention ops
-    "false",  # display renders `true` but not `false`
 }
 
 # Unregistered ops display nonetheless branches on a source literal for: `integral`

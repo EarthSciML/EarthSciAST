@@ -39,7 +39,7 @@
 # FALLBACK CONTRACT: anything the emitter cannot model — an unknown node kind
 # or descriptor, a foreign CSE scratch (except the build's own shared
 # scalar-prelude cache, which since ess-cgfsc is emitted as the interpreter's
-# `_cse_read`; see the tier note below), a >3-D box, an oversized spine —
+# `_cse_read`; see the tier note below), an oversized spine —
 # declines THAT kernel silently (`_CodegenDecline`); the kernel keeps the
 # per-cell interpreter (`_run_acc_kernel!`, eltype-generic). Declines are
 # counted per reason in `_CASCADE_TALLY` (`:codegen_kernel` /
@@ -49,14 +49,12 @@
 # SSA-style locals, never writes into the kernel's `_AccScratch` buffers — so
 # an emitted kernel and an interpreted one coexist within one RHS call.
 #
-# Kill switch: ESS_CODEGEN_DISABLE=1 disables BOTH generated functions
-# (primary and overflow), so every kernel runs the per-cell interpreter — the
-# differential-oracle escape hatch, mirroring ESS_STENCIL_DISABLE. (Since the
-# lane-tape retirement this means interpreter-EVERYTHING: slower than it was
-# when the tape still served Float64 residuals, but still bit-identical.)
-# Debug: ESS_CODEGEN_DEBUG=1 prints per-build emission/decline/latency lines.
+# With the tier off (`compiler=:interpreter`) BOTH generated functions (primary
+# and overflow) stand down and every kernel runs the per-cell interpreter: that
+# is the differential oracle, slower but bit-identical by the emitter's
+# contract.
 # Budget: ESS_CODEGEN_NODE_BUDGET overrides the emitted-node cap (default
-# 400_000 across all kernels of one build) that bounds Julia compile latency.
+# 64_000_000 across all kernels of one build) that backstops a runaway build.
 #
 # TEMPLATE SUB-KERNELS COMPILE ONCE (ess-cg-subcall-fn, OPT-IN via
 # ESS_CG_SUBCALL_FN=1): a `_NK_SUBCALL` body is emitted into ONE top-level
@@ -64,11 +62,10 @@
 # only in descriptor constants) and every site becomes a call — see
 # `_cg_emit_subcall` / `_cg_cell_fn!` and the default-off rationale at
 # `_cg_subcall_fn_disabled`. ESS_CG_SUBCALL_FN_MIN_NODES sets the stay-inline
-# size floor; ESS_CG_STRUCT_DUMP=<dir> dumps cell-body canonical keys.
+# size floor.
 # ========================================================================
 
-_codegen_disabled() = get(ENV, "ESS_CODEGEN_DISABLE", "") == "1"
-_codegen_debug() = get(ENV, "ESS_CODEGEN_DEBUG", "") == "1"
+_codegen_disabled() = !_compiler_plan_now().codegen
 # CUMULATIVE emitted-node budget across all kernels in one build call — a
 # build-latency backstop, NOT a per-function compile bound (the intra-kernel
 # split, ess-iip-split, handles that: every generated function stays under
@@ -78,7 +75,9 @@ _codegen_debug() = get(ENV, "ESS_CODEGEN_DEBUG", "") == "1"
 # models always emit fully; it only backstops a runaway. The duo LMARS `:inplace`
 # state RHS is ~1.5e6 nodes (13 spine-dominated momentum kernels, ~1.1e5–1.6e5
 # each); the AST build of that is ~3 GB and cheap. Override with
-# ESS_CODEGEN_NODE_BUDGET.
+# ESS_CODEGEN_NODE_BUDGET — a REFUSAL BOUNDARY under `native`, since a kernel
+# past it that the overflow emission also declines is a refused rule, not a
+# quiet demotion.
 _codegen_node_budget() =
     something(tryparse(Int, get(ENV, "ESS_CODEGEN_NODE_BUDGET", "")), 64_000_000)
 
@@ -103,18 +102,18 @@ end
 # budget. Under non-Float64 `T` it is called unconditionally, so its
 # native-compile cost is paid at the first Dual call.
 # (Since ess-f64ofl, below, the same function also serves Float64 calls when
-# the Float64 overflow routing is armed; ESS_F64_OVERFLOW_CODEGEN=0 restores
-# the interpreter-at-Float64 routing for the residual kernels.)
-# Kill switch: ESS_DUAL_CODEGEN_DISABLE=1 restores the pre-dual routing exactly
-# (the differential-oracle escape hatch, mirroring ESS_CODEGEN_DISABLE); the
-# tier is also off whenever ESS_CODEGEN_DISABLE=1 disables codegen wholesale,
-# so the existing oracle stays a pure interpreter build.
+# the Float64 overflow routing is armed.)
+# Off, the routing is the pre-dual one; the tier is also off under
+# `compiler=:interpreter`, which disables codegen wholesale, so the oracle stays
+# a pure interpreter build.
 # Budget: ESS_DUAL_CODEGEN_NODE_BUDGET overrides the overflow emission budget
 # (default unbounded — per-function size is still capped by
-# ESS_CODEGEN_FN_NODE_CAP chunking, which is what bounds LLVM memory).
+# ESS_CODEGEN_FN_NODE_CAP chunking, which is what bounds LLVM memory). It is a
+# REFUSAL BOUNDARY under `native`: this is the emission whose decline is what
+# leaves a tree walk in the right-hand side.
 # Build tally: `:dual_codegen_kernel` / `:dual_codegen_decline_<reason>` in
 # `_CASCADE_TALLY` — the observability hook for which tier Dual evaluation uses.
-_dual_codegen_disabled() = get(ENV, "ESS_DUAL_CODEGEN_DISABLE", "") == "1"
+_dual_codegen_disabled() = !_compiler_plan_now().dual_codegen
 _dual_codegen_node_budget() =
     something(tryparse(Int, get(ENV, "ESS_DUAL_CODEGEN_NODE_BUDGET", "")), typemax(Int))
 
@@ -129,20 +128,17 @@ _dual_codegen_node_budget() =
 # active, the overflow RGF runs CHUNKED on its own threaded cell axis (see
 # "Threaded cell axis for the codegen tier" below).
 #
-# Kill switch ESS_F64_OVERFLOW_CODEGEN=0 routes every residual Float64 kernel
-# to the per-cell interpreter instead — the differential oracle for this
-# routing. (Historical note: before the lane-tape retirement this switch
-# restored the tape-at-Float64 routing; the tape is gone, so the oracle is now
-# the interpreter — slower, still bit-identical by the emitter's contract.)
+# Off, every residual Float64 kernel routes to the per-cell interpreter
+# instead — the differential oracle for this routing.
 # Kernels even the overflow emission declines (`dual_resid`) keep the
-# interpreter at Float64, exactly as before.
+# interpreter at Float64.
 # The routing is inert unless the PRIMARY emission declined something and the
-# overflow function exists (`ESS_DUAL_CODEGEN_DISABLE=1` therefore also
-# disables it, keeping that switch a full pre-overflow oracle). On every model
-# within the primary budget — all repo fixtures — nothing changes at all.
+# overflow function exists, so turning the overflow tier off turns this off
+# too. On every model within the primary budget — all repo fixtures — nothing
+# changes at all.
 # Build tally: `:f64_overflow_armed` when a section is built with the routing
 # armed (overflow function present + feature on).
-_f64_overflow_codegen_enabled() = get(ENV, "ESS_F64_OVERFLOW_CODEGEN", "1") != "0"
+_f64_overflow_codegen_enabled() = _compiler_plan_now().f64_overflow
 
 # ---- Shared-prelude (xcse) cache reads (ess-cgfsc) ---------------------------
 # The cross-kernel fn-CSE pass (xcse.jl, plan B4) rewrites kernel invariant-tier
@@ -165,13 +161,11 @@ _f64_overflow_codegen_enabled() = get(ENV, "ESS_F64_OVERFLOW_CODEGEN", "1") != "
 # build.jl, hand-built test sections) pass `shared_cache = nothing` and keep
 # today's decline — as does ANY payload that is not that one cache object.
 #
-# Kill switch: ESS_CG_FOREIGN_SCRATCH_DISABLE=1 restores the unconditional
-# `:foreign_scratch` decline exactly (the differential oracle).
+# Off, every such read is an unconditional `:foreign_scratch` decline.
 # Build tally: `:cg_foreign_scratch_emit` — one bump per kernel that COMPILED
 # carrying at least one shared-prelude read (primary or overflow emission; a
 # kernel that later declines for another reason is not counted).
-_cg_foreign_scratch_disabled() =
-    get(ENV, "ESS_CG_FOREIGN_SCRATCH_DISABLE", "") == "1"
+_cg_foreign_scratch_disabled() = !_compiler_plan_now().cg_foreign_scratch
 
 # Per-kernel decline: the kernel keeps the per-cell interpreter runner.
 # Never an error — the tier is a pure optimization.
@@ -221,7 +215,9 @@ mutable struct _CGCtx
     # was first minted as. Reset per kernel so a declined kernel's rolled-back
     # helpers are never referenced (dedup scope is one kernel — where the
     # redundancy is; distinct kernels are distinct equations).
-    helper_dedup::Dict{String,Symbol}
+    # In the by-value transport (`_cg_split_by_value`) the stored value is the
+    # `_cgfns[k]` INDEX EXPRESSION rather than a name, so the field is `Any`.
+    helper_dedup::Dict{String,Any}
     # Sub-kernel function memo (ess-cg-subcall-fn): sub-`_AccKernel` → the
     # `@noinline` function serving its body, as `(fname, extra_params,
     # int_consts::Vector{Int}, flt_consts::Vector{Float64})`, or `:inline` for
@@ -245,19 +241,29 @@ mutable struct _CGCtx
     # True while emitting a sub-kernel body: `_NK_CACHED` invariant reads emit
     # `_cgivt[idx]` (the tuple argument) instead of a prologue local name.
     subivt::Bool
+    # Run-time geometry (see "Geometry as data" below): the integers the emitted
+    # loops read instead of literals, one tab object for the whole function;
+    # `geosink` is the statement list the `local` that reads each one goes
+    # into (the current kernel's block, or the invariant prologue), and
+    # `geomemo` names one local per geometry field within that list.
+    geo::Vector{Int}
+    geosink::Vector{Any}
+    geomemo::IdDict{Any,Symbol}
 end
 _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing) =
     _CGCtx(DataType[], Vector{Any}[], IdDict{Any,Tuple{Int,Int}}(),
            IdDict{Any,Vector{Symbol}}(),
-           Any[], Any[], 0, budget, 0, shared_cache, 0, Any[], Dict{String,Symbol}(),
+           Any[], Any[], 0, budget, 0, shared_cache, 0, Any[], Dict{String,Any}(),
            IdDict{Any,Any}(), Any[],
-           Dict{String,Tuple{Symbol,Vector{Symbol}}}(), String[], false)
+           Dict{String,Tuple{Symbol,Vector{Symbol}}}(), String[], false,
+           Int[], Any[], IdDict{Any,Symbol}())
 
-_cg_helper_dedup_disabled() = get(ENV, "ESS_CG_HELPER_DEDUP_DISABLE", "") == "1"
+_cg_helper_dedup_disabled() = !_compiler_plan_now().cg_helper_dedup
 
-# Sub-kernel / cell-body function tier (ess-cg-subcall-fn): OPT-IN via
-# ESS_CG_SUBCALL_FN=1 (ESS_CG_SUBCALL_FN_DISABLE=1 still force-disables, as
-# the differential oracle). Measured on the duo LMARS RHS (2026-08-28) the
+# Sub-kernel / cell-body function tier (ess-cg-subcall-fn). EXPERIMENTAL, and
+# it ships OFF: `ESS_CG_SUBCALL_FN=1` is the one `ESS_*` variable that turns it
+# on. It is not an oracle selector — no tier stands down when it is unset, the
+# tier simply does not exist in the default build. Measured on the duo LMARS RHS (2026-08-28) the
 # tier is value-exact and shares real structure (94/120 sub-bodies dedup), but
 # the emitted-node total is unchanged — the mass is ~28 near-identical cell
 # bodies fragmented per region class by value-dependent boundary folds, which
@@ -265,13 +271,13 @@ _cg_helper_dedup_disabled() = get(ENV, "ESS_CG_HELPER_DEDUP_DISABLE", "") == "1"
 # memory goes UP (38+ GB vs 32.6 GB) from the added function boundaries. Until
 # the duo rules gather affinely over shared cell sets (where this tier's
 # sharing actually lands), the fused emission is the better default.
-_cg_subcall_fn_disabled() =
-    get(ENV, "ESS_CG_SUBCALL_FN_DISABLE", "") == "1" ||
-    get(ENV, "ESS_CG_SUBCALL_FN", "") != "1"
+_cg_subcall_fn_disabled() = get(ENV, "ESS_CG_SUBCALL_FN", "") != "1"
 
 # Bodies at or under this emitted-node floor stay inlined per site: a leaf
 # template of a handful of nodes is cheaper re-emitted than behind a `@noinline`
-# call per cell per site. Override with ESS_CG_SUBCALL_FN_MIN_NODES.
+# call per cell per site. Override with ESS_CG_SUBCALL_FN_MIN_NODES — a refusal
+# boundary under `native` while the tier above it is opted in, since it decides
+# which bodies the emitter is asked to carve out.
 _cg_subcall_fn_min_nodes() =
     something(tryparse(Int, get(ENV, "ESS_CG_SUBCALL_FN_MIN_NODES", "")), 64)
 
@@ -306,6 +312,58 @@ function _cg_tab!(ctx::_CGCtx, obj)
     return :($(_cg_grp_sym(g))[$pos])
 end
 
+# ---- Geometry as data --------------------------------------------------------
+# A box's bounds, base slot and strides, a stencil's slot offsets, a cell count,
+# a fixed slot: every integer that says WHERE a kernel reads and writes is a
+# function of the grid size, and a literal of it would make every N a different
+# generated function, each paying its own Julia compile. So the emitter writes
+# them as locals read from one `Vector{Int}` tab (`ctx.geo`), hoisted ahead of
+# the loops that use them: two documents that differ only in N emit the same
+# expression, and RuntimeGeneratedFunctions (which keys a function on its
+# expression) compiles it once. The integer arithmetic is the same either way,
+# and no floating-point value moves, so the result is bit-identical.
+#
+# What stays a literal: a stride or slot offset of 0, 1 or -1 (`unit = true`),
+# which the loops need to see — a zero stride drops its term, and a unit one is
+# what lets the compiler see a contiguous run — and which is the same at every
+# N (the leading axis's stride and neighbour offset; any other axis has a unit
+# stride only on a grid one cell wide). Bounds, bases and fixed slots are data
+# even when they are 1. So are extents and cell counts, except a boundary slab's
+# (`_CellSet.slab`), which is one cell thick at every N.
+# Everything inside a structural sub-kernel body (`ctx.subivt`) stays literal,
+# since `_cg_abstract!` already lifts its literals into per-instance data.
+#
+# `key` (optional) names the geometry FIELD the value came from, by the
+# identity of the object that holds it, so two reads of one descriptor share one
+# local — keeping identical code identical for the split helpers' dedup — while
+# two fields that merely hold equal values at this N stay distinct.
+function _cg_geo!(ctx::_CGCtx, v::Int, key=nothing, unit::Bool=false)
+    (ctx.subivt || (unit && -1 <= v <= 1)) && return v
+    if key !== nothing
+        got = get(ctx.geomemo, key, nothing)
+        got === nothing || return got
+    end
+    push!(ctx.geo, v)
+    s = _cg_name(ctx, "G")
+    push!(ctx.geosink, :(local $s = $(_cg_tab!(ctx, ctx.geo))[$(length(ctx.geo))]))
+    key === nothing || (ctx.geomemo[key] = s)
+    return s
+end
+
+# Run `f()` with geometry locals going to `sink` (and a fresh memo, since a
+# memoized local exists only in the list it was defined in).
+function _cg_with_geosink(f, ctx::_CGCtx, sink::Vector{Any})
+    sink0, memo0 = ctx.geosink, ctx.geomemo
+    ctx.geosink = sink
+    ctx.geomemo = IdDict{Any,Symbol}()
+    try
+        return f()
+    finally
+        ctx.geosink = sink0
+        ctx.geomemo = memo0
+    end
+end
+
 # ---- Per-kernel-evaluation context ------------------------------------------
 # The cell coordinates as EXPRESSIONS (a loop-variable Symbol or an Int
 # literal), plus the CSE slot → local-name maps for the kernel currently being
@@ -323,38 +381,83 @@ struct _CGKernCtx
     mi3::Any
     cellsyms::Vector{Symbol}
     invsyms::Vector{Symbol}
+    # The multi-index of loop dims 4, 5, … — empty on a box of rank ≤ 3, where
+    # every dim past the third reads as the literal 1, exactly as the
+    # interpreter's padded `midx` does.
+    mix::Vector{Any}
 end
+_CGKernCtx(K, c, n, oln, mi1, mi2, mi3, cellsyms, invsyms) =
+    _CGKernCtx(K, c, n, oln, mi1, mi2, mi3, cellsyms, invsyms, Any[])
 
-_cg_mi(kc::_CGKernCtx, d::Int) = d == 1 ? kc.mi1 : d == 2 ? kc.mi2 : kc.mi3
+_cg_mi(kc::_CGKernCtx, d::Int) =
+    d == 1 ? kc.mi1 : d == 2 ? kc.mi2 : d == 3 ? kc.mi3 :
+    d - 3 <= length(kc.mix) ? kc.mix[d - 3] : 1
+
+# The same context with loop dim `d` bound to `v` (an affine reduction binds its
+# reduction dims this way, inside its loops).
+function _cg_with_mi(kc::_CGKernCtx, d::Int, v)
+    mi1, mi2, mi3 = kc.mi1, kc.mi2, kc.mi3
+    mix = kc.mix
+    if d == 1
+        mi1 = v
+    elseif d == 2
+        mi2 = v
+    elseif d == 3
+        mi3 = v
+    else
+        mix = copy(kc.mix)
+        while length(mix) < d - 3
+            push!(mix, 1)
+        end
+        mix[d - 3] = v
+    end
+    return _CGKernCtx(kc.K, kc.c, kc.n, kc.oln, mi1, mi2, mi3, kc.cellsyms,
+                      kc.invsyms, mix)
+end
 
 # Integer index expression `off + Σ_d (mi_d - 1)·s_d`, folding literal-1 mi
 # and zero strides (exact Int arithmetic — folding cannot change the index).
-function _cg_boxaddr(kc::_CGKernCtx, s1::Int, s2::Int, s3::Int, off::Int)
+# `sx` carries the strides of dims 4, 5, … (`_AccDesc.sx`). The strides and the
+# offset are run-time geometry (`_cg_geo!`), keyed under `key`.
+_cg_gkey(key, f) = key === nothing ? nothing : (key, f)
+function _cg_boxaddr(ctx::_CGCtx, kc::_CGKernCtx, s1::Int, s2::Int, s3::Int, off::Int,
+                     sx::Vector{Int}=_AK_NO_CONN, key=nothing)
     e = nothing
-    for (mi, s) in ((kc.mi1, s1), (kc.mi2, s2), (kc.mi3, s3))
+    for (d, mi, s) in ((1, kc.mi1, s1), (2, kc.mi2, s2), (3, kc.mi3, s3))
         s == 0 && continue
         mi === 1 && continue                      # (1-1)*s == 0
-        term = :(($mi - 1) * $s)
+        term = :(($mi - 1) * $(_cg_geo!(ctx, s, _cg_gkey(key, d), true)))
         e = e === nothing ? term : :($e + $term)
     end
-    return e === nothing ? off : :($off + $e)
+    for d in eachindex(sx)
+        s = sx[d]
+        mi = _cg_mi(kc, d + 3)
+        (s == 0 || mi === 1) && continue
+        term = :(($mi - 1) * $(_cg_geo!(ctx, s, _cg_gkey(key, d + 3), true)))
+        e = e === nothing ? term : :($e + $term)
+    end
+    g = _cg_geo!(ctx, off, _cg_gkey(key, :off))
+    return e === nothing ? g : :($g + $e)
 end
 
-_cg_offset(base, delta::Int) = delta == 0 ? base : :($base + $delta)
+_cg_offset(base, delta) = delta === 0 ? base : :($base + $delta)
 
 # ---- One access descriptor → one indexing expression (mirrors `_fetch`) -----
-function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc)
+# `key` identifies the descriptor (its table and position) for `_cg_geo!`.
+function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key=nothing)
     k = a.kind
     if k === _AK_STATE_AFFINE
-        return :(u[$(_cg_offset(kc.oln, a.delta))])
+        return :(u[$(_cg_offset(kc.oln, _cg_geo!(ctx, a.delta, _cg_gkey(key, :delta), true)))])
     elseif k === _AK_CONST_AFFINE
-        return :($(_cg_tab!(ctx, a.arr))[$(_cg_offset(kc.oln, a.delta))])
+        return :($(_cg_tab!(ctx, a.arr))[$(_cg_offset(kc.oln,
+                     _cg_geo!(ctx, a.delta, _cg_gkey(key, :delta), true)))])
     elseif k === _AK_CONST_BOX || k === _AK_FORCING_BOX
         # FORCING_BOX's arr is the aliased LIVE buffer — passing the reference
         # through `tabs` keeps every in-place refresh visible.
-        return :($(_cg_tab!(ctx, a.arr))[$(_cg_boxaddr(kc, a.s1, a.s2, a.s3, a.off))])
+        return :($(_cg_tab!(ctx, a.arr))[$(_cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off,
+                                                       a.sx, key))])
     elseif k === _AK_STATE_FIXED
-        return :(u[$(a.idx)])
+        return :(u[$(_cg_geo!(ctx, a.idx, _cg_gkey(key, :idx)))])
     elseif k === _AK_LOOP_IDX
         return :(Float64($(_cg_mi(kc, a.dim))))
     elseif k === _AK_SCALAR
@@ -364,20 +467,20 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc)
     elseif k === _AK_CONST_EDGE
         return :($(_cg_tab!(ctx, a.arr))[($(kc.c) - 1) * $(a.width) + $(kc.n)])
     elseif k === _AK_ARR_FIXED
-        return :($(_cg_tab!(ctx, a.arr))[$(a.idx)])
+        return :($(_cg_tab!(ctx, a.arr))[$(_cg_geo!(ctx, a.idx, _cg_gkey(key, :idx)))])
     elseif k === _AK_STATE_INDIRECT
         return :(u[$(_cg_tab!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(kc.n)]])
     elseif k === _AK_STATE_INDIRECT_COL
         return :(u[$(_cg_tab!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(a.col)]])
     elseif k === _AK_STATE_TBL_BOX
         s = _cg_name(ctx, "s")
-        addr = _cg_boxaddr(kc, a.s1, a.s2, a.s3, a.off)
+        addr = _cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off, a.sx, key)
         # Exactly `_fetch`'s ghost test: slot 0 ⇒ the ghost literal 0.0.
         return :(let $s = $(_cg_tab!(ctx, a.conn))[$addr]
                      $s == 0 ? 0.0 : u[$s]
                  end)
     elseif k === _AK_ARR_TBL_BOX
-        addr = _cg_boxaddr(kc, a.s1, a.s2, a.s3, a.off)
+        addr = _cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off, a.sx, key)
         return :($(_cg_tab!(ctx, a.arr))[$(_cg_tab!(ctx, a.conn))[$addr]])
     end
     throw(_CodegenDecline(:unsupported_desc))
@@ -415,7 +518,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
     _cg_budget!(ctx)
     k = nd.kind
     if k === _NK_ACCESS
-        return _cg_fetch(ctx, kc, kc.K.acc[nd.idx])
+        return _cg_fetch(ctx, kc, kc.K.acc[nd.idx], (kc.K.acc, nd.idx))
     elseif k === _NK_LITERAL
         return nd.literal
     elseif k === _NK_PARAM
@@ -441,8 +544,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
             # and the `alt::Vector{T}` buffer under any other `T`, both filled
             # by `_make_rhs`'s prelude tiers (at this same `T`) before the
             # kernel section runs; see the fill-ordering note at the tier docs
-            # above. The enclosing recipe's `convert(_cgT, …)` store matches
-            # `_fill_invariant!`'s `buf[i] = …` conversion exactly.
+            # above.
             ctx.fscratch += 1
             return :(_cse_read($(_cg_tab!(ctx, pl)), $(nd.idx), _cgT))
         end
@@ -458,7 +560,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
         s = _cg_name(ctx, "r")
         m = _cg_name(ctx, "m")
         inner = _CGKernCtx(kc.K, kc.c, m, kc.oln, kc.mi1, kc.mi2, kc.mi3,
-                           kc.cellsyms, kc.invsyms)
+                           kc.cellsyms, kc.invsyms, kc.mix)
         body = _cg_emit(ctx, inner, nd.children[1])
         return quote
             local $s = $(kc.K.zerobar)
@@ -467,6 +569,8 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
             end
             $s
         end
+    elseif k === _NK_AREDUCE
+        return _cg_emit_areduce(ctx, kc, nd)
     elseif k === _NK_CONTRACTION
         # Seeded sequential ⊕-fold in child order — `_eval_acc_contraction`
         # arm for arm (`max`/`min` fold through the function, `+`/`*` through
@@ -480,6 +584,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
         op = nd.op
         fnsym = op === :+ ? :+ : op === :* ? :* :
                 op === :max ? :max : op === :min ? :min :
+                op === :or ? :_or_combine :
                 throw(_CodegenDecline(:unsupported_op))
         return _cg_foldl(fnsym, exprs)
     elseif k === _NK_SUBCALL
@@ -490,17 +595,55 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
     throw(_CodegenDecline(:unknown_kind))
 end
 
-# Emit a kernel's per-cell CSE recipes as `local q = convert(T, …)` statements
-# appended to `stmts`, registering each local on `kc.cellsyms` so later recipes
-# and the spine resolve their `_NK_CACHED` reads (recipes only ever read LOWER
-# slots, so each name exists before its first read). The `convert` is exactly
-# where the interpreter's scratch store (`buf[i] = _eval_acc(…)`, a `Vector{T}`
-# setindex!) converts. Shared by the kernel cell body and the subcall inliner.
+# Affine reduction (`_NK_AREDUCE`) — `_eval_acc_areduce` as a loop nest: one
+# accumulator seeded from the node's 0̄ (a `Float64`, as the interpreter seeds
+# it), the contracted dims bound to loop counters (the first dim innermost),
+# and `s = s ⊕ body` in the innermost loop. The body is emitted once, so the
+# kernel's code does not grow with the contraction length.
+function _cg_emit_areduce(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
+    spec = nd.payload::_AReduceSpec
+    fnsym = _cg_oplus_fn(nd.op)
+    acc = _cg_name(ctx, "r")
+    js = Symbol[_cg_name(ctx, "j") for _ in spec.dims]
+    inner = kc
+    for r in eachindex(spec.dims)
+        inner = _cg_with_mi(inner, spec.dims[r], js[r])
+    end
+    body = _cg_emit(ctx, inner, nd.children[1])
+    loop = Expr(:(=), acc, Expr(:call, fnsym, acc, body))
+    for r in eachindex(spec.dims)
+        rg = spec.ranges[r]
+        lo = _cg_geo!(ctx, first(rg), (spec.ranges, r, :lo))
+        hi = _cg_geo!(ctx, last(rg), (spec.ranges, r, :hi))
+        loop = Expr(:for, :($(js[r]) = $lo:$hi), Expr(:block, loop))
+    end
+    return quote
+        local $acc = $(nd.literal)
+        $loop
+        $acc
+    end
+end
+
+# Emit a kernel's per-cell CSE recipes as `local q = …` statements appended to
+# `stmts`, registering each local on `kc.cellsyms` so later recipes and the
+# spine resolve their `_NK_CACHED` reads (recipes only ever read LOWER slots, so
+# each name exists before its first read). Shared by the kernel cell body and
+# the subcall inliner.
+#
+# A recipe keeps the type its expression has, and is NOT converted to the value
+# type `T`. The reference build (`compiler = :interpreter`) has no recipes: it
+# computes a shared subexpression in place, so a `Float64` one (a const lane,
+# `-W[i]`) stays `Float64` and multiplies a `Dual` as a scalar. Converting it
+# would make it a `Dual` with zero partials, and `Dual * Dual` then adds
+# `value · 0.0` to every partial: a `-0.0` partial of the reference turns into
+# `+0.0`, and an infinite value into a `NaN` partial. The interpreted
+# access-kernel runner stores its recipes in a `Vector{T}` scratch and does
+# convert; it is not the reference, and a strict build never runs it.
 function _cg_emit_recipes!(stmts::Vector{Any}, ctx::_CGCtx, kc::_CGKernCtx)
     for r in kc.K.cse.recipes
         e = _cg_bound_body!(ctx, _cg_emit(ctx, kc, r))
         s = _cg_name(ctx, "q")
-        push!(stmts, :(local $s = convert(_cgT, $e)))
+        push!(stmts, :(local $s = $e))
         push!(kc.cellsyms, s)
     end
     return stmts
@@ -520,8 +663,8 @@ end
 #
 # Bit-exactness and the zero-alloc discipline follow the split helpers'
 # (`_cg_spill!`) conventions exactly: per-cell CSE recipes stay function-local
-# `convert(_cgT, …)` locals (the interpreter refills the body's scratch at
-# every evaluation — a fresh call frame computes the identical values), `_cgT`
+# locals of their own type (`_cg_emit_recipes!`; a fresh call frame computes
+# the identical values), `_cgT`
 # is recomputed inside from `(u, p, t)` (never passed — constant-propagation),
 # the function captures nothing, and the name shares the split helpers'
 # `_cgh…` namespace so `_cg_is_spill_call` (partition irreducibility) and
@@ -532,8 +675,10 @@ end
 #
 # A tiny body (≤ `_cg_subcall_fn_min_nodes()`) stays inlined per site, and
 # Julia < 1.12 keeps the pre-tier inlining wholesale — the emitted function is
-# the same inner-`function`-under-RGF mechanism as the split, which boxes and
-# segfaults there (`_cg_split_supported`).
+# the same inner-`function`-under-RGF mechanism as the split's inner-definition
+# transport, which boxes and segfaults there (`_cg_split_supported`). This tier
+# has not been ported to the by-value transport the split takes instead; it
+# ships off, so nothing on those versions depends on it.
 # Canonicalizer/parametrizer for one emitted sub-kernel body
 # (ess-cg-subcall-struct). Rewrites the expression so that everything that
 # varies between two structurally-equal sub-kernels becomes an ARGUMENT:
@@ -604,7 +749,7 @@ function _cg_subcall_fn!(ctx::_CGCtx, S::_AccKernel, invsyms::Vector{Symbol})
         for r in S.cse.recipes
             e = _cg_emit(ctx, inner, r)
             s = _cg_name(ctx, "q")
-            push!(stmts, :(local $s = convert(_cgT, $e)))
+            push!(stmts, :(local $s = $e))
             push!(inner.cellsyms, s)
         end
         spine = _cg_emit(ctx, inner, S.spine)
@@ -666,7 +811,9 @@ end
 function _cg_emit_subcall(ctx::_CGCtx, kc::_CGKernCtx, S::_AccKernel)
     invsyms = get(ctx.invdone, S, nothing)
     invsyms === nothing && throw(_CodegenDecline(:subcall_order))
-    if _cg_split_supported() && !_cg_subcall_fn_disabled()
+    # The function tier passes the three-dim cell context as its formal
+    # parameters, so a body read past the third dim is inlined instead.
+    if _cg_split_supported() && !_cg_subcall_fn_disabled() && isempty(kc.mix)
         got = _cg_subcall_fn!(ctx, S, invsyms)
         if got !== :inline
             fname, extra, ints, flts =
@@ -686,7 +833,7 @@ function _cg_emit_subcall(ctx::_CGCtx, kc::_CGKernCtx, S::_AccKernel)
     # recipes become occurrence-local locals, then the body spine evaluates
     # against its OWN descriptor table.
     inner = _CGKernCtx(S, kc.c, kc.n, kc.oln, kc.mi1, kc.mi2, kc.mi3,
-                       Symbol[], invsyms)
+                       Symbol[], invsyms, kc.mix)
     stmts = _cg_emit_recipes!(Any[], ctx, inner)
     spine = _cg_emit(ctx, inner, S.spine)
     isempty(stmts) && return spine
@@ -694,7 +841,11 @@ function _cg_emit_subcall(ctx::_CGCtx, kc::_CGKernCtx, S::_AccKernel)
 end
 
 # ---- Op application (mirrors `_eval_acc_op` arm for arm) --------------------
-function _cg_emit_op(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
+# `kc` is left unannotated here and on `_cg_emit_fn`: the op ladder is the op
+# REGISTRY rendered as expressions and reads nothing off the evaluation context
+# but the recursion, so the scalar-spine emitter (array_contraction.jl)
+# shares these two rather than restating every registry row.
+function _cg_emit_op(ctx::_CGCtx, kc, nd::_Node)
     op = nd.op
     ch = nd.children
     ev(x) = _cg_emit(ctx, kc, x)
@@ -766,7 +917,7 @@ end
 # interpreters' `:fn` arms (compile.jl / access_kernel.jl), so interpolation
 # is never reimplemented here. Specs ride the `tabs` tuple (field loads are
 # hoisted by the compiler; the spec object is the very one the node carries).
-function _cg_emit_fn(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
+function _cg_emit_fn(ctx::_CGCtx, kc, nd::_Node)
     pl = nd.payload
     ch = nd.children
     if pl isa Tuple{String,_InterpLinearSpec}
@@ -794,7 +945,8 @@ function _cg_emit_fn(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
         h = pl[2]
         hs = _cg_tab!(ctx, h)
         sp = _cg_name(ctx, "sp")
-        return :(let $sp = $hs.specs[$(_cg_boxaddr(kc, h.s1, h.s2, h.s3, h.off))]
+        addr = _cg_boxaddr(ctx, kc, h.s1, h.s2, h.s3, h.off, _AK_NO_CONN, h)
+        return :(let $sp = $hs.specs[$addr]
                      _interp_linear_core($sp.table, $sp.axis,
                                          $(_cg_emit(ctx, kc, ch[1])))
                  end)
@@ -802,7 +954,8 @@ function _cg_emit_fn(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
         h = pl[2]
         hs = _cg_tab!(ctx, h)
         sp = _cg_name(ctx, "sp")
-        return :(let $sp = $hs.specs[$(_cg_boxaddr(kc, h.s1, h.s2, h.s3, h.off))]
+        addr = _cg_boxaddr(ctx, kc, h.s1, h.s2, h.s3, h.off, _AK_NO_CONN, h)
+        return :(let $sp = $hs.specs[$addr]
                      _interp_bilinear_core($sp.table, $sp.axis_x, $sp.axis_y,
                                            $(_cg_emit(ctx, kc, ch[1])),
                                            $(_cg_emit(ctx, kc, ch[2])))
@@ -814,7 +967,8 @@ function _cg_emit_fn(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
         h = pl[2]
         hs = _cg_tab!(ctx, h)
         sp = _cg_name(ctx, "sp")
-        return :(let $sp = $hs.specs[$(_cg_boxaddr(kc, h.s1, h.s2, h.s3, h.off))]
+        addr = _cg_boxaddr(ctx, kc, h.s1, h.s2, h.s3, h.off, _AK_NO_CONN, h)
+        return :(let $sp = $hs.specs[$addr]
                      convert(_cgT, _interp_searchsorted_core("interp.searchsorted",
                                  $(_cg_emit(ctx, kc, ch[1])), $sp.xs))
                  end)
@@ -858,11 +1012,15 @@ function _cg_inv!(ctx::_CGCtx, K::_AccKernel)
     kc = _CGKernCtx(K, 1, 0, 1, 1, 1, 1, Symbol[], syms)
     ctx.invdone[K] = syms
     push!(ctx.invlog, K)
-    for r in K.cse.inv_recipes
-        e = _cg_bound_body!(ctx, _cg_emit(ctx, kc, r))
-        s = _cg_name(ctx, "v")
-        push!(ctx.prologue, :(local $s = convert(_cgT, $e)))
-        push!(syms, s)
+    # Geometry an invariant recipe reads (a fixed slot) is read into the
+    # prologue too, just ahead of the statement that uses it.
+    _cg_with_geosink(ctx, ctx.prologue) do
+        for r in K.cse.inv_recipes
+            e = _cg_bound_body!(ctx, _cg_emit(ctx, kc, r))
+            s = _cg_name(ctx, "v")
+            push!(ctx.prologue, :(local $s = $e))
+            push!(syms, s)
+        end
     end
     return syms
 end
@@ -906,7 +1064,7 @@ function _cg_cell_fn!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbol})
         for r in K.cse.recipes
             e = _cg_emit(ctx, inner, r)
             s = _cg_name(ctx, "q")
-            push!(stmts, :(local $s = convert(_cgT, $e)))
+            push!(stmts, :(local $s = $e))
             push!(inner.cellsyms, s)
         end
         spine = _cg_emit(ctx, inner, K.spine)
@@ -923,11 +1081,6 @@ function _cg_cell_fn!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbol})
     ab = _CGAbs()
     kb = _cg_abstract!(ab, body0)
     key = string(kb)
-    if (d = get(ENV, "ESS_CG_STRUCT_DUMP", "")) != ""
-        open(joinpath(d, "cellkey_$(length(ctx.substruct_log))_$(objectid(K)).txt"), "w") do io
-            write(io, key)
-        end
-    end
     hit = get(ctx.substruct, key, nothing)
     if hit !== nothing
         ctx.nodes = nodes0
@@ -971,8 +1124,17 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
         _cg_inv!(ctx, S)
     end
     invsyms = _cg_inv!(ctx, K)
+    # The kernel's geometry locals head its own block, outside every loop, so a
+    # chunk sub-function that carries the nest carries them too.
+    geo = Any[]
+    nest = _cg_with_geosink(() -> _cg_emit_kernel_nest!(ctx, K, invsyms), ctx, geo)
+    isempty(geo) && return nest
+    return Expr(:block, geo..., nest)
+end
 
-    cellfn = (_cg_split_supported() && !_cg_subcall_fn_disabled()) ?
+function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbol})
+    cellfn = (_cg_split_supported() && !_cg_subcall_fn_disabled() &&
+              length(K.cells.strides) <= 3) ?
              _cg_cell_fn!(ctx, K, invsyms) : nothing
 
     # Per-cell body: a CALL to the shared cell function when the structural
@@ -1000,7 +1162,21 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     tv = _cg_name(ctx, "ab")
     av = _cg_name(ctx, "a")
     bv = _cg_name(ctx, "b")
-    hdr = Any[:(local $tv = _chunk_ordinals($ncells, _cgci, _cgnc)),
+    # Every bound, base and stride below is run-time geometry (`_cg_geo!`),
+    # except the extent of a boundary slab's thin axis (`_cellset_slab`), and
+    # the count of a box that is a slab on every axis: it is one cell at every
+    # N, and a literal extent lets the compiler drop that axis's loop, where a
+    # run-time one leaves a loop set up (and vectorized) for a single cell per
+    # row. The slab's index stays data, so the far edge's is one function too.
+    geo(v, f, unit::Bool=false) = _cg_geo!(ctx, v, (cs, f), unit)
+    function axis(d)
+        lo = geo(first(cs.ranges[d]), (d, :first))
+        _cellset_slab(cs, d) && return (lo, lo, 1)
+        n = length(cs.ranges[d])
+        return (lo, geo(last(cs.ranges[d]), (d, :last)), geo(n, (d, :len)))
+    end
+    corner = !isempty(cs.strides) && all(d -> _cellset_slab(cs, d), eachindex(cs.strides))
+    hdr = Any[:(local $tv = _chunk_ordinals($(corner ? 1 : geo(ncells, :n)), _cgci, _cgnc)),
               :(local $av = $tv[1]),
               :(local $bv = $tv[2])]
     if _is_outs(cs)
@@ -1017,13 +1193,13 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
             end
         end
     elseif _is_contig(cs)
-        rng = cs.ranges[1]
+        c0 = geo(first(cs.ranges[1]), (1, :first))
         c = _cg_name(ctx, "c")
         kc = _CGKernCtx(K, c, 0, c, c, 1, 1, Symbol[], invsyms)
         body = cellbody(kc)
         return quote
             $(hdr...)
-            for $c in ($(first(rng)) + $av):($(first(rng)) + $bv - 1)
+            for $c in ($c0 + $av):($c0 + $bv - 1)
                 $(body...)
             end
         end
@@ -1036,19 +1212,18 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     # (the decode is hoisted to the row level so the inner loop stays today's
     # instructions).
     nd = length(cs.strides)
-    nd <= 3 || throw(_CodegenDecline(:box_rank))
-    st = cs.strides
-    rg = cs.ranges
+    nd <= 3 || return _cg_emit_box_rank_n(ctx, K, cs, hdr, av, bv, cellbody, geo, axis)
+    st = Any[_cg_geo!(ctx, cs.strides[d], (cs, d, :stride), true) for d in 1:nd]
     iv = _cg_name(ctx, "i")
     jv = nd >= 2 ? _cg_name(ctx, "j") : 1
     kv = nd >= 3 ? _cg_name(ctx, "k") : 1
     oln = _cg_name(ctx, "o")
-    olnexpr = :($(cs.base) + $iv * $(st[1]))
+    olnexpr = :($(geo(cs.base, :base)) + $iv * $(st[1]))
     nd >= 2 && (olnexpr = :($olnexpr + $jv * $(st[2])))
     nd >= 3 && (olnexpr = :($olnexpr + $kv * $(st[3])))
     kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invsyms)
     body = cellbody(kc)
-    i0 = first(rg[1]); i1 = last(rg[1]); ni = length(rg[1])
+    i0, i1, ni = axis(1)
     if nd == 1
         return quote
             $(hdr...)
@@ -1063,7 +1238,7 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     ihi = _cg_name(ctx, "ih")
     jlo = _cg_name(ctx, "jl")
     jhi = _cg_name(ctx, "jh")
-    j0 = first(rg[2]); j1 = last(rg[2])
+    j0, j1, _ = axis(2)
     if nd == 2
         return quote
             $(hdr...)
@@ -1089,7 +1264,7 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     rhi = _cg_name(ctx, "rh")
     klo = _cg_name(ctx, "kl")
     khi = _cg_name(ctx, "kh")
-    nj = length(rg[2]); k0 = first(rg[3])
+    nj = axis(2)[3]; k0 = axis(3)[1]
     return quote
         $(hdr...)
         if $av < $bv
@@ -1114,64 +1289,104 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     end
 end
 
+# A strided Cartesian box of rank above 3, in `_run_box_kernel!`'s iteration
+# order (dim 1 fastest). The chunk `[a, b)` is walked as whole dim-1 ROWS, the
+# same row walk the rank-2/3 nests use: the chunk's first row ordinal
+# `r = a ÷ n1` is decoded into dims 2…D by division once, each later row steps
+# that odometer by one (dim 2 fastest, carrying upward), so the inner loop is
+# the rank-1 loop over `rowbase + i·s1`, and only the first and last row of a
+# chunk clamp dim 1 to the chunk boundary. c == oln for a box.
+function _cg_emit_box_rank_n(ctx::_CGCtx, K::_AccKernel, cs::_CellSet, hdr, av, bv,
+                             cellbody, geo, axis)
+    nd = length(cs.strides)
+    st = Any[_cg_geo!(ctx, cs.strides[d], (cs, d, :stride), true) for d in 1:nd]
+    ax = [axis(d) for d in 1:nd]
+    lo = Any[a[1] for a in ax]
+    hi = Any[a[2] for a in ax]
+    len = Any[a[3] for a in ax]
+    iv = _cg_name(ctx, "i")
+    ovs = Any[iv]
+    for d in 2:nd
+        push!(ovs, _cg_name(ctx, "i"))
+    end
+    oln = _cg_name(ctx, "o")
+    rowb = _cg_name(ctx, "rb")
+    rowexpr = geo(cs.base, :base)
+    for d in 2:nd
+        rowexpr = :($rowexpr + $(ovs[d]) * $(st[d]))
+    end
+    kc = _CGKernCtx(K, oln, 0, oln, ovs[1], ovs[2], ovs[3], Symbol[], _cg_inv!(ctx, K),
+                    Any[ovs[d] for d in 4:nd])
+    body = cellbody(kc)
+    i0 = lo[1]; i1 = hi[1]; ni = len[1]
+    ohi = _cg_name(ctx, "e")
+    rlo = _cg_name(ctx, "rl")
+    rhi = _cg_name(ctx, "rh")
+    rv = _cg_name(ctx, "r")
+    rr = _cg_name(ctx, "rr")
+    ilo = _cg_name(ctx, "il")
+    ihi = _cg_name(ctx, "ih")
+    seek = Any[:(local $rr = $rlo)]
+    for d in 2:nd
+        push!(seek, :(local $(ovs[d]) = $(lo[d]) + rem($rr, $(len[d]))))
+        d < nd && push!(seek, :($rr = div($rr, $(len[d]))))
+    end
+    # The odometer step after a row: dim 2 up by one, carrying into the next
+    # dim when it passes its last index. Past the chunk's last row it may run
+    # off the box; nothing reads it then.
+    step = :($(ovs[nd]) += 1)
+    for d in (nd - 1):-1:2
+        step = quote
+            if $(ovs[d]) < $(hi[d])
+                $(ovs[d]) += 1
+            else
+                $(ovs[d]) = $(lo[d])
+                $step
+            end
+        end
+    end
+    return quote
+        $(hdr...)
+        if $av < $bv
+            local $ohi = $bv - 1
+            local $rlo = div($av, $ni)
+            local $rhi = div($ohi, $ni)
+            $(seek...)
+            for $rv in $rlo:$rhi
+                local $ilo = $rv == $rlo ? $i0 + rem($av, $ni) : $i0
+                local $ihi = $rv == $rhi ? $i0 + rem($ohi, $ni) : $i1
+                local $rowb = $rowexpr
+                for $iv in $ilo:$ihi
+                    local $oln = $rowb + $iv * $(st[1])
+                    $(body...)
+                end
+                $step
+            end
+        end
+    end
+end
+
+# The read-only view of `u` the generated section's alias scope reads through
+# (see `_build_codegen_rhs`). `Const` wraps an `Array` only.
+@inline _cg_readonly(u::Array) = Base.Experimental.Const(u)
+@inline _cg_readonly(u) = u
+
 # ---- Build the fused generated RHS section ----------------------------------
 struct _CGBuilt{F,TB}
     f::F
     tabs::TB
     covered::Vector{Bool}
+    # Why each UNCOVERED kernel was declined, parallel to `covered` (`:none`
+    # where `covered[j]`). A strict compiler names the deepest of these when it
+    # refuses a rule, so the reason has to survive the emission that produced
+    # it — the tally counts reasons, it does not say which kernel had which.
+    reasons::Vector{Symbol}
     # Threaded cell axis (see "Threaded cell axis for the codegen tier"):
     # total cells across the covered kernels, and the build-time verdict that
     # every covered out-slot is globally unique (section-chunking is only
     # enabled when it holds).
     ncells::Int
     outs_disjoint::Bool
-end
-
-# Every output slot of `cs` pushed into `seen`; false on the first duplicate.
-# Cross-KERNEL by design: a per-kernel check could short-circuit a contiguous
-# set as disjoint-by-construction (it only compares a set against itself),
-# while here a contiguous range must also collide with the OTHER kernels'
-# slots, so every kind enumerates. Same slot arithmetic as the runners,
-# exact Int.
-function _cellset_outs_disjoint!(seen::Set{Int}, cs::_CellSet)
-    if _is_outs(cs)
-        for o in cs.outs
-            o in seen && return false
-            push!(seen, o)
-        end
-        return true
-    end
-    if _is_contig(cs)
-        for o in cs.ranges[1]
-            o in seen && return false
-            push!(seen, o)
-        end
-        return true
-    end
-    st = cs.strides; rg = cs.ranges; b = cs.base; nd = length(st)
-    if nd == 1
-        s1 = st[1]
-        for i in rg[1]
-            o = b + i*s1
-            o in seen && return false
-            push!(seen, o)
-        end
-    elseif nd == 2
-        s1 = st[1]; s2 = st[2]
-        for j in rg[2], i in rg[1]
-            o = b + i*s1 + j*s2
-            o in seen && return false
-            push!(seen, o)
-        end
-    else
-        s1 = st[1]; s2 = st[2]; s3 = st[3]
-        for k in rg[3], j in rg[2], i in rg[1]
-            o = b + i*s1 + j*s2 + k*s3
-            o in seen && return false
-            push!(seen, o)
-        end
-    end
-    return true
 end
 
 # Build-time SECTION-chunking safety check: are the emitted kernels' output
@@ -1189,13 +1404,8 @@ function _cg_covered_outs_disjoint(acc_kernels::AbstractVector{_AccKernel},
         covered[j] || continue
         ncells += _cellset_ncells(K.cells)
     end
-    seen = Set{Int}()
-    sizehint!(seen, ncells)
-    for (j, K) in enumerate(acc_kernels)
-        covered[j] || continue
-        _cellset_outs_disjoint!(seen, K.cells) || return ncells, false
-    end
-    return ncells, true
+    return ncells, _cellsets_outs_unique(K.cells for (j, K) in enumerate(acc_kernels)
+                                         if covered[j])
 end
 
 # Per-generated-FUNCTION emitted-node cap. The node budget above bounds total
@@ -1203,25 +1413,63 @@ end
 # first-call compile memory is super-linear in single-function size (one ~400k-
 # node function OOMs a 40 GB host). Loop nests are packed into `@noinline`
 # sub-functions up to this cap so LLVM compiles bounded pieces. Override with
-# ESS_CODEGEN_FN_NODE_CAP; 0 disables splitting (one function, legacy layout).
+# ESS_CODEGEN_FN_NODE_CAP; 0 disables splitting (one function, one flat body).
+# Every supported Julia can split (`_cg_split_by_value` picks the transport), so
+# an oversized body is compiled rather than declined, on every version.
 _codegen_fn_node_cap() =
     something(tryparse(Int, get(ENV, "ESS_CODEGEN_FN_NODE_CAP", "")), 20_000)
 
-# Whether this Julia can carry the body split at all. Julia < 1.12 CANNOT, and
-# takes the pre-split path instead: one function per kernel, and an oversized
-# body declines to the interpreter the way it did before ess-iip-split.
+# Whether this Julia can carry an emitted sub-function as an INNER DEFINITION —
+# a `function` written inside the emitted body. Julia < 1.12 cannot, and takes
+# the by-value transport instead (`_cg_split_by_value`); the split itself is
+# available on every version.
 #
-# The split's only mechanism is an inner `function` inside the emitted body, and
-# that body becomes a `RuntimeGeneratedFunction`. RGF rewrites every inner
-# definition into a `Base.Experimental.@opaque` closure — it has to, since the
-# body is compiled inside a `@generated` function, which may not define methods
-# — and an untyped opaque closure is `Core.OpaqueClosure{NTuple{N, Any}}`. On
-# 1.10 and 1.11 that boxes every scalar crossing the boundary, which is a
-# per-cell leak linear in the grid, and a NEST of them (a helper calling a
-# helper) segfaults: the MethodError such a call raises crashes the runtime
-# while it is being constructed. 1.12's optimizer types and elides the closure,
-# which is why the split is allocation-free and stable only there.
+# Why an inner definition is version-dependent. The emitted body becomes a
+# `RuntimeGeneratedFunction`, and RGF rewrites every inner definition into a
+# `Base.Experimental.@opaque` closure — it has to, since the body is compiled
+# inside a `@generated` function, which may not define methods — and an untyped
+# opaque closure is `Core.OpaqueClosure{NTuple{N, Any}}`. On 1.10 and 1.11 that
+# boxes every scalar crossing the boundary, which is a per-cell leak linear in
+# the grid, and a NEST of them (a helper calling a helper) segfaults: the
+# MethodError such a call raises crashes the runtime while it is being
+# constructed. 1.12's optimizer types and elides the closure, which is why the
+# inner-definition transport is allocation-free and stable only there.
+#
+# This also gates the EXPERIMENTAL sub-kernel function tier
+# (`_cg_subcall_fn`/`_cg_cell_fn!`), which emits inner definitions of its own and
+# has not been ported to the by-value transport. That tier ships off.
 _cg_split_supported() = VERSION >= v"1.12"
+
+# The name a by-value build gives the tuple of emitted sub-functions.
+const _CG_FNS = :_cgfns
+
+# TRANSPORT for the emitted sub-functions. There are two, and they emit the same
+# code — they differ only in how a sub-function reaches the body that calls it.
+#
+#   INNER DEFINITION (Julia ≥ 1.12): the sub-function is an `@noinline function`
+#     written inside the generated body and called by name. Cheapest, and what
+#     the split shipped as, but it only works where RGF's rewrite of an inner
+#     definition into an opaque closure is typed — see `_cg_split_supported`.
+#
+#   BY VALUE (Julia < 1.12, or `ESS_CODEGEN_SPLIT_TRANSPORT=value`): each
+#     sub-function is compiled as its OWN `RuntimeGeneratedFunction` and handed
+#     to the body at run time in a tuple, appended to the `tabs` argument; a call
+#     site is `_cgfns[k](…)` at a LITERAL `k`, so the callee is a concrete
+#     callable the compiler resolves statically — no closure is constructed, and
+#     nothing is boxed. The tuple is threaded into every sub-function that calls
+#     another, so nesting works to any depth.
+#
+# The second exists so `compiler=:native` can split a body on EVERY supported
+# Julia. `native` is the tier that has to be universally available — no heavy
+# external dependency, and no version where an oversized kernel has nowhere to
+# go but the per-cell interpreter, which under the strict compiler is a refusal.
+# (`:interpreter` stays the simple oracle; `sympy`/`mtk` only take some
+# documents; `xla` needs heavy dependencies.) Both transports emit the SAME
+# partitioned expression, so a build is value-identical either way — which is
+# what the transport override is for: it makes the by-value path testable on a
+# Julia that would otherwise never take it.
+_cg_split_by_value() =
+    !_cg_split_supported() || get(ENV, "ESS_CODEGEN_SPLIT_TRANSPORT", "") == "value"
 
 # Every Symbol referenced anywhere in `ex` (recursively). Used to compute the
 # exact set of outer-scope locals a chunk function must receive as arguments.
@@ -1266,9 +1514,16 @@ _cg_expr_size(ex) = ex isa Expr ? 1 + sum(_cg_expr_size, ex.args; init=0)::Int :
 
 # True for a call to a split helper (`_cgh…(…)`) minted by `_cg_spill!` — an
 # irreducible leaf of the partition (re-spilling it cannot shrink it).
-_cg_is_spill_call(ex) =
-    ex isa Expr && ex.head === :call && ex.args[1] isa Symbol &&
-    startswith(String(ex.args[1]::Symbol), "_cgh")
+function _cg_is_spill_call(ex)
+    (ex isa Expr && ex.head === :call && !isempty(ex.args)) || return false
+    f = ex.args[1]
+    f isa Symbol && return startswith(String(f::Symbol), "_cgh")
+    # By-value transport: the callee is `_cgfns[k]`, not a name. Recognising it
+    # is what keeps `_cg_partition!` terminating — re-spilling a call wraps one
+    # call in another of the same size.
+    return f isa Expr && (f::Expr).head === :ref && !isempty((f::Expr).args) &&
+           (f::Expr).args[1] === _CG_FNS
+end
 
 # A head that introduces its own scope / bindings (a `_NK_REDUCE`/subcall body is
 # a `quote` block with a `local` accumulator and a `for` loop var). Partitioning
@@ -1327,6 +1582,12 @@ function _cg_spill!(ctx::_CGCtx, sub)
     extra = sort!([s for s in syms if _cg_is_passable(s) && !(s in bound)]; by = string)
     params = Symbol[:u, :p, :t]
     append!(params, extra)
+    # By-value transport: the helper is its own generated function, so the tuple
+    # of helpers has to travel INTO it — a helper may call another. It is the
+    # last parameter, and it is added unconditionally so the parameter list is a
+    # function of the body alone, which is what the dedup key assumes.
+    byval = _cg_split_by_value()
+    (byval && !(_CG_FNS in params)) && push!(params, _CG_FNS)
     # Helper dedup: an identical body (same code ⇒ same params, since params are
     # exactly the passable names it references) reuses the first helper minted for
     # it. Only the CALL is re-emitted; the compiled function is shared. Value-exact
@@ -1341,11 +1602,22 @@ function _cg_spill!(ctx::_CGCtx, sub)
             return Expr(:call, got, params...)
         end
     end
-    fname = _cg_name(ctx, "h")
     ln = LineNumberNode(0, Symbol("ess-iip-split"))
     stmts = Any[]
     (:_cgT in syms) && push!(stmts, :(local _cgT = _rhs_value_type(u, p, t)))
     push!(stmts, Expr(:macrocall, Symbol("@inbounds"), ln, :(return $sub)))
+    if byval
+        # An ARGUMENT-TUPLE definition, compiled on its own at the end of the
+        # build; `ctx.helpers` holds it at the position its call sites name, and
+        # the decline rollback truncates that vector, so a declined kernel's
+        # helpers and the calls to them disappear together.
+        push!(ctx.helpers, Expr(:function, Expr(:tuple, params...),
+                                Expr(:block, stmts...)))
+        callee = Expr(:ref, _CG_FNS, length(ctx.helpers))
+        dedup && (ctx.helper_dedup[key] = callee)
+        return Expr(:call, callee, params...)
+    end
+    fname = _cg_name(ctx, "h")
     fdef = Expr(:function, Expr(:call, fname, params...), Expr(:block, stmts...))
     push!(ctx.helpers, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
     dedup && (ctx.helper_dedup[key] = fname)
@@ -1369,9 +1641,15 @@ function _cg_partition!(ctx::_CGCtx, ex, cap::Int)
         (ex.args[i], argsz[i]) = _cg_partition!(ctx, ex.args[i], cap)
         total += argsz[i]
     end
+    iscall = ex.head === :call
     while total > cap
         bi = 0; bs = 0
         for i in eachindex(ex.args)
+            # The CALLEE position of a call is not a value to hoist. Under the
+            # inner-definition transport it is a bare name and could never be
+            # chosen anyway; under the by-value one it is `_cgfns[k]`, and
+            # spilling it would mint a helper returning a FUNCTION.
+            (iscall && i == 1) && continue
             a = ex.args[i]
             # Only a genuine sub-expression is worth spilling; an already-spilled
             # helper call is irreducible (spilling it again just wraps one call in
@@ -1391,18 +1669,19 @@ end
 
 # Cap an emitted cell expression to the per-function node target, spilling into
 # helpers as needed. A no-op (returns `ex` unchanged, no helper minted) when it
-# already fits — so small kernels keep today's single-function fast path byte
-# for byte. `ESS_CODEGEN_BODY_SPLIT_DISABLE=1` forces the no-op (the pre-split
-# build; used as the differential oracle and to reproduce the OOM).
+# already fits — so small kernels keep the single-function fast path byte for
+# byte. Off, it is the no-op: one flat body per kernel, which is the
+# differential oracle and what reproduces the OOM.
 function _cg_bound_body!(ctx::_CGCtx, ex)
-    get(ENV, "ESS_CODEGEN_BODY_SPLIT_DISABLE", "") == "1" && return ex
+    _compiler_plan_now().codegen_body_split || return ex
     cap = _codegen_fn_node_cap()
     cap <= 0 && return ex
     _cg_expr_size(ex) <= cap && return ex
-    # Oversized, and this Julia cannot split safely: decline the kernel to its
-    # existing (interpreter) runner rather than emit a closure nest that boxes
-    # per cell and segfaults. See `_cg_split_supported`.
-    _cg_split_supported() || throw(_CodegenDecline(:body_split_unsupported))
+    # Oversized: partition it. Which TRANSPORT carries the pieces depends on the
+    # Julia (`_cg_split_by_value`), but every supported Julia has one, so an
+    # oversized body is compiled rather than declined to the per-cell
+    # interpreter — which under a strict compiler is a refusal, and would make
+    # `native` unavailable on Julia < 1.12 for exactly the largest kernels.
     return _cg_partition!(ctx, ex, cap)[1]
 end
 
@@ -1423,9 +1702,9 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
                             tally::Symbol=:codegen,
                             shared_cache::Union{Nothing,_CSECache}=nothing)
     isempty(acc_kernels) && return nothing
-    t0 = time_ns()
     ctx = _CGCtx(budget, shared_cache)
     covered = fill(false, length(acc_kernels))
+    reasons = fill(:none, length(acc_kernels))
     kloops = Tuple{Any,Int}[]         # (loop-nest expr, its emitted-node cost)
     for (j, K) in enumerate(acc_kernels)
         # Snapshot for rollback: a mid-kernel decline must discard its partial
@@ -1468,9 +1747,8 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
             resize!(ctx.substruct_log, nstructlog)
             ctx.nodes = nodes0
             ctx.fscratch = fscratch0
+            reasons[j] = err.reason
             _tally_cascade!(Symbol(tally, "_decline_", err.reason))
-            _codegen_debug() &&
-                println(stderr, "[ess-codegen/$tally] kernel $j DECLINED: $(err.reason)")
         end
     end
     any(covered) || return nothing
@@ -1499,11 +1777,14 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     # sym-collection below forwards it into each `@noinline` sub-function.
     push!(outer_passed, :_cgci)
     push!(outer_passed, :_cgnc)
+    # The helper tuple is an outer local in the by-value transport, so a chunk
+    # that calls a helper receives it like any other outer name.
+    byval = _cg_split_by_value()
+    byval && push!(outer_passed, _CG_FNS)
 
     # Partition the loop nests into chunks capped by emitted-node count. A
-    # non-positive cap means "one chunk" — which is also what an unsupported
-    # Julia gets, so it emits no sub-functions at all (`_cg_split_supported`).
-    cap = _cg_split_supported() ? _codegen_fn_node_cap() : 0
+    # non-positive cap means "one chunk".
+    cap = _codegen_fn_node_cap()
     chunks = Vector{Vector{Any}}()
     cur = Any[]; curcost = 0
     for (lx, cost) in kloops
@@ -1518,16 +1799,13 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     # locals its loops reference (sorted for a deterministic signature).
     #
     # A SINGLE chunk is not a split -- the body is already under the cap -- so
-    # its loops go straight into the kernel function instead. That is not just
-    # tidiness: a sub-function here becomes an untyped opaque closure, and on
-    # Julia < 1.12 every call to one boxes each scalar crossing the boundary,
-    # a per-cell leak linear in the grid (48 B/cell on the 1-D array-observed
-    # kernel). See `_cg_split_supported`, which is also why an unsupported Julia
-    # never reaches the several-chunk branch below.
+    # its loops go straight into the kernel function instead, with no
+    # sub-function at all.
     #
-    # A genuine split (several chunks) does emit sub-functions: an oversized
-    # single function is the thing this transform exists to prevent, and it OOMs
-    # the compiler outright, which is worse than boxing.
+    # A genuine split (several chunks) emits one sub-function per chunk, carried
+    # by whichever transport this Julia uses (`_cg_split_by_value`): an inner
+    # `@noinline` definition called by name, or its own generated function
+    # called out of the helper tuple.
     fndefs = Any[]; callstmts = Any[]
     if length(chunks) == 1
         push!(callstmts,
@@ -1539,30 +1817,61 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
                 _cg_collect_syms!(used, lx)
             end
             passed = sort!(collect(intersect(used, outer_passed)); by = string)
-            fname = Symbol("_cgchunk_", ci)
             fbody = Expr(:block,
                          :(local _cgT = _rhs_value_type(u, p, t)),
                          Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, chunk...)),
                          :(return nothing))
-            fdef = Expr(:function, Expr(:call, fname, :du, :u, :p, :t, passed...), fbody)
-            push!(fndefs, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
-            push!(callstmts, Expr(:call, fname, :du, :u, :p, :t, passed...))
+            if byval
+                vparams = Symbol[:du, :u, :p, :t]
+                append!(vparams, passed)
+                push!(ctx.helpers, Expr(:function, Expr(:tuple, vparams...), fbody))
+                push!(callstmts, Expr(:call, Expr(:ref, _CG_FNS, length(ctx.helpers)),
+                                      vparams...))
+            else
+                fname = Symbol("_cgchunk_", ci)
+                fdef = Expr(:function, Expr(:call, fname, :du, :u, :p, :t, passed...),
+                            fbody)
+                push!(fndefs, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
+                push!(callstmts, Expr(:call, fname, :du, :u, :p, :t, passed...))
+            end
         end
     end
 
     # `tabs` is now a tuple of the by-type containers; hoist each to its `_cggrpG`
     # local (a handful of statements, not one per object).
     grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
+    # By-value transport: every emitted sub-function is compiled on its own and
+    # arrives in a tuple appended to `tabs`, hoisted to a local FIRST so the
+    # invariant prologue, the chunk sub-functions and the helpers themselves can
+    # all call out of it. Inner-definition transport splices the definitions in
+    # instead, exactly as before.
+    fnstmts = byval && !isempty(ctx.helpers) ?
+              Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
+    helperdefs = byval ? Any[] : ctx.helpers
+    # The kernels run in an alias scope with `u` read-only (`_cg_readonly`): no
+    # `du` store aliases a `u` load. The section already rests on that — no cell
+    # reads a slot any cell of the section writes, which is what lets the
+    # threaded path run its chunks concurrently, and what an observed level's
+    # `(ue, ue)` call relies on — and it is what lets the compiler vectorize a
+    # row whose reads sit at run-time slot offsets (`_cg_geo!`) without a
+    # run-time overlap check per offset. Loads and stores only move relative to
+    # each other; no arithmetic changes.
+    kernels = Expr(:macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
+                   Expr(:let, Expr(:block, :(u = _cg_readonly(u))),
+                        Expr(:block,
+                             Expr(:macrocall, Symbol("@inbounds"), ln,
+                                  Expr(:block, ctx.prologue...)),
+                             callstmts...)))
     body = Expr(:block,
                 grpstmts...,
+                fnstmts...,
                 :(local _cgT = _rhs_value_type(u, p, t)),
                 # Intra-kernel split helpers (ess-iip-split): defined FIRST so the
                 # invariant prologue and every chunk sub-function can call them by
                 # name. Each is `@noinline`, params-only (captures nothing).
-                ctx.helpers...,
-                Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, ctx.prologue...)),
+                helperdefs...,
                 fndefs...,
-                callstmts...,
+                kernels,
                 :(return nothing))
     ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc), body)
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
@@ -1575,17 +1884,16 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     # to the group's concrete element type (`Vector{Vector{Int}}`, …), packed in a
     # small tuple. `_cggrpG[pos]` then reads a concrete-element container.
     tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
-    ntabs = sum(length, ctx.tab_objs; init=0)
-    if _codegen_debug()
-        ms = (time_ns() - t0) / 1e6
-        println(stderr, "[ess-codegen/$tally] emitted $(count(covered))/$(length(covered)) ",
-                "kernels in $(length(chunks)) fn(s) + $(length(ctx.helpers)) split helper(s) ",
-                "($(get(_CASCADE_TALLY, :cg_helper_deduped, 0)) deduped), $(ctx.nodes) nodes, ",
-                "$ntabs tabs in $ngrp typed group(s), $(ncells) cells ",
-                "(outs $(disjoint ? "disjoint" : "SHARED")), ",
-                "build $(round(ms; digits=1)) ms")
+    # …plus, in the by-value transport, the sub-function tuple as one more
+    # element. It is a heterogeneous tuple of concrete callables, so a call site
+    # reading it at a LITERAL index resolves its callee statically.
+    if byval && !isempty(ctx.helpers)
+        tabpack = (tabpack...,
+                   Tuple(RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
+                             @__MODULE__, @__MODULE__, h) for h in ctx.helpers))
     end
-    return _CGBuilt(f, tabpack, covered, ncells, disjoint)
+    ntabs = sum(length, ctx.tab_objs; init=0)
+    return _CGBuilt(f, tabpack, covered, reasons, ncells, disjoint)
 end
 
 # ---- Threaded cell axis for the codegen tier (RFC threaded-eval-tier) -------
@@ -1615,13 +1923,10 @@ end
 # `_chunk_ordinals`, and disjoint writes commute. Threaded `du` is bitwise
 # `===` serial `du`.
 #
-# OPT-IN semantics: no Polyester ⇒ serial, ESS_THREADS_DISABLE=1 ⇒ serial,
-# section total below the per-chunk min-cells threshold
-# (ESS_THREADS_MIN_CELLS) ⇒ serial. ESS_CG_THREADS_DISABLE=1 additionally
-# forces this tier serial — the codegen-threading differential oracle.
+# OPT-IN semantics: no Polyester ⇒ serial; a section total below the per-chunk
+# min-cells threshold (ESS_THREADS_MIN_CELLS) ⇒ serial.
 # Verdicts land in `_THREAD_TALLY` (`:cg_threaded` / `:cg_serial_small` /
 # `:cg_serial_shared_outs`), documented with the existing keys.
-_cg_threads_disabled() = get(ENV, "ESS_CG_THREADS_DISABLE", "") == "1"
 
 # One-time threading verdict for one generated function's cell axes:
 # `state` is 0 unexamined, 1 chunked, -1 serial (too few cells), -2 serial
@@ -1679,7 +1984,7 @@ end
 # Per-call gate for the chunked path (the shared `_threads_available()` plus
 # the codegen-specific kill switch; both re-read per call, so toggling either
 # env var between calls flips the route without touching the cached verdict).
-@inline _cg_threads_available() = _threads_available() && !_cg_threads_disabled()
+@inline _cg_threads_available() = _threads_available()
 
 # ---- The RHS's kernel section (wired into `_make_rhs`, acc_merge.jl) --------
 # One concretely-typed callable holding the generated function (or `Nothing`)
@@ -1707,7 +2012,7 @@ struct _KernelSection{F,TB,G,GTB}
     dual_resid::Vector{Int}
     # Float64 overflow routing (ess-f64ofl): when true, the overflow function
     # above also serves Float64 calls (in place of the per-cell interpreter).
-    # Baked at build time from ESS_F64_OVERFLOW_CODEGEN (default on).
+    # Baked at build time from the plan's Float64 overflow routing.
     f64cg::Bool
     # Threaded cell axis: one lazily-decided chunk verdict per generated
     # function (primary / overflow), see `_SecTCache` above.
@@ -1775,15 +2080,55 @@ end
 end
 
 # Partition the kernels between the codegen tier and the pre-existing runners.
-# `ESS_CODEGEN_DISABLE=1` (or an empty emission) yields a section that is
-# exactly the pre-codegen kernel loop; `ESS_DUAL_CODEGEN_DISABLE=1` yields the
-# pre-dual routing (Duals interpret every residual kernel) with the primary
-# tier intact.
+# With the codegen tier off (or an empty emission) the section is exactly the
+# pre-codegen kernel loop; with only the overflow tier off it is the pre-dual
+# routing (Duals interpret every residual kernel) with the primary tier intact.
 # `shared_cache` (ess-cgfsc): the build's scalar prelude `_CSECache`, passed
 # ONLY by the `_make_rhs` call site (acc_merge.jl) — the one place where the
 # section provably runs after that cache's prelude tiers were filled in the
 # same `f!` call. Every other caller keeps the default `nothing`, which keeps
 # the `:foreign_scratch` decline for shared-prelude reads.
+# A kernel BOTH emissions declined runs on `_run_acc_kernel!` — the `_eval_acc`
+# tree walk, once per output cell, on every right-hand-side call (§0 of the
+# phase-0 census). That is the one thing a compiled compiler promises not to do,
+# so a strict compiler refuses at BUILD, naming the rule the cascade has open
+# and the reason the OVERFLOW emission gave: the primary pass's reasons are not
+# refusals, since the overflow pass compiles what the budget declined.
+function _refuse_interpreted_kernels(kernels::AbstractVector{_AccKernel},
+                                     resid::AbstractVector{Int},
+                                     reasons::AbstractVector{Symbol},
+                                     emission_empty::Bool)
+    (_compiler_is_strict() && !isempty(resid)) || return nothing
+    why = :emission_produced_nothing
+    if !emission_empty
+        for j in resid
+            j <= length(reasons) || continue
+            reasons[j] === :none && continue
+            why = reasons[j]
+            break
+        end
+    end
+    _refuse_rule(_current_rule_label("the assembled right-hand side"),
+        "$(length(resid)) of $(length(kernels)) access kernel" *
+        (length(kernels) == 1 ? "" : "s") * " reached the end of both codegen " *
+        "emissions undeclared (deepest reason: $why), so they would run on the " *
+        "per-cell tree-walk kernel runner on every right-hand-side call. Build " *
+        "with compiler=:interpreter to run it, or grow the emitter to cover " *
+        "this construct")
+end
+
+# The same promise for the per-cell scalar entries that ride `rhs_list`: each is
+# a compiled `_Node` tree that the in-place `f!` walks with `_eval_node`, one per
+# output cell, on every right-hand-side call. No emission is attempted for them,
+# so there is no deeper reason to carry than the count.
+function _refuse_interpreted_cells(cells::AbstractVector)
+    (_compiler_is_strict() && !isempty(cells)) || return nothing
+    _refuse_rule(_current_rule_label("the assembled right-hand side"),
+        "$(length(cells)) array cell" * (length(cells) == 1 ? "" : "s") *
+        " would run as per-cell trees on the scalar walker (`_eval_node`) on " *
+        "every right-hand-side call. Build with compiler=:interpreter to run it")
+end
+
 function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
                               shared_cache::Union{Nothing,_CSECache}=nothing)
     cg = _codegen_disabled() ? nothing :
@@ -1791,34 +2136,41 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
     if cg === nothing
         kernels = collect(_AccKernel, acc_kernels)
         n_emitted = 0
+        # No primary emission ran, so there is no per-kernel reason to carry.
+        primary_reasons = Symbol[]
     else
         resid = [j for j in eachindex(cg.covered) if !cg.covered[j]]
         kernels = _AccKernel[acc_kernels[j] for j in resid]
         n_emitted = count(cg.covered)
+        # Re-indexed onto `kernels`, which is what every consumer below indexes.
+        primary_reasons = Symbol[cg.reasons[j] for j in resid]
     end
     cgf = cg === nothing ? nothing : cg.f
     cgtabs = cg === nothing ? nothing : cg.tabs
     # Dual overflow tier: retry the residual kernels under the dual budget. Its
     # RGF is only ever CALLED with non-Float64 arguments, so nothing here adds
     # Float64 compile latency — only the (cheap) AST emission runs at build.
-    # Gated on ESS_CODEGEN_DISABLE too: that switch must keep yielding a pure
-    # pre-codegen build (the codegen tier's differential oracle).
+    # Gated on the primary tier too: with codegen off the build must stay a pure
+    # pre-codegen one, which is the tier's differential oracle.
     dg = (_codegen_disabled() || _dual_codegen_disabled() || isempty(kernels)) ?
          nothing :
          _build_codegen_rhs(kernels; budget=_dual_codegen_node_budget(),
                             tally=:dual_codegen, shared_cache=shared_cache)
     if dg === nothing
+        _refuse_interpreted_kernels(kernels, collect(Int, 1:length(kernels)),
+                                    primary_reasons, isempty(primary_reasons))
         return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                               nothing, nothing, 0, collect(Int, 1:length(kernels)),
                               false, _sec_tcache(cg), _sec_tcache(nothing))
     end
     # Float64 overflow routing (ess-f64ofl): armed whenever the overflow
-    # function exists and ESS_F64_OVERFLOW_CODEGEN has not turned it off.
-    # `ESS_DUAL_CODEGEN_DISABLE=1` / `ESS_CODEGEN_DISABLE=1` reach the branch
-    # above instead, so both remain full oracles for their tiers.
+    # function exists and the plan has not turned the routing off. A build with
+    # either codegen tier off reaches the branch above instead, so both remain
+    # full oracles for their tiers.
     f64cg = _f64_overflow_codegen_enabled()
     f64cg && _tally_cascade!(:f64_overflow_armed)
     dual_resid = Int[j for j in eachindex(dg.covered) if !dg.covered[j]]
+    _refuse_interpreted_kernels(kernels, dual_resid, dg.reasons, false)
     return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                           dg.f, dg.tabs, count(dg.covered), dual_resid, f64cg,
                           _sec_tcache(cg), _sec_tcache(dg))

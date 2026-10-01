@@ -253,17 +253,11 @@ fn benchmark_expression_evaluation(c: &mut Criterion) {
     variables.insert("k".to_string(), 0.1);
 
     group.bench_function("simple_standard", |b| {
-        b.iter(|| {
-            earthsci_ast::fold_constant_expr(black_box(&simple_expr), black_box(&variables))
-                .unwrap()
-        })
+        b.iter(|| earthsci_ast::evaluate(black_box(&simple_expr), black_box(&variables)).unwrap())
     });
 
     group.bench_function("complex_standard", |b| {
-        b.iter(|| {
-            earthsci_ast::fold_constant_expr(black_box(&complex_expr), black_box(&variables))
-                .unwrap()
-        })
+        b.iter(|| earthsci_ast::evaluate(black_box(&complex_expr), black_box(&variables)).unwrap())
     });
 
     // Compact expression benchmarks

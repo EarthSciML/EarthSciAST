@@ -6,9 +6,14 @@ tuple arity), so an aggregate's Cartesian box need not be enumerated pointwise
 subscript once with interval arithmetic yields the identical maxima whenever
 no bound symbol repeats inside a subscript (the shipped rules' subscripts are
 all single-occurrence affine). These tests pin that equivalence against the
-enumerating walk (the ``_SHAPE_INTERVAL_DISABLE`` kill-switch is the A/B
-oracle), the exact-fallback on repeated symbols, and the range-shape edge
-cases (stepped, descending, empty, nested boxes).
+enumerating walk, the exact-fallback on repeated symbols, and the range-shape
+edge cases (stepped, descending, empty, nested boxes).
+
+The enumerating walk is reached by naming the compiler that turns every fast
+tier off — ``compiler="interpreter"``, installed here as the policy
+``esm_problem`` installs — rather than by an environment switch or by assigning
+to a module constant. Oracle selection is an argument (esm-libraries-spec
+§2.5.10), so the oracle these tests check against is the one a caller gets.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from collections import OrderedDict
 
 import pytest
 
+from earthsci_ast.compiler import CompilerPolicy, use_policy
 from earthsci_ast.esm_types import ExprNode
 
 # ``import earthsci_ast.flatten as FL`` would resolve to the ``flatten``
@@ -58,15 +64,17 @@ def _system(rhs, state_names) -> FlattenedSystem:
     )
 
 
+def _interpreter():
+    """The policy ``compiler="interpreter"`` installs: every fast tier off, so
+    the hull walk declines and the pointwise enumeration answers."""
+    return use_policy(CompilerPolicy(compiler="interpreter", every_tier_off=True))
+
+
 def _shapes_both_paths(rhs, state_names):
     """(interval-path shapes, enumeration-path shapes) for the same system."""
     fast = infer_variable_shapes(_system(rhs, state_names))
-    prev = FL._SHAPE_INTERVAL_DISABLE
-    FL._SHAPE_INTERVAL_DISABLE = True
-    try:
+    with _interpreter():
         ref = infer_variable_shapes(_system(rhs, state_names))
-    finally:
-        FL._SHAPE_INTERVAL_DISABLE = prev
     return fast, ref
 
 
@@ -98,12 +106,8 @@ def test_duo_strip_interval_matches_enumeration_without_pointwise_eval(monkeypat
     with monkeypatch.context() as m:
         m.setattr(FL, "_eval_index_expr", _forbidden)
         fast = infer_variable_shapes(_system(_duo_strip_rhs(), ["M.halo", "M.dt", "M.refx"]))
-    prev = FL._SHAPE_INTERVAL_DISABLE
-    FL._SHAPE_INTERVAL_DISABLE = True
-    try:
+    with _interpreter():
         ref = infer_variable_shapes(_system(_duo_strip_rhs(), ["M.halo", "M.dt", "M.refx"]))
-    finally:
-        FL._SHAPE_INTERVAL_DISABLE = prev
     assert fast == ref
     # gi+2 -> 5, gj-3 -> 4, k+1 -> 6; dt[k+1, l+1] -> (6, 6); refx[gi] -> (3,)
     assert fast["M.halo"] == (5, 4, 6)
@@ -114,7 +118,7 @@ def test_duo_strip_interval_matches_enumeration_without_pointwise_eval(monkeypat
 def test_repeated_symbol_falls_back_exactly() -> None:
     """``u[i - i + 3]`` is pointwise always 3; the interval hull would
     over-cover to [3 - 4, 3 + 4]. The walker must decline and the enumeration
-    must answer — identically to the kill-switch path."""
+    must answer — identically to the interpreter's own enumeration."""
     body = _idx("M.u", _add(_sub("i", "i"), 3))
     assert not FL._collect_index_uses_interval(body, {"M.u"}, {}, {"i": (1, 5)})
     rhs = ExprNode(op="faq", args=[], output_idx=["i"], ranges={"i": [1, 5]}, expr=body)

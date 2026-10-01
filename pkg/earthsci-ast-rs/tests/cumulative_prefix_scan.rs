@@ -421,7 +421,7 @@ fn shared_cumulative_fixtures_satisfy_their_inline_assertions() {
                     earthsci_ast::ProblemOptions {
                         p: std::collections::HashMap::new().clone(),
                         u0: std::collections::HashMap::new().clone(),
-                        compile: earthsci_ast::Compile::Always,
+                        rhs: earthsci_ast::Rhs::Always,
                         ..Default::default()
                     },
                 )

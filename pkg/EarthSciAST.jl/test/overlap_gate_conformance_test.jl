@@ -234,7 +234,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
         raw = JSON3.read(JSON3.write(_regrid_doc(eps)))
         ics = Dict("A_j[1]" => 0.0, "A_j[2]" => 0.0, "A_j[3]" => 0.0,
                    "F_tgt[1]" => 0.0, "F_tgt[2]" => 0.0, "F_tgt[3]" => 0.0)
-        f!, u0, p, _, vmap = build_evaluator(
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
             raw; model_name="RegridOverlap", initial_conditions=ics,
             const_arrays=_regrid_const, parameter_overrides=Dict("atol" => atol))
         du = similar(u0); f!(du, u0, p, 0.0)

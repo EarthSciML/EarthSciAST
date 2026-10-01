@@ -28,7 +28,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::{
-    Compile, EsmProblem, Flow, ProblemOptions, SimulateError, SolveOptions, esm_problem,
+    Compiler, EsmProblem, Flow, ProblemOptions, Rhs, SimulateError, SolveOptions, esm_problem,
     load_string, solve,
 };
 use std::sync::Arc;
@@ -111,7 +111,14 @@ fn problem_for(json: &str, tspan: (f64, f64)) -> EsmProblem {
         &file,
         tspan,
         ProblemOptions {
-            compile: Compile::Always,
+            rhs: Rhs::Always,
+            // The reproducer's `rad` is a causal self-reference (a sweep), which
+            // strict `native` refuses rather than demoting to the sequential
+            // oracle (esm-libraries-spec §2.5.10). This file measures the
+            // NON-ADVANCING RUN, not the compiler, so it names the reference
+            // evaluator — the same convention CONFORMANCE_SPEC §5.44 sets for a
+            // stage whose fixtures `native` declines.
+            compiler: Some(Compiler::Interpreter),
             ..Default::default()
         },
     )
@@ -278,9 +285,9 @@ fn a_span_that_must_be_crossed_is_still_integrated() {
 
 /// The output SHAPE the shortcut owns: under an empty span the caller's whole
 /// requested grid is answered, verbatim and in order, from the initial state —
-/// including a time beyond the span, which is the courtesy extrapolation the
-/// solver loop's `saveat` tail performs for a run that does step. Every row is
-/// constant across the grid, because nothing moved.
+/// including a time beyond the span, since a run that never moves has only the
+/// initial state to report. Every row is constant across the grid, because
+/// nothing moved.
 #[test]
 fn an_empty_span_answers_the_whole_requested_grid() {
     let sol = run_span(&doc(8, 4, true), (0.0, 0.0), Some(vec![0.0, 0.5, 1.0]));
@@ -334,7 +341,7 @@ fn scalar_doc() -> String {
     r#"{
  "esm": "1.1.0",
  "metadata": {"name": "Decay", "license": "MIT",
-  "description": "One scalar state, so this document compiles to the scalar backend."},
+  "description": "One scalar state."},
  "models": {
   "M": {
    "variables": {

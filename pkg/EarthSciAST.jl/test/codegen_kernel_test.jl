@@ -4,7 +4,7 @@
 # element, so NaN and -0.0 count) across several (u, t) probes, at Float64 AND
 # under ForwardDiff Dual:
 #   * default                 → the codegen tier (RuntimeGeneratedFunctions)
-#   * ESS_CODEGEN_DISABLE=1   → the pre-codegen runner (per-cell interpreter)
+#   * compiler=:interpreter   → the pre-codegen runner (per-cell interpreter)
 # Every case asserts the codegen tier actually FIRED (`:codegen_kernel` in
 # `_CASCADE_TALLY`), so a silent decline cannot make the comparison pass
 # trivially. Fixtures deliberately span the descriptor/op surface: affine
@@ -22,12 +22,11 @@ const ESM = EarthSciAST
 # Build with the codegen tier on (default) or off (the differential reference).
 # Returns (f!, u0, p, vmap, diag, tally-snapshot).
 function _cgk_build(model, ics; codegen::Bool, const_arrays=Dict(), form=:inplace)
-    withenv("ESS_CODEGEN_DISABLE" => (codegen ? nothing : "1")) do
-        ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, const_arrays=const_arrays, form=form)
-        (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
-    end
+    ESM._reset_cascade_tally!()
+    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
+        initial_conditions=ics, const_arrays=const_arrays, form=form,
+        compiler = codegen ? :native : :interpreter)
+    return (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
 end
 
 _cgk_fired(tally) = get(tally, :codegen_kernel, 0)
@@ -245,10 +244,11 @@ end
             @test_skip "bench fixture transport_3axis_7cubed_fullrank.esm missing"
         else
             flat = ESM.flatten(ESM.load_path(FIX))
-            build(codegen) = withenv("ESS_CODEGEN_DISABLE" => (codegen ? nothing : "1")) do
+            function build(codegen)
                 ESM._reset_cascade_tally!()
-                f!, u0, p, _, _ = ESM.build_evaluator(flat)
-                (f!, u0, p, copy(ESM._CASCADE_TALLY))
+                f!, u0, p, _, _ = ESM._build_evaluator(flat;
+                    compiler = codegen ? :native : :interpreter)
+                return (f!, u0, p, copy(ESM._CASCADE_TALLY))
             end
             fc, u0, p, tally = build(true)
             fr, v0, q, rtally = build(false)
@@ -274,8 +274,9 @@ end
 
     @testset "per-kernel decline: mixed emit/fallback section" begin
         # Hand-built kernels driven straight through `_make_kernel_section`:
-        # kernel 1 (1-D affine box) is emittable; kernel 2 (a rank-4 box) is
-        # NOT (`:box_rank` decline) and must silently keep the scalar runner.
+        # kernel 1 (1-D affine box) is emittable; kernel 2 reads a scratch slot
+        # that is no CSE tier of its own (`:foreign_scratch` decline) and must
+        # silently keep the scalar runner.
         N = 24
         mk1d(lo, hi, dW, dE) = begin
             acc = ESM._AccDesc[ESM._AccStateAffine(dW), ESM._AccStateAffine(0),
@@ -288,10 +289,13 @@ end
         end
         K1 = mk1d(2, N - 1, -1, 1)
         # Rank-4 box over a 2×2×2×3 slab (strides 1/2/4/8 with base -14, so
-        # oln = -14 + i + 2j + 4k + 8l covers 1:24 exactly once): the emitter
-        # caps box rank at 3 and must decline.
+        # oln = -14 + i + 2j + 4k + 8l covers 1:24 exactly once), reading a
+        # foreign scratch slot the interpreter reads and the emitter cannot.
+        foreign = ESM._AccScratch(1)
+        foreign.f64[1] = 0.5
         acc4 = ESM._AccDesc[ESM._AccStateAffine(0)]
-        sp4 = ESM._aop(:*, ESM._alit(0.5), ESM._acc(1))
+        sp4 = ESM._aop(:*, ESM._mknode(kind=ESM._NK_CACHED, idx=1, payload=foreign),
+                       ESM._acc(1))
         K2 = ESM._AccKernel(
             ESM._CellSet([1, 2, 4, 8], UnitRange{Int}[1:2, 1:2, 1:2, 1:3], -14),
             sp4, acc4, ESM._FixedBound(0), 0.0)
@@ -300,7 +304,7 @@ end
         section = ESM._make_kernel_section(kernels)
         tally = copy(ESM._CASCADE_TALLY)
         @test get(tally, :codegen_kernel, 0) == 1
-        @test get(tally, :codegen_decline_box_rank, 0) == 1
+        @test get(tally, :codegen_decline_foreign_scratch, 0) == 1
         @test length(section.kernels) == 1          # K2 kept its scalar runner
         u = _cgk_probe(N, 3)
         du = zeros(N)
@@ -311,6 +315,41 @@ end
         @test _cgk_bitsame(du, ref)
     end
 
+    @testset "boxes above rank 3 are emitted" begin
+        # A rank-4 box (the slab above) and a rank-5 box, each reading its own
+        # state slot, a const on its own grid (the box-addressed read, strides
+        # past the third dim), and every loop index: emitted, and bit-identical
+        # to the scalar runner (codegen_threaded_test.jl chunks a rank-4 box).
+        for (strides, ranges, base) in (
+                ([1, 2, 4, 8], UnitRange{Int}[1:2, 1:2, 1:2, 1:3], -14),
+                ([1, 2, 6, 12, 24], UnitRange{Int}[1:2, 1:3, 1:2, 1:2, 1:2], -44))
+            nd = length(strides)
+            ncell = prod(length, ranges)
+            cst = [0.25 * k + 0.01 * k^2 for k in 1:ncell]
+            acc = ESM._AccDesc[ESM._AccStateAffine(0),
+                               ESM._AccConstBox(cst, [prod(length(ranges[e]) for e in 1:d-1; init=1)
+                                                      for d in 1:nd], 1),
+                               (ESM._AccLoopIdx(d) for d in 1:nd)...]
+            terms = ESM._Node[ESM._aop(:*, ESM._acc(1), ESM._acc(2))]
+            for d in 1:nd
+                push!(terms, ESM._aop(:*, ESM._alit(0.1 * d), ESM._acc(2 + d)))
+            end
+            sp = ESM._aop(:+, terms...)
+            K = ESM._AccKernel(ESM._CellSet(strides, ranges, base), sp, acc,
+                               ESM._FixedBound(0), 0.0)
+            ESM._reset_cascade_tally!()
+            section = ESM._make_kernel_section(ESM._AccKernel[K])
+            @test get(ESM._CASCADE_TALLY, :codegen_kernel, 0) == 1
+            u = _cgk_probe(ncell, 3)
+            du = zeros(ncell)
+            section(du, u, nothing, 0.0, Float64)
+            ref = zeros(ncell)
+            ESM._run_acc_kernel!(ref, u, nothing, 0.0, K)
+            @test _cgk_bitsame(du, ref)
+            @test all(!iszero, ref)
+        end
+    end
+
     @testset "zero allocations at Float64 (codegen path)" begin
         N = 32
         ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
@@ -318,6 +357,9 @@ end
         @test _cgk_fired(tally) >= 1
         du = zero(u0)
         f!(du, u0, p, 0.0)                       # warm up
-        @test (@allocated f!(du, u0, p, 0.0)) == 0
+        # Julia >= 1.12 only: older versions box across RuntimeGeneratedFunction inner functions and @testset-scope reads.
+        if VERSION >= v"1.12"
+            @test (@allocated f!(du, u0, p, 0.0)) == 0
+        end
     end
 end

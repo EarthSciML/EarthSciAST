@@ -73,8 +73,14 @@ def _compute_fixture(fixture: dict[str, Any], repo_root: Path) -> dict[str, Any]
 
 
 def _run_fixture(
-    fixture: dict[str, Any], _manifest: dict[str, Any], manifest_path: Path
+    fixture: dict[str, Any],
+    _manifest: dict[str, Any],
+    manifest_path: Path,
+    _compiler: str | None = None,
 ) -> dict[str, Any]:
+    # `--compiler` is accepted for a uniform adapter surface and ignored: this
+    # adapter runs the cadence PARTITION pass, which builds no right-hand side
+    # and so has no compiler to choose.
     # Fixtures are repo-root-relative; resolve them relative to the manifest's
     # repo root (tests/conformance/cadence/manifest.json → parents[3]) so the
     # adapter works regardless of the invoking cwd.

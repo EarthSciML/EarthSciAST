@@ -1,0 +1,238 @@
+{
+  "category": "broadcast_alignment",
+  "runner": "inline_tests",
+  "version": "1.0",
+  "description": "Cross-binding conformance for esm-spec \u00a74.3.4's NAME-BASED operand alignment in an array-level equation, and for the scope boundary that rule has. An operand of a bare array-level expression aligns to the result by INDEX-SET NAME: it supplies the axes it is declared over, replicates along the ones it is not, and TRANSPOSES when its declaration order differs from the result's. An operand whose shape is ANONYMOUS \u2014 a `faq` result, whose axes carry node-local output symbols rather than index-set names \u2014 stays POSITIONAL, and the `broadcast` node spelling is governed by exactly the same rule as the bare one. Every binding got the alignment half wrong in its own vocabulary and in OPPOSITE directions (EarthSciML/EarthSciAST#100): Rust flattened the operand into the result's linear layout and zero-filled the tail, Python right-aligned the way NumPy does, and both produced finite, plausible, wrong fields. A one-operand `broadcast` separately dropped its `fn` and behaved as the identity (#101), which turns a negated flux into an un-negated one \u2014 also finite and plausible. The fixtures are documents that carry their own \u00a76.6 `tests` blocks, so the authored expectation travels with the physics; the goldens are the Julia `interpreter`'s actuals for the same assertions.",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust"
+  ],
+  "scope_excluded": {
+    "go": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md \u00a73, capability profiles). This is an exclusion from the CATEGORY, not from the rule.",
+    "typescript": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md \u00a73, capability profiles). This is an exclusion from the CATEGORY, not from the rule."
+  },
+  "integrators": {
+    "julia": {
+      "algorithm": "Tsit5",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    },
+    "python": {
+      "method": "LSODA",
+      "rtol": 1e-12,
+      "atol": 1e-14
+    },
+    "rust": {
+      "solver": "Erk",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    }
+  },
+  "tolerances": {
+    "golden_rtol": 1e-09,
+    "golden_atol": 1e-11,
+    "detail": "The band between a producer's actual and the Julia-interpreter golden. It is separate from, and tighter than, each assertion's own \u00a76.6.4 band: the assertion states what the PHYSICS is (and is gated at the document's own tolerance by each binding's \u00a76.6.3 predicate), while this states how far two evaluations of the same arithmetic may drift. Every fixture here integrates a CONSTANT tendency from a zero initial condition, or a scalar exponential, so an integrator contributes nothing near this floor."
+  },
+  "fixtures": [
+    {
+      "id": "bare_rank_lift",
+      "path": "valid/array_broadcast/bare_rank_lift.esm",
+      "model": "bare_rank_lift",
+      "golden": "golden/bare_rank_lift.json",
+      "tags": [
+        "array-level",
+        "rank-lift",
+        "esm-spec-4.3.4",
+        "issue-100"
+      ],
+      "note": "Referenced, not authored: the document already lives in the corpus.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "bare_mixed_rank_product",
+      "path": "valid/array_broadcast/bare_mixed_rank_product.esm",
+      "model": "bare_mixed_rank_product",
+      "golden": "golden/bare_mixed_rank_product.json",
+      "tags": [
+        "array-level",
+        "outer-product",
+        "esm-spec-4.3.4",
+        "issue-100"
+      ],
+      "note": "Referenced, not authored.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "bare_axis_permuted_operand",
+      "path": "valid/array_broadcast/bare_axis_permuted_operand.esm",
+      "model": "bare_axis_permuted_operand",
+      "golden": "golden/bare_axis_permuted_operand.json",
+      "tags": [
+        "array-level",
+        "transpose",
+        "esm-spec-4.3.4",
+        "issue-100"
+      ],
+      "note": "Referenced, not authored.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "broadcast_node_mixed_rank",
+      "path": "valid/array_broadcast/broadcast_node_mixed_rank.esm",
+      "model": "broadcast_node_mixed_rank",
+      "golden": "golden/broadcast_node_mixed_rank.json",
+      "tags": [
+        "array-level",
+        "broadcast-node",
+        "esm-spec-4.3.4",
+        "issue-100"
+      ],
+      "note": "Referenced, not authored. Same maths as `bare_mixed_rank_product` in the `broadcast` spelling, so the two must agree.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "anonymous_shape_positional",
+      "path": "fixtures/anonymous_shape_positional.esm",
+      "model": "anonymous_shape_positional",
+      "golden": "golden/anonymous_shape_positional.json",
+      "tags": [
+        "array-level",
+        "anonymous-shape",
+        "positional",
+        "esm-spec-4.3.4"
+      ],
+      "note": "Authored here: the scope BOUNDARY of the rule, which no shared fixture carried. Migrated from broadcast_alignment_test.jl testset (j).",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "unary_broadcast_fn",
+      "path": "fixtures/unary_broadcast_fn.esm",
+      "model": "unary_broadcast_fn",
+      "golden": "golden/unary_broadcast_fn.json",
+      "tags": [
+        "array-level",
+        "broadcast-node",
+        "unary",
+        "esm-spec-4.3.4",
+        "issue-101"
+      ],
+      "note": "Authored here. Migrated from the #101 arm of broadcast_alignment_test.jl and test_broadcast_and_index_alignment.py.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "observed_expression_aligned",
+      "path": "fixtures/observed_expression_aligned.esm",
+      "model": "observed_expression_aligned",
+      "golden": "golden/observed_expression_aligned.json",
+      "tags": [
+        "array-level",
+        "observed",
+        "esm-spec-4.3.4",
+        "issue-100"
+      ],
+      "note": "Authored here. Migrated from the Python `test_observed_expression_is_aligned_too` and the Rust `array_shaped_observed_broadcasts_by_name`.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    }
+  ]
+}

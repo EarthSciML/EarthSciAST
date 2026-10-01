@@ -96,10 +96,10 @@ pub(crate) fn nonadvancing_trajectory(
     }
 
     // With a grid, every requested time gets the initial state — including a
-    // time BEYOND an empty interval, which is the courtesy extrapolation the
-    // tail of [`run_solver`]'s `saveat` branch performs, and for a run that
-    // never moves the initial state is what it extrapolates. Without a grid,
-    // the single point the run produces is `t0` itself.
+    // time BEYOND an empty interval: a run that never moves has only the
+    // initial state to report. (A run that does step leaves a time past its
+    // end out instead; see the tail of [`run_solver`]'s `saveat` branch.)
+    // Without a grid, the single point the run produces is `t0` itself.
     let natural = [t0];
     let grid: &[f64] = opts.saveat.as_deref().unwrap_or(&natural);
     for &t in grid {
@@ -109,6 +109,60 @@ pub(crate) fn nonadvancing_trajectory(
         }
     }
     Some((times, state_rows, ReturnCode::Success))
+}
+
+/// Best-effort solver step / evaluation counters read out of diffsol after a
+/// solve, surfaced through [`SolutionMetadata`].
+///
+/// RHS and Jacobian evaluation counts come from the equations' per-op
+/// [`diffsol::OpStatistics`] (`number_of_calls` / `number_of_matrix_evals`),
+/// which any [`OdeSolverMethod`] exposes via `problem().eqn.rhs()`. Accepted and
+/// rejected step counts come from each concrete solver's `get_statistics()`
+/// (a `BdfStatistics`, shared by the Bdf/Sdirk/Erk solvers): `number_of_steps`
+/// for accepted steps, and error-test + nonlinear-solver failures for rejected
+/// steps. `get_statistics()` is not on the `OdeSolverMethod` trait, so the
+/// caller reads those two counts off the concrete solver and passes them in.
+#[cfg(feature = "solve")]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SolveStats {
+    pub n_rhs_calls: usize,
+    pub n_jacobian_calls: usize,
+    pub n_accepted_steps: usize,
+    pub n_rejected_steps: usize,
+}
+
+#[cfg(feature = "solve")]
+impl SolveStats {
+    /// Assemble from a solver's equation-eval statistics (`problem().eqn.rhs()`)
+    /// plus the accepted/rejected step counts the caller pulled from the
+    /// concrete solver's `get_statistics()`.
+    pub(crate) fn from_solver<'a, S, Eqn>(
+        solver: &S,
+        n_accepted_steps: usize,
+        n_rejected_steps: usize,
+    ) -> Self
+    where
+        S: OdeSolverMethod<'a, Eqn>,
+        Eqn: diffsol::OdeEquations<T = f64, V = diffsol::FaerVec<f64>> + 'a,
+    {
+        let op = solver.problem().eqn.rhs().statistics();
+        Self {
+            n_rhs_calls: op.number_of_calls,
+            n_jacobian_calls: op.number_of_matrix_evals,
+            n_accepted_steps,
+            n_rejected_steps,
+        }
+    }
+}
+
+#[cfg(feature = "solve")]
+impl std::ops::AddAssign for SolveStats {
+    fn add_assign(&mut self, rhs: Self) {
+        self.n_rhs_calls += rhs.n_rhs_calls;
+        self.n_jacobian_calls += rhs.n_jacobian_calls;
+        self.n_accepted_steps += rhs.n_accepted_steps;
+        self.n_rejected_steps += rhs.n_rejected_steps;
+    }
 }
 
 /// Run the configured solver from `t0` to `t_end`, honoring `opts.maxiters`
@@ -260,21 +314,13 @@ where
                 break;
             }
         }
-        // Anything after the solver's tstop is interpolated by extrapolation
-        // — strictly speaking out-of-range, but accept it as a courtesy if
-        // the user asked for it. A run that stopped early (max iterations, an
-        // unstable state, a cancel) is NOT extrapolated past where it got to:
-        // the trajectory ends where the integration ended.
-        while retcode.is_success() && next_idx < t_eval.len() {
-            let t = t_eval[next_idx];
-            let y = solver
-                .interpolate(t)
-                .map_err(|e| SimulateError::DiffsolError {
-                    details: e.to_string(),
-                })?;
-            push_state(&mut times, &mut state_rows, t, y.as_slice());
-            next_idx += 1;
-        }
+        // Whatever is left of the grid lies past `t_end`, or past where a run
+        // that stopped early (max iterations, an unstable state, a cancel)
+        // got to, and is not part of the trajectory: the trajectory ends where
+        // the integration ended. diffsol cannot interpolate past its stop time
+        // — every method refuses (issue #478) — so such times are left out,
+        // as the segmented path in `simulate_array` leaves them out of its
+        // per-segment grids.
         let _ = t_prev;
     } else {
         // Native step grid: record the initial point, then every step.
@@ -322,11 +368,25 @@ fn refuse_coupled_subsystem_event(file: &EsmFile) -> Result<(), CompileError> {
     }
 }
 
-/// Whether `file` must route to the array/spatial runtime
-/// ([`crate::simulate_array`]) rather than the scalar ODE interpreter: it has
-/// array-op nodes or spatial model structure. EsmProblem construction
-/// ([`crate::problem::esm_problem`]) is the single caller, so the routing is
-/// decided exactly once, at build time.
+/// Whether the document's WHOLE content is one model — the only shape
+/// `ArrayCompiled::from_file` can consume, since it takes that one raw `Model`
+/// and nothing else.
+///
+/// A reaction system beside the model counts as content: its reactions lower
+/// to `D(species, t) = …` during flattening, and a build that skipped them
+/// would drop every species from the compiled system. A system with NO
+/// reactions lowers to nothing, so it is not content.
+pub(crate) fn whole_document_is_one_model(file: &EsmFile) -> bool {
+    let one_model = file.models.as_ref().map_or(0, |m| m.len()) == 1;
+    let has_reactions = file
+        .reaction_systems
+        .as_ref()
+        .is_some_and(|systems| systems.iter().any(|(_, rs)| !rs.reactions.is_empty()));
+    one_model && !has_reactions
+}
+
+/// Whether `file` has array-op nodes or spatial model structure — the
+/// documents [`compile_array`] accepts.
 pub(crate) fn is_array_file(file: &EsmFile) -> bool {
     crate::simulate_array::file_has_array_ops(file)
         || crate::simulate_array::file_has_spatial_model(file)
@@ -337,6 +397,22 @@ pub(crate) fn is_array_file(file: &EsmFile) -> bool {
 /// `models.len() != 1` — so flatten the coupling into one namespaced system first
 /// and build from that (ess-14f.8). The single-model path is byte-identical to
 /// the original `from_file` call. Shared by all three public entry points.
+///
+/// **The single-model arm is for a document whose WHOLE content is that one
+/// model.** Two other shapes must flatten first, and both used to reach
+/// `from_file`:
+///
+///   * no `models` map at all — a document whose whole content is a
+///     `reaction_systems` block, which has no models until flattening lowers
+///     each reaction to `D(species, t) = …`. `from_file` refused it with "File
+///     has no models to simulate"; every pure-chemistry document in the wild
+///     is that shape (`pollu`, `superfast`, `geoschem_fullchem`), and the
+///     2026-09-21 census counted 25 of them, all fully taped once flattened;
+///   * one model BESIDE a reaction system. `from_file` consumes the single
+///     `Model` and DROPS the reaction system, so the species and their
+///     reactions vanish from the compiled system — silently, because what is
+///     left still builds. A `dAdt = D(Chem.A)` observed then fails as an
+///     unlowered `D` and an assertion on `Chem.A` finds no such state.
 pub(crate) fn build_array_compiled(
     file: &EsmFile,
 ) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
@@ -353,8 +429,7 @@ pub(crate) fn build_array_compiled(
     // annotated COPY (`None`, and no copy at all, for every other document).
     let annotated = crate::precision_infer::annotated(file).map_err(SimulateError::Compile)?;
     let file = annotated.as_ref().unwrap_or(file);
-    let model_count = file.models.as_ref().map_or(0, |m| m.len());
-    if model_count > 1 {
+    if !whole_document_is_one_model(file) {
         refuse_coupled_subsystem_event(file)?;
         let flat = flatten(file).map_err(CompileError::from)?;
         Ok(crate::simulate_array::ArrayCompiled::from_flattened(&flat)?)
@@ -385,14 +460,14 @@ pub(crate) fn build_array_compiled(
 /// coupled (multi-model) file is flattened first (the file is dropped right
 /// after flattening); a single-model file compiles directly. Errors with
 /// [`SimulateError`] if `file` has no array-op or spatial structure — a
-/// pure-scalar file belongs to [`Compiled::from_file`], whose build is cheap
-/// enough that a two-step split buys nothing.
+/// pure-scalar file is built by [`crate::problem::esm_problem`], whose build
+/// is cheap enough for it that a two-step split buys nothing.
 pub fn compile_array(file: EsmFile) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
     if !is_array_file(&file) {
         return Err(SimulateError::Compile(
             CompileError::InterpreterBuildError {
                 details: "compile_array requires an array/spatial model (this file has none); \
-                      use Compiled::from_file for pure-scalar files"
+                      use esm_problem for pure-scalar files"
                     .to_string(),
             },
         ));
@@ -406,8 +481,7 @@ pub fn compile_array(file: EsmFile) -> Result<crate::simulate_array::ArrayCompil
         Some(annotated) => annotated,
         None => file,
     };
-    let model_count = file.models.as_ref().map_or(0, |m| m.len());
-    if model_count > 1 {
+    if !whole_document_is_one_model(&file) {
         refuse_coupled_subsystem_event(&file)?;
         let flat = flatten(&file).map_err(CompileError::from)?;
         drop(file);

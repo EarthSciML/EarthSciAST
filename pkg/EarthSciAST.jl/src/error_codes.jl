@@ -315,6 +315,20 @@ const ERROR_CODES = (
     #    run without the construct reports a wrong answer. The ModelingToolkit
     #    export runs all three and never raises it. ───────────────────────────
     UNSUPPORTED_CONSTRUCT = "unsupported_construct",
+    # ── Compiler selection (API_SPEC §5.8; esm-spec §9.6.6). The `compiler`
+    #    keyword of `esm_problem` names one member of a closed vocabulary, and
+    #    the three codes below are the three ways naming one can fail. None of
+    #    them is ever answered by running a different compiler than the one the
+    #    caller asked for. ─────────────────────────────────────────────────────
+    # The value is outside the vocabulary.
+    COMPILER_UNKNOWN = "compiler_unknown",
+    # The value is in the vocabulary, but this binding, build or process cannot
+    # provide it. The message names what to load or build.
+    COMPILER_UNAVAILABLE = "compiler_unavailable",
+    # The chosen compiler cannot run this document. The message names the
+    # compiler, the rule (equation or observed, component-qualified) and the
+    # reason.
+    COMPILER_REFUSED_RULE = "compiler_refused_rule",
 )
 
 """

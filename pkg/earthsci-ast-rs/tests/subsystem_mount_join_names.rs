@@ -29,7 +29,7 @@
 
 use std::path::{Path, PathBuf};
 
-use earthsci_ast::{SolveOptions, load_path, run_inline_tests_with_base_dir};
+use earthsci_ast::{SolveOptions, load_path};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -42,8 +42,21 @@ fn fixture(name: &str) -> PathBuf {
 /// the `{"ref": "./join_leaf.esm"}` mount relative to the host document.
 fn assert_inline_tests_pass(path: &Path, expected: f64) {
     let file = load_path(path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
-    let results =
-        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results = earthsci_ast::run_inline_tests_with_options(
+        &file,
+        // The join these fixtures are about carries an overlap gate that
+        // DRIVES enumeration, which no tape lowering accepts, so `native`
+        // refuses both documents by NAME (API_SPEC §5.8). What is pinned
+        // here is that a MOUNTED leaf keeps its join, which is the reference
+        // evaluator's answer to give.
+        &earthsci_ast::InlineTestOptions {
+            solve: SolveOptions::default(),
+            base_dir: path.parent().map(std::path::Path::to_path_buf),
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
+            ..Default::default()
+        },
+        None,
+    );
     assert_eq!(
         results.len(),
         1,

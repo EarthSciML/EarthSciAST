@@ -1,0 +1,68 @@
+{
+ "category": "faq_pointwise_filter",
+ "runner": "inline_tests",
+ "version": "1.0",
+ "description": "What a `faq` `filter` does when the node has no contracted index. esm-schema defines the filter as the predicate that restricts which index combinations contribute a term, a combination for which it is false contributing the additive identity; with no contracted index each output cell is one combination, so a false predicate makes that cell 0̄. Rust and Python applied it; Julia's array-equation path dropped it (its expression-position path applied it), so the same document meant different numbers in different bindings.",
+ "reference_binding": "julia",
+ "reference_compiler": "interpreter",
+ "bindings_required": [
+  "julia",
+  "python",
+  "rust"
+ ],
+ "scope_excluded": {
+  "go": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). This is an exclusion from the CATEGORY, not from the rule.",
+  "typescript": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). This is an exclusion from the CATEGORY, not from the rule."
+ },
+ "integrators": {
+  "julia": {
+   "algorithm": "Tsit5",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  },
+  "python": {
+   "method": "LSODA",
+   "rtol": 1e-12,
+   "atol": 1e-14
+  },
+  "rust": {
+   "solver": "Erk",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  }
+ },
+ "tolerances": {
+  "golden_rtol": 1e-12,
+  "golden_atol": 1e-300,
+  "detail": "Constant-rate states integrated over one unit of time: every value is a small integer up to the integrator's rounding, which is what the band covers."
+ },
+ "fixtures": [
+  {
+   "id": "pointwise_filter",
+   "path": "fixtures/pointwise_filter.esm",
+   "model": "pointwise_filter",
+   "golden": "golden/pointwise_filter.json",
+   "tags": [
+    "faq",
+    "filter",
+    "pointwise"
+   ],
+   "note": "Authored here.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  }
+ ]
+}

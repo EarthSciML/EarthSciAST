@@ -1,0 +1,23 @@
+{
+  "category": "native_coverage",
+  "version": "1.0",
+  "binding": "julia",
+  "compiler": "native",
+  "reference_compiler": "interpreter",
+  "$comment": "Every corpus document the interpreter builds through esm_problem and native does not, with native's refusal. The list only shrinks: a document missing from it that native refuses is RED, and an entry native now builds is RED until it is removed. See README.md in this directory.",
+  "measured": {
+    "date": "2026-09-25",
+    "earthsciast_commit": "b36fe61a351a5beac96af8514a861a086ac5c2a2",
+    "earthsciast_dirty": true,
+    "earthscimodels_commit": "e298021cd5dc02149c291e64600feb786d76612b",
+    "documents": 1226,
+    "counts": {
+      "both build": 702,
+      "both fail": 255,
+      "invalid fixture (excluded)": 204,
+      "library fragment (excluded)": 62,
+      "native gap": 3
+    }
+  },
+  "entries": []
+}

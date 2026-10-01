@@ -12,16 +12,17 @@
 # (linear / bilinear / searchsorted):
 #   1. THE FIXTURE IS REAL — the class merge fires (kernel count shrinks) and
 #      the merged kernel really carries a per-lane spec payload (introspected
-#      off the codegen-disabled build's kernel list; without this the tally
-#      and identity checks could pass vacuously on an unmerged build).
+#      off a build whose primary emission declined on the node budget, so the
+#      kernel list is still populated; without this the tally and identity
+#      checks could pass vacuously on an unmerged build).
 #   2. THE TIER ACCEPTS — `:codegen_kernel` fires with ZERO
 #      `:codegen_decline_fn_payload` in `_CASCADE_TALLY`, and the section's
 #      residual kernel list is EMPTY (the merged interp kernel is ON the
 #      compiled tier, not silently on a fallback runner).
 #   3. BIT-IDENTITY — du is `===` per element (NaN/-0.0 count; never ≈)
-#      between the codegen build and ESS_CODEGEN_DISABLE=1, at Float64 AND
+#      between the `:native` build and `compiler=:interpreter`, at Float64 AND
 #      under ForwardDiff Dual (values + partials via the Jacobian bit-compare
-#      — the tier is the AD fast path), and ≡ the UNMERGED build too.
+#      — the tier is the AD fast path).
 #   4. LANES DISCRIMINATE — with identical u/v states the two blocks differ
 #      (the tables differ), so "every lane read the representative's table"
 #      can never pass, in either tier.
@@ -31,16 +32,25 @@ using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
-# Build with codegen and the kernel-class merge toggled independently.
+# Build under the compiler that runs the tier or the one that does not.
 # Returns (f!, u0, p, vmap, diag, tally-snapshot).
-function _cgl_build(model, ics; codegen::Bool, merged::Bool=true)
-    withenv("ESS_CODEGEN_DISABLE" => (codegen ? nothing : "1"),
-            "ESS_OOP_MERGE_DISABLE" => (merged ? nothing : "1")) do
-        ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics)
-        (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
+function _cgl_build(model, ics; codegen::Bool)
+    ESM._reset_cascade_tally!()
+    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
+        initial_conditions=ics, compiler = codegen ? :native : :interpreter)
+    return (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
+end
+
+# A `:native` build whose PRIMARY emission declines everything on the node
+# budget — a retained tuning threshold — so the merged kernels are still on
+# `kernel_section.kernels` and can be introspected. The overflow emission picks
+# them up under its own (unbounded) budget, so nothing is refused and nothing
+# runs interpreted; this build is for reading the kernel IR, never for values.
+function _cgl_kernels(model, ics)
+    f!, _u0, _p, _t, _vm, _d = withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
+        ESM._build_evaluator_impl(model; initial_conditions=ics)
     end
+    return getfield(getfield(f!, :kernel_section), :kernels)
 end
 
 _cgl_du(f!, u, p, t) = (d = similar(u); fill!(d, 0.0); f!(d, u, p, t); d)
@@ -70,17 +80,15 @@ function _cgl_has_lanespec(K, ::Type{LaneT}) where {LaneT}
 end
 
 # The full differential for one twin-table model: fixture-really-fired pins,
-# acceptance tally, and bit-identity at Float64 + Dual against BOTH references
-# (merged interpreter and unmerged build).
+# acceptance tally, and bit-identity at Float64 + Dual against the interpreter.
 function _cgl_differential(model, ics, ::Type{LaneT}; jacobian::Bool=true) where {LaneT}
-    fc, u0, p, _, dm, tally = _cgl_build(model, ics; codegen=true, merged=true)
-    fr, v0, q, _, _, rtally = _cgl_build(model, ics; codegen=false, merged=true)
-    fu, w0, r, _, du_, _ = _cgl_build(model, ics; codegen=false, merged=false)
+    fc, u0, p, _, dm, tally = _cgl_build(model, ics; codegen=true)
+    fr, v0, q, _, _, rtally = _cgl_build(model, ics; codegen=false)
 
-    # (1) the fixture is real: the class merge fired and minted a lane spec.
-    @test dm.n_acc_kernels < du_.n_acc_kernels
-    ksr = getfield(fr, :kernel_section)
-    @test any(K -> _cgl_has_lanespec(K, LaneT), getfield(ksr, :kernels))
+    # (1) the fixture is real: the class merge fired (it left fewer kernels
+    # than it was handed) and minted a lane spec of the expected type.
+    @test dm.n_acc_kernels < dm.n_classmerge_in
+    @test any(K -> _cgl_has_lanespec(K, LaneT), _cgl_kernels(model, ics))
 
     # (2) the codegen tier accepted the lane-spec payload — no fn_payload
     # decline, and NO residual kernel (the merged kernel is on the compiled
@@ -90,23 +98,20 @@ function _cgl_differential(model, ics, ::Type{LaneT}; jacobian::Bool=true) where
     ksc = getfield(fc, :kernel_section)
     @test getfield(ksc, :n_emitted) >= 1
     @test isempty(getfield(ksc, :kernels))
-    @test get(rtally, :codegen_kernel, 0) == 0   # the kill switch really kills
+    @test get(rtally, :codegen_kernel, 0) == 0   # the interpreter emits nothing
 
     # (3) bit-identity at Float64 …
-    @test u0 == v0 && u0 == w0
+    @test u0 == v0
     for k in 1:5, t in (0.0, 0.7, 3.25)
         u = k == 1 ? copy(u0) : _cgl_probe(length(u0), k)
         duc = _cgl_du(fc, u, p, t)
-        @test _cgl_bitsame(duc, _cgl_du(fr, u, q, t))   # ≡ merged interpreter
-        @test _cgl_bitsame(duc, _cgl_du(fu, u, r, t))   # ≡ unmerged reference
+        @test _cgl_bitsame(duc, _cgl_du(fr, u, q, t))   # ≡ the interpreter
     end
     # … and under ForwardDiff Dual (du values AND partials, via the Jacobian).
     if jacobian
         Jc = ForwardDiff.jacobian(uu -> _cgl_du(fc, uu, p, 0.4), u0)
         Jr = ForwardDiff.jacobian(uu -> _cgl_du(fr, uu, q, 0.4), v0)
-        Ju = ForwardDiff.jacobian(uu -> _cgl_du(fu, uu, r, 0.4), w0)
         @test _cgl_bitsame(Jc, Jr)
-        @test _cgl_bitsame(Jc, Ju)
     end
     return nothing
 end
@@ -190,7 +195,7 @@ _cgl_ics(names, N) =
         N = 9
         ics = Dict("$x[$k]" => 2.0 + sin(0.3k) for x in ("u", "v", "w"), k in 1:N)
         f!, u0, p, vm, _, tally = _cgl_build(_cgl_linear_model(N), ics;
-                                             codegen=true, merged=true)
+                                             codegen=true)
         @test get(tally, :codegen_decline_fn_payload, 0) == 0
         du = _cgl_du(f!, u0, p, 0.0)
         ublk = [du[vm["u[$k]"]] for k in 1:N]

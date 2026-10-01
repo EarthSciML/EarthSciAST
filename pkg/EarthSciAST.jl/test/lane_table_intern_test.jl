@@ -1,6 +1,5 @@
-# Build-time lane-table interning (tree_walk/acc_merge.jl `_lane_intern`,
-# `ESS_LANE_INTERN_DISABLE=1` oracle) + the clamp/edge-bound collapse
-# (tree_walk/interp_lanes.jl `_lane_bound`).
+# Build-time lane-table interning (tree_walk/acc_merge.jl `_lane_intern`) +
+# the clamp/edge-bound collapse (tree_walk/interp_lanes.jl `_lane_bound`).
 #
 # WHAT THIS PINS.
 #   1. SHARING IS IN THE BUILD PRODUCT. After a default build, content-equal
@@ -8,16 +7,15 @@
 #      SAME object (`===`) — counted by `objectid` — even when they were minted
 #      from different const spellings (`[10, 20]` vs `[10.0, 20.0]`) or
 #      distinct-but-equal vectors, which AST interning cannot unify (it keys
-#      const payload vectors by identity). With `ESS_LANE_INTERN_DISABLE=1`
-#      every member keeps its own mint — today's un-interned build — so the
-#      distinct-object count rises back to the member count, and
-#      `Base.summarysize` shows the share is real memory.
+#      const payload vectors by identity). The distinct-object count is the
+#      distinct-CONTENT count and no lower, the canonical representatives are
+#      pairwise content-distinct, and `Base.summarysize` against a per-lane
+#      deep copy shows the share is real memory rather than a count.
 #   2. BIT-IDENTITY. du is `===` per element (NaN/-0.0 count; never ≈) between
-#      the default build and the ESS_LANE_INTERN_DISABLE=1 /
-#      ESS_KERNEL_CLASS_MERGE_DISABLE=1 / ESS_STENCIL_DISABLE=1 /
-#      ESS_CODEGEN_DISABLE=1 oracles, at Float64 and under ForwardDiff Dual
-#      via the Jacobian; and the merged lane evaluators are `===` each member
-#      lane's own ORIGINAL scalar core.
+#      the default build and `compiler=:interpreter` — no interning, no class
+#      merge, no affine tier, no codegen — at Float64 and under ForwardDiff
+#      Dual via the Jacobian; and the merged lane evaluators are `===` each
+#      member lane's own ORIGINAL scalar core.
 #   3. THE CLAMP-BOUND COLLAPSE IS SOUND. `_lane_bound` collapses an
 #      all-BITWISE-equal boundary column to its one scalar (so a trace embeds a
 #      scalar constant, not an O(lanes) tensor — the gap
@@ -34,14 +32,14 @@ using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
-# Build with the intern pool / class merge / stencil / codegen toggled.
-function _lti_build(model, ics; intern::Bool=true, merged::Bool=true,
-                    stencil::Bool=true, codegen::Bool=true, form::Symbol=:inplace)
-    withenv("ESS_LANE_INTERN_DISABLE" => (intern ? nothing : "1"),
-            "ESS_KERNEL_CLASS_MERGE_DISABLE" => (merged ? nothing : "1"),
-            "ESS_STENCIL_DISABLE" => (stencil ? nothing : "1"),
-            "ESS_CODEGEN_DISABLE" => (codegen ? nothing : "1")) do
-        ESM._build_evaluator_impl(model; initial_conditions=ics, form=form)
+# Build under `compiler`. `codegen=false` puts the primary emission's node
+# budget at zero — a retained tuning threshold — so nothing is emitted away and
+# the merged kernels stay introspectable on `kernel_section.kernels`.
+function _lti_build(model, ics; codegen::Bool=true, compiler::Symbol=:native,
+                    form::Symbol=:inplace)
+    withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
+        ESM._build_evaluator_impl(model; initial_conditions=ics, form=form,
+                                  compiler=compiler)
     end
 end
 
@@ -53,8 +51,8 @@ _lti_probe(n, k) =
     Float64[-1.5 + 7.0 * abs(sin(1.3i + 0.7k)) + 0.01i for i in 1:n]
 
 # Collect every distinct `_Interp*LaneSpec` of type `LaneT` reachable from the
-# retained kernel list (build with codegen OFF so kernels are introspectable —
-# same route as codegen_lanespec_test.jl).
+# retained kernel list (built at a zero primary budget so kernels are
+# introspectable — same route as codegen_lanespec_test.jl).
 function _lti_lanespecs(f!, ::Type{LaneT}) where {LaneT}
     out = LaneT[]
     seen = IdDict{Any,Nothing}()
@@ -149,67 +147,53 @@ end
 # member count, `ncontent` the distinct table-content count.
 function _lti_flavour(model, ics, ::Type{LaneT}; members::Int, ncontent::Int,
                       N::Int, jacobian::Bool=true) where {LaneT}
-    # Introspection builds (codegen off so the kernel list is retained).
+    # Introspection build (zero primary budget, so the kernel list is retained).
     fon, u0, p, _, _, don = _lti_build(model, ics; codegen=false)
-    foff, v0, q, _, _, _ = _lti_build(model, ics; codegen=false, intern=false)
-    fun, w0, r, _, _, dun = _lti_build(model, ics; codegen=false, merged=false)
 
-    # The fixture is real: the class merge fired and minted a lane spec. (A
-    # stencil-shaped body may additionally mint small boundary-class lane
-    # specs; the interned and oracle builds have identical kernel structure,
-    # so the collections pair up positionally.)
-    @test don.n_acc_kernels < dun.n_acc_kernels
+    # The fixture is real: the class merge fired (it left fewer kernels than it
+    # was handed) and minted a lane spec.
+    @test don.n_acc_kernels < don.n_classmerge_in
     hs_on = _lti_lanespecs(fon, LaneT)
-    hs_off = _lti_lanespecs(foff, LaneT)
-    @test length(hs_on) == length(hs_off) >= 1
-    for (hon, hoff) in zip(hs_on, hs_off)
-        @test length(hon.specs) == length(hoff.specs)
-        # Every lane's content is preserved lane-by-lane vs the oracle, the
-        # canonical set never over-merges two distinct contents, and the
-        # knot-major lane columns — what the evaluators/backends broadcast —
-        # are bitwise unchanged by interning.
-        @test all(l -> ESM._fn_spec_content_equal(hon.specs[l], hoff.specs[l]),
-                  eachindex(hon.specs))
+    @test length(hs_on) >= 1
+    for hon in hs_on
+        # The canonical set never over-merges: two distinct representatives
+        # never hold the same content.
         reps = unique(objectid, hon.specs)
         for i in eachindex(reps), j in (i + 1):length(reps)
             @test !ESM._fn_spec_content_equal(reps[i], reps[j])
         end
-        for f in fieldnames(LaneT)
-            f === :specs && continue
-            @test isequal(getfield(hon, f), getfield(hoff, f))
-        end
+        # …and it never under-merges: every lane is `===` one of them.
+        @test all(sp -> any(r -> r === sp, reps), hon.specs)
     end
 
-    # (a)+(b) on the MAIN class (the most lanes): content-equal lane tables
-    # are `===` after an interned build — distinct objects == distinct
-    # CONTENTS — while the oracle build keeps one object per MEMBER mint; the
-    # share is real memory, not just aliasing in a count.
+    # (a)+(b) on the MAIN class (the most lanes): content-equal lane tables are
+    # `===` after an interned build — distinct objects == distinct CONTENTS —
+    # and the share is real memory, measured against the same lane vector with
+    # every member deep-copied back to its own mint.
     h_on = argmax(h -> length(h.specs), hs_on)
-    h_off = argmax(h -> length(h.specs), hs_off)
     @test length(h_on.specs) >= members * (N - 1)
     @test _lti_nuniq(h_on.specs) == ncontent
-    @test _lti_nuniq(h_off.specs) == members
-    @test Base.summarysize(h_on) < Base.summarysize(h_off)
+    @test ncontent < members                       # the sharing is not vacuous
+    unshared = [deepcopy(sp) for sp in h_on.specs]
+    @test Base.summarysize(h_on.specs) < Base.summarysize(unshared)
 
-    # (c) bit-identity against every oracle, on the default (codegen-on) build.
+    # (c) bit-identity against the interpreter, on the default build. The
+    # interpreter has no intern pool, no class merge, no affine tier and no
+    # codegen, so agreeing with it covers every tier this file touches at once.
     fc, uc, pc, _, _, _ = _lti_build(model, ics)
-    fi, ui, pi_, _, _, _ = _lti_build(model, ics; intern=false)
-    fm, um, pm, _, _, _ = _lti_build(model, ics; merged=false)
-    fs, us, ps, _, _, _ = _lti_build(model, ics; stencil=false)
-    @test uc == ui && uc == um && uc == us && uc == u0
+    fs, us, ps, _, _, _ = _lti_build(model, ics; compiler=:interpreter)
+    @test uc == us && uc == u0
     for k in 1:4, t in (0.0, 0.7, 3.25)
         u = k == 1 ? copy(uc) : _lti_probe(length(uc), k)
         duc = _lti_du(fc, u, pc, t)
-        @test _lti_bitsame(duc, _lti_du(fi, u, pi_, t))   # ≡ intern kill switch
-        @test _lti_bitsame(duc, _lti_du(fm, u, pm, t))    # ≡ unmerged
-        @test _lti_bitsame(duc, _lti_du(fs, u, ps, t))    # ≡ per-cell scalar
-        @test _lti_bitsame(duc, _lti_du(fon, u, p, t))    # ≡ codegen-disabled
+        @test _lti_bitsame(duc, _lti_du(fs, u, ps, t))    # ≡ the interpreter
+        @test _lti_bitsame(duc, _lti_du(fon, u, p, t))    # ≡ the un-emitted build
     end
     # ForwardDiff Dual (values + partials via the Jacobian).
     if jacobian
         Jc = ForwardDiff.jacobian(uu -> _lti_du(fc, uu, pc, 0.4), uc)
-        Ji = ForwardDiff.jacobian(uu -> _lti_du(fi, uu, pi_, 0.4), ui)
-        @test _lti_bitsame(Jc, Ji)
+        Js = ForwardDiff.jacobian(uu -> _lti_du(fs, uu, ps, 0.4), us)
+        @test _lti_bitsame(Jc, Js)
     end
     return nothing
 end
@@ -254,7 +238,7 @@ end
             ESM._LANE_INTERN_POOL[] = prev
         end
         # Pool off (outside a build): the mint is fresh per call — today's
-        # behavior, and what the ESS_LANE_INTERN_DISABLE=1 build sees.
+        # behavior, and what a build with the pool off sees.
         t1 = ESM._build_interp_spec("interp.linear", Any[_LTI_TA, _LTI_AX])
         t2 = ESM._build_interp_spec("interp.linear", Any[_LTI_TA, _LTI_AX])
         @test t1 !== t2 && ESM._fn_spec_content_equal(t1, t2)
@@ -272,8 +256,8 @@ end
         @test ESM._lane_bound(m) === m                # mixed column untouched
         one_lane = [7.0]
         @test ESM._lane_bound(one_lane) === 7.0
-        withenv("ESS_LANE_INTERN_DISABLE" => "1") do
-            @test ESM._lane_bound(c) === c            # kill switch: identity
+        ESM._with_compiler_plan(ESM._compiler_plan(:interpreter)) do
+            @test ESM._lane_bound(c) === c            # interning off: identity
         end
     end
 
@@ -311,8 +295,8 @@ end
         ref = _lti_bilin_ref(h, xs, ys)
         got = ESM._interp_bilinear_lanes(h, xs, ys)
         @test length(got) == L && all(got .=== ref)
-        # Kill switch: the lane-wide-bound program computes the same bits.
-        goff = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
+        # Interning off: the lane-wide-bound program computes the same bits.
+        goff = ESM._with_compiler_plan(ESM._compiler_plan(:interpreter)) do
             ESM._interp_bilinear_lanes(h, xs, ys)
         end
         @test all(goff .=== ref)

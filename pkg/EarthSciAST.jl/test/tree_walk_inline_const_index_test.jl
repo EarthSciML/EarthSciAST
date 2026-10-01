@@ -29,7 +29,7 @@ const ESM_ICI = EarthSciAST
         @test isfile(path)
         file = EarthSciAST.load_path(path)
         ics = Dict("a[1]"=>0.0, "a[2]"=>0.0, "a[3]"=>0.0, "b[1]"=>0.0, "b[2]"=>0.0)
-        f!, u0, p, _, vmap = build_evaluator(file; model_name="InlineConstIndex",
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(file; model_name="InlineConstIndex",
                                              initial_conditions=ics)
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["a[1]"]] ≈ 10.0

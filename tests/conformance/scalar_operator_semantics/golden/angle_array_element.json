@@ -1,0 +1,79 @@
+{
+  "fixture": "angle_array_element",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "angle_array_element_values",
+      "assertion_idx": 1,
+      "variable": "cos_lat",
+      "actual": 1.0
+    },
+    {
+      "test_id": "angle_array_element_values",
+      "assertion_idx": 2,
+      "variable": "cos_lat",
+      "actual": 0.5000000000000001
+    },
+    {
+      "test_id": "angle_array_element_values",
+      "assertion_idx": 3,
+      "variable": "cos_lat",
+      "actual": 6.123233995736766e-17
+    },
+    {
+      "test_id": "angle_array_element_values",
+      "assertion_idx": 4,
+      "variable": "cos_lat_rad",
+      "actual": 1.0
+    },
+    {
+      "test_id": "angle_array_element_values",
+      "assertion_idx": 5,
+      "variable": "cos_lat_rad",
+      "actual": 0.5000000000000001
+    },
+    {
+      "test_id": "angle_array_element_values",
+      "assertion_idx": 6,
+      "variable": "cos_lat_rad",
+      "actual": 6.123233995736766e-17
+    },
+    {
+      "test_id": "angle_array_element_values",
+      "assertion_idx": 7,
+      "variable": "sin_colat",
+      "actual": 1.0
+    },
+    {
+      "test_id": "angle_array_element_values",
+      "assertion_idx": 8,
+      "variable": "sin_colat",
+      "actual": 0.49999999999999994
+    },
+    {
+      "test_id": "angle_array_element_values",
+      "assertion_idx": 9,
+      "variable": "sin_colat",
+      "actual": 0.0
+    },
+    {
+      "test_id": "angle_array_element_values",
+      "assertion_idx": 10,
+      "variable": "sin_sum",
+      "actual": 1.8660254037844386
+    },
+    {
+      "test_id": "angle_array_element_values",
+      "assertion_idx": 11,
+      "variable": "sin_scalar",
+      "actual": 0.6427876096865393
+    },
+    {
+      "test_id": "angle_array_element_values",
+      "assertion_idx": 12,
+      "variable": "probe",
+      "actual": 1.8660254037844386
+    }
+  ]
+}

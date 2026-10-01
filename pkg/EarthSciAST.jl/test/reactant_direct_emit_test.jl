@@ -186,26 +186,10 @@ _de_dev(::Nothing) = nothing
 _de_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 
 # `@compile` runs the emission inside its own machinery, which may wrap what the
-# trace threw. Dig the `DirectEmitError` out of whatever came back, so a test can
-# assert on its FIELDS (construct, rule) and not on a rendered string.
-function _de_unwrap(e)
-    e isa EarthSciAST.DirectEmitError && return e
-    for f in (:error, :ex, :exception, :task, :captured)
-        if hasproperty(e, f)
-            inner = getproperty(e, f)
-            inner === e && continue
-            r = _de_unwrap(inner)
-            r === nothing || return r
-        end
-    end
-    if e isa CompositeException || e isa AbstractVector
-        for x in e
-            r = _de_unwrap(x)
-            r === nothing || return r
-        end
-    end
-    return nothing
-end
+# trace threw. Dig the `DirectEmitError` out of whatever came back — with the
+# SAME helper `esm_problem(…; compiler = :xla)` uses — so a test can assert on
+# its FIELDS (construct, rule) and not on a rendered string.
+_de_unwrap(e) = EarthSciAST._find_direct_emit_error(e)
 _de_seed(n) = [0.6sin(0.7k) - 0.15 for k in 1:n]
 
 # Count `stablehlo.<op>` / `chlo.<op>` occurrences in a printed module.
@@ -355,8 +339,11 @@ end
 # so the whole surface is ONE group of `NI*NJ` lanes — and each of the tent's
 # `M*M` iterations is one whole-lane read instead of one one-element slice per
 # cell. `NI = NJ = 6` because the read cost model wants at least eight pieces
-# before it prefers a gather: at four lanes there is nothing to decide.
-function _de_halo(; NI = 6, NJ = 6, M = 3)
+# before it prefers a gather: at four lanes there is nothing to decide. `M = 7`
+# because the per-cell loop takes the tent only when it has more terms than the
+# output has cells (`M*M > NI*NJ`, see `_de_halo_build`); a shorter tent is the
+# affine tier's, compiled once for the whole array, and leaves nothing to batch.
+function _de_halo(; NI = 6, NJ = 6, M = 7)
     NQ = max(NI, NJ) + M - 1
     W = [[[[Float64((i + 2j + 3k + 5l) % 7) for l in 1:M] for k in 1:M]
           for j in 1:NJ] for i in 1:NI]
@@ -405,12 +392,14 @@ end
 # The routing this fixture depends on is named rather than inherited: the
 # contraction loop tier has to take the reduction (so there ARE per-cell
 # `rhs_list` entries to batch) and the whole-array contraction tier must not
-# take it first.
+# take it first. The loop's floor is lowered to 8 terms here, and the loop
+# preempts the affine tier only when the output has fewer cells than the
+# contraction has terms, which `_de_halo`'s default `M` is sized for.
 _de_halo_build(doc, ics; form = :oop, batch = true) =
-    withenv("ESS_CONTRACTION_LOOP" => "1", "ESS_CONTRACTION_LOOP_MIN" => "8",
-            "ESS_ARRAY_CONTRACTION_MIN" => "1024",
-            "ESS_OOP_BATCH" => (batch ? "1" : "0")) do
-        build_evaluator(doc; initial_conditions = ics, form = form)
+    withenv("ESS_CONTRACTION_LOOP_MIN" => "8",
+            "ESS_ARRAY_CONTRACTION_MIN" => "1024") do
+        EarthSciAST._build_evaluator(doc; initial_conditions = ics, form = form,
+                        compiler = batch ? :native : :interpreter)
     end
 
 @testset "direct StableHLO emission from the compiled IR" begin
@@ -423,8 +412,8 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
                                "elementwise_gather.json")
         @test isfile(fixture)
         file = ESM_DE.load_path(fixture)
-        fo, u0, p, tspan, vmap = build_evaluator(file; model_name = "Column", form = :oop)
-        fi!, u0i, _, _, _ = build_evaluator(file; model_name = "Column")
+        fo, u0, p, tspan, vmap = EarthSciAST._build_evaluator(file; model_name = "Column", form = :oop)
+        fi!, u0i, _, _, _ = EarthSciAST._build_evaluator(file; model_name = "Column")
         @test u0 == u0i
         n = length(u0)
         samples = [(copy(u0), 0.0),
@@ -461,8 +450,8 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
 
     @testset "reaction–diffusion: state, parameters, pow, boundary kernels" begin
         N = 8
-        fo, u0, p, _, _ = build_evaluator(_de_rd(N); form = :oop)
-        fi!, _, _, _, _ = build_evaluator(_de_rd(N))
+        fo, u0, p, _, _ = EarthSciAST._build_evaluator(_de_rd(N); form = :oop)
+        fi!, _, _, _, _ = EarthSciAST._build_evaluator(_de_rd(N))
         u1 = collect(range(0.2, 1.7; length = N))
         samples = [(u1, 0.0), (u1 .^ 2 .- 0.5, 2.0), (reverse(u1) .* 1.3, 10.0)]
         d, cd_ = _de_compare("reaction_diffusion", fo, fi!, p, samples)
@@ -477,8 +466,8 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         N = 8
         wind = fill(1.0, N)
         pa = Dict("wind" => wind)
-        fi!, _, p, _, _ = build_evaluator(_de_forced(N); param_arrays = pa)
-        fo, _, _, _, _ = build_evaluator(_de_forced(N); form = :oop, param_arrays = pa)
+        fi!, _, p, _, _ = EarthSciAST._build_evaluator(_de_forced(N); param_arrays = pa)
+        fo, _, _, _, _ = EarthSciAST._build_evaluator(_de_forced(N); form = :oop, param_arrays = pa)
         host = ESM_DE.forcing_buffers(fo)
         @test keys(host) == (:wind,)
         @test host.wind === wind                      # aliased, not copied
@@ -524,8 +513,8 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
                        "transport_3axis_7cubed_fullrank.esm")
         @test isfile(fix)
         flat = ESM_DE.flatten(ESM_DE.load_path(fix))
-        fo, u0, p, _, _ = build_evaluator(flat; form = :oop)
-        fi!, _, _, _, _ = build_evaluator(flat)
+        fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form = :oop)
+        fi!, _, _, _, _ = EarthSciAST._build_evaluator(flat)
         # The plan really does carry sub-kernels — otherwise this fixture would
         # be testing the ordinary kernel path under a different name.
         plans = getfield(fo.rhs, :acc_plans)
@@ -688,8 +677,8 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
                        "transport_3axis_7cubed_fullrank.esm")
         @test isfile(fix)
         flat = ESM_DE.flatten(ESM_DE.load_path(fix))
-        fo, u0, p, _, _ = build_evaluator(flat; form = :oop)
-        fi!, _, _, _, _ = build_evaluator(flat)
+        fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form = :oop)
+        fi!, _, _, _, _ = EarthSciAST._build_evaluator(flat)
         n = length(u0)
         u1 = Float64[sin(0.1 * i) + 1.5 for i in 1:n]
         ref = _de_ip(fi!, u1, p, 0.4)
@@ -801,8 +790,8 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
                        "transport_3axis_7cubed_fullrank.esm")
         @test isfile(fix)
         flat = ESM_DE.flatten(ESM_DE.load_path(fix))
-        fo, u0, p, _, _ = build_evaluator(flat; form = :oop)
-        fi!, _, _, _, _ = build_evaluator(flat)
+        fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form = :oop)
+        fi!, _, _, _, _ = EarthSciAST._build_evaluator(flat)
         n = length(u0)
         u1 = Float64[sin(0.1 * i) + 1.5 for i in 1:n]
         ref = _de_ip(fi!, u1, p, 0.4)
@@ -915,21 +904,24 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # no longer follows the cell count.
         fn, u0n, pn, _, _ = _de_halo_build(doc, ics; batch = false)
         @test isempty(getfield(getfield(fn, :rhs), :rhs_batches).groups)
-        dn, _ = _de_compare("halo (per-entry, ESS_OOP_BATCH=0)", fn, fi!, pn,
+        dn, _ = _de_compare("halo (per-entry, compiler=:interpreter)", fn, fi!, pn,
                                samples; census = false)
         println("  batched tally:   ", d.stats)
         println("  per-entry tally: ", dn.stats)
         @test get(dn.stats, :scalar_batch, 0) == 0
 
         # ONE WHOLE-LANE READ PER TENT POSITION, and not one per cell. The
-        # per-entry walk reads the state one element at a time
-        # (`slice1@rhs_scalar.stategather`); the batched surface reads all
-        # `NI*NJ` lanes at once, so the site tally carries NO single-position
+        # per-entry walk reads the state one element at a time — through a
+        # state-gather node (`slice1@rhs_scalar.stategather`) where the build
+        # formed one, or a plain state node (`slice1@rhs_scalar.state`) under
+        # `compiler=:interpreter`, which forms none; the batched surface reads
+        # all `NI*NJ` lanes at once, so the site tally carries NO single-position
         # read at all and exactly `M*M` whole-lane reads — one per position of
         # the tent, whatever form the cost model gives each one.
-        rd1 = Symbol("slice1@rhs_scalar.stategather")
-        @test get(dn.stats, rd1, 0) > 0
-        @test get(d.stats, rd1, 0) == 0
+        reads1(stats) = get(stats, Symbol("slice1@rhs_scalar.stategather"), 0) +
+                        get(stats, Symbol("slice1@rhs_scalar.state"), 0)
+        @test reads1(dn.stats) > 0
+        @test reads1(d.stats) == 0
         @test get(d.stats, Symbol("concat@rhs_scalar.x"), 0) +
               get(d.stats, Symbol("gather@rhs_scalar.x"), 0) == M * M
 
@@ -946,7 +938,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
                                    samples; census = false)
             println("  batched tally (always): ", da.stats)
             @test get(da.stats, Symbol("gather@rhs_scalar.x"), 0) == M * M
-            @test get(da.stats, rd1, 0) == 0
+            @test reads1(da.stats) == 0
         end
 
         # And the emitted program stops following the cell count: the group's
@@ -957,8 +949,8 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
     end
 
     @testset "a closed `interp.linear` function" begin
-        fo, u0, p, _, _ = build_evaluator(_de_interpdoc(); form = :oop)
-        fi!, _, _, _, _ = build_evaluator(_de_interpdoc())
+        fo, u0, p, _, _ = EarthSciAST._build_evaluator(_de_interpdoc(); form = :oop)
+        fi!, _, _, _, _ = EarthSciAST._build_evaluator(_de_interpdoc())
         # In range, on a knot, and both clamps.
         samples = [([1.5], 0.0), ([2.0], 0.0), ([-1.0], 0.0), ([9.0], 0.0),
                    ([3.25], 1.0)]
@@ -972,8 +964,8 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
     end
 
     @testset "the `datetime.*` calendar and `log10`" begin
-        fo, u0, p, _, vmap = build_evaluator(_de_dtdoc(); form = :oop)
-        fi!, _, _, _, _ = build_evaluator(_de_dtdoc())
+        fo, u0, p, _, vmap = EarthSciAST._build_evaluator(_de_dtdoc(); form = :oop)
+        fi!, _, _, _, _ = EarthSciAST._build_evaluator(_de_dtdoc())
         samples = [(copy(u0), t) for t in _DE_DT_TIMES]
         d, cd_ = _de_compare("datetime_log10", fo, fi!, p, samples)
         # Ten `:fn` calls lowered — the nine fields plus the offset `hour`.
@@ -1131,7 +1123,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
     end
 
     @testset "the hard-error path names the construct and the rule" begin
-        fo, u0, p, _, vmap = build_evaluator(_de_unsupported_op(); form = :oop)
+        fo, u0, p, _, vmap = EarthSciAST._build_evaluator(_de_unsupported_op(); form = :oop)
         d = EXT_DE.direct_rhs(fo; var_map = vmap)
         ur = RX_DE.ConcreteRArray(copy(u0))
         tr = RX_DE.ConcreteRNumber(0.0)
@@ -1199,8 +1191,8 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
     @testset "reverse-mode ∂/∂p and ∂/∂u agree with the host" begin
         EZ = RX_DE.Enzyme
         N = 12
-        fo, u0, p, _, _ = build_evaluator(_de_rd(N); form = :oop)
-        fi!, _, _, _, _ = build_evaluator(_de_rd(N))
+        fo, u0, p, _, _ = EarthSciAST._build_evaluator(_de_rd(N); form = :oop)
+        fi!, _, _, _, _ = EarthSciAST._build_evaluator(_de_rd(N))
         syms = keys(p)
         pv0 = collect(Float64, values(p))
         u = Float64[0.6sin(0.7k) + 1.2 for k in 1:N]
@@ -1254,8 +1246,8 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # BOTH directions, the way `t` is, since a baked-in `p` returns the same
         # plausible numbers for ever with no error.
         N = 12
-        fo, u0, p, _, _ = build_evaluator(_de_rd(N); form = :oop)
-        fi!, _, _, _, _ = build_evaluator(_de_rd(N))
+        fo, u0, p, _, _ = EarthSciAST._build_evaluator(_de_rd(N); form = :oop)
+        fi!, _, _, _, _ = EarthSciAST._build_evaluator(_de_rd(N))
         syms = keys(p)
         pv0 = collect(Float64, values(p))
         nt(pv) = NamedTuple{syms}(Tuple(pv))

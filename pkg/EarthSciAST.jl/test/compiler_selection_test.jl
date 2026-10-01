@@ -1,0 +1,460 @@
+# Choosing the compiler (API_SPEC §5.8, esm-libraries-spec §2.5.10).
+#
+# Four things are pinned here, and nothing else in the suite pins any of them:
+#
+#   * the closed VOCABULARY and its three failures — `compiler_unknown` outside
+#     it, `compiler_unavailable` for a member this binding cannot provide, and
+#     never an answer that quietly builds with a different compiler;
+#   * the strict `native` TIER REPORT on the hardest document the cascade has —
+#     one whose equation the whole-array contraction tier accepts, which `native`
+#     takes only because that tier now emits its nest (a walked nest is what
+#     §2.5.10 refuses), and which the `:interpreter` builds a different way and
+#     agrees with bit for bit;
+#   * AGREEMENT — `:native` and `:interpreter` produce bit-identical right-hand
+#     sides and seeds on corpus fixtures that both run. This is the property the
+#     interpreter exists for, so it is measured on documents of three different
+#     shapes rather than on one;
+#   * the REPORT — every rule of a build names a tier, and `show` says which
+#     compiler ran.
+using Test
+using EarthSciAST
+using OrdinaryDiffEqTsit5
+const CSEL = EarthSciAST
+
+const _CSEL_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+_csel_fixture(parts...) = joinpath(_CSEL_ROOT, "tests", parts...)
+
+# A scalar ODE, a PDE-simulation diffusion fixture and a `faq` reduction: three
+# shapes that route through three different arms of the cascade.
+const _CSEL_AGREE = [
+    _csel_fixture("fixtures", "faq", "01_pure_ode_analytical.esm"),
+    _csel_fixture("conformance", "pde_simulation", "fixtures",
+                  "diffusion_1d_periodic_n8.esm"),
+    _csel_fixture("valid", "faq", "min_sum_tropical.esm"),
+    _csel_fixture("valid", "faq", "join_on_self_join.esm"),
+    # A document the affine tier DECLINES, so its equation is scalarized one
+    # output cell at a time. That is a per-cell BUILD and `native` allows it:
+    # the cell entries go on to the codegen tier and the right-hand side
+    # carries no tree walk.
+    _csel_fixture("valid", "faq", "join_moves_running_exhaust.esm"),
+]
+
+# ── A document the whole-array contraction tier ACCEPTS ──────────────────────
+# `out[rcv] = Σ_s SR[s,rcv]·E[s]` from zero initial conditions, the
+# source-receptor shape that tier exists for. `ESS_ARRAY_CONTRACTION_MIN` is a
+# TUNING THRESHOLD (§2.5.10 keeps those), lowered here so the tier engages at a
+# size the test can afford; the routing it produces is the same one a
+# production-sized document gets at the default floor.
+_csel_lhs(v, idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[idx],
+    "ranges" => Dict(idx => Any[1, n]),
+    "expr" => Dict("op" => "D", "args" => Any[
+        Dict("op" => "index", "args" => Any[v, idx])], "wrt" => "t"))
+_csel_zero(idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[idx],
+    "ranges" => Dict(idx => Any[1, n]), "expr" => 0.0)
+
+# The contracted range runs DESCENDING, which the affine tier's run-time fold
+# (ascending unit-step ranges only) leaves to the whole-array contraction nest.
+function _csel_contraction_doc(NS::Int = 16, NR::Int = 16)
+    SR = [[Float64((3s + 7r) % 11) for r in 1:NR] for s in 1:NS]
+    agg = Dict{String,Any}("op" => "faq", "args" => Any[],
+        "output_idx" => Any["rcv"],
+        "ranges" => Dict("rcv" => Any[1, NR], "s" => Any[NS, -1, 1]),
+        "semiring" => "sum_product",
+        "expr" => Dict("op" => "*", "args" => Any[
+            Dict("op" => "index", "args" => Any[
+                Dict("op" => "const", "args" => Any[], "value" => SR), "s", "rcv"]),
+            Dict("op" => "index", "args" => Any["E", "s"])]))
+    doc = Dict{String,Any}("esm" => "1.1.0",
+        "metadata" => Dict("name" => "csel_sr"),
+        "models" => Dict("R" => Dict{String,Any}(
+            "variables" => Dict(
+                "E"    => Dict("type" => "unknown", "shape" => Any["s"]),
+                "conc" => Dict("type" => "unknown", "shape" => Any["rcv"])),
+            "equations" => Any[
+                Dict("lhs" => _csel_lhs("E", "s", NS), "rhs" => _csel_zero("s", NS)),
+                Dict("lhs" => _csel_lhs("conc", "rcv", NR), "rhs" => agg)])))
+    ics = merge(Dict{String,Any}("E[$s]" => Float64(s % 5) for s in 1:NS),
+                Dict{String,Any}("conc[$r]" => 0.0 for r in 1:NR))
+    return doc, ics
+end
+
+_csel_contraction_build(doc, ics; compiler) =
+    withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
+        EarthSciAST._build_evaluator(doc; initial_conditions = ics, compiler = compiler)
+    end
+
+# `du` at the seeded state, so two builds can be compared element for element.
+function _csel_du(prob)
+    du = zeros(Float64, length(prob.u0))
+    prob.f!(du, prob.u0, prob.p, prob.tspan[1])
+    return du
+end
+
+@testset "choosing the compiler (§5.8)" begin
+
+    @testset "the vocabulary is closed" begin
+        @test CSEL.COMPILER_VOCABULARY ===
+              (:interpreter, :native, :xla, :mtk, :sympy)
+        doc = _CSEL_AGREE[1]
+
+        # Outside the vocabulary.
+        for bad in (:nope, :Native, :numpy, Symbol(""))
+            e = try
+                esm_problem(doc, (0.0, 1.0); compiler = bad)
+                nothing
+            catch err
+                err
+            end
+            @test e isa SimulateError
+            @test e.code == CSEL.ERROR_CODES.COMPILER_UNKNOWN
+            # The message says what the vocabulary IS, so a caller who
+            # misspelled one does not have to go and look it up.
+            @test occursin(":interpreter", e.msg) && occursin(":native", e.msg)
+        end
+
+        # In the vocabulary, not provided by this binding / this SESSION. Each
+        # one names what would have to be loaded or which binding has it — and
+        # none of them silently builds with another compiler.
+        #
+        # `:xla` is in this list because of what is NOT loaded here, not because
+        # of what is not implemented: it is the specialty compiler that needs a
+        # heavy external dependency, so the answer is `compiler_unavailable`
+        # naming Reactant in a session without it, and a BUILD in a session with
+        # it (test/compiler_xla_test.jl gates that arm, under
+        # `ESM_TEST_REACTANT=1`). The two arms must never trade places — an
+        # unavailable compiler that quietly became `compiler_unknown` would tell
+        # a caller the vocabulary had shrunk.
+        @test Base.get_extension(EarthSciAST, :EarthSciASTReactantExt) === nothing
+        for (v, needle) in ((:xla, "Reactant"), (:sympy, "Python"))
+            e = try
+                esm_problem(doc, (0.0, 1.0); compiler = v)
+                nothing
+            catch err
+                err
+            end
+            @test e isa SimulateError
+            @test e.code == CSEL.ERROR_CODES.COMPILER_UNAVAILABLE
+            @test occursin(needle, e.msg)
+        end
+
+        # `:mtk` is a MEMBER of the vocabulary that this binding provides —
+        # through a package extension, so what it needs is a loaded package
+        # rather than another binding. The vocabulary check runs FIRST, which is
+        # what makes the answer `compiler_unavailable` (in the vocabulary, not
+        # reachable here) rather than `compiler_unknown` (no such value).
+        #
+        # The test target carries ModelingToolkit, so THIS session takes the
+        # available arm and `:mtk` builds — which is `compiler_mtk_test.jl`'s
+        # subject. What is asserted here is the arm an MTK-FREE session takes:
+        # the plan is where the two diverge, and the message it raises names
+        # what to load. Asserting it end-to-end would need a second process with
+        # a different environment, which this suite has no way to spawn.
+        @test :mtk in CSEL.COMPILER_VOCABULARY
+        if Base.get_extension(EarthSciAST, :EarthSciASTMTKExt) === nothing
+            e = try
+                esm_problem(doc, (0.0, 1.0); compiler = :mtk)
+                nothing
+            catch err
+                err
+            end
+            @test e isa SimulateError
+            @test e.code == CSEL.ERROR_CODES.COMPILER_UNAVAILABLE
+            @test occursin("ModelingToolkit", e.msg)
+        else
+            @test CSEL._compiler_plan(:mtk).name === :mtk
+            # Strict, and every right-hand-side tier off: this compiler emits
+            # none of this package's own kernels, and it refuses what it cannot
+            # express rather than building part of a document. The
+            # construction-time compile-once forms stay on — the initial-state
+            # seed is still this package's evaluation.
+            @test CSEL._compiler_plan(:mtk).strict
+            @test !CSEL._compiler_plan(:mtk).codegen
+            @test !CSEL._compiler_plan(:mtk).stencil
+            @test CSEL._compiler_plan(:mtk).setup_map_compile_once
+        end
+    end
+
+    @testset "the default and a named :native are the same strict build" begin
+        # §2.5.10: "oracle selection is an argument, not an environment
+        # variable". No environment variable selects an evaluation strategy any
+        # more, so there is no second way of saying which compiler runs — and
+        # therefore nothing for the keyword to disagree with. Naming `:native`
+        # and naming nothing must be the same build, tier for tier and bit for
+        # bit, on the hardest document this file has.
+        doc, ics = _csel_contraction_doc()
+        runs = map(((), (; compiler = :native))) do kw
+            insp = BuildInspection()
+            f!, u0, p, _t, vm = withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
+                EarthSciAST._build_evaluator(doc; initial_conditions = ics, inspect = insp,
+                                kw...)
+            end
+            du = zeros(Float64, length(u0))
+            f!(du, u0, p, 0.0)
+            (insp.compiler_report, [du[vm["conc[$r]"]] for r in 1:16])
+        end
+        for (rep, _) in runs
+            @test rep.compiler === :native
+            @test any(r -> r.tier === :array_contraction_codegen, rep.rules)
+        end
+        @test tier_histogram(runs[1][1]) == tier_histogram(runs[2][1])
+        @test all(runs[1][2][r] === runs[2][2][r] for r in 1:16)
+        # …and `:interpreter` runs the same document, since it turns the tier
+        # off rather than taking what the tier accepts.
+        @test withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
+            compiler(esm_problem(_CSEL_AGREE[1], (0.0, 1.0); compiler = :interpreter))
+        end === :interpreter
+    end
+
+    @testset "strict :native compiles the whole-array contraction tier" begin
+        doc, ics = _csel_contraction_doc()
+        exact = [sum(Float64((3s + 7r) % 11) * Float64(s % 5) for s in 1:16)
+                 for r in 1:16]
+        insp = BuildInspection()
+        f!, u0, p, _t, vm = withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
+            EarthSciAST._build_evaluator(doc; initial_conditions = ics, compiler = :native,
+                            inspect = insp)
+        end
+        du = zeros(Float64, length(u0))
+        f!(du, u0, p, 0.0)
+        @test [du[vm["conc[$r]"]] for r in 1:16] == exact
+        # The tier is named in the report, in its GENERATED form — the walked
+        # one is what §2.5.10 refuses, so its absence is half the claim.
+        rows = [r for r in insp.compiler_report.rules
+                if r.tier === :array_contraction_codegen]
+        @test length(rows) == 1
+        @test occursin("conc", rows[1].rule)
+        @test !any(r -> r.tier === :array_contraction,
+                   insp.compiler_report.rules)
+
+        # The SAME document under `:interpreter`, which turns the tier off and
+        # reaches the answer through the per-cell path instead. `===` per
+        # element: the two compilers agree bit for bit on the shape the tier
+        # exists for, which is the property the interpreter exists to witness.
+        fi!, ui, pi_, _ti, vmi = _csel_contraction_build(doc, ics;
+                                                         compiler = :interpreter)
+        dui = zeros(Float64, length(ui))
+        fi!(dui, ui, pi_, 0.0)
+        @test [dui[vmi["conc[$r]"]] for r in 1:16] == exact
+        @test all(du[vm["conc[$r]"]] === dui[vmi["conc[$r]"]] for r in 1:16)
+    end
+
+    @testset "native and interpreter agree bit for bit: $(basename(f))" for f in _CSEL_AGREE
+        pn = esm_problem(f, (0.0, 1.0))
+        pi = esm_problem(f, (0.0, 1.0); compiler = :interpreter)
+        @test compiler(pn) === :native
+        @test compiler(pi) === :interpreter
+        # `isequal`, not `==`: two evaluators that differ only in producing NaN
+        # or -0.0 where the other does not are NOT in agreement.
+        @test isequal(pn.u0, pi.u0)
+        @test isequal(_csel_du(pn), _csel_du(pi))
+        @test pn.var_map == pi.var_map
+    end
+
+    # ── observed_field, native vs the interpreter oracle ────────────────────
+    # Reading an observed is one of the evaluations §2.5.10 puts under the
+    # refusal rule, so `native` must compile it rather than walk it per cell —
+    # and a SHAPELESS observed, whose single cell has no output index to bind,
+    # is the shape whose compile-once form used to be declined outright.
+    # `:interpreter` is the simple oracle: it walks, deliberately, and it is
+    # not written to agree with the compiled path, which is what makes the
+    # comparison worth making. `:native` is the universally available default;
+    # `sympy`/`mtk` take only some documents and `xla` needs heavy dependencies,
+    # so `native` is the one that has to cover everything.
+    @testset "native and interpreter read the same observed field: $(basename(f))" for
+            (f, names) in [
+        (_csel_fixture("valid", "nonlinear_mogi_shape.esm"),
+         ["MogiModel.ur", "MogiModel.uz", "ur", "uz"]),
+        (_csel_fixture("valid", "nonlinear_two_component_static.esm"),
+         ["Sites.North.u", "Sites.North.ur", "Sites.South.u"]),
+    ]
+        if isfile(f)
+            pn = esm_problem(f, (0.0, 1.0))
+            pi = esm_problem(f, (0.0, 1.0); compiler = :interpreter)
+            @test compiler(pn) === :native
+            @test compiler(pi) === :interpreter
+            for n in names
+                a = observed_field(pn, n)
+                b = observed_field(pi, n)
+                @test length(a) == length(b)
+                # Exact, or within 1e-12 relative. The two paths compile the
+                # same resolved body, so exact is what is expected; the
+                # tolerance is the margin, not the claim.
+                @test all(isequal(x, y) || abs(x - y) <= 1e-12 * max(abs(x), abs(y))
+                          for (x, y) in zip(a, b))
+            end
+        end
+    end
+
+    @testset "the report names every rule and a tier" begin
+        for f in _CSEL_AGREE
+            rep = compiler_report(esm_problem(f, (0.0, 1.0)))
+            @test rep isa CSEL.CompilerReport
+            @test rep.compiler === :native
+            @test !isempty(rep.rules)
+            for rec in rep.rules
+                @test !isempty(rec.rule)
+                @test rec.kind in (:equation, :observed, :setup_array)
+                # Every landing is a NAMED tier; `:none` or an empty symbol
+                # would make the record unreadable.
+                @test rec.tier !== Symbol("")
+            end
+            # The histogram accounts for every rule exactly once.
+            @test sum(n for (_, n) in CSEL.tier_histogram(rep)) == length(rep.rules)
+        end
+        # A scalar ODE's one equation lands on a tier that is named after the
+        # cascade arm that took it, not after the compiler.
+        rep = compiler_report(esm_problem(_CSEL_AGREE[1], (0.0, 1.0)))
+        @test any(r -> occursin("PureODE.u", r.rule), rep.rules)
+    end
+
+    @testset "show says which compiler ran" begin
+        pn = esm_problem(_CSEL_AGREE[1], (0.0, 1.0))
+        pi = esm_problem(_CSEL_AGREE[1], (0.0, 1.0); compiler = :interpreter)
+        @test occursin("compiler :native", sprint(show, pn))
+        @test occursin("compiler :interpreter", sprint(show, pi))
+        # The tier histogram rides along, so the printed problem says where the
+        # work went and not only what asked for it.
+        @test occursin("[", sprint(show, pn))
+        # `remake` carries the record: it swaps `p`/`u0`/`tspan`, not the build.
+        @test compiler(remake(pn; tspan = (0.0, 2.0))) === :native
+    end
+
+    @testset "BuildInspection carries the report" begin
+        insp = BuildInspection()
+        esm_problem(_CSEL_AGREE[1], (0.0, 1.0); inspect = insp)
+        @test insp.compiler_report.compiler === :native
+        @test !isempty(insp.compiler_report.rules)
+        # …and it is filled even when the build THREW, which is the case a
+        # caller most wants the partial record for. The document below files one
+        # rule on the contraction tier and then hands the tier the SAME output
+        # cells a second time, which `covered` refuses.
+        doc, ics = _csel_contraction_doc()
+        eqs = doc["models"]["R"]["equations"]
+        push!(eqs, eqs[2])
+        insp2 = BuildInspection()
+        @test_throws TreeWalkError withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
+            EarthSciAST._build_evaluator(doc; initial_conditions = ics, inspect = insp2,
+                            compiler = :native)
+        end
+        @test insp2.compiler_report.compiler === :native
+        @test any(r -> r.tier === :array_contraction_codegen,
+                  insp2.compiler_report.rules)
+    end
+
+    @testset "compiler = :xla builds only the out-of-place product" begin
+        # The in-place evaluator is `native`'s. Handing it back under a report
+        # that says `:xla` would be a fallback in everything but name, so the
+        # request is refused before anything is loaded or built — and before
+        # the availability check, so this session without Reactant hears it.
+        doc, _ = _csel_contraction_doc()
+        for call in (() -> CSEL._build_evaluator(doc; compiler = :xla),
+                     () -> CSEL._build_evaluator(load_path(_CSEL_AGREE[1]);
+                                                 compiler = :xla),
+                     () -> CSEL.build_evaluator(doc; compiler = :xla,
+                                                form = :inplace))
+            e = try
+                call(); nothing
+            catch err
+                err
+            end
+            @test e isa ArgumentError
+            @test occursin("form = :oop", e.msg)
+            @test occursin("esm_problem", e.msg)
+        end
+    end
+
+    @testset "an emitter refusal is found however @compile wrapped it" begin
+        de = CSEL.DirectEmitError("`/` with 3 arguments", "state equation y", "detail")
+        task = Task(() -> throw(de))
+        schedule(task)
+        wrapped = try
+            wait(task); nothing
+        catch err
+            err
+        end
+        @test wrapped isa TaskFailedException
+        @test CSEL._find_direct_emit_error(de) === de
+        @test CSEL._find_direct_emit_error(wrapped) === de
+        @test CSEL._find_direct_emit_error(CompositeException([ErrorException("x"), wrapped])) === de
+        @test CSEL._find_direct_emit_error(ErrorException("not the emitter's")) === nothing
+    end
+
+    @testset "the :xla finite-difference Jacobian" begin
+        # f(u, t) = [u₁² + t·u₂, sin(u₂)·u₁, 3u₃ − t²]; J and ∂f/∂t in closed form.
+        calls = Ref(0)
+        f! = (du, u, p, t) -> (calls[] += 1;
+                               du[1] = u[1]^2 + t * u[2];
+                               du[2] = sin(u[2]) * u[1];
+                               du[3] = 3u[3] - t^2; nothing)
+        u = [0.7, -1.3, 250.0]; t = 0.4
+        J = zeros(3, 3)
+        CSEL._XlaFdJacobian(f!, 3)(J, u, nothing, t)
+        Jx = [2u[1] t 0.0; sin(u[2]) u[1]*cos(u[2]) 0.0; 0.0 0.0 3.0]
+        @test isapprox(J, Jx; rtol = 1e-6, atol = 1e-6)
+        @test calls[] == 4                  # n + 1: f(u) once, one per column
+        @test u == [0.7, -1.3, 250.0]       # the caller's state is not touched
+        # A forward difference cancels to within eps(|f|)/h, so the time
+        # derivative is checked at a state whose f is O(1): the 250 above makes
+        # f₃ ≈ 750, whose cancellation error alone is several 1e-6.
+        v = [0.7, -1.3, 0.25]
+        dT = zeros(3)
+        CSEL._XlaFdTgrad(f!, 3)(dT, v, nothing, t)
+        @test isapprox(dT, [v[2], 0.0, -2t]; rtol = 1e-6, atol = 1e-6)
+        # Only an `:xla` Problem carries them; every other compiler's `f!` is a
+        # Julia function the solver differentiates itself.
+        @test CSEL._ode_derivatives(esm_problem(_CSEL_AGREE[1], (0.0, 1.0))) ==
+              NamedTuple()
+    end
+
+    @testset "build_evaluator is deprecated, and exported until it is removed" begin
+        # API_SPEC §8 item 23: the extension seam under the runners is retired
+        # — `esm_problem` is the way in — and the name that remains is a
+        # deprecated alias kept for one minor version so a downstream package
+        # keeps running while it migrates. It stays EXPORTED for that minor: a
+        # downstream that calls the bare name after `using EarthSciAST`
+        # (EarthSciASTDiff does) must hear the warning, not `UndefVarError`.
+        @test :build_evaluator in names(EarthSciAST)
+        @test :esm_problem in names(EarthSciAST)
+        # The BARE name, as that downstream spells it: an unexported alias
+        # would make this line an `UndefVarError`.
+        @test_logs (:warn,) match_mode = :any build_evaluator(load_path(_CSEL_AGREE[1]))
+        # The alias still builds, and builds the same thing the private entry
+        # point does: a deprecation that changed the answer would be a second
+        # break hiding inside the first.
+        file = load_path(_CSEL_AGREE[1])
+        dep = @test_logs (:warn,) match_mode = :any CSEL.build_evaluator(file)
+        priv = CSEL._build_evaluator(load_path(_CSEL_AGREE[1]))
+        @test isequal(dep[2], priv[2])          # u0
+        @test dep[5] == priv[5]                 # var_map
+        du_dep = zeros(length(dep[2])); dep[1](du_dep, dep[2], dep[3], 0.0)
+        du_priv = zeros(length(priv[2])); priv[1](du_priv, priv[2], priv[3], 0.0)
+        @test isequal(du_dep, du_priv)
+
+        # What the seam used to publish now hangs on the Problem, for every
+        # compiler rather than only for the out-of-place build form.
+        prob = esm_problem(_CSEL_AGREE[1], (0.0, 1.0))
+        @test forcing_buffers(prob) isa NamedTuple
+        @test forcing_buffer_index(prob) isa Dict{String,Int}
+        @test length(forcing_buffers(prob)) == length(forcing_buffer_index(prob))
+        insp = BuildInspection()
+        esm_problem(_CSEL_AGREE[1], (0.0, 1.0); inspect = insp)
+        @test compiler_report(insp) === insp.compiler_report
+        @test compiler_report(insp).compiler === :native
+    end
+
+    @testset "run_inline_tests takes a compiler" begin
+        f = _CSEL_AGREE[1]
+        native = run_inline_tests(f)
+        interp = run_inline_tests(f; compiler = :interpreter)
+        @test !isempty(native)
+        @test length(native) == length(interp)
+        @test all(r -> r.passed, native)
+        @test all(r -> r.passed, interp)
+        # The per-document option wins over the keyword, the same precedence
+        # every other `InlineTestOptions` field has.
+        viaopts = run_inline_tests(f;
+            options_for = _ -> InlineTestOptions(compiler = :interpreter))
+        @test length(viaopts) == length(native)
+        @test all(r -> r.passed, viaopts)
+    end
+end

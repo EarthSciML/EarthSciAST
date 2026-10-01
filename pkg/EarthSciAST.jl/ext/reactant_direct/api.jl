@@ -5,7 +5,7 @@
 """
     DirectRHS
 
-Callable wrapper over an out-of-place RHS (`build_evaluator(model; form = :oop)`)
+Callable wrapper over an out-of-place RHS (`EarthSciAST._build_evaluator(model; form = :oop)`)
 whose body, under `Reactant.@compile`, constructs StableHLO DIRECTLY from the
 compiled tree-walk IR rather than tracing the broadcast emitter.
 
@@ -56,11 +56,11 @@ end
 """
     direct_rhs(f; var_map = nothing) -> DirectRHS
 
-Wrap the out-of-place RHS `f` (`build_evaluator(model; form = :oop)[1]`) in the
+Wrap the out-of-place RHS `f` (`EarthSciAST._build_evaluator(model; form = :oop)[1]`) in the
 direct StableHLO emitter, and return a callable `(u, p, t) -> du` to compile:
 
 ```julia
-fo, u0, p, _, vmap = build_evaluator(doc; form = :oop)
+fo, u0, p, _, vmap = EarthSciAST._build_evaluator(doc; form = :oop)
 d   = EarthSciASTReactantExt.direct_rhs(fo; var_map = vmap)
 ur  = Reactant.ConcreteRArray(u0)
 pr  = NamedTuple{keys(p)}(map(Reactant.ConcreteRNumber, values(p)))
@@ -120,7 +120,7 @@ end
 The explicit-buffers form:
 
 ```julia
-fo  = build_evaluator(model; form = :oop, param_arrays = forcing)[1]
+fo  = EarthSciAST._build_evaluator(model; form = :oop, param_arrays = forcing)[1]
 db  = EarthSciASTReactantExt.direct_rhs_with_buffers(fo)
 dev = map(Reactant.ConcreteRArray, forcing_buffers(fo))
 xla = Reactant.@compile db(ur, pr, tr, dev)

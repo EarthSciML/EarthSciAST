@@ -1,0 +1,143 @@
+name: Native Coverage
+
+# The native coverage ledger (tests/conformance/native_coverage/README.md,
+# CONFORMANCE_SPEC §5.44.6). Every .esm under tests/ plus every .esm in
+# EarthSciML/EarthSciModels is built through `esm_problem` under `native` and
+# under `interpreter`, in Julia and in Rust, and the documents the interpreter
+# builds and native does not are checked against the committed ledger of each
+# binding. The ledger only shrinks:
+#
+#   * a document native newly refuses is RED;
+#   * a ledgered document native now builds is RED until its entry is removed.
+#
+# Weekly rather than per push. The sweep builds about 1,200 documents twice per
+# binding, and half the corpus is another repository's, so a push here is not
+# what moves most of it. `workflow_dispatch` runs it on demand, e.g. on a branch
+# that burns entries down.
+#
+# The two bindings are separate jobs: each is its own verdict, and one binding's
+# red must not hide the other's.
+
+on:
+  schedule:
+    # Mondays, 07:00 UTC.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+    inputs:
+      earthscimodels_ref:
+        description: 'EarthSciModels ref to check out (default: its default branch)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The Julia the compiler-agreement and conformance jobs run at.
+  JULIA_VERSION: '1.10'
+
+jobs:
+  census:
+    name: Native coverage census (${{ matrix.binding }})
+    runs-on: ubuntu-latest
+    # Cold: the Julia depot or the Rust release build, then two sweeps of the
+    # corpus. A budget, not a measurement.
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        binding: [julia, rust]
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+      # Both checkouts under the workspace, side by side: the census names a
+      # corpus document `tests/…` or `EarthSciModels/…` relative to them.
+      - uses: actions/checkout@v4
+        with:
+          path: EarthSciAST
+
+      - uses: actions/checkout@v4
+        with:
+          repository: EarthSciML/EarthSciModels
+          ref: ${{ inputs.earthscimodels_ref || '' }}
+          path: EarthSciModels
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Julia
+        if: matrix.binding == 'julia'
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ env.JULIA_VERSION }}
+
+      - name: Cache the Julia depot
+        if: matrix.binding == 'julia'
+        uses: actions/cache@v4
+        with:
+          path: ~/.julia
+          key: ${{ runner.os }}-native-coverage-${{ env.JULIA_VERSION }}-${{ hashFiles('EarthSciAST/pkg/EarthSciAST.jl/Project.toml', 'EarthSciAST/pkg/EarthSciAST.jl/scripts/compiler_agreement_env/Project.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-native-coverage-${{ env.JULIA_VERSION }}-
+
+      # Manifest.toml is gitignored repo-wide, so `Pkg.develop` is what points
+      # the census environment at THIS checkout rather than a registered
+      # EarthSciAST. Instantiating here keeps the precompile out of the census
+      # step, where it would count against every worker's first document.
+      - name: Instantiate the Julia census environment
+        if: matrix.binding == 'julia'
+        working-directory: EarthSciAST
+        run: |
+          julia --project=pkg/EarthSciAST.jl/scripts/compiler_agreement_env -e '
+            using Pkg
+            Pkg.develop(path="pkg/EarthSciAST.jl")
+            Pkg.instantiate()
+            Pkg.precompile()
+          '
+
+      - name: Setup Rust (stable)
+        if: matrix.binding == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        if: matrix.binding == 'rust'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-native-coverage-cargo-${{ hashFiles('EarthSciAST/pkg/earthsci-ast-rs/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-native-coverage-cargo-
+
+      # Two workers per sweep: a hosted runner has four cores, and the Julia
+      # census runs its native and interpreter sweeps at once.
+      - name: Census and ledger check (${{ matrix.binding }})
+        working-directory: EarthSciAST
+        run: |
+          ./scripts/native-coverage-census.sh \
+            --earthscimodels ../EarthSciModels \
+            --out ../native-coverage \
+            --bindings ${{ matrix.binding }} \
+            --jobs 2 \
+            --timeout 600
+
+      - name: Upload the census
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-coverage-${{ matrix.binding }}-${{ github.run_number }}
+          path: |
+            native-coverage/*.jsonl
+            native-coverage/*_report.json
+            native-coverage/corpus.txt
+            native-coverage/provenance.json
+          if-no-files-found: warn
+          retention-days: 30

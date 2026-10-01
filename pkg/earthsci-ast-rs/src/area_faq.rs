@@ -150,6 +150,12 @@ pub fn polygon_area_faq(ring: &[(f64, f64)], manifold: Manifold) -> f64 {
     // The FAQ node is built HERE (`shoelace_faq_node` / `spherical_excess_faq_node`)
     // out of evaluable-core ops only, so `eval_expression`'s operator gate cannot
     // reject it — it is not user input.
+    //
+    // Outside `native`'s refusal (esm-libraries-spec §2.5.10) for the same
+    // reason `eval_buildtime_field` is: the node is this function's own
+    // construction over ONE ring's vertices, not a rule of the document, and
+    // it runs once at build. The document's rules that CONSUME the areas are
+    // on the tape, and they are what the refusal gates.
     let value = eval_expression(&faq, &inputs, &[], &[], 0.0)
         .expect("the polygon-area FAQ node is built from evaluable ops by construction");
     match value {

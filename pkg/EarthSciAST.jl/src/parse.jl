@@ -675,7 +675,7 @@ function coerce_esm_file(data::Any)::EsmFile
     # document came through a path that carries surviving references WITHOUT the
     # load pipeline — the tree-walk front-door's `flattened_to_esm`
     # reconstitution (esm-spec §9.6.4 Option B), or a direct
-    # `coerce_esm_file`/`build_evaluator(dict)` call on a lowered 0.9.0 emit.
+    # `coerce_esm_file`/`_build_evaluator(dict)` call on a lowered 0.9.0 emit.
     # Capture them as `component_templates` so `apply_expression_template` nodes
     # in the coerced expressions stay resolvable; without this the references
     # compile into opaque op nodes that only fail at RHS evaluation time.

@@ -185,8 +185,8 @@ end
 # ========================================================================
 # The DEFAULT array-kernel build. Returns kernels or `nothing` (fall back to the
 # existing symbolic-stencil / per-cell chain, `covered` untouched).
-# `ESS_STENCIL_DISABLE=1` forces the per-cell reference — the differential-test
-# escape hatch, and the only switch on this path.
+# With this tier off the equation takes the per-cell reference, which is what
+# the differential tests compare against.
 
 # Reusable caches for the per-cell signature (branch template memo + branch-key
 # guard memo + a scratch IOBuffer), shared across the whole equation's sweep.
@@ -235,10 +235,9 @@ _AffineSig() = _AffineSig(Dict{String,_StencilBranch}(), IdDict{OpExpr,Bool}(), 
 # verification would fail. It is reference-free by construction: keying the
 # deviation from an affine model derived at some probe cell silently poisons the
 # scan whenever that probe sits on the clamped side of the transition being
-# looked for. Ghost membership (a state slot resolving to 0) keeps its own bit,
-# as before. `ESS_LANE_AFFINE_KEY_DISABLE=1` restores the Δ-keyed signature byte
-# for byte.
-_lane_affine_key_disabled() = get(ENV, "ESS_LANE_AFFINE_KEY_DISABLE", "") == "1"
+# looked for. Ghost membership (a state slot resolving to 0) keeps its own bit.
+# Off, the signature is the Δ-keyed one.
+_lane_affine_key_disabled() = !_compiler_plan_now().lane_affine_key
 
 # Is this subscript expression an AFFINE function of the loop indices — a sum of
 # integer literals and loop-index terms with integer coefficients? Such an
@@ -724,9 +723,14 @@ function _desc_key(d::_AccDesc)
     k = d.kind
     k === _AK_STATE_AFFINE && return (0x1, UInt64(0), d.delta, 0, 0, 0)
     k === _AK_LOOP_IDX     && return (0x2, UInt64(0), d.dim, 0, 0, 0)
-    k === _AK_CONST_BOX    && return (0x3, objectid(d.arr), d.s1, d.s2, d.s3, d.off)
-    k === _AK_FORCING_BOX  && return (0x4, objectid(d.arr), d.s1, d.s2, d.s3, d.off)
-    k === _AK_STATE_TBL_BOX && return (0x5, objectid(d.conn), d.s1, d.s2, d.s3, d.off)
+    if k === _AK_CONST_BOX || k === _AK_FORCING_BOX || k === _AK_STATE_TBL_BOX
+        tag = k === _AK_CONST_BOX ? 0x3 : k === _AK_FORCING_BOX ? 0x4 : 0x5
+        id = objectid(k === _AK_STATE_TBL_BOX ? d.conn : d.arr)
+        # A box of rank above 3 appends the strides of its dims past the third,
+        # so the key stays exact at every rank (and unchanged at rank ≤ 3).
+        isempty(d.sx) || return (tag, id, d.s1, d.s2, d.s3, d.off, Tuple(d.sx))
+        return (tag, id, d.s1, d.s2, d.s3, d.off)
+    end
     return (0xff, objectid(d), 0, 0, 0, 0)
 end
 function _lane_repl_key(lane_repl)
@@ -736,7 +740,9 @@ function _lane_repl_key(lane_repl)
             print(io, 'L', r.v, ';')
         else
             t = _desc_key((r::_AccRepl).desc)
-            print(io, 'A', t[1], ',', t[2], ',', t[3], ',', t[4], ',', t[5], ',', t[6], ';')
+            print(io, 'A', t[1], ',', t[2], ',', t[3], ',', t[4], ',', t[5], ',', t[6])
+            length(t) > 6 && print(io, ',', t[7])
+            print(io, ';')
         end
     end
     return String(take!(io))
@@ -746,7 +752,7 @@ end
 # box dims (fastest-first, matching `Iterators.product` fill order) and the
 # offset that maps the cell multi-index `midx` to `off + Σ(midx_d-1)·s_d`.
 function _box_local_addr(box, D)
-    s = zeros(Int, 3)
+    s = zeros(Int, max(D, 3))
     acc = 1
     for d in 1:D
         s[d] = acc
@@ -757,48 +763,6 @@ function _box_local_addr(box, D)
         off -= (first(box[d]) - 1) * s[d]
     end
     return s, off, acc            # acc == number of cells in the box
-end
-
-# ── ESS_AK_TBL_DEBUG=1: table-materialization ATTRIBUTION log ──────────────
-# Every per-box table a build materializes (a lane the affine derivation could
-# not prove) records `(kind, var_name, rendered index args)` → (boxes, total
-# entries) in `_AK_TBL_LOG`. Debug-only observability — the log is written
-# only under the env flag and read by probes; it never feeds the build.
-const _AK_TBL_LOG = Dict{String,Tuple{Int,Int}}()
-_ak_tbl_debug() = get(ENV, "ESS_AK_TBL_DEBUG", "") == "1"
-_reset_ak_tbl_log!() = empty!(_AK_TBL_LOG)
-function _ak_render(io::IO, e::ASTExpr)
-    if e isa VarExpr
-        print(io, e.name)
-    elseif e isa IntExpr
-        print(io, e.value)
-    elseif e isa NumExpr
-        print(io, e.value)
-    elseif e isa OpExpr
-        print(io, e.op, '(')
-        for (i, a) in enumerate(e.args)
-            i > 1 && print(io, ',')
-            _ak_render(io, a)
-        end
-        print(io, ')')
-    else
-        print(io, '?')
-    end
-end
-function _ak_tbl_log!(kind::Symbol, rec::_LaneRecipe, len::Int)
-    _ak_tbl_debug() || return nothing
-    io = IOBuffer()
-    print(io, kind, ' ', rec.var_name, '[')
-    for (i, a) in enumerate(rec.idx_args)
-        i > 1 && print(io, ',')
-        _ak_render(io, a)
-    end
-    print(io, ']')
-    key = String(take!(io))
-    length(key) > 300 && (key = key[1:300] * "…")
-    n, tot = get(_AK_TBL_LOG, key, (0, 0))
-    _AK_TBL_LOG[key] = (n + 1, tot + len)
-    return nothing
 end
 
 # ── LANE-AFFINE STATE BOX (a state gather on its OWN grid) ────────────────
@@ -824,12 +788,12 @@ end
 # box and every equation of the build through the pool below, and it is the same
 # size as the variable — never O(#cells) per lane.
 #
-# `ESS_STATE_BOX_DISABLE=1` restores the dense per-box table byte for byte.
-_state_box_disabled() = get(ENV, "ESS_STATE_BOX_DISABLE", "") == "1"
+# Off, every lane gets the dense per-box table.
+_state_box_disabled() = !_compiler_plan_now().state_box
 
 # Build-scoped, mirroring `_LANE_INTERN_POOL`: installed in
 # `_build_evaluator_impl`, torn down in its `finally`. `nothing` outside a build
-# (or under the kill switch) simply means the table is not shared.
+# (or with the lowering off) simply means the table is not shared.
 const _STATE_SLOT_TBL_POOL =
     Base.RefValue{Union{Nothing,Dict{Tuple{String,Int,Int},Vector{Int}}}}(nothing)
 
@@ -860,6 +824,41 @@ function _state_slot_block(rec::_LaneRecipe)
     return (lo0, hi0)
 end
 
+# One recipe value per cell of `box`, in box-local (first index fastest) order:
+# the compiled lane evaluator where it answers, `_eval_recipe` where it does
+# not (see "Compiled lane evaluation", stencil.jl).
+function _fill_box_table!(tbl::Vector, rec::_LaneRecipe, idx_names, box, D,
+                          var_map, const_arrays)
+    le = _lane_evaluator(rec, collect(String, idx_names), var_map, const_arrays)
+    _fill_box_table_nt!(tbl, rec, le, idx_names, ntuple(d -> UnitRange{Int}(box[d]), D),
+                        var_map, const_arrays)
+    return tbl
+end
+
+function _fill_box_table_nt!(tbl::Vector{T}, rec::_LaneRecipe, le, idx_names,
+                             rngs::NTuple{N,UnitRange{Int}}, var_map,
+                             const_arrays) where {T,N}
+    env = Dict{String,Int}()
+    loop = Vector{Int}(undef, N)
+    j = 0
+    for I in CartesianIndices(rngs)
+        j += 1
+        @inbounds for d in 1:N
+            loop[d] = I[d]
+        end
+        if le !== nothing
+            v, ok = _lane_eval(le, loop)
+            if ok
+                @inbounds tbl[j] = v
+                continue
+            end
+        end
+        tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, loop), var_map,
+                              const_arrays)::T
+    end
+    return tbl
+end
+
 # Materialize a NON-AFFINE state lane as a per-box slot table (Stage 2 of the
 # array-IR unification): one `_eval_recipe` per box cell — the SAME resolution
 # the per-cell fallback would run — stored densely in box-local layout, with 0
@@ -879,22 +878,15 @@ function _materialize_state_tbl_inner(rec::_LaneRecipe, idx_names, box, D,
                                 var_map, const_arrays)
     s, off, len = _box_local_addr(box, D)
     tbl = Vector{Int}(undef, len)
-    env = Dict{String,Int}()
-    j = 0
-    for loop in Iterators.product((box[d] for d in 1:D)...)
-        j += 1
-        tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
-                              var_map, const_arrays)::Int
-    end
-    _ak_tbl_log!(:state, rec, len)
-    return _AccRepl(_AccStateTblBox(tbl, s[1], s[2], s[3], off))
+    _fill_box_table!(tbl, rec, idx_names, box, D, var_map, const_arrays)
+    return _AccRepl(_AccStateTblBox(tbl, s, off))
 end
 
-# Kill switch for the non-affine LIVE-forcing lane table lowering below
-# (perf-plan A2, prototypes/perf-gap-closure-plan.md): `ESS_OBSREF_DISABLE=1`
-# restores the pre-A2 whole-equation per-cell fallback byte-for-byte — the
-# differential-oracle escape hatch (test/stencil_affine_pgather_tbl_test.jl).
-_obsref_disabled() = get(ENV, "ESS_OBSREF_DISABLE", "") == "1"
+# Gate for the non-affine LIVE-forcing lane table lowering below (perf-plan A2,
+# prototypes/perf-gap-closure-plan.md). Off, the whole equation takes the
+# per-cell fallback — the differential oracle
+# (test/stencil_affine_pgather_tbl_test.jl).
+_obsref_disabled() = !_compiler_plan_now().obsref
 
 # Materialize a NON-AFFINE live-forcing (pgather) lane as a per-box INDEX table
 # into the ALIASED live buffer (perf-plan A2). The forcing chains that observed
@@ -925,15 +917,8 @@ function _materialize_pgather_tbl_inner(rec::_LaneRecipe, idx_names, box, D,
     pg = rec.arr::_PGatherArray
     s, off, len = _box_local_addr(box, D)
     tbl = Vector{Int}(undef, len)
-    env = Dict{String,Int}()
-    j = 0
-    for loop in Iterators.product((box[d] for d in 1:D)...)
-        j += 1
-        tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
-                              var_map, const_arrays)::Int
-    end
-    _ak_tbl_log!(:pgather, rec, len)
-    return _AccRepl(_AccArrTblBox(pg.flat, tbl, s[1], s[2], s[3], off))
+    _fill_box_table!(tbl, rec, idx_names, box, D, var_map, const_arrays)
+    return _AccRepl(_AccArrTblBox(pg.flat, tbl, s, off))
 end
 
 # Materialize a NON-AFFINE const lane as a dense per-box VALUE table, addressed
@@ -959,17 +944,10 @@ function _materialize_const_box_inner(rec::_LaneRecipe, idx_names, box, D,
                                 var_map, const_arrays)
     s, off, len = _box_local_addr(box, D)
     vals = Vector{Float64}(undef, len)
-    env = Dict{String,Int}()
-    j = 0
-    for loop in Iterators.product((box[d] for d in 1:D)...)
-        j += 1
-        vals[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
-                               var_map, const_arrays)::Float64
-    end
+    _fill_box_table!(vals, rec, idx_names, box, D, var_map, const_arrays)
     v1 = vals[1]
     all(==(v1), vals) && return _LitRepl(v1)   # exhaustively verified invariant
-    _ak_tbl_log!(rec.kind == LANE_EXPRTBL ? :exprtbl : :const, rec, len)
-    return _AccRepl(_AccConstBox(vals, s[1], s[2], s[3], off))
+    return _AccRepl(_AccConstBox(vals, s, off))
 end
 
 # Derive one lane's lowering for a box and VERIFY it is uniform across the box
@@ -979,8 +957,8 @@ end
 # (pgather) index all MATERIALIZE per-box tables instead of declining — see
 # `_materialize_state_tbl` / `_materialize_const_box` /
 # `_materialize_pgather_tbl` (the pgather table holds indices into the aliased
-# live buffer, so it stays refresh-live; `ESS_OBSREF_DISABLE=1` restores the
-# pre-A2 whole-equation per-cell fallback for the differential oracle). A live
+# live buffer, so it stays refresh-live; with that lowering off the whole
+# equation takes the per-cell fallback, the differential oracle). A live
 # forcing lane otherwise lowers to `_AccForcingBox` over the aliased buffer
 # (never folded to a literal, so it stays refresh-live).
 # `structural` is `_affine_idx_expr` over every one of the lane's subscripts.
@@ -1050,7 +1028,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
             blk = _state_slot_block(rec)
             if blk !== nothing
                 lo0, hi0 = blk
-                ls = zeros(Int, 3)
+                ls = zeros(Int, max(D, 3))
                 ok = lo0 <= slot_rep <= hi0
                 if ok
                     for d in 1:D
@@ -1082,8 +1060,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                     end
                 end
                 ok && return _AccRepl(_AccStateTblBox(
-                    _state_slot_identity(rec.var_name, lo0, hi0),
-                    ls[1], ls[2], ls[3], o))
+                    _state_slot_identity(rec.var_name, lo0, hi0), ls, o))
             end
         end
         return _materialize_state_tbl(rec, idx_names, box, D, var_map, const_arrays)
@@ -1137,7 +1114,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         lenv = Dict{String,Int}()
         clin(loop) = _recipe_const_lin(rec, _set_env!(lenv, idx_names, loop), const_arrays)
         lin_rep = clin(rep)
-        s = zeros(Int, 3)
+        s = zeros(Int, max(D, 3))
         for d in 1:D
             if !thin[d]
                 l2 = copy(rep); l2[d] += 1
@@ -1160,9 +1137,9 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         # and folds to a literal. `flat[_recipe_const_lin(...)] ==
         # _eval_recipe(...)` (see `_recipe_const_lin`), so `val_rep` is that
         # element and the fold is bit-identical.
-        (s[1] == 0 && s[2] == 0 && s[3] == 0) && return _LitRepl(Float64(val_rep))
+        all(iszero, s) && return _LitRepl(Float64(val_rep))
         arr_flat = get!(flat_cache, rec.arr) do; Float64.(vec(rec.arr)); end
-        return _AccRepl(_AccConstBox(arr_flat, s[1], s[2], s[3], off))
+        return _AccRepl(_AccConstBox(arr_flat, s, off))
     else  # LANE_PGATHER — LIVE forcing gather
         # `_eval_recipe` returns the flat LINEAR INDEX into the forcing buffer (its
         # own grid), so this is the LANE_CONST derivation applied to the INDEX, not
@@ -1173,7 +1150,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         # (the aliased live buffer) straight through, NEVER a copy.
         pg = rec.arr::_PGatherArray
         lin_rep = ev(rep)
-        s = zeros(Int, 3)
+        s = zeros(Int, max(D, 3))
         for d in 1:D
             if !thin[d]
                 l2 = copy(rep); l2[d] += 1
@@ -1200,7 +1177,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
             return _materialize_pgather_tbl(rec, idx_names, box, D,
                                             var_map, const_arrays)
         end
-        return _AccRepl(_AccForcingBox(pg.flat, s[1], s[2], s[3], off))
+        return _AccRepl(_AccForcingBox(pg.flat, s, off))
     end
 end
 
@@ -1249,13 +1226,32 @@ function _box_corners(box)
         Iterators.product(((first(box[d]), last(box[d])) for d in 1:D)...)]
 end
 
+# A contraction the affine tier compiles as a loop rather than an unroll: its
+# contracted index names (kept symbolic in the body, as extra loop dims), their
+# ranges, the ⊕ and its 0̄. Every range is contiguous with unit step.
+struct _AffineReduce
+    names::Vector{String}
+    ranges::Vector{UnitRange{Int}}
+    op::Symbol
+    zerobar::Float64
+end
+
 # Emit one `_AccKernel` for a box: derive + verify every lane, then lower the
 # (memoized) sentinel template to a shared access spine.
+#
+# With `reduce`, the box's trailing `length(reduce.names)` dims are the
+# contraction's (`idx_names` names them too, and `strides` is zero there, so a
+# corner's output slot ignores them): the lanes are derived over the whole
+# box, and the kernel loops only the output dims, its spine the `_NK_AREDUCE`
+# fold of the lowered body over the contracted ones.
 function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
                               body, ctx_proto, var_map, const_arrays,
                               param_sym_set, reg_funcs, base, strides,
-                              lhs_var, lhs_idx_args, sig::_AffineSig)
+                              lhs_var, lhs_idx_args, sig::_AffineSig,
+                              reduce::Union{Nothing,_AffineReduce}=nothing;
+                              out_ranges=nothing)
     D = length(box)
+    nout = reduce === nothing ? D : D - length(reduce.names)
     rep = Int[first(box[d]) for d in 1:D]
     thin = Bool[length(box[d]) == 1 for d in 1:D]
     corners = _box_corners(box)
@@ -1288,16 +1284,74 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
     spine, acc, cse, subs = @_bench_hot :spine_lower get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
         a = _AccDesc[]
         raw = _lower_to_access(tmpl, lane_repl, a, subcalls)
+        if reduce !== nothing
+            raw = _mknode(kind=_NK_AREDUCE, op=reduce.op, literal=reduce.zerobar,
+                          payload=_AReduceSpec(collect(nout+1:D),
+                                               UnitRange{Int}[box[d] for d in nout+1:D]),
+                          children=_Node[raw])
+        end
         cs_spine, cse = _build_acc_cse(raw, a)   # per-cell CSE (shared subtrees → scratch)
         (cs_spine, a, cse, _collect_subkernels(cs_spine, cse))
     end
-    cs = _CellSet(collect(Int, strides), UnitRange{Int}[box[d] for d in 1:D], base)
+    slab = out_ranges === nothing ? Bool[] :
+           Bool[length(box[d]) == 1 && (first(box[d]) == first(out_ranges[d]) ||
+                                        last(box[d]) == last(out_ranges[d]))
+                for d in 1:nout]
+    cs = _CellSet(Int[strides[d] for d in 1:nout],
+                  UnitRange{Int}[box[d] for d in 1:nout], base, Int[], slab)
     push!(kernels, _AccKernel(cs, spine, acc, _FixedBound(0), 0.0, cse, subs))
 end
 
-# Mark every output slot a box owns (cheap O(box cells) bit-ops — the sole
-# remaining O(#cells) step, no tree-walk), detecting duplicate derivatives.
+# Mark every output slot a box owns (O(box cells) bit-ops — the sole remaining
+# O(#cells) step, no tree-walk), detecting duplicate derivatives. When the slot
+# map is one-to-one on the box, the box is checked and then marked a run of the
+# first loop index at a time, word-wise; a box that finds a slot already taken,
+# or whose map is not shown one-to-one, takes the cell-by-cell walk, which
+# raises the error at the first duplicate in loop order.
 function _mark_box_covered!(covered, box, base, strides, D, lhs_var, lhs_idx_args, idx_names)
+    if D >= 1 && strides[1] == 1 && _affine_injective_on(Int[strides[d] for d in 1:D], box)
+        rngs = ntuple(d -> UnitRange{Int}(box[d]), D)
+        _mark_box_runs!(covered, rngs, base, strides) && return nothing
+    end
+    _mark_box_cells!(covered, box, base, strides, D, lhs_var, lhs_idx_args, idx_names)
+end
+
+# `false`, with `covered` untouched, when a slot of the box is already set.
+function _mark_box_runs!(covered::BitVector, rngs::NTuple{N,UnitRange{Int}}, base::Int,
+                         strides) where {N}
+    st = ntuple(d -> Int(strides[d]), N)
+    r1 = rngs[1]
+    outer = CartesianIndices(Base.tail(rngs))
+    run_start(J) = (o = base + first(r1); @inbounds for d in 2:N; o += J[d-1] * st[d]; end; o)
+    for J in outer
+        lo = run_start(J)
+        _bits_any(covered, lo, lo + length(r1) - 1) && return false
+    end
+    for J in outer
+        lo = run_start(J)
+        fill!(view(covered, lo:(lo + length(r1) - 1)), true)
+    end
+    return true
+end
+
+# Whether any bit of `B[lo:hi]` is set, a 64-bit word at a time.
+function _bits_any(B::BitVector, lo::Int, hi::Int)
+    lo > hi && return false
+    checkbounds(B, lo:hi)
+    ch = B.chunks
+    w1 = (lo - 1) >>> 6 + 1
+    w2 = (hi - 1) >>> 6 + 1
+    m1 = typemax(UInt64) << ((lo - 1) & 63)
+    m2 = typemax(UInt64) >>> (63 - ((hi - 1) & 63))
+    w1 == w2 && return (@inbounds(ch[w1]) & m1 & m2) != 0
+    (@inbounds(ch[w1]) & m1) != 0 && return true
+    @inbounds for w in (w1 + 1):(w2 - 1)
+        ch[w] != 0 && return true
+    end
+    return (@inbounds(ch[w2]) & m2) != 0
+end
+
+function _mark_box_cells!(covered, box, base, strides, D, lhs_var, lhs_idx_args, idx_names)
     env = Dict{String,Int}()
     @inbounds for loop in Iterators.product((box[d] for d in 1:D)...)
         o = _box_oln(base, strides, loop, D)
@@ -1309,27 +1363,36 @@ function _mark_box_covered!(covered, box, base, strides, D, lhs_var, lhs_idx_arg
     end
 end
 
-# Compile a no-contraction array equation via the affine polyhedral build.
+# Compile an array equation via the affine polyhedral build.
 # Returns `Vector{_AccKernel}`, or `nothing` to fall back to the per-cell chain.
+#
+# With `reduce` the equation is a contraction `⊕_{k…} rhs_body(i…, k…)` whose
+# contracted indices `reduce.names` stay symbolic: they join the output indices
+# as trailing loop dims, the cut scan and the lane derivation see them like any
+# other dim, and each output box's kernel folds the body over them at run time
+# (`_NK_AREDUCE`). A contracted dim that the scan cuts (a ghost or region
+# transition along it) is declined, so the caller can unroll instead: one
+# kernel's fold must walk its contracted range in one piece to keep the order.
 function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
                              range_iters, lhs_body::OpExpr,
                              resolved_obs::Dict{String,ASTExpr},
-                             array_var_info, var_map::Dict{String,Int},
+                             array_var_info, var_map::AbstractDict{String,Int},
                              const_arrays::AbstractDict, pgather::AbstractDict,
                              param_sym_set, reg_funcs, covered::BitVector;
                              template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,
                              # A3: the per-BUILD cross-equation store (variant +
                              # bound-body caches, shared obs-inline memo).
-                             # `nothing` restores the per-equation caches
-                             # (ESS_XEQ_VARIANT_DISABLE=1 / storeless callers).
-                             xeq::Union{Nothing,_XEqStore}=nothing)
+                             # `nothing` is the per-equation caches
+                             # (cross-equation variants off / storeless callers).
+                             xeq::Union{Nothing,_XEqStore}=nothing,
+                             reduce::Union{Nothing,_AffineReduce}=nothing)
     (lhs_body.op == "D" && !isempty(lhs_body.args) &&
      lhs_body.args[1] isa OpExpr && (lhs_body.args[1]::OpExpr).op == "index" &&
      !isempty((lhs_body.args[1]::OpExpr).args) &&
      (lhs_body.args[1]::OpExpr).args[1] isa VarExpr) || return nothing
 
     D = length(idx_names)
-    (1 <= D <= 3) || return nothing               # multi-index capped at 3 (latlon3d)
+    D >= 1 || return nothing
     ranges = UnitRange{Int}[]
     for r in range_iters
         (length(r) >= 1 && collect(r) == collect(first(r):last(r))) || return nothing
@@ -1367,36 +1430,29 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
     lhs_var = (inner.args[1]::VarExpr).name
     lhs_idx_args = inner.args[2:end]
     length(lhs_idx_args) == D || return nothing
+    # The loop dims: the output's, then (for a contraction kept as a loop) the
+    # contracted ones.
+    all_names = reduce === nothing ? idx_names : vcat(idx_names, reduce.names)
+    all_ranges = reduce === nothing ? ranges : vcat(ranges, reduce.ranges)
+    Dall = length(all_names)
 
-    if get(ENV, "ESS_STENCIL_DEBUG", "") == "1" && sites !== nothing
-        # IDENTITY-MEMOIZED walk (`foreach_subexpr_once`) — NOTE the metric
-        # changed with it (ESS-0hh): `reachable-in-body` used to count PATHS to
-        # each site root and now counts DISTINCT reachable roots. Distinct is
-        # the meaningful diagnostic — the compile-once tier compiles each root
-        # once regardless of in-degree, and `sites` is keyed by identity — and
-        # the per-path count made this debug print itself exponential on the
-        # obs-inlined body, which is a compact DAG by construction
-        # (`_sub_preserving`): enabling debugging must never hang the build.
-        hit = 0
-        foreach_subexpr_once(body) do x
-            x isa OpExpr && haskey(sites, x) && (hit += 1)
-            nothing
-        end
-        println(stderr, "[compile-once] sites=", length(sites),
-                " reachable-in-body=", hit)
-        flush(stderr)
-    end
     tctx = sites === nothing ? nothing :
            _TemplateCtx(sites, var_map, param_sym_set, reg_funcs;
-                        idxkey=_idxset_key(idx_names), store=xeq)
-    ctx_proto = _StencilCtx(Set{String}(idx_names), _LaneRecipe[], Dict{String,Int}(),
+                        idxkey=_idxset_key(all_names), store=xeq)
+    ctx_proto = _StencilCtx(Set{String}(all_names), _LaneRecipe[], Dict{String,Int}(),
                             array_var_info, const_arrays, pgather, tctx)
     sig = _AffineSig()
     try
         base, strides = _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
-        cuts = @_bench :affine_cuts _affine_cut_points(sig, body, idx_names, ranges, ctx_proto,
+        # The output slot does not move along a contracted dim.
+        all_strides = reduce === nothing ? strides : vcat(strides, zeros(Int, Dall - D))
+        cuts = @_bench :affine_cuts _affine_cut_points(sig, body, all_names, all_ranges, ctx_proto,
                                   var_map, param_sym_set, reg_funcs,
-                                  (base, strides))
+                                  (base, all_strides))
+        for d in D+1:Dall
+            length(cuts[d]) == 1 ||
+                throw(_StencilFallback("affine reduction: contracted axis is cut"))
+        end
         segs = [_segments(cuts[d], ranges[d]) for d in 1:D]
         kernels = _AccKernel[]
         spine_cache = Dict{String,Tuple{_Node,Vector{_AccDesc},_AccCSE,Vector{_AccKernel}}}()
@@ -1404,11 +1460,13 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
         boxes = Vector{UnitRange{Int}}[]
         for segtuple in Iterators.product(segs...)
             box = UnitRange{Int}[segtuple[d] for d in 1:D]
-            @_bench :affine_box _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
+            reduce === nothing || append!(box, reduce.ranges)
+            @_bench :affine_box _process_affine_box!(kernels, spine_cache, flat_cache, box, all_names,
                                  body, ctx_proto, var_map, const_arrays,
-                                 param_sym_set, reg_funcs, base, strides,
-                                 lhs_var, lhs_idx_args, sig)
-            push!(boxes, box)
+                                 param_sym_set, reg_funcs, base, all_strides,
+                                 lhs_var, lhs_idx_args, sig, reduce;
+                                 out_ranges=ranges)
+            push!(boxes, box[1:D])
         end
         # Only after every box is verified: mark covered (untouched on fallback).
         for box in boxes
@@ -1417,8 +1475,7 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
         return kernels
     catch err
         if err isa _StencilFallback
-            get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
-                @info "affine stencil fallback" reason = err.reason
+            _note_decline!(:affine, Symbol(err.reason))
             return nothing
         end
         rethrow()

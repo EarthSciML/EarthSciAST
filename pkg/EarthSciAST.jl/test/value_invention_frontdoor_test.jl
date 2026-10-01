@@ -93,7 +93,7 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
 
         # (2) build_evaluator runs end-to-end: the derived-index-set throw is gone,
         #     only the geometric `area_eff` FAQ remains in the ODE.
-        f!, u0, p, _, vmap = build_evaluator(raw; model_name="EdgeEnumerationAreaEff",
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(raw; model_name="EdgeEnumerationAreaEff",
                                              const_arrays=ca)
         @test sort(collect(keys(vmap))) == ["area_eff[1]", "area_eff[2]"]
         du = similar(u0); fill!(du, NaN); f!(du, u0, p, 0.0)

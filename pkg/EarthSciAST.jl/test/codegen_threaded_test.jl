@@ -8,12 +8,12 @@
 #   2. CHUNK-INSTANCE DECOMPOSITION — the generated function's `(c, nchunks)`
 #      instances, run sequentially in THIS process, reproduce the serial
 #      `(1, 1)` du bitwise (`===`, so NaN/-0.0 count) for every cell-set kind
-#      the emitter chunks: outs/contig, rank-1, rank-2, and rank-3 boxes.
+#      the emitter chunks: outs/contig, rank-1, rank-2, rank-3 and rank-4 boxes.
 #      This pins the chunked loop-bound arithmetic (the row clamps of the
-#      rank-2/3 nests) with no threads involved — under Polyester the chunks
+#      rank-2/3/N nests) with no threads involved — under Polyester the chunks
 #      only ever run concurrently, which cannot change per-cell values when
 #      the out-slots are disjoint (the build-time check below).
-#   3. DISJOINTNESS — `_cellset_outs_disjoint!` catches duplicates within an
+#   3. DISJOINTNESS — `_cellsets_outs_unique` catches duplicates within an
 #      outs set AND across cell sets (contiguous ranges included); real builds
 #      carry `outs_disjoint == true` into the section caches, and a poisoned
 #      cache yields the permanent `:cg_serial_shared_outs` verdict.
@@ -21,12 +21,12 @@
 #      instance — since the lane-tape retirement there is no other fallback.)
 #   4. THREADED EXECUTION (subprocess, `julia -t 4` + Polyester, mirroring the
 #      in-process env-toggle discipline of the other codegen tests):
-#      du bit-identity threaded vs the
-#      ESS_CG_THREADS_DISABLE=1 serial oracle (same build, same routing) and
-#      vs an ESS_CODEGEN_DISABLE=1 build; `:cg_threaded` in `_THREAD_TALLY`;
-#      the min-cells threshold (`:cg_serial_small` at the 512-cell default on
-#      a small section); ESS_THREADS_DISABLE=1 keeping the section unexamined;
-#      and the budget-0 OVERFLOW function threading the same way.
+#      du bit-identity threaded vs a serial oracle — the same program built
+#      with the min-cells floor above the section, which is what keeps a
+#      section off the threaded route — and vs a `compiler=:interpreter`
+#      build; `:cg_threaded` in `_THREAD_TALLY`; the min-cells threshold
+#      (`:cg_serial_small` at the 512-cell default on a small section); and
+#      the budget-0 OVERFLOW function threading the same way.
 # The subprocess block is skipped (with a warning) when Polyester is not
 # available in the active environment — it is a weakdep and not a test target
 # dependency.
@@ -98,24 +98,54 @@ end
 _cgt_3d_ics(Ni, Nj, Nk) = Dict("u[$i,$j,$k]" => sin(0.3i) * cos(0.2j) + 0.07k
                                for i in 1:Ni, j in 1:Nj, k in 1:Nk)
 
-function _cgt_build(model, ics; env...)
+# 4-D 9-point Laplacian — the rank-above-3 chunked nest (a division odometer
+# over the dims past the first, once per row).
+function _cgt_4d_model(Ni, Nj, Nk, Nl)
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j", "k", "l"]))
+    u(i, j, k, l) = _idx("u", i, j, k, l)
+    I = _v("i"); J = _v("j"); K = _v("k"); L = _v("l")
+    m(x) = _op("-", x, _i(1)); pl(x) = _op("+", x, _i(1))
+    body = _op("+",
+        u(m(I), J, K, L), u(pl(I), J, K, L), u(I, m(J), K, L), u(I, pl(J), K, L),
+        u(I, J, m(K), L), u(I, J, pl(K), L), u(I, J, K, m(L)), u(I, J, K, pl(L)),
+        _op("*", _n(-8.0), u(I, J, K, L)))
+    rng = Dict("i" => [1, Ni], "j" => [1, Nj], "k" => [1, Nk], "l" => [1, Nl])
+    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j", "k", "l"],
+        expr_body=_Didx("u", I, J, K, L), ranges=rng)
+    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j", "k", "l"],
+        expr_body=body, ranges=rng)
+    ESM.Model(vars, [ESM.Equation(lhs, rhs)])
+end
+_cgt_4d_ics(Ni, Nj, Nk, Nl) = Dict("u[$i,$j,$k,$l]" => sin(0.3i) * cos(0.2j) + 0.07k - 0.03l
+                                   for i in 1:Ni, j in 1:Nj, k in 1:Nk, l in 1:Nl)
+
+function _cgt_build(model, ics; compiler::Symbol=:native, env...)
     withenv((String(k) => v for (k, v) in pairs(env))...) do
         ESM._reset_cascade_tally!()
         f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics)
+            initial_conditions=ics, compiler=compiler)
         (f!, u0, p, copy(ESM._CASCADE_TALLY))
     end
 end
 
 _cgt_du(f!, u, p, t) = (d = similar(u); fill!(d, 0.0); f!(d, u, p, t); d)
+
+# The serial oracle: the SAME program built with the per-chunk min-cells floor
+# above the whole section, which is what keeps a section off the threaded
+# route. It has to be a fresh build — the verdict caches on a section's first
+# call, so moving the floor afterwards changes nothing.
+_cgt_serial(model, ics; env...) =
+    withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
+        _cgt_build(model, ics; env...)
+    end
 _cgt_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
 
-# The section's box-kernel ranks, read off an ESS_CODEGEN_DISABLE=1 build
-# (where `kernels` holds EVERY kernel — the grid_invariance idiom; the kernel
-# IR under the runners is build-invariant, so the ranks apply to the emitting
-# build too).
+# The section's box-kernel ranks, read off a build whose primary emission
+# declined on the node budget (where `kernels` holds EVERY kernel — the
+# grid_invariance idiom; the kernel IR under the runners is build-invariant, so
+# the ranks apply to the emitting build too).
 function _cgt_ranks(model, ics)
-    f!, _, _, _ = _cgt_build(model, ics; ESS_CODEGEN_DISABLE="1")
+    f!, _, _, _ = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET="0")
     ks = getfield(f!, :kernel_section)
     [length(K.cells.strides) for K in getfield(ks, :kernels)]
 end
@@ -137,10 +167,11 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
         ics = _cgt_1d_ics(N)
         probes = [(u, t) for u in (nothing, :probe) for t in (0.0, 0.7)]
 
-        @testset "primary RGF: threaded ≡ ESS_CG_THREADS_DISABLE oracle ≡ no-codegen" begin
+        @testset "primary RGF: threaded ≡ serial oracle ≡ interpreter" begin
             ESM._reset_thread_tally!()
             fA, uA, pA, tallyA = _cgt_build(model, ics)
-            fR, uR, pR, _ = _cgt_build(model, ics; ESS_CODEGEN_DISABLE="1")
+            fS, _uS, pS, _ = _cgt_serial(model, ics)
+            fR, uR, pR, _ = _cgt_build(model, ics; compiler=:interpreter)
             @test get(tallyA, :codegen_kernel, 0) >= 1
             ksA = getfield(fA, :kernel_section)
             @test getfield(ksA, :tcache).disjoint      # build-time global check
@@ -149,9 +180,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
                     Float64[2.0 + 1.3 * sin(1.3i + 0.7k) * cos(0.31i * k) + 0.01i
                             for i in 1:length(uA)]
                 du_thr = _cgt_du(fA, u, pA, t)
-                du_ser = withenv("ESS_CG_THREADS_DISABLE" => "1") do
-                    _cgt_du(fA, u, pA, t)      # same build, serial (1,1) route
-                end
+                du_ser = _cgt_du(fS, u, pS, t)   # same program, serial route
                 du_ref = _cgt_du(fR, u, pR, t)
                 @test _cgt_bitsame(du_thr, du_ser)
                 @test _cgt_bitsame(du_thr, du_ref)
@@ -181,14 +210,6 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             @test _cgt_bitsame(duT, du)
         end
 
-        @testset "ESS_THREADS_DISABLE=1 leaves the section unexamined" begin
-            fK, uK, pK, _ = _cgt_build(model, ics)
-            withenv("ESS_THREADS_DISABLE" => "1") do
-                _cgt_du(fK, uK, pK, 0.0)
-            end
-            @test getfield(getfield(fK, :kernel_section), :tcache).state == 0
-        end
-
         @testset "shared-outs verdict is reachable and permanent" begin
             # No real build produces globally shared out-slots (asserted by the
             # disjoint == true pins above), so poison a cache directly: the
@@ -208,8 +229,8 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
         @testset "overflow RGF (budget 0): threaded ≡ serial oracle ≡ interpreter" begin
             ESM._reset_thread_tally!()
             fO, uO, pO, tallyO = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET="0")
-            fB, uB, pB, _ = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET="0",
-                                       ESS_F64_OVERFLOW_CODEGEN="0")
+            fOS, _uOS, pOS, _ = _cgt_serial(model, ics; ESS_CODEGEN_NODE_BUDGET="0")
+            fB, uB, pB, _ = _cgt_build(model, ics; compiler=:interpreter)
             @test get(tallyO, :dual_codegen_kernel, 0) >= 1
             @test get(tallyO, :f64_overflow_armed, 0) == 1
             ksO = getfield(fO, :kernel_section)
@@ -219,10 +240,8 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
                 u = Float64[2.0 + 1.3 * sin(1.3i + 0.7k) * cos(0.31i * k) + 0.01i
                             for i in 1:length(uO)]
                 du_thr = _cgt_du(fO, u, pO, t)
-                du_ser = withenv("ESS_CG_THREADS_DISABLE" => "1") do
-                    _cgt_du(fO, u, pO, t)
-                end
-                du_int = _cgt_du(fB, u, pB, t)     # interpreter routing
+                du_ser = _cgt_du(fOS, u, pOS, t)   # same program, serial route
+                du_int = _cgt_du(fB, u, pB, t)     # the interpreter
                 @test _cgt_bitsame(du_thr, du_ser)
                 @test _cgt_bitsame(du_thr, du_int)
             end
@@ -233,10 +252,9 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
         @testset "2-D boxes under real threading" begin
             N2 = 40                    # 1600 cells ≥ 2 chunks at the default
             f2, u2, p2, _ = _cgt_build(_cgt_2d_model(N2), _cgt_2d_ics(N2))
+            f2s, _u2s, p2s, _ = _cgt_serial(_cgt_2d_model(N2), _cgt_2d_ics(N2))
             du_thr = _cgt_du(f2, u2, p2, 0.4)
-            du_ser = withenv("ESS_CG_THREADS_DISABLE" => "1") do
-                _cgt_du(f2, u2, p2, 0.4)
-            end
+            du_ser = _cgt_du(f2s, u2, p2s, 0.4)
             @test getfield(getfield(f2, :kernel_section), :tcache).state == 1
             @test _cgt_bitsame(du_thr, du_ser)
         end
@@ -265,27 +283,35 @@ else
             end
         end
 
-        @testset "_cellset_outs_disjoint! (within and across cell sets)" begin
-            seen = Set{Int}()
-            @test ESM._cellset_outs_disjoint!(seen, ESM._outs_cells([4, 9, 2]))
-            @test !ESM._cellset_outs_disjoint!(Set{Int}(),
-                                               ESM._outs_cells([4, 9, 4]))
+        @testset "_cellsets_outs_unique (within and across cell sets)" begin
+            U = ESM._cellsets_outs_unique
+            @test U([ESM._outs_cells([4, 9, 2])])
+            @test !U([ESM._outs_cells([4, 9, 4])])
             # contig vs box overlap ACROSS sets (the case a per-kernel check
             # would never see): contig 1:6, then a stride-2 box hitting slot 4.
-            @test !ESM._cellset_outs_disjoint!(copy(seen), ESM._contig_cells(6))
-            seen2 = Set{Int}()
-            @test ESM._cellset_outs_disjoint!(seen2, ESM._contig_cells(6))
+            @test !U([ESM._outs_cells([4, 9, 2]), ESM._contig_cells(6)])
             box = ESM._CellSet([2], [UnitRange{Int}(1, 3)], 2)  # slots 4, 6, 8
-            @test !ESM._cellset_outs_disjoint!(seen2, box)
-            seen3 = Set{Int}()
-            @test ESM._cellset_outs_disjoint!(seen3, ESM._contig_cells(3))
-            @test ESM._cellset_outs_disjoint!(seen3, box)       # 1..3 vs 4,6,8
+            @test !U([ESM._contig_cells(6), box])
+            @test U([ESM._contig_cells(3), box])                # 1..3 vs 4,6,8
+            # Boxes of one layout map (a 10x10 column-major block at slot 1):
+            # decided box against box, with no slot enumerated.
+            b2(r1, r2) = ESM._CellSet([1, 10], [r1, r2], -10)
+            @test U([b2(1:10, 1:1), b2(1:1, 2:10), b2(2:10, 2:10)])
+            @test !U([b2(1:10, 1:1), b2(1:1, 1:10)])            # share cell (1,1)
+            # A map that is not one-to-one on its box goes to the bit map.
+            @test !U([ESM._CellSet([1, 1], [1:3, 1:3], 0)])
+            @test U([ESM._CellSet([1, 3], [1:3, 1:3], 0)])
+            # Rank 4, one box per corner slab of a 3^4 block.
+            b4(r) = ESM._CellSet([1, 3, 9, 27], r, 0)
+            @test U([b4([1:3, 1:3, 1:3, 1:1]), b4([1:3, 1:3, 1:3, 2:3])])
+            @test !U([b4([1:3, 1:3, 1:3, 1:2]), b4([1:3, 1:3, 1:3, 2:3])])
         end
 
         @testset "chunk instances reproduce the serial du ($(name))" for (name, model, ics, wantrank) in (
                     ("1-D contig+box", _cgt_1d_model(37), _cgt_1d_ics(37), 1),
                     ("2-D boxes", _cgt_2d_model(13), _cgt_2d_ics(13), 2),
-                    ("3-D boxes", _cgt_3d_model(9, 8, 7), _cgt_3d_ics(9, 8, 7), 3))
+                    ("3-D boxes", _cgt_3d_model(9, 8, 7), _cgt_3d_ics(9, 8, 7), 3),
+                    ("4-D boxes", _cgt_4d_model(6, 5, 4, 5), _cgt_4d_ics(6, 5, 4, 5), 4))
             # The fixture really carries a box of the advertised rank (else
             # this case would silently stop exercising that emission arm).
             @test wantrank in _cgt_ranks(model, ics)

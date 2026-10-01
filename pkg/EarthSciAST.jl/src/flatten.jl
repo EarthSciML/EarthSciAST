@@ -197,7 +197,7 @@ struct FlattenedSystem
     # (deep-equal dedup, deterministic `<ComponentPath>.<name>` collision rename).
     # Downstream consumers resolve surviving `apply_expression_template`
     # references against it (or `Expand` them; §9.6.4 rule 2). Empty when no
-    # references survived (or `ESS_TEMPLATE_REF_DISABLE=1`).
+    # references survived.
     template_registry::OrderedDict{String, Any}
     # ── esm-libraries-spec §4.7.5 step 4, the canonical field set (esm 1.0.0) ──
     # The three §6.3.1 SUBSET maps. Each is a subset of the map above it and
@@ -761,9 +761,8 @@ function _negate_expr(a::ASTExpr)::ASTExpr
     _is_zero_expr(a) && return _zero_expr()
     a isa NumExpr && return NumExpr(-(a::NumExpr).value)
     a isa IntExpr && return IntExpr(-(a::IntExpr).value)
-    # Unary `-`, not `neg`: both spell negation, but the Rust scalar interpreter
-    # has an arm for the first and none for the second, so emitting `neg` here
-    # would make one backend answer NaN.
+    # Unary `-`, not `neg`: both spell negation, and `-` is the spelling every
+    # binding's evaluator has a rule for.
     return OpExpr("-", ASTExpr[a])
 end
 
@@ -1006,8 +1005,7 @@ never survive: they are expanded eagerly at collect (`_collect_reaction_system!`
 before namespacing. Consumers that need the Option-A expanded image call
 [`expand_flattened_refs`](@ref) at their own boundary (RFC
 out-of-line-expression-templates §7.7); the tree-walk build expands at its entry
-with site recording (the compile-once tier). Under `ESS_TEMPLATE_REF_DISABLE=1`
-load already expanded, so no references reach `flatten` at all.
+with site recording (the compile-once tier).
 """
 function flatten(file::EsmFile; base_path::AbstractString=".",
                  load_ref=nothing)::FlattenedSystem
@@ -1348,7 +1346,10 @@ function _normalize_angle_arguments(states, params, observeds,
         for u in values(var_units)) || return (equations, field_ics,
                                                continuous_events, discrete_events)
 
-    rewrite(e) = _normalize_angle_expr(e, var_units)
+    # An array element carries its array's declared unit on this path, so
+    # `cos(index(lat, i))` with `lat` in `deg` is converted like `cos(lat)`.
+    element_units = _ElementUnits(var_units)
+    rewrite(e) = _normalize_angle_expr(e, element_units)
     equations = Equation[Equation(eq.lhs, rewrite(eq.rhs); _comment=eq._comment)
                          for eq in equations]
     field_ics = Pair{String, ASTExpr}[name => rewrite(expr) for (name, expr) in field_ics]
@@ -1425,7 +1426,7 @@ end
     flattened_to_esm(flat::FlattenedSystem; name="Flattened", esm_version=SCHEMA_VERSION) -> Dict{String,Any}
 
 Reconstitute a `FlattenedSystem` into a single-model native ESM **document**
-(`Dict{String,Any}`) that can be run directly: `build_evaluator(doc)` for a 0-D /
+(`Dict{String,Any}`) that can be run directly: `_build_evaluator(doc)` for a 0-D /
 array system, or `discretize(doc)` first when it carries a spatial PDE.
 
 A native dict — not a typed `EsmFile` — is the target on purpose: the value-

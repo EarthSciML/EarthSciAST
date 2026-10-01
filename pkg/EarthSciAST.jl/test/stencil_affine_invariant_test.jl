@@ -6,7 +6,7 @@
 # so it is RE-EVALUATED each call, never frozen at build.
 #
 # Asserts, per model: hoist FIRED (n_acc_inv_slots ≥ 1); default affine build ≡
-# per-cell (ESS_STENCIL_DISABLE) BIT-IDENTICALLY; and the time case re-evaluates
+# per-cell (`compiler=:interpreter`) BIT-IDENTICALLY; and the time case re-evaluates
 # across calls. A pure stencil (no invariant subexpr) hoists nothing.
 using Test
 using EarthSciAST
@@ -14,12 +14,9 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 function _inv_build(model, ics; affine::Bool)
-    envs = affine ? ("ESS_STENCIL_DISABLE" => nothing,) :
-                    ("ESS_STENCIL_DISABLE" => "1",)
-    withenv(envs...) do
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model; initial_conditions=ics)
-        (f!, u0, p, vm, diag)
-    end
+    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
+        initial_conditions=ics, compiler = affine ? :native : :interpreter)
+    return (f!, u0, p, vm, diag)
 end
 _du(f!, u0, p, t) = (du = zero(u0); f!(du, u0, p, t); du)
 

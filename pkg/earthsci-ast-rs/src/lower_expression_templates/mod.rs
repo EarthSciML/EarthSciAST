@@ -57,6 +57,37 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// A document with no template machinery is checked by one walk, which
+    /// must report what the two expanded-form validators report run one
+    /// after the other over the whole document (a geometry error first, at
+    /// its path), skip `expression_templates` subtrees as they do, and leave
+    /// the document unchanged.
+    #[test]
+    fn the_untemplated_fast_path_reports_as_the_validators_do() {
+        let geo = json!({"op": "polygon_intersection_area", "manifold": "flat", "args": []});
+        let inv = json!({"op": "makearray", "regions": [[[3, 0]]], "values": [0]});
+        let docs = [
+            json!({"esm": "1.1.0", "models": {"M": {"equations": [{"lhs": "x", "rhs": inv.clone()}, {"lhs": "y", "rhs": geo.clone()}]}}}),
+            json!({"esm": "1.1.0", "models": {"M": {"equations": [{"lhs": "x", "rhs": inv.clone()}]}}}),
+            json!({"esm": "1.1.0", "models": {"M": {"expression_templates": {}, "equations": [{"lhs": "y", "rhs": geo.clone()}]}}}),
+            json!({"esm": "1.1.0", "models": {"M": {"expression_templates": {}, "x": {"expression_templates": [geo.clone(), inv.clone()]}}}}),
+            json!({"esm": "1.1.0", "models": {"M": {"equations": [{"lhs": "x", "rhs": {"op": "+", "args": [1, 2]}}]}}}),
+        ];
+        for doc in docs {
+            let want = validate_geometry_manifolds(&doc, "")
+                .and_then(|()| validate_makearray_regions(&doc, ""))
+                .map_err(|e| e.to_string());
+            let mut got_doc = doc.clone();
+            let got = lower_expression_templates_found(&mut got_doc).map_err(|e| e.to_string());
+            match (&want, &got) {
+                (Ok(()), Ok(found)) => assert!(!found, "{doc}"),
+                (Err(w), Err(g)) => assert_eq!(w, g),
+                _ => panic!("{doc}: validators {want:?}, fast path {got:?}"),
+            }
+            assert_eq!(got_doc, doc);
+        }
+    }
+
     fn arrhenius_fixture() -> Value {
         json!({
           "esm": "1.0.0",

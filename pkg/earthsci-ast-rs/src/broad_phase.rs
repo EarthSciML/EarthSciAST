@@ -363,14 +363,11 @@ pub(crate) fn bump_gate_plan_declines() {
 
 /// How many gates this thread's planner has declined as uneconomic.
 ///
-/// Test-only: nothing in a release build reads it. `ESS_JOIN_GATE_STATS`
-/// reports declines as they happen, straight to stderr.
+/// Test-only: nothing in a release build reads it.
 ///
 /// A decline is invisible in an answer -- that is the point -- so without a
 /// counter the only evidence that the planner did anything is peak memory,
-/// which a test cannot assert on portably. With `ESS_JOIN_GATE_STATS=1` it is
-/// also reported per node, so a document's plan is a command's output rather
-/// than an argument from the source.
+/// which a test cannot assert on portably.
 #[cfg(test)]
 pub(crate) fn gate_plan_declines() -> u64 {
     PLAN_DECLINES.with(Cell::get)
@@ -382,10 +379,14 @@ pub(crate) fn reset_gate_plan_declines() {
     PLAN_DECLINES.with(|c| c.set(0));
 }
 
-/// Kill-switch for the whole join-gate DRIVER (`ESS_JOIN_GATE_DISABLE=1`, or
-/// [`set_join_gate_enabled`] within a thread).
+thread_local! {
+    static GATE_ENABLED: Cell<bool> = const { Cell::new(true) };
+}
+
+/// Is the join-gate DRIVER on for this thread? On unless
+/// [`set_join_gate_enabled`] turned it off.
 ///
-/// With it set, an aggregate carrying either kind of gate — a `join.overlap`
+/// With it off, an aggregate carrying either kind of gate — a `join.overlap`
 /// broad phase (§5.5.6) or a value-equality `join.on` match set (§5.5.8) — walks
 /// the untouched full product and lets the `filter` decide, which is exactly the
 /// pre-driver path. That is what makes the driver's central claim DIRECTLY
@@ -394,39 +395,18 @@ pub(crate) fn reset_gate_plan_declines() {
 /// benchmark measures a "before" that is the real engine on the real document
 /// rather than a hand-written stand-in.
 ///
-/// Thread-local (seeded from the environment once) rather than a process-wide
-/// `OnceLock`, so one test process can measure both arms.
-fn join_gate_env_disabled() -> bool {
-    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OFF.get_or_init(|| {
-        std::env::var("ESS_JOIN_GATE_DISABLE")
-            .map(|v| !v.is_empty() && v != "0")
-            .unwrap_or(false)
-    })
-}
-
-thread_local! {
-    static GATE_ENABLED: Cell<Option<bool>> = const { Cell::new(None) };
-}
-
-/// Is the join-gate driver on for this thread? See [`join_gate_env_disabled`].
+/// Thread-local rather than process-wide, so one test process can measure both
+/// arms — and an ARGUMENT rather than an environment switch, because a switch
+/// that selects an evaluation strategy is the thing `esm-libraries-spec.md`
+/// §2.5.10 refuses to keep beside `compiler`.
 pub fn join_gate_enabled() -> bool {
-    GATE_ENABLED.with(|c| match c.get() {
-        Some(v) => v,
-        None => {
-            let v = !join_gate_env_disabled();
-            c.set(Some(v));
-            v
-        }
-    })
+    GATE_ENABLED.with(Cell::get)
 }
 
 /// Turn the join-gate driver on/off for THIS thread, returning the previous
 /// setting so a caller can restore it.
 pub fn set_join_gate_enabled(on: bool) -> bool {
-    let prev = join_gate_enabled();
-    GATE_ENABLED.with(|c| c.set(Some(on)));
-    prev
+    GATE_ENABLED.with(|c| c.replace(on))
 }
 
 /// How many candidate PAIRS the join-gate index caches may keep resident
@@ -478,6 +458,10 @@ pub const GATE_PAIR_BYTES: usize = 2 * size_of::<i64>();
 /// match sets a relational port resolves.
 pub const DEFAULT_GATE_CACHE_PAIRS: usize = 4_000_000;
 
+/// The budget as the environment sets it (`ESS_GATE_CACHE_PAIRS`). A TUNING
+/// THRESHOLD, not a strategy switch: under `native` it is a refusal boundary
+/// rather than a fallback trigger (`esm-libraries-spec.md` §2.5.10), and
+/// moving it changes what a document costs, never what it answers.
 fn gate_cache_budget_env() -> usize {
     static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *N.get_or_init(|| {
@@ -496,6 +480,10 @@ thread_local! {
 /// before the planner declines to build it (`ESS_GATE_PLAN_RATIO`, default
 /// [`DEFAULT_GATE_PLAN_RATIO`]).
 ///
+/// A TUNING THRESHOLD, and under `native` a refusal boundary rather than a
+/// fallback trigger (`esm-libraries-spec.md` §2.5.10): moving it changes which
+/// documents build and what they cost, never what they answer.
+///
 /// A gate's cost is its match count; its value is the product of the two
 /// symbols' ranges, as narrowed by the gates already resolved. When a clause
 /// would materialise far more pairs than the space it is pruning, it cannot
@@ -510,15 +498,26 @@ pub(crate) fn gate_plan_ratio() -> u128 {
     GATE_PLAN_RATIO.with(|c| match c.get() {
         Some(v) => v,
         None => {
-            let v = env_u128("ESS_GATE_PLAN_RATIO", DEFAULT_GATE_PLAN_RATIO);
+            let v = *gate_plan_ratio_env();
             c.set(Some(v));
             v
         }
     })
 }
 
+/// The ratio as the environment sets it, read once for the process — the
+/// caching every other threshold uses, so a thread that reaches the knob first
+/// cannot see a different value from one that reaches it later.
+fn gate_plan_ratio_env() -> &'static u128 {
+    static RATIO: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
+    RATIO.get_or_init(|| env_u128("ESS_GATE_PLAN_RATIO", DEFAULT_GATE_PLAN_RATIO))
+}
+
 /// A gate smaller than this is never declined, whatever the ratio says
 /// (`ESS_GATE_PLAN_FLOOR`, default [`DEFAULT_GATE_PLAN_FLOOR`]).
+///
+/// A TUNING THRESHOLD on the same footing as [`gate_plan_ratio`], and a
+/// refusal boundary under `native` for the same reason.
 ///
 /// The planner's estimate of what a gate narrows is an UPPER BOUND computed
 /// from sibling gates, not from the walk that will actually run, so it can be
@@ -529,14 +528,23 @@ pub(crate) fn gate_plan_floor() -> usize {
     GATE_PLAN_FLOOR.with(|c| match c.get() {
         Some(v) => v,
         None => {
-            let v = usize::try_from(env_u128(
-                "ESS_GATE_PLAN_FLOOR",
-                DEFAULT_GATE_PLAN_FLOOR as u128,
-            ))
-            .unwrap_or(usize::MAX);
+            let v = *gate_plan_floor_env();
             c.set(Some(v));
             v
         }
+    })
+}
+
+/// The floor as the environment sets it, read once for the process — see
+/// [`gate_plan_ratio_env`].
+fn gate_plan_floor_env() -> &'static usize {
+    static FLOOR: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    FLOOR.get_or_init(|| {
+        usize::try_from(env_u128(
+            "ESS_GATE_PLAN_FLOOR",
+            DEFAULT_GATE_PLAN_FLOOR as u128,
+        ))
+        .unwrap_or(usize::MAX)
     })
 }
 
@@ -561,7 +569,8 @@ thread_local! {
 
 /// Set the planner's overshoot ratio and floor for THIS thread, returning the
 /// previous pair so a caller can restore them. Test-only: a release build
-/// configures the planner through `ESS_GATE_PLAN_RATIO` / `ESS_GATE_PLAN_FLOOR`. A floor of 0 with a ratio of 0
+/// configures the planner through `ESS_GATE_PLAN_RATIO` /
+/// `ESS_GATE_PLAN_FLOOR`. A floor of 0 with a ratio of 0
 /// declines every gate a sibling has already made redundant, which is the arm
 /// a differential test runs to show that planning changes cost and not answers.
 #[cfg(test)]
@@ -581,29 +590,6 @@ pub fn set_gate_cache_pair_budget(pairs: usize) -> usize {
     let prev = gate_cache_pair_budget();
     GATE_CACHE_PAIRS.with(|c| c.set(Some(pairs)));
     prev
-}
-
-/// Is per-node join-gate COST REPORTING on (`ESS_JOIN_GATE_STATS=1`)?
-///
-/// The leaf-visit counter [`overlap_enum_visits`] is the only direct evidence
-/// that a gated aggregate costs `O(|matches|·∏ungated)` and not `O(∏ranges)`,
-/// and the Rust integration tests read it directly. A whole-document
-/// measurement on a real fixture cannot: it runs through the `esm` binary,
-/// where no test harness holds the counter. This switch makes the same number
-/// readable from a CLI run — one line per gated `faq` evaluation on
-/// stderr — so a claim about a document's enumeration cost is a command's
-/// output rather than an argument from the source.
-///
-/// Off by default and read ONCE, so the instrumented build's hot path differs
-/// from the uninstrumented one by a single already-cached predicate outside the
-/// per-cell loop.
-pub fn join_gate_stats_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("ESS_JOIN_GATE_STATS")
-            .map(|v| !v.is_empty() && v != "0")
-            .unwrap_or(false)
-    })
 }
 
 /// Which side of an overlap gate a position lives on.

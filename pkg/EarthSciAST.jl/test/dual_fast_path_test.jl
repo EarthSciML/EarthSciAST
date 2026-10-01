@@ -14,16 +14,18 @@
 #   1. ROUTING — the build tally shows the primary decline
 #      (`:codegen_decline_budget`) AND the overflow acceptance
 #      (`:dual_codegen_kernel`); the section carries a dual function covering
-#      every residual kernel (`n_dual_emitted`, empty `dual_resid`); and
-#      ESS_DUAL_CODEGEN_DISABLE=1 restores the pre-dual section exactly
-#      (no dual function, no dual tally keys).
-#   2. FLOAT64 BIT-IDENTITY — du is `===` per element (NaN/-0.0 count) across
-#      the dual-tier build, the kill-switch build, and ESS_CODEGEN_DISABLE=1:
-#      the dual tier must never touch the Float64 path.
+#      every residual kernel (`n_dual_emitted`, empty `dual_resid`), while
+#      `compiler=:interpreter` has neither function and no dual tally keys.
+#   2. FLOAT64 BIT-IDENTITY — du is `===` per element (NaN/-0.0 count) between
+#      the dual-tier build and `compiler=:interpreter`: the dual tier must
+#      never touch the Float64 path.
 #   3. DUAL BIT-IDENTITY — a ForwardDiff Jacobian (values AND partials) is
-#      `===` per element between the dual-tier build and the kill-switch
-#      build, whose Dual path is the per-cell interpreter (the oracle), and
-#      the ESS_CODEGEN_DISABLE=1 build too.
+#      `===` per element between the dual-tier build and the interpreter,
+#      whose Dual path is the per-cell `_run_acc_kernel!` (the oracle).
+#
+# A build with the overflow tier off but the primary budget at zero is not one
+# of these: every kernel would be declined by both emissions, which a strict
+# `native` refuses rather than interprets. `:interpreter` is that oracle now.
 #   4. ALLOCATIONS — a warmed Dual-seeded f! call allocates strictly less on
 #      the dual tier than on the interpreter routing.
 using Test
@@ -32,11 +34,11 @@ using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
-function _dfp_build(model, ics; env...)
+function _dfp_build(model, ics; compiler::Symbol=:native, env...)
     withenv((String(k) => v for (k, v) in pairs(env))...) do
         ESM._reset_cascade_tally!()
         f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics)
+            initial_conditions=ics, compiler=compiler)
         (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
     end
 end
@@ -81,19 +83,14 @@ _dfp_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
     ics = _dfp_ics(N)
 
     # A: primary codegen forced off (budget 0) — the dual overflow tier is the
-    #    ONLY compiled representation. B: same, dual tier killed (the pre-dual
-    #    routing: per-cell interpreter under every T — the oracle).
-    # C: codegen disabled wholesale (must also keep the dual tier off).
+    #    ONLY compiled representation. C: the interpreter, per-cell under every
+    #    T, which is the oracle.
     fA, uA, pA, vmA, _, tallyA = _dfp_build(model, ics;
         ESS_CODEGEN_NODE_BUDGET="0")
-    fB, uB, pB, _, _, tallyB = _dfp_build(model, ics;
-        ESS_CODEGEN_NODE_BUDGET="0", ESS_DUAL_CODEGEN_DISABLE="1")
-    fC, uC, pC, _, _, tallyC = _dfp_build(model, ics;
-        ESS_CODEGEN_DISABLE="1")
+    fC, uC, pC, _, _, tallyC = _dfp_build(model, ics; compiler=:interpreter)
 
     @testset "routing: tally + section introspection" begin
         ksA = getfield(fA, :kernel_section)
-        ksB = getfield(fB, :kernel_section)
         ksC = getfield(fC, :kernel_section)
 
         # Primary tier really declined on the budget; overflow tier accepted.
@@ -108,17 +105,13 @@ _dfp_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         @test getfield(ksA, :n_dual_emitted) == length(getfield(ksA, :kernels))
         @test isempty(getfield(ksA, :dual_resid))
 
-        # The kill switch really kills: pre-dual section, byte for byte.
-        @test getfield(ksB, :dualf) === nothing
-        @test getfield(ksB, :n_dual_emitted) == 0
-        @test get(tallyB, :dual_codegen_kernel, 0) == 0
-        @test getfield(ksB, :dual_resid) == collect(1:length(getfield(ksB, :kernels)))
-
-        # ESS_CODEGEN_DISABLE=1 keeps BOTH tiers off (it must stay a pure
-        # pre-codegen oracle build).
+        # The interpreter keeps BOTH tiers off, and every kernel is residual:
+        # a pure pre-codegen build, which is what makes it the oracle.
         @test getfield(ksC, :dualf) === nothing
+        @test getfield(ksC, :n_dual_emitted) == 0
         @test get(tallyC, :dual_codegen_kernel, 0) == 0
         @test get(tallyC, :codegen_kernel, 0) == 0
+        @test getfield(ksC, :dual_resid) == collect(1:length(getfield(ksC, :kernels)))
     end
 
     @testset "sanity: default budget keeps the dual tier idle" begin
@@ -130,21 +123,18 @@ _dfp_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         @test get(tallyD, :dual_codegen_kernel, 0) == 0
     end
 
-    @testset "Float64 bit-identity (dual tier ≡ kill switch ≡ no codegen)" begin
-        @test uA == uB && uA == uC
+    @testset "Float64 bit-identity (dual tier ≡ interpreter)" begin
+        @test uA == uC
         for k in 1:5, t in (0.0, 0.7, 3.25)
             u = k == 1 ? copy(uA) : _dfp_probe(length(uA), k)
             duA = _dfp_du(fA, u, pA, t)
-            @test _dfp_bitsame(duA, _dfp_du(fB, u, pB, t))
             @test _dfp_bitsame(duA, _dfp_du(fC, u, pC, t))
         end
     end
 
     @testset "Dual bit-identity vs the interpreter oracle (values + partials)" begin
         JA = ForwardDiff.jacobian(uu -> _dfp_du(fA, uu, pA, 0.4), uA)
-        JB = ForwardDiff.jacobian(uu -> _dfp_du(fB, uu, pB, 0.4), uB)
         JC = ForwardDiff.jacobian(uu -> _dfp_du(fC, uu, pC, 0.4), uC)
-        @test _dfp_bitsame(JA, JB)
         @test _dfp_bitsame(JA, JC)
 
         # A direct Dual-seeded in-place call too (no jacobian scaffolding):
@@ -152,9 +142,9 @@ _dfp_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         DT = ForwardDiff.Dual{:dfp,Float64,1}
         uD = DT[DT(uA[i], ForwardDiff.Partials((0.5 + 0.01i,))) for i in eachindex(uA)]
         dA = _dfp_du(fA, uD, pA, 0.7)
-        dB = _dfp_du(fB, uD, pB, 0.7)
-        @test all(ForwardDiff.value.(dA) .=== ForwardDiff.value.(dB))
-        @test all(ForwardDiff.partials.(dA, 1) .=== ForwardDiff.partials.(dB, 1))
+        dC = _dfp_du(fC, uD, pC, 0.7)
+        @test all(ForwardDiff.value.(dA) .=== ForwardDiff.value.(dC))
+        @test all(ForwardDiff.partials.(dA, 1) .=== ForwardDiff.partials.(dC, 1))
     end
 
     @testset "Dual allocations: strictly fewer than the interpreter routing" begin
@@ -164,11 +154,11 @@ _dfp_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         # Warm both paths (first call compiles / allocates lazy alt buffers).
         for _ in 1:3
             fA(dD, uD, pA, 0.3)
-            fB(dD, uD, pB, 0.3)
+            fC(dD, uD, pC, 0.3)
         end
         allocA = @allocated fA(dD, uD, pA, 0.3)
-        allocB = @allocated fB(dD, uD, pB, 0.3)
-        @info "dual-call allocations" dual_tier = allocA interpreter = allocB
-        @test allocA < allocB
+        allocC = @allocated fC(dD, uD, pC, 0.3)
+        @info "dual-call allocations" dual_tier = allocA interpreter = allocC
+        @test allocA < allocC
     end
 end

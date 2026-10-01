@@ -86,7 +86,7 @@ recovered = EarthSciAST.Model(sys)
 
 When ModelingToolkit and Catalyst are not loaded, the pure-Julia path still
 covers the full pipeline: `flatten` produces a `FlattenedSystem` snapshot, and
-the tree-walk runtime (`build_evaluator`, `esm_problem` + `solve`) runs it end to end.
+the tree-walk runtime (`esm_problem` + `solve`) runs it end to end.
 
 ## Documentation
 

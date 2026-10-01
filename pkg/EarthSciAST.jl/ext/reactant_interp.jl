@@ -272,10 +272,13 @@ end
 #     kept as the documented fallback for a non-uniform axis too big for the
 #     ladder. Nothing about it changed.
 #
-# `ESS_RX_LOCATE` forces a tier (`auto` | `reduce` | `ladder` | `affine`) for
-# A/B measurement and as an escape hatch; `ESS_RX_LOCATE_LADDER_MAX` moves the
-# ladder/affine cut. The tiers are observationally identical, so the only thing
-# the switch can change is the emitted program.
+# `ESS_RX_LOCATE` picks the lowering (`auto` | `reduce` | `ladder` | `affine`)
+# and `ESS_RX_LOCATE_LADDER_MAX` moves the ladder/affine cut. Both are tuning
+# thresholds of ONE tier, not a choice of evaluator: the three lowerings are
+# observationally identical, every one of them is a compiled locate, and none
+# of them puts a tree walk in the right-hand side — so neither variable selects
+# an oracle and neither is a refusal boundary. What they change is the emitted
+# program, which is what makes them worth measuring.
 _rx_locate_mode() = get(ENV, "ESS_RX_LOCATE", "auto")
 _rx_ladder_max() = something(tryparse(Int, get(ENV, "ESS_RX_LOCATE_LADDER_MAX", "8")), 8)
 

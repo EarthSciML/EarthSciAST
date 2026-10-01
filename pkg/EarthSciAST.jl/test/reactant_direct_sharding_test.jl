@@ -63,7 +63,7 @@ _sh_fix(parts...) = joinpath(TESTUTILS_REPO_ROOT, "tests", parts...)
 # out-of-place build under test.
 function sh_reference(path)
     file = load_path(path)
-    f!, u0, p, _, _ = build_evaluator(file)
+    f!, u0, p, _, _ = EarthSciAST._build_evaluator(file)
     return (u, t) -> begin
         du = zero(u)
         f!(du, u, p, Float64(t))
@@ -75,7 +75,7 @@ end
 # across `ndev` devices, and return a closure `(u, t) -> du` on the host.
 function sh_compiled(path; ndev = nothing)
     file = load_path(path)
-    fo, u0, p, _, vmap = build_evaluator(file; form = :oop)
+    fo, u0, p, _, vmap = EarthSciAST._build_evaluator(file; form = :oop)
     d = EXT_SH.direct_rhs(fo; var_map = vmap, client = SH_CLIENT, sharding = ndev)
     p_dev = EXT_SH.direct_params(d, p)
     u_dev = EXT_SH.direct_state(d, copy(u0))
@@ -139,7 +139,7 @@ end
 @testset "direct emission, sharding refusals" begin
     fix = _sh_fix("conformance", "pde_simulation", "fixtures",
                   "diffusion_1d_periodic_n8.esm")
-    fo, u0, _, _, vmap = build_evaluator(load_path(fix); form = :oop)
+    fo, u0, _, _, vmap = EarthSciAST._build_evaluator(load_path(fix); form = :oop)
 
     @testset "a one-device shard is refused, not silently ignored" begin
         err = try
@@ -172,7 +172,7 @@ end
     # rather than a contrived one — and it is why this fixture is NOT in the
     # agreement testset above.
     @testset "the 343-cell transport fixture refuses an even shard" begin
-        tfo, tu0, _, _, tvmap = build_evaluator(
+        tfo, tu0, _, _, tvmap = EarthSciAST._build_evaluator(
             load_path(joinpath(TESTUTILS_REPO_ROOT, "tests", "bench",
                                "transport_3axis_7cubed_fullrank.esm"));
             form = :oop)

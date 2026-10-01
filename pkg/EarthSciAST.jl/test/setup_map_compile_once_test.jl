@@ -10,8 +10,8 @@
 # instead of constant-folding) and rebinds only those per cell.
 #
 # The whole game is that this changes NOTHING numerically. Every case below
-# materializes the SAME map twice — once on the fast path, once with
-# `ESS_SETUP_MAP_COMPILE_ONCE_DISABLE=1` forcing the per-cell reference — and
+# materializes the SAME map twice — once on the fast path, once under
+# `compiler=:interpreter`, which is the per-cell reference — and
 # demands `isequal` cell for cell. `isequal`, never `≈` and never `==`: `-0.0`
 # must not pass for `+0.0` and `NaN` must match `NaN`.
 #
@@ -49,7 +49,7 @@ function both_ways(json, env)
     fast = EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX, regfns)
     hits = EA._SETUP_MAP_FASTPATH_HITS[] - hits0
     miss = EA._SETUP_MAP_FASTPATH_MISS[] - miss0
-    ref = withenv("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE" => "1") do
+    ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
         EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX, regfns)
     end
     return fast, ref, hits, miss
@@ -126,7 +126,7 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
                                                  Dict{String,Function}())
         @test EA._SETUP_MAP_FASTPATH_HITS[] - h0 == 1
         @test EA._SETUP_MAP_FASTPATH_MISS[] - m0 == 0
-        ref = withenv("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE" => "1") do
+        ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, idx,
                                               Dict{String,Function}())
         end
@@ -142,13 +142,13 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         @test bitsame(fast, ref)
     end
 
-    @testset "kill switch keeps the per-cell reference available" begin
+    @testset "the interpreter keeps the per-cell reference available" begin
         body = _op("exp", _ix(_v("A"), _v("x"), _v("y")))
         j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
         rhs = EA.expression_from_json(j)
         m0 = EA._SETUP_MAP_FASTPATH_MISS[]
         h0 = EA._SETUP_MAP_FASTPATH_HITS[]
-        withenv("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE" => "1") do
+        EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
                                               Dict{String,Function}())
         end
@@ -156,39 +156,26 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         @test EA._SETUP_MAP_FASTPATH_HITS[] - h0 == 0
     end
 
-    @testset "verify mode agrees on the same maps" begin
-        body = _op("+", _op("log", _op("*", _ix(_v("A"), _v("x"), _v("y")),
-                                            _ix(_v("A"), _v("x"), _v("y")))),
-                        _ix(_v("B"), _v("x"), _v("y")))
-        j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
-        rhs = EA.expression_from_json(j)
-        got = withenv("ESS_SETUP_MAP_COMPILE_ONCE_VERIFY" => "1") do
-            EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
-                                              Dict{String,Function}())
-        end                                   # throws unless bit-identical
-        ref = withenv("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE" => "1") do
-            EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
-                                              Dict{String,Function}())
-        end
-        @test bitsame(got, ref)
-    end
-
     # ---- the two guards that keep the fast path exact ----
 
-    @testset "guard: `/` in a gather subscript declines" begin
-        # `_eval_const_int` reads `/` as TRUNCATING integer `div`; the compiled
-        # subscript reads it as true Float64 division. Refuse rather than diverge.
-        # `2x/2 == x` under BOTH readings, so this case is about the DECLINE, not
-        # about a divergence — the guard is structural, it does not try to prove
-        # a particular `/` harmless.
-        body = _op("exp", _ix(_v("B"), _op("/", _op("*", _v("x"), 2), 2), _v("y")))
-        j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
-        fast, ref, hits, miss = both_ways(j, ENV0)
-        @test hits == 0 && miss == 1          # declined → per-cell reference
-        @test bitsame(fast, ref)
-        @test !EA._subscripts_int_exact(EA.expression_from_json(j))
-        # ... and it is found in a NESTED node's body too, not just in the
-        # top-level `args` spine (the guard walks via `foreach_subexpr_once`).
+    @testset "`/` in a gather subscript: the fill reads it as the reference does" begin
+        # `_eval_const_int` reads `/` as TRUNCATING integer `div`; a subscript the
+        # compile-once sweep keeps symbolic would read it as true Float64
+        # division, so that sweep declines any `/` under an `index` subscript
+        # (`_subscripts_int_exact`). The compiled fill resolves subscripts the
+        # way the right-hand side does, with the reference's integer reading, so
+        # it serves the map — including `(x+1)/2`, where the two readings
+        # differ at every even `x`.
+        for sub in (_op("/", _op("*", _v("x"), 2), 2), _op("/", _op("+", _v("x"), 1), 2))
+            body = _op("exp", _ix(_v("B"), sub, _v("y")))
+            j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
+            fast, ref, hits, miss = both_ways(j, ENV0)
+            @test hits == 1 && miss == 0
+            @test bitsame(fast, ref)
+            @test !EA._subscripts_int_exact(EA.expression_from_json(j))
+        end
+        # The compile-once guard finds a `/` in a NESTED node's body too, not
+        # just in the top-level `args` spine (it walks via `foreach_subexpr_once`).
         inner = _map(["k"], ["k" => "Y"],
                      _ix(_v("B"), _op("/", _op("*", _v("x"), 2), 2), _v("k")))
         nested = _map(["x", "y"], ["x" => "X", "y" => "Y"],
@@ -201,22 +188,30 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         @test h2 == 1 && m2 == 0
     end
 
-    @testset "guard: non-:error const boundary declines" begin
-        # A `:periodic`/`:clamp` array makes an OOB gather LEGAL, and the two
-        # paths resolve OOB differently (fold → `_resolve_const_index`; runtime
-        # gather → raw linearization). Refuse the fast path outright.
-        wrapped = EA._wrap_bounded_const(copy(B), (:periodic, :error), "B")
-        env = Dict{String,Any}("A" => A, "B" => wrapped, "s" => 1.5, "thr" => 0.0)
-        body = _op("exp", _ix(_v("B"), _v("x"), _v("y")))
-        j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
-        fast, ref, hits, miss = both_ways(j, env)
-        @test hits == 0 && miss == 1
-        @test bitsame(fast, ref)
-        # ... and the same map with the default (:error) policy DOES engage.
-        plain = EA._wrap_bounded_const(copy(B), (:error, :error), "B")
-        _, _, h2, m2 = both_ways(j, Dict{String,Any}("A" => A, "B" => plain,
-                                                     "s" => 1.5, "thr" => 0.0))
-        @test h2 == 1 && m2 == 0
+    @testset "a periodic or clamp const boundary wraps as the reference does" begin
+        # A `:periodic`/`:clamp` axis makes an out-of-range gather LEGAL. The
+        # reference resolves it at fold time (`_resolve_const_index`), the
+        # compiled paths at run time (`_const_gather_sub`), and both hand the
+        # out-of-range case to `_resolve_const_index_oob`, so each reads the
+        # same element: the compiled fill, and the compile-once sweep it falls
+        # back to, which no longer declines such an array.
+        for pol in (:periodic, :clamp)
+            wrapped = EA._wrap_bounded_const(copy(B), (pol, :error), "B")
+            env = Dict{String,Any}("A" => A, "B" => wrapped, "s" => 1.5, "thr" => 0.0)
+            for sub in (_op("+", _v("x"), 1), _op("-", _v("x"), 2))
+                body = _op("exp", _ix(_v("B"), sub, _v("y")))
+                j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
+                fast, ref, hits, miss = both_ways(j, env)
+                @test (pol, hits, miss) == (pol, 1, 0)
+                @test (pol, bitsame(fast, ref)) == (pol, true)
+                # The sweep the fill falls back to, on its own.
+                rhs = EA.expression_from_json(j)
+                ca, params = EA._setup_env_split(env)
+                ce = EA._setup_map_compile_once(rhs, 2, ca, Dict{String,Function}(), params)
+                @test ce !== nothing
+                @test (pol, bitsame(EA._fill_map_fast(ce, [5, 4], 2), ref)) == (pol, true)
+            end
+        end
     end
 
     @testset "an unsupported map still falls back, not throws" begin
@@ -230,7 +225,7 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         rhs = EA.expression_from_json(j)
         fast = EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
                                                  Dict{String,Function}())
-        ref = withenv("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE" => "1") do
+        ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
                                               Dict{String,Function}())
         end
@@ -244,12 +239,13 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         for body in (_ix(_v("B"), _op("+", _v("x"), 1), 1),
                      _ix(_v("B"), _op("-", _v("x"), 1), 2))
             rhs = EA.expression_from_json(_map(["x"], ["x" => "X"], body))
-            for disable in ("", "1")
+            for interp in (false, true)
+                mat() = EA._materialize_setup_general_map(rhs, copy(ENV0), nothing,
+                                                          IDX, Dict{String,Function}())
                 err = try
-                    withenv("ESS_SETUP_MAP_COMPILE_ONCE_DISABLE" => disable) do
-                        EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
-                                                          Dict{String,Function}())
-                    end
+                    interp ?
+                        EA._with_compiler_plan(mat, EA._compiler_plan(:interpreter)) :
+                        mat()
                     nothing
                 catch e
                     e

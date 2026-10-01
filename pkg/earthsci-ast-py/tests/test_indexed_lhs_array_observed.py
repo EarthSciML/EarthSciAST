@@ -355,12 +355,18 @@ def test_the_normalizer_declines_a_target_with_no_declared_shape(tmp_path):
     assert _normalize_indexed_observed_lhs(model) is model.equations
 
 
-def test_the_indexed_spelling_still_routes_to_the_array_pathway(tmp_path):
-    """The #231 routing arm and this normalization compose: the declared shape
-    still decides the engine after the LHS is rewritten."""
+def test_the_indexed_spelling_still_builds_and_lays_out_as_an_array(tmp_path):
+    """This normalization composes with the §11 declared-shape resolution: the
+    declared shape still sizes the variable after the LHS is rewritten.
+
+    It used to read the ROUTER's answer, which no longer exists — which machinery
+    builds a document is the caller's under `compiler=` (API_SPEC §5.8) — so the
+    claim is made where it lives, in the layout."""
     path = _write(tmp_path, _doc("p", [EQ_W_INDEXED, EQ_D_BARE], ASSERT_U), "p.esm.json")
 
-    assert esm_problem(path, (0.0, 1.0)).pathway == "array"
+    prob = esm_problem(path, (0.0, 1.0))
+    assert prob.build is not None
+    assert prob.build.shapes["Column.u"] == (4,)
 
 
 # --------------------------------------------------------------------------- #

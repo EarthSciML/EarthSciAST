@@ -383,7 +383,7 @@ end
 # equal vectors — come out as the SAME object, so downstream `===` fast paths
 # (the merge guard, `_check_fn_group_specs`) hit and a merged kernel's per-lane
 # spec table shares one object per distinct content. Identity when the pool is
-# off (outside a build, or ESS_LANE_INTERN_DISABLE=1).
+# off (outside a build, or with lane interning off).
 function _build_interp_spec(fname::AbstractString, const_args::Vector{Any})
     if fname == "interp.linear"
         return _lane_intern(_build_interp_linear_spec(fname, const_args...))
@@ -584,9 +584,11 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         throw(_unevaluable_operator(expr.op,
             "a non-scalar `const` is consumed only by an array-consuming position"))
     elseif op_sym === Symbol("true")
-        # The boolean literal (esm-spec §4.2), in the evaluator's float encoding.
+        # The boolean literals (esm-spec §4.2), in the evaluator's float encoding.
         # (`:true` is the Bool `true`, not a Symbol, so it cannot be compared here.)
         return _mknode(kind=_NK_LITERAL, literal=1.0)
+    elseif op_sym === Symbol("false")
+        return _mknode(kind=_NK_LITERAL, literal=0.0)
     elseif op_sym === :enum
         throw(_unevaluable_operator(expr.op,
             "`enum` must be lowered to `const` at load — call `lower_enums!` before compile"))
@@ -1784,14 +1786,20 @@ end
 # The accumulator is seeded from `n.literal`, the 0̄ identity baked onto the node
 # at build time from the registry table — so every arm (incl. empty-or-folded
 # max/min/×) returns the normative identity without any hardcoded constant here.
-# All four arms share ONE shape: an `@inbounds` sequential fold over the children
+# Every arm has ONE shape: an `@inbounds` sequential fold over the children
 # seeded from `n.literal`. The `:+` arm sums from 0.0 (sum_product's 0̄, the only
 # ⊕=+ semiring) in child order — allocation-free and bit-identical to the prior
 # `@tullio s = …` sum (which `zero`-seeds the same sequential accumulation). The
 # Tullio form built per-call codegen machinery (~80 B per reduced cell); keeping
-# the four arms structurally identical is what makes the RHS `f!` non-allocating
+# the arms structurally identical is what makes the RHS `f!` non-allocating
 # (ess-9cc). This node is only built with ≥1 child (the empty case folds to a
 # literal upstream).
+# bool_and_or's ⊕ (§5.1) on the evaluator's 1.0/0.0 encoding of a truth value:
+# a fold step, so both operands are evaluated, as the other bindings' reductions
+# combine them. The emitted folds (codegen_kernel.jl, array_contraction.jl) call
+# this same function.
+@inline _or_combine(acc, term) = ((acc != 0) | (term != 0)) ? 1.0 : 0.0
+
 function _eval_contraction(n::_Node, u, p, t, ::Type{T}) where {T}
     op = n.op
     children = n.children
@@ -1811,6 +1819,12 @@ function _eval_contraction(n::_Node, u, p, t, ::Type{T}) where {T}
         s = n.literal  # -∞
         @inbounds for k in eachindex(children)
             s = max(s, _eval_node(children[k], u, p, t, T))
+        end
+        return s
+    elseif op === :or
+        s = n.literal  # false
+        @inbounds for k in eachindex(children)
+            s = _or_combine(s, _eval_node(children[k], u, p, t, T))
         end
         return s
     else  # :min

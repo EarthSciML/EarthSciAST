@@ -11,13 +11,16 @@ This module is the Python equivalent of EarthSciAST.jl/src/flatten.jl.
 
 from __future__ import annotations
 
-import os
 import warnings
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from . import compiler as _compiler
 from .classification import inlined_unknowns, observed_unknowns, ode_states
+from .error_handling import (
+    TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
+)
 from .errors import EarthSciAstError
 from .esm_types import (
     ARRAY_OPS,
@@ -41,11 +44,7 @@ from .esm_types import (
     VariableMapCoupling,
     is_aggregate_op,
 )
-from .error_handling import (
-    TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
-)
 from .expr_walk import any_child, iter_children, map_children, walk
-from .json_walk import ExpressionTemplateError
 
 # ``_expand_range`` moved to the dependency-free leaf :mod:`.index_ranges` (so
 # :mod:`.numpy_interpreter` can import it at module load instead of via three
@@ -53,6 +52,7 @@ from .json_walk import ExpressionTemplateError
 # original name for backward compatibility — ``simulation_array`` and callers in
 # this module still import ``_expand_range`` from :mod:`.flatten`.
 from .index_ranges import expand_range as _expand_range
+from .json_walk import ExpressionTemplateError
 from .reactions import derive_odes
 from .substitute import has_var_placeholder, substitute
 
@@ -3231,10 +3231,10 @@ def _check_registry_coupling_rewrites(registry: dict[str, Any], rewritten: set[s
 
     This is the ONE site where such a reference is REFUSED rather than resolved
     (CONFORMANCE_SPEC §5.35). The body is authored source: rewriting it would
-    silently diverge from the expand-at-load image the same document produces
-    under `ESS_TEMPLATE_REF_DISABLE=1`. A template `param` shadows the outer
-    name (esm-spec §9.6.1), so a body that BINDS the name through its params is
-    fine -- which is exactly the fix the message names.
+    silently diverge from the expand-at-load image the same document produces.
+    A template `param` shadows the outer name (esm-spec §9.6.1), so a body that
+    BINDS the name through its params is fine -- which is exactly the fix the
+    message names.
 
     Mirrors Julia `flatten.jl::_check_registry_coupling_rewrites`.
     """
@@ -3841,12 +3841,6 @@ def _eval_index_expr(expr: Expr, index_vals: dict[str, int]) -> int | None:
     return None
 
 
-# Kill-switch for the interval-arithmetic shape-inference fast path below —
-# the A/B oracle: with ESS_SHAPE_INTERVAL_DISABLE=1 every aggregate box is
-# enumerated pointwise, which must produce identical shapes.
-_SHAPE_INTERVAL_DISABLE = os.environ.get("ESS_SHAPE_INTERVAL_DISABLE", "") == "1"
-
-
 def _interval_index_expr(expr: Expr, bounds: dict[str, tuple[int, int]]) -> tuple[int, int] | None:
     """Interval twin of :func:`_eval_index_expr`: evaluate a subscript over
     ``{symbol: (min, max)}`` bounds, returning the inclusive ``(lo, hi)`` hull.
@@ -4059,8 +4053,10 @@ def _collect_index_uses(
                 # single-occurrence subscripts every shipped rule uses (see
                 # _collect_index_uses_interval). Falls through to the
                 # enumeration below only when a subscript repeats a bound
-                # symbol (hull over-covers) or the kill-switch is set.
-                if not _SHAPE_INTERVAL_DISABLE:
+                # symbol (hull over-covers) or `compiler="interpreter"` has
+                # every fast tier off, which is what makes the pointwise
+                # enumeration the oracle this path is checked against.
+                if not _compiler.every_tier_off():
                     if any(not vl for vl in value_lists):
                         return  # empty box — enumeration visits no points
                     ibounds: dict[str, tuple[int, int]] = {

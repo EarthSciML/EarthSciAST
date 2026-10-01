@@ -7,11 +7,8 @@
 //! (`conformance_scalar_ic_test.jl`) and the Python runner
 //! (`test_scalar_ic_conformance.py`) gate the same goldens.
 //!
-//! The Rust ARRAY runtime folds a 0-D `ic` correctly, but the SCALAR
-//! interpreter in `simulate.rs` used to drop it: an `ic` LHS matched neither
-//! `state_lhs_name` nor `observed_lhs_name` in `classify_equations`, so the
-//! equation fell off the end of the classification loop and the state silently
-//! started at its declared `default`. Every state in `scalar_ic.esm` declares a
+//! A binding that drops a 0-D `ic` does not error: the state silently starts
+//! at its declared `default`. Every state in `scalar_ic.esm` declares a
 //! `default` that DIFFERS from its `ic` so that substitution cannot hide, and
 //! `y` integrates `D(y)/dt = u` so the seeded value must reach the trajectory
 //! too. `scalar_ic_in_array_model.esm` re-runs the contract inside the array
@@ -126,10 +123,9 @@ fn scalar_ic_seeding_precedence() {
     };
 
     let at0 = |sol: &earthsci_ast::Solution, name: &str| -> f64 {
+        // See `Solution::index_of`: either spelling resolves.
         let i = sol
-            .state_variable_names
-            .iter()
-            .position(|n| n == name)
+            .index_of(name)
             .unwrap_or_else(|| panic!("no state {name} in {:?}", sol.state_variable_names));
         sol.state[i][0]
     };
@@ -141,7 +137,7 @@ fn scalar_ic_seeding_precedence() {
         earthsci_ast::ProblemOptions {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -162,7 +158,7 @@ fn scalar_ic_seeding_precedence() {
             earthsci_ast::ProblemOptions {
                 p: params.clone(),
                 u0: HashMap::new().clone(),
-                compile: earthsci_ast::Compile::Always,
+                rhs: earthsci_ast::Rhs::Always,
                 ..Default::default()
             },
         )
@@ -181,7 +177,7 @@ fn scalar_ic_seeding_precedence() {
             earthsci_ast::ProblemOptions {
                 p: HashMap::new().clone(),
                 u0: ics.clone(),
-                compile: earthsci_ast::Compile::Always,
+                rhs: earthsci_ast::Rhs::Always,
                 ..Default::default()
             },
         )

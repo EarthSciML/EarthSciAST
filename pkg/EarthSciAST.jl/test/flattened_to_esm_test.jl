@@ -88,7 +88,7 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
         @test haskey(doc, "index_sets") && haskey(doc["index_sets"], "cells")
         @test haskey(doc, "function_tables") && haskey(doc["function_tables"], "fuel")
         # build + evaluate: table_lookup(code=2) -> 20, so D(y) = 20.
-        f!, u0, p, _t, vmap = E.build_evaluator(doc; initial_conditions=Dict("A.y"=>0.0))
+        f!, u0, p, _t, vmap = E._build_evaluator(doc; initial_conditions=Dict("A.y"=>0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["A.y"]] ≈ 20.0
     end
@@ -109,7 +109,7 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
             Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["y"],"wrt"=>"t"),"rhs"=>"e")]
         doc = Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"Chain"),
             "models"=>Dict{String,Any}("M"=>Dict{String,Any}("variables"=>vars,"equations"=>eqs)))
-        f!, u0, p, _t, vmap = E.build_evaluator(doc; initial_conditions=Dict("y"=>0.0))
+        f!, u0, p, _t, vmap = E._build_evaluator(doc; initial_conditions=Dict("y"=>0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["y"]] ≈ 143.0   # x=3: a4 b8 c12 d144 e143
     end

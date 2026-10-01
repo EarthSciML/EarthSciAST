@@ -43,6 +43,36 @@ function _refuse_flat_events(flat::FlattenedSystem)
     return nothing
 end
 
+# The tree-walk evaluator's refusal of a Wiener-noise parameter (`update.kind =
+# "wiener"`, esm-spec §9.6.6). Such a parameter makes the document an SDE, and
+# this evaluator integrates ODEs only: building it anyway reads the noise as a
+# constant and reports the trajectory of a different, deterministic model.
+_wiener_refusal(name::AbstractString) = TreeWalkError(
+    ERROR_CODES.UNSUPPORTED_CONSTRUCT,
+    "Wiener noise parameter '$name' is not supported by the Julia tree-walk " *
+    "evaluator; refusing the build rather than running the model without it")
+
+# Throw the refusal when a flattened system carries a Wiener-noise parameter.
+# Called next to `_refuse_flat_events`, while the flattened system is in hand.
+function _refuse_flat_wiener_noise(flat::FlattenedSystem)
+    isempty(flat.brownian_parameters) ||
+        throw(_wiener_refusal(first(keys(flat.brownian_parameters))))
+    return nothing
+end
+
+# The first Wiener-noise parameter `model` or any of its subsystems declares;
+# `nothing` when there is none.
+function _first_wiener_parameter(model::Model)::Union{Nothing,String}
+    names = brownian_parameters(model)
+    isempty(names) || return first(names)
+    for sub in values(model.subsystems)
+        sub isa Model || continue
+        found = _first_wiener_parameter(sub)
+        found === nothing || return found
+    end
+    return nothing
+end
+
 # The first event `model` or any of its subsystems declares, a continuous one
 # before a discrete one; `nothing` when there is none.
 function _first_event(model::Model)::Union{Nothing,ContinuousEvent,DiscreteEvent}
@@ -176,7 +206,7 @@ function _sub_preserving(expr::OpExpr, bindings::Dict{String,ASTExpr}, memo::_Su
     # `gk` is CONTRACTED in the first and an OUTPUT index in the second. In a
     # MATERIALIZING build (the default for both emitters since 66b8e9a6) the sum
     # is materialized, so the mean reads a buffer gather and the two binders
-    # never meet. In an INLINING build (`ESS_ARRAY_OBS_INLINE=1`, or an observed
+    # never meet. In an INLINING build (`compiler=:interpreter`, or an observed
     # excluded from materialization) the sum is spliced into the mean's body, and
     # substituting the outer `gk` used to rewrite the inner sum's own loop
     # variable. The inner body then no longer mentions `gk` while `ranges` still
@@ -536,6 +566,50 @@ function _parse_cell_key(key::AbstractString)
 end
 
 """
+    _field_ic_uniform(target, rhs, rank, const_arrays, registered_functions; params)
+        -> ((tier, cell -> value) or nothing, attempts)
+
+Steps (1) and (2) of [`_resolve_field_ic`](@ref), the two forms whose value does
+not depend on the cell, answered once for a field of rank `rank`: a LOADED FIELD
+(`:setup_loaded`) or a BROADCAST CONSTANT (`:setup_constant`). `nothing` when
+neither serves, with `attempts` recording why the constant form failed, for the
+diagnostic step (4) raises if no later form serves either. A loaded field whose
+rank matches neither the grid nor a single element raises here.
+"""
+function _field_ic_uniform(target::AbstractString, rhs::EarthSciAST.ASTExpr,
+                           rank::Int, const_arrays, registered_functions;
+                           params::AbstractDict=_EMPTY_PARAMS)
+    # (1) Loaded field supplied as a const array over the lifted grid.
+    if rhs isa VarExpr && haskey(const_arrays, rhs.name)
+        arr = const_arrays[rhs.name]
+        ndims(arr) == rank && return ((:setup_loaded, cell -> Float64(arr[cell...])),
+                                      String[])
+        if length(arr) == 1
+            v = Float64(first(arr))
+            return ((:setup_loaded, _ -> v), String[])
+        end
+        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
+            "ic($(target)): loaded field '$(rhs.name)' has ndims=$(ndims(arr)) " *
+            "which does not match the $(rank)-D lifted target grid"))
+    end
+    # (2) Broadcast constant (scalar model PARAMETERS in scope as load-time
+    # constants; STATE is not — `params` carries only resolved scalar params).
+    # A failure here is a fall-through attempt, not final: it is recorded and
+    # attached to the step-(4) diagnostic so the reason the form was rejected is
+    # never silently swallowed.
+    try
+        v = Float64(evaluate_expr(rhs, params; registered_functions=registered_functions))
+        return ((:setup_constant, _ -> v), String[])
+    catch err
+        # A resource error is not a reason to try the NEXT form — the next form
+        # allocates too — and step (4) would rebrand it as a statement about
+        # this RHS. Out, unwrapped.
+        _is_resource_error(err) && rethrow()
+        return (nothing, String["as constant: $(sprint(showerror, err))"])
+    end
+end
+
+"""
     _resolve_field_ic(target, rhs, cell, const_arrays, registered_functions) -> Float64
 
 Resolve one grid cell's initial value for a scoped-reference / array `ic`
@@ -559,46 +633,42 @@ dropped.
 """
 function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
                            cell::Vector{Int}, const_arrays, registered_functions;
-                           params::AbstractDict=_EMPTY_PARAMS)::Float64
-    # (1) Loaded field supplied as a const array over the lifted grid.
-    if rhs isa VarExpr && haskey(const_arrays, rhs.name)
-        arr = const_arrays[rhs.name]
-        if ndims(arr) == length(cell)
-            return Float64(arr[cell...])
-        elseif length(arr) == 1
-            return Float64(first(arr))
-        else
-            throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
-                "ic($(target)): loaded field '$(rhs.name)' has ndims=$(ndims(arr)) " *
-                "which does not match the $(length(cell))-D lifted target grid"))
-        end
-    end
-    # (2) Broadcast constant (scalar model PARAMETERS in scope as load-time
-    # constants; STATE is not — `params` carries only resolved scalar params).
-    # Failures here and in (3) are fall-through attempts, not final: each error
-    # is recorded and attached to the step-(4) diagnostic so the reason a form
-    # was rejected is never silently swallowed.
-    _errs = String[]
-    try
-        return Float64(evaluate_expr(rhs, params;
-                                     registered_functions=registered_functions))
-    catch err
-        # A resource error is not a reason to try the NEXT form — the next form
-        # allocates too — and step (4) would rebrand it as a statement about
-        # this RHS. Out, unwrapped.
-        _is_resource_error(err) && rethrow()
-        push!(_errs, "as constant: $(sprint(showerror, err))")
-    end
+                           params::AbstractDict=_EMPTY_PARAMS,
+                           uniform=_field_ic_uniform(target, rhs, length(cell),
+                                                     const_arrays, registered_functions;
+                                                     params=params))::Float64
+    # (1) and (2) do not depend on the cell: `uniform` is their verdict, which a
+    # caller seeding a whole field computes once and passes for every cell.
+    hit, attempts = uniform
+    hit === nothing || return Float64(hit[2](cell))
+    _errs = copy(attempts)
     # (3) Coordinate expression over the grid geometry (per-cell field); model
     # parameters (e.g. a free-name geometry `x0`/`dx`) bind via `params`.
     if rhs isa OpExpr
-        try
-            return _eval_cellwise(rhs, cell; const_arrays=const_arrays,
-                                  registered_functions=registered_functions,
-                                  params=params)
+        # THE per-cell step: `_eval_cellwise` re-runs `_index_at_cell` →
+        # `_resolve_indices` → `_compile` for this one cell, so seeding a field
+        # costs one whole lowering per cell. Steps (1) and (2) above do not,
+        # which is why the refusal sits here and not at the caller's loop.
+        v = try
+            _eval_cellwise(rhs, cell; const_arrays=const_arrays,
+                           registered_functions=registered_functions,
+                           params=params)
         catch err
             _is_resource_error(err) && rethrow()
             push!(_errs, "as coordinate expression: $(sprint(showerror, err))")
+            nothing
+        end
+        if v !== nothing
+            # Refused only once this step has been shown to be the one that
+            # SERVES the seed: a document no step can seed is a document
+            # diagnostic (step 4 below), not a compiler refusal, and saying
+            # "your compiler cannot run this" about it would name the wrong
+            # thing entirely.
+            # No cell count: this entry point is called once per cell, so what
+            # it can report is the shape of the cost, not its extent.
+            _refuse_percell_evaluation("ic($(target))",
+                "the coordinate-expression initial-state seed", nothing)
+            return v
         end
     end
     # (4) Unsupported RHS — a clear error, never a silent drop.
@@ -888,7 +958,15 @@ function _cellwise_compile_once_impl(expr::EarthSciAST.ASTExpr, nidx::Int,
                                 params::AbstractDict;
                                 bind_syms::Union{Nothing,Vector{String}}=nothing,
                                 t::Float64=0.0)
-    nidx >= 1 || return nothing
+    # `nidx == 0` is a SHAPELESS (rank-0) target — one cell, no output index to
+    # bind. It compiles exactly like any other: no reserved index parameters, an
+    # empty symbol list for `_index_at_cell_sym` (which then makes the same
+    # `index(producer)` wrap the concrete `_index_at_cell` makes for an empty
+    # cell), and one evaluation. It used to be declined here, which sent every
+    # scalar observed to the per-cell walk — and, once the compiler gained a
+    # strict tier, to a refusal for the one shape that cannot possibly walk
+    # "per cell" more than once.
+    nidx >= 0 || return nothing
     # Reserved output-index parameter names (never authored by a user), one per
     # output dimension. Guard against the (impossible-in-practice) name collision.
     # `bind_syms` overrides them with caller-chosen names (wall2 Phase D reuses
@@ -921,6 +999,55 @@ function _cellwise_compile_once_impl(expr::EarthSciAST.ASTExpr, nidx::Int,
     return _CellEval{Tuple(psyms),length(pkeys),nidx}(node, base, t)
 end
 
+# Compile a SCALAR term once with `syms` — every loop symbol it reads, output and
+# contracted alike — bound as parameters, or `nothing` if it cannot be compiled.
+#
+# The difference from `_cellwise_compile_once` is only the `_index_at_cell_sym`
+# wrap that one applies first: that one is handed a FIELD expression and has to
+# index each array-producing node at the output cell, while this one is handed a
+# term that is already scalar at a fixed (output, contracted) tuple. Everything
+# after that is the same pipeline — `_resolve_indices` with the symbols declared
+# BOUND, so a const read carrying one lowers to a runtime `_NK_CONST_GATHER`,
+# then `_compile` with the symbols in the parameter set — and the result is the
+# same `_CellEval`, called with a key vector holding the symbols' values in
+# `syms` order.
+#
+# It exists for the join-gated aggregate (Phase E in inline_tests.jl), whose
+# admitted (output, contracted) tuples are chosen by a build-time index and so
+# cannot be enumerated symbolically. Compiling the TERM once and walking the
+# gate's own key sequence keeps the whole field on one compile, which is what
+# `compiler=:native` promises; `:interpreter` remains the oracle it is checked
+# against.
+function _scalarwise_compile_once(expr::EarthSciAST.ASTExpr, syms::Vector{String},
+                                  const_arrays::AbstractDict,
+                                  registered_functions::AbstractDict,
+                                  params::AbstractDict; t::Float64=0.0)
+    isempty(syms) && return nothing
+    length(unique(syms)) == length(syms) || return nothing
+    for s in syms
+        (s == "t" || haskey(params, s)) && return nothing
+    end
+    pkeys = collect(keys(params))
+    psyms = Symbol[Symbol(k) for k in pkeys]
+    for s in syms
+        push!(psyms, Symbol(s))
+    end
+    bound = Set{String}(syms)
+    reg = Dict{String,Any}(String(k) => v for (k, v) in registered_functions)
+    node = try
+        resolved = _resolve_indices(expr,
+                                    Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
+                                    Dict{String,Int}(), const_arrays,
+                                    _EMPTY_PGATHER, nothing, bound)
+        _compile(resolved, Dict{String,Int}(), Set{Symbol}(psyms), reg)
+    catch err
+        _is_resource_error(err) && rethrow()
+        return nothing
+    end
+    base = ntuple(i -> Float64(params[pkeys[i]]), length(pkeys))
+    return _CellEval{Tuple(psyms),length(pkeys),length(syms)}(node, base, t)
+end
+
 # Function barrier: evaluate `ce` at every cell. `ce` arrives concretely typed
 # (`CE` is inferred from it), so the per-cell call is a STATIC dispatch and the loop
 # body allocates nothing beyond the single output vector.
@@ -939,7 +1066,8 @@ end
 function _expand_int_range(r::AbstractVector)
     all(x -> x isa Integer, r) || throw(TreeWalkError("E_TREEWALK_DYNAMIC_RANGE",
         "expression-valued range bounds are not supported in the tree-walk " *
-        "evaluator; use a structured-grid discretization or ESD build_evaluator"))
+        "evaluator; use a structured-grid discretization, whose bounds are " *
+        "concrete integers by construction"))
     length(r) == 2 && return Int(r[1]):Int(r[2])
     length(r) == 3 && return Int(r[1]):Int(r[2]):Int(r[3])
     throw(TreeWalkError("E_TREEWALK_RANGE_ARITY",
@@ -1049,28 +1177,45 @@ function _eval_const_int(expr::OpExpr, idx_env::Dict{String,Int},
     elseif op == "neg"
         length(c) == 1 || throw(TreeWalkError("E_TREEWALK_ARITY", "neg needs 1 arg"))
         return -_eval_const_int(c[1], idx_env, const_arrays)
+    elseif op == "const"
+        # A scalar `const` literal — what a lowered `enum` op becomes
+        # (`_lower_expr_enums`), so a categorical lookup `index(T, enum(…), …)`
+        # subscripts with one. It is the `NumExpr` arm above.
+        v = expr.value
+        (v isa Real && !(v isa Bool)) ||
+            throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
+                "a non-scalar `const` is not an integer index"))
+        return Int(v)
     elseif op == "index"
         # Indirect gather: index(const_array_name, i1, i2, ...) → Int
         # Used for mesh connectivity: u[index(cells_on_cell, c, k)] resolves the
-        # neighbor index from a pre-computed connectivity array.
+        # neighbor index from a pre-computed connectivity array. The table may
+        # also be an inline `const` literal, `index({op:const, value:[…]}, i)`,
+        # read through the interning the expression-position gather uses
+        # (`_intern_inline_const`), so both spellings share one boundary policy.
         isempty(c) && throw(TreeWalkError("E_TREEWALK_INDEX_EMPTY",
                                            "index op in index position requires at least one arg"))
         first = c[1]
-        first isa VarExpr ||
-            throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
-                "index op in index position: first arg must be a variable name"))
-        haskey(const_arrays, first.name) ||
-            throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
-                "non-const array '$(first.name)' used in index position; " *
-                "add it to const_arrays or use a state-variable index"))
-        arr = const_arrays[first.name]
+        if first isa OpExpr && first.op == "const" && first.value isa AbstractVector
+            arr, name = _intern_inline_const(first, const_arrays)
+        else
+            first isa VarExpr ||
+                throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
+                    "index op in index position: first arg must be a variable name " *
+                    "or an inline `const` array"))
+            haskey(const_arrays, first.name) ||
+                throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
+                    "non-const array '$(first.name)' used in index position; " *
+                    "add it to const_arrays or use a state-variable index"))
+            arr, name = const_arrays[first.name], first.name
+        end
         idx_args = c[2:end]
         length(idx_args) == ndims(arr) ||
             throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
-                "const array '$(first.name)' is $(ndims(arr))D but got $(length(idx_args)) indices"))
+                "const array '$(name)' is $(ndims(arr))D but got $(length(idx_args)) indices"))
         int_indices = [_eval_const_int(a, idx_env, const_arrays) for a in idx_args]
         for d in 1:ndims(arr)
-            int_indices[d] = _resolve_const_index(arr, first.name, d, int_indices[d], size(arr, d))
+            int_indices[d] = _resolve_const_index(arr, name, d, int_indices[d], size(arr, d))
         end
         return Int(round(arr[int_indices...]))
     end

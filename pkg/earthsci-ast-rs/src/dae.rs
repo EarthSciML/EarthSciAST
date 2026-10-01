@@ -29,9 +29,8 @@
 //!   drops the algebraic equation, producing a pure-ODE [`EsmFile`] (and
 //!   rejects any residual, non-trivial algebraic equation with
 //!   `E_NONTRIVIAL_DAE`). This is a document-to-document rewrite.
-//! * **`simulate.rs` (`Compiled` build)** *keeps* them — it topologically
-//!   orders observed / trivially-algebraic states (`resolve_observed` /
-//!   `order_algebraic_states`) and re-evaluates them each step, rather than
+//! * **the array runtime (`simulate_array`)** *keeps* them — it orders the
+//!   observed rules by dependency and re-evaluates them each step, rather than
 //!   substituting them away.
 //!
 //! So `discretize()` here is not a prerequisite for `simulate()`; each has its

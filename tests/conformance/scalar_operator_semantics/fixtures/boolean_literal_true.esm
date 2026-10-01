@@ -1,0 +1,83 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "TrueOp",
+    "description": "The `true` literal operator of esm-spec \u00a74.2's evaluable core, on its own. It was split out of `scalar_operator_semantics` when Rust's strict `native` had no wholesale lowering for it and refused the whole document with `compiler_refused_rule` (issue #462). Every binding runs it under both compilers now.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "scalar_operator_semantics",
+      "inline-test",
+      "boolean-literal"
+    ],
+    "license": "MIT"
+  },
+  "models": {
+    "TrueOp": {
+      "variables": {
+        "literal_true": {
+          "type": "unknown",
+          "units": "1",
+          "description": "The operator under test: The `true` literal operator of esm-spec \u00a74.2's evaluable core, on its own. It was split out of `scalar_operator_semantics` when Rust's strict `native` had no wholesale lowering for it and refused the whole document with `compiler_refused_rule` (issue #462). Every binding runs it under both compilers now."
+        },
+        "probe": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Integrates the observed, so the value is read as well as computed."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "literal_true",
+          "rhs": {
+            "op": "true",
+            "args": []
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "probe"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "literal_true"
+        }
+      ],
+      "tests": [
+        {
+          "id": "literal_true_value",
+          "description": "The `true` literal operator of esm-spec \u00a74.2's evaluable core, on its own. It was split out of `scalar_operator_semantics` when Rust's strict `native` had no wholesale lowering for it and refused the whole document with `compiler_refused_rule` (issue #462). Every binding runs it under both compilers now.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "tolerance": {
+            "rel": 0.0,
+            "abs": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "literal_true",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "probe",
+              "time": 1.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-09,
+                "abs": 1e-11
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

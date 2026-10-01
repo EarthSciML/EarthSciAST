@@ -149,7 +149,7 @@ fn rank2_inline_array_is_read_row_major() {
         &file,
         (0.0, 1.0),
         earthsci_ast::ProblemOptions {
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -200,7 +200,7 @@ fn inline_array_shape_mismatch_is_a_build_error() {
         &file,
         (0.0, 1.0),
         earthsci_ast::ProblemOptions {
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )

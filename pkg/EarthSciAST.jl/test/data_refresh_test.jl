@@ -57,7 +57,7 @@ struct _BareSource end
         model = ESM.Model(Dict("y" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_D("y"), _idx("forcing", _i(1)))])
         buf = [2.0]                       # setup-time materialize for the first segment [0,1)
-        f!, u0, p, _ts, vm = build_evaluator(model;
+        f!, u0, p, _ts, vm = EarthSciAST._build_evaluator(model;
             initial_conditions=Dict("y" => 0.0), param_arrays=Dict("forcing" => buf))
 
         prov = MockProvider([1.0, 2.0], Dict(
@@ -94,7 +94,7 @@ struct _BareSource end
                ESM.Equation(_D("y"), _v("dep"))]
         model = ESM.Model(vars, eqs)
         buf = [2.0]
-        f!, u0, p, _ts, vm = build_evaluator(model;
+        f!, u0, p, _ts, vm = EarthSciAST._build_evaluator(model;
             initial_conditions=Dict("y" => 0.0), param_arrays=Dict("forcing" => buf))
 
         prov = MockProvider([1.0, 2.0], Dict(
@@ -115,7 +115,7 @@ struct _BareSource end
         model = ESM.Model(Dict("y" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_D("y"), _idx("forcing", _i(1)))])
         buf = [4.0]
-        f!, u0, p, _ts, vm = build_evaluator(model;
+        f!, u0, p, _ts, vm = EarthSciAST._build_evaluator(model;
             initial_conditions=Dict("y" => 0.0), param_arrays=Dict("forcing" => buf))
 
         const_prov = MockProvider(Float64[], Dict{Float64,Dict{String,Vector{Float64}}}())
@@ -137,7 +137,7 @@ struct _BareSource end
         model = ESM.Model(Dict("y" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_D("y"), _op("+", _idx("a", _i(1)), _idx("b", _i(1))))])
         abuf = [1.0]; bbuf = [1.0]
-        f!, u0, p, _ts, vm = build_evaluator(model;
+        f!, u0, p, _ts, vm = EarthSciAST._build_evaluator(model;
             initial_conditions=Dict("y" => 0.0),
             param_arrays=Dict("a" => abuf, "b" => bbuf))
 
@@ -166,7 +166,7 @@ struct _BareSource end
                           _ao1(_op("+", _idx("forcing", _v("i")), _idx("u", _v("i"))), "i", 1, N))])
         buf = collect(1.0:Float64(N))
         ics = Dict("u[$k]" => 0.0 for k in 1:N)
-        f!, u0, p, _ts, _vm = build_evaluator(model;
+        f!, u0, p, _ts, _vm = EarthSciAST._build_evaluator(model;
             initial_conditions=ics, param_arrays=Dict("forcing" => buf))
         du = similar(u0)
         @test rhs_alloc_bytes(f!, du, u0, p, 0.0) == 0

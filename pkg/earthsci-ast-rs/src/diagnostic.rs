@@ -403,6 +403,19 @@ diagnostic_code_registry! {
     /// A continuous or discrete event, or an implicit equation, reached an
     /// evaluator that cannot run it (esm-spec §9.6.6).
     UNSUPPORTED_CONSTRUCT = "unsupported_construct";
+    /// `ProblemOptions::compiler` named a value outside the closed vocabulary
+    /// of API_SPEC §5.8 (`interpreter`, `native`, `xla`, `mtk`, `sympy`).
+    COMPILER_UNKNOWN = "compiler_unknown";
+    /// The named compiler is in the vocabulary, but this binding, build or
+    /// process cannot provide it — a compiler this binding does not implement,
+    /// a Cargo feature not compiled in, a runtime not configured. The message
+    /// names what would have to be loaded or built. Never answered by running
+    /// a different compiler (esm-libraries-spec §2.5.10).
+    COMPILER_UNAVAILABLE = "compiler_unavailable";
+    /// The chosen compiler cannot run this document. Raised at BUILD, naming
+    /// the compiler, the rule (an equation or an observed, component-qualified)
+    /// and the reason. A refusal, never a fallback.
+    COMPILER_REFUSED_RULE = "compiler_refused_rule";
     /// A relational node in a continuous (ODE-position) expression.
     RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous";
     /// A `faq` binder (a `ranges` key or an `output_idx` entry) spelled
@@ -560,6 +573,9 @@ mod error_code_tests {
             "closed_function_arg_type",
             "closed_function_arity",
             "closed_function_overflow",
+            "compiler_refused_rule",
+            "compiler_unavailable",
+            "compiler_unknown",
             "const_units_version_too_old",
             "coupling_edge_unknown_role",
             "coupling_import_bind_not_a_component",
