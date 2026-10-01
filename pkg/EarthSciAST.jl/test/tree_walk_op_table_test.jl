@@ -214,7 +214,7 @@ end
                                   _o("index", _v("u"), _v("i"))))
         deqa = ESM.Equation(lhs, rhs)
         model = ESM.Model(vars, ESM.Equation[deqx, deqa])
-        f!, u0, p, tspan, var_map = build_evaluator(model;
+        f!, u0, p, tspan, var_map = EarthSciAST._build_evaluator(model;
             const_arrays=Dict("w" => [1.0, 2.0, 3.0, 4.0]),
             initial_conditions=Dict("u[1]" => 1.0, "u[2]" => 2.0,
                                     "u[3]" => 3.0, "u[4]" => 4.0))

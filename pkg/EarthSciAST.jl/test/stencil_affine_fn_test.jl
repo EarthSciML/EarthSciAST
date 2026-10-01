@@ -6,7 +6,7 @@
 # `_eval_acc_op` gained a `:fn` arm mirroring `_eval_node_op` (SAME cores, SAME
 # const tables). Build each model two ways and require BIT-IDENTITY:
 #   * default build          → affine access-kernel path (must FIRE: n_acc ≥ 1)
-#   * ESS_STENCIL_DISABLE=1 → per-cell reference
+#   * `compiler=:interpreter` → per-cell reference
 # The const table/axis of an interp are captured in the spec payload, not as
 # children — only the scalar query args are lowered as lanes, so a query that is a
 # neighbour gather (ghost at the boundary → literal 0.0) is exercised too.
@@ -16,15 +16,12 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 function _affine_build_fn(model, ics; affine::Bool, const_arrays=Dict())
-    envs = affine ? ("ESS_STENCIL_DISABLE" => nothing,) :
-                    ("ESS_STENCIL_DISABLE" => "1",)
-    withenv(envs...) do
-        f!, u0, p, _tspan, vmap, diag =
-            ESM._build_evaluator_impl(model; initial_conditions=ics, form=:inplace,
-                                      const_arrays=const_arrays)
-        du = zero(u0); f!(du, u0, p, 0.0)
-        (du, u0, vmap, diag)
-    end
+    f!, u0, p, _tspan, vmap, diag =
+        ESM._build_evaluator_impl(model; initial_conditions=ics, form=:inplace,
+                                  const_arrays=const_arrays,
+                                  compiler = affine ? :native : :interpreter)
+    du = zero(u0); f!(du, u0, p, 0.0)
+    return (du, u0, vmap, diag)
 end
 
 const _LT = [10.0, 20.0, 40.0, 80.0, 160.0]

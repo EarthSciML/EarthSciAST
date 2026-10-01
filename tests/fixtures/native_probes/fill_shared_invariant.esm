@@ -1,0 +1,218 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "native_probe_fill_shared_invariant",
+    "description": "A materialized array observed w whose fill kernel carries a lane-invariant closed-function subtree (interp.linear over t) that the state kernels also carry. Native shares the state kernels' copy through the scalar prelude and keeps the fill level's in its own invariant tier; the interpreter inlines everything. The two must agree bit for bit.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "native",
+      "probe"
+    ]
+  },
+  "models": {
+    "Fill": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": [
+            "i"
+          ],
+          "default": 1.0
+        },
+        "w": {
+          "type": "unknown",
+          "shape": [
+            "i"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "w",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                },
+                {
+                  "op": "fn",
+                  "name": "interp.linear",
+                  "args": [
+                    {
+                      "op": "const",
+                      "args": [],
+                      "value": [
+                        1.0,
+                        1.5,
+                        0.75,
+                        2.0
+                      ]
+                    },
+                    {
+                      "op": "const",
+                      "args": [],
+                      "value": [
+                        0.0,
+                        0.5,
+                        1.0,
+                        2.0
+                      ]
+                    },
+                    "t"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    -0.3,
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "w",
+                            {
+                              "op": "-",
+                              "args": [
+                                "i",
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "w",
+                            {
+                              "op": "+",
+                              "args": [
+                                "i",
+                                1
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.1,
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "fn",
+                          "name": "interp.linear",
+                          "args": [
+                            {
+                              "op": "const",
+                              "args": [],
+                              "value": [
+                                1.0,
+                                1.5,
+                                0.75,
+                                2.0
+                              ]
+                            },
+                            {
+                              "op": "const",
+                              "args": [],
+                              "value": [
+                                0.0,
+                                0.5,
+                                1.0,
+                                2.0
+                              ]
+                            },
+                            "t"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "i"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

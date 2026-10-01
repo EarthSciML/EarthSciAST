@@ -147,6 +147,64 @@ describe('flatten converts a degree argument', () => {
   })
 })
 
+// An array element carries its array's unit on the evaluation path, so
+// `cos(index(lat, i))` with `lat` in `deg` converts like `cos(lat)` does. The
+// checker has no rule for `index` or `faq` (esm-spec §4.8.4), and the rewrite
+// used to read the argument with the checker's rules, so it left every array
+// element unconverted.
+describe('flatten converts a degree ARRAY ELEMENT', () => {
+  const fixture = (): ReturnType<typeof loadFixture> =>
+    loadFixture('conformance', 'scalar_operator_semantics', 'fixtures', 'angle_array_element.esm')
+
+  it('folds pi/180 into index and faq-body arguments and leaves the rad control alone', () => {
+    const flat = flatten(fixture())
+    const args = new Map<string, Expression>()
+    const walk = (name: string, expr: Expression): void => {
+      if (typeof expr !== 'object' || expr === null || Array.isArray(expr)) return
+      const node = expr as ExpressionNode
+      if (
+        (node.op === 'sin' || node.op === 'cos' || node.op === 'tan') &&
+        node.args !== undefined &&
+        node.args.length === 1
+      ) {
+        args.set(name, node.args[0] as Expression)
+      }
+      for (const a of node.args ?? []) walk(name, a as Expression)
+      if (node.expr !== undefined) walk(name, node.expr as Expression)
+    }
+    for (const eq of flat.equations) {
+      if (typeof eq.lhs === 'string') walk(eq.lhs.split('.').pop() as string, eq.rhs)
+    }
+    expect([...args.keys()].sort()).toEqual([
+      'cos_lat',
+      'cos_lat_rad',
+      'sin_colat',
+      'sin_scalar',
+      'sin_sum',
+    ])
+    for (const name of ['cos_lat', 'sin_colat', 'sin_sum']) {
+      const node = args.get(name) as ExpressionNode
+      // `index(A, ...) * (pi/180)`: the element, then the declared scale, once.
+      expect(node.op, `${name}: expected the folded product`).toBe('*')
+      expect((node.args?.[0] as ExpressionNode).op, `${name}: the element first`).toBe('index')
+      expect(node.args?.[1], `${name}: the factor is the declared scale`).toBe(Math.PI / 180)
+    }
+    expect((args.get('sin_scalar') as ExpressionNode).op).toBe('*')
+    // The `rad` control is never touched.
+    expect((args.get('cos_lat_rad') as ExpressionNode).op).toBe('index')
+  })
+
+  it('leaves the checker reading the authored spelling', () => {
+    const result = validate(fixture())
+    expect(result.structural_errors).toEqual([])
+    expect(result.is_valid).toBe(true)
+    // The checker still has no rule for an array element.
+    const deg = parseUnitForConversion('deg')
+    const bindings = new Map<string, ParsedUnit>([['lat', deg]])
+    expect(checkDimensions({ op: 'index', args: ['lat', 1] }, bindings).dimensions).toBeNull()
+  })
+})
+
 describe('the shared fixtures', () => {
   it('refuses the scaled-argument fixture and names the repair', () => {
     const result = validate(

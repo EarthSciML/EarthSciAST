@@ -19,7 +19,7 @@
 //! reference cannot have the two errors cancel and still pass.
 //!
 //! The Rust array runtime strips the single-model `<namespace>.` prefix from
-//! override keys (`Compiled::normalize_override_keys`), so the local spelling
+//! override keys (`canonicalize_override_keys`), so the local spelling
 //! already bound here; this suite pins that against the reference binding.
 
 #![cfg(not(target_arch = "wasm32"))]
@@ -144,7 +144,7 @@ fn local_and_qualified_override_keys_both_bind_the_build_scope() {
             earthsci_ast::ProblemOptions {
                 p: params.clone(),
                 u0: HashMap::new().clone(),
-                compile: earthsci_ast::Compile::Always,
+                rhs: earthsci_ast::Rhs::Always,
                 ..Default::default()
             },
         )

@@ -1,0 +1,103 @@
+{
+ "category": "shaped_parameter_const_arrays",
+ "version": "1.0",
+ "description": "Cross-binding conformance for a caller's `const_arrays` entry that supplies a SHAPED parameter's value (CONFORMANCE_SPEC §5.32.5). Such an entry is the same binding as an inline-array `parameter_overrides` entry for the parameter, so its key resolves by the same esm-spec §6.6.2 rules: the flattened name (`Column.k`) and the model-local name (`k`) both designate the parameter. Julia and Python matched the flattened name only. With no `default`, Julia refused the document with `E_TREEWALK_UNSUPPORTED_SHAPE` (the parameter backed by nothing) and Python bound it as a scalar and failed the per-cell read with 'index applied to scalar value'; with a scalar `default`, both silently used the default and ignored the caller's array. Rust resolved both spellings. Each case builds the fixture through `esm_problem` with the listed `const_arrays` under every listed compiler and reads the state-free observed back through `observed_field`; the values are exact, so the comparison is exact.",
+ "bindings_required": [
+  "julia",
+  "python",
+  "rust"
+ ],
+ "scope_excluded": {
+  "go": "rewrite-only port; no esm_problem or observed_field",
+  "typescript": "no esm_problem with a const-array channel"
+ },
+ "compilers": [
+  "native",
+  "interpreter"
+ ],
+ "cases": [
+  {
+   "id": "no_default_qualified_key",
+   "fixture": "fixtures/shaped_param_no_default.esm",
+   "const_arrays": {
+    "Column.k": [
+     0.25,
+     0.5,
+     1.0
+    ]
+   },
+   "observed": "g",
+   "expected": [
+    1.5,
+    2.0,
+    3.0
+   ],
+   "note": "the flattened name: the spelling every binding already accepted"
+  },
+  {
+   "id": "no_default_local_key",
+   "fixture": "fixtures/shaped_param_no_default.esm",
+   "const_arrays": {
+    "k": [
+     0.25,
+     0.5,
+     1.0
+    ]
+   },
+   "observed": "g",
+   "expected": [
+    1.5,
+    2.0,
+    3.0
+   ],
+   "note": "the model-local name designates Column.k (esm-spec §6.6.2 rule 3)"
+  },
+  {
+   "id": "default_local_key_outranks_default",
+   "fixture": "fixtures/shaped_param_scalar_default.esm",
+   "const_arrays": {
+    "k": [
+     0.25,
+     0.5,
+     1.0
+    ]
+   },
+   "observed": "g",
+   "expected": [
+    1.5,
+    2.0,
+    3.0
+   ],
+   "note": "caller data outranks the declared default under the local spelling too; a binding that missed the key reads [2, 2, 2]"
+  },
+  {
+   "id": "default_qualified_key_outranks_default",
+   "fixture": "fixtures/shaped_param_scalar_default.esm",
+   "const_arrays": {
+    "Column.k": [
+     0.25,
+     0.5,
+     1.0
+    ]
+   },
+   "observed": "g",
+   "expected": [
+    1.5,
+    2.0,
+    3.0
+   ]
+  },
+  {
+   "id": "default_without_const_arrays",
+   "fixture": "fixtures/shaped_param_scalar_default.esm",
+   "const_arrays": {},
+   "observed": "g",
+   "expected": [
+    2.0,
+    2.0,
+    2.0
+   ],
+   "note": "control: the scalar default broadcasts (§5.32)"
+  }
+ ]
+}

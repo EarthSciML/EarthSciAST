@@ -37,6 +37,16 @@ name: XLA Compiled Backends
 # this workflow's to change, so the assertion lives in a step of its own.
 # If a `--require-available` option is ever added to
 # `scripts/run-compiled-rhs-conformance.py`, replace the assert steps with it.
+#
+# THE SECOND TIER THIS WORKFLOW OWNS is `compiler_agreement` (CONFORMANCE_SPEC
+# §5.44) under `--compiler xla`. Its ledger makes rust `bindings_required` for
+# that compiler and julia `bindings_optional`, and for the same reasons as above
+# `scripts/test-conformance.sh` registers no `xla` stage in its default run — so
+# this is the only workflow where that requirement can be answered at all. The
+# rust-xla job runs it through `./scripts/test-conformance.sh
+# --compiler-agreement-only xla` once the extension is unpacked and
+# XLA_EXTENSION_DIR exported. No assert step is needed there: `required` makes
+# an `unavailable` non-zero on the runner's own exit code.
 
 on:
   # The two path lists are spelled out twice, identically, on purpose:
@@ -48,11 +58,16 @@ on:
       - 'pkg/earthsci-ast-rs/**'
       - 'pkg/EarthSciAST.jl/**'
       - 'tests/conformance/compiled_rhs/**'
+      - 'tests/conformance/compiler_agreement/**'
       - 'scripts/run-compiled-rhs-conformance.py'
+      - 'scripts/run-compiler-agreement-conformance.py'
       # The runner imports this; a change here can move the tier's verdict
       # without touching the runner itself.
       - 'scripts/conformance_lib.py'
       - 'scripts/assert-compiled-rhs-available.py'
+      # The `xla` compiler-agreement stages are driven through this script's
+      # `--compiler-agreement-only` gate, so a change to it moves this verdict.
+      - 'scripts/test-conformance.sh'
       - 'scripts/fetch-xla-extension.sh'
       - '.github/workflows/xla-backends.yml'
   pull_request:
@@ -61,9 +76,12 @@ on:
       - 'pkg/earthsci-ast-rs/**'
       - 'pkg/EarthSciAST.jl/**'
       - 'tests/conformance/compiled_rhs/**'
+      - 'tests/conformance/compiler_agreement/**'
       - 'scripts/run-compiled-rhs-conformance.py'
+      - 'scripts/run-compiler-agreement-conformance.py'
       - 'scripts/conformance_lib.py'
       - 'scripts/assert-compiled-rhs-available.py'
+      - 'scripts/test-conformance.sh'
       - 'scripts/fetch-xla-extension.sh'
       - '.github/workflows/xla-backends.yml'
   workflow_dispatch:
@@ -228,6 +246,49 @@ jobs:
           path: conformance-results/compiled_rhs/rust_compiled_report.json
           if-no-files-found: error
 
+      # The compiler-agreement tier's `xla` producer (CONFORMANCE_SPEC §5.44).
+      # THIS is the job that can run it. The tier ledger
+      # (tests/conformance/compiler_agreement/manifest.json) makes rust
+      # `bindings_required` for `xla`, but `scripts/test-conformance.sh`
+      # registers no `xla` stage in its default run, because a plain checkout has
+      # no `xla_extension` and an unconfigured build answers `unavailable` —
+      # which for a required binding is RED. Until this step, that requirement
+      # could therefore go neither red nor green anywhere.
+      #
+      # `--compiler-agreement-only xla` runs the harness self-test and the
+      # producer stages the LEDGER names for `xla`, so it cannot drift from the
+      # manifest. Today that is rust (required) plus julia (optional). Julia is
+      # not installed in this job, and the gate SKIPS an optional binding whose
+      # toolchain is absent, with a warning, rather than failing — which is
+      # exactly what `bindings_optional` means. Julia's `xla` stays optional.
+      #
+      # XLA_EXTENSION_DIR has to be in this step's environment, not only the
+      # build's: the runner adds the `xla` cargo feature to the adapter for
+      # `--compiler xla` only when it is set, and builds WITHOUT the feature
+      # otherwise, which would make this gate report `unavailable` (RED). The
+      # export step above wrote it to $GITHUB_ENV, so every later step in this
+      # job already has it; restating it here keeps that dependency visible on
+      # the step that needs it.
+      #
+      # No extra assert step, unlike the compiled_rhs producer above: rust is
+      # `bindings_required` for `xla`, so the runner's own exit code is already
+      # non-zero on an `unavailable`.
+      - name: compiler_agreement tier — xla
+        env:
+          XLA_EXTENSION_DIR: ${{ env.XLA_EXTENSION_DIR }}
+        run: ./scripts/test-conformance.sh --compiler-agreement-only xla
+
+      - name: Upload the compiler_agreement reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-agreement-xla-${{ github.run_number }}
+          path: conformance-results/compiler_agreement/
+          # `warn`, not `error`: the producer writes a report even when it fails,
+          # so a missing one means something broke earlier, and a second red step
+          # saying "no artifact" would only bury the real one.
+          if-no-files-found: warn
+
   # ---------------------------------------------------------------------------
   # Julia: the direct StableHLO emitter's own test file, then the compiled_rhs
   # tier's Julia compiled producer.
@@ -302,13 +363,43 @@ jobs:
             include("reactant_direct_emit_test.jl")
           '
 
+      # A SECOND Reactant environment, and the reason is the same one that gave
+      # the compiled_rhs adapter its own: the file below drives the SOLVE path,
+      # so it needs SciMLBase and an integrator, which
+      # compiled_rhs_reactant_env deliberately does not carry (it exists for the
+      # adapter and nothing else). compiler_agreement_reactant_env already
+      # carries both, plus Reactant, so it is instantiated here rather than a
+      # third env being invented. The depot is shared, so Reactant itself is
+      # already precompiled by the step above and this resolve is cheap.
+      - name: Instantiate the compiler-agreement Reactant environment
+        run: |
+          julia --project=pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env -e '
+            using Pkg
+            Pkg.develop(path="pkg/EarthSciAST.jl")
+            Pkg.instantiate()
+            Pkg.precompile()
+          '
+
+      # `esm_problem(…; compiler = :xla)` — the emitter reached from the Problem
+      # surface rather than from the emitter's own entry point. Run HERE and
+      # nowhere else, for the same reason the step above is: it is the only job
+      # that carries Reactant. Without this step the compiler keyword's whole
+      # Julia lane would ship with no CI coverage, since conformance-testing.yml
+      # never sets ESM_TEST_REACTANT and so takes runtests.jl's skip branch.
+      - name: compiler = :xla on the solve path
+        run: |
+          julia --project=pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env -e '
+            cd("pkg/EarthSciAST.jl/test")
+            include("compiler_xla_test.jl")
+          '
+
       - name: compiled_rhs harness self-test
         run: python3 scripts/run-compiled-rhs-conformance.py --self-test
 
       - name: compiled_rhs tier — Julia compiled producer
         id: producer
         env:
-          EARTHSCI_COMPILED_RHS_ADAPTER_JULIA: julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl
+          EARTHSCI_COMPILED_RHS_ADAPTER_JULIA: julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl --compiler native
         run: |
           mkdir -p conformance-results/compiled_rhs
           python3 scripts/run-compiled-rhs-conformance.py \

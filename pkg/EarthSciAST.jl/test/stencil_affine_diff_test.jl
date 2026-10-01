@@ -1,7 +1,7 @@
 # End-to-end differential test for the affine polyhedral build (ess-affine).
 # Build the SAME model two ways and require bit-identical du:
 #   * default build       → the affine access-kernel path (_try_affine_stencil)
-#   * ESS_STENCIL_DISABLE=1 → the byte-identical per-cell reference path
+#   * `compiler=:interpreter` → the byte-identical per-cell reference path
 # Also assert the affine path actually FIRED (n_acc_kernels ≥ 1), so a silent
 # fallback can't make the comparison pass trivially.
 using Test
@@ -82,16 +82,13 @@ end
 
 # (du, u0, vmap, diag) for a model, under the affine path or the per-cell path.
 function _affine_build(model, ics; affine::Bool, form=:inplace, const_arrays=Dict())
-    envs = affine ? ("ESS_STENCIL_DISABLE" => nothing,) :
-                    ("ESS_STENCIL_DISABLE" => "1",)
-    withenv(envs...) do
-        f!, u0, p, _tspan, vmap, diag =
-            ESM._build_evaluator_impl(model; initial_conditions=ics, form=form,
-                                      const_arrays=const_arrays)
-        du = zero(u0)
-        f!(du, u0, p, 0.0)
-        (du, u0, vmap, diag)
-    end
+    f!, u0, p, _tspan, vmap, diag =
+        ESM._build_evaluator_impl(model; initial_conditions=ics, form=form,
+                                  const_arrays=const_arrays,
+                                  compiler = affine ? :native : :interpreter)
+    du = zero(u0)
+    f!(du, u0, p, 0.0)
+    return (du, u0, vmap, diag)
 end
 
 @testset "affine stencil ≡ per-cell (differential, ess-affine)" begin

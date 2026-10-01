@@ -5,8 +5,15 @@ tier on every path they specialize — the pure-map stencils, the makearray
 region values, and the broadcast contraction — because the conformance suite's
 discipline for interpreter changes is bitwise equivalence, not tolerance. Each
 test evaluates the same node shape twice on fresh trees (the codegen result is
-cached on the node): once with codegen enabled, once with the
-``_CODEGEN_DISABLE`` kill-switch oracle, and compares uint64 views.
+cached on the node): once under ``compiler="native"``, once under
+``compiler="interpreter"``, and compares uint64 views.
+
+The two policies installed here are the ones ``esm_problem`` installs for those
+two compiler values, so the oracle is selected by the argument a caller passes
+rather than by an environment switch or a module constant (esm-libraries-spec
+§2.5.10). ``native`` is installed NON-strict: these tests drive synthetic nodes
+to pin the tiers' arithmetic, and the strict refusal a per-cell landing earns is
+pinned in ``test_compiler_selection.py``, where a document earns it.
 """
 
 from __future__ import annotations
@@ -16,7 +23,16 @@ import pytest
 
 from earthsci_ast import numpy_codegen as NC
 from earthsci_ast import numpy_interpreter as NI
+from earthsci_ast.compiler import CompilerPolicy, use_policy
 from earthsci_ast.esm_types import ExprNode
+
+
+def _native():
+    return use_policy(CompilerPolicy(compiler="native"))
+
+
+def _interpreter():
+    return use_policy(CompilerPolicy(compiler="interpreter", every_tier_off=True))
 
 
 def _idx(name, *subs):
@@ -48,14 +64,11 @@ def _ctx(arrays=None, params=None):
 
 
 def _eval_both(make_agg, arrays=None, params=None):
-    """(codegen result, kill-switch oracle result) on fresh trees each."""
-    fast = NI._eval_faq(make_agg(), _ctx(arrays, params))
-    prev = NI._CODEGEN_DISABLE
-    NI._CODEGEN_DISABLE = True
-    try:
+    """(``native`` result, ``interpreter`` oracle result) on fresh trees each."""
+    with _native():
+        fast = NI._eval_faq(make_agg(), _ctx(arrays, params))
+    with _interpreter():
         ref = NI._eval_faq(make_agg(), _ctx(arrays, params))
-    finally:
-        NI._CODEGEN_DISABLE = prev
     return fast, ref
 
 
@@ -108,11 +121,19 @@ def test_makearray_regions_are_bitwise(u) -> None:
     def make():
         interior = _mul(0.5, _add(_idx("u", _add("i", 1), "j"), _idx("u", _sub("i", 1), "j")))
         edge = _mul("i", 2.0)
+        # The stencil makearray carries its own loop symbols, as the pointwise
+        # lift sets them (esm-spec §10.5): each region's value indexes the grid
+        # relative to THIS node's box, not to whatever cell an enclosing walk
+        # happens to be on. Without them the interpreter's per-cell walk would
+        # evaluate the interior body at the edge region's cells and gather
+        # ``u[i+1, j]`` past the array — a fixture artifact, not a difference
+        # between the tiers.
         ma = ExprNode(
             op="makearray",
             args=[],
             regions=[[[1, 8], [1, 5]], [[2, 7], [2, 4]]],
             values=[edge, interior],
+            output_idx=["i", "j"],
         )
         return ExprNode(
             op="faq",
@@ -258,9 +279,10 @@ def test_repeated_symbols_and_scalar_funcs(u) -> None:
     _assert_bitwise(fast, ref)
 
 
-def test_kill_switch_leaves_node_unmarked(u) -> None:
-    """Under ``_CODEGEN_DISABLE`` no codegen attribute is stored on the node
-    (the closure tier runs untouched, so the oracle really is the old path)."""
+def test_interpreter_leaves_node_unmarked(u) -> None:
+    """Under ``compiler="interpreter"`` no codegen attribute is stored on the
+    node, so the oracle really is a second implementation and not the generated
+    function reached by another route."""
 
     def make():
         return ExprNode(
@@ -272,18 +294,14 @@ def test_kill_switch_leaves_node_unmarked(u) -> None:
         )
 
     node = make()
-    prev = NI._CODEGEN_DISABLE
-    NI._CODEGEN_DISABLE = True
-    try:
+    with _interpreter():
         NI._eval_faq(node, _ctx({"u": u}))
-    finally:
-        NI._CODEGEN_DISABLE = prev
     assert not hasattr(node, "_cg_map")
 
 
 def test_error_parity_unresolved_symbol(u) -> None:
-    """A body naming an unknown symbol raises the same error class with and
-    without codegen (both paths decline the map and fail in the scalar loop)."""
+    """A body naming an unknown symbol raises the same error class under both
+    compilers (both decline the map and fail in the scalar loop)."""
 
     def make():
         return ExprNode(
@@ -294,15 +312,10 @@ def test_error_parity_unresolved_symbol(u) -> None:
             expr=_mul(_idx("u", "i", 1), "nonexistent"),
         )
 
-    with pytest.raises(NI.NumpyInterpreterError, match="Unresolved symbol"):
+    with _native(), pytest.raises(NI.NumpyInterpreterError, match="Unresolved symbol"):
         NI._eval_faq(make(), _ctx({"u": u}))
-    prev = NI._CODEGEN_DISABLE
-    NI._CODEGEN_DISABLE = True
-    try:
-        with pytest.raises(NI.NumpyInterpreterError, match="Unresolved symbol"):
-            NI._eval_faq(make(), _ctx({"u": u}))
-    finally:
-        NI._CODEGEN_DISABLE = prev
+    with _interpreter(), pytest.raises(NI.NumpyInterpreterError, match="Unresolved symbol"):
+        NI._eval_faq(make(), _ctx({"u": u}))
 
 
 def test_compile_box_body_declines_on_bad_static_subtree() -> None:

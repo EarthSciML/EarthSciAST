@@ -16,8 +16,9 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum CompileError {
     /// A model construct this evaluator cannot run: a continuous or discrete
-    /// event, or an implicit equation (an equation whose LHS is an expression
-    /// rather than an unknown, `D(unknown)` or `ic(unknown)`). esm-spec §9.6.6
+    /// event, an implicit equation (an equation whose LHS is an expression
+    /// rather than an unknown, `D(unknown)` or `ic(unknown)`), or a Wiener-noise
+    /// parameter. esm-spec §9.6.6
     /// `unsupported_construct`.
     ///
     /// Refused at build rather than skipped: a model run without its event, or
@@ -29,13 +30,43 @@ pub enum CompileError {
         code = crate::diagnostic::codes::UNSUPPORTED_CONSTRUCT
     )]
     UnsupportedConstruct {
-        /// Which construct: [`CONTINUOUS_EVENT`], [`DISCRETE_EVENT`] or
-        /// [`IMPLICIT_EQUATION`].
+        /// Which construct: [`CONTINUOUS_EVENT`], [`DISCRETE_EVENT`],
+        /// [`IMPLICIT_EQUATION`] or [`WIENER_NOISE`].
         construct: &'static str,
         /// Which evaluator refused it, e.g. `"Rust array evaluator"`.
         evaluator: &'static str,
         /// The offending instance: an event's name, or an equation's LHS.
         detail: String,
+    },
+
+    /// The chosen compiler cannot run one of this document's rules
+    /// (esm-spec §9.6.6 `compiler_refused_rule`, esm-libraries-spec §2.5.10).
+    ///
+    /// Raised at CONSTRUCTION, naming the compiler, the rule — an equation or
+    /// an observed, component-qualified — the cadence tier the rule would have
+    /// run at, and the DEEPEST decline reason reached while trying to lower
+    /// it. A refusal, never a fallback: the compiler does not run that rule on
+    /// a slower path, because a caller who asked for a compiled program and
+    /// got a tree walk has no way to find that out.
+    #[error(
+        "{code}: compiler '{compiler}' cannot run the {tier}-cadence {kind} '{rule}': {reason}. \
+         `native` is strict (esm-libraries-spec §2.5.10) — it refuses rather than demoting the \
+         rule to the per-cell oracle; build with `compiler: Some(Compiler::Interpreter)` to run \
+         this document on the reference evaluator",
+        code = crate::diagnostic::codes::COMPILER_REFUSED_RULE
+    )]
+    CompilerRefusedRule {
+        /// The vocabulary spelling of the compiler that refused.
+        compiler: &'static str,
+        /// `"observed"` or `"state derivative"`.
+        kind: &'static str,
+        /// The rule, component-qualified.
+        rule: String,
+        /// The cadence tier the rule would have run at: `"const"`,
+        /// `"discrete"` or `"continuous"`.
+        tier: &'static str,
+        /// The deepest decline reason reached while trying to lower it.
+        reason: String,
     },
 
     /// The flattened system contains a feature the v1 simulator does not support
@@ -149,12 +180,10 @@ pub enum CompileError {
     /// into the solution, whereas the pipeline stage that should have eliminated
     /// the op is the actual defect.
     ///
-    /// BOTH interpreters raise it. The message names no particular one because
-    /// the two have different rule sets — the scalar ODE interpreter
-    /// ([`crate::simulate`]) additionally has no rule for the array/tensor and
-    /// geometry ops the array runtime ([`crate::simulate_array`]) evaluates —
-    /// and the invariant is the same either way: an unevaluable op is a
-    /// diagnostic, never a number.
+    /// Raised by the array runtime's build gate and by the single-expression
+    /// [`crate::expression::evaluate`], whose scalar bindings additionally give
+    /// the array / tensor and geometry ops no value. The invariant is the same
+    /// either way: an unevaluable op is a diagnostic, never a number.
     #[error(
         "unevaluable_operator: operator '{op}' is an evaluable-core op with no evaluation rule \
          in the interpreter this model was built for — it must be eliminated by an earlier \
@@ -346,8 +375,10 @@ pub const DISCRETE_EVENT: &str = "discrete event";
 /// [`CompileError::UnsupportedConstruct`]'s `construct` for an equation whose
 /// LHS is an expression ([`crate::classification::LhsForm::Expression`]).
 pub const IMPLICIT_EQUATION: &str = "implicit equation";
-/// The scalar ODE interpreter (`crate::simulate`), as a refusal names it.
-pub const SCALAR_EVALUATOR: &str = "Rust scalar ODE interpreter";
+/// [`CompileError::UnsupportedConstruct`]'s `construct` for a parameter whose
+/// `update.kind` is `"wiener"`: it makes the document an SDE, which no Rust
+/// evaluator integrates.
+pub const WIENER_NOISE: &str = "Wiener noise";
 /// The array runtime (`crate::simulate_array`), as a refusal names it.
 pub const ARRAY_EVALUATOR: &str = "Rust array evaluator";
 

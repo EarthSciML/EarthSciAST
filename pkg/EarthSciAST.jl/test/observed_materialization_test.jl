@@ -194,7 +194,7 @@ function EA.provider_sample(m::MockGatedSR, ::Real; selection=nothing)
     return m.full[selection[1], selection[2]]
 end
 
-function _prepared()
+function _prepared(; compiler=:native)
     ca = Dict{String,Any}(
         "src_W" => CW, "src_S" => CS, "src_E" => CE, "src_N" => CN,
         "raw_x" => PX, "raw_y" => PY, "seg_key" => KEY, "seg_emis_in" => EMIS)
@@ -205,7 +205,7 @@ function _prepared()
     insp = EA.BuildInspection()
     prep = EA.esm_problem(_doc(), (0.0, 1.0); const_arrays=ca,
                       providers=Dict{String,Any}("Binned.SR_PM25" => g),
-                      inspect=insp, pushdown_rewrite=true)
+                      inspect=insp, pushdown_rewrite=true, compiler=compiler)
     return prep, insp, g
 end
 
@@ -225,6 +225,32 @@ end
     @test sum(EXPECT_E) ≈ 10.0 + 4.0
     # And the gate still did its job.
     @test isempty([c for c in g.calls if c[1] == :wholesale])
+end
+
+# The ORACLE. `E_PM25` and everything above it is a join-gated aggregate: the
+# admitted source/record pairs are chosen per output cell by a build-time index,
+# so `:native` cannot keep the output index symbolic and reads the field through
+# the compile-once-per-TERM path (Phase E in inline_tests.jl) instead.
+# `:interpreter` is the simple evaluator — it walks the tree once per cell, which
+# is exactly what it is for — so reading the same fields under it and comparing
+# checks the compiled path against something that was not written to agree with
+# it. `:native` is the universally available fast tier and the default; the
+# oracle is what keeps widening it honest.
+@testset "native reads the gated observeds exactly as the interpreter does" begin
+    pn, _, _ = _prepared()
+    pi, _, _ = _prepared(compiler = :interpreter)
+    @test EA.compiler(pn) === :native
+    @test EA.compiler(pi) === :interpreter
+    for name in ("seg_len", "road_len", "seg_emis", "E_PM25", "conc_PM25")
+        a = EA.observed_field(pn, name)
+        b = EA.observed_field(pi, name)
+        @test length(a) == length(b)
+        # Exact, or within 1e-12 relative: the two paths fold the same terms in
+        # the same order, so exact is what is expected and the tolerance is the
+        # margin, not the claim.
+        @test all(isequal(x, y) || abs(x - y) <= 1e-12 * max(abs(x), abs(y))
+                  for (x, y) in zip(a, b))
+    end
 end
 
 @testset "the producers of a build-time field are materialized ONCE" begin

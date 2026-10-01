@@ -507,7 +507,23 @@ const (
 	// equation, reached an evaluator that cannot run it (esm-spec §9.6.6). Go does not simulate,
 	// so it never raises this; the constant keeps the §9.6.6 vocabulary uniform.
 	CodeUnsupportedConstruct = "unsupported_construct"
+	// CodeCompilerUnknown: `esm_problem`'s `compiler` option named a value
+	// outside the closed vocabulary of API_SPEC §5.8 (`interpreter`, `native`,
+	// `xla`, `mtk`, `sympy`).
+	CodeCompilerUnknown = "compiler_unknown"
+	// CodeCompilerUnavailable: the named compiler is in the vocabulary, but
+	// this binding, build or process cannot provide it; the message names what
+	// to load or build. Never answered by running a different compiler
+	// (esm-libraries-spec §2.5.10).
+	CodeCompilerUnavailable = "compiler_unavailable"
+	// CodeCompilerRefusedRule: the chosen compiler cannot run this document.
+	// Raised at build, naming the compiler, the rule (an equation or an
+	// observed, component-qualified) and the reason.
+	CodeCompilerRefusedRule = "compiler_refused_rule"
 )
+
+// The three compiler codes above are registered, never raised here: Go does not
+// simulate, and the §9.6.6 code table is cross-language uniform.
 
 // --- Spec enum literal: ModelVariable.Type (esm-spec §6.3). esm 1.0.0 declares
 // exactly TWO. `state`, `observed`, `brownian` and `discrete` are GONE as

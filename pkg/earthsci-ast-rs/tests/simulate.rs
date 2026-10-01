@@ -10,12 +10,13 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
+use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{
     AffectEquation, ContinuousEvent, DiscreteEvent, DiscreteEventTrigger, Equation, ExpressionNode,
     Metadata, Model, ModelVariable, VariableType,
 };
 use earthsci_ast::{
-    Alg, CompileError, Compiled, EsmFile, Expr, FlattenedSystem, SimulateError, SolveOptions,
+    Alg, CompileError, EsmFile, Expr, FlattenedSystem, SimulateError, SolveOptions,
 };
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -192,7 +193,7 @@ fn test_exponential_decay_matches_analytical() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -276,7 +277,7 @@ fn test_reversible_reaction_reaches_steady_state() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -360,7 +361,7 @@ fn test_autocatalytic_conserves_mass() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -480,7 +481,7 @@ fn test_robertson_stiff_problem() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -599,7 +600,7 @@ fn test_round_trip_simple_ode_fixture() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -665,7 +666,7 @@ fn test_round_trip_stiff_vdp_fixture() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -681,7 +682,7 @@ fn test_round_trip_stiff_vdp_fixture() {
 }
 
 // ============================================================================
-// Test 7: Compiled struct reuse for parameter sweeps
+// Test 7: one compiled model reused across a parameter sweep
 // ============================================================================
 
 #[test]
@@ -694,7 +695,7 @@ fn test_compiled_reuse_for_parameter_sweep() {
     );
     let file = esm_with_model("Sweep", model);
 
-    let compiled = Compiled::from_file(&file).expect("compile failed");
+    let compiled = ArrayCompiled::from_file(&file).expect("compile failed");
 
     let opts = SolveOptions {
         alg: Alg::Bdf,
@@ -757,7 +758,9 @@ fn test_error_continuous_events_rejected() {
         description: None,
     });
 
-    let err = Compiled::from_flattened(&flat).unwrap_err();
+    let err = ArrayCompiled::from_flattened(&flat)
+        .err()
+        .expect("the build must be refused");
     let msg = err.to_string();
     assert!(
         msg.starts_with("unsupported_construct: continuous event 'zero_crossing'"),
@@ -775,7 +778,9 @@ fn test_error_discrete_events_rejected() {
         reinitialize: None,
         description: None,
     });
-    let err = Compiled::from_flattened(&flat).unwrap_err();
+    let err = ArrayCompiled::from_flattened(&flat)
+        .err()
+        .expect("the build must be refused");
     let msg = err.to_string();
     assert!(
         msg.starts_with("unsupported_construct: discrete event 'ping'"),
@@ -788,7 +793,9 @@ fn test_error_hybrid_dimensionality_rejected() {
     let mut flat = flat_with_one_state();
     flat.independent_variables = vec!["t".to_string(), "x".to_string(), "y".to_string()];
 
-    let err = Compiled::from_flattened(&flat).unwrap_err();
+    let err = ArrayCompiled::from_flattened(&flat)
+        .err()
+        .expect("the build must be refused");
     let msg = err.to_string();
     assert!(
         msg.contains("dimensionality") || msg.contains("Unsupported"),
@@ -821,7 +828,7 @@ fn test_error_invalid_parameter_name() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -874,7 +881,7 @@ fn test_error_missing_initial_condition() {
         earthsci_ast::ProblemOptions {
             p: params.clone(),
             u0: ic.clone(),
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -955,7 +962,9 @@ fn test_error_grad_in_simulator_rejected() {
     // means the canonical pipeline broke. The simulator must surface
     // this rather than silently substitute zero (the historical stub).
     let flat = flat_with_one_state_rhs(op("grad", vec![var("u")]));
-    let err = Compiled::from_flattened(&flat).unwrap_err();
+    let err = ArrayCompiled::from_flattened(&flat)
+        .err()
+        .expect("the build must be refused");
     let msg = err.to_string();
     assert!(
         matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "grad"),
@@ -970,7 +979,9 @@ fn test_error_grad_in_simulator_rejected() {
 #[test]
 fn test_error_div_in_simulator_rejected() {
     let flat = flat_with_one_state_rhs(op("div", vec![var("u")]));
-    let err = Compiled::from_flattened(&flat).unwrap_err();
+    let err = ArrayCompiled::from_flattened(&flat)
+        .err()
+        .expect("the build must be refused");
     assert!(
         matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "div"),
         "expected UnloweredOperatorError(div), got: {err}"
@@ -980,7 +991,9 @@ fn test_error_div_in_simulator_rejected() {
 #[test]
 fn test_error_laplacian_in_simulator_rejected() {
     let flat = flat_with_one_state_rhs(op("laplacian", vec![var("u")]));
-    let err = Compiled::from_flattened(&flat).unwrap_err();
+    let err = ArrayCompiled::from_flattened(&flat)
+        .err()
+        .expect("the build must be refused");
     assert!(
         matches!(
             err,
@@ -1003,7 +1016,9 @@ fn test_error_spatial_d_in_simulator_rejected() {
         wrt: Some("x".to_string()),
         ..Default::default()
     }));
-    let err = Compiled::from_flattened(&flat).unwrap_err();
+    let err = ArrayCompiled::from_flattened(&flat)
+        .err()
+        .expect("the build must be refused");
     let msg = err.to_string();
     assert!(
         matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "D"),
@@ -1073,8 +1088,7 @@ fn test_error_grad_in_array_simulator_rejected() {
 #[test]
 fn test_error_unknown_variable_in_array_model_rejected() {
     // The array-op build path (`ArrayCompiled::from_model`) must reject a
-    // reference to a genuinely-undeclared variable at BUILD time — the same
-    // contract the scalar interpreter enforces in `resolve_expr` (mirrors
+    // reference to a genuinely-undeclared variable at BUILD time (mirrors
     // tests/invalid/unknown_variable_ref.esm, whose RHS is `undefined_var * 2`).
     // Without the free-variable gate this name would fall through
     // `lookup_variable` to a silent `NaN`, poisoning the trajectory instead of

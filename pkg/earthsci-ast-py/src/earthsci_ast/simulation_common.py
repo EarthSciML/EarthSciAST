@@ -503,8 +503,7 @@ def flat_namespace_scope(flat: Any) -> set[str]:
     The namespace segments of every flattened name (which is where a mounted
     subsystem shows up at all) plus ``metadata.source_systems``, the contributing
     component names — a component that declares no variable of its own still
-    names a legal §4.6 qualifier. The Rust mirror reads the same two sources in
-    ``Compiled::from_flattened``.
+    names a legal §4.6 qualifier.
     """
     names = [
         *flat.state_variables,
@@ -620,6 +619,73 @@ def check_parameter_override_keys(
             f"system declares no such parameter (known: {listed}). esm-spec §6.6.2 "
             f"keys parameter_overrides by LOCAL parameter name."
         )
+
+
+def canonicalize_const_array_keys(
+    arrays: dict[str, Any],
+    shaped_parameter_names: Iterable[str],
+    all_names: Collection[str],
+    namespaces: Collection[str] | None = None,
+) -> dict[str, Any]:
+    """Resolve each caller ``const_arrays`` key that designates a SHAPED
+    parameter onto that parameter's flattened name, by the esm-spec §6.6.2
+    rules :func:`check_parameter_override_keys` applies to ``parameter_overrides``.
+
+    A caller's array for a shaped parameter is the same binding as an
+    inline-array override of it, so the model-local spelling ``lat`` designates
+    the flattened ``Deg.lat`` exactly as an override key does. An exact key
+    alone missed it: the parameter was bound as a scalar (its ``default``, or
+    nothing), so ``index(lat, i)`` raised "index applied to scalar value", or the
+    run silently used the default instead of the caller's array.
+
+    The map also carries arrays that are no parameter's value (a loader field, a
+    coordinate table), so a key that designates no shaped parameter is kept as
+    it is and never reported as unknown. A key carried as a dotted suffix by two
+    or more shaped parameters is ambiguous, and two non-exact keys designating
+    one parameter collide: both raise :class:`AmbiguousParameterError`, as for
+    an override. An exact key always wins. The resolved name is ADDED beside the
+    caller's key, which stays. Julia (``_normalize_const_array_keys``) resolves
+    the same keys the same way.
+    """
+    shaped = set(shaped_parameter_names)
+    if not arrays or not shaped:
+        return arrays
+    ns = namespace_scope(shaped) if namespaces is None else set(namespaces)
+    groups: dict[str, list[str]] = {}
+    for name in shaped:
+        for suffix in dotted_suffixes(name):
+            groups.setdefault(suffix, []).append(name)
+    claims: dict[str, list[str]] = {}
+    for key in arrays:
+        if key in all_names:
+            continue
+        hit = _dotted_suffix_hit(shaped, key, ns)
+        if hit is None:
+            candidates = groups.get(key)
+            if candidates is None:
+                continue
+            if len(candidates) > 1:
+                cands = sorted(candidates)
+                raise AmbiguousParameterError(
+                    f"const_arrays: ambiguous parameter name {key!r} — it is carried as "
+                    f"a suffix by {len(cands)} shaped parameters ({', '.join(cands)}). "
+                    f"Qualify it further with its owning component (esm-spec §6.6.2)."
+                )
+            hit = candidates[0]
+        if hit in arrays:
+            continue
+        claims.setdefault(hit, []).append(key)
+    if not claims:
+        return arrays
+    out = dict(arrays)
+    for name in sorted(claims):
+        keys = sorted(claims[name])
+        if len(keys) > 1:
+            raise AmbiguousParameterError(
+                _collision_message("const_arrays", "parameter", name, keys)
+            )
+        out[name] = arrays[keys[0]]
+    return out
 
 
 def _collision_message(surface: str, kind: str, name: str, keys: list[str]) -> str:

@@ -251,7 +251,7 @@ fn a_state_free_document_is_sent_to_observed_field() {
     }
 }
 
-/// A pure `reaction_systems` document is DIFFERENTIAL, and `Compile::Auto` has
+/// A pure `reaction_systems` document is DIFFERENTIAL, and `Rhs::Auto` has
 /// to know it before flattening has lowered anything.
 ///
 /// The regression: `has_differential_equations` read `file.models` alone, and a
@@ -269,16 +269,46 @@ fn a_reaction_system_is_not_mistaken_for_a_static_document() {
     let prob = esm_problem(
         ProblemInput::Path(Path::new(POLLU)),
         (0.0, 1.0),
-        ProblemOptions::default(),
+        ProblemOptions {
+            // The reference compiler, because the CLASSIFICATION is what this
+            // test is about and `native` does not get as far as answering it:
+            // the fixture's photolysis rates are data-fed parameters
+            // (`update: { kind: "data" }`) with no source bound here, so the
+            // tape refuses `PureChemistry.jO3` as an unresolved symbol
+            // (API_SPEC §5.8).
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
+            ..Default::default()
+        },
     )
     .expect("esm_problem");
     assert!(
         prob.is_dynamic(),
         "a document of 25 reactions was classified static",
     );
+    assert!(
+        !prob.state_variable_names().is_empty(),
+        "the reactions lowered to state derivatives: {:?}",
+        prob.state_variable_names()
+    );
+    assert!(
+        prob.compiler_report()
+            .rules()
+            .iter()
+            .any(|r| r.kind == "state derivative"),
+        "twenty-five reactions are twenty-five state derivatives, not a static evaluation"
+    );
+
+    // The RUN, and why it is a refusal rather than a trajectory: the array
+    // runtime binds a data-fed parameter from its SOURCE, not from its
+    // `default`, and this call supplies no source. Running on the declared
+    // defaults would produce a trajectory that looks like an answer and is
+    // not one, so the refusal names the parameter it could not bind.
     let mut o = SolveOptions::default();
     o.sample_evenly(0.0, 1.0, 3);
-    let sol = solve(&prob, &o).expect("a reaction system integrates");
-    assert_eq!(sol.time.len(), 3);
-    assert!(!sol.state_variable_names.is_empty());
+    let err = solve(&prob, &o).expect_err("no data source is bound here");
+    let text = err.to_string();
+    assert!(
+        text.contains("jO3"),
+        "the refusal must name the unbound data-fed parameter: {text}"
+    );
 }

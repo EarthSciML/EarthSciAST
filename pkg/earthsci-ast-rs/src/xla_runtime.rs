@@ -109,7 +109,7 @@ use std::sync::OnceLock;
 use xla::{ArrayElement, Literal, PjRtBuffer, PjRtClient, PjRtLoadedExecutable, XlaBuilder};
 
 use crate::simulate_array::ArrayCompiled;
-use crate::simulate_array::tape::xla_emit::{self, EmittedRhs, XlaEmitError};
+use crate::simulate_array::tape::xla_emit::{self, EmittedRhs, ForcingFeed, XlaEmitError};
 
 /// Why a model has no compiled right-hand side.
 ///
@@ -234,7 +234,11 @@ pub struct CompiledRhs {
     n_states: usize,
     params_len: usize,
     n_instrs: usize,
+    opcode_counts: Vec<(&'static str, usize)>,
     platform: String,
+    /// The fourth argument of a program that reads the forcing buffer, packed
+    /// from the model's live buffer on each evaluation.
+    forcing: Option<ForcingFeed>,
 }
 
 impl CompiledRhs {
@@ -246,7 +250,8 @@ impl CompiledRhs {
 
     /// Compile an already-emitted computation (the seam a test uses when it
     /// wants the HLO as well as the numbers).
-    pub fn from_emitted(emitted: EmittedRhs) -> Result<Self, CompileRhsError> {
+    pub fn from_emitted(mut emitted: EmittedRhs) -> Result<Self, CompileRhsError> {
+        let forcing = emitted.take_forcing();
         let client = client().map_err(CompileRhsError::Runtime)?;
         let exe = client
             .compile(emitted.computation())
@@ -256,7 +261,9 @@ impl CompiledRhs {
             n_states: emitted.n_states(),
             params_len: emitted.params_len(),
             n_instrs: emitted.n_instrs(),
+            opcode_counts: emitted.opcode_counts().to_vec(),
             platform: client.platform_name(),
+            forcing,
         })
     }
 
@@ -272,6 +279,14 @@ impl CompiledRhs {
     pub fn n_instrs(&self) -> usize {
         self.n_instrs
     }
+    /// How many tape instructions of opcode `op` (`"Reduce"`, `"Scan"`, …)
+    /// were lowered (diagnostics only).
+    pub fn opcode_count(&self, op: &str) -> usize {
+        self.opcode_counts
+            .iter()
+            .find(|(o, _)| *o == op)
+            .map_or(0, |(_, n)| *n)
+    }
     /// PJRT platform name (`"cpu"`, `"cuda"`, …).
     pub fn platform(&self) -> &str {
         &self.platform
@@ -285,28 +300,60 @@ impl CompiledRhs {
     /// silently ignoring a trailing parameter would evaluate a different
     /// model than the caller asked for.
     pub fn eval(&self, state: &[f64], params: &[f64], t: f64) -> Result<Vec<f64>, CompileRhsError> {
-        let pv = self.check_and_pad(state, params)?;
-        let args = [Literal::vec1(state), Literal::vec1(&pv), Literal::scalar(t)];
-        let out = self
-            .exe
-            .execute::<Literal>(&args)
-            .map_err(|e| CompileRhsError::Runtime(format!("execute failed: {e}")))?;
-        let buf = out
-            .first()
-            .and_then(|replica| replica.first())
-            .ok_or_else(|| CompileRhsError::Runtime("execute returned no buffer".into()))?;
-        let du = buf
-            .to_literal_sync()
-            .and_then(|l| l.to_vec::<f64>())
-            .map_err(|e| CompileRhsError::Runtime(format!("copy back failed: {e}")))?;
-        if du.len() != self.n_states {
+        let mut du = vec![0.0f64; self.n_states];
+        self.eval_into(state, params, t, &mut du)?;
+        Ok(du)
+    }
+
+    /// [`eval`](Self::eval) into a buffer the caller keeps, for a caller that
+    /// evaluates many times and would otherwise allocate the result each
+    /// call — the integrator's right-hand side and its finite-difference
+    /// Jacobian. `out` must be [`n_states`](Self::n_states) long.
+    pub fn eval_into(
+        &self,
+        state: &[f64],
+        params: &[f64],
+        t: f64,
+        out: &mut [f64],
+    ) -> Result<(), CompileRhsError> {
+        if out.len() != self.n_states {
             return Err(CompileRhsError::Runtime(format!(
-                "compiled program returned {} elements, expected {}",
-                du.len(),
+                "output buffer has {} elements, the compiled program returns {}",
+                out.len(),
                 self.n_states
             )));
         }
-        Ok(du)
+        let pv = self.check_and_pad(state, params)?;
+        let mut args = vec![Literal::vec1(state), Literal::vec1(&pv), Literal::scalar(t)];
+        // The forcing is read afresh on every call, as the tape's CONST and
+        // SEGMENT sections would read it on the scratch the call runs on.
+        if let Some(feed) = &self.forcing {
+            args.push(Literal::vec1(&feed.pack()));
+        }
+        let result = self
+            .exe
+            .execute::<Literal>(&args)
+            .map_err(|e| CompileRhsError::Runtime(format!("execute failed: {e}")))?;
+        let buf = result
+            .first()
+            .and_then(|replica| replica.first())
+            .ok_or_else(|| CompileRhsError::Runtime("execute returned no buffer".into()))?;
+        // The raw copy refuses a wrong element type and a device buffer
+        // SHORTER than `out`, but would copy the leading prefix of a longer
+        // one without complaint.
+        let returned = buf
+            .on_device_shape()
+            .and_then(|s| xla::ArrayShape::try_from(&s))
+            .map_err(|e| CompileRhsError::Runtime(format!("copy back failed: {e}")))?
+            .element_count();
+        if returned != self.n_states {
+            return Err(CompileRhsError::Runtime(format!(
+                "compiled program returned {returned} elements, expected {}",
+                self.n_states
+            )));
+        }
+        buf.copy_raw_to_host_sync(out, 0)
+            .map_err(|e| CompileRhsError::Runtime(format!("copy back failed: {e}")))
     }
 }
 
@@ -325,6 +372,13 @@ impl CompiledRhs {
         p: &PjRtBuffer,
         t: &PjRtBuffer,
     ) -> Result<Vec<f64>, CompileRhsError> {
+        if self.forcing.is_some() {
+            return Err(CompileRhsError::Runtime(
+                "this program reads the forcing buffer and takes a fourth argument, which \
+                 this three-buffer seam does not supply; use `eval` or `on_device`"
+                    .into(),
+            ));
+        }
         let out = self
             .exe
             .execute_b(&[u, p, t])
@@ -364,6 +418,9 @@ pub struct DeviceRhs<'a> {
     rhs: &'a CompiledRhs,
     u: PjRtBuffer,
     p: PjRtBuffer,
+    /// The forcing argument, packed and uploaded once with `p`: a forcing
+    /// refresh needs a new `DeviceRhs`, as a new parameter vector does.
+    f: Option<PjRtBuffer>,
     /// Result of the most recent [`eval_at`](Self::eval_at), still on the
     /// device. `None` before the first evaluation.
     du: Option<PjRtBuffer>,
@@ -388,10 +445,19 @@ impl CompiledRhs {
         let p = client
             .buffer_from_host_buffer(&pv, &[self.params_len], None)
             .map_err(|e| CompileRhsError::Runtime(format!("upload of p failed: {e}")))?;
+        let f = match &self.forcing {
+            None => None,
+            Some(feed) => Some(
+                client
+                    .buffer_from_host_buffer(&feed.pack(), &[feed.len()], None)
+                    .map_err(|e| CompileRhsError::Runtime(format!("upload of f failed: {e}")))?,
+            ),
+        };
         Ok(DeviceRhs {
             rhs: self,
             u,
             p,
+            f,
             du: None,
             stepper: None,
         })
@@ -454,11 +520,11 @@ impl DeviceRhs<'_> {
         let tb = client
             .buffer_from_host_buffer(&[t], &[], None)
             .map_err(|e| CompileRhsError::Runtime(format!("upload of t failed: {e}")))?;
-        let out = self
-            .rhs
-            .exe
-            .execute_b(&[&self.u, &self.p, &tb])
-            .map_err(|e| CompileRhsError::Runtime(format!("execute failed: {e}")))?;
+        let out = match &self.f {
+            None => self.rhs.exe.execute_b(&[&self.u, &self.p, &tb]),
+            Some(f) => self.rhs.exe.execute_b(&[&self.u, &self.p, &tb, f]),
+        }
+        .map_err(|e| CompileRhsError::Runtime(format!("execute failed: {e}")))?;
         self.du = Some(take_single_output(out, "rhs")?);
         Ok(())
     }

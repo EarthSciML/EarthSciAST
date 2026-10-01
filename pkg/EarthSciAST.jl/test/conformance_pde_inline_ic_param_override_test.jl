@@ -57,9 +57,17 @@ const _ICPO_MANIFEST  = joinpath(_ICPO_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
+            # `compiler=:interpreter`: the `ic_param_override` fixture seeds
+            # from a coordinate expression, which the seed lowers once per cell
+            # — a construction-time tree walk per cell that the strict `native`
+            # refuses (API_SPEC §5.8). This tier's subject is §6.6.5 build-time
+            # override scope against a committed golden, so it is measured under
+            # the reference evaluator, as CONFORMANCE_SPEC §5.44 has every
+            # non-compiler conformance stage pin.
             results = run_inline_tests(esm_path; model_name=String(fixture.model),
                                     alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                    reltol=1e-12, abstol=1e-14)
+                                    reltol=1e-12, abstol=1e-14,
+                                    compiler=:interpreter)
             @test length(results) == length(golden.assertions)
 
             # Index by (test_id, assertion_idx) — this category has THREE tests
@@ -89,7 +97,9 @@ end
         @testset "$(spelling) override key" begin
             insp = EarthSciAST.BuildInspection()
             sim = solve(EarthSciAST.esm_problem(esm_path, (0.0, 1.0); inspect=insp,
-                                       p=Dict(key => 0.0)), OrdinaryDiffEqTsit5.Tsit5();
+                                       p=Dict(key => 0.0),
+                                       compiler=:interpreter),
+                                       OrdinaryDiffEqTsit5.Tsit5();
                                        saveat=[0.0])
             @test SciMLBase.successful_retcode(sim)
             # The build resolved the parameter to the OVERRIDE, not the 1.0
@@ -111,6 +121,6 @@ end
     # had switched off while still reporting a verdict. Rust already raised
     # `InvalidParameter` here; Julia and Python now match it.
     @test_throws ArgumentError solve(EarthSciAST.esm_problem(
-        esm_path, (0.0, 1.0);
+        esm_path, (0.0, 1.0); compiler=:interpreter,
         p=Dict("not_a_param" => 7.0)), OrdinaryDiffEqTsit5.Tsit5(); saveat=[0.0])
 end

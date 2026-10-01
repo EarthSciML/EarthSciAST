@@ -67,6 +67,12 @@ pub(crate) mod classification;
 /// without spawning a process. Hidden from the published rustdoc surface.
 #[doc(hidden)]
 pub mod compiled_rhs_adapter;
+/// Core of the `compiler_agreement` conformance adapter (CONFORMANCE_SPEC
+/// §5.44), on the same terms as [`compiled_rhs_adapter`]: in the library so a
+/// test drives the binary's exact code path, and hidden from the published
+/// rustdoc surface.
+#[doc(hidden)]
+pub mod compiler_agreement_adapter;
 pub(crate) mod coupling;
 pub(crate) mod coupling_imports;
 pub(crate) mod dae;
@@ -137,10 +143,8 @@ pub mod performance;
 // `faq` / `join` passes, so it cannot live inside the gated solver module.
 pub(crate) mod compile_error;
 
-// Scalar ODE simulation (gt-5ws). Compiled for wasm too: its diffsol/Faer path
-// is pure Rust (spike S1). The `simulate_array` (spatial) backend it dispatches
-// into stays native-only, so the wasm build runs pure-ODE / 0-D box models and
-// the array/spatial dispatch branch in `simulate::simulate` is `cfg`-gated off.
+// The solver plumbing and run vocabulary (gt-5ws). Compiled for wasm too: its
+// diffsol/Faer path is pure Rust (spike S1).
 pub(crate) mod simulate;
 
 // Compiled for wasm too (EarthSciAST-akz): the array/PDE runtime is
@@ -155,6 +159,18 @@ pub mod simulate_array;
 // there.
 #[cfg(feature = "solve")]
 pub(crate) mod inline_tests;
+/// Core of the INLINE-TEST conformance adapter (CONFORMANCE_SPEC §5.45), on
+/// the same terms as [`compiler_agreement_adapter`]: in the library so a test
+/// drives the binary's exact code path, and hidden from the published rustdoc
+/// surface.
+///
+/// Gated exactly like the `inline_tests` module it drives. The agreement
+/// adapter above needs no gate because nothing it imports is configured out;
+/// this one imports the runner directly, so without the gate the wasm32 build
+/// fails on an unresolved import rather than simply omitting the adapter.
+#[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
+#[doc(hidden)]
+pub mod inline_tests_adapter;
 
 // `polygon_area` as a sum_product FAQ over the clip ring — evaluated through the
 // array simulator, so native-only like `simulate_array` (the wasm regridder keeps
@@ -348,21 +364,23 @@ pub use inline_tests::{
     AssertionResult, BuildProviderFactory, InlineTestOptions, check_assertion,
     ephemeral_injected_file, evaluate_cellwise, field_reduce, resolve_tolerance, run_inline_tests,
     run_inline_tests_filtered, run_inline_tests_paths, run_inline_tests_with_base_dir,
-    run_inline_tests_with_providers, state_cells,
+    run_inline_tests_with_options, run_inline_tests_with_providers, state_cells,
 };
 pub use performance::{CompactExpr, PerformanceError};
 #[cfg(feature = "parallel")]
 pub use reactions::stoichiometric_matrix_parallel;
 pub use simulate::{
-    Alg, Compiled, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, Progress, ProgressFn, ResolvedExpr,
-    ReturnCode, SimulateError, Solution, SolutionMetadata, SolveOptions, compile_array,
-    fold_constant_expr, interpret,
+    Alg, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, Progress, ProgressFn, ReturnCode, SimulateError,
+    Solution, SolutionMetadata, SolveOptions, compile_array,
 };
 
 // The EsmProblem / `solve` surface. `simulate` is deleted in all its forms.
+#[allow(deprecated)]
+pub use problem::Compile;
 pub use problem::{
-    CallbackFn, CallbackSet, Compile, EnsembleProblem, EsmProblem, ProblemInput, ProblemOptions,
-    Remake, callbacks, compose, esm_problem, observed_field, remake,
+    CallbackFn, CallbackSet, Compiler, CompilerReport, CompilerRuleReport, EnsembleProblem,
+    EsmProblem, ProblemInput, ProblemOptions, Remake, Rhs, callbacks, compose, esm_problem,
+    observed_field, remake,
 };
 #[cfg(feature = "solve")]
 pub use problem::{

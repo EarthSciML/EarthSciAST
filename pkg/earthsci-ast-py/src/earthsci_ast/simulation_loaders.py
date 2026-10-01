@@ -12,10 +12,12 @@ segments (RFC pure-io-data-loaders §4.3).
 from __future__ import annotations
 
 import datetime as _dt
+from dataclasses import dataclass
 from typing import Any, Callable
 
 import numpy as np
 
+from .compiler import CompilerRefusedRuleError
 from .flatten import (
     FlattenedSystem,
     LoaderField,
@@ -26,6 +28,7 @@ from .simulation_array import (
     _densify_solution,
     _element_names,
     _fill_build_inspection,
+    _NumpyRhsBuild,
 )
 from .simulation_common import (
     DENSE_OUTPUT_MIN_POINTS,
@@ -277,6 +280,84 @@ def _provider_segment_boundaries(
     return sorted(boundaries)
 
 
+@dataclass
+class SegmentedSeed:
+    """Segment 0 of a cadence-segmented run, built at CONSTRUCTION.
+
+    Holds everything a run needs to start without touching a provider again: the
+    shared array registry with segment 0's data in it, the closure that advances
+    that registry to a later boundary (which owns the provider objects, so
+    carrying it carries them), the boundary list, the compiled right-hand side
+    and the loader-invariant build products.
+
+    ``consumed`` is set when a run has taken it. The driver MUTATES the registry
+    in place as it crosses boundaries, so after one run it holds the LAST
+    segment's data rather than segment 0's: a second run re-seeds from the
+    providers exactly as an unseeded one does, which is correct rather than
+    cheap. The common shape — build once, run once — pays for segment 0 once.
+    """
+
+    loader_arrays: dict[str, np.ndarray]
+    refresh_fn: Callable[[float], None]
+    seg_ends: list[float]
+    build: _NumpyRhsBuild
+    static_cache: dict[str, Any]
+    t0: float
+    consumed: bool = False
+
+
+def _seed_first_segment(
+    flat: FlattenedSystem,
+    parameters: dict[str, float],
+    initial_conditions: dict[str, float],
+    t0: float,
+    loader_arrays: dict[str, np.ndarray],
+    refresh_fn: Callable[[float], None],
+    seg_ends: list[float],
+    static_cache: dict[str, Any] | None,
+) -> SegmentedSeed:
+    """Build the FIRST cadence segment, and keep it for the run.
+
+    The segmented engines compile per segment, so construction otherwise has no
+    build to exercise and the active compiler could refuse nothing — a document
+    whose rules it cannot run would be accepted at construction and fail
+    somewhere inside `solve`, which esm-libraries-spec §2.5.2 forbids of every
+    build failure. This is segment 0 of the run, built exactly as the driver
+    builds it: refresh the discrete forcing to ``t0``, compile, then exercise the
+    right-hand side and the output-time observeds the way a one-shot build does.
+
+    The whole seed is handed to the run, not just its cache: the providers have
+    already been sampled for segment 0, and sampling them again on the first
+    `solve` would make every construction cost an extra fetch — a network round
+    trip for a real loader.
+    """
+    from .problem import exercise_every_evaluation
+
+    if static_cache is None:
+        static_cache = {}
+    refresh_fn(t0)
+    build = _build_numpy_rhs(
+        flat,
+        parameters,
+        initial_conditions,
+        loader_arrays=loader_arrays,
+        static_cache=static_cache,
+        # A seed is a BUILD, not a run, so a document whose whole content is its
+        # observed graph is built rather than refused for having nothing to
+        # integrate — the same reading `esm_problem` gives a one-shot build.
+        build_only=True,
+    )
+    exercise_every_evaluation(flat, build, t0, loader_arrays=loader_arrays)
+    return SegmentedSeed(
+        loader_arrays=loader_arrays,
+        refresh_fn=refresh_fn,
+        seg_ends=list(seg_ends),
+        build=build,
+        static_cache=static_cache,
+        t0=t0,
+    )
+
+
 def _run_cadence_segmented_solve(
     flat: FlattenedSystem,
     parameters: dict[str, float],
@@ -290,6 +371,8 @@ def _run_cadence_segmented_solve(
     refresh_fn: Callable[[float], None],
     inspect: Any | None = None,
     maxiters: int | None = None,
+    static_cache: dict[str, Any] | None = None,
+    seed: SegmentedSeed | None = None,
 ) -> Solution:
     """The ONE discrete-cadence segmented solve — both the ``providers=`` seam
     (:func:`_simulate_with_discrete_providers`) and the ``loader_fields`` seam
@@ -325,18 +408,35 @@ def _run_cadence_segmented_solve(
     # observeds (the regrid APPLY W·field) change per segment, so the expensive
     # const geometry is materialized once at the seed build and reused, not
     # re-clipped every hour. Seeded on the seg-0 build; read on every later build.
-    static_cache: dict[str, Any] = {}
+    #
+    # A caller-owned cache arrives already populated: `esm_problem` builds this
+    # document's first segment at CONSTRUCTION (so the compiler can refuse it
+    # there, esm-libraries-spec §2.5.10) and hands the products forward, so the
+    # const geometry is materialized once for the Problem rather than once per
+    # `solve`.
+    if static_cache is None:
+        static_cache = {}
     for seg_idx, seg_end in enumerate(seg_ends):
-        # Refresh the discrete forcing to the hour covering this segment start,
-        # then REBUILD the RHS so a const-hoisted regrid picks up the slice.
-        refresh_fn(t_current)
-        build = _build_numpy_rhs(
-            flat,
-            parameters,
-            initial_conditions,
-            loader_arrays=loader_arrays,
-            static_cache=static_cache,
-        )
+        if seg_idx == 0 and seed is not None and not seed.consumed:
+            # Segment 0 was built at construction, on this same registry and
+            # these same providers — so take it rather than re-sampling and
+            # re-compiling it. Taken ONCE: the loop mutates the registry in
+            # place as it crosses boundaries, so a later run re-seeds from the
+            # providers like any unseeded one.
+            seed.consumed = True
+            build = seed.build
+        else:
+            # Refresh the discrete forcing to the hour covering this segment
+            # start, then REBUILD the RHS so a const-hoisted regrid picks up the
+            # slice.
+            refresh_fn(t_current)
+            build = _build_numpy_rhs(
+                flat,
+                parameters,
+                initial_conditions,
+                loader_arrays=loader_arrays,
+                static_cache=static_cache,
+            )
         if seg_idx == 0:
             y_current = build.y0
             elem_names = _element_names(build.state_names, build.shapes)
@@ -397,8 +497,19 @@ def _simulate_with_loaders(
     loader_provider: LoaderProvider | None = None,
     provider_factory: Callable | None = None,
     maxiters: int | None = None,
-) -> Solution:
+    static_cache: dict[str, Any] | None = None,
+    seed_only: bool = False,
+    seed: SegmentedSeed | None = None,
+) -> Solution | None:
     """Integrate a system whose RHS reads data-loader fields (RFC §4.3).
+
+    ``seed_only`` stops after the FIRST SEGMENT'S BUILD and returns ``None``.
+    That is the per-segment seed esm-libraries-spec §2.5.10 puts under the
+    compiler: this engine has no construction-time build of its own — it
+    rebuilds per cadence boundary — so without a seed here a compiler could not
+    refuse the document at construction, which §2.5.2 requires of every build
+    failure. The products land in ``static_cache``, which the real run reuses,
+    so the seed is paid once per Problem rather than once per `solve`.
 
     Loader fields are external inputs, not equations: a coupling edge already
     substituted each loader's producer symbol (e.g. ``ERA5.pl.u``) into its
@@ -432,6 +543,35 @@ def _simulate_with_loaders(
       Native arrays are bound RAW (on their native grid); any native→sim regrid
       is an in-model coupling expression the RHS evaluates (the obsolete regrid
       seam was removed in v0.8.0), not a bind-time transform."""
+    if seed is not None and not seed.consumed:
+        # Construction already did this document's setup and built segment 0 on
+        # these very providers. Re-running the setup would sample them again —
+        # a second network round trip for a real loader — so the run starts from
+        # the seed instead. `_run_cadence_segmented_solve` takes segment 0 from
+        # it and drives the rest normally.
+        try:
+            return _run_cadence_segmented_solve(
+                flat,
+                parameters,
+                initial_conditions,
+                method,
+                rtol,
+                atol,
+                seed.t0,
+                seed.seg_ends,
+                seed.loader_arrays,
+                seed.refresh_fn,
+                maxiters=maxiters,
+                static_cache=seed.static_cache,
+                seed=seed,
+            )
+        except UnsupportedDimensionalityError:
+            raise
+        except CompilerRefusedRuleError:
+            raise
+        except Exception as e:
+            return _failure_result(f"Simulation failed: {e}", retcode=_retcode_for_error(e))
+
     try:
         t0, t1 = float(tspan[0]), float(tspan[1])
 
@@ -516,6 +656,18 @@ def _simulate_with_loaders(
         # at t0), so they are read once per segment and never double-seeded.
         _seed_const()
 
+        if seed_only:
+            return _seed_first_segment(
+                flat,
+                parameters,
+                initial_conditions,
+                t0,
+                loader_arrays,
+                _refresh_discrete,
+                seg_ends,
+                static_cache,
+            )
+
         # One segmented driver for both loader seams: `_seed()` above already
         # materialized the CONST fields into `loader_arrays`; the shared core
         # re-seeds the DISCRETE fields per segment via `_refresh_discrete` and
@@ -532,9 +684,14 @@ def _simulate_with_loaders(
             loader_arrays,
             _refresh_discrete,
             maxiters=maxiters,
+            static_cache=static_cache,
         )
 
     except UnsupportedDimensionalityError:
+        raise
+    except CompilerRefusedRuleError:
+        # A compiler refusal is a BUILD failure, and esm-libraries-spec §2.5.2
+        # makes a build failure raise rather than come back as a return code.
         raise
     except Exception as e:
         return _failure_result(f"Simulation failed: {e}", retcode=_retcode_for_error(e))
@@ -649,7 +806,10 @@ def _simulate_with_discrete_providers(
     providers: dict[str, Any],
     inspect: Any | None = None,
     maxiters: int | None = None,
-) -> Solution:
+    static_cache: dict[str, Any] | None = None,
+    seed_only: bool = False,
+    seed: SegmentedSeed | None = None,
+) -> Solution | None:
     """Cadence-aware ``providers=`` integration: segment on the DISCRETE
     providers' refresh boundaries so a time-varying loader changes in-sim.
 
@@ -674,6 +834,33 @@ def _simulate_with_discrete_providers(
     With no discrete provider the caller never routes here (it takes the
     materialize-once path), so existing const runs are unaffected.
     """
+    if seed is not None and not seed.consumed:
+        # See the note on the loader entry point: construction built segment 0
+        # on these providers, so the run takes it rather than re-sampling them.
+        try:
+            return _run_cadence_segmented_solve(
+                flat,
+                parameters,
+                initial_conditions,
+                method,
+                rtol,
+                atol,
+                seed.t0,
+                seed.seg_ends,
+                seed.loader_arrays,
+                seed.refresh_fn,
+                inspect,
+                maxiters=maxiters,
+                static_cache=seed.static_cache,
+                seed=seed,
+            )
+        except UnsupportedDimensionalityError:
+            raise
+        except CompilerRefusedRuleError:
+            raise
+        except Exception as e:
+            return _failure_result(f"Simulation failed: {e}", retcode=_retcode_for_error(e))
+
     try:
         t0, t1 = float(tspan[0]), float(tspan[1])
 
@@ -735,6 +922,18 @@ def _simulate_with_discrete_providers(
                     abs_time = epoch + _dt.timedelta(seconds=float(when_seconds))
                     loader_arrays[n] = _provider_refresh_field(providers[n], abs_time)
 
+        if seed_only:
+            return _seed_first_segment(
+                flat,
+                parameters,
+                initial_conditions,
+                t0,
+                loader_arrays,
+                _refresh_discrete,
+                seg_ends,
+                static_cache,
+            )
+
         return _run_cadence_segmented_solve(
             flat,
             parameters,
@@ -748,9 +947,13 @@ def _simulate_with_discrete_providers(
             _refresh_discrete,
             inspect,
             maxiters=maxiters,
+            static_cache=static_cache,
         )
 
     except UnsupportedDimensionalityError:
+        raise
+    except CompilerRefusedRuleError:
+        # See the note on the loader driver: a refusal is a BUILD failure.
         raise
     except Exception as e:
         return _failure_result(f"Simulation failed: {e}", retcode=_retcode_for_error(e))

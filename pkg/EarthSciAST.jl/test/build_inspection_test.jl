@@ -2,7 +2,7 @@
 #
 # Two capability seams landed together and are pinned here:
 #
-# 1. `build_evaluator(...; inspect=BuildInspection())` exposes the materialized
+# 1. `EarthSciAST._build_evaluator(...; inspect=BuildInspection())` exposes the materialized
 #    SETUP-TIME geometry arrays (RFC §8.1 / esm-spec §8.6.1), the const-array
 #    registry, and the resolved observed map — the official surface the ESD
 #    conformance runner reads the per-pair regrid A_ij / A_j / W_ij from
@@ -108,7 +108,7 @@ end
 @testset "BuildInspection — per-pair regrid setup arrays (exact rationals)" begin
     doc = _bi_regrid_doc()
     insp = BuildInspection()
-    f!, u0, p, tspan, var_map = build_evaluator(doc; inspect=insp)
+    f!, u0, p, tspan, var_map = EarthSciAST._build_evaluator(doc; inspect=insp)
 
     @test issubset(Set(["A_ij", "A_j", "W_ij"]), Set(keys(insp.setup_arrays)))
     A = insp.setup_arrays["A_ij"]
@@ -139,7 +139,7 @@ end
     @test insp.observed_exprs isa Dict{String,EarthSciAST.ASTExpr}
 
     # Observability is inert: the build without `inspect` is identical.
-    f2!, u02, p2, tspan2, var_map2 = build_evaluator(_bi_regrid_doc())
+    f2!, u02, p2, tspan2, var_map2 = EarthSciAST._build_evaluator(_bi_regrid_doc())
     @test u02 == u0 && var_map2 == var_map && tspan2 == tspan
     du = similar(u0); du2 = similar(u02)
     f!(du, u0, p, 0.0); f2!(du2, u02, p2, 0.0)
@@ -218,7 +218,7 @@ end
     doc = _bi_ragged_doc()
 
     # Direct build: du at the zero IC IS the ragged divergence.
-    f!, u0, p, tspan, var_map = build_evaluator(doc)
+    f!, u0, p, tspan, var_map = EarthSciAST._build_evaluator(doc)
     @test haskey(var_map, "u[1]") && haskey(var_map, "u[2]")
     du = similar(u0)
     f!(du, u0, p, 0.0)
@@ -227,7 +227,7 @@ end
 
     # Inspection: the const-op factors AND the bare alias are registered.
     insp = BuildInspection()
-    build_evaluator(doc; inspect=insp)
+    EarthSciAST._build_evaluator(doc; inspect=insp)
     @test insp.const_arrays["F"] == [10.0, 20.0, 30.0]
     @test insp.const_arrays["nEdgesOnCell"] == [2.0, 3.0]
     @test haskey(insp.observed_exprs, "div")
@@ -235,9 +235,15 @@ end
     # §6.6.5 end to end (flatten prefixes every name with "Div.", so this also
     # exercises the model-scope suffix resolution of the registry's bare
     # "nEdgesOnCell" offsets factor) — including the DIRECT observed assertion.
+    #
+    # The observed's contracted bound varies per output cell, so the build-time
+    # cellwise evaluator has no compile-once form for it and takes the per-cell
+    # resolve and compile under `:interpreter`. Under the strict default the
+    # assertion reads it through the compiled observed program instead, and
+    # must agree bit for bit.
     file = EarthSciAST.load_string(IOBuffer(JSON3.write(doc)))
     results = run_inline_tests(file; model_name="Div", alg=OrdinaryDiffEqTsit5.Tsit5(),
-                            reltol=1e-10, abstol=1e-12)
+                            reltol=1e-10, abstol=1e-12, compiler=:interpreter)
     @test length(results) == 3
     for r in results
         @test r.passed
@@ -246,4 +252,11 @@ end
     div_min = only(r for r in results if r.reduce == "min")
     @test div_max.actual == 20.0
     @test div_min.actual == -10.0
+    native = run_inline_tests(file; model_name="Div", alg=OrdinaryDiffEqTsit5.Tsit5(),
+                              reltol=1e-10, abstol=1e-12)
+    @test length(native) == 3
+    for (rn, ri) in zip(native, results)
+        @test rn.passed
+        @test rn.actual === ri.actual
+    end
 end

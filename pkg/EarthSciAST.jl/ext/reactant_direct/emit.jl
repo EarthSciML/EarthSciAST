@@ -12,7 +12,7 @@ function _de_param(ctx::_DECtx, sym::Symbol)::_DEVal
     p isa NamedTuple ||
         _de_refuse("a parameter read on a `p` of type $(typeof(p))",
             "the emitter reads parameters by NAME out of a NamedTuple, the " *
-            "shape `build_evaluator` hands back. A vector `p` (`ComponentVector`, " *
+            "shape a build hands back as `p`. A vector `p` (`ComponentVector`, " *
             "`Vector`) reaches parameters by flat index and is not wired here.")
     hasproperty(p, sym) ||
         _de_refuse("the parameter `$(sym)`",
@@ -420,21 +420,20 @@ end
 
 function _de_emit!(ctx::_DECtx, rhs)::_DEVal
     n_states = ctx.n_states
-    # ess-array-contraction: whole-array einsums are a SECTION of the interpreted
-    # RHS (`_apply_array_contraction!`) that this walk has no arm for. Left
-    # alone their output slots would just assemble to zero — a silent wrong
-    # answer, which is the one thing this emitter does not do. The list is empty
-    # on every model whose reductions stay under the tier's floor, which is every
-    # model the backend has been run on; say so rather than emit a program that
-    # is missing a section.
+    # ess-array-contraction: whole-array einsums are a SECTION of the in-place
+    # RHS that this walk has no arm for. Left alone their output slots would
+    # just assemble to zero — a silent wrong answer, which is the one thing this
+    # emitter does not do. The list is empty on every model whose reductions
+    # stay under the tier's floor, which is every model the backend has been run
+    # on; say so rather than emit a program that is missing a section.
     let nac = length(getfield(rhs, :array_contractions)) +
               sum(length(lvl[5]) for lvl in getfield(rhs, :mat_levels); init=0)
         nac == 0 ||
             _de_refuse("$nac whole-array contraction(s)",
-                "the array-contraction tier (ess-array-contraction, " *
-                "`_apply_array_contraction!`) is a section of the " *
-                "interpreted RHS with no arm in this walk. Emitting the rest " *
-                "would leave its output slots zero, so the emission stops here.")
+                "the array-contraction tier (ess-array-contraction) is a " *
+                "section of the in-place RHS with no arm in this walk. " *
+                "Emitting the rest would leave its output slots zero, so the " *
+                "emission stops here.")
     end
     du = _DEMap(n_states)
     _de_plan_writes!(ctx, rhs, du)

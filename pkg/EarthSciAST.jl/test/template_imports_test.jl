@@ -152,11 +152,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test lib12.index_sets["cells"].size == 12
 
         # esm-spec §9.6.4 Option B: references survive by default; pin the
-        # Option-A expanded image via the `ESS_TEMPLATE_REF_DISABLE=1` hatch.
-        m = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
+        # Option-A expanded image with `expanded_file`.
+        m = EarthSciAST.expanded_file(
             EarthSciAST.load_path(joinpath(repo_root, "tests", "valid",
-                                      "template_import_minimal.esm"))
-        end
+                                           "template_import_minimal.esm")))
         @test m.index_sets["cells"].size == 8     # §9.7.5 merge into consumer
         y = observed_definition(m.models["M"], "y")
         @test y isa OpExpr && y.op == "*"
@@ -728,7 +727,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # The empty region is inert: the evaluator builds, and the two faces
         # tile the axis — d(c)/dt is the one-sided difference everywhere. With
         # a uniform state the differences vanish, so du == 0 exactly.
-        f!, u0, p, tspan, vmap = build_evaluator(f)
+        f!, u0, p, tspan, vmap = EarthSciAST._build_evaluator(f)
         du = similar(u0); fill!(du, NaN)
         f!(du, u0, p, 0.0)
         @test all(du .== 0.0)

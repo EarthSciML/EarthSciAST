@@ -1,0 +1,67 @@
+{
+  "fixture": "pointwise_filter",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "pointwise_filter_t1",
+      "assertion_idx": 1,
+      "variable": "a",
+      "actual": 0.0
+    },
+    {
+      "test_id": "pointwise_filter_t1",
+      "assertion_idx": 2,
+      "variable": "a",
+      "actual": 0.0
+    },
+    {
+      "test_id": "pointwise_filter_t1",
+      "assertion_idx": 3,
+      "variable": "a",
+      "actual": 6.999999999999997
+    },
+    {
+      "test_id": "pointwise_filter_t1",
+      "assertion_idx": 4,
+      "variable": "a",
+      "actual": 9.0
+    },
+    {
+      "test_id": "pointwise_filter_t1",
+      "assertion_idx": 5,
+      "variable": "a",
+      "actual": 10.999999999999996
+    },
+    {
+      "test_id": "pointwise_filter_t1",
+      "assertion_idx": 6,
+      "variable": "b",
+      "actual": 9.999999999999998
+    },
+    {
+      "test_id": "pointwise_filter_t1",
+      "assertion_idx": 7,
+      "variable": "b",
+      "actual": 19.999999999999996
+    },
+    {
+      "test_id": "pointwise_filter_t1",
+      "assertion_idx": 8,
+      "variable": "b",
+      "actual": 0.0
+    },
+    {
+      "test_id": "pointwise_filter_t1",
+      "assertion_idx": 9,
+      "variable": "b",
+      "actual": 0.0
+    },
+    {
+      "test_id": "pointwise_filter_t1",
+      "assertion_idx": 10,
+      "variable": "b",
+      "actual": 0.0
+    }
+  ]
+}

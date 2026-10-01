@@ -1,0 +1,201 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "unary_broadcast_fn",
+    "description": "esm-spec \u00a74.3.4's one-operand `broadcast` (issue #101). `broadcast(fn: \"-\", [flux])` is unary negation applied elementwise, and must give exactly what the bare `{op: \"-\"}` spelling gives. `flux` is a*dp with a = -0.3, so the tendency is +0.3*dp and dp(1) = exp(0.3) = 1.3498588075760032. A binding that treats a one-operand `broadcast` as the IDENTITY \u2014 dropping the `fn` \u2014 integrates -0.3*dp instead and lands on exp(-0.3) = 0.7408182206817179, which is finite, plausible, and 4.5e-1 away from the right answer: roughly nine orders of magnitude outside this fixture's band. `dq` carries the BARE spelling of the same maths, so the two states must agree with each other as well as with the number.",
+    "authors": [
+      "EarthSciAST Test Suite"
+    ],
+    "tags": [
+      "array-level",
+      "broadcast",
+      "unary",
+      "conformance",
+      "esm-spec-4.3.4",
+      "issue-101"
+    ]
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 3
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 2
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "unary_broadcast_fn": {
+      "tolerance": {
+        "rel": 1e-08,
+        "abs": 1e-10
+      },
+      "variables": {
+        "a": {
+          "type": "parameter",
+          "units": "1",
+          "default": -0.3,
+          "description": "The negative rate the unary `fn` must flip."
+        },
+        "dp": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 1.0,
+          "description": "Integrates broadcast(fn: \"-\", [flux_p])."
+        },
+        "dq": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 1.0,
+          "description": "Integrates the BARE unary minus of the same expression."
+        },
+        "flux_p": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "description": "a * dp."
+        },
+        "flux_q": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "description": "a * dq."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "The broadcast spelling: D(dp)/dt = -(a*dp) = +0.3 dp.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "dp"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "broadcast",
+            "fn": "-",
+            "args": [
+              "flux_p"
+            ]
+          }
+        },
+        {
+          "_comment": "The bare spelling of the same thing.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "dq"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "flux_q"
+            ]
+          }
+        },
+        {
+          "lhs": "flux_p",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "a",
+              "dp"
+            ]
+          }
+        },
+        {
+          "lhs": "flux_q",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "a",
+              "dq"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "unary_broadcast_applies_its_fn",
+          "description": "Both spellings reach exp(0.3) at t = 1, in every cell.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "tolerance": {
+            "rel": 1e-07,
+            "abs": 1e-09
+          },
+          "assertions": [
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 1.3498588075760032,
+              "coords": {
+                "lon": 1,
+                "lat": 1,
+                "lev": 1
+              }
+            },
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 1.3498588075760032,
+              "coords": {
+                "lon": 3,
+                "lat": 2,
+                "lev": 2
+              }
+            },
+            {
+              "variable": "dq",
+              "time": 1.0,
+              "expected": 1.3498588075760032,
+              "coords": {
+                "lon": 1,
+                "lat": 1,
+                "lev": 1
+              }
+            },
+            {
+              "variable": "dq",
+              "time": 1.0,
+              "expected": 1.3498588075760032,
+              "coords": {
+                "lon": 3,
+                "lat": 2,
+                "lev": 2
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

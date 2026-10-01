@@ -36,16 +36,16 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         model = ESM.Model(vars, eqs)
 
         # Default parameter value: ic(x) = k*2 = 6.
-        f!, u0, p, tspan, var_map = build_evaluator(model)
+        f!, u0, p, tspan, var_map = EarthSciAST._build_evaluator(model)
         @test u0[var_map["x"]] == 6.0
 
         # parameter_overrides feed the same resolved scope: ic(x) = 5*2 = 10.
-        _, u0b, _, _, vmb = build_evaluator(model;
+        _, u0b, _, _, vmb = EarthSciAST._build_evaluator(model;
             parameter_overrides=Dict("k" => 5.0))
         @test u0b[vmb["x"]] == 10.0
 
         # An explicit initial_conditions entry still wins over the ic equation.
-        _, u0c, _, _, vmc = build_evaluator(model;
+        _, u0c, _, _, vmc = EarthSciAST._build_evaluator(model;
             initial_conditions=Dict("x" => 42.0))
         @test u0c[vmc["x"]] == 42.0
 
@@ -56,7 +56,7 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
             ESM.Equation(_af_op("D", _af_v("x"); wrt="t"), _af_n(0.0)),
         ])
         err = try
-            build_evaluator(badm)
+            EarthSciAST._build_evaluator(badm)
             nothing
         catch e
             e

@@ -12,7 +12,7 @@ Coverage:
    functions, derivatives (``D(x)/Dt`` and ``D(x, t)``), open/user function calls;
  - array & call-shaped tier: array literals ``[…]`` (``const``), indexing
    ``a[i, j]`` (``index``), dotted closed-function calls ``datetime.year(t)``
-   (``fn``), the ``true`` literal, and ``integral`` / ``reshape`` / ``transpose`` /
+   (``fn``), the ``true`` and ``false`` literals, and ``integral`` / ``reshape`` / ``transpose`` /
    ``concat``;
  - reduction & array-query tier: ``faq`` reductions
    ``sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
@@ -122,7 +122,7 @@ _TEMPLATE_ARG_MIN = _op_precedence("+")
 
 # Structural ops whose defining data lives OUTSIDE `args` AND which have no text
 # surface yet — refused, pending a dedicated syntax pass. (`integral`, `reshape`,
-# `transpose`, `concat`, `fn`, `const`, `index`, `true`, `aggregate`,
+# `transpose`, `concat`, `fn`, `const`, `index`, `true`, `false`, `aggregate`,
 # `apply_expression_template`, `polygon_intersection_area`, `intersect_polygon`,
 # `makearray` DO have a surface and are reconstructed below; they are
 # intentionally absent here. `table_lookup` IS listed: its surface is the bracket
@@ -392,8 +392,8 @@ class _Parser:
         if t.k == "[":
             return {"op": "const", "value": self._parse_array_rest(), "args": []}
         if t.k == "name":
-            if t.v == "true":
-                return {"op": "true", "args": []}
+            if t.v in ("true", "false"):
+                return {"op": t.v, "args": []}
             # `makearray(region = value, …)` — a piecewise-region array. Its
             # arguments are `[lo:hi, …] = value` pairs, not plain call args, so it
             # needs its own parse rather than the generic _parse_call path.

@@ -3,23 +3,20 @@
 # An array-shaped observed defined by a `faq`/`makearray` used to be
 # INLINED into every reader (`_collect_array_inline_vars`); it is now evaluated
 # ONCE PER RHS CALL into a dense buffer laid out above the ODE state, and readers
-# gather that buffer (build.jl §2b-f). `ESS_ARRAY_OBS_INLINE=1` restores the
-# inlining build, which is the oracle every case below compares against —
-# bit-for-bit, not approximately.
+# gather that buffer (build.jl §2b-f). `compiler=:interpreter` is the inlining
+# build — it splices every array observed into its readers — and it is the
+# oracle every case below compares against, bit-for-bit, not approximately.
 using Test
 include("testutils.jl")
 
 using EarthSciAST
 const ESM_AOM = EarthSciAST
 
-# Build the same model twice — factored (default) and inlined (the oracle) —
-# and return both `(f!, u0, p, var_map)` tuples. The switch is read at BUILD
-# time, so flipping the env var between calls is enough.
+# Build the same model twice — factored (`:native`) and inlined
+# (`:interpreter`, the oracle) — and return both `(f!, u0, p, var_map)` tuples.
 function _aom_build_both(model; kwargs...)
     fac = ESM_AOM._build_evaluator_impl(model; kwargs...)
-    inl = withenv("ESS_ARRAY_OBS_INLINE" => "1") do
-        ESM_AOM._build_evaluator_impl(model; kwargs...)
-    end
+    inl = ESM_AOM._build_evaluator_impl(model; compiler = :interpreter, kwargs...)
     return fac, inl
 end
 
@@ -117,6 +114,41 @@ end
         for probe in (f2[2], fill(2.0, N))
             @test _aom_du(f2, probe) == _aom_du(i2, probe)
         end
+    end
+
+    # ---- A fill that reads its own buffer through an inlined observed ----
+    # g[i] = u[i] + s with s = g[3]: g's fill reads g's buffer through the
+    # scalar observed s. `validate()` calls this an observed cycle, and so does
+    # the inlining build; a `Model` built without validating must not reach
+    # the level's kernel section, whose alias scope asserts no store to g
+    # aliases a load.
+    @testset "a self-read through an inlined observed is an observed cycle" begin
+        vars3 = Dict(
+            "u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "s" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable),
+        )
+        eqs3 = [
+            ESM_AOM.Equation(_v("g"), _agg(_op("+", _idx("u", _v("i")), _v("s")))),
+            ESM_AOM.Equation(_v("s"), _idx("g", _i(3))),
+            ESM_AOM.Equation(_agg(_Didx("u", _v("i"))), _agg(_idx("g", _v("i")))),
+        ]
+        m3 = ESM_AOM.Model(vars3, eqs3)
+        for compiler in (:native, :interpreter)
+            err = try
+                ESM_AOM._build_evaluator_impl(m3; compiler = compiler, index_sets = isets,
+                                              initial_conditions = ics)
+                nothing
+            catch e
+                e
+            end
+            @test err isa ESM_AOM.TreeWalkError
+            @test err isa ESM_AOM.TreeWalkError && err.code == "E_TREEWALK_OBSERVED_CYCLE"
+        end
+        file = ESM_AOM.EsmFile("1.0.0", ESM_AOM.Metadata("selfread");
+                               models = Dict("M" => m3), index_sets = isets)
+        @test any(e -> e.error_type == "observed_cycle",
+                  ESM_AOM.validate(file).structural_errors)
     end
 
     # ---- Observeds that MUST stay inlined ----
@@ -327,19 +359,14 @@ end
         @test get(tally, :percell_acc, 0) == 0
         @test get(tally, :affine, 0) >= 2               # the fill AND D(u)
 
-        # Differential: bit-identical to the inlining oracle and to the per-cell
-        # reference, which never sees the unwrap at all.
-        inlC = withenv("ESS_ARRAY_OBS_INLINE" => "1") do
-            ESM_AOM._build_evaluator_impl(mC; kwC...)
-        end
-        pcC = withenv("ESS_STENCIL_DISABLE" => "1") do
-            ESM_AOM._build_evaluator_impl(mC; kwC...)
-        end
+        # Differential: bit-identical to the interpreter, which both inlines
+        # the observed and takes the per-cell path, so it never sees the
+        # unwrap at all.
+        inlC = ESM_AOM._build_evaluator_impl(mC; compiler = :interpreter, kwC...)
         u0 = facC[2]
         for probe in (u0, fill(1.0, length(u0)),
                       collect(range(-3.0, 3.0; length = length(u0))))
             @test _aom_du(facC, probe) == _aom_du(inlC, probe)
-            @test _aom_du(facC, probe) == _aom_du(pcC, probe)
         end
 
         # ...and the hand-computed value: D(u)[i,j] = k · Σ_j' u[i,j'].
@@ -394,7 +421,9 @@ end
         @test facS[6].n_mat_array_obs == 1        # g is factored
         @test facS[6].n_scan_folds == 1           # ...and the scan STILL fires
         @test inlS[6].n_mat_array_obs == 0
-        @test inlS[6].n_scan_folds == 1
+        # The interpreter has no scan rewrite either — it is part of the affine
+        # build — so the reference computes the same prefix sums cell by cell.
+        @test inlS[6].n_scan_folds == 0
         for probe in (facS[2], fill(1.0, length(facS[2])),
                       collect(range(-3.0, 3.0; length = length(facS[2]))))
             @test _aom_du(facS, probe) == _aom_du(inlS, probe)
@@ -417,7 +446,7 @@ end
 # `mean` puts the two binders in the same body. Materializing `w` (the default
 # `:inplace` build) hides the collision behind a buffer gather, which is why the
 # defect was invisible there and reached only the INLINING build
-# (`ESS_ARRAY_OBS_INLINE=1`).
+# (`compiler=:interpreter`).
 @testset "inlined aggregate does not capture a reader's loop variable" begin
     NI, NK = 2, 4
     _agg(out, rngs, body) = Dict{String,Any}(
@@ -453,10 +482,11 @@ end
     # du[gi,gk] = (Σ_kk q[gi,kk])/2 − q[gi,gk]
     want(i, k) = sum(Float64(10i + kk) for kk in 1:NK) / 2 - Float64(10i + k)
 
-    du_iip(; inline) = withenv("ESS_ARRAY_OBS_INLINE" => (inline ? "1" : nothing)) do
-        f!, u0, p, _, vm = EarthSciAST.build_evaluator(doc; initial_conditions = ics)
+    function du_iip(; inline)
+        f!, u0, p, _, vm = EarthSciAST._build_evaluator(doc;
+            initial_conditions = ics, compiler = inline ? :interpreter : :native)
         du = similar(u0); f!(du, u0, p, 0.0)
-        [du[vm["q[$i,$k]"]] for i in 1:NI, k in 1:NK]
+        return [du[vm["q[$i,$k]"]] for i in 1:NI, k in 1:NK]
     end
     ref = [want(i, k) for i in 1:NI, k in 1:NK]
     @test du_iip(inline = false) == ref          # factored: was already right

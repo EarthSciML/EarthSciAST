@@ -314,7 +314,9 @@ def test_constructing_a_problem_does_not_need_scipy(monkeypatch) -> None:
     monkeypatch.setattr(problem_mod, "SCIPY_AVAILABLE", False)
     prob = problem_mod.esm_problem(_decay_file(), (0.0, 1.0), u0={"A": 1.0})
     assert isinstance(prob, EsmProblem)
-    assert prob.scalar_build is not None  # the compile happened anyway
+    # The compile happened anyway — under the strict `native` default that is
+    # the vectorized NumPy build, not a lambdified SymPy one.
+    assert prob.build is not None
 
     sol = problem_mod.solve(prob)
     assert sol.retcode is ReturnCode.Failure

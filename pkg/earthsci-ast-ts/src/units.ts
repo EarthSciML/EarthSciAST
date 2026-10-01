@@ -257,7 +257,72 @@ export function checkDimensions(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
 ): UnitResult {
-  return checkDimensionsMemo(expr, unitBindings, new Map())
+  return checkDimensionsMemo(expr, unitBindings, new Map(), false)
+}
+
+/**
+ * The EVALUATION-PATH reading of {@link checkDimensions}: the same rules, plus
+ * an array operator carrying its ELEMENT's unit. The checker has no rule for
+ * the array operators (esm-spec §4.8.4: they are undeterminable there), but an
+ * evaluator that meets `cos(index(lat, i))` with `lat` in `deg` reads a number
+ * in degrees all the same, and §4.8.3 requires it converted. Only the angle
+ * rewrite (`flatten.ts` `normalizeAngleArguments`) calls it, so no checker
+ * verdict depends on it.
+ */
+export function checkElementDimensions(
+  expr: Expression,
+  unitBindings: Map<string, ParsedUnit>,
+): UnitResult {
+  return checkDimensionsMemo(expr, unitBindings, new Map(), true)
+}
+
+/** The array operators whose ELEMENT unit {@link checkElementDimensions} carries. */
+const ARRAY_ELEMENT_OPS: ReadonlySet<string> = new Set([
+  'faq',
+  'makearray',
+  'index',
+  'reshape',
+  'transpose',
+  'concat',
+  'broadcast',
+])
+
+/**
+ * The element unit of an array operator under the evaluation-path reading. The
+ * rules are the Rust binding's `propagate_array_dim` (units.rs), case for case,
+ * so every binding's angle rewrite folds the factor into the same arguments: an
+ * `faq` has its body's unit; a `makearray` has the unit its value regions share;
+ * a `broadcast` has the unit of its `fn` applied to its operands; `index`,
+ * `reshape`, `transpose` and `concat` have their source array's.
+ */
+function arrayElementDimensions(
+  node: ExpressionNode,
+  unitBindings: Map<string, ParsedUnit>,
+  memo: Map<object, UnitResult>,
+): ParsedUnit | null {
+  const element = (e: Expression): ParsedUnit | null =>
+    checkDimensionsMemo(e, unitBindings, memo, true).dimensions
+  const args = node.args ?? []
+  switch (node.op) {
+    case 'faq':
+      if (node.expr !== undefined) return element(node.expr as Expression)
+      return args.length > 0 ? element(args[0] as Expression) : dimensionless()
+    case 'makearray': {
+      const values = (node.values ?? []) as Expression[]
+      if (values.length === 0) return dimensionless()
+      const dims = values.map(element)
+      const known = dims.filter((d): d is ParsedUnit => d !== null)
+      if (known.length === 0 || known.length !== dims.length) return null
+      const first = known[0]
+      return known.every((d) => sameUnit(first, d)) ? first : null
+    }
+    case 'broadcast':
+      if (node.fn === undefined) return null
+      return checkDimensionsMemo({ op: node.fn, args } as ExpressionNode, unitBindings, memo, true)
+        .dimensions
+    default:
+      return args.length > 0 ? element(args[0] as Expression) : dimensionless()
+  }
 }
 
 /**
@@ -276,6 +341,7 @@ function checkDimensionsMemo(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
   memo: Map<object, UnitResult>,
+  elements: boolean,
 ): UnitResult {
   const isNode = typeof expr === 'object' && expr !== null
   if (isNode) {
@@ -284,7 +350,7 @@ function checkDimensionsMemo(
       return { dimensions: hit.dimensions, warnings: [], diagnostics: [] }
     }
   }
-  const res = computeDimensions(expr, unitBindings, memo)
+  const res = computeDimensions(expr, unitBindings, memo, elements)
   if (isNode) memo.set(expr, res)
   return res
 }
@@ -293,6 +359,7 @@ function computeDimensions(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
   memo: Map<object, UnitResult>,
+  elements: boolean,
 ): UnitResult {
   const diagnostics: UnitDiagnostic[] = []
   // Record a diagnostic with its classification made EXPLICIT here (not
@@ -351,7 +418,11 @@ function computeDimensions(
   const op = node.op
   const args = node.args ?? []
 
-  const argResults = args.map((arg) => checkDimensionsMemo(arg, unitBindings, memo))
+  if (elements && ARRAY_ELEMENT_OPS.has(op)) {
+    return finish(arrayElementDimensions(node, unitBindings, memo))
+  }
+
+  const argResults = args.map((arg) => checkDimensionsMemo(arg, unitBindings, memo, elements))
   for (const r of argResults) diagnostics.push(...r.diagnostics)
 
   // `get(i)` is the i-th operand's dimension, or `null` when indeterminate.

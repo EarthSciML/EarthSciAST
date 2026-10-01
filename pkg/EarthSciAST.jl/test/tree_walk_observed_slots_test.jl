@@ -12,8 +12,8 @@
 #                  (`n_obs_inlined`) — behavior identical to the pre-slot build;
 #   * cadence    — a parameter-only observed slot lands in the CONST tier;
 #   * AD         — slots ride the eltype-generic alt-buffer scheme (ForwardDiff
-#                  over state AND over parameters), and tiered ≡ untiered
-#                  (`ESS_UNTIERED=1`);
+#                  over state AND over parameters), and `:native` ≡
+#                  `:interpreter`;
 #   * zero-alloc — the slot prelude keeps `f!` allocation-free at Float64.
 
 using Test
@@ -275,7 +275,7 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
     # ----------------------------------------------------------------
     # AD gate: ForwardDiff over the STATE and over the PARAMETERS through the
     # slot prelude (the eltype-generic alt buffer), and the tiered `f!` ≡ an
-    # `ESS_UNTIERED=1` build bit-for-bit at Float64. The untiered build refills
+    # `compiler=:interpreter` build bit-for-bit at Float64. That build refills
     # every prelude slot on every call, so it is the reference that cannot carry
     # a stale (or Dual-clobbered) slot across calls; `tree_walk_untiered_test.jl`
     # pins it against the out-of-place walker.
@@ -296,9 +296,8 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
         model = ESM.Model(vars, eqs)
         f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(model)
         @test diag.n_obs_slots == 1
-        fun, _u2, _p2, _ts2, _vm2, d2 = withenv("ESS_UNTIERED" => "1") do
-            ESM._build_evaluator_impl(model)
-        end
+        fun, _u2, _p2, _ts2, _vm2, d2 = ESM._build_evaluator_impl(model;
+            compiler=:interpreter)
         @test d2.n_const_slots == 0 && d2.n_time_slots == 0
 
         # Analytic: du/dx of (-kx² + sin(kx²)) = -2kx + cos(kx²)·2kx

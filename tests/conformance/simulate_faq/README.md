@@ -61,8 +61,8 @@ symbol goes through the ordinary affine build as an elementwise **term** pass, a
 a `_ScanFold` accumulates over those terms after the kernel section. Both passes
 are `O(N)`, and the term pass keeps the affine lowering, the codegen tier,
 threading and AD unchanged. The Julia tests pin the result bit-for-bit against
-*both* the per-cell reference (`ESS_STENCIL_DISABLE=1`) and the interpreted affine
-tier (`ESS_CODEGEN_DISABLE=1`), neither of which sees the rewrite.
+the per-cell reference (`compiler=:interpreter`), which does not see the
+rewrite at all.
 
 ## Executing ports
 

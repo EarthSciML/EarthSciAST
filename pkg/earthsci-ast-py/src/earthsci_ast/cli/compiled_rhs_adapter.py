@@ -121,7 +121,9 @@ def _project(
     return {name: bare[name] for name in order}
 
 
-def run_fixture(fixture: dict[str, Any], tests_dir: Path) -> dict[str, Any]:
+def run_fixture(
+    fixture: dict[str, Any], tests_dir: Path, compiler: str | None = None
+) -> dict[str, Any]:
     """Evaluate one manifest fixture's RHS at every probe with the interpreter.
 
     Consumes ``path`` (relative to ``tests_dir``), ``state_order``,
@@ -149,13 +151,17 @@ def run_fixture(fixture: dict[str, Any], tests_dir: Path) -> dict[str, Any]:
             _state_vector(fixture, probe),
             t=float(probe.get("t", 0.0)),
             parameters=parameters,
+            compiler=compiler,
         )
         rhs[probe_id] = _project(evaluated, fixture, probe_id)
     return {"rhs": rhs}
 
 
 def run_manifest(
-    manifest: dict[str, Any], manifest_path: Path, engine: str = "interpreter"
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    engine: str = "interpreter",
+    compiler: str | None = None,
 ) -> dict[str, Any]:
     """The whole adapter payload for one manifest and one engine.
 
@@ -176,7 +182,7 @@ def run_manifest(
     fixtures: dict[str, Any] = {}
     for fixture in manifest.get("fixtures", []):
         try:
-            fixtures[fixture["id"]] = run_fixture(fixture, tests_dir)
+            fixtures[fixture["id"]] = run_fixture(fixture, tests_dir, compiler)
         except Exception as exc:  # noqa: BLE001 - surface per-fixture failure to the runner
             fixtures[fixture["id"]] = {"error": f"{type(exc).__name__}: {exc}"}
     return {"binding": BINDING, "engine": engine, "fixtures": fixtures}
@@ -187,10 +193,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--engine", choices=ENGINES, default="interpreter")
+    # `--engine` and `--compiler` are different questions and both stay.
+    # `--engine` is this tier's own axis — whether a binding has a COMPILED
+    # backend at all — and Python answers `compiled` with `unavailable`.
+    # `--compiler` is API_SPEC §5.8's closed vocabulary: WHICH of this binding's
+    # strategies evaluates the right-hand side. Omitted, it means the strict
+    # `native` default.
+    parser.add_argument("--compiler", default=None)
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
 
     manifest = json.loads(args.manifest.read_text())
-    payload = run_manifest(manifest, args.manifest, args.engine)
+    payload = run_manifest(manifest, args.manifest, args.engine, args.compiler)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")

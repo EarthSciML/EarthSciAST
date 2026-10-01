@@ -283,7 +283,7 @@ python3 scripts/run-compiled-rhs-conformance.py --self-test
 ./scripts/test-conformance.sh
 
 # Regenerate the goldens (e.g. after changing a fixture or a probe):
-EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl" \
+EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl --compiler native" \
   python3 scripts/run-compiled-rhs-conformance.py --write-golden --bindings julia
 ```
 

@@ -1,0 +1,55 @@
+{
+  "fixture": "broadcast_node_mixed_rank",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "broadcast_node_mixed_rank_t1",
+      "assertion_idx": 1,
+      "variable": "dp",
+      "actual": 1099.9999999999995
+    },
+    {
+      "test_id": "broadcast_node_mixed_rank_t1",
+      "assertion_idx": 2,
+      "variable": "dp",
+      "actual": 1299.9999999999995
+    },
+    {
+      "test_id": "broadcast_node_mixed_rank_t1",
+      "assertion_idx": 3,
+      "variable": "dp",
+      "actual": 2099.9999999999995
+    },
+    {
+      "test_id": "broadcast_node_mixed_rank_t1",
+      "assertion_idx": 4,
+      "variable": "dp",
+      "actual": 2299.999999999999
+    },
+    {
+      "test_id": "broadcast_node_mixed_rank_t1",
+      "assertion_idx": 5,
+      "variable": "dp",
+      "actual": 2199.999999999999
+    },
+    {
+      "test_id": "broadcast_node_mixed_rank_t1",
+      "assertion_idx": 6,
+      "variable": "dp",
+      "actual": 2599.999999999999
+    },
+    {
+      "test_id": "broadcast_node_mixed_rank_t1",
+      "assertion_idx": 7,
+      "variable": "dp",
+      "actual": 4399.999999999998
+    },
+    {
+      "test_id": "broadcast_node_mixed_rank_t1",
+      "assertion_idx": 8,
+      "variable": "dp",
+      "actual": 4599.999999999998
+    }
+  ]
+}

@@ -52,8 +52,8 @@ Render the literal value `V` itself — indistinguishable from a bare literal.
 Scalar → number formatting; array → `[e0, e1, …]`. All three formats.
 `{const 5}` → `5`.
 
-### true  `{op:"true", args:[]}`
-Bare `true` (all formats). Not `true()`.
+### true, false  `{op:"true", args:[]}`, `{op:"false", args:[]}`
+Bare `true` / `false` (all formats). Not `true()` / `false()`.
 
 ### fn  `{op:"fn", name:N, args:[…]}`
 `N(a0, …)`; latex `\mathrm{ESC(N)}(a0, …)`.

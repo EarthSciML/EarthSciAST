@@ -137,9 +137,9 @@ fn geom_arrays(g: &Geom) -> HashMap<String, ArrayD<f64>> {
 // (A) MIRRORED orientation — an authored gate on a per-RECORD aggregate.
 // ---------------------------------------------------------------------------
 
-#[test]
-fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
-    let g = geometry();
+/// `P[p] = SUM_{c in cells} [contains(cell_c, pt_p)] * (W[c] + S[c])`, gated on
+/// the points-in-cells overlap.
+fn mirrored_doc() -> Value {
     let mut vars = serde_json::Map::new();
     // An OBSERVED unknown is declared `unknown` and DEFINED by a
     // bare-variable-LHS equation (esm-spec 6.3.1); esm 1.0.0 has no
@@ -177,7 +177,7 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
         "args": ["src_W", "src_S", "src_E", "src_N", "px", "py"],
         "expr": {"op": "+", "args": [ix("src_W", "c"), ix("src_S", "c")]}
     }}));
-    let doc = json!({
+    json!({
         "esm": "1.1.0",
         "metadata": {"name": "dense_overlap_mirror"},
         "index_sets": {
@@ -185,9 +185,18 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
             "cells": {"kind": "interval", "size": NCELLS}
         },
         "models": {"Mirror": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}
-    });
+    })
+}
+
+#[test]
+fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
+    let g = geometry();
+    let doc = mirrored_doc();
 
     let opts = ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         model_name: Some("Mirror".into()),
         ..Default::default()
     };
@@ -196,6 +205,9 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
         &doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: geom_arrays(&g),
             build_providers: Vec::new(),
             ..opts
@@ -224,6 +236,59 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
         "{visits} visits is not a cut against the {} full product",
         NPTS * NCELLS
     );
+}
+
+/// Under the strict `native` the same gated aggregate is refused — the
+/// pipeline's reference evaluator walks it per output record — and refused
+/// after ONE record: the gate-driven walk stops at its first cell rather than
+/// enumerating every record's candidates only to throw the field away.
+#[test]
+fn native_refuses_the_gated_aggregate_after_its_first_output_cell() {
+    let g = geometry();
+    let doc = mirrored_doc();
+    let build = |compiler| {
+        reset_overlap_enum_visits();
+        let r = esm_problem(
+            &doc,
+            (0.0, 0.0),
+            ProblemOptions {
+                compiler: Some(compiler),
+                model_name: Some("Mirror".into()),
+                const_arrays: geom_arrays(&g),
+                build_providers: Vec::new(),
+                ..Default::default()
+            },
+        );
+        (r, overlap_enum_visits())
+    };
+
+    let (native, native_visits) = build(earthsci_ast::Compiler::Native);
+    match native {
+        Err(earthsci_ast::SimulateError::Compile(
+            earthsci_ast::CompileError::CompilerRefusedRule {
+                compiler,
+                kind,
+                rule,
+                reason,
+                ..
+            },
+        )) => {
+            assert_eq!(compiler, "native");
+            assert_eq!(kind, "build-time observed");
+            assert_eq!(rule, "Mirror.P");
+            assert!(reason.contains("per cell"), "{reason}");
+        }
+        other => panic!("expected compiler_refused_rule, got {other:?}"),
+    }
+    assert_eq!(
+        native_visits, 1,
+        "the refusal must come after the first output record's one candidate"
+    );
+
+    // The reference evaluator still walks every record.
+    let (interp, interp_visits) = build(earthsci_ast::Compiler::Interpreter);
+    interp.expect("the interpreter builds it");
+    assert_eq!(interp_visits, NPTS as u64);
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +396,9 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
     );
 
     let opts = ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         model_name: Some("Fwd".into()),
         pushdown_rewrite: true,
         ..Default::default()
@@ -340,6 +408,9 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
         &doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: arrays,
             build_providers: Vec::new(),
             ..opts
@@ -472,6 +543,9 @@ fn both_gated_symbols_contracted_drives_from_the_candidate_pairs() {
         "models": {"Pairs": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}
     });
     let opts = ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         model_name: Some("Pairs".into()),
         ..Default::default()
     };
@@ -480,6 +554,9 @@ fn both_gated_symbols_contracted_drives_from_the_candidate_pairs() {
         &doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: pir_arrays(),
             build_providers: Vec::new(),
             ..opts
@@ -532,6 +609,9 @@ fn both_gated_symbols_bound_is_a_membership_test_with_identity_fill() {
         "models": {"Member": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}
     });
     let opts = ProblemOptions {
+        // The pipeline's per-cell walk is refused by a strict native (#484), so
+        // these semantics are checked on the reference evaluator.
+        compiler: Some(earthsci_ast::Compiler::Interpreter),
         model_name: Some("Member".into()),
         ..Default::default()
     };
@@ -540,6 +620,9 @@ fn both_gated_symbols_bound_is_a_membership_test_with_identity_fill() {
         &doc,
         (0.0, 0.0),
         ProblemOptions {
+            // The pipeline's per-cell walk is refused by a strict native (#484), so
+            // these semantics are checked on the reference evaluator.
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: pir_arrays(),
             build_providers: Vec::new(),
             ..opts

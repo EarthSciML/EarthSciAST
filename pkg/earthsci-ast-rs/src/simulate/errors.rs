@@ -9,8 +9,8 @@ use super::*;
 // to preserve the native `crate::simulate::CompileError` path.
 pub use crate::compile_error::CompileError;
 
-/// Errors raised when running [`Compiled::simulate`] or the convenience
-/// [`crate::problem::solve`] entry point.
+/// Errors raised building an [`crate::problem::EsmProblem`] or running
+/// [`crate::problem::solve`].
 #[derive(Error, Debug)]
 pub enum SimulateError {
     /// Wraps a CompileError raised by [`crate::problem::esm_problem`]
@@ -37,6 +37,24 @@ pub enum SimulateError {
     #[error("Nothing to integrate: {details}")]
     NotDynamic {
         /// Why the EsmProblem carries no integrable right-hand side.
+        details: String,
+    },
+
+    /// [`crate::problem::ProblemOptions::compiler`] named a value that is in
+    /// API_SPEC §5.8's closed vocabulary but that this binding, this build or
+    /// this process cannot provide (esm-spec §9.6.6 `compiler_unavailable`).
+    ///
+    /// Never answered by building with a different compiler: the whole point
+    /// of naming one is that the caller knows which ran. `details` names what
+    /// would have to be loaded or built.
+    #[error(
+        "{code}: compiler '{compiler}' is not available here: {details}",
+        code = crate::diagnostic::codes::COMPILER_UNAVAILABLE
+    )]
+    CompilerUnavailable {
+        /// The vocabulary spelling the caller asked for.
+        compiler: &'static str,
+        /// What would have to be loaded or built to provide it.
         details: String,
     },
 
@@ -73,7 +91,7 @@ pub enum SimulateError {
     ///
     /// A document cannot spell one: the schema's `TimeSpan` bounds are JSON
     /// numbers, and esm-spec §6.6.4 records that "JSON has no infinite
-    /// literal". So this is a caller-supplied argument of [`Compiled::solve`],
+    /// literal". So this is a caller-supplied argument of a solve,
     /// validated alongside the parameter and initial-condition maps of the same
     /// call.
     ///

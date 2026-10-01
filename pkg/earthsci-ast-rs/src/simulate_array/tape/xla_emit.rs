@@ -8,6 +8,10 @@
 //! rhs(u: f64[N], p: f64[M], t: f64[]) -> du: f64[N]
 //! ```
 //!
+//! A program that reads the forcing buffer ([`Instr::LoadForcing`]) takes a
+//! fourth parameter, `f: f64[F]`: every forcing it loads, row-major, one after
+//! another ([`ForcingFeed`] says where each one sits and packs it).
+//!
 //! that reproduces what [`super::exec`] / `super::refexec` compute for the
 //! same inputs — numerically, within the tier's tolerance classes, never bit
 //! for bit (XLA's `exp`/`log`/`pow` are not Rust's libm).
@@ -74,8 +78,11 @@
 
 use super::super::{ArrayCompiled, BinCode, UnCode, VarShape};
 use super::ir::*;
-use std::collections::HashMap;
+use ndarray::ArrayD;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::rc::Rc;
 use xla::{ArrayElement, ElementType, PrimitiveType, XlaBuilder, XlaComputation, XlaOp};
 
 /// A model the emitter refuses to lower.
@@ -109,6 +116,26 @@ impl fmt::Display for XlaEmitError {
 
 impl std::error::Error for XlaEmitError {}
 
+/// Which way round [`Emitter::interp_count`] compares a knot with the query.
+#[derive(Clone, Copy)]
+enum CountCmp {
+    /// `axis[k] <= q` — the cell search of `interp.linear` / `interp.bilinear`.
+    AxisLeQuery,
+    /// `xs[k] < q` — the prefix `interp.searchsorted` counts.
+    AxisLtQuery,
+}
+
+/// Row-major strides (elements) of `shape` — the layout every slot value has.
+fn rm_strides(shape: &[usize]) -> Vec<i64> {
+    let mut st = vec![0i64; shape.len()];
+    let mut acc = 1i64;
+    for d in (0..shape.len()).rev() {
+        st[d] = acc;
+        acc *= shape[d] as i64;
+    }
+    st
+}
+
 /// A lowered right-hand side: the computation plus the shapes its caller has
 /// to feed it.
 pub struct EmittedRhs {
@@ -116,6 +143,46 @@ pub struct EmittedRhs {
     n_states: usize,
     params_len: usize,
     n_instrs: usize,
+    opcode_counts: Vec<(&'static str, usize)>,
+    forcing: Option<ForcingFeed>,
+}
+
+/// Where the forcing parameter `f` of a program that reads the forcing buffer
+/// comes from, and how it is laid out.
+///
+/// Each entry is one forcing the program loads, at its offset in `f`, in the
+/// order the program first loads them. [`Self::pack`] fills `f` from the
+/// model's live buffer with exactly the tape's load semantics, faults
+/// included, so a missing entry fails the solve with the interpreter's own
+/// error rather than as a device failure.
+pub struct ForcingFeed {
+    buffer: Rc<RefCell<HashMap<String, ArrayD<f64>>>>,
+    declared: HashSet<String>,
+    layout: Vec<(ForcingRef, usize)>,
+    len: usize,
+}
+
+impl ForcingFeed {
+    /// Length of `f` (at least one element, like `p`).
+    pub fn len(&self) -> usize {
+        self.len.max(1)
+    }
+
+    /// Always false: `f` is never zero-length (see [`Self::len`]).
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// `f` as the buffer stands now.
+    pub fn pack(&self) -> Vec<f64> {
+        let mut f = vec![0.0f64; self.len()];
+        let buffer = self.buffer.borrow();
+        for (fr, off) in &self.layout {
+            let n = super::exec::forcing_len(fr);
+            super::exec::load_forcing(fr, &buffer, &self.declared, &mut f[*off..*off + n]);
+        }
+        f
+    }
 }
 
 impl EmittedRhs {
@@ -138,6 +205,20 @@ impl EmittedRhs {
     /// Tape instruction count that was lowered (diagnostics only).
     pub fn n_instrs(&self) -> usize {
         self.n_instrs
+    }
+    /// How many instructions of each opcode the lowered tape carried
+    /// (diagnostics only), in first-seen program order.
+    pub fn opcode_counts(&self) -> &[(&'static str, usize)] {
+        &self.opcode_counts
+    }
+    /// The forcing parameter's feed, for a program that reads the forcing
+    /// buffer; `None` for the three-parameter form.
+    pub fn forcing(&self) -> Option<&ForcingFeed> {
+        self.forcing.as_ref()
+    }
+    /// Take the forcing feed, for the runtime that will own it.
+    pub fn take_forcing(&mut self) -> Option<ForcingFeed> {
+        self.forcing.take()
     }
     /// HLO text of the computation, for a debug dump. NEVER a gate: the tier
     /// compares numbers, never programs.
@@ -188,6 +269,12 @@ pub(crate) fn emit_program(
     let builder = XlaBuilder::new("earthsci_rhs");
     let mut em = Emitter::new(&builder, prog, compiled)?;
     let du = em.run()?;
+    let forcing = em.forcing_param.take().map(|_| ForcingFeed {
+        buffer: Rc::clone(&compiled.forcing),
+        declared: compiled.declared_names.clone(),
+        layout: em.forcing_layout.clone(),
+        len: em.forcing_len,
+    });
     let computation = du
         .build()
         .map_err(|e| XlaEmitError::new("<program>", format!("XlaBuilder::build failed: {e}")))?;
@@ -198,7 +285,22 @@ pub(crate) fn emit_program(
         // `Emitter::new` widens a zero-parameter model to `f64[1]`.
         params_len: prog.params_len.max(1),
         n_instrs: prog.instrs.len(),
+        opcode_counts: opcode_counts(prog),
+        forcing,
     })
+}
+
+/// Instructions per opcode, in first-seen program order.
+fn opcode_counts(prog: &TapeProgram) -> Vec<(&'static str, usize)> {
+    let mut counts: Vec<(&'static str, usize)> = Vec::new();
+    for i in &prog.instrs {
+        let op = i.opcode();
+        match counts.iter_mut().find(|(o, _)| *o == op) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((op, 1)),
+        }
+    }
+    counts
 }
 
 // ---------------------------------------------------------------------------
@@ -232,6 +334,13 @@ struct Emitter<'a> {
     /// Rule name attached to whatever instruction is being lowered, for the
     /// error's `rule` field.
     cur_rule: String,
+    /// The fourth parameter `f`, present when the program loads a forcing.
+    forcing_param: Option<XlaOp>,
+    /// Per `prog.forcings` index: its offset in `f`.
+    forcing_offsets: Vec<Option<usize>>,
+    /// The loaded forcings in `f` order, and `f`'s length.
+    forcing_layout: Vec<(ForcingRef, usize)>,
+    forcing_len: usize,
 }
 
 impl<'a> Emitter<'a> {
@@ -282,6 +391,31 @@ impl<'a> Emitter<'a> {
             .map(|(i, (n, _))| (n.clone(), i))
             .collect();
 
+        // `f` holds only the forcings an instruction loads, in the order the
+        // program first loads them.
+        let mut forcing_offsets: Vec<Option<usize>> = vec![None; prog.forcings.len()];
+        let mut forcing_layout: Vec<(ForcingRef, usize)> = Vec::new();
+        let mut forcing_len = 0usize;
+        for ins in &prog.instrs {
+            if let Instr::LoadForcing { forcing, .. } = ins {
+                let ix = *forcing as usize;
+                if forcing_offsets[ix].is_none() {
+                    let fr = prog.forcings[ix].clone();
+                    forcing_offsets[ix] = Some(forcing_len);
+                    forcing_len += super::exec::forcing_len(&fr);
+                    forcing_layout.push((fr, forcing_offsets[ix].expect("just set")));
+                }
+            }
+        }
+        let forcing_param = if forcing_layout.is_empty() {
+            None
+        } else {
+            Some(
+                b.parameter(3, f64::TY, &[forcing_len.max(1) as i64], "f")
+                    .map_err(|e| XlaEmitError::new("<program>", format!("parameter f: {e}")))?,
+            )
+        };
+
         let mut em = Emitter {
             b,
             prog,
@@ -295,6 +429,10 @@ impl<'a> Emitter<'a> {
             var_order,
             var_ix,
             cur_rule: "<program>".to_string(),
+            forcing_param,
+            forcing_offsets,
+            forcing_layout,
+            forcing_len,
         };
         em.state = em.build_state_views()?;
         Ok(em)
@@ -904,6 +1042,25 @@ impl<'a> Emitter<'a> {
                 )?;
                 self.define(*out, v);
             }
+            Instr::Assemble { table, out } => {
+                let dims = self.out_dims(*out);
+                let mut cur = self.zeros(&dims)?;
+                for (src, region) in &self.prog.assemblies[*table as usize].parts {
+                    let spec = &self.prog.regions[*region as usize];
+                    let sv = self.operand(src)?;
+                    let upd = self.to_shape(&sv, &spec.shape)?;
+                    let starts: Vec<XlaOp> = spec
+                        .dest_lo
+                        .iter()
+                        .map(|&x| self.ci(x as i64))
+                        .collect::<R<Vec<_>>>()?;
+                    cur = self.wrap(
+                        cur.dynamic_update_slice(&upd, &starts),
+                        "assemble: dynamic_update_slice",
+                    )?;
+                }
+                self.define(*out, cur);
+            }
             Instr::Export { slot, export } => {
                 let name = self.prog.exports[*export as usize].0.clone();
                 let v = self.slots[*slot as usize]
@@ -938,6 +1095,24 @@ impl<'a> Emitter<'a> {
                 };
                 self.define(*out, v);
             }
+            Instr::LoadForcing { forcing, out } => {
+                let fr = &self.prog.forcings[*forcing as usize];
+                let off = self.forcing_offsets[*forcing as usize]
+                    .ok_or_else(|| self.err("forcing load with no place in `f`"))?;
+                let n = super::exec::forcing_len(fr);
+                let f = self
+                    .forcing_param
+                    .clone()
+                    .ok_or_else(|| self.err("forcing load in a program without `f`"))?;
+                let flat = self.wrap(
+                    f.slice_in_dim(off as i64, (off + n) as i64, 1, 0),
+                    "forcing: slice",
+                )?;
+                let dims = self.out_dims(*out);
+                let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+                let v = self.wrap(flat.reshape(&d), "forcing: reshape")?;
+                self.define(*out, v);
+            }
             Instr::Reduce {
                 op,
                 init,
@@ -968,6 +1143,113 @@ impl<'a> Emitter<'a> {
                     )));
                 }
                 self.define(*out, v);
+            }
+            Instr::Scan {
+                op,
+                init,
+                src,
+                axis,
+                inclusive,
+                src_shape,
+                out,
+            } => {
+                let s = self.src(src)?;
+                let have = self.dims(&s)?;
+                if have != src_shape.as_slice() {
+                    return Err(self.err(format!(
+                        "scan source has shape {have:?} but the instruction expects {:?}",
+                        &src_shape[..]
+                    )));
+                }
+                let v = self.emit_scan_loop(*op, *init, &s, &have, *axis as usize, *inclusive)?;
+                self.define(*out, v);
+            }
+            Instr::TableGather { src, table, out } => {
+                let s = self.src(src)?;
+                let tbl = &self.prog.gather_tables[*table as usize];
+                let have = self.dims(&s)?;
+                if have != tbl.src_shape.as_slice() {
+                    return Err(self.err(format!(
+                        "table gather source has shape {have:?} but its table expects {:?}",
+                        &tbl.src_shape[..]
+                    )));
+                }
+                let v = self.emit_table_gather(&s, &have, &tbl.pos)?;
+                self.define(*out, v);
+            }
+            Instr::SegReduce {
+                op,
+                init,
+                src,
+                mask,
+                table,
+                out,
+            } => {
+                let terms = self.operand(&Operand::Slot(*src))?;
+                let mask = match mask {
+                    Some(m) => Some(self.operand(&Operand::Slot(*m))?),
+                    None => None,
+                };
+                let rows = &self.prog.seg_tables[*table as usize].rows;
+                let v = self.emit_seg_reduce(*op, *init, &terms, mask.as_ref(), rows)?;
+                let want = self.out_dims(*out);
+                let d: Vec<i64> = want.iter().map(|&x| x as i64).collect();
+                let v = self.wrap(v.reshape(&d), "segmented reduce: output box")?;
+                self.define(*out, v);
+            }
+            Instr::Interp { table, x, y, out } => {
+                let tbl = &self.prog.interp_tables[*table as usize];
+                let dims = self.out_dims(*out);
+                let xv = self.operand(x)?;
+                let xv = self.to_shape(&xv, &dims)?;
+                let yv = match y {
+                    Some(y) => {
+                        let v = self.operand(y)?;
+                        Some(self.to_shape(&v, &dims)?)
+                    }
+                    None => None,
+                };
+                let v = self.emit_interp(tbl, &dims, &xv, yv.as_ref())?;
+                self.define(*out, v);
+            }
+            Instr::PolyArea { a, b, geom, out } => {
+                let v = self.emit_poly_area(a, b, *geom, *out)?;
+                self.define(*out, v);
+            }
+            Instr::IndexGather {
+                src,
+                idx,
+                spec,
+                out,
+            } => {
+                let v = self.emit_index_gather(src, idx, *spec)?;
+                self.define(*out, v);
+            }
+            Instr::Reshape { src, out } => {
+                let s = self.src(src)?;
+                let dims = self.out_dims(*out);
+                let have = self.dims(&s)?;
+                if have.iter().product::<usize>() != dims.iter().product::<usize>() {
+                    return Err(self.err(format!(
+                        "reshape source has shape {have:?}, which does not hold the \
+                         {dims:?} its slot's box needs"
+                    )));
+                }
+                // XLA's reshape is row-major, which is the tape's definition.
+                let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+                let v = self.wrap(s.reshape(&d), "reshape")?;
+                self.define(*out, v);
+            }
+            Instr::Fault { fault } => {
+                // A computation has no channel to latch a fault through: its
+                // one output is `du`. The model is refused with the fault it
+                // would raise rather than compiled to return the `NaN` the
+                // interpreter substitutes WITHOUT the error that goes with it.
+                return Err(self.err(format!(
+                    "the program raises a fail-closed evaluation fault, which a compiled \
+                     program cannot report: {}",
+                    self.prog.faults[*fault as usize]
+                )));
             }
             Instr::Fallback { rule } => {
                 let info = &self.prog.rules[*rule as usize];
@@ -1015,6 +1297,377 @@ impl<'a> Emitter<'a> {
 
     fn define(&mut self, slot: SlotId, v: XlaOp) {
         self.slots[slot as usize] = Some(v);
+    }
+
+    // -- interp.* (esm-spec §9.2) ------------------------------------------
+
+    /// Lower one [`Instr::Interp`]: the §9.2 blend over a compile-time table.
+    ///
+    /// The table and axes go in as `r1` constants and the cell index comes out
+    /// of a COMPARE-AND-REDUCE — `count(axis[k] <= q)` over the lower-corner
+    /// candidates — which is the branch-free form of the registry's scan and
+    /// the shape XLA vectorizes. The corners are then read with `take`
+    /// (a `gather` along the table's one axis), and the blend is written in
+    /// §9.2's pinned `a + w * (b - a)` order.
+    ///
+    /// NUMERICAL STANDING, like every other arm here: equal to the
+    /// interpreter within the tier's tolerance classes, not bit for bit. The
+    /// index arithmetic and the clamps are exact, and the blend is the same
+    /// three operations in the same order — but nothing stops XLA contracting
+    /// `t_lo + w * (t_hi - t_lo)` into an FMA, which §9.2 explicitly allows a
+    /// binding to do and pins a relaxed tolerance for.
+    ///
+    /// COST: the index reduce materializes one predicate per output element
+    /// per axis knot. That is the same work the registry's scan does, laid out
+    /// wide instead of sequentially; a binary search over the constant axis
+    /// would be `log N` selects instead, and is the optimization to reach for
+    /// if a wide box over a long axis ever shows up.
+    fn emit_interp(
+        &self,
+        tbl: &InterpTable,
+        dims: &[usize],
+        x: &XlaOp,
+        y: Option<&XlaOp>,
+    ) -> R<XlaOp> {
+        match tbl.kind {
+            InterpKind::Linear => {
+                let blend = self.interp_blend(&tbl.table, &tbl.axis_x, dims, x)?;
+                // The two extrapolate-flat clamps, in the registry's order
+                // (below first). They cannot both hold: a validated axis is
+                // strictly increasing.
+                let n = tbl.axis_x.len();
+                let lo_knot = self.splat(tbl.axis_x[0], dims)?;
+                let hi_knot = self.splat(tbl.axis_x[n - 1], dims)?;
+                let lo_val = self.splat(tbl.table[0], dims)?;
+                let hi_val = self.splat(tbl.table[n - 1], dims)?;
+                let above = self.wrap(x.ge(&hi_knot), "interp.linear: x >= axis[N]")?;
+                let inner =
+                    self.wrap(above.select(&hi_val, &blend), "interp.linear: high clamp")?;
+                let below = self.wrap(x.le(&lo_knot), "interp.linear: x <= axis[1]")?;
+                self.wrap(below.select(&lo_val, &inner), "interp.linear: low clamp")
+            }
+            InterpKind::Bilinear => {
+                let y = y.ok_or_else(|| self.err("interp.bilinear without a `y` operand"))?;
+                let ny = tbl.axis_y.len();
+                // Per-axis clamp of the QUERY (not of the result), which is
+                // what makes the cell search below well defined.
+                let xq = self.interp_clamp_query(&tbl.axis_x, dims, x)?;
+                let yq = self.interp_clamp_query(&tbl.axis_y, dims, y)?;
+                let i = self.interp_cell(&tbl.axis_x, dims, &xq)?;
+                let j = self.interp_cell(&tbl.axis_y, dims, &yq)?;
+                let ax_lo = self.interp_take_at(&tbl.axis_x, &i)?;
+                let ax_hi = self.interp_take_next(&tbl.axis_x, &i)?;
+                let ay_lo = self.interp_take_at(&tbl.axis_y, &j)?;
+                let ay_hi = self.interp_take_next(&tbl.axis_y, &j)?;
+                let wx = self.interp_weight(&xq, &ax_lo, &ax_hi)?;
+                let wy = self.interp_weight(&yq, &ay_lo, &ay_hi)?;
+                // The flat row-major address of each of the four corners,
+                // `i * ny + j`, so all four are one `take` from the same r1
+                // constant the tape already holds flat.
+                let nyc = self.ci32(ny as i32, dims)?;
+                let one = self.ci32(1, dims)?;
+                let irow = self.wrap(i.mul_(&nyc), "interp.bilinear: i * ny")?;
+                let irow_n = self.wrap(irow.add_(&nyc), "interp.bilinear: (i+1) * ny")?;
+                let jp1 = self.wrap(j.add_(&one), "interp.bilinear: j + 1")?;
+                let c00 = self.interp_take_at(&tbl.table, &self.wrap(irow.add_(&j), "c00")?)?;
+                let c10 = self.interp_take_at(&tbl.table, &self.wrap(irow_n.add_(&j), "c10")?)?;
+                let c01 = self.interp_take_at(&tbl.table, &self.wrap(irow.add_(&jp1), "c01")?)?;
+                let c11 = self.interp_take_at(&tbl.table, &self.wrap(irow_n.add_(&jp1), "c11")?)?;
+                let row_j = self.interp_lerp(&c00, &c10, &wx)?;
+                let row_jp1 = self.interp_lerp(&c01, &c11, &wx)?;
+                self.interp_lerp(&row_j, &row_jp1, &wy)
+            }
+            InterpKind::SearchSorted => {
+                // The 1-based index of the first entry >= x. With `xs`
+                // non-decreasing the entries BELOW x are a prefix, so that
+                // index is `count(xs[k] < x) + 1` — and `count` is 0 for a NaN
+                // query, where the registry answers N+1 instead.
+                let xs = &tbl.axis_x;
+                let n = xs.len();
+                let below = self.interp_count(xs, dims, x, CountCmp::AxisLtQuery)?;
+                let one = self.ci32(1, dims)?;
+                let idx = self.wrap(below.add_(&one), "searchsorted: count + 1")?;
+                let idx = self.wrap(
+                    idx.convert(PrimitiveType::F64),
+                    "searchsorted: index -> f64",
+                )?;
+                if n == 0 {
+                    // Degenerate table: the registry returns 1 for every
+                    // query, NaN included.
+                    return Ok(idx);
+                }
+                let past_end = self.splat((n as i64 + 1) as f64, dims)?;
+                let is_nan = self.wrap(x.ne(x), "searchsorted: x is NaN")?;
+                self.wrap(is_nan.select(&past_end, &idx), "searchsorted: NaN query")
+            }
+        }
+    }
+
+    /// The in-cell part of `interp.linear` (no clamps): locate the cell, read
+    /// its two corners, blend.
+    fn interp_blend(&self, table: &[f64], axis: &[f64], dims: &[usize], q: &XlaOp) -> R<XlaOp> {
+        let i = self.interp_cell(axis, dims, q)?;
+        let a_lo = self.interp_take_at(axis, &i)?;
+        let a_hi = self.interp_take_next(axis, &i)?;
+        let t_lo = self.interp_take_at(table, &i)?;
+        let t_hi = self.interp_take_next(table, &i)?;
+        let w = self.interp_weight(q, &a_lo, &a_hi)?;
+        self.interp_lerp(&t_lo, &t_hi, &w)
+    }
+
+    /// `axis[0] <= q <= axis[N-1]`, extrapolate-flat (`interp.bilinear`
+    /// step 1). A NaN query falls through both comparisons and stays NaN,
+    /// exactly as the registry's `if / else if` chain leaves it.
+    fn interp_clamp_query(&self, axis: &[f64], dims: &[usize], q: &XlaOp) -> R<XlaOp> {
+        let n = axis.len();
+        let lo = self.splat(axis[0], dims)?;
+        let hi = self.splat(axis[n - 1], dims)?;
+        let above = self.wrap(q.ge(&hi), "interp: q >= axis[N]")?;
+        let inner = self.wrap(above.select(&hi, q), "interp: clamp high")?;
+        let below = self.wrap(q.le(&lo), "interp: q <= axis[1]")?;
+        self.wrap(below.select(&lo, &inner), "interp: clamp low")
+    }
+
+    /// The 0-based lower-corner index: `count(axis[k] <= q)` over
+    /// `k in [0, N-2]`, minus one, clamped into `[0, N-2]`.
+    ///
+    /// The clamp is what reproduces the registry's NaN behaviour: every
+    /// comparison is false for NaN, so the count is zero and the index would
+    /// be -1, where both the 1-D scan and `locate_cell` leave `i = 0` and let
+    /// the NaN weight carry the result.
+    fn interp_cell(&self, axis: &[f64], dims: &[usize], q: &XlaOp) -> R<XlaOp> {
+        let n = axis.len();
+        let count = self.interp_count(&axis[..n - 1], dims, q, CountCmp::AxisLeQuery)?;
+        let one = self.ci32(1, dims)?;
+        let cand = self.wrap(count.sub_(&one), "interp: count - 1")?;
+        let lo = self.ci32(0, dims)?;
+        let hi = self.ci32(n as i32 - 2, dims)?;
+        self.wrap(cand.clamp(&lo, &hi), "interp: clamp cell index")
+    }
+
+    /// `count(cmp(knots[k], q))` per output element, as an `s32` of `dims`.
+    fn interp_count(&self, knots: &[f64], dims: &[usize], q: &XlaOp, cmp: CountCmp) -> R<XlaOp> {
+        if knots.is_empty() {
+            return self.ci32(0, dims);
+        }
+        // `q` broadcast over a trailing knot axis, against the knot vector
+        // broadcast over the output box.
+        let mut wide: Vec<i64> = dims.iter().map(|&d| d as i64).collect();
+        wide.push(knots.len() as i64);
+        let keep: Vec<i64> = (0..dims.len() as i64).collect();
+        let qb = self.wrap(q.broadcast_in_dim(&wide, &keep), "interp: broadcast query")?;
+        let kv = self.wrap(self.b.constant_r1(knots), "interp: knot vector")?;
+        let kb = self.wrap(
+            kv.broadcast_in_dim(&wide, &[dims.len() as i64]),
+            "interp: broadcast knots",
+        )?;
+        let pred = match cmp {
+            CountCmp::AxisLeQuery => self.wrap(kb.le(&qb), "interp: axis <= q")?,
+            CountCmp::AxisLtQuery => self.wrap(kb.lt(&qb), "interp: axis < q")?,
+        };
+        let ones = self.wrap(pred.convert(PrimitiveType::S32), "interp: pred -> s32")?;
+        self.wrap(
+            ones.reduce_sum(&[dims.len() as i64], false),
+            "interp: count knots",
+        )
+    }
+
+    /// `values[idx]`, with `idx` an `s32` tensor over the output box.
+    fn interp_take_at(&self, values: &[f64], idx: &XlaOp) -> R<XlaOp> {
+        let v = self.wrap(self.b.constant_r1(values), "interp: table constant")?;
+        self.wrap(v.take(idx, 0), "interp: table gather")
+    }
+
+    /// `values[idx + 1]` — the upper corner of the located cell.
+    fn interp_take_next(&self, values: &[f64], idx: &XlaOp) -> R<XlaOp> {
+        let dims = self.dims(idx)?;
+        let one = self.ci32(1, &dims)?;
+        let next = self.wrap(idx.add_(&one), "interp: idx + 1")?;
+        self.interp_take_at(values, &next)
+    }
+
+    /// `w = (q - lo) / (hi - lo)`.
+    fn interp_weight(&self, q: &XlaOp, lo: &XlaOp, hi: &XlaOp) -> R<XlaOp> {
+        let num = self.wrap(q.sub_(lo), "interp: q - axis[i]")?;
+        let den = self.wrap(hi.sub_(lo), "interp: axis[i+1] - axis[i]")?;
+        self.wrap(num.div_(&den), "interp: weight")
+    }
+
+    /// §9.2's pinned blend `a + w * (b - a)`.
+    fn interp_lerp(&self, a: &XlaOp, b: &XlaOp, w: &XlaOp) -> R<XlaOp> {
+        let d = self.wrap(b.sub_(a), "interp: b - a")?;
+        let s = self.wrap(w.mul_(&d), "interp: w * (b - a)")?;
+        self.wrap(a.add_(&s), "interp: a + w * (b - a)")
+    }
+
+    /// An `f64` constant with the output box's shape.
+    fn splat(&self, v: f64, dims: &[usize]) -> R<XlaOp> {
+        let c = self.c(v)?;
+        self.to_shape(&c, dims)
+    }
+
+    /// An `s32` constant with the output box's shape (the index arithmetic
+    /// above stays integral so the cell address is exact).
+    fn ci32(&self, v: i32, dims: &[usize]) -> R<XlaOp> {
+        let c = self
+            .b
+            .c0(v)
+            .map_err(|e| self.err(format!("s32 constant: {e}")))?;
+        if dims.is_empty() {
+            return Ok(c);
+        }
+        let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+        self.wrap(c.broadcast(&d), "interp: broadcast s32 constant")
+    }
+
+    // -- geometry ----------------------------------------------------------
+
+    /// Lower one [`Instr::PolyArea`] by evaluating it HERE, at emit time,
+    /// into a constant.
+    ///
+    /// A polygon clip has no expression in XLA's operation set, so the
+    /// emitter can take the instruction only when both ring tables are
+    /// compile-time constants: slots an [`Instr::ConstArray`] defines. It then
+    /// runs the slab executor's own [`super::geom::run_poly_area`] over those
+    /// literals (broad phase included) and emits the areas as a literal, so
+    /// the compiled program reads the same `f64`s the slab executor computes.
+    /// A table that depends on a parameter, the state or an observed is a
+    /// named refusal.
+    fn emit_poly_area(&self, a: &SrcRef, b: &SrcRef, geom: u32, out: SlotId) -> R<XlaOp> {
+        let spec = &self.prog.geoms[geom as usize];
+        let ta = self.const_table(a)?;
+        let tb = self.const_table(b)?;
+        let (sa, sb) = (rm_strides(&ta.shape), rm_strides(&tb.shape));
+        let dims = self.out_dims(out);
+        let mut areas = vec![0.0f64; dims.iter().product::<usize>().max(1)];
+        unsafe {
+            super::geom::run_poly_area(
+                spec,
+                &super::geom::RingTable {
+                    ptr: ta.values.as_ptr(),
+                    shape: &ta.shape,
+                    strides: &sa,
+                },
+                &super::geom::RingTable {
+                    ptr: tb.values.as_ptr(),
+                    shape: &tb.shape,
+                    strides: &sb,
+                },
+                areas.as_mut_ptr(),
+            );
+        }
+        let flat = self.wrap(self.b.constant_r1(&areas[..]), "polygon area: literal")?;
+        let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+        self.wrap(flat.reshape(&d), "polygon area: reshape")
+    }
+
+    /// The literal an [`Instr::ConstArray`] stores into ring-table slot `s`,
+    /// or the refusal saying the table is not a compile-time constant.
+    fn const_table(&self, s: &SrcRef) -> R<&ConstArrayData> {
+        let not_const = || {
+            self.err(
+                "polygon_intersection_area: a ring table that is not a compile-time \
+                 constant (it depends on a parameter, the state or an observed) has no \
+                 lowering: XLA has no polygon clip",
+            )
+        };
+        let SrcRef::Slot(id) = s else {
+            return Err(not_const());
+        };
+        self.prog
+            .instrs
+            .iter()
+            .find_map(|i| match i {
+                Instr::ConstArray { data, out } if out == id => {
+                    Some(&self.prog.const_data[*data as usize])
+                }
+                _ => None,
+            })
+            .ok_or_else(not_const)
+    }
+
+    /// Lower one [`Instr::IndexGather`]: the subscript is rounded and
+    /// range-checked exactly as [`data_subscript`] does it (NaN reads as 0,
+    /// an out-of-range position as the zero ghost), each output element's
+    /// row-major source offset is built in `s64`, and one `take` over the
+    /// flattened source reads them.
+    fn emit_index_gather(&self, src: &SrcRef, idx: &Operand, spec: u32) -> R<XlaOp> {
+        let spec = &self.prog.index_gathers[spec as usize];
+        let s = self.src(src)?;
+        let have = self.dims(&s)?;
+        if have != spec.src_shape.as_slice() {
+            return Err(self.err(format!(
+                "indexed gather source has shape {have:?} but the spec expects {:?}",
+                &spec.src_shape[..]
+            )));
+        }
+        let dims: Vec<usize> = spec.shape.to_vec();
+        let d64: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+        let total: i64 = spec.src_shape.iter().product::<usize>() as i64;
+        let flat = self.wrap(s.reshape(&[total]), "indexed gather: flatten source")?;
+        let strides = rm_strides(&spec.src_shape);
+        let data_d = spec.data_axis();
+        let n = spec.src_shape[data_d] as f64;
+
+        let iv = self.operand(idx)?;
+        let iv = self.to_shape(&iv, &dims)?;
+        let r = self.wrap(iv.round(), "indexed gather: round")?;
+        let nan = self.wrap(r.ne(&r), "indexed gather: isnan")?;
+        let zero = self.splat(0.0, &dims)?;
+        let r = self.wrap(nan.select(&zero, &r), "indexed gather: NaN reads as 0")?;
+        // Pinned to [0, n + 1] before the integer convert, so every value
+        // converts exactly and the out-of-range ones stay out of range.
+        let top = self.splat(n + 1.0, &dims)?;
+        let r = self.wrap(
+            r.max(&zero).and_then(|x| x.min(&top)),
+            "indexed gather: pin",
+        )?;
+        let one_based = self.wrap(r.convert(PrimitiveType::S64), "indexed gather: convert")?;
+        let splat_i = |v: i64| -> R<XlaOp> {
+            let c = self.ci(v)?;
+            self.to_shape(&c, &dims)
+        };
+        let (one, zero_i, n_i, last_i) = (
+            splat_i(1)?,
+            splat_i(0)?,
+            splat_i(n as i64)?,
+            splat_i(n as i64 - 1)?,
+        );
+        let valid = self.wrap(
+            one_based
+                .ge(&one)
+                .and_then(|lo| one_based.le(&n_i).and_then(|hi| lo.and(&hi))),
+            "indexed gather: in range",
+        )?;
+        let pos = self.wrap(
+            one_based
+                .sub_(&one)
+                .and_then(|p| p.max(&zero_i))
+                .and_then(|p| p.min(&last_i)),
+            "indexed gather: position",
+        )?;
+        let stride_data = splat_i(strides[data_d])?;
+        let mut off = self.wrap(pos.mul_(&stride_data), "indexed gather: data offset")?;
+        for (d, ax) in spec.axes.iter().enumerate() {
+            let term = match *ax {
+                GatherAxis::Data => continue,
+                GatherAxis::Fixed(i) => splat_i(i as i64 * strides[d])?,
+                GatherAxis::Affine { axis, off: k } => {
+                    let io = self.wrap(
+                        self.b.iota(ElementType::S64, &d64, axis as i64),
+                        "indexed gather: iota",
+                    )?;
+                    let (k, st) = (splat_i(k)?, splat_i(strides[d])?);
+                    self.wrap(
+                        io.add_(&k).and_then(|x| x.mul_(&st)),
+                        "indexed gather: affine offset",
+                    )?
+                }
+            };
+            off = self.wrap(off.add_(&term), "indexed gather: offset")?;
+        }
+        let g = self.wrap(flat.take(&off, 0), "indexed gather: take")?;
+        self.wrap(valid.select(&g, &zero), "indexed gather: ghost")
     }
 
     // -- gather ------------------------------------------------------------
@@ -1269,6 +1922,156 @@ impl<'a> Emitter<'a> {
         let body = self.bin(op, &a, &b)?;
         body.build()
             .map_err(|e| self.err(format!("reduce kernel build: {e}")))
+    }
+
+    /// Lower one [`Instr::TableGather`]: the source flattened row-major, one
+    /// `take` at the build-time positions, and the ghost positions selected
+    /// to `+0.0`.
+    fn emit_table_gather(&self, src: &XlaOp, dims: &[usize], pos: &[u32]) -> R<XlaOp> {
+        let n: usize = dims.iter().product::<usize>().max(1);
+        let flat = self.wrap(src.reshape(&[n as i64]), "table gather: flatten")?;
+        let at: Vec<i64> = pos
+            .iter()
+            .map(|&p| if p == GATHER_GHOST { 0 } else { p as i64 })
+            .collect();
+        let at = self.wrap(self.b.constant_r1(&at[..]), "table gather: positions")?;
+        let taken = self.wrap(flat.take(&at, 0), "table gather: take")?;
+        if !pos.contains(&GATHER_GHOST) {
+            return Ok(taken);
+        }
+        let live: Vec<f64> = pos
+            .iter()
+            .map(|&p| if p == GATHER_GHOST { 0.0 } else { 1.0 })
+            .collect();
+        let live = self.wrap(self.b.constant_r1(&live[..]), "table gather: live mask")?;
+        let z = self.splat_like(&taken, 0.0)?;
+        let keep = self.wrap(live.ne(&z), "table gather: live != 0")?;
+        self.wrap(keep.select(&taken, &z), "table gather: ghost")
+    }
+
+    /// Lower one [`Instr::SegReduce`] as a scatter-combine of each term into
+    /// its output cell, excluded terms first replaced by the identity. Like
+    /// [`Instr::Reduce`] this is equal to the interpreter numerically, not
+    /// bit for bit: XLA does not order the updates a scatter combines.
+    /// Returns the flat `n_out` result.
+    fn emit_seg_reduce(
+        &self,
+        op: BinCode,
+        init: f64,
+        terms: &XlaOp,
+        mask: Option<&XlaOp>,
+        rows: &[u32],
+    ) -> R<XlaOp> {
+        let n_out = rows.len() - 1;
+        let m = rows[n_out] as usize;
+        let base = {
+            let c = self.c(init)?;
+            self.wrap(c.broadcast(&[n_out as i64]), "segmented reduce: identity")?
+        };
+        if m == 0 {
+            return Ok(base);
+        }
+        let terms = match mask {
+            None => terms.clone(),
+            Some(mk) => {
+                let z = self.splat_like(mk, 0.0)?;
+                let keep = self.wrap(mk.ne(&z), "segmented reduce: mask != 0")?;
+                let id = self.splat_like(terms, init)?;
+                self.wrap(keep.select(terms, &id), "segmented reduce: mask")?
+            }
+        };
+        let mut cell: Vec<i64> = Vec::with_capacity(m);
+        for c in 0..n_out {
+            cell.extend(std::iter::repeat_n(
+                c as i64,
+                (rows[c + 1] - rows[c]) as usize,
+            ));
+        }
+        let cell = self.wrap(
+            self.b
+                .constant_r1(&cell[..])
+                .and_then(|c| c.reshape(&[m as i64, 1])),
+            "segmented reduce: cell ids",
+        )?;
+        let comp = self.reduce_computation(op)?;
+        self.wrap(
+            base.scatter(&cell, &terms, &comp, &[], &[0], &[0], 1),
+            "segmented reduce: scatter",
+        )
+    }
+
+    /// Lower one [`Instr::Scan`] as ONE `while` loop over the scanned axis,
+    /// so the program's size does not grow with the scan's length.
+    ///
+    /// The loop carries `(k, src, acc, out)`: step `k` slices plane `k` of
+    /// `src`, combines it into the running `acc` (a plane-shaped value), and
+    /// writes the inclusive or exclusive partial into plane `k` of `out`.
+    /// Planes are folded strictly in ascending order, one elementwise combine
+    /// per step, so every position folds its terms in the tape's own
+    /// association: this lowering adds no reordering of its own.
+    fn emit_scan_loop(
+        &self,
+        op: BinCode,
+        init: f64,
+        src: &XlaOp,
+        dims: &[usize],
+        ax: usize,
+        inclusive: bool,
+    ) -> R<XlaOp> {
+        use xla::Shape;
+        let full: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+        let mut plane = full.clone();
+        plane[ax] = 1;
+        let carried = Shape::tuple(vec![
+            Shape::array::<i64>(vec![]),
+            Shape::array::<f64>(full.clone()),
+            Shape::array::<f64>(plane.clone()),
+            Shape::array::<f64>(full.clone()),
+        ]);
+        let n = full[ax];
+
+        let cb = XlaBuilder::new("scan_cond");
+        let st = self.wrap(cb.parameter_s(0, &carried, "st"), "scan cond: parameter")?;
+        let k = self.wrap(st.get_tuple_element(0), "scan cond: k")?;
+        let bound = self.wrap(cb.c0(n), "scan cond: bound")?;
+        let cond = self.wrap(k.lt(&bound), "scan cond: k < n")?;
+        let cond = cond
+            .build()
+            .map_err(|e| self.err(format!("scan cond build: {e}")))?;
+
+        let bb = XlaBuilder::new("scan_body");
+        let st = self.wrap(bb.parameter_s(0, &carried, "st"), "scan body: parameter")?;
+        let part = |i: i64| self.wrap(st.get_tuple_element(i), "scan body: unpack");
+        let (k, s, acc, out) = (part(0)?, part(1)?, part(2)?, part(3)?);
+        let zero = self.wrap(bb.c0(0i64), "scan body: zero")?;
+        let starts: Vec<XlaOp> = (0..full.len())
+            .map(|d| if d == ax { k.clone() } else { zero.clone() })
+            .collect();
+        let pl = self.wrap(s.dynamic_slice(&starts, &plane), "scan body: plane")?;
+        let next = self.bin(op, &acc, &pl)?;
+        let written = if inclusive { &next } else { &acc };
+        let out = self.wrap(
+            out.dynamic_update_slice(written, &starts),
+            "scan body: write plane",
+        )?;
+        let one = self.wrap(bb.c0(1i64), "scan body: one")?;
+        let k1 = self.wrap(k.add_(&one), "scan body: k + 1")?;
+        let body = self.wrap(bb.tuple(&[k1, s, next, out]), "scan body: pack")?;
+        let body = body
+            .build()
+            .map_err(|e| self.err(format!("scan body build: {e}")))?;
+
+        let acc0 = {
+            let c = self.c(init)?;
+            self.wrap(c.broadcast(&plane), "scan: initial accumulator")?
+        };
+        let start = self.wrap(
+            self.b
+                .tuple(&[self.ci(0)?, src.clone(), acc0, self.zeros(dims)?]),
+            "scan: initial state",
+        )?;
+        let res = self.wrap(XlaOp::while_(cond, body, start), "scan: while")?;
+        self.wrap(res.get_tuple_element(3), "scan: result")
     }
 
     /// The variable whose flat block contains `flat`.

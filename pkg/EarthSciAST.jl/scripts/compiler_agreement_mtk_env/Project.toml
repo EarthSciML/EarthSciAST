@@ -1,0 +1,29 @@
+# Environment for `compiler_agreement_adapter.jl --compiler mtk` ONLY.
+#
+# It is the sibling env (scripts/compiler_agreement_env) plus the two packages
+# `:mtk` needs in the session: ModelingToolkit, which is where the extension
+# that implements that compiler lives, and OrdinaryDiffEqNonlinearSolve, because
+# an implicit equation compiles to a DAE whose consistent initialization is a
+# nonlinear solve and OrdinaryDiffEq only carries one when that package is
+# loaded.
+#
+# Why a SECOND project rather than two more entries in the shared one: a
+# dependency in the shared env is resolved and precompiled by every Julia stage
+# that activates it — the `interpreter` and `native` compiler-agreement stages
+# and the whole inline-test tier — even though only `--compiler mtk` ever loads
+# it. Those two packages pull in most of the SciML symbolic stack, so the stages
+# that never touch them were paying for them on every run. `mtk` now runs in its
+# own workflow (.github/workflows/mtk-compiler.yml) with its own depot cache, and
+# this file is what that cache is keyed on.
+#
+# Same self-bootstrap as its sibling: Manifest.toml is gitignored repo-wide, so
+# the adapter re-establishes the local dev path and instantiates on a fresh
+# checkout.
+[deps]
+EarthSciAST = "c7bf5e87-b31b-4281-bdce-ffb8a46ec87c"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+ModelingToolkit = "961ee093-0014-501f-94e3-6117800e7a78"
+OrdinaryDiffEqNonlinearSolve = "127b3ac7-2247-4354-8eb6-78cf4e7c58e8"
+OrdinaryDiffEqRosenbrock = "43230ef6-c299-4910-a778-202eb28ce4ce"
+OrdinaryDiffEqTsit5 = "b1df2697-797e-41e3-8120-5422d3b24e4a"
+SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"

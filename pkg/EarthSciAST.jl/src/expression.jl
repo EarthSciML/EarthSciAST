@@ -8,9 +8,9 @@ This module provides functions for working with ESM format expressions:
 
 All operations are non-mutating and return new ASTExpr objects.
 
-Numerical evaluation lives in `tree_walk.jl` (`evaluate_expr` /
-`build_evaluator`) — the official EarthSciAST Julia evaluator — so this module
-hosts no parallel dispatch table. `simplify`'s constant-folding step
+Numerical evaluation lives in `tree_walk.jl` (`evaluate_expr` / the build
+under `esm_problem`) — the official EarthSciAST Julia evaluator — so this
+module hosts no parallel dispatch table. `simplify`'s constant-folding step
 delegates to `evaluate_expr` so adding an op to the tree-walk evaluator
 transparently extends the folder.
 """

@@ -148,6 +148,17 @@ enum Commands {
         /// — a RELATIONAL document's rows, for a row-by-row comparator.
         #[arg(long, default_value = "flat")]
         format: SimulateFormat,
+        /// WHICH strategy builds the right-hand side (API_SPEC §5.8's closed
+        /// vocabulary): `native` (the default — the tape, for every document,
+        /// and strict: a rule it cannot express is a build error naming the
+        /// rule), `interpreter` (the reference: every fast tier off, no
+        /// performance promise), or `xla` (the emitter over the tape, run
+        /// through XLA; needs a build with the `xla` feature and a usable
+        /// `xla_extension`, and refuses with `compiler_unavailable`
+        /// otherwise). `mtk` and `sympy` belong to the Julia and Python
+        /// bindings and are always `compiler_unavailable` here.
+        #[arg(long, value_name = "NAME")]
+        compiler: Option<String>,
     },
     /// Show information about an ESM file
     Info {
@@ -284,6 +295,13 @@ enum Commands {
         /// Report every assertion, not just the summary table
         #[arg(short, long)]
         verbose: bool,
+        /// WHICH strategy builds each test's right-hand side (API_SPEC §5.8's
+        /// closed vocabulary). Unset is `native`, which is STRICT: a document
+        /// whose rules the tape cannot lower fails with the refusal rather
+        /// than running on a slower path. Pass `interpreter` to run the
+        /// reference evaluator, which refuses nothing it can evaluate.
+        #[arg(long, value_name = "NAME")]
+        compiler: Option<String>,
     },
     /// Run cross-language conformance tests and write results.json to OUT_DIR
     ConformanceTest {
@@ -1895,7 +1913,7 @@ fn bench_simulate(
         &esm_file,
         (0.0, 1.0),
         earthsci_ast::ProblemOptions {
-            compile: earthsci_ast::Compile::Always,
+            rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
     )
@@ -2479,6 +2497,7 @@ fn run_analyze(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_simulate(
     file: PathBuf,
     time: f64,
@@ -2486,7 +2505,15 @@ fn run_simulate(
     observed: Vec<String>,
     model: Option<String>,
     format: SimulateFormat,
+    compiler: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // A value outside the closed vocabulary is `compiler_unknown` (esm-spec
+    // §9.6.6) and is refused HERE, before anything is loaded: it is the one of
+    // the three failures that says nothing about the document.
+    let compiler = match compiler.as_deref() {
+        None => None,
+        Some(name) => Some(earthsci_ast::Compiler::parse_named(name).map_err(fail)?),
+    };
     let content = read_input(&file)?;
     let esm_file = load_at(&file, &content)?;
 
@@ -2530,7 +2557,8 @@ fn run_simulate(
             // ("Exceeded maximum number of nonlinear solver failures at
             // time = 0") on a document that evaluates perfectly well. `Auto`
             // gives it the static backend and the single evaluation below.
-            compile: earthsci_ast::Compile::Auto,
+            rhs: earthsci_ast::Rhs::Auto,
+            compiler,
             model_name: model.clone(),
             build_pipeline: pipeline,
             ..Default::default()
@@ -2548,6 +2576,9 @@ fn run_simulate(
     // not from flattened cell keys.
     let mut evaluated: Vec<(String, ndarray::ArrayD<f64>)> = Vec::new();
     let sol = if prob.is_dynamic() {
+        // API_SPEC §5.8, "Every Problem reports what ran": one line, so a
+        // number in the output below is tied to the way it was produced.
+        println!("{}", prob.compiler_report());
         let sol = earthsci_ast::solve(&prob, &opts).map_err(|e| format!("solve failed: {e}"))?;
         println!(
             "✓ Simulation complete: {} output points, alg {}, retcode {}",
@@ -2561,12 +2592,29 @@ fn run_simulate(
         // nothing. Its answers are the fields the build materialized, so it is
         // EVALUATED ONCE rather than solved.
         //
-        // The rebuild turns the build pipeline on, which is what materializes
-        // an ARRAY observed: the scalar fallback cannot lower one, and a
-        // command that wrote an empty file would be the silent-empty twin of
-        // the silent zero. Skipped when the first build already ran the
-        // pipeline, which it does whenever the document ingests data.
-        let prob = if ingesting { prob } else { build(true)? };
+        // The first build already evaluated its observed graph on the named
+        // compiler — the tape under `native` — and those fields are the
+        // answer. Only when it produced none (a document the array runtime
+        // cannot build on its own: value invention, a derived index set) is
+        // the document rebuilt with the build pipeline on, and that rebuild is
+        // under the named compiler like any other build: the pipeline reports
+        // each observed it evaluates, and a strict compiler refuses one it
+        // would have to walk per cell. A command that wrote an empty file
+        // would be the silent-empty twin of the silent zero. The pipeline has
+        // already run whenever the document ingests data. The report printed
+        // is the one for the build whose fields are written.
+        //
+        // Some fields cannot mean "some are missing": the first build's
+        // state-free evaluation is all or nothing (one stateless pass over
+        // EVERY observed rule of the flattened system, or no fields at all),
+        // and the pipeline evaluates a subset of those rules — one model's
+        // observed definitions, value-invention assignments excluded.
+        let prob = if ingesting || !prob.observed_fields().is_empty() {
+            prob
+        } else {
+            build(true)?
+        };
+        println!("{}", prob.compiler_report());
         evaluated = static_fields(&prob, &observed)?;
         println!(
             "✓ Static evaluation complete: {} field(s). The document declares no \
@@ -3982,6 +4030,7 @@ fn mounted_components(path: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_test(
     paths: Vec<PathBuf>,
     model: Option<String>,
@@ -3990,7 +4039,14 @@ fn run_test(
     reltol: Option<f64>,
     abstol: Option<f64>,
     verbose: bool,
+    compiler: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Refused before anything is discovered: a value outside the closed
+    // vocabulary is `compiler_unknown` and says nothing about any document.
+    let compiler = match compiler.as_deref() {
+        None => None,
+        Some(name) => Some(earthsci_ast::Compiler::parse_named(name).map_err(fail)?),
+    };
     let files = discover_test_inputs(&paths)?;
     if files.is_empty() {
         // A mis-rooted invocation must not silently pass, but nor is finding
@@ -4083,13 +4139,17 @@ fn run_test(
                     ),
                     ..opts.clone()
                 };
-                let results = earthsci_ast::run_inline_tests_filtered(
+                let results = earthsci_ast::run_inline_tests_with_options(
                     &esm_file,
-                    model.as_deref(),
-                    &file_opts,
-                    path.parent(),
+                    &earthsci_ast::InlineTestOptions {
+                        model_name: model.clone(),
+                        solve: file_opts,
+                        base_dir: path.parent().map(std::path::Path::to_path_buf),
+                        test_filter: filter.clone(),
+                        compiler,
+                        ..Default::default()
+                    },
                     providers.as_deref(),
-                    filter.as_deref(),
                 );
                 for r in results {
                     rows.push(TestRow {
@@ -4260,7 +4320,8 @@ pub fn main() -> std::process::ExitCode {
             observed,
             model,
             format,
-        } => run_simulate(file, time, output, observed, model, format),
+            compiler,
+        } => run_simulate(file, time, output, observed, model, format, compiler),
         Commands::Info { file } => run_info(file),
         Commands::Units { file, check } => run_units(file, check),
         Commands::CouplingAnalysis { file, depth } => run_coupling_analysis(file, depth),
@@ -4296,7 +4357,10 @@ pub fn main() -> std::process::ExitCode {
             reltol,
             abstol,
             verbose,
-        } => run_test(paths, model, filter, solver, reltol, abstol, verbose),
+            compiler,
+        } => run_test(
+            paths, model, filter, solver, reltol, abstol, verbose, compiler,
+        ),
         Commands::ConformanceTest { out_dir, manifest } => {
             run_conformance_test(&out_dir, manifest.as_deref())
         }

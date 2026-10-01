@@ -350,6 +350,15 @@ except ImportError:
 # what `prepare` did, and `solve` is the run.
 _has_problem = False
 try:
+    from .compiler import (  # noqa: F401 — re-exported via __all__ below
+        COMPILERS,
+        Compiler,
+        CompilerRefusedRuleError,
+        CompilerReport,
+        CompilerUnavailableError,
+        CompilerUnknownError,
+        RuleTier,
+    )
     from .problem import (  # noqa: F401 — re-exported via __all__ below
         CallbackSet,
         EnsembleProblem,
@@ -749,6 +758,14 @@ if _has_problem:
             "observed_field",
             "desugar_pushdown",
             "pushdown_diagnostics",
+            # Choosing the compiler (API_SPEC §5.8, esm-libraries-spec §2.5.10).
+            "Compiler",
+            "COMPILERS",
+            "CompilerReport",
+            "RuleTier",
+            "CompilerUnknownError",
+            "CompilerUnavailableError",
+            "CompilerRefusedRuleError",
         ]
     )
 

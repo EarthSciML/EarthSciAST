@@ -538,7 +538,7 @@ end
         # Exactly-representable summands (powers of two), no cancellation, so
         # the canonical term order cannot change the result: bit-identity here
         # is a real property of THIS fixture, not a general guarantee.
-        f!, u0, p, _tspan, vm = EarthSciAST.build_evaluator(file)
+        f!, u0, p, _tspan, vm = EarthSciAST._build_evaluator(file)
         fill!(u0, 0.0)
         du_tw = zeros(length(u0))
         f!(du_tw, u0, p, 0.0)
@@ -586,7 +586,7 @@ end
             models=Dict{String,EarthSciAST.Model}("Cancel" => cancel),
             index_sets=Dict("x" => EarthSciAST.IndexSet("interval"; size=4)))
 
-        cf!, cu0, cp, _cts, cvm = EarthSciAST.build_evaluator(cfile)
+        cf!, cu0, cp, _cts, cvm = EarthSciAST._build_evaluator(cfile)
         fill!(cu0, 0.0)
         cdu_tw = zeros(length(cu0))
         cf!(cdu_tw, cu0, cp, 0.0)

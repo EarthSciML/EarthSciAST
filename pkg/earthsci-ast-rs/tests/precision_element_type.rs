@@ -39,7 +39,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::precision::{self, Precision};
-use earthsci_ast::{AssertionResult, SolveOptions, load_path, run_inline_tests};
+use earthsci_ast::{AssertionResult, SolveOptions, load_path};
 
 fn fixture(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -48,8 +48,20 @@ fn fixture(name: &str) -> std::path::PathBuf {
 }
 
 fn run(name: &str) -> Vec<AssertionResult> {
+    run_with(name, earthsci_ast::Compiler::Interpreter)
+}
+
+fn run_with(name: &str, compiler: earthsci_ast::Compiler) -> Vec<AssertionResult> {
     let file = load_path(fixture(name)).expect("fixture parses");
-    run_inline_tests(&file, None, &SolveOptions::default())
+    earthsci_ast::run_inline_tests_with_options(
+        &file,
+        &earthsci_ast::InlineTestOptions {
+            solve: SolveOptions::default(),
+            compiler: Some(compiler),
+            ..Default::default()
+        },
+        None,
+    )
 }
 
 /// The one assertion of the witness document, with its actual value.
@@ -266,6 +278,23 @@ fn a_binary64_variable_in_a_float32_document_stays_exact() {
         (0.99999994_f32 as f64).to_bits(),
         "declaring some variables Float64 must not make the Float32 ones more accurate"
     );
+    // The tape runs each instruction at its own precision, so `native` gives
+    // the same four values, bit for bit.
+    let native = run_with(
+        "f32_per_variable_element_type.esm",
+        earthsci_ast::Compiler::Native,
+    );
+    assert_eq!(native.len(), results.len());
+    for (n, r) in native.iter().zip(&results) {
+        assert_eq!(n.variable, r.variable);
+        assert!(n.passed, "native {}: {}", n.variable, n.message);
+        assert_eq!(
+            n.actual.map(f64::to_bits),
+            r.actual.map(f64::to_bits),
+            "native {} disagrees with the interpreter",
+            n.variable
+        );
+    }
 }
 
 /// The guard. An operator whose operands carry different declared element types

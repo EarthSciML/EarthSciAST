@@ -15,8 +15,8 @@
 #   * the AD traps — a `Dual` `t` never hits the Float64-keyed memo; a `Dual` `p`
 #     with same values / different partials never reuses another chunk's seed,
 #   * step-rejection safety (revisiting a `t` is a pure re-evaluation),
-#   * a BIT-EXACT differential oracle vs `ESS_TCADENCE_DISABLE=1` and vs the
-#     fully untiered `ESS_UNTIERED=1` build over a mixed call sequence,
+#   * a BIT-EXACT differential oracle vs the `compiler=:interpreter` build,
+#     whose prelude skips nothing at all, over a mixed call sequence,
 #   * an actual stiff Rosenbrock solve (ForwardDiff AND finite-difference
 #     Jacobians): identical solutions with the tier on and off.
 
@@ -113,14 +113,14 @@ end
         @test diag.n_const_slots + diag.n_time_slots + diag.n_dynamic_slots ==
               diag.n_cse_slots + diag.n_obs_slots
 
-        # ...and the kill switch demotes every one of them.
-        _f2!, _u02, _p2, _ts2, _vm2, d2 = withenv("ESS_TCADENCE_DISABLE" => "1") do
-            ESM._build_evaluator_impl(_tc_fastjx_model(K, M);
-                param_arrays=Dict("F" => buf))
-        end
-        @test d2.n_time_slots == 0
-        @test d2.n_dynamic_slots == diag.n_dynamic_slots + diag.n_time_slots
-        @test d2.n_const_slots == diag.n_const_slots
+        # ...and the interpreter demotes every one of them — the const tier
+        # with them, since it turns the whole cadence off, not just this tier.
+        _f2!, _u02, _p2, _ts2, _vm2, d2 = ESM._build_evaluator_impl(
+            _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf),
+            compiler=:interpreter)
+        @test d2.n_time_slots == 0 && d2.n_const_slots == 0
+        @test d2.n_dynamic_slots == diag.n_const_slots + diag.n_time_slots +
+                                    diag.n_dynamic_slots
     end
 
     # ----------------------------------------------------------------
@@ -235,11 +235,10 @@ end
                 _ = sumdu(t)                       # stamp the Float64 memo at t
             end
             dS = ForwardDiff.derivative(sumdu, t)  # Dual t, SAME value of t
-            # Central-difference reference on the disabled build (independent).
-            fd!, u0d, pd, _tsd, _vmd, _dd = withenv("ESS_TCADENCE_DISABLE" => "1") do
-                ESM._build_evaluator_impl(_tc_fastjx_model(K, M);
-                    param_arrays=Dict("F" => buf))
-            end
+            # Central-difference reference on the interpreter build (independent).
+            fd!, u0d, pd, _tsd, _vmd, _dd = ESM._build_evaluator_impl(
+                _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf),
+                compiler=:interpreter)
             h = 1e-7
             ref = (sum(_tc_call(fd!, u0d, pd, t + h)) -
                    sum(_tc_call(fd!, u0d, pd, t - h))) / 2h
@@ -282,30 +281,23 @@ end
     end
 
     # ----------------------------------------------------------------
-    # THE DIFFERENTIAL ORACLE. Tiered `f!` ≡ `ESS_TCADENCE_DISABLE=1` build ≡
-    # `ESS_UNTIERED=1` build, BIT-FOR-BIT, over a mixed sequence: repeated t
-    # (the skip), new t, perturbed u, changed p, in-place forcing refresh
-    # through the supported (notify) surface, and a revisited t. Same buffer
-    # feeds all three builds, refreshes are notified, so all three must agree
-    # exactly. The two switches are nested, and both arms earn their place: the
-    # narrow one demotes the TIME slots only, the wide one demotes the const
-    # tier too, so `f!` skips nothing at all. (`tree_walk_untiered_test.jl`
-    # pins the wide build against the out-of-place walker.)
+    # THE DIFFERENTIAL ORACLE. The `:native` `f!` ≡ the `:interpreter` `f!`,
+    # BIT-FOR-BIT, over a mixed sequence: repeated t (the skip), new t,
+    # perturbed u, changed p, in-place forcing refresh through the supported
+    # (notify) surface, and a revisited t. The same buffer feeds both builds and
+    # refreshes are notified, so they must agree exactly. The interpreter's
+    # prelude skips nothing at all — no const tier and no time tier — which is
+    # the whole point of comparing against it here.
     # ----------------------------------------------------------------
-    @testset "bit-exact differential oracle: tiered ≡ disabled ≡ untiered" begin
+    @testset "bit-exact differential oracle: native ≡ interpreter" begin
         K, M = 5, 3
         buf = [6.0]
         mk() = _tc_fastjx_model(K, M)
         pa() = Dict("F" => buf)
         fi, u0, p, _ts, _vm, di = ESM._build_evaluator_impl(mk(); param_arrays=pa())
-        fdis, _u2, _p2, _ts2, _vm2, ddis = withenv("ESS_TCADENCE_DISABLE" => "1") do
-            ESM._build_evaluator_impl(mk(); param_arrays=pa())
-        end
-        fun, _u3, _p3, _ts3, _vm3, dun = withenv("ESS_UNTIERED" => "1") do
-            ESM._build_evaluator_impl(mk(); param_arrays=pa())
-        end
+        fun, _u3, _p3, _ts3, _vm3, dun = ESM._build_evaluator_impl(mk();
+            param_arrays=pa(), compiler=:interpreter)
         @test di.n_time_slots > 0
-        @test ddis.n_time_slots == 0
         @test dun.n_const_slots == 0 && dun.n_time_slots == 0
 
         p2 = merge(p, (; w = 0.9, scale = 2.25))
@@ -328,9 +320,7 @@ end
             end
             u, pp, t = step
             a = _tc_call(fi, u, pp, t)
-            b = _tc_call(fdis, u, pp, t)
             c = _tc_call(fun, u, pp, t)
-            @test a == b
             @test c == a
         end
     end
@@ -367,16 +357,15 @@ end
     # bit-exactness contract (same RHS bits ⇒ same solver decisions ⇒ same
     # trajectory, bit for bit).
     # ----------------------------------------------------------------
-    @testset "Rosenbrock23 solve: tiered ≡ disabled, AD and FD Jacobians" begin
+    @testset "Rosenbrock23 solve: native ≡ interpreter, AD and FD Jacobians" begin
         K, M = 4, 3
         buf = [2.0]
         prob_of(f!, u0, p) = SciMLBase.ODEProblem(f!, copy(u0), (0.0, 5.0), p)
         fi, u0, p, _ts, _vm, di = ESM._build_evaluator_impl(
             _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf))
-        fdis, _u, _p, _ts2, _vm2, ddis = withenv("ESS_TCADENCE_DISABLE" => "1") do
-            ESM._build_evaluator_impl(_tc_fastjx_model(K, M);
-                param_arrays=Dict("F" => buf))
-        end
+        fdis, _u, _p, _ts2, _vm2, ddis = ESM._build_evaluator_impl(
+            _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf),
+            compiler=:interpreter)
         @test di.n_time_slots > 0 && ddis.n_time_slots == 0
         for autodiff in (true, false)
             alg = autodiff ? OrdinaryDiffEqRosenbrock.Rosenbrock23() :

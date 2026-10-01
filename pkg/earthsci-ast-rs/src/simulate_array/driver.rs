@@ -5,7 +5,6 @@
 
 #[cfg(feature = "solve")]
 use super::tape::TapeProgram;
-use super::tape::tape_disabled;
 use super::*;
 #[cfg_attr(not(feature = "solve"), allow(unused_imports))]
 use crate::simulate::SimulateError;
@@ -21,7 +20,371 @@ use crate::simulate::{
 use diffsol::{Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, Sdirk, VectorHost};
 use std::collections::HashSet;
 
+/// A taped read-out of every observed, at one state and one time.
+///
+/// Under [`RuntimeMode::Native`] every rule is on the tape — construction
+/// refused the document otherwise — so the observeds a setup or output-time
+/// pass needs are already computed by the tape's own CONST / SEGMENT /
+/// CONTINUOUS sections. This runs the tape with its `Export` publishes forced
+/// on and hands back the published map.
+///
+/// It exists because the passes it replaces evaluated the SAME rules through
+/// the whole-array overlay, with the per-cell oracle beneath it and no entry in
+/// any fallback report — the silent demotion `esm-libraries-spec.md` §2.5.10
+/// refuses, and one that a gate over `Instr::Fallback` alone cannot see,
+/// because the overlay declines on its own terms. Serving them from the tape
+/// makes the gate honest: there is no second evaluator left to disagree.
+///
+/// The production RHS scratch keeps its exports OFF (with no fallback rule
+/// nothing can read them, and the publish is a memcpy per observed per call),
+/// so this carries its own scratch and its own slab.
+#[cfg(feature = "solve")]
+struct TapedObserveds {
+    scratch: RhsScratch,
+    /// The tape writes `dy` whether or not the caller wants it; a setup or
+    /// output-time pass does not, so it lands here and is discarded.
+    dy: Vec<f64>,
+}
+
+#[cfg(feature = "solve")]
+impl TapedObserveds {
+    fn new(compiled: &ArrayCompiled, tape: &(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)) -> Self {
+        let mut scratch = RhsScratch::new(&compiled.var_shapes);
+        scratch.set_const_arrays(Rc::clone(&compiled.const_scope));
+        scratch.install_tape(Rc::clone(&tape.0), Rc::clone(&tape.1));
+        scratch.set_exports_active(true);
+        TapedObserveds {
+            scratch,
+            dy: vec![0.0f64; compiled.n_states],
+        }
+    }
+
+    /// The map the last [`Self::at`] published, without running the tape
+    /// again — so the node-0 values that decided the row layout are recorded
+    /// rather than recomputed.
+    fn scratch_observeds(&self) -> &ArrMap {
+        self.scratch
+            .taped_observeds()
+            .expect("the harvester installs a tape on its own scratch")
+    }
+
+    /// Every observed's value at `state` and `t`, published by the tape.
+    ///
+    /// The CONST and SEGMENT sections prime on the first call and are not
+    /// re-run while the parameter vector is unchanged, so a sweep over output
+    /// nodes pays for the CONTINUOUS section only — the same amortization the
+    /// static hoist existed to provide.
+    fn at(&mut self, compiled: &ArrayCompiled, state: &[f64], params: &[f64], t: f64) -> &ArrMap {
+        for v in self.dy.iter_mut() {
+            *v = 0.0;
+        }
+        evaluate_rhs_with_scratch(
+            &RhsCall {
+                rhs_rules: &compiled.rhs_rules,
+                observed_rules: &compiled.observed_rules,
+                var_shapes: &compiled.var_shapes,
+                param_names: &compiled.param_names,
+                state,
+                params,
+                forcing: &compiled.forcing,
+                t,
+                declared: &compiled.declared_names,
+            },
+            &mut self.dy,
+            false,
+            &mut RhsStats::default(),
+            &mut self.scratch,
+        );
+        self.scratch
+            .taped_observeds()
+            .expect("the harvester installs a tape on its own scratch")
+    }
+}
+
+/// The refusal a model that serves [`crate::Compiler::Xla`] gets when no
+/// compiled program was installed on it.
+///
+/// It is `compiler_unavailable` rather than a refused rule because nothing
+/// about the DOCUMENT is wrong: the build either never got as far as emitting
+/// (no `xla` feature) or handed the integrator a model it had not finished.
+#[cfg(feature = "solve")]
+fn xla_not_installed() -> SimulateError {
+    SimulateError::CompilerUnavailable {
+        compiler: "xla",
+        details: "this Problem names `xla` but carries no compiled program; the build did not \
+                  install one, and the tape is NOT run in its place — a compiler that cannot \
+                  run says so (esm-libraries-spec §2.5.10)"
+            .to_string(),
+    }
+}
+
+/// Run the compiled XLA right-hand side into `out`, routing a device failure
+/// into `fault` (FIRST failure wins) and leaving `out` NaN so the solver stops
+/// instead of integrating whatever was there before.
+///
+/// Shared by the production right-hand side and the finite-difference
+/// Jacobian, which under [`crate::Compiler::Xla`] evaluate exactly the same
+/// program; a second copy of the failure handling would be a second place to
+/// get it wrong.
+#[cfg(all(feature = "solve", feature = "xla"))]
+fn run_xla_rhs(
+    program: &crate::xla_runtime::CompiledRhs,
+    fault: &Rc<RefCell<Option<String>>>,
+    state: &[f64],
+    params: &[f64],
+    t: f64,
+    out: &mut [f64],
+) -> bool {
+    match program.eval_into(state, params, t, out) {
+        Ok(()) => true,
+        Err(e) => {
+            let mut slot = fault.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(e.to_string());
+            }
+            for v in out.iter_mut() {
+                *v = f64::NAN;
+            }
+            false
+        }
+    }
+}
+
+/// The finite-difference Jacobian-vector product `J v ≈ (f(y + εv) − f(y)) / ε`
+/// the XLA arm of the integrator's Jacobian closure computes, with the
+/// evaluation at the base point shared across calls and every buffer
+/// allocated once.
+///
+/// diffsol assembles a Jacobian by calling the product once per column, all
+/// at ONE `(y, p, t)`. Only `f(y + εv)` depends on the column, so keeping
+/// `f(y)` makes a Jacobian of `n` states cost `n + 1` right-hand-side
+/// evaluations instead of `2n` — and under [`crate::Compiler::Xla`] each one
+/// is a host-to-device-to-host round trip. The kept `f(y)` is reused only
+/// when `y`, `p` and `t` are bit-for-bit the ones it was computed at, and the
+/// forcing buffer the right-hand side may read is fixed for the segment the
+/// closure lives in, so the product is bit-identical to recomputing both
+/// evaluations every call.
+#[cfg(all(feature = "solve", any(test, feature = "xla")))]
+struct FdJvp {
+    base_y: Vec<f64>,
+    base_p: Vec<f64>,
+    base_t: f64,
+    /// `f(base_y, base_p, base_t)`; meaningful only while `base_valid`.
+    f_y: Vec<f64>,
+    base_valid: bool,
+    y_perturbed: Vec<f64>,
+    f_yp: Vec<f64>,
+}
+
+#[cfg(all(feature = "solve", any(test, feature = "xla")))]
+impl FdJvp {
+    fn new(n_states: usize) -> Self {
+        FdJvp {
+            base_y: vec![0.0; n_states],
+            base_p: Vec::new(),
+            base_t: 0.0,
+            f_y: vec![0.0; n_states],
+            base_valid: false,
+            y_perturbed: vec![0.0; n_states],
+            f_yp: vec![0.0; n_states],
+        }
+    }
+
+    /// Write `J(y, p, t) v` into `jv`. `eval(state, params, t, out)` fills
+    /// `out` with the right-hand side and reports whether it succeeded; a
+    /// failed evaluation of `f(y)` is not kept, so the next call tries again.
+    fn apply(
+        &mut self,
+        y: &[f64],
+        p: &[f64],
+        t: f64,
+        v: &[f64],
+        jv: &mut [f64],
+        mut eval: impl FnMut(&[f64], &[f64], f64, &mut [f64]) -> bool,
+    ) {
+        let n = y.len();
+        let mut y_norm = 0.0f64;
+        for &yi in y {
+            y_norm += yi * yi;
+        }
+        let y_norm = y_norm.sqrt().max(1.0);
+        let eps = f64::EPSILON.sqrt() * y_norm;
+
+        let same_point = self.base_valid
+            && self.base_t.to_bits() == t.to_bits()
+            && same_bits(&self.base_y, y)
+            && same_bits(&self.base_p, p);
+        if !same_point {
+            self.base_y.clear();
+            self.base_y.extend_from_slice(y);
+            self.base_p.clear();
+            self.base_p.extend_from_slice(p);
+            self.base_t = t;
+            self.f_y.resize(n, 0.0);
+            self.base_valid = eval(y, p, t, &mut self.f_y);
+        }
+
+        self.y_perturbed.clear();
+        self.y_perturbed
+            .extend(y.iter().zip(v).map(|(&yi, &vi)| yi + eps * vi));
+        self.f_yp.resize(n, 0.0);
+        eval(&self.y_perturbed, p, t, &mut self.f_yp);
+        for ((out, &fp), &f0) in jv.iter_mut().zip(&self.f_yp).zip(&self.f_y) {
+            *out = (fp - f0) / eps;
+        }
+    }
+}
+
+/// Bitwise slice equality: `-0.0` and `0.0` differ, and a `NaN` equals the
+/// same `NaN`, which is what reusing a function value requires.
+#[cfg(all(feature = "solve", any(test, feature = "xla")))]
+fn same_bits(a: &[f64], b: &[f64]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+}
+
+/// One evaluation a model's field initial conditions performed
+/// ([`ArrayCompiled::field_ic_records`]).
+#[cfg(feature = "solve")]
+#[derive(Clone, Debug)]
+pub(crate) struct FieldIcRecord {
+    /// The `ic` target, or the state-free observed materialized for its scope.
+    pub name: String,
+    /// `"initial condition"` or `"initial-condition scope"`.
+    pub kind: &'static str,
+    /// Whether the reference evaluator walked a `faq` in it cell by cell.
+    pub per_cell: bool,
+}
+
+/// The field initial conditions construction resolved, held for the first
+/// solve ([`ArrayCompiled::field_ic_records`] fills it, the first
+/// `build_initial_state` takes it).
+///
+/// Construction has to evaluate every field `ic` — a strict compiler refuses
+/// one it would walk per cell, and the report names the route of each — and
+/// the first solve needs exactly those values, so resolving them twice was a
+/// second full evaluation of every `ic` field on every Problem. The resolution
+/// reads two inputs, and the memo answers only when neither has moved:
+///
+/// * the parameters, checked here bit for bit against the positional vector
+///   the solve resolved (a [`crate::remake`] with new `p` shares this model and
+///   misses);
+/// * the provider forcing buffer, which the crate's own drivers leave as
+///   construction had it until the initial state is built (the CONST providers
+///   are bound before the compiler gate runs, and a discrete refresh comes
+///   after `u0`). A host can write it in between through
+///   [`ArrayCompiled::forcing_handle`], so the memo records the buffer's
+///   handle generation, which every call to that accessor bumps, and answers
+///   only while it is unchanged. Taking the memo, rather than keeping it, is
+///   what holds the rest: only the first solve can read it, and every later
+///   one resolves from the buffer as it stands.
+///
+/// Initial-condition overrides are applied over the result, not read by it.
+#[cfg(feature = "solve")]
+pub(crate) struct FieldIcMemo {
+    params: Vec<u64>,
+    forcing_generation: u64,
+    slots: HashMap<usize, f64>,
+}
+
+#[cfg(all(test, feature = "solve"))]
+thread_local! {
+    static FIELD_IC_RESOLUTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Test hook: how many times this thread has resolved a model's field initial
+/// conditions.
+#[cfg(all(test, feature = "solve"))]
+pub(crate) fn field_ic_resolutions() -> u64 {
+    FIELD_IC_RESOLUTIONS.with(std::cell::Cell::get)
+}
+
+#[cfg(feature = "solve")]
+fn param_bits(param_vec: &[f64]) -> Vec<u64> {
+    param_vec.iter().map(|x| x.to_bits()).collect()
+}
+
 impl ArrayCompiled {
+    /// Whether the TAPE serves this Problem's passes other than the right-hand
+    /// side — the build-time materialization of constants and static
+    /// observeds, the per-segment seed, the inspection snapshot and the
+    /// observeds reported at output times (esm-libraries-spec §2.5.10).
+    ///
+    /// True under the two STRICT compilers, [`crate::Compiler::Native`] and
+    /// [`crate::Compiler::Xla`], and for the same reason in both: each refuses
+    /// the document unless every rule lowered to the tape, so there is no
+    /// second evaluator left for those passes to drift against. Under `xla`
+    /// the right-hand side itself runs on the emitted executable instead (see
+    /// `is_xla`) — the emitted program's only output is `du`, so the
+    /// observed passes stay on the tape the emitter was built from, which is
+    /// still ONE evaluator rather than two.
+    pub(crate) fn tape_serves_passes(&self) -> bool {
+        matches!(self.runtime_mode, RuntimeMode::Native | RuntimeMode::Xla)
+    }
+
+    /// Whether this model serves a [`crate::Compiler::Xla`] build: the
+    /// right-hand side (and the finite-difference Jacobian differenced out of
+    /// it) is the XLA executable rather than the tape's own interpreter.
+    pub(crate) fn is_xla(&self) -> bool {
+        self.runtime_mode == RuntimeMode::Xla
+    }
+
+    /// Emit this model's tape as an XLA computation, compile it for the
+    /// device, and install it as the right-hand side
+    /// [`crate::Compiler::Xla`] runs (API_SPEC §5.8).
+    ///
+    /// Called ONCE, at construction, by [`crate::problem::esm_problem`] — so a
+    /// model the emitter cannot lower is a BUILD refusal naming the rule
+    /// rather than a surprise on the first step, and so the XLA compilation
+    /// (seconds for a large program) is paid once per Problem rather than once
+    /// per integration segment. Idempotent: a second call keeps the first
+    /// executable.
+    #[cfg(feature = "xla")]
+    pub(crate) fn install_xla_rhs(&self) -> Result<(), crate::xla_runtime::CompileRhsError> {
+        use crate::xla_runtime::{CompileRhsError, CompiledRhs};
+        if self.xla_rhs.get().is_some() {
+            return Ok(());
+        }
+        let program = CompiledRhs::compile(self)?;
+        // The two length contracts `CompiledRhs::eval` would otherwise raise
+        // per CALL, checked once here instead. After this the only way an
+        // evaluation can fail is the device itself, which is what the run-time
+        // error channel in [`Self::run_one_segment`] carries.
+        if program.n_states() != self.n_states {
+            return Err(CompileRhsError::Runtime(format!(
+                "the emitted program returns {} state slots, the model has {}",
+                program.n_states(),
+                self.n_states
+            )));
+        }
+        if program.params_len() < self.param_names.len() {
+            return Err(CompileRhsError::Runtime(format!(
+                "the emitted program takes {} parameters, the model has {}",
+                program.params_len(),
+                self.param_names.len()
+            )));
+        }
+        let _ = self.xla_rhs.set(Rc::new(program));
+        Ok(())
+    }
+
+    /// The installed XLA executable, when this model serves
+    /// [`crate::Compiler::Xla`]. `None` under every other compiler, so a
+    /// caller can hand the answer straight to the closure builders.
+    #[cfg(feature = "xla")]
+    pub(crate) fn xla_program(&self) -> Option<Rc<crate::xla_runtime::CompiledRhs>> {
+        if self.is_xla() {
+            self.xla_rhs.get().cloned()
+        } else {
+            None
+        }
+    }
+
+    /// Whether this model serves a [`crate::Compiler::Interpreter`] build: no
+    /// tape, and the whole-array overlay off, so every rule is walked per cell.
+    pub(crate) fn is_interpreter(&self) -> bool {
+        self.runtime_mode == RuntimeMode::Interpreter
+    }
+
     /// The flatten-time merge map (issue #230): every state spelling an
     /// `operator_compose` renaming match DELETED, mapped onto the survivor.
     pub(crate) fn merged_renames(&self) -> &HashMap<String, String> {
@@ -37,7 +400,23 @@ impl ArrayCompiled {
     /// problem. The buffer is shared (the handle and the closures clone one
     /// `Rc`); mutate it only *between* segments, never inside a solver step, to
     /// keep the RHS pure within a segment.
+    ///
+    /// Whoever holds the handle may write the buffer at any later point, so
+    /// taking one also retires the field initial conditions construction
+    /// resolved from it ([`FieldIcMemo`]): the next solve resolves them from
+    /// the buffer as it then stands.
     pub fn forcing_handle(&self) -> Rc<RefCell<HashMap<String, ArrayD<f64>>>> {
+        self.forcing_generation
+            .set(self.forcing_generation.get().wrapping_add(1));
+        Rc::clone(&self.forcing)
+    }
+
+    /// The forcing buffer, for the crate's own drivers, which write it only
+    /// where [`FieldIcMemo`] allows: before construction records the memo, or
+    /// after the initial state is built. Unlike [`Self::forcing_handle`] it
+    /// leaves the memo standing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn forcing_buffer(&self) -> Rc<RefCell<HashMap<String, ArrayD<f64>>>> {
         Rc::clone(&self.forcing)
     }
 
@@ -53,8 +432,55 @@ impl ArrayCompiled {
         !self.rhs_rules.is_empty()
     }
 
+    /// The single model's own namespace (the top-level `models` map key), or
+    /// `None` on the flattened path, whose names are already qualified.
+    ///
+    /// The single-model build names its slots BARE (`u[1]`, `k`), because the
+    /// raw `Model` it consumed carries no namespace; the flattened build
+    /// qualifies them (`M.u[1]`). Reported here so
+    /// [`crate::problem::EsmProblem`] can present ONE spelling whichever route
+    /// its document took.
+    pub(crate) fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
+    }
+
+    /// The OBSERVED variables this model declares, in dependency order.
+    ///
+    /// What [`crate::problem::observed_trajectories`] resolves a caller's name
+    /// against, with the §5.8 precedence.
+    pub fn observed_variable_names(&self) -> Vec<String> {
+        self.observed_rules
+            .iter()
+            .map(|r| observed_rule_var(r).clone())
+            .collect()
+    }
+
+    /// Every state slot's name (`u[2,3]`, or a 0-D state's bare name), in
+    /// flat state-vector order. Built from the slot layout the first time it
+    /// is asked for, then kept.
     pub fn state_variable_names(&self) -> &[String] {
-        &self.scalar_state_names
+        self.state_names
+            .get_or_init(|| super::layout::slot_names(&self.var_shapes))
+    }
+
+    /// [`Self::state_variable_names`] under this model's single-model
+    /// namespace (`M.u[2,3]`), the spelling the Problem reports (API_SPEC
+    /// §5.8's qualification rule, `crate::problem::qualify`, applied to each
+    /// variable's name; the cell suffix carries no `.`, so qualifying the
+    /// variable and qualifying the slot name agree). The same names as
+    /// [`Self::state_variable_names`] when the model has no namespace.
+    pub(crate) fn qualified_state_names(&self) -> &[String] {
+        let Some(ns) = self.namespace.as_deref() else {
+            return self.state_variable_names();
+        };
+        self.qualified_state_names.get_or_init(|| {
+            super::layout::slot_names_with(&self.var_shapes, |v| crate::problem::qualify(ns, v))
+        })
+    }
+
+    /// The length of the flat state vector.
+    pub fn n_states(&self) -> usize {
+        self.n_states
     }
     pub fn parameter_names(&self) -> &[String] {
         &self.param_names
@@ -142,21 +568,26 @@ impl ArrayCompiled {
     }
 
     /// Build a scratch with the compiled tape installed (Step 3b) — what the
-    /// production RHS closure carries. Honors `ESS_TAPE_DISABLE` /
-    /// `ESS_VEC_DISABLE` exactly as `simulate` does (returning a legacy
-    /// scratch), so a kill-switch test can observe the routing through
-    /// [`RhsScratch::has_tape`] / [`RhsStats::taped_rules`]. Exposed for the
-    /// fast-executor A/B, allocation-steady-state and invalidation tests,
-    /// driven through [`Self::debug_eval_rhs_into`].
+    /// production RHS closure carries. Exposed for the fast-executor A/B,
+    /// allocation-steady-state and invalidation tests, driven through
+    /// [`Self::debug_eval_rhs_into`].
     #[doc(hidden)]
     pub fn debug_new_scratch_taped(&self) -> RhsScratch {
         let mut s = RhsScratch::new(&self.var_shapes);
         s.set_const_arrays(Rc::clone(&self.const_scope));
-        if !tape_disabled() && !vec_disabled() {
-            let (prog, _report) = self.build_tape(&HashSet::new());
-            s.install_tape(Rc::new(prog), Rc::new(self.observed_rules.clone()));
-        }
+        let (prog, _report) = self.tape(&HashSet::new());
+        s.install_tape(prog, self.shared_observed_rules());
         s
+    }
+
+    /// The precision environment this model was compiled under (the
+    /// document's element type and its per-variable ones), which a solve arms
+    /// for its whole run. The `debug_*` right-hand-side entries do not arm it;
+    /// a caller comparing them on a document that declares element types
+    /// holds this guard around the calls, as a solve would.
+    #[doc(hidden)]
+    pub fn debug_precision_env(&self) -> crate::precision::Env {
+        self.precision.clone()
     }
 
     /// Resolve a parameter map into the positional parameter vector once, so the
@@ -210,21 +641,182 @@ impl ArrayCompiled {
         );
     }
 
+    /// Whether every observed rule is a plain scalar expression: a
+    /// [`AlgebraicRule::Scalar`] whose body [`check_scalar_evaluable`] admits
+    /// (no array, tensor or geometry op).
+    ///
+    /// The precondition under which a stateless evaluation
+    /// ([`Self::evaluate_stateless_observeds`]) is the whole answer for a
+    /// document with nothing to integrate. A SHAPED document answers
+    /// differently — from the fields its build materialized — so it is told
+    /// apart here rather than by what an evaluation happens to produce.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
+    pub(crate) fn observeds_are_scalar(&self) -> bool {
+        self.observed_rules.iter().all(|rule| match rule {
+            AlgebraicRule::Scalar { body, .. } => check_scalar_evaluable(body).is_ok(),
+            _ => false,
+        })
+    }
+
+    /// Every 0-D observed of a model with NO state vector, evaluated at each of
+    /// `times` — `(name, values)` in dependency order, one value per time.
+    ///
+    /// The answer for a document with nothing to integrate: its observeds are
+    /// pure functions of the parameters and `t`, so one evaluation per time is
+    /// the whole of it, and no integrator is involved. Each evaluation is one
+    /// right-hand-side call over the empty state, on the evaluator this model
+    /// serves — the tape under `native` / `xla`, the per-cell oracle under
+    /// `interpreter` — so the values are the ones a solve would report.
+    ///
+    /// Names are the rules' own (flattened on the `from_flattened` path, bare
+    /// with [`Self::namespace`] on the single-model one). An observed with more
+    /// than one cell is not reported; it has no scalar value per time. One
+    /// declared with a single cell (`[1]`) is, and the caller decides its rank
+    /// from the declaration.
+    ///
+    /// # Errors
+    ///
+    /// A parameter override that designates nothing, a parameter with neither
+    /// an override nor a default, and any fault the evaluator latched (an
+    /// out-of-range const-array gather, an unbound name) — all as a solve would
+    /// report them. A model that HAS state is refused rather than read at a
+    /// state nobody supplied.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
+    pub(crate) fn evaluate_stateless_observeds(
+        &self,
+        params: &HashMap<String, f64>,
+        times: &[f64],
+    ) -> Result<Vec<(String, Vec<f64>)>, SimulateError> {
+        let mut out: Vec<(String, Vec<f64>)> = Vec::new();
+        self.stateless_pass(params, times, |k, obs| {
+            if k == 0 {
+                out = self
+                    .observed_rules
+                    .iter()
+                    .map(observed_rule_var)
+                    .filter(|name| obs.get(*name).is_some_and(|a| a.len() == 1))
+                    .map(|name| (name.clone(), Vec::with_capacity(times.len())))
+                    .collect();
+            }
+            for (name, values) in &mut out {
+                let v = obs.get(name).and_then(|a| a.first().copied());
+                values.push(v.unwrap_or(f64::NAN));
+            }
+        })?;
+        Ok(out)
+    }
+
+    /// Every observed of a model with NO state vector, whatever its shape,
+    /// evaluated once at `t` — `(name, field)` in dependency order.
+    ///
+    /// [`Self::evaluate_stateless_observeds`]'s single-time sibling for the
+    /// build-time fields of a state-free document (`observed_field`): the same
+    /// one right-hand-side call over the empty state, on the evaluator this
+    /// model serves, so a shaped observed comes off the tape under `native`
+    /// exactly as a scalar one does. Errors as that method's.
+    pub(crate) fn evaluate_stateless_fields(
+        &self,
+        params: &HashMap<String, f64>,
+        t: f64,
+    ) -> Result<Vec<(String, ArrayD<f64>)>, SimulateError> {
+        let mut out: Vec<(String, ArrayD<f64>)> = Vec::new();
+        self.stateless_pass(params, &[t], |_, obs| {
+            out = self
+                .observed_rules
+                .iter()
+                .map(observed_rule_var)
+                .filter_map(|name| obs.get(name).map(|a| (name.clone(), a.clone())))
+                .collect();
+        })?;
+        Ok(out)
+    }
+
+    /// One right-hand-side call over the empty state per entry of `times`,
+    /// handing `visit` the observeds each call published.
+    fn stateless_pass(
+        &self,
+        params: &HashMap<String, f64>,
+        times: &[f64],
+        mut visit: impl FnMut(usize, &ArrMap),
+    ) -> Result<(), SimulateError> {
+        if self.n_states != 0 {
+            return Err(SimulateError::Compile(
+                crate::compile_error::CompileError::InterpreterBuildError {
+                    details: format!(
+                        "a stateless evaluation was asked of a model with {} state slot(s)",
+                        self.n_states
+                    ),
+                },
+            ));
+        }
+        let _precision_guard = self.precision.enter();
+        let param_vec = self.build_param_vec(params)?;
+        let mut scratch = RhsScratch::new(&self.var_shapes);
+        scratch.set_const_arrays(Rc::clone(&self.const_scope));
+        if self.tape_serves_passes() {
+            let (prog, _report) = self.tape(&HashSet::new());
+            scratch.install_tape(prog, self.shared_observed_rules());
+            scratch.set_exports_active(true);
+        }
+        let mut dy: Vec<f64> = Vec::new();
+        crate::simulate_array::take_const_array_oob();
+        for (k, &t) in times.iter().enumerate() {
+            evaluate_rhs_with_scratch(
+                &RhsCall {
+                    rhs_rules: &self.rhs_rules,
+                    observed_rules: &self.observed_rules,
+                    var_shapes: &self.var_shapes,
+                    param_names: &self.param_names,
+                    state: &[],
+                    params: &param_vec,
+                    forcing: &self.forcing,
+                    t,
+                    declared: &self.declared_names,
+                },
+                &mut dy,
+                self.is_interpreter(),
+                &mut RhsStats::default(),
+                &mut scratch,
+            );
+            if let Some(details) = crate::simulate_array::take_const_array_oob() {
+                return Err(
+                    crate::compile_error::CompileError::InterpreterBuildError { details }.into(),
+                );
+            }
+            let obs = scratch
+                .taped_observeds()
+                .unwrap_or_else(|| scratch.observed_arrays());
+            visit(k, obs);
+        }
+        Ok(())
+    }
+
     /// Resolve the deferred scoped-reference / array `ic` equations
     /// (esm-spec §11.4.1) into per-slot initial values keyed by flat state slot.
     /// A loaded-field RHS (`InitialConditions.O3_init`) is read from the
     /// provider-seeded forcing buffer and folded into the lifted grid state's cells
     /// (column-major, matching the slot enumeration in [`Self::from_model`]); a
     /// constant RHS broadcasts to every cell. Empty on the non-`ic` path.
+    ///
+    /// `records`, when given, receives one [`FieldIcRecord`] per evaluation
+    /// this performs — each state-free observed materialized for the `ic`
+    /// scope, then each target — saying whether it was walked per cell.
     #[cfg(feature = "solve")]
     fn resolve_field_ics(
         &self,
         params: &HashMap<String, f64>,
+        mut records: Option<&mut Vec<FieldIcRecord>>,
     ) -> Result<HashMap<usize, f64>, SimulateError> {
         let mut out: HashMap<usize, f64> = HashMap::new();
         if self.field_ics.is_empty() {
             return Ok(out);
         }
+        #[cfg(test)]
+        FIELD_IC_RESOLUTIONS.with(|c| c.set(c.get() + 1));
+        let walks = crate::simulate_array::per_cell_walks;
+        // `interpreter` runs these on the per-cell oracle like every other
+        // evaluation it performs; the other compilers leave the overlay on.
+        let _overlay = OverlayGuard::armed(self.is_interpreter());
         // esm-spec §6.6.5 build-time scope: materialize the STATE-FREE array
         // observeds an `ic` RHS may read (a `const` gather, a parameter-only
         // expression) and overlay them on the provider forcing buffer. A
@@ -250,10 +842,32 @@ impl ArrayCompiled {
                     if built.contains_key(name) {
                         continue;
                     }
-                    if let Ok(Value::Array(arr)) =
-                        eval_buildtime_field_in_scope(body, &self.index_sets, params, &built)
-                    {
+                    let before = walks();
+                    let value =
+                        eval_buildtime_field_in_scope(body, &self.index_sets, params, &built);
+                    if per_cell_walk_refused() {
+                        // A strict caller's walk stopped at its first cell
+                        // (`StopAtFirstCell`): this evaluation is the refusal,
+                        // and nothing computed from its placeholder counts —
+                        // not even a failure. Only construction arms the stop.
+                        if let Some(sink) = records.as_deref_mut() {
+                            sink.push(FieldIcRecord {
+                                name: name.clone(),
+                                kind: "initial-condition scope",
+                                per_cell: true,
+                            });
+                        }
+                        return Ok(out);
+                    }
+                    if let Ok(Value::Array(arr)) = value {
                         built.insert(name.clone(), *arr);
+                        if let Some(sink) = records.as_deref_mut() {
+                            sink.push(FieldIcRecord {
+                                name: name.clone(),
+                                kind: "initial-condition scope",
+                                per_cell: walks() != before,
+                            });
+                        }
                     }
                 }
                 if built.len() == before {
@@ -283,24 +897,89 @@ impl ArrayCompiled {
             // once per target and let every cell index the cached field. The
             // cell-independent cases (1 loaded field / 2 constant) ignore it.
             let mut cached_field: Option<Value> = None;
+            let before = walks();
             for flat in 0..total {
                 let multi = flat_to_multi_col_major(flat, &vs.shape);
                 let slot = vs.flat_offset + flat;
-                out.insert(
-                    slot,
-                    resolve_field_ic_cell(
-                        target,
-                        rhs,
-                        &multi,
-                        forcing,
-                        &self.index_sets,
-                        params,
-                        &mut cached_field,
-                    )?,
+                let value = resolve_field_ic_cell(
+                    target,
+                    rhs,
+                    &multi,
+                    forcing,
+                    &self.index_sets,
+                    params,
+                    &mut cached_field,
                 );
+                if per_cell_walk_refused() {
+                    // As for the scope above: the stopped walk is the refusal.
+                    if let Some(sink) = records.as_deref_mut() {
+                        sink.push(FieldIcRecord {
+                            name: target.clone(),
+                            kind: "initial condition",
+                            per_cell: true,
+                        });
+                    }
+                    return Ok(out);
+                }
+                out.insert(slot, value?);
+            }
+            if let Some(sink) = records.as_deref_mut() {
+                sink.push(FieldIcRecord {
+                    name: target.clone(),
+                    kind: "initial condition",
+                    per_cell: walks() != before,
+                });
             }
         }
         Ok(out)
+    }
+
+    /// Every evaluation the field initial conditions perform, exercised at
+    /// CONSTRUCTION against `params` so a strict compiler can refuse a per-cell
+    /// one there (esm-libraries-spec §2.5.10 asks that every evaluation a
+    /// compiler performs for the Problem be exercised at construction) and the
+    /// compiler report can show the route.
+    ///
+    /// Empty for a model with no field `ic`, and — deliberately — for one whose
+    /// initial conditions cannot be resolved yet: `solve` resolves them again
+    /// and raises the diagnostic there, where it always has been.
+    ///
+    /// `strict` is the compiler's: the first per-cell walk then stops at its
+    /// first cell (see `StopAtFirstCell`), because its record is a refusal and
+    /// the rest of the walk would buy nothing. A resolution that walked no cell
+    /// is kept for the first solve ([`FieldIcMemo`]).
+    #[cfg(feature = "solve")]
+    pub(crate) fn field_ic_records(
+        &self,
+        params: &HashMap<String, f64>,
+        strict: bool,
+    ) -> Vec<FieldIcRecord> {
+        if self.field_ics.is_empty() {
+            return Vec::new();
+        }
+        let Ok(param_vec) = self.build_param_vec(params) else {
+            return Vec::new();
+        };
+        let resolved: HashMap<String, f64> = self
+            .param_names
+            .iter()
+            .cloned()
+            .zip(param_vec.iter().copied())
+            .collect();
+        let _precision_guard = self.precision.enter();
+        let mut records = Vec::new();
+        let stop = strict.then(crate::simulate_array::StopAtFirstCell::arm);
+        let result = self.resolve_field_ics(&resolved, Some(&mut records));
+        if let Ok(slots) = result
+            && !stop.as_ref().is_some_and(|s| s.stopped())
+        {
+            *self.field_ic_memo.borrow_mut() = Some(FieldIcMemo {
+                params: param_bits(&param_vec),
+                forcing_generation: self.forcing_generation.get(),
+                slots,
+            });
+        }
+        records
     }
 
     /// The component / subsystem names a rule-2 override key may spell in its
@@ -312,12 +991,13 @@ impl ArrayCompiled {
     /// supplies the one namespace the names CANNOT show: the enclosing model's
     /// own, which the single-model path does not qualify its variables with —
     /// it is exactly what makes `P.sub.g` a legal spelling of `sub.g`.
-    #[cfg(feature = "solve")]
     fn override_namespaces(&self) -> std::collections::HashSet<String> {
         crate::simulate::namespace_scope(
+            // A slot name's cell suffix carries no `.`, so the state
+            // VARIABLES' names carry every namespace their slots' names do.
             self.param_names
                 .iter()
-                .chain(self.scalar_state_names.iter())
+                .chain(self.var_shapes.keys())
                 .map(String::as_str),
             self.namespace.as_deref(),
         )
@@ -328,7 +1008,6 @@ impl ArrayCompiled {
     /// vector (override > variable default; a parameter with neither is an
     /// [`SimulateError::InvalidParameter`]). The strict simulate-time
     /// counterpart of the lenient [`Self::debug_resolve_params`].
-    #[cfg(feature = "solve")]
     fn build_param_vec(&self, params: &HashMap<String, f64>) -> Result<Vec<f64>, SimulateError> {
         // esm-spec §6.6.2 caller-key canonicalization (see
         // `crate::simulate::canonicalize_override_keys`). This subsumes the
@@ -371,33 +1050,66 @@ impl ArrayCompiled {
     ) -> Result<Vec<f64>, SimulateError> {
         // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
         let initial_conditions = crate::simulate::canonicalize_override_keys(
-            &self.scalar_state_index,
+            &super::layout::SlotNames(&self.var_shapes),
             &self.override_namespaces(),
             initial_conditions,
             &self.merged_renames,
         )
         .map_err(crate::simulate::ic_key_error)?;
-        // Resolved scalar-parameter scope (load-time constants) for the ic
-        // coordinate-expression path — a parameter-dependent grid-geometry
-        // template (`x0 + (i − 1/2)·dx`) binds here; STATE is not in scope.
-        let resolved_params: HashMap<String, f64> = self
-            .param_names
-            .iter()
-            .cloned()
-            .zip(param_vec.iter().copied())
-            .collect();
-        let field_ic_map = self.resolve_field_ics(&resolved_params)?;
-        let mut ic_vec = vec![0.0f64; self.n_states];
-        for (i, name) in self.scalar_state_names.iter().enumerate() {
-            if let Some(&v) = initial_conditions.get(name) {
-                ic_vec[i] = v;
-            } else if let Some(&v) = field_ic_map.get(&i) {
-                ic_vec[i] = v;
-            } else if let Some(d) = self.state_defaults[i] {
-                ic_vec[i] = d;
-            } else {
-                return Err(SimulateError::InvalidInitialCondition { name: name.clone() });
+        // What construction resolved, when it resolved it under these
+        // parameters ([`FieldIcMemo`]).
+        let memo = self.field_ic_memo.borrow_mut().take().filter(|m| {
+            m.params == param_bits(param_vec)
+                && m.forcing_generation == self.forcing_generation.get()
+        });
+        let field_ic_map = match memo {
+            Some(m) => m.slots,
+            None => {
+                // Resolved scalar-parameter scope (load-time constants) for the
+                // ic coordinate-expression path — a parameter-dependent
+                // grid-geometry template (`x0 + (i − 1/2)·dx`) binds here; STATE
+                // is not in scope.
+                let resolved_params: HashMap<String, f64> = self
+                    .param_names
+                    .iter()
+                    .cloned()
+                    .zip(param_vec.iter().copied())
+                    .collect();
+                self.resolve_field_ics(&resolved_params, None)?
             }
+        };
+        // Per slot, the first of: an explicit override, a field `ic`, the
+        // variable's default. Written lowest priority first, each variable's
+        // default as one fill (or one gather of its inline data); a slot left
+        // with none of the three is flagged, and only a variable that
+        // declares no default can leave one.
+        let mut ic_vec = vec![0.0f64; self.n_states];
+        let mut unset: Option<Vec<bool>> = None;
+        for ((_, vs), default) in self.var_shapes.iter().zip(&self.state_defaults) {
+            let n = vs.shape.iter().copied().product::<usize>().max(1);
+            let range = vs.flat_offset..vs.flat_offset + n;
+            if !super::layout::write_state_default(vs, default, &mut ic_vec[range.clone()]) {
+                unset.get_or_insert_with(|| vec![false; self.n_states])[range].fill(true);
+            }
+        }
+        for (&slot, &v) in &field_ic_map {
+            ic_vec[slot] = v;
+            if let Some(u) = unset.as_mut() {
+                u[slot] = false;
+            }
+        }
+        for (name, &v) in &initial_conditions {
+            // Canonicalization answers only with names the layout resolves.
+            let slot = super::layout::lookup_slot(&self.var_shapes, name)
+                .expect("a canonical initial-condition key names a slot");
+            ic_vec[slot] = v;
+            if let Some(u) = unset.as_mut() {
+                u[slot] = false;
+            }
+        }
+        if let Some(slot) = unset.and_then(|u| u.iter().position(|&x| x)) {
+            let name = super::layout::slot_name(&self.var_shapes, slot).unwrap_or_default();
+            return Err(SimulateError::InvalidInitialCondition { name });
         }
         Ok(ic_vec)
     }
@@ -518,11 +1230,28 @@ impl ArrayCompiled {
         // first record so the static regrid geometry sees a populated buffer.
         refresh_fn(t0)?;
 
+        // The tape is built BEFORE the static hoist, not after it. Under
+        // either strict compiler the hoist is served FROM the tape (see
+        // [`Self::hoist_static_observeds`]), so the order the two ran in was
+        // itself the defect: the hoist evaluated every CONST-tier observed
+        // through the whole-array overlay, once per solve, before the tape the
+        // caller asked for had been built at all.
+        let (tape, tape_fallbacks) = self.build_solve_tape(discrete_forcing);
+
         let cadence = self.partition_observed_cadence(discrete_forcing);
-        let setup = self.hoist_static_observeds(cadence, &ic_vec, &param_vec, t0);
+        let setup = self.hoist_static_observeds(cadence, &ic_vec, &param_vec, t0, tape.as_ref());
+        let scratches = (self.tape_serves_passes() && tape.is_some()).then(SolveScratches::new);
 
         if let Some(insp) = inspect {
-            self.fill_solve_inspection(insp, &setup, &param_vec, t0, boundaries);
+            self.fill_solve_inspection(
+                insp,
+                &setup,
+                &ic_vec,
+                &param_vec,
+                t0,
+                boundaries,
+                tape.as_ref(),
+            );
         }
 
         let solver_name = match opts.alg {
@@ -530,8 +1259,6 @@ impl ArrayCompiled {
             Alg::Sdirk => "Sdirk",
             Alg::Erk => "Erk",
         };
-
-        let (tape, tape_fallbacks) = self.build_solve_tape(discrete_forcing);
 
         // CONST / single-segment (or no output grid to align segment samples on):
         // the original un-segmented run — byte-identical to the pre-segmentation
@@ -548,6 +1275,7 @@ impl ArrayCompiled {
                     &setup.cadence.continuous_rules,
                     opts,
                     tape.as_ref(),
+                    scratches.as_ref(),
                 )
                 .map_err(Self::const_oob_first)?;
             return self.assemble_solution(
@@ -559,10 +1287,12 @@ impl ArrayCompiled {
                     &stats,
                     tape_fallbacks,
                     self.merged_renames.clone(),
+                    self.namespace.clone(),
                 ),
                 &param_vec,
                 &setup,
                 &opts.output_observed,
+                tape.as_ref(),
             );
         }
 
@@ -575,6 +1305,7 @@ impl ArrayCompiled {
             setup: &setup,
             opts,
             tape: tape.as_ref(),
+            scratches: scratches.as_ref(),
         };
         let (time, state, stats, retcode) = self.run_segmented(&run, &mut refresh_fn)?;
 
@@ -592,10 +1323,12 @@ impl ArrayCompiled {
                 &stats,
                 tape_fallbacks,
                 self.merged_renames.clone(),
+                self.namespace.clone(),
             ),
             &param_vec,
             &setup,
             &opts.output_observed,
+            tape.as_ref(),
         )
     }
 
@@ -675,9 +1408,28 @@ impl ArrayCompiled {
         ic_vec: &[f64],
         param_vec: &[f64],
         t0: f64,
+        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) -> SolveSetup {
-        let static_rings_cell: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
         let sa0 = build_state_arrays(&self.var_shapes, ic_vec);
+        // The two STRICT compilers, `native` and `xla` (API_SPEC §5.8): the
+        // tape's own CONST section computes exactly these rules, once per
+        // solve, on the same schedule this hoist used to. Materializing them a
+        // SECOND time through the whole-array overlay would be the off-tape
+        // per-cell evaluation `esm-libraries-spec.md` §2.5.10 refuses — and it would be invisible,
+        // since the overlay declines on its own terms and reports nothing.
+        //
+        // What consumed the hoisted map still gets it: the RHS and Jacobian
+        // scratches read the tape's slots rather than a seeded observed map,
+        // and the inspection snapshot and the output-node pass harvest their
+        // values from the tape ([`TapedObserveds`]).
+        if self.tape_serves_passes() && tape.is_some() {
+            return SolveSetup {
+                cadence,
+                sa0,
+                static_obs: ArrMap::default(),
+            };
+        }
+        let static_rings_cell: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
         let mut static_obs = ArrMap::default();
         let env = EvalEnv {
             state_arrays: &sa0,
@@ -698,7 +1450,18 @@ impl ArrayCompiled {
             const_arrays: &self.const_scope,
             declared: &self.declared_names,
         };
-        materialize_observeds_into(&mut static_obs, &cadence.static_rules, &env);
+        materialize_observeds_pass(
+            &mut static_obs,
+            &cadence.static_rules,
+            &ObsPass {
+                env,
+                // `interpreter` is the reference and carries no performance
+                // promise: every fast tier off, including the whole-array
+                // overlay, at setup as much as on the hot path.
+                force_scalar: self.is_interpreter(),
+            },
+            &mut RhsStats::default(),
+        );
         drop(static_rings_cell);
         SolveSetup {
             cadence,
@@ -712,14 +1475,38 @@ impl ArrayCompiled {
     /// terrain, slopes). Nothing downstream consults the sink, so the
     /// integration is unchanged.
     #[cfg(feature = "solve")]
+    #[allow(clippy::too_many_arguments)]
     fn fill_solve_inspection(
         &self,
         insp: &mut BuildInspection,
         setup: &SolveSetup,
+        ic_vec: &[f64],
         param_vec: &[f64],
         t0: f64,
         boundaries: &[f64],
+        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) {
+        // Under either strict compiler: one taped read-out at t0 answers BOTH
+        // halves of this sink — the static observeds (which the hoist no
+        // longer materializes) and, on a segmented run, the varying ones. The
+        // off-tape snapshot below is what §2.5.10 would otherwise leave
+        // un-gated.
+        if self.tape_serves_passes()
+            && let Some(tape) = tape
+        {
+            let mut harvest = TapedObserveds::new(self, tape);
+            let obs = harvest.at(self, ic_vec, param_vec, t0);
+            self.fill_inspection(insp, obs, &setup.cadence.static_names, param_vec);
+            if !boundaries.is_empty() {
+                for rule in &setup.cadence.varying_rules {
+                    let name = observed_rule_var(rule);
+                    if let Some(a) = obs.get(name) {
+                        insp.setup_arrays.insert(name.clone(), a.clone());
+                    }
+                }
+            }
+            return;
+        }
         self.fill_inspection(
             insp,
             &setup.static_obs,
@@ -751,8 +1538,10 @@ impl ArrayCompiled {
                         const_arrays: &self.const_scope,
                         declared: &self.declared_names,
                     },
-                    // Build-time t0 snapshot: vectorized overlay (bit-identical).
-                    force_scalar: false,
+                    // Build-time t0 snapshot: vectorized overlay
+                    // (bit-identical), unless this is the `interpreter`
+                    // reference, which runs every tier off.
+                    force_scalar: self.is_interpreter(),
                 },
                 &mut RhsStats::default(),
             );
@@ -768,10 +1557,8 @@ impl ArrayCompiled {
     /// Step 3b: compile the tape program ONCE per solve and share it across
     /// every integration segment (each segment's fresh RHS scratch gets its
     /// own slab and re-runs the CONST/SEGMENT sections — the same cadence as
-    /// the static-observed hoist above). `ESS_TAPE_DISABLE=1` reverts
-    /// wholesale to the legacy interpreter path; `ESS_VEC_DISABLE=1` (the
-    /// pure per-cell oracle reference) implies it, since the tape compiles
-    /// the vectorized overlay's semantics.
+    /// the static-observed hoist above). [`crate::Compiler::Interpreter`]
+    /// builds no tape at all — it IS the per-cell oracle.
     ///
     /// The build report's fallback list is kept, not dropped: a rule the
     /// tape could not compile is evaluated by the per-cell oracle, whose
@@ -786,12 +1573,16 @@ impl ArrayCompiled {
         discrete_forcing: &HashSet<String>,
     ) -> (SolveTape, Vec<(String, String)>) {
         let mut tape_fallbacks: Vec<(String, String)> = Vec::new();
-        let tape: SolveTape = if tape_disabled() || vec_disabled() {
+        // `interpreter` (API_SPEC §5.8) is the reference and nothing else: no
+        // tape, and the whole-array overlay off under it, so every rule is
+        // walked per cell. It is the compiler the caller named, and the only
+        // way to reach the oracle.
+        let tape: SolveTape = if self.is_interpreter() {
             None
         } else {
-            let (prog, report) = self.build_tape(discrete_forcing);
-            tape_fallbacks = report.fallbacks;
-            Some((Rc::new(prog), Rc::new(self.observed_rules.clone())))
+            let (prog, report) = self.tape(discrete_forcing);
+            tape_fallbacks = report.fallbacks.clone();
+            Some((prog, self.shared_observed_rules()))
         };
         (tape, tape_fallbacks)
     }
@@ -813,6 +1604,7 @@ impl ArrayCompiled {
             setup,
             opts,
             tape,
+            scratches,
         } = run;
         let n_states = self.n_states;
 
@@ -841,6 +1633,9 @@ impl ArrayCompiled {
             // first (t0 was already primed by `refresh_fn(t0)` in `solve_core`).
             if a != t0 {
                 refresh_fn(a)?;
+                if let Some(s) = scratches {
+                    s.forcing_refreshed();
+                }
             }
             // Requested outputs falling in this segment: (a, b] — or [a, b] for
             // the first. Always run the solver's grid up to `b` (append if
@@ -889,6 +1684,7 @@ impl ArrayCompiled {
                     &setup.cadence.continuous_rules,
                     &seg_opts,
                     tape,
+                    scratches,
                 )
                 .map_err(Self::const_oob_first)?;
             stats += seg_stats;
@@ -935,16 +1731,19 @@ impl ArrayCompiled {
         param_vec: &[f64],
         setup: &SolveSetup,
         output_observed: &[String],
+        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) -> Result<Solution, SimulateError> {
-        let mut state_variable_names = self.scalar_state_names.clone();
+        let mut state_variable_names = self.state_variable_names().to_vec();
         self.append_observed_trajectories(
             &time,
             &mut state,
             &mut state_variable_names,
             param_vec,
             &setup.static_obs,
+            &setup.cadence.static_names,
             &setup.cadence.varying_rules,
             output_observed,
+            tape,
         );
         if let Some(details) = crate::simulate_array::take_const_array_oob() {
             return Err(
@@ -994,6 +1793,9 @@ impl ArrayCompiled {
         // Step 3b: the solve-wide tape program + the FULL observed rule list
         // its fallback indices resolve against. `None` ⇒ legacy interpreter.
         tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
+        // The solve's kept scratches, or `None` for a pair built for this
+        // segment alone (see [`SolveScratches`]).
+        scratches: Option<&SolveScratches>,
     ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode), SimulateError> {
         // A segment that never advances is answered from its own initial state,
         // before any closure, scratch buffer or diffsol problem is built
@@ -1037,7 +1839,12 @@ impl ArrayCompiled {
         // coupled-loader profile. They are state-free, so `sa_seg` is only a
         // consistency placeholder; their FAQ rings are produced-and-consumed in
         // this one pass (own transient registry, discarded after).
-        let seg_seed: ArrMap = if segment_static_rules.is_empty() {
+        let seg_seed: ArrMap = if segment_static_rules.is_empty() || self.tape_serves_passes() {
+            // Under either strict compiler: the tape's SEGMENT section
+            // computes the segment-invariant observeds itself, on the same
+            // once-per-segment schedule, so seeding them here would be the same rules evaluated
+            // a second time off the tape (§2.5.10). `static_obs` is empty
+            // under them for the same reason — see `hoist_static_observeds`.
             static_obs.clone()
         } else {
             let sa_seg = build_state_arrays(&self.var_shapes, u0);
@@ -1067,23 +1874,64 @@ impl ArrayCompiled {
             seed
         };
 
+        // `xla` (API_SPEC §5.8): the right-hand side is the XLA executable the
+        // build installed, not the tape's own interpreter. The FD Jacobian
+        // goes through it too — it differences two right-hand-side evaluations
+        // of the same rules, so leaving it on the tape would mean an implicit
+        // solve ran the whole model on a DIFFERENT compiler from the one the
+        // caller named, once per Jacobian call.
+        //
+        // Both closures hold the ONE executable (`Rc`); nothing recompiles per
+        // segment or per call.
+        //
+        // A missing executable under `xla` is a REFUSAL, not a quiet return to
+        // the tape. Without this the one way the two could come apart — a
+        // model that reached the integrator with `RuntimeMode::Xla` and an
+        // empty cell — would be answered by the tape under the name `xla`,
+        // which is exactly the substitution §2.5.10 exists to prevent.
+        #[cfg(feature = "xla")]
+        let xla_rhs = match (self.is_xla(), self.xla_program()) {
+            (false, _) => None,
+            (true, Some(program)) => Some(program),
+            (true, None) => return Err(xla_not_installed()),
+        };
+        #[cfg(not(feature = "xla"))]
+        if self.is_xla() {
+            // Unreachable: a build without the feature answers
+            // `compiler_unavailable` for `xla` before a backend exists. Kept
+            // so the no-fallback property holds by CODE rather than by that
+            // argument.
+            return Err(xla_not_installed());
+        }
         // Per-closure reusable scratch (ess-mro), pre-seeded ONCE with the
         // CONST + per-segment DISCRETE observeds (retained in place across steps,
         // never re-cloned) so each RHS eval materializes only the CONTINUOUS
         // observeds. `RefCell` gives the interior mutability diffsol's `Fn` RHS
         // requires; the Jacobian closure carries its own so the two never alias.
+        // Under `xla` the tape never evaluates the right-hand side, so this
+        // scratch (state-array buffers plus a copy of the seeded observed map)
+        // is not built at all.
+        #[cfg(feature = "xla")]
+        let tape_rhs = xla_rhs.is_none();
+        #[cfg(not(feature = "xla"))]
+        let tape_rhs = true;
         let seg_seed = Rc::new(seg_seed);
-        let mut rhs_scratch_val = RhsScratch::new(&var_shapes);
-        rhs_scratch_val.set_const_arrays(Rc::clone(&self.const_scope));
-        rhs_scratch_val.set_static((*seg_seed).clone());
-        // Step 3b: the production RHS closure's scratch gets the compiled
-        // tape (fresh slab per segment; CONST/SEGMENT sections prime on the
-        // segment's first call). The Jacobian scratch below deliberately does
-        // NOT — the FD Jacobian stays on the legacy path.
-        if let Some((prog, full_obs)) = tape {
-            rhs_scratch_val.install_tape(Rc::clone(prog), Rc::clone(full_obs));
+        let (rhs_scratch, jac_scratch) = match scratches {
+            Some(s) => (Rc::clone(&s.rhs), Rc::clone(&s.jac)),
+            None => (Rc::new(RefCell::new(None)), Rc::new(RefCell::new(None))),
+        };
+        if tape_rhs && rhs_scratch.borrow().is_none() {
+            let mut s = RhsScratch::new(&var_shapes);
+            s.set_const_arrays(Rc::clone(&self.const_scope));
+            s.set_static((*seg_seed).clone());
+            // Step 3b: the production RHS closure's scratch gets the compiled
+            // tape. Its CONST/SEGMENT sections prime on the first call, and a
+            // kept scratch re-runs SEGMENT after each forcing refresh.
+            if let Some((prog, full_obs)) = tape {
+                s.install_tape(Rc::clone(prog), Rc::clone(full_obs));
+            }
+            *rhs_scratch.borrow_mut() = Some(s);
         }
-        let rhs_scratch = RefCell::new(rhs_scratch_val);
         // The Jacobian scratch is built LAZILY on the first Jacobian call:
         // diffsol's `rhs_implicit` builder demands a Jacobian closure even for
         // the explicit (ERK) solver, which then never invokes it — so an eager
@@ -1093,7 +1941,39 @@ impl ArrayCompiled {
         // construction is deterministic, so results are bit-identical either way.
         let jac_seed = Rc::clone(&seg_seed);
         let const_scope_jac = Rc::clone(&self.const_scope);
-        let jac_scratch: RefCell<Option<RhsScratch>> = RefCell::new(None);
+        let tape_jac: Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)> =
+            match (self.tape_serves_passes(), tape) {
+                (true, Some((prog, full_obs))) => Some((Rc::clone(prog), Rc::clone(full_obs))),
+                _ => None,
+            };
+        // `interpreter`: the per-cell oracle for the right-hand side too, not
+        // just for the observeds. The strict compilers and the legacy routing
+        // pass `false` and take the whole-array overlay where the tape is
+        // absent.
+        let force_scalar = self.is_interpreter();
+
+        // The XLA Jacobian's buffers and kept base-point evaluation (see
+        // [`FdJvp`]), built on its first call for the same reason the tape's
+        // Jacobian scratch is.
+        #[cfg(feature = "xla")]
+        let xla_jac: Option<(Rc<crate::xla_runtime::CompiledRhs>, RefCell<Option<FdJvp>>)> =
+            xla_rhs.clone().map(|program| (program, RefCell::new(None)));
+        // Where an XLA execution failure goes. diffsol's right-hand side is
+        // `Fn(..) -> ()`, so a device failure has no return channel: it lands
+        // here, the derivative is filled with NaN so the solver stops rather
+        // than integrating stale numbers, and the first message is raised
+        // after the run as `compiler_unavailable` — which is what a device
+        // that stopped working mid-solve IS (esm-spec §9.6.6: this binding,
+        // build or PROCESS cannot provide the compiler). The lengths that
+        // `CompiledRhs::eval_into` would otherwise report here were already
+        // checked at install time, so nothing about the MODEL can reach this
+        // channel.
+        #[cfg(feature = "xla")]
+        let xla_fault: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        #[cfg(feature = "xla")]
+        let xla_fault_rhs = Rc::clone(&xla_fault);
+        #[cfg(feature = "xla")]
+        let xla_fault_jac = Rc::clone(&xla_fault);
 
         // External forcing channel (PR-1, ess-14f.7): clone the `Rc` handle into
         // each closure so both the RHS and the Jacobian read the *same*
@@ -1111,7 +1991,15 @@ impl ArrayCompiled {
             for slot in dy_s.iter_mut() {
                 *slot = 0.0;
             }
-            let mut scratch = rhs_scratch.borrow_mut();
+            #[cfg(feature = "xla")]
+            if let Some(program) = &xla_rhs {
+                run_xla_rhs(program, &xla_fault_rhs, y_s, p_s, t, dy_s);
+                return;
+            }
+            let mut scratch_slot = rhs_scratch.borrow_mut();
+            let scratch = scratch_slot
+                .as_mut()
+                .expect("the tape scratch is built whenever no XLA program serves the rhs");
             evaluate_rhs_with_scratch(
                 &RhsCall {
                     rhs_rules: &rhs_rules,
@@ -1125,9 +2013,9 @@ impl ArrayCompiled {
                     declared: &declared,
                 },
                 dy_s,
-                false,
+                force_scalar,
                 &mut RhsStats::default(),
-                &mut scratch,
+                scratch,
             );
         };
 
@@ -1136,6 +2024,22 @@ impl ArrayCompiled {
                                 t: f64,
                                 v: &diffsol::FaerVec<f64>,
                                 jv: &mut diffsol::FaerVec<f64>| {
+            #[cfg(feature = "xla")]
+            if let Some((program, jvp)) = &xla_jac {
+                let mut jvp = jvp.borrow_mut();
+                let jvp = jvp.get_or_insert_with(|| FdJvp::new(n_states));
+                jvp.apply(
+                    y.as_slice(),
+                    p.as_slice(),
+                    t,
+                    v.as_slice(),
+                    jv.as_mut_slice(),
+                    |state, params, t, out| {
+                        run_xla_rhs(program, &xla_fault_jac, state, params, t, out)
+                    },
+                );
+                return;
+            }
             let n = y.as_slice().len();
             let v_s = v.as_slice();
             let p_s = p.as_slice();
@@ -1159,6 +2063,22 @@ impl ArrayCompiled {
                 let mut s = RhsScratch::new(&var_shapes_jac);
                 s.set_const_arrays(Rc::clone(&const_scope_jac));
                 s.set_static((*jac_seed).clone());
+                // Under `native` the FD Jacobian runs on the TAPE as well
+                // (under `xla` it runs on the emitted program instead, which
+                // the arm above took).
+                // The two right-hand-side evaluations it differences are the
+                // same rules the production closure runs, so leaving them on
+                // the legacy interpreter meant an implicit solve evaluated the
+                // whole model through the overlay — and, wherever the overlay
+                // declined, per cell — at every Jacobian call: the largest
+                // off-tape evaluation in the driver, and one §2.5.10 covers
+                // ("every evaluation the compiler performs for the Problem").
+                // The tape is bit-identical to the legacy path (that is what
+                // the compiler-agreement tier asserts, CONFORMANCE_SPEC
+                // §5.44), so the differenced Jacobian is unchanged.
+                if let Some((prog, full_obs)) = &tape_jac {
+                    s.install_tape(Rc::clone(prog), Rc::clone(full_obs));
+                }
                 s
             });
             evaluate_rhs_with_scratch(
@@ -1174,7 +2094,7 @@ impl ArrayCompiled {
                     declared: &declared_jac,
                 },
                 &mut f_y,
-                false,
+                force_scalar,
                 &mut RhsStats::default(),
                 scratch,
             );
@@ -1191,7 +2111,7 @@ impl ArrayCompiled {
                     declared: &declared_jac,
                 },
                 &mut f_yp,
-                false,
+                force_scalar,
                 &mut RhsStats::default(),
                 scratch,
             );
@@ -1228,54 +2148,78 @@ impl ArrayCompiled {
             details: e.to_string(),
         })?;
 
-        // Mirror the scalar `Compiled::integrate` dispatch: run the solver, then
-        // read the real step/eval counters out of diffsol before the concrete
-        // solver is dropped (see [`SolveStats::from_solver`]).
-        let (time, state, stats, retcode) = match opts.alg {
-            Alg::Bdf => {
-                let mut solver: Bdf<'_, _, NewtonNonlinearSolver<_, FaerLU<f64>, _>> = problem
-                    .bdf::<FaerLU<f64>>()
-                    .map_err(|e| SimulateError::DiffsolError {
+        // Run the solver, then read the real step/eval counters out of diffsol
+        // before the concrete solver is dropped (see [`SolveStats::from_solver`]).
+        //
+        // Wrapped in an immediately-invoked closure so a solver failure does
+        // not leave the function before the XLA fault channel below is read: a
+        // device that stopped working reaches the solver as a NaN derivative,
+        // and reporting "tolerance not met" for it would name the wrong thing.
+        type SolvedSegment = (Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode);
+        let solved = (|| -> Result<SolvedSegment, SimulateError> {
+            let out = match opts.alg {
+                Alg::Bdf => {
+                    let mut solver: Bdf<'_, _, NewtonNonlinearSolver<_, FaerLU<f64>, _>> = problem
+                        .bdf::<FaerLU<f64>>()
+                        .map_err(|e| SimulateError::DiffsolError {
+                            details: e.to_string(),
+                        })?;
+                    let (time, state, retcode) =
+                        crate::simulate::run_solver(&mut solver, t_end, opts)?;
+                    let bs = solver.get_statistics();
+                    let stats = SolveStats::from_solver(
+                        &solver,
+                        bs.number_of_steps,
+                        bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+                    );
+                    (time, state, stats, retcode)
+                }
+                Alg::Sdirk => {
+                    let mut solver: Sdirk<'_, _, FaerLU<f64>> = problem
+                        .tr_bdf2::<FaerLU<f64>>()
+                        .map_err(|e| SimulateError::DiffsolError {
+                            details: e.to_string(),
+                        })?;
+                    let (time, state, retcode) =
+                        crate::simulate::run_solver(&mut solver, t_end, opts)?;
+                    let bs = solver.get_statistics();
+                    let stats = SolveStats::from_solver(
+                        &solver,
+                        bs.number_of_steps,
+                        bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+                    );
+                    (time, state, stats, retcode)
+                }
+                Alg::Erk => {
+                    let mut solver = problem.tsit45().map_err(|e| SimulateError::DiffsolError {
                         details: e.to_string(),
                     })?;
-                let (time, state, retcode) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
-                let bs = solver.get_statistics();
-                let stats = SolveStats::from_solver(
-                    &solver,
-                    bs.number_of_steps,
-                    bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
-                );
-                (time, state, stats, retcode)
-            }
-            Alg::Sdirk => {
-                let mut solver: Sdirk<'_, _, FaerLU<f64>> = problem
-                    .tr_bdf2::<FaerLU<f64>>()
-                    .map_err(|e| SimulateError::DiffsolError {
-                        details: e.to_string(),
-                    })?;
-                let (time, state, retcode) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
-                let bs = solver.get_statistics();
-                let stats = SolveStats::from_solver(
-                    &solver,
-                    bs.number_of_steps,
-                    bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
-                );
-                (time, state, stats, retcode)
-            }
-            Alg::Erk => {
-                let mut solver = problem.tsit45().map_err(|e| SimulateError::DiffsolError {
-                    details: e.to_string(),
-                })?;
-                let (time, state, retcode) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
-                let bs = solver.get_statistics();
-                let stats = SolveStats::from_solver(
-                    &solver,
-                    bs.number_of_steps,
-                    bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
-                );
-                (time, state, stats, retcode)
-            }
-        };
+                    let (time, state, retcode) =
+                        crate::simulate::run_solver(&mut solver, t_end, opts)?;
+                    let bs = solver.get_statistics();
+                    let stats = SolveStats::from_solver(
+                        &solver,
+                        bs.number_of_steps,
+                        bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
+                    );
+                    (time, state, stats, retcode)
+                }
+            };
+            Ok(out)
+        })();
+        // §9.6.6 `compiler_unavailable`: the caller named `xla`, and the XLA
+        // runtime stopped being able to provide it mid-solve. It is reported
+        // in preference to whatever the solver made of the NaN derivative,
+        // because that is the fact — and the first failure is reported, since
+        // every one after it ran on the same broken device.
+        #[cfg(feature = "xla")]
+        if let Some(details) = xla_fault.borrow().clone() {
+            return Err(SimulateError::CompilerUnavailable {
+                compiler: "xla",
+                details: format!("the compiled right-hand side failed during the solve: {details}"),
+            });
+        }
+        let (time, state, stats, retcode) = solved?;
         Ok((time, state, stats, retcode))
     }
 
@@ -1301,6 +2245,7 @@ impl ArrayCompiled {
     /// Names may be bare or `Model.`-qualified.
     #[cfg(feature = "solve")]
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn append_observed_trajectories(
         &self,
         time: &[f64],
@@ -1308,10 +2253,33 @@ impl ArrayCompiled {
         state_variable_names: &mut Vec<String>,
         param_vec: &[f64],
         static_obs: &ArrMap,
+        static_names: &HashSet<String>,
         varying_rules: &[AlgebraicRule],
         requested: &[String],
+        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) {
         if self.observed_rules.is_empty() || time.is_empty() {
+            return;
+        }
+        // Under either strict compiler: the observeds reported at output
+        // times are read off the TAPE, one call per saved node, instead of being re-derived through
+        // the whole-array overlay. esm-libraries-spec §2.5.10 names this pass
+        // explicitly — "the observeds reported at output times" are under the
+        // refusal like the right-hand side is — and it is the one that runs
+        // most often, once per saved time point.
+        if self.tape_serves_passes()
+            && let Some(tape) = tape
+        {
+            self.append_observed_trajectories_taped(
+                time,
+                state,
+                state_variable_names,
+                param_vec,
+                static_names,
+                varying_rules,
+                requested,
+                tape,
+            );
             return;
         }
         let wanted = self.resolve_requested_observeds(requested);
@@ -1366,10 +2334,9 @@ impl ArrayCompiled {
         // couple two rules through the `derived_rings` registry / an `offsets`
         // factor name instead, and a `join` couples them through key COLUMN
         // names. A model using any of those keeps the old un-pruned behaviour.
-        let prune = !outobs_prune_disabled()
-            && varying_rules
-                .iter()
-                .all(|r| !expr_blocks_output_pruning(observed_rule_body(r)));
+        let prune = varying_rules
+            .iter()
+            .all(|r| !expr_blocks_output_pruning(observed_rule_body(r)));
 
         // Probe: the rules that must actually run before 0-D-ness is known. A
         // rule whose value is provably an array needs no probe at all, and a
@@ -1415,8 +2382,9 @@ impl ArrayCompiled {
                         const_arrays: &self.const_scope,
                         declared: &self.declared_names,
                     },
-                    // Output-node observed snapshot: vectorized overlay.
-                    force_scalar: false,
+                    // Output-node observed snapshot: vectorized overlay,
+                    // unless this is the `interpreter` reference.
+                    force_scalar: self.is_interpreter(),
                 },
                 &mut RhsStats::default(),
             );
@@ -1530,7 +2498,7 @@ impl ArrayCompiled {
                             const_arrays: &self.const_scope,
                             declared: &self.declared_names,
                         },
-                        force_scalar: false,
+                        force_scalar: self.is_interpreter(),
                     },
                     &mut RhsStats::default(),
                 );
@@ -1545,6 +2513,165 @@ impl ArrayCompiled {
                 state.push(row);
             }
         }
+    }
+
+    /// [`Self::append_observed_trajectories`] served from the tape — the path
+    /// both strict compilers take.
+    ///
+    /// Same rows, same order, same cell-key spelling; the only difference is
+    /// where the numbers come from. One taped call per saved time point
+    /// publishes every observed (a strict build exports them all, because a
+    /// harvest that covered only the probe cone would silently skip a
+    /// caller-requested array observed and a static one), and the rows are read
+    /// straight off that map.
+    ///
+    /// The dependency-cone pruning the overlay path needs has no counterpart
+    /// here: the tape computes the whole CONTINUOUS section either way, and
+    /// its CONST and SEGMENT sections prime once for the whole sweep rather
+    /// than once per node, which is what the pruning was buying back.
+    #[cfg(feature = "solve")]
+    #[allow(clippy::too_many_arguments)]
+    fn append_observed_trajectories_taped(
+        &self,
+        time: &[f64],
+        state: &mut Vec<Vec<f64>>,
+        state_variable_names: &mut Vec<String>,
+        param_vec: &[f64],
+        static_names: &HashSet<String>,
+        varying_rules: &[AlgebraicRule],
+        requested: &[String],
+        tape: &(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>),
+    ) {
+        let wanted = self.resolve_requested_observeds(requested);
+        // WHICH observeds become rows is decided exactly as the overlay path
+        // decides it, and deliberately not by what the tape happens to
+        // publish: a strict build exports every observed so the harvest
+        // cannot miss one, and emitting every one of them would put rows in
+        // the solution that the same document did not carry before. The
+        // candidates are the hoisted static observeds plus the probe cone —
+        // the potentially-scalar rules and their transitive dependencies —
+        // which is what `obs` holds at this point on the overlay path.
+        let emitted = self.output_row_candidates(static_names, varying_rules, &wanted);
+        let nt = time.len();
+        let mut harvest = TapedObserveds::new(self, tape);
+        let mut flat = vec![0.0f64; self.n_states];
+
+        for (i, slot) in flat.iter_mut().enumerate() {
+            *slot = state[i][0];
+        }
+        // What becomes rows: every 0-D observed, plus every CALLER-REQUESTED
+        // array-valued one at one row per cell. Decided at node 0 and held
+        // fixed, so a later node cannot shift the row block.
+        let emit: Vec<ObservedRows> = {
+            let obs = harvest.at(self, &flat, param_vec, time[0]);
+            self.observed_rules
+                .iter()
+                .filter_map(|rule| {
+                    let name = observed_rule_var(rule);
+                    if !emitted.contains(name) {
+                        return None;
+                    }
+                    let arr = obs.get(name)?;
+                    if arr.ndim() == 0 {
+                        Some(ObservedRows::scalar(name.clone()))
+                    } else if wanted.contains(name) {
+                        Some(ObservedRows::gridded(name.clone(), arr.shape().to_vec()))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        if emit.is_empty() {
+            return;
+        }
+        let n_rows: usize = emit.iter().map(ObservedRows::n_rows).sum();
+        let mut rows: Vec<Vec<f64>> = vec![Vec::with_capacity(nt); n_rows];
+        let record = |obs: &ArrMap, rows: &mut Vec<Vec<f64>>| {
+            let mut j = 0usize;
+            for e in &emit {
+                match obs.get(&e.name) {
+                    Some(a) if e.shape.is_empty() => {
+                        rows[j].push(a.first().copied().unwrap_or(f64::NAN));
+                        j += 1;
+                    }
+                    Some(a) if a.shape() == e.shape.as_slice() => {
+                        for v in arrayd_to_col_major(a) {
+                            rows[j].push(v);
+                            j += 1;
+                        }
+                    }
+                    // Absent, or a rank node 0 did not see: NaN across the
+                    // block, so the fault shows in the values rather than
+                    // silently shifting every later row.
+                    _ => {
+                        for _ in 0..e.n_rows() {
+                            rows[j].push(f64::NAN);
+                            j += 1;
+                        }
+                    }
+                }
+            }
+        };
+        record(harvest.scratch_observeds(), &mut rows);
+        for k in 1..nt {
+            for (i, slot) in flat.iter_mut().enumerate() {
+                *slot = state[i][k];
+            }
+            let obs = harvest.at(self, &flat, param_vec, time[k]);
+            record(obs, &mut rows);
+        }
+
+        let mut rows = rows.into_iter();
+        for e in &emit {
+            for name in e.row_names() {
+                let Some(row) = rows.next() else { break };
+                state_variable_names.push(name);
+                state.push(row);
+            }
+        }
+    }
+
+    /// The observeds that may become solution rows: the hoisted static ones
+    /// plus the output-node probe cone.
+    ///
+    /// The overlay path's candidate set, named. It materializes the statics
+    /// once and then the PROBE CONE — every potentially-scalar observed and
+    /// its transitive dependencies — and an observed outside both is simply
+    /// not in `obs` when the row set is decided, so it becomes no row. The
+    /// taped path publishes every observed (that is what makes its harvest
+    /// complete), so it has to be told the same rule rather than inferring it
+    /// from what happens to be published.
+    #[cfg(feature = "solve")]
+    fn output_row_candidates(
+        &self,
+        static_names: &HashSet<String>,
+        varying_rules: &[AlgebraicRule],
+        wanted: &HashSet<String>,
+    ) -> HashSet<String> {
+        let mut out: HashSet<String> = static_names.clone();
+        let prune = varying_rules
+            .iter()
+            .all(|r| !expr_blocks_output_pruning(observed_rule_body(r)));
+        let cone: Option<Vec<AlgebraicRule>> = if prune {
+            let unknown: HashSet<String> = self
+                .observed_rules
+                .iter()
+                .filter(|r| {
+                    !observed_rule_is_array_valued(r) || wanted.contains(observed_rule_var(r))
+                })
+                .map(|r| observed_rule_var(r).clone())
+                .collect();
+            dependency_cone(varying_rules, &unknown)
+        } else {
+            None
+        };
+        match cone {
+            Some(rules) => out.extend(rules.iter().map(|r| observed_rule_var(r).clone())),
+            // No cone: the un-pruned behaviour materializes every varying rule.
+            None => out.extend(varying_rules.iter().map(|r| observed_rule_var(r).clone())),
+        }
+        out
     }
 
     /// The observed-rule names `requested` names.
@@ -1763,21 +2890,6 @@ impl ObservedRows {
     }
 }
 
-/// `true` when the observed-trajectory dependency-cone pruning is switched off
-/// by `ESS_OUTOBS_PRUNE_DISABLE=1`. The A/B kill switch for that optimization,
-/// mirroring `ESS_VEC_DISABLE` / `ESS_CSE_DISABLE`: with it set,
-/// [`ArrayCompiled::append_observed_trajectories`] materializes the full
-/// varying rule set at every output node exactly as it did before.
-fn outobs_prune_disabled() -> bool {
-    use std::sync::OnceLock;
-    static OFF: OnceLock<bool> = OnceLock::new();
-    *OFF.get_or_init(|| {
-        std::env::var("ESS_OUTOBS_PRUNE_DISABLE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
-}
-
 /// Is this observed rule's value provably an ARRAY (`ndim ≥ 1`) *without*
 /// evaluating it? Used only to keep a rule out of the 0-D probe in
 /// [`ArrayCompiled::append_observed_trajectories`], so it must never
@@ -1860,6 +2972,7 @@ fn solution_metadata(
     stats: &SolveStats,
     tape_fallbacks: Vec<(String, String)>,
     merged_variable_renames: HashMap<String, String>,
+    namespace: Option<String>,
 ) -> SolutionMetadata {
     SolutionMetadata {
         alg: solver_name.to_string(),
@@ -1871,6 +2984,7 @@ fn solution_metadata(
         // Rides to the caller so a name-keyed read of the result can resolve a
         // spelling the merge deleted (issue #230).
         merged_variable_renames,
+        namespace,
     }
 }
 
@@ -1913,6 +3027,47 @@ struct SegmentedRun<'a> {
     setup: &'a SolveSetup,
     opts: &'a SolveOptions,
     tape: Option<&'a (Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
+    scratches: Option<&'a SolveScratches>,
+}
+
+/// The right-hand-side and Jacobian scratches of a solve the TAPE serves,
+/// kept across all of its integration segments.
+///
+/// Each segment builds a fresh solver and fresh closures, but not fresh
+/// scratches: the tape's CONST section primes once per solve (the parameter
+/// vector does not change between segments), and after the driver refreshes
+/// the forcing buffer at a segment boundary it bumps each scratch's forcing
+/// epoch, which re-runs the SEGMENT section, where the DISCRETE forcing loads
+/// and everything computed from them live, on the next call.
+///
+/// Only under a strict compiler: there every rule is taped and the scratch
+/// carries no per-segment seed, so a kept scratch is exactly the state a fresh
+/// one would reach. Under the historical routing the scratch is seeded with
+/// the segment's own materialized observeds, and each segment builds its own.
+#[cfg(feature = "solve")]
+pub(super) struct SolveScratches {
+    rhs: Rc<RefCell<Option<RhsScratch>>>,
+    jac: Rc<RefCell<Option<RhsScratch>>>,
+}
+
+#[cfg(feature = "solve")]
+impl SolveScratches {
+    fn new() -> Self {
+        SolveScratches {
+            rhs: Rc::new(RefCell::new(None)),
+            jac: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    /// The driver refreshed the forcing buffer: every scratch built so far
+    /// re-runs its SEGMENT section on its next call.
+    fn forcing_refreshed(&self) {
+        for s in [&self.rhs, &self.jac] {
+            if let Some(scratch) = s.borrow_mut().as_mut() {
+                scratch.bump_forcing_epoch();
+            }
+        }
+    }
 }
 
 /// The transitive dependency cone of `seeds` within a dependency-ORDERED rule
@@ -2356,5 +3511,375 @@ mod forcing_channel_tests {
         params.insert("code".to_string(), 0.5);
         let (dy2, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
         assert_eq!(dy2, vec![15.0, 15.0], "interp.linear(...,0.5)=15");
+    }
+}
+
+#[cfg(all(test, feature = "solve"))]
+mod fd_jvp_tests {
+    //! The finite-difference Jacobian-vector product the XLA arm of the
+    //! integrator's Jacobian closure runs ([`FdJvp`]): how many right-hand-side
+    //! evaluations a Jacobian costs, when the kept `f(y)` is thrown away, and
+    //! that keeping it changes no bit of the product.
+    use super::*;
+    use std::cell::Cell;
+
+    /// A nonlinear right-hand side reading every argument, so a stale `f(y)`
+    /// kept across a change of `y`, `p` or `t` would show in the product.
+    fn f(y: &[f64], p: &[f64], t: f64, out: &mut [f64]) {
+        let n = y.len();
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = p[0] * y[i] * y[(i + 1) % n] - (t * y[i]).sin() + 1.0 / y[i];
+        }
+    }
+
+    /// The product with both evaluations made every call: the reference a
+    /// kept `f(y)` must match bit for bit.
+    fn uncached(y: &[f64], p: &[f64], t: f64, v: &[f64]) -> Vec<f64> {
+        let n = y.len();
+        let mut y_norm = 0.0f64;
+        for &yi in y {
+            y_norm += yi * yi;
+        }
+        let y_norm = y_norm.sqrt().max(1.0);
+        let eps = f64::EPSILON.sqrt() * y_norm;
+        let yp: Vec<f64> = (0..n).map(|i| y[i] + eps * v[i]).collect();
+        let (mut fy, mut fyp) = (vec![0.0; n], vec![0.0; n]);
+        f(y, p, t, &mut fy);
+        f(&yp, p, t, &mut fyp);
+        (0..n).map(|i| (fyp[i] - fy[i]) / eps).collect()
+    }
+
+    fn unit(n: usize, j: usize) -> Vec<f64> {
+        (0..n).map(|i| if i == j { 1.0 } else { 0.0 }).collect()
+    }
+
+    fn bits(v: &[f64]) -> Vec<u64> {
+        v.iter().map(|x| x.to_bits()).collect()
+    }
+
+    /// Run one product through `jvp`, returning it and how many evaluations
+    /// it took.
+    fn apply(jvp: &mut FdJvp, y: &[f64], p: &[f64], t: f64, v: &[f64]) -> (Vec<f64>, usize) {
+        let calls = Cell::new(0usize);
+        let mut jv = vec![0.0; y.len()];
+        jvp.apply(y, p, t, v, &mut jv, |s, q, t, out| {
+            calls.set(calls.get() + 1);
+            f(s, q, t, out);
+            true
+        });
+        (jv, calls.get())
+    }
+
+    /// A dense Jacobian of `n` states, one product per column at one point,
+    /// costs `n + 1` evaluations rather than `2n`, and every column is
+    /// bit-identical to evaluating both points every call.
+    #[test]
+    fn a_jacobian_at_one_point_evaluates_the_base_once() {
+        let (y, p, t) = (vec![0.7, 1.3, 2.9, 0.4], vec![1.5], 0.25);
+        let n = y.len();
+        let mut jvp = FdJvp::new(n);
+        let mut total = 0;
+        for j in 0..n {
+            let v = unit(n, j);
+            let (jv, calls) = apply(&mut jvp, &y, &p, t, &v);
+            total += calls;
+            assert_eq!(bits(&jv), bits(&uncached(&y, &p, t, &v)), "column {j}");
+        }
+        assert_eq!(total, n + 1);
+    }
+
+    /// Any change to the point — one state, the parameters, the time, or
+    /// only the sign of a zero — evaluates the base again, and the product
+    /// still matches the uncached one bit for bit.
+    #[test]
+    fn a_new_point_evaluates_the_base_again() {
+        let (y, p, t) = (vec![0.7, 1.3, 0.0], vec![1.5], 0.25);
+        let v = vec![0.3, -1.1, 0.8];
+        let mut jvp = FdJvp::new(y.len());
+        assert_eq!(apply(&mut jvp, &y, &p, t, &v).1, 2);
+        assert_eq!(apply(&mut jvp, &y, &p, t, &v).1, 1, "same point");
+
+        let mut y2 = y.clone();
+        y2[1] = 1.3000000000000003;
+        let mut signed_zero = y.clone();
+        signed_zero[2] = -0.0;
+        let points: [(&[f64], &[f64], f64, &str); 4] = [
+            (&y2, &p, t, "one state"),
+            (&y, &[2.5], t, "the parameters"),
+            (&y, &p, 0.5, "the time"),
+            (&signed_zero, &p, t, "the sign of a zero"),
+        ];
+        for (yk, pk, tk, what) in points {
+            // Start each from the original point so each change is the only one.
+            apply(&mut jvp, &y, &p, t, &v);
+            let (jv, calls) = apply(&mut jvp, yk, pk, tk, &v);
+            assert_eq!(calls, 2, "{what}");
+            assert_eq!(bits(&jv), bits(&uncached(yk, pk, tk, &v)), "{what}");
+        }
+    }
+
+    /// A failed evaluation of `f(y)` — a device error under `xla` — is not
+    /// kept: the next product at the same point tries it again.
+    #[test]
+    fn a_failed_base_evaluation_is_not_kept() {
+        let (y, p, t) = (vec![0.7, 1.3], vec![1.5], 0.25);
+        let v = vec![1.0, 0.0];
+        let mut jvp = FdJvp::new(y.len());
+        let mut jv = vec![0.0; 2];
+        let calls = Cell::new(0usize);
+        jvp.apply(&y, &p, t, &v, &mut jv, |s, q, t, out| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                out.fill(f64::NAN);
+                return false;
+            }
+            f(s, q, t, out);
+            true
+        });
+        assert_eq!(calls.get(), 2);
+        assert!(jv.iter().all(|x| x.is_nan()));
+        let (jv, calls) = apply(&mut jvp, &y, &p, t, &v);
+        assert_eq!(calls, 2, "the base is evaluated again");
+        assert_eq!(bits(&jv), bits(&uncached(&y, &p, t, &v)));
+    }
+}
+
+#[cfg(all(test, feature = "solve"))]
+mod field_ic_memo_tests {
+    //! Construction resolves every field initial condition (the compiler gate
+    //! and the report need it), and the first solve takes that resolution
+    //! instead of computing it again. Counted with the resolver's test hook.
+    use super::field_ic_resolutions;
+    use crate::compile_error::CompileError;
+    use crate::problem::{Compiler, ProblemOptions, Remake, esm_problem, remake, solve};
+    use crate::simulate::SimulateError;
+    use crate::simulate_array::per_cell_cells;
+    use crate::{SolveOptions, load_string};
+    use serde_json::{Value, json};
+
+    /// `u` over `n` cells with `D(u) = -u` and `ic(u) = rhs_ic`, and a
+    /// parameter `a = 0.5` the `ic` may read.
+    fn with_ic(n: usize, rhs_ic: Value) -> crate::EsmFile {
+        let doc = json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "FieldIcMemo"},
+            "index_sets": {"x": {"kind": "interval", "size": n}},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "unknown", "units": "1", "shape": ["x"]},
+                    "a": {"type": "parameter", "units": "1", "default": 0.5}
+                },
+                "equations": [
+                    {"lhs": {"op": "ic", "args": ["u"]}, "rhs": rhs_ic},
+                    {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                             "ranges": {"i": {"from": "x"}},
+                             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}],
+                                      "wrt": "t"}},
+                     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                             "ranges": {"i": {"from": "x"}},
+                             "expr": {"op": "-", "args": [{"op": "index", "args": ["u", "i"]}]}}},
+                ],
+            }},
+        });
+        load_string(&doc.to_string()).expect("loads")
+    }
+
+    /// `ic(u)[i] = a · i`: a coordinate expression over the grid.
+    fn scaled_index() -> Value {
+        json!({"op": "faq", "args": [], "output_idx": ["i"],
+               "ranges": {"i": {"from": "x"}},
+               "expr": {"op": "*", "args": ["a", "i"]}})
+    }
+
+    fn opts(compiler: Compiler) -> ProblemOptions {
+        ProblemOptions {
+            compiler: Some(compiler),
+            ..Default::default()
+        }
+    }
+
+    fn first_column(sol: &crate::Solution) -> Vec<f64> {
+        sol.state.iter().map(|r| r[0]).collect()
+    }
+
+    fn bits(sol: &crate::Solution) -> Vec<Vec<u64>> {
+        sol.state
+            .iter()
+            .map(|r| r.iter().map(|x| x.to_bits()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn the_first_solve_takes_the_resolution_construction_made() {
+        let file = with_ic(3, scaled_index());
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            let before = field_ic_resolutions();
+            let prob = esm_problem(&file, (0.0, 1.0), opts(compiler))
+                .unwrap_or_else(|e| panic!("[{compiler}] {e}"));
+            assert_eq!(
+                field_ic_resolutions() - before,
+                1,
+                "[{compiler}] construction"
+            );
+            assert!(
+                prob.compiler_report()
+                    .rules()
+                    .iter()
+                    .any(|r| r.kind == "initial condition"),
+                "[{compiler}] the report keeps its row"
+            );
+
+            let first = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(
+                field_ic_resolutions() - before,
+                1,
+                "[{compiler}] the first solve must not resolve the ics again"
+            );
+            assert_eq!(first_column(&first), [0.5, 1.0, 1.5], "[{compiler}]");
+
+            // A later solve resolves from the buffer as it stands, to the same
+            // bits.
+            let second = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(field_ic_resolutions() - before, 2, "[{compiler}]");
+            assert_eq!(bits(&first), bits(&second), "[{compiler}]");
+        }
+    }
+
+    #[test]
+    fn a_remake_with_new_parameters_resolves_again() {
+        let file = with_ic(3, scaled_index());
+        let prob = esm_problem(&file, (0.0, 1.0), opts(Compiler::Native)).expect("builds");
+        let before = field_ic_resolutions();
+        let changed = remake(
+            &prob,
+            &Remake {
+                p: [("a".to_string(), 2.0)].into_iter().collect(),
+                ..Default::default()
+            },
+        )
+        .expect("remakes");
+        let sol = solve(&changed, &SolveOptions::default()).expect("solves");
+        assert_eq!(
+            field_ic_resolutions() - before,
+            1,
+            "new parameters, new ics"
+        );
+        assert_eq!(first_column(&sol), [2.0, 4.0, 6.0]);
+        // The memo was keyed to the construction's parameters, and a miss
+        // spends it: the original resolves too, to its own values.
+        let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+        assert_eq!(field_ic_resolutions() - before, 2);
+        assert_eq!(first_column(&sol), [0.5, 1.0, 1.5]);
+    }
+
+    /// A strict compiler refuses an `ic` the reference evaluator walks per
+    /// cell, and refuses it after one cell of the walk.
+    #[test]
+    fn a_large_per_cell_initial_condition_is_refused_after_one_cell() {
+        let cumulative = json!({"op": "faq", "args": [], "output_idx": ["i"],
+                                "ranges": {"i": {"from": "x"}, "j": {"from": "x"}},
+                                "filter": {"op": "<=", "args": ["j", "i"]},
+                                "expr": 1.0});
+        let refusal = |n: usize, ic: Value| {
+            let file = with_ic(n, ic);
+            let before = per_cell_cells();
+            let err = esm_problem(&file, (0.0, 1.0), opts(Compiler::Native)).expect_err("per cell");
+            let cells = per_cell_cells() - before;
+            match err {
+                SimulateError::Compile(CompileError::CompilerRefusedRule {
+                    kind,
+                    rule,
+                    reason,
+                    ..
+                }) => ((kind, rule, reason), cells),
+                other => panic!("expected compiler_refused_rule, got {other:?}"),
+            }
+        };
+        let (small, _) = refusal(3, cumulative.clone());
+        let (large, cells) = refusal(100_000, cumulative.clone());
+        assert_eq!(large, small);
+        assert_eq!(large.0, "initial condition");
+        assert!(
+            large.2.ends_with(crate::simulate_array::ONE_CELL_NOTE),
+            "{}",
+            large.2
+        );
+        assert_eq!(cells, 1, "the walk must stop at its first cell");
+
+        // What the rest of the expression makes of the stopped walk's
+        // placeholder is not the document's either: `1 / Σ` over a walk that
+        // stopped reads a zero, and the infinity that follows must not turn
+        // the refusal into an unresolvable-ic failure.
+        let reciprocal = json!({"op": "/", "args": [1.0, cumulative]});
+        let (large, cells) = refusal(100_000, reciprocal);
+        assert_eq!(large, small);
+        assert_eq!(cells, 1);
+    }
+
+    /// A CONST provider serving `w` as zeros over three cells.
+    struct Zeros;
+
+    impl crate::provider::CadenceProvider for Zeros {
+        fn materialize(
+            &mut self,
+        ) -> Result<
+            std::collections::HashMap<String, crate::provider::NativeField>,
+            crate::provider::ProviderError,
+        > {
+            let zeros = ndarray::ArrayD::zeros(ndarray::IxDyn(&[3]));
+            Ok([("w".to_string(), crate::provider::NativeField::new(zeros))].into())
+        }
+        fn refresh(
+            &mut self,
+            _t: f64,
+        ) -> Result<
+            Option<std::collections::HashMap<String, crate::provider::NativeField>>,
+            crate::provider::ProviderError,
+        > {
+            Ok(None)
+        }
+        fn refresh_times(&self) -> Vec<f64> {
+            Vec::new()
+        }
+    }
+
+    fn loaded(compiler: Compiler) -> crate::EsmProblem {
+        let file = with_ic(3, json!("w"));
+        let options = ProblemOptions {
+            providers: [(
+                "w".to_string(),
+                Box::new(Zeros) as Box<dyn crate::provider::CadenceProvider>,
+            )]
+            .into(),
+            ..opts(compiler)
+        };
+        esm_problem(&file, (0.0, 1.0), options).unwrap_or_else(|e| panic!("[{compiler}] {e}"))
+    }
+
+    /// The memo was resolved from the forcing buffer as construction left it.
+    /// A host that writes the buffer through `forcing_handle` before the first
+    /// solve must get initial conditions from what it wrote.
+    #[test]
+    fn a_forcing_write_before_the_first_solve_is_not_masked_by_the_memo() {
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            // Untouched, the first solve takes the construction's resolution.
+            let prob = loaded(compiler);
+            let before = field_ic_resolutions();
+            let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(field_ic_resolutions() - before, 0, "[{compiler}]");
+            assert_eq!(first_column(&sol), [0.0, 0.0, 0.0], "[{compiler}]");
+
+            let prob = loaded(compiler);
+            let compiled = prob.debug_array_compiled().expect("an array model");
+            compiled.forcing_handle().borrow_mut().insert(
+                "w".to_string(),
+                ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[3]), vec![1.0, 2.0, 3.0])
+                    .expect("shape"),
+            );
+            let before = field_ic_resolutions();
+            let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(field_ic_resolutions() - before, 1, "[{compiler}]");
+            assert_eq!(first_column(&sol), [1.0, 2.0, 3.0], "[{compiler}]");
+        }
     }
 }

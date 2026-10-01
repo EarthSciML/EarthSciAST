@@ -49,14 +49,14 @@ const ESM = EarthSciAST
         @test isapprox(du[vmap["y[4]"]], 40.0; rtol=1e-12)   # clamp M[5] -> M[4]
 
         # periodic: M[5] -> M[1] = 10 (wrap)
-        f!, u0, p, _, vmap = build_evaluator(model; initial_conditions=ics,
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions=ics,
             const_arrays=Dict("M" => M), const_array_boundaries=Dict("M" => [:periodic]))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test isapprox(du[vmap["y[1]"]], 20.0; rtol=1e-12)
         @test isapprox(du[vmap["y[4]"]], 10.0; rtol=1e-12)   # wrap M[5] -> M[1]
 
         # no declared policy -> the OOB gather throws (bug-catching preserved)
-        @test_throws ESM.TreeWalkError build_evaluator(model; initial_conditions=ics,
+        @test_throws ESM.TreeWalkError EarthSciAST._build_evaluator(model; initial_conditions=ics,
             const_arrays=Dict("M" => M))
     end
 
@@ -92,12 +92,12 @@ const ESM = EarthSciAST
         @test isapprox(du[vmap["y[4]"]], 10.0; rtol=1e-12)   # clamp conn[5]->conn[4]=1 -> u[1]
 
         # periodic: conn[5] -> conn[1] = 2 -> u[2] = 20
-        f!, u0, p, _, vmap = build_evaluator(model; initial_conditions=ics,
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions=ics,
             const_arrays=Dict("conn" => conn), const_array_boundaries=Dict("conn" => [:periodic]))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test isapprox(du[vmap["y[4]"]], 20.0; rtol=1e-12)   # wrap conn[5]->conn[1]=2 -> u[2]
 
-        @test_throws ESM.TreeWalkError build_evaluator(model; initial_conditions=ics,
+        @test_throws ESM.TreeWalkError EarthSciAST._build_evaluator(model; initial_conditions=ics,
             const_arrays=Dict("conn" => conn))
     end
 
@@ -149,10 +149,10 @@ const ESM = EarthSciAST
         ics = Dict("y[$k]" => 0.0 for k in 1:N)
 
         # wrong rank: 1D array, 2-dim boundary spec
-        @test_throws ESM.TreeWalkError build_evaluator(model; initial_conditions=ics,
+        @test_throws ESM.TreeWalkError EarthSciAST._build_evaluator(model; initial_conditions=ics,
             const_arrays=Dict("M" => M), const_array_boundaries=Dict("M" => [:clamp, :clamp]))
         # unknown policy kind
-        @test_throws ESM.TreeWalkError build_evaluator(model; initial_conditions=ics,
+        @test_throws ESM.TreeWalkError EarthSciAST._build_evaluator(model; initial_conditions=ics,
             const_arrays=Dict("M" => M), const_array_boundaries=Dict("M" => [:reflect]))
     end
 end

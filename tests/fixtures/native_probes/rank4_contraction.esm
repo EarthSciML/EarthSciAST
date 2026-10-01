@@ -1,0 +1,318 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "native_probe_rank4_contraction",
+    "description": "An output box of rank 4 holding a contraction over a fifth index, so the affine tier's run-time fold loops a rank-5 box, reading state at the contracted index. The interpreter builds it per cell; the two must agree bit for bit.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "native",
+      "probe"
+    ]
+  },
+  "models": {
+    "R4": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "default": 1.0
+        },
+        "v": {
+          "type": "unknown",
+          "shape": [
+            "k"
+          ],
+          "default": 0.5
+        },
+        "out": {
+          "type": "unknown",
+          "shape": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ],
+            "ranges": {
+              "a": [
+                1,
+                2
+              ],
+              "b": [
+                1,
+                3
+              ],
+              "c": [
+                1,
+                2
+              ],
+              "d": [
+                1,
+                2
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "a",
+                    "b",
+                    "c",
+                    "d"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ],
+            "ranges": {
+              "a": [
+                1,
+                2
+              ],
+              "b": [
+                1,
+                3
+              ],
+              "c": [
+                1,
+                2
+              ],
+              "d": [
+                1,
+                2
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                -0.1,
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "a",
+                    "b",
+                    "c",
+                    "d"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": [
+                1,
+                10
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "v",
+                    "k"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": [
+                1,
+                10
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                -0.2,
+                {
+                  "op": "index",
+                  "args": [
+                    "v",
+                    "k"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ],
+            "ranges": {
+              "a": [
+                1,
+                2
+              ],
+              "b": [
+                1,
+                3
+              ],
+              "c": [
+                1,
+                2
+              ],
+              "d": [
+                1,
+                2
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "out",
+                    "a",
+                    "b",
+                    "c",
+                    "d"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ],
+            "ranges": {
+              "a": [
+                1,
+                2
+              ],
+              "b": [
+                1,
+                3
+              ],
+              "c": [
+                1,
+                2
+              ],
+              "d": [
+                1,
+                2
+              ],
+              "k": [
+                1,
+                10
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    0.1,
+                    {
+                      "op": "+",
+                      "args": [
+                        1,
+                        "k"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "a",
+                        "b",
+                        "c",
+                        "d"
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        "k",
+                        {
+                          "op": "index",
+                          "args": [
+                            "v",
+                            "k"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "semiring": "sum_product"
+          }
+        }
+      ]
+    }
+  }
+}

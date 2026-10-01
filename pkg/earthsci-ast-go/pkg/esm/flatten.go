@@ -2836,7 +2836,7 @@ func normalizeAngleArguments(expr Expression, env map[string]Unit) (Expression, 
 		return out, true
 	}
 	if len(out.Args) == 1 {
-		if arg, err := propagateDimension(out.Args[0], env); err == nil && arg != nil {
+		if arg, err := propagateElementDimension(out.Args[0], env); err == nil && arg != nil {
 			if factor, ok := angleNormalizationFactor(*arg); ok {
 				out.Args = []any{ExprNode{Op: "*", Args: []any{out.Args[0], factor}}}
 				return out, true

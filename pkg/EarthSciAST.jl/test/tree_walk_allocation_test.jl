@@ -33,10 +33,8 @@
 # folds, explicit `du` scatter) is a property of the kernels themselves, so the
 # testsets below pin the serial path and keep asserting EXACTLY 0 — via
 # `ESS_THREADS_MIN_CELLS`, which `_sec_prep_threads!` reads ONCE per section
-# and caches (unlike `ESS_THREADS_DISABLE`/`ESS_CG_THREADS_DISABLE`, which
-# `_cg_threads_available()` re-reads on EVERY call and whose `get(ENV, …)`
-# itself allocates a 32 B String per call once the variable is set — a kill
-# switch cannot be used to measure zero allocation).
+# and caches. A gate re-read on EVERY call could not be used here at all: the
+# `get(ENV, …)` itself allocates a String per call once the variable is set.
 #
 # The threaded dispatch is then covered on its own terms by the final testset:
 # its cost must stay CONSTANT in N, which is the real invariant (a per-cell

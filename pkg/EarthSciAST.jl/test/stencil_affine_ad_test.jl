@@ -18,16 +18,13 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 # Build an evaluator under the (default) affine path or the byte-identical
-# per-cell reference (ESS_STENCIL_DISABLE=1). Returns (f, u0, p, vmap, diag);
+# per-cell reference (`compiler=:interpreter`). Returns (f, u0, p, vmap, diag);
 function _affine_f(model, ics; affine::Bool, const_arrays=Dict())
-    envs = affine ? ("ESS_STENCIL_DISABLE" => nothing,) :
-                    ("ESS_STENCIL_DISABLE" => "1",)
-    withenv(envs...) do
-        f, u0, p, _tspan, vmap, diag =
-            ESM._build_evaluator_impl(model; initial_conditions=ics,
-                                      const_arrays=const_arrays)
-        (f, u0, p, vmap, diag)
-    end
+    f, u0, p, _tspan, vmap, diag =
+        ESM._build_evaluator_impl(model; initial_conditions=ics,
+                                  const_arrays=const_arrays,
+                                  compiler = affine ? :native : :interpreter)
+    return (f, u0, p, vmap, diag)
 end
 
 # Jacobian of an in-place RHS w.r.t. the state, and its `du` at a point.

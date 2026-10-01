@@ -17,7 +17,7 @@ package esm
 //     functions, derivatives (`D(x)/Dt` and `D(x, t)`), open/user function calls;
 //   - array & call-shaped tier: array literals `[…]` (`const`), indexing
 //     `a[i, j]` (`index`), dotted closed-function calls `datetime.year(t)` (`fn`),
-//     the `true` literal, and `integral` / `reshape` / `transpose` / `concat`;
+//     the `true` and `false` literals, and `integral` / `reshape` / `transpose` / `concat`;
 //   - reduction & array-query tier: `faq` reductions
 //     `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
 //     key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax`
@@ -105,7 +105,7 @@ var (
 // exprStructuralRefusals are the structural ops whose defining data lives
 // OUTSIDE `args` AND which have no text surface yet — refused, pending a
 // dedicated syntax pass. (`integral`, `reshape`, `transpose`, `concat`, `fn`,
-// `const`, `index`, `true`, `faq`, `apply_expression_template`,
+// `const`, `index`, `true`, `false`, `faq`, `apply_expression_template`,
 // `polygon_intersection_area`, `intersect_polygon` and `makearray` DO have a
 // surface and are reconstructed below; they are intentionally absent here.
 // `table_lookup` IS listed: its surface is the bracket form `visc[T=temp]`,
@@ -499,8 +499,8 @@ func (p *exprTextParser) parseAtom() Expression {
 }
 
 func (p *exprTextParser) parseNameAtom(t exprTok) Expression {
-	if t.s == "true" {
-		return ExprNode{Op: "true", Args: []any{}}
+	if t.s == "true" || t.s == "false" {
+		return ExprNode{Op: t.s, Args: []any{}}
 	}
 	// `makearray(region = value, …)` — a piecewise-region array. Its arguments
 	// are `[lo:hi, …] = value` pairs, not plain call args, so it needs its own

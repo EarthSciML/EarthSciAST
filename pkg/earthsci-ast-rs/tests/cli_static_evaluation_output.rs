@@ -23,7 +23,7 @@
 //!   * a request that cannot be one row set is REFUSED with the shapes named,
 //!     never truncated or padded into a table that looks right;
 //!   * and a document that does integrate is untouched — the change that
-//!     enables all of this is `Compile::Always` becoming `Compile::Auto`, which
+//!     enables all of this is `Rhs::Always` becoming `Rhs::Auto`, which
 //!     only a dynamic-document test can prove was safe.
 
 #![cfg(all(not(target_arch = "wasm32"), feature = "cli", feature = "solve"))]
@@ -80,7 +80,7 @@ fn relational_document() -> Value {
     })
 }
 
-/// A document that DOES integrate, so the `Compile::Auto` change can be shown
+/// A document that DOES integrate, so the `Rhs::Auto` change can be shown
 /// not to have moved it.
 const DYNAMIC: &str = "tests/fixtures/inline_tests/passing_decay.esm";
 

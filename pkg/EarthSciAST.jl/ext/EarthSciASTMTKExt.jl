@@ -13,6 +13,10 @@ directions of the ESM ⇄ MTK bridge:
 - **MTK → ESM**: `EarthSciAST.Model(::AbstractSystem)` plus the `mtk2esm` /
   `mtk2esm_gaps` migration exporters with their `GapReport` machinery
   (`mtk_ext/export.jl`).
+- **`compiler = :mtk`**: the ModelingToolkit compiler behind `esm_problem`
+  (API_SPEC §5.8) — the specialty compiler that runs EVENTS and IMPLICIT
+  EQUATIONS, the constructs CONFORMANCE_SPEC §5.39 has every other evaluator
+  refuse (`mtk_ext/compiler.jl`).
 
 Kept a `weakdep` extension (mirroring `SimulateExt` / `DataRefreshExt`) so
 the base package carries no MTK dependency; without it loaded, the core
@@ -34,7 +38,7 @@ using EarthSciAST: FlattenedSystem, ModelVariable, UnknownVariable,
     Equation, AffectEquation, Model, ContinuousEvent, DiscreteEvent,
     ConditionTrigger, PeriodicTrigger, PresetTimesTrigger,
     Domain, flatten, infer_array_shapes, expand_flattened_refs,
-    GapReport,
+    GapReport, SimulateError, EsmProblem,
     # MTK-independent helpers shared with the Catalyst extension
     # (src/mtk_export.jl) plus the ODE-vs-PDE split predicate and redirect
     # messages (src/flatten.jl).
@@ -66,5 +70,6 @@ include("mtk_ext/arrayop.jl")
 include("mtk_ext/variables.jl")
 include("mtk_ext/systems.jl")
 include("mtk_ext/export.jl")
+include("mtk_ext/compiler.jl")
 
 end # module EarthSciASTMTKExt

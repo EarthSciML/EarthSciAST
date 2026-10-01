@@ -75,7 +75,7 @@ end
 
 # RHS at t = 0 from the built evaluator, as a name → value map.
 function _bc_rhs(doc::AbstractDict)
-    f!, u0, p, _t, vm = E.build_evaluator(doc)
+    f!, u0, p, _t, vm = E._build_evaluator(doc)
     du = similar(u0)
     f!(du, u0, p, 0.0)
     return Dict{String,Float64}(k => du[i] for (k, i) in vm)
@@ -234,7 +234,7 @@ end
     @test hit.details["index_set"] == "qux"
     @test hit.path == "/models/X/equations/0/rhs"
 
-    err = _bc_err(() -> E.build_evaluator(doc))
+    err = _bc_err(() -> E._build_evaluator(doc))
     @test err isa E.TreeWalkError
     @test err.code == "E_TREEWALK_ARRAY_SHAPE_MISMATCH"
 end
@@ -304,29 +304,20 @@ end
                          (_bc_bcast("sin", "x", "x"),      "E_TREEWALK_BROADCAST_FN"),
                          (_bc_bcast("/", "x"),             "E_TREEWALK_BROADCAST_FN"),
                          (_bc_bcast("min", "x"),           "E_TREEWALK_BROADCAST_FN")]
-        err = _bc_err(() -> E.build_evaluator(mk(node)))
+        err = _bc_err(() -> E._build_evaluator(mk(node)))
         @test err isa E.TreeWalkError
         @test err.code == code
     end
 end
 
-@testset "anonymous shapes keep POSITIONAL semantics" begin
-    # A producer in element-wise position carries node-local `output_idx`
-    # symbols (`p`/`q`/`r`), NOT index-set names, so it is gathered positionally
-    # over the result loops. Value = p + 10q + 100r at (i,j,k).
-    prod = _bc_agg(("p", "q", "r"),
-                   ("p" => "lon", "q" => "lat", "r" => "lev"),
-                   _bc_op("+", "p", _bc_op("+", _bc_op("*", 10, "q"),
-                                                _bc_op("*", 100, "r"))))
-    got = _bc_rhs(_bc_model("An", prod))
-    @test got["dp[2,1,2]"] ≈ 2 + 10 + 200
-    @test got["dp[3,2,1]"] ≈ 3 + 20 + 100
-    # …and the same producer multiplied by a NAME-aligned lower-rank operand:
-    # the producer stays positional while `w1[lat]` aligns by name.
-    got2 = _bc_rhs(_bc_model("An2", _bc_op("*", prod, "w1")))
-    @test got2["dp[2,1,2]"] ≈ (2 + 10 + 200) * 10
-    @test got2["dp[3,2,1]"] ≈ (3 + 20 + 100) * 20
-end
+# The "anonymous shapes keep POSITIONAL semantics" testset moved to
+# `tests/conformance/broadcast_alignment/fixtures/anonymous_shape_positional.esm`
+# (CONFORMANCE_SPEC §5.45.3). That fixture carries all four of its assertions —
+# dp[2,1,2] = 212, dp[3,2,1] = 123, and the same two multiplied by the
+# NAME-aligned `w1` — at a TIGHTER band than the `≈` default used here, plus
+# four more cells, and `scripts/test-conformance.sh` runs it for julia, rust and
+# python under both `interpreter` and `native`. The scope BOUNDARY of §4.3.4 is
+# exactly the kind of rule that should not be pinned in one binding alone.
 
 @testset "reshape / transpose / concat are refused with unevaluable_operator" begin
     vars = Dict("u" => ESS.ModelVariable(ESS.UnknownVariable))
@@ -335,13 +326,13 @@ end
                  _op("transpose", _v("u"); perm=Any[0]),
                  _op("concat", _v("u"), _v("u"); axis=0)]
         m = ESS.Model(vars, [ESS.Equation(_D("u"), node)])
-        err = _bc_err(() -> E.build_evaluator(m; initial_conditions=ics))
+        err = _bc_err(() -> E._build_evaluator(m; initial_conditions=ics))
         @test err isa E.TreeWalkError
         @test err.code == "unevaluable_operator"
     end
     # …while a typed `broadcast` node with a legal `fn` now LOWERS and runs.
     m = ESS.Model(vars, [ESS.Equation(_D("u"), _op("broadcast", _v("u"); fn="-"))])
-    f!, u0, p, _t, vm = E.build_evaluator(m; initial_conditions=ics)
+    f!, u0, p, _t, vm = E._build_evaluator(m; initial_conditions=ics)
     du = similar(u0); f!(du, u0, p, 0.0)
     @test du[vm["u"]] == -1.0
 end
@@ -351,7 +342,7 @@ end
     # with the wrong number of subscripts is still a hard error (the guards were
     # narrowed to their real job, not widened into acceptance).
     doc = _bc_oracle("G", _bc_idx("w1", "i", "j", "k"))   # 3 subscripts into 1-D w1
-    err = _bc_err(() -> E.build_evaluator(doc))
+    err = _bc_err(() -> E._build_evaluator(doc))
     @test err isa E.TreeWalkError
     @test err.code == "E_TREEWALK_INDEX_NDIM"
 end

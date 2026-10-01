@@ -40,7 +40,7 @@ const ESM_EOG = EarthSciAST
     @testset "fixture builds and evaluates" begin
         @test isfile(fixture)
         file = ESM_EOG.load_path(fixture)
-        f!, u0, p, _, vmap = build_evaluator(file; model_name="Column")
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(file; model_name="Column")
         du = similar(u0)
         f!(du, u0, p, 0.0)
 
@@ -90,7 +90,7 @@ const ESM_EOG = EarthSciAST
                                      semiring="sum_product", output_idx=Any["i"],
                                      ranges=Dict{String,Any}("i" => Any[1, 4]),
                                      expr_body=body))
-        f!, u0, p, _, vmap = build_evaluator(model)
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model)
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["s"]] ≈ sum(fvals)
     end
@@ -101,7 +101,7 @@ const ESM_EOG = EarthSciAST
                  OpExpr("cos", ASTExpr[OpExpr("*", ASTExpr[NumExpr(_pi),
                    VarExpr("zc")])])])
         model = _column_model(body)
-        f!, u0, p, _, vmap = build_evaluator(model)
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model)
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["s"]] ≈ sum(fvals)
     end

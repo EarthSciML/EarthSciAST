@@ -1,0 +1,43 @@
+{
+  "fixture": "bare_axis_permuted_operand",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "bare_axis_permuted_operand_t1",
+      "assertion_idx": 1,
+      "variable": "dp",
+      "actual": 10.999999999999996
+    },
+    {
+      "test_id": "bare_axis_permuted_operand_t1",
+      "assertion_idx": 2,
+      "variable": "dp",
+      "actual": 12.999999999999996
+    },
+    {
+      "test_id": "bare_axis_permuted_operand_t1",
+      "assertion_idx": 3,
+      "variable": "dp",
+      "actual": 20.999999999999996
+    },
+    {
+      "test_id": "bare_axis_permuted_operand_t1",
+      "assertion_idx": 4,
+      "variable": "dp",
+      "actual": 22.999999999999993
+    },
+    {
+      "test_id": "bare_axis_permuted_operand_t1",
+      "assertion_idx": 5,
+      "variable": "dp",
+      "actual": 11.999999999999998
+    },
+    {
+      "test_id": "bare_axis_permuted_operand_t1",
+      "assertion_idx": 6,
+      "variable": "dp",
+      "actual": 22.999999999999993
+    }
+  ]
+}
