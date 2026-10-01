@@ -683,6 +683,38 @@ function formatNumber(num: number, format: 'unicode' | 'latex' | 'ascii'): strin
 const LOOSEST_PRECEDENCE = opPrecedence('or')
 
 /**
+ * Minimum precedence a unary-minus operand may have and still print WITHOUT
+ * parentheses. It must equal the parser's `UMINUS_MIN` (parse-expression.ts),
+ * which parses a unary-minus operand at multiplicative precedence: anything
+ * looser than `*` — a sum, a comparison, a logical op — would be swallowed by
+ * the `-` on re-parse, so `-(a + b)` MUST keep its parentheses or it reads back
+ * as `(-a) + b`. `*`, `/` and `^` operands need none (`-a * b`, `-a^2`).
+ */
+const UMINUS_OPERAND_MIN = opPrecedence('*')
+
+/**
+ * True when printing `child` right after a unary `-` would leave a numeric
+ * literal as the base of a `^` with nothing between — `-2^2`. The parser
+ * absorbs a `-` directly before a numeric literal into the literal, so that
+ * reads back as `(-2)^2`, not `-(2^2)`. The base is the leftmost leaf of the
+ * operand, reached through `*` / `/` (`-(2^2 * x)` → `-2^2 * x`).
+ */
+function startsWithLiteralPower(child: Expr): boolean {
+  if (typeof child === 'number' || typeof child === 'string' || isNumericLiteral(child)) {
+    return false
+  }
+  const node = child as ExprNode
+  if (node.op === '^') {
+    const base = node.args[0]
+    return typeof base === 'number' || isNumericLiteral(base)
+  }
+  if ((node.op === '*' || node.op === '/') && node.args.length > 0) {
+    return startsWithLiteralPower(node.args[0])
+  }
+  return false
+}
+
+/**
  * Left-associative binary operators for which a same-precedence RIGHT operand
  * must be parenthesized (`a - (b - c)`, `a / (b / c)`, `a ^ (b ^ c)`).
  */
@@ -709,9 +741,10 @@ function needsParentheses(parent: ExprNode, child: Expr, isRightOperand = false)
     return childPrec <= LOOSEST_PRECEDENCE
   }
 
-  // For unary minus, be less aggressive
+  // Unary minus: parenthesize exactly the operands the parser would not
+  // re-absorb — see UMINUS_OPERAND_MIN.
   if (parent.op === '-' && parent.args.length === 1) {
-    return childPrec <= LOOSEST_PRECEDENCE
+    return childPrec < UMINUS_OPERAND_MIN || startsWithLiteralPower(child)
   }
 
   if (childPrec < parentPrec) return true

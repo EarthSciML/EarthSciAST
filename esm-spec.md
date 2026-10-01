@@ -345,6 +345,43 @@ ExprNode := { "op": string, "args": [Expr, ...], ...optional_fields }
 - **Strings** are variable/parameter references: `"O3"`, `"k1"`
 - **ExprNodes** are operations
 
+#### 4.1.1 Infix text surface and its precedence
+
+An `.esm` document always carries the JSON tree above — that tree is the format, and it is
+unambiguous. Every binding *additionally* exposes an infix **text surface** through the
+`to_ascii` / `parse_expression` pair (API_SPEC.md §5.4), used by printers, diagnostics,
+authoring tools and the shared corpus at `tests/conformance/expression_parse/cases.json`.
+That surface is normative for those APIs: `parse_expression` is the inverse of `to_ascii`,
+and all five bindings MUST agree on the reading of any given text.
+
+Operators bind in this order, **loosest first**:
+
+| Level | Operators | Associativity |
+|---|---|---|
+| 1 | `or` | left |
+| 2 | `and` | left |
+| 3 | `==` `!=` `<` `>` `<=` `>=` | left (non-associative in practice) |
+| 4 | `+`, binary `-` | left; `-` is non-associative on the right (`a - (b - c)` keeps its parentheses) |
+| 5 | `*` `/`, **unary `-`** | left; `/` is non-associative on the right |
+| 6 | `not` | prefix |
+| 7 | `^` | right |
+| 8 | function calls, `[…]` indexing, atoms | — |
+
+**Unary `-` binds tighter than `+` and binary `-`, and looser than `^`** — the standard
+mathematical reading. So `-k_ab * A + k_ba * B` is `(-(k_ab * A)) + (k_ba * B)`, **not**
+`-(k_ab * A + k_ba * B)`; `-a^2` is `-(a^2)`, not `(-a)^2`; and `-a * b` is `-(a * b)`,
+which is numerically identical to `(-a) * b`. A `-` directly in front of a numeric literal
+is part of the literal, not a unary-minus node, which is what lets `2^-3` and
+`(300 / T)^-1.3` parse without parentheses.
+
+Because a unary-minus operand extends only to the next `+` or binary `-`, a printer MUST
+parenthesize a negated sum or difference — `-(a + b)`, `-(a - b)` — or the text it emits
+reads back as a different expression. The full printing contract is
+`tests/display/RENDERING_CONTRACT.md`.
+
+This section documents the text surface only; it places no requirement on `.esm`
+documents, whose expressions are JSON, and it is therefore not gated on the `esm` version.
+
 ### 4.2 Operators
 
 Every `op` string belongs to one of **two tiers**:

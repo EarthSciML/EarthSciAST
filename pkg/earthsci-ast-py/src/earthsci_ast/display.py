@@ -659,6 +659,33 @@ def _get_operator_precedence(op: str) -> int:
     return precedence_map.get(op, 8)  # Functions get highest precedence
 
 
+# The minimum precedence a unary-minus operand may have and still print WITHOUT
+# parentheses — `_op_precedence("*")`. It must equal the parser's `_UMINUS_MIN`
+# (parse_expression.py). Mirrors `UMINUS_OPERAND_MIN` in pretty-print.ts.
+_UMINUS_OPERAND_MIN = 5
+
+
+def _starts_with_literal_power(child) -> bool:
+    """True when ``-`` followed by ``child`` would read back as ``(-n)^e``.
+
+    The parser absorbs a ``-`` directly before a numeric literal into the
+    literal, so ``-(2^2)`` printed as ``-2^2`` reads back as ``(-2)^2``. The base
+    is the leftmost leaf of the operand, reached through ``*`` / ``/``.
+    """
+    if isinstance(child, ExprNode):
+        op, args = child.op, child.args
+    elif isinstance(child, dict) and "op" in child:
+        op, args = child["op"], child.get("args", [])
+    else:
+        return False
+    if op in ("^", "**", "pow"):
+        base = args[0] if args else None
+        return isinstance(base, (int, float)) and not isinstance(base, bool)
+    if op in ("*", "/") and args:
+        return _starts_with_literal_power(args[0])
+    return False
+
+
 def _needs_parentheses(parent: ExprNode, child: Expr, is_right_operand: bool = False) -> bool:
     """Check if parentheses are needed around a subexpression."""
     if isinstance(child, (int, float, str)):
@@ -675,6 +702,14 @@ def _needs_parentheses(parent: ExprNode, child: Expr, is_right_operand: bool = F
 
     parent_prec = _get_operator_precedence(parent.op)
     child_prec = _get_operator_precedence(child_op)
+
+    # Unary minus parses its operand at MULTIPLICATIVE precedence (see
+    # `_UMINUS_MIN` in parse_expression.py), so exactly the LOOSER children — a
+    # sum, a difference, a comparison, a logical op — must keep their
+    # parentheses: print `-(a + b)` without them and it reads back as
+    # `(-a) + b`, a different expression. `-a * b` and `-a^2` need none.
+    if parent.op in ("-", "neg") and len(parent.args) == 1:
+        return child_prec < _UMINUS_OPERAND_MIN or _starts_with_literal_power(child)
 
     if child_prec < parent_prec:
         return True
