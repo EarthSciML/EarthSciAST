@@ -2042,6 +2042,41 @@ func isFunctionCallOp(op string) bool {
 	return registeredFunctionCallOps[op]
 }
 
+// startsWithLiteralPower reports whether printing child right after a unary `-`
+// would leave a numeric literal as the base of a `^` — `-2^2`. The parser
+// absorbs a `-` directly before a numeric literal into the literal, so that
+// reads back as `(-2)^2`, not `-(2^2)`. The base is the leftmost leaf of the
+// operand, reached through `*` / `/`.
+func startsWithLiteralPower(child any) bool {
+	var op string
+	var args []any
+	switch x := child.(type) {
+	case ExprNode:
+		op, args = x.Op, x.Args
+	case *ExprNode:
+		if x == nil {
+			return false
+		}
+		op, args = x.Op, x.Args
+	case map[string]any:
+		op, _ = x["op"].(string)
+		args, _ = x["args"].([]any)
+	default:
+		return false
+	}
+	if len(args) == 0 {
+		return false
+	}
+	switch op {
+	case "^":
+		_, ok := numericValueOf(args[0])
+		return ok
+	case "*", "/":
+		return startsWithLiteralPower(args[0])
+	}
+	return false
+}
+
 // needsParentheses reports whether child needs parentheses inside a parent op.
 // It mirrors pretty-print.ts needsParentheses, with the F-7 correction that a
 // LEFT operand of the right-associative `^` at equal precedence is parenthesized
@@ -2062,7 +2097,7 @@ func needsParentheses(parentOp string, parentArgc int, child any, isRight bool) 
 	// Unary minus parenthesizes exactly the operands the parser would not
 	// re-absorb — see uminusOperandMinPrec.
 	if parentOp == "-" && parentArgc == 1 {
-		return childPrec < uminusOperandMinPrec
+		return childPrec < uminusOperandMinPrec || startsWithLiteralPower(child)
 	}
 	if childPrec < parentPrec {
 		return true

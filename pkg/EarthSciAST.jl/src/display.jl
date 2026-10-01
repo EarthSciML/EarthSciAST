@@ -558,6 +558,24 @@ Mirrors `UMINUS_OPERAND_MIN` in pretty-print.ts.
 const _UMINUS_OPERAND_MIN = 5
 
 """
+    _starts_with_literal_power(child) -> Bool
+
+True when `-` followed by `child` would read back as `(-n)^e`: the parser absorbs
+a `-` directly before a numeric literal into the literal, so `-(2^2)` printed as
+`-2^2` reads back as `(-2)^2`. The base is the leftmost leaf of the operand,
+reached through `*` / `/`.
+"""
+function _starts_with_literal_power(child)
+    child isa OpExpr || return false
+    if child.op == "^"
+        return !isempty(child.args) && (child.args[1] isa NumExpr || child.args[1] isa IntExpr)
+    elseif (child.op == "*" || child.op == "/") && !isempty(child.args)
+        return _starts_with_literal_power(child.args[1])
+    end
+    return false
+end
+
+"""
     needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::Bool=false,
                       parent_argc::Int=2) -> Bool
 
@@ -589,7 +607,7 @@ function needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::
     # re-absorb — a sum, a difference, a comparison, a logical op. See
     # [`_UMINUS_OPERAND_MIN`](@ref).
     if parent_op == "-" && parent_argc == 1
-        return child_prec < _UMINUS_OPERAND_MIN
+        return child_prec < _UMINUS_OPERAND_MIN || _starts_with_literal_power(child)
     end
 
     if child_prec < parent_prec

@@ -665,6 +665,27 @@ def _get_operator_precedence(op: str) -> int:
 _UMINUS_OPERAND_MIN = 5
 
 
+def _starts_with_literal_power(child) -> bool:
+    """True when ``-`` followed by ``child`` would read back as ``(-n)^e``.
+
+    The parser absorbs a ``-`` directly before a numeric literal into the
+    literal, so ``-(2^2)`` printed as ``-2^2`` reads back as ``(-2)^2``. The base
+    is the leftmost leaf of the operand, reached through ``*`` / ``/``.
+    """
+    if isinstance(child, ExprNode):
+        op, args = child.op, child.args
+    elif isinstance(child, dict) and "op" in child:
+        op, args = child["op"], child.get("args", [])
+    else:
+        return False
+    if op in ("^", "**", "pow"):
+        base = args[0] if args else None
+        return isinstance(base, (int, float)) and not isinstance(base, bool)
+    if op in ("*", "/") and args:
+        return _starts_with_literal_power(args[0])
+    return False
+
+
 def _needs_parentheses(parent: ExprNode, child: Expr, is_right_operand: bool = False) -> bool:
     """Check if parentheses are needed around a subexpression."""
     if isinstance(child, (int, float, str)):
@@ -688,7 +709,7 @@ def _needs_parentheses(parent: ExprNode, child: Expr, is_right_operand: bool = F
     # parentheses: print `-(a + b)` without them and it reads back as
     # `(-a) + b`, a different expression. `-a * b` and `-a^2` need none.
     if parent.op in ("-", "neg") and len(parent.args) == 1:
-        return child_prec < _UMINUS_OPERAND_MIN
+        return child_prec < _UMINUS_OPERAND_MIN or _starts_with_literal_power(child)
 
     if child_prec < parent_prec:
         return True

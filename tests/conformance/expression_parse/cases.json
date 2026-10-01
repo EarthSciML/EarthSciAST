@@ -443,6 +443,92 @@
       "reprint": "-(a - b)"
     },
     {
+      "text": "-(a < b)",
+      "tier": "scalar",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "<",
+            "args": [
+              "a",
+              "b"
+            ]
+          }
+        ]
+      },
+      "reprint": "-(a < b)"
+    },
+    {
+      "text": "-(a and b)",
+      "tier": "scalar",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "and",
+            "args": [
+              "a",
+              "b"
+            ]
+          }
+        ]
+      },
+      "reprint": "-(a and b)"
+    },
+    {
+      "text": "-(2^2)",
+      "tier": "scalar",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "^",
+            "args": [
+              2,
+              2
+            ]
+          }
+        ]
+      },
+      "reprint": "-(2^2)"
+    },
+    {
+      "text": "-(2^2 * x)",
+      "tier": "scalar",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "*",
+            "args": [
+              {
+                "op": "^",
+                "args": [
+                  2,
+                  2
+                ]
+              },
+              "x"
+            ]
+          }
+        ]
+      },
+      "reprint": "-(2^2 * x)"
+    },
+    {
+      "text": "(-2)^2",
+      "tier": "scalar",
+      "ast": {
+        "op": "^",
+        "args": [
+          -2,
+          2
+        ]
+      },
+      "reprint": "-2^2"
+    },
+    {
       "text": "-a * b + c",
       "tier": "scalar",
       "ast": {

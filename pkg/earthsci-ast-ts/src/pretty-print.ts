@@ -693,6 +693,28 @@ const LOOSEST_PRECEDENCE = opPrecedence('or')
 const UMINUS_OPERAND_MIN = opPrecedence('*')
 
 /**
+ * True when printing `child` right after a unary `-` would leave a numeric
+ * literal as the base of a `^` with nothing between — `-2^2`. The parser
+ * absorbs a `-` directly before a numeric literal into the literal, so that
+ * reads back as `(-2)^2`, not `-(2^2)`. The base is the leftmost leaf of the
+ * operand, reached through `*` / `/` (`-(2^2 * x)` → `-2^2 * x`).
+ */
+function startsWithLiteralPower(child: Expr): boolean {
+  if (typeof child === 'number' || typeof child === 'string' || isNumericLiteral(child)) {
+    return false
+  }
+  const node = child as ExprNode
+  if (node.op === '^') {
+    const base = node.args[0]
+    return typeof base === 'number' || isNumericLiteral(base)
+  }
+  if ((node.op === '*' || node.op === '/') && node.args.length > 0) {
+    return startsWithLiteralPower(node.args[0])
+  }
+  return false
+}
+
+/**
  * Left-associative binary operators for which a same-precedence RIGHT operand
  * must be parenthesized (`a - (b - c)`, `a / (b / c)`, `a ^ (b ^ c)`).
  */
@@ -722,7 +744,7 @@ function needsParentheses(parent: ExprNode, child: Expr, isRightOperand = false)
   // Unary minus: parenthesize exactly the operands the parser would not
   // re-absorb — see UMINUS_OPERAND_MIN.
   if (parent.op === '-' && parent.args.length === 1) {
-    return childPrec < UMINUS_OPERAND_MIN
+    return childPrec < UMINUS_OPERAND_MIN || startsWithLiteralPower(child)
   }
 
   if (childPrec < parentPrec) return true
