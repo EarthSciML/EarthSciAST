@@ -5,6 +5,12 @@
 //! and `\[…\]` delimiters the docs site already renders, a variables table,
 //! test results, and figures with their SVG inline. Nothing here needs a Hugo
 //! shortcode, so the same output would serve any Markdown site.
+//!
+//! A page whose front matter sets `show_source: true` also shows how it was
+//! written: each block of the source that holds a directive — a paragraph with
+//! `:var[…]` in it, an `::eq` line, an `:::esm-test` container — is printed as
+//! a Markdown code block just before what it renders to. A tutorial wants this;
+//! a paper written in the format does not, so it is off unless asked for.
 
 use std::fmt::Write as _;
 
@@ -42,11 +48,15 @@ pub fn render(page: &Page, out: &BuildOutput, opts: &RenderOptions) -> String {
     // The model the page is in the middle of, so that `::esm-variables`
     // tabulates that one, the way an element belongs to the model above it.
     let mut model: Option<&str> = None;
+    let mut block = Block {
+        show_source: shows_source(&page.front_matter),
+        ..Block::default()
+    };
     for part in &page.parts {
         match part {
-            Part::Text(text) => md.push_str(text),
-            Part::Broken(d) => md.push_str(&problem_block(std::slice::from_ref(d))),
-            Part::Whole(d) => md.push_str(&whole(d, out, opts, model)),
+            Part::Text(text) => block.text(&mut md, text),
+            Part::Broken(d) => block.output(&problem_block(std::slice::from_ref(d))),
+            Part::Whole(d) => block.directive(&d.raw, &whole(d, out, opts, model)),
             Part::Element(index, directive) => {
                 if let Some(name) = out
                     .elements
@@ -63,10 +73,14 @@ pub fn render(page: &Page, out: &BuildOutput, opts: &RenderOptions) -> String {
                     }
                 }
                 let element = out.elements.get(*index);
-                md.push_str(&render_element(directive, element, &problems, page, *index));
+                block.directive(
+                    &directive.raw,
+                    &render_element(directive, element, &problems, page, *index),
+                );
             }
         }
     }
+    block.flush(&mut md);
     let left: Vec<Diagnostic> = out
         .diagnostics
         .iter()
@@ -78,6 +92,95 @@ pub fn render(page: &Page, out: &BuildOutput, opts: &RenderOptions) -> String {
         md.push_str(&problem_block(&left));
     }
     md
+}
+
+/// The block of the page being written: the source it came from and what it
+/// renders to, held until a blank line ends it so that, when the page shows
+/// its source, the source of the whole block can go first.
+#[derive(Default)]
+struct Block {
+    show_source: bool,
+    source: String,
+    rendered: String,
+    has_directive: bool,
+}
+
+impl Block {
+    /// Markdown copied through, which ends the block at each blank line.
+    fn text(&mut self, md: &mut String, text: &str) {
+        let mut rest = text;
+        // A directive's source ends with its own line break, so a blank line
+        // straight after one starts this text.
+        if self.source.ends_with('\n') && rest.starts_with('\n') {
+            self.flush(md);
+            let blank = rest.len() - rest.trim_start_matches('\n').len();
+            md.push_str(&rest[..blank]);
+            rest = &rest[blank..];
+        }
+        while let Some(at) = rest.find("\n\n") {
+            // The line that ends at the blank line belongs to this block, and
+            // the blank lines themselves to neither.
+            self.output(&rest[..=at]);
+            self.source.push_str(&rest[..=at]);
+            self.flush(md);
+            let blank = rest[at..].len() - rest[at..].trim_start_matches('\n').len();
+            md.push_str(&rest[at + 1..at + blank]);
+            rest = &rest[at + blank..];
+        }
+        self.output(rest);
+        self.source.push_str(rest);
+    }
+
+    /// A directive, written as `raw`, and what it renders to.
+    fn directive(&mut self, raw: &str, rendered: &str) {
+        self.source.push_str(raw);
+        self.output(rendered);
+        self.has_directive = true;
+    }
+
+    /// Output with no source of its own.
+    fn output(&mut self, rendered: &str) {
+        self.rendered.push_str(rendered);
+    }
+
+    /// Write the block: its source first when the page shows it and the block
+    /// holds a directive, then what it renders to.
+    fn flush(&mut self, md: &mut String) {
+        if self.show_source && self.has_directive {
+            md.push_str(&source_block(self.source.trim_matches('\n')));
+        }
+        md.push_str(&self.rendered);
+        self.source.clear();
+        self.rendered.clear();
+        self.has_directive = false;
+    }
+}
+
+/// Whether the page's YAML front matter sets `show_source: true`.
+fn shows_source(front_matter: &str) -> bool {
+    let body = front_matter
+        .trim()
+        .strip_prefix("---")
+        .and_then(|s| s.strip_suffix("---"))
+        .unwrap_or("");
+    serde_yaml_ng::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("show_source").and_then(Value::as_bool))
+        .unwrap_or(false)
+}
+
+/// Source shown as a fenced Markdown block, in a wrapper the site styles and
+/// labels. The fence is longer than any run of backticks in the source, so a
+/// code span or fence inside it cannot close it.
+fn source_block(source: &str) -> String {
+    let mut longest = 0;
+    let mut run = 0;
+    for c in source.chars() {
+        run = if c == '`' { run + 1 } else { 0 };
+        longest = longest.max(run);
+    }
+    let fence = "`".repeat((longest + 1).max(3));
+    format!("<div class=\"esm-source\">\n\n{fence}markdown\n{source}\n{fence}\n\n</div>\n\n")
 }
 
 fn render_element(

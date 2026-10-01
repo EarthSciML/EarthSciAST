@@ -152,3 +152,50 @@ fn a_malformed_directive_is_reported_at_its_line() {
     );
     assert_eq!(page.diagnostics[0].source.as_ref().unwrap().line, Some(3));
 }
+
+#[test]
+fn a_page_can_show_the_source_of_each_block() {
+    // Off unless the page asks.
+    let (_, _, md) = build(DECAY);
+    assert!(!md.contains("esm-source"), "{md}");
+
+    let source = DECAY.replace("title: Decay\n", "title: Decay\nshow_source: true\n");
+    let (_, out, md) = build(&source);
+    assert!(out.ok, "{:#?}", out.diagnostics);
+    let shown =
+        |src: &str| format!("<div class=\"esm-source\">\n\n```markdown\n{src}\n```\n\n</div>\n\n");
+
+    // A paragraph with inline directives is shown whole, then rendered.
+    let paragraph = "Nitrogen :var[N]{default=100 units=\"mol\" description=\"Amount of nitrogen\"} decays\nat rate :param[lambda]{default=0.1 units=\"1/s\"}:";
+    let at = md.find(&shown(paragraph)).expect(&md);
+    assert!(md[at..].contains("Nitrogen \\(N\\) decays"), "{md}");
+    // Each leaf or container directive is its own block, ahead of its output.
+    let eq = md
+        .find(&shown("::eq[D(N, t) = -lambda*N]{#eq-decay}"))
+        .expect(&md);
+    assert!(eq < md.find("<a id=\"eq-decay\"").unwrap(), "{md}");
+    assert!(
+        md.contains(&shown("::model[Decay]{description=\"First-order decay\"}")),
+        "{md}"
+    );
+    let test = md.find("```markdown\n:::esm-test{#half-life").expect(&md);
+    assert!(
+        test < md.find("Test <code>half-life</code> passed").unwrap(),
+        "{md}"
+    );
+    assert!(md.contains(&shown("::esm-download{}")), "{md}");
+    // Prose with no directive in it is not repeated.
+    assert_eq!(md.matches("esm-source").count(), 7, "{md}");
+}
+
+#[test]
+fn shown_source_with_a_fence_in_it_gets_a_longer_fence() {
+    // A code fence straight after a paragraph, with no blank line, is part of
+    // the paragraph's block, so the source shown holds a fence of its own.
+    let source = "---\nshow_source: true\n---\n\nRead :var[N]{default=1} as:\n```text\nN\n```\n";
+    let (_, _, md) = build(source);
+    assert!(
+        md.contains("````markdown\nRead :var[N]{default=1} as:\n```text\nN\n```\n````"),
+        "{md}"
+    );
+}
