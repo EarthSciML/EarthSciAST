@@ -1171,11 +1171,16 @@ reading that as a gap.
 | `output_error` | error | `OutputError` | – | – | `OutputError` | – |
 | `output_meta` | type | `OutputMeta` | – | – | `OutputMeta` | – |
 | `output_plan` | type | `OutputPlan` | – | – | `OutputPlan` | – |
+| `parameter_sweep` | type | – | – | – | `ParameterSweep` | `ParameterSweep` |
 | `parameters` | function | `parameter_names` / `parameters` | `parameters` | – | – | – |
 | `parse_error` | error | `ParseError` | `ParseError` | – | – | – |
 | `parse_unit_conversion` | function | `parse_unit_conversion` | – | `parse_unit_conversion` | – | – |
 | `partition` | type | – | – | `Partition` | `Partition` | – |
 | `plan_dimension_coordinates` | function | `plan_dimension_coordinates` | – | – | `plan_dimension_coordinates` | – |
+| `plot` | type | – | – | – | `Plot` | `Plot` |
+| `plot_axis` | type | – | – | – | `PlotAxis` | `PlotAxis` |
+| `plot_series` | type | – | – | – | `PlotSeries` | `PlotSeries` |
+| `plot_value` | type | – | – | – | `PlotValue` | `PlotValue` |
 | `polygon_area` | function | – | – | `polygon_area` | `polygon_area` | – |
 | `product_matrix` | function | – | `productMatrix` | `product_matrix` | – | – |
 | `rank` | function | – | – | `rank` | `rank` | – |
@@ -1198,6 +1203,8 @@ reading that as a gap.
 | `substitute_with_context` | function | – | – | – | `substitute_with_context` | `SubstituteWithContext` |
 | `substrate_matrix` | function | – | `substrateMatrix` | `substrate_matrix` | – | – |
 | `subsystem_ref_error` | error | `SubsystemRefError` | – | `SubsystemRefError` | – | – |
+| `sweep_dimension` | type | – | – | – | `SweepDimension` | `SweepDimension` |
+| `sweep_range` | type | – | – | – | `SweepRange` | `SweepRange` |
 | `system_kind` | type | – | `SystemKind` | – | `SystemKind` | – |
 | `temporal_domain` | type | – | – | `TemporalDomain` | – | `TemporalDomain` |
 | `time_span` | type | – | – | – | `TimeSpan` | `TimeSpan` |
