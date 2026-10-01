@@ -25,6 +25,25 @@ docs/
     └── generated/         # Build-time output; not checked in
 ```
 
+## Narrative pages
+
+[`docs/narrative/`](narrative/) holds pages that define an EarthSciAST model in
+their own prose. `esm-narrative` assembles the model from the page's directives,
+validates it, runs its inline tests, runs its analyses, draws the figures, and
+writes the finished page into `content/generated/narrative/` with the `.esm`
+file beside it in `static/narrative/`. Neither output is checked in.
+
+```bash
+cargo run --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative -- build
+cargo run --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative -- build --watch
+cargo run --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative -- build --check
+```
+
+The command exits non-zero when a model does not validate or an inline test
+fails, which is what stops a bad model reaching the site. The directive syntax
+is documented in [`docs/narrative/_index.md`](narrative/_index.md), which is
+itself the section's landing page.
+
 ## Generation
 
 [`scripts/generate_docs.py`](../scripts/generate_docs.py) extracts API

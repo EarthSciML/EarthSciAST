@@ -1,0 +1,36 @@
+[package]
+name = "earthsci-typst-plugin"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89.0"
+authors = ["EarthSciML Authors and Contributors"]
+description = "Typst plugin exposing the earthsci-ast core and the narrative build over the wasm-minimal-protocol"
+license = "AGPL-3.0-only"
+repository = "https://github.com/EarthSciML/EarthSciAST"
+publish = false
+
+# A Typst plugin is a bare `wasm32-unknown-unknown` module whose only imports
+# are the two `typst_env` protocol functions. Build it with
+#     cargo build --release --target wasm32-unknown-unknown
+# and check the import list before shipping: any `__wbindgen_*` or WASI import
+# makes Typst refuse to load the module.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# No `cli` (clap) and, above all, no `wasm`: that feature links wasm-bindgen,
+# whose imports a Typst host cannot satisfy.
+earthsci-ast = { path = "../earthsci-ast-rs", default-features = false, features = ["solve"] }
+# `default-features = false` leaves out the Markdown front end and its
+# command: clap and a YAML parser have no place in a Typst plugin.
+earthsci-narrative = { path = "../earthsci-narrative", default-features = false }
+serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
+wasm-minimal-protocol = "0.2"
+# Only to register the custom backend `.cargo/config.toml` selects.
+getrandom = "0.3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true

@@ -71,10 +71,12 @@ mod rhs;
 pub mod tape;
 mod vectorized;
 
-// Only `area_faq` / `inline_tests` consume this re-export, and both stay
-// native-only, so gate it to avoid an unused-import warning on wasm.
+// `inline_tests` consumes `eval_buildtime_field` on every target; only the
+// native-only `area_faq` needs the scoped form, so it is gated to avoid an
+// unused-import warning on wasm.
+pub(crate) use compile::eval_buildtime_field;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use compile::{eval_buildtime_field, eval_buildtime_field_in_scope};
+pub(crate) use compile::eval_buildtime_field_in_scope;
 pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_invention};
 // The ONE free-variable gate (CONFORMANCE_SPEC §5.23), shared with the build
 // pipeline: `crate::prepare` runs the same check the compile path runs, so the

@@ -95,18 +95,18 @@
     }
   },
   "counts": {
-    "symbols": 928,
+    "symbols": 930,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 309,
       "typescript": 239,
       "python": 257,
-      "rust": 342,
+      "rust": 351,
       "go": 439
     },
     "by_tier": {
-      "extension": 653,
-      "stable": 275
+      "extension": 648,
+      "stable": 282
     }
   },
   "planned": [
@@ -4971,6 +4971,14 @@
       }
     },
     {
+      "name": "model_analysis",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ModelAnalysis"
+      }
+    },
+    {
       "name": "model_classification",
       "kind": "type",
       "tier": "extension",
@@ -5437,9 +5445,10 @@
     {
       "name": "parameter_sweep",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "ParameterSweep"
+        "go": "ParameterSweep",
+        "rust": "ParameterSweep"
       }
     },
     {
@@ -5675,33 +5684,45 @@
     {
       "name": "plot",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "Plot"
+        "go": "Plot",
+        "rust": "Plot"
       }
     },
     {
       "name": "plot_axis",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "PlotAxis"
+        "go": "PlotAxis",
+        "rust": "PlotAxis"
       }
     },
     {
       "name": "plot_series",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "PlotSeries"
+        "go": "PlotSeries",
+        "rust": "PlotSeries"
       }
     },
     {
       "name": "plot_value",
       "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "PlotValue",
+        "rust": "PlotValue"
+      }
+    },
+    {
+      "name": "plot_y",
+      "kind": "type",
       "tier": "extension",
       "bindings": {
-        "go": "PlotValue"
+        "rust": "PlotY"
       }
     },
     {
@@ -7322,17 +7343,19 @@
     {
       "name": "sweep_dimension",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "SweepDimension"
+        "go": "SweepDimension",
+        "rust": "SweepDimension"
       }
     },
     {
       "name": "sweep_range",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "SweepRange"
+        "go": "SweepRange",
+        "rust": "SweepRange"
       }
     },
     {
