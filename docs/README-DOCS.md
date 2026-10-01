@@ -30,8 +30,9 @@ docs/
 [`docs/narrative/`](narrative/) holds pages that define an EarthSciAST model in
 their own prose. `esm-narrative` assembles the model from the page's directives,
 validates it, runs its inline tests, runs its analyses, draws the figures, and
-writes the finished page into `content/generated/narrative/` with the `.esm`
-file beside it in `static/narrative/`. Neither output is checked in.
+writes the finished page into `content/generated/narrative/` as a page bundle,
+`decay/index.md` with `decay.esm` beside it, so the download link is relative
+and works under any base URL. Neither output is checked in.
 
 ```bash
 cargo run --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative -- build
