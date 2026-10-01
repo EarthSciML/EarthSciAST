@@ -11,7 +11,7 @@ fn build(source: &str) -> (Page, BuildOutput, String) {
         &page,
         &out,
         &RenderOptions {
-            esm_href: Some("/narrative/page.esm".to_string()),
+            esm_href: Some("page.esm".to_string()),
             esm_name: "page.esm".to_string(),
             generated_by: None,
         },
@@ -81,7 +81,7 @@ fn a_page_builds_into_a_page() {
     assert!(md.contains("data-sliders="), "{md}");
     assert!(md.contains("<svg xmlns="), "{md}");
     assert!(md.contains("<figcaption>Decay of N.</figcaption>"), "{md}");
-    assert!(md.contains("href=\"/narrative/page.esm\""), "{md}");
+    assert!(md.contains("href=\"page.esm\""), "{md}");
 
     // And the `.esm` file the page defines.
     assert_eq!(

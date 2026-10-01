@@ -118,8 +118,6 @@ conformance-results/
 **/api-data.json
 docs/generated/
 docs/content/generated/
-# `.esm` files built from the narrative pages, served as downloads.
-docs/static/narrative/
 docs/public/
 docs/.hugo_build.lock
 
