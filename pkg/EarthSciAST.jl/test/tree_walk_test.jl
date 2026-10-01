@@ -39,7 +39,7 @@ function _eval1(expr::ESM.ASTExpr; u_vals=Dict{String,Float64}(),
     vars["_probe"] = ModelVariable(UnknownVariable; default=0.0)
     eq = ESM.Equation(_D("_probe"), expr)
     model = ESM.Model(vars, [eq])
-    f!, u0, p, _tspan, var_map = build_evaluator(model;
+    f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model;
         registered_functions=registered_functions)
     # Override state values from u_vals
     for (k, v) in u_vals
@@ -57,63 +57,26 @@ end
     # ========================================================
     # Scalar op coverage
     # ========================================================
-    @testset "Arithmetic ops" begin
-        @test _eval1(_op("+", _n(1.0), _n(2.0), _n(3.0))) == 6.0
-        @test _eval1(_op("-", _n(5.0), _n(2.0))) == 3.0
-        @test _eval1(_op("-", _n(4.0))) == -4.0
-        # `neg` is the canonical-form unary negation emitted by
-        # `canonicalize` (esm-qrj). `discretize` rewrites `-x` to `neg(x)`.
-        @test _eval1(_op("neg", _n(4.0))) == -4.0
-        @test _eval1(_op("*", _n(2.0), _n(3.0), _n(4.0))) == 24.0
-        @test _eval1(_op("/", _n(10.0), _n(4.0))) == 2.5
-        @test _eval1(_op("^", _n(2.0), _n(3.0))) == 8.0
-        @test _eval1(_op("pow", _n(2.0), _n(3.0))) == 8.0
-    end
-
-    @testset "Integer vs float literals" begin
-        @test _eval1(_i(7)) == 7.0
-        @test _eval1(_op("+", _i(1), _i(2))) == 3.0
-        @test _eval1(_op("*", _i(3), _n(1.5))) == 4.5
-    end
-
-    @testset "Comparisons and logical" begin
-        @test _eval1(_op("<", _n(1.0), _n(2.0))) == 1.0
-        @test _eval1(_op("<=", _n(2.0), _n(2.0))) == 1.0
-        @test _eval1(_op(">", _n(1.0), _n(2.0))) == 0.0
-        @test _eval1(_op(">=", _n(2.0), _n(1.0))) == 1.0
-        @test _eval1(_op("==", _n(1.0), _n(1.0))) == 1.0
-        @test _eval1(_op("!=", _n(1.0), _n(2.0))) == 1.0
-        @test _eval1(_op("and", _op("<", _n(1.0), _n(2.0)),
-                                _op("<", _n(2.0), _n(3.0)))) == 1.0
-        @test _eval1(_op("or", _op(">", _n(1.0), _n(2.0)),
-                               _op("<", _n(2.0), _n(3.0)))) == 1.0
-        @test _eval1(_op("not", _op(">", _n(1.0), _n(2.0)))) == 1.0
-    end
-
-    @testset "ifelse, sign, min, max" begin
-        @test _eval1(_op("ifelse", _op("<", _n(1.0), _n(2.0)),
-                                   _n(10.0), _n(20.0))) == 10.0
-        @test _eval1(_op("ifelse", _op(">", _n(1.0), _n(2.0)),
-                                   _n(10.0), _n(20.0))) == 20.0
-        @test _eval1(_op("sign", _n(-3.0))) == -1.0
-        @test _eval1(_op("sign", _n(0.0))) == 0.0
-        @test _eval1(_op("sign", _n(42.0))) == 1.0
-        @test _eval1(_op("min", _n(3.0), _n(1.0), _n(2.0))) == 1.0
-        @test _eval1(_op("max", _n(3.0), _n(5.0), _n(2.0))) == 5.0
-    end
-
-    @testset "Elementary functions" begin
-        @test _eval1(_op("sin", _n(0.0))) == 0.0
-        @test _eval1(_op("cos", _n(0.0))) == 1.0
-        @test _eval1(_op("exp", _n(0.0))) == 1.0
-        @test _eval1(_op("log", _n(1.0))) == 0.0
-        @test _eval1(_op("log10", _n(100.0))) ≈ 2.0
-        @test _eval1(_op("sqrt", _n(9.0))) == 3.0
-        @test _eval1(_op("abs", _n(-7.5))) == 7.5
-        @test _eval1(_op("floor", _n(1.7))) == 1.0
-        @test _eval1(_op("ceil", _n(1.3))) == 2.0
-        @test _eval1(_op("atan2", _n(1.0), _n(1.0))) ≈ π / 4
-    end
+    #
+    # The op-by-op VALUE tests that used to live here — arithmetic, integer vs
+    # float literals, comparisons and logic, `ifelse`/`sign`/`min`/`max`, and the
+    # elementary functions — are now the cross-binding
+    # `tests/conformance/scalar_operator_semantics/` tier (CONFORMANCE_SPEC
+    # §5.45.4), which pins every one of them at EXACT tolerance over the UNION of
+    # the operand values this file and Rust's `tests/interpret.rs` each used to
+    # pin privately, and which `scripts/test-conformance.sh` runs for julia, rust
+    # and python under both `interpreter` and `native`.
+    #
+    # Three private op tables and no cross-binding gate is how two bindings
+    # disagree for a year: moving them found that Julia has an evaluation rule
+    # for the `true` literal op and NONE for `false`, and that Rust refuses `pow`
+    # and `false` outright and cannot lower `true` under `native`. All of that is
+    # recorded as named exclusions in that tier rather than in three suites that
+    # never compared notes.
+    #
+    # What stays below is everything a document cannot state: the closed-function
+    # registry, the unsupported-op diagnostics, observed inlining and cycle
+    # detection, the solves, and the ModelingToolkit parity sampling.
 
     @testset "Time variable and Pre" begin
         @test _eval1(_v("t"); t=3.5) == 3.5
@@ -215,7 +178,7 @@ end
             ESM.Equation(_D("x"), _op("-", _op("*", _v("y"), _v("x")))),
         ]
         model = ESM.Model(vars, eqs)
-        f!, u0, p, _tspan, var_map = build_evaluator(model)
+        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
         du = similar(u0)
         f!(du, u0, p, 0.0)
         # D(x) = -(2 * 0.5 * 1.0) = -1.0
@@ -247,7 +210,7 @@ end
             ESM.Equation(_v("a"), _v("k")),
             ESM.Equation(_D("x"), _op("*", _v("c"), _v("x"))),
         ]
-        f!, u0, p, _tspan, var_map = build_evaluator(ESM.Model(vars, eqs))
+        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(ESM.Model(vars, eqs))
         du = similar(u0)
         f!(du, u0, p, 0.0)
         @test du[var_map["x"]] === (2.0 * 2.0 + 1.0) * 1.0
@@ -264,7 +227,7 @@ end
             ESM.Equation(_D("x"), _v("a")),
         ]
         err = try
-            build_evaluator(ESM.Model(cyc_vars, cyc_eqs))
+            EarthSciAST._build_evaluator(ESM.Model(cyc_vars, cyc_eqs))
             nothing
         catch e
             e
@@ -283,7 +246,7 @@ end
         )
         eq = ESM.Equation(_D("x"), _op("*", _op("-", _v("k")), _v("x")))
         model = ESM.Model(vars, [eq])
-        f!, u0, p, _tspan, var_map = build_evaluator(model)
+        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 10.0), p)
         sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
                                         reltol=1e-8, abstol=1e-10)
@@ -303,7 +266,7 @@ end
                        ESM.TimeSpan(0.0, 25.0),
                        ESM.Assertion[]; description="default")]
         model = ESM.Model(vars, [eq]; tests=tests)
-        _, _, _, tspan_default, _ = build_evaluator(model)
+        _, _, _, tspan_default, _ = EarthSciAST._build_evaluator(model)
         @test tspan_default == (0.0, 25.0)
     end
 
@@ -339,7 +302,7 @@ end
             push!(eqs, ESM.Equation(_D("u_$i"), rhs))
         end
         model = ESM.Model(vars, eqs)
-        f!, u0, p, _tspan, var_map = build_evaluator(model)
+        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
         # Diffusion time ~ L² / α = 1 / 0.5 = 2. Integrate to t = 5.
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 5.0), p)
         sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
@@ -378,7 +341,7 @@ end
         model = ESM.Model(vars, eqs)
 
         # Tree-walk path
-        f_tw!, u0_tw, p_tw, _tspan, var_map = build_evaluator(model)
+        f_tw!, u0_tw, p_tw, _tspan, var_map = EarthSciAST._build_evaluator(model)
 
         # MTK path
         sys = MTK.System(model; name=:HeatParity)
@@ -448,7 +411,7 @@ end
                 ),
             ),
         )
-        f!, u0, p, _tspan, var_map = build_evaluator(esm)
+        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(esm)
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 10.0), p)
         sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
                                         reltol=1e-8, abstol=1e-10)
@@ -493,7 +456,7 @@ end
         model = ESM.Model(vars, eqs)
         # Build acceptance: < 5 s wall-clock.
         t_build = @elapsed begin
-            f!, u0, p, _tspan, var_map = build_evaluator(model)
+            f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
         end
         @test t_build < 5.0
         @test length(u0) == Nx * Ny
@@ -537,7 +500,7 @@ end
         end
         model = ESM.Model(vars, eqs)
         t_build = @elapsed begin
-            f!, u0, p, _tspan, var_map = build_evaluator(model)
+            f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
         end
         @test t_build < 5.0
         du = similar(u0)

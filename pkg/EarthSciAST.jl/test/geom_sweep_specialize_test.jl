@@ -163,11 +163,16 @@ end
 
     @testset "join gate and filter still reject the same cells" begin
         # A bin-equality join over the output indices of a MAP: rejected cells
-        # must keep the zero-initialized 0̄ on BOTH paths.
+        # must keep the zero-initialized 0̄ on BOTH paths. Under `native` such a
+        # gate drives the sweep from its key matches (geom_on_drive_test.jl);
+        # these cases turn that driver off so the DENSE specialized sweep is the
+        # one compared.
+        dense = EA._plan_with(EA._compiler_plan(:native); strict = false, join_on_gate = false)
+        dense_ways(j) = EA._with_compiler_plan(() -> both_ways(j), dense)
         body = _op("+", _ix("A", "i", "j"), "s")
         j = _agg(["i", "j"], ["i" => "I", "j" => "J"], body;
                  join = Any[Dict{String,Any}("on" => Any[Any["kI", "kJ"]])])
-        fast, ref, nf, nr = both_ways(j)
+        fast, ref, nf, nr = dense_ways(j)
         @test (nf, nr) == (1, 0)
         @test bitsame(fast, ref)
         @test any(iszero, fast)            # the gate really rejected something
@@ -176,7 +181,7 @@ end
         jc = _agg(["j"], ["i" => "I", "j" => "J"], _ix("B", "i", "j");
                   join = Any[Dict{String,Any}("on" => Any[Any["kI", "kJ"]])],
                   filter = _op(">", _ix("A", "i", "j"), "thr"))
-        fastc, refc, nfc, nrc = both_ways(jc)
+        fastc, refc, nfc, nrc = dense_ways(jc)
         @test (nfc, nrc) == (1, 0)
         @test bitsame(fastc, refc)
         @test length(unique(fastc)) > 1

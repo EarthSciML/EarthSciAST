@@ -39,6 +39,10 @@
 #               BEFORE api.jl: it declares the `DirectCallable` supertype and
 #               the placement table api.jl registers into.
 #   api.jl      `direct_rhs` / `direct_rhs_with_buffers` and the call methods
+#   problem.jl  `esm_problem(…; compiler = :xla)`: the emitted program compiled
+#               once per BUILD and wrapped in the Problem's in-place `f!`
+#               calling convention. Included LAST: it is the only file here that
+#               reaches back into the package's Problem surface.
 
 import EarthSciAST
 const _E = EarthSciAST
@@ -53,3 +57,4 @@ include("emit.jl")
 include("batch.jl")
 include("device.jl")
 include("api.jl")
+include("problem.jl")

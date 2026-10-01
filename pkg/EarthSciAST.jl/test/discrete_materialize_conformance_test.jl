@@ -67,17 +67,25 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         # (b) the const/discrete classification + field band: `g` (const × DISCRETE
         # forcing) is a discrete cache; `k` (const × parameter) is NOT. Re-materialize
         # at each anchor and assert the cache holds the golden contraction.
+        # Under `native` the cache is filled by one compiled kernel; the
+        # interpreter's per-cell fill is the oracle it must equal bit for bit.
         srcbuf = copy(src_at(0.0))
         dm = _ESS_DM.DiscreteMaterializer()
-        f!, u0, p, _ts, vm = _ESS_DM.build_evaluator(_ESS_DM.load_path(fixture);
+        f!, u0, p, _ts, vm = _ESS_DM._build_evaluator(_ESS_DM.load_path(fixture);
             initial_conditions = ics, param_arrays = Dict("src" => srcbuf),
             materialize_out = dm)
+        srcbuf_i = copy(src_at(0.0))
+        dm_i = _ESS_DM.DiscreteMaterializer()
+        _ESS_DM._build_evaluator(_ESS_DM.load_path(fixture);
+            initial_conditions = ics, param_arrays = Dict("src" => srcbuf_i),
+            compiler = :interpreter, materialize_out = dm_i)
         @test haskey(dm.caches, "g")     # forcing-tainted, state-free -> DISCRETE cache
         @test !haskey(dm.caches, "k")    # const/parameter-fed -> CONST-cadence (regression guard)
         for t in anchors
-            srcbuf .= src_at(t)
-            dm.materialize!()
+            srcbuf .= src_at(t); srcbuf_i .= src_at(t)
+            dm.materialize!(); dm_i.materialize!()
             @test vec(Float64.(dm.caches["g"])) ≈ g_at(t) atol = field_atol
+            @test all(dm.caches["g"] .=== dm_i.caches["g"])
         end
 
         # (c) trajectory band: ONE solve over a refresh callback whose `affect!`
@@ -86,7 +94,7 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         # frozen per segment -> RHS pure -> closed form matched to solver tol.
         srcbuf2 = copy(src_at(0.0))
         dm2 = _ESS_DM.DiscreteMaterializer()
-        f2!, u02, p2, _ts2, vm2 = _ESS_DM.build_evaluator(_ESS_DM.load_path(fixture);
+        f2!, u02, p2, _ts2, vm2 = _ESS_DM._build_evaluator(_ESS_DM.load_path(fixture);
             initial_conditions = ics, param_arrays = Dict("src" => srcbuf2),
             materialize_out = dm2)
         interior = [t for t in anchors if t > 0.0]

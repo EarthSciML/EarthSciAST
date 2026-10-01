@@ -8,19 +8,21 @@
 #
 # Public API:
 #
-#     build_evaluator(model::Model; kwargs...)
+#     _build_evaluator(model::Model; kwargs...)
 #         → (f!, u0::Vector{Float64}, p::NamedTuple, tspan::Tuple{Float64,Float64},
-#            var_map::Dict{String,Int})
+#            var_map::StateLayout)
 #
 # The returned tuple plugs straight into `ODEProblem(f!, u0, tspan, p)`.
 # `var_map` is the state-name → index lookup so callers can probe the
-# solution at specific variables.
+# solution at specific variables: an `AbstractDict{String,Int}` over the
+# element names (`"u[2,3]"`), answered arithmetically from one block per array
+# variable (tree_walk/state_layout.jl).
 #
 # The default `f!` both SOLVES and DIFFERENTIATES: it is zero-alloc at Float64 and
 # eltype-generic, so ForwardDiff runs through it over the state or the parameters
 # (a stiff solve gets an exact AD Jacobian for free).
 #
-# `build_evaluator(model; form = :oop)` returns the COMPILED INTERMEDIATE
+# `_build_evaluator(model; form = :oop)` returns the COMPILED INTERMEDIATE
 # REPRESENTATION in the same slot (tree_walk/oop.jl) rather than a second
 # evaluator: the same node spines and access kernels `f!` is lowered from, as
 # data, for a compiled backend to emit a program from. `direct_rhs`
@@ -41,11 +43,12 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 include("tree_walk/errors.jl")           # §1   TreeWalkError + E_TREEWALK_* codes
+include("tree_walk/state_layout.jl")     #      the flat state layout (`StateLayout`)
 include("tree_walk/geometry_setup.jl")   # §2   build-time geometry materialization
 include("tree_walk/build_helpers.jl")    #      sentinels, boundary policy, folds
 include("tree_walk/unlowered_gate.jl")   #      §9.6.3 c.6 pre-build rewrite-target walk
 include("tree_walk/scan.jl")             #      prefix-scan detection + `_ScanFold`
-include("tree_walk/build.jl")            # §2b  build pipeline, `build_evaluator`
+include("tree_walk/build.jl")            # §2b  build pipeline, `_build_evaluator`
 include("tree_walk/compile.jl")          # §3-4 `_Node` IR, scalar CSE, scalar walker
 include("tree_walk/geometry_compile.jl") # §2c  geometry body compiler (needs `_Node`)
 include("tree_walk/access_kernel.jl")    # §4b  unified array-kernel IR (`_AccKernel`)
@@ -60,6 +63,8 @@ include("tree_walk/array_contraction.jl") # §4f  …and for the whole-array con
 include("tree_walk/const_tier.jl")       # §4g  cadence partition of the scalar prelude
 include("tree_walk/stencil.jl")          # §4c  symbolic stencilizer (spines + recipes)
 include("tree_walk/stencil_affine.jl")   #      affine box processor (the default build)
+include("tree_walk/observed_program.jl") #      the compiled output-time observed route
 include("tree_walk/helpers.jl")          # §5   misc + array-variable helpers
 include("tree_walk/semiring.jl")         # §5c  semiring registry + join-gate resolution
 include("tree_walk/resolve.jl")          # §5d  index resolution, `_PGatherArray`
+include("tree_walk/setup_fill.jl")       # §5e  construction-time fills through the cascade

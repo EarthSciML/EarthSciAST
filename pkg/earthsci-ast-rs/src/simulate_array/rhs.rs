@@ -116,6 +116,15 @@ impl RhsScratch {
         self.tape = Some(TapeCtx::new(prog, observed_rules));
     }
 
+    /// The forcing buffer was refreshed: an installed tape re-runs its
+    /// SEGMENT section on the next call. No-op on a scratch with no tape,
+    /// which reads the buffer on every call.
+    pub(super) fn bump_forcing_epoch(&mut self) {
+        if let Some(tape) = self.tape.as_mut() {
+            tape.bump_forcing_epoch();
+        }
+    }
+
     /// Whether this scratch carries a compiled tape (test observability).
     pub fn has_tape(&self) -> bool {
         self.tape.is_some()
@@ -131,6 +140,12 @@ impl RhsScratch {
         if let Some(tape) = self.tape.as_mut() {
             tape.set_exports_active(on);
         }
+    }
+
+    /// The observeds the last untaped call materialized. On a scratch that
+    /// carries a tape, read [`Self::taped_observeds`] instead.
+    pub(super) fn observed_arrays(&self) -> &ArrMap {
+        &self.observed_arrays
     }
 
     /// The observeds the tape published on the last call, or `None` on a
@@ -308,7 +323,7 @@ pub(super) fn sweep_recurrence<'a>(
     let saved = ctx.recur.take();
     ctx.recur = Some(scope);
     let mut full = vec![0i64; output_ranges.len()];
-    for i in lo..=hi {
+    'sweep: for i in lo..=hi {
         set_bind(&mut ctx.loop_binds, &output_idx_names[axis], i);
         full[axis] = i;
         let mut inner = CartesianTuples::new(&inner_ranges);
@@ -321,6 +336,12 @@ pub(super) fn sweep_recurrence<'a>(
             // Published BEFORE the axis advances, which is the whole construct:
             // the next cell's self-read must observe this value, not a default.
             scope.publish(&full, v);
+            super::eval::note_per_cell_cell();
+            // A strict caller refuses the sweep; its first cell was for the
+            // diagnostic (`super::eval::StopAtFirstCell`).
+            if super::eval::stop_after_first_cell() {
+                break 'sweep;
+            }
         }
     }
     ctx.recur = saved;

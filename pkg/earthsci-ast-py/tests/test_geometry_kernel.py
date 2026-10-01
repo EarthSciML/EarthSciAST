@@ -580,3 +580,17 @@ def _shoelace_faq(clip_symbol: str, ring_set: str) -> ExprNode:
         ranges={"v": {"from": ring_set}},
         expr=body,
     )
+
+
+def test_planar_bbox_reject_is_strict_and_precedes_coercion():
+    """The planar reject mirrors the Julia `_bbox_disjoint` and the Rust kernel:
+    strictly disjoint boxes clip to nothing BEFORE ring coercion (so a degenerate
+    ring far away is not an error), and an edge-touching pair is not rejected."""
+    from earthsci_ast import geometry
+
+    square = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+    far_degenerate = np.array([[10.0, 10.0], [11.0, 11.0]])
+    assert geometry.intersect_polygon(far_degenerate, square, "planar").shape == (0, 2)
+    touching_degenerate = np.array([[1.0, 0.0], [1.0, 1.0]])
+    with pytest.raises(geometry.GeometryError):
+        geometry.intersect_polygon(touching_degenerate, square, "planar")

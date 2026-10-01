@@ -111,6 +111,7 @@ from .simulation_common import (
     _limit_iters,
     _retcode_for_error,
     _scipy_missing_message,
+    canonicalize_const_array_keys,
     check_parameter_override_keys,
     flat_namespace_scope,
     resolve_merged_renames,
@@ -798,6 +799,14 @@ def _esm_problem_under(
         else:
             merged[k] = np.asarray(_provider_sample_field(prov, t0), dtype=float)
 
+    # ---- caller keys for a shaped parameter (esm-spec §6.6.2) ----
+    merged = canonicalize_const_array_keys(
+        merged,
+        [n for n, v in flat.parameters.items() if v.shape],
+        {*flat.state_variables, *flat.parameters, *flat.observed_variables},
+        flat_namespace_scope(flat),
+    )
+
     # ---- data-fed parameters: refuse one with nothing bound (§9.6.6) -------
     # Before the engine is chosen and before anything is compiled, so the answer
     # is the same under every `compiler` — this asks whether the DOCUMENT's
@@ -924,7 +933,7 @@ def _esm_problem_under(
         # construction, so the seed IS its construction-time build: run segment 0
         # here, keep its loader-invariant products, and let `solve` start from
         # them instead of paying for them again.
-        segment_seed = _seed_segmented_engine(
+        segment_seed, seed_failure = _seed_segmented_engine(
             flat,
             engine,
             p,
@@ -940,7 +949,7 @@ def _esm_problem_under(
         # source. A seed that failed means no array was loaded for the feeds it
         # was going to bind, which is the §9.6.6 condition (see
         # `_refuse_unloaded_data_feeds`).
-        _refuse_unloaded_data_feeds(flat, segment_seed, deferred_feeds)
+        _refuse_unloaded_data_feeds(flat, segment_seed, deferred_feeds, seed_failure)
 
     return EsmProblem(
         flat=flat,
@@ -985,8 +994,12 @@ def _seed_segmented_engine(
     provider_factory: Any,
     discrete_providers: dict[str, Any],
     static_cache: dict[str, Any],
-) -> Any:
+) -> tuple[Any, str | None]:
     """Build the first cadence segment at construction, for the compiler's sake.
+
+    Returns ``(seed, failure)``: the seed, or ``None`` and a one-line description
+    of why there is none, so a caller that has to refuse can say what actually
+    went wrong rather than guess.
 
     Failures other than a compiler refusal are swallowed, for the same reason
     the one-shot probe swallows them: a segmented document has always been
@@ -996,7 +1009,7 @@ def _seed_segmented_engine(
     """
     try:
         if engine == "loaders":
-            return _simulate_with_loaders(
+            seed = _simulate_with_loaders(
                 flat,
                 tspan,
                 p,
@@ -1007,7 +1020,8 @@ def _seed_segmented_engine(
                 static_cache=static_cache,
                 seed_only=True,
             )
-        return _simulate_with_discrete_providers(
+            return seed, None
+        seed = _simulate_with_discrete_providers(
             flat,
             tspan,
             p,
@@ -1019,12 +1033,13 @@ def _seed_segmented_engine(
             static_cache=static_cache,
             seed_only=True,
         )
+        return seed, None
     except CompilerRefusedRuleError:
         raise
     except UnsupportedConstructError:
         raise
-    except Exception:  # noqa: BLE001 — a non-refusal failure stays a run failure
-        return None
+    except Exception as exc:  # noqa: BLE001 — a non-refusal failure stays a run failure
+        return None, f"{type(exc).__name__}: {exc}"
 
 
 def _data_fed_parameters(flat: FlattenedSystem) -> list[tuple[str, str]]:
@@ -1053,13 +1068,18 @@ def _data_fed_parameters(flat: FlattenedSystem) -> list[tuple[str, str]]:
 def _binds(name: str, *registries: Iterable[str]) -> bool:
     """Does any key in ``registries`` bind the parameter ``name``?
 
-    A key matches EXACTLY, or by its final dotted segment — the same bare-name
-    spelling esm-spec §6.6.2 admits for a ``p`` key, and the spelling a
-    ``providers`` entry uses.
+    A key matches EXACTLY or as a whole-segment dotted suffix of the other
+    spelling — the bare or partially qualified spelling esm-spec §6.6.2 admits
+    for a ``p`` key (``k`` or ``Forcing.k`` for ``Top.Forcing.k``), which is also
+    how a ``providers`` entry is spelled, and its reverse for a raw model whose
+    names are bare while the caller qualifies the key. It never matches on the
+    leaf alone: a key for ``Other.k`` does not bind ``Forcing.k``. A bare key is
+    genuinely ambiguous between components and binds each; the override resolver
+    reports that, and the direction it errs in only turns a refusal into a build
+    the caller asked for.
     """
-    leaf = name.rsplit(".", 1)[-1]
     return any(
-        k == name or k == leaf or str(k).rsplit(".", 1)[-1] == leaf
+        k == name or name.endswith(f".{k}") or str(k).endswith(f".{name}")
         for reg in registries
         for k in reg
     )
@@ -1119,7 +1139,9 @@ def _refuse_unbound_data_feeds(
     return deferred
 
 
-def _refuse_unloaded_data_feeds(flat: FlattenedSystem, seed: Any, deferred: set[str]) -> None:
+def _refuse_unloaded_data_feeds(
+    flat: FlattenedSystem, seed: Any, deferred: set[str], seed_failure: str | None = None
+) -> None:
     """Refuse when the construction-time seed loaded no data for a deferred feed.
 
     The in-tree default provider is an attempt to bind, not a binding: it opens
@@ -1136,6 +1158,8 @@ def _refuse_unloaded_data_feeds(flat: FlattenedSystem, seed: Any, deferred: set[
     name = sorted(deferred)[0]
     source = next((f.subkey for f in flat.loader_fields if f.name == name), "(unnamed)")
     detail = getattr(seed, "message", None) if seed is not None else None
+    if detail is None and seed_failure is not None:
+        detail = f"the construction-time seed failed ({seed_failure})"
     raise DataSourceUnboundError(name, source, detail or "the source loaded no data")
 
 
@@ -1450,7 +1474,8 @@ def _assert_no_redundant_definition(flat: FlattenedSystem) -> None:
 
 def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:
     """esm-spec §9.6.6 ``unsupported_construct`` — refuse an event (continuous or
-    discrete) or an implicit equation before any pathway is built.
+    discrete), an implicit equation or a Wiener-noise parameter before any
+    pathway is built.
 
     Neither the SymPy scalar pathway nor the NumPy array interpreter runs an
     event, and neither solves an equation whose LHS is an expression. Both used
@@ -1493,6 +1518,12 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) 
                 f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}`",
                 evaluator,
             )
+    # A Wiener-noise parameter (``update.kind = "wiener"``) makes the document an
+    # SDE. Neither pathway integrates one: both read the noise as a constant and
+    # report the trajectory of a different, deterministic model.
+    if flat.brownian_parameters:
+        name = next(iter(flat.brownian_parameters))
+        raise UnsupportedConstructError("Wiener noise", f"parameter '{name}'", evaluator)
 
 
 def _first_subsystem_event(file: EsmFile) -> tuple[str, Any] | None:

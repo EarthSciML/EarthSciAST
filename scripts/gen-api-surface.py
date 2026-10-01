@@ -267,11 +267,7 @@ EXTENSION_OVERRIDES = {
     ("parallel_evaluator", "type"),
     ("model_allocator", "type"),
     ("stoichiometric_matrix_parallel", "function"),
-    ("interpret", "function"),
     ("compile_array", "function"),
-    ("fold_constant_expr", "function"),
-    ("compiled", "type"),
-    ("resolved_expr", "type"),
     # Host/runtime integration seams: callbacks, sinks, providers, checkpoints.
     ("build_refresh_callback", "function"),
     ("build_output_callback", "function"),

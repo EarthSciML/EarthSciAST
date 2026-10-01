@@ -13,7 +13,7 @@
 // be rejected.
 // ---------------------------------------------------------------------------
 
-use super::fused::{FCHUNK, exec_fused_runs_generic};
+use super::fused::{FCHUNK, RunCursor, exec_fused_runs_generic};
 #[cfg(target_arch = "x86_64")]
 use super::fused::{exec_fused_runs_avx2, exec_fused_runs_avx512};
 use super::*;
@@ -98,14 +98,16 @@ fn drive(with_nan: bool) {
             shifted_ix: None,
             src_shape: DimU::from_elem(N, 1),
             elem_stride: 1,
-            load_reg: u16::MAX,
+            load_reg: GroupIx::MAX,
+            index: None,
         },
         FusedInput {
             src: SrcRef::Slot(1),
             shifted_ix: None,
             src_shape: DimU::from_elem(N, 1),
             elem_stride: 1,
-            load_reg: u16::MAX,
+            load_reg: GroupIx::MAX,
+            index: None,
         },
         // 2: shifted stride-1 read (ghost over the last run).
         FusedInput {
@@ -113,7 +115,8 @@ fn drive(with_nan: bool) {
             shifted_ix: Some(0),
             src_shape: DimU::from_elem(N + 16, 1),
             elem_stride: 1,
-            load_reg: u16::MAX,
+            load_reg: GroupIx::MAX,
+            index: None,
         },
         // 3: strided (elem_stride 2) read through a pre-load register.
         FusedInput {
@@ -121,7 +124,8 @@ fn drive(with_nan: bool) {
             shifted_ix: Some(1),
             src_shape: DimU::from_elem(2 * N + 8, 1),
             elem_stride: 2,
-            load_reg: u16::MAX, // patched below once n_regs is known
+            load_reg: GroupIx::MAX, // patched below once n_regs is known
+            index: None,
         },
     ];
 
@@ -148,10 +152,10 @@ fn drive(with_nan: bool) {
         let (a, b) = match i % 4 {
             0 => (MRef::In(0), MRef::In(1)),
             1 => (MRef::In(2), MRef::In(0)),
-            2 => (MRef::Scal(i as u16 % 5), MRef::In(3)),
-            _ => (MRef::In(1), MRef::Scal((i as u16 + 2) % 5)),
+            2 => (MRef::Scal(i as GroupIx % 5), MRef::In(3)),
+            _ => (MRef::In(1), MRef::Scal((i as GroupIx + 2) % 5)),
         };
-        let out = micro.len() as u16;
+        let out = micro.len() as GroupIx;
         micro.push(MicroOp::Bin { op: *op, a, b, out });
     }
     let uns = [
@@ -171,38 +175,38 @@ fn drive(with_nan: bool) {
         let a = match i % 3 {
             0 => MRef::In(0),
             1 => MRef::In(2),
-            _ => MRef::Reg(i as u16), // an earlier Bin result
+            _ => MRef::Reg(i as GroupIx), // an earlier Bin result
         };
-        let out = micro.len() as u16;
+        let out = micro.len() as GroupIx;
         micro.push(MicroOp::Un { op: *op, a, out });
     }
-    let out = micro.len() as u16;
+    let out = micro.len() as GroupIx;
     micro.push(MicroOp::Neg {
         a: MRef::In(3),
         out,
     });
-    let out = micro.len() as u16;
+    let out = micro.len() as GroupIx;
     micro.push(MicroOp::Select {
         cond: MRef::Reg(9), // an Lt mask
         a: MRef::In(0),
         b: MRef::In(1),
         out,
     });
-    let out = micro.len() as u16;
+    let out = micro.len() as GroupIx;
     micro.push(MicroOp::Select {
         cond: MRef::In(2),
         a: MRef::Reg(0),
         b: MRef::Scal(1),
         out,
     });
-    let out = micro.len() as u16;
+    let out = micro.len() as GroupIx;
     micro.push(MicroOp::Select {
         cond: MRef::Scal(2),
         a: MRef::In(1),
         b: MRef::In(0),
         out,
     });
-    let out = micro.len() as u16;
+    let out = micro.len() as GroupIx;
     micro.push(MicroOp::Mov {
         a: MRef::In(3),
         out,
@@ -211,7 +215,7 @@ fn drive(with_nan: bool) {
     for op1 in arith {
         for op2 in arith {
             for swap in [false, true] {
-                let out = micro.len() as u16;
+                let out = micro.len() as GroupIx;
                 micro.push(MicroOp::Bin2 {
                     op1,
                     a: MRef::In(0),
@@ -239,7 +243,7 @@ fn drive(with_nan: bool) {
     ];
     for (i, (op1, op2)) in ext.iter().enumerate() {
         for swap in [false, true] {
-            let out = micro.len() as u16;
+            let out = micro.len() as GroupIx;
             micro.push(MicroOp::Bin2 {
                 op1: *op1,
                 a: MRef::In(1),
@@ -248,7 +252,7 @@ fn drive(with_nan: bool) {
                 c: if i % 2 == 0 {
                     MRef::In(0)
                 } else {
-                    MRef::Scal(i as u16 % 5)
+                    MRef::Scal(i as GroupIx % 5)
                 },
                 swap,
                 out,
@@ -270,7 +274,7 @@ fn drive(with_nan: bool) {
                         _ => (MRef::In(1), MRef::In(0), MRef::Reg(0), MRef::In(2)),
                     };
                     pat += 1;
-                    let out = micro.len() as u16;
+                    let out = micro.len() as GroupIx;
                     micro.push(MicroOp::Bin3 {
                         op1,
                         a,
@@ -288,24 +292,35 @@ fn drive(with_nan: bool) {
         }
     }
     let n_ops = micro.len();
-    let n_regs = n_ops as u16;
+    let n_regs = n_ops as GroupIx;
     let mut inputs = inputs;
     inputs[3].load_reg = n_regs; // one strided pre-load register
 
-    // Runs: [0, 1300) shifted-src offset 5; [1300, N) ghost for the
+    // Runs: [0, 1300) shifted-src offset 5, as a 650-element run repeated
+    // twice (so the clones walk a repetition too); [1300, N) ghost for the
     // stride-1 shifted input. The strided input stays live in both.
-    let runs = vec![
-        FusedRun {
-            out_off: 0,
-            len: 1300,
-            in_off: SmallVec::from_slice(&[5i64, 3]),
-        },
-        FusedRun {
-            out_off: 1300,
-            len: (N - 1300) as u32,
-            in_off: SmallVec::from_slice(&[GHOST_OFF, 3 + 2 * 1300]),
-        },
-    ];
+    let schedule = RunSchedule {
+        nodes: vec![
+            RunNode::Repeat {
+                count: 2,
+                body: 1,
+                out_step: 650,
+                in_step: SmallVec::from_slice(&[650, 2 * 650]),
+            },
+            RunNode::Run(FusedRun {
+                out_off: 0,
+                len: 650,
+                in_off: SmallVec::from_slice(&[5i64, 3]),
+            }),
+            RunNode::Run(FusedRun {
+                out_off: 1300,
+                len: (N - 1300) as u32,
+                in_off: SmallVec::from_slice(&[GHOST_OFF, 3 + 2 * 1300]),
+            }),
+        ],
+        n_runs: 3,
+        depth: 1,
+    };
     let fs = FusedSpec {
         shape: DimU::from_elem(N, 1),
         inputs,
@@ -315,7 +330,8 @@ fn drive(with_nan: bool) {
         n_load_regs: 1,
         n_splat_regs: 6,          // 5 scalars + the zero register
         outputs: SmallVec::new(), // outs are passed directly
-        runs,
+        schedule,
+        reduce: None,
         n_fused_instrs: 0,
         n_folded_gathers: 0,
     };
@@ -323,18 +339,49 @@ fn drive(with_nan: bool) {
     let bases: Vec<*const f64> = vec![a.as_ptr(), b.as_ptr(), shifted.as_ptr(), strided.as_ptr()];
     let run_level = |wider: u8| -> Vec<Vec<f64>> {
         let mut outbufs: Vec<Vec<f64>> = (0..n_ops).map(|_| vec![0.0f64; N]).collect();
-        let outs: Vec<(u16, *mut f64)> = outbufs
+        let outs: Vec<(GroupIx, *mut f64)> = outbufs
             .iter_mut()
             .enumerate()
-            .map(|(i, buf)| (i as u16, buf.as_mut_ptr()))
+            .map(|(i, buf)| (i as GroupIx, buf.as_mut_ptr()))
             .collect();
         let mut fregs = vec![0.0f64; (n_regs as usize + 1 + 6) * FCHUNK];
+        let mut cursor = RunCursor::for_spec(&fs);
         match wider {
-            0 => unsafe { exec_fused_runs_generic(&fs, &svals, &bases, &outs, &mut fregs) },
+            0 => unsafe {
+                exec_fused_runs_generic(
+                    &fs,
+                    &svals,
+                    &bases,
+                    &outs,
+                    std::ptr::null_mut(),
+                    &mut fregs,
+                    &mut cursor,
+                )
+            },
             #[cfg(target_arch = "x86_64")]
-            1 => unsafe { exec_fused_runs_avx2(&fs, &svals, &bases, &outs, &mut fregs) },
+            1 => unsafe {
+                exec_fused_runs_avx2(
+                    &fs,
+                    &svals,
+                    &bases,
+                    &outs,
+                    std::ptr::null_mut(),
+                    &mut fregs,
+                    &mut cursor,
+                )
+            },
             #[cfg(target_arch = "x86_64")]
-            2 => unsafe { exec_fused_runs_avx512(&fs, &svals, &bases, &outs, &mut fregs) },
+            2 => unsafe {
+                exec_fused_runs_avx512(
+                    &fs,
+                    &svals,
+                    &bases,
+                    &outs,
+                    std::ptr::null_mut(),
+                    &mut fregs,
+                    &mut cursor,
+                )
+            },
             _ => panic!("level unavailable in this build"),
         }
         outbufs

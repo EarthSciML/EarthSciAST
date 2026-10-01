@@ -1,6 +1,6 @@
-//! Cross-language conformance for the three constructs neither Rust evaluator
-//! runs: a continuous event, a discrete event and an implicit equation (issues
-//! #264, #356).
+//! Cross-language conformance for the three constructs the Rust evaluator does
+//! not run: a continuous event, a discrete event and an implicit equation
+//! (issues #264, #356).
 //!
 //! Drives the shared manifest at `tests/conformance/unsupported_construct/`.
 //! All three used to validate and then vanish on the array evaluator's

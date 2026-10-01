@@ -1,0 +1,373 @@
+{
+ "esm": "1.1.0",
+ "metadata": {
+  "name": "AngleArrayElement",
+  "description": "esm-spec §4.8.3 'And an angle is CONVERTED': a circular-trig argument in `deg` is brought to radians before it is evaluated, and that includes an ARRAY ELEMENT. `index(lat, i)` with `lat` declared `deg` is a number in degrees exactly as a bare `lat` is, so `cos(index(lat, i))` over lat = [0, 60, 90] deg is [1, 0.5, 0]. Julia, Python, Go and TypeScript used to read the argument's unit with the checker's rules, which have none for `index` or `faq` (§4.8.4), so the flatten pass left the argument unconverted and Julia and Python returned cos(60 RADIANS) = -0.9524129804151563. Four readings are pinned: the element of a declared parameter (`cos_lat`); the element of an observed that an `faq` DEFINES in `deg` (`sin_colat`, colatitude = 90 - lat); `sin` of an element inside a REDUCING `faq` body (`sin_sum` = sin 0 + sin 60 + sin 90 = 1 + sqrt(3)/2); and the `rad` control (`cos_lat_rad`), which was always right and must stay right, so 'the scale is applied' is told apart from 'the scale is applied twice'. The scalar `sin(latitude)` row is the contrast every binding already converted.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "conformance",
+   "scalar_operator_semantics",
+   "inline-test",
+   "units",
+   "angle",
+   "esm-spec-4.8.3"
+  ],
+  "license": "MIT"
+ },
+ "index_sets": {
+  "cells": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "AngleArrayElement": {
+   "variables": {
+    "lat": {
+     "type": "parameter",
+     "units": "deg",
+     "shape": [
+      "cells"
+     ],
+     "default": [
+      0.0,
+      60.0,
+      90.0
+     ],
+     "description": "Three latitudes, declared in DEGREES."
+    },
+    "lat_rad": {
+     "type": "parameter",
+     "units": "rad",
+     "shape": [
+      "cells"
+     ],
+     "default": [
+      0.0,
+      1.0471975511965976,
+      1.5707963267948966
+     ],
+     "description": "THE CONTROL: the same three latitudes declared in radians, at scale 1. Never converted."
+    },
+    "latitude": {
+     "type": "parameter",
+     "units": "deg",
+     "default": 40.0,
+     "description": "A scalar latitude in degrees: the case every binding already converted."
+    },
+    "cos_lat": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cells"
+     ],
+     "description": "cos of an element of a `deg` parameter: [1, 0.5, 0]."
+    },
+    "cos_lat_rad": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cells"
+     ],
+     "description": "cos of an element of a `rad` parameter: [1, 0.5, 0], with no conversion."
+    },
+    "colat": {
+     "type": "unknown",
+     "units": "deg",
+     "shape": [
+      "cells"
+     ],
+     "description": "Colatitude, 90 - lat, DEFINED by an `faq` and declared in degrees: [90, 30, 0]."
+    },
+    "sin_colat": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cells"
+     ],
+     "description": "sin of an element of the faq-defined `deg` observed: [1, 0.5, 0]."
+    },
+    "sin_sum": {
+     "type": "unknown",
+     "units": "1",
+     "description": "sin of each `deg` element, summed by a reducing `faq`: 1 + sqrt(3)/2."
+    },
+    "sin_scalar": {
+     "type": "unknown",
+     "units": "1",
+     "description": "sin(40 deg), the scalar contrast."
+    },
+    "probe": {
+     "type": "unknown",
+     "units": "1",
+     "default": 0.0,
+     "description": "Integrates `sin_sum`, so the value is read as well as computed."
+    }
+   },
+   "equations": [
+    {
+     "lhs": "cos_lat",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cells"
+       }
+      },
+      "expr": {
+       "op": "cos",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "lat",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "cos_lat_rad",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cells"
+       }
+      },
+      "expr": {
+       "op": "cos",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "lat_rad",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "colat",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cells"
+       }
+      },
+      "expr": {
+       "op": "-",
+       "args": [
+        90.0,
+        {
+         "op": "index",
+         "args": [
+          "lat",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "sin_colat",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cells"
+       }
+      },
+      "expr": {
+       "op": "sin",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "colat",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "sin_sum",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "j": {
+        "from": "cells"
+       }
+      },
+      "expr": {
+       "op": "sin",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "lat",
+          "j"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "sin_scalar",
+     "rhs": {
+      "op": "sin",
+      "args": [
+       "latitude"
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "probe"
+      ],
+      "wrt": "t"
+     },
+     "rhs": "sin_sum"
+    }
+   ],
+   "tests": [
+    {
+     "id": "angle_array_element_values",
+     "description": "Each degree-valued array element reaches its circular function in RADIANS. An unconverted cos(index(lat, 2)) is cos(60 rad) = -0.952, fifteen orders of magnitude outside this band.",
+     "time_span": {
+      "start": 0.0,
+      "end": 1.0
+     },
+     "tolerance": {
+      "rel": 1e-14,
+      "abs": 1e-15
+     },
+     "assertions": [
+      {
+       "variable": "cos_lat",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "cells": 1
+       }
+      },
+      {
+       "variable": "cos_lat",
+       "time": 0.0,
+       "expected": 0.5,
+       "coords": {
+        "cells": 2
+       }
+      },
+      {
+       "variable": "cos_lat",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cells": 3
+       }
+      },
+      {
+       "variable": "cos_lat_rad",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "cells": 1
+       }
+      },
+      {
+       "variable": "cos_lat_rad",
+       "time": 0.0,
+       "expected": 0.5,
+       "coords": {
+        "cells": 2
+       }
+      },
+      {
+       "variable": "cos_lat_rad",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cells": 3
+       }
+      },
+      {
+       "variable": "sin_colat",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "cells": 1
+       }
+      },
+      {
+       "variable": "sin_colat",
+       "time": 0.0,
+       "expected": 0.5,
+       "coords": {
+        "cells": 2
+       }
+      },
+      {
+       "variable": "sin_colat",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cells": 3
+       }
+      },
+      {
+       "variable": "sin_sum",
+       "time": 0.0,
+       "expected": 1.8660254037844386
+      },
+      {
+       "variable": "sin_scalar",
+       "time": 0.0,
+       "expected": 0.6427876096865393
+      },
+      {
+       "variable": "probe",
+       "time": 1.0,
+       "expected": 1.8660254037844386,
+       "tolerance": {
+        "rel": 1e-09,
+        "abs": 1e-11
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

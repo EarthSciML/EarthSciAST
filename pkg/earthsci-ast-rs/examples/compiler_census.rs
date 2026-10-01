@@ -2,11 +2,8 @@
 //! `Compiler::Interpreter`, through the public `esm_problem` entry, and record
 //! what each one answered.
 //!
-//! The phase-0 shape of this example forced the array runtime by hand, because
-//! `native` did not exist yet and the default router sent 0-D documents to the
-//! scalar interpreter. It exists now, so the census measures IT: the numbers
-//! below are what a caller gets, not what a reconstruction of the build path
-//! predicts.
+//! The numbers below are what a caller gets, not what a reconstruction of the
+//! build path predicts.
 //!
 //! Per document:
 //!
@@ -24,6 +21,11 @@
 //! Usage:
 //!     cargo run --example compiler_census -- <doc.esm> [more.esm …]
 //!     cargo run --example compiler_census -- --paths-from <list.txt>
+//!     cargo run --example compiler_census -- --only native <doc.esm>
+//!
+//! `--only native` / `--only interpreter` records one compiler's half. The
+//! coverage census (`scripts/native-coverage-census.sh`) runs each half in its
+//! own process, so a half that is killed is known to be that compiler's.
 //!
 //! A document that panics is reported with its message rather than taking the
 //! process down; a document that hangs or is killed emits no line at all, and
@@ -146,13 +148,16 @@ fn record(out: &mut Map<String, Value>, tag: &str, path: &Path, compiler: Compil
     }
 }
 
-fn census_one(path: &Path, sink: &Arc<Mutex<Option<String>>>) -> Value {
+fn census_one(path: &Path, sink: &Arc<Mutex<Option<String>>>, only: Option<&str>) -> Value {
     let mut out = Map::new();
     out.insert("path".into(), json!(path.display().to_string()));
     for (tag, compiler) in [
         ("native", Compiler::Native),
         ("interpreter", Compiler::Interpreter),
     ] {
+        if only.is_some_and(|o| o != tag) {
+            continue;
+        }
         match guarded(sink, || {
             let mut sub = Map::new();
             record(&mut sub, tag, path, compiler);
@@ -171,9 +176,18 @@ fn census_one(path: &Path, sink: &Arc<Mutex<Option<String>>>) -> Value {
 
 fn main() -> Result<(), String> {
     let mut paths: Vec<PathBuf> = Vec::new();
+    let mut only: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         if a == "--rhs-always" {
+            continue;
+        }
+        if a == "--only" {
+            let tag = args.next().ok_or("--only needs native or interpreter")?;
+            if tag != "native" && tag != "interpreter" {
+                return Err(format!("--only {tag}: expected native or interpreter"));
+            }
+            only = Some(tag);
             continue;
         }
         if a == "--paths-from" {
@@ -189,7 +203,10 @@ fn main() -> Result<(), String> {
         }
     }
     if paths.is_empty() {
-        return Err("usage: compiler_census <doc.esm …> | --paths-from <list.txt>".into());
+        return Err(
+            "usage: compiler_census [--only native|interpreter] <doc.esm …> | --paths-from <list.txt>"
+                .into(),
+        );
     }
 
     let sink: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -201,7 +218,7 @@ fn main() -> Result<(), String> {
     }
 
     for path in &paths {
-        let line = census_one(path, &sink);
+        let line = census_one(path, &sink, only.as_deref());
         println!("{line}");
         use std::io::Write;
         let _ = std::io::stdout().flush();

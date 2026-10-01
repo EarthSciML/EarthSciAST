@@ -1,0 +1,43 @@
+{
+  "fixture": "bare_rank_lift",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "bare_rank_lift_t1",
+      "assertion_idx": 1,
+      "variable": "dp",
+      "actual": 9.999999999999998
+    },
+    {
+      "test_id": "bare_rank_lift_t1",
+      "assertion_idx": 2,
+      "variable": "dp",
+      "actual": 9.999999999999998
+    },
+    {
+      "test_id": "bare_rank_lift_t1",
+      "assertion_idx": 3,
+      "variable": "dp",
+      "actual": 19.999999999999996
+    },
+    {
+      "test_id": "bare_rank_lift_t1",
+      "assertion_idx": 4,
+      "variable": "dp",
+      "actual": 19.999999999999996
+    },
+    {
+      "test_id": "bare_rank_lift_t1",
+      "assertion_idx": 5,
+      "variable": "dp",
+      "actual": 9.999999999999998
+    },
+    {
+      "test_id": "bare_rank_lift_t1",
+      "assertion_idx": 6,
+      "variable": "dp",
+      "actual": 19.999999999999996
+    }
+  ]
+}

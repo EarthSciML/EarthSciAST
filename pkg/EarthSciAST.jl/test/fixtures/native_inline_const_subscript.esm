@@ -1,0 +1,134 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "native_probe_inline_const_subscript",
+    "description": "Inline const tables used as index subscripts: a table read at an enum-resolved subscript (the enum lowers to a scalar const) and a state read through an inline permutation table. Both compilers must build it and agree bit for bit.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "native",
+      "probe"
+    ]
+  },
+  "enums": {
+    "axis": {
+      "x": 1,
+      "y": 2
+    }
+  },
+  "models": {
+    "Perm": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": [
+            "i"
+          ],
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    {
+                      "op": "const",
+                      "args": [],
+                      "value": [
+                        [
+                          1.0,
+                          2.0,
+                          3.0,
+                          4.0
+                        ],
+                        [
+                          0.5,
+                          0.25,
+                          0.125,
+                          0.0625
+                        ]
+                      ]
+                    },
+                    {
+                      "op": "enum",
+                      "args": [
+                        "axis",
+                        "y"
+                      ]
+                    },
+                    "i"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    {
+                      "op": "index",
+                      "args": [
+                        {
+                          "op": "const",
+                          "args": [],
+                          "value": [
+                            3,
+                            1,
+                            4,
+                            2
+                          ]
+                        },
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

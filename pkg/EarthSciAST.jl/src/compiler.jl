@@ -75,6 +75,10 @@ struct CompilerPlan
     tcadence::Bool
     # ---- build-once machinery whose OFF state is a reference path ----
     intern::Bool
+    # Every construction-time compiled form: the fills of setup_fill.jl (setup
+    # MAP and makearray, field `ic`, faq `initialization_equations`) and the
+    # compile-once sweeps behind them (those, and `seed_expression_ic!`). Off,
+    # each takes its per-cell reference form.
     setup_map_compile_once::Bool
     geom_sweep_specialize::Bool
     geom_overlap_gate::Bool
@@ -94,6 +98,15 @@ _plan_all(name::Symbol, strict::Bool, on::Bool) =
                  on, on,
                  on, on, on, on)
 
+# `plan` with the named fields replaced.
+_plan_with(plan::CompilerPlan; kw...) =
+    CompilerPlan((get(kw, f, getfield(plan, f)) for f in fieldnames(CompilerPlan))...)
+
+# True when the construction-time compile-once forms may run (see the plan
+# field). A compile-once form is not a per-cell route, so it is gated on this
+# and never on a right-hand-side tier: `:mtk` turns every one of those off.
+_setup_compile_once_enabled() = _compiler_plan_now().setup_map_compile_once
+
 """
     _compiler_plan(compiler::Symbol) -> CompilerPlan
 
@@ -106,19 +119,55 @@ function _compiler_plan(compiler::Symbol)
     elseif compiler === :interpreter
         return _plan_all(:interpreter, false, false)
     elseif compiler === :xla
-        throw(SimulateError(
-            "compiler=:xla is not reachable from esm_problem yet — the direct " *
-            "StableHLO emitter exists (it needs Reactant loaded) but is wired to " *
-            "the `:oop` build_evaluator form, not to this entry point; a later " *
-            "phase of the compiler-selection work lands it here",
-            ERROR_CODES.COMPILER_UNAVAILABLE))
+        # The specialty compiler that needs a HEAVY EXTERNAL DEPENDENCY: the
+        # direct StableHLO emitter, which exists only with Reactant in the
+        # session. `_xla_extension` raises `compiler_unavailable` when it is
+        # not, which is the right failure for a value that IS in the
+        # vocabulary, and the device is resolved to a client here too — a
+        # mistyped `EARTHSCI_JULIA_XLA_DEVICE` is an `ArgumentError`, a GPU
+        # this process does not have is `compiler_unavailable` — so neither
+        # waits for a load, a flatten and a build. Everything else about the
+        # lane is in compiler_xla.jl.
+        # The PLAN is `native`'s: the emitter lowers the compiled tree-walk
+        # intermediate representation, so the tiers that build it all run, and
+        # they run strictly — a rule `native` would refuse is a rule `:xla` has
+        # no program for either.
+        _xla_extension()
+        _xla_client(_xla_device())
+        return _plan_all(:xla, true, true)
     elseif compiler === :mtk
-        throw(SimulateError(
-            "compiler=:mtk is not reachable from esm_problem yet — today's route " *
-            "to a ModelingToolkit system is `ModelingToolkit.System(flatten(file))` " *
-            "with ModelingToolkit loaded; a later phase of the compiler-selection " *
-            "work lands it on this keyword",
-            ERROR_CODES.COMPILER_UNAVAILABLE))
+        # VOCABULARY FIRST, AVAILABILITY SECOND. `:mtk` is a member of the
+        # closed vocabulary, so a session without ModelingToolkit hears
+        # `compiler_unavailable` naming what to load — never `compiler_unknown`,
+        # which would say the value does not exist.
+        #
+        # `:mtk` is a SPECIALTY compiler: it works only for some documents, and
+        # it is the one that runs EVENTS and IMPLICIT EQUATIONS (the constructs
+        # CONFORMANCE_SPEC §5.39 has every other evaluator refuse). `:native`
+        # remains the universally fast default with no heavy external
+        # dependency; `:interpreter` remains the simple oracle that checks them.
+        Base.get_extension(EarthSciAST, :EarthSciASTMTKExt) === nothing &&
+            throw(SimulateError(
+                "compiler=:mtk builds a ModelingToolkit `System` and needs " *
+                "ModelingToolkit loaded — add `using ModelingToolkit` so the " *
+                "EarthSciASTMTKExt extension activates. It is a SPECIALTY " *
+                "compiler that runs only some documents (it is the one that runs " *
+                "events and implicit equations); compiler=:native is the " *
+                "universally fast default",
+                ERROR_CODES.COMPILER_UNAVAILABLE))
+        # Every right-hand-side tier is OFF: this compiler emits nothing of
+        # this package's own, so a tier flag would describe a cascade that
+        # never runs. `strict` stays TRUE — `:mtk` refuses a document it cannot
+        # express by name (`compiler_refused_rule`) rather than building part
+        # of it, which is what `_refuse_rule` reads off the plan in force.
+        #
+        # The construction-time compile-once forms stay ON. ModelingToolkit
+        # owns the right-hand side, not the evaluations this package still
+        # performs for the problem — a `seed_ic!` hook's `seed_expression_ic!`
+        # above all. Those run under this plan, strictly, so they need the
+        # compiled-once form `native` gives them: with it off every seed would
+        # take the per-cell route, which a strict plan refuses.
+        return _plan_with(_plan_all(:mtk, true, false); setup_map_compile_once = true)
     elseif compiler === :sympy
         throw(SimulateError(
             "compiler=:sympy is a Python-binding compiler (a lambdified SymPy " *
@@ -155,6 +204,11 @@ _with_compiler_plan(f, plan::CompilerPlan) =
 # spelled out is the second way of saying the same thing that §2.5.10 exists to
 # remove.
 _plan_for(compiler::Symbol) = _compiler_plan(compiler)
+# The internal build entry (`_build_evaluator_impl`) also takes a plan itself,
+# so a test can build with a tier plan no vocabulary value names (a non-strict
+# `native`, to reach the per-cell build a strict one refuses). The public
+# entries take only the vocabulary.
+_plan_for(plan::CompilerPlan) = plan
 
 # ---------------------------------------------------------------------------
 # The report: which tier each rule landed on
@@ -169,10 +223,34 @@ landed on, and every decline it collected getting there.
 * `rule` — the rule's identity, component-qualified the way the document spells
   it (a derivative target with its output axes, an observed's name, a setup
   array's name).
-* `kind` — `:equation`, `:observed` or `:setup_array`.
-* `tier` — where it landed: `:affine`, `:scan`, `:array_contraction_codegen`,
-  `:percell_build` (scalarized per output cell at BUILD, then compiled),
-  `:codegen`, `:interpreter`, `:setup_compiled`, `:setup_percell`.
+* `kind` — `:equation`, `:observed`, `:setup_array`, or `:rhs_program` for a
+  compiler that emits ONE program for the whole assembled right-hand side
+  (`:xla`) rather than lowering it rule by rule.
+* `tier` — where it landed:
+  - right-hand side: `:affine`, `:scan`, `:array_contraction_codegen`,
+    `:empty_output` (an array equation over an empty output range: no cell to
+    build or run), `:percell_build` (scalarized per output cell at BUILD, then
+    compiled),
+    `:codegen`, `:interpreter` (walked per cell as trees on every call);
+    `:scalar` (a scalar equation, walked once per slot on every call by the
+    scalar walker) and `:scalar_loop` (the same, with a reduction kept as a
+    runtime loop the walker runs over its whole length on every call);
+  - construction: `:setup_codegen` (filled through the right-hand-side cascade
+    and emitted code, run once), `:setup_compiled` (compiled once, evaluated per
+    cell),
+    `:setup_loaded` (copied out of a supplied array), `:setup_constant`
+    (evaluated once and filled), `:setup_percell` (resolved and compiled per
+    cell), and `:discrete_percell` (a discrete-cadence field, resolved and
+    compiled per cell at build and walked per cell at every data refresh;
+    under `native` such a field is instead an `:observed` row on the
+    right-hand-side tier its compiled fill landed on);
+  - output time, added by `observed_field` the first time it reads a name:
+    `:output_compiled_once` or `:output_percell`;
+  - and, on the `:rhs_program` row an `:xla` build adds, `:xla_direct_cpu` /
+    `:xla_direct_gpu`, which name the emitter and the device together.
+  Under a strict compiler `:interpreter`, `:setup_percell`,
+  `:discrete_percell` and `:output_percell` are refusals instead, and so is
+  `:percell_build` in the in-place form, so a `native` report never shows them.
 * `declines` — `tier => reason` for every tier that looked at this rule and
   passed, deepest reason last.
 """
@@ -331,6 +409,36 @@ function _finish_report(rec::_BuildRecord)
 end
 
 # ---------------------------------------------------------------------------
+# What one output-time read did
+# ---------------------------------------------------------------------------
+#
+# `observed_field` files one report row per name, saying whether the read walked
+# per cell. That is a question about ONE CALL, which the process-global
+# `_CASCADE_TALLY` cannot answer: another task's evaluations add into it, and so
+# does an attempt the read made and then abandoned. So the read installs a
+# task-local counter, the per-cell cellwise route bumps it once it has SERVED a
+# value, and a caller that swallows a failed attempt drops what the attempt
+# counted (`_percell_mark` / `_percell_restore!`).
+const _PERCELL_COUNT_KEY = :earthsci_percell_count
+
+_percell_counter()::Union{Nothing,Base.RefValue{Int}} =
+    get(task_local_storage(), _PERCELL_COUNT_KEY, nothing)
+
+# `(f(), n)`: the value and the number of per-cell evaluations that served it.
+# A nested count also adds into the enclosing one.
+function _counting_percell(f)
+    outer = _percell_counter()
+    r = Ref(0)
+    v = task_local_storage(f, _PERCELL_COUNT_KEY, r)
+    outer === nothing || (outer[] += r[])
+    return v, r[]
+end
+
+_note_percell!() = (r = _percell_counter(); r === nothing || (r[] += 1); nothing)
+_percell_mark() = (r = _percell_counter(); r === nothing ? 0 : r[])
+_percell_restore!(n::Int) = (r = _percell_counter(); r === nothing || (r[] = n); nothing)
+
+# ---------------------------------------------------------------------------
 # The refusal
 # ---------------------------------------------------------------------------
 
@@ -368,7 +476,7 @@ not one of these and never reaches here: what is refused is re-deriving the
 program for every cell.
 """
 function _refuse_percell_evaluation(rule::AbstractString, what::AbstractString,
-                                    cells::Union{Nothing,Integer})
+                                    cells::Union{Nothing,Integer}; one_cell::Bool = false)
     _compiler_is_strict() || return nothing
     over = cells === nothing ? "" :
            ", over $cells cell" * (cells == 1 ? "" : "s")
@@ -377,5 +485,27 @@ function _refuse_percell_evaluation(rule::AbstractString, what::AbstractString,
         "because the compile-once form declined it. That is a tree walk per " *
         "cell at construction time, which esm-libraries-spec §2.5.10 puts " *
         "under the same rule as the right-hand side. Build with " *
-        "compiler=:interpreter to run it")
+        "compiler=:interpreter to run it" * (one_cell ? ". " * _ONE_CELL_NOTE : ""))
 end
+
+# Said by every refusal raised once ONE cell of a per-cell route has been
+# evaluated for its diagnostic (`one_cell = true` above), in the words the Rust
+# binding uses for its own: the cells it did not evaluate may still hold a
+# document error, and only the interpreter would find it.
+const _ONE_CELL_NOTE =
+    "Only one cell of it was evaluated before this refusal, so a document error " *
+    "in a cell that was not (an out-of-range gather at the last cell, say) is not " *
+    "reported here; the interpreter evaluates every cell and reports it"
+
+# The same, for a refusal whose diagnostic evaluated only some terms of one cell
+# (a contraction too long to build in full, `_refuse_faq_percell`), and for one
+# that evaluated no term at all (a join gate that admitted none it tried).
+const _PART_CELL_NOTE =
+    "Only some terms of one cell of it (the first and last value of each " *
+    "contracted index, or at most its first 1024 admitted terms) were evaluated " *
+    "before this refusal, so a document error in a term or cell that was not is " *
+    "not reported here; the interpreter evaluates every cell and reports it"
+const _NO_CELL_NOTE =
+    "No term of it was evaluated before this refusal (its join gate admitted " *
+    "none of the terms tried), so a document error in it is not reported here; " *
+    "the interpreter evaluates every cell and reports it"

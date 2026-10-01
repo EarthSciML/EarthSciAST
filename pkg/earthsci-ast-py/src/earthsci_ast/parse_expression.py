@@ -12,7 +12,7 @@ Coverage:
    functions, derivatives (``D(x)/Dt`` and ``D(x, t)``), open/user function calls;
  - array & call-shaped tier: array literals ``[…]`` (``const``), indexing
    ``a[i, j]`` (``index``), dotted closed-function calls ``datetime.year(t)``
-   (``fn``), the ``true`` literal, and ``integral`` / ``reshape`` / ``transpose`` /
+   (``fn``), the ``true`` and ``false`` literals, and ``integral`` / ``reshape`` / ``transpose`` /
    ``concat``;
  - reduction & array-query tier: ``faq`` reductions
    ``sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
@@ -110,11 +110,14 @@ _INFIX: frozenset[str] = frozenset(
 _RIGHT_ASSOC: frozenset[str] = frozenset({"^"})
 
 # Prefix operand minimum-precedences, sourced from the printer's table:
-#  - unary `-` binds LOOSELY (precedence of `-`, = additive), so it swallows a
-#    whole additive/multiplicative operand, matching how the printer renders
-#    `-(Ea/(R*T))` as `-Ea / (R * T)` with no inner parens.
+#  - unary `-` binds at MULTIPLICATIVE precedence, the standard mathematical
+#    reading: tighter than `+`/binary `-` (`-a + b` = `(-a) + b`), looser than
+#    `^` (`-a^2` = `-(a^2)`). Its operand absorbs a `*`/`/` chain (`-a * b` =
+#    `-(a * b)`, numerically identical to `(-a) * b`) and a power, but stops at
+#    the first `+`/`-`. The printer's matching rule is `_UMINUS_OPERAND_MIN` in
+#    display.py, so `-(a + b)` keeps its parens.
 #  - `not` binds TIGHTLY at its own precedence (`not p and q` = `(not p) and q`).
-_UMINUS_MIN = _op_precedence("-")
+_UMINUS_MIN = _op_precedence("*")
 _NOT_MIN = _op_precedence("not")
 # Template binding values (`name<k = value, …>`) bind at additive precedence so
 # the closing `>` — a comparison operator — is never swallowed as `value > …`.
@@ -122,7 +125,7 @@ _TEMPLATE_ARG_MIN = _op_precedence("+")
 
 # Structural ops whose defining data lives OUTSIDE `args` AND which have no text
 # surface yet — refused, pending a dedicated syntax pass. (`integral`, `reshape`,
-# `transpose`, `concat`, `fn`, `const`, `index`, `true`, `aggregate`,
+# `transpose`, `concat`, `fn`, `const`, `index`, `true`, `false`, `aggregate`,
 # `apply_expression_template`, `polygon_intersection_area`, `intersect_polygon`,
 # `makearray` DO have a surface and are reconstructed below; they are
 # intentionally absent here. `table_lookup` IS listed: its surface is the bracket
@@ -392,8 +395,8 @@ class _Parser:
         if t.k == "[":
             return {"op": "const", "value": self._parse_array_rest(), "args": []}
         if t.k == "name":
-            if t.v == "true":
-                return {"op": "true", "args": []}
+            if t.v in ("true", "false"):
+                return {"op": t.v, "args": []}
             # `makearray(region = value, …)` — a piecewise-region array. Its
             # arguments are `[lo:hi, …] = value` pairs, not plain call args, so it
             # needs its own parse rather than the generic _parse_call path.

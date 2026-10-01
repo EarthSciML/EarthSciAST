@@ -75,7 +75,7 @@ function _run(doc, const_arrays; disable::Bool=false)
         ESS._VI_ENUM_VISITS[] = 0
         du = nothing
         t = @elapsed begin
-            f!, u0, p, _, _ = build_evaluator(file; model_name="Rollup",
+            f!, u0, p, _, _ = EarthSciAST._build_evaluator(file; model_name="Rollup",
                 const_arrays=Dict{String,Any}(const_arrays),
                 initial_conditions=Dict("count" => 0.0),
                 compiler = disable ? :interpreter : :native)
@@ -105,7 +105,7 @@ end
                     "join_on_data_columns.esm")
     @test isfile(path)
     file = ESS.load_path(path)
-    f!, u0, p, _, vmap = build_evaluator(file; model_name="DataColumnJoin",
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(file; model_name="DataColumnJoin",
                                          initial_conditions=Dict("count" => 0.0))
     du = similar(u0); f!(du, u0, p, 0.0)
     @test du[vmap["count"]] == 5.0            # NOT 12.0 (the ungated product)

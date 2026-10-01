@@ -182,6 +182,45 @@ end
         end
     end
 
+    # An array element carries its array's unit on the evaluation path, so
+    # `cos(index(lat, i))` with `lat` in `deg` converts like `cos(lat)` does.
+    # The checker has no rule for `index` or `faq` (§4.8.4), and this rewrite
+    # used to read the argument with the checker's rules, so it left every
+    # array element unconverted and evaluated cos(60 radians) = -0.952.
+    @testset "flatten converts a degree ARRAY ELEMENT" begin
+        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
+                        "scalar_operator_semantics", "fixtures", "angle_array_element.esm")
+        if _require_fixture(path)
+            file = EarthSciAST.load_path(path)
+            flat = EarthSciAST.flatten(file)
+            found = Dict{String, Any}()
+            function collect_trig(name, e)
+                e isa EarthSciAST.OpExpr || return
+                e.op in ("sin", "cos", "tan") && length(e.args) == 1 &&
+                    (found[name] = e.args[1])
+                foreach(c -> collect_trig(name, c), EarthSciAST.child_exprs(e))
+            end
+            for eq in flat.equations
+                eq.lhs isa EarthSciAST.VarExpr && collect_trig(eq.lhs.name, eq.rhs)
+            end
+            args = Dict(last(split(k, '.')) => v for (k, v) in found)
+            @test sort(collect(keys(args))) ==
+                  ["cos_lat", "cos_lat_rad", "sin_colat", "sin_scalar", "sin_sum"]
+            for name in ("cos_lat", "sin_colat", "sin_sum")
+                arg = args[name]
+                # `index(A, …) * (π/180)`: the element, then the declared scale, once.
+                @test arg isa EarthSciAST.OpExpr && arg.op == "*"
+                @test arg.args[1] isa EarthSciAST.OpExpr && arg.args[1].op == "index"
+                @test arg.args[2] isa EarthSciAST.NumExpr && arg.args[2].value == pi / 180
+            end
+            @test args["sin_scalar"] isa EarthSciAST.OpExpr && args["sin_scalar"].op == "*"
+            # The `rad` control is never touched.
+            @test args["cos_lat_rad"] isa EarthSciAST.OpExpr && args["cos_lat_rad"].op == "index"
+            # The checker still reads the authored spelling and still accepts it.
+            @test EarthSciAST.validate(file).is_valid
+        end
+    end
+
     @testset "the shared fixtures" begin
         bad = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
                        "units_discriminator_transcendental_scaled_argument.esm")

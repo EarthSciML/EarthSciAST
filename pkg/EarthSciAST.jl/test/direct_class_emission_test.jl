@@ -112,7 +112,11 @@ _dce_probe(n, k) = Float64[1.0 + 0.9 * sin(1.3i + 0.7k) for i in 1:n]
 # class merge, no kernels at all. `codegen=false` puts the primary emission's
 # node budget at zero — a retained tuning threshold — so the class kernels stay
 # on `kernel_section.kernels` and can be introspected.
-function _dce_build(model, ics; codegen::Bool=true, compiler::Symbol=:native)
+# The default build is `native`'s tier plan with `strict` off: a strict
+# `native` refuses the in-place per-cell build this file is about (it grows with
+# the array), so a non-strict plan is the one that still takes it.
+const _DCE_NATIVE = ESM._plan_with(ESM._compiler_plan(:native); strict=false)
+function _dce_build(model, ics; codegen::Bool=true, compiler=_DCE_NATIVE)
     withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
         ESM._reset_cascade_tally!()
         f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;

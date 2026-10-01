@@ -90,6 +90,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # The ModelingToolkit export honours a continuous event's `affect_neg` and
     # `root_find` (esm-spec §5.2, issue #356).
     include("mtk_continuous_event_options_test.jl")
+    # `esm_problem(...; compiler = :mtk)` — the specialty compiler that RUNS the
+    # three constructs CONFORMANCE_SPEC §5.39 has every other evaluator refuse,
+    # and refuses by name the document content it cannot express (API_SPEC §5.8).
+    include("compiler_mtk_test.jl")
     include("run_esm_tests_test.jl")
     include("container_in_document_test.jl")
     include("units_fixture_consumption_test.jl")
@@ -158,9 +162,17 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # of `native` with the `:interpreter` oracle — the whole point of the
     # compiler keyword, and this file was never on the list, so none of it ran.
     include("compiler_selection_test.jl")
+    # Every per-cell route under a strict `native`: refused by name, or compiled
+    # once and reported under a tier that says so.
+    include("percell_route_refusal_test.jl")
+    # The compiled observed program: observed_field(prob, name; u, t), inline
+    # assertions and sink fields read through it, bit for bit the interpreter's.
+    include("observed_program_test.jl")
 
     # ---- Tree-walk evaluator (src/tree_walk.jl) + discrete-cadence data refresh ----
     include("tree_walk_test.jl")
+    include("state_layout_test.jl")                # the flat state layout ≡ the per-cell name map it replaced
+    include("compiled_lane_eval_test.jl")          # the affine tier's compiled lane evaluator ≡ _eval_recipe
     include("dag_walk_memo_test.jl")               # ESS-1p5 exponential-path DAG walk regression
     include("intern_oracle_test.jl")               # A1 hash-consing ≡ the interpreter (differential)
     include("xeq_variant_oracle_test.jl")          # A3 cross-eq variant memo ≡ the interpreter (differential)
@@ -222,6 +234,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
         include("reactant_locate_test.jl")           # count-locate ≢ a reduction, and bit-exact
         include("reactant_direct_emit_test.jl")      # the COMPILED backend: StableHLO built directly from the _Node IR
         include("reactant_direct_sharding_test.jl") # multi-device: needs ESM_TEST_REACTANT_GPU=1 too, else self-skips
+        include("compiler_xla_test.jl")              # esm_problem(; compiler = :xla): the emitter on the SOLVE path
     else
         @info "skipping the reactant_*_test.jl files (set ESM_TEST_REACTANT=1, " *
               "with Reactant in the environment, to run the compiled backend)"
@@ -281,6 +294,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("contraction_loop_test.jl")             # runtime contraction loop (ess-runtime-contraction)
     include("contraction_tier_order_test.jl")       # loop-vs-affine tier ORDER (ess-runtime-contraction × ess-affine)
     include("array_contraction_test.jl")            # whole-array contraction loop nest (ess-array-contraction)
+    include("array_contraction_table_test.jl")      # …its gated / ragged / filtered form, table-driven
+    include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
+    include("native_probe_fixtures_test.jl")        # native's probe fixtures: rank > 3, fill sections, const subscripts
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
     # `compiler=:interpreter`: an in-place build that skips no prelude slot,
     # which is what the tiering tests above use as their differential oracle.
@@ -314,14 +330,17 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("geometry_overlap_join_conformance_test.jl")
     include("geometry_ranged_clip_test.jl")
     include("setup_map_compile_once_test.jl")  # promoted-physics MAP: compile-once == per-cell, bitwise
+    include("setup_fill_test.jl")  # construction-time fills through the cascade: bitwise, one compile across N
     include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == rank-abstract, bitwise
     include("geom_overlap_drive_test.jl")     # setup overlap broad phase: candidate-DRIVEN, and what it changes
+    include("geom_on_drive_test.jl")          # setup bin-equality broad phase: key matches DRIVE the sweep
     include("broad_phase_conformance_test.jl")   # projection-pushdown Phase 3a
     include("overlap_gate_conformance_test.jl")   # projection-pushdown Phase 2a
     include("join_namespacing_test.jl")           # §5.5.6 join names under flattening
     include("join_on_equality_gate_test.jl")      # §5.5.8 value-equality gate: data columns + DRIVING
     include("join_on_self_join_test.jl")          # §5.5.8 a relation joined to ITSELF: two ranges, one index set
     include("vi_overlap_scaling_test.jl")         # projection-pushdown Wall #1 (candidate-driven)
+    include("vi_on_drive_test.jl")                # value invention: bin-equality key matches DRIVE the join
     include("pushdown_edge_test.jl")              # projection-pushdown Phase 2b (L1 milestone)
     include("auto_pushdown_rewrite_test.jl")      # projection-pushdown Phase 4 (auto desugar)
     include("pushdown_template_ref_test.jl")      # the desugar THROUGH surviving template refs (§9.6.4 Option B)
@@ -355,6 +374,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_scalar_ic_test.jl")
     include("conformance_static_evaluation_assertions_test.jl")  # §6.6.3 an assertion's `time` is when it is EVALUATED (#406)
     include("conformance_shaped_parameter_broadcast_test.jl")  # §6.3 scalar-on-a-shaped-parameter broadcast
+    include("conformance_shaped_parameter_const_arrays_test.jl")  # §5.32.5 const_arrays keys for a shaped parameter
     include("conformance_shaped_observed_scalar_broadcast_test.jl")  # §4.3.4 scalar right-hand side on a shaped observed (#262)
     include("conformance_override_key_diagnostics_test.jl")
     include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names

@@ -94,3 +94,13 @@ _dsu_code(e) = hasproperty(e, :code) ? String(e.code) : ""
         end
     end
 end
+
+@testset "a data feed is bound by its own name, never by another component's leaf" begin
+    bound = EarthSciAST._data_feed_is_bound
+    @test bound("Forcing.k", (Dict("Forcing.k" => 1),))
+    @test bound("Top.Forcing.k", (Dict("Forcing.k" => 1),))
+    @test bound("Forcing.k", (Dict("k" => 1),))
+    @test bound("k", (Dict("Forcing.k" => 1),))
+    @test !bound("Forcing.k", (Dict("Other.k" => 1),))
+    @test !bound("Forcing.k", (Dict("kk" => 1), Dict("orcing.k" => 1)))
+end

@@ -1,7 +1,7 @@
 # `Enzyme.API.strictAliasing!(false)` — what it costs, and what it would take to stop needing it
 
 > **The out-of-place tree walk this was measured on has since been retired.**
-> `build_evaluator(model; form = :oop)` now returns the compiled intermediate
+> `EarthSciAST._build_evaluator(model; form = :oop)` now returns the compiled intermediate
 > representation for a compiled backend to lower, with no host evaluator behind
 > it, so `repro_oop.jl` and `relaxed_min.jl` are gone. What survives unchanged
 > is the finding itself — the wart belongs to the shared `_Node` IR, not to any

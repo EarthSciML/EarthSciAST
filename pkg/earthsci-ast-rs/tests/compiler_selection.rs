@@ -52,19 +52,27 @@ fn build(path: &Path, compiler: Compiler) -> Result<EsmProblem, SimulateError> {
     build_rhs(path, compiler, Rhs::Auto)
 }
 
-/// `Rhs::Always` for the fixtures whose `D` equations only become an
-/// integrable system once a harness asks for one: a discretized PDE fixture
-/// declares its derivative through a `faq` stencil, and `Rhs::Auto` reads the
-/// undiscretized document as having nothing to integrate and hands back a
-/// static Problem — with no right-hand side, no compiler and nothing to
-/// compare.
+/// `Rhs::Always` for the fixtures a harness integrates as the conformance
+/// adapters do, forcing a right-hand side rather than letting the routing
+/// decide.
 fn build_rhs(path: &Path, compiler: Compiler, rhs: Rhs) -> Result<EsmProblem, SimulateError> {
+    build_with_u0(path, compiler, rhs, &[])
+}
+
+/// [`build_rhs`] with initial-condition overrides.
+fn build_with_u0(
+    path: &Path,
+    compiler: Compiler,
+    rhs: Rhs,
+    u0: &[(&str, f64)],
+) -> Result<EsmProblem, SimulateError> {
     esm_problem(
         path,
         (0.0, 1.0),
         ProblemOptions {
             rhs,
             compiler: Some(compiler),
+            u0: u0.iter().map(|&(k, v)| (k.to_string(), v)).collect(),
             ..Default::default()
         },
     )
@@ -74,10 +82,16 @@ fn build_rhs(path: &Path, compiler: Compiler, rhs: Rhs) -> Result<EsmProblem, Si
 // 1 + 2: availability, and the vocabulary's edge
 // ---------------------------------------------------------------------------
 
+/// The members this binding never provides, whatever it was built with:
+/// `mtk` is Julia's and `sympy` is Python's.
+///
+/// `xla` is NOT in this list. It is the one member whose availability is a
+/// property of the BUILD — the `xla` Cargo feature plus a usable runtime — so
+/// it has its own pair of tests, one per side of that feature.
 #[test]
 fn a_compiler_this_binding_does_not_provide_is_refused_not_substituted() {
     let path = fixture("tests/simulation/simple_ode.esm");
-    for compiler in [Compiler::Xla, Compiler::Mtk, Compiler::Sympy] {
+    for compiler in [Compiler::Mtk, Compiler::Sympy] {
         let err = match build(&path, compiler) {
             Err(e) => e,
             Ok(_) => panic!("{compiler} must be refused, not built"),
@@ -96,14 +110,30 @@ fn a_compiler_this_binding_does_not_provide_is_refused_not_substituted() {
                 // §2.5.10: the message names what would have to be loaded or
                 // built. A refusal that does not is a dead end.
                 assert!(
-                    details.contains("feature")
-                        || details.contains("Julia")
-                        || details.contains("Python"),
+                    details.contains("Julia") || details.contains("Python"),
                     "{compiler}: {details}"
                 );
             }
             other => panic!("{compiler} must raise CompilerUnavailable, got {other:?}"),
         }
+    }
+}
+
+/// Without the `xla` feature, `xla` is `compiler_unavailable` and the message
+/// says how to get it — never a fallback to `native`, and never `unknown`,
+/// which is a different failure about a different thing.
+#[cfg(not(feature = "xla"))]
+#[test]
+fn xla_is_unavailable_in_a_build_without_the_feature() {
+    let path = fixture("tests/simulation/simple_ode.esm");
+    match build(&path, Compiler::Xla) {
+        Err(SimulateError::CompilerUnavailable { compiler, details }) => {
+            assert_eq!(compiler, "xla");
+            // §2.5.10: the message names what would have to be built.
+            assert!(details.contains("feature"), "{details}");
+            assert!(details.contains("XLA_EXTENSION_DIR"), "{details}");
+        }
+        other => panic!("xla must raise CompilerUnavailable here, got {other:?}"),
     }
 }
 
@@ -128,14 +158,16 @@ fn a_value_outside_the_vocabulary_is_compiler_unknown() {
 
 /// The document `native` refuses, and the reason it refuses for.
 ///
-/// This used to be an `interp.linear` fixture, which was then the largest
-/// single decline in the corpus census (405 rules of 1057). That family is on
-/// the tape now, so the canonical refusal moved to the next one that is a
-/// genuine CAPABILITY gap rather than a cost choice:
-/// `polygon_intersection_area` has no array evaluator at all, so nothing about
-/// this test can quietly become a tautology the way a lowered `interp.linear`
-/// would have.
-const REFUSED_FIXTURE: &str = "tests/coupling/interfaces.esm";
+/// This was first an `interp.linear` fixture and then a
+/// `polygon_intersection_area` one; both families are on the tape now. The
+/// canonical refusal is a causal self-reference (esm-spec §4.3.1.1): a
+/// recurrence's cells are not independent, the interpreter's sequential sweep
+/// is its one implementation, and the tape refuses it by construction rather
+/// than by a missing lowering that could quietly land.
+const REFUSED_FIXTURE: &str = "tests/valid/recurrence_causal_self_reference.esm";
+
+/// What the refusal's reason names.
+const REFUSED_CONSTRUCT: &str = "recurrence";
 
 /// The refusal must name the RULE, not just the document.
 #[test]
@@ -160,11 +192,11 @@ fn native_refuses_a_rule_the_tape_cannot_lower_and_names_it() {
                 "the cadence tier is reported: {tier}"
             );
             assert!(
-                reason.contains("polygon_intersection_area"),
+                reason.contains(REFUSED_CONSTRUCT),
                 "the deepest decline reason is carried: {reason}"
             );
         }
-        other => panic!("native must refuse a polygon_intersection_area rule, got {other:?}"),
+        other => panic!("native must refuse a {REFUSED_CONSTRUCT} rule, got {other:?}"),
     }
 }
 
@@ -209,58 +241,103 @@ fn the_interpreter_takes_the_document_native_refused() {
 
 /// One fixture per document SHAPE, because the two compilers diverge by shape
 /// and not by document: a 0-D system, a reaction-systems-only document (no
-/// `models` map at all until flattening), a discretized PDE, and an
-/// aggregate/contraction document.
-const AGREEMENT_FIXTURES: &[&str] = &[
-    // A 0-D ODE — the shape the scalar interpreter used to own outright.
-    "tests/simulation/simple_ode.esm",
+/// `models` map at all until flattening), a discretized PDE, an
+/// aggregate/contraction document, and contractions over a tuple list.
+/// Each with the initial conditions a document without state defaults needs.
+const AGREEMENT_FIXTURES: &[(&str, &[(&str, f64)])] = &[
+    // A 0-D ODE.
+    ("tests/simulation/simple_ode.esm", &[]),
     // A `reaction_systems`-only document: no `models` map at all until
     // flattening lowers its reactions, which is the routing the `!= 1` fix
     // exists for.
-    "tests/simulation/autocatalytic_reaction.esm",
+    ("tests/simulation/autocatalytic_reaction.esm", &[]),
     // A gridded document, whose rows are per-cell keys.
-    "tests/conformance/output_derivation/fixtures/gridded.esm",
+    (
+        "tests/conformance/output_derivation/fixtures/gridded.esm",
+        &[],
+    ),
     // An aggregate over a mounted mesh subsystem, with a CONST-tier rule
     // beside the continuous one.
-    "tests/valid/subsystem_mesh_lib.esm",
+    ("tests/valid/subsystem_mesh_lib.esm", &[]),
+    // Contractions over a tuple list rather than a box: join gates (a
+    // categorical many-to-many key, data-column keys, a self-join) and
+    // ragged bounds read through a member gather.
+    ("tests/valid/faq/join_disaggregation_m2m.esm", &[]),
+    ("tests/valid/faq/join_disaggregation_m2m_permuted.esm", &[]),
+    ("tests/valid/faq/join_on_data_columns.esm", &[]),
+    ("tests/valid/faq/join_on_self_join.esm", &[]),
+    ("tests/valid/faq/join_on_self_join_syms.esm", &[]),
+    (
+        "tests/valid/faq/ragged_member_gather.esm",
+        &[
+            ("perParentTotal[1]", 0.0),
+            ("perParentTotal[2]", 0.0),
+            ("perParentTotal[3]", 0.0),
+        ],
+    ),
+    (
+        "tests/conformance/expression_templates/import_rebind_keyed_factors/expanded.esm",
+        &[("u[1]", 1.0), ("u[2]", -2.5), ("u[3]", 0.75), ("u[4]", 3.0)],
+    ),
 ];
 
 #[test]
 fn native_and_the_interpreter_agree_bit_for_bit() {
+    for &(rel, u0) in AGREEMENT_FIXTURES {
+        assert_native_agrees(rel, u0);
+    }
+}
+
+/// A document declaring per-variable element types (esm-spec §11.3.1) runs on
+/// the tape under `native`, and lands where the interpreter does. It is not in
+/// [`AGREEMENT_FIXTURES`] because the `xla` lane below refuses such documents.
+#[test]
+fn native_runs_per_variable_element_types_bit_for_bit() {
+    let rel = "tests/fixtures/element_type/float32_state_float64_neighbour.esm";
+    let native = build_rhs(&fixture(rel), Compiler::Native, Rhs::Always)
+        .unwrap_or_else(|e| panic!("{rel} must build under native: {e}"));
+    let report = native.compiler_report();
+    assert_eq!(report.n_oracle(), 0, "{report}");
+    assert_eq!(report.n_taped(), report.rules().len(), "{report}");
+    assert_native_agrees(rel, &[]);
+}
+
+/// Solve `rel` under `native` and under `interpreter` and require the same
+/// trajectory, bit for bit.
+fn assert_native_agrees(rel: &str, u0: &[(&str, f64)]) {
     let opts = SolveOptions {
         saveat: Some(vec![0.0, 0.25, 0.5, 0.75, 1.0]),
         ..Default::default()
     };
-    for rel in AGREEMENT_FIXTURES {
-        let path = fixture(rel);
-        let native = build_rhs(&path, Compiler::Native, Rhs::Always)
-            .unwrap_or_else(|e| panic!("{rel} must build under native: {e}"));
-        assert_eq!(native.compiler(), Compiler::Native);
-        // §5.8: `native` is the array runtime for EVERY document, whatever its
-        // shape — a 0-D one included. Nothing here may land on the scalar
-        // interpreter.
-        assert_eq!(native.backend_kind(), "array", "{rel}");
-        let reference = build_rhs(&path, Compiler::Interpreter, Rhs::Always)
-            .unwrap_or_else(|e| panic!("{rel} must build under the interpreter: {e}"));
+    let path = fixture(rel);
+    let build = |compiler: Compiler| build_with_u0(&path, compiler, Rhs::Always, u0);
+    let native =
+        build(Compiler::Native).unwrap_or_else(|e| panic!("{rel} must build under native: {e}"));
+    assert_eq!(native.compiler(), Compiler::Native);
+    // §5.8: `native` is the array runtime for EVERY document, whatever its
+    // shape — a 0-D one included. Nothing here may land on the scalar
+    // interpreter.
+    assert_eq!(native.backend_kind(), "array", "{rel}");
+    let reference = build(Compiler::Interpreter)
+        .unwrap_or_else(|e| panic!("{rel} must build under the interpreter: {e}"));
 
-        let a = solve(&native, &opts).unwrap_or_else(|e| panic!("{rel} native solve: {e}"));
-        let b = solve(&reference, &opts).unwrap_or_else(|e| panic!("{rel} interpreter solve: {e}"));
+    let a = solve(&native, &opts).unwrap_or_else(|e| panic!("{rel} native solve: {e}"));
+    let b = solve(&reference, &opts).unwrap_or_else(|e| panic!("{rel} interpreter solve: {e}"));
 
-        assert_eq!(a.state_variable_names, b.state_variable_names, "{rel}");
-        assert_eq!(a.time.len(), b.time.len(), "{rel}");
-        for (i, (x, y)) in a.time.iter().zip(b.time.iter()).enumerate() {
-            assert_eq!(x.to_bits(), y.to_bits(), "{rel}: time[{i}]");
-        }
-        for (r, (row_a, row_b)) in a.state.iter().zip(b.state.iter()).enumerate() {
-            assert_eq!(row_a.len(), row_b.len(), "{rel}: row {r}");
-            for (k, (x, y)) in row_a.iter().zip(row_b.iter()).enumerate() {
-                assert_eq!(
-                    x.to_bits(),
-                    y.to_bits(),
-                    "{rel}: {} at t index {k}: native {x:e} vs interpreter {y:e}",
-                    a.state_variable_names[r]
-                );
-            }
+    assert_eq!(a.state_variable_names, b.state_variable_names, "{rel}");
+    assert_eq!(a.time.len(), b.time.len(), "{rel}");
+    for (i, (x, y)) in a.time.iter().zip(b.time.iter()).enumerate() {
+        assert_eq!(x.to_bits(), y.to_bits(), "{rel}: time[{i}]");
+    }
+    for (r, (row_a, row_b)) in a.state.iter().zip(b.state.iter()).enumerate() {
+        assert_eq!(row_a.len(), row_b.len(), "{rel}: row {r}");
+        for (k, (x, y)) in row_a.iter().zip(row_b.iter()).enumerate() {
+            assert_eq!(
+                x.to_bits(),
+                y.to_bits(),
+                "{rel}: {} at t index {k}: native {x:e} vs interpreter {y:e}",
+                a.state_variable_names[r]
+            );
         }
     }
 }
@@ -309,13 +386,30 @@ fn the_report_names_every_rule_not_only_the_declines() {
 }
 
 #[test]
-fn a_static_document_reports_no_compiler_rules() {
-    // A document with nothing to integrate has no right-hand side, so no
-    // compiler was chosen for it and it can refuse nothing.
+fn a_static_document_reports_its_observeds_on_the_named_compiler() {
+    // A document with nothing to integrate has no right-hand side, but its
+    // observed graph is still evaluated at construction, and §2.5.10 puts that
+    // evaluation under the compiler the caller named (issue #484): the tape
+    // under `native`, the per-cell oracle under `interpreter`.
     let path = fixture("tests/valid/nonlinear_two_component_static.esm");
-    let prob = build(&path, Compiler::Native).expect("a static document still builds");
-    assert_eq!(prob.backend_kind(), "static");
-    assert!(prob.compiler_report().rules().is_empty());
+    for (compiler, tier) in [
+        (Compiler::Native, "taped"),
+        (Compiler::Interpreter, "oracle"),
+    ] {
+        let prob = build(&path, compiler).expect("a static document still builds");
+        assert_eq!(prob.backend_kind(), "static");
+        let report = prob.compiler_report();
+        assert!(!report.rules().is_empty(), "[{compiler}] {report}");
+        for r in report.rules() {
+            assert_eq!(r.kind, "observed", "[{compiler}] {}", r.rule);
+            assert_eq!(r.tier, tier, "[{compiler}] {}", r.rule);
+            assert!(r.reason.is_none(), "[{compiler}] {}", r.rule);
+        }
+        assert!(
+            !prob.observed_field_names().is_empty(),
+            "[{compiler}] the observeds were evaluated"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -366,6 +460,172 @@ fn a_const_tier_observed_document_is_served_from_the_tape() {
                 y.to_bits(),
                 "{} at t index {k}",
                 native.state_variable_names[r]
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 8: `xla`, the specialty compiler that needs a heavy external dependency
+// ---------------------------------------------------------------------------
+//
+// These run only in a build that HAS the dependency (`--features xla` against
+// an unpacked `xla_extension`). The other side of the feature is pinned by
+// `xla_is_unavailable_in_a_build_without_the_feature` above; between them, no
+// build of this crate leaves `xla` untested.
+
+/// The trajectory band `xla` is held to against the `interpreter` reference.
+///
+/// NOT bit-for-bit, and that is the standing ruling rather than a slack
+/// tolerance: XLA's `exp`/`log`/`pow` are not Rust's libm, and XLA's `reduce`
+/// does not pin the summation order a reduction's per-cell odometer does
+/// (`simulate_array::tape::xla_emit`'s module docs). Those differences enter
+/// the right-hand side at the last bits and the integrator then amplifies
+/// them over the run, which is what the loose end of this band pays for. The
+/// per-fixture bands the compiler-agreement tier writes (CONFORMANCE_SPEC
+/// §5.44) are the authority; this is a unit-test band over a few documents.
+#[cfg(feature = "xla")]
+const XLA_RTOL: f64 = 1e-7;
+#[cfg(feature = "xla")]
+const XLA_ATOL: f64 = 1e-10;
+
+/// The whole deliverable, from the caller's side: naming `xla` builds a
+/// Problem whose right-hand side IS the compiled program, it solves, it
+/// reports itself as `xla`, and it lands where the reference lands.
+#[cfg(feature = "xla")]
+#[test]
+fn xla_solves_and_agrees_with_the_interpreter() {
+    let opts = SolveOptions {
+        saveat: Some(vec![0.0, 0.25, 0.5, 0.75, 1.0]),
+        ..Default::default()
+    };
+    for &(rel, u0) in AGREEMENT_FIXTURES {
+        let path = fixture(rel);
+        let xla = build_with_u0(&path, Compiler::Xla, Rhs::Always, u0)
+            .unwrap_or_else(|e| panic!("{rel} must build under xla: {e}"));
+        assert_eq!(xla.compiler(), Compiler::Xla);
+        assert_eq!(xla.backend_kind(), "array", "{rel}");
+
+        // Every rule of the model is in the emitted program: `xla` is strict
+        // twice over, so a rule anywhere else would have been a build refusal.
+        // The setup evaluations outside the rule set — a field initial
+        // condition — are reported beside them, served by the whole-array
+        // overlay rather than walked per cell.
+        let report = xla.compiler_report();
+        assert_eq!(report.compiler(), Compiler::Xla, "{rel}");
+        assert!(!report.rules().is_empty(), "{rel}");
+        assert_eq!(report.n_oracle(), 0, "{rel}");
+        assert_eq!(report.n_taped(), 0, "{rel}");
+        assert_eq!(
+            report.n_xla() + report.n_vectorized(),
+            report.rules().len(),
+            "{rel}"
+        );
+        for r in report.rules() {
+            let want = match r.kind {
+                "observed" | "state derivative" => "xla",
+                _ => "vectorized",
+            };
+            assert_eq!(r.tier, want, "{rel}: {}", r.rule);
+            assert!(r.reason.is_none(), "{rel}: {}", r.rule);
+        }
+        assert!(report.to_string().contains("compiler xla"), "{rel}");
+
+        let reference = build_with_u0(&path, Compiler::Interpreter, Rhs::Always, u0)
+            .unwrap_or_else(|e| panic!("{rel} must build under the interpreter: {e}"));
+        let a = solve(&xla, &opts).unwrap_or_else(|e| panic!("{rel} xla solve: {e}"));
+        let b = solve(&reference, &opts).unwrap_or_else(|e| panic!("{rel} interpreter solve: {e}"));
+
+        assert_eq!(a.state_variable_names, b.state_variable_names, "{rel}");
+        assert_eq!(a.time.len(), b.time.len(), "{rel}");
+        for (r, (row_a, row_b)) in a.state.iter().zip(b.state.iter()).enumerate() {
+            assert_eq!(row_a.len(), row_b.len(), "{rel}: row {r}");
+            for (k, (x, y)) in row_a.iter().zip(row_b.iter()).enumerate() {
+                assert!(
+                    (x - y).abs() <= XLA_ATOL + XLA_RTOL * y.abs(),
+                    "{rel}: {} at t index {k}: xla {x:e} vs interpreter {y:e}",
+                    a.state_variable_names[r]
+                );
+            }
+        }
+    }
+}
+
+/// `xla` is strict the way `native` is, and refuses the same document for the
+/// same reason — because the FIRST gate it meets is the tape's, which names
+/// the rule and its cadence tier. An emitter that saw the `Instr::Fallback`
+/// instead could only name the instruction.
+#[cfg(feature = "xla")]
+#[test]
+fn xla_refuses_a_rule_the_tape_cannot_lower_and_names_it() {
+    let path = fixture(REFUSED_FIXTURE);
+    match build(&path, Compiler::Xla) {
+        Err(SimulateError::Compile(CompileError::CompilerRefusedRule {
+            compiler,
+            rule,
+            tier,
+            reason,
+            ..
+        })) => {
+            assert_eq!(compiler, "xla");
+            assert!(!rule.is_empty(), "the rule is named");
+            assert!(
+                tier == "const" || tier == "segment" || tier == "continuous",
+                "the cadence tier is reported: {tier}"
+            );
+            assert!(
+                reason.contains(REFUSED_CONSTRUCT),
+                "the deepest decline reason is carried: {reason}"
+            );
+        }
+        other => panic!("xla must refuse a {REFUSED_CONSTRUCT} rule, got {other:?}"),
+    }
+}
+
+/// The observed passes under `xla`. The emitted program's only output is `du`,
+/// so the observeds reported at output times are served from the same tape the
+/// emitter was built from — and must still agree with the reference, or the
+/// two halves of the build have drifted apart.
+///
+/// Read through `output_observed`, which makes the array-valued CONST
+/// observeds appear as per-cell rows beside the states: that is the pass
+/// esm-libraries-spec §2.5.10 names ("the observeds reported at output
+/// times"), and the one that runs most often.
+#[cfg(feature = "xla")]
+#[test]
+fn xla_reports_observeds_from_the_tape_the_emitter_was_built_from() {
+    // The fixture the `native` arm above uses for the same question: two
+    // CONST-tier observeds, which is the pass that used to run off the tape.
+    let path = fixture(
+        "tests/conformance/shaped_parameter_broadcast/fixtures/shaped_parameter_scalar_default.esm",
+    );
+    let xla = build_rhs(&path, Compiler::Xla, Rhs::Always).expect("builds under xla");
+    let reference =
+        build_rhs(&path, Compiler::Interpreter, Rhs::Always).expect("builds under the interpreter");
+    let names = xla.observed_variable_names();
+    assert!(!names.is_empty(), "the fixture must carry observeds");
+    let opts = SolveOptions {
+        saveat: Some(vec![0.0, 0.5, 1.0]),
+        output_observed: names.clone(),
+        ..Default::default()
+    };
+
+    let a = solve(&xla, &opts).expect("xla solves");
+    let b = solve(&reference, &opts).expect("the interpreter solves");
+    assert_eq!(a.state_variable_names, b.state_variable_names);
+    // The observed rows are the ones the states do not account for; without
+    // them this compares nothing the state comparison did not already.
+    assert!(
+        a.state_variable_names.len() > xla.state_variable_names().len(),
+        "the observeds must reach the solution as rows beside the states, got {:?}",
+        a.state_variable_names
+    );
+    for (r, (row_a, row_b)) in a.state.iter().zip(b.state.iter()).enumerate() {
+        for (k, (x, y)) in row_a.iter().zip(row_b.iter()).enumerate() {
+            assert!(
+                (x - y).abs() <= XLA_ATOL + XLA_RTOL * y.abs(),
+                "{} at t index {k}: xla {x:e} vs interpreter {y:e}",
+                a.state_variable_names[r]
             );
         }
     }

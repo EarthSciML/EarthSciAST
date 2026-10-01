@@ -207,7 +207,7 @@ function _build_Aij_via_evaluator()
 
     nS, nT = length(SRC), length(TGT)
     ics = Dict("A_ex[$i,$j]" => 0.0 for i in 1:nS, j in 1:nT)
-    f!, u0, p, _, vmap = build_evaluator(_aij_extract_esm(defs);
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(_aij_extract_esm(defs);
         model_name="AijExtract", initial_conditions=ics)
     du = similar(u0); f!(du, u0, p, 0.0)
     A = [du[vmap["A_ex[$i,$j]"]] for i in 1:nS, j in 1:nT]   # whole-mesh fused-leaf A_ij
@@ -224,7 +224,7 @@ end
 # Returns (A_j, F_tgt).
 function _build_fixture_end_to_end()
     raw = _asm_raw()
-    f!, u0, p, _, vmap = build_evaluator(raw; model_name="ConservativeRegridAssembly")
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(raw; model_name="ConservativeRegridAssembly")
     du = similar(u0); f!(du, u0, p, 0.0)
     n = 4
     A_j = [du[vmap["A_j_check[$j]"]] for j in 1:n]
@@ -291,7 +291,7 @@ function _eval_assembly(A_ij::Matrix{Float64}, dst_areas::Vector{Float64}, F_src
                         atol::Float64=1e-12)
     n = length(dst_areas)
     ics = Dict(("A_j[$j]" => 0.0 for j in 1:n)..., ("F_tgt[$j]" => 0.0 for j in 1:n)...)
-    f!, u0, p, _, vmap = build_evaluator(
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
         _apply_only_esm(); model_name="ApplyOnly", initial_conditions=ics,
         const_arrays=Dict("A_ij" => A_ij, "F_src" => F_src, "dst_areas" => dst_areas),
         parameter_overrides=Dict("atol" => atol))

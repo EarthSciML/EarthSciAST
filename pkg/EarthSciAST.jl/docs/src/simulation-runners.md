@@ -15,14 +15,15 @@ value means in Julia and how much of it is reachable today.
 |---|---|---|---|
 | `:native` | The universally fast option, with no heavy external dependency — hence the default. Every kernel lands on a codegen, affine or whole-array tier; a rule that would need a per-cell tree walk is a build error naming the rule and the reason, never a quiet demotion. | the tiered tree-walk build (`RuntimeGeneratedFunctions` codegen, already a package dependency) | **live.** It is what you get when you name nothing |
 | `:interpreter` | Deliberately simple: the correctness check for the other compilers. Every fast tier off, complete over the evaluable core, no performance promise of any kind. | the same tree walk with the per-cell runner for every kernel | **live.** Ask for it by name; no environment variable selects it |
-| `:xla` | Specialty: needs a heavy external dependency. StableHLO emitted directly and compiled through Reactant; a hard error on anything it cannot lower. | the direct emitter in the Reactant extension | **planned.** Reachable today only through [`build_evaluator`](@ref)`(…; form = :oop)`, not from `esm_problem` |
-| `:mtk` | Specialty: only some documents — but it is the one runner that executes **events and implicit equations**. | `ModelingToolkit.System(model)` via the package extension | **planned as a compiler.** The extension is live and supported; it is not yet something `esm_problem` can be asked for |
+| `:xla` | Specialty: needs a heavy external dependency. StableHLO emitted directly and compiled through Reactant; a hard error on anything it cannot lower. | the direct emitter in the Reactant extension | **live.** `esm_problem(…; compiler = :xla)` with `using Reactant` in the session; `compiler_unavailable` naming Reactant without it |
+| `:mtk` | Specialty: only some documents — but it is the one runner that executes **events and implicit equations**. Data handed in at the call, a continuous spatial dimension, a geometry operator and a time derivative of an expression are refused by name. | `ModelingToolkit.System` → `mtkcompile` → `ODEProblem`, through the package extension | **live** with `ModelingToolkit` loaded. `esm_problem(…; compiler = :mtk)`; without the package it is `compiler_unavailable` naming it |
 | `:sympy` | Specialty: Python only, and there only for scalar documents. | — | `compiler_unavailable` |
 
-**What is reachable today, and what is not.** `esm_problem` / `solve` build the
-tree-walk evaluator under `:native` or `:interpreter`, and that is the only
-thing they build: there is no keyword that reaches the Reactant emitter or
-ModelingToolkit from the stable entry point.
+**What is reachable today.** `esm_problem` / `solve` build the tree-walk
+evaluator under `:native` or `:interpreter`, the compiled StableHLO program
+under `:xla` when Reactant is loaded, and the ModelingToolkit system under
+`:mtk` when that package is loaded. Every Julia member of the vocabulary is
+reachable from the stable entry point.
 
 No environment variable selects an evaluation strategy. The `ESS_*` variables
 that remain are tuning thresholds — a node budget, a per-function size cap, a
@@ -33,10 +34,11 @@ experimental emission tiers ship off and are opted into by name
 (`ESS_CG_SUBCALL_FN`, `ESS_NESTED_TEMPLATE_BOUNDARY`); neither is an oracle,
 and nothing in the corpus depends on either.
 
-`:xla` and `:mtk` are each reached through their own entry point, below.
-ModelingToolkit in particular is not the default of the public simulation API
-and is not reachable from it: a document run through `esm_problem` is run by
-the tree-walk build.
+ModelingToolkit is reached BOTH ways: `compiler = :mtk` builds a problem
+through it, and the `ModelingToolkit.System` / `PDESystem` constructors remain
+the direct route for a caller who wants the symbolic system itself. Neither
+`:mtk` nor `:xla` is the default — a document run through `esm_problem` with no
+`compiler` is run by the tree-walk build.
 
 Each runner consumes the canonical-form AST emitted by [`discretize`](@ref) and
 walks it generically — none contains per-rule-shape dispatch — and each meets
@@ -61,33 +63,129 @@ generically; it never inspects rule kinds.
 
 ## `tree_walk` — when MTK's compile time becomes prohibitive
 
-[`build_evaluator`](@ref) is the public entry point. It accepts a `Model`, an
-`EsmFile`, or a raw `AbstractDict` (the output of [`discretize`](@ref)) and
-returns a tuple ready to plug into `OrdinaryDiffEq.ODEProblem`:
+[`esm_problem`](@ref) is the entry point, and the Problem it returns carries
+everything a run needs:
 
 ```julia
 using EarthSciAST
 using OrdinaryDiffEqTsit5
 
-esm_dict     = JSON3.read(read("model.esm", String))   # parse
-discretized  = discretize(esm_dict)                    # rule application
-f!, u0, p, tspan, var_map = build_evaluator(discretized)
-
-prob = ODEProblem(f!, u0, tspan, p)
+prob = esm_problem("model.esm", (0.0, 10.0))   # load → discretize → build → seed
 sol  = solve(prob, Tsit5())
 
-x_final = sol.u[end][var_map["x"]]
+x_final = sol[Symbol("Model.x")][end]          # indexed BY NAME
 ```
 
-The returned `var_map` is the state-name → index lookup so callers can probe
-the solution at specific variables.
+`prob.var_map` is the state-name → index lookup, for a caller that wants to
+probe the raw state vector rather than index the solution by name; `prob.f!`,
+`prob.u0`, `prob.p` and `prob.tspan` are the same objects the old five-tuple
+handed back.
+
+### Reading observeds — `observed_field`
+
+A `Solution` carries the state only. An observed — a variable an algebraic
+equation defines — is read off the Problem with [`observed_field`](@ref), which
+returns the field as a flat vector in row-major cell order (last index fastest):
+
+```julia
+observed_field(prob, "Model.flux")                     # the build-time field
+observed_field(prob, "Model.flux"; u = sol.u[end], t = sol.t[end])
+```
+
+Without `u` it is the field the build defines, which is only meaningful for a
+state-free observed; one that reads the state raises and asks for `u`. With `u`
+(any state vector laid out like `prob.u0`) and `t`, it is the observed at that
+point of a trajectory. Under `compiler = :native` both come from a program
+compiled once per problem and name through the same array cascade as the
+right-hand side, so a read costs one pass over the field; the first read of a
+name adds an `:observed` row to [`compiler_report`](@ref) (`:output_compiled`),
+and an observed native cannot compile is refused by name. Inline-test
+assertions and the observed fields a streaming-output sink names
+(`sink_observed_names`) are read through the same program, at each saved or
+written state. `compiler = :interpreter` answers from the build-time cellwise
+evaluator instead, the oracle the compiled program agrees with bit for bit.
+
+Rust's `observed_trajectory(prob, sol, name)` answers the same question for
+every saved point of a solution at once (API_SPEC §5.8).
+
+!!! note "`build_evaluator` has been retired"
+    `build_evaluator` was the public entry point here and is not any more
+    (`API_SPEC.md` §8 item 23): it is private behind `esm_problem`, with a
+    deprecated alias that warns once and forwards, kept for one minor version.
+    A caller reassembling a run out of its five-tuple reads the same values off
+    the Problem; `forcing_buffers` and `forcing_buffer_index` take the Problem;
+    the build-inspection record's compiler half is [`compiler_report`](@ref),
+    which a Problem and a `BuildInspection` both answer; and the compiled
+    right-hand side that `form = :oop` handed a backend is
+    `esm_problem(…; compiler = :xla)`.
+
+## `:xla` — the compiled StableHLO right-hand side
+
+With `using Reactant` in the session, `compiler = :xla` builds the document out
+of place — the compiled tree-walk intermediate representation is what the
+direct emitter lowers — emits StableHLO from it op by op, compiles that program
+ONCE per build on an XLA client, and wraps the executable in the in-place
+`f!(du, u, p, t)` every Problem carries:
+
+```julia
+using EarthSciAST, Reactant, OrdinaryDiffEqTsit5
+
+prob = esm_problem("model.esm", (0.0, 10.0); compiler = :xla)
+sol  = solve(prob, Tsit5())                    # every step runs the compiled program
+compiler(prob)                                 # :xla
+compiler_report(prob)                          # …the rhs_program row names the device
+```
+
+`u`, `p` and `t` are program INPUTS, so one compile serves every step, every
+stage and every save, and `remake(prob; p = …)` re-parameterizes without a
+retrace. The integrator owns `u` and `du` as ordinary host vectors, so each call
+copies the state onto the device and the derivative back; keeping the state
+resident across steps would mean owning the time loop, which is an integrator
+rather than a right-hand side.
+
+`EARTHSCI_JULIA_XLA_DEVICE` picks the client — `cpu` (the default, always
+available) or `gpu` — and the build's `compiler_report` records which one ran,
+as the tier `:xla_direct_cpu` / `:xla_direct_gpu` on the row for the assembled
+program. It is not an evaluation strategy and nothing else reads it: the same
+StableHLO module compiles on either platform. Both of its failures are answered
+before the document is loaded: any other value is an `ArgumentError` (a typo is
+a configuration error, not a missing compiler), and `gpu` in a process with no
+GPU client is `compiler_unavailable`.
+
+**A stiff algorithm needs no setting.** A compiled device program cannot be
+differentiated on the host, so an `:xla` Problem hands `solve` its own
+finite-difference Jacobian and time derivative through the compiled program
+(n + 1 calls per Jacobian for n states). `solve(prob, Rosenbrock23())` runs as
+written, and so does `run_inline_tests(doc; compiler = :xla)` on a document
+that declares `solver.stiffness: "high"`.
+
+**It refuses rather than falls back**, always with a `compiler_refused_rule`
+naming the rule and the reason:
+
+* anything the emitter cannot lower, with the construct and the rule it came
+  from taken straight off the emitter's own hard error;
+* a call whose element type is not `Float64`. `solve` on the Problem never
+  makes one, but a caller who builds its own `ODEProblem` from `prob.f!` and
+  lets a stiff algorithm forward-differentiate it does; name a finite-difference
+  Jacobian there (`autodiff = AutoFiniteDiff()`) or build `compiler = :native`;
+* a document binding LIVE FORCING BUFFERS (`param_arrays`, or a discrete data
+  provider). The compiled program takes those as arguments and needs them
+  re-synced to the device at each cadence boundary, which this entry point does
+  not wire yet; the buffer-free form would bake the build-time forcing in as a
+  constant and run the whole simulation against it, which is a wrong number with
+  nothing in the result to say so. Refused before the build starts.
+
+`compiler = :xla` builds only through `esm_problem`. The lower-level build asked
+for `compiler = :xla` in the in-place form is an `ArgumentError`, because the
+in-place evaluator is `native`'s and returning it under an `:xla` report would
+be a fallback.
 
 ### Single-expression entry point — `evaluate_expr`
 
 For callers that need to evaluate one AST expression at a given set of
 numeric bindings (e.g. units fixture consumption tests, or `simplify`'s
 constant-folding step), [`evaluate_expr`](@ref) reuses the same compile
-+ walker pipeline as `build_evaluator`:
++ walker pipeline the Problem's build uses:
 
 ```julia
 val = evaluate_expr(expr, Dict("x" => 2.0, "y" => 3.0))
@@ -99,7 +197,7 @@ is no parallel dispatch table. Unbound variables raise
 
 ### Performance characteristics
 
-- **Build time independent of system size.** `build_evaluator` walks each
+- **Build time independent of system size.** The build walks each
   equation's RHS once at build time and produces a compact compiled-IR tree
   (`_Node`) where ops are `Symbol` (pointer compare), state references have
   their `u`-index baked in, parameter references have their `Val{sym}` type
@@ -151,7 +249,7 @@ Array-typed ops outside a position that consumes them (`faq`, `makearray`,
 `rank`, `distinct`, `argmin`, `argmax`) are refused while the evaluator is
 built with `unevaluable_operator`; PDE ops (`grad`, `div`, `laplacian`) are
 refused with `unlowered_operator` (esm-spec §9.6.6). Either way they must be
-discretized, scalarized or materialized **before** `build_evaluator`. The `D` op is only
+discretized, scalarized or materialized **before** the build. The `D` op is only
 permitted in equation LHS (the time-derivative marker).
 
 ### Errors
@@ -167,22 +265,72 @@ cross-binding operator codes):
 | `E_TREEWALK_UNSUPPORTED_OP` | An internal pipeline defect: the removed `call` op, or an `index` that reached compilation unresolved. |
 | `E_TREEWALK_UNSUPPORTED_SHAPE` | A variable still has `shape` set — the model is not yet scalarized. |
 | `E_TREEWALK_UNSUPPORTED_BROWNIAN` | Brownian variables are not supported by the deterministic ODE walker. |
-| `unsupported_construct` | The model declares a continuous event, a discrete event, or an implicit equation (an expression LHS such as `s - f(s) ~ 0`). The walker runs none of them; use the ModelingToolkit runner, which does (esm-spec §9.6.6). |
+| `unsupported_construct` | The model declares a continuous event, a discrete event, or an implicit equation (an expression LHS such as `s - f(s) ~ 0`). The walker runs none of them, so `:native` and `:interpreter` both refuse; build with `compiler = :mtk`, which runs all three (esm-spec §9.6.6). |
 | `E_TREEWALK_UNSUPPORTED_EQUATION` | Any other equation LHS that is neither `D(state, wrt=t)` nor an observed-variable assignment. |
 | `E_TREEWALK_UNBOUND_VARIABLE` | Free variable is neither a state, parameter, nor `t`. |
 | `E_TREEWALK_DUPLICATE_DERIVATIVE` | More than one equation defines `D(state, wrt=t)` for the same state. |
 | `E_TREEWALK_OBSERVED_CYCLE` | Observed variables form a substitution cycle. |
 | `E_TREEWALK_FN_*` | Closed-function arity / argument-shape error. |
 
-## `ModelingToolkit` — events, implicit equations, structural simplification
+## `compiler = :mtk` — events, implicit equations, structural simplification
 
 The `EarthSciASTMTKExt` package extension activates automatically when
-`ModelingToolkit` is loaded and provides `ModelingToolkit.System(model)` /
-`ModelingToolkit.PDESystem(model)`. It is the one runner that executes
-continuous events, discrete events and implicit equations — the constructs the
-tree walk refuses with `unsupported_construct` — and the one that performs
-structural simplification. It is reached through its own entry point; making it
-`esm_problem(…; compiler = :mtk)` is planned. See
+`ModelingToolkit` is loaded. It is the one runner that executes continuous
+events, discrete events and implicit equations — the constructs the tree walk
+refuses with `unsupported_construct` — and the one that performs structural
+simplification.
+
+```julia
+using EarthSciAST, ModelingToolkit, OrdinaryDiffEqTsit5
+prob = esm_problem("sawtooth.esm", (0.0, 2.5); compiler = :mtk)
+sol  = solve(prob, Tsit5())           # the event fires; the tree walk refuses this document
+```
+
+The build is `ModelingToolkit.System(flatten(file))` → `mtkcompile` →
+`ODEProblem`, and `solve` integrates THAT problem, so the compiled system's
+events, mass matrix and observed equations are all in force. The
+[`EsmProblem`](@ref) around it is the ordinary one: `u0`, `p`, `tspan`,
+`var_map`, `callbacks`, `remake`, [`compiler_report`](@ref) and
+[`observed_field`](@ref) all work, and streaming-output sinks compose with the
+compiled system's own event callbacks rather than replacing them.
+
+**What it refuses, by name.** "Only some documents" is a statement about
+refusals, not about coverage that drifts. `compiler_refused_rule` names the rule
+and the reason for:
+
+* a parameter or field fed by LOADED DATA — a `providers` entry, a
+  `const_arrays` / `param_arrays` array handed in at the call, or
+  `pushdown_rewrite = true`. A ModelingToolkit system carries symbols and
+  equations; a loaded field has nowhere to land in it.
+* a CONTINUOUS spatial dimension. That is a PDE, and it needs
+  `ModelingToolkit.PDESystem` plus a discretizer this compiler does not run. A
+  document already discretized into an `arrayop` stencil has no spatial
+  independent variable and builds normally.
+* a geometry operator (`polygon_intersection_area`, `intersect_polygon`), which
+  is resolved against loaded polygons at build time and has no symbolic form.
+* `D(<expression>)` — a time derivative of an expression credits no state, so it
+  is an implicit equation spelled wrong; ModelingToolkit rejects the system and
+  this names the equation instead.
+
+**Two differences from the other compilers, both deliberate.**
+
+1. **Parameters bake at build.** Every parameter is `:structural` in
+   [`parameter_classes`](@ref): its value is read where `mtkcompile` can see it
+   and is baked into the compiled problem, so `esm_problem(…; p = …)` sets it
+   and `remake(prob; p = …)` refuses, naming the parameter. That is the class's
+   ordinary meaning, not a special case.
+2. **Solution indexing is ModelingToolkit's own.** A solution carries the
+   compiled system as its index provider, so `sol[sym]` takes that system's
+   symbols — a flattened `Chem.A` is `Chem_A` there, because a dot is not a
+   Julia identifier character. The DOCUMENT's spelling reaches you through
+   `prob.var_map` (name → the slot that indexes `sol.u[i]`) and through
+   `observed_field(prob, name)`, which answers out of the compiled system's
+   observed equations. Substituting a translating index provider breaks
+   ModelingToolkit's own initialization, which reads that field back as a
+   `System`.
+
+`ModelingToolkit.System(model)` / `ModelingToolkit.PDESystem(model)` remain the
+direct route to the symbolic system itself. See
 [ModelingToolkit / Catalyst integration](index.md#ModelingToolkit-/-Catalyst-integration)
 in the manual home page.
 

@@ -163,6 +163,7 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         # emit events, so the tree-walk build never sees one and would run the
         # model without it.
         _refuse_flat_events(input)
+        _refuse_flat_wiener_noise(input)
         # esm-spec §9.5.3: lower `table_lookup` to its `interp.*` form HERE —
         # the one point every input kind (path, native Dict, EsmFile,
         # already-flattened system) has funnelled into, and the first point
@@ -375,6 +376,12 @@ node's coordinates and written into `u0` at `var_map["var_name[i,j,…]"]`.
 
 Used to seed the level-set's signed-distance `psi` from the domain's declared
 IC over the real (projected) fire grid — no per-cell loop in the runner.
+
+`expr` is compiled ONCE with the dimension names bound as parameters and then
+evaluated at each cell of `var_name` that `var_map` holds; the cells are read
+off `var_map` itself, so no key is built per grid node. An expression the
+compiler does not accept is evaluated per cell by `evaluate_expr` instead,
+which a strict compiler plan in force refuses.
 """
 function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
                              var_name::AbstractString, expr::ASTExpr, coords)
@@ -382,16 +389,94 @@ function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
     dims = String[String(first(p)) for p in pairs_]
     axes_ = [collect(Float64, last(p)) for p in pairs_]
     sizes = Tuple(length.(axes_))
-    for I in CartesianIndices(sizes)
-        t = Tuple(I)
-        key = string(var_name, "[", join(t, ","), "]")
-        k = get(var_map, key, nothing)
-        k === nothing && continue
-        binding = Dict{String,Any}(dims[d] => axes_[d][t[d]] for d in eachindex(dims))
-        u0[k] = evaluate_expr(expr, binding)
+    # The cells to seed: every `var_name[i,j,…]` entry of `var_map` inside the
+    # grid, as (indices, slot) — `idx` holds the indices of cell `c` at
+    # `(c-1)*nd+1 : c*nd`.
+    nd = length(sizes)
+    idx = Int[]
+    slots = Int[]
+    buf = zeros(Int, nd)
+    for (key, slot) in var_map
+        _seed_cell_indices!(buf, String(key), var_name, sizes) || continue
+        append!(idx, buf)
+        push!(slots, Int(slot))
+    end
+    ce = _setup_compile_once_enabled() ? _seed_expression_compile(expr, dims) : nothing
+    if ce !== nothing
+        vals = Vector{Float64}(undef, nd)
+        @inbounds for c in eachindex(slots)
+            for d in 1:nd
+                vals[d] = axes_[d][idx[(c - 1) * nd + d]]
+            end
+            u0[slots[c]] = ce(vals)
+        end
+        return u0
+    end
+    binding(c) = Dict{String,Any}(dims[d] => axes_[d][idx[(c - 1) * nd + d]]
+                                  for d in eachindex(dims))
+    if _compiler_is_strict()
+        # An expression no form can evaluate — an undeclared name — is the
+        # caller's error, not a compiler's refusal, so the first cell is
+        # evaluated once, for its diagnostic only, before the refusal is raised.
+        isempty(slots) || evaluate_expr(expr, binding(1))
+        _refuse_percell_evaluation("seed_expression_ic!($(var_name))",
+            "the expression initial-state seed", length(slots);
+            one_cell = !isempty(slots))
+    end
+    for c in eachindex(slots)
+        u0[slots[c]] = evaluate_expr(expr, binding(c))
     end
     return u0
 end
+
+# Read the indices of a `name[i,j,…]` key into `buf` without allocating; false
+# when the key is another variable's, has another rank, or lies off the grid.
+function _seed_cell_indices!(buf::Vector{Int}, key::String, name::AbstractString,
+                             sizes::Tuple)
+    n = ncodeunits(name)
+    (ncodeunits(key) > n + 2 && startswith(key, name) &&
+     codeunit(key, n + 1) == UInt8('[') && codeunit(key, ncodeunits(key)) == UInt8(']')) ||
+        return false
+    d = 1; v = 0; seen = false
+    @inbounds for i in (n + 2):(ncodeunits(key) - 1)
+        b = codeunit(key, i)
+        if UInt8('0') <= b <= UInt8('9')
+            v = 10v + Int(b - UInt8('0')); seen = true
+        elseif b == UInt8(',') && seen && d < length(buf)
+            buf[d] = v; d += 1; v = 0; seen = false
+        else
+            return false
+        end
+    end
+    (seen && d == length(buf)) || return false
+    buf[d] = v
+    for k in eachindex(buf)
+        1 <= buf[k] <= sizes[k] || return false
+    end
+    return true
+end
+
+# The seed's expression compiled once with the dimension names as parameters:
+# a `_CellEval` whose "cell" is the vector of coordinate values, or `nothing`
+# when a name collides with the time symbol or the expression does not compile.
+function _seed_expression_compile(expr::ASTExpr, dims::Vector{String})
+    any(==("t"), dims) && return nothing
+    allunique(dims) || return nothing
+    psyms = Symbol[Symbol(d) for d in dims]
+    node = try
+        _compile(expr, Dict{String,Int}(), Set{Symbol}(psyms), Dict{String,Any}())
+    catch err
+        _is_resource_error(err) && rethrow()
+        return nothing
+    end
+    return _CoordEval{Tuple(psyms),length(dims)}(node)
+end
+
+struct _CoordEval{syms,N}
+    node::_Node
+end
+@inline (ce::_CoordEval{syms,N})(vals::AbstractVector{Float64}) where {syms,N} =
+    _eval_node(ce.node, _NO_STATE_U, NamedTuple{syms}(ntuple(d -> @inbounds(vals[d]), Val(N))), 0.0)
 
 # --------------------------------------------------------------------------- #
 # CONST-provider materialization: pull one forcing variable's field out of a
@@ -418,6 +503,31 @@ _callback_set(cbs) = throw(SimulateError(
 
 _compose_callbacks(cbs::AbstractVector) =
     isempty(cbs) ? nothing : length(cbs) == 1 ? cbs[1] : _callback_set(cbs)
+
+# --------------------------------------------------------------------------- #
+# The compiler-built backend seam (API_SPEC §5.8).
+#
+# `:native` and `:interpreter` hand back a plain closure, and everything
+# downstream of it — the `ODEProblem` the SciMLBase extension assembles, the
+# build-time observed reader — is this package's own. A SPECIALTY compiler
+# builds a whole program instead: `:mtk` compiles a ModelingToolkit `System`,
+# whose EVENTS, mass matrix and OBSERVED EQUATIONS live on ITS `ODEProblem` and
+# would be silently lost if the solve path rebuilt one out of the right-hand
+# side alone.
+#
+# Such a compiler parks that program on the CALLABLE it returns, and these
+# three hooks ask the callable for it. Dispatch is on the right-hand side's own
+# type — a type the extension owns — so an extension ADDS a method instead of
+# overwriting a core one, and a compiler with no backend needs no method at all.
+# --------------------------------------------------------------------------- #
+_compiler_backend(@nospecialize(f)) = nothing
+function _backend_ode_problem end
+function _backend_observed_field end
+
+# The `:mtk` construction itself (EarthSciASTMTKExt). No fallback method: the
+# plan `_compiler_plan(:mtk)` returns has already raised `compiler_unavailable`
+# when the extension is not loaded, so this name is only ever called with it.
+function _mtk_problem end
 
 # --------------------------------------------------------------------------- #
 # Internal solve bridge, for the CORE-RESIDENT callers that have to run a
@@ -448,8 +558,9 @@ _solve_problem(prob, alg; kwargs...) = throw(SimulateError(
 """
     EsmProblem
 
-The ESM simulation problem: the compiled tree-walk RHS `f!`, the seeded initial
-state `u0`, the integration interval `tspan`, the parameter carrier `p`, the
+The ESM simulation problem: the right-hand side `f!` the chosen `compiler`
+built — the compiled tree walk under `:native` / `:interpreter`, the compiled
+StableHLO program under `:xla` — the seeded initial state `u0`, the integration interval `tspan`, the parameter carrier `p`, the
 `var_map`, the live forcing buffers, the discrete-provider/refresh scaffolding,
 and the problem's own callback set — everything deterministic per document,
 built exactly once by [`esm_problem`](@ref).
@@ -484,11 +595,12 @@ Fields are an extension seam, not stable API; `var_map`, `p`, `u0`, `tspan`
 and `output_meta` are the ones downstream code reads.
 """
 struct EsmProblem
-    f!::Function                          # compiled tree-walk RHS (in-place)
+    f!::Function                          # the built RHS, in-place, whatever
+                                          # `compiler` produced it
     u0::Vector{Float64}                   # seeded initial state; COPIED per run
     tspan::Tuple{Float64,Float64}         # integration interval
     p::Any                                # parameter NamedTuple (or nothing)
-    var_map::Dict{String,Int}             # state-element name → flat index
+    var_map::AbstractDict{String,Int}     # state-element name → flat index (a `StateLayout`)
     param_buffers::Dict{String,Any}       # live forcing buffers, aliased into f!
     discrete_providers::Dict{String,Any}  # forcing var → DISCRETE data Provider
     dm::DiscreteMaterializer              # discrete-cadence cache sink (may be empty)
@@ -533,7 +645,13 @@ struct EsmProblem
 end
 
 function Base.show(io::IO, prob::EsmProblem)
-    np = prob.p === nothing ? 0 : length(prob.p)
+    # A compiler that built its own program carries its own parameter object
+    # (`:mtk` hands back ModelingToolkit's), whose `length` is a count of ITS
+    # internal partitions and not of the document's parameters. The build's
+    # parameter PARTITION is per declared name under every compiler, so it is
+    # what says how many parameters this problem has.
+    np = _compiler_backend(prob.f!) === nothing ?
+         (prob.p === nothing ? 0 : length(prob.p)) : length(prob.param_classes)
     print(io, "EsmProblem(", length(prob.u0), " state elements, ",
           prob.n_equations, " equations, ", np, " parameters, tspan=", prob.tspan)
     isempty(prob.discrete_providers) ||
@@ -576,6 +694,48 @@ show(stdout, MIME"text/plain"(), compiler_report(prob))
 The names and their meanings are stable; the record's shape is per-binding.
 """
 compiler_report(prob::EsmProblem)::CompilerReport = prob.inspection.compiler_report
+
+"""
+    compiler_report(insp::BuildInspection) -> CompilerReport
+
+The same record, off a build's inspection sink. A caller who passed
+`inspect = insp` to [`esm_problem`](@ref) reads it here — including after a
+build that REFUSED, which is the case the partial record is most wanted for and
+the one no Problem exists to carry.
+
+This is the whole of what build observability now answers about the compiler:
+the tier every rule landed on, the declines it collected getting there, and the
+build's cascade counters. `compiler_report(prob)` is the same object.
+"""
+compiler_report(insp::BuildInspection)::CompilerReport = insp.compiler_report
+
+"""
+    forcing_buffers(prob::EsmProblem) -> NamedTuple
+
+The live forcing buffers of `prob`: every `param_arrays` entry and every
+[`DiscreteMaterializer`](@ref) cache the build bound, in a STABLE (name-sorted)
+order, each value the ALIASED flat host view of the exact array the build bound
+— not a copy, so a discrete-cadence refresh writing the original array is
+visible through this container. Empty for a document with no live forcing.
+
+This is where the seam lives now. It used to hang off the out-of-place build
+product (`build_evaluator(model; form = :oop)`), which meant a caller had to
+build the document a second, special way to reach it; the Problem publishes it
+whatever compiler built it. Position of a name is
+[`forcing_buffer_index`](@ref)`(prob)[name]`, and
+[`sync_forcing!`](@ref) mirrors the container into a compiled program's device
+arrays at a cadence boundary.
+"""
+forcing_buffers(prob::EsmProblem)::NamedTuple = prob.inspection.forcing_buffers
+
+"""
+    forcing_buffer_index(prob::EsmProblem) -> Dict{String,Int}
+
+Name → position in [`forcing_buffers`](@ref)`(prob)`, and in any container
+aligned with it. Treat as read-only.
+"""
+forcing_buffer_index(prob::EsmProblem)::Dict{String,Int} =
+    prob.inspection.forcing_buffer_index
 
 
 # Equation count of the prepared (flattened, single-model) run document —
@@ -714,11 +874,14 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
      evaluates the body once per output cell and no codegen tier ever sees the
      section. This is compiler backlog, not a property of the document.
   3. **A construction-time or output-time materialization that resolves and
-     compiles the expression once per cell** — the setup-map per-cell
-     reference, the whole-array setup materializer, the coordinate-expression
-     initial-condition fill and the build-time observed evaluator's per-cell
-     arm. §2.5.10 puts every evaluation a compiler performs for the problem
-     under the same rule, not the right-hand side alone.
+     compiles the expression once per cell** — the per-cell arms of the setup
+     MAP, of the whole-array setup materializer, of the coordinate-expression
+     initial-condition seed and of the faq initialization-equation seed, which
+     are reached only when the compiled fill (each filled through the
+     right-hand-side cascade and emitted code, once) and any compile-once form
+     decline, and the build-time observed evaluator's per-cell arm. §2.5.10
+     puts every evaluation a compiler performs for the problem under the same
+     rule, not the right-hand side alone.
 
   What it does NOT refuse: a per-cell BUILD (an equation scalarized one output
   cell at a time whose cell entries are then compiled — that costs build time
@@ -730,10 +893,32 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
   fast tier off, one tree walk per output cell. Pick it to check another
   compiler, or to run a document `:native` refuses. It keeps the build-time
   MEMOS (the template expansion memo, the reference-preserving template image),
-  which change build wall time and not one evaluated bit. `:xla`, `:mtk` and
-  `:sympy` raise `compiler_unavailable` from this entry point today, naming
-  what to load or which binding has them; a value outside the vocabulary raises
-  `compiler_unknown`.
+  which change build wall time and not one evaluated bit.
+
+  **`:mtk` is the specialty compiler that works only for some documents**, and
+  it is the one that runs EVENTS and IMPLICIT EQUATIONS — the constructs
+  CONFORMANCE_SPEC §5.39 has every other evaluator refuse with
+  `unsupported_construct`. It needs `using ModelingToolkit` (without it, the
+  answer is `compiler_unavailable` naming that), and it builds
+  `ModelingToolkit.System(flatten(input))` → `mtkcompile` → `ODEProblem`, which
+  is what `solve` then integrates, so the compiled system's events, mass matrix
+  and observed equations are all in force. What it REFUSES by name
+  (`compiler_refused_rule`) is the document content it cannot express: a
+  parameter or field fed by LOADED DATA (a `providers` entry, a `const_arrays`
+  / `param_arrays` argument, `pushdown_rewrite = true`), a CONTINUOUS spatial
+  dimension (a PDE, which needs `ModelingToolkit.PDESystem` and a
+  discretization), a geometry operator, and a time derivative of an expression.
+  Two consequences a caller sees: every parameter classifies `:structural`
+  (the value is read where `mtkcompile` can see it and is baked into the
+  compiled problem, so `esm_problem(…; p = …)` sets it and `remake(prob; p = …)`
+  refuses), and a solution is indexed with the COMPILED SYSTEM's symbols rather
+  than the flattened ESM spelling — `prob.var_map` and
+  [`observed_field`](@ref) are the document-named surface there. See the
+  Simulation Runners page for the whole story.
+
+  `:xla` and `:sympy` raise `compiler_unavailable` from this entry point,
+  naming what to load or which binding has them; a value outside the vocabulary
+  raises `compiler_unknown`.
 
   Naming `:native` is exactly the default: no environment variable selects an
   evaluation strategy, so the keyword is the whole answer (esm-libraries-spec
@@ -742,7 +927,7 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
   documents build, not how fast they run.
 
 Julia extension-seam keywords (§2.5.2 explicitly allows these; NOT stable API):
-`const_arrays`, `param_arrays` (forwarded to [`build_evaluator`](@ref) — the
+`const_arrays`, `param_arrays` (forwarded to the build — the
 regridder source polygons and the live forcing buffers), `inspect` (share the
 problem's [`BuildInspection`](@ref) with the caller), `materialize_out` (a
 caller-owned [`DiscreteMaterializer`](@ref)), `pushdown_rewrite`, `seed_ic!`
@@ -815,6 +1000,21 @@ function esm_problem(input, tspan;
     _plan_for(compiler)
     span = (Float64(tspan[1]), Float64(tspan[2]))
     t_sample = sample_time === nothing ? span[1] : Float64(sample_time)
+    # `:mtk` builds a ModelingToolkit `System` rather than this package's own
+    # evaluator, so it takes the whole construction (EarthSciASTMTKExt). The
+    # plan above has already answered `compiler_unavailable` if MTK is absent.
+    if compiler === :mtk
+        return _mtk_problem(input, span; p = p, u0 = u0, providers = providers,
+            model_name = model_name, metaparameters = metaparameters,
+            base_path = base_path, sample_time = t_sample,
+            const_arrays = const_arrays, param_arrays = param_arrays,
+            inspect = inspect, materialize_out = materialize_out,
+            pushdown_rewrite = pushdown_rewrite, seed_ic! = seed_ic!,
+            sinks = sinks, snapshot = snapshot, pre_write = pre_write,
+            checkpoint_predicates = checkpoint_predicates,
+            checkpoint_sinks = checkpoint_sinks,
+            terminate_on_checkpoint = terminate_on_checkpoint)
+    end
     # ---- extent discovery: a loader that measures its OWN record count ------
     # FIRST, because a discovered extent CLOSES a metaparameter and every load
     # below binds metaparameters at the loader API (esm-spec §9.7.6 site 3). The
@@ -958,11 +1158,12 @@ function esm_problem(input, tspan;
         _inject_pushdown_aliases!(merged_param, doc, pd_coupling)
     end
 
-    # Discrete-cadence materialization sink (the middle cadence phase): opt IN so a
-    # state-free derived field over a live forcing buffer (a regrid→physics stack) is
-    # cut out of the per-step RHS into a cache filled once per refresh, not recomputed
-    # on every continuous step. Empty (no discrete-materialize var) ⇒ no effect. A
-    # caller-supplied `materialize_out` is reused (and thus inspectable), else fresh.
+    # Discrete-cadence materialization sink (the middle cadence phase), ALWAYS
+    # passed, so a state-free derived field over a live forcing buffer (a
+    # regrid→physics stack) is cut out of the per-step RHS into a cache filled once
+    # per refresh, not recomputed on every continuous step. Empty (no
+    # discrete-materialize var) ⇒ no effect. A caller-supplied `materialize_out` is
+    # reused (and thus inspectable), else fresh.
     dm = materialize_out === nothing ? DiscreteMaterializer() : materialize_out
     # Build observability is a CONSTRUCTION-time seam now (§5.8): the problem
     # always owns a `BuildInspection`, so `observed_field(prob, name)` is two
@@ -974,8 +1175,20 @@ function esm_problem(input, tspan;
     # what lets `remake(prob; p = …)` accept the numeric half instead of refusing
     # every override.
     param_classes = Dict{String,Symbol}()
-    f!, u0_built, p_built, _tspan, var_map = build_evaluator(doc;
+    # `:xla` refuses live forcing buffers, and every one a caller or a discrete
+    # provider binds is already in `merged_param`: refuse those now rather than
+    # after a build that can take hours. src/compiler_xla.jl keeps the check on
+    # the build product too, for the discrete-materializer caches only the
+    # build creates.
+    compiler === :xla && _xla_refuse_before_build(merged_param)
+    # `:xla` is built OUT OF PLACE — the compiled tree-walk intermediate
+    # representation is what the direct StableHLO emitter lowers — and the
+    # executable is wrapped back into the in-place `f!` this Problem's surface
+    # promises, just below. Every other compiler builds the in-place evaluator
+    # directly. See src/compiler_xla.jl.
+    f!, u0_built, p_built, _tspan, var_map = _build_evaluator(doc;
         compiler = compiler,
+        form = compiler === :xla ? :oop : :inplace,
         model_name = model_name,
         parameter_overrides = overrides,
         const_arrays = merged_const,
@@ -988,8 +1201,18 @@ function esm_problem(input, tspan;
         _gated_providers = gated_providers,
         _sample_time = t_sample)
 
+    if compiler === :xla
+        f! = _xla_problem_rhs(f!, var_map, u0_built, p_built,
+                              insp.compiler_report)
+    end
+
     # ---- initial state: the document's own ICs, then the caller's -----------
-    u0_run = _seed_u0(u0_built, var_map, u0, seed_ic!)
+    # Under the build's plan: a `seed_ic!` hook (`seed_expression_ic!`) is an
+    # evaluation for this problem, and §2.5.10 puts the seed under the same
+    # refusal rule as the right-hand side.
+    u0_run = _with_compiler_plan(_plan_for(compiler)) do
+        _seed_u0(u0_built, var_map, u0, seed_ic!)
+    end
 
     # ---- the problem's callback set (§2.5.4) --------------------------------
     # Composed HERE, at construction, because a callback that refreshes provider
@@ -1014,6 +1237,11 @@ function esm_problem(input, tspan;
     # store. With no sinks nothing here fires and the solve is unchanged.
     sink_vec = collect(Any, sinks)
     save_everystep = true
+    # A sink that names observed fields gets them read at each record's state
+    # through the problem's compiled observed program (the problem is bound
+    # once it exists, below).
+    prob_ref = Ref{Any}(nothing)
+    snapshot = _observed_snapshot(snapshot, sink_vec, prob_ref)
     if !isempty(sink_vec)
         out_cb, out_tstops = build_output_callback(;
             sinks = sink_vec, snapshot = snapshot, pre_write = pre_write)
@@ -1037,13 +1265,45 @@ function esm_problem(input, tspan;
         save_everystep = false
     end
 
-    return EsmProblem(f!, u0_run, span, p_built, var_map, merged_param,
+    # The record now describes this problem's build (`_observed_field_memo`).
+    run_file = Ref{Any}(nothing)
+    lock(insp.observed_lock) do
+        insp.observed_build = run_file
+        insp.observed_ctx === nothing || (insp.observed_ctxs[run_file] = insp.observed_ctx)
+    end
+    prob = EsmProblem(f!, u0_run, span, p_built, var_map, merged_param,
                       discrete_providers, dm, _doc_equation_count(doc),
                       Ref(t_sample), Ref(false), derive_output_meta(doc), doc,
-                      Ref{Any}(nothing), param_classes, insp,
+                      run_file, param_classes, insp,
                       _compose_callbacks(cbs), tstops, save_everystep,
                       sink_vec, _distinct_sinks(sink_vec, ck_vec), Ref{Any}(nothing),
                       merged_renames)
+    prob_ref[] = prob
+    return prob
+end
+
+# The output callback's snapshot for `sinks`: the caller's own when it passed
+# one, or when no sink names an observed field (`sink_observed_names`);
+# otherwise the state snapshot with each named field read at the record's
+# state and time, `observed_field(prob, name; u, t)` — the flat row-major
+# vector that returns — with the integrator's parameters, so a solve of a
+# `remake`d problem (which shares this callback) records its own `p`.
+# `prob_ref` holds the problem once it is built.
+function _observed_snapshot(snapshot, sinks, prob_ref::Base.RefValue{Any})
+    snapshot === state_snapshot || return snapshot
+    names = String[]
+    for s in sinks, n in sink_observed_names(s)
+        String(n) in names || push!(names, String(n))
+    end
+    isempty(names) && return snapshot
+    return function (integrator)
+        u = integrator.u
+        t = Float64(integrator.t)
+        obs = Dict{String,Array}(n => _observed_field_read(prob_ref[], n, Array(u), t,
+                                                           integrator.p)
+                                 for n in names)
+        return StateSnapshot(t, state_snapshot(integrator), obs)
+    end
 end
 
 # The seeded initial state: the build's own `u0`, then the caller's `u0`
@@ -1094,15 +1354,35 @@ function _bare_candidates(model, v::AbstractString)
 end
 
 """
-    observed_field(prob::EsmProblem, name) -> Array
+    observed_field(prob::EsmProblem, name; u = nothing, t = nothing) -> Vector{Float64}
 
-Evaluate the state-free observed `name` at BUILD time through the problem's own
-graph — the public face of the build-observability path (`_observed_field`).
+The observed `name` of the problem, as a flat vector in row-major cell order
+(last index fastest; one element for a scalar observed).
+
+With no `u`, it is the field the BUILD defines: a state-free observed evaluated
+with the parameters the problem was built with, at `t = 0` unless `t` is given.
+With `u` — a state vector laid out like `prob.u0`, such as `sol.u[k]` — it is
+the observed at that state and time `t` (default `0`), which is how a
+STATE-DEPENDENT observed is read; `t` is `sol.t[k]` for a saved solution point.
+A read at a state or time binds the problem's own parameters `prob.p`, so on a
+`remake(prob; p = …)` it answers with the substituted values.
+
+Under `compiler = :native` the value comes from a program compiled once per
+problem and name — the same array cascade as the right-hand side, run over the
+state — so a read costs one pass over the field whatever `u` and `t` are. Under
+`compiler = :interpreter` it is the build-time cellwise evaluator, the oracle the
+compiled program agrees with bit for bit. The first read of a name files an
+`:observed` row in [`compiler_report`](@ref) naming the route
+(`:output_compiled`, or `:output_compiled_once` / `:output_percell` for the
+cellwise evaluator); an observed native cannot compile is refused by name.
 
 Two arguments (API_SPEC §5.8): build observability moved to a construction-time
 seam, so the caller no longer threads the same [`BuildInspection`](@ref) through
 the build and back into this accessor — the problem owns one. Pass your own via
 `esm_problem(...; inspect = insp)` if you also want to read the sink directly.
+`u` and `t` are keywords, not arguments: the result has the rank of the field
+whatever they are, which API_SPEC §5.8 lets a binding that can overload spell
+this way.
 
 Resolution is the cross-binding rule of API_SPEC §5.8, in precedence order:
 
@@ -1114,21 +1394,90 @@ Resolution is the cross-binding rule of API_SPEC §5.8, in precedence order:
 A bare name against a MULTI-component document is refused, with every qualified
 candidate named, rather than bound to an arbitrary one.
 
-Throws a `SimulateError` when `name` is not a build-time-evaluable observed
-(state-dependent, unsized axis, or not an observed at all).
+Throws a `SimulateError` when `name` is not an evaluable observed (an unsized
+axis, or not an observed at all), or when it reads the state and no `u` was
+given.
 """
-function observed_field(prob::EsmProblem, name::AbstractString)
+function observed_field(prob::EsmProblem, name::AbstractString;
+                        u::Union{Nothing,AbstractVector} = nothing,
+                        t::Union{Nothing,Real} = nothing)
+    return _observed_field_read(prob, String(name), u, t, prob.p)
+end
+
+# `observed_field` with the parameter carrier `p` to read at: the problem's own,
+# or a running integrator's (an output sink's snapshot).
+function _observed_field_read(prob::EsmProblem, name::String,
+                              u::Union{Nothing,AbstractVector},
+                              t::Union{Nothing,Real}, p)
+    # A compiler that built its own program answers for its own observeds: under
+    # `:mtk` the value lives in the compiled system's OBSERVED EQUATIONS, which
+    # this package's build-time observed graph knows nothing about.
+    backend = _compiler_backend(prob.f!)
+    backend === nothing ||
+        return _backend_observed_field(backend, prob, name; u = u, t = t)
     # Reading an observed at output time is one of the evaluations
     # esm-libraries-spec §2.5.10 puts under the compiler's refusal rule, so it
     # runs under the plan that BUILT the problem rather than under whatever
     # plan (if any) happens to be in scope on the reader's task.
     return _with_compiler_plan(_compiler_plan(compiler(prob))) do
-        _observed_field_impl(prob, name)
+        _observed_field_memo(prob, name, u, t, p)
     end
 end
 
-function _observed_field_impl(prob::EsmProblem, name::AbstractString)
+# The output-time tiers an `observed_field` row can carry.
+const _OUTPUT_TIERS = (:output_compiled, :output_compiled_once, :output_percell)
+
+# The output-time route, reported in the problem's compiler report and, for the
+# build-time read (no `u`, no `t`), memoized on the problem's build. The first
+# read of a name in this build files one `:observed` row saying which route
+# served it, from what THIS call did (`_counting_program_reads`,
+# `_counting_percell`). A memoized read at the same forcing epoch returns the
+# stored field without evaluating anything: that read is state-free, so only an
+# in-place refresh of a live buffer (which bumps the epoch) can move it. A
+# `remake` of the problem shares the build and so the memo: the build-time read
+# reports what the build materialized (API_SPEC §5.8), with the build's
+# parameters, which a `p` or `u0` swap does not change. A read at a state or
+# time is the observed as a function of `(u, p, t)`, so it binds `p` — the
+# reading problem's, or the running integrator's.
+function _observed_field_memo(prob::EsmProblem, name::String,
+                              u::Union{Nothing,AbstractVector} = nothing,
+                              t::Union{Nothing,Real} = nothing, p = nothing)
     insp = prob.inspection
+    memoizable = u === nothing && t === nothing
+    memoizable && (p = nothing)
+    epoch = _FORCING_EPOCH[]
+    key = (prob.run_file, name)
+    if memoizable
+        hit = lock(() -> get(insp.observed_memo, key, nothing), insp.observed_lock)
+        hit !== nothing && hit.epoch == epoch && return copy(hit.value)
+    end
+    (v, nprog), percell = _counting_percell() do
+        _counting_program_reads() do
+            _observed_field_impl(prob, name; u = u, t = t, p = p)
+        end
+    end
+    lock(insp.observed_lock) do
+        # One row per name per build, filed into the report of the build this
+        # record describes (a problem built earlier with the same record reads
+        # through it, but files nothing into another build's report).
+        if insp.observed_build === prob.run_file &&
+           !any(r -> r.kind === :observed && r.rule == name && r.tier in _OUTPUT_TIERS,
+                insp.compiler_report.rules)
+            tier = nprog > 0 ? :output_compiled :
+                   percell > 0 ? :output_percell : :output_compiled_once
+            push!(insp.compiler_report.rules,
+                  CompilerRuleRecord(name, :observed, tier, Pair{Symbol,Symbol}[]))
+        end
+        memoizable && (insp.observed_memo[key] = _ObservedMemo(epoch, copy(v)))
+    end
+    return v
+end
+
+function _observed_field_impl(prob::EsmProblem, name::AbstractString;
+                              u::Union{Nothing,AbstractVector} = nothing,
+                              t::Union{Nothing,Real} = nothing, p = nothing)
+    insp = prob.inspection
+    ctx = _obs_ctx(prob)
     if prob.run_file[] === nothing
         prob.run_file[] = coerce_esm_file(prob.run_doc)
     end
@@ -1136,6 +1485,8 @@ function _observed_field_impl(prob::EsmProblem, name::AbstractString)
     (file.models !== nothing && !isempty(file.models)) || throw(SimulateError(
         "observed_field: prepared document has no model"))
     mname = String(first(keys(file.models)))
+    field_of(k) = _observed_field(insp, file, mname, k; ctx = ctx, u = u, t = t,
+                                  var_map = prob.var_map, p = p)
     # A name an `operator_compose` renaming match DELETED addresses a field that
     # MOVED (issue #230). The merge only ever REMOVES a spelling, so resolving
     # here can never shadow a live field.
@@ -1143,7 +1494,7 @@ function _observed_field_impl(prob::EsmProblem, name::AbstractString)
     model = file.models[mname]
     comps = _field_components(model)
     single = length(comps) == 1
-    fld = _observed_field(insp, file, mname, v)
+    fld = field_of(v)
     if fld === nothing && !occursin('.', v)
         # Bare spelling: resolve against the run model's observed tails, but
         # only on a SINGLE-component document (API_SPEC §5.8). On a multi-
@@ -1151,7 +1502,7 @@ function _observed_field_impl(prob::EsmProblem, name::AbstractString)
         cands = _bare_candidates(model, v)
         if single
             for k in cands
-                fld = _observed_field(insp, file, mname, k)
+                fld = field_of(k)
                 fld === nothing || break
             end
         elseif !isempty(cands)

@@ -596,22 +596,7 @@ pub(super) fn eval_vec_contracted<'a>(
                     acc = vec_combine(combine_op, acc, term, pool)?;
                 }
             }
-            // Mixed-radix increment over the contraction window.
-            let mut d = 0;
-            let mut done = false;
-            loop {
-                if d == nc {
-                    done = true;
-                    break;
-                }
-                cvals[d] += 1;
-                if cvals[d] <= chi[d] {
-                    break;
-                }
-                cvals[d] = clo[d];
-                d += 1;
-            }
-            if done {
+            if !next_contraction_tuple(&mut cvals[..nc], &clo[..nc], &chi[..nc]) {
                 break;
             }
             continue;
@@ -635,26 +620,28 @@ pub(super) fn eval_vec_contracted<'a>(
         // returning `None`, so `?` (bail to the oracle) leaks no pooled buffer.
         acc = vec_combine(combine_op, acc, term, pool)?;
 
-        // Mixed-radix increment over the contraction window.
-        let mut d = 0;
-        let mut done = false;
-        loop {
-            if d == nc {
-                done = true;
-                break;
-            }
-            cvals[d] += 1;
-            if cvals[d] <= chi[d] {
-                break;
-            }
-            cvals[d] = clo[d];
-            d += 1;
-        }
-        if done {
+        if !next_contraction_tuple(&mut cvals[..nc], &clo[..nc], &chi[..nc]) {
             break;
         }
     }
     Some(acc)
+}
+
+/// Advance `cvals` to the next tuple of the contraction window, the LAST
+/// contracted name fastest — the per-cell oracle's `CartesianTuples` order,
+/// so the overlay folds each cell's terms in the oracle's association.
+/// `false` once the window is exhausted.
+fn next_contraction_tuple(cvals: &mut [i64], clo: &[i64], chi: &[i64]) -> bool {
+    let mut d = cvals.len();
+    while d > 0 {
+        d -= 1;
+        cvals[d] += 1;
+        if cvals[d] <= chi[d] {
+            return true;
+        }
+        cvals[d] = clo[d];
+    }
+    false
 }
 
 /// Vectorized evaluation of `expr` over the output box `bx`. Increments `ops`
@@ -800,6 +787,8 @@ pub(super) enum VecOp {
     Aggregate,
     Makearray,
     Const,
+    /// The nullary boolean literals `true` / `false` (1.0 / 0.0).
+    BoolLit(bool),
     Ifelse,
     Broadcast,
     /// The precision-boundary marker (`crate::precision_infer::MARKER_OP`).
@@ -817,7 +806,7 @@ pub(super) fn vec_op_code(op: &str) -> VecOp {
         "-" => VecOp::Arith(BinCode::Sub),
         "*" => VecOp::Arith(BinCode::Mul),
         "/" => VecOp::Arith(BinCode::Div),
-        "^" => VecOp::Arith(BinCode::Pow),
+        "^" | "pow" => VecOp::Arith(BinCode::Pow),
         "min" => VecOp::Arith(BinCode::Min),
         "max" => VecOp::Arith(BinCode::Max),
         "atan2" => VecOp::Arith(BinCode::Atan2),
@@ -855,6 +844,8 @@ pub(super) fn vec_op_code(op: &str) -> VecOp {
         "faq" => VecOp::Aggregate,
         "makearray" => VecOp::Makearray,
         "const" => VecOp::Const,
+        "true" => VecOp::BoolLit(true),
+        "false" => VecOp::BoolLit(false),
         "ifelse" => VecOp::Ifelse,
         "broadcast" => VecOp::Broadcast,
         _ => VecOp::Unsupported,
@@ -946,6 +937,7 @@ fn eval_vec_op_code<'a>(
             // Array-valued constants are not part of the stencil fast path.
             Value::Array(_) => None,
         },
+        VecOp::BoolLit(b) => Some(VecValue::Scalar(if b { 1.0 } else { 0.0 })),
         // Scalar comparisons and `ifelse` over *scalar* operands — the einsum
         // weight idiom `ifelse(k==0,-2,1)` folds to a constant per contraction
         // tuple. Bit-identical to the oracle's `eval_op` (same exact-equality
@@ -1803,6 +1795,42 @@ pub(super) fn eval_vec_index<'a>(
 /// Vectorized makearray: materialize each region as a whole-array sub-range
 /// write over the region's box (last region wins), reusing the enclosing output
 /// symbols. Returns an array spanning the union bounding box.
+/// Which axes of a `makearray` region an array value of shape `value` covers,
+/// or `None` when it does not fit the region (esm-spec §4.3.2: "an
+/// array-valued expression must match the region's shape (excluding
+/// singleton dimensions)").
+///
+/// A value of the region's rank must match it exactly. A value of LOWER rank
+/// covers the region's non-singleton axes, in order, and must match their
+/// extents — the boundary face `[[1,1],[1,NLAT]]` holding an aggregate over
+/// `j` alone, which is how every §9.6.8 discretization writes its faces. That
+/// is the Julia reference's rule (`_resolve_index_of_makearray`). The value's
+/// elements are placed in row-major order, so the singleton axes are simply
+/// inserted.
+pub(super) fn region_value_axes(value: &[usize], region: &[usize]) -> Option<SmallVec<[bool; 4]>> {
+    if value == region {
+        return Some(SmallVec::from_elem(true, region.len()));
+    }
+    let covered: SmallVec<[bool; 4]> = region.iter().map(|&n| n != 1).collect();
+    let extents: SmallVec<[usize; 4]> = region.iter().copied().filter(|&n| n != 1).collect();
+    (value.len() < region.len() && value == extents.as_slice()).then_some(covered)
+}
+
+/// `value` viewed at the region's rank: the singleton axes
+/// [`region_value_axes`] leaves uncovered inserted, in place.
+pub(super) fn region_value_view<'v>(
+    value: ndarray::ArrayViewD<'v, f64>,
+    covered: &[bool],
+) -> ndarray::ArrayViewD<'v, f64> {
+    let mut v = value;
+    for (a, &c) in covered.iter().enumerate() {
+        if !c {
+            v = v.insert_axis(ndarray::Axis(a));
+        }
+    }
+    v
+}
+
 pub(super) fn eval_vec_makearray<'a>(
     node: &ExpressionNode,
     bx: &VecBox,
@@ -1862,9 +1890,13 @@ pub(super) fn eval_vec_makearray<'a>(
                 (hi - lo + 1) as usize
             })
             .collect();
+        // The legal EMPTY spelling (`stop == start - 1`, §4.3.2) covers no
+        // cell, but `eval_makearray` still evaluates its value, and an array
+        // value that does not fit poisons the result with `NaN`. This
+        // evaluator has no empty box to evaluate it over, so it declines.
         if r_shape.contains(&0) {
             pool.give_array(result);
-            return None;
+            bail_vec!("makearray: empty region");
         }
         // ess-cse: a region has its own `lo`/extent, so a coordinate ramp and
         // every shifted gather mean something different in it — a distinct box,
@@ -1884,16 +1916,29 @@ pub(super) fn eval_vec_makearray<'a>(
                 return None;
             }
         };
-        // An array region value must match the region box exactly.
-        let mismatch = match v.shape() {
-            None => false, // scalar fills the region
-            Some(s) => v.origin().map(|o| o != &r_lo[..]).unwrap_or(true) || s != &r_shape[..],
+        // An array region value must fit the region box (its non-singleton
+        // axes, for a lower-rank value) at the region's origin.
+        let covered = match (v.shape(), v.origin()) {
+            (None, _) => None, // scalar fills the region
+            (Some(s), Some(o)) => match region_value_axes(s, &r_shape) {
+                Some(c)
+                    if o.iter()
+                        .eq((0..r_shape.len()).filter(|&a| c[a]).map(|a| &r_lo[a])) =>
+                {
+                    Some(c)
+                }
+                _ => {
+                    v.release(pool);
+                    pool.give_array(result);
+                    return None;
+                }
+            },
+            (Some(_), None) => {
+                v.release(pool);
+                pool.give_array(result);
+                return None;
+            }
         };
-        if mismatch {
-            v.release(pool);
-            pool.give_array(result);
-            return None;
-        }
         match v {
             VecValue::Scalar(s) => {
                 let mut sub = result.slice_each_axis_mut(|ax| {
@@ -1906,6 +1951,7 @@ pub(super) fn eval_vec_makearray<'a>(
             other => {
                 {
                     let vview = other.view().expect("array operand has a view");
+                    let vview = region_value_view(vview, covered.as_deref().unwrap_or(&[]));
                     let mut sub = result.slice_each_axis_mut(|ax| {
                         let d = ax.axis.index();
                         let s0 = (r_lo[d] - lo_bb[d]) as usize;
@@ -2536,6 +2582,9 @@ mod op_dispatch_equivalence {
         assert_eq!(vec_op_code("faq"), VecOp::Aggregate);
         assert_eq!(vec_op_code("makearray"), VecOp::Makearray);
         assert_eq!(vec_op_code("const"), VecOp::Const);
+        assert_eq!(vec_op_code("true"), VecOp::BoolLit(true));
+        assert_eq!(vec_op_code("false"), VecOp::BoolLit(false));
+        assert_eq!(vec_op_code("pow"), VecOp::Arith(BinCode::Pow));
         assert_eq!(vec_op_code("ifelse"), VecOp::Ifelse);
         assert_eq!(vec_op_code("broadcast"), VecOp::Broadcast);
     }

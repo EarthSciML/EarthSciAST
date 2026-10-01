@@ -18,7 +18,7 @@ include("models.jl")
 
 function run_case(name, doc, n)
     println("\n", "="^72, "\n", name, "\n", "="^72)
-    fi, u0, p, _, _ = ESM.build_evaluator(doc)
+    fi, u0, p, _, _ = ESM._build_evaluator(doc)
     u = n == 2 ? [0.7, 0.4] : _seed(n)
     t = 0.37
     loss = function (uu)

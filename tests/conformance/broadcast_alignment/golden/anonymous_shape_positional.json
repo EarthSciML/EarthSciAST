@@ -1,0 +1,55 @@
+{
+  "fixture": "anonymous_shape_positional",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "anonymous_shape_positional_t1",
+      "assertion_idx": 1,
+      "variable": "dp",
+      "actual": 110.99999999999999
+    },
+    {
+      "test_id": "anonymous_shape_positional_t1",
+      "assertion_idx": 2,
+      "variable": "dp",
+      "actual": 211.99999999999994
+    },
+    {
+      "test_id": "anonymous_shape_positional_t1",
+      "assertion_idx": 3,
+      "variable": "dp",
+      "actual": 122.99999999999996
+    },
+    {
+      "test_id": "anonymous_shape_positional_t1",
+      "assertion_idx": 4,
+      "variable": "dp",
+      "actual": 222.99999999999991
+    },
+    {
+      "test_id": "anonymous_shape_positional_t1",
+      "assertion_idx": 5,
+      "variable": "dq",
+      "actual": 1110.0
+    },
+    {
+      "test_id": "anonymous_shape_positional_t1",
+      "assertion_idx": 6,
+      "variable": "dq",
+      "actual": 2119.9999999999995
+    },
+    {
+      "test_id": "anonymous_shape_positional_t1",
+      "assertion_idx": 7,
+      "variable": "dq",
+      "actual": 2459.9999999999995
+    },
+    {
+      "test_id": "anonymous_shape_positional_t1",
+      "assertion_idx": 8,
+      "variable": "dq",
+      "actual": 4459.999999999999
+    }
+  ]
+}

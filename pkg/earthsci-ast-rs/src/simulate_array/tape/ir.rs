@@ -29,6 +29,8 @@
 //! * [`Instr::Ramp`] is the coordinate-ramp idiom of `eval_vec_variable`.
 //! * [`Instr::Region`] is one `eval_vec_makearray` region write (later regions
 //!   overwrite earlier ones).
+//! * [`Instr::Assemble`] is a whole `eval_vec_makearray`: the zero-filled
+//!   bounding box with every region written in order, in one instruction.
 //! * [`Instr::ConstArray`] materializes an inline array literal: the elements
 //!   `eval_const`/`json_to_value` produce for that node, in row-major order,
 //!   already precision-rounded at ingress — the same `f64`s the interpreter
@@ -43,6 +45,34 @@
 //!   fastest) from the reduction identity, which is what makes a scalar
 //!   reduction bit-identical to `reduce_contraction`'s `acc = combine(acc,
 //!   term)` loop.
+//! * [`Instr::Scan`] is `run_prefix_scan` over a whole box: a running fold
+//!   along one axis, ascending, independently for every position of the
+//!   other axes, writing the inclusive or exclusive partial result.
+//! * [`Instr::PolyArea`] is `eval_polygon_intersection_area` per element of
+//!   its box: each element's two rings are read out of the two ring tables
+//!   and measured by the interpreter's own `clip_area_value`. Pairs a planar
+//!   broad phase proves bounding-box disjoint are not clipped; they hold the
+//!   value the kernel's own bounding-box reject returns for them.
+//! * [`Instr::IndexGather`] is `index_into` with one subscript that is DATA:
+//!   the subscript operand is rounded (`f64::round`, then `as i64`, exactly
+//!   `eval_index_args`) and an out-of-range position reads the zero ghost.
+//! * [`Instr::TableGather`] reads its source at positions fixed at build
+//!   time (one per output element, or the ghost `+0.0`): an `index` whose
+//!   subscripts are build-time data rather than an affine map of the box.
+//! * [`Instr::SegReduce`] is a compressed-row reduction: each output cell
+//!   folds its own contiguous run of a term list, skipping the terms a mask
+//!   excludes, which is `reduce_contraction`'s loop over an explicit list of
+//!   admitted contraction tuples (a join-gated or ragged contraction).
+//! * [`Instr::LoadForcing`] is `lookup_variable`'s forcing arm: the entry the
+//!   forcing buffer holds for the name, copied in row-major order (a 0-d entry
+//!   read as a scalar, rounded to the active precision), and the same
+//!   fail-closed fault when the buffer holds none.
+//! * [`Instr::Reshape`] is a row-major reinterpretation: the source's
+//!   elements, in row-major order, under the output slot's box.
+//! * [`Instr::Fault`] latches one fail-closed evaluation fault
+//!   (`E_TREEWALK_CONSTARRAY_OOB`, `E_TREEWALK_INDEX_ON_SCALAR`) exactly as
+//!   the per-cell oracle's `latch_gather_fault` does at the same point: the
+//!   FIRST fault latched in an evaluation wins, and the caller drains it.
 //!
 //! Array operands within one instruction share one box (shape + 1-based
 //! origin), checked at lowering time — the same precondition `vec_combine`
@@ -84,25 +114,25 @@ pub(crate) enum Operand {
     /// contraction-index values).
     Lit(f64),
     /// The scalar parameter at this index of the positional parameter vector.
-    Param(u16),
+    Param(u32),
     /// The current solver time `t`.
     Time,
     /// The whole persistent array of state variable `state_vars[i]`, read from
     /// the current state vector (origin all-1s). A 0-d state variable reads as
     /// a scalar — exactly `eval_vec_variable`'s state arm.
-    State(u16),
+    State(u32),
     /// The whole persistent observed array `obs_reads[i]`, resolved BY NAME in
     /// the runtime observed map (origin all-1s; 0-d reads as a scalar). Used
     /// for observeds produced by fallback rules or seeded static observeds.
-    Obs(u16),
+    Obs(u32),
 }
 
 /// An array source for [`Instr::Gather`] / [`Instr::LoadElem`].
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum SrcRef {
     Slot(SlotId),
-    State(u16),
-    Obs(u16),
+    State(u32),
+    Obs(u32),
 }
 
 /// One tape instruction. See the module docs for the semantics contract.
@@ -156,6 +186,12 @@ pub(crate) enum Instr {
         region: u32,
         out: SlotId,
     },
+    /// A whole `makearray` in one instruction: `out` zero-filled, then each
+    /// part of `assemblies[table]` written over its region IN ORDER (a later
+    /// region overwrites an earlier one) — what a chain of [`Instr::Region`]
+    /// writes computes, with no per-region copy of the box. `out` never
+    /// aliases a part's source.
+    Assemble { table: u32, out: SlotId },
     /// Evaluate the §9.2 `interp.*` entry `interp_tables[table]` elementwise
     /// over `out`'s box: `out[k] = f(table, x[k], y[k])`, with a scalar query
     /// operand broadcasting exactly as [`Instr::Bin`]'s operands do.
@@ -186,6 +222,17 @@ pub(crate) enum Instr {
     /// XlaBuilder emitter lowers this to a `ConstantLiteral` of the same
     /// row-major buffer.)
     ConstArray { data: u32, out: SlotId },
+    /// Copy the forcing-buffer entry `forcings[forcing]` names into `out`
+    /// (row-major, origin all-1s; a scalar slot for a 0-d entry).
+    ///
+    /// The forcing buffer only changes between integration segments, so this
+    /// runs in the CONST section for a forcing nothing refreshes and in the
+    /// SEGMENT section for a DISCRETE one, and every reader takes the slot:
+    /// no instruction ever reads the buffer itself. A missing entry latches
+    /// the fault the interpreter's lookup raises and fills `out` with `NaN`;
+    /// an entry whose shape is not the one the program was built against
+    /// latches a fault naming both.
+    LoadForcing { forcing: u32, out: SlotId },
     /// Reduce `src` over `axes` with `op`'s kernel, from `init`:
     ///
     /// ```text
@@ -217,6 +264,107 @@ pub(crate) enum Instr {
         src_shape: DimU,
         out: SlotId,
     },
+    /// Forward prefix scan (esm-spec §4.3.1) of `src` along `axis`, with
+    /// `op`'s kernel from `init`, independently for every position of the
+    /// other axes:
+    ///
+    /// ```text
+    /// acc = init
+    /// for k in 0..len(axis), ascending:
+    ///     inclusive:  acc = kernel(op)(acc, src[k]);  out[k] = acc
+    ///     exclusive:  out[k] = acc;  acc = kernel(op)(acc, src[k])
+    /// ```
+    ///
+    /// `out`'s box is `src_shape`. This is `run_prefix_scan`'s sweep, folding
+    /// each window in the same association (`init` is the reduction identity
+    /// and the first combine is NOT elided: `0.0 + (-0.0)` is `0.0`), so a
+    /// scan is bit-identical to the per-cell oracle. One instruction, whatever
+    /// the scanned length.
+    Scan {
+        op: BinCode,
+        init: f64,
+        src: SrcRef,
+        axis: u8,
+        inclusive: bool,
+        /// The expected source (and output) box (validation).
+        src_shape: DimU,
+        out: SlotId,
+    },
+    /// `polygon_intersection_area` over `out`'s box (a scalar slot for a
+    /// single pair): element `k`'s rings are `a` and `b` read at the positions
+    /// `geoms[geom]` derives from `k`, and its value is the interpreter's
+    /// `clip_area_value` of the two. See [`GeomSpec`] for the broad phase.
+    PolyArea {
+        a: SrcRef,
+        b: SrcRef,
+        geom: u32,
+        out: SlotId,
+    },
+    /// `out[k] = src[pos(k)]`, where source axis `index_gathers[spec].data_axis`
+    /// is addressed by the 1-based subscript `idx[k]` (a data value, rounded
+    /// as the interpreter rounds it) and every other source axis by an affine
+    /// map of an output axis or a fixed position. A subscript outside the
+    /// source extent reads the zero ghost, `eval_index`'s state and observed
+    /// rule; a const-array base is never lowered here.
+    IndexGather {
+        src: SrcRef,
+        idx: Operand,
+        spec: u32,
+        out: SlotId,
+    },
+    /// `out[k] = src[pos[k]]`, with `pos = gather_tables[table].pos` the
+    /// ROW-MAJOR flat position of each element's source cell, resolved at
+    /// build time; a [`GATHER_GHOST`] position reads `+0.0` (the zero ghost of
+    /// an out-of-range read). `out` is a 1-D box of `pos.len()` elements.
+    ///
+    /// This is `eval_index` with every subscript already evaluated: the
+    /// lowering computes each position exactly as `index_into` does (the
+    /// subscript rounded, then the zero ghost or the const-array boundary
+    /// policy), so the element read is the one the interpreter reads.
+    TableGather {
+        src: SrcRef,
+        table: u32,
+        out: SlotId,
+    },
+    /// A compressed-row reduction over the 1-D term list `src`:
+    ///
+    /// ```text
+    /// for c in 0..n_out:
+    ///     acc = init
+    ///     for k in rows[c] .. rows[c + 1]:
+    ///         if mask is None or mask[k] != 0:  acc = kernel(op)(acc, src[k])
+    ///     out[c] = acc
+    /// ```
+    ///
+    /// with `rows = seg_tables[table].rows` (`n_out + 1` ascending offsets,
+    /// the last equal to `src`'s length) and `c` the ROW-MAJOR cell of
+    /// `out`'s box (a scalar `out` has one cell). Each cell's run lists its
+    /// admitted contraction tuples in the interpreter's odometer order (the
+    /// last contracted name fastest), and an excluded term is SKIPPED, not
+    /// combined as the identity, exactly as `reduce_contraction`'s `continue`
+    /// does — so the fold is bit-identical, signed zeros and NaNs included.
+    SegReduce {
+        op: BinCode,
+        init: f64,
+        src: SlotId,
+        mask: Option<SlotId>,
+        table: u32,
+        out: SlotId,
+    },
+    /// `out`'s elements, in ROW-MAJOR order, are `src`'s elements in
+    /// row-major order: the same element count under a different box. A
+    /// column-major reshape (`eval_reshape`) is this between two axis
+    /// reversals, which are plain [`Instr::Gather`] permutations.
+    Reshape { src: SrcRef, out: SlotId },
+    /// Latch `faults[fault]` as the evaluation's fail-closed fault, unless an
+    /// earlier one is already latched (the oracle's `latch_gather_fault`,
+    /// which keeps the FIRST). The lowering emits one where the per-cell
+    /// oracle latches for certain whenever this point executes — an
+    /// out-of-range read of a const array with no boundary policy, a
+    /// subscript on a 0-D parameter — and it defines no slot: the value the
+    /// oracle substitutes there (`NaN`) is carried by the ordinary
+    /// instructions around it.
+    Fault { fault: u32 },
     /// Scalar-`ifelse` short circuit: if `cond != 0`, execute the next
     /// `n_true` instructions then skip the following `n_false`; else skip
     /// `n_true` and execute the following `n_false`. The untaken branch is
@@ -260,10 +408,19 @@ impl Instr {
             | Instr::Fill { out, .. }
             | Instr::Copy { out, .. }
             | Instr::Region { out, .. }
+            | Instr::Assemble { out, .. }
             | Instr::ConstArray { out, .. }
+            | Instr::LoadForcing { out, .. }
             | Instr::Interp { out, .. }
-            | Instr::Reduce { out, .. } => Some(*out),
+            | Instr::Reduce { out, .. }
+            | Instr::Scan { out, .. }
+            | Instr::PolyArea { out, .. }
+            | Instr::IndexGather { out, .. }
+            | Instr::TableGather { out, .. }
+            | Instr::SegReduce { out, .. }
+            | Instr::Reshape { out, .. } => Some(*out),
             Instr::JmpIfZero { .. }
+            | Instr::Fault { .. }
             | Instr::Fallback { .. }
             | Instr::Export { .. }
             | Instr::DyWrite { .. }
@@ -276,8 +433,12 @@ impl Instr {
     pub(crate) fn for_each_def(&self, fused: &[FusedSpec], mut f: impl FnMut(SlotId)) {
         match self {
             Instr::Fused { spec } => {
-                for &(_, slot) in &fused[*spec as usize].outputs {
+                let fs = &fused[*spec as usize];
+                for &(_, slot) in &fs.outputs {
                     f(slot);
+                }
+                if let Some(r) = &fs.reduce {
+                    f(r.out);
                 }
             }
             other => {
@@ -293,6 +454,7 @@ impl Instr {
         &self,
         dy_writes: &[DyWrite],
         fused: &[FusedSpec],
+        assemblies: &[AssembleSpec],
         mut f: impl FnMut(SlotId),
     ) {
         let mut op = |o: &Operand| {
@@ -311,12 +473,36 @@ impl Instr {
                 op(a);
                 op(b);
             }
-            Instr::Gather { src, .. } | Instr::LoadElem { src, .. } | Instr::Reduce { src, .. } => {
+            Instr::Gather { src, .. }
+            | Instr::LoadElem { src, .. }
+            | Instr::Reduce { src, .. }
+            | Instr::Scan { src, .. }
+            | Instr::TableGather { src, .. }
+            | Instr::Reshape { src, .. } => {
                 if let SrcRef::Slot(s) = src {
                     f(*s);
                 }
             }
-            Instr::Ramp { .. } | Instr::ConstArray { .. } => {}
+            Instr::PolyArea { a, b, .. } => {
+                for src in [a, b] {
+                    if let SrcRef::Slot(s) = src {
+                        f(*s);
+                    }
+                }
+            }
+            Instr::IndexGather { src, idx, .. } => {
+                if let SrcRef::Slot(s) = src {
+                    op(&Operand::Slot(*s));
+                }
+                op(idx);
+            }
+            Instr::SegReduce { src, mask, .. } => {
+                f(*src);
+                if let Some(m) = mask {
+                    f(*m);
+                }
+            }
+            Instr::Ramp { .. } | Instr::ConstArray { .. } | Instr::LoadForcing { .. } => {}
             Instr::Interp { x, y, .. } => {
                 op(x);
                 if let Some(y) = y {
@@ -329,8 +515,13 @@ impl Instr {
                 op(src);
                 op(&Operand::Slot(*base));
             }
+            Instr::Assemble { table, .. } => {
+                for (src, _) in &assemblies[*table as usize].parts {
+                    op(src);
+                }
+            }
             Instr::JmpIfZero { cond, .. } => op(cond),
-            Instr::Fallback { .. } => {}
+            Instr::Fallback { .. } | Instr::Fault { .. } => {}
             Instr::Export { slot, .. } => f(*slot),
             Instr::DyWrite { write } => f(dy_writes[*write as usize].slot),
             Instr::Fused { spec } => {
@@ -360,9 +551,18 @@ impl Instr {
             Instr::Fill { .. } => "Fill",
             Instr::Copy { .. } => "Copy",
             Instr::Region { .. } => "Region",
+            Instr::Assemble { .. } => "Assemble",
             Instr::ConstArray { .. } => "ConstArray",
+            Instr::LoadForcing { .. } => "LoadForcing",
             Instr::Interp { .. } => "Interp",
             Instr::Reduce { .. } => "Reduce",
+            Instr::Scan { .. } => "Scan",
+            Instr::PolyArea { .. } => "PolyArea",
+            Instr::IndexGather { .. } => "IndexGather",
+            Instr::TableGather { .. } => "TableGather",
+            Instr::SegReduce { .. } => "SegReduce",
+            Instr::Reshape { .. } => "Reshape",
+            Instr::Fault { .. } => "Fault",
             Instr::JmpIfZero { .. } => "JmpIfZero",
             Instr::Fallback { .. } => "Fallback",
             Instr::Export { .. } => "Export",
@@ -376,16 +576,24 @@ impl Instr {
 // Step 4: fused elementwise groups.
 // ---------------------------------------------------------------------------
 
+/// An index local to one fused group: a register, an array input, a scalar
+/// input or a shifted input. It stays 16-bit because the executor walks the
+/// micro-program once per chunk and a compact op is part of that loop's
+/// cost; the fusion pass closes a group before any of its tables could
+/// outgrow it (`GBuilder::has_room`). Indices into the program's own tables
+/// (states, observed reads, parameters, slots) are 32-bit.
+pub(crate) type GroupIx = u16;
+
 /// Reference to a value inside a fused micro-program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MRef {
     /// Temporary register defined by an earlier micro-op of the same group.
-    Reg(u16),
+    Reg(GroupIx),
     /// Array input `FusedSpec::inputs[i]`, read at the current element (for a
     /// folded gather: at the current element plus the run's source offset).
-    In(u16),
+    In(GroupIx),
     /// Scalar input `FusedSpec::scalars[i]`, broadcast over the box.
-    Scal(u16),
+    Scal(GroupIx),
 }
 
 /// One micro-op of a fused group. Element semantics are EXACTLY the scalar
@@ -401,27 +609,27 @@ pub(crate) enum MicroOp {
         op: BinCode,
         a: MRef,
         b: MRef,
-        out: u16,
+        out: GroupIx,
     },
     Un {
         op: UnCode,
         a: MRef,
-        out: u16,
+        out: GroupIx,
     },
     Neg {
         a: MRef,
-        out: u16,
+        out: GroupIx,
     },
     Select {
         cond: MRef,
         a: MRef,
         b: MRef,
-        out: u16,
+        out: GroupIx,
     },
     /// `out = a` (a fused `Fill`/`Copy`).
     Mov {
         a: MRef,
-        out: u16,
+        out: GroupIx,
     },
     /// Superop: `t = kernel(op1)(a, b); out = swap ? kernel(op2)(c, t)
     /// : kernel(op2)(t, c)` — two adjacent Bin micro-ops whose intermediate
@@ -436,7 +644,7 @@ pub(crate) enum MicroOp {
         op2: BinCode,
         c: MRef,
         swap: bool,
-        out: u16,
+        out: GroupIx,
     },
     /// Step 4b superop: a three-op `+ - * /` chain whose two intermediates
     /// each have exactly one consumer (the next op):
@@ -457,7 +665,7 @@ pub(crate) enum MicroOp {
         op3: BinCode,
         d: MRef,
         swap3: bool,
-        out: u16,
+        out: GroupIx,
     },
 }
 
@@ -468,18 +676,28 @@ pub(crate) struct FusedInput {
     /// `Some(i)`: a folded shifted-read gather — the source flat offset for a
     /// run lives at `FusedRun::in_off[i]`. `None`: aligned (the source is read
     /// at the same flat offset as the output).
-    pub shifted_ix: Option<u16>,
+    pub shifted_ix: Option<GroupIx>,
     /// The source array's expected shape (equals the group box for aligned
     /// inputs; a folded gather's source box may differ — its run offsets are
     /// flat in THIS shape's row-major layout). Validated at execution.
     pub src_shape: DimU,
     /// Per-element source advance within a run (1 = contiguous; a LINEAR
     /// folded gather — e.g. a level slice of a deeper box — advances by a
-    /// constant stride). Meaningful only for shifted inputs.
+    /// constant stride; 0 = one source element for the whole run, a read
+    /// broadcast along the box's innermost axis). Meaningful only for shifted
+    /// inputs.
     pub elem_stride: i64,
-    /// For a shifted input with `elem_stride != 1`: the chunk register the
-    /// executor pre-loads this input into (`u16::MAX` otherwise).
-    pub load_reg: u16,
+    /// For a shifted input with `elem_stride` other than 1 and 0 (and 0 too in
+    /// a group with a `Bin3` superop): the chunk register the executor
+    /// pre-loads this input into (`GroupIx::MAX` otherwise; a zero-stride
+    /// input is then read as the run's one element). A folded data-subscript
+    /// gather is always pre-loaded.
+    pub load_reg: GroupIx,
+    /// `Some((by, n))`: a folded [`Instr::IndexGather`] of a rank-1 source
+    /// of extent `n`. The element at output offset `k` is
+    /// `src[data_subscript(inputs[by][k], n)]`, the zero ghost when that is
+    /// `None`; `inputs[by]` is the subscript array, an aligned input.
+    pub index: Option<(GroupIx, usize)>,
 }
 
 /// Sentinel source offset: the input reads the gather's Dirichlet ghost
@@ -489,13 +707,121 @@ pub(crate) const GHOST_OFF: i64 = i64::MIN;
 /// One contiguous run of a fused group's precompiled schedule. Runs partition
 /// the (row-major flat) output box; within a run every shifted input is either
 /// a single constant flat offset into its source or entirely ghost.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FusedRun {
     pub out_off: u32,
     pub len: u32,
     /// Per SHIFTED input (indexed by `FusedInput::shifted_ix`): the 0-based
     /// flat source offset of the run's first element, or [`GHOST_OFF`].
     pub in_off: SmallVec<[i64; 2]>,
+}
+
+impl FusedRun {
+    /// This run moved `k` steps of `(out_step, in_step)`: every offset
+    /// advanced, a ghost input left ghost.
+    pub(crate) fn stepped(&self, k: i64, out_step: i64, in_step: &[i64]) -> FusedRun {
+        FusedRun {
+            out_off: (self.out_off as i64 + k * out_step) as u32,
+            len: self.len,
+            in_off: self
+                .in_off
+                .iter()
+                .zip(in_step)
+                .map(|(&o, &s)| if o == GHOST_OFF { o } else { o + k * s })
+                .collect(),
+        }
+    }
+}
+
+/// One node of a [`RunSchedule`].
+#[derive(Clone, Debug)]
+pub(crate) enum RunNode {
+    Run(FusedRun),
+    /// The `body` nodes that follow (a subtree), executed `count` (>= 2)
+    /// times in order; the `k`-th time (from 0) every run in them has its
+    /// `out_off` advanced by `k * out_step` and every non-ghost `in_off[j]`
+    /// by `k * in_step[j]`. A regular sequence of rows -- one row's runs
+    /// repeated at a constant stride in the output and in every source -- is
+    /// one such node, so the schedule's size does not grow with the box.
+    Repeat {
+        count: u32,
+        body: u32,
+        out_step: i64,
+        in_step: SmallVec<[i64; 2]>,
+    },
+}
+
+/// A fused group's precompiled run schedule: the runs, in ascending
+/// `out_off` and maximally coalesced, that partition its box, with regular
+/// repetitions kept as [`RunNode::Repeat`] instead of written out.
+#[derive(Clone, Debug)]
+pub(crate) struct RunSchedule {
+    /// Pre-order: a `Repeat` is followed by its body.
+    pub nodes: Vec<RunNode>,
+    /// The runs it executes (a repeated body counted once per repetition).
+    pub n_runs: usize,
+    /// The deepest nesting of `Repeat` nodes.
+    pub depth: usize,
+}
+
+impl RunSchedule {
+    /// The one-run schedule `(0, n_elems, [])` of a group with no shifted
+    /// inputs.
+    pub(crate) fn whole(n_elems: usize) -> Self {
+        RunSchedule {
+            nodes: vec![RunNode::Run(FusedRun {
+                out_off: 0,
+                len: n_elems as u32,
+                in_off: SmallVec::new(),
+            })],
+            n_runs: 1,
+            depth: 0,
+        }
+    }
+
+    /// Every run the schedule executes, in execution order, with its
+    /// repetition applied (diagnostics and the reference executor; the
+    /// production executor walks the nodes without expanding them).
+    pub(crate) fn for_each_run(&self, mut f: impl FnMut(&FusedRun)) {
+        fn walk(nodes: &[RunNode], out_d: i64, in_d: &[i64], f: &mut impl FnMut(&FusedRun)) {
+            let mut i = 0usize;
+            while i < nodes.len() {
+                match &nodes[i] {
+                    RunNode::Run(r) => {
+                        f(&r.stepped(1, out_d, in_d));
+                        i += 1;
+                    }
+                    RunNode::Repeat {
+                        count,
+                        body,
+                        out_step,
+                        in_step,
+                    } => {
+                        let body_nodes = &nodes[i + 1..i + 1 + *body as usize];
+                        for k in 0..*count as i64 {
+                            let d: SmallVec<[i64; 2]> =
+                                in_d.iter().zip(in_step).map(|(&a, &s)| a + k * s).collect();
+                            walk(body_nodes, out_d + k * out_step, &d, f);
+                        }
+                        i += 1 + *body as usize;
+                    }
+                }
+            }
+        }
+        let n_in = self.nodes.iter().find_map(|n| match n {
+            RunNode::Run(r) => Some(r.in_off.len()),
+            RunNode::Repeat { .. } => None,
+        });
+        let zeros: SmallVec<[i64; 2]> = SmallVec::from_elem(0, n_in.unwrap_or(0));
+        walk(&self.nodes, 0, &zeros, &mut f);
+    }
+
+    /// The expanded runs (see [`Self::for_each_run`]).
+    pub(crate) fn expanded(&self) -> Vec<FusedRun> {
+        let mut v = Vec::with_capacity(self.n_runs);
+        self.for_each_run(|r| v.push(r.clone()));
+        v
+    }
 }
 
 /// A fused elementwise group: a straight-line micro-program over virtual
@@ -512,25 +838,54 @@ pub(crate) struct FusedSpec {
     pub micro: Vec<MicroOp>,
     /// Physical register count after last-use recycling. An op's `out`
     /// register never aliases one of its operand registers.
-    pub n_regs: u16,
+    pub n_regs: GroupIx,
     /// Additional registers appended after `n_regs` for strided-input
     /// pre-loads (`FusedInput::load_reg` indexes into `n_regs..n_regs +
     /// n_load_regs`).
-    pub n_load_regs: u16,
+    pub n_load_regs: GroupIx,
     /// Step 4b: registers appended after the load registers for the
     /// all-pointer superops ([`MicroOp::Bin3`]): one splat register per
     /// entry of `scalars` (filled once per call) plus a trailing zero
     /// register (the ghost read). 0 when the micro-program has no Bin3.
-    pub n_splat_regs: u16,
+    pub n_splat_regs: GroupIx,
     /// `(register, slot)` live-outs stored back to the slab.
-    pub outputs: SmallVec<[(u16, SlotId); 2]>,
-    /// Precompiled run schedule (see [`FusedRun`]); a group with no shifted
-    /// inputs has the single run `(0, n_elems, [])`.
-    pub runs: Vec<FusedRun>,
+    pub outputs: SmallVec<[(GroupIx, SlotId); 2]>,
+    /// Precompiled run schedule (see [`RunSchedule`]); a group with no
+    /// shifted inputs has the single run `(0, n_elems, [])`.
+    pub schedule: RunSchedule,
+    /// An absorbed [`Instr::Reduce`] over the group box, folding one register
+    /// instead of storing it (see [`FusedReduce`]).
+    pub reduce: Option<FusedReduce>,
     /// Diagnostics: original instructions replaced (members incl. deleted
     /// folded gathers).
     pub n_fused_instrs: u32,
     pub n_folded_gathers: u32,
+}
+
+/// The fold of a fused group's value over its box's LEADING axes — an
+/// [`Instr::Reduce`] whose source only the group produced and only the
+/// reduction reads, so the source never materializes:
+///
+/// ```text
+/// out[*] = init
+/// for k in ROW-MAJOR order of the group box:
+///     out[k % n_inner] = kernel(op)(out[k % n_inner], reg[k])
+/// ```
+///
+/// Runs and their chunks execute in ascending flat order, which is the
+/// `Reduce` visiting order, so every output cell folds the same terms in the
+/// same association as the unfused instruction.
+#[derive(Clone, Debug)]
+pub(crate) struct FusedReduce {
+    /// The register holding the folded value (physical, after allocation).
+    pub reg: GroupIx,
+    pub op: BinCode,
+    pub init: f64,
+    /// The reduction's output slot: the group box with the leading axes
+    /// dropped (a scalar slot when every axis is folded).
+    pub out: SlotId,
+    /// Elements per leading-axes position (the output's element count).
+    pub n_inner: usize,
 }
 
 impl FusedSpec {
@@ -555,6 +910,9 @@ pub struct FuseStats {
     /// the gathered value are counted as folded — this counts kept Gather
     /// instructions in the fused program).
     pub n_gathers_kept: usize,
+    /// Reductions absorbed into the group producing their source
+    /// ([`FusedReduce`]; the `Reduce` instruction is deleted).
+    pub n_reduces_folded: usize,
     /// Group size histogram buckets: [2-3, 4-7, 8-15, 16-31, 32-63, 64+]
     /// member instructions.
     pub group_size_hist: [usize; 6],
@@ -630,9 +988,43 @@ pub(crate) struct GatherPlan {
 #[derive(Clone, Debug)]
 pub(crate) struct ConstArrayData {
     pub shape: DimU,
-    /// Row-major elements, exactly as `json_to_value` produced them
-    /// (precision-rounded at ingress under `element_type: "Float32"`).
+    /// Row-major elements, exactly as `json_to_value` produces them from the
+    /// literal (precision-rounded at ingress under `element_type: "Float32"`)
+    /// — taken from the declared data directly for a lowered shaped-parameter
+    /// default.
     pub values: Vec<f64>,
+}
+
+/// The position an [`Instr::TableGather`] element reads when its source cell
+/// is out of range: the element is the zero ghost `+0.0`.
+pub(crate) const GATHER_GHOST: u32 = u32::MAX;
+
+/// The build-time positions of one [`Instr::TableGather`].
+#[derive(Clone, Debug)]
+pub(crate) struct GatherTable {
+    /// The source box the positions are row-major flat offsets into.
+    pub src_shape: DimU,
+    /// One source position per output element, or [`GATHER_GHOST`].
+    pub pos: Vec<u32>,
+}
+
+/// The row offsets of one [`Instr::SegReduce`]: output cell `c` folds terms
+/// `rows[c] .. rows[c + 1]`.
+#[derive(Clone, Debug)]
+pub(crate) struct SegTable {
+    pub rows: Vec<u32>,
+}
+
+/// One forcing-buffer entry the program reads ([`Instr::LoadForcing`]).
+#[derive(Clone, Debug)]
+pub(crate) struct ForcingRef {
+    /// The buffer key, which is the variable's name as the compiled model
+    /// spells it.
+    pub name: String,
+    /// The box the program was built against (empty for a 0-d entry): the
+    /// entry's shape when the buffer held it at build time, else the
+    /// variable's declared shape.
+    pub shape: DimU,
 }
 
 /// Which esm-spec §9.2 `interp.*` entry an [`Instr::Interp`] evaluates.
@@ -708,6 +1100,110 @@ impl InterpTable {
     }
 }
 
+/// Where one [`Instr::PolyArea`] element reads a ring along one LEADING axis
+/// of the ring table (the table is `[.., V, 2]`: the last two axes are the
+/// ring's vertices and its `(lon, lat)` pair).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RingSel {
+    /// This 0-based position, for every element.
+    Fixed(usize),
+    /// Position `p + off` for the element at position `p` along output axis
+    /// `axis` (a partial `index(table, i)` whose subscript is `i + k`). Every
+    /// position the box reaches is inside the table, checked at lowering.
+    Axis { axis: u8, off: i64 },
+}
+
+/// One ring operand of an [`Instr::PolyArea`]: the table's box and how each
+/// of its leading axes is addressed. No selectors means the operand is the
+/// whole `[V, 2]` array, the same ring for every element.
+#[derive(Clone, Debug)]
+pub(crate) struct RingRef {
+    /// The expected table box (validation).
+    pub src_shape: DimU,
+    pub sel: SmallVec<[RingSel; 3]>,
+}
+
+impl RingRef {
+    /// The output axes this operand's ring varies along.
+    pub(crate) fn axes(&self) -> SmallVec<[u8; 3]> {
+        let mut v: SmallVec<[u8; 3]> = SmallVec::new();
+        for s in &self.sel {
+            if let RingSel::Axis { axis, .. } = s
+                && !v.contains(axis)
+            {
+                v.push(*axis);
+            }
+        }
+        v
+    }
+}
+
+/// The constant part of one [`Instr::PolyArea`].
+///
+/// `pairs` is the broad phase: `Some((axis_a, axis_b))` when the manifold is
+/// planar and ring `a` varies along output axis `axis_a` only and ring `b`
+/// along the different axis `axis_b` only. The instruction then clips just
+/// the candidate pairs whose bounding boxes are not strictly disjoint (an
+/// R*-tree query over the two rings' boxes, so the work is `O(n log n)` plus
+/// the candidates, not the product) and writes every other element the value
+/// the kernel's own disjoint-box reject returns. That reject is part of
+/// `crate::geometry::intersect_polygon`, which is what makes the skipped
+/// pairs exact rather than approximately zero. Every element is still a pure
+/// function of its own pair, so the order pairs are visited in cannot reach
+/// a result, and a fold over the box downstream is unchanged.
+#[derive(Clone, Debug)]
+pub(crate) struct GeomSpec {
+    pub manifold: crate::geometry::Manifold,
+    pub a: RingRef,
+    pub b: RingRef,
+    /// The output box (empty for a scalar slot).
+    pub shape: DimU,
+    pub pairs: Option<(u8, u8)>,
+}
+
+/// How one source axis of an [`Instr::IndexGather`] is addressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GatherAxis {
+    /// By the data subscript (the instruction's `idx` operand).
+    Data,
+    /// 0-based position `p + off` for output position `p` along `axis`; in
+    /// range for every position, checked at lowering.
+    Affine { axis: u8, off: i64 },
+    /// This 0-based position.
+    Fixed(usize),
+}
+
+/// The constant part of one [`Instr::IndexGather`].
+#[derive(Clone, Debug)]
+pub(crate) struct IndexGatherSpec {
+    /// One entry per source axis; exactly one is [`GatherAxis::Data`].
+    pub axes: SmallVec<[GatherAxis; 4]>,
+    /// The expected source box (validation).
+    pub src_shape: DimU,
+    /// The output box.
+    pub shape: DimU,
+}
+
+impl IndexGatherSpec {
+    /// The source axis the data subscript addresses.
+    pub(crate) fn data_axis(&self) -> usize {
+        self.axes
+            .iter()
+            .position(|a| *a == GatherAxis::Data)
+            .expect("an IndexGather has one data axis")
+    }
+}
+
+/// The 0-based source position a data subscript `v` addresses along an axis
+/// of extent `n`, or `None` for the zero ghost — `eval_index_args` then
+/// `index_into` exactly: `v.round() as i64` (NaN reads as 0, out-of-range
+/// values saturate), and a 1-based position outside `1..=n` is out of range.
+#[inline]
+pub(crate) fn data_subscript(v: f64, n: usize) -> Option<usize> {
+    let one_based = v.round() as i64;
+    (one_based >= 1 && one_based <= n as i64).then(|| (one_based - 1) as usize)
+}
+
 /// One makearray region: placement of a region write within its bounding box.
 #[derive(Clone, Debug)]
 pub(crate) struct RegionSpec {
@@ -715,6 +1211,15 @@ pub(crate) struct RegionSpec {
     pub dest_lo: DimU,
     /// Region extent.
     pub shape: DimU,
+}
+
+/// The parts of one [`Instr::Assemble`]: each source (a scalar fill or an
+/// array spanning its region) and the region it is written over, in the
+/// `makearray`'s region order.
+#[derive(Clone, Debug)]
+pub(crate) struct AssembleSpec {
+    /// `(source, index into TapeProgram::regions)`.
+    pub parts: Vec<(Operand, u32)>,
 }
 
 /// A state variable the program reads/writes, snapshot of its `VarShape`.
@@ -732,7 +1237,7 @@ pub(crate) struct StateRef {
 pub(crate) struct DyWrite {
     pub slot: SlotId,
     /// Index into [`TapeProgram::state_vars`].
-    pub var: u16,
+    pub var: u32,
     /// 0-based sub-block start per axis (from `subblock_dest`).
     pub dest_lo: SmallVec<[usize; 4]>,
     /// Single flat slot for scalar rules (`RhsRule::Scalar`/`IndexedScalar`):
@@ -801,6 +1306,13 @@ pub(crate) struct SlabLayout {
 pub(crate) struct TapeProgram {
     /// All instructions: CONST section, then SEGMENT, then CONTINUOUS.
     pub instrs: Vec<Instr>,
+    /// Per instruction, the precision its kernels run at (esm-spec §11.3.1):
+    /// the precision in force while it was lowered — its observed rule's
+    /// variable's, or a precision-boundary marker's inside it. Every executor
+    /// arms it around the instruction. EMPTY when every instruction runs at
+    /// the precision the program executes under, which is every document that
+    /// declares no per-variable element type.
+    pub precision: Vec<crate::precision::Precision>,
     /// Instruction count of the CONST section.
     pub n_const: u32,
     /// Instruction count of the SEGMENT section.
@@ -808,14 +1320,31 @@ pub(crate) struct TapeProgram {
     pub slots: Vec<SlotDesc>,
     pub plans: Vec<GatherPlan>,
     pub regions: Vec<RegionSpec>,
+    /// `makearray` assemblies (`Instr::Assemble` indexes here).
+    pub assemblies: Vec<AssembleSpec>,
     /// Inline array-literal payloads (`Instr::ConstArray` indexes here).
     pub const_data: Vec<ConstArrayData>,
     /// §9.2 `interp.*` constant tables (`Instr::Interp` indexes here).
     pub interp_tables: Vec<InterpTable>,
+    /// Geometry instructions' constant parts (`Instr::PolyArea` indexes here).
+    pub geoms: Vec<GeomSpec>,
+    /// Data-subscript gathers' constant parts (`Instr::IndexGather` indexes
+    /// here).
+    pub index_gathers: Vec<IndexGatherSpec>,
+    /// Build-time gather positions (`Instr::TableGather` indexes here).
+    pub gather_tables: Vec<GatherTable>,
+    /// Compressed-row offsets (`Instr::SegReduce` indexes here).
+    pub seg_tables: Vec<SegTable>,
+    /// Fail-closed fault messages (`Instr::Fault` indexes here), each the
+    /// text the per-cell oracle latches at the same point.
+    pub faults: Vec<String>,
     pub state_vars: Vec<StateRef>,
     /// Observed names resolved through the runtime observed map
     /// (`Operand::Obs`/`SrcRef::Obs` index here).
     pub obs_reads: Vec<String>,
+    /// Forcing-buffer entries the program loads (`Instr::LoadForcing`
+    /// indexes here).
+    pub forcings: Vec<ForcingRef>,
     pub dy_writes: Vec<DyWrite>,
     /// Observed values published back into the runtime observed map: names a
     /// fallback rule or the samples/observed-trajectory dependency cone reads.

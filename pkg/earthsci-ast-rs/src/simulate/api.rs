@@ -89,12 +89,6 @@ pub enum Alg {
 #[cfg(feature = "solve")]
 pub(crate) type RawTrajectory = (Vec<f64>, Vec<Vec<f64>>, ReturnCode);
 
-/// The raw trajectory `integrate` hands back: [`RawTrajectory`] plus the
-/// solver's step/eval counters.
-#[cfg(feature = "solve")]
-pub(super) type IntegrateResult =
-    Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode), SimulateError>;
-
 impl Alg {
     /// Parse the host-facing solver name, case-insensitively.
     ///
@@ -145,7 +139,7 @@ pub struct Progress<'a> {
     /// the run is uncapped.
     pub maxiters: Option<usize>,
     /// The integrator's state vector at `t`, in
-    /// [`Compiled::state_variable_names`] order.
+    /// [`crate::problem::EsmProblem::state_variable_names`] order.
     ///
     /// This is what makes a [`crate::problem::CallbackSet`] entry able to do
     /// the job `esm-libraries-spec.md` §2.5.4 describes — write an output
@@ -190,7 +184,7 @@ pub type ProgressFn = std::sync::Arc<dyn for<'p> Fn(&Progress<'p>) -> Flow>;
 #[cfg(not(target_arch = "wasm32"))]
 pub type ProgressFn = std::sync::Arc<dyn for<'p> Fn(&Progress<'p>) -> Flow + Send + Sync>;
 
-/// Per-run knobs for [`crate::problem::solve`] / [`Compiled::solve`].
+/// Per-run knobs for [`crate::problem::solve`].
 ///
 /// Every field carries the canonical SciML spelling (`API_SPEC.md` §4):
 /// `alg`, `abstol`, `reltol`, `saveat`, `maxiters`.
@@ -276,9 +270,8 @@ pub struct SolveOptions {
     /// of this document is ignored here and diagnosed downstream by
     /// [`crate::OutputError::UnknownObserved`], which names it.
     ///
-    /// Honoured by both runners: the scalar runner walks its observed graph
-    /// over the output grid, the array runner materializes the requested
-    /// array-valued observeds it otherwise skips.
+    /// The runtime materializes the requested array-valued observeds it
+    /// otherwise skips.
     pub output_observed: Vec<String>,
 }
 
@@ -416,8 +409,7 @@ impl Solution {
     ///    mirror of (3), and the arm a
     ///    caller needs when a document's rows come from the array runtime's
     ///    single-model build, which names its slots without the model's
-    ///    namespace while the flattened build and the scalar interpreter
-    ///    qualify.
+    ///    namespace while the flattened build qualifies them.
     ///
     /// An ambiguous tail resolves to nothing rather than to an arbitrary one
     /// of the candidates, in both directions.
@@ -516,9 +508,9 @@ pub struct SolutionMetadata {
     /// See `esm-spec.md` §9.6.10 for the authoring patterns that keep rules
     /// vectorizable.
     ///
-    /// Always empty for the scalar interpreter path (which has no tape) and
-    /// under [`crate::Compiler::Interpreter`], which builds none — an empty
-    /// list means "nothing to report", not "the tape covered everything".
+    /// Always empty under [`crate::Compiler::Interpreter`], which builds no
+    /// tape — an empty list means "nothing to report", not "the tape covered
+    /// everything".
     pub tape_fallbacks: Vec<(String, String)>,
     /// Every state spelling an `operator_compose` renaming match DELETED,
     /// mapped onto the survivor it was folded into (issue #230; carried from

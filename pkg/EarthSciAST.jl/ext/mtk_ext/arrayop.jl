@@ -227,7 +227,7 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
         "variables must declare a concrete range"))
     expr.join === nothing && expr.join_gates === nothing || throw(ArgumentError(
         "relational `join` clauses on an aggregate are not supported by the " *
-        "MTK evaluator path — use the tree-walk evaluator (`build_evaluator`)"))
+        "MTK evaluator path — use the tree-walk evaluator (`esm_problem`)"))
     extents = _extents(dim_dict)
     ranges = Dict{String,UnitRange{Int}}()
     for (name, r) in expr.ranges

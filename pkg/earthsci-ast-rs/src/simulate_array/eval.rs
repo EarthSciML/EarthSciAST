@@ -137,6 +137,15 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
             Value::Array(Box::new(a.clone()))
         };
     }
+    latch_unbound_read(name, ctx.declared);
+    Value::Scalar(f64::NAN)
+}
+
+/// Latch the fault for a read that NOTHING in scope produced a value for:
+/// [`lookup_variable`]'s last resort, shared with the tape's forcing load
+/// (`Instr::LoadForcing`), which reads the same forcing channel and has to fail
+/// the same way when the channel holds no entry for the name.
+pub(super) fn latch_unbound_read(name: &str, declared: &HashSet<String>) {
     // Nothing produced a value for this name. Two very different defects reach
     // this point and they MUST NOT be reported as one (issue #181).
     //
@@ -149,7 +158,7 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
     //     routinely false — the reported name was typically an observed that is
     //     declared, defined and referenced perfectly well, and had nothing to
     //     do with the cycle. Bisecting from that message costs an afternoon.
-    if ctx.declared.contains(name) {
+    if declared.contains(name) {
         latch_gather_fault(format!(
             "E_TREEWALK_UNRESOLVED_ORDER: '{name}' IS declared in this model, but nothing had \
              produced a value for it at the point this expression was evaluated. For an observed \
@@ -159,7 +168,7 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
              observeds on it. This is NOT an undeclared name — see E_TREEWALK_UNBOUND_NAME for \
              that (CONFORMANCE_SPEC §5.23)."
         ));
-        return Value::Scalar(f64::NAN);
+        return;
     }
     // (2) NOTHING bound this name — not `t`, not a loop binder, not a state, not
     // an observed, not a parameter, not a forcing channel, and the model does
@@ -184,7 +193,20 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
          CONFORMANCE_SPEC §5.23: never a NaN sentinel, which `max(x, floor)` or any \
          comparison would launder into a plausible number by dropping the operand."
     ));
-    Value::Scalar(f64::NAN)
+}
+
+/// Latch the fault for a forcing-buffer entry whose shape is not the box a
+/// compiled program was built against (`Instr::LoadForcing`). The interpreter
+/// reads whatever array the buffer holds; a compiled program fixed each box at
+/// build, so it cannot, and says so rather than reading the entry through the
+/// wrong box.
+pub(super) fn latch_forcing_shape_mismatch(name: &str, built: &[usize], held: &[usize]) {
+    latch_gather_fault(format!(
+        "the forcing buffer holds '{name}' with shape {held:?}, but the compiled program \
+         reads it as {built:?} (the shape the buffer held, or else the variable declared, \
+         when the program was built). A compiled program's boxes are fixed at build: a \
+         forcing field that changes shape between refreshes cannot be read by it."
+    ));
 }
 
 /// Bind (or rebind) a loop index in `binds` without reallocating the key on the
@@ -223,8 +245,8 @@ pub(super) fn set_bind(binds: &mut IdxMap, name: &str, val: i64) {
 pub fn is_evaluable_op(op: &str) -> bool {
     matches!(
         op,
-        // Arithmetic.
-        "+" | "-" | "*" | "/" | "^" | "neg"
+        // Arithmetic. `pow` is the word spelling of `^`.
+        "+" | "-" | "*" | "/" | "^" | "pow" | "neg"
         // Elementary functions.
         | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
         | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
@@ -239,7 +261,7 @@ pub fn is_evaluable_op(op: &str) -> bool {
         // for a semi-join, and the one op in the §4.2 table this evaluator used
         // to have no answer for while `value_invention::vi_eval`, Python's
         // `numpy_interpreter` and Julia's `_geo_compile` all evaluated it.
-        | "D" | "Pre" | "const" | "true"
+        | "D" | "Pre" | "const" | "true" | "false"
         // Array / geometry ops.
         | "index" | "faq" | "makearray" | "reshape" | "transpose" | "concat"
         | "broadcast" | "intersect_polygon" | "polygon_intersection_area"
@@ -310,6 +332,101 @@ fn check_evaluable_ops(expr: &Expr) -> Result<(), CompileError> {
     }
 }
 
+/// Evaluate a standalone SCALAR expression to one number — the evaluator
+/// behind [`crate::expression::evaluate`].
+///
+/// `params` / `param_names` are the scalar bindings, positionally; `t` is the
+/// independent variable. The per-cell oracle does the work, gated first by
+/// [`check_scalar_evaluable`], so an operator with no scalar value is refused
+/// by name before any of the expression is evaluated.
+///
+/// # Errors
+///
+/// Everything [`check_scalar_evaluable`] reports, and the evaluator's own
+/// fail-closed faults (an unbound name, an out-of-range const-array gather) as
+/// [`CompileError::InterpreterBuildError`].
+pub(crate) fn eval_scalar_expression(
+    expr: &Expr,
+    params: &[f64],
+    param_names: &[String],
+    t: f64,
+) -> Result<f64, CompileError> {
+    check_scalar_evaluable(expr)?;
+    let value = eval_expression(expr, &HashMap::new(), params, param_names, t)?;
+    value
+        .as_scalar()
+        .ok_or_else(|| CompileError::InterpreterBuildError {
+            details: "the expression is array-valued; a scalar evaluation has one number \
+                      to return"
+                .to_string(),
+        })
+}
+
+/// [`check_evaluable`] for an entry point whose answer is ONE NUMBER computed
+/// from scalar bindings ([`eval_scalar_expression`]).
+///
+/// On top of the runtime gate it refuses, naming the operator, what has no
+/// scalar value over scalar operands: the array / tensor ops, the geometry
+/// ops, an array-valued `const` (except as a `fn` argument, where it is the
+/// `interp.*` table or axis), and a structural `D`, which [`eval_op_named`]
+/// answers with the `NaN` sentinel because a right-hand-side `D` never
+/// legitimately reaches evaluation (esm-spec §4.2).
+///
+/// The layers run in [`check_evaluable`]'s order with this one before the
+/// Float32 layer, so an op that trips both (`intersect_polygon`) is reported as
+/// `unevaluable_operator`: declaring `Float64` would not make it evaluable here.
+pub(crate) fn check_scalar_evaluable(expr: &Expr) -> Result<(), CompileError> {
+    check_no_spatial_ops(expr)?;
+    check_evaluable_ops(expr)?;
+    check_scalar_ops(expr)?;
+    crate::precision::check_f32_supported(expr)
+}
+
+/// The [`check_scalar_evaluable`] layer that refuses the ops with no scalar
+/// value, applied over the whole tree.
+fn check_scalar_ops(expr: &Expr) -> Result<(), CompileError> {
+    let Expr::Operator(node) = expr else {
+        return Ok(());
+    };
+    let no_scalar_value = match node.op.as_str() {
+        "D"
+        | "index"
+        | "faq"
+        | "makearray"
+        | "reshape"
+        | "transpose"
+        | "concat"
+        | "broadcast"
+        | "intersect_polygon"
+        | "polygon_intersection_area" => true,
+        "const" => !node
+            .value
+            .as_ref()
+            .is_some_and(serde_json::Value::is_number),
+        _ => false,
+    };
+    if no_scalar_value {
+        return Err(CompileError::UnevaluableOperatorError {
+            op: node.op.clone(),
+        });
+    }
+    let is_fn = node.op == "fn";
+    let mut first_err: Option<CompileError> = None;
+    node.for_each_child(&mut |child| {
+        let table_arg = is_fn && matches!(child, Expr::Operator(c) if c.op == "const");
+        if first_err.is_none()
+            && !table_arg
+            && let Err(e) = check_scalar_ops(child)
+        {
+            first_err = Some(e);
+        }
+    });
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
 pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     eval_op_named(node.op.as_str(), node, ctx)
 }
@@ -332,6 +449,8 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // Elementwise / scalar arithmetic. If any operand is an array,
         // return an array (with ndarray broadcasting).
         "+" | "-" | "*" | "/" | "^" => eval_arith(op, &node.args, ctx),
+        // The word spelling of `^`, folded through the `^` kernel itself.
+        "pow" => eval_arith("^", &node.args, ctx),
 
         // Canonical unary negation: `canonicalize.rs` emits `neg`, so a
         // canonicalized expression can reach this oracle, and the vectorized
@@ -400,15 +519,13 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         //
         // A right-hand-side `D` is resolved to a tendency by `flatten`'s phase
         // 5b′, or refused with `unlowered_operator` before any build (esm-spec
-        // §4.2). It used to answer `0.0` "for parity with the scalar
-        // interpreter" — the parity was real and all three evaluators were
-        // wrong together, which is how four shipped documents came to compute
-        // silent zeros. §4.2 forbids inventing a value here, IN PARTICULAR `0`,
-        // which passes an `expected: 0` assertion silently where `NaN` fails
-        // every finite one.
+        // §4.2). §4.2 forbids inventing a value here, IN PARTICULAR `0`, which
+        // passes an `expected: 0` assertion silently where `NaN` fails every
+        // finite one.
         //
-        // Unlike the scalar interpreter, `D` must STAY in `is_evaluable_op`
-        // here: `check_evaluable_side` walks an equation's LHS and unwraps only
+        // `D` must STAY in `is_evaluable_op` here (the single-expression
+        // `check_scalar_evaluable` refuses it by name instead):
+        // `check_evaluable_side` walks an equation's LHS and unwraps only
         // `ic`, so delisting `D` would reject every document that states a
         // differential equation. Teaching that gate to unwrap a structural `D`
         // LHS as it unwraps `ic` would let this arm go too.
@@ -471,6 +588,8 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // identity, so `faq{expr: true}` COUNTS the admitted tuples —
         // which is exactly what a semi-join wants to say.
         "true" => Value::Scalar(1.0),
+        // Its counterpart, in the same encoding (a false comparison is 0.0).
+        "false" => Value::Scalar(0.0),
 
         // Unreachable by construction: EVERY path into this evaluator is gated.
         // The compiled-model path gates in `from_model` (`check_no_spatial_ops`),
@@ -755,7 +874,7 @@ pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
         "-" => x - y,
         "*" => x * y,
         "/" => x / y,
-        "^" => x.powf(y),
+        "^" | "pow" => x.powf(y),
         "atan2" => x.atan2(y),
         "min" => x.min(y),
         "max" => x.max(y),
@@ -831,7 +950,7 @@ impl BinCode {
             "-" => BinCode::Sub,
             "*" => BinCode::Mul,
             "/" => BinCode::Div,
-            "^" => BinCode::Pow,
+            "^" | "pow" => BinCode::Pow,
             "atan2" => BinCode::Atan2,
             "min" => BinCode::Min,
             "max" => BinCode::Max,
@@ -1664,6 +1783,156 @@ pub(super) fn lookup_array_ref<'a>(name: &str, ctx: &'a EvalCtx) -> Option<&'a A
 }
 
 thread_local! {
+    /// How many `faq` nodes this thread has evaluated by walking the body once
+    /// per cell (or once per contracted term) rather than through the
+    /// whole-array overlay. See [`per_cell_walks`].
+    static PER_CELL_WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The running count of per-cell `faq` walks on this thread: the number of
+/// times [`eval_faq`] took its per-cell branch (a prefix scan, the output-tuple
+/// loop, or a rank-0 contraction folded term by term) because the whole-array
+/// overlay did not take the node.
+///
+/// The routes that evaluate a document through this evaluator OUTSIDE the
+/// compiled rule set — the build pipeline's observed graph, a field initial
+/// condition — read the delta across one evaluation to learn whether it was
+/// interpreted per cell, which is what a strict compiler refuses
+/// (esm-libraries-spec §2.5.10). A counter rather than a flag, so a nested
+/// evaluation cannot clear what an enclosing one recorded.
+pub(crate) fn per_cell_walks() -> u64 {
+    PER_CELL_WALKS.with(std::cell::Cell::get)
+}
+
+fn note_per_cell_walk() {
+    PER_CELL_WALKS.with(|c| c.set(c.get().wrapping_add(1)));
+}
+
+#[cfg(test)]
+thread_local! {
+    static PER_CELL_CELLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Test hook: how many cells the per-cell walks on this thread have
+/// evaluated (a prefix-scan step, an output tuple, a recurrence cell).
+#[cfg(test)]
+pub(crate) fn per_cell_cells() -> u64 {
+    PER_CELL_CELLS.with(std::cell::Cell::get)
+}
+
+#[inline]
+pub(super) fn note_per_cell_cell() {
+    #[cfg(test)]
+    PER_CELL_CELLS.with(|c| c.set(c.get() + 1));
+}
+
+/// The state of a [`StopAtFirstCell`] on this thread.
+#[derive(Clone, Copy, Default)]
+struct FirstCellStop {
+    /// A strict caller is listening: a per-cell walk stops after its first cell.
+    armed: bool,
+    /// A walk has stopped. Every value computed since is a placeholder.
+    stopped: bool,
+    /// A document error (a latched out-of-range gather) was already pending
+    /// when the walk stopped, so the evaluation fails with it rather than being
+    /// refused.
+    with_error: bool,
+}
+
+thread_local! {
+    static FIRST_CELL_STOP: std::cell::Cell<FirstCellStop> = const {
+        std::cell::Cell::new(FirstCellStop { armed: false, stopped: false, with_error: false })
+    };
+}
+
+/// Stop every per-cell walk at its first cell, for as long as this guard
+/// lives.
+///
+/// A strict compiler refuses an evaluation the reference evaluator walks per
+/// cell, so the rest of such a walk is work whose only product is a refusal —
+/// on a gate-driven join over a million cells, minutes of it. Armed around the
+/// evaluation, the first `faq` that goes per cell evaluates ONE cell, for its
+/// diagnostic only (a body no route can evaluate is the document's error, and
+/// an out-of-range gather in it must still say so), and stops; every walk
+/// after it stops before its first cell. The evaluation's value is then a
+/// placeholder, and [`per_cell_walk_refused`] tells the caller to discard it
+/// and refuse.
+///
+/// The stop is taken exactly where [`per_cell_walks`] counts a walk, so
+/// whether a refusal happens, and its reason, are what a full walk would have
+/// given; only the work behind them is gone.
+pub(crate) struct StopAtFirstCell(FirstCellStop);
+
+impl StopAtFirstCell {
+    pub(crate) fn arm() -> Self {
+        StopAtFirstCell(FIRST_CELL_STOP.with(|c| {
+            c.replace(FirstCellStop {
+                armed: true,
+                ..FirstCellStop::default()
+            })
+        }))
+    }
+
+    /// Whether any per-cell walk stopped under this guard, error or not: what
+    /// was computed is not the whole answer.
+    pub(crate) fn stopped(&self) -> bool {
+        FIRST_CELL_STOP.with(|c| c.get().stopped)
+    }
+}
+
+impl Drop for StopAtFirstCell {
+    fn drop(&mut self) {
+        FIRST_CELL_STOP.with(|c| c.set(self.0));
+    }
+}
+
+/// What a refusal raised from a walk [`StopAtFirstCell`] stopped says after its
+/// reason, in the words the Julia binding uses for its own: the cells the walk
+/// did not evaluate may still hold a document error (an out-of-range gather at
+/// the last cell of a prefix scan), and only the interpreter would find it.
+pub(crate) const ONE_CELL_NOTE: &str = "only one cell of it was evaluated before this refusal, \
+    so a document error in a cell that was not (an out-of-range gather at the last cell, say) \
+    is not reported here; the interpreter evaluates every cell and reports it";
+
+/// Whether a per-cell walk on this thread stopped under a [`StopAtFirstCell`]
+/// with no document error pending, so that what was computed since — a value,
+/// or an error raised by reading a placeholder — is not the document's, and
+/// the evaluation is refused.
+pub(crate) fn per_cell_walk_refused() -> bool {
+    let s = FIRST_CELL_STOP.with(std::cell::Cell::get);
+    s.stopped && !s.with_error
+}
+
+/// Whether a per-cell walk has already stopped on this thread, so the next
+/// one need not evaluate even its first cell.
+fn per_cell_walk_stopped() -> bool {
+    FIRST_CELL_STOP.with(|c| c.get().stopped)
+}
+
+/// Whether a [`StopAtFirstCell`] is armed on this thread.
+fn stop_at_first_cell() -> bool {
+    FIRST_CELL_STOP.with(|c| c.get().armed)
+}
+
+/// Called after a per-cell walk's first cell. Under an armed
+/// [`StopAtFirstCell`] it records the stop, and whether that cell latched a
+/// document error, and answers `true`: the walk ends here.
+pub(super) fn stop_after_first_cell() -> bool {
+    FIRST_CELL_STOP.with(|c| {
+        let mut s = c.get();
+        if !s.armed {
+            return false;
+        }
+        if !s.stopped {
+            s.stopped = true;
+            s.with_error = CONST_OOB.with(|l| l.borrow().is_some());
+            c.set(s);
+        }
+        true
+    })
+}
+
+thread_local! {
     /// First `E_TREEWALK_CONSTARRAY_OOB` raised during the current evaluation.
     ///
     /// The tree walk returns a bare [`Value`] with no error channel, so an
@@ -1689,8 +1958,10 @@ pub fn take_const_array_oob() -> Option<String> {
     CONST_OOB.with(|c| c.borrow_mut().take())
 }
 
-/// Latch the FIRST fail-closed gather diagnostic of this evaluation.
-fn latch_gather_fault(msg: String) {
+/// Latch the FIRST fail-closed gather diagnostic of this evaluation. The
+/// tape's `Instr::Fault` latches through here too, so both evaluators keep
+/// the same first-wins record.
+pub(crate) fn latch_gather_fault(msg: String) {
     CONST_OOB.with(|c| {
         let mut slot = c.borrow_mut();
         if slot.is_none() {
@@ -1727,29 +1998,40 @@ fn latch_recur_unavailable(name: &str, raw: &[i64]) {
 /// goes on to apply — the document then reports a number that was never
 /// computed.
 fn latch_index_on_scalar(base: &Expr, subscripts: usize) {
+    latch_gather_fault(index_on_scalar_message(base, subscripts));
+}
+
+/// The text [`latch_index_on_scalar`] latches, shared with the tape lowering,
+/// which emits it as an `Instr::Fault`.
+pub(crate) fn index_on_scalar_message(base: &Expr, subscripts: usize) -> String {
     let what = match base {
         Expr::Variable(name) => format!("'{name}'"),
         Expr::Operator(node) => format!("the `{}` result", node.op),
         Expr::Integer(_) | Expr::Number(_) => "a numeric literal".to_string(),
     };
-    latch_gather_fault(format!(
+    format!(
         "E_TREEWALK_INDEX_ON_SCALAR: {what} has no axes, so the {subscripts} subscript(s) \
          applied to it name nothing (esm-spec §4.3.4; CONFORMANCE_SPEC.md §7.1). Fail-closed: \
          never the §5.5.5 zero ghost, which is the boundary convention for a gather that HAS \
          an axis to fall outside of, and never a bare NaN. Read an unshaped quantity by its \
          bare name or as `index(<name>)` with no subscript, or give it a `shape` if it was \
          meant to have axes."
-    ));
+    )
 }
 
 /// Latch the FIRST const-array out-of-range diagnostic of this evaluation.
 fn latch_const_oob(name: &str, one_based: i64, n: i64, d: usize) {
-    latch_gather_fault(format!(
+    latch_gather_fault(const_oob_message(name, one_based, n, d));
+}
+
+/// The text [`latch_const_oob`] latches, shared with the tape lowering.
+pub(crate) fn const_oob_message(name: &str, one_based: i64, n: i64, d: usize) -> String {
+    format!(
         "E_TREEWALK_CONSTARRAY_OOB: const array '{name}' index {one_based} out of range \
          1..{n} in dim {d} (CONFORMANCE_SPEC.md §5.5.5: the zero-ghost convention is \
          never applied to a const-array gather; declare a per-dimension boundary policy \
          to resolve it as `periodic` or `clamp`)"
-    ));
+    )
 }
 
 /// The out-of-range boundary policy of the gather being resolved
@@ -2175,18 +2457,27 @@ pub(super) fn eval_polygon_intersection_area(node: &ExpressionNode, ctx: &mut Ev
     let Some((manifold, va, vb)) = eval_clip_operands(node, ctx) else {
         return Value::Scalar(f64::NAN);
     };
-    // Clip, then measure — the fused composition. The clip kernel returns the
-    // `n` distinct overlap vertices; `polygon_area`'s shoelace / spherical body
-    // reads the wrap edge `n→1` itself, so no explicit ring closure is needed
-    // here (and no derived ring is registered — the fused leaf exposes none).
-    match crate::geometry::intersect_polygon(&va, &vb, manifold)
+    Value::Scalar(clip_area_value(&va, &vb, manifold))
+}
+
+/// The value of one `polygon_intersection_area` of two `(lon, lat)` rings: the
+/// ONE definition the interpreter above and the tape's geometry instruction
+/// both call, so a compiled area is the interpreter's by shared code.
+///
+/// Clip, then measure — the fused composition. The clip kernel returns the `n`
+/// distinct overlap vertices; `polygon_area`'s shoelace / spherical body reads
+/// the wrap edge `n→1` itself, so no explicit ring closure is needed here (and
+/// no derived ring is registered — the fused leaf exposes none).
+pub(crate) fn clip_area_value(
+    va: &[(f64, f64)],
+    vb: &[(f64, f64)],
+    manifold: crate::geometry::Manifold,
+) -> f64 {
+    // A degenerate input ring or unavailable backend surfaces as NaN, the
+    // same not-a-value sentinel the evaluator uses for unevaluable nodes.
+    crate::geometry::intersect_polygon(va, vb, manifold)
         .and_then(|ring| crate::geometry::polygon_area(&ring, manifold))
-    {
-        Ok(area) => Value::Scalar(area),
-        // A degenerate input ring or unavailable backend surfaces as NaN, the
-        // same not-a-value sentinel the evaluator uses for unevaluable nodes.
-        Err(_) => Value::Scalar(f64::NAN),
-    }
+        .unwrap_or(f64::NAN)
 }
 
 /// Close a ring by repeating its first vertex (RFC §8.1; mirrors Python
@@ -2823,7 +3114,7 @@ impl JoinGate {
 
 /// Where one of a gate's two symbols sits in the aggregate being evaluated.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum GateAxis {
+pub(super) enum GateAxis {
     /// A contracted index — free, at this position in `contract_names`.
     Contracted(usize),
     /// An output index — already bound in `ctx.loop_binds` for this cell.
@@ -2838,7 +3129,7 @@ pub(super) struct GatePlacement {
     tgt: GateAxis,
 }
 
-fn gate_axis(sym: &str, idx_names: &[String], contract_names: &[String]) -> GateAxis {
+pub(super) fn gate_axis(sym: &str, idx_names: &[String], contract_names: &[String]) -> GateAxis {
     if let Some(d) = contract_names.iter().position(|n| n == sym) {
         return GateAxis::Contracted(d);
     }
@@ -3385,7 +3676,7 @@ pub(super) fn resolve_join_gates(join: &[JoinClause], ctx: &EvalCtx) -> Vec<Join
 
 /// Both sides of an `on` gate as the planner carries them: `(positions, keys)`
 /// per side, left then right.
-type EqSides = (
+pub(super) type EqSides = (
     Vec<i64>,
     Vec<crate::relational::Key>,
     Vec<i64>,
@@ -3579,34 +3870,45 @@ fn key_column_values(
     col: &crate::join::KeyColumn,
     ctx: &EvalCtx,
 ) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
-    use crate::join::{JoinKey, KeyColumn};
+    use crate::join::KeyColumn;
     match col {
-        KeyColumn::Const { positions, values } => {
-            let keys = values
-                .iter()
-                .map(|v| match v {
-                    JoinKey::Int(i) => crate::relational::Key::Int(*i),
-                    JoinKey::Cat(c) => crate::relational::Key::Str(c.clone()),
-                })
-                .collect();
-            Some((positions.clone(), keys))
-        }
-        KeyColumn::Column(name) => with_named_array(name, ctx, |a| {
-            if a.ndim() != 1 {
-                return None;
-            }
-            let mut keys = Vec::with_capacity(a.len());
-            for &v in a.iter() {
-                if !v.is_finite() || v.fract() != 0.0 {
-                    return None;
-                }
-                keys.push(crate::relational::Key::Int(v as i64));
-            }
-            // A 1-D data column is addressed 1-based by `index(col, sym)`, and
-            // its shape index set resolves the symbol's range to `[1, N]`.
-            Some(((1..=a.len() as i64).collect(), keys))
-        })?,
+        KeyColumn::Const { positions, values } => Some(const_key_column(positions, values)),
+        KeyColumn::Column(name) => with_named_array(name, ctx, data_key_column)?,
     }
+}
+
+/// The `(positions, keys)` of a build-time constant key column.
+pub(super) fn const_key_column(
+    positions: &[i64],
+    values: &[crate::join::JoinKey],
+) -> (Vec<i64>, Vec<crate::relational::Key>) {
+    use crate::join::JoinKey;
+    let keys = values
+        .iter()
+        .map(|v| match v {
+            JoinKey::Int(i) => crate::relational::Key::Int(*i),
+            JoinKey::Cat(c) => crate::relational::Key::Str(c.clone()),
+        })
+        .collect();
+    (positions.to_vec(), keys)
+}
+
+/// The `(positions, keys)` of a 1-D data column, or `None` when it is not one
+/// or holds a value that is not EXACTLY integral (see [`key_column_values`]).
+pub(super) fn data_key_column(a: &ArrayD<f64>) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
+    if a.ndim() != 1 {
+        return None;
+    }
+    let mut keys = Vec::with_capacity(a.len());
+    for &v in a.iter() {
+        if !v.is_finite() || v.fract() != 0.0 {
+            return None;
+        }
+        keys.push(crate::relational::Key::Int(v as i64));
+    }
+    // A 1-D data column is addressed 1-based by `index(col, sym)`, and
+    // its shape index set resolves the symbol's range to `[1, N]`.
+    Some(((1..=a.len() as i64).collect(), keys))
 }
 
 /// One side's per-position key: the single column's key for a simple `on`, or
@@ -3620,23 +3922,31 @@ fn side_keys(
     cols: &[crate::join::KeyColumn],
     ctx: &EvalCtx,
 ) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
-    let (positions, first) = key_column_values(cols.first()?, ctx)?;
-    if cols.len() == 1 {
-        return Some((positions, first));
+    let parts = cols
+        .iter()
+        .map(|c| key_column_values(c, ctx))
+        .collect::<Option<Vec<_>>>()?;
+    composite_side_keys(parts)
+}
+
+/// Combine one side's per-column `(positions, keys)` into its per-position
+/// key (see [`side_keys`]). `None` for no columns, or for columns that do
+/// not run over the same positions.
+pub(super) fn composite_side_keys(
+    mut parts: Vec<(Vec<i64>, Vec<crate::relational::Key>)>,
+) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
+    if parts.len() == 1 {
+        return parts.pop();
     }
-    let mut parts: Vec<Vec<crate::relational::Key>> = Vec::with_capacity(cols.len());
-    parts.push(first);
-    for c in &cols[1..] {
-        let (p, k) = key_column_values(c, ctx)?;
-        // Every column of one side runs over the SAME loop symbol, so a length
-        // or position disagreement means the gate does not describe this node.
-        if p != positions {
-            return None;
-        }
-        parts.push(k);
+    let (positions, _) = parts.first()?;
+    let positions = positions.clone();
+    // Every column of one side runs over the SAME loop symbol, so a length
+    // or position disagreement means the gate does not describe this node.
+    if parts.iter().any(|(p, _)| *p != positions) {
+        return None;
     }
     let keys = (0..positions.len())
-        .map(|t| crate::relational::skolem(parts.iter().map(|p| p[t].clone()).collect(), false))
+        .map(|t| crate::relational::skolem(parts.iter().map(|p| p.1[t].clone()).collect(), false))
         .collect();
     Some((positions, keys))
 }
@@ -3681,7 +3991,7 @@ fn equality_sides(g: &crate::join::OnGate, ctx: &EvalCtx) -> Option<EqSides> {
 /// Takes the keyed sides rather than reading them, because the planner has
 /// already read them to price this gate and reading a multi-million-row key
 /// column twice is the term issue #418 left standing.
-fn index_from_sides(sides: EqSides) -> (crate::broad_phase::OverlapIndex, usize, usize) {
+pub(super) fn index_from_sides(sides: EqSides) -> (crate::broad_phase::OverlapIndex, usize, usize) {
     let (pos_l, keys_l, pos_r, keys_r) = sides;
     let (n_l, n_r) = (pos_l.len(), pos_r.len());
     // Canonical-key-ordered matches (§5.5 rule 5) mapped back onto the two
@@ -4613,6 +4923,73 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         }
     }
 
+    // ---- Rank-0 contraction as a whole-array map, then one fold -----------
+    // A fully contracted node (`total = Σ_r x[r]`) has no output box for the
+    // overlay above to evaluate over, so it used to be folded term by term,
+    // one tree walk per term. Its body is a pure map over the CONTRACTION box
+    // instead: evaluate that once through the overlay, with the contracted
+    // symbols bound as the box's axes, and fold the resulting array. The fold
+    // visits the terms in row-major order — the order `CartesianTuples` walks
+    // the contraction odometer, last index fastest — starting from the
+    // identity with the same `combine`, so the result is bit-identical to the
+    // loop below. Declined (to that loop) for a filter, which the loop SKIPS
+    // rather than folding the identity (not bit-identical for signed zeros),
+    // for bounds that vary, and wherever the overlay above is declined.
+    if shape.is_empty()
+        && !contract_names.is_empty()
+        && filter.is_none()
+        && scan.is_none()
+        && gates.is_empty()
+        && ctx.recur.is_none()
+        && let Some(box_ranges) = static_ranges.as_deref()
+    {
+        let terms = with_faq_pool(|pool| {
+            try_eval_faq_vectorized(
+                &contract_names,
+                box_ranges,
+                body,
+                &[],
+                &[],
+                reduce,
+                None,
+                &*ctx,
+                pool,
+            )
+            .map(|(vv, _ops)| {
+                let out = vv.view().expect("vectorized faq has a view").to_owned();
+                vv.release(pool);
+                out
+            })
+        });
+        if let Some(terms) = terms {
+            let acc = terms
+                .iter()
+                .fold(reduce.identity(), |acc, &t| reduce.combine(acc, t));
+            return Value::Scalar(acc);
+        }
+    }
+    // An EMPTY output box (a size-0 index set) has no cell to evaluate: the
+    // result is the empty array of that box. The buffer below is sized
+    // `max(1)` for the rank-0 case, and reshaping its one element into a box
+    // with a zero extent is not a value but a panic.
+    if shape.contains(&0) {
+        return Value::Array(Box::new(ArrayD::zeros(IxDyn(&shape))));
+    }
+    // From here on the node is walked per cell. A rank-0 node with nothing to
+    // contract is a single scalar evaluation, not a walk.
+    let is_walk = !shape.is_empty() || !contract_names.is_empty();
+    if is_walk {
+        note_per_cell_walk();
+        // A strict caller has already been told to refuse (see
+        // [`StopAtFirstCell`]): this walk's value is never read.
+        if per_cell_walk_stopped() {
+            return if shape.is_empty() {
+                Value::Scalar(0.0)
+            } else {
+                Value::Array(Box::new(ArrayD::zeros(IxDyn(&shape))))
+            };
+        }
+    }
     let mut buf = vec![0.0f64; total];
     let saved_binds: Vec<(String, Option<i64>)> = idx_names
         .iter()
@@ -4640,7 +5017,12 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             scan,
             i_name: &idx_names[scan.axis],
             j_name: &contract_names[0],
-            bounds: (scan_lo, scan_hi),
+            // One step of one scan when the walk is to stop at its first cell.
+            bounds: if stop_at_first_cell() {
+                (scan_lo, scan_hi.min(scan_lo))
+            } else {
+                (scan_lo, scan_hi)
+            },
             body,
             reduce,
         };
@@ -4652,9 +5034,13 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
                 full[*d] = *val;
             }
             run_prefix_scan(&sweep, ctx, |i, acc, _| {
+                note_per_cell_cell();
                 full[scan.axis] = i;
                 buf[multi_to_flat_col_major(&full, &shape, &origin)] = acc;
             });
+            if stop_after_first_cell() {
+                break;
+            }
         }
     } else {
         let cellbox = CellBox {
@@ -4695,6 +5081,12 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             };
             let flat = multi_to_flat_col_major(tuple, &shape, &origin);
             buf[flat] = v;
+            if is_walk {
+                note_per_cell_cell();
+                if stop_after_first_cell() {
+                    break;
+                }
+            }
         }
         if let Some(before) = stats_from {
             let desc = gates
@@ -4912,9 +5304,12 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
                 .iter()
                 .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
                 .collect();
-            if a.shape() != region_shape.as_slice() {
+            // The value must fit the region, excluding its singleton axes
+            // (esm-spec §4.3.2): the face region `[[1,1],[1,n]]` takes an
+            // `[n]` value.
+            let Some(covered) = region_value_axes(a.shape(), &region_shape) else {
                 return Value::Scalar(f64::NAN);
-            }
+            };
             // The legal EMPTY region spelling (`stop == start - 1`, §4.3.2)
             // writes nothing — and its `start` may sit one past the bounding
             // box, which is not a slicable offset. The per-cell walk produced no
@@ -4935,7 +5330,7 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
                 let s0 = (ranges[d].0 - origin[d]) as usize;
                 ndarray::Slice::from(s0..s0 + region_shape[d])
             })
-            .assign(a);
+            .assign(&region_value_view(a.view(), &covered));
             continue;
         }
         let scalar = match &v {
@@ -6222,6 +6617,10 @@ mod gate_plan_tests {
                 model_name: Some("J".into()),
                 const_arrays: t.const_arrays(),
                 build_providers: Vec::new(),
+                // A gate-driven join is walked per cell by the pipeline, which
+                // a strict native refuses (#484); the gate planner is what is
+                // under test here, on the reference evaluator.
+                compiler: Some(crate::Compiler::Interpreter),
                 ..Default::default()
             },
         )

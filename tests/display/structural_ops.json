@@ -50,6 +50,16 @@
         "ascii": "true"
       },
       {
+        "name": "false",
+        "input": {
+          "op": "false",
+          "args": []
+        },
+        "unicode": "false",
+        "latex": "false",
+        "ascii": "false"
+      },
+      {
         "name": "fn datetime.year",
         "input": {
           "op": "fn",

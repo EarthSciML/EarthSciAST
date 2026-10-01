@@ -13,7 +13,7 @@
  *    functions, derivatives (`D(x)/Dt` and `D(x, t)`), open/user function calls;
  *  - array & call-shaped tier: array literals `[…]` (`const`), indexing
  *    `a[i, j]` (`index`), dotted closed-function calls `datetime.year(t)` (`fn`),
- *    the `true` literal, and `integral` / `reshape` / `transpose` / `concat`;
+ *    the `true` and `false` literals, and `integral` / `reshape` / `transpose` / `concat`;
  *  - reduction & array-query tier: `faq` reductions
  *    `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
  *    key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax` arg-witnesses
@@ -88,11 +88,15 @@ const INFIX: readonly string[] = [
 const RIGHT_ASSOC = new Set<string>(['^'])
 
 // Prefix operand minimum-precedences, sourced from the registry:
-//  - unary `-` binds LOOSELY (registry precedence of `-`, = additive), so it
-//    swallows a whole additive/multiplicative operand, matching how the printer
-//    renders `-(Ea/(R*T))` as `-Ea / (R * T)` with no inner parens.
+//  - unary `-` binds at MULTIPLICATIVE precedence, the standard mathematical
+//    reading: tighter than `+`/binary `-` (`-a + b` = `(-a) + b`, NOT the
+//    `-(a + b)` this used to produce), looser than `^` (`-a^2` = `-(a^2)`).
+//    Its operand therefore absorbs a `*`//` chain (`-a * b` = `-(a * b)`,
+//    numerically identical to `(-a) * b`) and a power, but stops at the first
+//    `+`/`-`. The printer's matching rule lives in pretty-print.ts
+//    (`UMINUS_OPERAND_MIN`), so `-(a + b)` keeps its parentheses.
 //  - `not` binds TIGHTLY at its registry precedence (`not p and q` = `(not p) and q`).
-const UMINUS_MIN = opPrecedence('-')
+const UMINUS_MIN = opPrecedence('*')
 const NOT_MIN = opPrecedence('not')
 // Template binding values (`name<k = value, …>`) bind at additive precedence so
 // the closing `>` — a comparison operator — is never swallowed as `value > …`.
@@ -101,7 +105,7 @@ const TEMPLATE_ARG_MIN = opPrecedence('+')
 /**
  * Structural ops whose defining data lives OUTSIDE `args` AND which have no
  * text surface yet — refused, pending a dedicated syntax pass. (`integral`,
- * `reshape`, `transpose`, `concat`, `fn`, `const`, `index`, `true`, `faq`,
+ * `reshape`, `transpose`, `concat`, `fn`, `const`, `index`, `true`, `false`, `faq`,
  * `apply_expression_template`, `polygon_intersection_area`, `intersect_polygon`,
  * `makearray` DO have a surface and are reconstructed below; they are
  * intentionally absent here. `table_lookup` IS listed: its surface is the
@@ -362,7 +366,7 @@ class Parser {
     // A leading `[` is a const array literal (`[1, 2, 3]`, `[[1, 2], [3, 4]]`).
     if (t.k === '[') return { op: 'const', value: this.parseArrayRest(), args: [] }
     if (t.k === 'name') {
-      if (t.v === 'true') return { op: 'true', args: [] }
+      if (t.v === 'true' || t.v === 'false') return { op: t.v, args: [] }
       // `makearray(region = value, …)` — a piecewise-region array. Its arguments
       // are `[lo:hi, …] = value` pairs, not plain call args, so it needs its own
       // parse rather than the generic parseCall path.

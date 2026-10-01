@@ -1243,9 +1243,11 @@ the manifold parameter to a non-member literal). Throws
 function _validate_geometry_manifolds(x, path::String="",
                                        seen::IdDict{Any,Nothing}=IdDict{Any,Nothing}())
     if _is_array(x)
+        _may_hold_object(x) || return
         haskey(seen, x) && return
         seen[x] = nothing
         for (i, child) in enumerate(x)
+            (_is_array(child) || _is_object(child)) || continue
             _validate_geometry_manifolds(child, "$path/$(i-1)", seen)
         end
         return
@@ -1297,9 +1299,13 @@ code `makearray_region_inverted`.
 function _validate_makearray_regions(x, path::String="",
                                      seen::IdDict{Any,Nothing}=IdDict{Any,Nothing}())
     if _is_array(x)
+        _may_hold_object(x) || return
         haskey(seen, x) && return
         seen[x] = nothing
         for (i, child) in enumerate(x)
+            # A scalar holds no region; skipping it spares a path string per
+            # element of a large inline number array.
+            (_is_array(child) || _is_object(child)) || continue
             _validate_makearray_regions(child, "$path/$(i-1)", seen)
         end
         return
@@ -1937,11 +1943,11 @@ document rather than the reference-preserving one. The third half of the
 public expansion seam — [`expanded_model`](@ref) gives one `Model`,
 [`expand_flattened_refs`](@ref) a `FlattenedSystem`, this the whole document.
 
-`flatten` and `build_evaluator` take the reference-preserving file directly and
-expand at their own boundary, so this is for a consumer that wants the expanded
-DOCUMENT: an emitter, a diff against a fused golden, a reader with no template
-handling of its own. `file` is not modified, and a file with no surviving
-references comes back by identity.
+`flatten` and the build under `esm_problem` take the reference-preserving
+file directly and expand at their own boundary, so this is for a consumer that
+wants the expanded DOCUMENT: an emitter, a diff against a fused golden, a
+reader with no template handling of its own. `file` is not modified, and a
+file with no surviving references comes back by identity.
 """
 function expanded_file(file::EsmFile)::EsmFile
     file.component_templates === nothing && return file
@@ -2025,7 +2031,7 @@ equations and observed expressions against the merged `template_registry`,
 returning an Expanded copy, bit-identical to the Expand-at-load image. A no-op
 when the registry is empty (no references survived). `flatten` ALWAYS carries
 references, so a consumer with no template handling calls this at its entry —
-the MTK `System`/`PDESystem` constructors do; the tree-walk `build_evaluator`
+the MTK `System`/`PDESystem` constructors do; the tree-walk build
 does NOT (it expands at its own entry with site recording, the compile-once
 tier).
 

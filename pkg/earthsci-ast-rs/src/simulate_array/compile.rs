@@ -67,10 +67,10 @@ pub(crate) fn model_tree_any(model: &Model, pred: &dyn Fn(&Model) -> bool) -> bo
 /// Return true if the file has spatial structure: any model with array-shaped
 /// state variables (`shape` field non-empty).
 ///
-/// Used by [`crate::simulate::simulate`] to route discretized-PDE files to the
-/// ArrayOp runtime even when the equations do not yet contain explicit
-/// `faq`/`index` nodes (e.g. a spatial model whose equations were rewritten
-/// using indexed-scalar D(u[i])=... form rather than the `faq` wrapper).
+/// Used by [`crate::compile_array`] to accept discretized-PDE files even when
+/// the equations do not yet contain explicit `faq`/`index` nodes (e.g. a
+/// spatial model whose equations were rewritten using indexed-scalar
+/// D(u[i])=... form rather than the `faq` wrapper).
 pub fn file_has_spatial_model(file: &EsmFile) -> bool {
     let Some(models) = &file.models else {
         return false;
@@ -226,7 +226,7 @@ pub(crate) fn parse_subsystem_model(
 /// what makes the MPAS keyed-factor wiring contract (`nEdgesOnCell :=
 /// mesh.nEdgesOnCell`, a bare-name observed alias of a mounted const factor)
 /// resolvable. A model without subsystems is untouched (byte-identical build).
-pub(super) fn mount_subsystems(
+pub(crate) fn mount_subsystems(
     model: &mut Model,
     index_sets: &mut HashMap<String, IndexSet>,
 ) -> Result<(), CompileError> {
@@ -356,15 +356,47 @@ pub(super) fn apply_ragged_factor_scope(
     Ok(())
 }
 
+/// The rewrites `flatten` makes to a model's equations that a route reading
+/// the AUTHORED model — the array runtime's single-model route, and the build
+/// pipeline (`crate::prepare`) — must make itself, so every route answers one
+/// document with one number.
+///
+/// * esm-spec §4.2, the two halves of the right-hand-side `D` rule (`flatten`'s
+///   phase 5b′): each RHS structural `D` resolves into the tendency the model
+///   defines for it, and one that resolves to nothing is refused rather than
+///   answered with `0` (or, through a reference evaluator, `NaN`). The same two
+///   functions, in the same order, as [`ArrayCompiled::from_flattened`].
+/// * esm-spec §4.8.3 "Angles are the ONE exception" (phase 5g): see
+///   [`normalize_model_angle_arguments`]. Without it `sin(theta)` with `theta`
+///   declared `deg` evaluated `sin(90 radians)` = 0.894 where the scalar and
+///   coupled routes, and the other bindings, returned 1.
+pub(crate) fn apply_flatten_rewrites(model: &mut Model) -> Result<(), CompileError> {
+    let time_invariant: std::collections::HashSet<String> = model
+        .variables
+        .iter()
+        .filter(|(_, v)| v.var_type == crate::types::VariableType::Parameter)
+        .map(|(name, _)| name.clone())
+        .collect();
+    crate::flatten::resolve_rhs_time_derivatives(&mut model.equations, &time_invariant);
+    if crate::flatten::first_unresolved_rhs_time_derivative_in(&model.equations).is_some() {
+        return Err(CompileError::UnloweredOperatorError {
+            op: "D".to_string(),
+        });
+    }
+    normalize_model_angle_arguments(model);
+    Ok(())
+}
+
 /// Fold a declared angle's scale into every `sin`/`cos`/`tan` argument of
 /// `model`, so the argument reaches the evaluator in RADIANS (esm-spec §4.8.3,
 /// issue #409).
 ///
 /// The array runtime's SINGLE-MODEL route deliberately never flattens
-/// (`ArrayCompiled::from_file`), so `flatten`'s phase 5g
-/// (`crate::flatten::normalize_angle_arguments`) never runs for it. This is that
-/// phase, against the authored model's own declarations, so the two array routes
-/// and the scalar route answer one document with one number.
+/// (`ArrayCompiled::from_file`), and neither does the build pipeline
+/// (`crate::prepare`), so `flatten`'s phase 5g
+/// (`crate::flatten::normalize_angle_arguments`) never runs for either. This is
+/// that phase, against the authored model's own declarations, so every route
+/// answers one document with one number.
 fn normalize_model_angle_arguments(model: &mut Model) {
     let (env, _) = crate::units::build_unit_env(&model.variables);
     // A document that declares no angle at a scale other than 1 cannot be
@@ -452,8 +484,7 @@ impl ArrayCompiled {
         Ok(compiled)
     }
 
-    /// Build from a [`FlattenedSystem`] — the array-runtime analogue of the
-    /// scalar [`crate::simulate::Compiled::from_flattened`].
+    /// Build from a [`FlattenedSystem`].
     ///
     /// [`crate::flatten::flatten`] already merges a coupled, multi-component
     /// file into a single dot-namespaced system (coupling rules applied, every
@@ -475,8 +506,8 @@ impl ArrayCompiled {
     /// inference, faq lowering, the diffsol RHS build — is shared bit-for-bit
     /// with the single-model path.
     pub fn from_flattened(flat: &FlattenedSystem) -> Result<Self, CompileError> {
-        // Reject hybrid dimensionality and model events, mirroring the scalar
-        // `Compiled::from_flattened`. The data-loader refresh path that drives
+        // Reject hybrid dimensionality and model events. The data-loader
+        // refresh path that drives
         // this seam is event-free by design (a driver-level segmented solve,
         // not an in-solver event), so rejecting here loses no in-scope
         // capability while preventing a model that *does* declare events from
@@ -672,42 +703,10 @@ impl ArrayCompiled {
         }
         let mut index_sets_owned = index_sets.clone();
         mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
-        // esm-spec §4.2, the two halves of the right-hand-side `D` rule, applied
-        // here because this SINGLE-MODEL route deliberately never flattens (see
-        // `from_file_owned`) and so does not get them from `flatten`'s phase
-        // 5b′: resolve each RHS structural `D` over an unknown that carries a
-        // differential equation into that unknown's tendency, then refuse any
-        // that resolved to nothing rather than letting `eval`/the tape lowering
-        // answer it with `0`. Runs after mounting so a subsystem's equations are
-        // in scope under their mounted names. Same two functions, in the same
-        // order, as `Self::from_flattened` — the two array routes must not
-        // answer one document differently.
-        let time_invariant: std::collections::HashSet<String> = model_owned
-            .variables
-            .iter()
-            .filter(|(_, v)| v.var_type == crate::types::VariableType::Parameter)
-            .map(|(name, _)| name.clone())
-            .collect();
-        crate::flatten::resolve_rhs_time_derivatives(&mut model_owned.equations, &time_invariant);
-        if crate::flatten::first_unresolved_rhs_time_derivative_in(&model_owned.equations).is_some()
-        {
-            return Err(CompileError::UnloweredOperatorError {
-                op: "D".to_string(),
-            });
-        }
-        // esm-spec §4.8.3 "Angles are the ONE exception", applied here for the
-        // same reason as the `D` rule above: this SINGLE-MODEL route never
-        // flattens, so it does not get `flatten`'s phase 5g either — and this
-        // route is what every array/PDE document with one model compiles
-        // through (the array oracle, the vectorized overlay, the tape and the
-        // XLA emitter all read the `ArrayCompiled` it builds). Without this
-        // mirror, `sin(theta)` with `theta` declared `deg` evaluated
-        // `sin(90 radians)` = 0.894 here while the scalar and coupled routes,
-        // and the other four bindings, returned 1 — the same document
-        // answering two different numbers. Runs after mounting so a
-        // subsystem's declarations are in scope, and the rewrite is a no-op on
-        // a document declaring no angle at a scale other than 1.
-        normalize_model_angle_arguments(&mut model_owned);
+        // `flatten`'s rewrites, which this SINGLE-MODEL route never gets
+        // (see `from_file_owned`). Runs after mounting so a subsystem's
+        // equations and declarations are in scope under their mounted names.
+        apply_flatten_rewrites(&mut model_owned)?;
         // Lower every SHAPED parameter whose value the document supplies —
         // inline array data, or one scalar broadcast over the grid (esm-spec
         // §6.3 / §6.6.2) — into the `const`-observed channel this runtime
@@ -715,7 +714,8 @@ impl ArrayCompiled {
         // is lowered under its namespaced name too; `vi_arrays` is passed so a
         // caller-supplied factor array stays authoritative over a declared
         // default.
-        lower_inline_array_parameters(&mut model_owned, &index_sets_owned, vi_arrays)?;
+        let inline_param_arrays =
+            lower_inline_array_parameters(&mut model_owned, &index_sets_owned, vi_arrays)?;
         apply_ragged_factor_scope(&mut index_sets_owned, &model_owned.variables)?;
         // Under `element_type: "Float32"`, reject an index set whose subscripts
         // binary32 cannot address exactly. Index expressions share the value
@@ -807,6 +807,7 @@ impl ArrayCompiled {
         // moves each observed body out of the variable registry).
         let (
             observed_names,
+            forcing_decls,
             eliminated,
             held_at_ic,
             slots,
@@ -848,9 +849,8 @@ impl ArrayCompiled {
             }
 
             // (0b) Reject a reference to a variable bound in NONE of the model's
-            // binding categories — the array-path analogue of the scalar
-            // interpreter's `resolve_expr` "Unknown variable" gate, and the same
-            // function `crate::prepare` calls on the build-pipeline route
+            // binding categories — the same function `crate::prepare` calls on
+            // the build-pipeline route
             // (CONFORMANCE_SPEC §5.23; `extra_bound` is empty here because this
             // path's evaluation scope is the model's own declarations). Without
             // it a typo'd/undeclared bare name reaches `lookup_variable`'s final
@@ -880,8 +880,24 @@ impl ArrayCompiled {
             // exactly the order `classify_variables` produced them in).
             let observed_names: Vec<String> =
                 observed_vars.iter().map(|(n, _)| (*n).clone()).collect();
+            // The externally refreshed parameters ride in `observed_vars` with
+            // no defining rule (see `classify_variables`); these are the
+            // forcing buffer's names.
+            let mut forcing_decls: IndexMap<String, Option<Vec<usize>>> = observed_vars
+                .iter()
+                .filter(|(_, var)| var.var_type == VariableType::Parameter)
+                .map(|(name, var)| {
+                    let shape = match var.shape.as_deref() {
+                        None => Some(Vec::new()),
+                        Some(decl) => resolve_declared_shape(decl, index_sets),
+                    };
+                    ((*name).clone(), shape)
+                })
+                .collect();
+            infer_unsized_forcing_shapes(&mut forcing_decls, &model.equations);
             (
                 observed_names,
+                forcing_decls,
                 eliminated,
                 held_at_ic,
                 slots,
@@ -913,8 +929,6 @@ impl ArrayCompiled {
 
         let SlotTables {
             var_shapes,
-            scalar_state_names,
-            scalar_state_index,
             state_defaults,
             n_states,
         } = slots;
@@ -931,9 +945,11 @@ impl ArrayCompiled {
 
         Ok(ArrayCompiled {
             runtime_mode: crate::simulate_array::RuntimeMode::default(),
+            #[cfg(feature = "xla")]
+            xla_rhs: std::cell::OnceCell::new(),
             var_shapes,
-            scalar_state_names,
-            scalar_state_index,
+            state_names: std::cell::OnceCell::new(),
+            qualified_state_names: std::cell::OnceCell::new(),
             state_defaults,
             param_names,
             param_index,
@@ -944,6 +960,7 @@ impl ArrayCompiled {
             declared_names,
             forcing: Rc::new(RefCell::new(HashMap::new())),
             data_fed,
+            forcing_generation: std::cell::Cell::new(0),
             field_ics,
             ic_scope_defs,
             index_sets: index_sets.clone(),
@@ -951,6 +968,12 @@ impl ArrayCompiled {
             const_scope,
             precision: crate::precision::Env::capture(),
             merged_renames: HashMap::new(),
+            #[cfg(feature = "solve")]
+            field_ic_memo: RefCell::new(None),
+            inline_param_arrays,
+            forcing_decls,
+            tape_cache: tape::TapeCache::new(),
+            shared_observed: std::cell::OnceCell::new(),
         })
     }
 }
@@ -1031,14 +1054,11 @@ fn check_evaluable_side(expr: &Expr) -> Result<(), CompileError> {
 }
 
 /// (0b) Reject a reference to a variable that is bound in NONE of the model's
-/// binding categories — the array-path analogue of the scalar interpreter's
-/// [`crate::simulate`] `resolve_expr` "Unknown variable" gate. Without it a
-/// typo'd or undeclared bare name falls through [`lookup_variable`]'s final arm,
-/// which used to hand back a silent `NaN` sentinel that `max(x, floor)` launders
-/// into a plausible number by dropping the operand, instead of failing loudly at
-/// build time. The error variant and message match the scalar path
-/// (`InterpreterBuildError` / `Unknown variable '{name}' referenced in
-/// expression`).
+/// binding categories. Without it a typo'd or undeclared bare name falls
+/// through [`lookup_variable`]'s final arm, which fails closed only at the
+/// drain, instead of failing loudly at build time. The error is
+/// `InterpreterBuildError` / `Unknown variable '{name}' referenced in
+/// expression`.
 ///
 /// **ONE gate, and EVERY route calls it** (CONFORMANCE_SPEC §5.23). This is not
 /// a compile-path-local check: [`crate::prepare::run_prepare`] — the build
@@ -1137,24 +1157,30 @@ pub(crate) fn check_free_variables(
     }
 
     // ---- Check every equation (skipping `ic`) and observed expression. -------
+    // Each check sees the shared bound set plus its own expression's binders,
+    // added for the check and taken back out after it (see `with_binders`).
+    let mut binders: HashSet<String> = HashSet::new();
     for eq in &model.equations {
         if is_ic_lhs(&eq.lhs) {
             continue;
         }
-        let mut scope = bound.clone();
-        collect_binders(&eq.lhs, &mut scope);
-        collect_binders(&eq.rhs, &mut scope);
-        check_expr_free_vars(&eq.lhs, &scope)?;
-        check_expr_free_vars(&eq.rhs, &scope)?;
+        collect_binders(&eq.lhs, &mut binders);
+        collect_binders(&eq.rhs, &mut binders);
+        with_binders(&mut bound, &mut binders, |scope| {
+            check_expr_free_vars(&eq.lhs, scope)?;
+            check_expr_free_vars(&eq.rhs, scope)
+        })?;
     }
     for var in model.variables.values() {
         let mut failure = None;
         var.for_each_expression(&mut |expr| {
-            let mut scope = bound.clone();
-            collect_binders(expr, &mut scope);
-            if failure.is_none()
-                && let Err(e) = check_expr_free_vars(expr, &scope)
-            {
+            if failure.is_some() {
+                return;
+            }
+            collect_binders(expr, &mut binders);
+            if let Err(e) = with_binders(&mut bound, &mut binders, |scope| {
+                check_expr_free_vars(expr, scope)
+            }) {
                 failure = Some(e);
             }
         });
@@ -1163,6 +1189,30 @@ pub(crate) fn check_free_variables(
         }
     }
     Ok(())
+}
+
+/// Run `check` against `bound` widened by `binders`, then restore `bound`:
+/// only the binders it did not already hold are inserted, and exactly those
+/// are removed again. `binders` is left empty for the next expression. The
+/// cost is the expression's own binders, not the size of the bound set, so
+/// the whole check stays linear in the model.
+fn with_binders<T>(
+    bound: &mut HashSet<String>,
+    binders: &mut HashSet<String>,
+    check: impl FnOnce(&HashSet<String>) -> T,
+) -> T {
+    let mut added: Vec<String> = Vec::new();
+    for name in binders.drain() {
+        if !bound.contains(&name) {
+            bound.insert(name.clone());
+            added.push(name);
+        }
+    }
+    let out = check(bound);
+    for name in &added {
+        bound.remove(name);
+    }
+    out
 }
 
 /// Is this LHS an initial-condition marker (`{"op": "ic", …}`)?
@@ -1257,8 +1307,8 @@ fn collect_dim_symbols(expr: &Expr, out: &mut HashSet<String>) {
 }
 
 /// Reject the first bare (non-dotted) variable reference bound in none of the
-/// categories in `scope`. Mirrors the scalar path's `resolve_expr` "Unknown
-/// variable" error in both variant and message. The full expression-bearing
+/// categories in `scope`, as `Unknown variable '{name}' referenced in
+/// expression`. The full expression-bearing
 /// child set is descended via [`ExpressionNode::for_each_child`] (args plus the
 /// sidecar fields), so a reference hidden in an aggregate body, filter, integral
 /// bound, table axis, aggregate key, or template binding is not missed. A `fn`
@@ -1357,16 +1407,6 @@ fn capture_ic_scope_defs(
     out
 }
 
-/// The ROW-major (last index fastest) linear offset of the 0-based multi-index
-/// `multi` in an array of extents `shape` — the order an authored nested JSON
-/// array reads in, which is not this runtime's column-major slot order.
-fn row_major_offset(multi: &[usize], shape: &[usize]) -> usize {
-    multi
-        .iter()
-        .zip(shape.iter())
-        .fold(0usize, |acc, (i, n)| acc * n + i)
-}
-
 /// Lower every SHAPED parameter whose value the document itself supplies —
 /// INLINE ARRAY DATA (a row-major nested JSON array on its `default`, esm-spec
 /// §6.3, and the `parameter_overrides` a test resolves into it, §6.6.2) or a
@@ -1409,8 +1449,9 @@ fn lower_inline_array_parameters(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
     external: Option<&HashMap<String, ArrayD<f64>>>,
-) -> Result<(), CompileError> {
+) -> Result<HashMap<String, (Vec<usize>, Vec<f64>)>, CompileError> {
     let mut lowered: Vec<(String, JsonValue)> = Vec::new();
+    let mut dense: HashMap<String, (Vec<usize>, Vec<f64>)> = HashMap::new();
     for (name, var) in &mut model.variables {
         if var.var_type != VariableType::Parameter {
             continue;
@@ -1444,6 +1485,7 @@ fn lower_inline_array_parameters(
             var.var_type = VariableType::Unknown;
             var.default = None;
             lowered.push((name.clone(), dense_to_json(&want, &values)));
+            dense.insert(name.clone(), (want, values));
             continue;
         }
         let (shape, values) = default.to_dense().map_err(|e| {
@@ -1468,6 +1510,7 @@ fn lower_inline_array_parameters(
         var.var_type = VariableType::Unknown;
         var.default = None;
         lowered.push((name.clone(), dense_to_json(&shape, &values)));
+        dense.insert(name.clone(), (shape, values));
     }
     for (name, value) in lowered {
         // A bare-variable LHS makes it an OBSERVED (esm-spec §6.3.1), and a
@@ -1484,7 +1527,7 @@ fn lower_inline_array_parameters(
             comment: None,
         });
     }
-    Ok(())
+    Ok(dense)
 }
 
 /// Re-nest a row-major dense buffer into the nested JSON array a `const` node
@@ -1512,8 +1555,8 @@ fn dense_to_json(shape: &[usize], values: &[f64]) -> JsonValue {
 /// Every category is DERIVED (esm-spec §6.3.1), never read off a declared type:
 /// an unknown is an ODE state or an observed according to the equation that
 /// defines it, and a parameter is Brownian or discrete according to its
-/// `update`. A Brownian parameter is an explicit unsupported-feature error,
-/// never a silent drop, and so is a discrete one.
+/// `update`. A Brownian parameter is refused (`unsupported_construct`), never
+/// a silent drop, and so is a discrete one this backend cannot refresh.
 #[allow(clippy::type_complexity)]
 fn classify_variables(
     model: &Model,
@@ -1556,11 +1599,10 @@ fn classify_variables(
             }
             VariableType::Parameter => {
                 if class.is_brownian(name) {
-                    return Err(CompileError::UnsupportedFeatureError {
-                        feature: "brownian".to_string(),
-                        message: format!(
-                            "Rust simulation backend does not support SDE models; parameter '{name}' carries a wiener update"
-                        ),
+                    return Err(CompileError::UnsupportedConstruct {
+                        construct: crate::compile_error::WIENER_NOISE,
+                        evaluator: crate::compile_error::ARRAY_EVALUATOR,
+                        detail: format!("parameter '{name}'"),
                     });
                 }
                 if class.is_discrete_parameter(name) {
@@ -1578,7 +1620,7 @@ fn classify_variables(
                         if let Some(source) = var
                             .update
                             .as_ref()
-                            .and_then(|u| u.rules().iter().find_map(|r| r.data_source()))
+                            .and_then(crate::data_fed::data_feed_source)
                         {
                             data_fed.push((name.clone(), source.to_string()));
                         }
@@ -1695,17 +1737,16 @@ fn partition_states(
 
 /// Flat state-vector tables built by [`build_slot_tables`] (stage 4),
 /// mirroring the corresponding [`ArrayCompiled`] fields: per-variable
-/// shape/offset descriptions plus the per-slot name / index / default tables.
+/// shape/offset descriptions and per-variable defaults. Per-slot names are
+/// not built: they follow from the layout (see `layout::slot_name`).
 struct SlotTables {
     var_shapes: IndexMap<String, VarShape>,
-    scalar_state_names: Vec<String>,
-    scalar_state_index: HashMap<String, usize>,
-    state_defaults: Vec<Option<f64>>,
+    state_defaults: Vec<StateDefault>,
     n_states: usize,
 }
 
-/// (4) Build the flat offset and scalar-slot names per state variable
-/// (column-major slot enumeration).
+/// (4) Build the flat offset and extents per state variable (column-major
+/// slot enumeration within each), with each variable's default.
 ///
 /// # Errors
 ///
@@ -1717,9 +1758,7 @@ fn build_slot_tables(
     shape_map: &HashMap<String, Vec<usize>>,
 ) -> Result<SlotTables, CompileError> {
     let mut var_shapes: IndexMap<String, VarShape> = IndexMap::new();
-    let mut scalar_state_names: Vec<String> = Vec::new();
-    let mut scalar_state_index: HashMap<String, usize> = HashMap::new();
-    let mut state_defaults: Vec<Option<f64>> = Vec::new();
+    let mut state_defaults: Vec<StateDefault> = Vec::with_capacity(final_states.len());
     let mut flat_offset: usize = 0;
 
     for name in final_states {
@@ -1730,15 +1769,13 @@ fn build_slot_tables(
             vec![1i64; shape.len()]
         };
         let var = model.variables.get(name);
-        let default = var.and_then(|v| v.default_scalar());
         // A SHAPED unknown may declare its whole initial profile as INLINE
-        // ARRAY DATA (esm-spec §6.3) instead of one broadcast scalar. Flatten it
-        // ROW-major (the authored nesting's order) and read each cell at its own
-        // multi-index below — the slot enumeration here is COLUMN-major, so the
-        // two orders coincide only in rank 1 and the value must be gathered, not
-        // zipped. A ragged array or a shape that disagrees with the slots is a
-        // build error, never a silently mis-seeded state vector.
-        let default_field = match var.and_then(|v| v.default_array()) {
+        // ARRAY DATA (esm-spec §6.3) instead of one broadcast scalar. It is
+        // kept ROW-major (the authored nesting's order) and gathered into the
+        // column-major slots when the initial state is built. A ragged array
+        // or a shape that disagrees with the slots is a build error, never a
+        // silently mis-seeded state vector.
+        let default = match var.and_then(|v| v.default_array()) {
             Some(Ok((dshape, values))) => {
                 if dshape != shape {
                     return Err(CompileError::build_err(format!(
@@ -1746,39 +1783,21 @@ fn build_slot_tables(
                          not match the resolved grid shape {shape:?} (esm-spec §6.6.2)"
                     )));
                 }
-                Some(values)
+                if shape.is_empty() {
+                    StateDefault::Scalar(var.and_then(|v| v.default_scalar()))
+                } else {
+                    StateDefault::Field(values)
+                }
             }
             Some(Err(e)) => {
                 return Err(CompileError::build_err(format!(
                     "state '{name}': {e} (esm-spec §6.3)"
                 )));
             }
-            None => None,
+            _ => StateDefault::Scalar(var.and_then(|v| v.default_scalar())),
         };
         let total = shape.iter().copied().product::<usize>().max(1);
-        if shape.is_empty() {
-            scalar_state_names.push(name.clone());
-            scalar_state_index.insert(name.clone(), flat_offset);
-            state_defaults.push(default);
-        } else {
-            // Generate per-element names in column-major order.
-            for flat in 0..total {
-                let multi = flat_to_multi_col_major(flat, &shape);
-                let idx_str = multi
-                    .iter()
-                    .zip(origin.iter())
-                    .map(|(v, o)| (v + *o as usize).to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let slot_name = format!("{name}[{idx_str}]");
-                scalar_state_names.push(slot_name.clone());
-                scalar_state_index.insert(slot_name, flat_offset + flat);
-                state_defaults.push(match default_field.as_ref() {
-                    Some(values) => Some(values[row_major_offset(&multi, &shape)]),
-                    None => default,
-                });
-            }
-        }
+        state_defaults.push(default);
         var_shapes.insert(
             name.clone(),
             VarShape {
@@ -1792,8 +1811,6 @@ fn build_slot_tables(
 
     Ok(SlotTables {
         var_shapes,
-        scalar_state_names,
-        scalar_state_index,
         state_defaults,
         n_states: flat_offset,
     })
@@ -2658,7 +2675,7 @@ fn build_rhs_rules(
 ) -> Result<Vec<RhsRule>, CompileError> {
     let var_shapes = &slots.var_shapes;
     let mut rhs_rules: Vec<RhsRule> = Vec::new();
-    let mut covered_slots: HashSet<usize> = HashSet::new();
+    let mut covered_slots = SlotCoverage::new(slots.n_states);
 
     // Declared index-set axis NAMES of every array-shaped variable (state /
     // parameter / observed), used to lower a whole-array `D(state)` RHS into
@@ -2709,7 +2726,7 @@ fn build_rhs_rules(
 fn lower_faq_derivative(
     d: DerivArrayop,
     var_shapes: &IndexMap<String, VarShape>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     let DerivArrayop {
@@ -2729,21 +2746,13 @@ fn lower_faq_derivative(
         )));
     }
     // Mark the covered slots.
-    let shape = &var_shapes[&var];
-    for tuple in cartesian_range(&ranges) {
-        // Map to column-major flat offset using actual LHS index expressions.
-        let binds: HashMap<String, i64> = idx_names
-            .iter()
-            .zip(tuple.iter())
-            .map(|(n, v)| (n.clone(), *v))
-            .collect();
-        let actual_multi: Vec<i64> = lhs_idx_exprs
-            .iter()
-            .map(|e| eval_simple_index(e, &binds))
-            .collect();
-        let flat = multi_to_flat_col_major(&actual_multi, &shape.shape, &shape.origin);
-        covered_slots.insert(shape.flat_offset + flat);
-    }
+    mark_faq_lhs_coverage(
+        &var_shapes[&var],
+        &idx_names,
+        &ranges,
+        &lhs_idx_exprs,
+        covered_slots,
+    );
     rhs_rules.push(RhsRule::ArrayLoop {
         var_name: var,
         output_idx_names: idx_names,
@@ -2765,7 +2774,7 @@ fn lower_indexed_derivative(
     indices: &[i64],
     rhs: &Expr,
     var_shapes: &IndexMap<String, VarShape>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     // Indexed: find slot.
@@ -2793,7 +2802,7 @@ fn lower_bare_derivative(
     model: &Model,
     array_axes: &HashMap<String, Vec<String>>,
     var_shapes: &IndexMap<String, VarShape>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     let shape = var_shapes
@@ -2840,6 +2849,7 @@ fn lower_bare_derivative(
             &shape,
             target_axes,
             array_axes,
+            var_shapes,
             covered_slots,
             rhs_rules,
         )?;
@@ -2863,7 +2873,7 @@ fn lower_wholearray_producer_lift(
     shape: &VarShape,
     target_axes: Option<&[String]>,
     array_axes: &HashMap<String, Vec<String>>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     let ndim = shape.shape.len();
@@ -2878,9 +2888,7 @@ fn lower_wholearray_producer_lift(
     let plan = build_gather_plan(rhs, array_axes, &var, target_axes, false)?;
     let body = index_array_leaves_by_loops(rhs, array_axes, Some(&plan), &loops);
     let total = shape.shape.iter().copied().product::<usize>().max(1);
-    for flat in 0..total {
-        covered_slots.insert(shape.flat_offset + flat);
-    }
+    covered_slots.insert_range(shape.flat_offset, total);
     rhs_rules.push(RhsRule::ArrayLoop {
         var_name: var.clone(),
         output_idx_names: loops,
@@ -2899,21 +2907,55 @@ fn lower_wholearray_producer_lift(
 }
 
 /// Whole-array `D(var) = <array-valued rhs>` over a declared
-/// array shape: enumerate cells and emit one per-cell scalar
-/// rule, indexing each array-shaped RHS leaf by that cell
-/// (elementwise semantics). This is the array-runtime analog
-/// of the Julia `_lift_wholearray_deriv_equations` lift.
+/// array shape, with elementwise semantics: each array-shaped
+/// RHS leaf is indexed by the output cell. This is the
+/// array-runtime analog of the Julia
+/// `_lift_wholearray_deriv_equations` lift.
+///
+/// The rule is ONE [`RhsRule::ArrayLoop`] over the whole shape, its body
+/// gathering every leaf by the loop symbols ([`CellCoords::Loops`]) — the
+/// same rewrite the per-cell form applies with integer coordinates, so each
+/// cell evaluates the identical scalar expression. Only a body
+/// [`wholearray_body_loops_as_percell`] rejects keeps the per-cell form, one
+/// [`RhsRule::IndexedScalar`] per cell.
+#[allow(clippy::too_many_arguments)]
 fn lower_wholearray_percell(
     var: String,
     rhs: &Expr,
     shape: &VarShape,
     target_axes: Option<&[String]>,
     array_axes: &HashMap<String, Vec<String>>,
-    covered_slots: &mut HashSet<usize>,
+    var_shapes: &IndexMap<String, VarShape>,
+    covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     let plan = build_gather_plan(rhs, array_axes, &var, target_axes, true)?;
     let total = shape.shape.iter().copied().product::<usize>().max(1);
+    if wholearray_body_loops_as_percell(rhs, array_axes, var_shapes) {
+        let ndim = shape.shape.len();
+        let loops: Vec<String> = (0..ndim).map(|d| format!("_lp{d}_{var}")).collect();
+        let output_ranges: Vec<(i64, i64)> = shape
+            .shape
+            .iter()
+            .zip(shape.origin.iter())
+            .map(|(sz, o)| (*o, *o + *sz as i64 - 1))
+            .collect();
+        let lhs_idx_exprs: Vec<Expr> = loops.iter().map(|l| Expr::Variable(l.clone())).collect();
+        let body = index_array_leaves(rhs, array_axes, Some(&plan), CellCoords::Loops(&loops));
+        covered_slots.insert_range(shape.flat_offset, total);
+        rhs_rules.push(RhsRule::ArrayLoop {
+            var_name: var,
+            output_idx_names: loops,
+            output_ranges,
+            lhs_idx_exprs,
+            body: Box::new(body),
+            contract_names: Vec::new(),
+            contract_dims: Vec::new(),
+            reduce: ReduceKind::Sum,
+            filter: None,
+        });
+        return Ok(());
+    }
     for flat in 0..total {
         let multi0 = flat_to_multi_col_major(flat, &shape.shape);
         let cell: Vec<i64> = multi0
@@ -2921,7 +2963,7 @@ fn lower_wholearray_percell(
             .zip(shape.origin.iter())
             .map(|(m, o)| *m as i64 + *o)
             .collect();
-        let body = index_array_leaves(rhs, array_axes, Some(&plan), &cell);
+        let body = index_array_leaves(rhs, array_axes, Some(&plan), CellCoords::Ints(&cell));
         let slot = shape.flat_offset + flat;
         covered_slots.insert(slot);
         rhs_rules.push(RhsRule::IndexedScalar {
@@ -2941,14 +2983,12 @@ fn lower_wholearray_percell(
 fn cover_held_at_ic_slots(
     held_at_ic: &HashSet<String>,
     var_shapes: &IndexMap<String, VarShape>,
-    covered_slots: &mut HashSet<usize>,
+    covered_slots: &mut SlotCoverage,
 ) {
     for name in held_at_ic {
         if let Some(vs) = var_shapes.get(name) {
             let total = vs.shape.iter().copied().product::<usize>().max(1);
-            for k in 0..total {
-                covered_slots.insert(vs.flat_offset + k);
-            }
+            covered_slots.insert_range(vs.flat_offset, total);
         }
     }
 }
@@ -2956,31 +2996,33 @@ fn cover_held_at_ic_slots(
 /// (8) Every state slot must have a defining equation.
 fn check_state_slots_covered(
     slots: &SlotTables,
-    covered_slots: &HashSet<usize>,
+    covered_slots: &SlotCoverage,
 ) -> Result<(), CompileError> {
-    for (i, name) in slots.scalar_state_names.iter().enumerate() {
-        if !covered_slots.contains(&i) {
-            return Err(CompileError::build_err(format!(
+    match covered_slots.first_uncovered() {
+        Some(slot) => {
+            let name = slot_name(&slots.var_shapes, slot).unwrap_or_default();
+            Err(CompileError::build_err(format!(
                 "State slot '{name}' has no defining derivative equation."
-            )));
+            )))
         }
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Evaluate a state-free build-time expression (grid geometry, §11.4.1
 /// coordinate-expression `ic` RHSs, §6.6.5 analytic `reference`s) through the
 /// official array evaluator.
 ///
-/// **Outside `native`'s refusal, deliberately.** esm-libraries-spec §2.5.10
-/// puts four evaluations under the refusal — the constants and static
-/// observeds materialized at construction, the per-segment seed, the
-/// right-hand side, and the observeds reported at output times — and this is
-/// none of them: it evaluates an INITIAL CONDITION or a piece of grid
-/// geometry, not one of the document's rules. No compiler tier in any binding
-/// has a form for initial-state assembly, so a refusal here would refuse the
-/// documents rather than name a gap that could be closed. Recorded rather than
-/// gated. Array-producing `faq`/`makearray` nodes
+/// **The reference evaluator, under every compiler.** No compiler tier has a
+/// form for initial-state assembly, so a field `ic` is evaluated here whatever
+/// the Problem names. What keeps that honest is that construction EXERCISES
+/// every such evaluation ([`ArrayCompiled::field_ic_records`]): one the
+/// whole-array overlay serves is reported as vectorized, and one that walks a
+/// `faq` per cell is refused by a strict compiler, naming the target
+/// (esm-libraries-spec §2.5.10). An inline test's analytic `reference` also
+/// comes here, and stays here under every compiler: it is the test's oracle,
+/// not the model (`crate::inline_tests::evaluate_cellwise`).
+/// Array-producing `faq`/`makearray` nodes
 /// yield arrays; elementwise ops broadcast over them. Any `{ "from": <set> }`
 /// range references are resolved against `index_sets` first, so a raw
 /// (pre-compile) expression evaluates exactly as an equation expression does
@@ -3042,9 +3084,10 @@ pub(super) fn resolve_field_ic_cell(
     forcing: &HashMap<String, ArrayD<f64>>,
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
-    // Per-target memo of the case-(3) whole-field evaluation (cell-independent),
-    // so the coordinate expression is evaluated once per target rather than once
-    // per cell. `None` on entry for the first cell; filled on first use.
+    // Per-target memo of the case-(2) constant and the case-(3) whole-field
+    // evaluation (both cell-independent), so the expression is evaluated once
+    // per target rather than once per cell. `None` on entry for the first cell;
+    // filled on first use.
     cached_field: &mut Option<Value>,
 ) -> Result<f64, SimulateError> {
     // (1) Loaded field served through the provider forcing buffer.
@@ -3065,16 +3108,25 @@ pub(super) fn resolve_field_ic_cell(
             ),
         });
     }
-    // (2) Broadcast constant. Finite-only, and `Ok`-only: an op outside the
-    // scalar interpreter's rule set (an `aggregate` grid-geometry node) must
-    // fall through to the coordinate-expression path below — never silently
-    // seed the state vector. `fold_constant_expr` used to render one as `NaN`,
-    // and the `is_finite()` guard is what caught it; since issue #220 it errors
-    // instead, and the `if let Ok(..)` catches it one step earlier. Both arms
-    // are still needed: the guard also rejects a genuine `1.0/0.0`.
-    if let Ok(c) = crate::simulate::fold_constant_expr(rhs, params)
+    // (2) Broadcast constant. Finite-only, and `Ok`-only: an op with no scalar
+    // value (a `faq` grid-geometry node) must fall through to the
+    // coordinate-expression path below — never silently seed the state vector.
+    // `evaluate` refuses one by name, which the `if let Ok(..)` catches; the
+    // `is_finite()` guard rejects a genuine `1.0/0.0`.
+    //
+    // Evaluated ONCE per target and memoized with the case-(3) field: the
+    // value does not depend on the cell, so walking the expression again for
+    // each cell would be a per-cell tree walk producing one number.
+    if let Some(Value::Scalar(c)) = cached_field.as_ref()
         && c.is_finite()
     {
+        return Ok(*c);
+    }
+    if cached_field.is_none()
+        && let Ok(c) = crate::expression::evaluate(rhs, params)
+        && c.is_finite()
+    {
+        *cached_field = Some(Value::Scalar(c));
         return Ok(c);
     }
     // (3) Coordinate expression over grid-geometry aggregates (model
@@ -3493,8 +3545,7 @@ fn externally_refreshed(var: &ModelVariable) -> bool {
 /// `variables[v].expression` field. Sorted by name (a `BTreeMap`), so every
 /// consumer iterates deterministically.
 fn observed_bodies(model: &Model) -> std::collections::BTreeMap<String, Expr> {
-    crate::classification::Classification::from_parts(&model.variables, &model.equations)
-        .observed_definitions
+    crate::classification::observed_definitions_of_parts(&model.variables, &model.equations)
 }
 
 /// Gather the build-time-CONSTANT factor arrays the value-invention engine reads
@@ -3914,6 +3965,17 @@ pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
             node.args.iter().any(rhs_has_array_producer)
         }
         _ => false,
+    }
+}
+
+/// Resolve every self-qualified reference in `model` (`M.a` written inside
+/// model `M`) to its local name, as the single-model route does before it
+/// compiles — for the build pipeline, which reads the same authored model.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn resolve_model_self_references(model: &mut Model, model_name: &str) {
+    let hits = self_qualified_references(model, model_name);
+    if !hits.is_empty() {
+        resolve_self_qualified_references(model, &hits);
     }
 }
 
@@ -4409,10 +4471,35 @@ pub(super) fn index_array_leaves_by_loops(
     }
 }
 
+/// The coordinates [`index_array_leaves`] gathers each leaf at: one concrete
+/// 1-based cell, or the loop symbols of an [`RhsRule::ArrayLoop`] over the
+/// whole shape (which bind, cell by cell, to exactly those integers).
+#[derive(Clone, Copy)]
+pub(super) enum CellCoords<'a> {
+    Ints(&'a [i64]),
+    Loops(&'a [String]),
+}
+
+impl CellCoords<'_> {
+    fn len(&self) -> usize {
+        match self {
+            CellCoords::Ints(c) => c.len(),
+            CellCoords::Loops(l) => l.len(),
+        }
+    }
+
+    fn coord(&self, d: usize) -> Expr {
+        match self {
+            CellCoords::Ints(c) => Expr::Integer(c[d]),
+            CellCoords::Loops(l) => Expr::Variable(l[d].clone()),
+        }
+    }
+}
+
 /// Rewrite each bare array-shaped `Variable` leaf of a whole-array `D(state)` RHS
-/// into an `index(var, cell…)` gather at the given 1-based cell, so the
-/// elementwise array equation compiles to one per-cell scalar rule. The array
-/// target of an existing `index` node is left untouched (it is already a gather).
+/// into an `index(var, cell…)` gather at the given cell, so the elementwise
+/// array equation compiles to a scalar body per cell. The array target of an
+/// existing `index` node is left untouched (it is already a gather).
 ///
 /// A declared leaf listed in `plan` is gathered at the cell coordinates of ITS
 /// OWN axes (esm-spec §4.3.4) — a `[lat]` operand under a `[lon,lat,lev]`
@@ -4425,7 +4512,7 @@ pub(super) fn index_array_leaves(
     expr: &Expr,
     array_axes: &HashMap<String, Vec<String>>,
     plan: Option<&GatherPlan>,
-    cell: &[i64],
+    cell: CellCoords<'_>,
 ) -> Expr {
     match expr {
         Expr::Variable(v) => {
@@ -4435,11 +4522,11 @@ pub(super) fn index_array_leaves(
                     // `positions` is built against this same result, so every
                     // entry indexes `cell`.
                     Some(positions) => {
-                        args.extend(positions.iter().map(|&p| Expr::Integer(cell[p])));
+                        args.extend(positions.iter().map(|&p| cell.coord(p)));
                     }
                     None => {
                         let n = axes.len().min(cell.len());
-                        args.extend(cell[..n].iter().map(|&c| Expr::Integer(c)));
+                        args.extend((0..n).map(|d| cell.coord(d)));
                     }
                 }
                 Expr::operator(ExpressionNode {
@@ -4468,6 +4555,54 @@ pub(super) fn index_array_leaves(
             Expr::operator(out)
         }
         other => other.clone(),
+    }
+}
+
+/// Whether a whole-array `D(state)` RHS may be lowered as one loop over the
+/// state's shape ([`CellCoords::Loops`]) instead of one rule per cell.
+///
+/// The two forms evaluate the same scalar expression at every cell, so the
+/// oracle cannot tell them apart. The loop form is refused where the TAPE
+/// lowers the two differently: a leaf the rewrite would gather inside an
+/// `index` argument (a data-dependent index), any aggregate (a per-cell body
+/// folds a scalar reduction wholesale, while one nested in a loop's box stays
+/// per-cell), and a state leaf whose shape was inferred rather than declared,
+/// which the rewrite leaves whole.
+fn wholearray_body_loops_as_percell(
+    expr: &Expr,
+    array_axes: &HashMap<String, Vec<String>>,
+    var_shapes: &IndexMap<String, VarShape>,
+) -> bool {
+    fn rewrites_a_leaf(e: &Expr, array_axes: &HashMap<String, Vec<String>>) -> bool {
+        match e {
+            Expr::Variable(v) => array_axes.contains_key(v),
+            Expr::Operator(node) if node.op == "index" => node
+                .args
+                .iter()
+                .skip(1)
+                .any(|a| rewrites_a_leaf(a, array_axes)),
+            Expr::Operator(node) => node.any_child(&mut |c| rewrites_a_leaf(c, array_axes)),
+            _ => false,
+        }
+    }
+    match expr {
+        Expr::Variable(v) => {
+            array_axes.contains_key(v) || var_shapes.get(v).is_none_or(|vs| vs.shape.is_empty())
+        }
+        Expr::Operator(node) => {
+            if node.op == "index" {
+                return !node
+                    .args
+                    .iter()
+                    .skip(1)
+                    .any(|a| rewrites_a_leaf(a, array_axes));
+            }
+            if is_faq_op(&node.op) {
+                return false;
+            }
+            !node.any_child(&mut |c| !wholearray_body_loops_as_percell(c, array_axes, var_shapes))
+        }
+        _ => true,
     }
 }
 
@@ -4784,6 +4919,82 @@ pub(super) fn infer_shapes(
         out.insert(name_s, shape);
     }
     Ok(out)
+}
+
+/// Size, from how the equations index it, every refreshed parameter whose
+/// declared shape names an index set the registry cannot size, as
+/// [`infer_state_shapes`] sizes a state from its uses when no declaration
+/// does: each axis spans `[1, hi]`, `hi` the largest subscript any `index` of
+/// it reaches. A parameter no equation indexes, or indexes at different
+/// ranks, stays unsized.
+///
+/// The box is only what a compiled read is built against. The forcing load
+/// checks the entry the buffer actually holds against it at run time and
+/// faults on a different shape, so a wrong guess fails loudly rather than
+/// reading the wrong cells.
+fn infer_unsized_forcing_shapes(
+    decls: &mut IndexMap<String, Option<Vec<usize>>>,
+    equations: &[crate::types::Equation],
+) {
+    let unsized_: HashSet<&str> = decls
+        .iter()
+        .filter(|(_, s)| s.is_none())
+        .map(|(n, _)| n.as_str())
+        .collect();
+    if unsized_.is_empty() {
+        return;
+    }
+    let mut per_var_min: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut per_var_max: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut seen_indexed: HashSet<String> = HashSet::new();
+    let skip_none: HashSet<String> = HashSet::new();
+    let no_loops: HashMap<String, (i64, i64)> = HashMap::new();
+    let mut ranks: HashMap<String, HashSet<usize>> = HashMap::new();
+    {
+        let mut walk = ShapeWalk {
+            states: &unsized_,
+            per_var_min: &mut per_var_min,
+            per_var_max: &mut per_var_max,
+            seen_indexed: &mut seen_indexed,
+            skip_shape_update: &skip_none,
+        };
+        for eq in equations {
+            walk.walk(&eq.lhs, &no_loops);
+            walk.walk(&eq.rhs, &no_loops);
+        }
+    }
+    for eq in equations {
+        for e in [&eq.lhs, &eq.rhs] {
+            index_ranks(e, &unsized_, &mut ranks);
+        }
+    }
+    for (name, shape) in decls.iter_mut() {
+        if shape.is_some() || ranks.get(name).is_none_or(|r| r.len() != 1) {
+            continue;
+        }
+        let Some(maxes) = per_var_max.get(name) else {
+            continue;
+        };
+        if maxes.iter().all(|&hi| hi >= 1) {
+            *shape = Some(maxes.iter().map(|&hi| hi as usize).collect());
+        }
+    }
+}
+
+/// The subscript counts every `index` of a name in `names` uses.
+fn index_ranks(expr: &Expr, names: &HashSet<&str>, out: &mut HashMap<String, HashSet<usize>>) {
+    let Expr::Operator(node) = expr else {
+        return;
+    };
+    if node.op == "index"
+        && let Some(Expr::Variable(var)) = node.args.first()
+        && names.contains(var.as_str())
+    {
+        out.entry(var.clone())
+            .or_default()
+            .insert(node.args.len() - 1);
+    }
+    node.for_each_child(&mut |child| index_ranks(child, names, out));
 }
 
 /// Accumulator state for [`infer_shapes`]'s expression walk, so the recursion

@@ -175,6 +175,24 @@ def test_makearray_overlapping_regions() -> None:
     assert out[2, 2] == 2.0
 
 
+def test_makearray_lower_rank_region_values_cover_the_free_axis() -> None:
+    """esm-spec §4.3.2: an array value matches its region "excluding singleton
+    dimensions". A face region holds a value over its one free axis, on either
+    side of the singleton (the Julia reference's rule)."""
+    v = np.array([1.0, 2.0, 3.0])
+    ctx = _ctx({"v": v})
+    leading = ExprNode(
+        op="makearray", args=[], regions=[[[1, 2], [1, 3]], [[2, 2], [1, 3]]], values=[0.5, "v"]
+    )
+    out = eval_expr(leading, ctx)
+    np.testing.assert_array_equal(out, [[0.5, 0.5, 0.5], [1.0, 2.0, 3.0]])
+    trailing = ExprNode(
+        op="makearray", args=[], regions=[[[1, 3], [1, 2]], [[1, 3], [2, 2]]], values=[0.5, "v"]
+    )
+    out = eval_expr(trailing, ctx)
+    np.testing.assert_array_equal(out, [[0.5, 1.0], [0.5, 2.0], [0.5, 3.0]])
+
+
 def test_reshape_column_major_matches_julia() -> None:
     """``reshape([1..6], [2, 3])`` uses column-major order so ``M[1,2] == 3``."""
     ctx = _ctx({"u": np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])})

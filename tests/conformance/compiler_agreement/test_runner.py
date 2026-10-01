@@ -80,6 +80,22 @@ def drop_anchors(manifest: dict) -> None:
         fx["anchor"] = {"source": "none"}
 
 
+def unrequired(manifest: dict) -> None:
+    """Empty every fixture's `required` map — the REFUSAL ledger.
+
+    A test about an UNREQUIRED refusal must construct that state rather than
+    borrow the committed ledger's: fixtures gain `required` names one at a time
+    as coverage lands (a one-way ratchet), and a test that read the committed
+    maps would quietly stop testing the unrequired arm the day one was filled."""
+    for fx in manifest["fixtures"]:
+        fx["required"] = {b: [] for b in fx.get("required", {})}
+
+
+def _drop_anchors_unrequired(manifest: dict) -> None:
+    drop_anchors(manifest)
+    unrequired(manifest)
+
+
 def _drop_anchors_native_optional(manifest: dict) -> None:
     """`drop_anchors` + `native_optional`, the pair every test of the optional
     availability arm needs: a canned trajectory the anchors would reject, gated
@@ -95,7 +111,9 @@ def native_optional(manifest: dict) -> None:
     whichever arm the committed ledger happens to be on: `native` crosses to
     `bindings_required` one binding at a time as each strict build lands, and a
     test that read the committed ledger would quietly change what it asserts on
-    the day a binding crossed."""
+    the day a binding crossed. Every fixture's `required` map is emptied with
+    it: a fixture may not require a compiler its binding need not offer."""
+    unrequired(manifest)
     manifest["compilers"]["native"] = {
         **manifest["compilers"]["native"],
         "bindings_required": [],
@@ -294,7 +312,7 @@ def test_anchor_rejects_wrong_physics(tmp_path):
 
 
 def test_unrequired_refusal_is_a_named_exclusion_and_green(tmp_path):
-    manifest = materialize(tmp_path, drop_anchors)
+    manifest = materialize(tmp_path, _drop_anchors_unrequired)
     mint_golden(manifest)
     proc, payload = produce(manifest, "native", tmp_path, scenario="all_refused")
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -326,7 +344,7 @@ def test_required_refusal_is_red_and_the_rest_stay_exclusions(tmp_path):
     exclusion."""
 
     def patch(manifest):
-        drop_anchors(manifest)
+        _drop_anchors_unrequired(manifest)
         manifest["compilers"]["native"]["bindings_required"] = ["julia"]
         manifest["compilers"]["native"]["bindings_optional"] = ["rust", "python"]
         manifest["fixtures"][0]["required"]["julia"] = ["native"]
@@ -423,7 +441,7 @@ def test_error_is_red_whether_or_not_the_fixture_requires_the_compiler(tmp_path)
 
 def test_the_mixed_table_separates_all_four_adapter_outcomes(tmp_path):
     """One run, four different verdicts: the runner must not collapse them."""
-    manifest = materialize(tmp_path, drop_anchors)
+    manifest = materialize(tmp_path, _drop_anchors_unrequired)
     mint_golden(manifest)
     proc, payload = produce(manifest, "native", tmp_path, scenario="mixed")
     assert proc.returncode == 1

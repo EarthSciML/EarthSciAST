@@ -29,7 +29,7 @@ _probe_states(n) = (
 # Build `model` under `env` and return (du probes, u0, p, var_map).
 function _intern_probe_model(model; compiler=:native,
                              ics=Dict{String,Float64}(), const_arrays=Dict())
-    f, u0, p, _, vmap = ESM.build_evaluator(model; initial_conditions=ics,
+    f, u0, p, _, vmap = ESM._build_evaluator(model; initial_conditions=ics,
                                             const_arrays=const_arrays,
                                             compiler=compiler)
     dus = Vector{Float64}[]
@@ -223,7 +223,7 @@ end
                        "transport_3axis_7cubed_fullrank.esm")
         function bp(compiler)
             flat = ESM.flatten(ESM.load_path(FIX))
-            f, u0, p, _, vmap = ESM.build_evaluator(flat; compiler=compiler)
+            f, u0, p, _, vmap = ESM._build_evaluator(flat; compiler=compiler)
             dus = Vector{Float64}[]
             for (ti, u) in zip((0.0, 0.7, 3.25), _probe_states(length(u0)))
                 du = similar(u0)

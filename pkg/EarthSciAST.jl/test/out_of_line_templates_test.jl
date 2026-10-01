@@ -412,11 +412,11 @@ end
             @test f.component_templates !== nothing               # references survive load
             flat_fast = EarthSciAST.flatten(f)                    # references reach the build
             @test !isempty(flat_fast.template_registry)           # merged registry carried
-            f1!, u01, p1, _t1, vm1 = EarthSciAST.build_evaluator(flat_fast)
+            f1!, u01, p1, _t1, vm1 = EarthSciAST._build_evaluator(flat_fast)
             # The shared boundary utility: Expand the FlattenedSystem in place
             # of the build-entry expansion — the consumer-side fallback path.
             flat_exp = EarthSciAST.expand_flattened_refs(flat_fast)
-            f2!, u02, p2, _t2, vm2 = EarthSciAST.build_evaluator(flat_exp)
+            f2!, u02, p2, _t2, vm2 = EarthSciAST._build_evaluator(flat_exp)
             @test vm1 == vm2
             n = length(u01)
             # Deterministic, varied probe vectors (no RNG dependency).
@@ -429,7 +429,7 @@ end
                 @test du1 == du2                                  # bit-identical RHS
             end
             # And bit-identical to the per-cell reference evaluator.
-            f3!, u03, p3, _t3, _vm3 = EarthSciAST.build_evaluator(
+            f3!, u03, p3, _t3, _vm3 = EarthSciAST._build_evaluator(
                 flat_fast; compiler=:interpreter)
             u = _probe(1)
             du1 = zeros(n); du3 = zeros(n)

@@ -102,7 +102,7 @@ function _scf_build(F; disable=false, floor=nothing)
             "ESS_CG_SUBCALL_FN_MIN_NODES" => (floor === nothing ? nothing : string(floor))) do
         ESM._reset_cascade_tally!()
         flat = ESM.flatten(ESM.load_path(F))
-        f!, u0, p, _t, vm = ESM.build_evaluator(flat)
+        f!, u0, p, _t, vm = ESM._build_evaluator(flat)
         (f!, u0, p, vm, copy(ESM._CASCADE_TALLY))
     end
 end

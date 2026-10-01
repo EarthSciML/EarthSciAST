@@ -11,7 +11,7 @@ Deep ModelingToolkit/Catalyst integration is provided by package extensions
 (`EarthSciASTMTKExt`, `EarthSciASTCatalystExt`) that load
 automatically when the user imports `ModelingToolkit` or `Catalyst`. Without
 those packages loaded, `flatten` still produces a pure-Julia `FlattenedSystem`
-snapshot, and the MTK-free tree-walk runtime (`build_evaluator`, `esm_problem`)
+snapshot, and the MTK-free tree-walk runtime (`esm_problem`)
 runs it end to end.
 
 Two features live in namespaced submodules rather than the flat namespace:
@@ -142,7 +142,12 @@ include("tree_walk.jl")
 include("unit_conversion.jl")
 include("data_refresh.jl")
 include("data_output.jl")
+# `compiler=:xla` (API_SPEC §5.8): after the tree walk, because it names the
+# emitter's `DirectEmitError`, and before simulate.jl, which dispatches on it.
+include("compiler_xla.jl")
 include("simulate.jl")
+# Names that have left the public surface, kept for one minor version.
+include("deprecated.jl")
 include("reference_graph.jl")
 include("cadence.jl")
 include("value_invention.jl")
@@ -318,7 +323,12 @@ export
     # dependency-free fallback + conformance oracle.
     broad_phase_candidates, build_spatial_index,
     # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)
-    build_evaluator, evaluate_expr, TreeWalkError, BuildInspection,
+    evaluate_expr, TreeWalkError, BuildInspection,
+    # DEPRECATED (API_SPEC §8 item 23, src/deprecated.jl), exported until it is
+    # removed: a downstream that calls the bare name after `using EarthSciAST`
+    # (EarthSciASTDiff does, throughout its tests) must hear the deprecation
+    # warning, not an `UndefVarError`.
+    build_evaluator,
     # Public template-expansion seam (esm-spec §9.6.4 Option B): the typed
     # model exactly as `build_evaluator` sees it post-expansion, for
     # downstream analyzers (EarthSciASTDiff differentiates this tree). Two

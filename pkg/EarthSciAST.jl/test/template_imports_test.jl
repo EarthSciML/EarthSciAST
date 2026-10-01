@@ -727,7 +727,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # The empty region is inert: the evaluator builds, and the two faces
         # tile the axis — d(c)/dt is the one-sided difference everywhere. With
         # a uniform state the differences vanish, so du == 0 exactly.
-        f!, u0, p, tspan, vmap = build_evaluator(f)
+        f!, u0, p, tspan, vmap = EarthSciAST._build_evaluator(f)
         du = similar(u0); fill!(du, NaN)
         f!(du, u0, p, 0.0)
         @test all(du .== 0.0)

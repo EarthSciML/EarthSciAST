@@ -16,7 +16,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{Alg, Compiled, SolveOptions, load_path};
+use earthsci_ast::{Alg, ProblemOptions, SolveOptions, esm_problem, load_path, solve};
 use std::collections::HashMap;
 
 mod common;
@@ -27,12 +27,30 @@ fn reservoir_reactant_held_fixed() {
     let file = load_path(&path)
         .unwrap_or_else(|e| panic!("fixture {} does not load: {e}", path.display()));
 
-    let compiled = Compiled::from_file(&file).expect("compile failed");
+    // With R held at its default (2.0) and k = 0.5, the effective rate law is
+    // v = k*R*A = A, so A(t) = exp(-t) and B(t) = 1 - exp(-t) exactly, and R
+    // never moves. A binding that consumed R as a state would give a strictly
+    // slower A decay (e.g. A(1) ~= 0.4353 vs 0.3679) and miss these.
+    let mut par = HashMap::new();
+    par.insert("ReservoirHeldFixed.k".to_string(), 0.5);
+    let mut ic = HashMap::new();
+    ic.insert("ReservoirHeldFixed.A".to_string(), 1.0);
+    ic.insert("ReservoirHeldFixed.B".to_string(), 0.0);
+    let prob = esm_problem(
+        &file,
+        (0.0, 3.0),
+        ProblemOptions {
+            p: par,
+            u0: ic,
+            ..Default::default()
+        },
+    )
+    .expect("build failed");
 
     // R (`constant: true`) is a reservoir: it must be a PARAMETER, not a state,
     // and only A and B are integrated.
-    let states = compiled.state_variable_names();
-    let params = compiled.parameter_names();
+    let states = prob.state_variable_names();
+    let params = prob.parameter_names();
     assert!(
         !states.iter().any(|n| n == "ReservoirHeldFixed.R"),
         "reservoir R must NOT be a state variable; states = {states:?}"
@@ -45,16 +63,6 @@ fn reservoir_reactant_held_fixed() {
     assert!(states.iter().any(|n| n == "ReservoirHeldFixed.B"));
     assert_eq!(states.len(), 2, "only A and B are states; got {states:?}");
 
-    // With R held at its default (2.0) and k = 0.5, the effective rate law is
-    // v = k*R*A = A, so A(t) = exp(-t) and B(t) = 1 - exp(-t) exactly, and R
-    // never moves. A binding that consumed R as a state would give a strictly
-    // slower A decay (e.g. A(1) ~= 0.4353 vs 0.3679) and miss these.
-    let mut par = HashMap::new();
-    par.insert("ReservoirHeldFixed.k".to_string(), 0.5);
-    let mut ic = HashMap::new();
-    ic.insert("ReservoirHeldFixed.A".to_string(), 1.0);
-    ic.insert("ReservoirHeldFixed.B".to_string(), 0.0);
-
     let sample_times = vec![1.0, 2.0, 3.0];
     let opts = SolveOptions {
         alg: Alg::Bdf,
@@ -64,9 +72,7 @@ fn reservoir_reactant_held_fixed() {
         saveat: Some(sample_times.clone()),
         ..Default::default()
     };
-    let sol = compiled
-        .solve((0.0, 3.0), &par, &ic, &opts)
-        .expect("simulate failed");
+    let sol = solve(&prob, &opts).expect("simulate failed");
 
     let a_idx = sol
         .state_variable_names

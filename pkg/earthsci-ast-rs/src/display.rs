@@ -28,11 +28,50 @@ const UNICODE_SUPERSCRIPTS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵',
 // Operator precedence levels (higher = tighter binding)
 const PRECEDENCE: &[(&str, i32)] = &[("+", 1), ("-", 1), ("*", 2), ("/", 2), ("^", 3)];
 
-/// Precedence of the loosest-binding operators — the boolean / comparison tier,
-/// which this table leaves at 0. Mirrors `LOOSEST_PRECEDENCE` in
-/// pretty-print.ts: inside a unary-minus operand, only a child at or below this
-/// precedence needs parentheses.
-const LOOSEST_PRECEDENCE: i32 = 0;
+/// The `parent_prec` a unary-minus operand renders at: the ADDITIVE level of
+/// this module's compressed table, so a `+`/binary-`-` child (precedence 1) is
+/// parenthesized and a `*`/`/`/`^` child (2/3) is not. It mirrors the parser's
+/// `UMINUS_MIN` (parse_expression.rs), which reads a unary-minus operand at
+/// multiplicative precedence — print `-(a + b)` without the parentheses and it
+/// reads back as `(-a) + b`, a different expression. `-a * b` and `-a^2` need
+/// none. Mirrors `UMINUS_OPERAND_MIN` in pretty-print.ts.
+const UMINUS_OPERAND_PARENT_PREC: i32 = 1;
+
+/// Whether a unary-minus operand needs parentheses that the precedence table
+/// cannot express. This table gives comparisons and `and`/`or` precedence 0
+/// ("never parenthesize"), but the parser reads a unary-minus operand at
+/// multiplicative precedence, so `-(a < b)` printed bare reads back as
+/// `(-a) < b`. Separately, a `-` directly before a numeric literal is part of
+/// the literal, so `-(2^2)` printed as `-2^2` reads back as `(-2)^2`; the base
+/// is the leftmost leaf of the operand, reached through `*` / `/`.
+fn uminus_operand_needs_parens(operand: &Expr) -> bool {
+    let Expr::Operator(n) = operand else {
+        return false;
+    };
+    match n.op.as_str() {
+        "<" | ">" | "<=" | ">=" | "==" | "!=" | "=" | "and" | "or" => true,
+        "^" => matches!(
+            n.args.first(),
+            Some(Expr::Integer(_)) | Some(Expr::Number(_))
+        ),
+        "*" | "/" => n.args.first().is_some_and(starts_with_literal_power),
+        _ => false,
+    }
+}
+
+fn starts_with_literal_power(expr: &Expr) -> bool {
+    let Expr::Operator(n) = expr else {
+        return false;
+    };
+    match n.op.as_str() {
+        "^" => matches!(
+            n.args.first(),
+            Some(Expr::Integer(_)) | Some(Expr::Number(_))
+        ),
+        "*" | "/" => n.args.first().is_some_and(starts_with_literal_power),
+        _ => false,
+    }
+}
 
 /// Get operator precedence (higher means tighter binding)
 fn get_precedence(op: &str) -> i32 {
@@ -815,7 +854,7 @@ fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
             fmt,
         )),
 
-        "true" => Some("true".to_string()),
+        "true" | "false" => Some(op.to_string()),
 
         "fn" => {
             let name = node.name.as_deref().unwrap_or("");
@@ -1127,13 +1166,17 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
         "-" => {
             let minus = pick(fmt, "−", "-", "-");
             if args.len() == 1 {
-                // Unary minus is deliberately LOOSE (pretty-print.ts: "for unary
-                // minus, be less aggressive"): only a child at the loosest
-                // (logical-or) precedence is parenthesized, so `−(a + b)` prints
-                // `−a + b`. That is not injective, but it IS what the parser
-                // reads back (`parse_expression` gives unary `-` the additive
-                // minimum precedence), so the pair still round-trips.
-                format!("{minus}{}", render_at(&args[0], fmt, LOOSEST_PRECEDENCE))
+                // A unary-minus operand renders at the ADDITIVE level, so a sum
+                // or difference keeps its parentheses (`−(a + b)`) while a
+                // product or power does not (`−a · b`, `−a^2`) — exactly the
+                // operands the parser re-absorbs. See
+                // `UMINUS_OPERAND_PARENT_PREC`.
+                let operand = render_at(&args[0], fmt, UMINUS_OPERAND_PARENT_PREC);
+                if uminus_operand_needs_parens(&args[0]) {
+                    format!("{minus}({operand})")
+                } else {
+                    format!("{minus}{operand}")
+                }
             } else if args.len() == 2 {
                 // Left-associative and NON-associative on the right: the right
                 // operand renders at `op_prec` — a child at the SAME precedence

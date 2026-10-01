@@ -823,6 +823,9 @@ const EVALUABLE_CORE_OPS = new Set<string>([
   'intersect_polygon',
   'polygon_intersection_area',
   'skolem',
+  'rank',
+  'argmin',
+  'argmax',
 ])
 
 /**

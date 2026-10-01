@@ -158,20 +158,24 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
 
     # ---- the two guards that keep the fast path exact ----
 
-    @testset "guard: `/` in a gather subscript declines" begin
-        # `_eval_const_int` reads `/` as TRUNCATING integer `div`; the compiled
-        # subscript reads it as true Float64 division. Refuse rather than diverge.
-        # `2x/2 == x` under BOTH readings, so this case is about the DECLINE, not
-        # about a divergence — the guard is structural, it does not try to prove
-        # a particular `/` harmless.
-        body = _op("exp", _ix(_v("B"), _op("/", _op("*", _v("x"), 2), 2), _v("y")))
-        j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
-        fast, ref, hits, miss = both_ways(j, ENV0)
-        @test hits == 0 && miss == 1          # declined → per-cell reference
-        @test bitsame(fast, ref)
-        @test !EA._subscripts_int_exact(EA.expression_from_json(j))
-        # ... and it is found in a NESTED node's body too, not just in the
-        # top-level `args` spine (the guard walks via `foreach_subexpr_once`).
+    @testset "`/` in a gather subscript: the fill reads it as the reference does" begin
+        # `_eval_const_int` reads `/` as TRUNCATING integer `div`; a subscript the
+        # compile-once sweep keeps symbolic would read it as true Float64
+        # division, so that sweep declines any `/` under an `index` subscript
+        # (`_subscripts_int_exact`). The compiled fill resolves subscripts the
+        # way the right-hand side does, with the reference's integer reading, so
+        # it serves the map — including `(x+1)/2`, where the two readings
+        # differ at every even `x`.
+        for sub in (_op("/", _op("*", _v("x"), 2), 2), _op("/", _op("+", _v("x"), 1), 2))
+            body = _op("exp", _ix(_v("B"), sub, _v("y")))
+            j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
+            fast, ref, hits, miss = both_ways(j, ENV0)
+            @test hits == 1 && miss == 0
+            @test bitsame(fast, ref)
+            @test !EA._subscripts_int_exact(EA.expression_from_json(j))
+        end
+        # The compile-once guard finds a `/` in a NESTED node's body too, not
+        # just in the top-level `args` spine (it walks via `foreach_subexpr_once`).
         inner = _map(["k"], ["k" => "Y"],
                      _ix(_v("B"), _op("/", _op("*", _v("x"), 2), 2), _v("k")))
         nested = _map(["x", "y"], ["x" => "X", "y" => "Y"],
@@ -184,22 +188,30 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         @test h2 == 1 && m2 == 0
     end
 
-    @testset "guard: non-:error const boundary declines" begin
-        # A `:periodic`/`:clamp` array makes an OOB gather LEGAL, and the two
-        # paths resolve OOB differently (fold → `_resolve_const_index`; runtime
-        # gather → raw linearization). Refuse the fast path outright.
-        wrapped = EA._wrap_bounded_const(copy(B), (:periodic, :error), "B")
-        env = Dict{String,Any}("A" => A, "B" => wrapped, "s" => 1.5, "thr" => 0.0)
-        body = _op("exp", _ix(_v("B"), _v("x"), _v("y")))
-        j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
-        fast, ref, hits, miss = both_ways(j, env)
-        @test hits == 0 && miss == 1
-        @test bitsame(fast, ref)
-        # ... and the same map with the default (:error) policy DOES engage.
-        plain = EA._wrap_bounded_const(copy(B), (:error, :error), "B")
-        _, _, h2, m2 = both_ways(j, Dict{String,Any}("A" => A, "B" => plain,
-                                                     "s" => 1.5, "thr" => 0.0))
-        @test h2 == 1 && m2 == 0
+    @testset "a periodic or clamp const boundary wraps as the reference does" begin
+        # A `:periodic`/`:clamp` axis makes an out-of-range gather LEGAL. The
+        # reference resolves it at fold time (`_resolve_const_index`), the
+        # compiled paths at run time (`_const_gather_sub`), and both hand the
+        # out-of-range case to `_resolve_const_index_oob`, so each reads the
+        # same element: the compiled fill, and the compile-once sweep it falls
+        # back to, which no longer declines such an array.
+        for pol in (:periodic, :clamp)
+            wrapped = EA._wrap_bounded_const(copy(B), (pol, :error), "B")
+            env = Dict{String,Any}("A" => A, "B" => wrapped, "s" => 1.5, "thr" => 0.0)
+            for sub in (_op("+", _v("x"), 1), _op("-", _v("x"), 2))
+                body = _op("exp", _ix(_v("B"), sub, _v("y")))
+                j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
+                fast, ref, hits, miss = both_ways(j, env)
+                @test (pol, hits, miss) == (pol, 1, 0)
+                @test (pol, bitsame(fast, ref)) == (pol, true)
+                # The sweep the fill falls back to, on its own.
+                rhs = EA.expression_from_json(j)
+                ca, params = EA._setup_env_split(env)
+                ce = EA._setup_map_compile_once(rhs, 2, ca, Dict{String,Function}(), params)
+                @test ce !== nothing
+                @test (pol, bitsame(EA._fill_map_fast(ce, [5, 4], 2), ref)) == (pol, true)
+            end
+        end
     end
 
     @testset "an unsupported map still falls back, not throws" begin

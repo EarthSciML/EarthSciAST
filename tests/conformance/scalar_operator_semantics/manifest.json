@@ -1,0 +1,214 @@
+{
+  "category": "scalar_operator_semantics",
+  "runner": "inline_tests",
+  "version": "1.0",
+  "description": "What each SCALAR operator of esm-spec \u00a79.2's evaluable core COMPUTES, pinned once for every binding. The op vocabulary is named in the spec and its tiers are gated by the registry corpus, but nothing shared said what `sign(0)`, `7/2`, `atan2(y, x)` or a false comparison is WORTH \u2014 each binding pinned it privately, against its own evaluator, in its own vocabulary: Julia through `build_evaluator` on hand-built AST nodes (tree_walk_test.jl), Rust through `interpret()` on a `ResolvedExpr` tree (interpret.rs), Python through `_expr_to_sympy` unit tests (test_simulation_scalar_ops.py). Three private op tables and no cross-binding gate is exactly the shape in which two bindings disagree for a year. The fixture is ALGEBRAIC: every operator is an observed whose operands are declared PARAMETERS, asserted at a single static evaluation (CONFORMANCE_SPEC \u00a75.43), so no integrator stands between the operator and the number and the band is the arithmetic's alone. A second test re-asserts a subset under `parameter_overrides`, so a binding that folded the declared defaults at build time and ignored the overrides lands on the first test's numbers and fails.",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust"
+  ],
+  "scope_excluded": {
+    "go": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md \u00a73, capability profiles). This is an exclusion from the CATEGORY, not from the rule.",
+    "typescript": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md \u00a73, capability profiles). This is an exclusion from the CATEGORY, not from the rule."
+  },
+  "integrators": {
+    "julia": {
+      "algorithm": "Tsit5",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    },
+    "python": {
+      "method": "LSODA",
+      "rtol": 1e-12,
+      "atol": 1e-14
+    },
+    "rust": {
+      "solver": "Erk",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    }
+  },
+  "tolerances": {
+    "golden_rtol": 1e-13,
+    "golden_atol": 1e-300,
+    "detail": "\u00a75.38.2's `algebraic` class. These are single evaluations of scalar arithmetic, so two correct bindings differ only in the last bits of a transcendental; nothing here carries an integrator's error except the one `probe` assertion, which declares its own looser band in the document."
+  },
+  "fixtures": [
+    {
+      "id": "scalar_operator_semantics",
+      "path": "fixtures/scalar_operator_semantics.esm",
+      "model": "Ops",
+      "golden": "golden/scalar_operator_semantics.json",
+      "tags": [
+        "scalar",
+        "operators",
+        "esm-spec-9.2",
+        "static-evaluation"
+      ],
+      "note": "Authored here. Migrated from tree_walk_test.jl testsets 1-5, interpret.rs and test_simulation_scalar_ops.py.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "boolean_literal_false",
+      "path": "fixtures/boolean_literal_false.esm",
+      "model": "FalseOp",
+      "golden": "golden/boolean_literal_false.json",
+      "tags": [
+        "scalar",
+        "operators",
+        "esm-spec-9.2",
+        "boolean-literal"
+      ],
+      "note": "Authored here, SPLIT OUT of `scalar_operator_semantics` when it was the one core operator the three bindings did not agree on (issues #460, #461); all three now evaluate it.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "pow_alias",
+      "path": "fixtures/pow_alias.esm",
+      "model": "PowAlias",
+      "golden": "golden/pow_alias.json",
+      "tags": [
+        "scalar",
+        "operators",
+        "esm-spec-9.2",
+        "power-alias"
+      ],
+      "note": "Authored here, SPLIT OUT of `scalar_operator_semantics` when Rust refused the `pow` spelling that Julia and Python evaluate (issue #461); all three now evaluate it.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "boolean_literal_true",
+      "path": "fixtures/boolean_literal_true.esm",
+      "model": "TrueOp",
+      "golden": "golden/boolean_literal_true.json",
+      "tags": [
+        "scalar",
+        "operators",
+        "esm-spec-9.2",
+        "boolean-literal"
+      ],
+      "note": "Authored here, SPLIT OUT of `scalar_operator_semantics` when Rust's strict `native` had no wholesale lowering for the `true` leaf (issue #462); it has one now.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "angle_array_element",
+      "path": "fixtures/angle_array_element.esm",
+      "model": "AngleArrayElement",
+      "golden": "golden/angle_array_element.json",
+      "tags": [
+        "circular-trig",
+        "units",
+        "angle",
+        "esm-spec-4.8.3",
+        "array-element",
+        "static-evaluation"
+      ],
+      "note": "Authored here. The array-element half of esm-spec \u00a74.8.3's angle conversion: a `deg` argument reached through `index` or an `faq` body is converted exactly as a bare `deg` variable is (tests/simulation/angle_units_degrees.esm pins the scalar half).",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    },
+    {
+      "id": "angle_nested_fields",
+      "path": "fixtures/angle_nested_fields.esm",
+      "model": "AngleNestedFields",
+      "golden": "golden/angle_nested_fields.json",
+      "tags": [
+        "circular-trig",
+        "units",
+        "angle",
+        "esm-spec-4.8.3",
+        "makearray",
+        "table_lookup",
+        "static-evaluation"
+      ],
+      "note": "Authored here. The nested-field half of esm-spec \u00a74.8.3's angle conversion: a `deg` argument inside a `makearray` region value or a `table_lookup` axis input is converted as one in `args` is. Sibling of angle_array_element.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
+    }
+  ]
+}

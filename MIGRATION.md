@@ -1373,9 +1373,12 @@ Listed because knowing the boundary is what stops you over-migrating.
 - **`to_json(file)` is the document serializer** in all five, and stays that
   way. The graph renderer is `to_json_graph`. Julia's two dispatch on argument
   type; Julia's `Graph` methods of `to_json` are the one deprecated alias.
-- **`build_evaluator` survives unchanged** as a documented `extension`-tier
-  seam. It has 117 real call sites downstream and is not deprecated by any of
-  this.
+- **`build_evaluator` survived this harmonization unchanged** as a documented
+  `extension`-tier seam, on the strength of its downstream call sites. It has
+  since been RETIRED by `API_SPEC.md` §8 item 23, once `compiler = :xla` gave
+  the compiled right-hand side a Problem-shaped entry point: it is private
+  behind `esm_problem` with a deprecated alias for one minor, and the
+  forcing-buffer seam and the build report re-hang on the Problem.
 - **`load_path` (Rust) and `LoadString` (Go)** already meant what they now mean
   and are untouched.
 - **`SCHEMA_VERSION` (TypeScript, Rust) and `SchemaVersion` (Go)** are

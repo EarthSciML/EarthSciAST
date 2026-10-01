@@ -49,7 +49,7 @@ end
         @test evaluate_expr(rhs, Dict("a" => 1.5, "k" => 0.25)) ≈ -0.375
         # The seam matches the evaluator: build the ORIGINAL file (which
         # expands internally) and confirm the same RHS value.
-        f!, u0, p, _, vm = build_evaluator(file)
+        f!, u0, p, _, vm = EarthSciAST._build_evaluator(file)
         du = zeros(length(u0)); f!(du, u0, p, 0.0)
         @test du[vm["a"]] ≈ -0.375
         # Non-mutating: the file's own model still carries the reference.

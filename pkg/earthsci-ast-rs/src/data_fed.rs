@@ -44,13 +44,21 @@ fn pinned<'a>(p: impl IntoIterator<Item = &'a String>, full: &str) -> bool {
 }
 
 /// Is this update spec a data feed — some rule of `kind: "data"` carrying a
-/// `from` binding (esm-spec §5.4)? A `schedule` / `condition` / `crossing`
-/// update, or a `handler`-valued one, is not provider-fed and is not this
-/// module's business.
-fn is_data_fed(spec: &ParameterUpdateSpec) -> bool {
-    spec.rules()
-        .iter()
-        .any(|r| r.data_source().is_some() && r.value().is_some_and(|v| v.from.is_some()))
+/// `from` binding (esm-spec §5.4)? The classifier lists a parameter in
+/// `data_fed` under the same test (`simulate_array::compile::data_feed_source`),
+/// so the refusal and the pin agree on which parameters they are talking about.
+/// A `schedule` / `condition` / `crossing` update, or a `handler`-valued one, is
+/// not provider-fed and is not this module's business.
+pub(crate) fn is_data_fed(spec: &ParameterUpdateSpec) -> bool {
+    data_feed_source(spec).is_some()
+}
+
+/// The `data_sources` key of the first data feed in `spec` (see [`is_data_fed`]).
+pub(crate) fn data_feed_source(spec: &ParameterUpdateSpec) -> Option<&str> {
+    spec.rules().iter().find_map(|r| {
+        r.data_source()
+            .filter(|_| r.value().is_some_and(|v| v.from.is_some()))
+    })
 }
 
 /// Strip the `update` of every data-fed parameter the caller pinned with `p`,
@@ -192,9 +200,10 @@ fn json_update_is_data_fed(update: Option<&serde_json::Value>) -> bool {
 /// * a DISCRETE provider owns it and will refresh it at its cadence anchors;
 /// * a caller `const_arrays` entry supplies it, which is the same channel as
 ///   the first by another door;
-/// * the caller pinned it with `p` — in which case it is not in this list at
-///   all, because [`pin_data_fed_parameters`] stripped its `update` before the
-///   backend was built.
+/// * the caller pinned it with `p` (`pins`). When the input was a document,
+///   [`pin_data_fed_parameters`] already stripped the `update`, so the
+///   parameter is not in this list at all; a PRE-FLATTENED system has no
+///   document to strip, so the pin is honoured here instead.
 ///
 /// Called after the providers are bound and BEFORE the compiler's own gate
 /// builds the tape, so the answer is the same under `native` and
@@ -203,10 +212,11 @@ fn json_update_is_data_fed(update: Option<&serde_json::Value>) -> bool {
 /// document as `compiler_refused_rule` ("wholesale: unresolved symbol"), which
 /// names the tape's limits in place of the defect and which no `providers`
 /// argument would clear.
-pub(crate) fn refuse_unbound(
+pub(crate) fn refuse_unbound<'a>(
     compiled: &crate::simulate_array::ArrayCompiled,
     const_arrays: &std::collections::HashMap<String, ndarray::ArrayD<f64>>,
     discrete_forcing: &std::collections::HashSet<String>,
+    pins: impl IntoIterator<Item = &'a String> + Clone,
 ) -> Result<(), SimulateError> {
     if compiled.data_fed().is_empty() {
         return Ok(());
@@ -215,11 +225,21 @@ pub(crate) fn refuse_unbound(
     let bound = forcing.borrow();
     for (name, source) in compiled.data_fed() {
         // The forcing buffer and the provider registries are keyed by the
-        // variable name the model declares, which on the single-model path is
-        // the BARE one; `data_fed` carries the qualified spelling so the
-        // refusal names something the caller can find. Accept either.
-        let leaf = name.rsplit('.').next().unwrap_or(name);
-        let known = |k: &str| k == name || k == leaf;
+        // variable name the model declares: QUALIFIED on the coupled path
+        // (`Forcing.k`, which `data_fed` spells the same way) and BARE on the
+        // single-model path, where `data_fed` was qualified afterwards by the
+        // model's namespace. The bare spelling is accepted only on that path
+        // and only for THIS parameter's own leaf — on a coupled document two
+        // components may each declare a `k`, and a binding for one must not
+        // answer for the other.
+        if pinned(pins.clone(), name) {
+            continue;
+        }
+        let bare = compiled
+            .namespace()
+            .and_then(|ns| name.strip_prefix(ns))
+            .and_then(|rest| rest.strip_prefix('.'));
+        let known = |k: &str| k == name || bare == Some(k);
         if bound.keys().any(|k| known(k))
             || discrete_forcing.iter().any(|k| known(k))
             || const_arrays.keys().any(|k| known(k))

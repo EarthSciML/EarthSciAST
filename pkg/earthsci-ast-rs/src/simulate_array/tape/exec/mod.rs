@@ -29,13 +29,13 @@
 //! indexed load either way, and keeping one address space keeps the executor
 //! uniform.
 //!
-//! **Sections/invalidation**: the CONST and SEGMENT sections run once per
-//! scratch (the driver builds a fresh scratch per integration segment — the
-//! same cadence as the static-observed hoist), guarded by a
-//! `bind_params`-style parameter-generation hash mirroring `cse.rs`: a caller
-//! that reuses one scratch across a parameter change (a sweep through
-//! `debug_eval_rhs_into`) re-primes instead of being served stale CONST
-//! values. Full epoch machinery is Step 4.
+//! **Sections/invalidation**: the CONST section runs once per scratch and
+//! parameter vector, guarded by a `bind_params`-style parameter-generation
+//! hash mirroring `cse.rs`: a caller that reuses one scratch across a
+//! parameter change (a sweep through `debug_eval_rhs_into`) re-primes instead
+//! of being served stale CONST values. The SEGMENT section also re-runs when
+//! the forcing epoch moves, which the driver bumps after each forcing refresh
+//! on the scratch it keeps for the whole solve.
 //!
 //! The executor is split along the stages one call passes through. This
 //! module owns the environment switches, the per-scratch executor state and
@@ -78,25 +78,6 @@ use resolve::{cm_strides, rm_strides};
 // ---------------------------------------------------------------------------
 // Device selection (read once and cached).
 // ---------------------------------------------------------------------------
-
-/// Whether this document must run off the tape whatever the compiler says.
-///
-/// Not a switch: the caller names the compiler (API_SPEC §5.8) and this is the
-/// one document property the tape cannot express, so `native` REFUSES such a
-/// document (`crate::problem::esm_problem`) rather than demoting it quietly.
-pub(crate) fn tape_disabled() -> bool {
-    // A document with per-variable element types (esm-spec §11.3.1) does not
-    // run on the tape. The tape resolves its kernels at EXECUTION from the
-    // thread-local precision, and it fuses instructions ACROSS rules, so the
-    // one thing a per-variable precision needs — a rule (or a subtree)
-    // evaluated in a precision its neighbours are not — is the one thing a
-    // fused tape cannot express. The vectorized overlay and the per-cell
-    // oracle both re-enter per rule and per node, where the guard still
-    // stands. Correctness over throughput, and only for the documents that
-    // ask for it: every other document is unaffected, this being a
-    // thread-local read on a path that already reads one.
-    crate::precision::has_variable_overrides()
-}
 
 /// Runtime-selected SIMD width for the fused-loop kernel clones (Step 4b).
 ///
@@ -208,6 +189,9 @@ pub(crate) struct TapeExec {
     /// Step 4: chunk register file for fused groups
     /// (`max n_regs over specs × FCHUNK` doubles, recycled across groups).
     fregs: Vec<f64>,
+    /// A fused group's resolved operands, sized for the largest group so a
+    /// call never allocates.
+    fscratch: fused::FusedScratch,
     /// Step 4 export demotion: `Export` instructions only execute when
     /// something can read the published arrays — a fallback rule is present,
     /// or a caller explicitly requested them
@@ -308,6 +292,7 @@ impl TapeExec {
             primed_param_epoch: 0,
             primed_forcing_epoch: 0,
             fregs: vec![0.0f64; max_fregs * FCHUNK],
+            fscratch: fused::FusedScratch::for_program(prog),
             exports_active: n_fallback > 0,
             n_taped: prog.rules.len() - n_fallback,
             n_fallback,
@@ -356,10 +341,10 @@ impl TapeCtx {
     }
 
     /// Invalidate the SEGMENT section: the driver calls this after refreshing
-    /// the live forcing buffer while keeping one warm executor. (The current
-    /// driver builds a fresh scratch per segment, so nothing calls it yet;
-    /// it is the forcing half of the Step 4 epoch machinery.)
-    #[allow(dead_code)]
+    /// the live forcing buffer between integration segments, keeping one warm
+    /// executor for the whole solve (`driver::SolveScratches`). The next call
+    /// re-runs the SEGMENT section, where the DISCRETE forcing loads live, and
+    /// not the CONST one.
     pub(crate) fn bump_forcing_epoch(&mut self) {
         self.forcing_epoch += 1;
     }
@@ -432,6 +417,65 @@ impl<'a> Env<'a> {
             declared: self.declared,
         }
     }
+}
+
+/// [`Instr::LoadForcing`]'s element semantics, shared by the fast and the
+/// reference executor: `lookup_variable`'s forcing arm written into `dst`.
+///
+/// The entry is copied in row-major order whatever its memory layout (an
+/// `ArrayD` iterates logically), and a 0-d entry is rounded to the active
+/// precision as the lookup's scalar arm rounds it; an array entry is not,
+/// because it was rounded where it entered the problem. A missing entry
+/// latches the lookup's own fault, and an entry of another shape the
+/// mismatch fault; both leave `dst` `NaN`.
+pub(in crate::simulate_array::tape) fn load_forcing(
+    fr: &ForcingRef,
+    buffer: &HashMap<String, ArrayD<f64>>,
+    declared: &HashSet<String>,
+    dst: &mut [f64],
+) {
+    let Some(a) = buffer.get(&fr.name) else {
+        latch_unbound_read(&fr.name, declared);
+        dst.fill(f64::NAN);
+        return;
+    };
+    if a.shape() != &fr.shape[..] {
+        latch_forcing_shape_mismatch(&fr.name, &fr.shape, a.shape());
+        dst.fill(f64::NAN);
+        return;
+    }
+    if fr.shape.is_empty() {
+        dst[0] = crate::precision::active().round(a[IxDyn(&[])]);
+    } else if let Some(src) = a.as_slice() {
+        dst.copy_from_slice(src);
+    } else {
+        for (d, v) in dst.iter_mut().zip(a.iter()) {
+            *d = *v;
+        }
+    }
+}
+
+/// The number of `f64`s [`load_forcing`] writes for `fr`: one for a 0-d entry,
+/// else the element count of its box (zero for an empty one).
+pub(in crate::simulate_array::tape) fn forcing_len(fr: &ForcingRef) -> usize {
+    if fr.shape.is_empty() {
+        1
+    } else {
+        fr.shape.iter().product()
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static SECTION_PRIMES: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Test hook: how many times this thread's tape calls ran the CONST and
+/// SEGMENT sections together, and how many ran the SEGMENT section alone
+/// (a forcing-epoch bump).
+#[cfg(test)]
+pub(crate) fn section_primes() -> (u64, u64) {
+    SECTION_PRIMES.with(std::cell::Cell::get)
 }
 
 /// `bind_params`-style parameter-vector generation hash (bit-exact).
@@ -535,9 +579,13 @@ pub(in crate::simulate_array) fn run_tape_call(
     if exec.primed_param_epoch != param_epoch {
         exec.primed_param_epoch = param_epoch;
         exec.primed_forcing_epoch = forcing_epoch;
+        #[cfg(test)]
+        SECTION_PRIMES.with(|c| c.set((c.get().0 + 1, c.get().1)));
         run_range(&env, 0..prime_end, exec, dy, stats);
     } else if exec.primed_forcing_epoch != forcing_epoch {
         exec.primed_forcing_epoch = forcing_epoch;
+        #[cfg(test)]
+        SECTION_PRIMES.with(|c| c.set((c.get().0, c.get().1 + 1)));
         run_range(&env, const_end..prime_end, exec, dy, stats);
     }
     run_range(&env, prime_end..prog.instrs.len(), exec, dy, stats);

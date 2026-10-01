@@ -189,6 +189,7 @@ pub(super) const BOX_TRANSPARENT_OPS: &[&str] = &[
     "*",
     "/",
     "^",
+    "pow",
     "min",
     "max",
     "atan2",

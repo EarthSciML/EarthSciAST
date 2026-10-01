@@ -1,0 +1,9 @@
+# The scaling conformance tier's Julia environment
+# (tests/conformance/scaling/julia/adapter.jl). Its own project rather than
+# compiler_agreement_env because it loads Polyester, which is how native's
+# threaded tier is switched on, and no stage of that shared environment should
+# resolve or precompile it.
+[deps]
+EarthSciAST = "c7bf5e87-b31b-4281-bdce-ffb8a46ec87c"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+Polyester = "f517fe37-dbe3-4b94-8317-1923a5111588"

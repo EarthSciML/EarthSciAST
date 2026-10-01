@@ -54,11 +54,12 @@ export interface OpInfo {
    * (`faq`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and
    * `broadcast` ITSELF — a self-referential `fn: 'broadcast'` would recurse
    * forever); the closed-registry invocation `fn`; the form/lowering ops (`D`,
-   * `ic`, `Pre`, `const`, `true`, `enum`, `table_lookup`,
-   * `apply_expression_template`); and the relational/geometry kernels. `=` is
-   * likewise NOT scalar: the registry has no alias mechanism, and `=` is not a
-   * spelling of `==` (nor `pow`/`**` of `^`) — it carries no evaluator and is
-   * not an operator this format applies element-wise.
+   * `ic`, `Pre`, `const`, `true`, `false`, `enum`, `table_lookup`,
+   * `apply_expression_template`); the word spelling `pow` of `^`, which
+   * evaluates but is not a `broadcast` `fn` in any binding; and the
+   * relational/geometry kernels. `=` is likewise NOT scalar: `=` is not a
+   * spelling of `==` (nor `**` of `^`) — it carries no evaluator and is not an
+   * operator this format applies element-wise.
    *
    * Because the flag lives ON the arity row, a scalar operator is by
    * construction a registered one: there is no way to classify a name the
@@ -139,6 +140,15 @@ export const OPS: Record<string, OpInfo> = {
     scalar: true,
     arityName: 'Exponentiation',
     precedence: 7,
+    cost: 8,
+    evaluate: (args) => Math.pow(args[0], args[1]),
+  },
+  // The word spelling of `^` (esm-spec §4.2): the same meaning and the same
+  // value. It renders as a call, `pow(x, 2)`, and is not a `broadcast` `fn`
+  // (no `scalar` flag), which is where every other binding's registry puts it.
+  pow: {
+    arity: { min: 2, max: 2 },
+    arityName: 'Exponentiation',
     cost: 8,
     evaluate: (args) => Math.pow(args[0], args[1]),
   },

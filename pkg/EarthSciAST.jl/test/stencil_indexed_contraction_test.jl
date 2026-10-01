@@ -123,7 +123,7 @@ end
 function _sic_build(F; disable=false)
     ESM._reset_cascade_tally!()
     flat = ESM.flatten(ESM.load_path(F))
-    f!, u0, p, _t, vm = ESM.build_evaluator(flat;
+    f!, u0, p, _t, vm = ESM._build_evaluator(flat;
         compiler = disable ? :interpreter : :native)
     return (f!, u0, p, vm, copy(ESM._CASCADE_TALLY))
 end

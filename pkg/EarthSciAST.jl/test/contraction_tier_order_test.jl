@@ -17,11 +17,24 @@
 # optimistic (`#groups == 1`) form of "the unroll cannot be cheaper" — so:
 #
 #   * a NARROW output over a LONG reduction (what the loop exists for, and every
-#     shape in `contraction_loop_test.jl`) takes the loop;
+#     shape in `contraction_loop_test.jl`) takes the loop's place;
 #   * a WIDE output over a SHORT reduction — the column-sum shape
 #     `out[i,j] = Σ_k dp[i,j,k]·c[i,j,k]` — is offered to the affine tier first
 #     and lands there, so its build IR does not grow with the grid;
-#   * an equation the affine tier DECLINES falls back to the loop.
+#   * an equation the affine tier DECLINES falls back to the loop's place.
+#
+# In the IN-PLACE build that place belongs to the whole-array contraction nest,
+# whatever the nest's length floor: the loop's cells are `_Node` trees the
+# in-place `f!` walks per output cell on every call, so the loop is retired
+# there and the nest — same admission, same fold order, emitted code — takes
+# every equation the loop would have. The out-of-place build keeps the loop,
+# because its emitters compile it (test/reactant_direct_emit_test.jl).
+#
+# And in the in-place build the affine tier no longer unrolls: it keeps the
+# contracted index as a loop dim and folds it at run time (`_AffineReduce`), an
+# O(#groups) build at every reduction length, so the preemption's premise is
+# gone and the affine tier is offered even the narrow-output shape first. The
+# nest is what an affine decline leaves.
 #
 # Numerically nothing may move, whichever tier takes the equation: every case is
 # pinned bit-for-bit against `compiler=:interpreter` — which turns the nest, the
@@ -104,7 +117,7 @@ function _cto_build(NI, NJ, NK; compiler = :native, env = Dict{String,String}())
         _CTO_ESS._BENCH_ON[] = true
         local f, u0, p, vm
         try
-            f, u0, p, _, vm = build_evaluator(doc; initial_conditions = ics,
+            f, u0, p, _, vm = EarthSciAST._build_evaluator(doc; initial_conditions = ics,
                                               compiler = compiler,
                                               const_arrays = Dict("dp" => dp))
         finally
@@ -136,42 +149,44 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
     end
 
     # ── The shape the contraction loop exists for. 4 output cells against 8
-    # terms — the unroll cannot be cheaper, so the loop keeps the equation, the
-    # reduction being far under the whole-array nest's floor.
-    @testset "narrow output, long reduction → contraction loop (under the floor)" begin
+    # terms — an unroll could not be cheaper, but the affine tier's run-time
+    # fold is no unroll, so it takes the equation.
+    @testset "narrow output, long reduction → the affine run-time fold" begin
         NI, NJ, NK = 2, 2, 8
         @test NI * NJ < NK                  # the admission condition, stated
         du, vm, tally, _ = _cto_build(NI, NJ, NK)
-        @test _cto_get(tally, :percell_loop) == 1
+        @test _cto_get(tally, :percell_loop) == 0
         @test _cto_get(tally, :array_contraction_codegen) == 0
+        @test _cto_get(tally, :affine_reduce) == 1
+        @test _cto_get(tally, :affine) == 2     # the column sum AND the D(c)=0 equation
         @test _cto_outs(du, vm, NI, NJ) == _cto_exact(NI, NJ, NK)
+        du_i, vm_i, _, _ = _cto_build(NI, NJ, NK; compiler = :interpreter)
+        A = _cto_outs(du, vm, NI, NJ)
+        @test all(A[i] === _cto_outs(du_i, vm_i, NI, NJ)[i] for i in eachindex(A))
     end
 
-    # ── …and the SAME shape once the reduction clears the nest's floor. The
-    # per-cell loop lowers one node per OUTPUT CELL; the nest lowers one for the
-    # whole equation, so by the rule both tiers are selected on — take the
-    # equation when the alternative's build scales with an extent — the nest wins
-    # here too, narrow output or not. Pinned as a positive routing fact on both
-    # sides: the nest fired AND the loop did not.
-    @testset "narrow output, long reduction → the nest once above the floor" begin
+    # ── …and the SAME shape once the reduction clears the nest's floor: the
+    # floor does not move it, since the affine tier comes first either way.
+    # Pinned as a positive routing fact on both sides: the affine fold took it
+    # AND neither the loop nor the nest did.
+    @testset "narrow output, long reduction → the affine fold above the floor too" begin
         NI, NJ, NK = 2, 2, 8
         env = Dict("ESS_ARRAY_CONTRACTION_MIN" => "8")
         du, vm, tally, _ = _cto_build(NI, NJ, NK; env = env)
-        @test _cto_get(tally, :array_contraction_codegen) == 1
+        @test _cto_get(tally, :affine_reduce) == 1
+        @test _cto_get(tally, :array_contraction_codegen) == 0
         @test _cto_get(tally, :percell_loop) == 0
         @test _cto_get(tally, :percell_acc) == 0
-        # Numerics do not move with the tier. The same fixture BELOW the floor is
-        # the per-cell loop's own answer, bit for bit — the two tiers checked
-        # against each other, which only this file can do.
+        # Numerics do not move with the floor: the same fixture BELOW it is the
+        # same build, bit for bit.
         du_l, vm_l, tally_l, _ = _cto_build(NI, NJ, NK)
-        @test _cto_get(tally_l, :percell_loop) == 1        # the oracle is the loop
+        @test _cto_get(tally_l, :affine_reduce) == 1
         A = _cto_outs(du, vm, NI, NJ)
         @test all(A[i] === _cto_outs(du_l, vm_l, NI, NJ)[i] for i in eachindex(A))
         @test A == _cto_exact(NI, NJ, NK)
         # …and bit for bit against the pure unroll. This shape reaches the
-        # emitter through a 3-D const gather at two output indices and a state
-        # gather at the contracted one, which the source-receptor shape in
-        # `array_contraction_test.jl` does not.
+        # emitter through a 3-D const gather at two output indices and the
+        # contracted one, and a state gather at all three.
         du_i, vm_i, tally_i, _ = _cto_build(NI, NJ, NK; compiler = :interpreter,
                                             env = env)
         @test _cto_get(tally_i, :array_contraction_codegen) == 0
