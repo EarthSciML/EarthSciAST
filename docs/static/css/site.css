@@ -86,3 +86,27 @@ pre code { background: transparent; padding: 0; }
 
 details { margin: 0.5rem 0; }
 details summary { cursor: pointer; color: #0b3a5b; }
+
+/* Narrative pages: what `esm-narrative` writes into content/generated. */
+.esm-figure { margin: 1.25rem 0; text-align: center; }
+.esm-figure svg { max-width: 100%; height: auto; }
+.esm-figure figcaption { color: #555; font-size: 0.9em; margin-top: 0.35rem; text-align: left; }
+
+.esm-test { border-left: 4px solid #2e7d32; background: #f3f8f3; padding: 0.6rem 0.9rem; margin: 1rem 0; }
+.esm-test--fail { border-left-color: #c62828; background: #fdf3f3; }
+.esm-test__head { margin: 0 0 0.4rem; font-weight: 600; }
+.esm-test table { margin: 0; background: #fff; }
+.esm-assertion--fail td { color: #c62828; }
+
+.esm-problems { margin: 1rem 0; }
+.esm-problem { border-left: 4px solid #c62828; background: #fdf3f3; padding: 0.5rem 0.9rem; margin: 0.35rem 0; }
+.esm-problem--warning { border-left-color: #ef6c00; background: #fff8ef; }
+.esm-problem--skipped { border-left-color: #999; background: #f4f4f4; color: #555; }
+
+.esm-example { border: 1px solid #e4e4e4; border-radius: 4px; padding: 0.75rem 1rem; margin: 1rem 0; }
+.esm-example pre { margin: 0.4rem 0; }
+.esm-example__json { margin-top: 0.5rem; }
+
+.esm-download a { font-weight: 600; }
+/* An equation's anchor is a jump target, not something to show. */
+a.esm-eq { display: block; height: 0; }

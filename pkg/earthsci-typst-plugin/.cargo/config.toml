@@ -1,0 +1,9 @@
+# A Typst plugin gets no host randomness, and must be deterministic anyway.
+# Route getrandom 0.3 (reached through ahash and faer's rand) to the fixed
+# source in src/lib.rs instead of its `wasm_js` backend, whose
+# `crypto.getRandomValues` import a Typst host cannot satisfy.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="custom"']
+
+[build]
+target = "wasm32-unknown-unknown"

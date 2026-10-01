@@ -1,0 +1,513 @@
+[
+  {
+    "description": "Variable names",
+    "test_cases": [
+      {
+        "name": "x",
+        "typst": "x",
+        "description": "A single letter stays bare, in math italic"
+      },
+      {
+        "name": "lambda",
+        "typst": "lambda",
+        "description": "A spelled Greek letter becomes its Typst symbol"
+      },
+      {
+        "name": "Gamma",
+        "typst": "Gamma",
+        "description": "A capital Greek letter with its own glyph"
+      },
+      {
+        "name": "θ",
+        "typst": "theta",
+        "description": "A Unicode Greek letter becomes its Typst symbol"
+      },
+      {
+        "name": "x1",
+        "typst": "x_1",
+        "description": "Letter then digits: a subscript"
+      },
+      {
+        "name": "T298",
+        "typst": "T_298",
+        "description": "Letter then several digits: a numeric subscript"
+      },
+      {
+        "name": "concentration",
+        "typst": "\"concentration\"",
+        "description": "A multi-letter word is upright text"
+      },
+      {
+        "name": "rate_constant",
+        "typst": "\"rate_constant\"",
+        "description": "Underscores inside a word stay literal"
+      },
+      {
+        "name": "Ca",
+        "typst": "C a",
+        "description": "A bare element symbol is two italic letters, set side by side"
+      },
+      {
+        "name": "RT",
+        "typst": "R T",
+        "description": "Capitals only: italic letters, as in the LaTeX backend"
+      }
+    ]
+  },
+  {
+    "description": "Chemical species",
+    "test_cases": [
+      {
+        "name": "O3",
+        "typst": "\"O\"_3",
+        "description": "Species: upright symbols, digits subscripted"
+      },
+      {
+        "name": "NO2",
+        "typst": "\"NO\"_2",
+        "description": "Two-letter prefix"
+      },
+      {
+        "name": "H2O",
+        "typst": "\"H\"_2\"O\"",
+        "description": "Parts joined with no space, which Typst would print"
+      },
+      {
+        "name": "C6H12O6",
+        "typst": "\"C\"_6\"H\"_12\"O\"_6",
+        "description": "Multi-digit subscripts"
+      },
+      {
+        "name": "Ca(OH)2",
+        "typst": "\"Ca(OH)\"_2",
+        "description": "A group count after a parenthesis"
+      },
+      {
+        "name": "jNO2",
+        "typst": "j_(\"NO\"_2)",
+        "description": "A prefix letter with a species subscript"
+      },
+      {
+        "name": "kOH",
+        "typst": "k_\"OH\"",
+        "description": "A rate constant named after a radical"
+      },
+      {
+        "name": "k_NO2_O3",
+        "typst": "k_(\"NO\"_2, \"O\"_3)",
+        "description": "The core's double subscript becomes one, comma-separated"
+      },
+      {
+        "name": "alphaCO2",
+        "typst": "\"alpha\"_(\"CO\"_2)",
+        "description": "A word prefix with a species subscript"
+      },
+      {
+        "name": "Ca2+",
+        "typst": "C a^(2+)",
+        "description": "A trailing charge is a superscript"
+      },
+      {
+        "name": "SO4-2",
+        "typst": "\"SO\"_4^(2-)",
+        "description": "Sign-then-magnitude charge"
+      }
+    ]
+  },
+  {
+    "description": "Numbers",
+    "test_cases": [
+      {
+        "input": 0,
+        "typst": "0",
+        "description": "Zero"
+      },
+      {
+        "input": 42,
+        "typst": "42",
+        "description": "An integer"
+      },
+      {
+        "input": 3.15,
+        "typst": "3.15",
+        "description": "A decimal in the plain range"
+      },
+      {
+        "input": -2.5,
+        "typst": "-2.5",
+        "description": "A negative number keeps its sign"
+      },
+      {
+        "input": 1.8e-12,
+        "typst": "1.8 times 10^(-12)",
+        "description": "Scientific notation below 0.01"
+      },
+      {
+        "input": 15000,
+        "typst": "1.5 times 10^4",
+        "description": "Scientific notation at 10000 and above"
+      },
+      {
+        "name": "Infinity",
+        "typst": "infinity",
+        "description": "Infinity, as the corpus spells it"
+      },
+      {
+        "name": "NaN",
+        "typst": "\"NaN\"",
+        "description": "Not-a-number is upright text"
+      }
+    ]
+  },
+  {
+    "description": "Arithmetic and precedence",
+    "test_cases": [
+      {
+        "expression": "a + b + c",
+        "typst": "a + b + c",
+        "description": "An n-ary sum"
+      },
+      {
+        "expression": "a + -b",
+        "typst": "a - b",
+        "description": "A sum with a negated operand prints as a difference"
+      },
+      {
+        "expression": "a - (b - c)",
+        "typst": "a - (b - c)",
+        "description": "The right operand of a difference keeps its parentheses"
+      },
+      {
+        "expression": "a - b * c",
+        "typst": "a - b dot.op c",
+        "description": "A tighter right operand needs none"
+      },
+      {
+        "expression": "(a + b) * c",
+        "typst": "(a + b) dot.op c",
+        "description": "A sum inside a product"
+      },
+      {
+        "expression": "-(a + b)",
+        "typst": "-(a + b)",
+        "description": "A negated sum keeps its parentheses"
+      },
+      {
+        "expression": "-a * b + c",
+        "typst": "-a dot.op b + c",
+        "description": "Unary minus binds tighter than + and looser than *"
+      },
+      {
+        "expression": "-a * b",
+        "typst": "-a dot.op b",
+        "description": "A negated product"
+      },
+      {
+        "expression": "-a + b",
+        "typst": "-a + b",
+        "description": "Unary minus binds tighter than +"
+      },
+      {
+        "expression": "-(a - b)",
+        "typst": "-(a - b)",
+        "description": "A negated difference keeps its parentheses"
+      },
+      {
+        "expression": "(-a) * b",
+        "typst": "(-a) dot.op b",
+        "description": "A negated factor is parenthesized, since -a dot.op b means -(a dot.op b)"
+      },
+      {
+        "expression": "-a^2",
+        "typst": "-a^(2)",
+        "description": "Unary minus binds looser than ^"
+      },
+      {
+        "expression": "(-a)^2",
+        "typst": "(-a)^(2)",
+        "description": "A negated base is parenthesized"
+      },
+      {
+        "expression": "k * NO2 * O3",
+        "typst": "k dot.op \"NO\"_2 dot.op \"O\"_3",
+        "description": "A product of a rate constant and two species"
+      },
+      {
+        "expression": "1.8e-12 * x",
+        "typst": "1.8 times 10^(-12) dot.op x",
+        "description": "A scientific-notation factor"
+      },
+      {
+        "expression": "a / b",
+        "typst": "frac(a, b)",
+        "description": "Division is a fraction"
+      },
+      {
+        "expression": "(a + b) / (c - d)",
+        "typst": "frac(a + b, c - d)",
+        "description": "A fraction groups its own operands"
+      },
+      {
+        "expression": "a / b * c",
+        "typst": "frac(a, b) dot.op c",
+        "description": "A fraction as a factor"
+      },
+      {
+        "expression": "(a / b)^2",
+        "typst": "(frac(a, b))^(2)",
+        "description": "A fraction as a power's base takes parentheses"
+      },
+      {
+        "expression": "a^(b^c)",
+        "typst": "a^(b^(c))",
+        "description": "Right-nested powers"
+      },
+      {
+        "expression": "(a^b)^c",
+        "typst": "(a^(b))^(c)",
+        "description": "Left-nested powers keep their parentheses"
+      },
+      {
+        "expression": "x^-1",
+        "typst": "x^(-1)",
+        "description": "A negative exponent"
+      },
+      {
+        "expression": "(a + b)^2",
+        "typst": "(a + b)^(2)",
+        "description": "A sum as a power's base"
+      },
+      {
+        "expression": "(1.8e-12)^2",
+        "typst": "(1.8 times 10^(-12))^(2)",
+        "description": "A scientific number as a power's base"
+      },
+      {
+        "expression": "NO2^2",
+        "typst": "\"NO\"_2^(2)",
+        "description": "A species as a power's base"
+      }
+    ]
+  },
+  {
+    "description": "Derivatives",
+    "test_cases": [
+      {
+        "expression": "D(N, t)",
+        "typst": "frac(partial N, partial t)",
+        "description": "A time derivative"
+      },
+      {
+        "input": {
+          "op": "D",
+          "args": [
+            "x"
+          ]
+        },
+        "typst": "frac(partial x, partial t)",
+        "description": "An absent wrt means t"
+      },
+      {
+        "input": {
+          "op": "D",
+          "args": [
+            "u"
+          ],
+          "wrt": "z"
+        },
+        "typst": "frac(partial u, partial z)",
+        "description": "A spatial derivative"
+      },
+      {
+        "expression": "D(O3, t)",
+        "typst": "frac(partial \"O\"_3, partial t)",
+        "description": "A species derivative"
+      },
+      {
+        "expression": "D(x + y, t)",
+        "typst": "frac(partial (x + y), partial t)",
+        "description": "A compound operand is parenthesized"
+      }
+    ]
+  },
+  {
+    "description": "Functions",
+    "test_cases": [
+      {
+        "expression": "exp(x)",
+        "typst": "exp(x)",
+        "description": "exp"
+      },
+      {
+        "expression": "exp(-Ea / (R * T))",
+        "typst": "exp(-frac(\"Ea\", R dot.op T))",
+        "description": "An Arrhenius factor"
+      },
+      {
+        "expression": "log(x)",
+        "typst": "ln(x)",
+        "description": "One-argument log is the natural log"
+      },
+      {
+        "expression": "log10(x)",
+        "typst": "log_10(x)",
+        "description": "Base-10 log"
+      },
+      {
+        "expression": "sqrt(a + b)",
+        "typst": "sqrt(a + b)",
+        "description": "A square root"
+      },
+      {
+        "expression": "abs(x)",
+        "typst": "abs(x)",
+        "description": "Absolute value"
+      },
+      {
+        "expression": "floor(x) + ceil(y)",
+        "typst": "floor(x) + ceil(y)",
+        "description": "Floor and ceiling"
+      },
+      {
+        "expression": "sin(x) * cos(y) + tanh(z)",
+        "typst": "sin(x) dot.op cos(y) + tanh(z)",
+        "description": "Trigonometric and hyperbolic functions"
+      },
+      {
+        "expression": "asin(x) + atanh(y)",
+        "typst": "arcsin(x) + tanh^(-1)(y)",
+        "description": "Inverse functions"
+      },
+      {
+        "expression": "min(a, b) + max(a, b, c)",
+        "typst": "min(a, b) + max(a, b, c)",
+        "description": "min and max"
+      },
+      {
+        "expression": "sign(x)",
+        "typst": "op(\"sgn\")(x)",
+        "description": "The sign function"
+      },
+      {
+        "expression": "atan2(y, x)",
+        "typst": "op(\"atan2\")(y, x)",
+        "description": "A function Typst does not know"
+      },
+      {
+        "expression": "grad(T)",
+        "typst": "op(\"grad\")(T)",
+        "description": "An open-tier operator"
+      }
+    ]
+  },
+  {
+    "description": "Comparisons and logic",
+    "test_cases": [
+      {
+        "expression": "x > 0",
+        "typst": "x > 0",
+        "description": "Greater than"
+      },
+      {
+        "expression": "x >= y",
+        "typst": "x >= y",
+        "description": "Greater or equal prints as a symbol"
+      },
+      {
+        "expression": "x <= y",
+        "typst": "x <= y",
+        "description": "Less or equal"
+      },
+      {
+        "expression": "x != y",
+        "typst": "x != y",
+        "description": "Not equal"
+      },
+      {
+        "expression": "a > 0 and b < 1",
+        "typst": "a > 0 and b < 1",
+        "description": "Conjunction"
+      },
+      {
+        "expression": "a or b",
+        "typst": "a or b",
+        "description": "Disjunction"
+      },
+      {
+        "expression": "not a",
+        "typst": "not a",
+        "description": "Negation"
+      },
+      {
+        "expression": "not (x > 0)",
+        "typst": "not (x > 0)",
+        "description": "Negation of a comparison"
+      },
+      {
+        "expression": "ifelse(x > 0, a, b)",
+        "typst": "cases(a quad & \"if\" x > 0, b quad & \"otherwise\")",
+        "description": "A conditional is a cases block"
+      }
+    ]
+  },
+  {
+    "description": "Structural operators",
+    "test_cases": [
+      {
+        "input": {
+          "op": "const",
+          "args": [],
+          "value": [
+            1,
+            2,
+            3
+          ]
+        },
+        "typst": "\"[1, 2, 3]\"",
+        "description": "Array constants print as upright text"
+      },
+      {
+        "input": {
+          "op": "fn",
+          "name": "datetime.year",
+          "args": [
+            "t"
+          ]
+        },
+        "typst": "\"datetime.year(t)\"",
+        "description": "A closed function call prints as upright text"
+      },
+      {
+        "input": {
+          "op": "index",
+          "args": [
+            "u",
+            1
+          ]
+        },
+        "typst": "\"u[1]\"",
+        "description": "Indexing prints as upright text"
+      }
+    ]
+  },
+  {
+    "description": "Equations",
+    "test_cases": [
+      {
+        "equation": "D(N, t) = -lambda * N",
+        "typst": "frac(partial N, partial t) = -lambda dot.op N",
+        "description": "Exponential decay"
+      },
+      {
+        "equation": "D(O3, t) = jNO2 * NO2 - k * NO * O3",
+        "typst": "frac(partial \"O\"_3, partial t) = j_(\"NO\"_2) dot.op \"NO\"_2 - k dot.op \"NO\" dot.op \"O\"_3",
+        "description": "A photochemical box model"
+      },
+      {
+        "equation": "y = 2 * x + b",
+        "typst": "y = 2 dot.op x + b",
+        "description": "An observed variable"
+      }
+    ]
+  }
+]

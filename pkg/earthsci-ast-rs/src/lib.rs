@@ -157,9 +157,11 @@ pub(crate) mod simulate;
 pub mod simulate_array;
 
 // §6.6.5 inline PDE tests over the array simulation pathway (field
-// reductions, analytic references, coordinate-expression evaluation) —
-// native-only like the `simulate_array` runtime it drives.
-#[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
+// reductions, analytic references, coordinate-expression evaluation).
+// Compiled for wasm too, like the `simulate_array` runtime it drives; only
+// data-source providers, which need the native build pipeline, are refused
+// there.
+#[cfg(feature = "solve")]
 pub(crate) mod inline_tests;
 /// Core of the INLINE-TEST conformance adapter (CONFORMANCE_SPEC §5.45), on
 /// the same terms as [`compiler_agreement_adapter`]: in the library so a test
@@ -308,10 +310,11 @@ pub use types::{
     CovarianceMatrix, DaeInfo, DataSource, DataSourceBinding, DataSourceDeterminism,
     DataSourceKind, DataSourceLocation, DataSourceMetadata, DataSourceTemporal, DiscreteEvent,
     DiscreteEventTrigger, DiscretizedFrom, Distribution, DistributionParam, Domain, Equation,
-    EsmFile, Expr, ExpressionNode, FunctionalUpdate, InlineValue, Metadata, Model, ModelTest,
-    ModelTestAssertion, ModelVariable, Operator, ParameterUpdate, ParameterUpdateSpec, Reaction,
-    ReactionSystem, RecordsPerFile, RegionBound, Solver, Species, StoichiometricEntry, TimeSpan,
-    Tolerance, UnitConversion, UpdateValue, VariableMapTransform, VariableType,
+    EsmFile, Expr, ExpressionNode, FunctionalUpdate, InlineValue, Metadata, Model, ModelAnalysis,
+    ModelTest, ModelTestAssertion, ModelVariable, Operator, ParameterSweep, ParameterUpdate,
+    ParameterUpdateSpec, Plot, PlotAxis, PlotSeries, PlotValue, PlotY, Reaction, ReactionSystem,
+    RecordsPerFile, RegionBound, Solver, Species, StoichiometricEntry, SweepDimension, SweepRange,
+    TimeSpan, Tolerance, UnitConversion, UpdateValue, VariableMapTransform, VariableType,
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,
@@ -360,7 +363,7 @@ pub use migration::get_supported_migration_targets;
 
 pub use compile_error::CompileError;
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
+#[cfg(feature = "solve")]
 pub use inline_tests::{
     AssertionResult, BuildProviderFactory, InlineTestOptions, check_assertion,
     ephemeral_injected_file, evaluate_cellwise, field_reduce, resolve_tolerance, run_inline_tests,
