@@ -88,12 +88,15 @@ const _TP_INFIX = Set{String}([
 const _TP_RIGHT_ASSOC = Set{String}(["^"])
 
 # Prefix operand minimum-precedences, sourced from the registry:
-#  - unary `-` binds LOOSELY (registry precedence of `-`, = additive), so it
-#    swallows a whole additive/multiplicative operand, matching how the printer
-#    renders `-(Ea/(R*T))` as `-Ea / (R * T)` with no inner parens.
+#  - unary `-` binds at MULTIPLICATIVE precedence, the standard mathematical
+#    reading: tighter than `+`/binary `-` (`-a + b` = `(-a) + b`), looser than
+#    `^` (`-a^2` = `-(a^2)`). Its operand absorbs a `*`/`/` chain (`-a * b` =
+#    `-(a * b)`, numerically identical to `(-a) * b`) and a power, but stops at
+#    the first `+`/`-`. The printer's matching rule is `_UMINUS_OPERAND_MIN` in
+#    display.jl, so `-(a + b)` keeps its parens.
 #  - `not` binds TIGHTLY at its registry precedence
 #    (`not p and q` = `(not p) and q`).
-const _TP_UMINUS_MIN = get_operator_precedence("-")
+const _TP_UMINUS_MIN = get_operator_precedence("*")
 const _TP_NOT_MIN = get_operator_precedence("not")
 # Template binding values (`name<k = value, …>`) bind at additive precedence so
 # the closing `>` — a comparison operator — is never swallowed as `value > …`.

@@ -94,10 +94,14 @@ fn op_precedence(op: &str) -> i32 {
     }
 }
 
-/// Unary `-` binds LOOSELY (at `-`'s own additive precedence), so it swallows a
-/// whole additive/multiplicative operand — matching how the printer renders
-/// `-(Ea/(R*T))` as `-Ea / (R * T)` with no inner parentheses.
-const UMINUS_MIN: i32 = 4;
+/// Unary `-` binds at MULTIPLICATIVE precedence — the standard mathematical
+/// reading: tighter than `+`/binary `-` (`-a + b` == `(-a) + b`), looser than
+/// `^` (`-a^2` == `-(a^2)`). Its operand therefore absorbs a `*`/`/` chain
+/// (`-a * b` == `-(a * b)`, numerically identical to `(-a) * b`) and a power,
+/// but stops at the first `+`/`-`. The printer's matching rule is
+/// `UMINUS_OPERAND_PARENT_PREC` in display.rs, so `-(a + b)` keeps its
+/// parentheses.
+const UMINUS_MIN: i32 = 5;
 /// `not` binds TIGHTLY (`not p and q` == `(not p) and q`).
 const NOT_MIN: i32 = 6;
 /// Template binding values bind at additive precedence so the closing `>` — a
