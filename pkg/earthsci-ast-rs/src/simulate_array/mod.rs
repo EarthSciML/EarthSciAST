@@ -83,6 +83,7 @@ pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_inventio
 // two routes cannot disagree about which names a document declares.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
+pub(crate) use compile::data_feed_source;
 pub(crate) use compile::{model_tree_any, parse_subsystem_model};
 // The build pipeline reads the authored model, as the single-model route does,
 // so it applies the same stand-ins for `flatten`'s rewrites.

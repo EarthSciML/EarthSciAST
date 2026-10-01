@@ -1617,11 +1617,7 @@ fn classify_variables(
                     // HAVE a definition, and `lookup_variable`'s forcing arm
                     // resolves the name at evaluation time.
                     if externally_refreshed(var) {
-                        if let Some(source) = var
-                            .update
-                            .as_ref()
-                            .and_then(crate::data_fed::data_feed_source)
-                        {
+                        if let Some(source) = var.update.as_ref().and_then(data_feed_source) {
                             data_fed.push((name.clone(), source.to_string()));
                         }
                         observed_vars.push((name, var));
@@ -3527,6 +3523,17 @@ fn model_contains_arg_witness(model: &Model) -> bool {
 /// own (CONFORMANCE_SPEC §5.10.1, §5.13.2). A rule with an `expression` value
 /// form is the opposite case — the model computes it, and something has to run
 /// that computation on each refresh.
+/// The `data_sources` key of the first data feed in `spec` — a rule of
+/// `kind: "data"` carrying a `from` binding (esm-spec §5.4). Lives here rather
+/// than in `data_fed` because that module is not built for wasm32, while the
+/// classifier is.
+pub(crate) fn data_feed_source(spec: &crate::types::ParameterUpdateSpec) -> Option<&str> {
+    spec.rules().iter().find_map(|r| {
+        r.data_source()
+            .filter(|_| r.value().is_some_and(|v| v.from.is_some()))
+    })
+}
+
 fn externally_refreshed(var: &ModelVariable) -> bool {
     let Some(spec) = &var.update else {
         return false;

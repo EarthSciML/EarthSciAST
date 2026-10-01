@@ -24,6 +24,7 @@
 //!   re-derivation of the document's namespacing.
 
 use crate::simulate::SimulateError;
+use crate::simulate_array::data_feed_source;
 use crate::types::{EsmFile, ParameterUpdateSpec};
 
 /// Does `key` — a `p` key — designate the flattened parameter `full`?
@@ -45,20 +46,12 @@ fn pinned<'a>(p: impl IntoIterator<Item = &'a String>, full: &str) -> bool {
 
 /// Is this update spec a data feed — some rule of `kind: "data"` carrying a
 /// `from` binding (esm-spec §5.4)? The classifier lists a parameter in
-/// `data_fed` under the same test (`simulate_array::compile::data_feed_source`),
+/// `data_fed` under the same test ([`data_feed_source`]),
 /// so the refusal and the pin agree on which parameters they are talking about.
 /// A `schedule` / `condition` / `crossing` update, or a `handler`-valued one, is
 /// not provider-fed and is not this module's business.
 pub(crate) fn is_data_fed(spec: &ParameterUpdateSpec) -> bool {
     data_feed_source(spec).is_some()
-}
-
-/// The `data_sources` key of the first data feed in `spec` (see [`is_data_fed`]).
-pub(crate) fn data_feed_source(spec: &ParameterUpdateSpec) -> Option<&str> {
-    spec.rules().iter().find_map(|r| {
-        r.data_source()
-            .filter(|_| r.value().is_some_and(|v| v.from.is_some()))
-    })
 }
 
 /// Strip the `update` of every data-fed parameter the caller pinned with `p`,
