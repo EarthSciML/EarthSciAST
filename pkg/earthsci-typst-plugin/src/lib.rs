@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use earthsci_ast::{
-    Alg, Compile, ProblemOptions, SolveOptions, esm_problem, load_string, parse_equation, solve,
+    Alg, ProblemOptions, Rhs, SolveOptions, esm_problem, load_string, parse_equation, solve,
     to_ascii, to_latex, to_unicode, validate as validate_file,
 };
 use earthsci_narrative::build::{BuildOptions, build_json};
@@ -105,7 +105,7 @@ pub fn solve_esm(esm: &[u8], opts: &[u8]) -> Result<Vec<u8>, String> {
         ProblemOptions {
             p: bindings("params")?,
             u0: bindings("ic")?,
-            compile: Compile::Always,
+            rhs: Rhs::Always,
             ..Default::default()
         },
     )

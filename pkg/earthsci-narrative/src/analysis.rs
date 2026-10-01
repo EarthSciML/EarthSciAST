@@ -28,8 +28,8 @@
 use std::collections::HashMap;
 
 use earthsci_ast::{
-    Alg, Compile, EsmFile, EsmProblem, ModelAnalysis, Plot, PlotAxis, PlotY, ProblemOptions,
-    Remake, SimulateError, SolveOptions, SweepDimension, esm_problem, remake, solve,
+    Alg, EsmFile, EsmProblem, ModelAnalysis, Plot, PlotAxis, PlotY, ProblemOptions, Remake, Rhs,
+    SimulateError, SolveOptions, SweepDimension, esm_problem, remake, solve,
 };
 use serde::{Serialize, Serializer};
 use serde_json::Value;
@@ -392,7 +392,7 @@ pub fn run_analysis(
                 p,
                 u0: u0.clone(),
                 model_name: Some(model.to_string()),
-                compile: Compile::Always,
+                rhs: Rhs::Always,
                 ..Default::default()
             },
         )
