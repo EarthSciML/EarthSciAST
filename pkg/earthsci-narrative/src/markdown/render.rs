@@ -56,7 +56,7 @@ pub fn render(page: &Page, out: &BuildOutput, opts: &RenderOptions) -> String {
         match part {
             Part::Text(text) => block.text(&mut md, text),
             Part::Broken(d) => block.output(&problem_block(std::slice::from_ref(d))),
-            Part::Whole(d) => block.directive(&d.raw, &whole(d, out, opts, model)),
+            Part::Whole(d) => block.directive(&mut md, &d.raw, &whole(d, out, opts, model), d.form),
             Part::Element(index, directive) => {
                 if let Some(name) = out
                     .elements
@@ -74,8 +74,10 @@ pub fn render(page: &Page, out: &BuildOutput, opts: &RenderOptions) -> String {
                 }
                 let element = out.elements.get(*index);
                 block.directive(
+                    &mut md,
                     &directive.raw,
                     &render_element(directive, element, &problems, page, *index),
+                    directive.form,
                 );
             }
         }
@@ -108,34 +110,33 @@ struct Block {
 impl Block {
     /// Markdown copied through, which ends the block at each blank line.
     fn text(&mut self, md: &mut String, text: &str) {
-        let mut rest = text;
-        // A directive's source ends with its own line break, so a blank line
-        // straight after one starts this text.
-        if self.source.ends_with('\n') && rest.starts_with('\n') {
-            self.flush(md);
-            let blank = rest.len() - rest.trim_start_matches('\n').len();
-            md.push_str(&rest[..blank]);
-            rest = &rest[blank..];
+        for line in text.split_inclusive('\n') {
+            if line
+                .trim_end_matches('\n')
+                .trim_end_matches('\r')
+                .trim()
+                .is_empty()
+            {
+                self.flush(md);
+                md.push_str(line);
+            } else {
+                self.output(line);
+                self.source.push_str(line);
+            }
         }
-        while let Some(at) = rest.find("\n\n") {
-            // The line that ends at the blank line belongs to this block, and
-            // the blank lines themselves to neither.
-            self.output(&rest[..=at]);
-            self.source.push_str(&rest[..=at]);
-            self.flush(md);
-            let blank = rest[at..].len() - rest[at..].trim_start_matches('\n').len();
-            md.push_str(&rest[at + 1..at + blank]);
-            rest = &rest[at + blank..];
-        }
-        self.output(rest);
-        self.source.push_str(rest);
     }
 
     /// A directive, written as `raw`, and what it renders to.
-    fn directive(&mut self, raw: &str, rendered: &str) {
+    fn directive(&mut self, md: &mut String, raw: &str, rendered: &str, form: Form) {
+        if form != Form::Inline {
+            self.flush(md);
+        }
         self.source.push_str(raw);
         self.output(rendered);
         self.has_directive = true;
+        if form != Form::Inline {
+            self.flush(md);
+        }
     }
 
     /// Output with no source of its own.

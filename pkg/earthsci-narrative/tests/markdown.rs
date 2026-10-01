@@ -199,3 +199,33 @@ fn shown_source_with_a_fence_in_it_gets_a_longer_fence() {
         "{md}"
     );
 }
+
+#[test]
+fn shown_source_splits_on_whitespace_blank_lines_with_crlf() {
+    let source = "---\r\nshow_source: true\r\n---\r\n\r\nFirst paragraph.\r\n \t\r\nRead :var[N]{default=1}.\r\n";
+    let (_, _, md) = build(source);
+
+    assert!(
+        md.contains(
+            "<div class=\"esm-source\">\n\n```markdown\nRead :var[N]{default=1}.\r\n```\n\n</div>\n\n"
+        ),
+        "{md}"
+    );
+    assert_eq!(md.matches("esm-source").count(), 1, "{md}");
+}
+
+#[test]
+fn adjacent_block_directives_have_separate_source_blocks() {
+    let source = "---\nshow_source: true\n---\n\n::esm-example[a + b]\n::esm-example[a - b]\n";
+    let (_, _, md) = build(source);
+
+    assert!(
+        md.contains("```markdown\n::esm-example[a + b]\n```"),
+        "{md}"
+    );
+    assert!(
+        md.contains("```markdown\n::esm-example[a - b]\n```"),
+        "{md}"
+    );
+    assert_eq!(md.matches("esm-source").count(), 2, "{md}");
+}

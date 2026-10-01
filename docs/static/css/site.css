@@ -111,7 +111,7 @@ details summary { cursor: pointer; color: #0b3a5b; }
 
 /* `show_source: true`: the Markdown that wrote the block below it. */
 .esm-source { margin: 1rem 0 0.5rem; }
-.esm-source::before { content: "Markdown source"; display: block; font-size: 0.75em; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: #777; margin-bottom: 0.2rem; }
+.esm-source::before { content: "Markdown source"; display: block; font-size: 0.75em; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: #707070; margin-bottom: 0.2rem; }
 .esm-source pre { margin: 0; }
 /* An equation's anchor is a jump target, not something to show. */
 a.esm-eq { display: block; height: 0; }
