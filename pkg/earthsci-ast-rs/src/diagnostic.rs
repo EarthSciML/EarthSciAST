@@ -341,6 +341,16 @@ diagnostic_code_registry! {
     CIRCULAR_DEPENDENCY = "circular_dependency";
     /// A parameter `update` naming no declared data source.
     DATA_SOURCE_UNDEFINED = "data_source_undefined";
+    /// A data-fed parameter (`update` of `kind: "data"`, esm-spec §5.4/§8.5)
+    /// reached a build with NOTHING bound to it — no provider, no loaded
+    /// array, no caller-supplied `p` value. Raised at CONSTRUCTION, before any
+    /// right-hand side is built, naming the parameter, the `data_sources`
+    /// entry and what to pass. The complement of `data_source_undefined`,
+    /// which is the VALIDATOR's finding about an `update.source` that names no
+    /// declared entry; this one is the BUILD's finding about a source that
+    /// resolves perfectly well and that nothing supplied data for
+    /// (CONFORMANCE_SPEC §5.46).
+    DATA_SOURCE_UNBOUND = "data_source_unbound";
     /// A `data_sources[*].source.url_template` (or `mirrors` entry) that
     /// cannot be resolved to a URL at load time (esm-spec §8.2.1): an
     /// unexpanded `${VAR}` — §8.2 does not expand environment variables
@@ -586,6 +596,7 @@ mod error_code_tests {
             "coupling_library_illegal_payload",
             "coupling_library_nested_import",
             "coupling_role_unused",
+            "data_source_unbound",
             "data_source_undefined",
             "data_source_url_unresolved",
             "derived_index_set_unmaterialized",

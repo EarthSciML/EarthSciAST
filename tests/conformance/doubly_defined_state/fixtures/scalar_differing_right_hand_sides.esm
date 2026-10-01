@@ -1,0 +1,80 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ScalarDoublyDefinedState",
+    "description": "The unknown `x` carries BOTH `D(x, t) ~ k` and `x ~ k * 3`. esm-spec §4.9.4 counts an equation against the unknowns whichever form its LHS takes, so this model has two equations for one unknown. Every simulation binding MUST refuse it at the build with `equation_count_mismatch`, naming `x` and both equations, rather than tie-breaking in favour of the derivative and integrating a system free of the constraint the file declares.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "doubly_defined_state",
+      "equations"
+    ]
+  },
+  "models": {
+    "ScalarDoublyDefinedState": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Defined twice: by a derivative equation and by an algebraic one."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "The rate the derivative equation uses and the constraint scales."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "k"
+        },
+        {
+          "lhs": "x",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "k",
+              3.0
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 1.0
+        }
+      ],
+      "tests": [
+        {
+          "id": "the_document_has_no_answer",
+          "description": "Deliberately unanswerable: integrating gives x(1) = 3 and the constraint says x = 6. A binding that reports EITHER number has dropped an equation.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "x",
+              "time": 1.0,
+              "expected": 6.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

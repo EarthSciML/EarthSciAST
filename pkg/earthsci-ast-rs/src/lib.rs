@@ -76,6 +76,10 @@ pub mod compiler_agreement_adapter;
 pub(crate) mod coupling;
 pub(crate) mod coupling_imports;
 pub(crate) mod dae;
+/// esm-spec §9.6.6 `data_source_unbound`: what binds a DATA-FED parameter, and
+/// the refusal when nothing does (CONFORMANCE_SPEC §5.46).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod data_fed;
 /// Flat→gridded simulation-output derivation (streaming-output-sinks RFC
 /// §7–§9): the Rust mirror of `EarthSciAST.jl`'s `src/data_output.jl`. Pure and
 /// wasm32-clean — it plans a dataset, it never writes one.

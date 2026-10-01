@@ -507,6 +507,16 @@ const (
 	// equation, reached an evaluator that cannot run it (esm-spec §9.6.6). Go does not simulate,
 	// so it never raises this; the constant keeps the §9.6.6 vocabulary uniform.
 	CodeUnsupportedConstruct = "unsupported_construct"
+	// CodeDataSourceUnbound: a data-fed parameter (an `update` of
+	// `kind: "data"`, esm-spec §5.4/§8.5) reached a build with nothing bound to
+	// it -- no provider, no loaded array, no caller-supplied `p` value
+	// (esm-spec §9.6.6, CONFORMANCE_SPEC §5.46). The complement of
+	// ErrorDataSourceUndefined, which this binding DOES raise: that is the
+	// validator's finding about a source name resolving to nothing, this is the
+	// build's finding about a source that resolves and that nothing supplied
+	// data for. Go does not simulate, so nothing here raises it; the constant
+	// keeps the §9.6.6 vocabulary uniform.
+	CodeDataSourceUnbound = "data_source_unbound"
 	// CodeCompilerUnknown: `esm_problem`'s `compiler` option named a value
 	// outside the closed vocabulary of API_SPEC §5.8 (`interpreter`, `native`,
 	// `xla`, `mtk`, `sympy`).

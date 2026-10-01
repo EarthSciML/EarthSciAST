@@ -1,0 +1,87 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ControlCallerPinsTheForcing",
+    "description": "CONTROL: the SAME document as unbound_scalar_forcing, run with a caller-supplied value for `Forcing.k`. Pinning the parameter BINDS it \u2014 that is the escape hatch for a test, and for running a data-fed document offline \u2014 so the build MUST succeed and the run MUST report the pinned rate. The pin comes through the inline test's `parameter_overrides`, which is the `p` argument of `esm_problem` by another name, so the three bindings exercise the hatch through their own inline-test runners.",
+    "authors": [
+      "Test Suite"
+    ],
+    "tags": [
+      "conformance",
+      "data_source_unbound",
+      "control"
+    ]
+  },
+  "data_sources": {
+    "Wind": {
+      "kind": "static",
+      "source": {
+        "url_template": "file:///data/wind_that_is_never_read.nc"
+      }
+    }
+  },
+  "models": {
+    "Forcing": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "Wind",
+            "from": {
+              "file_variable": "k_decay"
+            }
+          },
+          "description": "Data-fed, and therefore refused unless something binds it; the inline test below binds it."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1.0,
+              "k",
+              "x"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "a_pinned_forcing_binds_the_parameter",
+          "description": "0.5 is the caller's, not the document's default of 0.1: the run must report exp(-0.5), which is what shows the pin reached the right-hand side rather than merely silencing the refusal.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "k": 0.5
+          },
+          "assertions": [
+            {
+              "variable": "x",
+              "time": 1.0,
+              "expected": 0.6065306597126334
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

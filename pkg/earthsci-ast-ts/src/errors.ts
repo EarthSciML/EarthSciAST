@@ -182,6 +182,19 @@ export const ERROR_CODES = {
   //   This binding does not simulate, so it never raises it; the entry keeps
   //   the §9.6.6 vocabulary uniform across the five registries.
   UNSUPPORTED_CONSTRUCT: 'unsupported_construct',
+  // `data_source_unbound` — a DATA-FED parameter (an `update` of
+  //   `kind: "data"`, esm-spec §5.4/§8.5) reached a build with NOTHING bound
+  //   to it: no provider object, no loaded array, no caller-supplied `p` value
+  //   (esm-spec §9.6.6, CONFORMANCE_SPEC §5.46). The complement of
+  //   `data_source_undefined` below, which this binding does raise: that one is
+  //   the validator's finding about an `update.source` naming no declared
+  //   entry, this one is the build's finding about a source that resolves and
+  //   that nothing supplied data for. Refused rather than evaluated at the
+  //   parameter's `default`, which produces a whole trajectory under the label
+  //   of a rate the document says comes from a file. This binding does not
+  //   simulate, so it never raises it; the entry keeps the §9.6.6 vocabulary
+  //   uniform across the five registries.
+  DATA_SOURCE_UNBOUND: 'data_source_unbound',
   // `compiler_unknown` / `compiler_unavailable` / `compiler_refused_rule` —
   //   the three ways naming a compiler can fail (API_SPEC §5.8,
   //   esm-libraries-spec §2.5.10). `esm_problem(..., compiler=...)` draws from a

@@ -83,6 +83,7 @@ pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_inventio
 // two routes cannot disagree about which names a document declares.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
+pub(crate) use compile::data_feed_source;
 pub(crate) use compile::{model_tree_any, parse_subsystem_model};
 // The build pipeline reads the authored model, as the single-model route does,
 // so it applies the same stand-ins for `flatten`'s rewrites.
@@ -696,6 +697,15 @@ pub struct ArrayCompiled {
     /// `ModelVariable.refresh` field (plan PR-2) is deferred: forcing resolves
     /// by name at runtime and does not need it.
     forcing: Rc<RefCell<HashMap<String, ArrayD<f64>>>>,
+    /// Every DATA-FED parameter routed to [`Self::forcing`] at classification:
+    /// the name the runtime looks up, and the `data_sources` key its `update`
+    /// names (esm-spec §5.4/§8.5). Read by
+    /// [`crate::data_fed::refuse_unbound`] at construction to answer whether
+    /// anything actually bound each one — a forcing nothing bound must be a
+    /// refusal, never a run at the parameter's `default` (esm-spec §9.6.6
+    /// `data_source_unbound`, CONFORMANCE_SPEC §5.46). Empty for every model
+    /// with no data feed.
+    data_fed: Vec<(String, String)>,
     /// How many times [`Self::forcing_handle`] has handed out the buffer: a
     /// host holding a handle can have written it since, which is what
     /// [`driver::FieldIcMemo`] checks.

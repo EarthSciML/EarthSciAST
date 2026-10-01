@@ -51,6 +51,17 @@ const ERROR_CODES = (
     CIRCULAR_DEPENDENCY = "circular_dependency",
     CONFLICTING_DERIVATIVE = "conflicting_derivative",
     DATA_SOURCE_UNDEFINED = "data_source_undefined",
+    # esm-spec §9.6.6 / CONFORMANCE_SPEC §5.46: a data-fed parameter (an `update`
+    # of `kind: "data"`) reached a build with NOTHING bound to it -- no provider,
+    # no loaded array, no caller-supplied `p` value. Raised at CONSTRUCTION,
+    # before any right-hand side is built, naming the parameter, the
+    # `data_sources` entry and what to pass. The complement of
+    # `data_source_undefined`: that one is the VALIDATOR's finding about a
+    # source name that resolves to nothing, this one is the BUILD's finding
+    # about a source that resolves and that nothing supplied data for. Refused
+    # rather than bound from the parameter's `default`, which produces a whole
+    # trajectory under the label of a rate the document says comes from a file.
+    DATA_SOURCE_UNBOUND = "data_source_unbound",
     # esm-spec §8.2.1: a `data_sources[*].source.url_template` (or a `mirrors`
     # entry) that cannot be resolved to a URL at load time -- an unexpanded
     # `${VAR}` (§8.2 does not expand environment variables into a source's

@@ -1,0 +1,35 @@
+{
+  "category": "doubly_defined_state",
+  "version": "1.0",
+  "description": "Cross-binding conformance for ONE unknown carrying BOTH a derivative equation (`D(x, t) ~ f`) and a whole-variable algebraic one (`x ~ g`). esm-spec §4.9.4 counts an equation against the unknowns whichever form its LHS takes, so such a document has one more equation than it has unknowns to bind, and every binding's `validate` already reports `equation_count_mismatch` at `/models/<M>`. The decision this category pins is that the BUILD says the same thing. Rust used to tie-break in favour of the derivative on purpose — the rationale being that reporting the name as algebraic would hide a genuinely settable initial condition from a Run UI — and Julia left both equations standing and failed later with an uncoded `E_TREEWALK_UNSUPPORTED_EQUATION` naming neither the unknown nor either equation. Both integrate, or fail to explain, a system free of a constraint the file declares; a refused document has no run, so there is no Run UI to mislead. Every refusal case MUST fail the build with `equation_count_mismatch` and the message MUST name the unknown and BOTH equations. It pins no numbers. The two refusal fixtures differ only in whether a shaped unknown puts the document on a binding's array compile, because the scalar and array routes are separate code in Rust and Python and both must refuse. Each has a control: the same document with the algebraic equation removed, which takes the same evaluator and MUST still run, which is what attributes the refusal to the second definition rather than to the document's shape. The right-hand sides DIFFER in both refusal fixtures (`k` against `k * 3`), so no binding can argue the pair is a harmless duplicate. Go and TypeScript do not simulate and only register the code.",
+  "code": "equation_count_mismatch",
+  "bindings": ["julia", "python", "rust"],
+  "cases": [
+    {
+      "id": "scalar_differing_right_hand_sides",
+      "path": "fixtures/scalar_differing_right_hand_sides.esm",
+      "unknown": "x",
+      "evaluator_path": "scalar",
+      "expect": "refuse"
+    },
+    {
+      "id": "array_differing_right_hand_sides",
+      "path": "fixtures/array_differing_right_hand_sides.esm",
+      "unknown": "x",
+      "evaluator_path": "array",
+      "expect": "refuse"
+    },
+    {
+      "id": "control_scalar",
+      "path": "fixtures/control_scalar_derivative_only.esm",
+      "evaluator_path": "scalar",
+      "expect": "run"
+    },
+    {
+      "id": "control_array",
+      "path": "fixtures/control_array_derivative_only.esm",
+      "evaluator_path": "array",
+      "expect": "run"
+    }
+  ]
+}

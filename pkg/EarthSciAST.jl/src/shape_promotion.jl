@@ -316,6 +316,12 @@ slot. A pure ODE state (defined by `D(x,t)`) is left untouched. This normalizati
 lets `promote_downstream_shapes` lift a feed-forward algebraic physics chain
 authored as states (Rothermel R, midflame U, EMC, …) the same as expression-defined
 observeds. Returns a new system; the input is untouched.
+
+A name carrying BOTH forms stays a state here and keeps both of its equations,
+but no run reaches that state: `build_evaluator` refuses such a document at its
+entry with `equation_count_mismatch`, because esm-spec §4.9.4 counts an equation
+whichever form its LHS takes and the system is therefore unbalanced — which is
+what `validate` reports for the same file.
 """
 function algebraic_states_to_observeds(flat::FlattenedSystem)::FlattenedSystem
     diff_states = Set{String}()

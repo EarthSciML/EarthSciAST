@@ -1,0 +1,73 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ScalarControl",
+    "description": "CONTROL: the scalar refusal document with the algebraic equation removed, so `x` carries only its derivative equation. It takes the same evaluator and MUST still build and run, which is what attributes the refusal to the second definition rather than to the document's shape.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "doubly_defined_state",
+      "control"
+    ]
+  },
+  "models": {
+    "ScalarControl": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Defined once, by its derivative equation."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "The rate the derivative equation uses."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "k"
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 1.0
+        }
+      ],
+      "tests": [
+        {
+          "id": "the_derivative_only_state_still_runs",
+          "description": "x(0) = 1, dx/dt = 2, so x(1) = 3.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "x",
+              "time": 1.0,
+              "expected": 3.0,
+              "tolerance": {
+                "rel": 1e-06
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

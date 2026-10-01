@@ -365,6 +365,24 @@ UNSUPPORTED_CONSTRUCT = "unsupported_construct"
 
 
 # ===========================================================================
+# A data-fed parameter with nothing bound to it (esm-spec §5.4/§8.5/§9.6.6,
+# CONFORMANCE_SPEC §5.46), raised as
+# ``earthsci_ast.errors.DataSourceUnboundError`` by ``esm_problem`` at
+# construction, before any right-hand side is built.
+# ===========================================================================
+
+#: A parameter whose ``update`` is ``kind: "data"`` reached a build with NOTHING
+#: bound to it -- no provider object for it, no array loaded for it, no
+#: caller-supplied ``p`` value for it. The complement of
+#: :data:`ErrorCode.DATA_SOURCE_UNDEFINED`, which is the VALIDATOR's finding
+#: about an ``update.source`` naming no declared entry; this is the BUILD's
+#: finding about a source that resolves and that nothing supplied data for.
+#: Refused rather than evaluated at the parameter's ``default``: a forcing at
+#: its default produces a whole trajectory that looks like an answer.
+DATA_SOURCE_UNBOUND = "data_source_unbound"
+
+
+# ===========================================================================
 # Compiler selection (API_SPEC.md §5.8, esm-libraries-spec.md §2.5.10,
 # esm-spec §9.6.6). ``esm_problem(..., compiler=...)`` names one member of a
 # closed vocabulary; these are the three ways naming one can fail. A binding
