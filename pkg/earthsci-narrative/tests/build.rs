@@ -145,7 +145,10 @@ fn two_box_exchange() {
         "version": 1,
         "elements": [
             {"kind": "model", "name": "TwoBox"},
-            {"kind": "eq", "text": "D(A, t) = k_ba*B - k_ab*A"},
+            // A leading minus negates only its own term (esm-spec §4.1.1); read
+            // as `-(k_ab*A + k_ba*B)`, both boxes would drain and the
+            // equilibrium test below would fail.
+            {"kind": "eq", "text": "D(A, t) = -k_ab*A + k_ba*B"},
             {"kind": "eq", "text": "D(B, t) = k_ab*A - k_ba*B"},
             {"kind": "var", "name": "A", "default": 1, "units": "mol"},
             {"kind": "var", "name": "B", "default": 0, "units": "mol"},

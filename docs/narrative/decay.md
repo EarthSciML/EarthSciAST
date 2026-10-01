@@ -73,7 +73,7 @@ holds :var[B]{default=0 units="mol" description="Mass in box B"}. Mass moves
 from A to B at rate :param[k_ab]{default=0.3 units="1/s" description="Transfer rate, A to B"}
 and back at rate :param[k_ba]{default=0.1 units="1/s" description="Transfer rate, B to A"}:
 
-::eq[D(A, t) = k_ba*B - k_ab*A]{#eq-a}
+::eq[D(A, t) = -k_ab*A + k_ba*B]{#eq-a}
 
 ::eq[D(B, t) = k_ab*A - k_ba*B]{#eq-b}
 

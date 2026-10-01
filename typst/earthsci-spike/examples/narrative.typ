@@ -15,7 +15,7 @@
     (kind: "var", name: "B", default: 0, units: "mol", description: "Tracer in box B"),
     (kind: "param", name: "k_ab", default: 0.3, units: "1/s", description: "Rate from A to B"),
     (kind: "param", name: "k_ba", default: 0.1, units: "1/s", description: "Rate from B to A"),
-    (kind: "eq", text: "D(A, t) = k_ba*B - k_ab*A", label: "eq-a"),
+    (kind: "eq", text: "D(A, t) = -k_ab*A + k_ba*B", label: "eq-a"),
     (kind: "eq", text: "D(B, t) = k_ab*A - k_ba*B", label: "eq-b"),
     (kind: "test", id: "equilibrium", time_span: (start: 0, end: 100),
      assertions: ((variable: "B", time: 100, expected: 0.75, tolerance: (rel: 1e-3)),)),

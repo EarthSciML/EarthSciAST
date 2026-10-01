@@ -6,11 +6,12 @@
 //!
 //! - **Operators** are laid out natively, with the LaTeX backend's
 //!   parenthesization rules (`display.rs`, `format_operator`): the same
-//!   precedence table, `a + (-b)` printed as `a - b`, and a right operand of
-//!   `-` or `/` parenthesized only when it binds no tighter. One departure: a
-//!   negated sum keeps its parentheses (see `UNARY_MINUS_OPERAND`). Division is an explicit `frac(a, b)`, a derivative
-//!   `frac(partial x, partial t)`, and a product joins its factors with
-//!   `dot.op`.
+//!   precedence table, unary minus binding tighter than `+` and looser than
+//!   `*` (so `-(a + b)` keeps its parentheses and `-a dot.op b` needs none),
+//!   `a + (-b)` printed as `a - b`, and a right operand of `-` or `/`
+//!   parenthesized only when it binds no tighter. Division is an explicit
+//!   `frac(a, b)`, a derivative `frac(partial x, partial t)`, and a product
+//!   joins its factors with `dot.op`.
 //! - **Names and numbers** reuse the core's decisions by translating its LaTeX
 //!   for that one leaf into Typst: `\mathrm{H_2O}` becomes `"H"_2"O"`,
 //!   `\lambda` becomes `lambda`, `T_{298}` becomes `T_298`, and
@@ -62,13 +63,19 @@ fn precedence(op: &str) -> i32 {
 }
 
 /// The precedence a unary minus's operand renders at: additive, so a negated
-/// sum keeps its parentheses, `-(a + b)`.
-///
-/// This departs from the core's printers, which print that node as `-a + b`
-/// (its parser reads a leading minus as covering the whole sum, so the pair
-/// round-trips). A reader of a paper takes `-a + b` to mean `(-a) + b`, so
-/// here the parentheses stay; the output still parses back to the same tree.
+/// sum keeps its parentheses, `-(a + b)`, while a product or power does not,
+/// `-a dot.op b`. The core's `UMINUS_OPERAND_PARENT_PREC`.
 const UNARY_MINUS_OPERAND: i32 = 1;
+
+/// A unary-minus operand the precedence table leaves bare but the core
+/// parenthesizes: a comparison or logical operator, which this table, like
+/// the core's, gives precedence 0. (The core also parenthesizes a power of a
+/// literal, `-(2^2)`, for its parser's sake; typeset, `-2^2` already reads as
+/// that.)
+fn unary_minus_needs_parens(operand: &Expr) -> bool {
+    matches!(operand, Expr::Operator(n)
+        if matches!(n.op.as_str(), "<" | ">" | "<=" | ">=" | "==" | "!=" | "=" | "and" | "or"))
+}
 
 /// Operators the core renders from fields other than `args` (its
 /// `format_structural_op`). They print as upright text here.
@@ -165,6 +172,7 @@ fn render_operator(expr: &Expr, node: &ExpressionNode, parent_prec: i32) -> Stri
             }
         }
         "-" => match args {
+            [a] if unary_minus_needs_parens(a) => format!("-({})", r0(a)),
             [a] => format!("-{}", render(a, UNARY_MINUS_OPERAND)),
             // Left-associative: the right operand keeps parentheses when it
             // binds no tighter (`a - (b - c)`), not when it binds tighter.

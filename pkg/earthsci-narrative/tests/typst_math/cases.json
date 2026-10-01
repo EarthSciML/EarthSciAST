@@ -190,17 +190,42 @@
       {
         "expression": "-(a + b)",
         "typst": "-(a + b)",
-        "description": "A negated sum keeps its parentheses (the core prints -a + b)"
+        "description": "A negated sum keeps its parentheses"
       },
       {
         "expression": "-a * b + c",
-        "typst": "-(a dot.op b + c)",
-        "description": "The text syntax reads a leading minus as covering the whole sum; the output says so"
+        "typst": "-a dot.op b + c",
+        "description": "Unary minus binds tighter than + and looser than *"
       },
       {
         "expression": "-a * b",
         "typst": "-a dot.op b",
         "description": "A negated product"
+      },
+      {
+        "expression": "-a + b",
+        "typst": "-a + b",
+        "description": "Unary minus binds tighter than +"
+      },
+      {
+        "expression": "-(a - b)",
+        "typst": "-(a - b)",
+        "description": "A negated difference keeps its parentheses"
+      },
+      {
+        "expression": "(-a) * b",
+        "typst": "(-a) dot.op b",
+        "description": "A negated factor is parenthesized, since -a dot.op b means -(a dot.op b)"
+      },
+      {
+        "expression": "-a^2",
+        "typst": "-a^(2)",
+        "description": "Unary minus binds looser than ^"
+      },
+      {
+        "expression": "(-a)^2",
+        "typst": "(-a)^(2)",
+        "description": "A negated base is parenthesized"
       },
       {
         "expression": "k * NO2 * O3",
