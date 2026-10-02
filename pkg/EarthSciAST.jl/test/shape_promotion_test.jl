@@ -225,3 +225,36 @@ end
     states2 = E.OrderedDict{String,E.ModelVariable}("x" => E.ModelVariable(E.UnknownVariable))
     @test isempty(E._pointwise_lifted_species(eqs2, states2))
 end
+
+# esm-spec §6.3: an unknown with no `shape` defined by a `faq` over inline
+# intervals takes its shape from those ranges (a 0-D value lifts when it meets
+# an array), under both compilers; a declared shape that disagrees is refused.
+@testset "shape from a faq's inline ranges" begin
+    repo = joinpath(@__DIR__, "..", "..", "..")
+    doc = joinpath(repo, "tests", "conformance", "expression_templates",
+                   "metaparameter_resolutions", "expanded_n4.esm")
+    for compiler in (:interpreter, :native)
+        prob = E.esm_problem(doc, (0.0, 1.0); compiler = compiler)
+        @test E.observed_field(prob, "Sweep.Problem.ramp"; u = [3.0], t = 0.0) == [3.0, 6.0]
+    end
+    ramp(shape) = Dict{String,Any}("esm"=>"1.1.0", "metadata"=>Dict("name"=>"R"),
+        "index_sets"=>Dict{String,Any}("c"=>Dict{String,Any}("kind"=>"interval","size"=>3)),
+        "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
+            "variables"=>Dict{String,Any}(
+                "u"=>Dict{String,Any}("type"=>"unknown","default"=>1.0),
+                "ramp"=>merge(Dict{String,Any}("type"=>"unknown"),
+                              shape === nothing ? Dict{String,Any}() :
+                                                  Dict{String,Any}("shape"=>Any[shape]))),
+            "equations"=>Any[
+                Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["u"],"wrt"=>"t"),
+                                 "rhs"=>op("*", -1, "u")),
+                Dict{String,Any}("lhs"=>"ramp","rhs"=>Dict{String,Any}("op"=>"faq",
+                    "args"=>Any[], "output_idx"=>Any["i"],
+                    "ranges"=>Dict{String,Any}("i"=>Any[1, 2]), "expr"=>op("*","u","i")))])))
+    for compiler in (:interpreter, :native)
+        prob = E.esm_problem(ramp(nothing), (0.0, 1.0); compiler = compiler)
+        @test E.observed_field(prob, "M.ramp"; u = [2.0], t = 0.0) == [2.0, 4.0]
+        @test_throws E.DimensionPromotionError E.esm_problem(ramp("c"), (0.0, 1.0);
+                                                             compiler = compiler)
+    end
+end

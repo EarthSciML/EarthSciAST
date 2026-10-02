@@ -90,6 +90,8 @@ class ErrorCode(Enum):
     # `functional_affect` are gone and the defect they described is reached
     # through `affects`.
     EVENT_AFFECTS_PARAMETER = "event_affects_parameter"
+    EQUATION_DEFINES_PARAMETER = "equation_defines_parameter"
+    UNBOUND_INDEX_SYMBOL = "unbound_index_symbol"
     # esm 1.0.0. A data source is not a component, so `update.source` is the only
     # way a document can name one -- and it MUST resolve.
     DATA_SOURCE_UNDEFINED = "data_source_undefined"

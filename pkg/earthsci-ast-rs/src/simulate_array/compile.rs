@@ -2446,6 +2446,7 @@ fn build_observed_rules(
 ) -> Result<Vec<AlgebraicRule>, CompileError> {
     let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
     let array_axes = declared_axis_names(model);
+    let declared: HashSet<String> = model.variables.keys().cloned().collect();
 
     // Declared observed variables with an `expression` field. An array-shaped
     // observed — a discretization-agnostic PDE leaf's `psi_x`, `grad_mag`,
@@ -2490,7 +2491,7 @@ fn build_observed_rules(
         if let Expr::Operator(lhs) = &eq.lhs
             && lhs.op == "index"
         {
-            check_bare_index_definition(name, lhs, &eq.rhs, &array_axes)?;
+            check_bare_index_definition(name, lhs, &eq.rhs, &array_axes, &declared)?;
         }
         // A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) is recognized before
         // either ordinary lowering, because both of them would compile the
@@ -2588,11 +2589,17 @@ fn build_observed_rules(
 ///
 /// Flatten namespaces a free subscript (`k` becomes `Model.k`) but not a `faq`
 /// binder, so a subscript matches its binder in either spelling.
+///
+/// Checked first: a plain-symbol subscript at any level of the gather that the
+/// right-hand `faq` does not bind and that names no declared variable is an
+/// index symbol nothing binds — `unbound_index_symbol` (esm-spec §6.3.1), the
+/// finding `validate` reports for the same left-hand side.
 fn check_bare_index_definition(
     name: &str,
     lhs: &ExpressionNode,
     rhs: &Expr,
     array_axes: &HashMap<String, Vec<String>>,
+    declared: &HashSet<String>,
 ) -> Result<(), CompileError> {
     let head_is_the_variable = matches!(lhs.args.first(), Some(Expr::Variable(_)));
     let subs = lhs.args.get(1..).unwrap_or_default();
@@ -2601,6 +2608,32 @@ fn check_bare_index_definition(
         Expr::Variable(v) => v == binder || v.strip_prefix(prefix) == Some(binder.as_str()),
         _ => false,
     };
+    let frame: &[String] = match rhs {
+        Expr::Operator(node) if is_faq_op(&node.op) => node.output_idx.as_deref().unwrap_or(&[]),
+        _ => &[],
+    };
+    let mut gather = Some(lhs);
+    while let Some(g) = gather {
+        for sub in g.args.iter().skip(1) {
+            if let Expr::Variable(v) = sub
+                && !declared.contains(v)
+                && !frame.iter().any(|b| names_binder(sub, b))
+            {
+                let sym = v.strip_prefix(prefix).unwrap_or(v);
+                return Err(CompileError::InterpreterBuildError {
+                    details: format!(
+                        "{}: equation defining '{name}' subscripts its left-hand side with \
+                         '{sym}', which no faq binds (esm-spec §6.3.1)",
+                        crate::diagnostic::codes::UNBOUND_INDEX_SYMBOL
+                    ),
+                });
+            }
+        }
+        gather = match g.args.first() {
+            Some(Expr::Operator(inner)) if inner.op == "index" => Some(inner),
+            _ => None,
+        };
+    }
     let binds_subscripts = match rhs {
         Expr::Operator(node) if is_faq_op(&node.op) => match node.output_idx.as_deref() {
             Some(frame) => {

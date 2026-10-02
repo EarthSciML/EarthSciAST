@@ -66,7 +66,7 @@ from .compiler import (
 )
 from .errors import MissingDataError
 from .error_handling import CALLBACK_UNREGISTERED
-from .esm_types import CouplingType, EsmFile, ExprNode
+from .esm_types import CouplingType, EsmFile, ExprNode, is_aggregate_op
 from .expr_walk import iter_children
 from .expression import UnsupportedConstructError, free_variables
 from .flatten import (
@@ -713,6 +713,7 @@ def _esm_problem_under(
         file = lower_table_lookups(file)
         _refuse_ic_in_reaction_system(file)
         _refuse_unregistered_callback_reads(file)
+        _refuse_reference_integrity_errors(file, base_path)
 
     # A caller-flattened system has no document, but `flatten` carries
     # `function_tables` so that this carrier can be lowered too.
@@ -751,6 +752,11 @@ def _esm_problem_under(
 
     # A declared shape over an undeclared index set, on a state nothing sizes.
     _assert_shaped_states_have_extent(flat)
+
+    # esm-spec §6.3.1: an equation never defines a parameter. A document that
+    # tries is refused by name on every carrier (a caller-flattened system never
+    # passed through `validate`), never built with the equation dropped.
+    _refuse_parameter_definition(flat)
 
     # One unknown carrying both a derivative equation and a bare-LHS one.
     _assert_no_doubly_defined_state(flat)
@@ -1256,6 +1262,38 @@ def _assert_shaped_states_have_extent(flat: FlattenedSystem) -> None:
         )
 
 
+def _defined_lhs_name(lhs: Any) -> str | None:
+    """The variable a DEFINING left-hand side names — bare, ``index(...)``, or
+    either as the body of a ``faq`` — or ``None`` for a derivative, an ``ic``
+    or an expression LHS."""
+    e = lhs
+    while isinstance(e, ExprNode):
+        if is_aggregate_op(e.op) and e.expr is not None:
+            e = e.expr
+        elif e.op == "index" and e.args:
+            e = e.args[0]
+        else:
+            return None
+    return e if isinstance(e, str) else None
+
+
+def _refuse_parameter_definition(flat: FlattenedSystem) -> None:
+    """``equation_defines_parameter`` (esm-spec §6.3.1): an equation whose
+    left-hand side names a parameter. A parameter's value comes from its
+    default, an override, its update or a coupling; building with the equation
+    dropped, or letting it override the parameter, answers for a model the
+    document does not describe."""
+    for eq in flat.equations:
+        name = _defined_lhs_name(eq.lhs)
+        if name is not None and name in flat.parameters:
+            raise SimulationError(
+                f"equation_defines_parameter: the equation "
+                f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}` defines "
+                f"{name!r}, which is a parameter; an equation defines unknowns only "
+                f"(esm-spec §6.3.1)"
+            )
+
+
 def _assert_no_doubly_defined_state(flat: FlattenedSystem) -> None:
     """Refuse an unknown that carries BOTH a derivative equation and a bare-LHS one.
 
@@ -1346,6 +1384,25 @@ def _refuse_ic_in_reaction_system(file: EsmFile) -> None:
                     f"`species.default`, or a scoped-reference ic equation in a model, "
                     f"esm-spec §11.4.1)"
                 )
+
+
+#: The structural-validation codes a build refuses on (esm-libraries-spec
+#: §2.5.2). They are the reference-integrity findings: a name, reference or data
+#: source the document uses and does not declare. Equation-count and unit
+#: findings are not here: they stay ``validate``'s to report.
+_BUILD_REFUSED_VALIDATION_CODES = frozenset({"undefined_variable", "undefined_parameter", "undefined_species", "undefined_system", "undefined_index_set", "unresolved_scoped_ref", "event_var_undeclared", "data_source_undefined", "missing_required_field"})
+
+
+def _refuse_reference_integrity_errors(file: EsmFile, base_path: str | None) -> None:
+    """Refuse the first reference-integrity finding ``validate`` reports for
+    ``file``, with the validator's code, pointer and message."""
+    from .validation import validate
+
+    for e in validate(file, base_path=base_path).structural_errors:
+        # An inline test's references are the test runner's to report (esm-spec
+        # §6.6); the build does not evaluate them.
+        if e.code in _BUILD_REFUSED_VALIDATION_CODES and "/tests/" not in (e.path or ""):
+            raise SimulationError(f"[{e.code}] {e.path}: {e.message} (esm-libraries-spec §2.5.2)")
 
 
 class CallbackUnregisteredError(SimulationError):

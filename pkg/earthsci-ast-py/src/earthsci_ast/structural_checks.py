@@ -2459,6 +2459,150 @@ def _check_event_affects_parameter(data: dict[str, Any], errors: list[str]) -> N
                         )
 
 
+def _lhs_variable_type(data: dict[str, Any], mpath: list[str], model: dict, name: str):
+    """The declared ``type`` of the variable an equation LHS names, resolving a
+    scoped reference (``sub.L`` / ``Top.sub.L``) through subsystems."""
+    v = (model.get("variables") or {}).get(name)
+    if isinstance(v, dict):
+        return v.get("type")
+    parts = name.split(".")
+    if len(parts) < 2:
+        return None
+
+    def walk(start: dict, segs: list[str]):
+        cur = start
+        for seg in segs[:-1]:
+            nxt = (cur.get("subsystems") or {}).get(seg) if isinstance(cur, dict) else None
+            if not isinstance(nxt, dict):
+                return None
+            cur = nxt
+        var = (cur.get("variables") or {}).get(segs[-1])
+        return var.get("type") if isinstance(var, dict) else None
+
+    # Relative to this model, then with this model's own path as the prefix,
+    # then from the document root.
+    t = walk(model, parts)
+    if t is None and parts[: len(mpath)] == mpath and len(parts) > len(mpath):
+        t = walk(model, parts[len(mpath):])
+    if t is None:
+        root = (data.get("models") or {}).get(parts[0])
+        if isinstance(root, dict):
+            t = walk(root, parts[1:])
+    return t
+
+
+def _lhs_base_name(lhs: Any):
+    """The variable an equation LHS defines, through ``faq``/``index``
+    wrappers; ``None`` for a derivative, an ``ic`` or an expression LHS."""
+    e = lhs
+    while isinstance(e, dict):
+        op = e.get("op")
+        if op in ("faq", "aggregate") and isinstance(e.get("expr"), (dict, str)):
+            e = e["expr"]
+        elif op == "index" and e.get("args"):
+            e = e["args"][0]
+        else:
+            return None
+    return e if isinstance(e, str) else None
+
+
+def _lhs_defined_name(lhs: Any):
+    """The variable an equation LHS defines or differentiates, through
+    ``faq``/``index``/``D`` wrappers — the name an ``unbound_index_symbol``
+    message reports."""
+    e = lhs
+    while isinstance(e, dict):
+        op = e.get("op")
+        if op in ("faq", "aggregate") and isinstance(e.get("expr"), (dict, str)):
+            e = e["expr"]
+        elif op in ("index", "D") and e.get("args"):
+            e = e["args"][0]
+        else:
+            return None
+    return e if isinstance(e, str) else None
+
+
+def _lhs_free_index_symbols(lhs: Any, bound: set, names: set) -> list[str]:
+    out: list[str] = []
+
+    def walk(e: Any, b: set) -> None:
+        if not isinstance(e, dict):
+            return
+        op = e.get("op")
+        if op in ("faq", "aggregate"):
+            nb = set(b)
+            nb.update(x for x in (e.get("output_idx") or []) if isinstance(x, str))
+            nb.update((e.get("ranges") or {}).keys())
+            walk(e.get("expr"), nb)
+            for a in e.get("args") or []:
+                walk(a, nb)
+            return
+        if op == "index":
+            args = e.get("args") or []
+            if args:
+                walk(args[0], b)
+            for sub in args[1:]:
+                if isinstance(sub, str):
+                    if sub not in b and sub not in names and sub not in out:
+                        out.append(sub)
+                else:
+                    walk(sub, b)
+            return
+        for a in e.get("args") or []:
+            walk(a, b)
+
+    walk(lhs, bound)
+    return out
+
+
+def _check_equation_lhs_names(data: dict[str, Any], errors: list) -> None:
+    """``equation_defines_parameter`` and ``unbound_index_symbol`` (esm-spec
+    §6.3.1): an equation's left-hand side never defines a parameter, and an index
+    symbol on it is bound by a ``faq`` (on the left, or the right-hand side's
+    ``output_idx`` for the bare-index definition)."""
+    metas = data.get("metaparameters")
+    meta_names = set(metas.keys()) if isinstance(metas, dict) else set()
+
+    def visit(model: dict, mpath: list[str], ptr: str) -> None:
+        names = set((model.get("variables") or {}).keys()) | meta_names | {"t"}
+        for k, eq in enumerate(model.get("equations") or []):
+            if not isinstance(eq, dict):
+                continue
+            lhs = eq.get("lhs")
+            if isinstance(lhs, dict) and lhs.get("op") == "ic":
+                continue
+            path = f"{ptr}/equations/{k}/lhs"
+            base = _lhs_base_name(lhs)
+            if base is not None and _lhs_variable_type(data, mpath, model, base) == "parameter":
+                errors.append((
+                    "equation_defines_parameter", path,
+                    f"Equation {k} defines '{base}', which is a parameter; an equation "
+                    f"defines unknowns only",
+                    {"variable": base},
+                ))
+            rhs = eq.get("rhs")
+            bound = set()
+            if isinstance(rhs, dict) and rhs.get("op") in ("faq", "aggregate"):
+                bound = {x for x in (rhs.get("output_idx") or []) if isinstance(x, str)}
+            free = _lhs_free_index_symbols(lhs, bound, names)
+            defining = _lhs_defined_name(lhs) if free else None
+            for sym in free:
+                what = f" (defining '{defining}')" if defining else ""
+                errors.append((
+                    "unbound_index_symbol", path,
+                    f"Equation {k}{what} subscripts its left-hand side with '{sym}', "
+                    f"which no faq binds",
+                    {"symbol": sym},
+                ))
+        for sname, sub in (model.get("subsystems") or {}).items():
+            if isinstance(sub, dict):
+                visit(sub, mpath + [sname], f"{ptr}/subsystems/{sname}")
+
+    for mname, m in (data.get("models") or {}).items():
+        if isinstance(m, dict):
+            visit(m, [mname], f"/models/{mname}")
+
+
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$")
 _URL_RE = re.compile(r"^https?://[^\s/$.?#].[^\s]*$")
 _DOI_RE = re.compile(r"^10\.\d{4,9}/[^\s]+$")
@@ -3642,6 +3786,9 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     collect("circular_dependency", lambda sub: _check_circular_references(data, tables, sub))
     collect("data_source_undefined", lambda sub: _check_data_source_references(data, sub))
     collect("event_affects_parameter", lambda sub: _check_event_affects_parameter(data, sub))
+    # esm-spec §6.3.1: an equation never defines a parameter, and an index symbol
+    # on its left-hand side is bound by a faq. Each finding names its own code.
+    collect("equation_defines_parameter", lambda sub: _check_equation_lhs_names(data, sub))
     # A declaration spelled with a globally-scoped name (the independent
     # variable, or `_var`) is unreachable: both resolve BY NAME ahead of the
     # declaration maps, so every reader silently gets the implicit symbol

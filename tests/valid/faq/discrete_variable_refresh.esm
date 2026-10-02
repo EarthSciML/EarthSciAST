@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "discrete_variable_refresh",
     "description": "M3 schema fixture (RFC semiring-faq-unified-ir §6.1 / §8; bead ess-my4.3.2), restated for esm 1.0.0: the DISCRETE cadence class is seeded by a PARAMETER carrying an `update` block (esm-spec §5.4) — there is no third `discrete` variable type any more, and no `refresh` field. Such a parameter has a shape fixed at setup and values that refresh only at discrete events; it is the declared seed the dependency-partition pass schedules into a per-event handler. This fixture declares one parameter for each of the three discrete-cadence update kinds — `schedule` (tstops, the MTK PresetTimeCallback analogue; here a met field reloaded on a periodic interval), `data` (a boundary-condition field reloaded when its `data_sources` entry advances a record), and `remesh` (reloadable mesh topology under AMR) — plus one parameter with NO update at all (a setup-only buffer, e.g. a mesh loaded once, which is simply CONST). Each of the three declares its required `shape` and EXACTLY ONE value form (`from` for the data-bound one, a registered `handler` for the two the format cannot state symbolically). The model also carries an ordinary continuous unknown, so the partition is genuinely three-cadence. Validates against the schema with no evaluator.",
@@ -66,6 +66,7 @@
             "cells",
             "levels"
           ],
+          "default": 0.0,
           "description": "Loaded meteorology (wind) field — shape fixed at setup, values reloaded on a fixed schedule by a registered handler (the reload is not statable as an expression).",
           "update": {
             "kind": "schedule",
@@ -82,6 +83,7 @@
           "shape": [
             "boundary"
           ],
+          "default": 0.0,
           "description": "Boundary-condition inflow field, reloaded when the `bc_loader` data source advances to the next record.",
           "update": {
             "kind": "data",
@@ -96,6 +98,7 @@
           "shape": [
             "edges"
           ],
+          "default": 0.0,
           "description": "Reloadable mesh topology / edge-normal geometry, recomputed by a registered handler on an AMR remesh event.",
           "update": {
             "kind": "remesh",
@@ -110,6 +113,7 @@
           "shape": [
             "cells"
           ],
+          "default": 0.0,
           "description": "Cell areas from a mesh loaded once at setup — a shaped parameter with NO `update` at all, so it never refreshes (CONST cadence). Before 1.0.0 this was spelled as a `discrete` variable without a refresh trigger."
         },
         "decay_rate": {
@@ -122,37 +126,69 @@
         {
           "_comment": "An arrayed continuous decay over the cell/level grid; the updated parameters above seed the DISCRETE class and are inert to this algebra.",
           "lhs": {
-            "op": "index",
-            "args": [
-              {
-                "op": "D",
-                "args": [
-                  "c"
-                ],
-                "wrt": "t"
-              },
+            "op": "faq",
+            "args": [],
+            "output_idx": [
               "i",
               "k"
-            ]
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              },
+              "k": {
+                "from": "levels"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "c",
+                    "i",
+                    "k"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
           },
           "rhs": {
-            "op": "*",
-            "args": [
-              {
-                "op": "-",
-                "args": [
-                  "decay_rate"
-                ]
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
               },
-              {
-                "op": "index",
-                "args": [
-                  "c",
-                  "i",
-                  "k"
-                ]
+              "k": {
+                "from": "levels"
               }
-            ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    "decay_rate"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "c",
+                    "i",
+                    "k"
+                  ]
+                }
+              ]
+            }
           }
         }
       ]

@@ -2845,6 +2845,10 @@ fn compile_backend(
             details,
         });
     }
+    // An equation that defines a parameter (esm-spec §6.3.1) is refused under
+    // every compiler and every `Rhs` mode: the build used to drop it, answering
+    // with the parameter's default.
+    refuse_parameter_definitions(file, flat)?;
     if mode == Rhs::Never {
         return Ok(Backend::Static(
             "the caller asked for Rhs::Never".to_string(),
@@ -2903,6 +2907,7 @@ fn compile_backend(
 
     refuse_structurally_unreachable(file)?;
     refuse_unregistered_callback_reads(file)?;
+    refuse_reference_integrity_errors(file)?;
 
     if mode == Rhs::Auto && !has_differential_equations(file, model_name) {
         // Nothing to integrate is not nothing to run: an event, an implicit
@@ -2922,6 +2927,60 @@ fn compile_backend(
     let mut compiled = crate::simulate::build_array_compiled(file)?;
     compiled.runtime_mode = runtime_mode;
     Ok(Backend::Array(Rc::new(compiled)))
+}
+
+/// Refuse an equation whose left-hand side names a parameter
+/// (`equation_defines_parameter`, esm-spec §6.3.1), in the typed document or,
+/// for a flattened input, in the flattened equations. `validate` reports the
+/// same finding; Julia and Python refuse it at their front doors too.
+fn refuse_parameter_definitions(
+    file: Option<&EsmFile>,
+    flat: Option<&FlattenedSystem>,
+) -> Result<(), SimulateError> {
+    let refuse = |path: &str, message: &str| {
+        SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
+            "[{}] {path}: {message} (esm-spec §6.3.1)",
+            crate::diagnostic::codes::EQUATION_DEFINES_PARAMETER
+        )))
+    };
+    if let Some(file) = file
+        && let Some(e) = crate::structural::parameter_definition_errors(file).first()
+    {
+        return Err(refuse(&e.path, &e.message));
+    }
+    if let Some(flat) = flat {
+        for (k, eq) in flat.equations.iter().enumerate() {
+            let mut lhs = &eq.lhs;
+            let name = loop {
+                match lhs {
+                    crate::types::Expr::Variable(v) => break Some(v.as_str()),
+                    crate::types::Expr::Operator(n) if n.op == "faq" || n.op == "aggregate" => {
+                        match n.expr.as_deref() {
+                            Some(x) => lhs = x,
+                            None => break None,
+                        }
+                    }
+                    crate::types::Expr::Operator(n) if n.op == "index" => match n.args.first() {
+                        Some(x) => lhs = x,
+                        None => break None,
+                    },
+                    _ => break None,
+                }
+            };
+            if let Some(name) = name
+                && flat.parameters.contains_key(name)
+            {
+                return Err(refuse(
+                    &format!("/equations/{k}/lhs"),
+                    &format!(
+                        "Equation {k} defines '{name}', which is a parameter; an equation \
+                         defines unknowns only"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Refuse two declarations the document can hold but no build may run, each a
@@ -2959,6 +3018,43 @@ fn refuse_structurally_unreachable(file: &EsmFile) -> Result<(), SimulateError> 
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// The structural-validation codes a build refuses on (esm-libraries-spec
+/// §2.5.2). They are the reference-integrity findings: a name, reference or data
+/// source the document uses and does not declare. A build that went ahead would
+/// read a value the document does not describe. Equation-count and unit findings
+/// are not here: they stay `validate`'s to report.
+const BUILD_REFUSED_VALIDATION_CODES: &[&str] = &[
+    "undefined_variable",
+    "undefined_parameter",
+    "undefined_species",
+    "undefined_system",
+    "undefined_index_set",
+    "unresolved_scoped_ref",
+    "event_var_undeclared",
+    "data_source_undefined",
+    "missing_required_field",
+];
+
+/// Refuse the first [`BUILD_REFUSED_VALIDATION_CODES`] finding `validate`
+/// reports for `file`, with the validator's code, pointer and message.
+fn refuse_reference_integrity_errors(file: &EsmFile) -> Result<(), SimulateError> {
+    let result = crate::validate::validate(file);
+    if let Some(e) = result.structural_errors.iter().find(|e| {
+        // An inline test's references are the test runner's to report
+        // (esm-spec §6.6); the build does not evaluate them.
+        BUILD_REFUSED_VALIDATION_CODES.contains(&e.code.to_string().as_str())
+            && !e.path.contains("/tests/")
+    }) {
+        return Err(SimulateError::Compile(
+            crate::compile_error::CompileError::build_err(format!(
+                "[{}] {}: {} (esm-libraries-spec §2.5.2)",
+                e.code, e.path, e.message
+            )),
+        ));
     }
     Ok(())
 }

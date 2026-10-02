@@ -2475,6 +2475,9 @@ impl<'m> TapeBuilder<'m> {
             {
                 self.lower_wholesale(&node.args[0])?
             }
+            // Likewise an elementwise combination one of whose operands is a
+            // shape op (the bare `a + reshape(b, [1, 3])` spelling).
+            base @ Expr::Operator(_) if mentions_shape_op(base) => self.lower_wholesale(base)?,
             base => self.lower_expr(base, bx)?,
         };
         let n = node.args.len() - 1;
@@ -6764,4 +6767,16 @@ fn color_slab(prog: &mut TapeProgram) {
         segment_elems,
         recycled_elems,
     };
+}
+
+/// True iff `e` is a `reshape` / `transpose` / `concat`, or an operator one of
+/// whose operands (looking through operators) is.
+fn mentions_shape_op(e: &Expr) -> bool {
+    match e {
+        Expr::Operator(n) => {
+            matches!(n.op.as_str(), "reshape" | "transpose" | "concat")
+                || n.args.iter().any(mentions_shape_op)
+        }
+        _ => false,
+    }
 }

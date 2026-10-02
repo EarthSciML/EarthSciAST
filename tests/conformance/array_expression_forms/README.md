@@ -57,9 +57,8 @@ operand, which has no gather form; Julia refuses both by name
 
 ## Named exclusions
 
-None: every binding runs every fixture under both compilers. (Rust's tape once
-refused `shape_ops_symbolic_subscripts`; it now lowers a shape-op or `broadcast`
-base whole and reads it at the subscripts, as the interpreter's gather does.)
+None. Every fixture is required under `interpreter` and `native` in Julia,
+Rust and Python.
 
 The bare-operator spelling of the positional broadcast (`a + reshape(b, [1, 2])`
 with no `broadcast` node) is not a fixture: Python aligns it the NumPy way

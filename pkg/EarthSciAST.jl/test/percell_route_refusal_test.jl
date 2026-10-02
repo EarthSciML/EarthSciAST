@@ -261,11 +261,10 @@ _pr_rank4_build(doc, compiler; kw...) =
         @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(u)"]
     end
 
-    @testset "a faq initialization equation left per cell refuses" begin
-        # A body that reads a STATE is left to the routes that evaluate it
-        # against the initial state seeded so far, and a live forcing buffer
-        # read at the output index does not resolve with that index symbolic,
-        # so the only route left is the per-cell one.
+    # A body that reads ANOTHER state reads the initial state seeded so far, and
+    # the compiled fill takes that state as a snapshot of its current values,
+    # beside a live forcing buffer read at the output index.
+    @testset "a faq initialization equation reading another state is a compiled fill" begin
         vvar = Dict("v" => _PR.ModelVariable(_PR.UnknownVariable; shape = ["x"],
                                              default = 0.5))
         vzero = _PR.Equation(faq1(_Didx("v", _v("i"))), faq1(_n(0.0)))
@@ -274,23 +273,20 @@ _pr_rank4_build(doc, compiler; kw...) =
                           faq1(_op("+", _op("*", _n(2.0), _idx("F", _v("i"))),
                                    _idx("v", _v("i")))))])
         F = collect(1.0:5.0)
-        @test _pr_refuses(() -> seed(m, :native; param_arrays = Dict("F" => F)),
-                          "init(u)"; one_cell = true)
+        un, vn, rn = seed(m, :native; param_arrays = Dict("F" => F))
         ui, vi, _ = seed(m, :interpreter; param_arrays = Dict("F" => F))
         @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* F .+ 0.5
+        @test all(un[vn["u[$i]"]] === ui[vi["u[$i]"]] for i in 1:5)
+        @test [r.rule for r in _pr_rows(rn, :setup_codegen)] == ["init(u)"]
     end
 
-    # A body that reads a STATE but resolves with its index symbolic has a
-    # compile-once form, which walks its compiled tree at every cell against the
-    # initial state seeded so far. That is a tree walk per cell too, so a strict
-    # compiler refuses it by name rather than take it; the interpreter takes it.
-    @testset "a state-reading faq initialization equation refuses under native" begin
-        vvar = Dict("v" => _PR.ModelVariable(_PR.UnknownVariable; shape = ["x"],
-                                             default = 0.5))
-        vzero = _PR.Equation(faq1(_Didx("v", _v("i"))), faq1(_n(0.0)))
-        m = _PR.Model(merge(uvar(), vvar), [zero_eq(), vzero];
+    # A body that reads its OWN target has only the per-cell forms, which walk a
+    # tree at every cell against the state as it is being written. A strict
+    # compiler refuses that by name; the interpreter takes it.
+    @testset "a self-reading faq initialization equation refuses under native" begin
+        m = _PR.Model(uvar(), [zero_eq()];
                       initialization_equations = [_PR.Equation(_v("u"),
-                          faq1(_op("+", _op("*", _n(2.0), _v("i")), _idx("v", _v("i")))))])
+                          faq1(_op("+", _op("*", _n(2.0), _v("i")), _idx("u", _v("i")))))])
         e = try
             seed(m, :native); nothing
         catch err
@@ -300,8 +296,8 @@ _pr_rank4_build(doc, compiler; kw...) =
         @test occursin("init(u)", e.detail) && occursin("tree walk per cell", e.detail)
         @test occursin(_PR._ONE_CELL_NOTE, e.detail)
         ui, vi, ri = seed(m, :interpreter)
-        @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* (1:5) .+ 0.5
-        @test [r.rule for r in _pr_rows(ri, :setup_percell)] == ["init(u)"]
+        @test [ui[vi["u[$i]"]] for i in 1:5] == 2.0 .* (1:5)
+        @test !isempty(_pr_rows(ri, :setup_percell)) || !isempty(_pr_rows(ri, :setup_compiled))
     end
 
     # ── Field initial conditions answered once per field (#482) ───────────────
@@ -762,5 +758,50 @@ _pr_rank4_build(doc, compiler; kw...) =
         @test code_of(e) == "E_TREEWALK_UNSUPPORTED_EQUATION"
         @test occursin("SENTINEL", e.detail)
         @test count("as constant:", e.detail) == 1
+    end
+end
+
+# A caller's u0 override is part of the state an initialization equation reads
+# (user ruling; the Rust and Python front doors seed the same way), and a cell
+# the caller names keeps the caller's value.
+@testset "esm_problem: an initialization equation reads the caller's u0" begin
+    faqx(body) = Dict{String,Any}("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                                  "ranges" => Dict("i" => Dict("from" => "x")), "expr" => body)
+    ixd(v) = Dict{String,Any}("op" => "index", "args" => Any[v, "i"])
+    Dd(x) = Dict{String,Any}("op" => "D", "args" => Any[x], "wrt" => "t")
+    doc = Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "init_reads_u0"),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
+        "models" => Dict("M" => Dict{String,Any}(
+            "variables" => Dict{String,Any}(
+                "u" => Dict{String,Any}("type" => "unknown", "shape" => Any["x"], "default" => 1.0),
+                "w" => Dict{String,Any}("type" => "unknown", "shape" => Any["x"], "default" => 0.0)),
+            "equations" => Any[Dict("lhs" => faqx(Dd(ixd("u"))), "rhs" => faqx(0.0)),
+                               Dict("lhs" => faqx(Dd(ixd("w"))), "rhs" => faqx(0.0))],
+            "initialization_equations" => Any[Dict("lhs" => "w",
+                "rhs" => faqx(Dict{String,Any}("op" => "*", "args" => Any[2.0, ixd("u")])))])))
+    cells(prob, v) = [prob.u0[prob.var_map["M.$v[$i]"]] for i in 1:3]
+    for compiler in (:interpreter, :native)
+        p1 = _PR.esm_problem(doc, (0.0, 1.0); compiler = compiler, u0 = Dict("u[2]" => 7.0))
+        @test cells(p1, "u") == [1.0, 7.0, 1.0]
+        @test cells(p1, "w") == [2.0, 14.0, 2.0]
+        p2 = _PR.esm_problem(doc, (0.0, 1.0); compiler = compiler, u0 = Dict("u" => 4.0))
+        @test cells(p2, "w") == [8.0, 8.0, 8.0]
+        p3 = _PR.esm_problem(doc, (0.0, 1.0); compiler = compiler, u0 = Dict("M.w[2]" => -1.0))
+        @test cells(p3, "w") == [2.0, -1.0, 2.0]
+    end
+end
+
+# esm-spec §6.3.1 (user ruling): an equation whose left-hand side names a
+# parameter is refused at build by name, under every compiler, never dropped.
+@testset "esm_problem refuses an equation that defines a parameter" begin
+    path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "equation_defines_parameter.esm")
+    for compiler in (:interpreter, :native)
+        e = try
+            _PR.esm_problem(path, (0.0, 1.0); compiler = compiler); nothing
+        catch err
+            err
+        end
+        @test e isa _PR.TreeWalkError &&
+              e.code == _PR.ERROR_CODES.EQUATION_DEFINES_PARAMETER
     end
 end

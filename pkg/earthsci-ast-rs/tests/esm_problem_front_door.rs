@@ -145,3 +145,25 @@ fn a_control_character_in_a_declared_name_is_a_load_error() {
         );
     }
 }
+
+#[test]
+fn a_reference_integrity_error_is_refused_with_the_validator_code() {
+    // esm-libraries-spec §2.5.2: construction refuses on the validator's
+    // reference-integrity findings.
+    for compiler in COMPILERS {
+        let msg = refusal("tests/invalid/undefined_parameter.esm", compiler);
+        assert!(msg.contains("[undefined_parameter]"), "{compiler:?}: {msg}");
+    }
+}
+
+#[test]
+fn a_rate_law_reading_a_species_is_not_an_undefined_parameter() {
+    // `k / A`, with `A` a species of the system: a valid rate law.
+    for compiler in COMPILERS {
+        build(
+            "tests/simulation/mass_action_substrate_cancellation.esm",
+            compiler,
+        )
+        .unwrap_or_else(|e| panic!("{compiler:?}: {e}"));
+    }
+}

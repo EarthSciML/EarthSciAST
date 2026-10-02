@@ -190,6 +190,29 @@ function _refuse_callback_reads_in(model::Model, path::AbstractString,
     return nothing
 end
 
+# esm-libraries-spec §2.5.2: the structural-validation codes a build refuses on.
+# They are the reference-integrity findings: a name, reference or data source the
+# document uses and does not declare. A build that went ahead would read a value
+# the document does not describe. Equation-count and unit findings are not here:
+# they stay `validate`'s to report.
+const _BUILD_REFUSED_VALIDATION_CODES = ("undefined_variable", "undefined_parameter", "undefined_species", "undefined_system", "undefined_index_set", "unresolved_scoped_ref", "event_var_undeclared", "data_source_undefined", "missing_required_field")
+
+function _refuse_reference_integrity_errors(file::EsmFile; supplied_names = ())
+    for e in validate_structural(file)
+        e.error_type in _BUILD_REFUSED_VALIDATION_CODES || continue
+        # An inline test's references are the test runner's to report (§6.6);
+        # the build does not evaluate them.
+        occursin("/tests/", e.path) && continue
+        # A bare name the caller binds at construction — a `const_arrays`,
+        # `param_arrays` or `providers` key — is in scope for this build.
+        e.error_type == ERROR_CODES.UNDEFINED_VARIABLE &&
+            get(e.details, "variable", nothing) in supplied_names && continue
+        throw(ParseError("[$(e.error_type)] $(e.path): $(e.message) (esm-libraries-spec §2.5.2)";
+                         code=e.error_type, path=e.path, details=e.details))
+    end
+    return nothing
+end
+
 #
 # `renames_out`, when given, is filled with the flattened system's
 # `merged_variable_renames` (issue #230) — the states an `operator_compose`
@@ -199,7 +222,8 @@ end
 # the existing callers that want only the doc are unchanged.
 function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}(),
                           base_path::AbstractString = pwd(),
-                          renames_out::Union{Nothing,AbstractDict} = nothing)
+                          renames_out::Union{Nothing,AbstractDict} = nothing,
+                          supplied_names = ())
     if input isa AbstractString
         isfile(input) || throw(SimulateError("simulate: no such file '$input'"))
         input = load_path(input; metaparameters=metaparameters)
@@ -227,6 +251,7 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         _refuse_unsupported_major_version(input.esm)
         _refuse_reserved_declaration_names(input)
         _refuse_unregistered_callback_reads(input)
+        _refuse_reference_integrity_errors(input; supplied_names=supplied_names)
         run_coordinates = input.coordinates
         run_solver = input.solver
         for (mname, model) in something(input.models, ())
@@ -1193,7 +1218,9 @@ function esm_problem(input, tspan;
     # the flattened system's metadata is still reachable.
     merged_renames = OrderedDict{String,String}()
     doc = _prepare_run_doc(input; metaparameters=metaparams, base_path=base_path,
-                           renames_out=merged_renames)
+                           renames_out=merged_renames,
+                           supplied_names=Set{String}(string(k) for d in
+                               (const_arrays, param_arrays, providers) if d !== nothing for k in keys(d)))
 
     # esm-spec §6.6.2: a `p` binding is a scalar, or — for a SHAPED parameter —
     # INLINE ARRAY DATA (a row-major nested array supplying the whole column).
@@ -1295,7 +1322,8 @@ function esm_problem(input, tspan;
     # executable is wrapped back into the in-place `f!` this Problem's surface
     # promises, just below. Every other compiler builds the in-place evaluator
     # directly. See src/compiler_xla.jl.
-    f!, u0_built, p_built, _tspan, var_map = _build_evaluator(doc;
+    f!, u0_built, p_built, _tspan, var_map = _with_caller_u0(u0) do
+      _build_evaluator(doc;
         compiler = compiler,
         form = compiler === :xla ? :oop : :inplace,
         model_name = model_name,
@@ -1309,6 +1337,7 @@ function esm_problem(input, tspan;
         # The front door fetches these pre-sliced right after value-invention.
         _gated_providers = gated_providers,
         _sample_time = t_sample)
+    end
 
     if compiler === :xla
         f! = _xla_problem_rhs(f!, var_map, u0_built, p_built,
