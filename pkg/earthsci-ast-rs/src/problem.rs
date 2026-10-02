@@ -2900,6 +2900,7 @@ fn compile_backend(
 
     refuse_structurally_unreachable(file)?;
     refuse_unregistered_callback_reads(file)?;
+    refuse_reference_integrity_errors(file)?;
 
     if mode == Rhs::Auto && !has_differential_equations(file, model_name) {
         // Nothing to integrate is not nothing to run: an event, an implicit
@@ -3010,6 +3011,43 @@ fn refuse_structurally_unreachable(file: &EsmFile) -> Result<(), SimulateError> 
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// The structural-validation codes a build refuses on (esm-libraries-spec
+/// §2.5.2). They are the reference-integrity findings: a name, reference or data
+/// source the document uses and does not declare. A build that went ahead would
+/// read a value the document does not describe. Equation-count and unit findings
+/// are not here: they stay `validate`'s to report.
+const BUILD_REFUSED_VALIDATION_CODES: &[&str] = &[
+    "undefined_variable",
+    "undefined_parameter",
+    "undefined_species",
+    "undefined_system",
+    "undefined_index_set",
+    "unresolved_scoped_ref",
+    "event_var_undeclared",
+    "data_source_undefined",
+    "missing_required_field",
+];
+
+/// Refuse the first [`BUILD_REFUSED_VALIDATION_CODES`] finding `validate`
+/// reports for `file`, with the validator's code, pointer and message.
+fn refuse_reference_integrity_errors(file: &EsmFile) -> Result<(), SimulateError> {
+    let result = crate::validate::validate(file);
+    if let Some(e) = result.structural_errors.iter().find(|e| {
+        // An inline test's references are the test runner's to report
+        // (esm-spec §6.6); the build does not evaluate them.
+        BUILD_REFUSED_VALIDATION_CODES.contains(&e.code.to_string().as_str())
+            && !e.path.contains("/tests/")
+    }) {
+        return Err(SimulateError::Compile(
+            crate::compile_error::CompileError::build_err(format!(
+                "[{}] {}: {} (esm-libraries-spec §2.5.2)",
+                e.code, e.path, e.message
+            )),
+        ));
     }
     Ok(())
 }

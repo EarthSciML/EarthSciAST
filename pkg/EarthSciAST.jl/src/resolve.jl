@@ -1166,6 +1166,20 @@ function _inline_model_subsystems!(native::AbstractDict{String,Any}, model::Abst
                     _absolutize_nested_refs!(cmodel, compdir)
                     subs[sub_key] = cmodel
                     _merge_native_index_sets!(native, comp, ref; staged=staged, staged_refs=staged_refs)
+                    # The by-name blocks the leaf's AST references travel up with
+                    # it, exactly as at a top-level `models.<k>` mount (the two
+                    # forms are one mechanism, esm-spec §4.7; a hoisted
+                    # `data_sources` block is §8.2.1's case). The parent wins on a
+                    # key clash.
+                    for blk in ("function_tables", "data_sources")
+                        src = get(comp, blk, nothing)
+                        (src isa AbstractDict && !isempty(src)) || continue
+                        dst = get!(() -> Dict{String,Any}(), native, blk)
+                        dst isa AbstractDict || continue
+                        for (k, v) in src
+                            haskey(dst, k) || (dst[k] = v)
+                        end
+                    end
                 finally
                     delete!(visited, canonical)
                 end
