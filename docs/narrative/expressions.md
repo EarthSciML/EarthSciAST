@@ -2,6 +2,7 @@
 title: "Expressions, three ways"
 description: "Every example on this page is parsed at build time: the text, the mathematics and the JSON are the same expression."
 weight: 20
+show_source: true
 ---
 
 An `.esm` document stores expressions as JSON trees, but nobody wants to write

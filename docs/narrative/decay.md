@@ -2,6 +2,7 @@
 title: "Writing a model in prose"
 description: "A tutorial: define, test and plot a model inside the page that explains it."
 weight: 10
+show_source: true
 ---
 
 A narrative page defines its model as it explains it. The mathematics you read
