@@ -145,7 +145,8 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
         ca = Dict{String,Any}("edge_lo" => lo, "edge_hi" => lo .+ 1)
         dus = Dict{Symbol,Vector{Float64}}()
         for c in (:interpreter, :native)
-            prob = ESS.esm_problem(path, (0.0, 1.0); compiler = c, const_arrays = ca)
+            prob = ESS.esm_problem(path, (0.0, 1.0); compiler = c, const_arrays = ca,
+                                   u0 = harness_u0(path))
             du = fill(NaN, length(prob.u0))
             prob.f!(du, ones(length(prob.u0)), prob.p, 0.0)
             dus[c] = du

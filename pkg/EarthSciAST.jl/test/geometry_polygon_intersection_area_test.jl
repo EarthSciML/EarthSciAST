@@ -161,7 +161,8 @@ end
     for (path, ca, var, want) in cases
         dus = Dict{Symbol,Vector{Float64}}()
         for c in (:interpreter, :native)
-            prob = _PIA.esm_problem(path, (0.0, 1.0); compiler = c, const_arrays = ca)
+            prob = _PIA.esm_problem(path, (0.0, 1.0); compiler = c, const_arrays = ca,
+                                    u0 = harness_u0(path))
             u = ones(length(prob.u0))
             du = fill(NaN, length(u))
             prob.f!(du, u, prob.p, 0.0)

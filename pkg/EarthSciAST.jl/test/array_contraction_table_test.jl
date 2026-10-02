@@ -22,7 +22,9 @@ const _ACT_REPO = normpath(joinpath(@__DIR__, "..", "..", ".."))
 
 function _act_problem(path, compiler)
     _ACT._reset_cascade_tally!()
-    prob = _ACT.esm_problem(path, (0.0, 1.0); compiler=compiler)
+    # The starting values the documents' ODE states leave to the harness
+    # (esm-spec §11.4).
+    prob = _ACT.esm_problem(path, (0.0, 1.0); compiler=compiler, u0=harness_u0(path))
     return prob, copy(_ACT._CASCADE_TALLY)
 end
 

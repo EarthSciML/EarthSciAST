@@ -322,7 +322,9 @@ end
     @test length(results) == 1
     @test results[1].status == EarthSciAST.ERROR
     @test results[1].actual === nothing
-    @test occursin("E_TREEWALK_UNBOUND_VARIABLE", results[1].message)
+    # The construction's reference-integrity gate now names it first, as an
+    # undeclared variable.
+    @test occursin("undefined_variable", results[1].message)
     @test occursin("ghost", results[1].message)
 end
 
