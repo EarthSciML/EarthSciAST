@@ -1,0 +1,59 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "unbound_index_symbol",
+    "description": "A free index symbol on an equation's left-hand side (esm-spec 6.3.1): `index(D(u), i)` with no faq binding `i`. Index symbols are local to the faq that binds them, so `i` names nothing: `unbound_index_symbol`. The valid spelling is an explicit faq on both sides.",
+    "authors": [
+      "EarthSciAST conformance"
+    ]
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "index",
+            "args": [
+              {
+                "op": "D",
+                "args": [
+                  "u"
+                ],
+                "wrt": "t"
+              },
+              "i"
+            ]
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "index",
+                "args": [
+                  "u",
+                  "i"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

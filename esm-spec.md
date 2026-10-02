@@ -2303,7 +2303,7 @@ Optional arrayed-variable fields:
 
 | Field | Description |
 |---|---|
-| `shape` | Ordered list of index-set names (keys in the document-scoped `index_sets` registry) the variable is arrayed over. Omitted or null means the variable is scalar. Index expressions into the variable (`index`, `faq` ranges) resolve against these sets. The names are also what an **array-level expression** aligns its operands by: in `D(dp) ~ w2 * z1` the operands are matched to `dp`'s axes by index-set name and replicated along the axes they do not declare, and an operand carrying an index set `dp` is not shaped over is rejected (`array_shape_mismatch`). See Section 4.3.4. |
+| `shape` | Ordered list of index-set names (keys in the document-scoped `index_sets` registry) the variable is arrayed over. Omitted or null means the variable is scalar — unless its defining equation's right-hand side is a `faq` whose output indices range over explicit inline intervals (`ramp ~ faq(output_idx=[i], ranges={i: [1, 2]}, expr=u*i)`): such an unknown takes its shape, one axis per output index, from those ranges, since a 0-D declaration lifts when it meets an array. If a `shape` is declared as well, its extents MUST equal the ranges' extents, and a mismatch is `array_shape_mismatch`. Index expressions into the variable (`index`, `faq` ranges) resolve against these sets. The names are also what an **array-level expression** aligns its operands by: in `D(dp) ~ w2 * z1` the operands are matched to `dp`'s axes by index-set name and replicated along the axes they do not declare, and an operand carrying an index set `dp` is not shaped over is rejected (`array_shape_mismatch`). See Section 4.3.4. |
 | `location` | Optional advisory placement tag for a staggered quantity (e.g., `"cell_center"`, `"edge_normal"`, `"x_face"`, `"vertex"`). Metadata only — the index set a quantity lives on is given by `shape`. Omitted means no explicit placement. |
 
 **Inline array data.** A shaped variable's `default` is a **number**, or a
@@ -2374,7 +2374,7 @@ Python, Rust, and Go; `odeStates` in TypeScript).
 | Function | Returns |
 |---|---|
 | `ode_states(model)` | unknowns appearing under `D(·, t)` on some equation LHS |
-| `observed_unknowns(model)` | unknowns **defined** by an equation whose LHS names them — a bare-variable LHS (`y ~ f(…)`) or an indexed-variable LHS (`y[i] ~ f(…)`, which defines the whole array `y`) — eliminable, materializable |
+| `observed_unknowns(model)` | unknowns **defined** by an equation whose LHS names them — a bare-variable LHS (`y ~ f(…)`) or an indexed-variable LHS (`y[i] ~ f(…)`, with `i` bound by a `faq`, which defines the whole array `y`) — eliminable, materializable |
 | `algebraic_unknowns(model)` | unknowns constrained only implicitly — no equation names them on its LHS (`H*H*SO4 ~ Ksp`) |
 | `is_ode_state(model, name)` | membership test for the first |
 
@@ -2396,6 +2396,26 @@ beyond bookkeeping: `algebraic_unknowns` seeds the cadence partition
 resolves through its defining equation's RHS — so misclassifying an arrayed
 definition as algebraic pushes build-time work (const-backed geometry and
 regridding arrays) onto the per-timestep hot path.
+
+**What a left-hand side may name.** An equation defines, or constrains, the
+unknowns its left-hand side names; it never defines a **parameter**. An
+equation whose left-hand side names a parameter — bare (`k ~ …`), indexed
+(`k[i] ~ …`), wrapped in a `faq`, or through a scoped reference into a
+subsystem (`Top.sub.k ~ …`) — is invalid, with the structural diagnostic
+`equation_defines_parameter`: a parameter's value comes from its `default`,
+a `distribution`, an override, its `update` (§5.4) or a coupling, and a
+binding that silently drops the equation, or silently lets it override the
+parameter, reports an answer the document does not describe. A binding MUST
+reject such a document in validation and MUST refuse to build it.
+
+Likewise, an index symbol is local to the `faq` that binds it (§4.3). A string
+subscript of an `index` on an equation's left-hand side that names no declared
+variable or metaparameter MUST be bound by a `faq` enclosing it on that
+left-hand side, or — for the bare-index definition `index(V, k) ~ faq{k}(…)` —
+by the right-hand side's `faq` `output_idx`. A free one (`index(D(u), i) ~ …`
+with no `faq` binding `i`) makes the document invalid, with the structural
+diagnostic `unbound_index_symbol`; the pointwise form is written with an
+explicit `faq` on both sides.
 
 Note that *eliminable* and *inlineable* are not the same thing. A scalar
 observed is eliminated by substituting its definition into every consumer; an
@@ -2508,9 +2528,10 @@ to answer a derived question is precisely what 1.0.0 removes.
 `system_kind` → `"sde"`.
 
 Adding an arrayed unknown `w` shaped over `bins` and the equation
-`{"lhs": {"op": "index", "args": ["w", "i"]}, "rhs": …}` puts `w` in
-`observed_unknowns`, not `algebraic_unknowns`: the LHS's base name is `w`, so
-the equation defines it.
+`{"lhs": {"op": "index", "args": ["w", "i"]}, "rhs": {"op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "bins"}}, …}}`
+puts `w` in `observed_unknowns`, not `algebraic_unknowns`: the LHS's base name
+is `w`, so the equation defines it. (The right-hand `faq` is what binds `i`;
+with `i` bound by nothing the document is `unbound_index_symbol`.)
 
 ### 6.4 Advection Model Example
 

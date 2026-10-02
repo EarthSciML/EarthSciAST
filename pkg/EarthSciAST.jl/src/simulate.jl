@@ -1295,7 +1295,8 @@ function esm_problem(input, tspan;
     # executable is wrapped back into the in-place `f!` this Problem's surface
     # promises, just below. Every other compiler builds the in-place evaluator
     # directly. See src/compiler_xla.jl.
-    f!, u0_built, p_built, _tspan, var_map = _build_evaluator(doc;
+    f!, u0_built, p_built, _tspan, var_map = _with_caller_u0(u0) do
+      _build_evaluator(doc;
         compiler = compiler,
         form = compiler === :xla ? :oop : :inplace,
         model_name = model_name,
@@ -1309,6 +1310,7 @@ function esm_problem(input, tspan;
         # The front door fetches these pre-sliced right after value-invention.
         _gated_providers = gated_providers,
         _sample_time = t_sample)
+    end
 
     if compiler === :xla
         f! = _xla_problem_rhs(f!, var_map, u0_built, p_built,

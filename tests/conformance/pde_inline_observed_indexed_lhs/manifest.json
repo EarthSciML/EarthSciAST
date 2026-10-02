@@ -299,9 +299,9 @@
       "model": "M",
       "test_id": "refuse_scalar_rhs",
       "assertion_count": 2,
-      "diagnostic": "indexed_definition_unsupported_form",
+      "diagnostic": "unbound_index_symbol",
       "names_variable": "w_scalar",
-      "note": "A bare-index definition with a SCALAR right side (`w_scalar[k] ~ 5.0`): no `faq` binds `k`, so nothing supplies the index range. Before §5.36.2, Rust failed inside the integrator on it."
+      "note": "A bare-index definition with a SCALAR right side (`w_scalar[k] ~ 5.0`): no `faq` binds `k`, so nothing supplies the index range. Before §5.36.2, Rust failed inside the integrator on it. Since the esm-spec 6.3.1 ruling on free index symbols (2026-09-29) the document is invalid with unbound_index_symbol: `k` is bound by nothing."
     },
     {
       "id": "refuse_offset_subscript",
@@ -319,9 +319,9 @@
       "model": "M",
       "test_id": "refuse_nested_index",
       "assertion_count": 2,
-      "diagnostic": "indexed_definition_unsupported_form",
+      "diagnostic": "unbound_index_symbol",
       "names_variable": "w_nested",
-      "note": "A bare-index definition whose gather is NESTED (`index(index(w_nested, j), k) ~ faq{k}(2*k)`): its base name is `w_nested`, but it addresses a cell of a cell rather than the whole array. Before §5.36.2's head check, Rust and Python both RAN it while Julia refused it with an unrelated shape error."
+      "note": "A bare-index definition whose gather is NESTED (`index(index(w_nested, j), k) ~ faq{k}(2*k)`): its base name is `w_nested`, but it addresses a cell of a cell rather than the whole array. Before §5.36.2's head check, Rust and Python both RAN it while Julia refused it with an unrelated shape error. Since the esm-spec 6.3.1 ruling on free index symbols (2026-09-29) the document is invalid with unbound_index_symbol: `j` is bound by nothing (the right-hand faq binds only `k`)."
     }
   ]
 }

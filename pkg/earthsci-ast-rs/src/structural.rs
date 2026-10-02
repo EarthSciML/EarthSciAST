@@ -61,6 +61,10 @@ pub(crate) fn validate_model(
         errors,
     );
 
+    // esm-spec §6.3.1: what an equation's left-hand side may name — never a
+    // parameter, and no index symbol no `faq` binds. Subsystems included.
+    errors.extend(lhs_name_errors(esm_file, model_name, model));
+
     ctx.check_equation_balance(errors);
     let unit_env = ctx.check_unit_declarations(errors);
     ctx.check_initialization_equation_refs(errors);
@@ -1104,6 +1108,263 @@ fn check_subsystem_array_defaults<'a, I>(
                 &format!("{sub_path}/subsystems"),
                 errors,
             );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// esm-spec §6.3.1 "What a left-hand side may name"
+// ---------------------------------------------------------------------------
+
+/// Every `equation_defines_parameter` and `unbound_index_symbol` finding for
+/// one top-level model and the inline subsystems it mounts, at each equation's
+/// `lhs` pointer. Shared by `validate` and by `esm_problem`, which refuses the
+/// first (a binding that dropped such an equation, or let it override the
+/// parameter, would answer with a number the document does not describe).
+pub(crate) fn lhs_name_errors(
+    esm_file: &EsmFile,
+    model_name: &str,
+    model: &crate::Model,
+) -> Vec<StructuralError> {
+    let mut out = Vec::new();
+    let mut scope: HashSet<String> = esm_file
+        .metaparameters
+        .as_ref()
+        .and_then(|m| m.as_object())
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    scope.insert(independent_variable(esm_file));
+    let model_json = serde_json::to_value(model).unwrap_or(serde_json::Value::Null);
+    lhs_name_errors_in(
+        esm_file,
+        &format!("/models/{model_name}"),
+        &model_json,
+        &scope,
+        &mut out,
+    );
+    out
+}
+
+/// The `equation_defines_parameter` findings of every model in `esm_file`,
+/// in model-name order — what `esm_problem` refuses before it builds.
+pub(crate) fn parameter_definition_errors(esm_file: &EsmFile) -> Vec<StructuralError> {
+    let Some(models) = &esm_file.models else {
+        return Vec::new();
+    };
+    let mut names: Vec<&String> = models.keys().collect();
+    names.sort();
+    names
+        .into_iter()
+        .flat_map(|n| lhs_name_errors(esm_file, n, &models[n]))
+        .filter(|e| matches!(e.code, StructuralErrorCode::EquationDefinesParameter))
+        .collect()
+}
+
+/// One model's equations (as JSON, so an inline subsystem — untyped in
+/// [`crate::Model`] — is walked by the same code), then its subsystems.
+fn lhs_name_errors_in(
+    esm_file: &EsmFile,
+    path: &str,
+    model: &serde_json::Value,
+    doc_scope: &HashSet<String>,
+    out: &mut Vec<StructuralError>,
+) {
+    let mut names: HashSet<String> = doc_scope.clone();
+    if let Some(vars) = model.get("variables").and_then(|v| v.as_object()) {
+        names.extend(vars.keys().cloned());
+    }
+    for (k, eq) in model
+        .get("equations")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let Some(lhs) = eq.get("lhs") else { continue };
+        let lhs_path = format!("{path}/equations/{k}/lhs");
+        if lhs.get("op").and_then(|o| o.as_str()) == Some("ic") {
+            continue;
+        }
+        if let Some(name) = lhs_defined_name(lhs)
+            && lhs_names_parameter(esm_file, model, name)
+        {
+            out.push(StructuralError {
+                path: lhs_path.clone(),
+                code: StructuralErrorCode::EquationDefinesParameter,
+                message: format!(
+                    "Equation {k} defines '{name}', which is a parameter; an equation \
+                     defines unknowns only"
+                ),
+                details: serde_json::json!({ "variable": name }),
+            });
+        }
+        // The bare-index definition `index(V, k) ~ faq{k}(…)` takes its
+        // subscripts from the right-hand side's `output_idx`.
+        let mut bound: HashSet<String> = HashSet::new();
+        if let Some(rhs) = eq.get("rhs")
+            && matches!(
+                rhs.get("op").and_then(|o| o.as_str()),
+                Some("faq") | Some("aggregate")
+            )
+        {
+            bound.extend(json_output_idx(rhs));
+        }
+        let mut free: Vec<String> = Vec::new();
+        collect_free_lhs_subscripts(lhs, &bound, &names, &mut free);
+        let subject = lhs_subject_name(lhs);
+        for symbol in free {
+            let defining = subject.map_or(String::new(), |v| format!(" (defining '{v}')"));
+            out.push(StructuralError {
+                path: lhs_path.clone(),
+                code: StructuralErrorCode::UnboundIndexSymbol,
+                message: format!(
+                    "Equation {k}{defining} subscripts its left-hand side with \
+                     '{symbol}', which no faq binds"
+                ),
+                details: serde_json::json!({ "symbol": symbol, "variable": subject }),
+            });
+        }
+    }
+    if let Some(subs) = model.get("subsystems").and_then(|v| v.as_object()) {
+        let mut sub_names: Vec<&String> = subs.keys().collect();
+        sub_names.sort();
+        for s in sub_names {
+            let sub = &subs[s];
+            if sub.get("ref").is_some() {
+                continue; // an unresolved mount: nothing inline to check
+            }
+            lhs_name_errors_in(
+                esm_file,
+                &format!("{path}/subsystems/{s}"),
+                sub,
+                doc_scope,
+                out,
+            );
+        }
+    }
+}
+
+/// The variable a defining left-hand side names, read through its `faq` and
+/// `index` wrappers; `None` for a derivative (`D(…)`), an `ic`, or an
+/// expression that names no single variable.
+fn lhs_defined_name(lhs: &serde_json::Value) -> Option<&str> {
+    let mut e = lhs;
+    loop {
+        if let Some(s) = e.as_str() {
+            return Some(s);
+        }
+        match e.get("op").and_then(|o| o.as_str())? {
+            "faq" | "aggregate" => e = e.get("expr")?,
+            "index" => e = e.get("args")?.as_array()?.first()?,
+            _ => return None,
+        }
+    }
+}
+
+/// Whether `name`, written on a left-hand side in `model`, names a parameter:
+/// a local variable, a scoped path into `model`'s subsystems, or a path from a
+/// top-level model of the document (which may be `model` itself).
+fn lhs_names_parameter(esm_file: &EsmFile, model: &serde_json::Value, name: &str) -> bool {
+    let parts: Vec<&str> = name.split('.').collect();
+    let is_param = |m: &serde_json::Value, rest: &[&str]| -> Option<bool> {
+        let mut cur = m;
+        for p in &rest[..rest.len() - 1] {
+            cur = cur.get("subsystems")?.get(*p)?;
+        }
+        let v = cur.get("variables")?.get(*rest.last()?)?;
+        Some(v.get("type").and_then(|t| t.as_str()) == Some("parameter"))
+    };
+    if let Some(found) = is_param(model, &parts) {
+        return found;
+    }
+    if parts.len() > 1
+        && let Some(models) = &esm_file.models
+        && let Some(top) = models.get(parts[0])
+        && let Ok(top_json) = serde_json::to_value(top)
+        && let Some(found) = is_param(&top_json, &parts[1..])
+    {
+        return found;
+    }
+    false
+}
+
+/// The variable a left-hand side is about, read through `faq`, `index` and
+/// `D` wrappers alike (for naming it in a diagnostic).
+fn lhs_subject_name(lhs: &serde_json::Value) -> Option<&str> {
+    let mut e = lhs;
+    loop {
+        if let Some(s) = e.as_str() {
+            return Some(s);
+        }
+        match e.get("op").and_then(|o| o.as_str())? {
+            "faq" | "aggregate" => e = e.get("expr")?,
+            "index" | "D" => e = e.get("args")?.as_array()?.first()?,
+            _ => return None,
+        }
+    }
+}
+
+fn json_output_idx(node: &serde_json::Value) -> Vec<String> {
+    node.get("output_idx")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|x| x.as_str().map(str::to_string))
+        .collect()
+}
+
+/// The string subscripts of `index` nodes in a left-hand side that name no
+/// variable or metaparameter in scope and no enclosing `faq` binds, in order,
+/// without repeats.
+fn collect_free_lhs_subscripts(
+    e: &serde_json::Value,
+    bound: &HashSet<String>,
+    names: &HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    let Some(obj) = e.as_object() else { return };
+    let op = obj.get("op").and_then(|o| o.as_str()).unwrap_or("");
+    let args: &[serde_json::Value] = obj
+        .get("args")
+        .and_then(|a| a.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    match op {
+        "faq" | "aggregate" => {
+            let mut inner = bound.clone();
+            inner.extend(json_output_idx(e));
+            if let Some(r) = obj.get("ranges").and_then(|r| r.as_object()) {
+                inner.extend(r.keys().cloned());
+            }
+            if let Some(x) = obj.get("expr") {
+                collect_free_lhs_subscripts(x, &inner, names, out);
+            }
+            for a in args {
+                collect_free_lhs_subscripts(a, &inner, names, out);
+            }
+        }
+        "index" => {
+            if let Some(base) = args.first() {
+                collect_free_lhs_subscripts(base, bound, names, out);
+            }
+            for s in args.iter().skip(1) {
+                match s.as_str() {
+                    Some(sym) => {
+                        if !bound.contains(sym)
+                            && !names.contains(sym)
+                            && !out.iter().any(|o| o == sym)
+                        {
+                            out.push(sym.to_string());
+                        }
+                    }
+                    None => collect_free_lhs_subscripts(s, bound, names, out),
+                }
+            }
+        }
+        _ => {
+            for a in args {
+                collect_free_lhs_subscripts(a, bound, names, out);
+            }
         }
     }
 }

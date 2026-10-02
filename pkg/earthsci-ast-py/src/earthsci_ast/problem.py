@@ -66,7 +66,7 @@ from .compiler import (
 )
 from .errors import MissingDataError
 from .error_handling import CALLBACK_UNREGISTERED
-from .esm_types import CouplingType, EsmFile, ExprNode
+from .esm_types import CouplingType, EsmFile, ExprNode, is_aggregate_op
 from .expr_walk import iter_children
 from .expression import UnsupportedConstructError, free_variables
 from .flatten import (
@@ -752,6 +752,11 @@ def _esm_problem_under(
     # A declared shape over an undeclared index set, on a state nothing sizes.
     _assert_shaped_states_have_extent(flat)
 
+    # esm-spec §6.3.1: an equation never defines a parameter. A document that
+    # tries is refused by name on every carrier (a caller-flattened system never
+    # passed through `validate`), never built with the equation dropped.
+    _refuse_parameter_definition(flat)
+
     # One unknown carrying both a derivative equation and a bare-LHS one.
     _assert_no_doubly_defined_state(flat)
 
@@ -1254,6 +1259,38 @@ def _assert_shaped_states_have_extent(flat: FlattenedSystem) -> None:
             f"does (esm-spec §6.3, §9.7.10: a name still unresolved after "
             f"injection is an error at the build)"
         )
+
+
+def _defined_lhs_name(lhs: Any) -> str | None:
+    """The variable a DEFINING left-hand side names — bare, ``index(...)``, or
+    either as the body of a ``faq`` — or ``None`` for a derivative, an ``ic``
+    or an expression LHS."""
+    e = lhs
+    while isinstance(e, ExprNode):
+        if is_aggregate_op(e.op) and e.expr is not None:
+            e = e.expr
+        elif e.op == "index" and e.args:
+            e = e.args[0]
+        else:
+            return None
+    return e if isinstance(e, str) else None
+
+
+def _refuse_parameter_definition(flat: FlattenedSystem) -> None:
+    """``equation_defines_parameter`` (esm-spec §6.3.1): an equation whose
+    left-hand side names a parameter. A parameter's value comes from its
+    default, an override, its update or a coupling; building with the equation
+    dropped, or letting it override the parameter, answers for a model the
+    document does not describe."""
+    for eq in flat.equations:
+        name = _defined_lhs_name(eq.lhs)
+        if name is not None and name in flat.parameters:
+            raise SimulationError(
+                f"equation_defines_parameter: the equation "
+                f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}` defines "
+                f"{name!r}, which is a parameter; an equation defines unknowns only "
+                f"(esm-spec §6.3.1)"
+            )
 
 
 def _assert_no_doubly_defined_state(flat: FlattenedSystem) -> None:

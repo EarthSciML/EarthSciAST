@@ -62,6 +62,10 @@ const ERROR_CODES = (
     EMPTY_CALLBACK_ID = "empty_callback_id",
     EQUATION_COUNT_MISMATCH = "equation_count_mismatch",
     EVENT_AFFECTS_PARAMETER = "event_affects_parameter",
+    # esm-spec §6.3.1: an equation's left-hand side names a parameter, or
+    # subscripts with an index symbol no faq binds.
+    EQUATION_DEFINES_PARAMETER = "equation_defines_parameter",
+    UNBOUND_INDEX_SYMBOL = "unbound_index_symbol",
     EVENT_VAR_UNDECLARED = "event_var_undeclared",
     INVALID_BROADCAST_FN = "invalid_broadcast_fn",
     INVALID_REFERENCE_SYNTAX = "invalid_reference_syntax",

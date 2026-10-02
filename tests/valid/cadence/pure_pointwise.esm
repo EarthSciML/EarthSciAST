@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.1.0",
   "metadata": {
     "name": "pure_pointwise",
     "description": "M3 cadence-partition fixture (RFC semiring-faq-unified-ir §6.1; CONFORMANCE_SPEC.md §5.7; bead ess-my4.3.6): the PURE-POINTWISE case — all CONTINUOUS, EMPTY per-event handler, EMPTY materialization set. A pointwise relaxation-plus-forcing RHS D(u[i])/dt = -u[i] + A*sin(omega*t). Every expression node classes CONTINUOUS: the state loads u[i] change every step, and CRUCIALLY the explicit continuous-`t` forcing sin(omega*t) is CONTINUOUS too — NOT discrete. This is the §6.1 subtlety the partition is named for: classifying by CADENCE (\"changes every step\") rather than by ROLE (\"the unknown we solve for\") keeps an analytic forcing out of DISCRETE, where it would silently go stale between events. The CONST scalar parameters `A` and `omega` feed CONTINUOUS parents and inline as literals (the pre-existing constant-fold) — a bare scalar constant is the degenerate zero-buffer case and is NOT a partition materialization point, so the materialization-point SET is empty, the per-event DISCRETE handler is empty, and the hot per-step `_Node` tree is the entire RHS (identical in shape to today's compiled output — performance for existing pointwise rules is unchanged). Every node carries an `expect_cadence:\"continuous\"` assertion the partition pass checks against its derived class. Validates against the schema with no evaluator.",
@@ -48,58 +48,82 @@
         {
           "_comment": "D(u[i])/dt = -u[i] + A*sin(omega*t). All nodes CONTINUOUS. omega*t is CONST*CONTINUOUS = CONTINUOUS: the analytic forcing recomputes every step and must NOT be classed DISCRETE (it is not piecewise-constant between events). No topology, no discrete fields -> empty materialization set, empty per-event handler, entire RHS is the hot tree.",
           "lhs": {
-            "op": "index",
-            "args": [
-              {
-                "op": "D",
-                "args": [
-                  "u"
-                ],
-                "wrt": "t"
-              },
+            "op": "faq",
+            "args": [],
+            "output_idx": [
               "i"
-            ]
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
           },
           "rhs": {
-            "op": "+",
-            "expect_cadence": "continuous",
-            "args": [
-              {
-                "op": "-",
-                "expect_cadence": "continuous",
-                "args": [
-                  {
-                    "op": "index",
-                    "args": [
-                      "u",
-                      "i"
-                    ],
-                    "expect_cadence": "continuous"
-                  }
-                ]
-              },
-              {
-                "op": "*",
-                "expect_cadence": "continuous",
-                "args": [
-                  "A",
-                  {
-                    "op": "sin",
-                    "expect_cadence": "continuous",
-                    "args": [
-                      {
-                        "op": "*",
-                        "expect_cadence": "continuous",
-                        "args": [
-                          "omega",
-                          "t"
-                        ]
-                      }
-                    ]
-                  }
-                ]
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
               }
-            ]
+            },
+            "expr": {
+              "op": "+",
+              "expect_cadence": "continuous",
+              "args": [
+                {
+                  "op": "-",
+                  "expect_cadence": "continuous",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i"
+                      ],
+                      "expect_cadence": "continuous"
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "expect_cadence": "continuous",
+                  "args": [
+                    "A",
+                    {
+                      "op": "sin",
+                      "expect_cadence": "continuous",
+                      "args": [
+                        {
+                          "op": "*",
+                          "expect_cadence": "continuous",
+                          "args": [
+                            "omega",
+                            "t"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
           }
         }
       ]

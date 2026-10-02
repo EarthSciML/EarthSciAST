@@ -570,6 +570,30 @@ function _rewrite_bare_index_observed_lhs(eq::Equation, model::Model,
     prefix = (dot = findlast('.', name)) === nothing ? "" : name[1:dot]
     rhs = eq.rhs
     frame = rhs isa OpExpr && (rhs::OpExpr).op == "faq" ? (rhs::OpExpr).output_idx : nothing
+    # A plain-symbol subscript at any level of the gather that neither the
+    # right-hand frame binds nor a variable names is a free index symbol: the
+    # document is invalid (esm-spec §6.3.1, `unbound_index_symbol`). Flatten
+    # namespaces a free LHS symbol (`k` becomes `Model.k`) but not a binder.
+    binders = Set{String}()
+    frame === nothing || for b in frame
+        b isa AbstractString || continue
+        push!(binders, String(b)); push!(binders, prefix * String(b))
+    end
+    g = gather
+    while true
+        for s in view(g.args, 2:length(g.args))
+            s isa VarExpr || continue
+            sn = (s::VarExpr).name
+            (sn in binders || haskey(model.variables, sn)) && continue
+            local_sym = startswith(sn, prefix) ? sn[(length(prefix) + 1):end] : sn
+            throw(TreeWalkError(ERROR_CODES.UNBOUND_INDEX_SYMBOL,
+                "'$name' is defined by a left-hand side that subscripts with " *
+                "'$local_sym', which no faq binds (esm-spec §6.3.1)"))
+        end
+        h = g.args[1]
+        (h isa OpExpr && (h::OpExpr).op == "index" && !isempty((h::OpExpr).args)) || break
+        g = h::OpExpr
+    end
     binds = head isa VarExpr &&
         frame !== nothing && !isempty(subs) && length(frame) == length(subs) &&
         all(zip(subs, frame)) do (s, b)
