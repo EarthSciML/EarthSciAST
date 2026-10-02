@@ -113,6 +113,16 @@ fn undeclared_shape_axis_is_refused_at_build() {
 #[test]
 fn undeclared_shape_axis_with_indexed_equations_still_builds() {
     // Sized by its equations' literal ranges; builds in Julia too.
-    build("conformance/pde_simulation/fixtures/diffusion_1d_periodic_n4.esm")
-        .expect("an indexed state with an undeclared axis still builds");
+    // The fixture leaves its state's starting value to the harness (esm-spec §11.4).
+    let prob = esm_problem(
+        ProblemInput::Path(std::path::Path::new(
+            "../../tests/conformance/pde_simulation/fixtures/diffusion_1d_periodic_n4.esm",
+        )),
+        (0.0, 1.0),
+        ProblemOptions {
+            u0: (1..=4).map(|i| (format!("u[{i}]"), 0.0)).collect(),
+            ..Default::default()
+        },
+    );
+    prob.expect("an indexed state with an undeclared axis still builds");
 }

@@ -944,6 +944,7 @@ impl ArrayCompiled {
         // (7)+(7b)+(8) Build the RHS rules, cover held-at-ic slots, and
         // validate that every state slot has a defining equation.
         let rhs_rules = build_rhs_rules(model, &slots, &held_at_ic)?;
+        let held_at_ic_names = held_at_ic.clone();
 
         let SlotTables {
             var_shapes,
@@ -992,6 +993,7 @@ impl ArrayCompiled {
             forcing_decls,
             forcing_defaults,
             unvalued_shaped_params,
+            held_at_ic: held_at_ic_names,
             tape_cache: tape::TapeCache::new(),
             shared_observed: std::cell::OnceCell::new(),
         })

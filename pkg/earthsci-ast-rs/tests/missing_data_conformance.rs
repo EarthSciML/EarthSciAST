@@ -111,12 +111,34 @@ fn build(
     compiler: Compiler,
     const_arrays: HashMap<String, ArrayD<f64>>,
 ) -> Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError> {
+    build_with(path, compiler, const_arrays, &Value::Null)
+}
+
+/// A number map from the case's `supply.p` / `supply.u0`.
+fn number_map(v: &Value) -> HashMap<String, f64> {
+    v.as_object()
+        .map(|o| {
+            o.iter()
+                .map(|(k, x)| (k.clone(), x.as_f64().expect("number")))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn build_with(
+    path: &std::path::Path,
+    compiler: Compiler,
+    const_arrays: HashMap<String, ArrayD<f64>>,
+    supply: &Value,
+) -> Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError> {
     esm_problem(
         path,
         (0.0, 1.0),
         ProblemOptions {
             compiler: Some(compiler),
             const_arrays,
+            p: number_map(&supply["p"]),
+            u0: number_map(&supply["u0"]),
             rhs: earthsci_ast::Rhs::Always,
             ..Default::default()
         },
@@ -151,6 +173,7 @@ fn a_shaped_parameter_with_no_data_is_refused_by_name() {
                 Ok(_) => panic!("{id} [{compiler}]: built with no data for {missing:?}"),
                 Err(e) => e.to_string(),
             };
+            let code = case["error_code"].as_str().unwrap_or(code);
             assert!(err.contains(code), "{id} [{compiler}]: {err}");
             assert!(
                 missing
@@ -167,15 +190,19 @@ fn with_its_data_every_compiler_builds_and_agrees_bit_for_bit() {
     let (dir, manifest) = manifest();
     for case in manifest["cases"].as_array().expect("cases") {
         let id = case["id"].as_str().expect("id");
-        let Some(arrays) = case["const_arrays"].as_object() else {
-            continue;
+        let empty = serde_json::Map::new();
+        let supply = &case["supply"];
+        let arrays = match case["const_arrays"].as_object() {
+            Some(a) => a,
+            None if supply.is_object() => &empty,
+            None => continue,
         };
         let path = dir.join(case["fixture"].as_str().expect("fixture"));
         let mut answers: Vec<Vec<f64>> = Vec::new();
         for compiler in compilers(&manifest) {
             let const_arrays: HashMap<String, ArrayD<f64>> =
                 arrays.iter().map(|(k, v)| (k.clone(), dense(v))).collect();
-            let prob = build(path.as_path(), compiler, const_arrays)
+            let prob = build_with(path.as_path(), compiler, const_arrays, supply)
                 .unwrap_or_else(|e| panic!("{id} [{compiler}]: build failed with data: {e}"));
             if !case["rhs"].as_bool().unwrap_or(false) {
                 continue;

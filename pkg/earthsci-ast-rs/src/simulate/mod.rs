@@ -691,12 +691,16 @@ mod tests {
               }
             }
             "#;
+        // Refused at construction, naming the state (esm-spec §11.4).
         let err = problem_of(json, HashMap::new())
             .and_then(|prob| solve(&prob, &SolveOptions::default()))
             .expect_err("a differential state with no initial value must be refused");
         assert!(
-            matches!(err, SimulateError::InvalidInitialCondition { .. }),
-            "expected InvalidInitialCondition, got {err:?}"
+            matches!(
+                &err,
+                SimulateError::Compile(CompileError::MissingInitialValue { slot, .. }) if slot == "D"
+            ),
+            "expected MissingInitialValue for D, got {err:?}"
         );
     }
 

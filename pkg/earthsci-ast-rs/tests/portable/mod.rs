@@ -366,7 +366,8 @@ pub fn check_scaling_fixture(family: &str, n: u64, text: &str) {
 /// Native builds `text` with every rule on the tape, and its right-hand side
 /// at one state is the interpreter's, bit for bit.
 pub fn check_native_rhs_doc(id: &str, text: &str) {
-    let doc: Value = serde_json::from_str(text).expect("the document parses");
+    let mut doc: Value = serde_json::from_str(text).expect("the document parses");
+    supply_state_defaults(&mut doc);
     let interp = esm_problem(&doc, (0.0, 1.0), options(Compiler::Interpreter, None))
         .unwrap_or_else(|e| panic!("{id}: the interpreter does not build it: {e}"));
     let native = esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None))
@@ -550,6 +551,7 @@ fn supply_polygon_rings(doc: &mut Value) {
 pub fn check_geometry_doc(id: &str, text: &str) {
     let mut doc: Value = serde_json::from_str(text).expect("the document parses");
     supply_polygon_rings(&mut doc);
+    supply_state_defaults(&mut doc);
     let interp = esm_problem(&doc, (0.0, 1.0), options(Compiler::Interpreter, None))
         .unwrap_or_else(|e| panic!("{id}: the interpreter does not build it: {e}"));
     let native = esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None))
@@ -590,5 +592,44 @@ pub fn check_geometry_doc(id: &str, text: &str) {
             "{id}: native dy differs from the interpreter's at {} ({a} vs {b})",
             nc.state_variable_names()[i]
         );
+    }
+}
+
+/// Give every ODE state (a `D` target on some equation's left-hand side) that
+/// declares no `default` a starting value of 0.0. Several corpus documents
+/// leave their states' starting values to the harness; built without one they
+/// are refused (`E_TREEWALK_MISSING_INITIAL_VALUE`, esm-spec §11.4).
+pub fn supply_state_defaults(doc: &mut serde_json::Value) {
+    fn d_target(lhs: &serde_json::Value) -> Option<String> {
+        match lhs.get("op").and_then(|o| o.as_str()) {
+            Some("D") => {
+                let a = lhs.get("args")?.get(0)?;
+                a.as_str()
+                    .map(str::to_string)
+                    .or_else(|| a.get("args")?.get(0)?.as_str().map(str::to_string))
+            }
+            Some("faq") => d_target(lhs.get("expr")?),
+            _ => None,
+        }
+    }
+    let Some(models) = doc.get_mut("models").and_then(|m| m.as_object_mut()) else {
+        return;
+    };
+    for model in models.values_mut() {
+        let targets: Vec<String> = model
+            .get("equations")
+            .and_then(|e| e.as_array())
+            .map(|eqs| eqs.iter().filter_map(|e| d_target(e.get("lhs")?)).collect())
+            .unwrap_or_default();
+        let Some(vars) = model.get_mut("variables").and_then(|v| v.as_object_mut()) else {
+            continue;
+        };
+        for t in targets {
+            if let Some(v) = vars.get_mut(&t)
+                && v.get("default").is_none()
+            {
+                v["default"] = serde_json::json!(0.0);
+            }
+        }
     }
 }

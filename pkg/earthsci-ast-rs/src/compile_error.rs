@@ -363,6 +363,17 @@ pub enum CompileError {
         detail: String,
     },
 
+    /// An unknown that needs a starting value reached construction with none:
+    /// no `default`, no initial condition or `ic` equation, and no caller `u0`
+    /// (esm-spec §11.4).
+    #[error("E_TREEWALK_MISSING_INITIAL_VALUE: {detail}")]
+    MissingInitialValue {
+        /// The first state slot with no starting value.
+        slot: String,
+        /// The whole diagnostic after the code.
+        detail: String,
+    },
+
     /// The convenience constructors flattened the input first; that step
     /// failed.
     #[error("Flatten failed: {0}")]

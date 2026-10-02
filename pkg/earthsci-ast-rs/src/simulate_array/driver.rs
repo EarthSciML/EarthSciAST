@@ -1206,6 +1206,94 @@ impl ArrayCompiled {
         )
     }
 
+    /// The scalar-table parameters neither `params` (the caller's `p`,
+    /// canonicalized as [`Self::build_param_vec`] does) nor a declared default
+    /// gives a value. Empty when a key does not canonicalize: that is the
+    /// solve's diagnostic, not this one.
+    pub(crate) fn unsupplied_params(&self, params: &HashMap<String, f64>) -> Vec<String> {
+        let Ok(params) = crate::simulate::canonicalize_override_keys(
+            &self.param_index,
+            &self.override_namespaces(),
+            params,
+            &self.merged_renames,
+        ) else {
+            return Vec::new();
+        };
+        self.param_names
+            .iter()
+            .zip(&self.param_defaults)
+            .filter(|(name, d)| d.is_none() && !params.contains_key(*name))
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// The states none of whose slots anything gives a starting value — no
+    /// default, no field `ic`, no initialization equation, no entry of
+    /// `initial_conditions` (the caller's `u0`) — by name. Read at construction, from the field `ic`s
+    /// construction resolved ([`FieldIcMemo`], left in place for the first
+    /// solve); empty when those could not be resolved there, or a key does not
+    /// canonicalize, which leaves the diagnostic to the solve.
+    #[cfg(feature = "solve")]
+    pub(crate) fn unset_initial_slots(
+        &self,
+        initial_conditions: &HashMap<String, f64>,
+    ) -> Vec<String> {
+        let Ok(initial_conditions) = crate::simulate::canonicalize_override_keys(
+            &super::layout::SlotNames(&self.var_shapes),
+            &self.override_namespaces(),
+            initial_conditions,
+            &self.merged_renames,
+        ) else {
+            return Vec::new();
+        };
+        let memo_slots;
+        let empty = HashMap::new();
+        let field_ic_map = if self.field_ics.is_empty() {
+            &empty
+        } else {
+            match self.field_ic_memo.borrow().as_ref() {
+                Some(m) => {
+                    memo_slots = m.slots.clone();
+                    &memo_slots
+                }
+                None => return Vec::new(),
+            }
+        };
+        let (_, unset) = self.seeded_defaults(field_ic_map);
+        let Some(mut unset) = unset else {
+            return Vec::new();
+        };
+        for name in initial_conditions.keys() {
+            if let Some(slot) = super::layout::lookup_slot(&self.var_shapes, name) {
+                unset[slot] = false;
+            }
+        }
+        // An initialization equation assigns its whole target, and a held
+        // state (no `D`, no definition) is not an ODE state.
+        for target in self
+            .init_faqs
+            .iter()
+            .map(|(t, _)| t)
+            .chain(&self.held_at_ic)
+        {
+            if let Some(vs) = self.var_shapes.get(target) {
+                let n = vs.shape.iter().copied().product::<usize>().max(1);
+                unset[vs.flat_offset..vs.flat_offset + n].fill(false);
+            }
+        }
+        // A state is refused only when NONE of its slots got a value: cells left
+        // over in a partly seeded one are layout (a grid widened past the cells
+        // the document names) and keep their placeholder.
+        self.var_shapes
+            .iter()
+            .filter(|(_, vs)| {
+                let n = vs.shape.iter().copied().product::<usize>().max(1);
+                unset[vs.flat_offset..vs.flat_offset + n].iter().all(|&u| u)
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
     /// Run the simulation.
     /// Validate override parameter names and build the positional param
     /// vector (override > variable default; a parameter with neither is an

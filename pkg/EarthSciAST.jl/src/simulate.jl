@@ -1351,6 +1351,7 @@ function esm_problem(input, tspan;
     u0_run = _with_compiler_plan(_plan_for(compiler)) do
         _seed_u0(u0_built, var_map, u0, seed_ic!)
     end
+    _refuse_missing_initial_values(insp.unvalued_slots, u0_built, var_map, u0, seed_ic!)
 
     # ---- the problem's callback set (§2.5.4) --------------------------------
     # Composed HERE, at construction, because a callback that refreshes provider
@@ -1448,6 +1449,38 @@ end
 # argument (a Dict of per-element / broadcast overrides, or a whole vector),
 # then the `seed_ic!` hook. Always a fresh vector — the build's `u0` is never
 # mutated, so `remake(prob; u0 = …)` cannot disturb the problem it came from.
+# esm-spec §11.4: an unknown that needs a starting value and has none — no
+# `default`, no initial condition, no `ic` equation, no caller `u0` — is an
+# error when the problem is built. The build reports the slots it could not
+# seed (`BuildInspection.unvalued_slots`, holding a 0.0 placeholder); a caller
+# `u0` that names them, a whole replacement vector, or a `seed_ic!` hook covers
+# them.
+function _refuse_missing_initial_values(unvalued::Vector{Int}, u0_built::Vector{Float64},
+                                        var_map::AbstractDict, u0, seed_ic!)
+    isempty(unvalued) && return nothing
+    (u0 isa AbstractVector || seed_ic! !== nothing) && return nothing
+    probe = copy(u0_built)
+    probe[unvalued] .= NaN
+    u0 isa AbstractDict && !isempty(u0) && _apply_initial_conditions!(probe, var_map, u0)
+    missing_slots = Set(s for s in unvalued if isnan(probe[s]))
+    isempty(missing_slots) && return nothing
+    # A state is refused only when NONE of its slots got a value: cells left
+    # over in a partly seeded one are layout (a grid widened past the cells the
+    # document names) and keep their placeholder.
+    base(k) = String(first(split(String(k), '['; limit = 2)))
+    partly = Set(base(k) for (k, s) in var_map if !(s in missing_slots))
+    names = sort!(unique!(String[base(k) for (k, s) in var_map
+                                 if s in missing_slots && !(base(k) in partly)]))
+    isempty(names) && return nothing
+    shown = join(("'$(n)'" for n in first(names, 5)), ", ") * (length(names) > 5 ? ", …" : "")
+    throw(TreeWalkError("E_TREEWALK_MISSING_INITIAL_VALUE",
+        "no starting value for $(length(names)) unknown(s) ($(shown)): the unknown " *
+        "declares no `default`, and no initial condition, `ic` equation or caller " *
+        "`u0` sets it. An unknown with no starting value is an error when a problem " *
+        "is built (esm-spec §11.4). To supply it, pass `u0 = Dict(\"$(first(names))\" " *
+        "=> value)` to `esm_problem`, or declare a `default` on the unknown."))
+end
+
 function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!)
     out = copy(u0_built)
     if u0 isa AbstractDict
