@@ -2541,8 +2541,16 @@ function validate_model_references(file::EsmFile, model::Model, path::String;
     # `external_temperature_forcing` exactly this way and nowhere else).
     union!(scope, _callback_injected_names(file))
 
-    # Validate equation references
-    for (i, eq) in enumerate(model.equations)
+    # Validate equation references — on the EXPANSION of any surviving
+    # `apply_expression_template` reference (esm-spec §9.6.4 rule 2: a reference
+    # denotes its expansion). A template binding is a value substituted into the
+    # body, and only where the body uses it in an expression position is it a
+    # reference; one bound to a scalar field (`K_manifold => "planar"` filling a
+    # `manifold`) is a literal. Expansion keeps the equation order, so pointers
+    # still name the authored equation.
+    eqs = isempty(model_name) ? model.equations :
+          _units_view(file, model_name, model).equations
+    for (i, eq) in enumerate(eqs)
         append!(errors, validate_expression_references(file, eq.lhs, "$path/equations/$(i-1)/lhs"; scope=scope))
         append!(errors, validate_expression_references(file, eq.rhs, "$path/equations/$(i-1)/rhs"; scope=scope))
     end
