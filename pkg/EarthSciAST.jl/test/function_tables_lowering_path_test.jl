@@ -234,7 +234,10 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
                        "M.w[3]" => 3.25)
         answers = Dict{Symbol,Any}()
         for compiler in (:interpreter, :native)
-            prob = _FTP.esm_problem(doc, (0.0, 1.0); compiler = compiler)
+            # The test drives every state itself (`du_at`), so the starting
+            # values the build requires (esm-spec §11.4) are placeholders.
+            prob = _FTP.esm_problem(doc, (0.0, 1.0); compiler = compiler,
+                                    u0 = Dict("M.w" => 0.0, "M.v" => 0.0))
             du = du_at(prob, inrange)
             # In range (an end knot included) the answer is the clamp answer.
             @test du[prob.var_map["M.x"]] == 10.0

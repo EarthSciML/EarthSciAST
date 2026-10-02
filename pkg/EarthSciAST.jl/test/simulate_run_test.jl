@@ -154,7 +154,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
     end
 
     @testset "missing alg → clear error" begin
-        @test_throws ESM_S.SimulateError solve(ESM_S.esm_problem(scalar_esm(1.0), (0.0, 1.0)), nothing)
+        # The state's starting value is supplied (esm-spec §11.4), so what is
+        # refused is the missing algorithm.
+        @test_throws ESM_S.SimulateError solve(
+            ESM_S.esm_problem(scalar_esm(1.0), (0.0, 1.0); u0 = Dict("y" => 0.0)), nothing)
     end
 
     @testset "additive couple connector adds -k*A to a species ODE (esm-spec §10.3)" begin
