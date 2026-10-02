@@ -176,17 +176,10 @@
     "AtmosphereTransport": {
       "variables": {
         "u": {
-          "type": "parameter",
+          "type": "unknown",
           "units": "m/s",
           "default": 10.0,
           "description": "Zonal wind",
-          "update": {
-            "kind": "data",
-            "source": "MeteorologicalForcing",
-            "from": {
-              "file_variable": "wind_u"
-            }
-          },
           "shape": []
         },
         "v": {

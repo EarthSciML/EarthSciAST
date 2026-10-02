@@ -1282,8 +1282,9 @@ fn lhs_name_errors_in(
     }
 }
 
-/// The variable a defining left-hand side names, read through its `faq` and
-/// `index` wrappers; `None` for a derivative (`D(…)`), an `ic`, or an
+/// The variable a left-hand side names, read through its `faq` and `index`
+/// wrappers and a time derivative (`D(…)` with `wrt` absent or `t`: a parameter
+/// may have neither a definition nor dynamics); `None` for an `ic`, or an
 /// expression that names no single variable.
 fn lhs_defined_name(lhs: &serde_json::Value) -> Option<&str> {
     let mut e = lhs;
@@ -1294,6 +1295,9 @@ fn lhs_defined_name(lhs: &serde_json::Value) -> Option<&str> {
         match e.get("op").and_then(|o| o.as_str())? {
             "faq" | "aggregate" => e = e.get("expr")?,
             "index" => e = e.get("args")?.as_array()?.first()?,
+            "D" if matches!(e.get("wrt").and_then(|w| w.as_str()), None | Some("t")) => {
+                e = e.get("args")?.as_array()?.first()?
+            }
             _ => return None,
         }
     }

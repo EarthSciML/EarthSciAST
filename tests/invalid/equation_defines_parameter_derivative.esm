@@ -1,0 +1,92 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "equation_defines_parameter_derivative",
+    "description": "A time derivative of a PARAMETER on an equation's left-hand side (esm-spec 6.3.1): `D(k) ~ -k` and the arrayed `faq{i}(D(index(w, i))) ~ ...` would give parameters dynamics. Both are `equation_defines_parameter`; a quantity that evolves is declared an `unknown`.",
+    "authors": [
+      "EarthSciAST conformance"
+    ]
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0
+        },
+        "w": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "k"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "k"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "w",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "expr": "k"
+          }
+        }
+      ]
+    }
+  }
+}

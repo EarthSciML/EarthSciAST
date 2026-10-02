@@ -752,7 +752,7 @@ end
             # NO2 has no diffusion counterpart in the fixture: unmatched, so
             # untouched.
             "D(ChemistrySystem.NO2)/Dt = -1 * ChemistrySystem.k2 * ChemistrySystem.NO2",
-            # `AdvectionSystem` writes `D(u)` for its OWN parameter, so neither
+            # `AdvectionSystem` writes `D(u)` for its OWN unknown `u`, so neither
             # entry naming it ever matches and its equation survives whole.
             "D(AdvectionSystem.u)/Dt = (-AdvectionSystem.u) * grad(AdvectionSystem.u) + " *
                 "(-AdvectionSystem.v) * grad(AdvectionSystem.u)",
@@ -763,7 +763,8 @@ end
         # The prune: `DiffusionSystem.ozone_conc` / `.nitrogen_oxide` were merged
         # away and must not survive as unconstrained unknowns.
         @test collect(keys(flat.state_variables)) ==
-              ["ChemistrySystem.O3", "ChemistrySystem.NO", "ChemistrySystem.NO2"]
+              ["ChemistrySystem.O3", "ChemistrySystem.NO", "ChemistrySystem.NO2",
+               "AdvectionSystem.u"]
         @test isempty(flat.algebraic_variables)
         # §4.7.6: `D` with `wrt != "t"` names a spatial axis too, so `z` is in.
         @test String[String(v) for v in flat.independent_variables] ==
