@@ -1263,14 +1263,17 @@ def _assert_shaped_states_have_extent(flat: FlattenedSystem) -> None:
 
 
 def _defined_lhs_name(lhs: Any) -> str | None:
-    """The variable a DEFINING left-hand side names — bare, ``index(...)``, or
-    either as the body of a ``faq`` — or ``None`` for a derivative, an ``ic``
-    or an expression LHS."""
+    """The variable a left-hand side names — bare, ``index(...)``, under a time
+    derivative, or any of these as the body of a ``faq`` (a parameter may have
+    neither a definition nor dynamics) — or ``None`` for an ``ic`` or an
+    expression LHS."""
     e = lhs
     while isinstance(e, ExprNode):
         if is_aggregate_op(e.op) and e.expr is not None:
             e = e.expr
         elif e.op == "index" and e.args:
+            e = e.args[0]
+        elif e.op == "D" and e.args and getattr(e, "wrt", None) in (None, "t"):
             e = e.args[0]
         else:
             return None

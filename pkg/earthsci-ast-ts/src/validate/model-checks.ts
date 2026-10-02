@@ -1322,17 +1322,18 @@ export function validateRelationalNodesInContinuous(
 // esm-spec §6.3.1 "What a left-hand side may name"
 // ---------------------------------------------------------------------------
 
-/** The variable a left-hand side names through its `faq` / `index` wrappers,
- * or undefined — and undefined for a `D` / `ic` form, which defines dynamics
- * or an initial value rather than the variable. */
+/** The variable a left-hand side names through its `faq` / `index` wrappers
+ * and a time derivative (a parameter may have neither a definition nor
+ * dynamics, esm-spec §6.3.1), or undefined — and undefined for an `ic` form,
+ * which declares an initial value rather than the variable. */
 function lhsBaseName(e: unknown): string | undefined {
   let cur: unknown = e
   for (;;) {
     if (typeof cur === 'string') return cur
     if (typeof cur !== 'object' || cur === null || !('op' in cur)) return undefined
-    const n = cur as { op: string; args?: unknown[]; expr?: unknown }
+    const n = cur as { op: string; args?: unknown[]; expr?: unknown; wrt?: string }
     if (n.op === 'faq' || n.op === 'aggregate') cur = n.expr
-    else if (n.op === 'index') {
+    else if (n.op === 'index' || (n.op === 'D' && (n.wrt === undefined || n.wrt === 't'))) {
       if (!n.args || n.args.length === 0) return undefined
       cur = n.args[0]
     } else return undefined

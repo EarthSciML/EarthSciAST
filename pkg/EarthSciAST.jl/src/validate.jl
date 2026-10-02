@@ -3503,14 +3503,15 @@ end
 _variable_type_word(t::ModelVariableType)::String =
     t == ParameterVariable ? "parameter" : "unknown"
 
-# The variable a left-hand side DEFINES — through `index` / `faq` wrappers, not
-# a `D` (a derivative defines dynamics) or an `ic` — or `nothing`.
+# The variable a left-hand side names — through `index` / `faq` wrappers and a
+# time derivative `D` (a parameter may have neither a definition nor dynamics),
+# not an `ic` — or `nothing`.
 function _lhs_defined_name(e)
     while e isa OpExpr
         o = e::OpExpr
         if _is_faq_op(o.op) && o.expr_body !== nothing
             e = o.expr_body
-        elseif o.op == "index" && !isempty(o.args)
+        elseif (o.op == "index" || _is_time_derivative(o)) && !isempty(o.args)
             e = o.args[1]
         else
             return nothing

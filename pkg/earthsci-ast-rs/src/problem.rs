@@ -2953,10 +2953,15 @@ fn refuse_parameter_definitions(
                             None => break None,
                         }
                     }
-                    crate::types::Expr::Operator(n) if n.op == "index" => match n.args.first() {
-                        Some(x) => lhs = x,
-                        None => break None,
-                    },
+                    crate::types::Expr::Operator(n)
+                        if n.op == "index"
+                            || (n.op == "D" && matches!(n.wrt.as_deref(), None | Some("t"))) =>
+                    {
+                        match n.args.first() {
+                            Some(x) => lhs = x,
+                            None => break None,
+                        }
+                    }
                     _ => break None,
                 }
             };

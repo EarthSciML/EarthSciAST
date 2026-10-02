@@ -2492,14 +2492,18 @@ def _lhs_variable_type(data: dict[str, Any], mpath: list[str], model: dict, name
 
 
 def _lhs_base_name(lhs: Any):
-    """The variable an equation LHS defines, through ``faq``/``index``
-    wrappers; ``None`` for a derivative, an ``ic`` or an expression LHS."""
+    """The variable an equation LHS names, through ``faq``/``index`` wrappers
+    and a time derivative (``D`` with ``wrt`` absent or ``t``: a parameter may
+    have neither a definition nor dynamics); ``None`` for an ``ic`` or an
+    expression LHS."""
     e = lhs
     while isinstance(e, dict):
         op = e.get("op")
         if op in ("faq", "aggregate") and isinstance(e.get("expr"), (dict, str)):
             e = e["expr"]
         elif op == "index" and e.get("args"):
+            e = e["args"][0]
+        elif op == "D" and e.get("args") and e.get("wrt") in (None, "t"):
             e = e["args"][0]
         else:
             return None

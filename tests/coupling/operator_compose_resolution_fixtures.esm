@@ -98,7 +98,7 @@
     "AdvectionSystem": {
       "variables": {
         "u": {
-          "type": "parameter",
+          "type": "unknown",
           "units": "m/s",
           "default": 3.0,
           "description": "Eastward wind"

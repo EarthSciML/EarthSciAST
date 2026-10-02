@@ -3645,5 +3645,28 @@
     ],
     "is_valid": false,
     "notes": "User ruling 2026-09-29 (esm-spec 6.3.1): a free index symbol on an equation's left-hand side makes the document invalid. tests/valid/cadence/pure_pointwise.esm and tests/valid/faq/discrete_variable_refresh.esm used this spelling and were rewritten with an explicit faq."
+  },
+  "equation_defines_parameter_derivative.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/M/equations/0/lhs",
+        "code": "equation_defines_parameter",
+        "message": "Equation 0 defines 'k', which is a parameter; an equation defines unknowns only",
+        "details": {
+          "variable": "k"
+        }
+      },
+      {
+        "path": "/models/M/equations/1/lhs",
+        "code": "equation_defines_parameter",
+        "message": "Equation 1 defines 'w', which is a parameter; an equation defines unknowns only",
+        "details": {
+          "variable": "w"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "User ruling 2026-10-02 (esm-spec 6.3.1): a parameter under D(...) on an equation's left-hand side is invalid, like a bare or indexed definition of one."
   }
 }

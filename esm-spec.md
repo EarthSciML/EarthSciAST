@@ -2400,9 +2400,10 @@ regridding arrays) onto the per-timestep hot path.
 **What a left-hand side may name.** An equation defines, or constrains, the
 unknowns its left-hand side names; it never defines a **parameter**. An
 equation whose left-hand side names a parameter — bare (`k ~ …`), indexed
-(`k[i] ~ …`), wrapped in a `faq`, or through a scoped reference into a
-subsystem (`Top.sub.k ~ …`) — is invalid, with the structural diagnostic
-`equation_defines_parameter`: a parameter's value comes from its `default`,
+(`k[i] ~ …`), wrapped in a `faq`, through a scoped reference into a
+subsystem (`Top.sub.k ~ …`), or under a time derivative (`D(k) ~ …`, which
+would give a parameter dynamics; a quantity that evolves is an `unknown`) — is
+invalid, with the structural diagnostic `equation_defines_parameter`: a parameter's value comes from its `default`,
 a `distribution`, an override, its `update` (§5.4) or a coupling, and a
 binding that silently drops the equation, or silently lets it override the
 parameter, reports an answer the document does not describe. A binding MUST

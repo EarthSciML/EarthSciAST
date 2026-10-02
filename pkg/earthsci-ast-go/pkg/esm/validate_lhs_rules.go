@@ -109,7 +109,14 @@ func lhsBaseName(e Expression) (string, bool) {
 				return "", false
 			}
 			e = n.Args[0]
-		case "D", "ic":
+		case "D":
+			// A time derivative of a parameter gives it dynamics, which is
+			// as invalid as a definition (esm-spec §6.3.1).
+			if (n.Wrt != nil && *n.Wrt != "t") || len(n.Args) == 0 {
+				return "", true
+			}
+			e = n.Args[0]
+		case "ic":
 			return "", true
 		default:
 			return "", false
