@@ -6,7 +6,7 @@ use super::par::force_split;
 use super::pool::DISPATCHES;
 use crate::{Compiler, ProblemOptions, Rhs, esm_problem};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 fn fixtures() -> Vec<PathBuf> {
@@ -34,14 +34,14 @@ fn fixtures() -> Vec<PathBuf> {
 
 /// `dy` at a non-trivial state, through the production (taped) scratch,
 /// twice (the second call is a steady one: primed sections, warm workers).
-fn rhs(path: &PathBuf, ways: Option<usize>) -> Vec<f64> {
+fn rhs(path: &Path, ways: Option<usize>) -> Vec<f64> {
     let opts = ProblemOptions {
         compiler: Some(Compiler::Native),
         rhs: Rhs::Always,
         ..Default::default()
     };
-    let prob = esm_problem(path.as_path(), (0.0, 1.0), opts)
-        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let prob =
+        esm_problem(path, (0.0, 1.0), opts).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let c = prob.debug_array_compiled().expect("a right-hand side");
     let n = c.state_variable_names().len();
     let state: Vec<f64> = (0..n)
