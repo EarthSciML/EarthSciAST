@@ -441,14 +441,8 @@ impl ArrayCompiled {
         let const_names = self.classify_static_observeds(discrete_forcing);
         let seg_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
         let forcing = self.forcing_inputs(discrete_forcing);
-        let (prog, vn_hits) = build_tape_program(
-            self,
-            &const_names,
-            &seg_names,
-            &forcing,
-            fuse,
-            align_layout,
-        );
+        let (prog, vn_hits) =
+            build_tape_program(self, &const_names, &seg_names, &forcing, fuse, align_layout);
         let report = make_report(&prog, vn_hits);
         (prog, report)
     }
