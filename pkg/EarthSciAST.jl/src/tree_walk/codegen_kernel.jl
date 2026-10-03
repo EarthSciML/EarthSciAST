@@ -442,6 +442,18 @@ end
 
 _cg_offset(base, delta) = delta === 0 ? base : :($base + $delta)
 
+# The first slot of a slot table that is `c0, c0+1, …` with no ghost (0)
+# entry, or 0 when it is not one such run.
+function _cg_affine_conn(conn::Vector{Int})
+    isempty(conn) && return 0
+    c0 = conn[1]
+    c0 >= 1 || return 0
+    @inbounds for k in eachindex(conn)
+        conn[k] == c0 + k - 1 || return 0
+    end
+    return c0
+end
+
 # ---- One access descriptor → one indexing expression (mirrors `_fetch`) -----
 # `key` identifies the descriptor (its table and position) for `_cg_geo!`.
 function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key=nothing)
@@ -475,6 +487,11 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key=nothing)
     elseif k === _AK_STATE_TBL_BOX
         s = _cg_name(ctx, "s")
         addr = _cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off, a.sx, key)
+        # A table that is one ascending run of slots with no ghost (the box of
+        # an array laid out as one column-major block) reads the same slot as
+        # base + address, without the table load and the ghost test.
+        c0 = _cg_affine_conn(a.conn)
+        c0 > 0 && return :(u[$(_cg_geo!(ctx, c0 - 1, _cg_gkey(key, :tblbase))) + $addr])
         # Exactly `_fetch`'s ghost test: slot 0 ⇒ the ghost literal 0.0.
         return :(let $s = $(_cg_tab!(ctx, a.conn))[$addr]
                      $s == 0 ? 0.0 : u[$s]
@@ -1219,6 +1236,22 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invsyms)
     body = cellbody(kc)
     i0, i1, ni = axis(1)
+    if nd == 1 && cellfn === nothing
+        inter = _cg_areduce_interchanged(ctx, K, kc, iv, oln, olnexpr, i0, av, bv)
+        if inter !== nothing
+            return quote
+                $(hdr...)
+                if _cgT === Float64 && eltype(du) === Float64
+                    $inter
+                else
+                    for $iv in ($i0 + $av):($i0 + $bv - 1)
+                        local $oln = $olnexpr
+                        $(body...)
+                    end
+                end
+            end
+        end
+    end
     if nd == 1
         return quote
             $(hdr...)
@@ -1282,6 +1315,90 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
             end
         end
     end
+end
+
+# ---- Loop interchange for an affine reduction over a strided operand --------
+# A rank-1 kernel whose whole cell value is one affine reduction
+# (`du[o] = ⊕_j body(i, j)`, `_cg_emit_areduce`) runs the reduction innermost,
+# so an operand read contiguously along the CELL axis and at a large stride
+# along the reduced one — `Σ_j K[i,j]·e[j]` over a column-major `K` — is walked
+# at that large stride on every term. The interchanged nest keeps each cell's
+# accumulator in its own `du` slot and runs the cells innermost:
+#
+#     du[o] = 0̄                          for every cell of the chunk
+#     for each reduced tuple, in `_cg_emit_areduce`'s order
+#         du[o] = du[o] ⊕ body(i, tuple)   for every cell of the chunk
+#
+# Every cell folds the same terms in the same order from the same Float64 seed,
+# so each `du[o]` is bitwise the per-cell nest's; only the order in which
+# different cells advance changes, and cells are independent. It is emitted for
+# the Float64 value type only (the caller's branch): under any other type a
+# `du` slot could not hold the Float64 seed unchanged (`_cg_fold` explains why
+# that matters). Chosen when more of the body's box reads are contiguous (or
+# invariant) along the cell axis and strided along the innermost reduced axis
+# than the other way round. Returns the nest, or `nothing` when it does not
+# apply.
+function _cg_areduce_interchanged(ctx::_CGCtx, K::_AccKernel, kc::_CGKernCtx,
+                                  iv::Symbol, oln::Symbol, olnexpr, i0, av, bv)
+    nd = K.spine
+    nd.kind === _NK_AREDUCE || return nothing
+    isempty(K.cse.recipes) || return nothing
+    spec = nd.payload::_AReduceSpec
+    isempty(spec.dims) && return nothing
+    _cg_reduce_strides_favor_cells(K, nd.children[1], spec.dims[1]) || return nothing
+    fnsym = _cg_oplus_fn(nd.op)
+    js = Symbol[_cg_name(ctx, "j") for _ in spec.dims]
+    inner = kc
+    for r in eachindex(spec.dims)
+        inner = _cg_with_mi(inner, spec.dims[r], js[r])
+    end
+    body = _cg_emit(ctx, inner, nd.children[1])
+    cap = _codegen_fn_node_cap()
+    cap > 0 && _cg_expr_size(body) > cap && return nothing
+    loop = quote
+        for $iv in ($i0 + $av):($i0 + $bv - 1)
+            local $oln = $olnexpr
+            du[$oln] = $fnsym(du[$oln], $body)
+        end
+    end
+    for r in eachindex(spec.dims)
+        rg = spec.ranges[r]
+        lo = _cg_geo!(ctx, first(rg), (spec.ranges, r, :lo))
+        hi = _cg_geo!(ctx, last(rg), (spec.ranges, r, :hi))
+        loop = Expr(:for, :($(js[r]) = $lo:$hi), Expr(:block, loop))
+    end
+    return quote
+        for $iv in ($i0 + $av):($i0 + $bv - 1)
+            du[$olnexpr] = $(nd.literal)
+        end
+        $loop
+    end
+end
+
+# Whether the box reads under `body` favour the cell axis (loop dim 1) in the
+# inner loop over the reduced axis `rdim`: a read gains when it is contiguous or
+# invariant along the cells and strided along `rdim`, and loses the other way.
+function _cg_reduce_strides_favor_cells(K::_AccKernel, body::_Node, rdim::Int)
+    gain = 0
+    stride(a::_AccDesc, d::Int) = d == 1 ? a.s1 : d == 2 ? a.s2 : d == 3 ? a.s3 :
+        (d - 3 <= length(a.sx) ? a.sx[d - 3] : 0)
+    near(s) = s == 0 || s == 1
+    function visit(n::_Node)
+        if n.kind === _NK_ACCESS
+            a = K.acc[n.idx]
+            if a.kind === _AK_STATE_TBL_BOX || a.kind === _AK_CONST_BOX ||
+               a.kind === _AK_FORCING_BOX || a.kind === _AK_ARR_TBL_BOX
+                so = stride(a, 1)
+                sk = stride(a, rdim)
+                near(so) && !near(sk) && (gain += 1)
+                near(sk) && !near(so) && (gain -= 1)
+            end
+        end
+        foreach(visit, n.children)
+        return nothing
+    end
+    visit(body)
+    return gain > 0
 end
 
 # A strided Cartesian box of rank above 3, in `_run_box_kernel!`'s iteration
