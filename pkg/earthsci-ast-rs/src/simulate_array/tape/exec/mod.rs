@@ -98,11 +98,18 @@ pub(crate) enum SimdLevel {
     Avx512,
 }
 
-/// Detect the widest supported clone, once.
+/// Select the clone, once: AVX2 where the CPU has it, the generic codegen
+/// otherwise.
+///
+/// The AVX-512 clone is opt-in. Its loops run in 512-bit registers, and on
+/// the Xeon cores this tier is measured on that lowers the core clock for the
+/// whole call, the scalar pieces included (scan chains, gathers, the per-call
+/// passes), which costs more than the wider lanes give back.
 ///
 /// `ESS_TAPE_SIMD_DISABLE=1` forces the generic codegen and
-/// `ESS_TAPE_SIMD_LEVEL=generic|avx2|avx512` caps the selection below the
-/// detected width: DEVICE selection, not strategy selection — every level runs
+/// `ESS_TAPE_SIMD_LEVEL=generic|avx2|avx512` chooses a level (one the CPU
+/// lacks falls back to the next narrower): DEVICE selection, not strategy
+/// selection — every level runs
 /// the same program and is bit-identical (`simd_clone_bit_identity`), so
 /// neither is a way to reach a different evaluator
 /// (`esm-libraries-spec.md` §2.5.10).
@@ -116,16 +123,15 @@ pub(crate) fn simd_level() -> SimdLevel {
         if off {
             return SimdLevel::Generic;
         }
-        // `ESS_TAPE_SIMD_LEVEL=generic|avx2|avx512`: cap the selection below
-        // the detected width (measurement aid; a level the CPU lacks is
-        // ignored). Unset = widest detected.
+        // `ESS_TAPE_SIMD_LEVEL=generic|avx2|avx512` (measurement aid; a level
+        // the CPU lacks falls back). Unset = AVX2 where available.
         let cap = std::env::var("ESS_TAPE_SIMD_LEVEL").unwrap_or_default();
         if cap.eq_ignore_ascii_case("generic") {
             return SimdLevel::Generic;
         }
         #[cfg(target_arch = "x86_64")]
         {
-            let allow512 = !cap.eq_ignore_ascii_case("avx2");
+            let allow512 = cap.eq_ignore_ascii_case("avx512");
             if allow512
                 && std::arch::is_x86_feature_detected!("avx512f")
                 && std::arch::is_x86_feature_detected!("avx512vl")

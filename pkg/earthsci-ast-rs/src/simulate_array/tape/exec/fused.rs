@@ -1230,9 +1230,8 @@ pub(super) unsafe fn exec_fused_runs_avx2(
     unsafe { exec_fused_runs(fs, svals, bases, outs, red, idx, fregs, cursor) }
 }
 
-/// AVX-512 clone (f+vl+dq+bw, all runtime-checked). Note LLVM keeps its
-/// preferred vector width at 256 bits for these targets unless told
-/// otherwise, so this may codegen close to the AVX2 clone.
+/// AVX-512 clone (f+vl+dq+bw, all runtime-checked), selected only on request
+/// (see `simd_level`): LLVM vectorizes these loops in 512-bit registers.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(
     enable = "avx512f",
