@@ -13,7 +13,9 @@
 // be rejected.
 // ---------------------------------------------------------------------------
 
-use super::fused::{FCHUNK, RunCursor, exec_fused_runs_generic};
+use super::fused::{
+    FCHUNK, RunCursor, dispatch_bin_kernel, dispatch_un_kernel, exec_fused_runs_generic,
+};
 #[cfg(target_arch = "x86_64")]
 use super::fused::{exec_fused_runs_avx2, exec_fused_runs_avx512};
 use super::*;
@@ -448,6 +450,101 @@ fn assert_bits_eq(want: &[Vec<f64>], got: &[Vec<f64>], label: &str, nan_class: b
                 a.to_bits(),
                 b.to_bits()
             );
+        }
+    }
+}
+
+/// Every arm of the kernel dispatch macros computes the same bits as the
+/// shared kernel table it stands in for, over every operator code.
+#[test]
+fn dispatch_arms_match_the_kernel_tables() {
+    use {BinCode as B, UnCode as U};
+    const XS: &[f64] = &[
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        0.5,
+        -3.25,
+        2.0,
+        0.999,
+        1.5,
+        f64::MIN_POSITIVE,
+        5e-324,
+        1e300,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ];
+    let bins = [
+        B::Add,
+        B::Sub,
+        B::Mul,
+        B::Div,
+        B::Pow,
+        B::Atan2,
+        B::Min,
+        B::Max,
+        B::Eq,
+        B::Ne,
+        B::Lt,
+        B::Le,
+        B::Gt,
+        B::Ge,
+        B::And,
+        B::Or,
+        B::Unknown,
+    ];
+    let uns = [
+        U::Exp,
+        U::Ln,
+        U::Log10,
+        U::Sqrt,
+        U::Abs,
+        U::Sign,
+        U::Floor,
+        U::Ceil,
+        U::Sin,
+        U::Cos,
+        U::Tan,
+        U::Asin,
+        U::Acos,
+        U::Atan,
+        U::Sinh,
+        U::Cosh,
+        U::Tanh,
+        U::Asinh,
+        U::Acosh,
+        U::Atanh,
+        U::Not,
+        U::Unknown,
+    ];
+    for op in bins {
+        for &x in XS {
+            for &y in XS {
+                macro_rules! k {
+                    ($f:expr) => {{
+                        let f = $f;
+                        f(x, y)
+                    }};
+                }
+                let got: f64 = dispatch_bin_kernel!(&op, k);
+                let want = binary_kernel_of(op)(x, y);
+                assert_eq!(got.to_bits(), want.to_bits(), "{op:?}({x:?}, {y:?})");
+            }
+        }
+    }
+    for op in uns {
+        for &x in XS {
+            macro_rules! k {
+                ($f:expr) => {{
+                    let f = $f;
+                    f(x)
+                }};
+            }
+            let got: f64 = dispatch_un_kernel!(&op, k);
+            let want = unary_kernel_of(op)(x);
+            assert_eq!(got.to_bits(), want.to_bits(), "{op:?}({x:?})");
         }
     }
 }

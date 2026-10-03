@@ -364,6 +364,9 @@ macro_rules! dispatch_bin_kernel {
                 BinCode::Le => $apply!(|x, y| (x <= y) as i32 as f64),
                 BinCode::Gt => $apply!(|x, y| (x > y) as i32 as f64),
                 BinCode::Ge => $apply!(|x, y| (x >= y) as i32 as f64),
+                BinCode::Atan2 => $apply!(|x: f64, y: f64| x.atan2(y)),
+                BinCode::And => $apply!(|x: f64, y: f64| (x != 0.0 && y != 0.0) as i32 as f64),
+                BinCode::Or => $apply!(|x: f64, y: f64| (x != 0.0 || y != 0.0) as i32 as f64),
                 other => $apply!(binary_kernel_of(*other)),
             }
         }
@@ -393,6 +396,16 @@ macro_rules! dispatch_un_kernel {
                 UnCode::Tanh => $apply!(|x: f64| x.tanh()),
                 UnCode::Floor => $apply!(|x: f64| x.floor()),
                 UnCode::Ceil => $apply!(|x: f64| x.ceil()),
+                UnCode::Tan => $apply!(|x: f64| x.tan()),
+                UnCode::Asin => $apply!(|x: f64| x.asin()),
+                UnCode::Acos => $apply!(|x: f64| x.acos()),
+                UnCode::Atan => $apply!(|x: f64| x.atan()),
+                UnCode::Sinh => $apply!(|x: f64| x.sinh()),
+                UnCode::Cosh => $apply!(|x: f64| x.cosh()),
+                UnCode::Asinh => $apply!(|x: f64| x.asinh()),
+                UnCode::Acosh => $apply!(|x: f64| x.acosh()),
+                UnCode::Atanh => $apply!(|x: f64| x.atanh()),
+                UnCode::Not => $apply!(|x: f64| (x == 0.0) as i32 as f64),
                 UnCode::Sign => $apply!(|x: f64| {
                     if x > 0.0 {
                         1.0
