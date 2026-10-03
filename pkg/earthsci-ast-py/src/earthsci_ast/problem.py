@@ -1564,7 +1564,19 @@ def _refuse_ic_in_reaction_system(file: EsmFile) -> None:
 #: §2.5.2). They are the reference-integrity findings: a name, reference or data
 #: source the document uses and does not declare. Equation-count and unit
 #: findings are not here: they stay ``validate``'s to report.
-_BUILD_REFUSED_VALIDATION_CODES = frozenset({"undefined_variable", "undefined_parameter", "undefined_species", "undefined_system", "undefined_index_set", "unresolved_scoped_ref", "event_var_undeclared", "data_source_undefined", "missing_required_field"})
+_BUILD_REFUSED_VALIDATION_CODES = frozenset(
+    {
+        "undefined_variable",
+        "undefined_parameter",
+        "undefined_species",
+        "undefined_system",
+        "undefined_index_set",
+        "unresolved_scoped_ref",
+        "event_var_undeclared",
+        "data_source_undefined",
+        "missing_required_field",
+    }
+)
 
 
 def _refuse_reference_integrity_errors(file: EsmFile, base_path: str | None) -> None:

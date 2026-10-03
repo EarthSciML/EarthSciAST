@@ -14,22 +14,33 @@ from earthsci_ast.problem import esm_problem, solve
 
 def _doc(rhs_output_idx: list[str]) -> dict:
     faq = lambda out, ranges, expr, **kw: {  # noqa: E731
-        "op": "faq", "args": [], "output_idx": out, "ranges": ranges, "expr": expr, **kw
+        "op": "faq",
+        "args": [],
+        "output_idx": out,
+        "ranges": ranges,
+        "expr": expr,
+        **kw,
     }
     u_k = {"op": "index", "args": ["u", "k"]}
     u_i = {"op": "index", "args": ["u", "i"]}
     d_u = {"op": "D", "args": [u_i], "wrt": "t"}
     if rhs_output_idx:
-        rhs = faq(["i"], {"i": [1, 3], "k": [1, 3]}, {"op": ">", "args": [u_k, u_i]},
-                  semiring="bool_and_or")
+        rhs = faq(
+            ["i"],
+            {"i": [1, 3], "k": [1, 3]},
+            {"op": ">", "args": [u_k, u_i]},
+            semiring="bool_and_or",
+        )
         eqs = [{"lhs": faq(["i"], {"i": [1, 3]}, d_u), "rhs": rhs}]
         variables = {"u": {"type": "unknown", "shape": ["x"], "default": [1.0, 2.0, 3.0]}}
     else:
         any_big = faq([], {"k": [1, 3]}, {"op": ">", "args": [u_k, 2.5]}, semiring="bool_and_or")
         eqs = [
             {"lhs": "b", "rhs": any_big},
-            {"lhs": faq(["i"], {"i": [1, 3]}, d_u),
-             "rhs": faq(["i"], {"i": [1, 3]}, {"op": "*", "args": ["b", u_i]})},
+            {
+                "lhs": faq(["i"], {"i": [1, 3]}, d_u),
+                "rhs": faq(["i"], {"i": [1, 3]}, {"op": "*", "args": ["b", u_i]}),
+            },
         ]
         variables = {
             "u": {"type": "unknown", "shape": ["x"], "default": [1.0, 2.0, 3.0]},

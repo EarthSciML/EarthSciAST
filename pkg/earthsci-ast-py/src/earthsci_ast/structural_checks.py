@@ -2483,7 +2483,7 @@ def _lhs_variable_type(data: dict[str, Any], mpath: list[str], model: dict, name
     # then from the document root.
     t = walk(model, parts)
     if t is None and parts[: len(mpath)] == mpath and len(parts) > len(mpath):
-        t = walk(model, parts[len(mpath):])
+        t = walk(model, parts[len(mpath) :])
     if t is None:
         root = (data.get("models") or {}).get(parts[0])
         if isinstance(root, dict):
@@ -2578,12 +2578,15 @@ def _check_equation_lhs_names(data: dict[str, Any], errors: list) -> None:
             path = f"{ptr}/equations/{k}/lhs"
             base = _lhs_base_name(lhs)
             if base is not None and _lhs_variable_type(data, mpath, model, base) == "parameter":
-                errors.append((
-                    "equation_defines_parameter", path,
-                    f"Equation {k} defines '{base}', which is a parameter; an equation "
-                    f"defines unknowns only",
-                    {"variable": base},
-                ))
+                errors.append(
+                    (
+                        "equation_defines_parameter",
+                        path,
+                        f"Equation {k} defines '{base}', which is a parameter; an equation "
+                        f"defines unknowns only",
+                        {"variable": base},
+                    )
+                )
             rhs = eq.get("rhs")
             bound = set()
             if isinstance(rhs, dict) and rhs.get("op") in ("faq", "aggregate"):
@@ -2592,12 +2595,15 @@ def _check_equation_lhs_names(data: dict[str, Any], errors: list) -> None:
             defining = _lhs_defined_name(lhs) if free else None
             for sym in free:
                 what = f" (defining '{defining}')" if defining else ""
-                errors.append((
-                    "unbound_index_symbol", path,
-                    f"Equation {k}{what} subscripts its left-hand side with '{sym}', "
-                    f"which no faq binds",
-                    {"symbol": sym},
-                ))
+                errors.append(
+                    (
+                        "unbound_index_symbol",
+                        path,
+                        f"Equation {k}{what} subscripts its left-hand side with '{sym}', "
+                        f"which no faq binds",
+                        {"symbol": sym},
+                    )
+                )
         for sname, sub in (model.get("subsystems") or {}).items():
             if isinstance(sub, dict):
                 visit(sub, mpath + [sname], f"{ptr}/subsystems/{sname}")

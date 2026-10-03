@@ -1436,8 +1436,9 @@ export function validateLhsRules(
 ): StructuralError[] {
   const errors: StructuralError[] = []
   const meta = new Set(
-    Object.keys(((esmFile as unknown as { metaparameters?: Record<string, unknown> })
-      .metaparameters) ?? {}),
+    Object.keys(
+      (esmFile as unknown as { metaparameters?: Record<string, unknown> }).metaparameters ?? {},
+    ),
   )
   const indep = independentVariableName(esmFile)
   const vars = model.variables ?? {}
