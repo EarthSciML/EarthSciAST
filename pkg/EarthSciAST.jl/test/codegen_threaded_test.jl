@@ -1,5 +1,5 @@
 # The codegen tier's threaded cell axis (codegen_kernel.jl, "Threaded cell
-# axis for the codegen tier"; partition + opt-in infrastructure in
+# axis for the codegen tier"; partition + dispatch infrastructure in
 # access_kernel.jl, "Threading infrastructure").
 #
 # Pinned here:
@@ -10,7 +10,7 @@
 #      `(1, 1)` du bitwise (`===`, so NaN/-0.0 count) for every cell-set kind
 #      the emitter chunks: outs/contig, rank-1, rank-2, rank-3 and rank-4 boxes.
 #      This pins the chunked loop-bound arithmetic (the row clamps of the
-#      rank-2/3/N nests) with no threads involved — under Polyester the chunks
+#      rank-2/3/N nests) with no threads involved — threaded, the chunks
 #      only ever run concurrently, which cannot change per-cell values when
 #      the out-slots are disjoint (the build-time check below).
 #   3. DISJOINTNESS — `_cellsets_outs_unique` catches duplicates within an
@@ -19,7 +19,7 @@
 #      cache yields the permanent `:cg_serial_shared_outs` verdict.
 #      (A shared-outs section under threading runs the serial `(1, 1)`
 #      instance — since the lane-tape retirement there is no other fallback.)
-#   4. THREADED EXECUTION (subprocess, `julia -t 4` + Polyester, mirroring the
+#   4. THREADED EXECUTION (subprocess, `julia -t 4`, mirroring the
 #      in-process env-toggle discipline of the other codegen tests):
 #      du bit-identity threaded vs a serial oracle — the same program built
 #      with the min-cells floor above the section, which is what keeps a
@@ -27,9 +27,6 @@
 #      build; `:cg_threaded` in `_THREAD_TALLY`; the min-cells threshold
 #      (`:cg_serial_small` at the 512-cell default on a small section); and
 #      the budget-0 OVERFLOW function threading the same way.
-# The subprocess block is skipped (with a warning) when Polyester is not
-# available in the active environment — it is a weakdep and not a test target
-# dependency.
 using Test
 using EarthSciAST
 include("testutils.jl")
@@ -152,14 +149,11 @@ end
 
 if get(ENV, "ESS_CGT_CHILD", "") == "1"
     # =========================================================================
-    # CHILD: threaded end-to-end (spawned below with `-t 4` and a Polyester-
-    # capable project; everything here may assume Polyester loads).
+    # CHILD: threaded end-to-end (spawned below with `-t 4`).
     # =========================================================================
-    using Polyester
 
     @testset "codegen threaded cell axis (child, $(Threads.nthreads()) threads)" begin
         @test Threads.nthreads() >= 2
-        @test ESM._polyester_loaded()
         @test ESM._threads_available()
 
         N = 512                       # 1024 cells: 2 chunks at the 512 default
@@ -374,23 +368,17 @@ else
             end
         end
 
-        # ---- the threaded subprocess (skipped without Polyester) ----
-        polypath = Base.find_package("Polyester")
-        if polypath === nothing
-            @warn "Polyester not in the active environment; skipping the " *
-                  "threaded codegen-cell-axis subprocess tests"
-        else
-            @testset "threaded subprocess (julia -t 4)" begin
-                env = copy(ENV)
-                for k in collect(keys(env))
-                    startswith(k, "ESS_") && delete!(env, k)
-                end
-                env["ESS_CGT_CHILD"] = "1"
-                env["JULIA_PROJECT"] = Base.active_project()
-                cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 4 $(@__FILE__)`, env)
-                proc = run(pipeline(ignorestatus(cmd); stdout=stdout, stderr=stderr))
-                @test success(proc)
+        # ---- the threaded subprocess ----
+        @testset "threaded subprocess (julia -t 4)" begin
+            env = copy(ENV)
+            for k in collect(keys(env))
+                startswith(k, "ESS_") && delete!(env, k)
             end
+            env["ESS_CGT_CHILD"] = "1"
+            env["JULIA_PROJECT"] = Base.active_project()
+            cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 4 $(@__FILE__)`, env)
+            proc = run(pipeline(ignorestatus(cmd); stdout=stdout, stderr=stderr))
+            @test success(proc)
         end
     end
 end

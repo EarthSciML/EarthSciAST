@@ -124,8 +124,8 @@ _dual_codegen_node_budget() =
 # few ms); what this routing adds is the residual kernels' NATIVE compile at the
 # first Float64 call — roughly linear in emitted nodes, the per-function
 # `ESS_CODEGEN_FN_NODE_CAP` chunking being what keeps it linear, and the same
-# latency a Dual caller already pays at its first call. With Polyester threading
-# active, the overflow RGF runs CHUNKED on its own threaded cell axis (see
+# latency a Dual caller already pays at its first call. With more than one
+# thread, the overflow RGF runs CHUNKED on its own threaded cell axis (see
 # "Threaded cell axis for the codegen tier" below).
 #
 # Off, every residual Float64 kernel routes to the per-cell interpreter
@@ -1918,8 +1918,8 @@ end
 # `_chunk_ordinals`, and disjoint writes commute. Threaded `du` is bitwise
 # `===` serial `du`.
 #
-# OPT-IN semantics: no Polyester ⇒ serial; a section total below the per-chunk
-# min-cells threshold (ESS_THREADS_MIN_CELLS) ⇒ serial.
+# One Julia thread ⇒ serial; a section total below the per-chunk min-cells
+# threshold (ESS_THREADS_MIN_CELLS) ⇒ serial.
 # Verdicts land in `_THREAD_TALLY` (`:cg_threaded` / `:cg_serial_small` /
 # `:cg_serial_shared_outs`), documented with the existing keys.
 
@@ -1962,17 +1962,16 @@ function _sec_prep_threads!(tc::_SecTCache)
 end
 
 # Run one generated function's cells as `nchunks` STATIC chunks — the
-# `_BATCH_RUNNER` hook (EarthSciASTPolyesterExt) over the `_chunk_ordinals`
-# partition; each chunk re-runs the (pure) tab-hoist + invariant prologue on
-# its own stack and walks its `[a, b)` slice of every kernel. Only reached
-# when `_threads_available()` was true, so the runner is non-null.
+# batch runner over the `_chunk_ordinals` partition; each chunk re-runs the
+# (pure) tab-hoist + invariant prologue on its own stack and walks its `[a, b)`
+# slice of every kernel.
 function _run_cg_section_threaded!(f, tabs, du, u, p, t, tc::_SecTCache)
     nchunks = tc.nchunks
     run_chunk = function (c::Int)
         f(du, u, p, t, tabs, c, nchunks)
         return nothing
     end
-    _BATCH_RUNNER[](run_chunk, nchunks)
+    _batch_run!(run_chunk, nchunks)
     return nothing
 end
 
@@ -2020,7 +2019,7 @@ end
         # PRIMARY generated function, chunked at Float64 when the section
         # verdict allows (threaded cell axis above; Float64-only — Dual calls
         # stay serial). Any serial verdict (small,
-        # shared outs, no Polyester, either kill switch) runs the (1, 1)
+        # shared outs, one thread) runs the (1, 1)
         # instance — the serial entry.
         if T === Float64 && _cg_threads_available() &&
            _sec_prep_threads!(s.tcache).state == 1

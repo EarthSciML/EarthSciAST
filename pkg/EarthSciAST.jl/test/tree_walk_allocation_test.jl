@@ -14,19 +14,16 @@
 #
 # THREADED TIER, and why this file pins the SERIAL path explicitly.
 # The codegen tier can run a section's cell axis as static chunks through
-# Polyester (`_run_cg_section_threaded!`, codegen_kernel.jl). That dispatch is
+# Polyester (`_run_cg_section_threaded!`, codegen_kernel.jl), a hard dependency. That dispatch is
 # NOT free: handing a closure over `du`/`u`/`p`/`tabs` to Polyester's batch
 # runner costs a fixed ~96 B per call (48 B closure + 48 B
 # `ManualMemory.Reference`; both non-isbits, so Polyester boxes them). The cost
 # is per DISPATCH, not per cell — it does not grow with N — but it is not 0.
 #
-# The tier arms itself when Polyester is loaded, and Polyester arrives as a
-# TRANSITIVE dependency of the SciML stack (ModelingToolkit / OrdinaryDiffEq /
-# Catalyst). So whether these measurements see the serial or the threaded path
-# depends on which OTHER test files ran first in the same process — this file
-# alone loads no SciML package and measures the serial path, while the full
-# `runtests.jl` has MTK loaded by the time it gets here and measures the
-# threaded one. That is a property of the process, not of the kernels.
+# The tier arms itself whenever Julia runs with more than one thread, so
+# whether these measurements see the serial or the threaded path depends on
+# how the process was started. That is a property of the process, not of the
+# kernels.
 #
 # The zero-allocation DISCIPLINE this file exists to guard (`@views`/gather
 # slices, preallocated scratch, fused in-place broadcasts, in-place semiring
@@ -308,9 +305,8 @@ end
 end  # withenv(_SERIAL_PIN...)
 
 # The chunked cell axis on its own terms. Only reachable when the threaded tier
-# is actually armed (Polyester loaded — usually transitively via the SciML
-# stack — and `nthreads() > 1`), so it is skipped in a bare `julia --project`
-# run of this file and exercised in the full suite.
+# is actually armed (`nthreads() > 1`), so it is skipped in a one-thread run
+# of this file.
 #
 # The dispatch costs a FIXED ~96 B per call (see the header). What must hold is
 # that the cost is per dispatch and not per CELL: a real leak in a chunked
@@ -320,9 +316,7 @@ end  # withenv(_SERIAL_PIN...)
 @testset "threaded cell axis: per-dispatch cost is constant in N (ess-9cc)" begin
     if !EarthSciAST._threads_available()
         @info "skipping threaded-tier allocation test: threaded tier not armed " *
-              "(needs Polyester loaded and nthreads() > 1; " *
-              "nthreads=$(Threads.nthreads()), " *
-              "polyester=$(EarthSciAST._polyester_loaded()))"
+              "(needs nthreads() > 1; nthreads=$(Threads.nthreads()))"
     else
         # Small min-cells so every N below genuinely chunks; read once per
         # section and cached, so it adds no per-call allocation.

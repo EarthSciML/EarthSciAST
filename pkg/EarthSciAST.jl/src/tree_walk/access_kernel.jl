@@ -1110,28 +1110,23 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 # slot — which the codegen build's `_cg_covered_outs_disjoint` rules out up
 # front.
 #
-# OPT-IN, and deliberately so. Threading the cell axis is a large WIN on an
-# isolated RHS but can be a LOSS inside the ODE solve that RHS actually lives in:
-# a stiff solver calls the RHS in short bursts separated by linear-algebra work,
-# so the pool sleeps between calls and each dispatch pays a wake-up latency
-# — which is easily more than the parallel speedup. The default is therefore
-# OFF, and the opt-in is LOADING POLYESTER: the batch runner lives in
-# `EarthSciASTPolyesterExt` and is null until the user does `using Polyester`
-# (which activates the extension and calls `_set_batch_runner!`). Enable it (by
-# loading Polyester) for RHS-dominated workloads with cell counts far above
-# `ESS_THREADS_MIN_CELLS`, where per-dispatch work amortizes the wake-up;
-# measure the SOLVE, not the RHS, before trusting it. Raising that floor past a
-# section's cell count is how a serial run is forced without unloading
-# Polyester — chunking changes no bit, so it is not a choice of evaluator and
-# has no `compiler` value of its own.
+# ON BY DEFAULT. Polyester is a hard dependency and the chunked cell axis runs
+# whenever Julia has more than one thread; with one thread (`julia -t 1`, the
+# default without `JULIA_NUM_THREADS`) every section runs its serial `(1, 1)`
+# instance. Inside an ODE solve a stiff solver calls the RHS in short bursts
+# separated by linear-algebra work, so the pool may sleep between calls and a
+# dispatch pays a wake-up; the per-chunk cell floor (`ESS_THREADS_MIN_CELLS`)
+# keeps small sections serial for that reason. Raising that floor past a
+# section's cell count forces a serial run — chunking changes no bit, so it is
+# not a choice of evaluator and has no `compiler` value of its own.
 
-# The `nchunks`-way static batch runner, supplied by EarthSciASTPolyesterExt when
-# Polyester is loaded. Signature: `runner(chunkbody, nchunks)` calls
-# `chunkbody(c)` for `c in 1:nchunks`, in parallel, with a barrier at the end.
-# Null (⇒ serial path) until the extension installs it.
-const _BATCH_RUNNER = Ref{Any}(nothing)
-_set_batch_runner!(f) = (_BATCH_RUNNER[] = f; nothing)
-@inline _polyester_loaded() = _BATCH_RUNNER[] !== nothing
+# Run `chunkbody(c)` for `c in 1:nchunks`, in parallel, with a barrier at the end.
+function _batch_run!(chunkbody, nchunks::Int)
+    Polyester.@batch for c in 1:nchunks
+        chunkbody(c)
+    end
+    return nothing
+end
 
 # One-time threading verdicts, in the `_CASCADE_TALLY` spirit: bumped once per
 # generated SECTION (not per eval) by `_sec_prep_threads!` (codegen_kernel.jl).
@@ -1155,8 +1150,7 @@ _reset_thread_tally!() = (empty!(_THREAD_TALLY); nothing)
 _thread_min_cells() =
     something(tryparse(Int, get(ENV, "ESS_THREADS_MIN_CELLS", "")), 512)
 
-@inline _threads_available() =
-    Threads.nthreads() > 1 && _polyester_loaded()
+@inline _threads_available() = Threads.nthreads() > 1
 
 # Total cells in a cell set, in the runners' own enumeration.
 function _cellset_ncells(cs::_CellSet)

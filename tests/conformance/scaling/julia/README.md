@@ -11,7 +11,7 @@ holds what is Julia's:
 | `sweep.sh`, `sweep.sbatch` | the Slurm driver for the full ladder, serial and threaded |
 
 The adapter runs in its own environment, `pkg/EarthSciAST.jl/scripts/scaling_env`
-(EarthSciAST, JSON3, Polyester). Only its `Project.toml` is committed; the
+(EarthSciAST, JSON3). Only its `Project.toml` is committed; the
 adapter develops the local package into it and instantiates it on first use.
 
 ## Running it
@@ -69,10 +69,9 @@ Linux only.
   untimed call: at least 5, at least `--budget` seconds, at most 1000.
 - `allocs_per_call` is `@allocated prob.f!(du, u, p, t)` behind a function
   barrier, after two warm calls.
-- `threads` in the file header is `Threads.nthreads()`. The adapter always
-  loads Polyester, because loading it is how native's threaded tier is turned
-  on today (`EarthSciASTPolyesterExt`); with one thread native runs its serial
-  path. In a threaded run `hand_loop_s` is the threaded hand loop and
+- `threads` in the file header is `Threads.nthreads()`. Native threads by
+  default whenever Julia has more than one thread; with one thread it runs its
+  serial path. In a threaded run `hand_loop_s` is the threaded hand loop and
   `hand_loop_serial_s` the serial one.
 - `status` is `refused` for a `compiler_refused_rule` out of the build and
   `error` for anything else; `reason` carries the message.
