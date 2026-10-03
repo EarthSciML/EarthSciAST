@@ -1,0 +1,54 @@
+{
+  "category": "data_source_unbound",
+  "version": "1.0",
+  "description": "Cross-binding conformance for a DATA-FED PARAMETER — one carrying an `update` of `kind: \"data\"` (esm-spec §5.4/§8.5) — that reaches a build with NOTHING BOUND to it: no provider object, no loaded array, and no caller-supplied `p` value. A declared `default` is then the parameter's value (esm-spec §6.3; user ruling 2026-09-29), so `unbound_scalar_forcing` RUNS at its default. With no `default` the parameter is missing data (esm-spec §10.10) and the build MUST refuse at construction with `E_TREEWALK_MISSING_DATA`, naming the parameter and the data source. A source that resolves to nothing is the validator's `data_source_undefined`, refused at the front door (esm-libraries-spec §2.5.2). The refusal is a DOCUMENT/BINDING contract, so it is identical under `compiler=native` and `compiler=interpreter`. The `p` escape hatch binds the parameter and the pinned value reaches the right-hand side. `data_source_unbound` stays registered as the code a binding raises for an unbound feed none of those rules answers. Go and TypeScript do not simulate and only register the code.",
+  "code": "data_source_unbound",
+  "bindings": [
+    "julia",
+    "python",
+    "rust"
+  ],
+  "cases": [
+    {
+      "id": "unbound_scalar_forcing",
+      "path": "fixtures/unbound_scalar_forcing.esm",
+      "parameter": "Forcing.k",
+      "source": "Wind",
+      "expect": "run",
+      "note": "A declared `default` is the value of a data-fed parameter nothing binds (esm-spec §6.3; user ruling 2026-09-29, which the phase-4 merge made the rule here): the build runs at 0.1, and its inline test pins exp(-0.1)."
+    },
+    {
+      "id": "unbound_array_forcing",
+      "path": "fixtures/unbound_array_forcing.esm",
+      "parameter": "Forcing.k",
+      "source": "Wind",
+      "expect": "refuse",
+      "accepts": [
+        "E_TREEWALK_MISSING_DATA"
+      ],
+      "note": "No `default`, nothing bound: missing data (esm-spec §10.10), refused by that name and naming the data source that feeds it."
+    },
+    {
+      "id": "unresolvable_source",
+      "path": "fixtures/unresolvable_source.esm",
+      "parameter": "Forcing.k",
+      "source": "NoSuchSource",
+      "expect": "refuse",
+      "accepts": [
+        "data_source_undefined",
+        "data_source_unbound"
+      ]
+    },
+    {
+      "id": "control_caller_pins_the_forcing",
+      "path": "fixtures/control_caller_pins_the_forcing.esm",
+      "parameter": "Forcing.k",
+      "expect": "run"
+    },
+    {
+      "id": "control_plain_parameter",
+      "path": "fixtures/control_plain_parameter.esm",
+      "expect": "run"
+    }
+  ]
+}

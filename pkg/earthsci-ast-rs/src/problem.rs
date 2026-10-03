@@ -1947,6 +1947,24 @@ pub fn esm_problem<'a>(
         build.baked_parameters.sort();
     }
 
+    // ---- (3d) A `p` pin BINDS a data-fed parameter (esm-spec §9.6.6). -----
+    // The caller passed a value for a parameter the document says is read from
+    // a file, so for THIS build it is not read from a file — that is the
+    // documented escape hatch for running a data-fed document offline, and for
+    // its own inline tests (`Test.parameter_overrides`, esm-spec §6.6, is this
+    // argument by another name). Stripping the `update` here, before the
+    // backend is built, is what makes the pin REACH the right-hand side: a
+    // parameter that still carries a `data` update is routed to the external
+    // forcing channel, where a `p` binding never lands and which the tape
+    // cannot lower at all, so the pin used to change nothing and `native`
+    // refused the document anyway.
+    #[cfg(not(target_arch = "wasm32"))]
+    if !opts.p.is_empty()
+        && let Some(file) = owned_file.as_mut()
+    {
+        crate::data_fed::pin_data_fed_parameters(file, opts.p.keys());
+    }
+
     // ---- (4) Compile the right-hand side. ---------------------------------
     let backend = compile_backend(
         owned_file.as_ref(),
@@ -2006,6 +2024,24 @@ pub fn esm_problem<'a>(
         bind_providers(&backend, &mut opts, tspan)?;
     if let Backend::Array(c) = &backend {
         supplied.refuse_missing_array(c, owned_file.as_ref(), &opts.p)?;
+    }
+
+    // ---- (5c) Refuse a data-fed parameter nothing bound (§9.6.6). ---------
+    // After the providers are bound and BEFORE the compiler's gate below builds
+    // the tape, so the refusal is the same under `native` and `interpreter`:
+    // this asks whether the DOCUMENT's inputs are bound, not what a compiler
+    // can lower. Without it `native` reported the same document as
+    // `compiler_refused_rule` ("wholesale: unresolved symbol"), naming the
+    // tape's limits in place of the defect, while `interpreter` built and then
+    // failed inside the run with an uncoded treewalk fault.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Backend::Array(compiled) = &backend {
+        crate::data_fed::refuse_unbound(
+            compiled,
+            &opts.const_arrays,
+            &discrete_forcing,
+            opts.p.keys(),
+        )?;
     }
 
     // esm-spec §2.2: the document's own solver hints. Read from whichever
@@ -3054,14 +3090,38 @@ fn refuse_reference_integrity_errors(file: &EsmFile) -> Result<(), SimulateError
         BUILD_REFUSED_VALIDATION_CODES.contains(&e.code.to_string().as_str())
             && !e.path.contains("/tests/")
     }) {
+        let named = declared_name_at(&e.path)
+            .map(|n| format!(" (variable '{n}')"))
+            .unwrap_or_default();
         return Err(SimulateError::Compile(
             crate::compile_error::CompileError::build_err(format!(
-                "[{}] {}: {} (esm-libraries-spec §2.5.2)",
+                "[{}] {}: {}{named} (esm-libraries-spec §2.5.2)",
                 e.code, e.path, e.message
             )),
         ));
     }
     Ok(())
+}
+
+/// The full name of the variable a validator pointer sits under —
+/// `/models/A/subsystems/B/variables/v/…` is `A.B.v` — so a refusal names the
+/// variable the way a caller addresses it (esm-spec §6.6.2).
+fn declared_name_at(pointer: &str) -> Option<String> {
+    let segs: Vec<&str> = pointer.trim_start_matches('/').split('/').collect();
+    let mut parts = Vec::new();
+    let mut i = 0;
+    while i + 1 < segs.len() {
+        match segs[i] {
+            "models" | "reaction_systems" | "subsystems" => parts.push(segs[i + 1]),
+            "variables" | "species" | "parameters" => {
+                parts.push(segs[i + 1]);
+                return Some(parts.join("."));
+            }
+            _ => return None,
+        }
+        i += 2;
+    }
+    None
 }
 
 /// Refuse, with `callback_unregistered` (esm-spec §9.6.6), an equation that
@@ -3566,6 +3626,12 @@ impl SuppliedData {
         file: Option<&EsmFile>,
         p: &HashMap<String, f64>,
     ) -> Result<(), SimulateError> {
+        // The parameter as the caller addresses it: by full name (esm-spec
+        // §6.6.2), which a single-model build compiles bare under its namespace.
+        let full = |name: &str| match c.namespace() {
+            Some(ns) if !name.starts_with(&format!("{ns}.")) => format!("{ns}.{name}"),
+            _ => name.to_string(),
+        };
         let forcing = c.forcing_buffer();
         for name in c.forcing_names() {
             if forcing.borrow().contains_key(name) || names_key(&self.provider_keys, name) {
@@ -3579,7 +3645,12 @@ impl SuppliedData {
             // No data is supplied: a declared default is the value (esm-spec
             // §6.3), and with none the parameter is missing data (§10.10).
             let mut value = match c.forcing_default(name) {
-                None => return Err(missing_data_error(name, declared_variable(file, name))),
+                None => {
+                    return Err(missing_data_error(
+                        &full(name),
+                        declared_variable(file, name),
+                    ));
+                }
                 // A default over a shape that does not resolve yet (an
                 // unmaterialized derived set) has no field to fill here.
                 Some(None) => continue,
@@ -3593,7 +3664,10 @@ impl SuppliedData {
         }
         for name in c.unvalued_shaped_params() {
             if !names_key(p, name) {
-                return Err(missing_data_error(name, declared_variable(file, name)));
+                return Err(missing_data_error(
+                    &full(name),
+                    declared_variable(file, name),
+                ));
             }
         }
         // A scalar parameter no default, caller `p` or `distribution` gives a
@@ -3605,7 +3679,7 @@ impl SuppliedData {
             {
                 continue;
             }
-            return Err(missing_data_error(&name, var));
+            return Err(missing_data_error(&full(&name), var));
         }
         Ok(())
     }

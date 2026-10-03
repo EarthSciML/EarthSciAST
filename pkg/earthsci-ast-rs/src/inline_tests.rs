@@ -89,8 +89,15 @@ use crate::simulate::{Solution, SolveOptions};
 /// constructed; it is recorded as an assertion ERROR, never ignored.
 ///
 /// See [`run_inline_tests_with_providers`].
+#[cfg(not(target_arch = "wasm32"))]
 pub type BuildProviderFactory<'a> =
     dyn Fn() -> Result<Vec<(String, Box<dyn crate::prepare::PrepareProvider>)>, String> + 'a;
+
+/// The wasm32 build has no build pipeline (`crate::prepare` is native-only), so
+/// there is no provider contract to satisfy: a factory passed here is refused,
+/// and every assertion of a test that needs one is recorded as an ERROR.
+#[cfg(target_arch = "wasm32")]
+pub type BuildProviderFactory<'a> = dyn Fn() -> Result<(), String> + 'a;
 
 /// Qualify a test's override keys with the component that OWNS the test.
 ///
@@ -1631,6 +1638,7 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
 /// Only `y ~ f(…)` definitions are walked ([`crate::classification::LhsForm`]
 /// calls that shape `Bare`): an ODE state is not read from a build field at
 /// all, and an implicit constraint defines no single name.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn time_dependent_observeds(model: &Model) -> std::collections::BTreeSet<String> {
     let bodies: Vec<(String, &Expr)> = model
         .equations
@@ -1679,6 +1687,7 @@ fn time_dependent_observeds(model: &Model) -> std::collections::BTreeSet<String>
 /// would report the value at `tspan.0` for a question asked at another time,
 /// which is exactly the outcome issue #406 is about, so it is refused by name
 /// instead.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn unevaluable_time_dependent_assertion(
     file: &EsmFile,
     model_name: &str,
@@ -1783,6 +1792,7 @@ fn static_evaluation_times(saveat: &[f64], start: f64, end: f64) -> Vec<f64> {
 ///
 /// `None` when the problem has a state vector: then it integrates, and
 /// [`solve`] produces the answer.
+#[cfg(not(target_arch = "wasm32"))]
 fn static_trajectory(prob: &EsmProblem, times: &[f64]) -> Option<Result<Solution, String>> {
     // Whether this path applies is a property of the DOCUMENT, not of `t`, so
     // the graph is resolved once and evaluated per time. Once it has resolved,
@@ -1811,6 +1821,13 @@ fn static_trajectory(prob: &EsmProblem, times: &[f64]) -> Option<Result<Solution
             ..Default::default()
         },
     }))
+}
+
+/// On wasm32 the array runtime's state-free evaluation is native-only, so a
+/// document with nothing to integrate goes to [`solve`] instead.
+#[cfg(target_arch = "wasm32")]
+fn static_trajectory(_prob: &EsmProblem, _times: &[f64]) -> Option<Result<Solution, String>> {
+    None
 }
 
 /// Everything ONE inline test's BUILD depends on, within one
@@ -1928,9 +1945,11 @@ struct BuiltModel {
     ///
     /// `None` when the document ingests `data_sources`: that build asks for
     /// the pipeline itself, so there is nothing to retry.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     retry_bindings: Option<RetryBindings>,
     /// What that retry produced, computed at most ONCE per [`BuildKey`]
     /// ([`BuiltModel::retry_fields`]).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     retry_fields: OnceCell<Option<BuiltFields>>,
 }
 
@@ -1952,6 +1971,7 @@ impl BuiltModel {
     /// it retried — a build that fails for the key fails for every test
     /// sharing it, and a second whole-document build is too expensive to spend
     /// on learning that again.
+    #[cfg(not(target_arch = "wasm32"))]
     fn retry_fields(&self, run_file: &EsmFile, tspan: (f64, f64)) -> Option<&BuiltFields> {
         self.retry_fields
             .get_or_init(|| build_pipeline_fields(run_file, tspan, self.retry_bindings.as_ref()))
@@ -2281,6 +2301,8 @@ fn build_for_test(
     let retry_bindings = build_providers
         .is_none()
         .then(|| (scalar_params.clone(), u0.clone(), seeds.compiler));
+    // Only the native provider branch below writes to it.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut popts = ProblemOptions {
         p: scalar_params,
         u0,
@@ -2293,6 +2315,20 @@ fn build_for_test(
     // failure here is NOT a solve failure and must not be reported as one:
     // it means the numbers the test asserts on were never read, so every
     // assertion of this test is an ERROR naming the source.
+    #[cfg(target_arch = "wasm32")]
+    if build_providers.is_some() {
+        return BuiltModel {
+            key,
+            ephemeral,
+            index_sets,
+            built: Built::TestError(
+                "data-source providers need the build pipeline, which is native-only".to_string(),
+            ),
+            retry_bindings,
+            retry_fields: OnceCell::new(),
+        };
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     if let Some(make) = build_providers {
         match make() {
             Ok(provs) => {
@@ -2372,6 +2408,10 @@ thread_local! {
 /// §9.6.6 asks for. A rebuild that fails, or that materializes nothing, hands
 /// back `None` and the caller reports the solve failure it already had —
 /// this is an attempt to answer more, never a new way to fail.
+///
+/// Native-only: on wasm32 there is no build pipeline (`crate::prepare` is
+/// native-only), and the runner arm that retries is compiled out with it.
+#[cfg(not(target_arch = "wasm32"))]
 fn build_pipeline_fields(
     run_file: &EsmFile,
     tspan: (f64, f64),
@@ -2509,6 +2549,7 @@ fn run_component_tests(
                 // reads back for a §6.6.5 array assertion. Taken BEFORE the
                 // solve so a state-free document — whose `solve` is a legitimate
                 // `NotDynamic` — still answers its assertions.
+                #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
                 let mut fields: BuiltFields = prob
                     .observed_fields()
                     .iter()
@@ -2567,6 +2608,8 @@ fn run_component_tests(
                         // back its identity element, a tendency moves — and
                         // charges every test a whole extra build for the
                         // substitution.
+                        // Native-only, like the evaluations it answers from.
+                        #[cfg(not(target_arch = "wasm32"))]
                         Err(e) if crate::problem::has_nothing_to_integrate(prob) => {
                             // Whatever the refused solve latched is not an
                             // answer; the fields below are. Without this reset

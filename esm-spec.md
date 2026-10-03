@@ -345,6 +345,43 @@ ExprNode := { "op": string, "args": [Expr, ...], ...optional_fields }
 - **Strings** are variable/parameter references: `"O3"`, `"k1"`
 - **ExprNodes** are operations
 
+#### 4.1.1 Infix text surface and its precedence
+
+An `.esm` document always carries the JSON tree above — that tree is the format, and it is
+unambiguous. Every binding *additionally* exposes an infix **text surface** through the
+`to_ascii` / `parse_expression` pair (API_SPEC.md §5.4), used by printers, diagnostics,
+authoring tools and the shared corpus at `tests/conformance/expression_parse/cases.json`.
+That surface is normative for those APIs: `parse_expression` is the inverse of `to_ascii`,
+and all five bindings MUST agree on the reading of any given text.
+
+Operators bind in this order, **loosest first**:
+
+| Level | Operators | Associativity |
+|---|---|---|
+| 1 | `or` | left |
+| 2 | `and` | left |
+| 3 | `==` `!=` `<` `>` `<=` `>=` | left (non-associative in practice) |
+| 4 | `+`, binary `-` | left; `-` is non-associative on the right (`a - (b - c)` keeps its parentheses) |
+| 5 | `*` `/`, **unary `-`** | left; `/` is non-associative on the right |
+| 6 | `not` | prefix |
+| 7 | `^` | right |
+| 8 | function calls, `[…]` indexing, atoms | — |
+
+**Unary `-` binds tighter than `+` and binary `-`, and looser than `^`** — the standard
+mathematical reading. So `-k_ab * A + k_ba * B` is `(-(k_ab * A)) + (k_ba * B)`, **not**
+`-(k_ab * A + k_ba * B)`; `-a^2` is `-(a^2)`, not `(-a)^2`; and `-a * b` is `-(a * b)`,
+which is numerically identical to `(-a) * b`. A `-` directly in front of a numeric literal
+is part of the literal, not a unary-minus node, which is what lets `2^-3` and
+`(300 / T)^-1.3` parse without parentheses.
+
+Because a unary-minus operand extends only to the next `+` or binary `-`, a printer MUST
+parenthesize a negated sum or difference — `-(a + b)`, `-(a - b)` — or the text it emits
+reads back as a different expression. The full printing contract is
+`tests/display/RENDERING_CONTRACT.md`.
+
+This section documents the text surface only; it places no requirement on `.esm`
+documents, whose expressions are JSON, and it is therefore not gated on the `esm` version.
+
 ### 4.2 Operators
 
 Every `op` string belongs to one of **two tiers**:
@@ -4523,6 +4560,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `unevaluable_operator` | An op that IS in the evaluable-core set (§4.2) reached an evaluator that has no evaluation rule for it. The complement of `unlowered_operator`, and the two are distinguished by which side of §4.2 the op falls on: `unlowered_operator` means the op is OUTSIDE evaluable-core and no rewrite rule eliminated it (the document is under-lowered), whereas `unevaluable_operator` means the op is INSIDE evaluable-core but *this* evaluator cannot produce a value for it — because an earlier pipeline stage (value invention, or a lowering pass) should have eliminated it, or because the document was built for a different runtime (a binding may legitimately offer more than one evaluator, e.g. a scalar ODE interpreter alongside a whole-array one, with different rule sets). The check MUST precede evaluation: the evaluator walks the whole expression (or, where it has a build step, every expression it builds) and refuses up front, so no part of an expression carrying such an op is evaluated — an op in the untaken branch of an `ifelse` is refused too. Raising only when evaluation happens to reach the node does not satisfy this. The diagnostic MUST name the offending op, and the evaluator MUST NOT evaluate the op to a sentinel value (NaN, zero, or any other number): a sentinel is indistinguishable from a legitimate numerical result and would propagate into the solution. Binding-local spellings of this condition (`E_TREEWALK_UNSUPPORTED_OP`, `unsupported_operator`, an uncoded interpreter error) are superseded by this code; the shared fixture is `tests/conformance/unevaluable_operator/`. |
 | `unsupported_construct` | A model construct reached an evaluator that cannot run it: a **continuous event** (`continuous_events`), a **discrete event** (`discrete_events`), an **implicit equation** — one whose LHS is an expression rather than an unknown (bare or indexed), a time derivative of one, or `ic` of one, and so constrains its operands without defining any of them — or **Wiener noise**, a parameter whose `update.kind` is `wiener`, which makes the document an SDE (§6.3.1) that an ODE evaluator would otherwise run with the noise read as a constant. Fires at BUILD, before evaluation, and MUST name the construct and the evaluator. It is reported rather than skipped: an evaluator that runs the model without the event, or without solving the residual, reports an answer the document does not describe. An evaluator that does run the construct (e.g. a ModelingToolkit export) never raises it. |
 | `callback_unregistered` | An equation reads a variable that a `callback` coupling entry injects (`coupling[i].config.callback_variables[j].name`, a declaration site per §4.9), and no callback supplying it is registered at construction. The value is the host's to supply, and no binding has a seam to register one before the build. So a build that went ahead would read a placeholder (zero, NaN, or an unset forcing slot) the document does not describe. It fires at BUILD, before evaluation, and names the variable, the reading system and the `callback_id`. Loading and validation are unaffected: the variable IS declared. |
+| `data_source_unbound` | A **data-fed parameter** — one whose `update` is `kind: "data"` (§5.4, §8.5) — reached a build with **nothing bound to it** (no provider object, no array loaded, no caller-supplied `p` value) in a case none of the following rules answers. A declared `default` is such a parameter's value (§6.3), so it builds; one with no `default` is missing data (§10.10), refused at construction as `E_TREEWALK_MISSING_DATA`, naming the parameter and the data source that feeds it; a `data_sources` key that resolves to nothing is the validator's `data_source_undefined`, refused at the front door (esm-libraries-spec §2.5.2). This code stays the cross-binding name for an unbound feed a binding cannot answer otherwise. A parameter the caller pins with `p` IS bound, MUST build, and the pin MUST reach the right-hand side. The answer is identical under every `compiler` value. |
 | `compiler_unknown` | An `esm_problem` **`compiler`** option (API_SPEC.md §5.8) named a value outside the closed vocabulary — `interpreter`, `native`, `xla`, `mtk`, `sympy`. Fires at construction, before anything is built, and MUST name the offending value. |
 | `compiler_unavailable` | A `compiler` value that IS in the vocabulary, but that this binding, this build, or this process cannot provide: a compiler the binding does not implement, a build feature not compiled in, an optional package not loaded. The message MUST name what would have to be loaded or built. A binding MUST NOT answer by selecting a different compiler — the whole point of naming one is that the caller knows which one ran. |
 | `compiler_refused_rule` | The chosen compiler cannot run this document. Fires at BUILD, and MUST name the compiler, the **rule** — the equation or observed it refused, component-qualified — and the reason. It is a refusal, never a fallback: a compiler that quietly ran the rule on a slower or different path would report a number under a label that does not describe how it was produced. |

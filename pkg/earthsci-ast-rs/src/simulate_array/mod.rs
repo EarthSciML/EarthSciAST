@@ -71,10 +71,12 @@ mod rhs;
 pub mod tape;
 mod vectorized;
 
-// Only `area_faq` / `inline_tests` consume this re-export, and both stay
-// native-only, so gate it to avoid an unused-import warning on wasm.
+// `inline_tests` consumes `eval_buildtime_field` on every target; only the
+// native-only `area_faq` needs the scoped form, so it is gated to avoid an
+// unused-import warning on wasm.
+pub(crate) use compile::eval_buildtime_field;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use compile::{eval_buildtime_field, eval_buildtime_field_in_scope};
+pub(crate) use compile::eval_buildtime_field_in_scope;
 pub use compile::{
     file_has_array_ops, file_has_spatial_model, run_value_invention,
     run_value_invention_with_params,
@@ -84,6 +86,7 @@ pub use compile::{
 // two routes cannot disagree about which names a document declares.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
+pub(crate) use compile::data_feed_source;
 pub(crate) use compile::{model_tree_any, parse_subsystem_model};
 // The build pipeline reads the authored model, as the single-model route does,
 // so it applies the same stand-ins for `flatten`'s rewrites.
@@ -700,6 +703,15 @@ pub struct ArrayCompiled {
     /// `ModelVariable.refresh` field (plan PR-2) is deferred: forcing resolves
     /// by name at runtime and does not need it.
     forcing: Rc<RefCell<HashMap<String, ArrayD<f64>>>>,
+    /// Every DATA-FED parameter routed to [`Self::forcing`] at classification:
+    /// the name the runtime looks up, and the `data_sources` key its `update`
+    /// names (esm-spec §5.4/§8.5). Read by
+    /// [`crate::data_fed::refuse_unbound`] at construction to answer whether
+    /// anything actually bound each one — a forcing nothing bound must be a
+    /// refusal, never a run at the parameter's `default` (esm-spec §9.6.6
+    /// `data_source_unbound`, CONFORMANCE_SPEC §5.46). Empty for every model
+    /// with no data feed.
+    data_fed: Vec<(String, String)>,
     /// How many times [`Self::forcing_handle`] has handed out the buffer: a
     /// host holding a handle can have written it since, which is what
     /// [`driver::FieldIcMemo`] checks.

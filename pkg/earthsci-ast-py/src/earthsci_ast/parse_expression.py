@@ -110,11 +110,14 @@ _INFIX: frozenset[str] = frozenset(
 _RIGHT_ASSOC: frozenset[str] = frozenset({"^"})
 
 # Prefix operand minimum-precedences, sourced from the printer's table:
-#  - unary `-` binds LOOSELY (precedence of `-`, = additive), so it swallows a
-#    whole additive/multiplicative operand, matching how the printer renders
-#    `-(Ea/(R*T))` as `-Ea / (R * T)` with no inner parens.
+#  - unary `-` binds at MULTIPLICATIVE precedence, the standard mathematical
+#    reading: tighter than `+`/binary `-` (`-a + b` = `(-a) + b`), looser than
+#    `^` (`-a^2` = `-(a^2)`). Its operand absorbs a `*`/`/` chain (`-a * b` =
+#    `-(a * b)`, numerically identical to `(-a) * b`) and a power, but stops at
+#    the first `+`/`-`. The printer's matching rule is `_UMINUS_OPERAND_MIN` in
+#    display.py, so `-(a + b)` keeps its parens.
 #  - `not` binds TIGHTLY at its own precedence (`not p and q` = `(not p) and q`).
-_UMINUS_MIN = _op_precedence("-")
+_UMINUS_MIN = _op_precedence("*")
 _NOT_MIN = _op_precedence("not")
 # Template binding values (`name<k = value, …>`) bind at additive precedence so
 # the closing `>` — a comparison operator — is never swallowed as `value > …`.

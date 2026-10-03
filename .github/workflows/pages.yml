@@ -43,6 +43,12 @@ jobs:
       - name: Generate API + example documentation
         run: python scripts/generate_docs.py --output docs/content/generated
 
+      # The narrative pages are built, validated, tested and plotted here.
+      # A model that does not validate, or an inline test that fails, exits
+      # non-zero and so stops the deploy.
+      - name: Build narrative pages
+        run: cargo run --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative -- build
+
       - name: Install Hugo extended
         run: |
           curl -sSL \

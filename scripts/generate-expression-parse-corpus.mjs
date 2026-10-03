@@ -56,7 +56,31 @@ const SCALAR = [
   'x != 0',
   'x >= 1',
   'x <= 1',
+  // Unary-minus precedence. It binds TIGHTER than `+` / binary `-` and LOOSER
+  // than `^` — the standard mathematical reading — so `-a + b` is `(-a) + b`
+  // and `-a^2` is `-(a^2)`. A negated SUM must keep its parentheses on the way
+  // back out or the reprint changes meaning. Each case pins one edge of that.
   '-a + b',
+  '-a - b',
+  '-a * b',
+  '-a / b',
+  '-a^2',
+  '-a^-b',
+  '2^-3',
+  '-(a + b)',
+  '-(a - b)',
+  // A negated comparison / logical op keeps its parentheses too, and a `-`
+  // directly before a numeric literal is part of the literal, so a negated
+  // power with a literal base (`-(2^2)`, value -4) must not print as `-2^2`
+  // (which reads back as `(-2)^2`, value 4).
+  '-(a < b)',
+  '-(a and b)',
+  '-(2^2)',
+  '-(2^2 * x)',
+  '(-2)^2',
+  '-a * b + c',
+  '-x^2 + y^2',
+  '-k_ab * A + k_ba * B',
   '2 * (a + b)',
   'sqrt(a^2 + b^2)',
   '∂u_∂z^2 + ∂v_∂z^2',

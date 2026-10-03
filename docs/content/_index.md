@@ -28,6 +28,9 @@ and multiplicative coupling, operator apply and compose, and events.
 **[Expression templates](templates/)** — `match` rewrite rules, how imports and
 metaparameters work, and how spatial discretization is expressed.
 
+**[Narrative models](generated/narrative/)** — pages that define a model in
+their own prose, then validate, test and plot it as they are built.
+
 ## Reference
 
 - [`esm-spec.md`](https://github.com/EarthSciML/EarthSciAST/blob/main/esm-spec.md)

@@ -6454,6 +6454,106 @@ Either way the compiler is an argument and never an inheritance, and this tier
 remains the only place `native`'s coverage is measured. Without that, the whole
 harness goes red for reasons unrelated to what each stage tests.
 
+### 5.45 A Doubly-Defined Unknown Is Refused, Never Tie-Broken (normative)
+
+**Decision pinned.** An unknown that carries BOTH a derivative equation
+(`D(x, t) ~ f`) and a whole-variable algebraic one (`x ~ g`) MUST be refused at
+BUILD by every simulating binding, with the esm-spec §4.9.4 diagnostic
+`equation_count_mismatch`, and the message MUST name the unknown and BOTH
+equations. §4.9.4 counts an equation against the unknowns whichever form its LHS
+takes, so the two together are one more equation than the model has unknowns to
+bind — which is exactly what each binding's `validate` already reports at
+`/models/<M>`. The build is the other place that same document arrives, and it
+says the same thing.
+
+**Reason.** The alternative is to tie-break, and there is no defensible winner.
+Rust did it on purpose — "differential wins over algebraic when both are
+present" — on the grounds that reporting the name as algebraic would hide a
+genuinely settable initial condition from a Run UI. But the document declares a
+constraint, and integrating the derivative alone runs a model the file does not
+describe while saying nothing about the equation dropped to do it. A refused
+document has no run, so there is no Run UI left to mislead. Julia, for its part,
+kept both equations and failed later, deep in classification, with a
+Julia-local code naming neither the unknown nor either equation — a refusal, but
+not one an author can act on.
+
+**Shape.** Golden-free; it pins no numbers. Two refusal cases — the same defect
+on a scalar document and on one whose shaped unknown takes a binding's ARRAY
+compile, because the scalar and array routes are separate code in Rust and
+Python and both must refuse. Each has its own CONTROL: the same document with
+the algebraic equation removed, which takes the same evaluator and MUST still
+run. The controls are the non-vacuity anchor: a binding that refused every
+document would otherwise satisfy the refusal cases. Both refusal fixtures give
+the two equations DIFFERING right-hand sides (`k` against `k * 3`), so no
+binding can argue the pair is a harmless duplicate; an IDENTICAL pair is left to
+each binding's own structural validator, which is where a duplicate definition
+is decided.
+
+The manifest and fixtures live in `tests/conformance/doubly_defined_state/`.
+Adapters: `pkg/EarthSciAST.jl/test/doubly_defined_state_conformance_test.jl`;
+`pkg/earthsci-ast-py/tests/test_doubly_defined_state_conformance.py`;
+`pkg/earthsci-ast-rs/tests/doubly_defined_state_conformance.rs`. Each adapter
+also asserts that its binding's `validate` reports the same code on the same
+file, which is what makes the refusal a property of the document rather than of
+the evaluator. Go and TypeScript do not simulate; they only register the code.
+
+**Out of scope.** Julia's ModelingToolkit route is a code GENERATOR
+(`to_julia_code`), not a build, so it never raises the code; a generated script
+hands both equations to `mtkcompile`, which reports the imbalance in its own
+vocabulary.
+
+
+### 5.46 A Data-Fed Parameter Nothing Bound: Its Default, or Missing Data (normative)
+
+A **data-fed parameter** is one whose `update` is `{kind: "data", source: …,
+from: {file_variable: …}}` (esm-spec §5.4, §8.5). From esm 1.0.0 that parameter
+IS the loaded field: a data source is not a component and has no coupling edge.
+
+**The rule.** When a binding builds a document and a data-fed parameter has
+**nothing bound to it** — no provider object for it, no array loaded for it, and
+no caller-supplied `p` value for it:
+
+- a declared `default` is the parameter's value (esm-spec §6.3; user ruling
+  2026-09-29), and the build succeeds;
+- with no `default`, the parameter is missing data (esm-spec §10.10), and the
+  build MUST FAIL at construction with `E_TREEWALK_MISSING_DATA`, naming the
+  parameter and the data source that feeds it. It MUST NOT bind the parameter
+  from zero or from a NaN sentinel (the missing-data tier, `tests/conformance/missing_data/`,
+  pins the shaped and scalar forms).
+
+This binds `esm_problem`, `build_evaluator` and `run_inline_tests` alike, and the
+answer is a document contract: it MUST be identical under `compiler=native` and
+`compiler=interpreter`. Whether a compiler can lower a read of the forcing
+channel is a separate question, answered by `compiler_refused_rule`.
+
+**The `p` escape hatch is required to keep working.** A caller who passes an
+explicit `p` value for the parameter HAS bound it. That is how a data-fed
+document is run offline, and how its inline tests run (`Test.parameter_overrides`,
+esm-spec §6.6, is the `p` argument of `esm_problem` by another name). Such a
+build MUST succeed, and the pinned value MUST reach the right-hand side,
+outranking the declared `default`.
+
+**An unresolvable source is not a bound source.** A parameter whose
+`update.source` names no declared `data_sources` entry is the validation defect
+`data_source_undefined` (esm-spec §8.5), which the front door refuses
+(esm-libraries-spec §2.5.2). No binding may drop the loader field because its
+source did not resolve and then run the parameter as an ordinary one.
+
+`data_source_unbound` (esm-spec §9.6.6) remains the registered name for an
+unbound feed a binding cannot answer by the rules above.
+
+#### 5.46.1 Gate
+
+`tests/conformance/data_source_unbound/` — a manifest, two refusal fixtures
+(no `default`, and an unresolvable source) and three cases that run (a defaulted
+feed, a pinned feed, and a plain parameter), with no goldens. Consumed by
+`pkg/EarthSciAST.jl/test/data_source_unbound_conformance_test.jl`,
+`pkg/earthsci-ast-py/tests/test_data_source_unbound_conformance.py` and
+`pkg/earthsci-ast-rs/tests/data_source_unbound_conformance.rs`, each of which
+asserts the refusal under BOTH compilers, asserts that the message names the
+parameter, and runs the cases that build. Go and TypeScript do not simulate and only
+register the code.
+
 
 #### 5.44.6 The native coverage ledger
 
