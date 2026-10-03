@@ -1216,6 +1216,56 @@ fn ab_scan_absorbed_into_its_group() {
     assert_eq!(fused_cont, 1, "the scans and their reader run as one group");
 }
 
+/// The unstructured-mesh gather `sum_k kappa * (u[nbr[i, k]] - u[i])` over a
+/// constant neighbour table, with more cells than one executor chunk: the
+/// folded gather reads positions resolved when the CONST section runs, and
+/// the reduction over the four neighbour positions walks its accumulator
+/// chunk by chunk.
+#[test]
+fn ab_index_gather_reduction_interleaved() {
+    let n = 1500usize;
+    let nbr: Vec<Vec<f64>> = (0..n)
+        .map(|i| {
+            (0..4)
+                .map(|k| ((i * 7 + k * 389 + 1) % n + 1) as f64)
+                .collect()
+        })
+        .collect();
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_mesh_gather"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["cells"]},
+                "nbr": {"type": "unknown", "shape": ["cells", "nb"]},
+                "kappa": {"type": "parameter", "default": 0.1}
+            },
+            "equations": [
+                {"lhs": "nbr", "rhs": {"op": "const", "args": [], "value": nbr}},
+                {
+                    "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                            "expr": {"op": "D", "args": [
+                                {"op": "index", "args": ["u", "i"]}], "wrt": "t"},
+                            "ranges": {"i": [1, n]}},
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                            "ranges": {"i": [1, n], "k": [1, 4]},
+                            "expr": {"op": "*", "args": ["kappa", {"op": "-", "args": [
+                                {"op": "index", "args": ["u",
+                                    {"op": "index", "args": ["nbr", "i", "k"]}]},
+                                {"op": "index", "args": ["u", "i"]}]}]}}
+                }
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    assert!(
+        prog.fused
+            .iter()
+            .any(|f| f.interleave.is_some() && f.inputs.iter().any(|i| i.index.is_some())),
+        "the neighbour reduction runs interleaved over its folded gather"
+    );
+}
+
 /// A declared observed whose whole body is a `makearray` (the boundary-
 /// dispatch stencil shape every discretization template expands to), plus a
 /// wholesale ELEMENTWISE observed combining a state array with a taped

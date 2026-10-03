@@ -708,6 +708,7 @@ unsafe fn exec_fused_runs(
     cursor: &mut RunCursor,
 ) {
     let rp = fregs.as_mut_ptr();
+    let cs = FCHUNK;
     // Bin3 splat registers: one FCHUNK broadcast per scalar plus a zero
     // register (the ghost read), filled once per call. The values are the
     // EXACT scalars / the exact `+0.0` ghost, so an all-pointer superop
@@ -718,22 +719,17 @@ unsafe fn exec_fused_runs(
         debug_assert_eq!(fs.n_splat_regs as usize, svals.len() + 1);
         unsafe {
             for (i, &v) in svals.iter().enumerate() {
-                let p = rp.add((splat_base + i) * FCHUNK);
-                for k in 0..FCHUNK {
+                let p = rp.add((splat_base + i) * cs);
+                for k in 0..cs {
                     *p.add(k) = v;
                 }
             }
-            let z = rp.add(zero_ix * FCHUNK);
-            for k in 0..FCHUNK {
+            let z = rp.add(zero_ix * cs);
+            for k in 0..cs {
                 *z.add(k) = 0.0;
             }
         }
     }
-    // Walk the schedule in execution order: a `Repeat` opens a frame over
-    // its body, and each time the walk reaches the body's end it either
-    // steps every offset once more and goes back to the body's start, or
-    // (the last repetition done) takes the steps back off and closes.
-    let nodes = &fs.schedule.nodes;
     let RunCursor {
         frames,
         in_delta,
@@ -744,66 +740,11 @@ unsafe fn exec_fused_runs(
     // visits, so the carries need no reset here; size them only.
     carries.clear();
     carries.resize(n_scans(fs), 0.0);
-    frames.clear();
-    in_delta.clear();
-    in_delta.resize(n_shifted(fs), 0);
-    in_off.clear();
-    in_off.resize(in_delta.len(), 0);
-    let mut out_delta = 0i64;
-    let mut i = 0usize;
-    loop {
-        while let Some(fr) = frames.last_mut()
-            && i == fr.end
-        {
-            let RunNode::Repeat {
-                count,
-                body,
-                out_step,
-                in_step,
-            } = &nodes[fr.node]
-            else {
-                unreachable!("a frame is opened by a Repeat node")
-            };
-            fr.left -= 1;
-            if fr.left > 0 {
-                out_delta += out_step;
-                for (d, s) in in_delta.iter_mut().zip(in_step) {
-                    *d += s;
-                }
-                i = fr.end - *body as usize;
-                break;
-            }
-            let back = *count as i64 - 1;
-            out_delta -= back * out_step;
-            for (d, s) in in_delta.iter_mut().zip(in_step) {
-                *d -= back * s;
-            }
-            frames.pop();
-        }
-        let run = match nodes.get(i) {
-            None => break,
-            Some(RunNode::Repeat { count, body, .. }) => {
-                frames.push(RepeatFrame {
-                    node: i,
-                    end: i + 1 + *body as usize,
-                    left: *count,
-                });
-                i += 1;
-                continue;
-            }
-            Some(RunNode::Run(run)) => run,
-        };
-        i += 1;
-        for ((o, &r), &d) in in_off.iter_mut().zip(&run.in_off).zip(in_delta.iter()) {
-            *o = if r == GHOST_OFF { r } else { r + d };
-        }
-        let in_off: &[i64] = in_off;
-        let out_off = (run.out_off as i64 + out_delta) as usize;
-        let mut done = 0usize;
-        let len = run.len as usize;
-        while done < len {
-            let c = (len - done).min(FCHUNK);
-            let at = out_off + done;
+    // One chunk: `c` elements at flat box offset `at`, `done` elements
+    // into a run whose shifted inputs start at `in_off`.
+    macro_rules! chunk {
+        ($in_off:expr, $done:expr, $at:expr, $c:expr) => {{
+            let (in_off, done, at, c): (&[i64], usize, usize, usize) = ($in_off, $done, $at, $c);
             // Pre-load strided shifted inputs into their dedicated chunk
             // registers (a ghost run needs no load — reads resolve to 0.0).
             for (i, inp) in fs.inputs.iter().enumerate() {
@@ -816,7 +757,7 @@ unsafe fn exec_fused_runs(
                     if let Some(Some(t)) = idx.get(i) {
                         unsafe {
                             let dst = std::slice::from_raw_parts_mut(
-                                rp.add(inp.load_reg as usize * FCHUNK),
+                                rp.add(inp.load_reg as usize * cs),
                                 c,
                             );
                             let pos = &t.pos[at..at + c];
@@ -838,7 +779,7 @@ unsafe fn exec_fused_runs(
                         continue;
                     }
                     unsafe {
-                        let dst = rp.add(inp.load_reg as usize * FCHUNK);
+                        let dst = rp.add(inp.load_reg as usize * cs);
                         let sub = bases[by as usize].add(at);
                         let src = bases[i];
                         for k in 0..c {
@@ -856,7 +797,7 @@ unsafe fn exec_fused_runs(
                     continue;
                 }
                 unsafe {
-                    let dst = rp.add(inp.load_reg as usize * FCHUNK);
+                    let dst = rp.add(inp.load_reg as usize * cs);
                     let base =
                         bases[i].offset(o as isize + done as isize * inp.elem_stride as isize);
                     for k in 0..c {
@@ -866,14 +807,14 @@ unsafe fn exec_fused_runs(
             }
             let msrc = |m: &MRef| -> MSrc {
                 match m {
-                    MRef::Reg(r) => MSrc::P(unsafe { rp.add(*r as usize * FCHUNK) as *const f64 }),
+                    MRef::Reg(r) => MSrc::P(unsafe { rp.add(*r as usize * cs) as *const f64 }),
                     MRef::Scal(i) => MSrc::C(svals[*i as usize]),
                     MRef::In(i) => {
                         let inp = &fs.inputs[*i as usize];
                         match inp.shifted_ix {
-                            None if inp.index.is_some() => MSrc::P(unsafe {
-                                rp.add(inp.load_reg as usize * FCHUNK) as *const f64
-                            }),
+                            None if inp.index.is_some() => {
+                                MSrc::P(unsafe { rp.add(inp.load_reg as usize * cs) as *const f64 })
+                            }
                             None => MSrc::P(unsafe { bases[*i as usize].add(at) }),
                             Some(s) => {
                                 let o = in_off[s as usize];
@@ -881,7 +822,7 @@ unsafe fn exec_fused_runs(
                                     MSrc::C(0.0)
                                 } else if inp.load_reg != GroupIx::MAX {
                                     MSrc::P(unsafe {
-                                        rp.add(inp.load_reg as usize * FCHUNK) as *const f64
+                                        rp.add(inp.load_reg as usize * cs) as *const f64
                                     })
                                 } else if inp.elem_stride == 0 {
                                     // Constant along the run: one source
@@ -906,11 +847,11 @@ unsafe fn exec_fused_runs(
                     MSrc::P(p) => p,
                     MSrc::C(v) => {
                         if v == 0.0 && v.is_sign_positive() {
-                            unsafe { rp.add(zero_ix * FCHUNK) as *const f64 }
+                            unsafe { rp.add(zero_ix * cs) as *const f64 }
                         } else {
                             match m {
                                 MRef::Scal(i) => unsafe {
-                                    rp.add((splat_base + *i as usize) * FCHUNK) as *const f64
+                                    rp.add((splat_base + *i as usize) * cs) as *const f64
                                 },
                                 _ => unreachable!("non-scalar constant operand"),
                             }
@@ -922,7 +863,7 @@ unsafe fn exec_fused_runs(
                 match op {
                     MicroOp::Bin { op, a, b, out } => {
                         let (a, b) = (msrc(a), msrc(b));
-                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        let dst = unsafe { rp.add(*out as usize * cs) };
                         // Monomorphized over the shared table — the same
                         // kernel bodies as the unfused `Instr::Bin` arm.
                         macro_rules! chunk {
@@ -934,7 +875,7 @@ unsafe fn exec_fused_runs(
                     }
                     MicroOp::Un { op, a, out } => {
                         let a = msrc(a);
-                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        let dst = unsafe { rp.add(*out as usize * cs) };
                         macro_rules! chunk {
                             ($f:expr) => {
                                 unsafe { fch1(dst, c, a, $f) }
@@ -944,15 +885,15 @@ unsafe fn exec_fused_runs(
                     }
                     MicroOp::Neg { a, out } => {
                         let a = msrc(a);
-                        unsafe { fch1(rp.add(*out as usize * FCHUNK), c, a, |x| -x) };
+                        unsafe { fch1(rp.add(*out as usize * cs), c, a, |x| -x) };
                     }
                     MicroOp::Select { cond, a, b, out } => {
                         let (cv, av, bv) = (msrc(cond), msrc(a), msrc(b));
-                        unsafe { fch_sel(rp.add(*out as usize * FCHUNK), c, cv, av, bv) };
+                        unsafe { fch_sel(rp.add(*out as usize * cs), c, cv, av, bv) };
                     }
                     MicroOp::Mov { a, out } => {
                         let a = msrc(a);
-                        unsafe { fch1(rp.add(*out as usize * FCHUNK), c, a, |x| x) };
+                        unsafe { fch1(rp.add(*out as usize * cs), c, a, |x| x) };
                     }
                     MicroOp::Scan {
                         op,
@@ -964,7 +905,7 @@ unsafe fn exec_fused_runs(
                         out,
                     } => {
                         let a = msrc(a);
-                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        let dst = unsafe { rp.add(*out as usize * cs) };
                         let cv = &mut carries[*carry as usize];
                         let (row, init, inclusive) = (*row as usize, *init, *inclusive);
                         macro_rules! chunk {
@@ -984,7 +925,7 @@ unsafe fn exec_fused_runs(
                         out,
                     } => {
                         let (av, bv, cv) = (msrc(a), msrc(b), msrc(c3));
-                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        let dst = unsafe { rp.add(*out as usize * cs) };
                         // Under `element_type: "Float32"` the monomorphized
                         // closures below are hand-copied f64 arithmetic that
                         // never sees the precision, so compose the SAME two
@@ -1070,7 +1011,7 @@ unsafe fn exec_fused_runs(
                         out,
                     } => {
                         let (pa, pb, pc, pd) = (msrc_p(a), msrc_p(b), msrc_p(c3), msrc_p(d4));
-                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        let dst = unsafe { rp.add(*out as usize * cs) };
                         // See `Bin2`: Float32 composes the three shared kernels
                         // in the same order rather than the f64-only closures.
                         if crate::precision::is_f32() {
@@ -1174,14 +1115,14 @@ unsafe fn exec_fused_runs(
             for &(reg, optr) in outs {
                 unsafe {
                     std::ptr::copy_nonoverlapping(
-                        rp.add(reg as usize * FCHUNK) as *const f64,
+                        rp.add(reg as usize * cs) as *const f64,
                         optr.add(at),
                         c,
                     );
                 }
             }
             if let Some(r) = &fs.reduce {
-                let v = unsafe { rp.add(r.reg as usize * FCHUNK) as *const f64 };
+                let v = unsafe { rp.add(r.reg as usize * cs) as *const f64 };
                 macro_rules! fold {
                     ($f:expr) => {
                         unsafe { fold_chunk(red, r.n_inner, at, v, c, $f) }
@@ -1189,6 +1130,88 @@ unsafe fn exec_fused_runs(
                 }
                 dispatch_bin_kernel!(&r.op, fold);
             }
+        }};
+    }
+    // A reduction over a few leading positions, one run each, folds each
+    // chunk of its accumulator for every position before moving on, so the
+    // accumulator chunk stays in the fastest cache; each output still folds
+    // its terms in ascending position order.
+    if let (Some(runs), Some(r)) = (&fs.interleave, &fs.reduce) {
+        let mut c0 = 0usize;
+        while c0 < r.n_inner {
+            let c = (r.n_inner - c0).min(cs);
+            for run in runs {
+                chunk!(&run.in_off, c0, run.out_off as usize + c0, c);
+            }
+            c0 += c;
+        }
+        return;
+    }
+    // Walk the schedule in execution order: a `Repeat` opens a frame over
+    // its body, and each time the walk reaches the body's end it either
+    // steps every offset once more and goes back to the body's start, or
+    // (the last repetition done) takes the steps back off and closes.
+    let nodes = &fs.schedule.nodes;
+    frames.clear();
+    in_delta.clear();
+    in_delta.resize(n_shifted(fs), 0);
+    in_off.clear();
+    in_off.resize(in_delta.len(), 0);
+    let mut out_delta = 0i64;
+    let mut i = 0usize;
+    loop {
+        while let Some(fr) = frames.last_mut()
+            && i == fr.end
+        {
+            let RunNode::Repeat {
+                count,
+                body,
+                out_step,
+                in_step,
+            } = &nodes[fr.node]
+            else {
+                unreachable!("a frame is opened by a Repeat node")
+            };
+            fr.left -= 1;
+            if fr.left > 0 {
+                out_delta += out_step;
+                for (d, s) in in_delta.iter_mut().zip(in_step) {
+                    *d += s;
+                }
+                i = fr.end - *body as usize;
+                break;
+            }
+            let back = *count as i64 - 1;
+            out_delta -= back * out_step;
+            for (d, s) in in_delta.iter_mut().zip(in_step) {
+                *d -= back * s;
+            }
+            frames.pop();
+        }
+        let run = match nodes.get(i) {
+            None => break,
+            Some(RunNode::Repeat { count, body, .. }) => {
+                frames.push(RepeatFrame {
+                    node: i,
+                    end: i + 1 + *body as usize,
+                    left: *count,
+                });
+                i += 1;
+                continue;
+            }
+            Some(RunNode::Run(run)) => run,
+        };
+        i += 1;
+        for ((o, &r), &d) in in_off.iter_mut().zip(&run.in_off).zip(in_delta.iter()) {
+            *o = if r == GHOST_OFF { r } else { r + d };
+        }
+        let in_off: &[i64] = in_off;
+        let out_off = (run.out_off as i64 + out_delta) as usize;
+        let mut done = 0usize;
+        let len = run.len as usize;
+        while done < len {
+            let c = (len - done).min(cs);
+            chunk!(in_off, done, out_off + done, c);
             done += c;
         }
     }

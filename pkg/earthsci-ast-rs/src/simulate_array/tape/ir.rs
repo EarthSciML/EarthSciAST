@@ -667,7 +667,7 @@ impl Instr {
 pub(crate) type GroupIx = u16;
 
 /// Reference to a value inside a fused micro-program.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum MRef {
     /// Temporary register defined by an earlier micro-op of the same group.
     Reg(GroupIx),
@@ -954,6 +954,12 @@ pub(crate) struct FusedSpec {
     /// An absorbed [`Instr::Reduce`] over the group box, folding one register
     /// instead of storing it (see [`FusedReduce`]).
     pub reduce: Option<FusedReduce>,
+    /// For a group with an absorbed reduction whose box is a few leading
+    /// positions of one run each (run `k` covering `[k * n_inner, (k + 1) *
+    /// n_inner)`) and no scan: those runs, expanded. The executor then walks
+    /// the accumulator chunk by chunk, folding every position into a chunk
+    /// before the next — the same per-output fold order.
+    pub interleave: Option<Vec<FusedRun>>,
     /// Diagnostics: original instructions replaced (members incl. deleted
     /// folded gathers).
     pub n_fused_instrs: u32,

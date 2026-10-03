@@ -98,7 +98,7 @@ type AxisSegs = SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]>;
 // this hot fold path. Boxing it to even the variants out -- clippy's suggested
 // fix -- would reintroduce exactly the indirection that layout is avoiding.
 #[allow(clippy::large_enum_variant)]
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum ShiftedGeom {
     /// Piecewise per-axis segments with ghost gaps: along output axis `d` the
     /// source advances by `strides[d]` per element (0 for an axis the source
@@ -144,11 +144,15 @@ struct GBuilder {
     /// An absorbed [`Instr::Reduce`] folding one of the group's values
     /// (see [`FusedReduce`]); the group is flushed as soon as it is set.
     reduce: Option<ReduceTail>,
+    /// Value numbering over the group's pure micro-ops: an op with the same
+    /// kernel and the same operands as an earlier one is that op's register
+    /// (the kernels are pure, so it would compute the same bits).
+    vn: FxHashMap<MKey, GroupIx>,
     /// Absorbed scans so far (each owns the next carry slot).
     n_scans: GroupIx,
-    /// `Export`s of slots this group defines, held back until it flushes
-    /// (see `fuse_section`).
-    exports: Vec<u32>,
+    /// `Export`s and `DyWrite`s of slots this group defines, held back until
+    /// it flushes (see `fuse_section`).
+    deferred: Vec<u32>,
 }
 
 /// An [`Instr::Reduce`] a group absorbed, before register allocation.
@@ -159,6 +163,26 @@ struct ReduceTail {
     init: f64,
     out: SlotId,
     n_inner: usize,
+}
+
+/// A pure micro-op without its destination: the value-numbering key.
+#[derive(Hash, PartialEq, Eq)]
+enum MKey {
+    Bin(BinCode, MRef, MRef),
+    Un(super::super::UnCode, MRef),
+    Neg(MRef),
+    Select(MRef, MRef, MRef),
+    Mov(MRef),
+}
+
+/// The same source (`SrcRef` has no equality of its own).
+fn same_src(a: &SrcRef, b: &SrcRef) -> bool {
+    match (a, b) {
+        (SrcRef::Slot(x), SrcRef::Slot(y)) => x == y,
+        (SrcRef::State(x), SrcRef::State(y)) => x == y,
+        (SrcRef::Obs(x), SrcRef::Obs(y)) => x == y,
+        _ => false,
+    }
 }
 
 /// Operand resolved for group membership (pre-commit description).
@@ -187,8 +211,9 @@ impl GBuilder {
             prov,
             prec,
             reduce: None,
+            vn: FxHashMap::default(),
             n_scans: 0,
-            exports: Vec::new(),
+            deferred: Vec::new(),
         }
     }
 
@@ -416,7 +441,23 @@ impl GBuilder {
         for r in resolved {
             mrefs.push(self.commit(r));
         }
+        let key = match ins {
+            Instr::Bin { op, .. } => MKey::Bin(*op, mrefs[0], mrefs[1]),
+            Instr::Un { op, .. } => MKey::Un(*op, mrefs[0]),
+            Instr::Neg { .. } => MKey::Neg(mrefs[0]),
+            Instr::Select { .. } => MKey::Select(mrefs[0], mrefs[1], mrefs[2]),
+            Instr::Fill { .. } | Instr::Copy { .. } => MKey::Mov(mrefs[0]),
+            _ => unreachable!(),
+        };
+        if let Some(&ssa) = self.vn.get(&key) {
+            self.val_of.insert(out, MRef::Reg(ssa));
+            self.defs.push((out, ssa));
+            self.members.insert(ix);
+            self.member_instrs.push(ix);
+            return true;
+        }
         let ssa = self.micro.len() as GroupIx;
+        self.vn.insert(key, ssa);
         let mop = match ins {
             Instr::Bin { op, .. } => MicroOp::Bin {
                 op: *op,
@@ -499,7 +540,8 @@ impl GBuilder {
         true
     }
 
-    /// Absorb a foldable gather as a shifted input.
+    /// Absorb a foldable gather as a shifted input — the input an earlier
+    /// fold of the same source with the same geometry already made, if any.
     fn add_folded_gather(
         &mut self,
         ix: u32,
@@ -508,6 +550,18 @@ impl GBuilder {
         geom: ShiftedGeom,
         out: SlotId,
     ) {
+        let twin = self.inputs.iter().position(|inp| {
+            inp.shifted_ix
+                .is_some_and(|s| same_src(&inp.src, &src) && self.shifted_segs[s as usize] == geom)
+        });
+        if let Some(t) = twin {
+            let input_ix = t as GroupIx;
+            self.val_of.insert(out, MRef::In(input_ix));
+            self.folded.push((ix, out, input_ix));
+            self.members.insert(ix);
+            self.member_instrs.push(ix);
+            return;
+        }
         let input_ix = self.inputs.len() as GroupIx;
         let shifted_ix = self.shifted_segs.len() as GroupIx;
         let elem_stride = geom.elem_stride();
@@ -1666,7 +1720,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     let prog = fx.prog;
     let has_compute = g.micro.iter().any(|m| !matches!(m, MicroOp::Mov { .. }));
     if g.member_instrs.len() < 2 || g.micro.is_empty() || !has_compute {
-        for &ix in g.member_instrs.iter().chain(&g.exports) {
+        for &ix in g.member_instrs.iter().chain(&g.deferred) {
             fx.sink.passthrough(prog, ix as usize);
         }
         return;
@@ -1685,7 +1739,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         prov,
         prec,
         reduce,
-        exports,
+        deferred,
         ..
     } = g;
 
@@ -1699,7 +1753,11 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
             .any(|r| !members.contains(r));
         if external {
             fx.sink.passthrough(prog, orig_ix as usize);
-            let old = inputs[input_ix as usize].shifted_ix.expect("was shifted");
+            // A twin fold already rewired this shared input to its own
+            // materialized gather, which holds the same values.
+            let Some(old) = inputs[input_ix as usize].shifted_ix else {
+                continue;
+            };
             kept_shifted[old as usize] = false;
             inputs[input_ix as usize] = FusedInput {
                 src: SrcRef::Slot(slot),
@@ -1825,6 +1883,22 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         0
     };
     let schedule = build_schedule(&shape, &new_segs);
+    let interleave = reduce.as_ref().and_then(|r| {
+        const MAX_INTERLEAVED: usize = 16;
+        let n_pos = n_elems / r.n_inner;
+        if n_pos < 2
+            || n_pos > MAX_INTERLEAVED
+            || schedule.n_runs != n_pos
+            || micro.iter().any(|m| matches!(m, MicroOp::Scan { .. }))
+        {
+            return None;
+        }
+        let runs = schedule.expanded();
+        runs.iter()
+            .enumerate()
+            .all(|(k, run)| run.out_off as usize == k * r.n_inner && run.len as usize == r.n_inner)
+            .then_some(runs)
+    });
     // Strided shifted inputs are pre-loaded into dedicated chunk registers
     // appended after the micro register file.
     let mut n_load_regs: GroupIx = 0;
@@ -1867,6 +1941,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         outputs,
         schedule,
         reduce,
+        interleave,
         n_fused_instrs: n_members as u32,
         n_folded_gathers: (folded.len() + folded_index.len()) as u32,
     });
@@ -1875,7 +1950,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     if let Some(p) = prec {
         fx.sink.prec.push(p);
     }
-    for ix in exports {
+    for ix in deferred {
         fx.sink.passthrough(prog, ix as usize);
     }
 }
@@ -1933,10 +2008,12 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
 
     let prog = fx.prog;
     // With no fallback rule and no observed read in the program, nothing
-    // reads the observed map during a call, so an `Export` only has to run
-    // before its section ends: one of a slot an open group defines is held
-    // back until that group flushes instead of flushing it early.
-    let defer_exports = prog.obs_reads.is_empty()
+    // reads the observed map or `dy` during a call, so an `Export` or a
+    // `DyWrite` only has to run before its section ends: one of a slot an
+    // open group defines is held back until that group flushes instead of
+    // flushing it early (which lets the next equation over the same box join
+    // the group).
+    let defer = prog.obs_reads.is_empty()
         && !prog
             .instrs
             .iter()
@@ -1944,11 +2021,16 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
     let mut i = range.start;
     while i < range.end {
         let ins = &prog.instrs[i];
-        if defer_exports
-            && let Instr::Export { slot, .. } = ins
-            && let Some(gi) = open.iter().position(|g| g.defines(*slot))
+        let deferrable = match ins {
+            Instr::Export { slot, .. } => Some(*slot),
+            Instr::DyWrite { write } => Some(prog.dy_writes[*write as usize].slot),
+            _ => None,
+        };
+        if defer
+            && let Some(slot) = deferrable
+            && let Some(gi) = open.iter().position(|g| g.defines(slot))
         {
-            open[gi].exports.push(i as u32);
+            open[gi].deferred.push(i as u32);
             i += 1;
             continue;
         }
