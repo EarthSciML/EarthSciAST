@@ -116,9 +116,9 @@ fn reversible(prog: &TapeProgram) -> bool {
             .parts
             .iter()
             .all(|(op, _)| op_ok(op)),
-        Instr::Gather { src, .. } | Instr::LoadElem { src, .. } | Instr::TableGather { src, .. } => {
-            src_ok(src)
-        }
+        Instr::Gather { src, .. }
+        | Instr::LoadElem { src, .. }
+        | Instr::TableGather { src, .. } => src_ok(src),
         Instr::IndexGather { src, idx, .. } => src_ok(src) && op_ok(idx),
         Instr::Ramp { .. }
         | Instr::ConstArray { .. }
@@ -278,9 +278,12 @@ fn reverse(prog: &mut TapeProgram) {
 /// axes keep pairing with the same source axes.
 fn reverse_plan(plan: &mut GatherPlan) {
     let m = plan.src_shape.len();
-    let mut fixed: SmallVec<[(usize, usize); 4]> =
-        plan.fixed_desc.iter().map(|&(d, i)| (m - 1 - d, i)).collect();
-    fixed.sort_unstable_by(|x, y| y.0.cmp(&x.0));
+    let mut fixed: SmallVec<[(usize, usize); 4]> = plan
+        .fixed_desc
+        .iter()
+        .map(|&(d, i)| (m - 1 - d, i))
+        .collect();
+    fixed.sort_unstable_by_key(|&(d, _)| std::cmp::Reverse(d));
     let r = plan.perm.len();
     debug_assert_eq!(r, plan.mapped.iter().filter(|&&b| b).count());
     let perm: SmallVec<[usize; 4]> = (0..r).map(|q| r - 1 - plan.perm[r - 1 - q]).collect();

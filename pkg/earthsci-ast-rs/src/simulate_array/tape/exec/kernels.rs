@@ -337,6 +337,10 @@ pub(super) unsafe fn ew_select(dst: *mut f64, shape: &[usize], cond: &Rv, a: &Rv
     }
 }
 
+/// The row length from which a per-row `memmove`/`memset` call beats the
+/// inline element loop; shorter rows pay the call more than they save.
+const ROW_CALL_MIN: usize = 64;
+
 /// Strided-to-strided block copy (pure data movement).
 pub(super) unsafe fn copy_strided(
     dst: *mut f64,
@@ -361,21 +365,35 @@ pub(super) unsafe fn copy_strided(
             }
             return;
         }
-        let inner = shape[n - 1];
+        // Fold trailing axes that are contiguous on BOTH sides into the
+        // innermost one, so a sub-box of whole rows copies in long runs.
+        let (di, si) = (dstr[n - 1], sstr[n - 1]);
+        let mut n = n;
+        let mut inner = shape[n - 1];
+        while n > 1
+            && dstr[n - 2] == dstr[n - 1] * shape[n - 1] as i64
+            && sstr[n - 2] == sstr[n - 1] * shape[n - 1] as i64
+        {
+            n -= 1;
+            inner *= shape[n - 1];
+        }
         if inner == 0 {
             return;
         }
-        let (di, si) = (dstr[n - 1], sstr[n - 1]);
         let outer = tot / inner;
         let mut idx = DimU::from_elem(0, n);
         let (mut doff, mut soff) = (0i64, 0i64);
         for _ in 0..outer {
             let mut dp = dst.offset(doff as isize);
             let mut sp = src.offset(soff as isize);
-            for _ in 0..inner {
-                *dp = *sp;
-                dp = dp.offset(di as isize);
-                sp = sp.offset(si as isize);
+            if di == 1 && si == 1 && inner >= ROW_CALL_MIN {
+                std::ptr::copy(sp, dp, inner);
+            } else {
+                for _ in 0..inner {
+                    *dp = *sp;
+                    dp = dp.offset(di as isize);
+                    sp = sp.offset(si as isize);
+                }
             }
             let mut d = n - 1;
             while d > 0 {
@@ -390,6 +408,76 @@ pub(super) unsafe fn copy_strided(
                 soff -= sstr[d] * shape[d] as i64;
                 idx[d] = 0;
             }
+        }
+    }
+}
+
+/// Whether position `p` along output axis `d` lies in one of the plan's
+/// copy segments for that axis.
+#[inline]
+fn seg_covers(plan: &GatherPlan, d: usize, p: usize) -> bool {
+    plan.segs[d].iter().any(|&(o, l, _)| p >= o && p < o + l)
+}
+
+/// Zero the elements of `out` (contiguous row-major over the plan's box)
+/// that no segment block writes; with rows shorter than [`ROW_CALL_MIN`] the
+/// whole box, which the blocks then overwrite. The blocks are the Cartesian products
+/// of one segment per axis, so an element is covered iff every one of its
+/// coordinates lies in a segment of its axis: a row whose outer coordinates
+/// are not all covered is zeroed whole, any other row only in the gaps
+/// between its last axis' segments.
+///
+/// # Safety
+/// `out` must hold the plan box's elements.
+unsafe fn zero_uncovered(plan: &GatherPlan, out: *mut f64) {
+    let nd = plan.shape.len();
+    let tot = total(&plan.shape);
+    if nd == 0 || tot == 0 {
+        if nd == 0 {
+            unsafe { *out = 0.0 };
+        }
+        return;
+    }
+    let inner = plan.shape[nd - 1];
+    if inner < ROW_CALL_MIN {
+        // Short rows: one fill of the whole box is cheaper than the walk.
+        unsafe { std::slice::from_raw_parts_mut(out, tot).fill(0.0) };
+        return;
+    }
+    let mut gaps: SmallVec<[(usize, usize); 4]> = SmallVec::new();
+    let mut segs: SmallVec<[(usize, usize); 4]> = plan.segs[nd - 1]
+        .iter()
+        .map(|&(o, l, _)| (o, o + l))
+        .collect();
+    segs.sort_unstable();
+    let mut next = 0usize;
+    for (a, b) in segs {
+        if a > next {
+            gaps.push((next, a));
+        }
+        next = next.max(b);
+    }
+    if next < inner {
+        gaps.push((next, inner));
+    }
+    let mut idx = DimU::from_elem(0, nd);
+    for row in 0..tot / inner {
+        let p = unsafe { out.add(row * inner) };
+        if (0..nd - 1).all(|d| seg_covers(plan, d, idx[d])) {
+            for &(a, b) in &gaps {
+                unsafe { std::slice::from_raw_parts_mut(p.add(a), b - a).fill(0.0) };
+            }
+        } else {
+            unsafe { std::slice::from_raw_parts_mut(p, inner).fill(0.0) };
+        }
+        let mut d = nd - 1;
+        while d > 0 {
+            d -= 1;
+            idx[d] += 1;
+            if idx[d] < plan.shape[d] {
+                break;
+            }
+            idx[d] = 0;
         }
     }
 }
@@ -479,15 +567,11 @@ pub(super) unsafe fn exec_gather(
             mpos += 1;
         }
     }
-    // 3. Ghost fill: `+0.0` everywhere (ArrayD::zeros semantics) — skipped
-    //    when the segment schedule provably overwrites every element.
+    // 3. Ghost fill: `+0.0` (ArrayD::zeros semantics) on every element the
+    //    segment schedule leaves uncovered — skipped when it provably
+    //    overwrites every element.
     if !full_cover {
-        let out_len = total(&plan.shape);
-        unsafe {
-            for k in 0..out_len {
-                *out.add(k) = 0.0;
-            }
-        }
+        unsafe { zero_uncovered(plan, out) };
     }
     // 4. Segment-copy schedule (mixed-radix over per-axis segment picks,
     //    axis 0 fastest — disjoint blocks, so order is immaterial).
@@ -801,6 +885,101 @@ pub(super) unsafe fn seg_reduce(
                 }
             }
             *dst.add(c) = acc;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every element of a `shape` box, as its multi-index, row-major.
+    fn cells(shape: &[usize]) -> Vec<Vec<usize>> {
+        let mut out = vec![vec![]];
+        for &n in shape {
+            out = out
+                .into_iter()
+                .flat_map(|c| {
+                    (0..n).map(move |i| {
+                        let mut c = c.clone();
+                        c.push(i);
+                        c
+                    })
+                })
+                .collect();
+        }
+        out
+    }
+
+    fn off(ix: &[usize], st: &[i64]) -> usize {
+        ix.iter().zip(st).map(|(&i, &s)| i as i64 * s).sum::<i64>() as usize
+    }
+
+    /// The row-folding and row-copy paths move exactly the elements the
+    /// per-element walk moves, for sub-boxes of whole rows, partial rows,
+    /// transposed and strided views.
+    #[test]
+    fn copy_strided_matches_the_element_walk() {
+        let cases: Vec<(Vec<usize>, Vec<i64>, Vec<i64>)> = vec![
+            // A sub-box of whole rows of a [6, 4, 5] box into a dense one.
+            (vec![2, 4, 5], vec![20, 5, 1], vec![20, 5, 1]),
+            // Partial rows: [3, 2, 3] out of [6, 4, 5].
+            (vec![3, 2, 3], vec![20, 5, 1], vec![6, 3, 1]),
+            // Transposed source.
+            (vec![4, 5], vec![1, 4], vec![5, 1]),
+            // Strided inner axis on one side only.
+            (vec![3, 4], vec![8, 2], vec![4, 1]),
+            // Contiguous inner pair, strided outer.
+            (vec![2, 3, 4], vec![40, 4, 1], vec![12, 4, 1]),
+            // Rows long enough for the row copy: whole rows, then partial.
+            (vec![2, 3, 80], vec![480, 80, 1], vec![240, 80, 1]),
+            (vec![2, 3, 70], vec![480, 80, 1], vec![210, 70, 1]),
+        ];
+        for (shape, sst, dst_st) in cases {
+            let span = |st: &[i64]| -> usize {
+                shape
+                    .iter()
+                    .zip(st)
+                    .map(|(&n, &s)| (n - 1) as i64 * s)
+                    .sum::<i64>() as usize
+                    + 1
+            };
+            let src: Vec<f64> = (0..span(&sst)).map(|k| k as f64 + 0.5).collect();
+            let mut got = vec![-1.0f64; span(&dst_st)];
+            let mut want = got.clone();
+            unsafe { copy_strided(got.as_mut_ptr(), &dst_st, src.as_ptr(), &sst, &shape) };
+            for c in cells(&shape) {
+                want[off(&c, &dst_st)] = src[off(&c, &sst)];
+            }
+            assert_eq!(got, want, "shape {shape:?} src {sst:?} dst {dst_st:?}");
+        }
+    }
+
+    /// `zero_uncovered` zeroes exactly the elements outside every segment
+    /// block and leaves the covered ones alone.
+    #[test]
+    fn zero_uncovered_zeroes_exactly_the_ghosts() {
+        let shape: DimU = SmallVec::from_slice(&[4, 3, 70]);
+        let segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> = SmallVec::from_vec(vec![
+            SmallVec::from_slice(&[(1, 3, 0)]),
+            SmallVec::from_slice(&[(0, 1, 0), (2, 1, 0)]),
+            SmallVec::from_slice(&[(30, 35, 0), (0, 20, 0)]),
+        ]);
+        let plan = GatherPlan {
+            fixed_desc: SmallVec::new(),
+            perm: SmallVec::from_slice(&[0, 1, 2]),
+            mapped: SmallVec::from_slice(&[true, true, true]),
+            segs,
+            shape: shape.clone(),
+            origin: SmallVec::from_slice(&[1, 1, 1]),
+            src_shape: shape.clone(),
+            src_origin: SmallVec::from_slice(&[1, 1, 1]),
+        };
+        let mut out = vec![7.0f64; 4 * 3 * 70];
+        unsafe { zero_uncovered(&plan, out.as_mut_ptr()) };
+        for (k, c) in cells(&shape).iter().enumerate() {
+            let covered = (0..3).all(|d| seg_covers(&plan, d, c[d]));
+            assert_eq!(out[k], if covered { 7.0 } else { 0.0 }, "cell {c:?}");
         }
     }
 }

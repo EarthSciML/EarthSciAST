@@ -642,8 +642,7 @@ fn dy_homes(prog: &TapeProgram, n: usize) -> Vec<usize> {
         if conditional[pc] || w.scatter.is_some() || w.scalar_flat.is_some() {
             continue;
         }
-        if readers[s] != 1 || defs[s] != 1 || !cont.contains(&def_pc[s]) || conditional[def_pc[s]]
-        {
+        if readers[s] != 1 || defs[s] != 1 || !cont.contains(&def_pc[s]) || conditional[def_pc[s]] {
             continue;
         }
         let Instr::Fused { spec } = &prog.instrs[def_pc[s]] else {
@@ -740,7 +739,12 @@ pub(in crate::simulate_array) fn run_tape_call(
     }
     // Refill the row-major state mirror: one strided pass per mirrored
     // variable block (column-major flat -> row-major at the same offset).
-    for (sv, _) in prog.state_vars.iter().zip(&exec.mirror).filter(|(_, m)| **m) {
+    for (sv, _) in prog
+        .state_vars
+        .iter()
+        .zip(&exec.mirror)
+        .filter(|(_, m)| **m)
+    {
         let rm = rm_strides(&sv.shape);
         let cm = cm_strides(&sv.shape);
         unsafe {
