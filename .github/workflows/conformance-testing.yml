@@ -745,7 +745,11 @@ jobs:
   # per-language job still fails the workflow on its own, exactly as before.
   standard-conformance-testing:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Each inline-test tier runs every binding under both compilers, and Julia
+    # starts a fresh process per tier and compiler; the recurrence,
+    # value-invention, expression-form, boolean-reduction and missing-data
+    # tiers took the job past 45 minutes.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
