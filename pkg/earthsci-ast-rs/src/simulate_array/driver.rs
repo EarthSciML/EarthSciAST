@@ -75,9 +75,6 @@ impl TapedObserveds {
     /// nodes pays for the CONTINUOUS section only — the same amortization the
     /// static hoist existed to provide.
     fn at(&mut self, compiled: &ArrayCompiled, state: &[f64], params: &[f64], t: f64) -> &ArrMap {
-        for v in self.dy.iter_mut() {
-            *v = 0.0;
-        }
         evaluate_rhs_with_scratch(
             &RhsCall {
                 rhs_rules: &compiled.rhs_rules,
@@ -660,9 +657,6 @@ impl ArrayCompiled {
         scratch: &mut RhsScratch,
         stats: &mut RhsStats,
     ) {
-        for slot in dy.iter_mut() {
-            *slot = 0.0;
-        }
         evaluate_rhs_with_scratch(
             &RhsCall {
                 rhs_rules: &self.rhs_rules,
@@ -2293,11 +2287,9 @@ impl ArrayCompiled {
             let y_s = y.as_slice();
             let p_s = p.as_slice();
             let dy_s = dy.as_mut_slice();
-            for slot in dy_s.iter_mut() {
-                *slot = 0.0;
-            }
             #[cfg(feature = "xla")]
             if let Some(program) = &xla_rhs {
+                dy_s.fill(0.0);
                 run_xla_rhs(program, &xla_fault_rhs, y_s, p_s, t, dy_s);
                 return;
             }

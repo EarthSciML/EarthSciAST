@@ -641,6 +641,38 @@ pub(super) unsafe fn reduce_rows(
     }
 }
 
+/// One axis of extent `len` folded out of a contiguous row-major source
+/// viewed as `[pre, len, post]`: `acc[p * post + q] = f(acc[..], src[(p *
+/// len + j) * post + q])` for `j` ascending — each output cell's terms in its
+/// own axis order, which is the row-major visiting order restricted to that
+/// cell. `acc` holds `pre * post` elements, already seeded with the
+/// identity, and never aliases `src`.
+pub(super) unsafe fn reduce_axis(
+    acc: *mut f64,
+    src: *const f64,
+    pre: usize,
+    len: usize,
+    post: usize,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    unsafe {
+        if post == 1 {
+            for p in 0..pre {
+                let row = std::slice::from_raw_parts(src.add(p * len), len);
+                let mut y = *acc.add(p);
+                for &x in row {
+                    y = f(y, x);
+                }
+                *acc.add(p) = y;
+            }
+            return;
+        }
+        for p in 0..pre {
+            reduce_rows(acc.add(p * post), post, src.add(p * len * post), len, f);
+        }
+    }
+}
+
 /// `Instr::IndexGather`: `dst` (contiguous row-major over `spec.shape`)
 /// receives, per output position, the source element the data subscript
 /// `idx` selects along the spec's data axis (the zero ghost when

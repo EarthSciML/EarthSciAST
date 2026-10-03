@@ -441,9 +441,8 @@ pub(super) unsafe fn exec_fused(
                 unsafe { slab_ptr.add(slot_off[*s as usize]) as *const f64 }
             }
             SrcRef::State(ix) => {
-                let sv = &env.prog.state_vars[*ix as usize];
-                debug_assert_eq!(&sv.shape, &inp.src_shape);
-                unsafe { env.state_rm.as_ptr().add(sv.flat_offset) }
+                debug_assert_eq!(&env.prog.state_vars[*ix as usize].shape, &inp.src_shape);
+                super::resolve::state_ptr(env, *ix)
             }
             SrcRef::Obs(ix) => {
                 let name = &env.prog.obs_reads[*ix as usize];
