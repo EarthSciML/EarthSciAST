@@ -796,6 +796,133 @@ pub(crate) struct FusedInput {
     /// `src[data_subscript(inputs[by][k], n)]`, the zero ghost when that is
     /// `None`; `inputs[by]` is the subscript array, an aligned input.
     pub index: Option<(GroupIx, usize)>,
+    /// `Some`: a folded [`Instr::Gather`] whose shifts would split the box
+    /// into too many runs to fold as a shifted read (a shift along the
+    /// innermost axis), read through its plan into this input's chunk
+    /// register one chunk at a time (see [`ChunkGather`]). An aligned input
+    /// otherwise.
+    pub gather: Option<Box<ChunkGather>>,
+}
+
+/// A same-rank gather plan with no fixed, broadcast or permuted axes, read
+/// over a flat range of its output box: the element at row-major output
+/// position `(i_0, .., i_{d-1})` is the source element at `src_off + Σ
+/// strides[a] · (so_a + i_a - o_a)` when every `i_a` lies in a segment
+/// `(o_a, len, so_a)` of axis `a`, and the zero ghost otherwise — the
+/// element `Instr::Gather` would write there (its segments are disjoint).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ChunkGather {
+    /// Per output axis: copy segments `(out_off, len, src_off)`, ascending in
+    /// `out_off`.
+    pub segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]>,
+    /// Per output axis: the source's row-major flat stride.
+    pub strides: SmallVec<[i64; 4]>,
+    /// The output box.
+    pub shape: DimU,
+}
+
+impl ChunkGather {
+    /// The source coordinate along axis `a` at output coordinate `i`, or
+    /// `None` in the ghost.
+    #[inline(always)]
+    fn coord(&self, a: usize, i: usize) -> Option<usize> {
+        self.segs[a]
+            .iter()
+            .find(|&&(o, l, _)| o <= i && i < o + l)
+            .map(|&(o, _, so)| so + (i - o))
+    }
+
+    /// The flat source offset of output position `flat`, or `None` in the
+    /// ghost (the per-element definition the reference executor uses).
+    pub(crate) fn src_offset(&self, flat: usize) -> Option<i64> {
+        let mut rest = flat;
+        let mut off = 0i64;
+        for a in (0..self.shape.len()).rev() {
+            let i = rest % self.shape[a];
+            rest /= self.shape[a];
+            off += self.strides[a] * self.coord(a, i)? as i64;
+        }
+        Some(off)
+    }
+
+    /// Write output positions `at .. at + c` into `dst[0 .. c]`, one row of
+    /// the innermost axis at a time: the leading axes' source offset is
+    /// carried from row to row like an odometer, and each row is its
+    /// innermost-axis segments copied and the gaps between them zeroed.
+    ///
+    /// # Safety
+    /// `src` must hold the plan's source box row-major and `dst` `c`
+    /// elements, disjoint from it.
+    #[inline(always)]
+    pub(crate) unsafe fn fill(&self, src: *const f64, at: usize, c: usize, dst: *mut f64) {
+        let nd = self.shape.len();
+        let last = self.shape[nd - 1];
+        let s_last = self.strides[nd - 1];
+        // The leading coordinates of the first row, and each one's source
+        // contribution (`None` in the ghost).
+        let mut idx: SmallVec<[usize; 4]> = SmallVec::from_elem(0, nd - 1);
+        let mut part: SmallVec<[Option<i64>; 4]> = SmallVec::from_elem(None, nd - 1);
+        let mut rest = at / last;
+        for a in (0..nd - 1).rev() {
+            idx[a] = rest % self.shape[a];
+            rest /= self.shape[a];
+            part[a] = self.coord(a, idx[a]).map(|x| self.strides[a] * x as i64);
+        }
+        let mut col = at % last;
+        let mut k = 0usize;
+        while k < c {
+            let len = (c - k).min(last - col);
+            let off = part.iter().try_fold(0i64, |o, p| p.map(|p| o + p));
+            unsafe {
+                let d = std::slice::from_raw_parts_mut(dst.add(k), len);
+                match off {
+                    None => d.fill(0.0),
+                    Some(off) => {
+                        // Segments are disjoint; walk them in output order,
+                        // zeroing what lies between.
+                        let mut pos = col;
+                        for &(o, l, so) in &self.segs[nd - 1] {
+                            let lo = o.max(col);
+                            let hi = (o + l).min(col + len);
+                            if lo >= hi {
+                                continue;
+                            }
+                            if lo > pos {
+                                d[pos - col..lo - col].fill(0.0);
+                            }
+                            let s = src.offset((off + s_last * (so + lo - o) as i64) as isize);
+                            let out = &mut d[lo - col..hi - col];
+                            if s_last == 1 {
+                                out.copy_from_slice(std::slice::from_raw_parts(s, hi - lo));
+                            } else {
+                                for (j, x) in out.iter_mut().enumerate() {
+                                    *x = *s.offset(j as isize * s_last as isize);
+                                }
+                            }
+                            pos = pos.max(hi);
+                        }
+                        if pos < col + len {
+                            d[pos - col..].fill(0.0);
+                        }
+                    }
+                }
+            }
+            k += len;
+            col = 0;
+            // Next row: advance the leading odometer.
+            let mut a = nd - 1;
+            while a > 0 {
+                a -= 1;
+                idx[a] += 1;
+                if idx[a] < self.shape[a] {
+                    part[a] = self.coord(a, idx[a]).map(|x| self.strides[a] * x as i64);
+                    break;
+                }
+                idx[a] = 0;
+                part[a] = self.coord(a, 0).map(|x| self.strides[a] * x as i64);
+            }
+        }
+    }
 }
 
 /// Sentinel source offset: the input reads the gather's Dirichlet ghost

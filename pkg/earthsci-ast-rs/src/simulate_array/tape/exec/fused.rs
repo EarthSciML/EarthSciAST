@@ -751,6 +751,11 @@ unsafe fn exec_fused_runs(
                 if inp.load_reg == GroupIx::MAX {
                     continue;
                 }
+                // A gather read through its plan, one chunk at a time.
+                if let Some(g) = &inp.gather {
+                    unsafe { g.fill(bases[i], at, c, rp.add(inp.load_reg as usize * cs)) };
+                    continue;
+                }
                 // A folded data-subscript gather: one random read per element,
                 // through the subscript array's aligned chunk.
                 if let Some((by, n)) = inp.index {
@@ -812,7 +817,7 @@ unsafe fn exec_fused_runs(
                     MRef::In(i) => {
                         let inp = &fs.inputs[*i as usize];
                         match inp.shifted_ix {
-                            None if inp.index.is_some() => {
+                            None if inp.index.is_some() || inp.gather.is_some() => {
                                 MSrc::P(unsafe { rp.add(inp.load_reg as usize * cs) as *const f64 })
                             }
                             None => MSrc::P(unsafe { bases[*i as usize].add(at) }),

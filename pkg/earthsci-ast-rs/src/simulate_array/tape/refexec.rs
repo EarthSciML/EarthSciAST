@@ -708,6 +708,13 @@ pub(super) fn run_reference(
                                 MRef::In(i) => {
                                     let inp = &fs.inputs[*i as usize];
                                     match inp.shifted_ix {
+                                        None if inp.gather.is_some() => {
+                                            let g = inp.gather.as_deref().expect("a chunk gather");
+                                            match g.src_offset(at) {
+                                                Some(o) => flats[*i as usize][o as usize],
+                                                None => 0.0,
+                                            }
+                                        }
                                         None => match inp.index {
                                             Some((by, n)) => {
                                                 match data_subscript(flats[by as usize][at], n) {

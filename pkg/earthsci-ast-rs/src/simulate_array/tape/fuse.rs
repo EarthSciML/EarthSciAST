@@ -50,6 +50,14 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use std::collections::BTreeSet;
 
+/// Shortest innermost-axis extent a [`ChunkGather`] is formed for.
+const MIN_CHUNK_GATHER_ROW: usize = 12;
+
+/// A [`ChunkGather`] with rows shorter than this is materialized after all
+/// when its group has fewer than [`LIGHT_GROUP_OPS`] micro-ops.
+const SHORT_CHUNK_GATHER_ROW: usize = 32;
+const LIGHT_GROUP_OPS: usize = 8;
+
 /// Maximum simultaneously open groups (oldest is flushed beyond this).
 const MAX_OPEN_GROUPS: usize = 4;
 
@@ -411,6 +419,7 @@ impl GBuilder {
                     elem_stride: 1,
                     load_reg: GroupIx::MAX,
                     index: None,
+                    gather: None,
                 });
                 self.aligned_ix.insert(key, i);
                 MRef::In(i)
@@ -532,12 +541,47 @@ impl GBuilder {
             elem_stride: 1,
             load_reg: GroupIx::MAX,
             index: Some((by, n)),
+            gather: None,
         });
         self.val_of.insert(out, MRef::In(input_ix));
         self.folded_index.push((ix, out, input_ix));
         self.members.insert(ix);
         self.member_instrs.push(ix);
         true
+    }
+
+    /// Absorb a gather read through its plan one chunk at a time (see
+    /// [`ChunkGather`]) — the input an earlier identical one made, if any.
+    fn add_chunk_gather(
+        &mut self,
+        ix: u32,
+        src: SrcRef,
+        g: ChunkGather,
+        src_shape: &super::super::DimU,
+        out: SlotId,
+    ) {
+        let twin = self.inputs.iter().position(|inp| {
+            same_src(&inp.src, &src) && inp.gather.as_deref().is_some_and(|h| *h == g)
+        });
+        let input_ix = match twin {
+            Some(t) => t as GroupIx,
+            None => {
+                self.inputs.push(FusedInput {
+                    src,
+                    shifted_ix: None,
+                    src_shape: src_shape.clone(),
+                    elem_stride: 1,
+                    load_reg: GroupIx::MAX,
+                    index: None,
+                    gather: Some(Box::new(g)),
+                });
+                (self.inputs.len() - 1) as GroupIx
+            }
+        };
+        self.val_of.insert(out, MRef::In(input_ix));
+        self.folded_index.push((ix, out, input_ix));
+        self.members.insert(ix);
+        self.member_instrs.push(ix);
     }
 
     /// Absorb a foldable gather as a shifted input — the input an earlier
@@ -572,6 +616,7 @@ impl GBuilder {
             elem_stride,
             load_reg: GroupIx::MAX,
             index: None,
+            gather: None,
         });
         self.shifted_segs.push(geom);
         self.val_of.insert(out, MRef::In(input_ix));
@@ -1766,6 +1811,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
                 elem_stride: 1,
                 load_reg: GroupIx::MAX,
                 index: None,
+                gather: None,
             };
         } else {
             fx.sink.stats.n_gathers_folded += 1;
@@ -1785,6 +1831,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
                 elem_stride: 1,
                 load_reg: GroupIx::MAX,
                 index: None,
+                gather: None,
             };
         } else {
             fx.sink.stats.n_gathers_folded += 1;
@@ -1856,6 +1903,30 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     }
 
     merge_superops(&mut micro, &mut outputs, fx.cfg);
+    // A chunk-read gather with short rows in a group with little else to do
+    // costs more per row than materializing it once: materialize it after
+    // all (the Gather lands before the group, like an externally read one).
+    if micro.len() < LIGHT_GROUP_OPS {
+        for &(orig_ix, slot, input_ix) in &folded_index {
+            let short = inputs[input_ix as usize]
+                .gather
+                .as_deref()
+                .is_some_and(|g| g.shape.last().is_some_and(|&l| l < SHORT_CHUNK_GATHER_ROW));
+            if short {
+                fx.sink.passthrough(prog, orig_ix as usize);
+                fx.sink.stats.n_gathers_folded -= 1;
+                inputs[input_ix as usize] = FusedInput {
+                    src: SrcRef::Slot(slot),
+                    shifted_ix: None,
+                    src_shape: shape.clone(),
+                    elem_stride: 1,
+                    load_reg: GroupIx::MAX,
+                    index: None,
+                    gather: None,
+                };
+            }
+        }
+    }
     for op in &micro {
         *fx.sink.micro_hist.entry(mop_label(op)).or_insert(0) += n_elems;
     }
@@ -1907,6 +1978,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     // needs every operand in a register.
     for inp in inputs.iter_mut() {
         if inp.index.is_some()
+            || inp.gather.is_some()
             || inp.shifted_ix.is_some()
                 && inp.elem_stride != 1
                 && (inp.elem_stride != 0 || n_splat_regs > 0)
@@ -2119,6 +2191,35 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                 let shape = out_desc.shape.clone();
                 let gi = find_or_open(&mut open, shape, prog.provenance[i], prec_at(prog, i), fx);
                 open[gi].add_folded_gather(i as u32, *src, plan_ref, geom, *out);
+                i += 1;
+                continue;
+            }
+            // A same-rank shift whose runs would shatter the box: read it
+            // through its plan, chunk by chunk, inside its box's group —
+            // unless its rows are so short that the per-row work outweighs
+            // materializing it.
+            if out_desc.shape == plan_ref.shape
+                && foldable_plan(plan_ref)
+                && plan_ref
+                    .shape
+                    .last()
+                    .is_some_and(|&l| l >= MIN_CHUNK_GATHER_ROW)
+            {
+                flush_hazards(ins, None, &mut open, fx);
+                let shape = out_desc.shape.clone();
+                let gi = find_or_open(&mut open, shape, prog.provenance[i], prec_at(prog, i), fx);
+                let mut segs = plan_ref.segs.clone();
+                // `ChunkGather::fill` walks each axis's segments in output
+                // order.
+                for axis in segs.iter_mut() {
+                    axis.sort_unstable();
+                }
+                let g = ChunkGather {
+                    segs,
+                    strides: rm_strides(&plan_ref.src_shape),
+                    shape: plan_ref.shape.clone(),
+                };
+                open[gi].add_chunk_gather(i as u32, *src, g, &plan_ref.src_shape, *out);
                 i += 1;
                 continue;
             }

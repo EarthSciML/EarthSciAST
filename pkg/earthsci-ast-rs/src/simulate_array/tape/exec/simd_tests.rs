@@ -100,6 +100,7 @@ fn drive(with_nan: bool) {
             elem_stride: 1,
             load_reg: GroupIx::MAX,
             index: None,
+            gather: None,
         },
         FusedInput {
             src: SrcRef::Slot(1),
@@ -108,6 +109,7 @@ fn drive(with_nan: bool) {
             elem_stride: 1,
             load_reg: GroupIx::MAX,
             index: None,
+            gather: None,
         },
         // 2: shifted stride-1 read (ghost over the last run).
         FusedInput {
@@ -117,6 +119,7 @@ fn drive(with_nan: bool) {
             elem_stride: 1,
             load_reg: GroupIx::MAX,
             index: None,
+            gather: None,
         },
         // 3: strided (elem_stride 2) read through a pre-load register.
         FusedInput {
@@ -126,6 +129,7 @@ fn drive(with_nan: bool) {
             elem_stride: 2,
             load_reg: GroupIx::MAX, // patched below once n_regs is known
             index: None,
+            gather: None,
         },
     ];
 

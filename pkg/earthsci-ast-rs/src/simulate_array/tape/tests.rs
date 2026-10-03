@@ -1216,6 +1216,47 @@ fn ab_scan_absorbed_into_its_group() {
     assert_eq!(fused_cont, 1, "the scans and their reader run as one group");
 }
 
+/// A ghost Laplacian along the innermost axis of a 3-D box whose rows are
+/// too short to fold as shifted reads: the gathers are read through their
+/// plans one chunk at a time inside the consumer's group (chunks start and
+/// end mid-row), together with a wrap along the outer axis.
+#[test]
+fn ab_chunk_gathers_on_short_rows() {
+    let (ni, nj, nk) = (8i64, 4i64, 40i64);
+    let ix3 = |i: serde_json::Value, k: serde_json::Value| json!({"op": "index", "args": ["u", i, "j", k]});
+    let lap = json!({"op": "+", "args": [
+        ix3(json!("i"), json!({"op": "-", "args": ["k", 1]})),
+        {"op": "*", "args": [-2.0, ix3(json!("i"), json!("k"))]},
+        ix3(json!("i"), json!({"op": "+", "args": ["k", 1]})),
+        {"op": "*", "args": [0.5, ix3(wrap(json!({"op": "+", "args": ["i", 1]}), 1, ni), json!("k"))]}
+    ]});
+    let ranges = json!({"i": [1, ni], "j": [1, nj], "k": [1, nk]});
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_chunk_gather"},
+        "models": {"M": {
+            "variables": {"u": {"type": "unknown", "shape": ["i", "j", "k"]}},
+            "equations": [{
+                "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
+                        "expr": {"op": "D", "args": [
+                            {"op": "index", "args": ["u", "i", "j", "k"]}], "wrt": "t"},
+                        "ranges": ranges},
+                "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
+                        "ranges": ranges, "expr": {"op": "*", "args": [0.25, lap]}}
+            }]
+        }}
+    });
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    assert!(
+        prog.fused
+            .iter()
+            .flat_map(|f| &f.inputs)
+            .any(|i| i.gather.is_some()),
+        "the innermost-axis shifts are read through their plans"
+    );
+    assert_eq!(opcount(&prog, "Gather"), 0, "no gather is materialized");
+}
+
 /// The unstructured-mesh gather `sum_k kappa * (u[nbr[i, k]] - u[i])` over a
 /// constant neighbour table, with more cells than one executor chunk: the
 /// folded gather reads positions resolved when the CONST section runs, and
