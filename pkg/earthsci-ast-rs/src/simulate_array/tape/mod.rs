@@ -472,6 +472,12 @@ impl ArrayCompiled {
                 fs.schedule.nodes.len(),
                 fs.reduce
             );
+            for (k, inp) in fs.inputs.iter().enumerate() {
+                let _ = writeln!(out, "  in {k}: {inp:?}");
+            }
+            for op in &fs.micro {
+                let _ = writeln!(out, "  {op:?}");
+            }
         }
         out
     }
