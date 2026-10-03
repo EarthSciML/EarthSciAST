@@ -980,6 +980,54 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     end
 
     # ----------------------------------------------------------------
+    # (3b) A `p` that is not `isbits` — a plain parameter `Vector` — is stamped by
+    # CONTENT (a deep copy compared element by element), so a steady call skips the
+    # refill like a NamedTuple does, and an IN-PLACE change of one element (which an
+    # identity compare could not see) refills.
+    # ----------------------------------------------------------------
+    @testset "a vector `p` is stamped by content, in-place changes included" begin
+        f!, u0, p, _ts, vm, _diag = ESM._build_evaluator_impl(_ct_arrhenius())
+        pm = ESM.param_map(p)
+        pv = zeros(length(pm))
+        for (k, i) in pm
+            pv[i] = getfield(p, Symbol(k))
+        end
+        du1 = _ct_call(f!, u0, pv, 0.0)
+        @test du1 == _ct_call(f!, u0, p, 0.0)
+        pv[pm["A"]] *= 2.0                       # same object, new value
+        du2 = _ct_call(f!, u0, pv, 0.0)
+        @test du2[vm["x"]] === _ct_k(merge(p, (; A = 2.0 * p.A))) * u0[vm["x"]]
+        pv[pm["A"]] /= 2.0
+        @test _ct_call(f!, u0, pv, 0.0) == du1
+        if VERSION >= v"1.12"
+            du = similar(u0)
+            @test rhs_alloc_bytes(f!, du, u0, pv, 0.0) == 0
+        end
+    end
+
+    @testset "parameter stamps: egal for isbits, content for arrays" begin
+        nt = (; a = 1.0, b = -0.0)
+        @test ESM._pstamp(nt) === nt
+        @test ESM._pstamp_same(ESM._pstamp(nt), (; a = 1.0, b = -0.0))
+        @test !ESM._pstamp_same(ESM._pstamp(nt), (; a = 1.0, b = 0.0))
+        v = [1.0, NaN, 3.0]
+        s = ESM._pstamp(v)
+        @test s !== v && ESM._pstamp_same(s, v)
+        v[3] = 4.0
+        @test !ESM._pstamp_same(s, v)
+        mixed = (; k = 2.0, arr = [1.0, 2.0])
+        sm = ESM._pstamp(mixed)
+        @test ESM._pstamp_same(sm, mixed)
+        mixed.arr[1] = 9.0
+        @test !ESM._pstamp_same(sm, mixed)
+        # Nothing it cannot compare safely is ever matched.
+        d = Dict("k" => 1.0)
+        @test !ESM._pstamp_same(ESM._pstamp(d), d)
+        big = zeros(ESM._PSTAMP_MAX_ELEMS + 1)
+        @test !ESM._pstamp_same(ESM._pstamp(big), big)
+    end
+
+    # ----------------------------------------------------------------
     # (4) THE BUFFER-STALENESS KILLER. `_CSECache` holds TWO buffers (`f64`, and the
     # lazily created `alt` for a non-Float64 value type), so the validity stamp must be
     # PER BUFFER. Alternate Float64 and Dual calls, repeatedly, in BOTH orders: a
@@ -1076,6 +1124,41 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
         buf[1] = 7.0
         du = _ct_call(f!, u0, p, 0.25)
         @test du[vm["y"]] === 7.0 * k
+    end
+
+    # ----------------------------------------------------------------
+    # (6b) The forcing epoch is PER BUILD: a refresh written into one build's
+    # buffer invalidates that build's time tier (at the same `t`) and leaves a
+    # second build, reading a different buffer, alone. A write through the
+    # caller's N-d array reaches the build that reads it through its `vec`.
+    # ----------------------------------------------------------------
+    @testset "a refresh invalidates only the builds that read the buffer" begin
+        vars = Dict{String,ModelVariable}(
+            "y" => ModelVariable(UnknownVariable; default=1.0),
+            "k" => ModelVariable(ParameterVariable; default=2.0))
+        mk(ix...) = ESM.Model(vars, ESM.Equation[ESM.Equation(_cse_D("y"),
+            _cse_op("+", _cse_op("*", _idx("F", ix...), _cse_v("k")),
+                         _cse_op("*", _idx("F", ix...), _cse_v("k"))))])
+        bufA = [5.0 6.0; 7.0 8.0]
+        bufB = [1.0, 2.0]
+        fA, uA, pA, _, vmA, dA = ESM._build_evaluator_impl(mk(_i(1), _i(1));
+            param_arrays=Dict("F" => bufA))
+        fB, uB, pB, _, vmB, dB = ESM._build_evaluator_impl(mk(_i(1));
+            param_arrays=Dict("F" => bufB))
+        @test dA.n_time_slots >= 1
+        eA = getfield(fA, :cse_cache).epoch
+        eB = getfield(fB, :cse_cache).epoch
+        @test eA !== eB
+        @test _ct_call(fA, uA, pA, 0.5)[vmA["y"]] === 5.0 * 2.0 + 5.0 * 2.0
+        _ct_call(fB, uB, pB, 0.5)
+        a0, b0 = eA[], eB[]
+        ESM._write_forcing!(bufA, "F", Dict("F" => [40.0 6.0; 7.0 8.0]))
+        @test eA[] == a0 + 1
+        @test eB[] == b0
+        @test _ct_call(fA, uA, pA, 0.5)[vmA["y"]] === 40.0 * 2.0 + 40.0 * 2.0
+        @test _ct_call(fB, uB, pB, 0.5)[vmB["y"]] === 1.0 * 2.0 + 1.0 * 2.0
+        ESM.notify_forcing_refresh!(bufB)
+        @test eB[] == b0 + 1 && eA[] == a0 + 1
     end
 
     # ----------------------------------------------------------------

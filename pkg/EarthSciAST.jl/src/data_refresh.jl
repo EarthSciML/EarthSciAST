@@ -277,7 +277,8 @@ function _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample)
     # memoized time-cadence prelude slots (B3, tree_walk/const_tier.jl). A refresh
     # callback fires AT its tstop, so the next RHS call may be at a `t` the t-tier
     # stamp already holds; the epoch bump is what makes the refresh visible then.
-    _bump_forcing_epoch!()
+    # Only the builds that read this buffer are invalidated (cadence_stamp.jl).
+    _bump_buffer_epochs!(buffer)
     return buffer
 end
 

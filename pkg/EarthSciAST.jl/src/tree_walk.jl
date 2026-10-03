@@ -43,6 +43,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 include("tree_walk/errors.jl")           # §1   TreeWalkError + E_TREEWALK_* codes
+include("tree_walk/cadence_stamp.jl")    #      parameter stamps + the per-build forcing epoch
 include("tree_walk/state_layout.jl")     #      the flat state layout (`StateLayout`)
 include("tree_walk/geometry_setup.jl")   # §2   build-time geometry materialization
 include("tree_walk/build_helpers.jl")    #      sentinels, boundary policy, folds

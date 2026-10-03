@@ -7,7 +7,7 @@
 # ========================================================================
 
 # One `observed_field` answer: the forcing epoch it was computed at
-# (`_FORCING_EPOCH`) and the field. The field is state-free, so it moves only
+# (`_epoch_value`, cadence_stamp.jl) and the field. The field is state-free, so it moves only
 # when a live buffer is refreshed in place. It is filed under the build it
 # belongs to, named by the problem's `run_file` slot — each build allocates its
 # own and `remake` shares it — so a record reused for a second build, or a
@@ -188,9 +188,13 @@ mutable struct DiscreteMaterializer
     caches::Dict{String,Array{Float64}}
     materialize!::Function
     var_order::Vector{String}
+    # The forcing epoch of the build this sink belongs to (cadence_stamp.jl):
+    # bumped by `materialize!` and by a refresh of any buffer the build reads.
+    epoch::_ForcingEpoch
 end
 DiscreteMaterializer() =
-    DiscreteMaterializer(Dict{String,Array{Float64}}(), () -> nothing, String[])
+    DiscreteMaterializer(Dict{String,Array{Float64}}(), () -> nothing, String[],
+                         _new_forcing_epoch())
 
 # ============================================================
 # 2b. Build-pipeline stages
@@ -2624,38 +2628,39 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
     # 3. `materialize!`: every fill into its cache, in dependency order, with the
     #    `p` given (by default the one the caches already hold).
     filled_p = Ref{Any}(pp)
+    stamp = Ref{Any}(_pstamp(pp))
+    epoch = mut.epoch
     function materialize!(q = filled_p[])
         for fill in fills
             fill(q)
         end
         filled_p[] = q
+        stamp[] = _pstamp(q)
         # The caches just changed IN PLACE under readers gathering them via
         # `_NK_PARAM_GATHER` — invalidate the memoized time-cadence prelude slots
         # (B3, const_tier.jl): a refresh fires AT its tstop, so the next RHS call
         # is at a `t` the t-tier stamp may already hold.
-        _bump_forcing_epoch!()
+        _bump_epoch!(epoch)
         return nothing
     end
     materialize!()          # initial fill — valid caches for u0 seeding + first step
     mut.caches = caches
     mut.materialize! = materialize!
     mut.var_order = order
-    return _DiscreteRefill{typeof(pp),typeof(materialize!)}(filled_p, materialize!)
+    return _DiscreteRefill{typeof(pp),typeof(materialize!)}(stamp, materialize!)
 end
 
 # The right-hand side's check that the discrete caches hold its own `p`, and the
-# refill when they do not. The compare is the const tier's (`_cse_const_stale`):
-# egal on an `isbits` `p`, so a same-`p` call is a load and a bit compare and
-# never allocates, and a `p` that is not `isbits` refills on every call rather
-# than trust object identity. A `p` of another type than the build's — dual
+# refill when they do not. The compare is the const tier's (`_pstamp_same`,
+# cadence_stamp.jl): a same-`p` call is a compare and never allocates. A `p` of another type than the build's — dual
 # numbers, for a derivative with respect to parameters — leaves the caches as
 # they are: they hold Float64 values and cannot carry a derivative.
 struct _DiscreteRefill{P,F}
-    filled_p::Base.RefValue{Any}
+    stamp::Base.RefValue{Any}
     materialize!::F
 end
 @inline function (g::_DiscreteRefill{P})(p::P) where {P}
-    (isbits(p) && g.filled_p[] === p) || g.materialize!(p)
+    _pstamp_same(g.stamp[], p) || g.materialize!(p)
     return nothing
 end
 @inline (g::_DiscreteRefill)(p) = nothing
@@ -3579,6 +3584,11 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # ---- Live forcing buffers (ess-14f.3, JL-J0) ----
     # (see `_build_pgather` for the feasibility-gate design note)
     pgather = @_bench :build_pgather _build_pgather(param_arrays)
+    # This build's forcing epoch: the problem's (its discrete sink carries it),
+    # bumped by a refresh of any buffer the build reads.
+    forcing_epoch = materialize_out === nothing ? _new_forcing_epoch() :
+                    materialize_out.epoch
+    _register_forcing_buffers!(forcing_epoch, values(param_arrays))
 
     # ---- Discrete-cadence materialization: cache buffers + fill kernels ----
     # (the middle cadence phase; see DiscreteMaterializer). Each discrete var gets a
@@ -3785,6 +3795,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     rhs_list, scalar_prelude, scalar_cache, cse_diag =
         @_bench :cse_scalar _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs;
                             has_pgather = !isempty(pgather), obs_defs=obs_defs)
+    scalar_cache.epoch = forcing_epoch
 
     # ---- Cross-kernel / kernel↔prelude fn-CSE (perf plan B4; xcse.jl) ----
     # A lane-invariant fn/interp subtree appearing in several array kernels'
