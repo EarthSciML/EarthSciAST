@@ -1494,7 +1494,10 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(GroupIx, SlotId)], c
 /// An op's `out` register is allocated BEFORE its dying operands are freed,
 /// so `out` never aliases an operand register (which lets the executor's
 /// chunk loops use disjoint slices).
-fn allocate_registers(micro: &mut [MicroOp], outputs: &mut [(GroupIx, SlotId)]) -> GroupIx {
+pub(super) fn allocate_registers(
+    micro: &mut [MicroOp],
+    outputs: &mut [(GroupIx, SlotId)],
+) -> GroupIx {
     let n_ssa = micro.len();
     let mut last_use = vec![usize::MAX; n_ssa]; // MAX = never used
     let use_at = |m: &MRef, i: usize, last_use: &mut Vec<usize>| {

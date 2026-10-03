@@ -74,10 +74,8 @@ fn split_calls_are_bit_identical_to_serial() {
         for ways in [2, 3, 4, 7] {
             let before = DISPATCHES.load(Ordering::Relaxed);
             let split = rhs(&path, Some(ways));
-            // A document of scalars only has nothing to split.
-            let scalar_only = path.to_string_lossy().contains("scalar_chemistry");
             assert!(
-                scalar_only || DISPATCHES.load(Ordering::Relaxed) > before,
+                DISPATCHES.load(Ordering::Relaxed) > before,
                 "{}: nothing split {ways} wide",
                 path.display()
             );

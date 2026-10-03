@@ -144,6 +144,9 @@ fn reversible(prog: &TapeProgram) -> bool {
         Instr::PolyArea { .. } | Instr::Sweep { .. } | Instr::Fallback { .. } => false,
         // The pass runs ahead of fusion.
         Instr::Fused { .. } => false,
+        // Lanes read 0-d states, parameters and scalar slots and write the
+        // derivative of 0-d states: nothing with an axis.
+        Instr::Lanes { .. } => true,
     })
 }
 

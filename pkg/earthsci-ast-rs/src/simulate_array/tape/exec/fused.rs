@@ -24,7 +24,7 @@ pub(super) const FCHUNK: usize = 1024;
 /// A micro-op operand resolved for one chunk: a pointer to `c` contiguous
 /// values, or a constant broadcast over the chunk.
 #[derive(Clone, Copy)]
-enum MSrc {
+pub(super) enum MSrc {
     P(*const f64),
     C(f64),
 }
@@ -35,7 +35,7 @@ enum MSrc {
 /// buffer (disjoint from the register file), so slice-based loops are sound —
 /// and vectorizable.
 #[inline(always)]
-unsafe fn fch1(dst: *mut f64, c: usize, a: MSrc, f: impl Fn(f64) -> f64 + Copy) {
+pub(super) unsafe fn fch1(dst: *mut f64, c: usize, a: MSrc, f: impl Fn(f64) -> f64 + Copy) {
     unsafe {
         let d = std::slice::from_raw_parts_mut(dst, c);
         match a {
@@ -59,7 +59,13 @@ unsafe fn fch1(dst: *mut f64, c: usize, a: MSrc, f: impl Fn(f64) -> f64 + Copy) 
 /// argument; the two operands may alias EACH OTHER, which shared slices
 /// permit).
 #[inline(always)]
-unsafe fn fch2(dst: *mut f64, c: usize, a: MSrc, b: MSrc, f: impl Fn(f64, f64) -> f64 + Copy) {
+pub(super) unsafe fn fch2(
+    dst: *mut f64,
+    c: usize,
+    a: MSrc,
+    b: MSrc,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
     unsafe {
         let d = std::slice::from_raw_parts_mut(dst, c);
         match (a, b) {
@@ -274,7 +280,7 @@ unsafe fn fch_scan(
 
 /// The `vec_select` pick over one chunk.
 #[inline(always)]
-unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MSrc) {
+pub(super) unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MSrc) {
     // A constant condition is the filter-gate broadcast: whole-chunk pick.
     if let MSrc::C(cv) = cond {
         let pick = if cv != 0.0 { a } else { b };

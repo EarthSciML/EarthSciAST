@@ -97,6 +97,10 @@ pub(super) fn program_work(prog: &TapeProgram) -> usize {
             | Instr::IndexGather { out, .. }
             | Instr::TableGather { out, .. }
             | Instr::Scan { out, .. } => prog.slots[*out as usize].elems(),
+            Instr::Lanes { spec } => {
+                let ls = &prog.lanes[*spec as usize];
+                (ls.lanes as usize).saturating_mul(ls.micro.len() + ls.inputs.len() + 1)
+            }
             _ => 0,
         });
     }

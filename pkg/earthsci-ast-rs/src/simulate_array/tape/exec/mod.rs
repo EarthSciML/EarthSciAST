@@ -57,6 +57,7 @@ use std::rc::Rc;
 mod fused;
 mod interp;
 mod kernels;
+mod lanes;
 mod oracle;
 #[cfg(not(target_arch = "wasm32"))]
 mod par;
@@ -254,6 +255,8 @@ pub(crate) struct TapeExec {
     /// subscripts the CONST or SEGMENT section defines, refilled each time
     /// those sections run.
     idx_tables: Vec<Vec<Option<fused::IndexTable>>>,
+    /// The lane programs' chunk registers.
+    lscratch: lanes::LaneScratch,
     /// Step 4 export demotion: `Export` instructions only execute when
     /// something can read the published arrays — a fallback rule is present,
     /// or a caller explicitly requested them
@@ -375,6 +378,7 @@ impl TapeExec {
             fregs: vec![0.0f64; max_fregs * FCHUNK],
             fscratch: fused::FusedScratch::for_program(prog),
             idx_tables: fused::index_tables_for(prog),
+            lscratch: lanes::LaneScratch::for_program(prog),
             exports_active: n_fallback > 0,
             n_taped: prog.rules.len() - n_fallback,
             n_fallback,

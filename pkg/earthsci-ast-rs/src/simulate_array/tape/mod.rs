@@ -76,6 +76,7 @@ mod lower;
 mod lowering_limit_tests;
 #[cfg(test)]
 mod refexec;
+mod reroll;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

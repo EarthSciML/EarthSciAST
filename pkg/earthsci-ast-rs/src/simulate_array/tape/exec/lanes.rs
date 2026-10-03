@@ -1,0 +1,353 @@
+//! Lane-program execution ([`Instr::Lanes`]).
+//!
+//! The lanes are strip-mined into chunks of [`LCHUNK`]. Per chunk each input
+//! is gathered from its lanes' sources into a chunk register, the
+//! micro-program runs over the chunk through the same chunk kernels and
+//! kernel dispatch the fused executor uses, and each write scatters its
+//! chunk into `dy`. Every lane applies exactly the kernels its scalar
+//! instructions applied, in their order; the lanes are independent and
+//! write distinct `dy` positions, so chunking cannot change a bit.
+
+use super::fused::{MSrc, dispatch_bin_kernel, dispatch_un_kernel, fch_sel, fch1, fch2};
+use super::resolve::resolve_scalar;
+use super::*;
+
+/// Lanes per chunk: long enough to amortize each micro-op's dispatch, short
+/// enough that a mechanism-sized program's registers stay cache-resident.
+pub(super) const LCHUNK: usize = 256;
+
+/// The per-executor buffers of the lane programs, sized for the largest
+/// program so a call never allocates.
+pub(super) struct LaneScratch {
+    regs: Vec<f64>,
+    svals: Vec<f64>,
+    /// The register files of the workers a split lane program runs on
+    /// (native targets only), grown the first time a call splits wider.
+    #[cfg(not(target_arch = "wasm32"))]
+    workers: Vec<Vec<f64>>,
+}
+
+impl LaneScratch {
+    pub(super) fn for_program(prog: &TapeProgram) -> Self {
+        let regs = prog
+            .lanes
+            .iter()
+            .map(|ls| ls.n_regs as usize + ls.inputs.len())
+            .max()
+            .unwrap_or(0);
+        let svals = prog
+            .lanes
+            .iter()
+            .map(|ls| ls.scalars.len())
+            .max()
+            .unwrap_or(0);
+        LaneScratch {
+            regs: vec![0.0; regs * LCHUNK],
+            svals: Vec::with_capacity(svals),
+            #[cfg(not(target_arch = "wasm32"))]
+            workers: Vec::new(),
+        }
+    }
+}
+
+/// Execute one lane program; under call split width `ways` (see `par`) its
+/// lanes are divided between workers, each lane whole on one of them.
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn exec_lanes(
+    ls: &LaneSpec,
+    env: &Env,
+    slab_ptr: *mut f64,
+    slot_off: &[usize],
+    obs: &ArrMap,
+    scratch: &mut LaneScratch,
+    dy: &mut [f64],
+    simd: SimdLevel,
+    ways: usize,
+) {
+    #[cfg(target_arch = "wasm32")]
+    let _ = ways;
+    let LaneScratch {
+        regs,
+        svals,
+        #[cfg(not(target_arch = "wasm32"))]
+        workers,
+    } = scratch;
+    svals.clear();
+    for op in &ls.scalars {
+        svals.push(resolve_scalar(op, env, slab_ptr, slot_off, obs));
+    }
+    let src = Sources {
+        state: env.state,
+        params: env.params,
+        slab: slab_ptr,
+        slot_off,
+    };
+    let out = Out {
+        ptr: dy.as_mut_ptr(),
+        len: dy.len(),
+    };
+    let lanes = ls.lanes as usize;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ways = super::par::ways_for(lanes, ways);
+        if ways > 1 {
+            while workers.len() < ways {
+                workers.push(vec![0.0; regs.len()]);
+            }
+            let sh = SplitLanes {
+                ls,
+                src: &src,
+                svals,
+                out,
+                regs: workers.as_mut_ptr(),
+                simd,
+                precision: crate::precision::active(),
+            };
+            super::pool::run(ways, &move |w| {
+                let sh = &sh;
+                let (lo, hi) = (lanes * w / ways, lanes * (w + 1) / ways);
+                if lo >= hi {
+                    return;
+                }
+                // The caller's precision is thread-local; carry it over.
+                let _p = crate::precision::enter(sh.precision);
+                // SAFETY: share `w` runs once per dispatch, so each register
+                // file has one user; lanes write distinct `dy` positions.
+                let regs = unsafe { &mut *sh.regs.add(w) };
+                unsafe { run_lanes(sh.simd, sh.ls, sh.src, sh.svals, regs, sh.out, lo, hi) };
+            });
+            return;
+        }
+    }
+    unsafe { run_lanes(simd, ls, &src, svals, regs, out, 0, lanes) }
+}
+
+/// The derivative a lane program scatters into.
+#[derive(Clone, Copy)]
+struct Out {
+    ptr: *mut f64,
+    len: usize,
+}
+
+/// One split lane program, shared read-only by its workers.
+#[cfg(not(target_arch = "wasm32"))]
+struct SplitLanes<'a> {
+    ls: &'a LaneSpec,
+    src: &'a Sources<'a>,
+    svals: &'a [f64],
+    out: Out,
+    regs: *mut Vec<f64>,
+    simd: SimdLevel,
+    precision: crate::precision::Precision,
+}
+
+// SAFETY: workers read the sources and the slab, and write only the `dy`
+// positions of their own lanes and their own register files.
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl Sync for SplitLanes<'_> {}
+
+/// Lanes `[lo, hi)` through the SIMD clone `simd`.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+unsafe fn run_lanes(
+    simd: SimdLevel,
+    ls: &LaneSpec,
+    src: &Sources,
+    svals: &[f64],
+    regs: &mut [f64],
+    out: Out,
+    lo: usize,
+    hi: usize,
+) {
+    match simd {
+        SimdLevel::Generic => unsafe { exec_lanes_generic(ls, src, svals, regs, out, lo, hi) },
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx2 => unsafe { exec_lanes_avx2(ls, src, svals, regs, out, lo, hi) },
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx512 => unsafe { exec_lanes_avx512(ls, src, svals, regs, out, lo, hi) },
+    }
+}
+
+/// Where a lane input's entries point.
+struct Sources<'a> {
+    state: &'a [f64],
+    params: &'a [f64],
+    slab: *const f64,
+    slot_off: &'a [usize],
+}
+
+impl Sources<'_> {
+    /// Gather lanes `l0 .. l0 + c` of `inp` into `dst`.
+    #[inline(always)]
+    unsafe fn gather(&self, inp: &LaneTable, l0: usize, c: usize, dst: *mut f64) {
+        let d = unsafe { std::slice::from_raw_parts_mut(dst, c) };
+        match (inp.kind, &inp.ix) {
+            // Evenly spaced lanes of a slice: one bounds check per chunk.
+            (LaneKind::State | LaneKind::Param, LaneIx::Affine { base, step }) => {
+                let v = if inp.kind == LaneKind::State {
+                    self.state
+                } else {
+                    self.params
+                };
+                let (base, step) = (*base as usize, *step as usize);
+                let first = base + l0 * step;
+                if step == 1 {
+                    d.copy_from_slice(&v[first..first + c]);
+                } else {
+                    let v = &v[first..first + (c - 1) * step + 1];
+                    for (k, x) in d.iter_mut().enumerate() {
+                        *x = unsafe { *v.get_unchecked(k * step) };
+                    }
+                }
+            }
+            (kind, ix) => {
+                for (k, x) in d.iter_mut().enumerate() {
+                    let i = ix.at(l0 + k) as usize;
+                    *x = match kind {
+                        LaneKind::State => self.state[i],
+                        LaneKind::Param => self.params[i],
+                        LaneKind::Slot => unsafe { *self.slab.add(self.slot_off[i]) },
+                    };
+                }
+            }
+        }
+    }
+}
+
+/// Scatter `c` values (`val(k)` for lane `l0 + k`) to their `dy` positions.
+#[inline(always)]
+fn scatter(dy: Out, pos: &LaneIx, l0: usize, c: usize, val: impl Fn(usize) -> f64) {
+    match pos {
+        LaneIx::Affine { base, step } => {
+            let (base, step) = (*base as usize, *step as usize);
+            let first = base + l0 * step;
+            assert!(first + (c - 1) * step < dy.len, "lane write out of dy");
+            for k in 0..c {
+                unsafe { *dy.ptr.add(first + k * step) = val(k) };
+            }
+        }
+        LaneIx::Table(t) => {
+            for (k, &p) in t[l0..l0 + c].iter().enumerate() {
+                assert!((p as usize) < dy.len, "lane write out of dy");
+                unsafe { *dy.ptr.add(p as usize) = val(k) };
+            }
+        }
+    }
+}
+
+/// The chunk loop, monomorphized per SIMD level through the wrappers below.
+#[inline(always)]
+unsafe fn exec_lanes_chunks(
+    ls: &LaneSpec,
+    src: &Sources,
+    svals: &[f64],
+    regs: &mut [f64],
+    dy: Out,
+    lo: usize,
+    hi: usize,
+) {
+    let rp = regs.as_mut_ptr();
+    let n_regs = ls.n_regs as usize;
+    let reg = |r: usize| unsafe { rp.add(r * LCHUNK) };
+    let mut l0 = lo;
+    while l0 < hi {
+        let c = (hi - l0).min(LCHUNK);
+        for (i, inp) in ls.inputs.iter().enumerate() {
+            unsafe { src.gather(inp, l0, c, reg(n_regs + i)) };
+        }
+        let msrc = |m: &MRef| -> MSrc {
+            match m {
+                MRef::Reg(r) => MSrc::P(reg(*r as usize)),
+                MRef::In(i) => MSrc::P(reg(n_regs + *i as usize)),
+                MRef::Scal(i) => MSrc::C(svals[*i as usize]),
+            }
+        };
+        for op in &ls.micro {
+            match op {
+                MicroOp::Bin { op, a, b, out } => {
+                    let (a, b) = (msrc(a), msrc(b));
+                    let dst = reg(*out as usize);
+                    macro_rules! chunk {
+                        ($f:expr) => {
+                            unsafe { fch2(dst, c, a, b, $f) }
+                        };
+                    }
+                    dispatch_bin_kernel!(op, chunk);
+                }
+                MicroOp::Un { op, a, out } => {
+                    let a = msrc(a);
+                    let dst = reg(*out as usize);
+                    macro_rules! chunk {
+                        ($f:expr) => {
+                            unsafe { fch1(dst, c, a, $f) }
+                        };
+                    }
+                    dispatch_un_kernel!(op, chunk);
+                }
+                MicroOp::Neg { a, out } => unsafe { fch1(reg(*out as usize), c, msrc(a), |x| -x) },
+                MicroOp::Select { cond, a, b, out } => unsafe {
+                    fch_sel(reg(*out as usize), c, msrc(cond), msrc(a), msrc(b))
+                },
+                MicroOp::Mov { a, out } => unsafe { fch1(reg(*out as usize), c, msrc(a), |x| x) },
+                MicroOp::Bin2 { .. } | MicroOp::Bin3 { .. } | MicroOp::Scan { .. } => {
+                    unreachable!("a lane program holds no superops or scans")
+                }
+            }
+        }
+        for w in &ls.writes {
+            match msrc(&w.src) {
+                MSrc::P(p) => scatter(dy, &w.pos, l0, c, |k| unsafe { *p.add(k) }),
+                MSrc::C(v) => scatter(dy, &w.pos, l0, c, |_| v),
+            }
+        }
+        l0 += c;
+    }
+}
+
+#[inline(never)]
+unsafe fn exec_lanes_generic(
+    ls: &LaneSpec,
+    src: &Sources,
+    svals: &[f64],
+    regs: &mut [f64],
+    dy: Out,
+    lo: usize,
+    hi: usize,
+) {
+    unsafe { exec_lanes_chunks(ls, src, svals, regs, dy, lo, hi) }
+}
+
+/// AVX2 clone (no `fma`: a contracted multiply-add would change bits).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn exec_lanes_avx2(
+    ls: &LaneSpec,
+    src: &Sources,
+    svals: &[f64],
+    regs: &mut [f64],
+    dy: Out,
+    lo: usize,
+    hi: usize,
+) {
+    unsafe { exec_lanes_chunks(ls, src, svals, regs, dy, lo, hi) }
+}
+
+/// AVX-512 clone (f+vl+dq+bw, all runtime-checked).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(
+    enable = "avx512f",
+    enable = "avx512vl",
+    enable = "avx512dq",
+    enable = "avx512bw"
+)]
+unsafe fn exec_lanes_avx512(
+    ls: &LaneSpec,
+    src: &Sources,
+    svals: &[f64],
+    regs: &mut [f64],
+    dy: Out,
+    lo: usize,
+    hi: usize,
+) {
+    unsafe { exec_lanes_chunks(ls, src, svals, regs, dy, lo, hi) }
+}
