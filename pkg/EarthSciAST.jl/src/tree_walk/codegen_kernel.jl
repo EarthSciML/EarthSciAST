@@ -489,11 +489,15 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key=nothing)
         addr = _cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off, a.sx, key)
         # A table that is one ascending run of slots with no ghost (the box of
         # an array laid out as one column-major block) reads the same slot as
-        # base + address, without the table load and the ghost test.
+        # base + address, without the table load and the ghost test. Whether a
+        # table is such a run can depend on the grid size (a boundary slab one
+        # cell wide), so the choice is run-time data (`-1` = not a run) and the
+        # emitted code is the same at every N; the branch is loop-invariant.
         c0 = _cg_affine_conn(a.conn)
-        c0 > 0 && return :(u[$(_cg_geo!(ctx, c0 - 1, _cg_gkey(key, :tblbase))) + $addr])
+        cb = _cg_geo!(ctx, c0 > 0 ? c0 - 1 : -1, _cg_gkey(key, :tblbase))
         # Exactly `_fetch`'s ghost test: slot 0 ⇒ the ghost literal 0.0.
-        return :(let $s = $(_cg_tab!(ctx, a.conn))[$addr]
+        return :($cb >= 0 ? u[$cb + $addr] :
+                 let $s = $(_cg_tab!(ctx, a.conn))[$addr]
                      $s == 0 ? 0.0 : u[$s]
                  end)
     elseif k === _AK_ARR_TBL_BOX
