@@ -192,6 +192,10 @@ pub(crate) struct TapeExec {
     /// A fused group's resolved operands, sized for the largest group so a
     /// call never allocates.
     fscratch: fused::FusedScratch,
+    /// Per fused group: the resolved positions of its folded gathers whose
+    /// subscripts the CONST or SEGMENT section defines, refilled each time
+    /// those sections run.
+    idx_tables: Vec<Vec<Option<fused::IndexTable>>>,
     /// Step 4 export demotion: `Export` instructions only execute when
     /// something can read the published arrays — a fallback rule is present,
     /// or a caller explicitly requested them
@@ -293,6 +297,7 @@ impl TapeExec {
             primed_forcing_epoch: 0,
             fregs: vec![0.0f64; max_fregs * FCHUNK],
             fscratch: fused::FusedScratch::for_program(prog),
+            idx_tables: fused::index_tables_for(prog),
             exports_active: n_fallback > 0,
             n_taped: prog.rules.len() - n_fallback,
             n_fallback,
@@ -582,11 +587,17 @@ pub(in crate::simulate_array) fn run_tape_call(
         #[cfg(test)]
         SECTION_PRIMES.with(|c| c.set((c.get().0 + 1, c.get().1)));
         run_range(&env, 0..prime_end, exec, dy, stats);
+        unsafe {
+            fused::refill_index_tables(&mut exec.idx_tables, exec.slab.as_ptr(), &exec.slot_off)
+        };
     } else if exec.primed_forcing_epoch != forcing_epoch {
         exec.primed_forcing_epoch = forcing_epoch;
         #[cfg(test)]
         SECTION_PRIMES.with(|c| c.set((c.get().0, c.get().1 + 1)));
         run_range(&env, const_end..prime_end, exec, dy, stats);
+        unsafe {
+            fused::refill_index_tables(&mut exec.idx_tables, exec.slab.as_ptr(), &exec.slot_off)
+        };
     }
     run_range(&env, prime_end..prog.instrs.len(), exec, dy, stats);
     exec.state_rm = state_rm;

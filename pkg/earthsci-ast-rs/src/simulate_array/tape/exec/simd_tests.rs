@@ -354,6 +354,7 @@ fn drive(with_nan: bool) {
                     &bases,
                     &outs,
                     std::ptr::null_mut(),
+                    &[],
                     &mut fregs,
                     &mut cursor,
                 )
@@ -366,6 +367,7 @@ fn drive(with_nan: bool) {
                     &bases,
                     &outs,
                     std::ptr::null_mut(),
+                    &[],
                     &mut fregs,
                     &mut cursor,
                 )
@@ -378,6 +380,7 @@ fn drive(with_nan: bool) {
                     &bases,
                     &outs,
                     std::ptr::null_mut(),
+                    &[],
                     &mut fregs,
                     &mut cursor,
                 )

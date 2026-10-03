@@ -404,6 +404,91 @@ impl RunCursor {
     }
 }
 
+/// A folded data-subscript gather whose subscript array is fixed for the
+/// call: its source positions, resolved once when the sections that define
+/// the subscript run, so a steady call reads one `u32` per element instead of
+/// rounding and range-checking an `f64` subscript.
+pub(super) struct IndexTable {
+    /// The subscript array's slot (defined in the CONST or SEGMENT section).
+    subscript: SlotId,
+    /// The gathered source's extent along its data axis.
+    n: usize,
+    /// One position per element of the group box, or [`GATHER_GHOST`].
+    pos: Vec<u32>,
+    /// No position is the ghost, so the gather is a plain indexed load.
+    all_in: bool,
+}
+
+/// Per fused group, per input: the [`IndexTable`] of every folded
+/// data-subscript gather in a CONTINUOUS-section group whose subscript is a
+/// slot the CONST or SEGMENT section defines (an empty list for a group with
+/// none). Sized here, once; [`refill_index_tables`] only overwrites.
+pub(super) fn index_tables_for(prog: &TapeProgram) -> Vec<Vec<Option<IndexTable>>> {
+    let prime_end = (prog.n_const + prog.n_segment) as usize;
+    let tables = prog.tables();
+    let mut primed: Vec<bool> = vec![false; prog.slots.len()];
+    for ins in &prog.instrs[..prime_end] {
+        ins.for_each_def(&tables, |s| primed[s as usize] = true);
+    }
+    let mut out: Vec<Vec<Option<IndexTable>>> = prog.fused.iter().map(|_| Vec::new()).collect();
+    for ins in &prog.instrs[prime_end..] {
+        let Instr::Fused { spec } = ins else { continue };
+        let fs = &prog.fused[*spec as usize];
+        let n_elems = fs.n_elems();
+        let per_input: Vec<Option<IndexTable>> = fs
+            .inputs
+            .iter()
+            .map(|inp| {
+                let (by, n) = inp.index?;
+                let SrcRef::Slot(sub) = fs.inputs[by as usize].src else {
+                    return None;
+                };
+                (primed[sub as usize] && n < GATHER_GHOST as usize).then(|| IndexTable {
+                    subscript: sub,
+                    n,
+                    pos: vec![GATHER_GHOST; n_elems],
+                    all_in: false,
+                })
+            })
+            .collect();
+        if per_input.iter().any(Option::is_some) {
+            out[*spec as usize] = per_input;
+        }
+    }
+    out
+}
+
+/// Re-resolve every [`IndexTable`] from its subscript slot, after the
+/// sections that define the subscripts ran. The positions are
+/// [`data_subscript`]'s, so the gather reads the same elements it would
+/// resolve per call.
+///
+/// # Safety
+/// `slab_ptr` must be the slab `slot_off` lays out, with every table's
+/// subscript slot holding the table's element count.
+pub(super) unsafe fn refill_index_tables(
+    tables: &mut [Vec<Option<IndexTable>>],
+    slab_ptr: *const f64,
+    slot_off: &[usize],
+) {
+    for t in tables.iter_mut().flatten().flatten() {
+        let sub = unsafe {
+            std::slice::from_raw_parts(slab_ptr.add(slot_off[t.subscript as usize]), t.pos.len())
+        };
+        let mut all_in = true;
+        for (p, &v) in t.pos.iter_mut().zip(sub) {
+            *p = match data_subscript(v, t.n) {
+                Some(i) => i as u32,
+                None => {
+                    all_in = false;
+                    GATHER_GHOST
+                }
+            };
+        }
+        t.all_in = all_in;
+    }
+}
+
 /// Execute one fused group. Iterates the precompiled run schedule; each run
 /// is strip-mined into `FCHUNK`-element chunks whose micro-ops execute over
 /// the register file, then live-out registers store to the slab. Per element
@@ -419,6 +504,7 @@ pub(super) unsafe fn exec_fused(
     obs: &ArrMap,
     fregs: &mut [f64],
     scratch: &mut FusedScratch,
+    idx: &[Option<IndexTable>],
     simd: SimdLevel,
 ) {
     let FusedScratch {
@@ -481,15 +567,15 @@ pub(super) unsafe fn exec_fused(
     // `#[target_feature]` wrappers only widen the auto-vectorized lanes.
     match simd {
         SimdLevel::Generic => unsafe {
-            exec_fused_runs_generic(fs, svals, bases, outs, red, fregs, cursor)
+            exec_fused_runs_generic(fs, svals, bases, outs, red, idx, fregs, cursor)
         },
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx2 => unsafe {
-            exec_fused_runs_avx2(fs, svals, bases, outs, red, fregs, cursor)
+            exec_fused_runs_avx2(fs, svals, bases, outs, red, idx, fregs, cursor)
         },
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 => unsafe {
-            exec_fused_runs_avx512(fs, svals, bases, outs, red, fregs, cursor)
+            exec_fused_runs_avx512(fs, svals, bases, outs, red, idx, fregs, cursor)
         },
     }
 }
@@ -527,12 +613,14 @@ unsafe fn fold_chunk(
 /// so each wrapper compiles the WHOLE loop nest — micro-op dispatch, chunk
 /// kernels and stores — under its feature set).
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 unsafe fn exec_fused_runs(
     fs: &FusedSpec,
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
     red: *mut f64,
+    idx: &[Option<IndexTable>],
     fregs: &mut [f64],
     cursor: &mut RunCursor,
 ) {
@@ -637,6 +725,30 @@ unsafe fn exec_fused_runs(
                 // A folded data-subscript gather: one random read per element,
                 // through the subscript array's aligned chunk.
                 if let Some((by, n)) = inp.index {
+                    if let Some(Some(t)) = idx.get(i) {
+                        unsafe {
+                            let dst = std::slice::from_raw_parts_mut(
+                                rp.add(inp.load_reg as usize * FCHUNK),
+                                c,
+                            );
+                            let pos = &t.pos[at..at + c];
+                            let src = bases[i];
+                            if t.all_in {
+                                for (d, &p) in dst.iter_mut().zip(pos) {
+                                    *d = *src.add(p as usize);
+                                }
+                            } else {
+                                for (d, &p) in dst.iter_mut().zip(pos) {
+                                    *d = if p == GATHER_GHOST {
+                                        0.0
+                                    } else {
+                                        *src.add(p as usize)
+                                    };
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     unsafe {
                         let dst = rp.add(inp.load_reg as usize * FCHUNK);
                         let sub = bases[by as usize].add(at);
@@ -976,16 +1088,18 @@ unsafe fn exec_fused_runs(
 
 /// Baseline-codegen instantiation of the fused chunk loop.
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused_runs_generic(
     fs: &FusedSpec,
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
     red: *mut f64,
+    idx: &[Option<IndexTable>],
     fregs: &mut [f64],
     cursor: &mut RunCursor,
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, idx, fregs, cursor) }
 }
 
 /// AVX2 clone: identical Rust source compiled under `avx2` (+`fma` is NOT
@@ -994,16 +1108,18 @@ pub(super) unsafe fn exec_fused_runs_generic(
 /// support, so the `unsafe` target-feature contract holds.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused_runs_avx2(
     fs: &FusedSpec,
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
     red: *mut f64,
+    idx: &[Option<IndexTable>],
     fregs: &mut [f64],
     cursor: &mut RunCursor,
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, idx, fregs, cursor) }
 }
 
 /// AVX-512 clone (f+vl+dq+bw, all runtime-checked). Note LLVM keeps its
@@ -1016,16 +1132,18 @@ pub(super) unsafe fn exec_fused_runs_avx2(
     enable = "avx512dq",
     enable = "avx512bw"
 )]
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused_runs_avx512(
     fs: &FusedSpec,
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
     red: *mut f64,
+    idx: &[Option<IndexTable>],
     fregs: &mut [f64],
     cursor: &mut RunCursor,
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, idx, fregs, cursor) }
 }
 
 /// The SINGLE definition of micro-op scalar semantics: one element of one
