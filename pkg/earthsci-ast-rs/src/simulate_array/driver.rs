@@ -2496,6 +2496,7 @@ impl ArrayCompiled {
                     (time, state, stats, retcode)
                 }
                 Alg::Erk => {
+                    let _seq = crate::simulate::SequentialFaer::enter();
                     let mut solver = problem.tsit45().map_err(|e| SimulateError::DiffsolError {
                         details: e.to_string(),
                     })?;
