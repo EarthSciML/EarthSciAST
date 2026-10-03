@@ -691,6 +691,12 @@ pub(super) fn run_reference(
                     .reduce
                     .as_ref()
                     .map_or_else(Vec::new, |r| vec![r.init; r.n_inner]);
+                let n_scans = fs
+                    .micro
+                    .iter()
+                    .filter(|m| matches!(m, MicroOp::Scan { .. }))
+                    .count();
+                let mut carries = vec![0.0f64; n_scans];
                 let mut covered = 0usize;
                 for run in &fs.schedule.expanded() {
                     for k in 0..run.len as usize {
@@ -725,7 +731,7 @@ pub(super) fn run_reference(
                             }
                         };
                         for op in &fs.micro {
-                            eval_micro_op(op, &mut regs, get);
+                            eval_micro_op(op, &mut regs, at, &mut carries, get);
                         }
                         for (oi, &(reg, _)) in fs.outputs.iter().enumerate() {
                             outs[oi][at] = regs[reg as usize];

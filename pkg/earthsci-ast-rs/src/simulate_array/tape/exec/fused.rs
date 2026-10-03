@@ -205,6 +205,73 @@ unsafe fn fch4(
     }
 }
 
+/// One chunk (`c` values at flat box offset `at`) of an absorbed scan along
+/// rows of `row` elements: the running value restarts at `init` at each
+/// row's first element and otherwise continues from `*carry`, which it
+/// leaves holding the value after the chunk's last element.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn fch_scan(
+    dst: *mut f64,
+    c: usize,
+    at: usize,
+    a: MSrc,
+    row: usize,
+    init: f64,
+    inclusive: bool,
+    carry: &mut f64,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    let mut acc = *carry;
+    let mut k = 0usize;
+    while k < c {
+        let pos = (at + k) % row;
+        if pos == 0 {
+            acc = init;
+        }
+        let end = k + (c - k).min(row - pos);
+        // Monomorphized over the operand kind and the scan flavour, so each
+        // piece is one plain dependency chain.
+        unsafe {
+            let d = std::slice::from_raw_parts_mut(dst.add(k), end - k);
+            match (a, inclusive) {
+                (MSrc::P(p), true) => {
+                    for (o, &x) in d
+                        .iter_mut()
+                        .zip(std::slice::from_raw_parts(p.add(k), end - k))
+                    {
+                        acc = f(acc, x);
+                        *o = acc;
+                    }
+                }
+                (MSrc::P(p), false) => {
+                    for (o, &x) in d
+                        .iter_mut()
+                        .zip(std::slice::from_raw_parts(p.add(k), end - k))
+                    {
+                        *o = acc;
+                        acc = f(acc, x);
+                    }
+                }
+                (MSrc::C(x), true) => {
+                    for o in d.iter_mut() {
+                        acc = f(acc, x);
+                        *o = acc;
+                    }
+                }
+                (MSrc::C(x), false) => {
+                    for o in d.iter_mut() {
+                        *o = acc;
+                        acc = f(acc, x);
+                    }
+                }
+            }
+        }
+        k = end;
+    }
+    *carry = acc;
+}
+
 /// The `vec_select` pick over one chunk.
 #[inline(always)]
 unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MSrc) {
@@ -360,13 +427,25 @@ impl FusedScratch {
             svals: Vec::with_capacity(most(|f| f.scalars.len())),
             bases: Vec::with_capacity(most(|f| f.inputs.len())),
             outs: Vec::with_capacity(most(|f| f.outputs.len())),
-            cursor: RunCursor::with_room(most(|f| f.schedule.depth), most(n_shifted)),
+            cursor: RunCursor::with_room(
+                most(|f| f.schedule.depth),
+                most(n_shifted),
+                most(n_scans),
+            ),
         }
     }
 }
 
 fn n_shifted(fs: &FusedSpec) -> usize {
     fs.inputs.iter().filter(|i| i.shifted_ix.is_some()).count()
+}
+
+/// The carry slots a group's absorbed scans use.
+fn n_scans(fs: &FusedSpec) -> usize {
+    fs.micro
+        .iter()
+        .filter(|m| matches!(m, MicroOp::Scan { .. }))
+        .count()
 }
 
 /// The executor's position in a [`RunSchedule`]: one frame per open
@@ -378,6 +457,9 @@ pub(super) struct RunCursor {
     frames: Vec<RepeatFrame>,
     in_delta: Vec<i64>,
     in_off: Vec<i64>,
+    /// Each absorbed scan's running value, carried from one chunk to the
+    /// next.
+    carries: Vec<f64>,
 }
 
 /// An open repetition: the `Repeat` node, its body's node range, and the
@@ -390,17 +472,18 @@ struct RepeatFrame {
 }
 
 impl RunCursor {
-    pub(super) fn with_room(depth: usize, n_shifted: usize) -> Self {
+    pub(super) fn with_room(depth: usize, n_shifted: usize, n_scans: usize) -> Self {
         RunCursor {
             frames: Vec::with_capacity(depth),
             in_delta: Vec::with_capacity(n_shifted),
             in_off: Vec::with_capacity(n_shifted),
+            carries: Vec::with_capacity(n_scans),
         }
     }
 
     #[cfg(test)]
     pub(super) fn for_spec(fs: &FusedSpec) -> Self {
-        Self::with_room(fs.schedule.depth, n_shifted(fs))
+        Self::with_room(fs.schedule.depth, n_shifted(fs), n_scans(fs))
     }
 }
 
@@ -655,7 +738,12 @@ unsafe fn exec_fused_runs(
         frames,
         in_delta,
         in_off,
+        carries,
     } = cursor;
+    // Every scan restarts at flat offset 0, the first element the walk
+    // visits, so the carries need no reset here; size them only.
+    carries.clear();
+    carries.resize(n_scans(fs), 0.0);
     frames.clear();
     in_delta.clear();
     in_delta.resize(n_shifted(fs), 0);
@@ -865,6 +953,26 @@ unsafe fn exec_fused_runs(
                     MicroOp::Mov { a, out } => {
                         let a = msrc(a);
                         unsafe { fch1(rp.add(*out as usize * FCHUNK), c, a, |x| x) };
+                    }
+                    MicroOp::Scan {
+                        op,
+                        a,
+                        init,
+                        inclusive,
+                        row,
+                        carry,
+                        out,
+                    } => {
+                        let a = msrc(a);
+                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        let cv = &mut carries[*carry as usize];
+                        let (row, init, inclusive) = (*row as usize, *init, *inclusive);
+                        macro_rules! chunk {
+                            ($f:expr) => {
+                                unsafe { fch_scan(dst, c, at, a, row, init, inclusive, cv, $f) }
+                            };
+                        }
+                        dispatch_bin_kernel!(op, chunk);
                     }
                     MicroOp::Bin2 {
                         op1,
@@ -1165,6 +1273,9 @@ pub(super) unsafe fn exec_fused_runs_avx512(
 ///   then `swap3` for `Bin3`). The constituent kernels are applied strictly
 ///   in order — never contracted into a hardware FMA, which would change
 ///   bits.
+/// * `Scan` folds into `carries[carry]`, restarting at `init` where the
+///   element's flat box offset `at` begins a row; the caller visits the box
+///   in ascending flat order.
 /// * `get` resolves an [`MRef`] operand (register / broadcast scalar / array
 ///   input at the current element, including the [`GHOST_OFF`] `+0.0` read).
 ///   Operand reads are pure, so `Select` reading only the taken operand is
@@ -1177,6 +1288,8 @@ pub(super) unsafe fn exec_fused_runs_avx512(
 pub(in crate::simulate_array::tape) fn eval_micro_op(
     op: &MicroOp,
     regs: &mut [f64],
+    at: usize,
+    carries: &mut [f64],
     get: impl Fn(&MRef, &[f64]) -> f64,
 ) {
     match op {
@@ -1198,6 +1311,28 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
         }
         MicroOp::Mov { a, out } => {
             regs[*out as usize] = get(a, regs);
+        }
+        MicroOp::Scan {
+            op,
+            a,
+            init,
+            inclusive,
+            row,
+            carry,
+            out,
+        } => {
+            let acc = &mut carries[*carry as usize];
+            if at % *row as usize == 0 {
+                *acc = *init;
+            }
+            let x = get(a, regs);
+            if *inclusive {
+                *acc = binary_kernel_of(*op)(*acc, x);
+                regs[*out as usize] = *acc;
+            } else {
+                regs[*out as usize] = *acc;
+                *acc = binary_kernel_of(*op)(*acc, x);
+            }
         }
         MicroOp::Bin2 {
             op1,

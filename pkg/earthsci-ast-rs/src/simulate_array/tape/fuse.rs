@@ -144,6 +144,11 @@ struct GBuilder {
     /// An absorbed [`Instr::Reduce`] folding one of the group's values
     /// (see [`FusedReduce`]); the group is flushed as soon as it is set.
     reduce: Option<ReduceTail>,
+    /// Absorbed scans so far (each owns the next carry slot).
+    n_scans: GroupIx,
+    /// `Export`s of slots this group defines, held back until it flushes
+    /// (see `fuse_section`).
+    exports: Vec<u32>,
 }
 
 /// An [`Instr::Reduce`] a group absorbed, before register allocation.
@@ -182,6 +187,8 @@ impl GBuilder {
             prov,
             prec,
             reduce: None,
+            n_scans: 0,
+            exports: Vec::new(),
         }
     }
 
@@ -223,6 +230,74 @@ impl GBuilder {
             out: *out,
             n_inner: src_shape[axes.len()..].iter().product::<usize>().max(1),
         });
+        self.members.insert(ix);
+        self.member_instrs.push(ix);
+        true
+    }
+
+    /// Absorb the identity gather at instruction `ix` (`out` reads `src`,
+    /// which this group computes, element for element) as another name for
+    /// `src`'s register.
+    fn alias(&mut self, ix: u32, src: SlotId, out: SlotId) {
+        let Some(&MRef::Reg(ssa)) = self.val_of.get(&src) else {
+            unreachable!("an alias names a computed value")
+        };
+        self.val_of.insert(out, MRef::Reg(ssa));
+        self.defs.push((out, ssa));
+        self.members.insert(ix);
+        self.member_instrs.push(ix);
+    }
+
+    /// Absorb `Scan` at instruction `ix` when it runs along the LAST axis of
+    /// this group's box: a [`MicroOp::Scan`] over its source, which the group
+    /// may compute itself or read as an aligned input. Returns `false` (group
+    /// untouched) otherwise.
+    fn try_add_scan(&mut self, ix: u32, ins: &Instr, prog: &TapeProgram) -> bool {
+        let Instr::Scan {
+            op,
+            init,
+            src,
+            axis,
+            inclusive,
+            src_shape,
+            out,
+        } = ins
+        else {
+            return false;
+        };
+        if *src_shape != self.shape || *axis as usize + 1 != self.shape.len() {
+            return false;
+        }
+        let operand = match src {
+            SrcRef::Slot(s) => Operand::Slot(*s),
+            SrcRef::State(i) => Operand::State(*i),
+            SrcRef::Obs(_) => return false,
+        };
+        let Some(r @ (ResOp::Existing(MRef::Reg(_) | MRef::In(_)) | ResOp::NewAligned(..))) =
+            self.resolve(&operand, prog)
+        else {
+            return false;
+        };
+        if let ResOp::Existing(MRef::In(i)) = r
+            && (self.inputs[i as usize].shifted_ix.is_some()
+                || self.inputs[i as usize].index.is_some())
+        {
+            return false;
+        }
+        let a = self.commit(r);
+        let ssa = self.micro.len() as GroupIx;
+        self.micro.push(MicroOp::Scan {
+            op: *op,
+            a,
+            init: *init,
+            inclusive: *inclusive,
+            row: self.shape[*axis as usize] as u32,
+            carry: self.n_scans,
+            out: ssa,
+        });
+        self.n_scans += 1;
+        self.val_of.insert(*out, MRef::Reg(ssa));
+        self.defs.push((*out, ssa));
         self.members.insert(ix);
         self.member_instrs.push(ix);
         true
@@ -466,6 +541,20 @@ fn foldable_plan(plan: &GatherPlan) -> bool {
         && plan.src_shape.len() == plan.shape.len()
         && !plan.shape.is_empty()
         && !plan.shape.contains(&0)
+}
+
+/// A fold that reads every element of an equal-shape source at its own flat
+/// offset: one run over the whole box, from source offset 0, contiguous.
+fn is_identity_fold(shape: &[usize], geom: &ShiftedGeom) -> bool {
+    if geom.elem_stride() != 1 {
+        return false;
+    }
+    let sched = build_schedule(shape, std::slice::from_ref(geom));
+    let n_elems: usize = shape.iter().product::<usize>().max(1);
+    match &sched.nodes[..] {
+        [RunNode::Run(r)] => r.out_off == 0 && r.len as usize == n_elems && r.in_off[..] == [0],
+        _ => false,
+    }
 }
 
 /// Cap on the fold's run-schedule shattering: a fold must keep runs coarse
@@ -1086,7 +1175,10 @@ fn for_each_operand(op: &MicroOp, mut f: impl FnMut(&MRef)) {
             f(a);
             f(b);
         }
-        MicroOp::Un { a, .. } | MicroOp::Neg { a, .. } | MicroOp::Mov { a, .. } => f(a),
+        MicroOp::Un { a, .. }
+        | MicroOp::Neg { a, .. }
+        | MicroOp::Mov { a, .. }
+        | MicroOp::Scan { a, .. } => f(a),
         MicroOp::Select { cond, a, b, .. } => {
             f(cond);
             f(a);
@@ -1142,6 +1234,7 @@ fn mop_label(op: &MicroOp) -> String {
         MicroOp::Neg { .. } => "Neg".to_string(),
         MicroOp::Select { .. } => "Select".to_string(),
         MicroOp::Mov { .. } => "Mov".to_string(),
+        MicroOp::Scan { op, .. } => format!("Scan({op:?})"),
         MicroOp::Bin2 { op1, op2, swap, .. } => {
             format!("Bin2({op1:?},{op2:?}{})", if *swap { ",swap" } else { "" })
         }
@@ -1172,9 +1265,10 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(GroupIx, SlotId)], c
                 count(a, &mut uses);
                 count(b, &mut uses);
             }
-            MicroOp::Un { a, .. } | MicroOp::Neg { a, .. } | MicroOp::Mov { a, .. } => {
-                count(a, &mut uses)
-            }
+            MicroOp::Un { a, .. }
+            | MicroOp::Neg { a, .. }
+            | MicroOp::Mov { a, .. }
+            | MicroOp::Scan { a, .. } => count(a, &mut uses),
             MicroOp::Select { cond, a, b, .. } => {
                 count(cond, &mut uses);
                 count(a, &mut uses);
@@ -1313,7 +1407,10 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(GroupIx, SlotId)], c
                 *b = remap(b, &new_of);
                 *out = new_id;
             }
-            MicroOp::Un { a, out, .. } | MicroOp::Neg { a, out } | MicroOp::Mov { a, out } => {
+            MicroOp::Un { a, out, .. }
+            | MicroOp::Neg { a, out }
+            | MicroOp::Mov { a, out }
+            | MicroOp::Scan { a, out, .. } => {
                 *a = remap(a, &new_of);
                 *out = new_id;
             }
@@ -1416,7 +1513,10 @@ fn allocate_registers(micro: &mut [MicroOp], outputs: &mut [(GroupIx, SlotId)]) 
                 remap(b);
                 *out = phys_of[*out as usize];
             }
-            MicroOp::Un { a, out, .. } | MicroOp::Neg { a, out } | MicroOp::Mov { a, out } => {
+            MicroOp::Un { a, out, .. }
+            | MicroOp::Neg { a, out }
+            | MicroOp::Mov { a, out }
+            | MicroOp::Scan { a, out, .. } => {
                 remap(a);
                 *out = phys_of[*out as usize];
             }
@@ -1566,7 +1666,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     let prog = fx.prog;
     let has_compute = g.micro.iter().any(|m| !matches!(m, MicroOp::Mov { .. }));
     if g.member_instrs.len() < 2 || g.micro.is_empty() || !has_compute {
-        for &ix in &g.member_instrs {
+        for &ix in g.member_instrs.iter().chain(&g.exports) {
             fx.sink.passthrough(prog, ix as usize);
         }
         return;
@@ -1585,6 +1685,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         prov,
         prec,
         reduce,
+        exports,
         ..
     } = g;
 
@@ -1774,6 +1875,9 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     if let Some(p) = prec {
         fx.sink.prec.push(p);
     }
+    for ix in exports {
+        fx.sink.passthrough(prog, ix as usize);
+    }
 }
 
 fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
@@ -1828,9 +1932,26 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
     }
 
     let prog = fx.prog;
+    // With no fallback rule and no observed read in the program, nothing
+    // reads the observed map during a call, so an `Export` only has to run
+    // before its section ends: one of a slot an open group defines is held
+    // back until that group flushes instead of flushing it early.
+    let defer_exports = prog.obs_reads.is_empty()
+        && !prog
+            .instrs
+            .iter()
+            .any(|x| matches!(x, Instr::Fallback { .. }));
     let mut i = range.start;
     while i < range.end {
         let ins = &prog.instrs[i];
+        if defer_exports
+            && let Instr::Export { slot, .. } = ins
+            && let Some(gi) = open.iter().position(|g| g.defines(*slot))
+        {
+            open[gi].exports.push(i as u32);
+            i += 1;
+            continue;
+        }
 
         // Hard barriers: a recurrence sweep and its body (copied verbatim —
         // the body runs once per cell, in order, and its cells are not
@@ -1894,6 +2015,22 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                 None
             };
             if let Some(geom) = geom {
+                // An identity read of a value an open group of the same box
+                // computes is that value: alias it instead of materializing
+                // the group's output to read it back.
+                if let SrcRef::Slot(s) = src
+                    && plan_ref.src_shape == out_desc.shape
+                    && is_identity_fold(&out_desc.shape, &geom)
+                    && let Some(gi) = open.iter().position(|g| {
+                        g.shape == out_desc.shape
+                            && g.prec == prec_at(prog, i)
+                            && matches!(g.val_of.get(s), Some(MRef::Reg(_)))
+                    })
+                {
+                    open[gi].alias(i as u32, *s, *out);
+                    i += 1;
+                    continue;
+                }
                 // A gather whose SOURCE is defined by an open group forces
                 // that group to materialize first.
                 flush_hazards(ins, None, &mut open, fx);
@@ -1964,6 +2101,24 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             }
             // Unfusable operand (an observed read): the target group may
             // still hold slots this instruction reads — flush it too.
+            flush_hazards(ins, None, &mut open, fx);
+            fx.sink.passthrough(prog, i);
+            i += 1;
+            continue;
+        }
+
+        // A scan along the last axis joins the group of its box.
+        if let Instr::Scan { src_shape, .. } = ins
+            && !src_shape.is_empty()
+            && !src_shape.contains(&0)
+        {
+            let prec = prec_at(prog, i);
+            flush_hazards(ins, Some((src_shape, prec)), &mut open, fx);
+            let gi = find_or_open(&mut open, src_shape.clone(), prog.provenance[i], prec, fx);
+            if open[gi].has_room() && open[gi].try_add_scan(i as u32, ins, prog) {
+                i += 1;
+                continue;
+            }
             flush_hazards(ins, None, &mut open, fx);
             fx.sink.passthrough(prog, i);
             i += 1;

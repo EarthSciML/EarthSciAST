@@ -749,6 +749,22 @@ pub(crate) enum MicroOp {
         swap3: bool,
         out: GroupIx,
     },
+    /// An absorbed [`Instr::Scan`] along the group box's LAST axis (`row`
+    /// elements): the running fold of `a` from `init`, restarted at the first
+    /// element of every row and carried across chunks and runs in carry slot
+    /// `carry`. Inclusive: `acc = kernel(op)(acc, a); out = acc`; exclusive:
+    /// `out = acc; acc = kernel(op)(acc, a)`. A group visits its box in
+    /// ascending flat order, which is `Instr::Scan`'s order along that axis,
+    /// so every element folds the same terms in the same association.
+    Scan {
+        op: BinCode,
+        a: MRef,
+        init: f64,
+        inclusive: bool,
+        row: u32,
+        carry: GroupIx,
+        out: GroupIx,
+    },
 }
 
 /// One array input of a fused group.
