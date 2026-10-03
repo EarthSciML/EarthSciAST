@@ -52,6 +52,10 @@ _cx_fixture(parts...) = joinpath(CX_ROOT, "tests", parts...)
 const CX_ARRAY = _cx_fixture("fixtures", "faq", "15_discretized_1d_heat.esm")
 const CX_SCALAR = _cx_fixture("valid", "solver_block.esm")
 
+# The heat document leaves its state's starting value to the caller, and a
+# state with none is refused at build (esm-spec §11.4).
+_cx_u0(f) = f == CX_ARRAY ? Dict("Heat1D.u" => 1.0) : nothing
+
 # ---- the live-forcing document -----------------------------------------------
 #
 # `D(c[i]) = -k*c[i] + wind[i]`, with `wind` a LIVE forcing buffer bound BY
@@ -75,7 +79,8 @@ function _cx_forced(N)
             "n" => Dict{String,Any}("kind" => "interval", "size" => N)),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => Dict{String,Any}(
-                "c" => Dict{String,Any}("type" => "unknown", "shape" => Any["n"]),
+                "c" => Dict{String,Any}("type" => "unknown", "shape" => Any["n"],
+                                        "default" => 1.0),
                 "k" => Dict{String,Any}("type" => "parameter", "default" => 0.5)),
             "equations" => Any[Dict{String,Any}(
                 "lhs" => _cx_ao(_cx_Dt(_cx_ix("c", "i"))),
@@ -120,8 +125,8 @@ _cx_du(prob, u, t) = (du = zeros(Float64, length(u));
     @testset "a Problem whose right-hand side is the compiled program: $(basename(f))" for f in
             (CX_ARRAY, CX_SCALAR)
         span = (0.0, 0.05)
-        pi_ = esm_problem(f, span; compiler = :interpreter)
-        px = esm_problem(f, span; compiler = :xla)
+        pi_ = esm_problem(f, span; compiler = :interpreter, u0 = _cx_u0(f))
+        px = esm_problem(f, span; compiler = :xla, u0 = _cx_u0(f))
 
         # The SURFACE is the one every compiler produces: same layout, same
         # seed, same parameters. A compiler chooses how the derivative is
