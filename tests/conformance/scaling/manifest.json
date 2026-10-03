@@ -964,6 +964,15 @@
         "phase": 5
       },
       {
+        "family": "scalar_chemistry",
+        "gate": "no_steady_alloc",
+        "threads": "threaded",
+        "measured": "bytes per steady call with 2 threads: 1000:544, 10000:544, 100000:544",
+        "max_bytes_per_call": 1088,
+        "reason": "a threaded call allocates in its thread dispatch: the scalar codegen section (scalar_codegen.jl) passes its chunk closure, which carries the section's tuple of generated functions, through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, as every threaded generated section does; at 100 states the section is below the per-thread cell floor, runs serial and allocates nothing",
+        "phase": 5
+      },
+      {
         "family": "source_receptor",
         "gate": "no_steady_alloc",
         "threads": "threaded",

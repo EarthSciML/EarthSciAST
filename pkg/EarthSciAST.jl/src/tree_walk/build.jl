@@ -3808,6 +3808,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # independent oracle the acc≡per-cell differential tests compare against.
     # Empty on every default build. Appended AFTER the CSE pass so the
     # reference trees are exactly the `_compile` output, untouched by sharing.
+    n_scalar_rhs = length(rhs_list)
     isempty(percell_scalar) || append!(rhs_list, percell_scalar)
 
     # ---- Cadence tiers of the (now final) prelude (4qf + B3, const_tier.jl) ----
@@ -3823,6 +3824,17 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # has — so an FD Jacobian's N+1 same-`t` calls fill the time tier once.
     const_slots, time_slots, dyn_slots =
         _classify_const_slots(scalar_prelude, scalar_cache)
+
+    # ---- The scalar equations and the prelude as generated code (scalar_codegen.jl) ----
+    # `:inplace` only: the out-of-place product hands the compiled IR itself to a
+    # compiled backend. The per-cell reference entries past `n_scalar_rhs` stay
+    # walked. Their report rows move to the `*_codegen` tiers here.
+    scalar_section = form === :inplace ?
+        @_bench(:scalar_codegen, _build_scalar_section(rhs_list, n_scalar_rhs,
+            scalar_prelude, scalar_cache, const_slots, time_slots, dyn_slots,
+            acc_kernels)) : nothing
+    scalar_section === nothing ||
+        _retier_scalar_rules!(var_map, rhs_list, scalar_section)
 
     # ---- Default tspan ----
     tspan_default = _pick_tspan(tspan, model)
@@ -3855,7 +3867,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         rhs0 = _make_rhs_with_obs_buffers(
             _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
                       const_slots, time_slots, dyn_slots, scan_folds,
-                      _make_contraction_section(array_contractions)),
+                      _make_contraction_section(array_contractions);
+                      scalar = scalar_section),
             n_total, n_states, Tuple(mat_levels))
         discrete_refill === nothing ? rhs0 : _make_rhs_discrete_refill(rhs0, discrete_refill)
     elseif form === :oop
@@ -4946,11 +4959,13 @@ const _CASCADE_ROUTING_TIER = Dict{Symbol,Symbol}(
     :percell_disabled   => :interpreter,
 )
 
-# A scalar equation lands on the scalar walker: interpreted, once per slot, on
+# A scalar equation is filed on the scalar walker: interpreted, once per slot, on
 # every right-hand-side call. `:scalar_loop` marks one whose resolved body keeps
 # a reduction as a runtime loop (`_resolve_scalar_faq`), so each of those calls
 # also walks that loop over its whole contracted length — per slot rather than
-# per cell, which is why it is reported rather than refused.
+# per cell, which is why it is reported rather than refused. Under `native` the
+# scalar codegen tier (scalar_codegen.jl) then emits the equation and moves its
+# row to `:scalar_codegen` / `:scalar_loop_codegen` (`_retier_scalar_rules!`).
 _scalar_rule_tier(e) = _has_contract_loop(e) ? :scalar_loop : :scalar
 function _has_contract_loop(e)
     e isa OpExpr || return false
