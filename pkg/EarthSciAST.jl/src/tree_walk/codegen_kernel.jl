@@ -2130,6 +2130,38 @@ struct _KernelSection{F,TB,G,GTB}
     # function (primary / overflow), see `_SecTCache` above.
     tcache::_SecTCache
     dual_tcache::_SecTCache
+    # Serial cell tiling of the primary function: the number of static chunks
+    # a serial call runs back to back (1 = one pass per kernel). See
+    # `_section_tiles`.
+    ntiles::Int
+end
+
+# SERIAL TILING. The primary function runs chunk `c` of every emitted kernel
+# back to back (the threaded path's granularity, above), so a serial call can
+# run the chunks one after another instead of each kernel over all its cells:
+# several kernels over the same cells — one per species of a reaction system
+# lifted onto a grid — then share the cells' operands while they are still in
+# cache, where one pass per kernel streams every operand from memory once per
+# kernel. Chunk boundaries are not observable (the threaded path's argument:
+# every fold is inside one cell, out-slots are disjoint, `u` is read-only), so
+# a tiled call is bitwise the untiled one. Tiled only when the section has
+# several kernels and globally disjoint out-slots, with about
+# `_SECTION_TILE_CELLS` cells of each kernel per chunk.
+const _SECTION_TILE_CELLS = 1024
+function _section_tiles(ncells::Int, n_emitted::Int, disjoint::Bool)
+    (disjoint && n_emitted >= 2) || return 1
+    return max(1, div(ncells, n_emitted * _SECTION_TILE_CELLS))
+end
+
+@inline function _run_cg_section_serial!(f, tabs, du, u, p, t, ntiles::Int)
+    if ntiles == 1
+        f(du, u, p, t, tabs, 1, 1)
+    else
+        for c in 1:ntiles
+            f(du, u, p, t, tabs, c, ntiles)
+        end
+    end
+    return nothing
 end
 
 @inline function (s::_KernelSection{F,TB,G})(du, u, p, t, ::Type{T}) where {F,TB,G,T}
@@ -2143,7 +2175,7 @@ end
            _sec_prep_threads!(s.tcache).state == 1
             _run_cg_section_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache)
         else
-            s.cgf(du, u, p, t, s.cgtabs, 1, 1)
+            _run_cg_section_serial!(s.cgf, s.cgtabs, du, u, p, t, s.ntiles)
         end
     end
     kernels = s.kernels
@@ -2273,7 +2305,8 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
                                     primary_reasons, isempty(primary_reasons))
         return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                               nothing, nothing, 0, collect(Int, 1:length(kernels)),
-                              false, _sec_tcache(cg), _sec_tcache(nothing))
+                              false, _sec_tcache(cg), _sec_tcache(nothing),
+                              _cg_section_tiles(cg, n_emitted))
     end
     # Float64 overflow routing (ess-f64ofl): armed whenever the overflow
     # function exists and the plan has not turned the routing off. A build with
@@ -2285,5 +2318,10 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
     _refuse_interpreted_kernels(kernels, dual_resid, dg.reasons, false)
     return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                           dg.f, dg.tabs, count(dg.covered), dual_resid, f64cg,
-                          _sec_tcache(cg), _sec_tcache(dg))
+                          _sec_tcache(cg), _sec_tcache(dg),
+                          _cg_section_tiles(cg, n_emitted))
 end
+
+_cg_section_tiles(::Nothing, ::Int) = 1
+_cg_section_tiles(cg::_CGBuilt, n_emitted::Int) =
+    _section_tiles(cg.ncells, n_emitted, cg.outs_disjoint)
