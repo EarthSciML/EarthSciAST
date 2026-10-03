@@ -2790,18 +2790,38 @@ end
 # for the value type an AD-driven `f!` is called at — exactly like `_CSECache` /
 # `_AccScratch`, so the RHS stays zero-alloc at Float64 AND differentiable.
 # Allocated ONCE at build and reused across every RHS call.
+#
+# `stamp64` / `stampalt` are the `p` each buffer's const-cadence observeds were
+# filled for, with exactly the prelude's `_cse_const_stale` semantics (egal on
+# an `isbits` `p`, never stamped otherwise); a freshly allocated `alt` holds no
+# valid const block, so allocating one invalidates its stamp.
 mutable struct _ObsExtVec
     f64::Vector{Float64}
     alt::Any
+    stamp64::Any
+    stampalt::Any
 end
-_ObsExtVec(n::Int) = _ObsExtVec(zeros(Float64, n), nothing)
+_ObsExtVec(n::Int) = _ObsExtVec(zeros(Float64, n), nothing, _CSE_INVALID, _CSE_INVALID)
 @inline _obsext_buf(s::_ObsExtVec, ::Type{Float64}) = s.f64
 @inline function _obsext_buf(s::_ObsExtVec, ::Type{T}) where {T}
     b = s.alt
     b isa Vector{T} && return b
     nb = zeros(T, length(s.f64))
     s.alt = nb
+    s.stampalt = _CSE_INVALID
     return nb
+end
+@inline _obsext_const_stale(s::_ObsExtVec, ::Type{Float64}, p) =
+    !(isbits(p) && s.stamp64 === p)
+@inline _obsext_const_stale(s::_ObsExtVec, ::Type{T}, p) where {T} =
+    !(isbits(p) && s.stampalt === p)
+@inline function _obsext_mark_const!(s::_ObsExtVec, ::Type{Float64}, p)
+    s.stamp64 = isbits(p) ? p : _CSE_INVALID
+    return nothing
+end
+@inline function _obsext_mark_const!(s::_ObsExtVec, ::Type{T}, p) where {T}
+    s.stampalt = isbits(p) ? p : _CSE_INVALID
+    return nothing
 end
 
 # Synthesize the per-cell fill equation for one materialized array observed:
@@ -2939,20 +2959,74 @@ function _materialized_obs_levels(mat_defs::Dict{String,ASTExpr}, names,
     return [String[n for n in order if depth[n] == k] for k in 1:nlev]
 end
 
+# The CONST-cadence materialized observeds: those whose definition, followed
+# through every observed it reads (materialized or inlined), reaches only
+# literals, bound indices, scalar parameters and const arrays — no state, no
+# `t`, no live forcing buffer or discrete cache. Their buffers are a function
+# of `p` alone, so `f!` refills them only when `p` moves (the prelude const
+# tier's rule, const_tier.jl, applied to whole buffers).
+#
+# FAIL CLOSED. A name is const only when it is positively one of those leaves;
+# anything the walk does not recognize (the independent variable, a state, a
+# forcing buffer, a recurrence's self-read, a name bound by a construct other
+# than a `faq`'s indices) makes the observed dynamic, which costs a refill per
+# call and never a stale number.
+function _const_cadence_mat_obs(mat_defs::Dict{String,ASTExpr}, mat_vars,
+                                inline_obs::AbstractDict, dynamic::Set{String},
+                                param_sym_set::AbstractDict,
+                                const_registry::AbstractDict)
+    memo = Dict{String,Bool}()
+    visiting = Set{String}()
+    function bound_names(e::ASTExpr)
+        b = Set{String}()
+        foreach_subexpr_once(e) do x
+            if x isa OpExpr && _is_faq_op(x.op)
+                x.output_idx === nothing || foreach(i -> push!(b, string(i)), x.output_idx)
+                x.ranges === nothing || foreach(k -> push!(b, string(k)), keys(x.ranges))
+            end
+            nothing
+        end
+        return b
+    end
+    function name_const(n::String)
+        n in dynamic && return false
+        haskey(memo, n) && return memo[n]
+        n in visiting && return false
+        def = (n in mat_vars && haskey(mat_defs, n)) ? mat_defs[n] :
+              haskey(inline_obs, n) ? inline_obs[n] : nothing
+        def === nothing &&
+            return haskey(param_sym_set, Symbol(n)) || haskey(const_registry, n)
+        push!(visiting, n)
+        b = bound_names(def)
+        c = all(r -> r in b || name_const(r), _referenced_var_names(def))
+        delete!(visiting, n)
+        memo[n] = c
+        return c
+    end
+    return Set{String}(n for n in mat_vars if name_const(n))
+end
+
 # Wrap the compiled state RHS with the per-call observed fills. Returns `f_state!`
 # UNCHANGED when nothing is materialized, so every model without a factored array
 # observed keeps a byte-identical closure (and its zero-allocation property).
 # `levels` is a vector of
 # `(scalar_nodes, kernel_section, scan_folds, array_contractions,
-# recurrence_sweeps)` in dependency order.
+# recurrence_sweeps)` in dependency order. `const_levels` has the same shape and
+# holds the const-cadence observeds (`_const_cadence_mat_obs`), which read no
+# `levels` entry; they run first, and only when the buffer's const stamp says
+# `p` moved or the buffer is new.
 function _make_rhs_with_obs_buffers(f_state!, n_total::Int, n_states::Int,
-                                    levels::Tuple)
-    isempty(levels) && return f_state!
+                                    levels::Tuple, const_levels::Tuple=())
+    isempty(levels) && isempty(const_levels) && return f_state!
     ext = _ObsExtVec(n_total)
     function f!(du, u, p, t)
         T = _rhs_value_type(u, p, t)
         ue = _obsext_buf(ext, T)
         @inbounds copyto!(ue, 1, u, 1, n_states)
+        if !isempty(const_levels) && _obsext_const_stale(ext, T, p)
+            _fill_obs_levels!(const_levels, ue, p, t, T)
+            _obsext_mark_const!(ext, T, p)
+        end
         # Fill the observed buffers level by level: a level's defs read only the
         # state and STRICTLY LOWER levels, both already valid in `ue`.
         _fill_obs_levels!(levels, ue, p, t, T)
@@ -3679,9 +3753,30 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     mat_scan_fold_count = 0
     mat_array_contraction_count = 0
     mat_recurrence_count = 0
+    mat_const_levels = Any[]
     recur_names = _recurrence_names(mat_defs, mat_vars)
+    # The const-cadence observeds fill in their own levels, ahead of the rest
+    # and only when `p` moves (`_make_rhs_with_obs_buffers`). The untiered
+    # build (`compiler = :interpreter`, the oracle) refills everything on every
+    # call, as its prelude does; the out-of-place product has no such skip.
+    mat_const = if form === :inplace && !_untiered() && !isempty(mat_vars)
+        dyn_seed = _state_base_names(layout.var_map, layout.array_var_info)
+        push!(dyn_seed, "t")
+        union!(dyn_seed, keys(pgather))
+        _const_cadence_mat_obs(mat_defs, mat_vars, raw_obs, dyn_seed,
+                               param_sym_set, const_registry)
+    else
+        Set{String}()
+    end
+    level_plan = Tuple{Vector{String},Bool}[]
     if !isempty(mat_vars)
-        for lvl in _materialized_obs_levels(mat_defs, mat_vars, raw_obs)
+        isempty(mat_const) || foreach(l -> push!(level_plan, (l, true)),
+            _materialized_obs_levels(mat_defs, mat_const, raw_obs))
+        foreach(l -> push!(level_plan, (l, false)),
+            _materialized_obs_levels(mat_defs, setdiff(mat_vars, mat_const), raw_obs))
+    end
+    if !isempty(level_plan)
+        for (lvl, lvl_const) in level_plan
             lvl_scalars = Tuple{Int,_Node}[]
             lvl_kernels = _AccKernel[]
             lvl_scans = _ScanFold[]
@@ -3732,7 +3827,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                        _OopAccPlan[_build_oop_acc_plan(K) for K in merged],
                        lvl_scans, lvl_acs))
             else
-                push!(mat_levels,
+                push!(lvl_const ? mat_const_levels : mat_levels,
                       (lvl_scalars, _make_kernel_section(merged), lvl_scans,
                        _make_contraction_section(lvl_acs), Tuple(lvl_recurs)))
             end
@@ -3856,7 +3951,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
                       const_slots, time_slots, dyn_slots, scan_folds,
                       _make_contraction_section(array_contractions)),
-            n_total, n_states, Tuple(mat_levels))
+            n_total, n_states, Tuple(mat_levels), Tuple(mat_const_levels))
         discrete_refill === nothing ? rhs0 : _make_rhs_discrete_refill(rhs0, discrete_refill)
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
@@ -3957,7 +4052,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               # buffer cells that is, and the dependency depth the fills run in.
               n_mat_array_obs = length(mat_vars),
               n_mat_array_cells = n_total - n_states,
-              n_mat_levels = length(mat_levels),
+              n_mat_levels = length(mat_levels) + length(mat_const_levels),
+              n_mat_const_levels = length(mat_const_levels),
               # Parameter NAME → position in a vector `p` — the build's own copy
               # of what the public `param_map(p)` recomputes from the NamedTuple.
               # Here so an internal consumer never has to re-derive the order.
