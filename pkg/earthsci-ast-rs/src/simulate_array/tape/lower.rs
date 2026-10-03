@@ -872,6 +872,7 @@ impl<'m> TapeBuilder<'m> {
             assemblies: &self.assemblies,
             sweeps: &self.sweeps,
             scalar_reads: &self.scalar_reads,
+            lanes: &[],
         }
     }
 
@@ -6565,9 +6566,11 @@ impl<'m> TapeBuilder<'m> {
             provenance,
             params_len: self.param_names.len(),
             fused: Vec::new(),
+            lanes: Vec::new(),
             fuse_stats: FuseStats::default(),
         };
         if let Some(cfg) = fuse {
+            super::reroll::reroll_program(&mut prog);
             super::fuse::fuse_program(&mut prog, cfg);
         }
         color_slab(&mut prog);

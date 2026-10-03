@@ -57,6 +57,7 @@ use std::rc::Rc;
 mod fused;
 mod interp;
 mod kernels;
+mod lanes;
 mod oracle;
 mod resolve;
 #[cfg(test)]
@@ -177,6 +178,9 @@ pub(crate) struct TapeExec {
     /// contiguous memory instead of stride-684 walks. Pure data movement, so
     /// bit-identical to reading the strided view directly.
     state_rm: Vec<f64>,
+    /// The array states, which are all `state_rm` holds (a 0-d state is read
+    /// from the state vector itself).
+    rm_array_vars: Vec<u32>,
     /// Per gather plan: `true` when its per-axis segments tile the whole
     /// output box, so the ghost zero-fill can be skipped (every element is
     /// overwritten by a segment copy).
@@ -192,6 +196,8 @@ pub(crate) struct TapeExec {
     /// A fused group's resolved operands, sized for the largest group so a
     /// call never allocates.
     fscratch: fused::FusedScratch,
+    /// The lane programs' chunk registers.
+    lscratch: lanes::LaneScratch,
     /// Step 4 export demotion: `Export` instructions only execute when
     /// something can read the published arrays — a fallback rule is present,
     /// or a caller explicitly requested them
@@ -255,6 +261,9 @@ impl TapeExec {
             .map(|sv| sv.flat_offset + sv.shape.iter().product::<usize>().max(1))
             .max()
             .unwrap_or(0);
+        let rm_array_vars: Vec<u32> = (0..prog.state_vars.len() as u32)
+            .filter(|&i| !prog.state_vars[i as usize].shape.is_empty())
+            .collect();
         let plan_full = prog
             .plans
             .iter()
@@ -288,11 +297,13 @@ impl TapeExec {
             export_sites,
             pending: Vec::with_capacity(16),
             state_rm: vec![0.0f64; n_state],
+            rm_array_vars,
             plan_full,
             primed_param_epoch: 0,
             primed_forcing_epoch: 0,
             fregs: vec![0.0f64; max_fregs * FCHUNK],
             fscratch: fused::FusedScratch::for_program(prog),
+            lscratch: lanes::LaneScratch::for_program(prog),
             exports_active: n_fallback > 0,
             n_taped: prog.rules.len() - n_fallback,
             n_fallback,
@@ -532,21 +543,18 @@ pub(in crate::simulate_array) fn run_tape_call(
     let exec = &mut ctx.exec;
     // Refill the row-major state mirror: one strided pass per variable block
     // (column-major flat -> row-major at the same offset).
-    for sv in &prog.state_vars {
-        if sv.shape.is_empty() {
-            exec.state_rm[sv.flat_offset] = state[sv.flat_offset];
-        } else {
-            let rm = rm_strides(&sv.shape);
-            let cm = cm_strides(&sv.shape);
-            unsafe {
-                copy_strided(
-                    exec.state_rm.as_mut_ptr().add(sv.flat_offset),
-                    &rm,
-                    state.as_ptr().add(sv.flat_offset),
-                    &cm,
-                    &sv.shape,
-                );
-            }
+    for &i in &exec.rm_array_vars {
+        let sv = &prog.state_vars[i as usize];
+        let rm = rm_strides(&sv.shape);
+        let cm = cm_strides(&sv.shape);
+        unsafe {
+            copy_strided(
+                exec.state_rm.as_mut_ptr().add(sv.flat_offset),
+                &rm,
+                state.as_ptr().add(sv.flat_offset),
+                &cm,
+                &sv.shape,
+            );
         }
     }
     // Intra-call FAQ ring registry for fallback rules (`HashMap::new` does not

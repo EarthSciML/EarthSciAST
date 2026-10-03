@@ -162,8 +162,15 @@ pub(super) fn resolve_src(
         }
         SrcRef::State(ix) => {
             let sv = &env.prog.state_vars[*ix as usize];
+            // A 0-d state has one layout, so it is read where it lives and
+            // the row-major mirror holds array states only.
+            let base = if sv.shape.is_empty() {
+                env.state
+            } else {
+                env.state_rm
+            };
             SrcView {
-                ptr: unsafe { env.state_rm.as_ptr().add(sv.flat_offset) },
+                ptr: unsafe { base.as_ptr().add(sv.flat_offset) },
                 shape: sv.shape.clone(),
                 strides: rm_strides(&sv.shape),
             }

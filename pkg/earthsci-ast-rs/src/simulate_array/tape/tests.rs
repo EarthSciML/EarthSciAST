@@ -899,6 +899,82 @@ fn ab_scalar_rules() {
     ab_check(doc, 0, -1.5, 1.5);
 }
 
+/// Many scalar boxes of one mechanism (the `scalar_chemistry` shape): the
+/// rerolling pass shares each rate across the equations that read it and
+/// runs the boxes as the lanes of one lane program, bit-identical to the
+/// interpreter. Box `k` reads its own `kb_k` (a parameter input) and the
+/// shared `k1`, `t` and literals (scalar operands). The off-grid state `a_1x`
+/// sits between two boxes' `a` in the state order, so `a`'s lanes are not
+/// evenly spaced and go through a position table; a box written another way
+/// stays scalar.
+#[test]
+fn ab_rerolled_scalar_boxes() {
+    let boxes = [1, 2, 3, 5, 8, 13, 21];
+    let mut vars = serde_json::Map::new();
+    let mut eqs: Vec<serde_json::Value> = Vec::new();
+    vars.insert("k1".into(), json!({"type": "parameter", "default": 0.7}));
+    for b in boxes {
+        let (a, c, kb) = (format!("a_{b}"), format!("c_{b}"), format!("kb_{b}"));
+        vars.insert(a.clone(), json!({"type": "unknown"}));
+        vars.insert(c.clone(), json!({"type": "unknown"}));
+        vars.insert(
+            kb.clone(),
+            json!({"type": "parameter", "default": 0.1 * b as f64}),
+        );
+        // r = k1 * a * c, read by both equations.
+        let r = json!({"op": "*", "args": ["k1", a, c]});
+        eqs.push(json!({"lhs": {"op": "D", "args": [a], "wrt": "t"},
+            "rhs": {"op": "+", "args": [
+                {"op": "-", "args": [r]},
+                {"op": "*", "args": [kb, {"op": "exp", "args": [{"op": "-", "args": [c]}]}]},
+                {"op": "*", "args": [0.25, "t"]}]}}));
+        eqs.push(json!({"lhs": {"op": "D", "args": [c], "wrt": "t"},
+            "rhs": {"op": "-", "args": [r, {"op": "max", "args": [c, 0.5]}]}}));
+    }
+    vars.insert("a_1x".into(), json!({"type": "unknown"}));
+    eqs.push(json!({"lhs": {"op": "D", "args": ["a_1x"], "wrt": "t"},
+        "rhs": {"op": "*", "args": ["a_1x", "a_1x", "k1"]}}));
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_reroll"},
+        "models": {"M": {"variables": vars, "equations": eqs}}
+    });
+    let prog = ab_check(doc, 0, 0.1, 2.0);
+    let lanes: Vec<&LaneSpec> = prog
+        .instrs
+        .iter()
+        .filter_map(|i| match i {
+            Instr::Lanes { spec } => Some(&prog.lanes[*spec as usize]),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lanes.len(), 1, "one lane program: {:?}", prog.instrs);
+    let ls = lanes[0];
+    assert_eq!(ls.lanes as usize, boxes.len());
+    assert_eq!(ls.writes.len(), 2);
+    // The rate is computed once per lane: two `*` for r, `-r`, `-c`, `exp`,
+    // `* kb`, two `+`, `max`, the final `-`. `0.25 * t` reads no box, so it
+    // runs once outside and every lane reads it.
+    assert_eq!(ls.micro.len(), 10, "{:?}", ls.micro);
+    let kinds: Vec<LaneKind> = ls.inputs.iter().map(|i| i.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![LaneKind::State, LaneKind::State, LaneKind::Param],
+        "{:?}",
+        ls.inputs
+    );
+    assert!(
+        ls.inputs.iter().any(|i| matches!(i.ix, LaneIx::Table(_))),
+        "the off-grid state breaks one input's spacing"
+    );
+    assert!(
+        prog.instrs
+            .iter()
+            .any(|i| matches!(i, Instr::DyWrite { .. })),
+        "the off-grid equation stays scalar"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Structural invariants.
 // ---------------------------------------------------------------------------
