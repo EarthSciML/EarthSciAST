@@ -430,6 +430,11 @@ function _apply_operator_compose!(equations::Vector{Equation},
     # summed into ONE flat `+` node at the end, so `rhs_A + rhs_B1 + rhs_B2`
     # renders the way it did before this became a position-preserving merge.
     extra = Dict{Int, Vector{ASTExpr}}()
+    # §4.7.1 step 4: "the final equation for variable x has the original LHS:
+    # D(x, t)". Where A defines the quantity by a bare equation and B gives it a
+    # tendency, the merged equation takes B's `D` left-hand side, spelled in
+    # A's name (the ownership rule below may still retarget it).
+    d_lhs = Dict{Int, ASTExpr}()
     consumed = falses(length(expanded))
     # B's dependent variable ⇒ A's, for every match that RENAMED it. Ordered so
     # the retarget/prune below is deterministic.
@@ -495,6 +500,11 @@ function _apply_operator_compose!(equations::Vector{Equation},
             rhs_b = OpExpr("*", ASTExpr[NumExpr(factor), rhs_b])
         end
         push!(get!(extra, a_index[target], ASTExpr[]), rhs_b)
+        a_lhs = expanded[a_index[target]].lhs
+        if !(a_lhs isa OpExpr && a_lhs.op == "D") && eq.lhs isa OpExpr && eq.lhs.op == "D"
+            d_lhs[a_index[target]] = target == b_dep ? eq.lhs :
+                                     _rename_variable(eq.lhs, b_dep, target)
+        end
         consumed[i] = true
     end
 
@@ -516,7 +526,7 @@ function _apply_operator_compose!(equations::Vector{Equation},
     if !isempty(extra)
         for (j, terms) in extra
             eq = expanded[j]
-            expanded[j] = Equation(eq.lhs,
+            expanded[j] = Equation(get(d_lhs, j, eq.lhs),
                                    OpExpr("+", ASTExpr[eq.rhs; terms...]);
                                    _comment=eq._comment)
             # A merged equation is no longer A's authored contribution — it is
@@ -1211,7 +1221,8 @@ function _apply_expression_transform!(equations::Vector{Equation},
         observeds[to] = ModelVariable(UnknownVariable;
             units=to_var === nothing ? nothing : to_var.units,
             description=to_var === nothing ? nothing : to_var.description,
-            shape=to_var === nothing ? nothing : to_var.shape)
+            shape=to_var === nothing ? nothing : to_var.shape,
+            element_type=to_var === nothing ? nothing : to_var.element_type)
     end
     # The defining equation (`to ~ transform`) is what MAKES `to` an observed
     # unknown from esm 1.0.0 — the declaration carries no expression, so this

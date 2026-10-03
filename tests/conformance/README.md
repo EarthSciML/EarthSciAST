@@ -41,6 +41,26 @@ tests/conformance/
 │   ├── manifest.json               #   `"runner": "inline_tests"`
 │   ├── fixtures/<id>.esm           #   one document: a filter on an equation and on an observed
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+├── recurrence/                     # a causal self-reference's ordered sweep (CONFORMANCE_SPEC §5.19, §5.45.4)
+│   ├── README.md                   #   the contract: why the fixtures pin ORDER, the routes, the refusals
+│   ├── manifest.json               #   `"runner": "inline_tests"`; the documents live in tests/fixtures/recurrence
+│   ├── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+│   └── rejections.json             #   the eight malformed self-references every binding rejects
+├── value_invention_geometry/       # value invention and setup geometry feeding a right-hand side (CONFORMANCE_SPEC §5.45.4)
+│   ├── README.md                   #   the contract, and what each binding refused before it
+│   ├── manifest.json               #   `"runner": "inline_tests"`; one named exclusion (Python native)
+│   ├── fixtures/<id>.esm           #   three documents authored here (three more are REFERENCED)
+│   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+├── array_expression_forms/         # shape ops under `index`, positional broadcast, arrayed definitions (§5.45.4)
+│   ├── README.md                   #   the contract
+│   ├── manifest.json               #   `"runner": "inline_tests"`
+│   ├── fixtures/<id>.esm           #   one document authored here (six more are REFERENCED)
+│   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+├── bool_and_or_reductions/         # scalar `bool_and_or` reductions run everywhere (CONFORMANCE_SPEC §5.6.1, §5.45.4)
+│   ├── README.md                   #   the contract, and the divergence it closed
+│   ├── manifest.json               #   `"runner": "inline_tests"`
+│   ├── fixtures/<id>.esm           #   one document: three scalar reductions, one filtered
+│   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
 ├── deprecated_op_alias/            # the `aggregate` -> `faq` alias contract (esm 1.1.0)
 │   ├── aliased.esm                 #   input, authored with the deprecated spelling
 │   ├── canonical.esm               #   expected output, and a no-warning input
@@ -93,7 +113,7 @@ Classification of every stage in `scripts/test-conformance.sh`:
 | `compiler-agreement <compiler> producer (<binding>)` | reference-comparing — the golden is the Julia *`interpreter`*, which shares no code with the compiled or vectorized tiers being gated. For the `interpreter` compiler in Rust and Python the golden leg is additionally **cross-binding-agreeing**; the carried anchors are what keep a shared wrong answer visible. A compiler that cannot run a document is a **named exclusion** in the report, never a silent skip, and never a fallback (CONFORMANCE_SPEC §5.44.3) |
 | `inline-test self-test` | reference-comparing — every committed golden must reproduce the DOCUMENT's own `expected` at each assertion's resolved §6.6.4 band, so a golden minted from a broken build cannot sit there agreeing with itself; the negative controls assert the harness rejects a value off its band, a missing assertion, an assertion the binding itself failed, a `passed` on a value outside the document's band, an error, an unnamed refusal, a refusal whose code drifted, a per-fixture `compiler_unavailable` and a malformed golden, and that `--write-golden` refuses a failed or non-finite reference assertion |
 | `inline-test <compiler> producer (<binding>)` | **reference-comparing** twice over: each binding's `actual` against the document's authored `expected` (an oracle outside every binding), by the runner's own §6.6.3 predicate with the binding's `passed` required to agree, and its `actual` against the Julia-`interpreter` golden. For Rust and Python the golden leg is additionally **cross-binding-agreeing**; the authored expectation is what keeps a shared wrong answer visible. A refusal is a **named exclusion** in the report, never a silent skip (CONFORMANCE_SPEC §5.45.3) |
-| `recurrence` (`recurrence/`, driven by each binding's own suite) | **reference-comparing** — every assertion is a value pinned at zero tolerance, several against an INDEPENDENT oracle (`07`'s ascending fold in Python) rather than against another binding. Bit-identity is available here (CONFORMANCE_SPEC §5.19.1), so cross-binding agreement is a consequence of each binding matching the reference, not the test |
+| `recurrence` (`recurrence/`, an inline-test tier driven by `scripts/run-inline-tests-conformance.py`) | **reference-comparing** — every assertion is a value pinned at zero tolerance, several against an INDEPENDENT oracle (`07`'s ascending fold in Python) rather than against another binding. Bit-identity is available here (CONFORMANCE_SPEC §5.19.1), so cross-binding agreement is a consequence of each binding matching the reference, not the test |
 | `deprecated_op_alias` (`deprecated_op_alias/manifest.json`, driven by each binding's own suite) | **reference-comparing** — `canonical.esm` is a committed golden outside the bindings, and the alias input must emit byte-identically to it. The warning-count assertion is a per-binding classification (CONFORMANCE_SPEC §7), not a wire format. |
 | **round-trip** (`round_trip/manifest.json`, below) | **reference-comparing** since the original fixture `F` became the oracle (was self-comparing) |
 

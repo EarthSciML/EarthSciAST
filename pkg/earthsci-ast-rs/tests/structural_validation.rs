@@ -1688,3 +1688,136 @@ fn an_array_default_on_an_unshaped_variable_is_rejected() {
     );
     assert!(!result.is_valid);
 }
+
+// ---------------------------------------------------------------------------
+// esm-spec §6.3.1 "What a left-hand side may name" (user rulings 2026-09-29)
+// ---------------------------------------------------------------------------
+
+fn lhs_findings(fixture: &str) -> Vec<(String, String)> {
+    let file = load_string(fixture).expect("loads");
+    validate(&file)
+        .structural_errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.code,
+                StructuralErrorCode::EquationDefinesParameter
+                    | StructuralErrorCode::UnboundIndexSymbol
+            )
+        })
+        .map(|e| (e.code.to_string(), e.path.clone()))
+        .collect()
+}
+
+/// An equation defining a parameter — locally or through a scoped reference
+/// into a subsystem — is `equation_defines_parameter` at its `lhs`.
+#[test]
+fn an_equation_defining_a_parameter_is_rejected() {
+    let fixture = include_str!("../../../tests/invalid/equation_defines_parameter.esm");
+    assert_fixture_structurally_rejected(
+        "equation_defines_parameter",
+        fixture,
+        StructuralErrorCode::EquationDefinesParameter,
+    );
+    assert_eq!(
+        lhs_findings(fixture),
+        vec![
+            (
+                "equation_defines_parameter".to_string(),
+                "/models/Top/equations/0/lhs".to_string()
+            ),
+            (
+                "equation_defines_parameter".to_string(),
+                "/models/Top/equations/1/lhs".to_string()
+            ),
+        ]
+    );
+}
+
+/// A left-hand-side subscript no `faq` binds is `unbound_index_symbol`.
+#[test]
+fn a_free_index_symbol_on_a_left_hand_side_is_rejected() {
+    let fixture = include_str!("../../../tests/invalid/unbound_index_symbol.esm");
+    assert_fixture_structurally_rejected(
+        "unbound_index_symbol",
+        fixture,
+        StructuralErrorCode::UnboundIndexSymbol,
+    );
+    assert_eq!(
+        lhs_findings(fixture),
+        vec![(
+            "unbound_index_symbol".to_string(),
+            "/models/M/equations/0/lhs".to_string()
+        )]
+    );
+}
+
+/// The explicit-`faq` spellings, and the bare-index definition whose subscript
+/// the right-hand `faq` binds, name nothing wrong.
+#[test]
+fn bound_left_hand_subscripts_and_defined_unknowns_are_accepted() {
+    for (name, fixture) in [
+        (
+            "pure_pointwise",
+            include_str!("../../../tests/valid/cadence/pure_pointwise.esm"),
+        ),
+        (
+            "discrete_variable_refresh",
+            include_str!("../../../tests/valid/faq/discrete_variable_refresh.esm"),
+        ),
+        (
+            "observed_bare_index_lhs",
+            include_str!(
+                "../../../tests/conformance/pde_inline_observed_indexed_lhs/fixtures/observed_bare_index_lhs.esm"
+            ),
+        ),
+    ] {
+        assert!(
+            lhs_findings(fixture).is_empty(),
+            "{name}: {:?}",
+            lhs_findings(fixture)
+        );
+    }
+    for (name, fixture) in [
+        (
+            "pure_pointwise",
+            include_str!("../../../tests/valid/cadence/pure_pointwise.esm"),
+        ),
+        (
+            "discrete_variable_refresh",
+            include_str!("../../../tests/valid/faq/discrete_variable_refresh.esm"),
+        ),
+    ] {
+        let result = validate(&load_string(fixture).expect("loads"));
+        assert!(result.is_valid, "{name}: {:?}", result.structural_errors);
+    }
+}
+
+/// `esm_problem` refuses a parameter-defining equation by name under every
+/// compiler and every `Rhs` mode; it used to drop the equation and answer with
+/// the parameter's default.
+#[test]
+fn esm_problem_refuses_an_equation_defining_a_parameter() {
+    let fixture = include_str!("../../../tests/invalid/equation_defines_parameter.esm");
+    for compiler in [Compiler::Interpreter, Compiler::Native] {
+        for rhs in [Rhs::Auto, Rhs::Always, Rhs::Never] {
+            let raw: serde_json::Value = serde_json::from_str(fixture).unwrap();
+            let err = match esm_problem(
+                &raw,
+                (0.0, 1.0),
+                ProblemOptions {
+                    compiler: Some(compiler),
+                    rhs,
+                    ..Default::default()
+                },
+            ) {
+                Ok(_) => panic!("{compiler:?}/{rhs:?} built a parameter-defining equation"),
+                Err(e) => e.to_string(),
+            };
+            assert!(
+                err.contains("equation_defines_parameter") && err.contains("Top.sub.L"),
+                "{compiler:?}/{rhs:?}: {err}"
+            );
+        }
+    }
+}

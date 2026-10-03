@@ -509,6 +509,13 @@ end
         @test !isempty(parameter_classes(prob))
         @test all(v === :structural for v in values(parameter_classes(prob)))
         @test_throws SimulateError remake(prob; p = Dict("Decay.k" => 2.0))
+        # A ready-made parameter carrier is installed verbatim, and the run
+        # integrates with it rather than with the build's parameters.
+        prob2 = esm_problem(_mtkc_fixture("valid", "solver_block.esm"), (0.0, 1.0);
+                            compiler = :mtk, p = Dict("Decay.k" => 2.0))
+        endstate(pr) = solve(pr, Tsit5(); reltol = 1e-10, abstol = 1e-12).u[end]
+        @test endstate(remake(prob; p = prob2.p)) == endstate(prob2)
+        @test endstate(prob2) != endstate(prob)
     end
 
     # A sink's output callback is a SOLVE-TIME callback, and the compiled

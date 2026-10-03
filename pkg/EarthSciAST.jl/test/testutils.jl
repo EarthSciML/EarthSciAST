@@ -127,4 +127,36 @@ end
 # stays harmless.
 include("zero_alloc_harness.jl")
 
+# A `u0` giving 0.0 to every ODE state (a `D` target on some equation's LHS)
+# of `doc` — a path, JSON text or a parsed `Dict` — that declares no `default`.
+# Several corpus documents leave their states' starting values to the harness;
+# built without one they are refused (`E_TREEWALK_MISSING_INITIAL_VALUE`,
+# esm-spec §11.4). Keys are `Model.var`, which `esm_problem` broadcasts over an
+# array state's cells.
+function harness_u0(doc)
+    d = doc isa AbstractString ?
+        JSON3.read(isfile(doc) ? read(doc, String) : doc, Dict{String,Any}) : doc
+    d_target(lhs) = if lhs isa AbstractDict && get(lhs, "op", nothing) == "D"
+        a = lhs["args"][1]
+        a isa AbstractString ? a :
+            (a isa AbstractDict && get(a, "op", nothing) == "index" ? a["args"][1] : nothing)
+    elseif lhs isa AbstractDict && get(lhs, "op", nothing) == "faq"
+        d_target(lhs["expr"])
+    else
+        nothing
+    end
+    out = Dict{String,Float64}()
+    for (mname, m) in get(d, "models", Dict{String,Any}())
+        m isa AbstractDict || continue
+        vars = get(m, "variables", Dict{String,Any}())
+        for eq in get(m, "equations", Any[])
+            t = d_target(get(eq, "lhs", nothing))
+            t isa AbstractString || continue
+            v = get(vars, t, nothing)
+            v isa AbstractDict && !haskey(v, "default") && (out["$mname.$t"] = 0.0)
+        end
+    end
+    return out
+end
+
 end # ESM_TESTUTILS_LOADED guard

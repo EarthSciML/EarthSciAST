@@ -248,7 +248,7 @@ pub fn is_evaluable_op(op: &str) -> bool {
         // Arithmetic. `pow` is the word spelling of `^`.
         "+" | "-" | "*" | "/" | "^" | "pow" | "neg"
         // Elementary functions.
-        | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
+        | "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
         | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
         | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh"
         | "atan2" | "min" | "max"
@@ -484,9 +484,9 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         }
 
         // Unary / scalar transcendentals.
-        "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
-        | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
-        | "acosh" | "atanh" => eval_unary(op, &node.args, ctx),
+        "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin" | "cos"
+        | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh"
+        | "atanh" => eval_unary(op, &node.args, ctx),
 
         "atan2" => eval_binary(op, &node.args, ctx),
 
@@ -626,6 +626,9 @@ pub(super) fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         return Value::Scalar(f64::NAN);
     };
     let vals: ValVec = node.args.iter().map(|a| eval(a, ctx)).collect();
+    // A lookup into an `out_of_bounds: "error"` table (esm-spec §9.5.1)
+    // checks every query against its axis BEFORE the interpolation core.
+    let strict = crate::lower_table_lookup::strict_table(node);
 
     // Broadcast the 1-D interpolation kernel over an ARRAY query: the table +
     // axis (args 0,1) stay fixed as the lookup table, only the query point
@@ -639,6 +642,12 @@ pub(super) fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         let table: Vec<f64> = value_flat(&vals[0]);
         let axis: Vec<f64> = value_flat(&vals[1]);
         let out = q.mapv(|x| {
+            if let Some(id) = strict
+                && let Some(fault) = crate::lower_table_lookup::out_of_bounds_fault(id, 1, &axis, x)
+            {
+                latch_gather_fault(fault);
+                return f64::NAN;
+            }
             let call = [
                 ClosedArg::Array(table.clone()),
                 ClosedArg::Array(axis.clone()),
@@ -675,9 +684,41 @@ pub(super) fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         };
         args.push(arg);
     }
+    if let Some(id) = strict
+        && let Some(fault) = strict_query_fault(id, name, &args)
+    {
+        latch_gather_fault(fault);
+        return Value::Scalar(f64::NAN);
+    }
     match evaluate_closed_function(name, &args) {
         Ok(v) => Value::Scalar(v.as_f64()),
         Err(_) => Value::Scalar(f64::NAN),
+    }
+}
+
+/// The first out-of-range query of a strict-table `interp.*` call, in the
+/// order the tape checks them (the first axis, then the second), or `None`.
+/// §9.2 puts the query last for the two tensor entries and first for
+/// `interp.searchsorted`; an argument of the wrong kind is left to the
+/// registry, which rejects the call on its own terms.
+fn strict_query_fault(
+    table_id: &str,
+    name: &str,
+    args: &[crate::registered_functions::ClosedArg],
+) -> Option<String> {
+    use crate::lower_table_lookup::out_of_bounds_fault;
+    use crate::registered_functions::ClosedArg;
+    let scalar_on = |q: usize, a: usize, which: usize| match (args.get(q), args.get(a)) {
+        (Some(ClosedArg::Scalar(x)), Some(ClosedArg::Array(axis))) => {
+            out_of_bounds_fault(table_id, which, axis, *x)
+        }
+        _ => None,
+    };
+    match name {
+        "interp.linear" => scalar_on(2, 1, 1),
+        "interp.bilinear" => scalar_on(3, 1, 1).or_else(|| scalar_on(4, 2, 2)),
+        "interp.searchsorted" => scalar_on(0, 1, 1),
+        _ => None,
     }
 }
 
@@ -1149,7 +1190,7 @@ pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
     }
     match op {
         "exp" => x.exp(),
-        "log" | "ln" => x.ln(),
+        "log" => x.ln(),
         "log10" => x.log10(),
         "sqrt" => x.sqrt(),
         "abs" => x.abs(),
@@ -1224,7 +1265,7 @@ impl UnCode {
     pub(crate) fn of(op: &str) -> UnCode {
         match op {
             "exp" => UnCode::Exp,
-            "log" | "ln" => UnCode::Ln,
+            "log" => UnCode::Ln,
             "log10" => UnCode::Log10,
             "sqrt" => UnCode::Sqrt,
             "abs" => UnCode::Abs,
@@ -1375,7 +1416,7 @@ mod kernel_equivalence_tests {
 
     #[rustfmt::skip]
     const UN_OPS: &[&str] = &[
-        "exp", "log", "ln", "log10", "sqrt", "abs", "sign", "floor", "ceil", "sin", "cos",
+        "exp", "log", "log10", "sqrt", "abs", "sign", "floor", "ceil", "sin", "cos",
         "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
         "not", "no_such_op",
     ];
@@ -1497,7 +1538,6 @@ mod kernel_equivalence_tests {
             let cases: &[(&str, f64)] = &[
                 ("exp", xf.exp() as f64),
                 ("log", xf.ln() as f64),
-                ("ln", xf.ln() as f64),
                 ("log10", xf.log10() as f64),
                 ("sqrt", xf.sqrt() as f64),
                 ("abs", xf.abs() as f64),
@@ -1973,19 +2013,25 @@ pub(crate) fn latch_gather_fault(msg: String) {
 /// Latch an unavailable causal self-read (esm-spec §4.3.1.1): the position is
 /// outside the recurrence axis, or names a cell the sweep has not published.
 fn latch_recur_unavailable(name: &str, raw: &[i64]) {
+    latch_gather_fault(recur_unavailable_message(name, raw));
+}
+
+/// The text [`latch_recur_unavailable`] latches, shared with the tape's
+/// causal self-read (`Instr::ScalarRead`).
+pub(crate) fn recur_unavailable_message(name: &str, raw: &[i64]) -> String {
     let at = raw
         .iter()
         .map(|i| i.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    latch_gather_fault(format!(
+    format!(
         "E_TREEWALK_RECUR_UNAVAILABLE: causal self-read of '{name}' at cell [{at}] is not \
          available — the position is outside the recurrence axis, or the sweep has not \
          published that cell yet (esm-spec §4.3.1.1; CONFORMANCE_SPEC.md §5.19.4: a causal \
          self-read is fail-closed, never the §5.5.5 zero ghost and never a NaN a `max(x, 0)` \
          could launder). Guard the base case inside the body, e.g. \
          `ifelse(k <= 1, <base>, <recurrence>)`."
-    ));
+    )
 }
 
 /// Latch a subscript applied to a value that has NO axes (esm-spec §4.3.4: a
@@ -2436,11 +2482,33 @@ pub(super) fn eval_intersect_polygon(node: &ExpressionNode, ctx: &mut EvalCtx) -
             }
             Value::Array(Box::new(arr))
         }
-        // A degenerate input ring or unavailable backend surfaces as NaN, the
-        // same not-a-value sentinel the evaluator uses for unevaluable nodes.
-        Err(_) => Value::Scalar(f64::NAN),
+        // A degenerate operand ring is an invalid value (esm-spec §8.6.1) and
+        // latches a fault; any other clip failure surfaces as NaN, the same
+        // not-a-value sentinel the evaluator uses for unevaluable nodes.
+        Err(e) => {
+            latch_degenerate_operand(&e);
+            Value::Scalar(f64::NAN)
+        }
     }
 }
+
+/// Latch a degenerate polygon operand (esm-spec §8.6.1: a ring with fewer than 3
+/// distinct vertices is rejected) as a fail-closed fault, so the evaluation
+/// that met it fails, on the interpreter and on the tape alike, instead of
+/// carrying a NaN area onward. The code is the one Julia raises for the same
+/// ring. Any other clip failure is left to its NaN sentinel.
+pub(crate) fn latch_degenerate_operand(e: &crate::geometry::GeometryError) {
+    if e.is_degenerate_operand() {
+        latch_gather_fault(format!(
+            "{GEOMETRY_CLIP_CODE}: {} (esm-spec §8.6.1: a polygon operand needs at least 3 \
+             distinct vertices)",
+            e.message()
+        ));
+    }
+}
+
+/// The code a degenerate polygon operand is refused with.
+pub(crate) const GEOMETRY_CLIP_CODE: &str = "E_TREEWALK_GEOMETRY_CLIP";
 
 /// Evaluate the fused `polygon_intersection_area` leaf op (esm-spec §4.2 /
 /// §8.6.1): the **scalar** overlap area of the two polygon operands under the
@@ -2473,11 +2541,15 @@ pub(crate) fn clip_area_value(
     vb: &[(f64, f64)],
     manifold: crate::geometry::Manifold,
 ) -> f64 {
-    // A degenerate input ring or unavailable backend surfaces as NaN, the
+    // A degenerate operand ring latches a fault (see
+    // [`latch_degenerate_operand`]); any other failure surfaces as NaN, the
     // same not-a-value sentinel the evaluator uses for unevaluable nodes.
     crate::geometry::intersect_polygon(va, vb, manifold)
         .and_then(|ring| crate::geometry::polygon_area(&ring, manifold))
-        .unwrap_or(f64::NAN)
+        .unwrap_or_else(|e| {
+            latch_degenerate_operand(&e);
+            f64::NAN
+        })
 }
 
 /// Close a ring by repeating its first vertex (RFC §8.1; mirrors Python
@@ -5741,7 +5813,6 @@ mod evaluability_gate_tests {
             "neg",
             "exp",
             "log",
-            "ln",
             "log10",
             "sqrt",
             "abs",

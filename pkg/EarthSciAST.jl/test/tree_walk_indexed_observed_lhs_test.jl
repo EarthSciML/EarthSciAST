@@ -216,7 +216,11 @@ end
             end
             @test err !== nothing
             msg = err === nothing ? "" : sprint(showerror, err)
-            @test occursin("indexed_definition_unsupported_form", msg)
+            # A subscript no `faq` binds is caught earlier, by the
+            # reference-integrity gate (`unbound_index_symbol`); the offset
+            # subscript, whose symbol IS bound, reaches the form check.
+            @test occursin("indexed_definition_unsupported_form", msg) ||
+                  occursin("unbound_index_symbol", msg)
             @test occursin("'w'", msg)
         end
     end

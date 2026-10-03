@@ -1,0 +1,864 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "native_probe_datetime_float32",
+    "description": "The datetime closed functions evaluated for Float32 variables (esm-spec 11.3.1) in a Float64 document: each observed c_k is one calendar field (every entry but julian_day, which Float32 may not use) of a 6-cell array of instants that advance with the solver time, and a Float32 state integrates their sum. The interpreter evaluates the calendar in binary64 on the binary32 argument and hands the result back unrounded; native must return the same bits, which a binary32 expansion of the calendar arithmetic does not.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "native",
+      "probe",
+      "element_type"
+    ]
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 6
+    }
+  },
+  "models": {
+    "T": {
+      "variables": {
+        "epoch": {
+          "type": "parameter",
+          "units": "s",
+          "default": 946684800.0,
+          "element_type": "Float32"
+        },
+        "step": {
+          "type": "parameter",
+          "units": "s",
+          "default": 8406720.0,
+          "element_type": "Float32"
+        },
+        "u": {
+          "type": "unknown",
+          "shape": [
+            "cells"
+          ],
+          "units": "1",
+          "default": 0.5,
+          "element_type": "Float32"
+        },
+        "c0": {
+          "type": "unknown",
+          "shape": [
+            "cells"
+          ],
+          "units": "1",
+          "element_type": "Float32"
+        },
+        "c1": {
+          "type": "unknown",
+          "shape": [
+            "cells"
+          ],
+          "units": "1",
+          "element_type": "Float32"
+        },
+        "c2": {
+          "type": "unknown",
+          "shape": [
+            "cells"
+          ],
+          "units": "1",
+          "element_type": "Float32"
+        },
+        "c3": {
+          "type": "unknown",
+          "shape": [
+            "cells"
+          ],
+          "units": "1",
+          "element_type": "Float32"
+        },
+        "c4": {
+          "type": "unknown",
+          "shape": [
+            "cells"
+          ],
+          "units": "1",
+          "element_type": "Float32"
+        },
+        "c5": {
+          "type": "unknown",
+          "shape": [
+            "cells"
+          ],
+          "units": "1",
+          "element_type": "Float32"
+        },
+        "c6": {
+          "type": "unknown",
+          "shape": [
+            "cells"
+          ],
+          "units": "1",
+          "element_type": "Float32"
+        },
+        "c7": {
+          "type": "unknown",
+          "shape": [
+            "cells"
+          ],
+          "units": "1",
+          "element_type": "Float32"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "c0",
+                "i"
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "fn",
+              "name": "datetime.year",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    "epoch",
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "step",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                3671.0,
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                86400.0,
+                                "t"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "c1",
+                "i"
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "fn",
+              "name": "datetime.month",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    "epoch",
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "step",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                3671.0,
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                86400.0,
+                                "t"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "c2",
+                "i"
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "fn",
+              "name": "datetime.day",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    "epoch",
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "step",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                3671.0,
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                86400.0,
+                                "t"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "c3",
+                "i"
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "fn",
+              "name": "datetime.hour",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    "epoch",
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "step",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                3671.0,
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                86400.0,
+                                "t"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "c4",
+                "i"
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "fn",
+              "name": "datetime.minute",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    "epoch",
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "step",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                3671.0,
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                86400.0,
+                                "t"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "c5",
+                "i"
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "fn",
+              "name": "datetime.second",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    "epoch",
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "step",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                3671.0,
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                86400.0,
+                                "t"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "c6",
+                "i"
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "fn",
+              "name": "datetime.day_of_year",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    "epoch",
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "step",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                3671.0,
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                86400.0,
+                                "t"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "c7",
+                "i"
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "fn",
+              "name": "datetime.is_leap_year",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    "epoch",
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "step",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                3671.0,
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                86400.0,
+                                "t"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ]
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    0.0001,
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "c0",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "c1",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "c2",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "c3",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "c4",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "c5",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "c6",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "c7",
+                            "i"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.1,
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

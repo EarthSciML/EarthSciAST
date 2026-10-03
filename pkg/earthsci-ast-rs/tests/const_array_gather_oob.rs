@@ -260,3 +260,53 @@ fn off_the_end_flat_gather_through_prepare_fails_closed() {
     );
     let _: Value = doc; // the document is untouched
 }
+
+/// A const array read at a subscript that is itself const data
+/// (`gx[idx[i]]`): native resolves each cell's position at build time, and a
+/// position out of range under the default `error` policy is a refusal, not a
+/// zero ghost.
+#[test]
+fn a_const_gather_at_an_out_of_range_data_subscript_is_refused_under_native() {
+    use earthsci_ast::{CompileError, Compiler, Rhs, SimulateError};
+    let doc = |idx: [f64; 3]| {
+        json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "data_subscript"},
+            "index_sets": {"p": {"kind": "interval", "size": 3}},
+            "models": {"M": {
+                "variables": {
+                    "gx": {"type": "unknown", "shape": ["p"]},
+                    "idx": {"type": "unknown", "shape": ["p"]},
+                    "w": {"type": "unknown", "shape": ["p"], "default": 0.0}
+                },
+                "equations": [
+                    {"lhs": "gx", "rhs": {"op": "const", "args": [], "value": [10.0, 20.0, 30.0]}},
+                    {"lhs": "idx", "rhs": {"op": "const", "args": [], "value": idx}},
+                    {"lhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "p"}},
+                             "expr": {"op": "D", "args": [{"op": "index", "args": ["w", "i"]}], "wrt": "t"}},
+                     "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "p"}},
+                             "expr": {"op": "index", "args": ["gx", {"op": "index", "args": ["idx", "i"]}]}}}
+                ]
+            }}
+        })
+    };
+    let build = |d: &Value| {
+        esm_problem(
+            d,
+            (0.0, 1.0),
+            ProblemOptions {
+                compiler: Some(Compiler::Native),
+                rhs: Rhs::Always,
+                ..Default::default()
+            },
+        )
+    };
+    assert!(build(&doc([3.0, 1.0, 2.0])).is_ok());
+    match build(&doc([3.0, 4.0, 2.0])) {
+        Err(SimulateError::Compile(CompileError::CompilerRefusedRule { reason, .. })) => {
+            assert!(reason.contains("out of range"), "{reason}");
+        }
+        Err(e) => panic!("expected a native refusal, got {e}"),
+        Ok(_) => panic!("an out-of-range const gather built under native"),
+    }
+}

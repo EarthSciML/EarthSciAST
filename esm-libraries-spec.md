@@ -314,6 +314,42 @@ became a Problem has no run to describe. This resolves a split the previous
 entry points had: `simulate` reported build failures as a failed result while
 `prepare` raised.
 
+**A build refuses a document with a broken reference.** `load` stays lenient
+about structural errors (§2.1a), and `validate` reports all of them. Construction
+refuses on the **reference-integrity** findings only, with the validator's code,
+pointer and message:
+
+- `undefined_variable`, `undefined_parameter`, `undefined_species`,
+  `undefined_system`, `undefined_index_set`;
+- `unresolved_scoped_ref`, `event_var_undeclared`;
+- `data_source_undefined`;
+- `missing_required_field`.
+
+A finding inside a component's inline `tests` is the test runner's to report
+(esm-spec §6.6), because construction does not evaluate tests. Each one names something the document uses and does not declare, so a build
+that went ahead would read a value the document does not describe (the silent
+failure CONFORMANCE_SPEC §5.23 forbids). The equation-count and unit findings
+(`equation_count_mismatch`, `unit_inconsistency`, `unit_parse_error`, …) are NOT
+refused at construction yet. The validators still report false positives for
+them on valid array, `faq` and multi-model documents, and repairing those is
+follow-up work. Until it lands, those findings stay `validate`'s to report.
+
+**A build refuses what it cannot answer for, even where nothing reads it.**
+Construction evaluates every state-free observed it materializes, including one
+that no state derivative reads. When that value is invalid by the spec, the
+build raises the spec's error rather than dropping the observed. The first such
+value pinned is a degenerate polygon operand: a ring of fewer than 3 distinct
+vertices (esm-spec §8.6.1, `E_TREEWALK_GEOMETRY_CLIP`), which
+`tests/conformance/pushdown/fixtures/pushdown_polygon_area.esm`'s all-zero
+default rings produce. A value that is only not yet available — a parameter with
+no default, a field a provider fills later — is not invalid, and construction
+may still leave it unmaterialized. Likewise, an equation that reads a variable a
+`callback` coupling injects is refused with `callback_unregistered`
+(esm-spec §9.6.6) when no callback supplying it is registered at construction.
+No binding has a seam to register one, so today every such document is refused:
+the value is the host's to supply, and a build that went ahead would read a
+placeholder.
+
 **`sample_time` defaults to `tspan[1]`, not to zero.** Providers are sampled at
 construction, and a literal zero default silently samples the wrong instant for
 any run that does not start at `t = 0`. A binding MUST default it to the start of

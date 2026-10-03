@@ -111,7 +111,10 @@ def test_indexed_lhs_array_observed_runs(fixture: dict) -> None:
 def test_bare_index_definition_outside_the_runnable_form_is_refused(refusal: dict) -> None:
     """CONFORMANCE_SPEC §5.36.2: a bare-index definition whose RHS is not a
     ``faq`` naming the LHS subscripts in order is REFUSED — no actual, not
-    passed, and the message carries the code and names the variable."""
+    passed, and the message carries the fixture's ``diagnostic`` and names the
+    variable. A subscript nothing binds is ``unbound_index_symbol`` (esm-spec
+    §6.3.1), which this binding raises at load; the runner reports it per
+    assertion all the same."""
     integ = _manifest()["integrators"]["python"]
     results = run_inline_tests(
         str(_ROOT / refusal["path"]),

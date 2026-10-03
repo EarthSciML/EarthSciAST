@@ -2788,6 +2788,16 @@
           "update_kinds": [],
           "distribution_kind": null,
           "source_system": "ChemistrySystem"
+        },
+        {
+          "name": "AdvectionSystem.u",
+          "role": "state",
+          "units": "m/s",
+          "default": 3.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "AdvectionSystem"
         }
       ],
       "parameters": [
@@ -2810,16 +2820,6 @@
           "update_kinds": [],
           "distribution_kind": null,
           "source_system": "ChemistrySystem"
-        },
-        {
-          "name": "AdvectionSystem.u",
-          "role": "parameter",
-          "units": "m/s",
-          "default": 3.0,
-          "shape": null,
-          "update_kinds": [],
-          "distribution_kind": null,
-          "source_system": "AdvectionSystem"
         },
         {
           "name": "AdvectionSystem.v",

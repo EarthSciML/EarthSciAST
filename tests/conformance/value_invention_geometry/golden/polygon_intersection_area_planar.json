@@ -1,0 +1,13 @@
+{
+  "fixture": "polygon_intersection_area_planar",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "planar_overlap_area",
+      "assertion_idx": 1,
+      "variable": "area_state",
+      "actual": 0.9999999999999998
+    }
+  ]
+}

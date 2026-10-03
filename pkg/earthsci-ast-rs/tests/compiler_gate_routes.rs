@@ -162,20 +162,41 @@ fn a_shaped_state_free_document_is_evaluated_on_the_named_compiler() {
 
 /// A state-free rule the tape cannot lower is a refusal naming it — it used
 /// to be evaluated off the gate — while the interpreter evaluates it.
+///
+/// The rule is a recurrence whose self-read sits inside an array-valued part
+/// of its cell body (a nested `faq`), which the tape's sweep does not lower.
 #[test]
 fn native_refuses_a_state_free_rule_the_tape_cannot_lower() {
-    let path = fixture("tests/fixtures/recurrence/01_recurrence_doubling.esm");
-    let err = esm_problem(path.as_path(), (0.0, 1.0), opts(Compiler::Native))
-        .expect_err("a recurrence has no taped form");
+    // `j ↦ s[k-1]·j`: an array-valued value holding the self-read.
+    let inner = json!({"op": "faq", "args": [], "output_idx": ["j"],
+        "ranges": {"j": [1, 2]},
+        "expr": {"op": "*", "args": [
+            {"op": "index", "args": ["s", {"op": "-", "args": ["k", 1]}]}, "j"]}});
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "GateRefused"},
+        "index_sets": {"steps": {"kind": "interval", "size": 4}},
+        "models": {"R": {
+            "variables": {"s": {"type": "unknown", "units": "1", "shape": ["steps"]}},
+            "equations": [{"lhs": "s", "rhs": {
+                "op": "faq", "args": [], "output_idx": ["k"],
+                "ranges": {"k": {"from": "steps"}},
+                "expr": {"op": "ifelse", "args": [
+                    {"op": "<=", "args": ["k", 1]},
+                    1.0,
+                    {"op": "index", "args": [inner, 2]}
+                ]}}}]
+        }}
+    });
+    let err = build_json(&doc, opts(Compiler::Native)).expect_err("the tape cannot lower it");
     let (compiler, kind, rule, reason) = refusal(err);
     assert_eq!(compiler, "native");
     assert_eq!(kind, "observed");
     assert!(!rule.is_empty());
     assert!(reason.contains("recurrence"), "{reason}");
 
-    let prob = esm_problem(path.as_path(), (0.0, 1.0), opts(Compiler::Interpreter))
-        .expect("the interpreter evaluates it");
-    assert!(!prob.observed_field_names().is_empty());
+    let prob = build_json(&doc, opts(Compiler::Interpreter)).expect("the interpreter evaluates it");
+    assert_eq!(values(&prob, "R.s"), vec![1.0, 2.0, 4.0, 8.0]);
 }
 
 // ---------------------------------------------------------------------------

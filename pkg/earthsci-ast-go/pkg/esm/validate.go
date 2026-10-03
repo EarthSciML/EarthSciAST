@@ -893,6 +893,9 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// model's own variables.
 	s.validateTestRefs(model.Tests, allVars, basePath, modelName)
 
+	// esm-spec §6.3.1: what an equation's left-hand side may name.
+	s.validateLHSRules(modelName, lhsScopeOfModel(model), basePath)
+
 	// Equation-unknown balance validation (Section 3.2.1). Skipped for a coupled
 	// model: its unknowns may be driven by equations another system contributes,
 	// so a local count is meaningless.

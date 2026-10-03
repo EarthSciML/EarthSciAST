@@ -40,7 +40,7 @@
               "file_variable": "k_decay"
             }
           },
-          "description": "Data-fed, and therefore refused unless something binds it; the inline test below binds it."
+          "description": "Data-fed; the inline test below binds it with a pin, which must outrank the declared default."
         }
       },
       "equations": [

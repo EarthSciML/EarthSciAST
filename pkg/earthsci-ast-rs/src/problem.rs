@@ -678,6 +678,11 @@ pub(crate) struct BuildProducts {
     /// Parameters baked into the build. Substituting one of these needs a
     /// rebuild, so [`remake`] refuses rather than lying.
     pub baked_parameters: Vec<String>,
+    /// Why a state-free document's observed graph could not be evaluated at
+    /// construction — a fail-closed evaluation fault such as
+    /// `table_lookup_out_of_bounds` — so [`observed_field`] can name the cause
+    /// instead of only the name it cannot answer.
+    pub static_eval_error: Option<String>,
 }
 
 /// A simulation problem: a document, an interval, and the bindings that fix
@@ -1160,9 +1165,16 @@ pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, Simu
             )),
         ));
     }
+    let cause = prob
+        .build
+        .static_eval_error
+        .as_deref()
+        .map(|e| format!("; evaluating the state-free observed graph failed: {e}"))
+        .unwrap_or_default();
     Err(SimulateError::Compile(
         crate::compile_error::CompileError::build_err(format!(
-            "observed_field: '{name}' is not a build-time-evaluable observed of this EsmProblem"
+            "observed_field: '{name}' is not a build-time-evaluable observed of this \
+             EsmProblem{cause}"
         )),
     ))
 }
@@ -1584,6 +1596,10 @@ pub fn esm_problem<'a>(
     // `owned_json` is exactly what the parser made of the file's text, so it
     // nests within the parser's recursion limit (see stage (3)).
     let mut json_from_text = false;
+    // Whether the build pipeline rewrote the document. Only a rewritten one
+    // may fail the typed parse and still build (see stage (3)).
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut rewritten_by_pipeline = false;
 
     match input {
         ProblemInput::Path(path) => {
@@ -1601,6 +1617,15 @@ pub fn esm_problem<'a>(
             })?;
             owned_json = Some(raw);
             json_from_text = true;
+            // A relative `{ref}` or template import resolves against the
+            // referencing file's directory (esm-spec §4.7), not the process's
+            // working directory; a caller's explicit `base_path` still wins.
+            if opts.base_path.is_none() {
+                opts.base_path = Some(match path.parent() {
+                    Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+                    _ => PathBuf::from("."),
+                });
+            }
         }
         ProblemInput::Json(v) => owned_json = Some(v.clone()),
         ProblemInput::File(f) => owned_file = Some(f.clone()),
@@ -1723,6 +1748,12 @@ pub fn esm_problem<'a>(
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut route_rows: Vec<CompilerRuleReport> = Vec::new();
 
+    // What the caller supplied for the document's shaped parameters, captured
+    // before the build pipeline consumes `const_arrays` and `build_providers`:
+    // the compiled model binds the arrays too (stage 3d), and the missing-data
+    // gate asks which names any channel serves.
+    let supplied = SuppliedData::capture(&mut opts, owned_json.as_ref(), owned_file.as_ref());
+
     // A TYPED document is a legitimate input to the build pipeline, and it used
     // to be the one input shape that silently was not: the pipeline reads raw
     // JSON, so `ProblemInput::File` skipped it entirely — `build_providers`,
@@ -1795,6 +1826,7 @@ pub fn esm_problem<'a>(
             }));
             *raw = prepared.doc;
             json_from_text = false;
+            rewritten_by_pipeline = true;
             model_name = Some(prepared.model_name);
             build.fields = prepared.fields;
             build.members = prepared.members;
@@ -1818,19 +1850,43 @@ pub fn esm_problem<'a>(
             // nested that deep still takes the round trip, to get the same
             // refusal. A document parsed from a file's text and not rewritten
             // since is within that limit already.
+            // The loader-API metaparameters close the AUTHORED document
+            // (esm-spec §9.7.6 site 4); a pipeline-rewritten one has had them
+            // closed already, and may no longer declare the names.
+            let load_opts = crate::parse::LoadOptions {
+                base_path: opts.base_path.clone(),
+                metaparameters: if rewritten_by_pipeline {
+                    BTreeMap::new()
+                } else {
+                    opts.metaparameters.clone()
+                },
+            };
             let loaded = if json_from_text || nesting_within(raw, NESTING_WITHOUT_ROUND_TRIP) {
-                crate::parse::load_document(raw)
+                crate::parse::load_document_with_options(raw, &load_opts)
             } else {
                 let text = serde_json::to_string(raw).map_err(|e| {
                     SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
                         "re-serializing the prepared document: {e}"
                     )))
                 })?;
-                crate::parse::load_string(&text)
+                crate::parse::load_string_with_options(&text, &load_opts)
             };
             match loaded {
                 Ok(f) => owned_file = Some(f),
                 Err(e) => {
+                    // The AUTHORED document failing to load — a schema
+                    // violation, an unresolved import, a removed op, a version
+                    // the library does not read — is fatal under every `Rhs`
+                    // mode: esm-libraries-spec §2.1a says a library MUST NOT
+                    // silently accept an invalid file, and a Problem built
+                    // from one would answer for a document that does not load.
+                    if !rewritten_by_pipeline {
+                        return Err(SimulateError::Compile(
+                            crate::compile_error::CompileError::build_err(format!(
+                                "loading the document: {e}"
+                            )),
+                        ));
+                    }
                     // A document the build pipeline rewrote may no longer be a
                     // *typed* ESM document (the pushdown desugar emits engine
                     // constructs). Its build-time products are still valid, so
@@ -1867,6 +1923,30 @@ pub fn esm_problem<'a>(
         crate::lower_table_lookup::lower_table_lookups(f).map_err(SimulateError::Compile)?;
     }
 
+    // ---- (3d) Caller arrays for shaped parameters. ------------------------
+    // CONFORMANCE_SPEC §5.32.5: a caller's `const_arrays` entry that gives a
+    // shaped parameter its value is the same binding as an inline-array
+    // override, so it lands where that override does — on the parameter's
+    // `default`, which the array compile lowers. The build pipeline above only
+    // evaluates the observed graph; without this the compiled right-hand side
+    // never saw the array and ran on the declared default instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(f) = owned_file.as_mut() {
+        supplied.bind_arrays(f, &opts.p, model_name.as_deref());
+    }
+    // A scalar parameter value invention reads (a skolem bin width) is
+    // build-time data: the invented set's size depends on it, so the caller's
+    // `p` entry lands on its `default`, which the compile's value invention
+    // reads, and the parameter is baked into the build.
+    if let Some(f) = owned_file.as_mut() {
+        for name in bind_value_invention_params(f, &opts.p) {
+            if !build.baked_parameters.contains(&name) {
+                build.baked_parameters.push(name);
+            }
+        }
+        build.baked_parameters.sort();
+    }
+
     // ---- (3d) A `p` pin BINDS a data-fed parameter (esm-spec §9.6.6). -----
     // The caller passed a value for a parameter the document says is read from
     // a file, so for THIS build it is not read from a file — that is the
@@ -1894,6 +1974,18 @@ pub fn esm_problem<'a>(
         compiler,
     )?;
 
+    // ---- (4a) The missing-data gate (esm-spec §10.10). ---------------------
+    // A shaped parameter with neither a default nor a supplied value is a
+    // construction error, raised here naming the parameter rather than as an
+    // unbound read at the first evaluation. An array model is checked on its
+    // compiled tables (after step 5 has bound the providers); a static one on
+    // its flattened parameters, before its observed graph is evaluated.
+    if let Backend::Static(_) = &backend
+        && let Some(f) = owned_file.as_ref()
+    {
+        supplied.refuse_missing_static(f, &opts.p, model_name.as_deref())?;
+    }
+
     // ---- (4b) State-free static evaluation. -------------------------------
     // A document that declares no differential equations has nothing to
     // integrate — `solve` refuses it with `NotDynamic` — but its whole content
@@ -1913,7 +2005,7 @@ pub fn esm_problem<'a>(
         && let Backend::Static(_) = &backend
     {
         let t0 = opts.sample_time.unwrap_or(tspan.0);
-        let (fields, rows) = static_observed_fields(
+        let (fields, rows, eval_error) = static_observed_fields(
             owned_file.as_ref(),
             flat_only,
             &opts.p,
@@ -1922,6 +2014,7 @@ pub fn esm_problem<'a>(
             compiler,
         )?;
         build.fields = fields;
+        build.static_eval_error = eval_error;
         route_rows.extend(rows);
     }
 
@@ -1929,6 +2022,9 @@ pub fn esm_problem<'a>(
     #[cfg(not(target_arch = "wasm32"))]
     let (refresh, discrete_forcing, refresh_boundaries) =
         bind_providers(&backend, &mut opts, tspan)?;
+    if let Backend::Array(c) = &backend {
+        supplied.refuse_missing_array(c, owned_file.as_ref(), &opts.p)?;
+    }
 
     // ---- (5c) Refuse a data-fed parameter nothing bound (§9.6.6). ---------
     // After the providers are bound and BEFORE the compiler's gate below builds
@@ -1974,6 +2070,13 @@ pub fn esm_problem<'a>(
         &opts.p,
     )?;
     compiler_report.rules.splice(0..0, route_rows);
+
+    // ---- (5b') Every state slot has a starting value (esm-spec §11.4). ------
+    // After (5b), which resolved the field `ic`s this reads.
+    #[cfg(feature = "solve")]
+    if let Backend::Array(c) = &backend {
+        refuse_missing_initial_values(c, &opts.u0)?;
+    }
 
     // ---- (5c) `xla`: emit and compile, here, once. ------------------------
     // AFTER the gate above, so a rule that never reached the tape is refused
@@ -2326,7 +2429,9 @@ pub(crate) fn has_nothing_to_integrate(prob: &EsmProblem) -> bool {
 /// that will not build. Python makes the same call for the same reason
 /// (`problem.py`, the scalar no-state branch). Only the compiler's own refusal is
 /// raised: that one says the document evaluates under `interpreter` and not
-/// under the compiler the caller named.
+/// under the compiler the caller named. An EVALUATION failure of a runtime
+/// that did build (a fail-closed fault) comes back as the third element, for
+/// [`observed_field`] to report.
 #[allow(clippy::type_complexity)]
 fn static_observed_fields(
     file: Option<&EsmFile>,
@@ -2335,33 +2440,57 @@ fn static_observed_fields(
     t0: f64,
     model_name: Option<&str>,
     compiler: Compiler,
-) -> Result<(HashMap<String, ArrayD<f64>>, Vec<CompilerRuleReport>), SimulateError> {
-    let nothing = || Ok((HashMap::new(), Vec::new()));
+) -> Result<
+    (
+        HashMap<String, ArrayD<f64>>,
+        Vec<CompilerRuleReport>,
+        Option<String>,
+    ),
+    SimulateError,
+> {
+    let nothing = || Ok((HashMap::new(), Vec::new(), None));
     let owned_flat;
     let flat = match (flat_only, file) {
         (Some(f), _) => f,
-        (None, Some(file)) => match crate::flatten::flatten(file) {
-            Ok(f) => {
-                owned_flat = f;
-                &owned_flat
-            }
-            Err(_) => return nothing(),
-        },
+        // A document that does not flatten — an unresolved coupling endpoint,
+        // a coupling-import error — is a build failure, raised as one
+        // (esm-libraries-spec §2.5.2) rather than answered with no fields.
+        (None, Some(file)) => {
+            owned_flat = crate::flatten::flatten(file).map_err(|e| {
+                SimulateError::Compile(crate::compile_error::CompileError::Flatten(e))
+            })?;
+            &owned_flat
+        }
         (None, None) => return nothing(),
     };
+    // The evaluable-core gate runs first (esm-spec §9.6.3 constraint 6): it
+    // walks every equation, so an unknown no equation defines — which makes
+    // the system not state-free below — does not let a rewrite-target operator
+    // through unreported.
+    if let Some(op) = crate::flatten::first_unlowered_operator(flat) {
+        return Err(SimulateError::Compile(
+            crate::compile_error::CompileError::UnloweredOperatorError { op },
+        ));
+    }
     // A system WITH state is not state-free evaluable: an observed may read
     // state, and there is none to read. Reachable when `model_name` selects an
     // ODE-free model out of a document that has ODEs elsewhere, since
     // `flatten` is document-wide.
-    if !flat.state_variables.is_empty() {
+    // An unknown defined by an element-wise equation (`index(a, i) = …`) is
+    // listed as an observed as well as a state; only a state no equation
+    // defines has anything to integrate.
+    if flat
+        .state_variables
+        .keys()
+        .any(|k| !flat.observed_variables.contains_key(k))
+    {
         return nothing();
     }
     // An ill-formed document is not a compiler's to refuse: a name declared
     // nowhere fails the same free-variable gate the array build and the build
-    // pipeline run (CONFORMANCE_SPEC §5.23), and like any build failure here it
-    // yields no fields — so the pipeline, which runs that gate before
-    // evaluating anything, is what names it — rather than surfacing as a
-    // strict compiler "declining" a rule no compiler could evaluate.
+    // pipeline run (CONFORMANCE_SPEC §5.23), and is raised as that build
+    // failure rather than surfacing as a strict compiler "declining" a rule no
+    // compiler could evaluate — or as a Problem with no fields at all.
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(file) = file
         && crate::simulate::whole_document_is_one_model(file)
@@ -2373,13 +2502,13 @@ fn static_observed_fields(
             .unwrap_or_default()
             .into_iter()
             .collect();
-        if crate::simulate_array::check_free_variables(model, &index_sets, &[]).is_err() {
-            return nothing();
-        }
+        crate::simulate_array::check_free_variables(model, &index_sets, &[])
+            .map_err(SimulateError::Compile)?;
     }
-    let Ok(mut compiled) = ArrayCompiled::from_flattened(flat) else {
-        return nothing();
-    };
+    // The same gates the array route runs — the evaluable-core operator gate
+    // (esm-spec §9.6.3 constraint 6), events, operator arity — fire here too:
+    // a state-free document is evaluated, so it is built.
+    let mut compiled = ArrayCompiled::from_flattened(flat).map_err(SimulateError::Compile)?;
     compiled.runtime_mode = match compiler {
         Compiler::Interpreter => crate::simulate_array::RuntimeMode::Interpreter,
         _ => crate::simulate_array::RuntimeMode::Native,
@@ -2392,8 +2521,19 @@ fn static_observed_fields(
         &std::collections::HashSet::new(),
         false,
     )?;
-    let Ok(values) = compiled.evaluate_stateless_fields(p, t0) else {
-        return Ok((HashMap::new(), report.rules));
+    let values = match compiled.evaluate_stateless_fields(p, t0) {
+        Ok(values) => values,
+        // A value the spec makes invalid (a degenerate polygon operand,
+        // esm-spec §8.6.1) is refused, not handed back as a Problem with no
+        // fields; a value that is only not yet available (a parameter with no
+        // default, a field a provider fills later) still is.
+        Err(e)
+            if e.to_string()
+                .contains(crate::simulate_array::GEOMETRY_CLIP_CODE) =>
+        {
+            return Err(e);
+        }
+        Err(e) => return Ok((HashMap::new(), report.rules, Some(e.to_string()))),
     };
     let fields = values
         .into_iter()
@@ -2409,7 +2549,7 @@ fn static_observed_fields(
             declared.map(|_| (name, arr))
         })
         .collect();
-    Ok((fields, report.rules))
+    Ok((fields, report.rules, None))
 }
 
 /// Build the per-rule record, and — under a STRICT compiler ([`Compiler::Native`]
@@ -2741,6 +2881,10 @@ fn compile_backend(
             details,
         });
     }
+    // An equation that defines a parameter (esm-spec §6.3.1) is refused under
+    // every compiler and every `Rhs` mode: the build used to drop it, answering
+    // with the parameter's default.
+    refuse_parameter_definitions(file, flat)?;
     if mode == Rhs::Never {
         return Ok(Backend::Static(
             "the caller asked for Rhs::Never".to_string(),
@@ -2780,7 +2924,33 @@ fn compile_backend(
         ));
     };
 
+    // A document with no component at all — a template or coupling library, a
+    // `data_sources` registry — has nothing to build. Julia's and Python's
+    // `flatten` refuse it the same way, rather than hand back an empty Problem.
+    let n_components = file.models.as_ref().map_or(0, |m| m.len())
+        + file.reaction_systems.as_ref().map_or(0, |r| r.len());
+    if n_components == 0 {
+        return Err(SimulateError::Compile(
+            crate::compile_error::CompileError::build_err(format!(
+                "nothing to flatten: '{}' declares no `models` and no `reaction_systems`. A \
+                 file carrying only `expression_templates` is a template LIBRARY (esm-spec \
+                 §9.7); import it from a document that declares components rather than \
+                 building it directly",
+                file.metadata.name.as_deref().unwrap_or("")
+            )),
+        ));
+    }
+
+    refuse_structurally_unreachable(file)?;
+    refuse_unregistered_callback_reads(file)?;
+    refuse_reference_integrity_errors(file)?;
+
     if mode == Rhs::Auto && !has_differential_equations(file, model_name) {
+        // Nothing to integrate is not nothing to run: an event, an implicit
+        // equation or a noise term still changes what the document means, and
+        // the static evaluation below honours none of them. The array route
+        // refuses each by name, and so does this one.
+        refuse_static_unsupported_construct(file, model_name)?;
         return Ok(Backend::Static(
             "the document declares no differential equations".to_string(),
         ));
@@ -2793,6 +2963,318 @@ fn compile_backend(
     let mut compiled = crate::simulate::build_array_compiled(file)?;
     compiled.runtime_mode = runtime_mode;
     Ok(Backend::Array(Rc::new(compiled)))
+}
+
+/// Refuse an equation whose left-hand side names a parameter
+/// (`equation_defines_parameter`, esm-spec §6.3.1), in the typed document or,
+/// for a flattened input, in the flattened equations. `validate` reports the
+/// same finding; Julia and Python refuse it at their front doors too.
+fn refuse_parameter_definitions(
+    file: Option<&EsmFile>,
+    flat: Option<&FlattenedSystem>,
+) -> Result<(), SimulateError> {
+    let refuse = |path: &str, message: &str| {
+        SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
+            "[{}] {path}: {message} (esm-spec §6.3.1)",
+            crate::diagnostic::codes::EQUATION_DEFINES_PARAMETER
+        )))
+    };
+    if let Some(file) = file
+        && let Some(e) = crate::structural::parameter_definition_errors(file).first()
+    {
+        return Err(refuse(&e.path, &e.message));
+    }
+    if let Some(flat) = flat {
+        for (k, eq) in flat.equations.iter().enumerate() {
+            let mut lhs = &eq.lhs;
+            let name = loop {
+                match lhs {
+                    crate::types::Expr::Variable(v) => break Some(v.as_str()),
+                    crate::types::Expr::Operator(n) if n.op == "faq" || n.op == "aggregate" => {
+                        match n.expr.as_deref() {
+                            Some(x) => lhs = x,
+                            None => break None,
+                        }
+                    }
+                    crate::types::Expr::Operator(n)
+                        if n.op == "index"
+                            || (n.op == "D" && matches!(n.wrt.as_deref(), None | Some("t"))) =>
+                    {
+                        match n.args.first() {
+                            Some(x) => lhs = x,
+                            None => break None,
+                        }
+                    }
+                    _ => break None,
+                }
+            };
+            if let Some(name) = name
+                && flat.parameters.contains_key(name)
+            {
+                return Err(refuse(
+                    &format!("/equations/{k}/lhs"),
+                    &format!(
+                        "Equation {k} defines '{name}', which is a parameter; an equation \
+                         defines unknowns only"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuse two declarations the document can hold but no build may run, each a
+/// structural error `validate` also reports, which built anyway would be
+/// finite, plausible and wrong:
+///
+/// * a declaration spelled with the independent variable or `_var`
+///   (`reserved_variable_name`, esm-spec §4.9.1.1): every reader of the name
+///   gets the implicit symbol, never the declared quantity;
+/// * an `ic` equation among a reaction system's `constraint_equations`
+///   (`ic_in_reaction_system`, esm-spec §11.4.1), which no evaluator applies.
+///
+/// Julia and Python refuse both at their front doors too.
+fn refuse_structurally_unreachable(file: &EsmFile) -> Result<(), SimulateError> {
+    let refuse = |code: &str, path: &str, message: &str, section: &str| {
+        SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
+            "[{code}] {path}: {message} (esm-spec {section})"
+        )))
+    };
+    if let Some(e) = crate::structural::reserved_declaration_errors(file).first() {
+        return Err(refuse(&e.code.to_string(), &e.path, &e.message, "§4.9.1.1"));
+    }
+    if let Some(systems) = &file.reaction_systems {
+        for (rs_name, rs) in systems {
+            for (i, eq) in rs.constraint_equations.iter().flatten().enumerate() {
+                if matches!(&eq.lhs, crate::types::Expr::Operator(n) if n.op == "ic") {
+                    return Err(refuse(
+                        crate::diagnostic::codes::IC_IN_REACTION_SYSTEM,
+                        &format!("/reaction_systems/{rs_name}/constraint_equations/{i}"),
+                        "ic equation not allowed in a reaction system; a reaction system \
+                         hosts no ic equations (a species' initial value is its \
+                         `species.default`, or a scoped-reference ic equation in a model)",
+                        "§11.4.1",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The structural-validation codes a build refuses on (esm-libraries-spec
+/// §2.5.2). They are the reference-integrity findings: a name, reference or data
+/// source the document uses and does not declare. A build that went ahead would
+/// read a value the document does not describe. Equation-count and unit findings
+/// are not here: they stay `validate`'s to report.
+const BUILD_REFUSED_VALIDATION_CODES: &[&str] = &[
+    "undefined_variable",
+    "undefined_parameter",
+    "undefined_species",
+    "undefined_system",
+    "undefined_index_set",
+    "unresolved_scoped_ref",
+    "event_var_undeclared",
+    "data_source_undefined",
+    "missing_required_field",
+];
+
+/// Refuse the first [`BUILD_REFUSED_VALIDATION_CODES`] finding `validate`
+/// reports for `file`, with the validator's code, pointer and message.
+fn refuse_reference_integrity_errors(file: &EsmFile) -> Result<(), SimulateError> {
+    let result = crate::validate::validate(file);
+    if let Some(e) = result.structural_errors.iter().find(|e| {
+        // An inline test's references are the test runner's to report
+        // (esm-spec §6.6); the build does not evaluate them.
+        BUILD_REFUSED_VALIDATION_CODES.contains(&e.code.to_string().as_str())
+            && !e.path.contains("/tests/")
+    }) {
+        let named = declared_name_at(&e.path)
+            .map(|n| format!(" (variable '{n}')"))
+            .unwrap_or_default();
+        return Err(SimulateError::Compile(
+            crate::compile_error::CompileError::build_err(format!(
+                "[{}] {}: {}{named} (esm-libraries-spec §2.5.2)",
+                e.code, e.path, e.message
+            )),
+        ));
+    }
+    Ok(())
+}
+
+/// The full name of the variable a validator pointer sits under —
+/// `/models/A/subsystems/B/variables/v/…` is `A.B.v` — so a refusal names the
+/// variable the way a caller addresses it (esm-spec §6.6.2).
+fn declared_name_at(pointer: &str) -> Option<String> {
+    let segs: Vec<&str> = pointer.trim_start_matches('/').split('/').collect();
+    let mut parts = Vec::new();
+    let mut i = 0;
+    while i + 1 < segs.len() {
+        match segs[i] {
+            "models" | "reaction_systems" | "subsystems" => parts.push(segs[i + 1]),
+            "variables" | "species" | "parameters" => {
+                parts.push(segs[i + 1]);
+                return Some(parts.join("."));
+            }
+            _ => return None,
+        }
+        i += 2;
+    }
+    None
+}
+
+/// Refuse, with `callback_unregistered` (esm-spec §9.6.6), an equation that
+/// reads a variable a `callback` coupling injects
+/// (`config.callback_variables[].name`). Only a registered callback supplies
+/// that value, and nothing registers one at construction, so a build would read
+/// a placeholder the document does not describe. The interpreter would read
+/// an unset forcing slot at its first call instead.
+fn refuse_unregistered_callback_reads(file: &EsmFile) -> Result<(), SimulateError> {
+    let mut injected: BTreeMap<String, String> = BTreeMap::new();
+    for entry in file.coupling.iter().flatten() {
+        let crate::CouplingEntry::Callback {
+            callback_id,
+            config,
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        let names = config
+            .as_ref()
+            .and_then(|c| c.get("callback_variables"))
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|cv| cv.get("name").and_then(|n| n.as_str()));
+        for name in names {
+            injected.insert(name.to_string(), callback_id.clone());
+        }
+    }
+    if injected.is_empty() {
+        return Ok(());
+    }
+    let Some(models) = file.models.as_ref() else {
+        return Ok(());
+    };
+    let mut names: Vec<&String> = models.keys().collect();
+    names.sort();
+    for name in names {
+        callback_reads_in(&models[name], name, &injected)?;
+    }
+    Ok(())
+}
+
+/// [`refuse_unregistered_callback_reads`] over one model and its inline
+/// subsystems. A name the model declares itself is not the injected one.
+fn callback_reads_in(
+    model: &crate::types::Model,
+    path: &str,
+    injected: &BTreeMap<String, String>,
+) -> Result<(), SimulateError> {
+    for eq in &model.equations {
+        for side in [&eq.lhs, &eq.rhs] {
+            let mut vars: Vec<String> = crate::free_variables(side).into_iter().collect();
+            vars.sort();
+            for v in vars {
+                if model.variables.contains_key(&v) {
+                    continue;
+                }
+                if let Some(id) = injected.get(&v) {
+                    return Err(SimulateError::Compile(
+                        crate::compile_error::CompileError::build_err(format!(
+                            "[{}] '{path}' reads '{v}', which the `callback` coupling '{id}' \
+                             supplies, but no callback is registered to supply it at \
+                             construction; refusing the build rather than reading a value \
+                             the document does not give (esm-spec §9.6.6)",
+                            crate::diagnostic::codes::CALLBACK_UNREGISTERED
+                        )),
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(subs) = model.subsystems.as_ref() {
+        let mut names: Vec<&String> = subs.keys().collect();
+        names.sort();
+        for name in names {
+            if let Ok((sub, _)) = crate::simulate_array::parse_subsystem_model(name, &subs[name]) {
+                callback_reads_in(&sub, &format!("{path}.{name}"), injected)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuse, with `unsupported_construct` (esm-spec §9.6.6), a document with
+/// nothing to integrate that still carries an event, an implicit equation or a
+/// Wiener-noise parameter — in the named model, or in any model when none is
+/// named, subsystems included. The array route refuses the same three while
+/// compiling; a state-free document never reaches it.
+fn refuse_static_unsupported_construct(
+    file: &EsmFile,
+    model_name: Option<&str>,
+) -> Result<(), SimulateError> {
+    if model_name.is_none()
+        && let Some((construct, event)) = crate::compile_error::first_event_in_file(file)
+    {
+        return Err(crate::compile_error::event_refusal(
+            construct,
+            crate::compile_error::ARRAY_EVALUATOR,
+            event.as_deref(),
+        )
+        .into());
+    }
+    let Some(models) = file.models.as_ref() else {
+        return Ok(());
+    };
+    for (_, model) in models
+        .iter()
+        .filter(|(name, _)| model_name.is_none_or(|want| want == name.as_str()))
+    {
+        if let Some(refusal) = static_unsupported_construct(model) {
+            return Err(refusal.into());
+        }
+    }
+    Ok(())
+}
+
+/// The first construct of `model` or its inline subsystems that
+/// [`refuse_static_unsupported_construct`] refuses, as its refusal.
+fn static_unsupported_construct(
+    model: &crate::types::Model,
+) -> Option<crate::compile_error::CompileError> {
+    use crate::compile_error::ARRAY_EVALUATOR;
+    if let Some((construct, event)) = crate::compile_error::first_event(model) {
+        return Some(crate::compile_error::event_refusal(
+            construct,
+            ARRAY_EVALUATOR,
+            event.as_deref(),
+        ));
+    }
+    if let Some(eq) = crate::compile_error::first_implicit_equation(&model.equations) {
+        return Some(crate::compile_error::implicit_equation_refusal(
+            ARRAY_EVALUATOR,
+            eq,
+        ));
+    }
+    let class = crate::classification::Classification::of(model);
+    if let Some(name) = class.brownian_parameters.first() {
+        return Some(crate::compile_error::CompileError::UnsupportedConstruct {
+            construct: crate::compile_error::WIENER_NOISE,
+            evaluator: ARRAY_EVALUATOR,
+            detail: format!("parameter '{name}'"),
+        });
+    }
+    let subs = model.subsystems.as_ref()?;
+    let mut names: Vec<&String> = subs.keys().collect();
+    names.sort();
+    names.into_iter().find_map(|name| {
+        crate::simulate_array::parse_subsystem_model(name, &subs[name])
+            .ok()
+            .and_then(|(sub, _)| static_unsupported_construct(&sub))
+    })
 }
 
 /// Whether the document (or the named model within it) declares at least one
@@ -2847,6 +3329,560 @@ fn model_has_derivative(model: &crate::types::Model) -> bool {
         .equations
         .iter()
         .any(|eq| crate::classification::has_time_derivative(&eq.lhs))
+}
+
+/// Whether `var` is a parameter with a non-empty declared `shape`.
+fn is_shaped_parameter(var: &crate::types::ModelVariable) -> bool {
+    var.var_type == crate::types::VariableType::Parameter
+        && var.shape.as_ref().is_some_and(|s| !s.is_empty())
+}
+
+/// Whether every `update` rule of `var` takes its value from outside the model
+/// — a data source (`from`) or a registered handler — which is what makes the
+/// array runtime serve it from the forcing buffer.
+fn is_externally_fed(var: &crate::types::ModelVariable) -> bool {
+    var.update.as_ref().is_some_and(|spec| {
+        spec.rules().iter().all(|rule| {
+            rule.value()
+                .is_some_and(|v| v.from.is_some() || v.handler.is_some())
+        })
+    })
+}
+
+/// Whether `name` — a compiled or flattened name — or its model-local tail is a
+/// key of `keys`.
+fn names_key<V>(keys: &HashMap<String, V>, name: &str) -> bool {
+    keys.contains_key(name)
+        || name
+            .split_once('.')
+            .is_some_and(|(_, tail)| keys.contains_key(tail))
+}
+
+/// The declared variable a compiled or flattened `name` refers to, for a
+/// diagnostic: `Model.var` in a top-level model, or a bare name one model
+/// declares.
+fn declared_variable<'f>(
+    file: Option<&'f EsmFile>,
+    name: &str,
+) -> Option<&'f crate::types::ModelVariable> {
+    let models = file?.models.as_ref()?;
+    if let Some((model, var)) = name.split_once('.')
+        && let Some(v) = models.get(model).and_then(|m| m.variables.get(var))
+    {
+        return Some(v);
+    }
+    models.values().find_map(|m| m.variables.get(name))
+}
+
+/// The `E_TREEWALK_MISSING_DATA` refusal for shaped parameter `name`, naming
+/// what the document says feeds it and how a caller supplies it.
+fn missing_data_error(name: &str, var: Option<&crate::types::ModelVariable>) -> SimulateError {
+    let shaped = var.is_some_and(is_shaped_parameter);
+    let shape = var
+        .and_then(|v| v.shape.as_ref())
+        .filter(|s| !s.is_empty())
+        .map(|s| format!(" (shape [{}])", s.join(", ")))
+        .unwrap_or_default();
+    let mut feeds: Vec<String> = Vec::new();
+    for rule in var
+        .and_then(|v| v.update.as_ref())
+        .map(|u| u.rules())
+        .unwrap_or_default()
+    {
+        let Some(value) = rule.value() else { continue };
+        if let Some(from) = &value.from {
+            feeds.push(format!(
+                "the data source '{}' (file_variable '{}')",
+                rule.data_source().unwrap_or("?"),
+                from.file_variable
+            ));
+        } else if let Some(h) = &value.handler {
+            feeds.push(format!(
+                "the registered handler '{}' (update kind '{}'), which writes it only when it fires",
+                h.handler_id,
+                rule.kind()
+            ));
+        }
+    }
+    let (fed, how) = if feeds.is_empty() {
+        (
+            "Nothing in the document gives it a value.".to_string(),
+            if shaped {
+                format!(
+                    "pass its array in `ProblemOptions::const_arrays` under \"{name}\", or declare \
+                     a `default` on it"
+                )
+            } else {
+                format!(
+                    "pass it in `ProblemOptions::p` under \"{name}\", or declare a `default` on it"
+                )
+            },
+        )
+    } else {
+        (
+            format!(
+                "The document feeds it from {}, and no data for it was supplied at construction.",
+                feeds.join(" and ")
+            ),
+            format!(
+                "pass a provider for it in `ProblemOptions::providers` under \"{name}\", or its \
+                 array in `ProblemOptions::const_arrays` (a constant snapshot), or declare a \
+                 `default` on it"
+            ),
+        )
+    };
+    SimulateError::Compile(crate::compile_error::CompileError::MissingData {
+        parameter: name.to_string(),
+        detail: format!(
+            "no data supplied for the {kind}parameter '{name}'{shape}, which declares no \
+             `default`. {fed} A parameter with neither a default nor a supplied value is an error \
+             when a problem is built (esm-spec §10.10). To supply it, {how}.",
+            kind = if shaped { "shaped " } else { "" }
+        ),
+    })
+}
+
+/// The `E_TREEWALK_MISSING_INITIAL_VALUE` refusal: a state slot no default,
+/// initial condition, `ic` equation or caller `u0` gives a starting value.
+#[cfg(feature = "solve")]
+fn refuse_missing_initial_values(
+    c: &ArrayCompiled,
+    u0: &HashMap<String, f64>,
+) -> Result<(), SimulateError> {
+    let unset = c.unset_initial_slots(u0);
+    let Some(first) = unset.first() else {
+        return Ok(());
+    };
+    let mut shown: Vec<String> = unset.iter().take(5).map(|n| format!("'{n}'")).collect();
+    if unset.len() > 5 {
+        shown.push("…".to_string());
+    }
+    Err(SimulateError::Compile(
+        crate::compile_error::CompileError::MissingInitialValue {
+            slot: first.clone(),
+            detail: format!(
+                "no starting value for {} unknown(s) ({}): the unknown declares no `default`, \
+                 and no initial condition, `ic` equation or caller `u0` sets it. An unknown with \
+                 no starting value is an error when a problem is built (esm-spec §11.4). To \
+                 supply it, pass it in `ProblemOptions::u0` under \"{first}\", or declare a \
+                 `default` on the unknown.",
+                unset.len(),
+                shown.join(", ")
+            ),
+        },
+    ))
+}
+
+/// The nested [`crate::types::InlineValue`] an array denotes, row-major — the
+/// spelling a shaped parameter's inline `default` takes (esm-spec §6.3).
+#[cfg(not(target_arch = "wasm32"))]
+fn inline_value_of(a: &ArrayD<f64>) -> crate::types::InlineValue {
+    use crate::types::InlineValue;
+    fn nest(shape: &[usize], values: &[f64]) -> InlineValue {
+        let Some((&axis, rest)) = shape.split_first() else {
+            return InlineValue::Scalar(values[0]);
+        };
+        let stride = rest.iter().product::<usize>();
+        InlineValue::Array(
+            (0..axis)
+                .map(|i| nest(rest, &values[i * stride..(i + 1) * stride]))
+                .collect(),
+        )
+    }
+    let values: Vec<f64> = a.iter().copied().collect();
+    if a.ndim() == 0 {
+        return InlineValue::Scalar(values[0]);
+    }
+    nest(a.shape(), &values)
+}
+
+/// The data a caller supplied for a document's shaped parameters, captured at
+/// the top of [`esm_problem`] because the build pipeline consumes
+/// `const_arrays` and `build_providers`.
+#[derive(Default)]
+struct SuppliedData {
+    /// Each `const_arrays` entry whose key names a shaped parameter of the
+    /// document, as `Model.param` or as the bare `param`.
+    #[cfg(not(target_arch = "wasm32"))]
+    arrays: HashMap<String, ArrayD<f64>>,
+    /// The keys of the run-time providers and of the build-time providers.
+    provider_keys: HashMap<String, ()>,
+    /// The captured arrays for parameters the document feeds from outside
+    /// (a data source or a handler) and no provider serves, keyed
+    /// `Model.param`: [`Self::bind_arrays`] routes them to the forcing buffer,
+    /// the channel such a parameter is read through, as a constant snapshot.
+    #[cfg(not(target_arch = "wasm32"))]
+    forcing_arrays: std::cell::RefCell<HashMap<String, ArrayD<f64>>>,
+}
+
+impl SuppliedData {
+    /// Capture what `opts` supplies. The shaped-parameter arrays are MOVED out
+    /// of `opts.const_arrays` when they are the only reason the build pipeline
+    /// would run on a document of several models with none selected, which the
+    /// pipeline refuses: they need nothing from it there (stage 3d binds each
+    /// onto its parameter). Otherwise the pipeline keeps them — it evaluates a
+    /// state-free document's observed graph with them — and they are copied
+    /// here.
+    fn capture(opts: &mut ProblemOptions, raw: Option<&JsonValue>, file: Option<&EsmFile>) -> Self {
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let mut out = SuppliedData::default();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            out.provider_keys
+                .extend(opts.providers.keys().map(|k| (k.clone(), ())));
+            out.provider_keys
+                .extend(opts.build_providers.iter().map(|(k, _)| (k.clone(), ())));
+            if !opts.const_arrays.is_empty() {
+                let shaped = shaped_parameter_keys(raw, file);
+                let several_models =
+                    opts.model_name.is_none() && model_count(raw, file).is_some_and(|n| n > 1);
+                let only_trigger = (several_models || raw.is_some_and(declares_derivative))
+                    && !opts.build_pipeline
+                    && !opts.pushdown_rewrite
+                    && opts.build_providers.is_empty()
+                    && opts.const_arrays.keys().all(|k| shaped.contains(k));
+                if only_trigger {
+                    out.arrays = std::mem::take(&mut opts.const_arrays);
+                } else {
+                    for (k, a) in &opts.const_arrays {
+                        if shaped.contains(k) {
+                            out.arrays.insert(k.clone(), a.clone());
+                        }
+                    }
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (opts, raw, file);
+        out
+    }
+
+    /// Bind each captured array to the shaped parameter it names — keyed
+    /// `Model.param`, or by a bare name only one model's shaped parameter
+    /// carries. A scalar override in `p` outranks it, and so does a provider
+    /// for a parameter the document feeds from outside. Otherwise it becomes
+    /// the parameter's inline `default`, or, for a parameter fed from outside,
+    /// a constant snapshot in the forcing buffer (served by
+    /// [`Self::refuse_missing_array`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bind_arrays(&self, file: &mut EsmFile, p: &HashMap<String, f64>, selected: Option<&str>) {
+        if self.arrays.is_empty() {
+            return;
+        }
+        let Some(models) = file.models.as_mut() else {
+            return;
+        };
+        // With one model selected, a bare key names that model's parameter;
+        // the other models are not built, so they cannot make it ambiguous.
+        let in_scope = |mname: &str| selected.is_none_or(|s| s == mname);
+        let mut owners: HashMap<String, usize> = HashMap::new();
+        for (_, m) in models.iter().filter(|(n, _)| in_scope(n)) {
+            for (v, var) in &m.variables {
+                if is_shaped_parameter(var) {
+                    *owners.entry(v.clone()).or_default() += 1;
+                }
+            }
+        }
+        for (mname, m) in models.iter_mut() {
+            if !in_scope(mname) {
+                continue;
+            }
+            for (v, var) in m.variables.iter_mut() {
+                if !is_shaped_parameter(var) {
+                    continue;
+                }
+                let qualified = format!("{mname}.{v}");
+                let arr = self.arrays.get(&qualified).or_else(|| {
+                    if owners.get(v) == Some(&1) {
+                        self.arrays.get(v)
+                    } else {
+                        None
+                    }
+                });
+                let Some(arr) = arr else { continue };
+                if p.contains_key(&qualified) || p.contains_key(v) {
+                    continue;
+                }
+                if is_externally_fed(var) {
+                    if !names_key(&self.provider_keys, &qualified) {
+                        self.forcing_arrays
+                            .borrow_mut()
+                            .insert(qualified, arr.clone());
+                    }
+                    continue;
+                }
+                var.default = Some(inline_value_of(arr));
+            }
+        }
+    }
+
+    /// The missing-data gate for an array model: serve a forcing name no
+    /// provider supplies from the caller's array, else from its declared
+    /// `default`, and refuse one with neither, or a shaped parameter the build
+    /// left with no value at all.
+    fn refuse_missing_array(
+        &self,
+        c: &ArrayCompiled,
+        file: Option<&EsmFile>,
+        p: &HashMap<String, f64>,
+    ) -> Result<(), SimulateError> {
+        // The parameter as the caller addresses it: by full name (esm-spec
+        // §6.6.2), which a single-model build compiles bare under its namespace.
+        let full = |name: &str| match c.namespace() {
+            Some(ns) if !name.starts_with(&format!("{ns}.")) => format!("{ns}.{name}"),
+            _ => name.to_string(),
+        };
+        let forcing = c.forcing_buffer();
+        for name in c.forcing_names() {
+            if forcing.borrow().contains_key(name) || names_key(&self.provider_keys, name) {
+                continue;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(arr) = self.forcing_array(name) {
+                forcing.borrow_mut().insert(name.clone(), arr);
+                continue;
+            }
+            // No data is supplied: a declared default is the value (esm-spec
+            // §6.3), and with none the parameter is missing data (§10.10).
+            let mut value = match c.forcing_default(name) {
+                None => {
+                    return Err(missing_data_error(
+                        &full(name),
+                        declared_variable(file, name),
+                    ));
+                }
+                // A default over a shape that does not resolve yet (an
+                // unmaterialized derived set) has no field to fill here.
+                Some(None) => continue,
+                Some(Some(value)) => value,
+            };
+            let prec = precision::of_variable(name);
+            if prec.is_f32() {
+                value.mapv_inplace(|x| prec.round(x));
+            }
+            forcing.borrow_mut().insert(name.clone(), value);
+        }
+        for name in c.unvalued_shaped_params() {
+            if !names_key(p, name) {
+                return Err(missing_data_error(
+                    &full(name),
+                    declared_variable(file, name),
+                ));
+            }
+        }
+        // A scalar parameter no default, caller `p` or `distribution` gives a
+        // value (esm-spec §10.10).
+        for name in c.unsupplied_params(p) {
+            let var = declared_variable(file, &name);
+            if c.unvalued_shaped_params().contains(&name)
+                || var.is_some_and(|v| v.distribution.is_some())
+            {
+                continue;
+            }
+            return Err(missing_data_error(&full(&name), var));
+        }
+        Ok(())
+    }
+
+    /// The captured snapshot for forcing name `name` — a compiled name, which
+    /// is `Model.param` on a coupled build and the bare `param` on a
+    /// single-model one.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn forcing_array(&self, name: &str) -> Option<ArrayD<f64>> {
+        let arrays = self.forcing_arrays.borrow();
+        if let Some(a) = arrays.get(name) {
+            return Some(a.clone());
+        }
+        let mut tails = arrays
+            .iter()
+            .filter(|(k, _)| k.split_once('.').is_some_and(|(_, tail)| tail == name));
+        match (tails.next(), tails.next()) {
+            (Some((_, a)), None) => Some(a.clone()),
+            _ => None,
+        }
+    }
+
+    /// The missing-data gate for a document with nothing to integrate, read
+    /// off its flattened parameters (coupling may bind a declared parameter to
+    /// another component's variable, and then it needs no value of its own).
+    /// Flattens only when some parameter declares no value.
+    fn refuse_missing_static(
+        &self,
+        file: &EsmFile,
+        p: &HashMap<String, f64>,
+        selected: Option<&str>,
+    ) -> Result<(), SimulateError> {
+        let unvalued = |v: &crate::types::ModelVariable| {
+            v.var_type == crate::types::VariableType::Parameter
+                && v.default.is_none()
+                && v.distribution.is_none()
+        };
+        let any = file
+            .models
+            .as_ref()
+            .is_some_and(|ms| ms.values().any(|m| m.variables.values().any(unvalued)));
+        if !any {
+            return Ok(());
+        }
+        let Ok(flat) = crate::flatten::flatten(file) else {
+            return Ok(());
+        };
+        for (name, var) in &flat.parameters {
+            if !unvalued(var) || names_key(p, name) {
+                continue;
+            }
+            // With one model selected, only its parameters are built.
+            if selected.is_some_and(|m| !name.starts_with(&format!("{m}."))) {
+                continue;
+            }
+            if is_externally_fed(var) && names_key(&self.provider_keys, name) {
+                continue;
+            }
+            return Err(missing_data_error(name, Some(var)));
+        }
+        Ok(())
+    }
+}
+
+/// Set each 0-D parameter a value-invention node reads (inside a `skolem`,
+/// `rank` or arg-witness node, or a `distinct` / keyed `faq`) to the caller's
+/// `p` entry for it — keyed `Model.param` or bare — and return the `p` keys
+/// used.
+fn bind_value_invention_params(file: &mut EsmFile, p: &HashMap<String, f64>) -> Vec<String> {
+    use crate::types::Expr;
+    use std::collections::HashSet;
+    fn collect(e: &Expr, inside: bool, out: &mut HashSet<String>) {
+        match e {
+            Expr::Variable(v) if inside => {
+                out.insert(v.clone());
+            }
+            Expr::Operator(n) => {
+                let vi = inside
+                    || matches!(n.op.as_str(), "skolem" | "rank" | "argmin" | "argmax")
+                    || n.distinct == Some(true)
+                    || n.key.is_some();
+                n.for_each_child(&mut |c| collect(c, vi, out));
+            }
+            _ => {}
+        }
+    }
+    let mut used = Vec::new();
+    if p.is_empty() {
+        return used;
+    }
+    let Some(models) = file.models.as_mut() else {
+        return used;
+    };
+    for (mname, m) in models.iter_mut() {
+        let mut read: HashSet<String> = HashSet::new();
+        for eq in &m.equations {
+            collect(&eq.rhs, false, &mut read);
+        }
+        for (v, var) in m.variables.iter_mut() {
+            if var.var_type != crate::types::VariableType::Parameter
+                || var.shape.as_ref().is_some_and(|s| !s.is_empty())
+                || !read.contains(v)
+            {
+                continue;
+            }
+            let qualified = format!("{mname}.{v}");
+            let key = if p.contains_key(&qualified) {
+                qualified
+            } else if p.contains_key(v) {
+                v.clone()
+            } else {
+                continue;
+            };
+            var.default = Some(crate::types::InlineValue::Scalar(p[&key]));
+            used.push(key);
+        }
+    }
+    used
+}
+
+/// Whether any equation of the raw document has a time derivative on its
+/// left-hand side, or the document holds a reaction system: a document with a
+/// right-hand side to compile, whose caller arrays the compile binds itself.
+#[cfg(not(target_arch = "wasm32"))]
+fn declares_derivative(raw: &JsonValue) -> bool {
+    fn has_d(v: &JsonValue) -> bool {
+        match v {
+            JsonValue::Object(o) => {
+                o.get("op").and_then(JsonValue::as_str) == Some("D") || o.values().any(has_d)
+            }
+            JsonValue::Array(a) => a.iter().any(has_d),
+            _ => false,
+        }
+    }
+    if raw
+        .get("reaction_systems")
+        .and_then(JsonValue::as_object)
+        .is_some_and(|r| !r.is_empty())
+    {
+        return true;
+    }
+    raw.get("models")
+        .and_then(JsonValue::as_object)
+        .is_some_and(|ms| {
+            ms.values().any(|m| {
+                m.get("equations")
+                    .and_then(JsonValue::as_array)
+                    .is_some_and(|eqs| eqs.iter().any(|e| e.get("lhs").is_some_and(has_d)))
+            })
+        })
+}
+
+/// How many `models` the document declares, off the raw JSON when there is one.
+#[cfg(not(target_arch = "wasm32"))]
+fn model_count(raw: Option<&JsonValue>, file: Option<&EsmFile>) -> Option<usize> {
+    match raw {
+        Some(r) => r
+            .get("models")
+            .and_then(JsonValue::as_object)
+            .map(|m| m.len()),
+        None => file.and_then(|f| f.models.as_ref()).map(|m| m.len()),
+    }
+}
+
+/// Every name a caller's `const_arrays` key may use for a shaped parameter of
+/// the document: `Model.param` and the bare `param`, read off the raw JSON when
+/// there is one and the typed document otherwise.
+#[cfg(not(target_arch = "wasm32"))]
+fn shaped_parameter_keys(
+    raw: Option<&JsonValue>,
+    file: Option<&EsmFile>,
+) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    if let Some(models) = raw
+        .and_then(|v| v.get("models"))
+        .and_then(JsonValue::as_object)
+    {
+        for (m, model) in models {
+            let Some(vars) = model.get("variables").and_then(JsonValue::as_object) else {
+                continue;
+            };
+            for (v, var) in vars {
+                let shaped = var
+                    .get("shape")
+                    .and_then(JsonValue::as_array)
+                    .is_some_and(|s| !s.is_empty());
+                if shaped && var.get("type").and_then(JsonValue::as_str) == Some("parameter") {
+                    out.insert(format!("{m}.{v}"));
+                    out.insert(v.clone());
+                }
+            }
+        }
+    } else if let Some(models) = file.and_then(|f| f.models.as_ref()) {
+        for (m, model) in models {
+            for (v, var) in &model.variables {
+                if is_shaped_parameter(var) {
+                    out.insert(format!("{m}.{v}"));
+                    out.insert(v.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 #[cfg(not(target_arch = "wasm32"))]

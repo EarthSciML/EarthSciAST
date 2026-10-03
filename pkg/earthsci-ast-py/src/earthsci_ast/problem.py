@@ -65,9 +65,11 @@ from .compiler import (
     resolve_compiler,
     use_policy,
 )
-from .esm_types import EsmFile, ExprNode
+from .errors import MissingDataError
+from .error_handling import CALLBACK_UNREGISTERED
+from .esm_types import CouplingType, EsmFile, ExprNode, is_aggregate_op
 from .expr_walk import iter_children
-from .expression import DataSourceUnboundError, UnsupportedConstructError
+from .expression import DataSourceUnboundError, UnsupportedConstructError, free_variables
 from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
@@ -710,6 +712,9 @@ def _esm_problem_under(
     # document declaring no `function_tables`.
     if file is not None:
         file = lower_table_lookups(file)
+        _refuse_ic_in_reaction_system(file)
+        _refuse_unregistered_callback_reads(file)
+        _refuse_reference_integrity_errors(file, base_path)
 
     # A caller-flattened system has no document, but `flatten` carries
     # `function_tables` so that this carrier can be lowered too.
@@ -748,6 +753,11 @@ def _esm_problem_under(
 
     # A declared shape over an undeclared index set, on a state nothing sizes.
     _assert_shaped_states_have_extent(flat)
+
+    # esm-spec §6.3.1: an equation never defines a parameter. A document that
+    # tries is refused by name on every carrier (a caller-flattened system never
+    # passed through `validate`), never built with the equation dropped.
+    _refuse_parameter_definition(flat)
 
     # One unknown carrying both a derivative equation and a bare-LHS one.
     _assert_no_doubly_defined_state(flat)
@@ -842,12 +852,17 @@ def _esm_problem_under(
     # ---- the engine, and the compile ----------------------------------------
     # WHICH machinery runs is the compiler's (the caller's); how OFTEN it runs
     # is the document's. `_segmenting_engine` answers only the second question.
+    # The document's own data sources are read only through a loader seam the
+    # caller registers. With none, a data-fed parameter takes its declared
+    # `default` like any other parameter (and one with no default is refused
+    # as missing data), exactly as in Julia and Rust.
+    loader_seam = loader_provider is not None or provider_factory is not None
     if policy.compiler == "sympy":
         _refuse_array_document_under_sympy(flat)
-        _refuse_bound_data_under_sympy(flat, discrete_providers, merged, gated)
+        _refuse_bound_data_under_sympy(flat, discrete_providers, merged, gated, loader_seam)
         engine = "scalar"
     else:
-        engine = _segmenting_engine(flat, discrete_providers, merged, gated)
+        engine = _segmenting_engine(flat, discrete_providers, merged, gated, loader_seam)
     static_cache: dict[str, Any] = {}
     segment_seed: Any = None
     build: _NumpyRhsBuild | None = None
@@ -1038,6 +1053,9 @@ def _seed_segmented_engine(
         raise
     except UnsupportedConstructError:
         raise
+    except MissingDataError:
+        # A parameter with no value is a construction error (esm-spec §10.10).
+        raise
     except Exception as exc:  # noqa: BLE001 — a non-refusal failure stays a run failure
         return None, f"{type(exc).__name__}: {exc}"
 
@@ -1130,6 +1148,14 @@ def _refuse_unbound_data_feeds(
     for name, source in feeds:
         if _binds(name, merged, gated, discrete_providers, p):
             continue
+        # A declared `default` is the parameter's value when no data is supplied
+        # (esm-spec §6.3, user ruling 2026-09-29); one with neither a default
+        # nor data is missing data (§10.10), refused by that name.
+        var = flat.parameters.get(name)
+        if var is not None and getattr(var, "default", None) is not None:
+            continue
+        if var is not None and name not in loader_names:
+            raise MissingDataError(name, var)
         if name in loader_names:
             deferred.add(name)
             continue
@@ -1160,6 +1186,11 @@ def _refuse_unloaded_data_feeds(
     detail = getattr(seed, "message", None) if seed is not None else None
     if detail is None and seed_failure is not None:
         detail = f"the construction-time seed failed ({seed_failure})"
+    var = flat.parameters.get(name)
+    if var is not None:
+        # No default either (a defaulted feed never reaches `deferred`): the
+        # parameter is missing data (esm-spec §10.10), refused by that name.
+        raise MissingDataError(name, var, detail or "the source loaded no data")
     raise DataSourceUnboundError(name, source, detail or "the source loaded no data")
 
 
@@ -1168,6 +1199,7 @@ def _segmenting_engine(
     discrete_providers: dict[str, Any],
     merged: dict[str, Any],
     gated: dict[str, Any],
+    loader_seam: bool = False,
 ) -> str:
     """How OFTEN the NumPy compilers rebuild — not WHICH machinery they use.
 
@@ -1183,14 +1215,16 @@ def _segmenting_engine(
     deferred gated fetch — are already bound, so one build covers the whole
     span and takes precedence over the in-document data-loader seam (a document
     with both binds the injected arrays, as the pre-Problem entry points did).
-    ``loader_fields`` alone means cadence segmentation. Everything else is one
-    build for the whole span.
+    ``loader_fields`` read through a caller's loader seam (``loader_provider``
+    or ``provider_factory``) mean cadence segmentation; with no seam the
+    document's data sources are not read and its data-fed parameters take their
+    declared defaults. Everything else is one build for the whole span.
     """
     if discrete_providers:
         return "discrete_providers"
     if merged or gated:
         return "array"
-    if flat.loader_fields:
+    if flat.loader_fields and loader_seam:
         return "loaders"
     return "array"
 
@@ -1200,6 +1234,7 @@ def _refuse_bound_data_under_sympy(
     discrete_providers: dict[str, Any],
     merged: dict[str, Any],
     gated: dict[str, Any],
+    loader_seam: bool = False,
 ) -> None:
     """``compiler="sympy"`` binds no data; a problem that carries some is refused.
 
@@ -1213,7 +1248,7 @@ def _refuse_bound_data_under_sympy(
         ("a time-varying provider", discrete_providers),
         ("an injected array (a provider or const_arrays)", merged),
         ("a gated provider", gated),
-        ("an in-document data loader", flat.loader_fields),
+        ("an in-document data loader", flat.loader_fields if loader_seam else []),
     ):
         if names:
             first = sorted(str(getattr(n, "name", n)) for n in names)[0]
@@ -1398,6 +1433,41 @@ def _assert_shaped_states_have_extent(flat: FlattenedSystem) -> None:
         )
 
 
+def _defined_lhs_name(lhs: Any) -> str | None:
+    """The variable a left-hand side names — bare, ``index(...)``, under a time
+    derivative, or any of these as the body of a ``faq`` (a parameter may have
+    neither a definition nor dynamics) — or ``None`` for an ``ic`` or an
+    expression LHS."""
+    e = lhs
+    while isinstance(e, ExprNode):
+        if is_aggregate_op(e.op) and e.expr is not None:
+            e = e.expr
+        elif e.op == "index" and e.args:
+            e = e.args[0]
+        elif e.op == "D" and e.args and getattr(e, "wrt", None) in (None, "t"):
+            e = e.args[0]
+        else:
+            return None
+    return e if isinstance(e, str) else None
+
+
+def _refuse_parameter_definition(flat: FlattenedSystem) -> None:
+    """``equation_defines_parameter`` (esm-spec §6.3.1): an equation whose
+    left-hand side names a parameter. A parameter's value comes from its
+    default, an override, its update or a coupling; building with the equation
+    dropped, or letting it override the parameter, answers for a model the
+    document does not describe."""
+    for eq in flat.equations:
+        name = _defined_lhs_name(eq.lhs)
+        if name is not None and name in flat.parameters:
+            raise SimulationError(
+                f"equation_defines_parameter: the equation "
+                f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}` defines "
+                f"{name!r}, which is a parameter; an equation defines unknowns only "
+                f"(esm-spec §6.3.1)"
+            )
+
+
 def _assert_no_doubly_defined_state(flat: FlattenedSystem) -> None:
     """Refuse an unknown that carries BOTH a derivative equation and a bare-LHS one.
 
@@ -1472,6 +1542,99 @@ def _assert_no_redundant_definition(flat: FlattenedSystem) -> None:
     )
 
 
+def _refuse_ic_in_reaction_system(file: EsmFile) -> None:
+    """esm-spec §11.4.1 ``ic_in_reaction_system``: an ``ic`` equation among a
+    reaction system's ``constraint_equations`` is a structural error ``validate``
+    reports, and no pathway applies it, so a build would run the species from its
+    ``default`` with no diagnostic. Refused here, as Julia refuses it at load and
+    Rust at its build."""
+    for rs_name, rs in (file.reaction_systems or {}).items():
+        for ce_idx, eq in enumerate(rs.constraint_equations or []):
+            if getattr(getattr(eq, "lhs", None), "op", None) == "ic":
+                raise SimulationError(
+                    f"ic_in_reaction_system: /reaction_systems/{rs_name}/constraint_equations/"
+                    f"{ce_idx}: ic equation not allowed in a reaction system; a reaction "
+                    f"system hosts no ic equations (a species' initial value is its "
+                    f"`species.default`, or a scoped-reference ic equation in a model, "
+                    f"esm-spec §11.4.1)"
+                )
+
+
+#: The structural-validation codes a build refuses on (esm-libraries-spec
+#: §2.5.2). They are the reference-integrity findings: a name, reference or data
+#: source the document uses and does not declare. Equation-count and unit
+#: findings are not here: they stay ``validate``'s to report.
+_BUILD_REFUSED_VALIDATION_CODES = frozenset(
+    {
+        "undefined_variable",
+        "undefined_parameter",
+        "undefined_species",
+        "undefined_system",
+        "undefined_index_set",
+        "unresolved_scoped_ref",
+        "event_var_undeclared",
+        "data_source_undefined",
+        "missing_required_field",
+    }
+)
+
+
+def _refuse_reference_integrity_errors(file: EsmFile, base_path: str | None) -> None:
+    """Refuse the first reference-integrity finding ``validate`` reports for
+    ``file``, with the validator's code, pointer and message."""
+    from .validation import validate
+
+    for e in validate(file, base_path=base_path).structural_errors:
+        # An inline test's references are the test runner's to report (esm-spec
+        # §6.6); the build does not evaluate them.
+        if e.code in _BUILD_REFUSED_VALIDATION_CODES and "/tests/" not in (e.path or ""):
+            raise SimulationError(f"[{e.code}] {e.path}: {e.message} (esm-libraries-spec §2.5.2)")
+
+
+class CallbackUnregisteredError(SimulationError):
+    """An equation reads a ``callback`` coupling variable, and no callback is
+    registered to supply it at construction (esm-spec §9.6.6)."""
+
+    code = CALLBACK_UNREGISTERED
+
+
+def _refuse_unregistered_callback_reads(file: EsmFile) -> None:
+    """esm-spec §9.6.6 ``callback_unregistered``: an equation that reads a variable
+    a ``callback`` coupling injects (``config.callback_variables[].name``) reads a
+    value only a registered callback supplies. Nothing registers one at
+    construction, so a build would read a placeholder the document does not
+    describe."""
+    injected: dict[str, str] = {}
+    for entry in file.coupling or []:
+        if getattr(entry, "coupling_type", None) != CouplingType.CALLBACK:
+            continue
+        for cv in (getattr(entry, "config", None) or {}).get("callback_variables") or []:
+            name = cv.get("name") if isinstance(cv, dict) else None
+            if isinstance(name, str):
+                injected[name] = str(getattr(entry, "callback_id", None))
+    if not injected:
+        return
+
+    def visit(model: Any, path: str) -> None:
+        for eq in model.equations or []:
+            for side in (eq.lhs, eq.rhs):
+                for v in sorted(free_variables(side)):
+                    if v in (model.variables or {}) or v not in injected:
+                        continue
+                    raise CallbackUnregisteredError(
+                        f"{CALLBACK_UNREGISTERED}: '{path}' reads '{v}', which the `callback` "
+                        f"coupling '{injected[v]}' supplies, but no callback is registered to "
+                        f"supply it at construction; refusing the build rather than reading a "
+                        f"value the document does not give (esm-spec §9.6.6)"
+                    )
+        for sub_name, sub in sorted((getattr(model, "subsystems", None) or {}).items()):
+            if hasattr(sub, "equations"):
+                visit(sub, f"{path}.{sub_name}")
+
+    for name, model in sorted((file.models or {}).items()):
+        visit(model, name)
+
+
 def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:
     """esm-spec §9.6.6 ``unsupported_construct`` — refuse an event (continuous or
     discrete), an implicit equation or a Wiener-noise parameter before any
@@ -1524,6 +1687,24 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) 
     if flat.brownian_parameters:
         name = next(iter(flat.brownian_parameters))
         raise UnsupportedConstructError("Wiener noise", f"parameter '{name}'", evaluator)
+    # A parameter that recomputes ITSELF from a symbolic ``expression`` update
+    # (esm-spec §5.4) is the 1.0.0 spelling of an event that writes it:
+    # ``crossing`` replaces a continuous event, ``schedule`` / ``condition`` a
+    # discrete one. Neither pathway fires events, so building it anyway freezes
+    # the parameter at its default. An update read ``from`` a data source or
+    # supplied by a registered ``handler`` is filled from outside the model.
+    for name in sorted(flat.discrete_parameters):
+        update = flat.discrete_parameters[name].update
+        rules = update if isinstance(update, list) else [update] if update else []
+        for rule in rules:
+            if rule.kind != "wiener" and rule.expression is not None:
+                construct = "continuous event" if rule.kind == "crossing" else "discrete event"
+                raise UnsupportedConstructError(
+                    construct,
+                    f"(the `{rule.kind}` update of parameter '{name}', which recomputes "
+                    f"it from an expression)",
+                    evaluator,
+                )
 
 
 def _first_subsystem_event(file: EsmFile) -> tuple[str, Any] | None:
@@ -1600,8 +1781,35 @@ def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
     for eq in flat.equations:
         _walk_for_unlowered(eq.lhs, structural_derivative_ok=True)
         _walk_for_unlowered(eq.rhs, structural_derivative_ok=False)
+        _refuse_array_valued_bool_and_or(eq.rhs)
     for _target, rhs in flat.field_ics:
         _walk_for_unlowered(rhs, structural_derivative_ok=False)
+
+
+def _refuse_array_valued_bool_and_or(expr: Any) -> None:
+    """CONFORMANCE_SPEC §5.6.1: the numeric evaluators reject an ARRAY-valued
+    ``bool_and_or`` reduction — a ``faq`` with an output index that contracts
+    another — at build, under every compiler. A scalar one runs. A
+    value-invention node (``distinct``, a ``key``) or an addressable producer
+    (``id``) yields an index set, not an array, and is not this."""
+    if not isinstance(expr, ExprNode):
+        return
+    if (
+        expr.op == "faq"
+        and expr.semiring == "bool_and_or"
+        and not expr.distinct
+        and expr.key is None
+        and expr.id is None
+    ):
+        out = [o for o in (expr.output_idx or []) if isinstance(o, str)]
+        if out and any(k not in out for k in (expr.ranges or {})):
+            raise SimulationError(
+                "array-valued `bool_and_or` reduction: the numeric evaluators reject a "
+                "`bool_and_or` faq that has output indices and contracts one "
+                "(CONFORMANCE_SPEC §5.6.1); a scalar one, with no output index, runs"
+            )
+    for child in iter_children(expr):
+        _refuse_array_valued_bool_and_or(child)
 
 
 #: Evaluable-core ops no Python pathway evaluates, refused at the front door with

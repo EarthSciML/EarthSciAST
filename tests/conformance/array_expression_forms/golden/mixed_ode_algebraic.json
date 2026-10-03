@@ -1,0 +1,25 @@
+{
+  "fixture": "mixed_ode_algebraic",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "analytical_t1",
+      "assertion_idx": 1,
+      "variable": "u[1]",
+      "actual": 0.3678794411714487
+    },
+    {
+      "test_id": "analytical_t1",
+      "assertion_idx": 2,
+      "variable": "u[3]",
+      "actual": 1.1036383235143457
+    },
+    {
+      "test_id": "analytical_t1",
+      "assertion_idx": 3,
+      "variable": "u[5]",
+      "actual": 1.839397205857243
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "fixture": "03_recurrence_multi_lag",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "two_lags_evaluate",
+      "assertion_idx": 1,
+      "variable": "s",
+      "actual": 1.0
+    },
+    {
+      "test_id": "two_lags_evaluate",
+      "assertion_idx": 2,
+      "variable": "s",
+      "actual": 1.0
+    },
+    {
+      "test_id": "two_lags_evaluate",
+      "assertion_idx": 3,
+      "variable": "s",
+      "actual": 2.0
+    },
+    {
+      "test_id": "two_lags_evaluate",
+      "assertion_idx": 4,
+      "variable": "s",
+      "actual": 3.0
+    },
+    {
+      "test_id": "two_lags_evaluate",
+      "assertion_idx": 5,
+      "variable": "s",
+      "actual": 5.0
+    },
+    {
+      "test_id": "two_lags_evaluate",
+      "assertion_idx": 6,
+      "variable": "s",
+      "actual": 8.0
+    },
+    {
+      "test_id": "two_lags_evaluate",
+      "assertion_idx": 7,
+      "variable": "s",
+      "actual": 13.0
+    },
+    {
+      "test_id": "two_lags_evaluate",
+      "assertion_idx": 8,
+      "variable": "s",
+      "actual": 21.0
+    },
+    {
+      "test_id": "two_lags_evaluate",
+      "assertion_idx": 9,
+      "variable": "s",
+      "actual": 34.0
+    }
+  ]
+}

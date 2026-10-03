@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "UnboundScalarForcing",
-    "description": "A SCALAR data-fed parameter whose `update.source` RESOLVES to a declared data source, in a document nothing supplies data for. Built with no `providers` and no `p` binding for `Forcing.k`, the parameter has no source bound and MUST be refused at construction (`data_source_unbound`, esm-spec 9.6.6). Before the ruling the bindings bound it from its `default` of 0.1 and integrated an exponential decay that the document does not describe: the answer looked like a rate the file names, but came from a placeholder.",
+    "description": "A SCALAR data-fed parameter whose `update.source` RESOLVES to a declared data source, in a document nothing supplies data for. Built with no `providers` and no `p` binding for `Forcing.k`, nothing binds the parameter, so its declared `default` (0.1) is its value (esm-spec §6.3; user ruling 2026-09-29) and the build runs: the inline test pins exp(-0.1).",
     "authors": [
       "Test Suite"
     ],
@@ -40,7 +40,7 @@
               "file_variable": "k_decay"
             }
           },
-          "description": "Data-fed: its value comes from the Wind source, never from `default`."
+          "description": "Data-fed from the Wind source; with nothing bound, its declared `default` is its value (esm-spec §6.3)."
         }
       },
       "equations": [
@@ -65,7 +65,7 @@
       "tests": [
         {
           "id": "decay_at_the_rate_the_data_would_have_supplied",
-          "description": "The number here is exp(-0.1), the trajectory the `default` of 0.1 produces. It is exactly the plausible-looking wrong answer the ruling exists to prevent: nothing bound `Forcing.k`, so no run may report it. A build MUST refuse instead of producing it.",
+          "description": "The number here is exp(-0.1), the trajectory the `default` of 0.1 produces: nothing binds `Forcing.k`, so its declared default serves (esm-spec §6.3; user ruling 2026-09-29).",
           "time_span": {
             "start": 0.0,
             "end": 1.0

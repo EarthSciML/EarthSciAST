@@ -39,6 +39,11 @@
 //!   compile-time-constant table, elementwise in the query. Its element
 //!   semantics are the registry functions themselves, which is what the
 //!   per-cell oracle's `eval_fn` calls, so the agreement is by shared code.
+//! * [`Instr::Calendar`] evaluates one esm-spec §9.2 `datetime.*` entry
+//!   elementwise through the registry, on the binary64 argument, and keeps the
+//!   binary64 result: `eval_fn`'s arithmetic, by sharing its code. Only a
+//!   Float32 document emits it; under Float64 the family is expanded into the
+//!   instructions above.
 //! * [`Instr::Reduce`] folds a source box down over a set of axes with a
 //!   binary kernel, visiting the source in ROW-MAJOR order. That order is the
 //!   per-cell oracle's contraction odometer (`CartesianTuples`, LAST name
@@ -69,6 +74,13 @@
 //!   fail-closed fault when the buffer holds none.
 //! * [`Instr::Reshape`] is a row-major reinterpretation: the source's
 //!   elements, in row-major order, under the output slot's box.
+//! * [`Instr::Sweep`] is `sweep_recurrence`: its body runs once per cell of
+//!   a recurrence's frame, the recurrence axis outermost and ascending, and
+//!   each cell is published (rounded to the working precision) before the
+//!   next one runs.
+//! * [`Instr::ScalarRead`] is `eval_index` with every subscript a run-time
+//!   scalar: a causal self-read (`RecurScope::read`, fail-closed), or
+//!   `index_into` on a state, observed or const array.
 //! * [`Instr::Fault`] latches one fail-closed evaluation fault
 //!   (`E_TREEWALK_CONSTARRAY_OOB`, `E_TREEWALK_INDEX_ON_SCALAR`) exactly as
 //!   the per-cell oracle's `latch_gather_fault` does at the same point: the
@@ -213,6 +225,19 @@ pub(crate) enum Instr {
         y: Option<Operand>,
         out: SlotId,
     },
+    /// `out[k] = f(a[k])` for the §9.2 calendar entry `f =
+    /// CALENDAR_FNS[func]`, evaluated by the closed-function registry on the
+    /// binary64 value of `a[k]`, the result kept unrounded and a registry
+    /// error read as `NaN` ([`calendar_at`]) — what the per-cell oracle's
+    /// `eval_fn` computes, by calling the same function. A scalar `a`
+    /// broadcasts as [`Instr::Un`]'s operand does.
+    ///
+    /// Emitted for a Float32 document only. There the tape's arithmetic
+    /// kernels are binary32, so the expansion the Float64 lowering uses (an
+    /// exact integer decomposition in binary64) would round at every step,
+    /// while the oracle runs the registry in binary64 and hands back its
+    /// result without rounding it.
+    Calendar { func: u8, a: Operand, out: SlotId },
     /// Materialize the inline array literal `const_data[data]` into `out`:
     /// a straight row-major store of the literal's elements, origin all-1s.
     ///
@@ -365,6 +390,35 @@ pub(crate) enum Instr {
     /// oracle substitutes there (`NaN`) is carried by the ordinary
     /// instructions around it.
     Fault { fault: u32 },
+    /// A causal self-reference sweep (esm-spec §4.3.1.1) over
+    /// `sweeps[spec]`: the next `body_len` instructions are the recurrence's
+    /// cell body, lowered once over the sweep position, and they run once per
+    /// cell of the frame, in the order the spec fixes:
+    ///
+    /// ```text
+    /// for cell in frame, recurrence axis outermost ascending,
+    ///                    the other axes inside it in output_idx order:
+    ///     coords[d] = cell[d] (1-based)
+    ///     run the body
+    ///     out[cell] = round(result)      // published before the next cell
+    /// ```
+    ///
+    /// `round` is this instruction's own working precision, the rule's
+    /// (`RecurScope::publish`). This is the interpreter's `sweep_recurrence`
+    /// loop: every cell is evaluated by itself, in the normative order, and
+    /// nothing is batched or reordered (CONFORMANCE_SPEC §5.19.2). Fusion
+    /// copies it and its body verbatim.
+    Sweep { spec: u32 },
+    /// `out = src[subs]`, every subscript a scalar known only at run time
+    /// (`scalar_reads[spec]`): each one rounded as `eval_index_args` rounds
+    /// it, then resolved by the spec's kind — a causal self-read of the array
+    /// an [`Instr::Sweep`] is building (the fail-closed
+    /// `E_TREEWALK_RECUR_UNAVAILABLE` for a cell the sweep has not published),
+    /// a state or observed read (the zero ghost out of range), or a
+    /// const-array read (its boundary policy, else
+    /// `E_TREEWALK_CONSTARRAY_OOB`). This is `index_into` with one full
+    /// subscript tuple, and the recurrence scope's `read`.
+    ScalarRead { src: SrcRef, spec: u32, out: SlotId },
     /// Scalar-`ifelse` short circuit: if `cond != 0`, execute the next
     /// `n_true` instructions then skip the following `n_false`; else skip
     /// `n_true` and execute the following `n_false`. The untaken branch is
@@ -412,14 +466,17 @@ impl Instr {
             | Instr::ConstArray { out, .. }
             | Instr::LoadForcing { out, .. }
             | Instr::Interp { out, .. }
+            | Instr::Calendar { out, .. }
             | Instr::Reduce { out, .. }
             | Instr::Scan { out, .. }
             | Instr::PolyArea { out, .. }
             | Instr::IndexGather { out, .. }
             | Instr::TableGather { out, .. }
             | Instr::SegReduce { out, .. }
-            | Instr::Reshape { out, .. } => Some(*out),
+            | Instr::Reshape { out, .. }
+            | Instr::ScalarRead { out, .. } => Some(*out),
             Instr::JmpIfZero { .. }
+            | Instr::Sweep { .. }
             | Instr::Fault { .. }
             | Instr::Fallback { .. }
             | Instr::Export { .. }
@@ -429,11 +486,19 @@ impl Instr {
     }
 
     /// Visit every slot this instruction DEFINES ([`Instr::out`] plus the
-    /// multi-output [`Instr::Fused`] case).
-    pub(crate) fn for_each_def(&self, fused: &[FusedSpec], mut f: impl FnMut(SlotId)) {
+    /// multi-output [`Instr::Fused`] and [`Instr::Sweep`] cases: a sweep
+    /// defines the array it builds and its coordinate slots).
+    pub(crate) fn for_each_def(&self, t: &SlotTables, mut f: impl FnMut(SlotId)) {
         match self {
+            Instr::Sweep { spec } => {
+                let sw = &t.sweeps[*spec as usize];
+                f(sw.out);
+                for &c in &sw.coords {
+                    f(c);
+                }
+            }
             Instr::Fused { spec } => {
-                let fs = &fused[*spec as usize];
+                let fs = &t.fused[*spec as usize];
                 for &(_, slot) in &fs.outputs {
                     f(slot);
                 }
@@ -450,13 +515,12 @@ impl Instr {
     }
 
     /// Visit every slot this instruction READS.
-    pub(crate) fn for_each_read(
-        &self,
-        dy_writes: &[DyWrite],
-        fused: &[FusedSpec],
-        assemblies: &[AssembleSpec],
-        mut f: impl FnMut(SlotId),
-    ) {
+    ///
+    /// An [`Instr::Sweep`] reports the result it stores after each pass
+    /// through its body; that read happens at the END of the body, which is
+    /// where the slab coloring keeps it live to (`color_slab`). The body's
+    /// instructions report their own reads.
+    pub(crate) fn for_each_read(&self, t: &SlotTables, mut f: impl FnMut(SlotId)) {
         let mut op = |o: &Operand| {
             if let Operand::Slot(s) = o {
                 f(*s);
@@ -467,7 +531,7 @@ impl Instr {
                 op(a);
                 op(b);
             }
-            Instr::Un { a, .. } | Instr::Neg { a, .. } => op(a),
+            Instr::Un { a, .. } | Instr::Neg { a, .. } | Instr::Calendar { a, .. } => op(a),
             Instr::Select { cond, a, b, .. } => {
                 op(cond);
                 op(a);
@@ -516,16 +580,31 @@ impl Instr {
                 op(&Operand::Slot(*base));
             }
             Instr::Assemble { table, .. } => {
-                for (src, _) in &assemblies[*table as usize].parts {
+                for (src, _) in &t.assemblies[*table as usize].parts {
                     op(src);
                 }
             }
+            Instr::ScalarRead { src, spec, .. } => {
+                if let SrcRef::Slot(s) = src {
+                    op(&Operand::Slot(*s));
+                }
+                let sp = &t.scalar_reads[*spec as usize];
+                for s in &sp.subs {
+                    op(s);
+                }
+                if let ScalarReadKind::SelfRead { sweep } = sp.kind {
+                    for &c in &t.sweeps[sweep as usize].coords {
+                        op(&Operand::Slot(c));
+                    }
+                }
+            }
             Instr::JmpIfZero { cond, .. } => op(cond),
+            Instr::Sweep { spec } => op(&t.sweeps[*spec as usize].result),
             Instr::Fallback { .. } | Instr::Fault { .. } => {}
             Instr::Export { slot, .. } => f(*slot),
-            Instr::DyWrite { write } => f(dy_writes[*write as usize].slot),
+            Instr::DyWrite { write } => f(t.dy_writes[*write as usize].slot),
             Instr::Fused { spec } => {
-                let fs = &fused[*spec as usize];
+                let fs = &t.fused[*spec as usize];
                 for inp in &fs.inputs {
                     if let SrcRef::Slot(s) = inp.src {
                         op(&Operand::Slot(s));
@@ -555,6 +634,7 @@ impl Instr {
             Instr::ConstArray { .. } => "ConstArray",
             Instr::LoadForcing { .. } => "LoadForcing",
             Instr::Interp { .. } => "Interp",
+            Instr::Calendar { .. } => "Calendar",
             Instr::Reduce { .. } => "Reduce",
             Instr::Scan { .. } => "Scan",
             Instr::PolyArea { .. } => "PolyArea",
@@ -563,6 +643,8 @@ impl Instr {
             Instr::SegReduce { .. } => "SegReduce",
             Instr::Reshape { .. } => "Reshape",
             Instr::Fault { .. } => "Fault",
+            Instr::Sweep { .. } => "Sweep",
+            Instr::ScalarRead { .. } => "ScalarRead",
             Instr::JmpIfZero { .. } => "JmpIfZero",
             Instr::Fallback { .. } => "Fallback",
             Instr::Export { .. } => "Export",
@@ -1015,6 +1097,196 @@ pub(crate) struct SegTable {
     pub rows: Vec<u32>,
 }
 
+/// The constant part of one [`Instr::Sweep`].
+#[derive(Clone, Debug)]
+pub(crate) struct SweepSpec {
+    /// The variable the recurrence defines, as the compiled model spells it:
+    /// the name an unavailable self-read's fault message carries.
+    pub var: String,
+    /// The array being built: the whole frame, row-major, origin all 1s.
+    pub out: SlotId,
+    /// One scalar slot per frame axis, in `output_idx` order, holding the
+    /// current cell's 1-based coordinate while the body runs.
+    pub coords: SmallVec<[SlotId; 4]>,
+    /// The frame's extents (origin all 1s).
+    pub shape: DimU,
+    /// The recurrence axis: the outermost loop, ascending.
+    pub axis: u8,
+    /// The body: this many instructions after the `Sweep`.
+    pub body_len: u32,
+    /// The cell's value, read after each pass through the body.
+    pub result: Operand,
+}
+
+impl SweepSpec {
+    /// Cells in the frame (0 when an extent is 0).
+    pub(crate) fn n_cells(&self) -> usize {
+        self.shape.iter().product()
+    }
+
+    /// The frame axes in sweep order, slowest first: the recurrence axis,
+    /// then every other axis in `output_idx` order.
+    fn order(&self) -> impl DoubleEndedIterator<Item = usize> + '_ {
+        let axis = self.axis as usize;
+        std::iter::once(axis).chain((0..self.shape.len()).filter(move |&d| d != axis))
+    }
+
+    /// Advance the 0-based frame cell `cell` to the next one in sweep order
+    /// (the last axis of the order fastest, as `CartesianTuples` walks the
+    /// inner axes); `false` after the last cell.
+    pub(crate) fn advance(&self, cell: &mut [usize]) -> bool {
+        for d in self.order().rev() {
+            cell[d] += 1;
+            if cell[d] < self.shape[d] {
+                return true;
+            }
+            cell[d] = 0;
+        }
+        false
+    }
+
+    /// Where the 0-based frame cell `cell` falls in the sweep.
+    pub(crate) fn ordinal(&self, cell: &[usize]) -> usize {
+        self.order().fold(0, |o, d| o * self.shape[d] + cell[d])
+    }
+
+    /// Row-major flat offset of the 0-based frame cell `cell` in `out`.
+    pub(crate) fn flat(&self, cell: &[usize]) -> usize {
+        (0..self.shape.len()).fold(0, |o, d| o * self.shape[d] + cell[d])
+    }
+}
+
+/// How an [`Instr::ScalarRead`] resolves its subscripts.
+#[derive(Clone, Debug)]
+pub(crate) enum ScalarReadKind {
+    /// A causal self-read of the array `sweeps[sweep]` is building
+    /// (`RecurScope::read`): a cell outside the frame, or one the sweep has
+    /// not published yet — at or after the current cell in sweep order — is
+    /// the fail-closed `E_TREEWALK_RECUR_UNAVAILABLE`, never a value. A read
+    /// cell is rounded to the working precision, as the scope rounds it.
+    SelfRead { sweep: u32 },
+    /// A state or observed array: out of range reads the zero ghost.
+    ZeroGhost,
+    /// A const array (CONFORMANCE_SPEC §5.5.5): out of range resolves by
+    /// `policy[d]` (already `Error` for an empty dimension), and the error is
+    /// `E_TREEWALK_CONSTARRAY_OOB` naming `name`.
+    ConstArray {
+        name: String,
+        policy: SmallVec<[crate::value_invention::BoundaryKind; 4]>,
+    },
+}
+
+/// The constant part of one [`Instr::ScalarRead`].
+#[derive(Clone, Debug)]
+pub(crate) struct ScalarReadSpec {
+    /// One scalar subscript per source axis.
+    pub subs: SmallVec<[Operand; 4]>,
+    pub kind: ScalarReadKind,
+}
+
+/// What an [`Instr::ScalarRead`] reads, once its subscripts are known.
+pub(crate) enum ScalarReadAt {
+    /// The source element at these 0-based positions.
+    Elem(SmallVec<[usize; 4]>),
+    /// The zero ghost.
+    Ghost,
+    /// A fail-closed fault with this message; the value is `NaN`.
+    Fault(String),
+}
+
+impl ScalarReadSpec {
+    /// Resolve the 1-based subscripts `raw` (each already rounded by
+    /// [`subscript_of`]) against a source of extents `src_shape`. `cur` is the
+    /// sweep's current 0-based cell, read only by a self-read.
+    ///
+    /// The single definition every executor calls, so their reads cannot
+    /// drift from one another; it restates `index_into` (the zero ghost, the
+    /// const-array policies, the first faulting dimension's message) and
+    /// `RecurScope::read` + `latch_recur_unavailable`.
+    pub(crate) fn resolve(
+        &self,
+        raw: &[i64],
+        src_shape: &[usize],
+        sweeps: &[SweepSpec],
+        cur: &[usize],
+    ) -> ScalarReadAt {
+        match &self.kind {
+            ScalarReadKind::SelfRead { sweep } => {
+                let sw = &sweeps[*sweep as usize];
+                let mut cell: SmallVec<[usize; 4]> = SmallVec::new();
+                for (d, &r) in raw.iter().enumerate() {
+                    if r < 1 || r > sw.shape[d] as i64 {
+                        return ScalarReadAt::Fault(
+                            crate::simulate_array::eval::recur_unavailable_message(&sw.var, raw),
+                        );
+                    }
+                    cell.push((r - 1) as usize);
+                }
+                if sw.ordinal(&cell) >= sw.ordinal(cur) {
+                    return ScalarReadAt::Fault(
+                        crate::simulate_array::eval::recur_unavailable_message(&sw.var, raw),
+                    );
+                }
+                ScalarReadAt::Elem(cell)
+            }
+            ScalarReadKind::ZeroGhost => {
+                let mut ix: SmallVec<[usize; 4]> = SmallVec::new();
+                for (d, &r) in raw.iter().enumerate() {
+                    if r < 1 || r > src_shape[d] as i64 {
+                        return ScalarReadAt::Ghost;
+                    }
+                    ix.push((r - 1) as usize);
+                }
+                ScalarReadAt::Elem(ix)
+            }
+            ScalarReadKind::ConstArray { name, policy } => {
+                use crate::value_invention::BoundaryKind;
+                let mut ix: SmallVec<[usize; 4]> = SmallVec::new();
+                for (d, &r) in raw.iter().enumerate() {
+                    let n = src_shape[d] as i64;
+                    let at = if (1..=n).contains(&r) {
+                        Some((r - 1) as usize)
+                    } else {
+                        match policy[d] {
+                            BoundaryKind::Periodic if n >= 1 => {
+                                Some((r - 1).rem_euclid(n) as usize)
+                            }
+                            BoundaryKind::Clamp if n >= 1 => Some((r.clamp(1, n) - 1) as usize),
+                            _ => None,
+                        }
+                    };
+                    match at {
+                        Some(i) => ix.push(i),
+                        None => {
+                            return ScalarReadAt::Fault(
+                                crate::simulate_array::eval::const_oob_message(name, r, n, d),
+                            );
+                        }
+                    }
+                }
+                ScalarReadAt::Elem(ix)
+            }
+        }
+    }
+}
+
+/// The 1-based position an index expression's value names: `eval_index_args`'
+/// `f.round() as i64` (NaN reads as 0, and an out-of-range value saturates).
+#[inline]
+pub(crate) fn subscript_of(v: f64) -> i64 {
+    v.round() as i64
+}
+
+/// The program tables an instruction's slot reads and definitions are found
+/// through ([`Instr::for_each_read`], [`Instr::for_each_def`]).
+pub(crate) struct SlotTables<'a> {
+    pub dy_writes: &'a [DyWrite],
+    pub fused: &'a [FusedSpec],
+    pub assemblies: &'a [AssembleSpec],
+    pub sweeps: &'a [SweepSpec],
+    pub scalar_reads: &'a [ScalarReadSpec],
+}
+
 /// One forcing-buffer entry the program reads ([`Instr::LoadForcing`]).
 #[derive(Clone, Debug)]
 pub(crate) struct ForcingRef {
@@ -1025,6 +1297,30 @@ pub(crate) struct ForcingRef {
     /// entry's shape when the buffer held it at build time, else the
     /// variable's declared shape.
     pub shape: DimU,
+}
+
+/// The nine calendar entries of the esm-spec §9.2 closed-function registry;
+/// [`Instr::Calendar`]'s `func` indexes here.
+pub(crate) const CALENDAR_FNS: [&str; 9] = [
+    "datetime.year",
+    "datetime.month",
+    "datetime.day",
+    "datetime.hour",
+    "datetime.minute",
+    "datetime.second",
+    "datetime.day_of_year",
+    "datetime.julian_day",
+    "datetime.is_leap_year",
+];
+
+/// [`Instr::Calendar`]'s element: the registry's answer for `CALENDAR_FNS[func]`
+/// at the binary64 `t_utc`, promoted to `f64` without rounding, or `NaN` when
+/// the registry refuses the argument — `eval_fn`'s own reading of a `fn` node.
+pub(crate) fn calendar_at(func: u8, t_utc: f64) -> f64 {
+    use crate::registered_functions::{ClosedArg, evaluate_closed_function};
+    evaluate_closed_function(CALENDAR_FNS[func as usize], &[ClosedArg::Scalar(t_utc)])
+        .map(|v| v.as_f64())
+        .unwrap_or(f64::NAN)
 }
 
 /// Which esm-spec §9.2 `interp.*` entry an [`Instr::Interp`] evaluates.
@@ -1080,14 +1376,26 @@ pub(crate) struct InterpTable {
     pub axis_x: Vec<f64>,
     /// `axis_y`; empty for every kind but [`InterpKind::Bilinear`].
     pub axis_y: Vec<f64>,
+    /// The id of the `out_of_bounds: "error"` table this call was lowered
+    /// from (esm-spec §9.5.1), or `None` for a clamping lookup. When set,
+    /// every query is checked against its axis before the blend.
+    pub strict: Option<String>,
 }
 
 impl InterpTable {
     /// Evaluate this entry at one query point — the SINGLE definition the fast
     /// executor, the reference executor and the build-time constant fold all
     /// call. `y` is read only by [`InterpKind::Bilinear`].
+    ///
+    /// A strict table's out-of-range query latches the oracle's
+    /// `table_lookup_out_of_bounds` fault and yields the `NaN` the oracle
+    /// substitutes alongside it.
     pub(crate) fn at(&self, x: f64, y: f64) -> f64 {
         use crate::registered_functions::{interp_bilinear_at, interp_linear_at, searchsorted_at};
+        if let Some(fault) = self.out_of_bounds(x, y) {
+            crate::simulate_array::eval::latch_gather_fault(fault);
+            return f64::NAN;
+        }
         match self.kind {
             InterpKind::Linear => interp_linear_at(&self.table, &self.axis_x, x),
             InterpKind::Bilinear => {
@@ -1097,6 +1405,17 @@ impl InterpTable {
             // `ClosedValue::as_f64`, so the tape stores the same `f64`.
             InterpKind::SearchSorted => searchsorted_at(x, &self.axis_x) as f64,
         }
+    }
+
+    /// The fault a strict table raises for this query point, checked in the
+    /// oracle's order (the first axis, then the second), or `None`.
+    pub(crate) fn out_of_bounds(&self, x: f64, y: f64) -> Option<String> {
+        use crate::lower_table_lookup::out_of_bounds_fault;
+        let id = self.strict.as_deref()?;
+        out_of_bounds_fault(id, 1, &self.axis_x, x).or_else(|| match self.kind {
+            InterpKind::Bilinear => out_of_bounds_fault(id, 2, &self.axis_y, y),
+            InterpKind::Linear | InterpKind::SearchSorted => None,
+        })
     }
 }
 
@@ -1243,6 +1562,13 @@ pub(crate) struct DyWrite {
     /// Single flat slot for scalar rules (`RhsRule::Scalar`/`IndexedScalar`):
     /// when `Some`, `slot` is scalar and is written to `dy[flat]` directly.
     pub scalar_flat: Option<usize>,
+    /// A left-hand side that is not a constant shift of the output indices
+    /// (`D(u[n + 1 - i])`, `D(m[j, i])` over `[i, j]`): the absolute `dy`
+    /// position of each element of `slot`, in its ROW-MAJOR order, written in
+    /// that order, so where two cells address one position the later one
+    /// stands — the per-cell oracle's walk over the output box. `dest_lo` is
+    /// unused when this is `Some`.
+    pub scatter: Option<Vec<usize>>,
 }
 
 /// What kind of source rule a program rule entry describes.
@@ -1338,6 +1664,10 @@ pub(crate) struct TapeProgram {
     /// Fail-closed fault messages (`Instr::Fault` indexes here), each the
     /// text the per-cell oracle latches at the same point.
     pub faults: Vec<String>,
+    /// Recurrence sweeps (`Instr::Sweep` indexes here).
+    pub sweeps: Vec<SweepSpec>,
+    /// Run-time-subscript reads (`Instr::ScalarRead` indexes here).
+    pub scalar_reads: Vec<ScalarReadSpec>,
     pub state_vars: Vec<StateRef>,
     /// Observed names resolved through the runtime observed map
     /// (`Operand::Obs`/`SrcRef::Obs` index here).
@@ -1363,6 +1693,17 @@ pub(crate) struct TapeProgram {
 }
 
 impl TapeProgram {
+    /// The tables [`Instr::for_each_read`] and [`Instr::for_each_def`] read.
+    pub(crate) fn tables(&self) -> SlotTables<'_> {
+        SlotTables {
+            dy_writes: &self.dy_writes,
+            fused: &self.fused,
+            assemblies: &self.assemblies,
+            sweeps: &self.sweeps,
+            scalar_reads: &self.scalar_reads,
+        }
+    }
+
     /// The `[start, end)` instruction range of a section.
     pub(crate) fn section_range(&self, c: Cadence) -> std::ops::Range<usize> {
         let nc = self.n_const as usize;

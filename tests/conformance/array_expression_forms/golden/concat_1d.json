@@ -1,0 +1,19 @@
+{
+  "fixture": "concat_1d",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "concat_element_check",
+      "assertion_idx": 1,
+      "variable": "head",
+      "actual": 19.999999999999996
+    },
+    {
+      "test_id": "concat_element_check",
+      "assertion_idx": 2,
+      "variable": "tail",
+      "actual": 199.99999999999991
+    }
+  ]
+}

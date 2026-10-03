@@ -105,6 +105,56 @@ function _first_wiener_parameter(model::Model)::Union{Nothing,String}
     return nothing
 end
 
+# A parameter that recomputes ITSELF from a symbolic `expression` update
+# (esm-spec §5.4) is the 1.0.0 spelling of an event that writes it: `crossing`
+# replaces a continuous event, `schedule` and `condition` a discrete one. This
+# evaluator fires no events, so building it anyway freezes the parameter at its
+# default and reports a different model. Refused as the event it stands for
+# (esm-spec §9.6.6). An update read `from` a data source, or supplied by a
+# registered `handler`, is filled from outside the model and is not refused.
+_symbolic_update_construct(kind::AbstractString) =
+    kind == "crossing" ? "continuous event" : "discrete event"
+
+_symbolic_update_refusal(name::AbstractString, kind::AbstractString) = TreeWalkError(
+    ERROR_CODES.UNSUPPORTED_CONSTRUCT,
+    "$(_symbolic_update_construct(kind)) (the `$(kind)` update of parameter '$name', " *
+    "which recomputes it from an expression) is not supported by the Julia tree-walk " *
+    "evaluator; refusing the build rather than running the model without it")
+
+# The first (name, kind) among `vars` whose update carries a symbolic
+# `expression` rule; `nothing` when there is none. Sorted by name, so the
+# refusal names the same parameter on every run.
+function _first_symbolic_update(vars::AbstractDict)
+    for name in sort!(collect(String, keys(vars)))
+        v = vars[name]
+        v isa ModelVariable && v.type == ParameterVariable || continue
+        for rule in _update_rules(v)
+            rule.kind != "wiener" && rule.expression !== nothing &&
+                return (name, rule.kind)
+        end
+    end
+    return nothing
+end
+
+function _first_symbolic_update(model::Model)
+    found = _first_symbolic_update(model.variables)
+    found === nothing || return found
+    for sub in values(model.subsystems)
+        sub isa Model || continue
+        found = _first_symbolic_update(sub)
+        found === nothing || return found
+    end
+    return nothing
+end
+
+# Throw the refusal when a flattened system carries a self-recomputing
+# parameter. Called next to `_refuse_flat_wiener_noise`.
+function _refuse_flat_symbolic_updates(flat::FlattenedSystem)
+    found = _first_symbolic_update(flat.discrete_parameters)
+    found === nothing || throw(_symbolic_update_refusal(found...))
+    return nothing
+end
+
 # The refusal of a doubly-defined unknown (esm-spec §4.9.4), naming the unknown
 # and both equations.
 _doubly_defined_refusal(name::AbstractString, diff_eq::Equation, bare_eq::Equation) =
@@ -153,6 +203,7 @@ end
 struct _DataFeed
     name::String
     source::String
+    var::ModelVariable
 end
 
 # Every data-fed parameter of `model` and, by recursion, of its subsystems, in
@@ -176,7 +227,7 @@ function _collect_data_feeds!(out::Vector{_DataFeed}, model::Model,
             push!(out, _DataFeed(isempty(prefix) ? String(var_name) :
                                  "$(prefix).$(var_name)",
                                  rule.source === nothing ? "(unnamed)" :
-                                 String(rule.source)))
+                                 String(rule.source), var))
             break                      # one parameter is fed by one source
         end
     end
@@ -214,37 +265,31 @@ end
 """
     _refuse_unbound_data_feeds(model, bindings...)
 
-Refuse the build when a data-fed parameter has NOTHING bound to it — no
-provider, no loaded array, no caller-supplied `p` value (esm-spec §9.6.6
-`data_source_unbound`, CONFORMANCE_SPEC §5.46).
+The build's answer for a data-fed parameter that nothing bound — no provider,
+no loaded array, no caller-supplied `p` value (esm-spec §9.6.6, CONFORMANCE_SPEC
+§5.46).
 
-The alternative is not a missing number, it is a plausible-looking wrong
-answer: the tree-walk build bound such a parameter from its `default` and
-integrated it, so a document that says a rate is read from a file reported a
-complete trajectory computed from a placeholder, with nothing in the result
-recording that the file was never opened.
+A declared `default` is the parameter's value when no data is supplied
+(esm-spec §6.3; user ruling 2026-09-29), so such a parameter builds. One with
+neither a default nor a bound value is missing data (§10.10) and is refused as
+`E_TREEWALK_MISSING_DATA`, naming the parameter and the data source that feeds
+it. `data_source_unbound` stays in the registry, where the §9.6.6 vocabulary is
+uniform across bindings, but this binding no longer raises it.
 
 `bindings` are the registries a value can arrive through by the time the build
-runs — the resolved `parameter_overrides`, `const_arrays` (which is where
-`esm_problem` puts a CONST provider's materialized field and a gated
-provider's fetched slab) and `param_arrays` (the live buffer a DISCRETE
-provider rewrites). Checked at the build entry, before any right-hand side
-exists, so the answer is the same under every `compiler`.
+runs — the resolved `parameter_overrides`, `const_arrays` (where `esm_problem`
+puts a CONST provider's materialized field and a gated provider's fetched slab)
+and `param_arrays` (the live buffer a DISCRETE provider rewrites). Checked at the
+build entry, before any right-hand side exists, so the answer is the same under
+every `compiler`.
 """
 function _refuse_unbound_data_feeds(model::Model, bindings...)
     feeds = _collect_data_feeds!(_DataFeed[], model, "")
     isempty(feeds) && return nothing
     for feed in feeds
         _data_feed_is_bound(feed.name, bindings) && continue
-        throw(TreeWalkError(ERROR_CODES.DATA_SOURCE_UNBOUND,
-            "parameter '$(feed.name)' is fed by the data source " *
-            "'$(feed.source)' (an `update` of kind \"data\"), and nothing " *
-            "bound it: no provider, no loaded array, and no `p` value. Pass " *
-            "`providers = Dict(\"$(feed.name)\" => <provider>)` to supply the " *
-            "data, or `p = Dict(\"$(feed.name)\" => <value>)` to pin a value. " *
-            "The build will not fall back to the parameter's `default`: a " *
-            "forcing at its default produces a whole trajectory that looks " *
-            "like an answer"))
+        feed.var.default === nothing || continue
+        throw(_missing_data_error(feed.name, feed.var))
     end
     return nothing
 end

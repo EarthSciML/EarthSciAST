@@ -41,6 +41,7 @@ const _NK_CONST_GATHER = UInt8(9)   # read a captured const/provider array at an
 const _NK_LOOPVAR       = UInt8(10)  # read the current value of an enclosing runtime contraction loop counter (ess-runtime-contraction)
 const _NK_CONTRACTION_LOOP = UInt8(11)  # compile-once ⊕-reduction: iterate a static range, fold ONE body per iteration (ess-runtime-contraction)
 const _NK_STATE_GATHER = UInt8(12)  # read u at a slot computed at eval time from loop-var-dependent subscripts (ess-runtime-contraction)
+const _NK_RECUR_GATHER = UInt8(13)  # a recurrence's causal self-read: a PUBLISHED cell of its own buffer, or a fault (recurrence_sweep.jl)
 
 # The ONE compiled IR node — scalar spines and access-kernel spines are both trees
 # of these. `kind` selects which fields are live. The catch-all `payload::Any` slot
@@ -214,6 +215,30 @@ struct _StateGatherRef
     hi::Vector{Int}
 end
 
+# ── A recurrence's causal self-read (esm-spec §4.3.1.1; recurrence_sweep.jl) ──
+# The payload of an `_NK_RECUR_GATHER` node. The subscripts are the node's
+# `children`; each is checked against its axis of the recurrence's own dense
+# `1…dims[d]` frame, and the cell it names is then read only if the sweep has
+# already PUBLISHED it — its position in the sweep order (`sweep_w`, the weight of
+# each axis in that order) is before `cur[]`, the position of the cell being
+# evaluated. Anything else is `E_TREEWALK_RECUR_UNAVAILABLE`: never the zero
+# ghost an out-of-range state gather reads (CONFORMANCE_SPEC §5.19.4). `base` and
+# `strides` address the observed's buffer block in the extended value vector.
+struct _RecurGather
+    name::String
+    dims::Vector{Int}
+    sweep_w::Vector{Int}
+    base::Int
+    strides::Vector{Int}
+    cur::Base.RefValue{Int}
+end
+
+# Build→compile side channel for it, like `_StateGatherRef`: rides on a
+# `__recur_read` marker op's `.value`, whose `args` are the subscripts.
+struct _RecurGatherRef
+    gather::_RecurGather
+end
+
 # Build-scoped cache of a state array's flat slot table (vname → (slot_flat,
 # strides)). The table maps a state cell's per-dim logical index to its flat `u`
 # slot; it depends ONLY on the state array's `var_map` layout, so it is built once
@@ -384,13 +409,14 @@ end
 # (the merge guard, `_check_fn_group_specs`) hit and a merged kernel's per-lane
 # spec table shares one object per distinct content. Identity when the pool is
 # off (outside a build, or with lane interning off).
-function _build_interp_spec(fname::AbstractString, const_args::Vector{Any})
+function _build_interp_spec(fname::AbstractString, const_args::Vector{Any};
+                            strict::String = "")
     if fname == "interp.linear"
-        return _lane_intern(_build_interp_linear_spec(fname, const_args...))
+        return _lane_intern(_build_interp_linear_spec(fname, const_args...; strict))
     elseif fname == "interp.bilinear"
-        return _lane_intern(_build_interp_bilinear_spec(fname, const_args...))
+        return _lane_intern(_build_interp_bilinear_spec(fname, const_args...; strict))
     elseif fname == "interp.searchsorted"
-        return _lane_intern(_build_interp_searchsorted_spec(fname, const_args...))
+        return _lane_intern(_build_interp_searchsorted_spec(fname, const_args...; strict))
     end
     throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
         "fn '$(fname)' carries const args but has no interp.* spec builder"))
@@ -525,7 +551,11 @@ function _compile_fn_node(expr::OpExpr, compile_child)
                          for (k, pos) in enumerate(cspec.const_positions)]
         children = _Node[compile_child(expr.args[pos])
                          for pos in 1:cspec.arity if !(pos in cspec.const_positions)]
-        payload = (fname, _build_interp_spec(fname, const_args))
+        # A lookup lowered from an `out_of_bounds: "error"` table carries the
+        # table id on this node (lower_table_lookup.jl); the spec checks its
+        # query against the axis before the core runs.
+        payload = (fname, _build_interp_spec(fname, const_args;
+                                             strict = something(expr.table, "")))
     end
     return _mknode(kind=_NK_OP, op=:fn, children=children, payload=payload)
 end
@@ -569,6 +599,14 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
                        payload=_StateGather(ref.slot_flat, ref.strides, ref.lo, ref.hi,
                                             length(ref.slot_flat)),
                        children=subs)
+    end
+
+    # A recurrence's causal self-read (recurrence_sweep.jl): the subscripts
+    # compile as children, the published-cell check rides on `.value`.
+    if op_sym === :__recur_read
+        ref = expr.value::_RecurGatherRef
+        subs = _Node[_compile(a, var_map, param_syms, reg_funcs, memo) for a in expr.args]
+        return _mknode(kind=_NK_RECUR_GATHER, payload=ref.gather, children=subs)
     end
 
     children = _Node[_compile(a, var_map, param_syms, reg_funcs, memo)
@@ -633,7 +671,8 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     elseif op_sym === :broadcast || op_sym === :reshape ||
            op_sym === :transpose || op_sym === :concat
         throw(_unevaluable_operator(expr.op,
-                            "the tree-walk path has no rule for this shape op"))
+                            "outside an index(...) the tree-walk path has no rule for " *
+                            "this shape op; index(op(...), k1, k2, ...) is a gather of its operand"))
     elseif op_sym === :index
         # A forcing gather over a live `param_arrays` buffer (ess-14f.3): the
         # `index` branch of `_resolve_indices` already bounds-checked and
@@ -658,6 +697,17 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         if expr.value isa _ConstGatherRef
             ref = expr.value::_ConstGatherRef
             return _const_gather_node(ref.vals, children; name=ref.name)
+        end
+        # A gather `_resolve_indices` left alone because its base names no
+        # array it knows: a variable with no declared or inferred shape, no
+        # const/forcing data, and no equation defining its cells.
+        base = isempty(expr.args) ? nothing : expr.args[1]
+        if base isa VarExpr
+            bn = (base::VarExpr).name
+            throw(TreeWalkError("E_TREEWALK_INDEX_NOT_ARRAY",
+                "index($(bn), …): '$(bn)' is not an array the build can gather from — " *
+                "it has no declared `shape`, no data bound to it, and no equation " *
+                "that defines its cells, so it has no element to read"))
         end
         # Otherwise: index ops must be resolved to state-slot references by
         # _resolve_indices before reaching _compile; encountering one here
@@ -1716,6 +1766,8 @@ end
         return _eval_contraction_loop(n, u, p, t, T)
     elseif k === _NK_STATE_GATHER
         return _eval_state_gather(n, u, p, t, T)
+    elseif k === _NK_RECUR_GATHER
+        return _eval_recur_gather(n, u, p, t, T)
     else
         return _eval_node_op(n, u, p, t, T)
     end
@@ -1739,6 +1791,58 @@ function _eval_state_gather(n::_Node, u, p, t, ::Type{T}) where {T}
     end
     slot = @inbounds sg.slot_flat[off + 1]
     @inbounds return u[slot]
+end
+
+# A recurrence's causal self-read (`_RecurGather`). The subscripts are evaluated
+# and range-checked in dimension order, as `_eval_state_gather` does (a later one
+# is not evaluated once one is out of the frame), and the read is served only
+# from a cell the sweep has already published.
+function _eval_recur_gather(n::_Node, u, p, t, ::Type{T}) where {T}
+    rg = n.payload::_RecurGather
+    children = n.children
+    ord = 0
+    slot = rg.base
+    @inbounds for d in eachindex(children)
+        sub = round(Int, _eval_node(children[d], u, p, t, T))
+        (1 <= sub <= rg.dims[d]) || _recur_unavailable(rg, children, d, u, p, t, T)
+        ord += (sub - 1) * rg.sweep_w[d]
+        slot += (sub - 1) * rg.strides[d]
+    end
+    ord < rg.cur[] || _recur_unavailable(rg, children, length(children), u, p, t, T)
+    @inbounds return u[slot]
+end
+
+# The fault, off the hot path: the first `nd` subscripts (the ones the read
+# evaluated) are evaluated again for the message.
+@noinline function _recur_unavailable(rg::_RecurGather, children, nd::Int, u, p, t,
+                                      ::Type{T}) where {T}
+    subs = Int[round(Int, _eval_node(children[d], u, p, t, T)) for d in 1:nd]
+    _recur_unavailable_at(rg, rg.cur[], subs)
+end
+
+# `E_TREEWALK_RECUR_UNAVAILABLE` for a self-read of `rg`'s variable at `subs` (the
+# subscripts evaluated before the read stopped) while the sweep is at position
+# `cur`. The emitted sweep (recurrence_sweep.jl) raises it through here too, so
+# both forms say the same thing.
+@noinline function _recur_unavailable_at(rg::_RecurGather, cur::Int, subs::Vector{Int})
+    r = cur
+    cell = zeros(Int, length(rg.dims))
+    for d in sortperm(rg.sweep_w; rev=true)
+        q, r = divrem(r, rg.sweep_w[d])
+        cell[d] = q + 1
+    end
+    inframe = length(subs) == length(rg.dims) &&
+              all(d -> 1 <= subs[d] <= rg.dims[d], eachindex(subs))
+    throw(TreeWalkError("E_TREEWALK_RECUR_UNAVAILABLE",
+        "causal self-read of '$(rg.name)' at [$(join(subs, ", "))" *
+        (length(subs) < length(rg.dims) ? ", …" : "") *
+        "] while evaluating cell [$(join(cell, ", "))]: " *
+        (inframe ? "that cell has not been published yet" :
+                   "that position is outside the recurrence's frame " *
+                   "[$(join(("1:$e" for e in rg.dims), ", "))]") *
+        " (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.4). A self-read is never " *
+        "resolved to a value it cannot have; write the base case as an `ifelse` " *
+        "guard in the body"))
 end
 
 # Compile-once runtime ⊕-reduction (ess-runtime-contraction). Iterates the static
@@ -2048,19 +2152,19 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         if pl isa Tuple{String,_InterpLinearSpec}
             spec = pl[2]
             x = _eval_node(c[1], u, p, t, T)
-            return _interp_linear_core(spec.table, spec.axis, x)
+            return _interp_linear_core(spec, x)
         elseif pl isa Tuple{String,_InterpBilinearSpec}
             spec = pl[2]
             x = _eval_node(c[1], u, p, t, T)
             y = _eval_node(c[2], u, p, t, T)
-            return _interp_bilinear_core(spec.table, spec.axis_x, spec.axis_y, x, y)
+            return _interp_bilinear_core(spec, x, y)
         elseif pl isa Tuple{String,_InterpSearchsortedSpec}
             spec = pl[2]
             x = _eval_node(c[1], u, p, t, T)
             # `convert(T, …)`, not `Float64(…)`: the index is discrete (no
             # derivative), but the ARM must still land in the evaluator's value
             # type or the `:fn` arm infers as a `Union` under ForwardDiff.
-            return convert(T, _interp_searchsorted_core("interp.searchsorted", x, spec.xs))
+            return convert(T, _interp_searchsorted_core(spec, x))
         elseif pl isa Tuple{String,_FnTypedCoreSpec}
             # Registry-declared typed scalar core (registered_functions.jl,
             # ess-dtcore). `T === Float64` folds at compile time (the same

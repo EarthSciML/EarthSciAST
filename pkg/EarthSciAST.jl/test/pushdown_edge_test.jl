@@ -242,7 +242,7 @@ end
             key=Dict("op"=>"skolem", "label"=>"cell", "args"=>["c"])))
 
     doc = Dict(
-        "esm" => "0.9.0",
+        "esm" => "1.0.0",
         "metadata" => Dict("name" => "isrm_pushdown_L1"),
         "index_sets" => Dict(
             "src_cells"  => Dict("kind"=>"interval", "size"=>GRID),

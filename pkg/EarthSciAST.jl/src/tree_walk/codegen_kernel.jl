@@ -922,18 +922,16 @@ function _cg_emit_fn(ctx::_CGCtx, kc, nd::_Node)
     ch = nd.children
     if pl isa Tuple{String,_InterpLinearSpec}
         sp = _cg_tab!(ctx, pl[2])
-        return :(_interp_linear_core($sp.table, $sp.axis, $(_cg_emit(ctx, kc, ch[1]))))
+        return :(_interp_linear_core($sp, $(_cg_emit(ctx, kc, ch[1]))))
     elseif pl isa Tuple{String,_InterpBilinearSpec}
         sp = _cg_tab!(ctx, pl[2])
-        return :(_interp_bilinear_core($sp.table, $sp.axis_x, $sp.axis_y,
-                                       $(_cg_emit(ctx, kc, ch[1])),
+        return :(_interp_bilinear_core($sp, $(_cg_emit(ctx, kc, ch[1])),
                                        $(_cg_emit(ctx, kc, ch[2]))))
     elseif pl isa Tuple{String,_InterpSearchsortedSpec}
         sp = _cg_tab!(ctx, pl[2])
         # `convert(T, …)` exactly as the eval arms: the discrete index must
         # land in the evaluator's value type.
-        return :(convert(_cgT, _interp_searchsorted_core("interp.searchsorted",
-                     $(_cg_emit(ctx, kc, ch[1])), $sp.xs)))
+        return :(convert(_cgT, _interp_searchsorted_core($sp, $(_cg_emit(ctx, kc, ch[1])))))
     elseif pl isa Tuple{String,_InterpLinearLaneSpec}
         # Per-LANE spec table (kernel-class merge, oop_merge.jl): select THIS
         # cell's member spec by the box lane addressing, then call the SAME
@@ -947,8 +945,7 @@ function _cg_emit_fn(ctx::_CGCtx, kc, nd::_Node)
         sp = _cg_name(ctx, "sp")
         addr = _cg_boxaddr(ctx, kc, h.s1, h.s2, h.s3, h.off, _AK_NO_CONN, h)
         return :(let $sp = $hs.specs[$addr]
-                     _interp_linear_core($sp.table, $sp.axis,
-                                         $(_cg_emit(ctx, kc, ch[1])))
+                     _interp_linear_core($sp, $(_cg_emit(ctx, kc, ch[1])))
                  end)
     elseif pl isa Tuple{String,_InterpBilinearLaneSpec}
         h = pl[2]
@@ -956,8 +953,7 @@ function _cg_emit_fn(ctx::_CGCtx, kc, nd::_Node)
         sp = _cg_name(ctx, "sp")
         addr = _cg_boxaddr(ctx, kc, h.s1, h.s2, h.s3, h.off, _AK_NO_CONN, h)
         return :(let $sp = $hs.specs[$addr]
-                     _interp_bilinear_core($sp.table, $sp.axis_x, $sp.axis_y,
-                                           $(_cg_emit(ctx, kc, ch[1])),
+                     _interp_bilinear_core($sp, $(_cg_emit(ctx, kc, ch[1])),
                                            $(_cg_emit(ctx, kc, ch[2])))
                  end)
     elseif pl isa Tuple{String,_InterpSearchsortedLaneSpec}
@@ -969,8 +965,7 @@ function _cg_emit_fn(ctx::_CGCtx, kc, nd::_Node)
         sp = _cg_name(ctx, "sp")
         addr = _cg_boxaddr(ctx, kc, h.s1, h.s2, h.s3, h.off, _AK_NO_CONN, h)
         return :(let $sp = $hs.specs[$addr]
-                     convert(_cgT, _interp_searchsorted_core("interp.searchsorted",
-                                 $(_cg_emit(ctx, kc, ch[1])), $sp.xs))
+                     convert(_cgT, _interp_searchsorted_core($sp, $(_cg_emit(ctx, kc, ch[1]))))
                  end)
     elseif pl isa Tuple{String,_FnTypedCoreSpec}
         # Registry-declared typed scalar core (ess-dtcore). `_cgT === Float64`

@@ -89,3 +89,99 @@ class SimulationError(EarthSciAstError):
     so ``earthsci_ast.simulation.SimulationError`` and every other established
     spelling are unchanged.
     """
+
+
+class MissingDataError(SimulationError):
+    """``E_TREEWALK_MISSING_DATA``: a SHAPED parameter reached construction with
+    no value — no ``default``, no override, no caller array, and, for one the
+    document feeds from a data source or a registered handler, no data from it
+    either. esm-spec §10.10 makes "a parameter with neither a default nor a
+    supplied value" an error when a problem is built.
+
+    The message names the parameter, what the document says feeds it, and how a
+    caller supplies it; ``reason`` adds why a data source's read failed, when one
+    did. Julia and Rust raise the same code.
+    """
+
+    code = "E_TREEWALK_MISSING_DATA"
+
+    def __init__(self, name: str, var: object, reason: str | None = None) -> None:
+        self.name = name
+        shape = getattr(var, "shape", None)
+        shape_s = f" (shape [{', '.join(shape)}])" if shape else ""
+        update = getattr(var, "update", None)
+        rules = update if isinstance(update, list) else ([update] if update is not None else [])
+        feeds = []
+        for rule in rules:
+            src = getattr(rule, "from_source", None)
+            handler = getattr(rule, "handler", None)
+            if src is not None:
+                feeds.append(
+                    f"the data source '{getattr(rule, 'source', None) or '?'}' "
+                    f"(file_variable '{src.file_variable}')"
+                )
+            elif handler is not None:
+                feeds.append(
+                    f"the registered handler '{handler.handler_id}' (update kind "
+                    f"'{rule.kind}'), which writes it only when it fires"
+                )
+        if not feeds:
+            fed = "Nothing in the document gives it a value."
+            how = (
+                f"pass its array in `const_arrays={{'{name}': array}}`, or declare a `default` on it"
+                if shape
+                else f"pass it in `p={{'{name}': value}}`, or declare a `default` on it"
+            )
+        else:
+            if reason is None:
+                fed = (
+                    f"The document feeds it from {' and '.join(feeds)}, and no data for it "
+                    "was supplied at construction."
+                )
+            else:
+                fed = (
+                    f"The document feeds it from {' and '.join(feeds)}, which could not be "
+                    f"read at construction: {reason}."
+                )
+            how = (
+                "pass a provider for it in `providers` (or a `provider_factory`), or its "
+                f"array in `const_arrays={{'{name}': array}}` (a constant snapshot), or "
+                "declare a `default` on it"
+            )
+        kind = "shaped " if shape else ""
+        if getattr(var, "default", None) is None:
+            head = f"no data supplied for the {kind}parameter '{name}'{shape_s}, which declares no `default`."
+            rule = (
+                " A parameter with neither a default nor a supplied value is an error when a "
+                "problem is built (esm-spec §10.10)."
+            )
+        else:
+            # Only a failed read reaches here for a parameter with a default: the
+            # data the caller asked construction to fetch is not there, and a
+            # failed build raises (esm-libraries-spec §2.5.2) rather than
+            # running on the placeholder.
+            head = f"no data could be read for the {kind}parameter '{name}'{shape_s}."
+            rule = ""
+        super().__init__(f"{self.code}: {head} {fed}{rule} To supply it, {how}.")
+
+
+class MissingInitialValueError(SimulationError):
+    """``E_TREEWALK_MISSING_INITIAL_VALUE``: an unknown that needs a starting
+    value reached construction with none — no ``default``, no initial condition
+    or ``ic`` equation, and no caller ``u0`` (esm-spec §11.4). Julia and Rust
+    raise the same code.
+    """
+
+    code = "E_TREEWALK_MISSING_INITIAL_VALUE"
+
+    def __init__(self, names: list[str]) -> None:
+        self.names = list(names)
+        shown = ", ".join(f"'{n}'" for n in self.names[:5]) + (", …" if len(self.names) > 5 else "")
+        first = self.names[0]
+        super().__init__(
+            f"{self.code}: no starting value for {len(self.names)} unknown(s) ({shown}): "
+            "the unknown declares no `default`, and no initial condition, `ic` equation or "
+            "caller `u0` sets it. An unknown with no starting value is an error when a problem "
+            f"is built (esm-spec §11.4). To supply it, pass `u0={{'{first}': value}}` to "
+            "`esm_problem`, or declare a `default` on the unknown."
+        )

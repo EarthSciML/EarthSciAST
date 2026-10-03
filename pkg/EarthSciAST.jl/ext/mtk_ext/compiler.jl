@@ -476,6 +476,8 @@ function _mtk_run_system(input; metaparameters, base_path, renames_out)
         "esm_problem: unsupported input of type $(typeof(input)); pass a path, " *
         "EsmFile, FlattenedSystem, or native ESM Dict"))
     flat = EarthSciAST.lower_table_lookups(input)
+    EarthSciAST._refuse_parameter_definitions(flat.equations,
+        merge(flat.state_variables, flat.observed_variables, flat.parameters))
     merge!(renames_out, flat.metadata.merged_variable_renames)
     # The run DOCUMENT is metadata only: output naming / CF coordinates, the
     # §2.2 `solver` block, the equation count `show` prints, and the component
@@ -800,14 +802,18 @@ end
 # What `solve(prob, alg; …)` integrates. The prototype is remade rather than
 # rebuilt so the events, the mass matrix, the observed function and the
 # initialization data the compile produced ride into every run; `u0` and
-# `tspan` are the only two things a run varies, and `u0` is the problem's
-# SEEDED vector (the document's initial conditions, then the caller's), in the
-# compiled system's own unknown order because `var_map` was built from it.
+# `tspan` are what a run varies, and `u0` is the problem's SEEDED vector (the
+# document's initial conditions, then the caller's), in the compiled system's
+# own unknown order because `var_map` was built from it. A parameter carrier
+# installed by `remake(prob; p = …)` (ModelingToolkit's own object — a `Dict`
+# override is refused as `:structural`) rides in too, or the run would silently
+# keep the build's parameters.
 function EarthSciAST._backend_ode_problem(b::MTKCompiler, prob, tspan)
+    pkw = prob.p === b.prototype.p ? (;) : (; p = prob.p)
     b.prototype.u0 === nothing &&
-        return ModelingToolkit.SciMLBase.remake(b.prototype; tspan = tspan)
+        return ModelingToolkit.SciMLBase.remake(b.prototype; tspan = tspan, pkw...)
     return ModelingToolkit.SciMLBase.remake(b.prototype;
-                                            u0 = copy(prob.u0), tspan = tspan)
+                                            u0 = copy(prob.u0), tspan = tspan, pkw...)
 end
 
 # ---------------------------------------------------------------------------

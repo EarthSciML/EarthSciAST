@@ -382,10 +382,6 @@ is. See the comment at the skip below.
 function lower_reactions_to_equations(reactions::Vector{Reaction},
                                       species::Vector{Species})::Vector{Equation}
     equations = Equation[]
-    if isempty(species)
-        return equations
-    end
-
     species_names = [sp.name for sp in species]
     species_idx = Dict{String, Int}(name => i for (i, name) in enumerate(species_names))
 
@@ -395,9 +391,16 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
 
     for (j, rxn) in enumerate(reactions)
         for (sp, signed_stoich) in each_stoich_term(rxn)
-            if haskey(species_idx, sp)
-                S[species_idx[sp], j] += signed_stoich
-            end
+            # A substrate or product the system does not declare is refused, not
+            # dropped: dropping it lowers a different reaction (a product that is
+            # never produced) with no diagnostic (esm-spec §7.2,
+            # `undefined_species`). The other bindings refuse it too.
+            haskey(species_idx, sp) || throw(ParseError(
+                "[$(ERROR_CODES.UNDEFINED_SPECIES)] reaction '$(rxn.id)' names species " *
+                "'$sp', which the reaction system does not declare";
+                code=ERROR_CODES.UNDEFINED_SPECIES,
+                details=Dict{String,Any}("species" => sp, "reaction_id" => rxn.id)))
+            S[species_idx[sp], j] += signed_stoich
         end
     end
 

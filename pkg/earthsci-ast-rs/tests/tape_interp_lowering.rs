@@ -656,3 +656,255 @@ fn a_table_the_registry_rejects_bails_rather_than_blending() {
     assert!(taped[iy].is_nan(), "the sentinel survives the bail");
     assert_same_bits("bad axis", &taped, &oracle);
 }
+
+// ---------------------------------------------------------------------------
+// `out_of_bounds: "error"` tables (esm-spec §9.5.1)
+// ---------------------------------------------------------------------------
+
+/// A document reading one `out_of_bounds: "error"` table through
+/// `table_lookup`, with every query a state so a probe can place it anywhere.
+/// `table` is the `function_tables` entry, `lookup_axes` the lookup's `axes`
+/// map, `states` the query states besides `y`, and `shape` the index-set
+/// block (empty for scalars).
+fn strict_doc(table: &str, lookup_axes: &str, states: &[&str], shape: Option<usize>) -> String {
+    let (index_sets, shape_attr) = match shape {
+        Some(n) => (
+            format!(r#""index_sets": {{ "cell": {{ "kind": "interval", "size": {n} }} }},"#),
+            r#", "shape": ["cell"]"#.to_string(),
+        ),
+        None => (String::new(), String::new()),
+    };
+    let mut vars: Vec<String> = states
+        .iter()
+        .map(|s| {
+            format!(r#""{s}": {{ "type": "unknown", "units": "1", "default": 0.0{shape_attr} }}"#)
+        })
+        .collect();
+    vars.push(format!(
+        r#""y": {{ "type": "unknown", "units": "1", "default": 0.0{shape_attr} }}"#
+    ));
+    let mut eqs: Vec<String> = states
+        .iter()
+        .map(|s| {
+            format!(r#"{{ "lhs": {{ "op": "D", "args": ["{s}"], "wrt": "t" }}, "rhs": 0.0 }}"#)
+        })
+        .collect();
+    eqs.push(format!(
+        r#"{{ "lhs": {{ "op": "D", "args": ["y"], "wrt": "t" }},
+             "rhs": {{ "op": "table_lookup", "table": "tab", "axes": {lookup_axes}, "args": [] }} }}"#
+    ));
+    format!(
+        r#"{{
+  "esm": "1.1.0",
+  "metadata": {{ "name": "TapeStrictTable", "description": "A lookup into an out_of_bounds: error table, queried by states." }},
+  {index_sets}
+  "function_tables": {{ "tab": {table} }},
+  "models": {{ "M": {{ "variables": {{ {vars} }}, "equations": [ {eqs} ] }} }}
+}}"#,
+        vars = vars.join(", "),
+        eqs = eqs.join(", ")
+    )
+}
+
+/// The native build of `doc` — which must succeed with every rule taped, so
+/// the probes below compare two different evaluators — and its compiled model.
+fn strict_compiled(doc: &str) -> std::rc::Rc<ArrayCompiled> {
+    let file = load_string(doc).unwrap_or_else(|e| panic!("load: {e:?}"));
+    let prob = esm_problem(
+        &file,
+        (0.0, 1.0),
+        ProblemOptions {
+            compiler: Some(Compiler::Native),
+            rhs: Rhs::Always,
+            ..Default::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("native build: {e}"));
+    let compiled = prob.debug_array_compiled().expect("an array backend");
+    assert_fully_taped(&compiled, "strict table");
+    compiled
+}
+
+/// The tape's answer and fault, and the oracle's, for one probe state.
+#[allow(clippy::type_complexity)]
+fn both_with_faults(
+    compiled: &ArrayCompiled,
+    u: &[f64],
+) -> ((Vec<f64>, Option<String>), (Vec<f64>, Option<String>)) {
+    use earthsci_ast::simulate_array::take_const_array_oob;
+    let p: HashMap<String, f64> = HashMap::new();
+    take_const_array_oob();
+    let (taped, _) = compiled.debug_eval_rhs(u, 0.0, &p, false);
+    let tape_fault = take_const_array_oob();
+    let (oracle, _) = compiled.debug_eval_rhs(u, 0.0, &p, true);
+    let oracle_fault = take_const_array_oob();
+    ((taped, tape_fault), (oracle, oracle_fault))
+}
+
+/// Tape and oracle agree bit for bit, raise the SAME fault, and the fault is
+/// raised exactly for the queries outside the axis.
+fn assert_strict_agreement(compiled: &ArrayCompiled, u: &[f64], out_of_range: bool, what: &str) {
+    let ((taped, tf), (oracle, of)) = both_with_faults(compiled, u);
+    assert_same_bits(what, &taped, &oracle);
+    assert_eq!(tf, of, "{what}: tape and oracle faults");
+    match (&tf, out_of_range) {
+        (Some(msg), true) => assert!(
+            msg.starts_with("table_lookup_out_of_bounds: table `tab`"),
+            "{what}: {msg}"
+        ),
+        (None, false) => {}
+        (f, _) => panic!("{what}: out_of_range={out_of_range} but fault {f:?}"),
+    }
+}
+
+#[test]
+fn a_strict_linear_table_is_taped_and_faults_exactly_where_the_oracle_does() {
+    let table = format!(
+        r#"{{ "axes": [{{ "name": "q", "values": {axis} }}], "interpolation": "linear",
+             "out_of_bounds": "error", "data": {table} }}"#,
+        axis = json_array(&AXIS),
+        table = json_array(&TABLE)
+    );
+    let compiled = strict_compiled(&strict_doc(&table, r#"{ "q": "q" }"#, &["q"], None));
+    let (iq, iy) = (slot(&compiled, "q"), slot(&compiled, "y"));
+    for x in linear_probes() {
+        let mut u = vec![0.0; compiled.state_variable_names().len()];
+        u[iq] = x;
+        // Not `!(lo..=hi).contains(&x)`: that is true for a NaN query, which
+        // is not out of range (§9.2 propagates it).
+        #[allow(clippy::manual_range_contains)]
+        let out = x < AXIS[0] || x > AXIS[4];
+        assert_strict_agreement(&compiled, &u, out, &format!("strict linear q={x:?}"));
+        if !out {
+            // In range, the clamp arithmetic: the registry's own answer.
+            let (taped, _) = compiled.debug_eval_rhs(&u, 0.0, &HashMap::new(), false);
+            let want = evaluate_closed_function(
+                "interp.linear",
+                &[
+                    ClosedArg::Array(TABLE.to_vec()),
+                    ClosedArg::Array(AXIS.to_vec()),
+                    ClosedArg::Scalar(x),
+                ],
+            )
+            .expect("registry")
+            .as_f64();
+            assert!(
+                same_bits(taped[iy], want),
+                "q={x:?}: {} vs {want}",
+                taped[iy]
+            );
+        }
+    }
+}
+
+#[test]
+fn a_strict_bilinear_table_checks_both_axes() {
+    let table = format!(
+        r#"{{ "axes": [{{ "name": "x", "values": {ax} }}, {{ "name": "y", "values": {ay} }}],
+             "interpolation": "bilinear", "out_of_bounds": "error", "data": {table} }}"#,
+        ax = json_array(&AXIS_X),
+        ay = json_array(&AXIS_Y),
+        table = json_array_2d(&TABLE_2D)
+    );
+    let compiled = strict_compiled(&strict_doc(
+        &table,
+        r#"{ "x": "a", "y": "b" }"#,
+        &["a", "b"],
+        None,
+    ));
+    let (ia, ib) = (slot(&compiled, "a"), slot(&compiled, "b"));
+    let xs = [-0.5, 0.0, 1.5, 2.0, 2.5, f64::NAN];
+    let ys = [-1.0, 0.0, 12.0, 30.0, 31.0, f64::NAN];
+    for &a in &xs {
+        for &b in &ys {
+            let mut u = vec![0.0; compiled.state_variable_names().len()];
+            u[ia] = a;
+            u[ib] = b;
+            // NaN is in range on either axis, so not `!contains` (see above).
+            #[allow(clippy::manual_range_contains)]
+            let out = a < 0.0 || a > 2.0 || b < 0.0 || b > 30.0;
+            assert_strict_agreement(
+                &compiled,
+                &u,
+                out,
+                &format!("strict bilinear ({a:?},{b:?})"),
+            );
+        }
+    }
+}
+
+/// `nearest` lowers to `index(data, interp.searchsorted(q, axis))`, and the
+/// marker sits on the search. The tape does not lower an `index` whose
+/// subscript is a run-time value (native refuses that document whatever the
+/// table's `out_of_bounds`), so this one is checked on the oracle alone.
+#[test]
+fn a_strict_nearest_table_checks_its_query() {
+    use earthsci_ast::simulate_array::take_const_array_oob;
+    let table = format!(
+        r#"{{ "axes": [{{ "name": "q", "values": {axis} }}], "interpolation": "nearest",
+             "out_of_bounds": "error", "data": {table} }}"#,
+        axis = json_array(&AXIS),
+        table = json_array(&TABLE)
+    );
+    let file = load_string(&strict_doc(&table, r#"{ "q": "q" }"#, &["q"], None)).expect("load");
+    let prob = esm_problem(
+        &file,
+        (0.0, 1.0),
+        ProblemOptions {
+            compiler: Some(Compiler::Interpreter),
+            rhs: Rhs::Always,
+            ..Default::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("interpreter build: {e}"));
+    let compiled = prob.debug_array_compiled().expect("an array backend");
+    let (iq, iy) = (slot(&compiled, "q"), slot(&compiled, "y"));
+    for (x, want) in [
+        (-1.0, None),
+        (0.0, Some(10.0)),
+        (2.5, Some(40.0)),
+        (7.0, Some(160.0)),
+        (7.5, None),
+    ] {
+        let mut u = vec![0.0; compiled.state_variable_names().len()];
+        u[iq] = x;
+        take_const_array_oob();
+        let (oracle, _) = compiled.debug_eval_rhs(&u, 0.0, &HashMap::new(), true);
+        let fault = take_const_array_oob();
+        match want {
+            Some(v) => {
+                assert_eq!(fault, None, "q={x}");
+                assert_eq!(oracle[iy], v, "q={x}");
+            }
+            None => assert!(
+                fault
+                    .as_deref()
+                    .is_some_and(|m| m.starts_with("table_lookup_out_of_bounds: table `tab`")),
+                "q={x}: {fault:?}"
+            ),
+        }
+    }
+}
+
+/// A gridded query: one out-of-range cell faults the whole call, in both
+/// evaluators, with the same (first) cell's message.
+#[test]
+fn a_strict_table_over_a_gridded_query_faults_on_any_cell() {
+    let table = format!(
+        r#"{{ "axes": [{{ "name": "q", "values": {axis} }}], "interpolation": "linear",
+             "out_of_bounds": "error", "data": {table} }}"#,
+        axis = json_array(&AXIS),
+        table = json_array(&TABLE)
+    );
+    let compiled = strict_compiled(&strict_doc(&table, r#"{ "q": "q" }"#, &["q"], Some(4)));
+    let q0 = slot(&compiled, "q[1]");
+    let n = compiled.state_variable_names().len();
+    let mut u = vec![0.0; n];
+    for (k, v) in [0.5, 2.75, 7.0, 1.0].iter().enumerate() {
+        u[q0 + k] = *v;
+    }
+    assert_strict_agreement(&compiled, &u, false, "gridded, all in range");
+    u[q0 + 2] = 9.0;
+    u[q0 + 3] = -2.0;
+    assert_strict_agreement(&compiled, &u, true, "gridded, two cells out of range");
+}

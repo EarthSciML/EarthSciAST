@@ -105,6 +105,71 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
         @test expected ≈ [43.0, 143.75]   # the concrete DUO effective areas
     end
 
+    @testset "edge-enumeration: a missing ragged factor is refused by name" begin
+        # With no connectivity the producer cannot run: the derived set is
+        # refused under its own name, never a KeyError from the engine.
+        m, isets = _vi_typed_fixture("tests/valid/faq/edge_enumeration_area_eff.esm",
+                                     "EdgeEnumerationAreaEff")
+        err = try
+            ESS.materialize_value_invention(m, isets, Dict{String,Any}(), Dict{String,Float64}())
+            nothing
+        catch e
+            e
+        end
+        @test err isa ESS.TreeWalkError
+        @test err.code == "derived_index_set_unmaterialized"
+        @test occursin("n_verts_on_face", err.detail)
+    end
+
+    @testset "edge-enumeration: const-defined ragged factors are constant factors" begin
+        # tests/conformance/value_invention_geometry: every key column is an
+        # unknown defined by a `const` node, registered under its flattened
+        # name, while the ragged set names its factors by bare name.
+        path = _vi_fixture("tests/conformance/value_invention_geometry/fixtures/edge_enumeration_ode.esm")
+        dus = Dict{Symbol,Vector{Float64}}()
+        for c in (:interpreter, :native)
+            prob = ESS.esm_problem(path, (0.0, 1.0); compiler = c)
+            du = fill(NaN, length(prob.u0))
+            prob.f!(du, ones(length(prob.u0)), prob.p, 0.0)
+            dus[c] = du
+            @test sort(du) == [5.0, 43.0, 143.75]
+        end
+        @test reinterpret(UInt64, dus[:native]) == reinterpret(UInt64, dus[:interpreter])
+    end
+
+    @testset "skolem_distinct_rank: shaped edge endpoints build with data" begin
+        # edge_lo / edge_hi are shaped [faces, local_edges]; with their data the
+        # derived edge set is sized and the ODE builds under both compilers.
+        path = _vi_fixture("tests/valid/faq/skolem_distinct_rank.esm")
+        lo = Float64[mod1(f + l, 5) for f in 1:12, l in 1:3]
+        ca = Dict{String,Any}("edge_lo" => lo, "edge_hi" => lo .+ 1)
+        dus = Dict{Symbol,Vector{Float64}}()
+        for c in (:interpreter, :native)
+            prob = ESS.esm_problem(path, (0.0, 1.0); compiler = c, const_arrays = ca,
+                                   u0 = harness_u0(path))
+            du = fill(NaN, length(prob.u0))
+            prob.f!(du, ones(length(prob.u0)), prob.p, 0.0)
+            dus[c] = du
+            @test du == [-1.0]
+        end
+        @test reinterpret(UInt64, dus[:native]) == reinterpret(UInt64, dus[:interpreter])
+    end
+
+    @testset "argmin: a right-hand side gathers through the assignment buffer" begin
+        path = _vi_fixture("tests/conformance/value_invention_geometry/fixtures/nearest_generator_ode.esm")
+        dus = Dict{Symbol,Vector{Float64}}()
+        for c in (:interpreter, :native)
+            prob = ESS.esm_problem(path, (0.0, 1.0); compiler = c)
+            du = fill(NaN, length(prob.u0))
+            prob.f!(du, zeros(length(prob.u0)), prob.p, 0.0)
+            dus[c] = du
+            w = [du[prob.var_map[only(k for k in keys(prob.var_map) if endswith(k, "w[$i]"))]]
+                 for i in 1:4]
+            @test w == [0.0, 1.0, 1.0, 2.0]    # gx[assign], assign = [1, 2, 2, 3]
+        end
+        @test reinterpret(UInt64, dus[:native]) == reinterpret(UInt64, dus[:interpreter])
+    end
+
     @testset "edge-enumeration: adversarial mesh inputs collapse to the golden" begin
         # §5.5.4: permuted faces / reversed winding / a duplicate face all yield
         # the identical canonically-sorted edge set (the relational engine's job).

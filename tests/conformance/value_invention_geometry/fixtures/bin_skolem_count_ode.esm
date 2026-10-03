@@ -1,0 +1,369 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ValueInventionBinSkolemCountODE",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "description": "The broad phase of a conservative regrid, counted by a right-hand side. Each source and target cell is binned by skolem(floor(lon/dx), floor(lat/dy)); the candidate-pair set is the `distinct` equi-join of the two bin columns. Source longitudes 0.2, 0.5, 1.2, 3.2 fall in bins 0, 0, 1, 3 and target longitudes 0.1, 0.9, 1.5, 9.9 in 0, 0, 1, 9, so the pairs are (1,1), (1,2), (2,1), (2,2), (3,3). The coordinates are unknowns defined by `const` nodes and the bin widths are scalar parameters with defaults. d(n_pairs)/dt = |candidate_pairs|, so n_pairs(1) = 5."
+  },
+  "index_sets": {
+    "src_cells": {
+      "kind": "interval",
+      "size": 4
+    },
+    "tgt_cells": {
+      "kind": "interval",
+      "size": 4
+    },
+    "candidate_pairs": {
+      "kind": "derived",
+      "from_faq": "candidate_set"
+    }
+  },
+  "models": {
+    "BinSkolemCountODE": {
+      "variables": {
+        "src_lon": {
+          "type": "unknown",
+          "shape": [
+            "src_cells"
+          ]
+        },
+        "src_lat": {
+          "type": "unknown",
+          "shape": [
+            "src_cells"
+          ]
+        },
+        "tgt_lon": {
+          "type": "unknown",
+          "shape": [
+            "tgt_cells"
+          ]
+        },
+        "tgt_lat": {
+          "type": "unknown",
+          "shape": [
+            "tgt_cells"
+          ]
+        },
+        "dx": {
+          "type": "parameter",
+          "default": 1.0
+        },
+        "dy": {
+          "type": "parameter",
+          "default": 1.0
+        },
+        "src_bin": {
+          "type": "unknown",
+          "shape": [
+            "src_cells"
+          ]
+        },
+        "tgt_bin": {
+          "type": "unknown",
+          "shape": [
+            "tgt_cells"
+          ]
+        },
+        "pair_exists": {
+          "type": "unknown",
+          "shape": [
+            "candidate_pairs"
+          ]
+        },
+        "n_pairs": {
+          "type": "unknown",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": "src_lon",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              0.2,
+              0.5,
+              1.2,
+              3.2
+            ]
+          }
+        },
+        {
+          "lhs": "src_lat",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "lhs": "tgt_lon",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              0.1,
+              0.9,
+              1.5,
+              9.9
+            ]
+          }
+        },
+        {
+          "lhs": "tgt_lat",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "index",
+            "args": [
+              "src_bin",
+              "i"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              }
+            },
+            "args": [
+              "src_lon",
+              "src_lat",
+              "dx",
+              "dy"
+            ],
+            "expr": {
+              "op": "skolem",
+              "label": "bin",
+              "args": [
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "src_lon",
+                            "i"
+                          ]
+                        },
+                        "dx"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "src_lat",
+                            "i"
+                          ]
+                        },
+                        "dy"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "index",
+            "args": [
+              "tgt_bin",
+              "j"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "args": [
+              "tgt_lon",
+              "tgt_lat",
+              "dx",
+              "dy"
+            ],
+            "expr": {
+              "op": "skolem",
+              "label": "bin",
+              "args": [
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "tgt_lon",
+                            "j"
+                          ]
+                        },
+                        "dx"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "tgt_lat",
+                            "j"
+                          ]
+                        },
+                        "dy"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "index",
+            "args": [
+              "pair_exists",
+              "p"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "id": "candidate_set",
+            "semiring": "bool_and_or",
+            "distinct": true,
+            "output_idx": [
+              "p"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "src_bin",
+                    "tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "args": [
+              "src_bin",
+              "tgt_bin"
+            ],
+            "key": {
+              "op": "skolem",
+              "label": "pair",
+              "args": [
+                "i",
+                "j"
+              ]
+            },
+            "expr": {
+              "op": "true",
+              "args": []
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "n_pairs"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "semiring": "sum_product",
+            "output_idx": [],
+            "ranges": {
+              "p": {
+                "from": "candidate_pairs"
+              }
+            },
+            "expr": 1.0
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "bin_skolem_count_ode",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "tolerance": {
+            "rel": 1e-09,
+            "abs": 1e-12
+          },
+          "assertions": [
+            {
+              "variable": "n_pairs",
+              "time": 1.0,
+              "expected": 5.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,230 @@
+{
+ "category": "array_expression_forms",
+ "runner": "inline_tests",
+ "version": "1.0",
+ "description": "Cross-binding conformance for array expression and equation forms that are relabellings of cells: `index` over a `reshape`, `transpose` or `concat` (esm-spec §4.3.5), which is an element of the operand at other subscripts; a positional `broadcast` of anonymous operands of different shapes (§4.3.4); and an arrayed definition `faq{i}(index(v, i)) ~ rhs` of an observed whose shape was never declared (§6.3.1), which defines the whole of `v` over the frame. Each document carries its own §6.6 `tests` block, so the authored expectation travels with the maths; the goldens are the Julia `interpreter`'s actuals for the same assertions.",
+ "reference_binding": "julia",
+ "reference_compiler": "interpreter",
+ "bindings_required": [
+  "julia",
+  "python",
+  "rust"
+ ],
+ "scope_excluded": {
+  "go": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). This is an exclusion from the CATEGORY, not from the rule.",
+  "typescript": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). This is an exclusion from the CATEGORY, not from the rule."
+ },
+ "integrators": {
+  "julia": {
+   "algorithm": "Tsit5",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  },
+  "python": {
+   "method": "LSODA",
+   "rtol": 1e-12,
+   "atol": 1e-14
+  },
+  "rust": {
+   "solver": "Erk",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  }
+ },
+ "tolerances": {
+  "golden_rtol": 1e-09,
+  "golden_atol": 1e-11,
+  "detail": "The band between a producer's actual and the Julia-interpreter golden, separate from and tighter than each assertion's own §6.6.4 band. Every probe here integrates a constant tendency from a zero initial condition, or a linear decay, so an integrator contributes nothing near this floor."
+ },
+ "fixtures": [
+  {
+   "id": "reshape_roundtrip",
+   "path": "fixtures/faq/11_reshape_roundtrip.esm",
+   "model": "ReshapeRoundTrip",
+   "golden": "golden/reshape_roundtrip.json",
+   "tags": [
+    "reshape",
+    "column-major",
+    "esm-spec-4.3.5"
+   ],
+   "note": "Referenced, not authored: the document already lives in the corpus.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "transpose_2d",
+   "path": "fixtures/faq/12_transpose_2d.esm",
+   "model": "Transpose2D",
+   "golden": "golden/transpose_2d.json",
+   "tags": [
+    "transpose",
+    "esm-spec-4.3.5"
+   ],
+   "note": "Referenced, not authored: the document already lives in the corpus.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "concat_1d",
+   "path": "fixtures/faq/13_concat_1d.esm",
+   "model": "Concat1D",
+   "golden": "golden/concat_1d.json",
+   "tags": [
+    "concat",
+    "esm-spec-4.3.5"
+   ],
+   "note": "Referenced, not authored: the document already lives in the corpus.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "broadcast_elementwise",
+   "path": "fixtures/faq/14_broadcast_elementwise.esm",
+   "model": "BroadcastShapes",
+   "golden": "golden/broadcast_elementwise.json",
+   "tags": [
+    "broadcast",
+    "positional",
+    "esm-spec-4.3.4"
+   ],
+   "note": "Referenced, not authored: the document already lives in the corpus.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "mixed_ode_algebraic",
+   "path": "fixtures/faq/02_mixed_ode_algebraic.esm",
+   "model": "MixedODEAlg",
+   "golden": "golden/mixed_ode_algebraic.json",
+   "tags": [
+    "arrayed-definition",
+    "esm-spec-6.3.1"
+   ],
+   "note": "Referenced, not authored: the document already lives in the corpus.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "weno_wide_stencil",
+   "path": "fixtures/faq/04_weno_wide_stencil.esm",
+   "model": "WENO",
+   "golden": "golden/weno_wide_stencil.json",
+   "tags": [
+    "arrayed-definition",
+    "stencil",
+    "esm-spec-6.3.1"
+   ],
+   "note": "Referenced, not authored: the document already lives in the corpus.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "shape_ops_symbolic_subscripts",
+   "path": "fixtures/shape_ops_symbolic_subscripts.esm",
+   "model": "shape_ops_symbolic_subscripts",
+   "golden": "golden/shape_ops_symbolic_subscripts.json",
+   "tags": [
+    "reshape",
+    "transpose",
+    "concat",
+    "broadcast",
+    "faq",
+    "esm-spec-4.3.5"
+   ],
+   "note": "Authored here: the same gathers with an faq loop symbol as a subscript.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  }
+ ]
+}

@@ -1,0 +1,48 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "scalar_parameter_no_value",
+    "description": "A scalar parameter with no default: esm-spec \u00a710.10 makes it an error when a problem is built unless the caller's `p` supplies it (user ruling 2026-09-29). Julia used 0.0; Rust refused only at the solve.",
+    "authors": [
+      "missing_data conformance"
+    ]
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "k": {
+          "type": "parameter",
+          "units": "1/s"
+        },
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "u"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

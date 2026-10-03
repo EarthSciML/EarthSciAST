@@ -1644,7 +1644,18 @@ The enum spelling is normative: `"sum_product"`, `"max_product"`, `"min_sum"`,
 property on `ExpressionNode`) restates the identities inline and pins the
 `default` to `sum_product`. `bool_and_or` is the only index-set-producing
 semiring (it drives `distinct` / `skolem`, §5.5); the M1 numeric evaluators
-reject it for array-valued reductions.
+reject it for array-valued reductions — a `faq` with an output index that
+contracts another, other than a value-invention node (`distinct`, a `key`) or
+an addressable producer (`id`).
+
+A SCALAR `bool_and_or` reduction — a `faq` with no output index — is a number,
+and every numeric evaluator runs it under every compiler: `acc = 0` (`false`),
+then for each admitted combination in turn `acc = (acc ≠ 0 ∨ term ≠ 0) ? 1 : 0`.
+The result is exactly `0` or `1`; a `NaN` term is not `0` and so reads as
+true; a combination the `filter` excludes contributes nothing, and an empty
+reduction is `0`. Because every step is crisp, the result does not depend on
+the order the combinations are visited in. Tier:
+`tests/conformance/bool_and_or_reductions/`.
 
 #### 5.6.2 Identity resolution and back-compat
 
@@ -4831,6 +4842,41 @@ compared exactly. Runners: **Julia** —
 `bindings_required` is `["julia", "python", "rust"]`; TypeScript and Go are
 `scope_excluded`.
 
+#### 5.32.6 A shaped parameter with no data is refused by name
+
+esm-spec §10.10: a parameter with neither a default nor a supplied value is an
+error when a problem is built. For a SHAPED parameter the supplied value is an
+override, a caller's `const_arrays` entry (§5.32.5), a provider for the data
+source its `update` names, or a live forcing buffer; a registered handler that
+writes the parameter only when it fires supplies nothing before then. With none
+of these, every compiler refuses the construction with
+`E_TREEWALK_MISSING_DATA`, naming the parameter, what the document says feeds
+it (a data source, a handler, or nothing) and how to supply it. A binding that
+runs on an invented value — the scalar stand-in `0.0`, a `NaN`, a scalar slot a
+per-cell read cannot index — or that defers the failure to the first
+evaluation, is not conforming. Julia refused as `E_TREEWALK_UNSUPPORTED_SHAPE:
+<name>`; Rust built every such document and failed at the solve with an
+unrelated message; Python bound the stand-in as a scalar.
+
+With the case's arrays supplied, every compiler builds and the right-hand side
+at a fixed probe state is bit-for-bit the same under `native` and
+`interpreter` within each binding. `caller_array_outranks_default` pins that a
+caller's array outranks a declared scalar default in a DIFFERENTIAL document
+(Rust's compiled right-hand side read the default and ignored the array).
+
+A data-fed parameter that DECLARES a default, built with no provider and no
+caller array, takes that default in every binding (esm-spec §6.3: supplied data
+takes the place of the default, so without data the default stands). No binding
+reads a document's own `data_sources` unless the caller registers a provider or
+loader for them; Python used to, and Rust used to leave the parameter unserved
+until its first read failed. `loaded_field_default_served` pins it.
+
+**Gate:** `tests/conformance/missing_data/`. Runners: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_missing_data_test.jl`; **Python** —
+`pkg/earthsci-ast-py/tests/test_missing_data_conformance.py`; **Rust** —
+`pkg/earthsci-ast-rs/tests/missing_data_conformance.rs`. `bindings_required` is
+`["julia", "python", "rust"]`; TypeScript and Go are `scope_excluded`.
+
 ### 5.33 `operator_compose` Merge Intent (normative)
 
 esm-libraries-spec §4.7.1 step 5 preserves an equation the merge did not match.
@@ -5337,7 +5383,10 @@ A bare `index(V, k…) ~ rhs` runs exactly when the gather names `V` directly
 `faq` whose `output_idx` names those symbols in the same order, and the subscript
 count equals `V`'s rank if `V` declares a `shape`. It then means `V ~ rhs`
 (esm-spec §6.3.1). Any other bare-index definition of an observed MUST
-be **refused** with `indexed_definition_unsupported_form` (esm-spec §9.6.6):
+be **refused** with `indexed_definition_unsupported_form` (esm-spec §9.6.6) —
+or, when a subscript is a symbol no `faq` binds (not the right-hand `faq`'s
+`output_idx`, and not an enclosing one), with `unbound_index_symbol`, since the
+document is then invalid (esm-spec §6.3.1):
 every assertion reports **no actual** and is not passed, and the message carries
 the code and **names the offending variable**. A best-effort answer is not
 allowed, because each wrong answer here is plausible: filling the array from a
@@ -5355,10 +5404,12 @@ per-binding runners:
   through the shaped state `z` it drives (`D(z) = wn`) rather than asserted
   directly, because an inline assertion needs a declared axis to address and
   Rust reports an unshaped array observed as having no cells.
-* `fixtures/refuse_scalar_rhs.esm` — `w_scalar[k] ~ 5.0`.
+* `fixtures/refuse_scalar_rhs.esm` — `w_scalar[k] ~ 5.0`, whose `k` nothing
+  binds: `unbound_index_symbol`.
 * `fixtures/refuse_offset_subscript.esm` — `w_offset[k+1] ~ faq{k}(2*k)`.
 * `fixtures/refuse_nested_index.esm` — `index(index(w_nested, j), k) ~ faq{k}(2*k)`,
-  whose base name is `w_nested` but which addresses a cell of a cell. Until the
+  whose base name is `w_nested` but which addresses a cell of a cell; its `j` is
+  bound by nothing, so it is `unbound_index_symbol`. Until the
   head check, Rust and Python RAN it (both answering as though the right-hand
   `faq` were the whole of `w_nested`) while Julia refused it with
   `E_TREEWALK_UNSUPPORTED_SHAPE` — a divergence window in the same class this
@@ -6452,69 +6503,55 @@ hands both equations to `mtkcompile`, which reports the imbalance in its own
 vocabulary.
 
 
-### 5.46 A Data-Fed Parameter Nothing Bound Is Refused, Not Defaulted (normative)
+### 5.46 A Data-Fed Parameter Nothing Bound: Its Default, or Missing Data (normative)
 
 A **data-fed parameter** is one whose `update` is `{kind: "data", source: …,
 from: {file_variable: …}}` (esm-spec §5.4, §8.5). From esm 1.0.0 that parameter
-IS the loaded field — a data source is not a component and has no coupling edge
-— so the `update` block is the whole of the document's statement that this
-number comes from a file.
+IS the loaded field: a data source is not a component and has no coupling edge.
 
-**The rule.** When a binding is asked to build a document and a data-fed
-parameter has **nothing bound to it** — no provider object for it, no array
-loaded for it, and no caller-supplied `p` value for it — the build MUST FAIL at
-construction with `data_source_unbound` (esm-spec §9.6.6). The message MUST name
-the parameter, the `data_sources` entry its `update` names, and what the caller
-can pass. It MUST fail before any right-hand side is built, and it MUST NOT bind
-the parameter from its `default`, from zero, or from a NaN sentinel. This binds
-`esm_problem`, `build_evaluator` and `run_inline_tests` alike.
+**The rule.** When a binding builds a document and a data-fed parameter has
+**nothing bound to it** — no provider object for it, no array loaded for it, and
+no caller-supplied `p` value for it:
 
-**Why.** The alternative is not a missing number, it is a plausible-looking
-wrong answer. A scalar forcing with a `default` of 0.1 integrates to a complete,
-smooth, reproducible trajectory; it is reported under the label of a rate the
-document says is read from a file, and nothing in the result records that the
-file was never opened. Refusing costs the caller one argument. Defaulting costs
-them the result, and costs the reader any way of telling. The shaped case makes
-the same point from the other side: a data-fed FIELD carries no `default` at
-all, so whatever a binding produces for it is a property of how it seeded an
-array and not of the document.
+- a declared `default` is the parameter's value (esm-spec §6.3; user ruling
+  2026-09-29), and the build succeeds;
+- with no `default`, the parameter is missing data (esm-spec §10.10), and the
+  build MUST FAIL at construction with `E_TREEWALK_MISSING_DATA`, naming the
+  parameter and the data source that feeds it. It MUST NOT bind the parameter
+  from zero or from a NaN sentinel (the missing-data tier, `tests/conformance/missing_data/`,
+  pins the shaped and scalar forms).
 
-**It is a document contract, not a compiler capability.** The refusal MUST be
-identical in shape under `compiler=native` and under `compiler=interpreter`.
-Whether a particular compiler can LOWER a read of the forcing channel is a
-separate question, answered separately by `compiler_refused_rule`; whether
-anything BOUND the forcing is decided before any right-hand side exists, and has
-the same answer for every compiler. A binding whose two compilers disagree here
-— one refusing and one running — is reporting a compiler property in place of a
-document property.
+This binds `esm_problem`, `build_evaluator` and `run_inline_tests` alike, and the
+answer is a document contract: it MUST be identical under `compiler=native` and
+`compiler=interpreter`. Whether a compiler can lower a read of the forcing
+channel is a separate question, answered by `compiler_refused_rule`.
 
 **The `p` escape hatch is required to keep working.** A caller who passes an
 explicit `p` value for the parameter HAS bound it. That is how a data-fed
-document is run offline, and it is how its own inline tests run at all:
-`Test.parameter_overrides` (esm-spec §6.6) is the `p` argument of `esm_problem`
-by another name. Such a build MUST succeed, and the pinned value MUST reach the
-right-hand side — a binding that merely suppressed the refusal and then
-integrated the `default` would pass a refusal test and fail its purpose.
+document is run offline, and how its inline tests run (`Test.parameter_overrides`,
+esm-spec §6.6, is the `p` argument of `esm_problem` by another name). Such a
+build MUST succeed, and the pinned value MUST reach the right-hand side,
+outranking the declared `default`.
 
 **An unresolvable source is not a bound source.** A parameter whose
-`update.source` names no declared `data_sources` entry is a validation defect
-with its own code (`data_source_undefined`, esm-spec §8.5). A binding whose
-simulation front door runs structural validation reports that and never reaches
-the build; one whose front door does not MUST still refuse, with
-`data_source_unbound`. Either code satisfies this tier for that case. What no
-binding may do is drop the loader field because its source did not resolve,
-leave the parameter looking ordinary, and integrate it at its `default`.
+`update.source` names no declared `data_sources` entry is the validation defect
+`data_source_undefined` (esm-spec §8.5), which the front door refuses
+(esm-libraries-spec §2.5.2). No binding may drop the loader field because its
+source did not resolve and then run the parameter as an ordinary one.
+
+`data_source_unbound` (esm-spec §9.6.6) remains the registered name for an
+unbound feed a binding cannot answer by the rules above.
 
 #### 5.46.1 Gate
 
-`tests/conformance/data_source_unbound/` — a manifest, three refusal fixtures
-and two controls, with no goldens: the category pins a refusal and two
-trajectories, not a numeric agreement. Consumed by
+`tests/conformance/data_source_unbound/` — a manifest, two refusal fixtures
+(no `default`, and an unresolvable source) and three cases that run (a defaulted
+feed, a pinned feed, and a plain parameter), with no goldens. Consumed by
 `pkg/EarthSciAST.jl/test/data_source_unbound_conformance_test.jl`,
 `pkg/earthsci-ast-py/tests/test_data_source_unbound_conformance.py` and
 `pkg/earthsci-ast-rs/tests/data_source_unbound_conformance.rs`, each of which
 asserts the refusal under BOTH compilers, asserts that the message names the
-parameter, and runs the two controls. Go and TypeScript do not simulate and only
+parameter, and runs the cases that build. Go and TypeScript do not simulate and only
 register the code.
 
 
@@ -6701,6 +6738,10 @@ binding that got better is the one way a ratchet can run backwards.
 | `broadcast_alignment` | esm-spec §4.3.4 name-based operand alignment in an array-level equation, its ANONYMOUS-shape boundary, and the one-operand `broadcast` node |
 | `scalar_operator_semantics` | what each scalar operator of esm-spec §9.2's evaluable core COMPUTES |
 | `faq_pointwise_filter` | a `faq` `filter` on a node with no contracted index: each output cell is one combination, and a false predicate makes it the semiring's 0̄ (esm-schema `filter`) |
+| `recurrence` | a causal self-reference along one index axis (esm-spec §4.3.1.1): the ordered sweep's values at zero tolerance, under every compiler each fixture's `required` map names (§5.19) |
+| `value_invention_geometry` | build-time value invention (a `distinct` producer over a ragged set, an `argmin` arg-witness buffer, a bin-skolem candidate set) and setup-time polygon geometry (`intersect_polygon`, `polygon_intersection_area` over unequal rings) feeding a right-hand side, every producer input a constant factor held in the document (esm-spec §4.2) |
+| `array_expression_forms` | esm-spec §4.3.5 `index` over a `reshape` / `transpose` / `concat` (an element of the operand at other subscripts), a positional §4.3.4 `broadcast` of anonymous operands, and a §6.3.1 arrayed definition of an observed whose shape was never declared |
+| `bool_and_or_reductions` | §5.6.1 scalar (rank-0) `bool_and_or` reductions: a crisp OR over the admitted terms, 0 when none is non-zero, under every compiler |
 
 Each tier's `README.md` is its contract and records what did NOT move into it.
 A tier is added by writing that README, a manifest with `"runner":
@@ -6801,6 +6842,8 @@ ever emitted it, and the code had zero real coverage.
 | `unresolved_subsystem_ref` | Structural | A §4.7 subsystem `ref` does not resolve — the target file does not exist, or is not reachable. **Canonical spelling.** (Formerly also spelled `ref_not_found`; see §7.1.3.) |
 | `ambiguous_subsystem_ref` | Structural | A §4.7 subsystem `ref` resolves to a file containing zero, or more than one, top-level model/reaction system, so the mount target is not unique. **Canonical spelling.** (Formerly `ref_ambiguous_system`; see §7.1.3.) |
 | `null_reaction` | Structural | Reaction with both null substrates and products |
+| `equation_defines_parameter` | Structural | An equation's left-hand side names a parameter — bare, indexed, inside a `faq`, through a scoped reference into a subsystem, or under a time derivative `D(·)` (esm-spec §6.3.1). Pointer: the equation's `lhs`. Every binding rejects it in validation and refuses to build it; none may drop the equation or let it override the parameter. |
+| `unbound_index_symbol` | Structural | A string subscript of an `index` on an equation's left-hand side names no declared variable or metaparameter and is bound by no enclosing left-hand-side `faq` and, for the bare-index definition, by no right-hand-side `faq` `output_idx` (esm-spec §6.3.1). Pointer: the equation's `lhs`. |
 | `event_affects_parameter` | Structural | An event `affects` LHS names a parameter; parameter mutation belongs in the parameter's own `update` (esm-spec §5.4) |
 | `event_var_undeclared` | Structural | Event affects undeclared variable. NOT emitted for `_var` (esm-spec §6.4, §4.9.1) or for the independent variable. |
 | `equation_count_mismatch` (see above) | Structural | Unknowns vs equations. Algebraic and expression-LHS equations COUNT (esm-spec §4.9.4). |

@@ -426,6 +426,19 @@ pub(super) fn reduce_combine_op(reduce: ReduceKind) -> Option<BinCode> {
     }
 }
 
+/// The binary kernel that folds a SCALAR (rank-0) reduction: [`reduce_combine_op`],
+/// plus the boolean `or` (`bool_and_or`'s ⊕), which a scalar reduction runs and
+/// an array-valued one may not (CONFORMANCE_SPEC §5.6.1). `BinCode::Or` returns
+/// [`ReduceKind::combine`]'s crisp `0.0`/`1.0` for every operand pair at either
+/// precision, a `NaN` operand (which is not `0`) reading as true in both.
+pub(super) fn scalar_combine_op(reduce: ReduceKind) -> BinCode {
+    match reduce {
+        ReduceKind::Or => BinCode::Or,
+        ReduceKind::And => BinCode::And,
+        other => reduce_combine_op(other).expect("a numeric ⊕ has a kernel"),
+    }
+}
+
 /// Evaluate an einsum faq body as a whole-array fold over its contracted
 /// indices: for each contraction tuple `k` (a small static window — fixed-width
 /// neighbour stencil), bind `k` and evaluate the body once as whole-array
@@ -819,7 +832,7 @@ pub(super) fn vec_op_code(op: &str) -> VecOp {
         ">" => VecOp::Cmp(BinCode::Gt),
         ">=" => VecOp::Cmp(BinCode::Ge),
         "exp" => VecOp::Unary(UnCode::Exp),
-        "log" | "ln" => VecOp::Unary(UnCode::Ln),
+        "log" => VecOp::Unary(UnCode::Ln),
         "log10" => VecOp::Unary(UnCode::Log10),
         "sqrt" => VecOp::Unary(UnCode::Sqrt),
         "abs" => VecOp::Unary(UnCode::Abs),
@@ -1614,10 +1627,11 @@ pub(super) fn eval_vec_index<'a>(
                 ));
                 axis_segs.push(segs);
             }
-            AxisIndex::Wrap { k, period } => {
+            AxisIndex::Wrap { k, period, lo } => {
                 let (k, period) = (*k, *period);
-                // A roll requires the source axis to be the full period.
-                if so != bx.lo[a] || ssz != period || bx.shape[a] as i64 != period {
+                // A roll requires the source axis to be the full period, with
+                // the wrap window on it.
+                if so != bx.lo[a] || *lo != so || ssz != period || bx.shape[a] as i64 != period {
                     arg0.release(pool);
                     bail_vec!("index: periodic wrap axis is not a full-period roll");
                 }
@@ -1976,10 +1990,44 @@ pub(super) enum AxisIndex {
     /// (bound contraction indices folded in): a shifted slice. Out-of-extent
     /// positions stay ghost-0 (homogeneous Dirichlet).
     Affine(i64),
-    /// Periodic wrap of base offset `k` over an axis of period `period`: a
-    /// cyclic roll, no ghost. See [`parse_wrap_axis_any`] for the recognized
-    /// idiom.
-    Wrap { k: i64, period: i64 },
+    /// Periodic wrap of base offset `k` over the subscripts `[lo, lo + period
+    /// - 1]`: `sym + k` folded back into that window once, from either side.
+    /// Over a box that is one period of its source starting at `lo` this is
+    /// a cyclic roll with no ghost; see [`wrap_pieces`] for the general case
+    /// and [`parse_wrap_axis_any`] for the recognized idiom.
+    Wrap { k: i64, period: i64, lo: i64 },
+}
+
+/// The output positions of one axis read through a periodic wrap, split into
+/// the runs over which the subscript is affine: `(start, len, shift)`, 0-based
+/// and ascending, with the 1-based subscript at position `p` of the run being
+/// `out_lo + p + shift`. The idiom folds `sym + k` below `lo` up by `period`,
+/// above `lo + period - 1` down by `period`, and leaves it alone between, so
+/// there are at most three runs. Whether each subscript lands inside the
+/// source is the caller's question, exactly as for an affine shift.
+pub(super) fn wrap_pieces(
+    out_lo: i64,
+    n: usize,
+    k: i64,
+    lo: i64,
+    period: i64,
+) -> SmallVec<[(usize, usize, i64); 3]> {
+    let n_i = n as i64;
+    let hi = lo + period - 1;
+    // `sym + k < lo` ⇔ p < lo − k − out_lo; `sym + k > hi` ⇔ p > hi − k − out_lo.
+    let below = (lo - k - out_lo).clamp(0, n_i);
+    let above = (hi - k - out_lo + 1).clamp(below, n_i);
+    let mut pieces = SmallVec::new();
+    for (start, end, shift) in [
+        (0, below, k + period),
+        (below, above, k),
+        (above, n_i, k - period),
+    ] {
+        if end > start {
+            pieces.push((start as usize, (end - start) as usize, shift));
+        }
+    }
+    pieces
 }
 
 /// Classify one `index` axis expression AGAINST A GIVEN SYMBOL: affine shift
@@ -2194,7 +2242,14 @@ pub(super) fn parse_wrap_axis_any(expr: &Expr, bx: &VecBox) -> Option<(usize, Ax
     if p1 != period || p2 != period || period <= 0 {
         return None;
     }
-    Some((a, AxisIndex::Wrap { k, period }))
+    Some((
+        a,
+        AxisIndex::Wrap {
+            k,
+            period,
+            lo: lo_bound,
+        },
+    ))
 }
 
 /// Reduce `expr` to `(coeff_of_sym, constant)` over the integers, folding bound
@@ -2283,7 +2338,11 @@ pub(super) fn parse_wrap_axis(expr: &Expr, sym: &str, bx: &VecBox) -> Option<Axi
     if p1 != period || p2 != period || period <= 0 {
         return None;
     }
-    Some(AxisIndex::Wrap { k, period })
+    Some(AxisIndex::Wrap {
+        k,
+        period,
+        lo: lo_bound,
+    })
 }
 
 /// Match `Expr::Operator(op, …)` of the given arity, returning the node.
@@ -2327,7 +2386,7 @@ mod axis_classifier_equivalence {
     #[derive(Debug, PartialEq, Eq)]
     enum Role {
         Affine(usize, i64),
-        Wrap(usize, i64, i64),
+        Wrap(usize, i64, i64, i64),
         Const(i64),
         Bail,
     }
@@ -2335,7 +2394,7 @@ mod axis_classifier_equivalence {
     fn from_axis(a: usize, ax: &AxisIndex) -> Role {
         match ax {
             AxisIndex::Affine(k) => Role::Affine(a, *k),
-            AxisIndex::Wrap { k, period } => Role::Wrap(a, *k, *period),
+            AxisIndex::Wrap { k, period, lo } => Role::Wrap(a, *k, *period, *lo),
         }
     }
 
@@ -2541,7 +2600,7 @@ mod op_dispatch_equivalence {
     const CMP: &[&str] = &["==", "!=", "<", "<=", ">", ">="];
     #[rustfmt::skip]
     const UNARY: &[&str] = &[
-        "exp", "log", "ln", "log10", "sqrt", "abs", "sign", "floor", "ceil", "sin",
+        "exp", "log", "log10", "sqrt", "abs", "sign", "floor", "ceil", "sin",
         "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh",
         "acosh", "atanh", "not",
     ];

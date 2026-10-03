@@ -27,6 +27,17 @@ fn ring_table(v: &SrcView) -> RingTable<'_> {
     }
 }
 
+/// Write a recurrence sweep's current (0-based) cell into its coordinate
+/// slots, 1-based, as the interpreter binds the frame symbols.
+///
+/// # Safety
+/// `slab_ptr` must be the slab `slot_off` lays out.
+unsafe fn write_coords(sw: &SweepSpec, cell: &[usize], slab_ptr: *mut f64, slot_off: &[usize]) {
+    for (&slot, &c) in sw.coords.iter().zip(cell) {
+        unsafe { *slab_ptr.add(slot_off[slot as usize]) = (c + 1) as f64 };
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The interpreter loop.
 // ---------------------------------------------------------------------------
@@ -71,6 +82,9 @@ pub(super) fn run_range(
         }
     }
 
+    // The open recurrence sweep, if any: the `Sweep` instruction's position
+    // and the 0-based frame cell its body is evaluating.
+    let mut sweep: Option<(usize, SmallVec<[usize; 4]>)> = None;
     let mut pc = range.start;
     while pc < range.end {
         while let Some(&(pos, skip)) = pending.last() {
@@ -80,6 +94,35 @@ pub(super) fn run_range(
             } else {
                 break;
             }
+        }
+        // The end of a recurrence body: publish the cell, then run the body
+        // for the next cell in sweep order, or leave the sweep after the last.
+        let mut sweep_done = false;
+        if let Some((spc, cell)) = &mut sweep {
+            let Instr::Sweep { spec } = &prog.instrs[*spc] else {
+                unreachable!("an open sweep starts at a Sweep")
+            };
+            let sw = &prog.sweeps[*spec as usize];
+            let body = *spc + 1;
+            if pc == body + sw.body_len as usize {
+                let v = resolve_scalar(&sw.result, env, slab_ptr, slot_off, obs);
+                let prec = prog
+                    .precision
+                    .get(*spc)
+                    .copied()
+                    .unwrap_or_else(crate::precision::active);
+                let out = unsafe { slab_ptr.add(slot_off[sw.out as usize]) };
+                unsafe { *out.add(sw.flat(cell)) = prec.round(v) };
+                if sw.advance(cell) {
+                    unsafe { write_coords(sw, cell, slab_ptr, slot_off) };
+                    pc = body;
+                    continue;
+                }
+                sweep_done = true;
+            }
+        }
+        if sweep_done {
+            sweep = None;
         }
         if pc >= range.end {
             break;
@@ -323,6 +366,18 @@ pub(super) fn run_range(
                     }
                 }
             }
+            Instr::Calendar { func, a, out } => {
+                let desc = &prog.slots[*out as usize];
+                let off = slot_off[*out as usize];
+                if desc.scalar {
+                    let av = resolve_scalar(a, env, slab_ptr, slot_off, obs);
+                    unsafe { *slab_ptr.add(off) = calendar_at(*func, av) };
+                } else {
+                    let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off, obs);
+                    let dst = unsafe { slab_ptr.add(off) };
+                    unsafe { ew1(dst, &desc.shape, &av, |x| calendar_at(*func, x)) };
+                }
+            }
             Instr::ConstArray { data, out } => {
                 let d = &prog.const_data[*data as usize];
                 let off = slot_off[*out as usize];
@@ -499,6 +554,48 @@ pub(super) fn run_range(
             Instr::Fault { fault } => {
                 latch_gather_fault(prog.faults[*fault as usize].clone());
             }
+            Instr::Sweep { spec } => {
+                let sw = &prog.sweeps[*spec as usize];
+                debug_assert!(sweep.is_none(), "recurrence sweeps do not nest");
+                if sw.n_cells() == 0 {
+                    pc += 1 + sw.body_len as usize;
+                    continue;
+                }
+                let cell: SmallVec<[usize; 4]> = SmallVec::from_elem(0, sw.shape.len());
+                unsafe { write_coords(sw, &cell, slab_ptr, slot_off) };
+                sweep = Some((pc, cell));
+            }
+            Instr::ScalarRead { src, spec, out } => {
+                let sp = &prog.scalar_reads[*spec as usize];
+                let sv = resolve_src(src, env, slab_ptr, slot_off, obs);
+                let raw: SmallVec<[i64; 4]> = sp
+                    .subs
+                    .iter()
+                    .map(|o| subscript_of(resolve_scalar(o, env, slab_ptr, slot_off, obs)))
+                    .collect();
+                let cur = sweep.as_ref().map_or(&[][..], |(_, c)| &c[..]);
+                let v = match sp.resolve(&raw, &sv.shape, &prog.sweeps, cur) {
+                    ScalarReadAt::Elem(ix) => {
+                        let off: i64 = ix
+                            .iter()
+                            .zip(sv.strides.iter())
+                            .map(|(&i, &st)| i as i64 * st)
+                            .sum();
+                        let x = unsafe { *sv.ptr.offset(off as isize) };
+                        if matches!(sp.kind, ScalarReadKind::SelfRead { .. }) {
+                            crate::precision::active().round(x)
+                        } else {
+                            x
+                        }
+                    }
+                    ScalarReadAt::Ghost => 0.0,
+                    ScalarReadAt::Fault(msg) => {
+                        latch_gather_fault(msg);
+                        f64::NAN
+                    }
+                };
+                unsafe { *slab_ptr.add(slot_off[*out as usize]) = v };
+            }
             Instr::JmpIfZero {
                 cond,
                 n_true,
@@ -572,6 +669,15 @@ pub(super) fn run_range(
                 let w = &prog.dy_writes[*write as usize];
                 let desc = &prog.slots[w.slot as usize];
                 let off = slot_off[w.slot as usize];
+                if let Some(pos) = &w.scatter {
+                    // The slot is contiguous row-major, the order `pos` lists.
+                    debug_assert_eq!(pos.len(), desc.elems());
+                    for (k, &p) in pos.iter().enumerate() {
+                        dy[p] = unsafe { *slab_ptr.add(off + k) };
+                    }
+                    pc += 1;
+                    continue;
+                }
                 match w.scalar_flat {
                     Some(flat) => {
                         debug_assert!(desc.scalar);

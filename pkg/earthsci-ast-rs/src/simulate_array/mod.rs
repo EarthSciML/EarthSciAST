@@ -77,7 +77,10 @@ mod vectorized;
 pub(crate) use compile::eval_buildtime_field;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::eval_buildtime_field_in_scope;
-pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_invention};
+pub use compile::{
+    file_has_array_ops, file_has_spatial_model, run_value_invention,
+    run_value_invention_with_params,
+};
 // The ONE free-variable gate (CONFORMANCE_SPEC §5.23), shared with the build
 // pipeline: `crate::prepare` runs the same check the compile path runs, so the
 // two routes cannot disagree about which names a document declares.
@@ -96,6 +99,7 @@ pub(crate) use eval::{
     per_cell_walk_refused, per_cell_walks,
 };
 // Read only by `crate::expression`'s tests.
+pub(crate) use eval::GEOMETRY_CLIP_CODE;
 #[cfg(test)]
 pub(crate) use eval::check_scalar_evaluable;
 pub use eval::{
@@ -407,9 +411,11 @@ enum AlgebraicRule {
     ///
     /// Structurally an [`AlgebraicRule::ArrayLoop`] plus the recurrence axis,
     /// but a SEPARATE variant on purpose: its cells are not independent, so it
-    /// must never reach the whole-array overlay, the tape, or any other path
-    /// that evaluates cells out of order or in a batch (CONFORMANCE_SPEC
-    /// §5.19.2). Being a distinct variant means every `match` over the rule
+    /// must never reach the whole-array overlay or any other path that
+    /// evaluates cells out of order or in a batch (CONFORMANCE_SPEC §5.19.2).
+    /// The interpreter evaluates it with `sweep_recurrence`; the tape with an
+    /// ordered `Sweep` that runs its cell body one cell at a time in the same
+    /// order. Being a distinct variant means every `match` over the rule
     /// kinds has to say what it does with a recurrence instead of silently
     /// inheriting a reordering path.
     Recurrence {
@@ -719,6 +725,12 @@ pub struct ArrayCompiled {
     /// coordinate expression over grid-geometry aggregates — into the flat state
     /// vector cell-by-cell (DESIGN pde_simulation_pipeline §2 R2).
     field_ics: Vec<(String, Expr)>,
+    /// The `faq`-valued initialization equations (esm-spec §6.2), each
+    /// `(target_state, faq)`, in document order. At `u0` build time each
+    /// assigns the cells of its ranges, read against the initial state seeded
+    /// so far, except a cell the caller's `u0` names
+    /// ([`Self::seed_initialization_faqs`]).
+    init_faqs: Vec<(String, Expr)>,
     /// The STATE-FREE observed definitions a field `ic` RHS may read, in name
     /// order (esm-spec §6.6.5 "Build-time evaluation scope").
     ///
@@ -784,6 +796,24 @@ pub struct ArrayCompiled {
     /// registry cannot size. The tape compiles a read of one of these into a
     /// forcing load (`tape::Instr::LoadForcing`) rather than declining it.
     forcing_decls: IndexMap<String, Option<Vec<usize>>>,
+    /// The declared `default` of each [`Self::forcing_decls`] entry that has
+    /// one, as the dense row-major field it denotes over the resolved shape
+    /// (`None` while that shape does not resolve). Construction serves it from
+    /// the forcing buffer when no provider or caller array supplies the name:
+    /// the default is the value until data arrives (esm-spec §6.3).
+    #[allow(clippy::type_complexity)]
+    forcing_defaults: HashMap<String, Option<(Vec<usize>, Vec<f64>)>>,
+    /// Every SHAPED parameter the build left with no value at all: no
+    /// `default`, no inline data, no `distribution`, and no refresh from
+    /// outside the model. It holds a scalar-table slot with no value, which a
+    /// per-cell read cannot index; [`crate::problem::esm_problem`] refuses the
+    /// build naming each one (esm-spec §10.10).
+    unvalued_shaped_params: Vec<String>,
+    /// The state variables with neither a `D` equation nor an algebraic
+    /// definition, held at their initial value. Not ODE states, so the
+    /// front door's missing-initial-value gate leaves them alone, as the
+    /// other bindings do.
+    held_at_ic: HashSet<String>,
     /// The tape programs this model has built ([`tape::TapeCache`], which says
     /// what a kept program depends on).
     tape_cache: tape::TapeCache,

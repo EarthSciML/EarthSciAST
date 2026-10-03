@@ -266,17 +266,8 @@ fn a_reaction_system_is_not_mistaken_for_a_static_document() {
         eprintln!("· skipping: no {POLLU}");
         return;
     }
-    // Nothing here supplies the photolysis rates the document declares as
-    // data-fed parameters, and a build with nothing bound to them is a refusal
-    // now (esm-spec §9.6.6 `data_source_unbound`) — under BOTH compilers, this
-    // being a property of the document and not of the evaluator. That refusal
-    // is asserted first, because it is what makes the pinned build below an
-    // honest reading of the classification rather than an accident.
-    for compiler in [
-        earthsci_ast::Compiler::Native,
-        earthsci_ast::Compiler::Interpreter,
-    ] {
-        let err = esm_problem(
+    let build = |compiler| {
+        esm_problem(
             ProblemInput::Path(Path::new(POLLU)),
             (0.0, 1.0),
             ProblemOptions {
@@ -284,33 +275,9 @@ fn a_reaction_system_is_not_mistaken_for_a_static_document() {
                 ..Default::default()
             },
         )
-        .expect_err("no photolysis source is bound here");
-        let text = err.to_string();
-        assert!(
-            text.contains("data_source_unbound") && text.contains("PureChemistry.j"),
-            "{compiler:?}: the refusal must name the unbound data-fed parameter: {text}"
-        );
-    }
-
-    // Pinning the four rates BINDS them (esm-spec §6.6.2), which is the
-    // documented way to run a data-fed document with no data — and the only way
-    // to reach the question this test is actually about. The values are the
-    // fixture's own declared defaults, so the trajectory is the one the
-    // document describes when its source happens to agree with them.
-    let mut opts = ProblemOptions {
-        compiler: Some(earthsci_ast::Compiler::Interpreter),
-        ..Default::default()
+        .unwrap_or_else(|e| panic!("[{compiler}] esm_problem: {e}"))
     };
-    for (rate, value) in [
-        ("PureChemistry.jO3", 1e-5),
-        ("PureChemistry.jNO2", 5e-3),
-        ("PureChemistry.jNO3", 2e-3),
-        ("PureChemistry.jH2O2", 1e-6),
-    ] {
-        opts.p.insert(rate.to_string(), value);
-    }
-    let prob = esm_problem(ProblemInput::Path(Path::new(POLLU)), (0.0, 1.0), opts)
-        .expect("a pinned chemistry document builds");
+    let prob = build(earthsci_ast::Compiler::Interpreter);
     assert!(
         prob.is_dynamic(),
         "a document of 25 reactions was classified static",
@@ -328,14 +295,25 @@ fn a_reaction_system_is_not_mistaken_for_a_static_document() {
         "twenty-five reactions are twenty-five state derivatives, not a static evaluation"
     );
 
-    // And it RUNS — which is the half the refusal used to stand in for. A
-    // static classification would have failed here with `NotDynamic` instead.
+    // The RUN. The fixture's photolysis rates are data-fed parameters
+    // (`update: { kind: "data" }`) with no provider bound here, so each takes
+    // its declared `default` (esm-spec §6.3; user ruling 2026-09-29), under
+    // either compiler, and the two agree bit for bit.
     let mut o = SolveOptions::default();
     o.sample_evenly(0.0, 1.0, 3);
-    let sol = solve(&prob, &o).expect("a pinned chemistry document runs");
-    assert_eq!(sol.time.len(), 3, "three save points were asked for");
-    assert!(
-        !sol.state.is_empty(),
-        "twenty-five species integrate to twenty-five rows"
-    );
+    let interp = solve(&prob, &o).expect("the interpreter runs on the declared defaults");
+    let native = solve(&build(earthsci_ast::Compiler::Native), &o)
+        .expect("native runs on the declared defaults");
+    assert_eq!(interp.state_variable_names, native.state_variable_names);
+    for (row, name) in interp.state_variable_names.iter().enumerate() {
+        let (a, b) = (&interp.state[row], &native.state[row]);
+        assert!(
+            a.iter().all(|v| v.is_finite()),
+            "{name}: a non-finite value in {a:?}"
+        );
+        assert!(
+            a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits()),
+            "{name}: interpreter {a:?} != native {b:?}"
+        );
+    }
 }

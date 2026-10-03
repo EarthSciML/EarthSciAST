@@ -30,12 +30,10 @@ use serde_json::{Value, json};
 
 /// The REFERENCE compiler, for every fixture in this file.
 ///
-/// A causal self-reference is the one construct CONFORMANCE_SPEC §5.19.2
-/// forbids the tape from lowering at all — its cells are not independent and
-/// the tape's scheduler reorders and batches — so `native` refuses every
-/// document here by construction (API_SPEC §5.8), and refusing is the right
-/// answer. What this file is about is the SEMANTICS of the sequential sweep,
-/// which is the interpreter's to define.
+/// What this file is about is the SEMANTICS of the sequential sweep, which is
+/// the interpreter's to define. `native` lowers the same documents as an
+/// ordered sweep on the tape and is held to these values bit for bit in
+/// `recurrence_native_agreement.rs`.
 fn interpreter_options(base_dir: Option<&std::path::Path>) -> InlineTestOptions {
     InlineTestOptions {
         compiler: Some(Compiler::Interpreter),
@@ -264,7 +262,9 @@ fn doc_with_body(body: Value) -> String {
       "index_sets": { "steps": { "kind": "interval", "size": 4 } },
       "models": { "R": {
         "tolerance": { "rel": 0.0, "abs": 0.0 },
-        "variables": { "s": { "type": "unknown", "shape": ["steps"], "units": "1" } },
+        "variables": { "s": { "type": "unknown", "shape": ["steps"], "units": "1" },
+                       "lag": { "type": "parameter", "shape": ["steps"], "units": "1",
+                                "default": 1.0 } },
         "equations": [ { "lhs": "s", "rhs": {
           "op": "faq", "args": [], "output_idx": ["k"],
           "ranges": { "k": { "from": "steps" } }, "expr": body } } ],

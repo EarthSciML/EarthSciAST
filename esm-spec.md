@@ -1552,7 +1552,7 @@ atom     := '1' | symbol | '(' unit ')'
 | **Circular trig** — `sin` `cos` `tan` | The argument MUST be a **plane angle** (`rad`, or `deg`, which carries the `rad` dimension to the FIRST power) **or dimensionless at scale 1**. The result is dimensionless. A plane angle is admitted at **any scale**, and an implementation MUST **CONVERT** it to radians before evaluating: `sin(θ)` with `θ` declared `deg` and valued 90 is `1`, not `sin(90 radians)` = 0.8939966636005579. The conversion is exact (`deg` is `π/180` rad, §4.8.1) and has exactly ONE reading, which is why an angle is converted where a dimensionless-but-scaled argument is refused (below). `sr` is `rad²` and is NOT a plane angle: no conversion turns a solid angle into a plane one. |
 | **Inverse circular trig** — `asin` `acos` `atan` | The argument MUST be **dimensionless at scale 1**. The result is an **angle** (`rad`). |
 | `atan2` (2-ary) | The two operands MUST be **COMMENSURATE with each other** — same dimension and same scale, but ANY dimension, not necessarily dimensionless. The result is an **angle** (`rad`). `atan2` is the ONE inverse-trig op that does not take a dimensionless argument: it takes a *ratio not yet formed*, so `atan2(dy_m, dx_m)` is the ordinary spelling of a bearing and MUST be admitted. A checker that gives `atan2` the `asin`/`acos`/`atan` dimensionless-argument rule rejects it. `atan2(dy_m, dx_s)` remains an ERROR — the operands are not commensurate. |
-| **Strict transcendentals** | The argument MUST be **dimensionless at scale 1** — a PURE NUMBER — and the result is dimensionless. The set is EXACTLY: `ln` `log` `log10` `exp` `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` — ten ops, and no others. It is a CLOSED list, not a category to be extended by intuition: `sqrt`, `abs`, `min`, `max` are not members and have their own rules above. |
+| **Strict transcendentals** | The argument MUST be **dimensionless at scale 1** — a PURE NUMBER — and the result is dimensionless. The set is EXACTLY: `log` `log10` `exp` `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` — nine ops, and no others. (`ln` is not an operator: the natural logarithm is `log`, §4.2, and an `ln` node is a rewrite-target like any other unknown op.) It is a CLOSED list, not a category to be extended by intuition: `sqrt`, `abs`, `min`, `max` are not members and have their own rules above. |
 | any other op | No dimensional rule ⇒ the result is UNDETERMINABLE (§4.8.4). It is **not** dimensionless. |
 
 **Angles are the ONE exception to the dimensionless-argument rule, and they must be.** `rad` is one of the eight axes (§4.8.1), so an angle is NOT dimensionless — which means a rule that demanded a dimensionless argument for *every* transcendental would make `cos(θ)` illegal, and `cos(θ)` is the single most common operation in earth science. It would reject the shipped standard library (`lib/solar.esm`: `cos_zenith = sin φ · sin δ + cos φ · cos δ · cos ω`) and `tests/valid/lib_solar_subsystem_inclusion.esm` (`cos(Solar.solar_zenith_angle)`) along with it. The circular functions map an angle to a pure ratio and their inverses map a ratio back to an angle; the hyperbolic and logarithmic/exponential functions do not, and keep the strict rule. This is the only place where tracking `rad` as an axis costs anything, and it is what tracking it buys: a latitude in `deg` stays distinguishable from a bare number.
@@ -1703,6 +1703,21 @@ shape of #200), `…_renamed_independent.esm` and its valid twin
 `tests/valid/independent_variable_renamed.esm` (the reserved name follows
 `domain.independent_variable`; a binding that hard-codes `"t"` fails one of the
 two).
+
+##### 4.9.1.2 A declared name MUST NOT contain a control character
+
+A key of a declaration map MUST NOT contain a NUL or any other C0 control
+character (U+0000–U+001F) or DEL (U+007F). The declaration maps are the
+top-level `models`, `reaction_systems`, `data_sources`, `enums`,
+`function_tables`, `index_sets`, `coordinates`, `expression_templates` and
+`coupling_roles`, each component's `variables`, `species`, `parameters`,
+`subsystems` and `expression_templates`, and a `metaparameters` block. Such a
+name cannot be written in the expression syntax (§4.1). A reference to it is
+just as unreadable, and a binding that interns names cannot represent a NUL at
+all (Julia's `Symbol` rejects one). The schema enforces the rule through
+`$defs/Identifier`, so a document carrying such a name fails schema validation
+at load, in every binding, before any build sees it.
+`tests/future/security/null_byte_injection.esm` exercises it.
 
 #### 4.9.2 Scoped references are ARBITRARY DEPTH
 
@@ -2325,7 +2340,7 @@ Optional arrayed-variable fields:
 
 | Field | Description |
 |---|---|
-| `shape` | Ordered list of index-set names (keys in the document-scoped `index_sets` registry) the variable is arrayed over. Omitted or null means the variable is scalar. Index expressions into the variable (`index`, `faq` ranges) resolve against these sets. The names are also what an **array-level expression** aligns its operands by: in `D(dp) ~ w2 * z1` the operands are matched to `dp`'s axes by index-set name and replicated along the axes they do not declare, and an operand carrying an index set `dp` is not shaped over is rejected (`array_shape_mismatch`). See Section 4.3.4. |
+| `shape` | Ordered list of index-set names (keys in the document-scoped `index_sets` registry) the variable is arrayed over. Omitted or null means the variable is scalar — unless its defining equation's right-hand side is a `faq` whose output indices range over explicit inline intervals (`ramp ~ faq(output_idx=[i], ranges={i: [1, 2]}, expr=u*i)`): such an unknown takes its shape, one axis per output index, from those ranges, since a 0-D declaration lifts when it meets an array. If a `shape` is declared as well, its extents MUST equal the ranges' extents, and a mismatch is `array_shape_mismatch`. Index expressions into the variable (`index`, `faq` ranges) resolve against these sets. The names are also what an **array-level expression** aligns its operands by: in `D(dp) ~ w2 * z1` the operands are matched to `dp`'s axes by index-set name and replicated along the axes they do not declare, and an operand carrying an index set `dp` is not shaped over is rejected (`array_shape_mismatch`). See Section 4.3.4. |
 | `location` | Optional advisory placement tag for a staggered quantity (e.g., `"cell_center"`, `"edge_normal"`, `"x_face"`, `"vertex"`). Metadata only — the index set a quantity lives on is given by `shape`. Omitted means no explicit placement. |
 
 **Inline array data.** A shaped variable's `default` is a **number**, or a
@@ -2396,7 +2411,7 @@ Python, Rust, and Go; `odeStates` in TypeScript).
 | Function | Returns |
 |---|---|
 | `ode_states(model)` | unknowns appearing under `D(·, t)` on some equation LHS |
-| `observed_unknowns(model)` | unknowns **defined** by an equation whose LHS names them — a bare-variable LHS (`y ~ f(…)`) or an indexed-variable LHS (`y[i] ~ f(…)`, which defines the whole array `y`) — eliminable, materializable |
+| `observed_unknowns(model)` | unknowns **defined** by an equation whose LHS names them — a bare-variable LHS (`y ~ f(…)`) or an indexed-variable LHS (`y[i] ~ f(…)`, with `i` bound by a `faq`, which defines the whole array `y`) — eliminable, materializable |
 | `algebraic_unknowns(model)` | unknowns constrained only implicitly — no equation names them on its LHS (`H*H*SO4 ~ Ksp`) |
 | `is_ode_state(model, name)` | membership test for the first |
 
@@ -2418,6 +2433,27 @@ beyond bookkeeping: `algebraic_unknowns` seeds the cadence partition
 resolves through its defining equation's RHS — so misclassifying an arrayed
 definition as algebraic pushes build-time work (const-backed geometry and
 regridding arrays) onto the per-timestep hot path.
+
+**What a left-hand side may name.** An equation defines, or constrains, the
+unknowns its left-hand side names; it never defines a **parameter**. An
+equation whose left-hand side names a parameter — bare (`k ~ …`), indexed
+(`k[i] ~ …`), wrapped in a `faq`, through a scoped reference into a
+subsystem (`Top.sub.k ~ …`), or under a time derivative (`D(k) ~ …`, which
+would give a parameter dynamics; a quantity that evolves is an `unknown`) — is
+invalid, with the structural diagnostic `equation_defines_parameter`: a parameter's value comes from its `default`,
+a `distribution`, an override, its `update` (§5.4) or a coupling, and a
+binding that silently drops the equation, or silently lets it override the
+parameter, reports an answer the document does not describe. A binding MUST
+reject such a document in validation and MUST refuse to build it.
+
+Likewise, an index symbol is local to the `faq` that binds it (§4.3). A string
+subscript of an `index` on an equation's left-hand side that names no declared
+variable or metaparameter MUST be bound by a `faq` enclosing it on that
+left-hand side, or — for the bare-index definition `index(V, k) ~ faq{k}(…)` —
+by the right-hand side's `faq` `output_idx`. A free one (`index(D(u), i) ~ …`
+with no `faq` binding `i`) makes the document invalid, with the structural
+diagnostic `unbound_index_symbol`; the pointwise form is written with an
+explicit `faq` on both sides.
 
 Note that *eliminable* and *inlineable* are not the same thing. A scalar
 observed is eliminated by substituting its definition into every consumer; an
@@ -2530,9 +2566,10 @@ to answer a derived question is precisely what 1.0.0 removes.
 `system_kind` → `"sde"`.
 
 Adding an arrayed unknown `w` shaped over `bins` and the equation
-`{"lhs": {"op": "index", "args": ["w", "i"]}, "rhs": …}` puts `w` in
-`observed_unknowns`, not `algebraic_unknowns`: the LHS's base name is `w`, so
-the equation defines it.
+`{"lhs": {"op": "index", "args": ["w", "i"]}, "rhs": {"op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "bins"}}, …}}`
+puts `w` in `observed_unknowns`, not `algebraic_unknowns`: the LHS's base name
+is `w`, so the equation defines it. (The right-hand `faq` is what binds `i`;
+with `i` bound by nothing the document is `unbound_index_symbol`.)
 
 ### 6.4 Advection Model Example
 
@@ -4209,7 +4246,7 @@ The migration of inline-const lookups to tables is a one-shot author-driven refa
 
 ##### 9.5.3a `out_of_bounds: "error"` in a binding that does not implement it
 
-`out_of_bounds: "clamp"` is required of every binding; `"error"` is "conformant when implemented" (§9.5.1). A binding that has not implemented `"error"` **MUST refuse the lookup** with `table_out_of_bounds_unsupported` rather than evaluate it under `"clamp"`. Substituting the mode the binding happens to have for the mode the author declared is a wrong answer with nothing in the result to say so — the same defect class as an unlowered `table_lookup` reaching an evaluator. The refusal is raised at the point the binding would otherwise lower or dispatch the node, so a document declaring `"error"` still LOADS and still round-trips (§9.5.4); it simply does not evaluate. No binding implements `"error"` as of v1.0.0.
+`out_of_bounds: "clamp"` is required of every binding; `"error"` is "conformant when implemented" (§9.5.1). A binding that has not implemented `"error"` **MUST refuse the lookup** with `table_out_of_bounds_unsupported` rather than evaluate it under `"clamp"`. Substituting the mode the binding happens to have for the mode the author declared is a wrong answer with nothing in the result to say so — the same defect class as an unlowered `table_lookup` reaching an evaluator. The refusal is raised at the point the binding would otherwise lower or dispatch the node, so a document declaring `"error"` still LOADS and still round-trips (§9.5.4); it simply does not evaluate. A binding that implements `"error"` raises `table_lookup_out_of_bounds` exactly when a query lies strictly below an axis's first knot or strictly above its last; a query on an end knot is in range, and a NaN query is not out of bounds — it passes through the interpolation core and yields NaN, as §9.2 specifies for `interp.linear`. The Rust and Julia bindings implement `"error"` (Julia's `:mtk` compiler refuses it as described here, having no channel to raise at run time); the other three refuse it as described here.
 
 #### 9.5.6 Conformance fixtures
 
@@ -4522,7 +4559,8 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `unlowered_operator` | A rewrite-target op (§4.2) reached evaluation/compilation without being lowered — no rule eliminated it. Fires before evaluation, not necessarily at load (loading is permissive). One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
 | `unevaluable_operator` | An op that IS in the evaluable-core set (§4.2) reached an evaluator that has no evaluation rule for it. The complement of `unlowered_operator`, and the two are distinguished by which side of §4.2 the op falls on: `unlowered_operator` means the op is OUTSIDE evaluable-core and no rewrite rule eliminated it (the document is under-lowered), whereas `unevaluable_operator` means the op is INSIDE evaluable-core but *this* evaluator cannot produce a value for it — because an earlier pipeline stage (value invention, or a lowering pass) should have eliminated it, or because the document was built for a different runtime (a binding may legitimately offer more than one evaluator, e.g. a scalar ODE interpreter alongside a whole-array one, with different rule sets). The check MUST precede evaluation: the evaluator walks the whole expression (or, where it has a build step, every expression it builds) and refuses up front, so no part of an expression carrying such an op is evaluated — an op in the untaken branch of an `ifelse` is refused too. Raising only when evaluation happens to reach the node does not satisfy this. The diagnostic MUST name the offending op, and the evaluator MUST NOT evaluate the op to a sentinel value (NaN, zero, or any other number): a sentinel is indistinguishable from a legitimate numerical result and would propagate into the solution. Binding-local spellings of this condition (`E_TREEWALK_UNSUPPORTED_OP`, `unsupported_operator`, an uncoded interpreter error) are superseded by this code; the shared fixture is `tests/conformance/unevaluable_operator/`. |
 | `unsupported_construct` | A model construct reached an evaluator that cannot run it: a **continuous event** (`continuous_events`), a **discrete event** (`discrete_events`), an **implicit equation** — one whose LHS is an expression rather than an unknown (bare or indexed), a time derivative of one, or `ic` of one, and so constrains its operands without defining any of them — or **Wiener noise**, a parameter whose `update.kind` is `wiener`, which makes the document an SDE (§6.3.1) that an ODE evaluator would otherwise run with the noise read as a constant. Fires at BUILD, before evaluation, and MUST name the construct and the evaluator. It is reported rather than skipped: an evaluator that runs the model without the event, or without solving the residual, reports an answer the document does not describe. An evaluator that does run the construct (e.g. a ModelingToolkit export) never raises it. |
-| `data_source_unbound` | A **data-fed parameter** — one whose `update` is `kind: "data"` (§5.4, §8.5) — reached a build with **nothing bound to it**: no provider object for it, no array loaded for it, and no caller-supplied `p` value for it. Fires at CONSTRUCTION, before any right-hand side is built, and MUST name the parameter, the `data_sources` entry its `update` names, and what the caller can pass (`providers`, or `p` to pin a value). It is the complement of `data_source_undefined`: that code is the VALIDATOR's finding about an `update.source` that names no declared entry, this one is the BUILD's finding about a source that resolves and that nothing supplied data for. A binding MUST NOT answer by evaluating the parameter at its `default` — a forcing at its default produces a whole trajectory, under the label of a quantity the document says is read from a file, with nothing in the result recording that the file was never opened. Because it asks whether the DOCUMENT's inputs are bound and not what an evaluator can lower, the refusal is identical under every `compiler` value; a compiler that additionally cannot lower a read of the forcing channel reports that separately as `compiler_refused_rule`. A parameter the caller pins with `p` IS bound and MUST build. |
+| `callback_unregistered` | An equation reads a variable that a `callback` coupling entry injects (`coupling[i].config.callback_variables[j].name`, a declaration site per §4.9), and no callback supplying it is registered at construction. The value is the host's to supply, and no binding has a seam to register one before the build. So a build that went ahead would read a placeholder (zero, NaN, or an unset forcing slot) the document does not describe. It fires at BUILD, before evaluation, and names the variable, the reading system and the `callback_id`. Loading and validation are unaffected: the variable IS declared. |
+| `data_source_unbound` | A **data-fed parameter** — one whose `update` is `kind: "data"` (§5.4, §8.5) — reached a build with **nothing bound to it** (no provider object, no array loaded, no caller-supplied `p` value) in a case none of the following rules answers. A declared `default` is such a parameter's value (§6.3), so it builds; one with no `default` is missing data (§10.10), refused at construction as `E_TREEWALK_MISSING_DATA`, naming the parameter and the data source that feeds it; a `data_sources` key that resolves to nothing is the validator's `data_source_undefined`, refused at the front door (esm-libraries-spec §2.5.2). This code stays the cross-binding name for an unbound feed a binding cannot answer otherwise. A parameter the caller pins with `p` IS bound, MUST build, and the pin MUST reach the right-hand side. The answer is identical under every `compiler` value. |
 | `compiler_unknown` | An `esm_problem` **`compiler`** option (API_SPEC.md §5.8) named a value outside the closed vocabulary — `interpreter`, `native`, `xla`, `mtk`, `sympy`. Fires at construction, before anything is built, and MUST name the offending value. |
 | `compiler_unavailable` | A `compiler` value that IS in the vocabulary, but that this binding, this build, or this process cannot provide: a compiler the binding does not implement, a build feature not compiled in, an optional package not loaded. The message MUST name what would have to be loaded or built. A binding MUST NOT answer by selecting a different compiler — the whole point of naming one is that the caller knows which one ran. |
 | `compiler_refused_rule` | The chosen compiler cannot run this document. Fires at BUILD, and MUST name the compiler, the **rule** — the equation or observed it refused, component-qualified — and the reason. It is a refusal, never a fallback: a compiler that quietly ran the rule on a slower or different path would report a number under a label that does not describe how it was produced. |
@@ -5334,7 +5372,7 @@ default nor a supplied value is an error when a problem is built from the docume
 fails loudly at build instead of silently running with a placeholder value. A target that does
 carry a `default` is, by that declaration, optional: omitting its import is not an error. `validate`
 cannot reject an uncoupled default-less parameter on its own, because the value may legitimately
-arrive at run time.
+arrive at run time. This holds for a SCALAR parameter exactly as for a shaped one: the check runs at problem construction, after the caller's `p`, any provider and any `distribution` are applied, and a parameter nothing supplies is refused with `E_TREEWALK_MISSING_DATA` naming it. A binding MUST NOT substitute `0.0` (or any other value it chose) for the missing one, and MUST NOT defer the failure to the solve.
 
 ### 10.11 Coupling-import diagnostics
 
@@ -5498,6 +5536,8 @@ The RHS is an ordinary Expression:
 - **state-free array observed** → a reference to an observed whose defining expression closes over parameters, inline `const` data and other state-free observeds — no state, no `t`. Such a field is resolvable **before the simulation runs**, which is exactly the build-time evaluation scope §6.6.5 already defines, so a binding resolves it through the same evaluator it reaches from the coordinate-expression and analytic-`reference` positions. `ic(u) ~ theta0`, where `theta0` is a `const` gather or a shaped parameter's inline column (§6.3), is the column-physics case: the initial profile is data the document carries, not a closed-form function of the coordinates.
 
 A 0-D component's `ic` RHS is a scalar; a PDE component's may be a coordinate expression. Every ODE state SHOULD have exactly one `ic` equation; a missing one defaults to the variable's declared `default`.
+
+**No starting value is an error.** An unknown that needs a starting value — an ODE state or an algebraic unknown, not an observed one — and gets none from its declared `default`, an `ic` equation, an initialization equation (§6.2), a run-time override, or the caller's `u0` at problem construction, is an error when the problem is built, reported with `E_TREEWALK_MISSING_INITIAL_VALUE` naming the unknown. The check runs at construction, after the caller's values are applied; a binding MUST NOT start such an unknown at `0.0` (or any other value it chose), and MUST NOT defer the failure to the solve.
 
 **Run-time overrides.** A test or analysis MAY override the initial value of an unknown for one run via `test.initial_conditions` / `analysis.initial_state` (§6.6 / §6.7) — this overrides the `ic` equation's value for that run without changing the model. The value is a number, or — for a **shaped** unknown — a row-major nested JSON array matching its declared `shape` (§6.6.2).
 

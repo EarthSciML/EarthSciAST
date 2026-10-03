@@ -270,11 +270,14 @@ diagnostic_code_registry! {
     /// An axis's `values` carries a non-finite entry; §9.5.1 requires
     /// strictly-increasing FINITE floats.
     TABLE_AXIS_NAN = "table_axis_nan";
-    /// The referenced table declares `out_of_bounds: "error"`, which no
-    /// binding implements as of v1.0.0 (esm-spec §9.5.3a). Refused rather
-    /// than evaluated under `"clamp"`: answering in the mode the binding
-    /// happens to have, rather than the one the author declared, is a wrong
-    /// answer with nothing in the result to say so.
+    /// A lookup into an `out_of_bounds: "error"` table was queried outside an
+    /// axis range (esm-spec §9.5.1). Raised at evaluation time, through the
+    /// evaluators' fail-closed fault channel.
+    TABLE_LOOKUP_OUT_OF_BOUNDS = "table_lookup_out_of_bounds";
+    /// The referenced table declares `out_of_bounds: "error"` and the binding
+    /// does not implement that mode (esm-spec §9.5.3a). This binding
+    /// implements it, so it no longer raises this code; the constant stays
+    /// because the value is a cross-binding contract the other bindings emit.
     TABLE_OUT_OF_BOUNDS_UNSUPPORTED = "table_out_of_bounds_unsupported";
 
     // ---- subsystem refs: §4.7 reference resolution (`ref_loading.rs`) ----
@@ -364,6 +367,10 @@ diagnostic_code_registry! {
     DOMAIN_UNIT_MISMATCH = "domain_unit_mismatch";
     /// A model whose equation count cannot match its unknown count.
     EQUATION_COUNT_MISMATCH = "equation_count_mismatch";
+    /// An equation whose left-hand side names a parameter — bare, indexed,
+    /// inside a `faq`, or through a scoped reference into a subsystem
+    /// (esm-spec §6.3.1). An equation defines unknowns only.
+    EQUATION_DEFINES_PARAMETER = "equation_defines_parameter";
     /// An event `affect` writing a parameter rather than an unknown.
     EVENT_AFFECTS_PARAMETER = "event_affects_parameter";
     /// An event referring to a variable the model does not declare.
@@ -413,6 +420,9 @@ diagnostic_code_registry! {
     /// A continuous or discrete event, or an implicit equation, reached an
     /// evaluator that cannot run it (esm-spec §9.6.6).
     UNSUPPORTED_CONSTRUCT = "unsupported_construct";
+    /// An equation reads a `callback` coupling variable, and no callback is
+    /// registered to supply it at construction (esm-spec §9.6.6).
+    CALLBACK_UNREGISTERED = "callback_unregistered";
     /// `ProblemOptions::compiler` named a value outside the closed vocabulary
     /// of API_SPEC §5.8 (`interpreter`, `native`, `xla`, `mtk`, `sympy`).
     COMPILER_UNKNOWN = "compiler_unknown";
@@ -462,6 +472,10 @@ diagnostic_code_registry! {
     UNDEFINED_SYSTEM = "undefined_system";
     /// A reference to a variable the component does not declare.
     UNDEFINED_VARIABLE = "undefined_variable";
+    /// A string subscript of an `index` on an equation's left-hand side that
+    /// no enclosing left-hand `faq` binds — nor, for the bare-index definition,
+    /// the right-hand `faq`'s `output_idx` (esm-spec §6.3.1).
+    UNBOUND_INDEX_SYMBOL = "unbound_index_symbol";
     /// An evaluable-core op (esm-spec §4.2) with no evaluation rule in the
     /// evaluator a model was built for (esm-spec §9.6.6). Carried by
     /// `CompileError::UnevaluableOperatorError`.
@@ -579,6 +593,7 @@ mod error_code_tests {
             "array_default_without_shape",
             "array_shape_mismatch",
             "assertion_rank_mismatch",
+            "callback_unregistered",
             "circular_dependency",
             "closed_function_arg_type",
             "closed_function_arity",
@@ -605,6 +620,7 @@ mod error_code_tests {
             "enum_invalid_args",
             "enum_lowering_residual",
             "equation_count_mismatch",
+            "equation_defines_parameter",
             "event_affects_parameter",
             "event_var_undeclared",
             "factor_with_expression_transform",
@@ -647,6 +663,7 @@ mod error_code_tests {
             "table_data_shape_mismatch",
             "table_interpolation_axes_mismatch",
             "table_lookup_axis_name_mismatch",
+            "table_lookup_out_of_bounds",
             "table_lookup_output_out_of_range",
             "table_lookup_unknown_table",
             "table_out_of_bounds_unsupported",
@@ -670,6 +687,7 @@ mod error_code_tests {
             "template_inject_target_unknown",
             "template_library_illegal_payload",
             "toplevel_model_ref_unresolved",
+            "unbound_index_symbol",
             "undefined_index_set",
             "undefined_operator",
             "undefined_parameter",

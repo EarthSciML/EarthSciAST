@@ -250,6 +250,8 @@ function _field_ic_fill(rhs::ASTExpr, cells::_DiscoveredCells, param_scope::Abst
     return buf === nothing ? nothing : (sf, buf)
 end
 
+_colmajor_strides(hi::Vector{Int}) = Int[prod(hi[1:(d - 1)]; init = 1) for d in eachindex(hi)]
+
 """
     _init_equation_fill(agg, range_iters, var_map, const_arrays, pgather,
                         param_sym_set, reg_funcs, p)
@@ -258,12 +260,17 @@ end
 A `faq`-valued initialization equation's aggregate `agg` filled over its own
 output ranges (`range_iters`, unit-step), as the fill and its buffer, or
 `nothing` when no compiled fill serves it. The fill reads the build's scalar
-parameters (`p`), const arrays and live forcing buffers; a body that reads a
-state is left to the caller's route, which evaluates it against the initial
-state seeded so far, one cell at a time.
+parameters (`p`), const arrays and live forcing buffers. A body that reads a
+state reads the initial state seeded so far (`u0`, the caller's override
+included): each state it reads enters the fill as a snapshot of its current
+values — a const array for an array state with unit origin, a literal for a
+scalar — which is what the per-cell reference reads, since the equation's own
+target is not among them. Any other state read is left to the caller's route.
 """
 function _init_equation_fill(agg::OpExpr, range_iters, var_map, const_arrays::AbstractDict,
-                             pgather::AbstractDict, param_sym_set, reg_funcs, p)
+                             pgather::AbstractDict, param_sym_set, reg_funcs, p;
+                             u0::Union{Nothing,Vector{Float64}} = nothing,
+                             target::AbstractString = "")
     _setup_compile_once_enabled() || return nothing
     all(r -> !isempty(r) && step(r) == 1, range_iters) || return nothing
     # A pure map, as the per-cell reference reads it: that reference substitutes
@@ -271,9 +278,22 @@ function _init_equation_fill(agg::OpExpr, range_iters, var_map, const_arrays::Ab
     (agg.join_gates === nothing && agg.filter === nothing) || return nothing
     outs = Set{String}(_output_idx_strings(agg))
     all(k -> String(k) in outs, keys(_ranges_dict(agg))) || return nothing
+    snap = nothing
+    subs = Dict{String,ASTExpr}()
     for name in _referenced_var_names(agg)
-        (haskey(var_map, name) || _vm_block(var_map, name) !== nothing) && return nothing
+        blk = _vm_block(var_map, name)
+        (haskey(var_map, name) || blk !== nothing) || continue
+        (u0 === nothing || name == target) && return nothing
+        if blk !== nothing
+            (all(==(1), blk.lo) && blk.strides == _colmajor_strides(blk.hi)) || return nothing
+            snap === nothing && (snap = copy(const_arrays))
+            snap[name] = reshape(u0[blk.base:(blk.base + blk.len - 1)], Tuple(blk.hi))
+        else
+            subs[name] = NumExpr(u0[var_map[name]])
+        end
     end
+    snap === nothing || (const_arrays = snap)
+    isempty(subs) || (agg = _sub_preserving(agg, subs)::OpExpr)
     lo = Int[first(r) for r in range_iters]
     hi = Int[last(r) for r in range_iters]
     sf = _compile_setup_fill(agg, lo, hi; const_arrays=const_arrays, p=p,

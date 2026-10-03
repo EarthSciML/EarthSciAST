@@ -301,7 +301,15 @@ describe('array_shape_mismatch (esm-spec §4.3.4 "Broadcast compatibility")', ()
   it('leaves an INDEXED equation LHS alone (a per-cell equation spells its own axes)', () => {
     const file = arrayModel('bad' as Expression, { bad: ['spc'] })
     const model = (file.models as Record<string, { equations: { lhs: unknown }[] }>).M
-    model.equations[0].lhs = { op: 'D', args: [{ op: 'index', args: ['dp', 'i', 'j', 'k'] }] }
+    // The per-cell LHS binds its own axes with a `faq` (a free subscript is
+    // `unbound_index_symbol`, esm-spec §6.3.1).
+    model.equations[0].lhs = {
+      op: 'faq',
+      args: [],
+      output_idx: ['i', 'j', 'k'],
+      ranges: { i: { from: 'lon' }, j: { from: 'lat' }, k: { from: 'lev' } },
+      expr: { op: 'D', args: [{ op: 'index', args: ['dp', 'i', 'j', 'k'] }], wrt: 't' },
+    }
     expect(findings(file)).toEqual([])
   })
 

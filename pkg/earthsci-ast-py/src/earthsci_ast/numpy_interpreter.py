@@ -261,6 +261,12 @@ class ConstArrayOutOfRangeError(NumpyInterpreterError):
     merely not evaluable yet, so a tolerant build pass must not skip it."""
 
 
+class DegenerateOperandError(NumpyInterpreterError):
+    """``E_TREEWALK_GEOMETRY_CLIP``: a polygon operand has fewer than 3 distinct
+    vertices (esm-spec §8.6.1). An invalid value in the document, not an observed
+    that is merely not evaluable yet, so a tolerant build pass must not skip it."""
+
+
 class UnreachableSpatialOperatorError(NumpyInterpreterError):
     """Raised when an unlowered rewrite-target operator reaches the simulator's
     RHS evaluator — a spatial/right-hand-side ``D``, one of the open-tier sugar
@@ -1462,6 +1468,8 @@ def _eval_intersect_polygon(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     poly_b = _as_array(eval_expr(expr.args[1], ctx))
     try:
         ring = geometry.intersect_polygon(poly_a, poly_b, manifold)
+    except geometry.DegenerateRingError as exc:
+        raise DegenerateOperandError(f"E_TREEWALK_GEOMETRY_CLIP: {exc}") from exc
     except geometry.GeometryError as exc:
         raise NumpyInterpreterError(str(exc)) from exc
     closed = geometry.close_ring(ring)
@@ -1508,6 +1516,8 @@ def _eval_polygon_intersection_area(expr: ExprNode, ctx: EvalContext) -> float:
     poly_b = _as_array(eval_expr(expr.args[1], ctx))
     try:
         ring = geometry.intersect_polygon(poly_a, poly_b, manifold)
+    except geometry.DegenerateRingError as exc:
+        raise DegenerateOperandError(f"E_TREEWALK_GEOMETRY_CLIP: {exc}") from exc
     except geometry.GeometryError as exc:
         raise NumpyInterpreterError(str(exc)) from exc
     return float(polygon_area_via_faq(ring, manifold))
@@ -2558,6 +2568,23 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # unchanged M1 fast / scalar paths below and stay byte-for-byte identical.
     join_clauses = getattr(expr, "join", None)
     filter_expr = getattr(expr, "filter", None)
+    # CONFORMANCE_SPEC §5.6.1: a numeric evaluator runs a SCALAR bool_and_or
+    # reduction and rejects an array-valued one. A value-invention node
+    # (`distinct`, a `key`) or an addressable producer (`id`) yields an index set
+    # rather than an array, and is not this.
+    if (
+        reducer == "or"
+        and out_syms
+        and reduce_syms
+        and not getattr(expr, "distinct", None)
+        and getattr(expr, "key", None) is None
+        and getattr(expr, "id", None) is None
+    ):
+        raise NumpyInterpreterError(
+            "array-valued `bool_and_or` reduction: the numeric evaluators reject a "
+            "`bool_and_or` faq that has output indices and contracts one "
+            "(CONFORMANCE_SPEC §5.6.1); a scalar one, with no output index, runs"
+        )
     # An OVERLAP gate (§5.5.6) DRIVES enumeration rather than filtering it, so
     # every path that would materialise the dense ``out × reduce`` box and mask
     # it is bypassed outright — that box is exactly the ``O(N_c·N_r)`` work the
@@ -3906,7 +3933,7 @@ def _eval_faq_reduce_vectorized(
     the semiring's ⊗ need not be ×.
     """
     ufunc = _REDUCE_UFUNCS.get(reducer)
-    if ufunc is None:
+    if ufunc is None and reducer != "or":
         return _decline("gated-reduce", f"⊕ {reducer!r} has no numpy ufunc")
     if not reduce_syms:
         return _decline(
@@ -3936,6 +3963,13 @@ def _eval_faq_reduce_vectorized(
         term = np.where(admit, term, empty_zero)
 
     red_axes = tuple(range(len(out_syms), ndim))
+    if reducer == "or":
+        # bool_and_or's ⊕ (a scalar reduction only; the dispatcher rejects an
+        # array-valued one): 1.0 when any admitted term is non-zero — a NaN
+        # included, as in `_reduce_step` — else the identity 0.0. The result
+        # does not depend on the order the terms are visited in.
+        out = np.any(np.asarray(term) != 0.0, axis=red_axes)
+        return np.asarray(out, dtype=float).reshape(out_shape)
     with np.errstate(divide="ignore", invalid="ignore"):
         out = ufunc.reduce(np.ascontiguousarray(term), axis=red_axes, initial=empty_zero)
     return np.asarray(out, dtype=float).reshape(out_shape)

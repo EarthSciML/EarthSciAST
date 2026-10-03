@@ -1317,3 +1317,163 @@ export function validateRelationalNodesInContinuous(
   })
   return errors
 }
+
+// ---------------------------------------------------------------------------
+// esm-spec §6.3.1 "What a left-hand side may name"
+// ---------------------------------------------------------------------------
+
+/** The variable a left-hand side names through its `faq` / `index` wrappers
+ * and a time derivative (a parameter may have neither a definition nor
+ * dynamics, esm-spec §6.3.1), or undefined — and undefined for an `ic` form,
+ * which declares an initial value rather than the variable. */
+function lhsBaseName(e: unknown): string | undefined {
+  let cur: unknown = e
+  for (;;) {
+    if (typeof cur === 'string') return cur
+    if (typeof cur !== 'object' || cur === null || !('op' in cur)) return undefined
+    const n = cur as { op: string; args?: unknown[]; expr?: unknown; wrt?: string }
+    if (n.op === 'faq' || n.op === 'aggregate') cur = n.expr
+    else if (n.op === 'index' || (n.op === 'D' && (n.wrt === undefined || n.wrt === 't'))) {
+      if (!n.args || n.args.length === 0) return undefined
+      cur = n.args[0]
+    } else return undefined
+  }
+}
+
+/** The variable a left-hand side defines, looking through `D` and `ic` as
+ * well as the addressing wrappers, for naming it in a message. */
+function lhsDefinedName(e: unknown): string {
+  let cur: unknown = e
+  for (;;) {
+    if (typeof cur === 'string') return cur
+    if (typeof cur !== 'object' || cur === null || !('op' in cur)) return ''
+    const n = cur as { op: string; args?: unknown[]; expr?: unknown }
+    if (n.op === 'faq' || n.op === 'aggregate') cur = n.expr
+    else if (n.op === 'index' || n.op === 'D' || n.op === 'ic') {
+      if (!n.args || n.args.length === 0) return ''
+      cur = n.args[0]
+    } else return ''
+  }
+}
+
+function lhsFreeSymbols(
+  e: unknown,
+  bound: Set<string>,
+  declared: (name: string) => boolean,
+  out: string[],
+): void {
+  if (typeof e !== 'object' || e === null || !('op' in e)) return
+  const n = e as {
+    op: string
+    args?: unknown[]
+    expr?: unknown
+    output_idx?: unknown[]
+    ranges?: Record<string, unknown>
+  }
+  if (n.op === 'faq' || n.op === 'aggregate') {
+    const inner = new Set(bound)
+    for (const x of n.output_idx ?? []) if (typeof x === 'string') inner.add(x)
+    for (const k of Object.keys(n.ranges ?? {})) inner.add(k)
+    lhsFreeSymbols(n.expr, inner, declared, out)
+    for (const a of n.args ?? []) lhsFreeSymbols(a, inner, declared, out)
+    return
+  }
+  if (n.op === 'index') {
+    const args = n.args ?? []
+    if (args.length === 0) return
+    lhsFreeSymbols(args[0], bound, declared, out)
+    for (const a of args.slice(1)) {
+      if (typeof a === 'string') {
+        if (!bound.has(a) && !declared(a)) out.push(a)
+      } else lhsFreeSymbols(a, bound, declared, out)
+    }
+    return
+  }
+  for (const a of n.args ?? []) lhsFreeSymbols(a, bound, declared, out)
+  if (n.expr !== undefined) lhsFreeSymbols(n.expr, bound, declared, out)
+}
+
+function rhsOutputIdx(e: unknown): Set<string> {
+  const out = new Set<string>()
+  if (typeof e !== 'object' || e === null || !('op' in e)) return out
+  const n = e as { op: string; output_idx?: unknown[] }
+  if (n.op !== 'faq' && n.op !== 'aggregate') return out
+  for (const x of n.output_idx ?? []) if (typeof x === 'string') out.add(x)
+  return out
+}
+
+/** The declared type of `name` as a local variable, or as a scoped reference
+ * into an inline subsystem (optionally led by the model's own name). */
+function declaredTypeOf(model: Model, modelName: string, name: string): string | undefined {
+  const local = (model.variables ?? {})[name]
+  if (local) return String(local.type)
+  let parts = name.split('.')
+  if (parts.length > 1 && parts[0] === modelName) parts = parts.slice(1)
+  if (parts.length < 2) return undefined
+  let cur: Model = model
+  for (const p of parts.slice(0, -1)) {
+    const subs: NonNullable<Model['subsystems']> = cur.subsystems ?? {}
+    const sub = subs[p]
+    if (!sub || !isInlineModel(sub)) return undefined
+    cur = sub
+  }
+  const v = (cur.variables ?? {})[parts[parts.length - 1]]
+  return v ? String(v.type) : undefined
+}
+
+/**
+ * esm-spec §6.3.1: an equation never defines a parameter
+ * (`equation_defines_parameter`), and a string subscript on a left-hand side
+ * must be bound by a `faq` there or, for the bare-index definition
+ * `index(V, k) ~ faq{k}(…)`, by the right-hand side's `output_idx`
+ * (`unbound_index_symbol`). Recurses into inline subsystems.
+ */
+export function validateLhsRules(
+  model: Model,
+  modelPath: string,
+  modelName: string,
+  esmFile: EsmFile,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  const meta = new Set(
+    Object.keys(
+      (esmFile as unknown as { metaparameters?: Record<string, unknown> }).metaparameters ?? {},
+    ),
+  )
+  const indep = independentVariableName(esmFile)
+  const vars = model.variables ?? {}
+  const declared = (name: string): boolean =>
+    name === indep || name === 't' || meta.has(name) || name in vars
+  const equations = model.equations ?? []
+  for (let i = 0; i < equations.length; i++) {
+    const eq = equations[i] as { lhs: unknown; rhs: unknown }
+    const path = `${modelPath}/equations/${i}/lhs`
+    const base = lhsBaseName(eq.lhs)
+    if (base !== undefined && declaredTypeOf(model, modelName, base) === 'parameter') {
+      errors.push({
+        path,
+        code: ERROR_CODES.EQUATION_DEFINES_PARAMETER,
+        message: `Equation ${i} defines '${base}', which is a parameter; an equation defines unknowns only`,
+        details: { variable: base },
+      })
+    }
+    const free: string[] = []
+    lhsFreeSymbols(eq.lhs, rhsOutputIdx(eq.rhs), declared, free)
+    const defined = lhsDefinedName(eq.lhs)
+    for (const sym of [...new Set(free)]) {
+      errors.push({
+        path,
+        code: ERROR_CODES.UNBOUND_INDEX_SYMBOL,
+        message: `Equation ${i} (defining '${defined}') subscripts its left-hand side with '${sym}', which no faq binds`,
+        details: { symbol: sym, variable: defined },
+      })
+    }
+  }
+  const subsystems = model.subsystems ?? {}
+  for (const name of Object.keys(subsystems).sort()) {
+    const sub = subsystems[name]
+    if (!sub || !isInlineModel(sub)) continue
+    errors.push(...validateLhsRules(sub as Model, `${modelPath}/subsystems/${name}`, name, esmFile))
+  }
+  return errors
+}

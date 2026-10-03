@@ -248,6 +248,24 @@ pub const INLINE_TIER_DOCS: &[(&str, &str, &str)] = &[
         "conformance/pde_inline_reference_dimension_names/fixtures/reference_dimension_names.esm",
         "M"
     ),
+    tier_doc!(
+        "value_invention_geometry",
+        "edge_enumeration_ode",
+        "conformance/value_invention_geometry/fixtures/edge_enumeration_ode.esm",
+        "EdgeEnumerationODE"
+    ),
+    tier_doc!(
+        "value_invention_geometry",
+        "nearest_generator_ode",
+        "conformance/value_invention_geometry/fixtures/nearest_generator_ode.esm",
+        "NearestGeneratorODE"
+    ),
+    tier_doc!(
+        "value_invention_geometry",
+        "bin_skolem_count_ode",
+        "conformance/value_invention_geometry/fixtures/bin_skolem_count_ode.esm",
+        "BinSkolemCountODE"
+    ),
 ];
 
 macro_rules! corpus_doc {
@@ -348,7 +366,8 @@ pub fn check_scaling_fixture(family: &str, n: u64, text: &str) {
 /// Native builds `text` with every rule on the tape, and its right-hand side
 /// at one state is the interpreter's, bit for bit.
 pub fn check_native_rhs_doc(id: &str, text: &str) {
-    let doc: Value = serde_json::from_str(text).expect("the document parses");
+    let mut doc: Value = serde_json::from_str(text).expect("the document parses");
+    supply_state_defaults(&mut doc);
     let interp = esm_problem(&doc, (0.0, 1.0), options(Compiler::Interpreter, None))
         .unwrap_or_else(|e| panic!("{id}: the interpreter does not build it: {e}"));
     let native = esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None))
@@ -494,11 +513,45 @@ pub fn check_inline_tier_doc(id: &str, model: &str, text: &str) {
     }
 }
 
+/// Give every `[vertices, 2]` parameter the document leaves with no value a
+/// square vertex ring, the k-th one (in name order) shifted by k along both
+/// coordinates so consecutive rings overlap. Several geometry documents
+/// declare their polygon operands as data the caller supplies; built without
+/// it they are refused (`E_TREEWALK_MISSING_DATA`, esm-spec §10.10).
+fn supply_polygon_rings(doc: &mut Value) {
+    let Some(models) = doc.get_mut("models").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for model in models.values_mut() {
+        let Some(vars) = model.get_mut("variables").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        let mut names: Vec<String> = vars
+            .iter()
+            .filter(|(_, v)| {
+                v["type"] == "parameter"
+                    && v.get("default").is_none()
+                    && v.get("update").is_none()
+                    && v["shape"].as_array().is_some_and(|s| s.len() == 2)
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        names.sort();
+        for (k, name) in names.iter().enumerate() {
+            let o = k as f64;
+            vars[name]["default"] =
+                serde_json::json!([[o, o], [o + 2.0, o], [o + 2.0, o + 2.0], [o, o + 2.0]]);
+        }
+    }
+}
+
 /// Native builds one geometry document with no rule off the tape, and agrees
 /// with the interpreter bit for bit on every build-time field and on the
 /// right-hand side at one state, with the right-hand side forced on.
 pub fn check_geometry_doc(id: &str, text: &str) {
-    let doc: Value = serde_json::from_str(text).expect("the document parses");
+    let mut doc: Value = serde_json::from_str(text).expect("the document parses");
+    supply_polygon_rings(&mut doc);
+    supply_state_defaults(&mut doc);
     let interp = esm_problem(&doc, (0.0, 1.0), options(Compiler::Interpreter, None))
         .unwrap_or_else(|e| panic!("{id}: the interpreter does not build it: {e}"));
     let native = esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None))
@@ -539,5 +592,44 @@ pub fn check_geometry_doc(id: &str, text: &str) {
             "{id}: native dy differs from the interpreter's at {} ({a} vs {b})",
             nc.state_variable_names()[i]
         );
+    }
+}
+
+/// Give every ODE state (a `D` target on some equation's left-hand side) that
+/// declares no `default` a starting value of 0.0. Several corpus documents
+/// leave their states' starting values to the harness; built without one they
+/// are refused (`E_TREEWALK_MISSING_INITIAL_VALUE`, esm-spec §11.4).
+pub fn supply_state_defaults(doc: &mut serde_json::Value) {
+    fn d_target(lhs: &serde_json::Value) -> Option<String> {
+        match lhs.get("op").and_then(|o| o.as_str()) {
+            Some("D") => {
+                let a = lhs.get("args")?.get(0)?;
+                a.as_str()
+                    .map(str::to_string)
+                    .or_else(|| a.get("args")?.get(0)?.as_str().map(str::to_string))
+            }
+            Some("faq") => d_target(lhs.get("expr")?),
+            _ => None,
+        }
+    }
+    let Some(models) = doc.get_mut("models").and_then(|m| m.as_object_mut()) else {
+        return;
+    };
+    for model in models.values_mut() {
+        let targets: Vec<String> = model
+            .get("equations")
+            .and_then(|e| e.as_array())
+            .map(|eqs| eqs.iter().filter_map(|e| d_target(e.get("lhs")?)).collect())
+            .unwrap_or_default();
+        let Some(vars) = model.get_mut("variables").and_then(|v| v.as_object_mut()) else {
+            continue;
+        };
+        for t in targets {
+            if let Some(v) = vars.get_mut(&t)
+                && v.get("default").is_none()
+            {
+                v["default"] = serde_json::json!(0.0);
+            }
+        }
     }
 }

@@ -510,27 +510,7 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # symbol instead of the declared quantity (issue #200). All three
     # declaration maps are covered: a species and a reaction parameter become
     # symbols of the derived ODE system exactly as a `variables` entry does.
-    let indep = _indep_var(file)
-        if file.models !== nothing
-            for model_name in sort!(collect(keys(file.models)))
-                _check_reserved_model_names!(errors, file.models[model_name],
-                                             "/models/$model_name",
-                                             "Model '$model_name'"; indep=indep)
-            end
-        end
-        if file.reaction_systems !== nothing
-            for rs_name in sort!(collect(keys(file.reaction_systems)))
-                rs = file.reaction_systems[rs_name]
-                owner = "Reaction system '$rs_name'"
-                _check_reserved_declaration_names!(errors, (s.name for s in rs.species),
-                                                   "/reaction_systems/$rs_name/species",
-                                                   owner, "species"; indep=indep)
-                _check_reserved_declaration_names!(errors, (p.name for p in rs.parameters),
-                                                   "/reaction_systems/$rs_name/parameters",
-                                                   owner, "parameter"; indep=indep)
-            end
-        end
-    end
+    _check_reserved_file_names!(errors, file)
 
     # 3f. Inline array data is a SHAPED variable's value (esm-spec §6.3,
     # `array_default_without_shape`): on a variable with no `shape` it has
@@ -539,6 +519,18 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
         for model_name in sort!(collect(keys(file.models)))
             _check_array_defaults_have_shape!(errors, file.models[model_name],
                                               "/models/$model_name", "Model '$model_name'")
+        end
+    end
+
+    # 3g. What an equation's left-hand side may name (esm-spec §6.3.1): never a
+    # parameter (`equation_defines_parameter`), and no index symbol a faq does
+    # not bind (`unbound_index_symbol`).
+    if file.models !== nothing
+        meta = file.metaparameters === nothing ? Set{String}() :
+               Set{String}(String(k) for k in keys(file.metaparameters))
+        for model_name in sort!(collect(keys(file.models)))
+            m = file.models[model_name]
+            _check_equation_lhs_names!(errors, m, "/models/$model_name", model_name, m, meta)
         end
     end
 
@@ -1126,6 +1118,38 @@ function _check_reserved_declaration_names!(errors::Vector{StructuralError},
             "$owner declares a $kind named '$name', which is $role",
             ERROR_CODES.RESERVED_VARIABLE_NAME,
             Dict{String,Any}("name" => name, "reserved_as" => why)))
+    end
+    return errors
+end
+
+"""
+    _check_reserved_file_names!(errors, file)
+
+[`_check_reserved_declaration_names!`](@ref) over all three declaration maps of
+`file` — every model's `variables` (subsystems included) and every reaction
+system's `species` and `parameters` — in sorted order. Shared by `validate` and
+by the build, which refuses the same declarations (see `esm_problem`).
+"""
+function _check_reserved_file_names!(errors::Vector{StructuralError}, file::EsmFile)
+    indep = _indep_var(file)
+    if file.models !== nothing
+        for model_name in sort!(collect(keys(file.models)))
+            _check_reserved_model_names!(errors, file.models[model_name],
+                                         "/models/$model_name",
+                                         "Model '$model_name'"; indep=indep)
+        end
+    end
+    if file.reaction_systems !== nothing
+        for rs_name in sort!(collect(keys(file.reaction_systems)))
+            rs = file.reaction_systems[rs_name]
+            owner = "Reaction system '$rs_name'"
+            _check_reserved_declaration_names!(errors, (s.name for s in rs.species),
+                                               "/reaction_systems/$rs_name/species",
+                                               owner, "species"; indep=indep)
+            _check_reserved_declaration_names!(errors, (p.name for p in rs.parameters),
+                                               "/reaction_systems/$rs_name/parameters",
+                                               owner, "parameter"; indep=indep)
+        end
     end
     return errors
 end
@@ -1999,7 +2023,7 @@ end
 #     neither can ever be a recurrence — they are cycles of length one and MUST
 #     keep the cycle diagnosis they have always had.
 #
-# The predicate is character-for-character the one `_decline_recurrence_definitions`
+# The predicate is character-for-character the one `_decline_unmaterialized_recurrences`
 # (tree_walk/build.jl) uses, which is the point: §5.19.5 asks that the two sites
 # agree, not that either be clever.
 function _recurrence_candidate_names(model::Model,
@@ -2454,7 +2478,9 @@ function _validate_test_references(file::EsmFile, tests, path::String,
     for (i, t) in enumerate(tests)
         for (j, a) in enumerate(t.assertions)
             ref = a.reference
-            ref === nothing && continue
+            # A `from_file` reference (esm-spec §6.6.5 convention 3) is data, not
+            # an expression, and carries no names to resolve.
+            ref isa ASTExpr || continue
             append!(errors, validate_expression_references(
                 file, ref, "$path/tests/$(i-1)/assertions/$(j-1)/reference"; scope=scope))
         end
@@ -2515,8 +2541,16 @@ function validate_model_references(file::EsmFile, model::Model, path::String;
     # `external_temperature_forcing` exactly this way and nowhere else).
     union!(scope, _callback_injected_names(file))
 
-    # Validate equation references
-    for (i, eq) in enumerate(model.equations)
+    # Validate equation references — on the EXPANSION of any surviving
+    # `apply_expression_template` reference (esm-spec §9.6.4 rule 2: a reference
+    # denotes its expansion). A template binding is a value substituted into the
+    # body, and only where the body uses it in an expression position is it a
+    # reference; one bound to a scalar field (`K_manifold => "planar"` filling a
+    # `manifold`) is a literal. Expansion keeps the equation order, so pointers
+    # still name the authored equation.
+    eqs = isempty(model_name) ? model.equations :
+          _units_view(file, model_name, model).equations
+    for (i, eq) in enumerate(eqs)
         append!(errors, validate_expression_references(file, eq.lhs, "$path/equations/$(i-1)/lhs"; scope=scope))
         append!(errors, validate_expression_references(file, eq.rhs, "$path/equations/$(i-1)/rhs"; scope=scope))
     end
@@ -3476,6 +3510,129 @@ end
 # it prints.
 _variable_type_word(t::ModelVariableType)::String =
     t == ParameterVariable ? "parameter" : "unknown"
+
+# The variable a left-hand side names — through `index` / `faq` wrappers and a
+# time derivative `D` (a parameter may have neither a definition nor dynamics),
+# not an `ic` — or `nothing`.
+function _lhs_defined_name(e)
+    while e isa OpExpr
+        o = e::OpExpr
+        if _is_faq_op(o.op) && o.expr_body !== nothing
+            e = o.expr_body
+        elseif (o.op == "index" || _is_time_derivative(o)) && !isempty(o.args)
+            e = o.args[1]
+        else
+            return nothing
+        end
+    end
+    return e isa VarExpr ? (e::VarExpr).name : nothing
+end
+
+# The declaration `name` refers to from `model`: a local variable, or a scoped
+# reference into a subsystem, written from the model or from the root model.
+function _lhs_variable(model::Model, name::String, root_name::String, root::Model)
+    v = get(model.variables, name, nothing)
+    v === nothing || return v
+    parts = split(name, '.')
+    for (start, cur0) in ((1, model), (2, parts[1] == root_name ? root : nothing))
+        cur = cur0
+        cur === nothing && continue
+        ok = true
+        for p in parts[start:end-1]
+            sub = get(cur.subsystems, String(p), nothing)
+            if sub isa Model
+                cur = sub
+            else
+                ok = false; break
+            end
+        end
+        ok || continue
+        v = get(cur.variables, String(parts[end]), nothing)
+        v === nothing || return v
+    end
+    return nothing
+end
+
+# Free string subscripts of `index` nodes in `e`: not bound by an enclosing faq
+# (or by `bound`), and naming no declared variable or metaparameter.
+function _free_lhs_index_symbols!(out::Vector{String}, e, bound::Set{String},
+                                  names::Set{String})
+    e isa OpExpr || return out
+    o = e::OpExpr
+    if _is_faq_op(o.op)
+        b = copy(bound)
+        o.output_idx === nothing || foreach(x -> x isa AbstractString && push!(b, String(x)), o.output_idx)
+        o.ranges === nothing || foreach(k -> push!(b, String(k)), keys(o.ranges))
+        o.expr_body === nothing || _free_lhs_index_symbols!(out, o.expr_body, b, names)
+        foreach(a -> _free_lhs_index_symbols!(out, a, b, names), o.args)
+        return out
+    end
+    if o.op == "index" && !isempty(o.args)
+        _free_lhs_index_symbols!(out, o.args[1], bound, names)
+        for a in o.args[2:end]
+            if a isa VarExpr
+                n = (a::VarExpr).name
+                (n in bound || n in names || n == "t") || push!(out, n)
+            else
+                _free_lhs_index_symbols!(out, a, bound, names)
+            end
+        end
+        return out
+    end
+    foreach(a -> _free_lhs_index_symbols!(out, a, bound, names), o.args)
+    return out
+end
+
+"""
+    _check_equation_lhs_names!(errors, model, path, root_name, root, metaparameters)
+
+esm-spec §6.3.1, what an equation's left-hand side may name: an equation defines
+unknowns, never a parameter (`equation_defines_parameter`, for a bare, indexed
+or faq-wrapped left side and for a scoped reference into a subsystem), and an
+index symbol on it must be bound by a faq on that side or, for the bare-index
+definition, by the right side's faq `output_idx` (`unbound_index_symbol`).
+Recurses into inline subsystems.
+"""
+function _check_equation_lhs_names!(errors::Vector{StructuralError}, model::Model,
+                                    path::String, root_name::String, root::Model,
+                                    meta::Set{String})
+    names = Set{String}(keys(model.variables))
+    union!(names, meta)
+    for (k, eq) in enumerate(model.equations)
+        lhs = eq.lhs
+        (lhs isa OpExpr && (lhs::OpExpr).op == "ic") && continue
+        lpath = "$path/equations/$(k-1)/lhs"
+        dn = _lhs_defined_name(lhs)
+        if dn !== nothing
+            v = _lhs_variable(model, dn, root_name, root)
+            if v !== nothing && v.type == ParameterVariable
+                push!(errors, StructuralError(lpath,
+                    "Equation $(k-1) defines '$(dn)', which is a parameter; an " *
+                    "equation defines unknowns only",
+                    ERROR_CODES.EQUATION_DEFINES_PARAMETER,
+                    Dict{String,Any}("variable" => dn)))
+            end
+        end
+        rhs = eq.rhs
+        rb = Set{String}()
+        if rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) && (rhs::OpExpr).output_idx !== nothing
+            foreach(x -> x isa AbstractString && push!(rb, String(x)), (rhs::OpExpr).output_idx)
+        end
+        free = unique!(_free_lhs_index_symbols!(String[], lhs, rb, names))
+        for sym in free
+            push!(errors, StructuralError(lpath,
+                "Equation $(k-1)" * (dn === nothing ? "" : " (defining '$(dn)')") *
+                " subscripts its left-hand side with '$(sym)', which no faq binds",
+                ERROR_CODES.UNBOUND_INDEX_SYMBOL,
+                Dict{String,Any}("symbol" => sym)))
+        end
+    end
+    for (sname, sub) in model.subsystems
+        sub isa Model || continue
+        _check_equation_lhs_names!(errors, sub, "$path/subsystems/$sname", root_name, root, meta)
+    end
+    return errors
+end
 
 """
     _check_event_affects_unknowns!(errors, model, event, event_path, event_kind)

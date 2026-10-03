@@ -73,6 +73,10 @@ const ERROR_CODES = (
     EMPTY_CALLBACK_ID = "empty_callback_id",
     EQUATION_COUNT_MISMATCH = "equation_count_mismatch",
     EVENT_AFFECTS_PARAMETER = "event_affects_parameter",
+    # esm-spec §6.3.1: an equation's left-hand side names a parameter, or
+    # subscripts with an index symbol no faq binds.
+    EQUATION_DEFINES_PARAMETER = "equation_defines_parameter",
+    UNBOUND_INDEX_SYMBOL = "unbound_index_symbol",
     EVENT_VAR_UNDECLARED = "event_var_undeclared",
     INVALID_BROADCAST_FN = "invalid_broadcast_fn",
     INVALID_REFERENCE_SYNTAX = "invalid_reference_syntax",
@@ -298,12 +302,14 @@ const ERROR_CODES = (
     TABLE_DATA_SHAPE_MISMATCH = "table_data_shape_mismatch",
     TABLE_AXIS_NAN = "table_axis_nan",
     # esm-spec §9.5.3a: `out_of_bounds: "clamp"` is required of every binding
-    # and `"error"` is "conformant when implemented" (§9.5.1). This binding
-    # implements only the first, so a table declaring the second is REFUSED
-    # where it would otherwise lower — answering in the mode we happen to have
-    # rather than the one the author declared is a wrong number with nothing in
-    # the result to say so.
+    # and `"error"` is "conformant when implemented" (§9.5.1). A compiler that
+    # cannot run the second (`:mtk`) refuses the lookup where it would otherwise
+    # lower — answering in the mode it happens to have rather than the one the
+    # author declared is a wrong number with nothing in the result to say so.
     TABLE_OUT_OF_BOUNDS_UNSUPPORTED = "table_out_of_bounds_unsupported",
+    # esm-spec §9.5.1 `out_of_bounds: "error"`, implemented: a query strictly
+    # outside a strict table's axis raises this at evaluation time.
+    TABLE_LOOKUP_OUT_OF_BOUNDS = "table_lookup_out_of_bounds",
 
     # ── Discretization pipeline (tree_walk/; esm-spec §4.2 / §9.6.8). The one
     #    `TreeWalkError` code that is NOT an `E_TREEWALK_*` Julia-local name:
@@ -326,6 +332,9 @@ const ERROR_CODES = (
     #    run without the construct reports a wrong answer. The ModelingToolkit
     #    export runs all three and never raises it. ───────────────────────────
     UNSUPPORTED_CONSTRUCT = "unsupported_construct",
+    # An equation reads a `callback` coupling variable, and no callback is
+    #    registered to supply it at construction (esm-spec §9.6.6).
+    CALLBACK_UNREGISTERED = "callback_unregistered",
     # ── Compiler selection (API_SPEC §5.8; esm-spec §9.6.6). The `compiler`
     #    keyword of `esm_problem` names one member of a closed vocabulary, and
     #    the three codes below are the three ways naming one can fail. None of

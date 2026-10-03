@@ -126,6 +126,11 @@ mutable struct BuildInspection
     # since.
     observed_ctx::Any
     observed_ctxs::WeakKeyDict{Base.RefValue{Any},Any}
+    # The state slots (by position in `u0`) nothing in the document gave a
+    # starting value: no `default`, no `ic` equation, no initial condition.
+    # The build writes 0.0 there only as a placeholder; `esm_problem` refuses
+    # any the caller's `u0` does not then cover (esm-spec §11.4).
+    unvalued_slots::Vector{Int}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -137,7 +142,8 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     NamedTuple(), Dict{String,Int}(),
                                     Dict{Tuple{Base.RefValue{Any},String},_ObservedMemo}(),
                                     ReentrantLock(), Ref{Any}(nothing),
-                                    nothing, WeakKeyDict{Base.RefValue{Any},Any}())
+                                    nothing, WeakKeyDict{Base.RefValue{Any},Any}(),
+                                    Int[])
 
 """
     DiscreteMaterializer()
@@ -856,7 +862,7 @@ function _partition_variables(model::Model;
                 # buffer, ess-14f.3). Either way it is array-backed, not a scalar
                 # parameter, so it is NOT added to param_names.
                 haskey(const_arrays, name) || haskey(param_arrays, name) ||
-                    throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE", name))
+                    throw(_missing_data_error(name, v))
             else
                 push!(param_names, name)
             end
@@ -874,6 +880,48 @@ function _partition_variables(model::Model;
     end
     sort!(param_names)
     return param_names, observed_names, state_var_names
+end
+
+# A shaped parameter that reached the partition with no value: no `default`,
+# no override, no caller array and no live forcing buffer. esm-spec §10.10 makes
+# "a parameter with neither a default nor a supplied value" an error when a
+# problem is built, so this is a construction error naming the parameter, what
+# the document says feeds it, and the channels that would supply it.
+function _missing_data_error(name::AbstractString, v::ModelVariable)
+    shaped = _is_array_shape(v.shape)
+    shape = shaped ? " (shape [$(join(v.shape, ", "))])" : ""
+    # A declared default that never reached the const-array channel: its shape
+    # did not resolve to extents when the default was broadcast.
+    v.default === nothing || return TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE",
+        "the shaped parameter '$(name)'$(shape) declares a `default`, but its shape does " *
+        "not resolve to extents where the default is broadcast over it (an index set " *
+        "with no known size); supply its array in `const_arrays` instead")
+    feeds = String[]
+    for u in something(v.update, ParameterUpdate[])
+        if u.from !== nothing
+            push!(feeds, "the data source '$(something(u.source, "?"))' " *
+                         "(file_variable '$(u.from.file_variable)')")
+        elseif u.handler !== nothing
+            push!(feeds, "the registered handler '$(u.handler.handler_id)' " *
+                         "(update kind '$(u.kind)'), which writes it only when it fires")
+        end
+    end
+    fed = isempty(feeds) ? "Nothing in the document gives it a value." :
+          "The document feeds it from $(join(feeds, " and ")), and no data for it " *
+          "was supplied at construction."
+    how = isempty(feeds) ?
+          (shaped ?
+           "pass its array to `esm_problem` as `const_arrays = Dict(\"$(name)\" => array)`, " *
+           "or declare a `default` on it" :
+           "pass it to `esm_problem` as `p = Dict(\"$(name)\" => value)`, or declare a " *
+           "`default` on it") :
+          "pass a provider for it in `providers`, or its array as " *
+          "`const_arrays = Dict(\"$(name)\" => array)` (a constant snapshot) or " *
+          "`param_arrays` (a live buffer the caller refreshes), or declare a `default` on it"
+    return TreeWalkError("E_TREEWALK_MISSING_DATA",
+        "no data supplied for the $(shaped ? "shaped " : "")parameter '$(name)'$(shape), which declares no " *
+        "`default`. $(fed) A parameter with neither a default nor a supplied value is an " *
+        "error when a problem is built (esm-spec §10.10). To supply it, $(how).")
 end
 
 # ---- Stage: inline array data (esm-spec §6.3 / §6.6.2) ----------------------
@@ -904,7 +952,8 @@ end
 function _register_inline_array_parameters(model::Model, const_arrays::AbstractDict,
                                            parameter_overrides::AbstractDict,
                                            index_sets::AbstractDict;
-                                           param_arrays::AbstractDict=Dict{String,Any}())
+                                           param_arrays::AbstractDict=Dict{String,Any}(),
+                                           derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS)
     additions = Dict{String,Any}()
     for (name, v) in model.variables
         v.type == ParameterVariable && _is_array_shape(v.shape) || continue
@@ -919,7 +968,7 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
             # already outranks). Tested after it, a scalar override of a
             # parameter whose declared `default` is an inline array was silently
             # DROPPED and the default used instead.
-            exts = _declared_shape_extents(v.shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+            exts = _declared_shape_extents(v.shape, index_sets, derived_extents)
             exts === nothing && continue
             fill(Float64(ov), Tuple(exts))
         elseif haskey(const_arrays, name)
@@ -932,14 +981,15 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
             # not resolve (an unmaterialized derived set has no extent to fill) —
             # the build's own extent checks then report any real disagreement.
             haskey(param_arrays, name) && continue
-            exts = _declared_shape_extents(v.shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+            exts = _declared_shape_extents(v.shape, index_sets, derived_extents)
             exts === nothing && continue
             fill(Float64(v.default), Tuple(exts))
         else
             continue
         end
         _check_inline_shape(name, value, v.shape, index_sets,
-                            ov === nothing ? "default" : "parameter_overrides")
+                            ov === nothing ? "default" : "parameter_overrides";
+                            derived_extents=derived_extents)
         additions[name] = value
     end
     isempty(additions) && return const_arrays
@@ -984,11 +1034,12 @@ end
 # accepted as authored — the build's own extent checks then report any real
 # disagreement.
 function _check_inline_shape(name::AbstractString, value, shape, index_sets::AbstractDict,
-                             origin::AbstractString)
+                             origin::AbstractString;
+                             derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS)
     _is_array_shape(shape) || throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE",
         "$(origin)[$(name)]: inline array data was supplied for a variable with no " *
         "declared `shape`; only a SHAPED variable takes a nested array (esm-spec §6.3)"))
-    exts = _declared_shape_extents(shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+    exts = _declared_shape_extents(shape, index_sets, derived_extents)
     exts === nothing && return nothing
     size(value) == Tuple(exts) || throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE",
         "$(origin)[$(name)]: inline array data has shape $(size(value)), which does not " *
@@ -1325,13 +1376,23 @@ end
 # assertions), while STATE stays out of scope. Computed before the ic fold so
 # the same map feeds both the seed path and the parameter NamedTuple.
 function _resolve_param_scope(model::Model, param_names::Vector{String},
-                              parameter_overrides::AbstractDict)
+                              parameter_overrides::AbstractDict;
+                              supplied::AbstractDict=_EMPTY_PARAMS,
+                              supplied_live::AbstractDict=_EMPTY_PARAMS)
     param_scope = Dict{String,Float64}()
     for name in param_names
-        param_scope[name] = haskey(parameter_overrides, name) ?
-            Float64(parameter_overrides[name]) :
-            (model.variables[name].default === nothing ? 0.0 :
-             Float64(model.variables[name].default))
+        v = model.variables[name]
+        param_scope[name] = if haskey(parameter_overrides, name)
+            Float64(parameter_overrides[name])
+        elseif v.default !== nothing
+            Float64(v.default)
+        elseif v.distribution !== nothing || haskey(supplied, name) ||
+               haskey(supplied_live, name)
+            0.0   # drawn at setup, or read from the caller's / a provider's data
+        else
+            # esm-spec §10.10: neither a default nor a supplied value.
+            throw(_missing_data_error(name, v))
+        end
     end
     return param_scope
 end
@@ -1458,6 +1519,26 @@ function _classify_parameters(model::Model, param_names::Vector{String},
     return classes
 end
 
+# esm-spec §6.3.1: an equation whose left-hand side names a parameter is
+# invalid, and a build refuses it by name rather than drop it or let it override
+# the parameter. `variables` is the flattened registry, so a scoped reference
+# into a subsystem is already its qualified name.
+function _refuse_parameter_definitions(equations, variables::AbstractDict)
+    for eq in equations
+        (eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "ic") && continue
+        dn = _lhs_defined_name(eq.lhs)
+        dn === nothing && continue
+        v = get(variables, dn, nothing)
+        (v !== nothing && v.type == ParameterVariable) || continue
+        throw(TreeWalkError(ERROR_CODES.EQUATION_DEFINES_PARAMETER,
+            "equation `$(first(to_ascii(eq), 200))` defines '$(dn)', which is a " *
+            "parameter; an equation defines unknowns only, and a parameter takes its " *
+            "value from its default, an override, its update or a coupling " *
+            "(esm-spec §6.3.1)"))
+    end
+    return nothing
+end
+
 # ---- Stage: fold `ic(var) = <initial value>` equations (esm-spec v0.8.0) ----
 # An `ic`-LHS equation declares an initial condition. The tree-walk path seeds
 # u0 from the `initial_conditions` kwarg / variable defaults, so pull each ic
@@ -1486,7 +1567,8 @@ function _fold_ic_equations(equations::Vector{Equation}, model::Model,
             lop = eq.lhs::OpExpr
             (length(lop.args) == 1 && lop.args[1] isa VarExpr) ||
                 throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
-                    "ic(...) LHS must name a single state variable"))
+                    "ic(...) LHS must name a single state variable; got " *
+                    "$(first(to_ascii(eq.lhs), 200))"))
             vn = (lop.args[1]::VarExpr).name
             # An `ic` whose target is an array-shaped state variable is a
             # scoped-reference / field IC: defer it (its RHS is a field, not
@@ -1508,6 +1590,15 @@ function _fold_ic_equations(equations::Vector{Equation}, model::Model,
                     # swallowed as an ordinary decline further up
                     # (`_is_resource_error`).
                     _is_resource_error(err) && rethrow()
+                    rv = err isa UnboundVariableError ?
+                         get(model.variables, err.variable_name, nothing) : nothing
+                    rv !== nothing && rv.type == UnknownVariable &&
+                        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
+                            "ic($(vn)): the right-hand side reads the unknown " *
+                            "'$(err.variable_name)'. An initial condition is evaluated " *
+                            "before the run, when no unknown has a value, so a build-time " *
+                            "reference to one is an error (esm-spec §6.6.5 build-time " *
+                            "evaluation scope)"))
                     throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
                         "ic($(vn)) RHS must const-fold to a scalar for the " *
                         "tree-walk path ($(sprint(showerror, err)))"))
@@ -1651,8 +1742,12 @@ end
 # `fold_fields!(set)` hands the field-`ic` values to `set(slot, value)`.
 function _build_u0(model::Model, layout::StateLayout,
                    initial_conditions::AbstractDict,
-                   eq_ics::Dict{String,Float64}, fold_fields!)
+                   eq_ics::Dict{String,Float64}, fold_fields!;
+                   unvalued::Union{Nothing,Vector{Int}}=nothing)
     u0 = Vector{Float64}(undef, length(layout))
+    # Slots with a starting value; the rest hold a 0.0 placeholder, reported
+    # through `unvalued` (esm-spec §11.4).
+    valued = trues(length(u0))
     scalar_names = _layout_scalar_names(layout)
     for (i, name) in enumerate(scalar_names)
         if haskey(initial_conditions, name)
@@ -1662,6 +1757,7 @@ function _build_u0(model::Model, layout::StateLayout,
         else
             d = model.variables[name].default
             u0[i] = d === nothing ? 0.0 : Float64(d)
+            d === nothing && (valued[i] = false)
         end
     end
     # Array cells: the parent variable's declared default first (a scalar
@@ -1682,6 +1778,7 @@ function _build_u0(model::Model, layout::StateLayout,
         d = model.variables[b.name].default
         if d === nothing
             fill!(view(u0, rng), 0.0)
+            valued[rng] .= false
         elseif is_inline_array(d)
             inside = eltype(d) <: Real && ndims(d) == length(b.lo) &&
                      all(dd -> b.lo[dd] >= 1 && b.hi[dd] <= size(d, dd), eachindex(b.lo))
@@ -1702,7 +1799,7 @@ function _build_u0(model::Model, layout::StateLayout,
     end
     n_scalar = length(scalar_names)
     covered = isempty(deferred) ? nothing : falses(length(u0))
-    mark = s -> (covered === nothing || (covered[s] = true); nothing)
+    mark = s -> (valued[s] = true; covered === nothing || (covered[s] = true); nothing)
     fold_fields!((s, v) -> (s == 0 || (u0[s] = v; mark(s)); nothing))
     _apply_ics_by_slot!((s, v) -> (s > n_scalar && (u0[s] = Float64(v); mark(s)); nothing),
                         layout, initial_conditions)
@@ -1710,10 +1807,30 @@ function _build_u0(model::Model, layout::StateLayout,
         idxs = Vector{Int}(undef, length(b.lo))
         for s in (b.base):(b.base + b.len - 1)
             covered[s] && continue
-            u0[s] = _cell_default(model, b.name, _block_cell!(idxs, b, s))
+            cell = _block_cell!(idxs, b, s)
+            u0[s] = _cell_default(model, b.name, cell)
+            valued[s] = any(<(0), cell) || !haskey(model.variables, b.name) ||
+                        model.variables[b.name].default !== nothing
+        end
+    end
+    if unvalued !== nothing
+        # Only an ODE state needs a starting value; an algebraic unknown the
+        # build solves for takes it from its definition.
+        ode = Set{String}(ode_states(model))
+        for s in findall(!, valued)
+            name = s <= n_scalar ? scalar_names[s] : _layout_block_name(layout, s)
+            name in ode && push!(unvalued, s)
         end
     end
     return u0
+end
+
+# The array variable whose block holds state slot `s` (a slot past the scalars).
+function _layout_block_name(layout::StateLayout, s::Int)
+    for b in _layout_blocks(layout)
+        b.base <= s < b.base + b.len && return b.name
+    end
+    return ""
 end
 
 # One array cell's default value: its parent variable's declared default, or 0
@@ -1783,9 +1900,16 @@ function _split_observed_and_derivatives(equations::Vector{Equation},
                                 "implicit equation `$(to_ascii(eq))` is not " *
                                 "supported by the Julia tree-walk evaluator; refusing " *
                                 "the build rather than running the model without it"))
+        elseif eq.lhs isa VarExpr
+            # A bare LHS naming no observed: a parameter, or a state.
+            throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
+                "equation `$(first(to_ascii(eq), 200))`: its left-hand side " *
+                "'$((eq.lhs::VarExpr).name)' " *
+                "is not an unknown this equation can define (esm-spec §6.3.1): an " *
+                "equation defines an unknown, and a parameter takes its value from " *
+                "its default, an override or a coupling"))
         else
-            # Any other unsupported equation form (a spatial derivative LHS, a
-            # bare LHS naming no observed).
+            # Any other unsupported equation form (a spatial derivative LHS).
             throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
                                 _equation_tag(eq)))
         end
@@ -1793,47 +1917,37 @@ function _split_observed_and_derivatives(equations::Vector{Equation},
     # A CAUSAL SELF-REFERENCE is not a cycle (esm-spec §4.3.1.1), and it must
     # not reach `_resolve_observed` — which would substitute the body into
     # itself, hit its iteration cap, and report `E_TREEWALK_OBSERVED_CYCLE` for
-    # a document the spec calls acyclic. Told apart here, before the fixed
-    # point, so a bare self-reference keeps the cycle diagnosis it earns and a
-    # recurrence gets its own.
-    _decline_recurrence_definitions(observed_exprs, mat_defs, array_shaped_vars)
+    # a document the spec calls acyclic. A recurrence is materialized (its fill
+    # is an ordered sweep, recurrence_sweep.jl), so it sits in `mat_defs`; one
+    # left in the substitution map is one whose buffer could not be laid out,
+    # and is refused here by name. A bare self-reference keeps the cycle
+    # diagnosis it earns.
+    _decline_unmaterialized_recurrences(observed_exprs, array_shaped_vars)
     return derivative_eqs, _resolve_observed(observed_exprs), observed_exprs, mat_defs
 end
 
-# Fail closed on a recurrence definition this backend cannot honour.
-#
-# The array backend builds per-cell INDEPENDENT kernels and CLASS-MERGES them,
-# and the merge reorders cells; the one sequential-across-cells construct it has
-# is the prefix scan's post-pass fold (tree_walk/scan.jl), whose combine step is
-# a fixed `combine(acc, du[slot])` rather than an evaluated expression. A
-# recurrence needs a compiled cell body evaluated INSIDE the sweep loop, so
-# there is no path here it can take — and CONFORMANCE_SPEC §5.19.2 is explicit
-# that a binding whose default array path reorders cells MUST decline that path
-# for this construct specifically rather than "approximate" it: the cells are
-# not independent, so a reordering is a different computation, not an equivalent
-# one. Declining loudly is therefore the correct behaviour, and the only wrong
-# one is running it anyway. Tracked as Julia binding debt in
-# `docs/content/rfcs/causal-self-reference-recurrence.md` §6.1.
-function _decline_recurrence_definitions(observed_exprs::Dict{String,ASTExpr},
-                                         mat_defs::Dict{String,ASTExpr},
-                                         array_shaped_vars)
-    for defs in (observed_exprs, mat_defs)
-        for name in sort!(collect(keys(defs)))
-            # CANDIDACY, exactly as CONFORMANCE_SPEC §5.19.5 defines it: an
-            # array-shaped unknown with at least one `index` self-read, well
-            # founded or not. A scalar self-reference has no axis to fold along
-            # and can never be a recurrence, so it keeps whatever diagnosis it
-            # had — the self-edge exemption must not weaken cycle handling.
-            name in array_shaped_vars || continue
-            recurrence_self_reference_kind(name, defs[name]) === :indexed || continue
-            throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_RECURRENCE",
-                "'$name' is defined by a causal self-reference (esm-spec §4.3.1.1): its " *
-                "own right-hand side reads `index($name, …)`. This is a well-founded " *
-                "recurrence, NOT a dependency cycle — but this backend's array path " *
-                "class-merges per-cell kernels and so reorders cells, which " *
-                "CONFORMANCE_SPEC §5.19.2 forbids for a construct whose cells are not " *
-                "independent. Declining rather than returning a reordered answer."))
-        end
+# Fail closed on a recurrence definition that did not become a materialized
+# observed. Its cells are defined by one another, so there is no inlined form of
+# it (CONFORMANCE_SPEC §5.19.2): without the buffer its sweep writes, it cannot
+# be evaluated at all, and declining loudly is the only correct behaviour.
+function _decline_unmaterialized_recurrences(observed_exprs::Dict{String,ASTExpr},
+                                             array_shaped_vars)
+    for name in sort!(collect(keys(observed_exprs)))
+        # CANDIDACY, exactly as CONFORMANCE_SPEC §5.19.5 defines it: an
+        # array-shaped unknown with at least one `index` self-read, well
+        # founded or not. A scalar self-reference has no axis to fold along
+        # and can never be a recurrence, so it keeps whatever diagnosis it
+        # had — the self-edge exemption must not weaken cycle handling.
+        name in array_shaped_vars || continue
+        recurrence_self_reference_kind(name, observed_exprs[name]) === :indexed || continue
+        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_RECURRENCE",
+            "'$name' is defined by a causal self-reference (esm-spec §4.3.1.1): its " *
+            "own right-hand side reads `index($name, …)`. This is a well-founded " *
+            "recurrence, NOT a dependency cycle, and it is evaluated by an ordered " *
+            "sweep into a buffer laid out over its frame — but this build could not " *
+            "lay one out: its defining `faq`'s output ranges are not the dense `1…n` " *
+            "box of its declared shape, or it is owned by a mechanism that builds it " *
+            "some other way (a setup-time geometry array, a discrete-cadence cache)."))
     end
     return nothing
 end
@@ -2052,11 +2166,42 @@ end
 # substitute → resolve → compile, which a strict compiler refuses. The coord_<dim> const_array must be provided
 # by the caller. Explicit initial_conditions values take precedence (already
 # seeded in u0).
+# The caller's u0 override, visible to the build while `esm_problem` builds: an
+# initialization equation reads the state the caller set (the Rust and Python
+# front doors seed the same way).
+const _CALLER_U0_KEY = :esm_caller_u0
+_with_caller_u0(f, u0) = u0 === nothing ? f() : task_local_storage(f, _CALLER_U0_KEY, u0)
+
+# Write the caller's u0 into `u0` before the initialization equations run and
+# return the slots it names (they keep the caller's value). Nothing to do, and
+# an empty set, without a caller u0 or without an initialization equation.
+function _apply_caller_u0!(u0::Vector{Float64}, var_map, init_equations)
+    isempty(init_equations) && return Set{Int}()
+    cu = get(task_local_storage(), _CALLER_U0_KEY, nothing)
+    cu === nothing && return Set{Int}()
+    if cu isa AbstractVector
+        length(cu) == length(u0) || return Set{Int}()
+        u0 .= cu
+        return Set{Int}(eachindex(u0))
+    end
+    cu isa AbstractDict || return Set{Int}()
+    # The slots the override names: those it writes over either of two
+    # backgrounds (a NaN it writes shows against the zero one).
+    a = fill(NaN, length(u0)); _apply_initial_conditions!(a, var_map, cu)
+    b = zeros(length(u0));     _apply_initial_conditions!(b, var_map, cu)
+    slots = Set{Int}(i for i in eachindex(u0) if !isnan(a[i]) || !iszero(b[i]))
+    for i in slots
+        u0[i] = b[i]
+    end
+    return slots
+end
+
 function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
                                 initial_conditions::AbstractDict,
                                 var_map::AbstractDict{String,Int}, array_var_info,
                                 const_arrays::AbstractDict,
-                                pgather::AbstractDict, param_sym_set, reg_funcs, p)
+                                pgather::AbstractDict, param_sym_set, reg_funcs, p;
+                                skip_slots::Set{Int} = Set{Int}())
     pp = isnothing(p) ? NamedTuple() : p
     for eq in init_equations
         eq.lhs isa VarExpr || continue
@@ -2089,6 +2234,7 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
             slot == 0 && continue
             # explicit override wins
             may_override && haskey(initial_conditions, _cell_key(var_name, cell)) && continue
+            slot in skip_slots && continue
             push!(todo, (idx_tuple, slot))
         end
         isempty(todo) && continue
@@ -2098,7 +2244,8 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
         filled = _init_equation_fill(rhs_op,
                                      [_expand_int_range(ranges_dict[n]) for n in idx_names],
                                      var_map, const_arrays,
-                                     pgather, param_sym_set, reg_funcs, p)
+                                     pgather, param_sym_set, reg_funcs, p;
+                                     u0 = u0, target = var_name)
         if filled !== nothing
             sf, buf = filled
             _record_rule!(rule, :equation, :setup_codegen)
@@ -2144,7 +2291,8 @@ function _seed_faq_init_u0!(u0::Vector{Float64}, init_equations,
             percell(first(todo)[1])
             _refuse_rule(rule,
                 "no compiled fill serves this faq-valued initialization equation " *
-                "(a fill reads no state and takes no join gate, filter or " *
+                "(a fill reads another state only as a unit-origin array or a " *
+                "scalar, never its own target, and takes no join gate, filter or " *
                 "contraction), and the forms left walk a tree at each of its " *
                 "$(length(todo)) cell" * (length(todo) == 1 ? "" : "s") * ": one " *
                 "compiled once, or one resolved and compiled per cell. That is a " *
@@ -2367,6 +2515,13 @@ end
 #     as `index(<def>, j…)` and walked with `_eval_node` at each refill —
 #     the `_seed_faq_init_u0!` pattern, writing a cache buffer instead of a u0
 #     slot. Reported `:discrete_percell`, and refused by a strict plan.
+#
+# A fill may read scalar parameters, so the caches belong to the `p` they were
+# filled with. `materialize!(q)` fills them with `q` (with no argument, the `p`
+# of the last fill), and the returned `_DiscreteRefill` — which the in-place
+# right-hand side calls first on every call — refills them when the call's `p` is
+# not that one. That is what makes `remake(prob; p = …)` reach a
+# forcing-derived field. Returns `nothing` when there is nothing to fill.
 function _build_discrete_materializer!(mut::DiscreteMaterializer,
         discrete_vars, discrete_defs::Dict{String,ASTExpr}, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::AbstractDict{String,Int}, const_arrays::AbstractDict,
@@ -2423,7 +2578,7 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
             # cannot compile at all rather than read u = 0.
             _check_discrete_def_state_free(rop_res, name, state_names)
             push!(fills, _compile_discrete_fill(name, rop, Int[length(r) for r in rngs],
-                cvec, resolved_obs, const_arrays, pgather, param_sym_set, reg_funcs, pp))
+                cvec, resolved_obs, const_arrays, pgather, param_sym_set, reg_funcs))
             continue
         end
         # The per-cell route, and a rank-0 field under either plan (one cell,
@@ -2463,14 +2618,17 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
             l = isempty(idx_tuple) ? 1 : lin[idx_tuple...]
             push!(cell_fills, (l, node))
         end
-        push!(fills, _percell_discrete_fill(cvec, cell_fills, uz, pp))
+        push!(fills, _percell_discrete_fill(cvec, cell_fills, uz))
         _record_rule!(name, :observed, isempty(idx_names) ? :scalar : :discrete_percell)
     end
-    # 3. `materialize!`: every fill into its cache, in dependency order.
-    function materialize!()
+    # 3. `materialize!`: every fill into its cache, in dependency order, with the
+    #    `p` given (by default the one the caches already hold).
+    filled_p = Ref{Any}(pp)
+    function materialize!(q = filled_p[])
         for fill in fills
-            fill()
+            fill(q)
         end
+        filled_p[] = q
         # The caches just changed IN PLACE under readers gathering them via
         # `_NK_PARAM_GATHER` — invalidate the memoized time-cadence prelude slots
         # (B3, const_tier.jl): a refresh fires AT its tstop, so the next RHS call
@@ -2482,17 +2640,43 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
     mut.caches = caches
     mut.materialize! = materialize!
     mut.var_order = order
+    return _DiscreteRefill{typeof(pp),typeof(materialize!)}(filled_p, materialize!)
+end
+
+# The right-hand side's check that the discrete caches hold its own `p`, and the
+# refill when they do not. The compare is the const tier's (`_cse_const_stale`):
+# egal on an `isbits` `p`, so a same-`p` call is a load and a bit compare and
+# never allocates, and a `p` that is not `isbits` refills on every call rather
+# than trust object identity. A `p` of another type than the build's — dual
+# numbers, for a derivative with respect to parameters — leaves the caches as
+# they are: they hold Float64 values and cannot carry a derivative.
+struct _DiscreteRefill{P,F}
+    filled_p::Base.RefValue{Any}
+    materialize!::F
+end
+@inline function (g::_DiscreteRefill{P})(p::P) where {P}
+    (isbits(p) && g.filled_p[] === p) || g.materialize!(p)
     return nothing
+end
+@inline (g::_DiscreteRefill)(p) = nothing
+
+# The in-place right-hand side with the discrete caches brought up to its `p`
+# before the state equations read them.
+function _make_rhs_discrete_refill(inner::F, refill::G) where {F,G}
+    return function (du, u, p, t)
+        refill(p)
+        return inner(du, u, p, t)
+    end
 end
 
 # The per-cell route's fill of one cache. Every node was CHECKED state-free, so
 # the zero `u` / `t = 0` passed to `_eval_node` is provably never read; `p`
 # carries the scalar params a fill may use.
 function _percell_discrete_fill(cvec::Vector{Float64}, cell_fills,
-                                uz::Vector{Float64}, pp)
-    return function ()
+                                uz::Vector{Float64})
+    return function (p)
         @inbounds for (l, node) in cell_fills
-            cvec[l] = _eval_node(node, uz, pp, 0.0)
+            cvec[l] = _eval_node(node, uz, p, 0.0)
         end
         return nothing
     end
@@ -2555,7 +2739,7 @@ end
 # variable's own name (`_with_rule_alias`), and the row is filed as an observed.
 function _compile_discrete_fill(name::String, def::OpExpr, dims::Vector{Int},
                                 cvec::Vector{Float64}, resolved_obs, const_arrays,
-                                pgather, param_sym_set, reg_funcs, pp)
+                                pgather, param_sym_set, reg_funcs)
     nd = length(dims)
     blk = name => (ones(Int, nd), copy(dims))
     L = StateLayout(String[], [blk])
@@ -2586,8 +2770,8 @@ function _compile_discrete_fill(name::String, def::OpExpr, dims::Vector{Int},
     rec === nothing || (rec.current = name)
     section = _make_kernel_section(merged)
     rec === nothing || (rec.current = "")
-    levels = ((scal, section, sfs, _make_contraction_section(acs)),)
-    return () -> (_fill_obs_levels!(levels, cvec, pp, 0.0, Float64); nothing)
+    levels = ((scal, section, sfs, _make_contraction_section(acs), ()),)
+    return p -> (_fill_obs_levels!(levels, cvec, p, 0.0, Float64); nothing)
 end
 
 # ============================================================
@@ -2690,8 +2874,7 @@ end
 # walk expands through every non-materialized observed definition and stops at
 # the materialized ones (their buffers are the dependency).
 #
-# A fill that reaches its OWN buffer through an inlined observed (an `index`
-# self-read in its own body is declined earlier, as a recurrence) is an
+# A fill that reaches its OWN buffer through an inlined observed is an
 # observed cycle, and is refused here with the code the inlining build
 # (`_resolve_observed`) and `validate()` give it. It must be: a level's kernel
 # section runs in an alias scope that asserts no store to the buffers it fills
@@ -2700,16 +2883,24 @@ end
 # from a `Model` that skipped `validate()` would otherwise put a load of a slot
 # the same section stores into that scope, which is undefined, not merely
 # stale. The check is per observed and per name it reaches, never per cell.
+#
+# The one self-edge that is not a cycle is a recurrence's DIRECT self-read
+# (esm-spec §4.3.1.1): its fill is an ordered sweep that reads only the cells it
+# has already written (recurrence_sweep.jl), not a kernel section. So a
+# recurrence's direct reads of its own name are left out of its edges; reaching
+# itself through an inlined observed is still the cycle above.
 function _materialized_obs_levels(mat_defs::Dict{String,ASTExpr}, names,
                                   inline_obs::Dict{String,ASTExpr})
     nm = Set{String}(names)
+    recur = _recurrence_names(mat_defs, nm)
     # The materialized buffers `root` reads, and for each the inlined observed
-    # it was reached through (`nothing` for a direct read).
-    function reach(root::ASTExpr)
+    # it was reached through (`nothing` for a direct read). A direct read of
+    # `skip` is not followed.
+    function reach(root::ASTExpr, skip::Union{Nothing,String}=nothing)
         out = Dict{String,Union{Nothing,String}}()
         via = Dict{String,Union{Nothing,String}}()
         frontier = Tuple{String,Union{Nothing,String}}[
-            (r, nothing) for r in _referenced_var_names(root)]
+            (r, nothing) for r in _referenced_var_names(root) if r != skip]
         while !isempty(frontier)
             r, from = pop!(frontier)
             if r in nm
@@ -2723,7 +2914,7 @@ function _materialized_obs_levels(mat_defs::Dict{String,ASTExpr}, names,
     end
     deps = Dict{String,Set{String}}()
     for n in sort!(collect(names))
-        out, via = reach(mat_defs[n])
+        out, via = reach(mat_defs[n], n in recur ? n : nothing)
         if haskey(out, n)
             path = String[n]
             step = out[n]
@@ -2752,8 +2943,8 @@ end
 # UNCHANGED when nothing is materialized, so every model without a factored array
 # observed keeps a byte-identical closure (and its zero-allocation property).
 # `levels` is a vector of
-# `(scalar_nodes, kernel_section, scan_folds, array_contractions)` in dependency
-# order.
+# `(scalar_nodes, kernel_section, scan_folds, array_contractions,
+# recurrence_sweeps)` in dependency order.
 function _make_rhs_with_obs_buffers(f_state!, n_total::Int, n_states::Int,
                                     levels::Tuple)
     isempty(levels) && return f_state!
@@ -2794,6 +2985,9 @@ end
     # same position behind the kernel section that `_make_rhs` puts them in.
     ac = lv[4]
     isempty(ac) || _apply_array_contractions!(ue, ue, p, t, ac, T)
+    # This level's causal self-references, each one ordered sweep over its own
+    # buffer (recurrence_sweep.jl). Nothing else in the level reads them.
+    _run_recurrence_sweeps!(lv[5], ue, p, t, T)
     return _fill_obs_levels!(Base.tail(levels), ue, p, t, T)
 end
 
@@ -2855,6 +3049,17 @@ function _build_lower_and_classify(model::Model;
     # physics over it) stay inlined: after the discrete cut they reduce to affine blends
     # of the discrete caches that the symbolic-stencil folder handles. Without the sink
     # both sets are empty and the inline sets are untouched (byte-identical pre-cut).
+    # ---- Causal self-references (esm-spec §4.3.1.1, recurrence_sweep.jl) ----
+    # Array observeds whose own definition reads `index(self, …)`. Each is
+    # materialized into a buffer by an ordered sweep under every compiler, so it
+    # is kept out of every cut below that would move it elsewhere, together with
+    # everything that reads it (a discrete- or const-cadence fill runs outside
+    # the right-hand side, where its buffer is not filled).
+    recur_vars = _recurrence_names(
+        Dict{String,ASTExpr}((eq.lhs::VarExpr).name => eq.rhs
+                             for eq in equations if eq.lhs isa VarExpr &&
+                             (eq.lhs::VarExpr).name in array_inline_vars),
+        array_inline_vars)
     discrete_vars = Set{String}()
     if materialize_out !== nothing
         pre_state = setdiff(Set{String}(solver_unknowns(model)), vi_vars)
@@ -2864,6 +3069,11 @@ function _build_lower_and_classify(model::Model;
             equations, union(geom_inline_vars, array_inline_vars),
             copy(array_inline_vars), pre_state,
             Set{String}(String(k) for k in keys(param_arrays)), scalar_params)
+        if !isempty(recur_vars)
+            reach = _recurrence_readers(equations, recur_vars)
+            setdiff!(discrete_vars, reach)
+            setdiff!(const_mat_vars, reach)
+        end
         setdiff!(geom_inline_vars, discrete_vars)
         setdiff!(array_inline_vars, discrete_vars)
         setdiff!(array_inline_vars, const_mat_vars)
@@ -2913,6 +3123,10 @@ function _build_lower_and_classify(model::Model;
     # forms now carry the same materialized-observed fill levels.
     mat_array_vars = _collect_materialized_array_obs(model, equations,
                                                      array_inline_vars, discrete_vars)
+    # A recurrence cannot be inlined into its readers — its cells are defined by
+    # one another — so it is materialized whatever the compiler, and whether or
+    # not anything reads it: the output-time routes read the same buffer.
+    union!(mat_array_vars, recur_vars)
 
     return (; equations, folded_array_obs,
             has_geometry=geo.has_geometry,
@@ -2920,7 +3134,28 @@ function _build_lower_and_classify(model::Model;
             geom_ring_vars=geo.ring_vars, geom_setup_vars=geo.setup_vars,
             geom_defs=geo.defs, geom_inline_vars, array_inline_vars,
             discrete_vars, pia_operand_vars, pia_operand_arrays,
-            const_obs_vars, const_obs_arrays, mat_array_vars)
+            const_obs_vars, const_obs_arrays, mat_array_vars, recur_vars)
+end
+
+# The names in `recur_vars` and every observed that reads one of them, directly
+# or through other observed definitions.
+function _recurrence_readers(equations::Vector{Equation}, recur_vars::Set{String})
+    defs = Dict{String,ASTExpr}()
+    for eq in equations
+        eq.lhs isa VarExpr && (defs[(eq.lhs::VarExpr).name] = eq.rhs)
+    end
+    reach = copy(recur_vars)
+    _saturate!() do
+        changed = false
+        for (n, rhs) in defs
+            n in reach && continue
+            if any(r -> r in reach, _referenced_var_names(rhs))
+                push!(reach, n); changed = true
+            end
+        end
+        changed
+    end
+    return reach
 end
 
 # ---- Phase 2: ODE variable partition + setup materialization + equation rewrites ----
@@ -2952,7 +3187,8 @@ function _build_partition_and_materialize(model::Model, cls;
         discrete_vars=cls.discrete_vars)
 
     # ---- Scalar parameter scope (load-time constants) ----
-    param_scope = _resolve_param_scope(model, param_names, parameter_overrides)
+    param_scope = _resolve_param_scope(model, param_names, parameter_overrides;
+                                       supplied=const_arrays, supplied_live=param_arrays)
 
     # ---- M4: materialize intersect_polygon clip rings at setup time ----
     # Each clip is evaluated now (operands are const_arrays) into a CLOSED ring,
@@ -2964,7 +3200,8 @@ function _build_partition_and_materialize(model::Model, cls;
         Dict{String,Int}() : _EMPTY_DERIVED_EXTENTS
     if cls.has_geometry
         geom_rings, geom_extents =
-            _materialize_geometry_rings(cls.equations, const_arrays, cls.geom_ring_vars)
+            _materialize_geometry_rings(cls.equations, const_arrays, cls.geom_ring_vars,
+                                        cls.const_obs_arrays)
         merge!(derived_extents, geom_extents)
     end
     # Value-invention derived index sets (skolem/distinct/rank) materialized via
@@ -3053,21 +3290,7 @@ function _build_partition_and_materialize(model::Model, cls;
     # mounted subsystem's original) — unique at that depth, else left bare so
     # the existing unbound-name error surfaces. Empty (byte-identical) for
     # documents without ragged index sets.
-    factor_scope = Dict{String,String}()
-    for (_, iset) in index_sets
-        (iset isa IndexSet && iset.kind == "ragged") || continue
-        for f in (iset.offsets, iset.values)
-            f === nothing && continue
-            fname = String(f)
-            (haskey(factor_scope, fname) || haskey(model.variables, fname)) && continue
-            cands = String[n for n in keys(model.variables)
-                           if endswith(n, "." * fname)]
-            isempty(cands) && continue
-            mindepth = minimum(count(==('.'), c) for c in cands)
-            best = String[c for c in cands if count(==('.'), c) == mindepth]
-            length(best) == 1 && (factor_scope[fname] = best[1])
-        end
-    end
+    factor_scope = _ragged_factor_scope(index_sets, model.variables)
     let pre = equations
         equations = _resolve_index_set_ranges(equations, index_sets, derived_extents,
                                               factor_scope)
@@ -3131,7 +3354,9 @@ function _build_state_layout(model::Model, cls, parts;
         registered_functions::AbstractDict, const_arrays::AbstractDict, vi_vars,
         # Build-time parameter-read sink (see `_PARAM_READS`): the field-ic fold
         # below is the fourth build-time consumer of the parameter scope.
-        param_reads::Union{Nothing,Set{String}}=nothing)
+        param_reads::Union{Nothing,Set{String}}=nothing,
+        # Filled with the slots nothing gave a starting value (`_build_u0`).
+        unvalued::Union{Nothing,Vector{Int}}=nothing)
     # ---- Discover array cells from equations and initial conditions ----
     # Array variable detection: a variable is treated as an array if it has
     # an explicit non-empty shape, OR if it appears inside index(var, k...)
@@ -3181,7 +3406,7 @@ function _build_state_layout(model::Model, cls, parts;
         set -> _with_param_reads(param_reads) do
             _fold_field_ics!(set, parts.field_ics, array_cells, var_map,
                              parts.param_scope, registered_functions, const_arrays)
-        end)
+        end; unvalued=unvalued)
 
     # ---- Parameter NamedTuple ----
     p_vals = Float64[]
@@ -3313,8 +3538,19 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         # in it must be substituted — including references between factored
         # observeds. Re-resolving the merged map restores exactly that, and only
         # when a sink asked for it.
+        # A recurrence's definition reads itself, so it has no fully substituted
+        # form: it is published as authored, and the others around it.
+        recur_pub = _recurrence_names(mat_defs, mat_vars)
         published = isempty(mat_defs) ? resolved_obs :
-            _resolve_observed(merge(Dict{String,ASTExpr}(resolved_obs), mat_defs))
+            _resolve_observed(merge(Dict{String,ASTExpr}(resolved_obs),
+                                    Dict{String,ASTExpr}(k => v for (k, v) in mat_defs
+                                                         if !(k in recur_pub))))
+        if !isempty(recur_pub)
+            published = Dict{String,ASTExpr}(published)
+            for k in recur_pub
+                published[k] = mat_defs[k]
+            end
+        end
         for (k, e) in published
             inspect.observed_exprs[String(k)] = e
         end
@@ -3354,11 +3590,10 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # they compile against the ODE-ONLY layout: an observed buffer holds nothing
     # valid there (a name that reaches one keeps the inline path — see
     # `_collect_materialized_array_obs`).
-    if materialize_out !== nothing
+    discrete_refill = materialize_out === nothing ? nothing :
         @_bench :discrete_mat _build_discrete_materializer!(materialize_out, cls.discrete_vars,
             parts.discrete_defs, resolved_obs, layout.array_var_info, layout.var_map,
             const_registry, pgather, param_sym_set, reg_funcs, p, n_states)
-    end
 
     # ---- The compiled observed program's context (observed_program.jl) ----
     # Output-time reads compile against this build's ODE layout, its const
@@ -3376,9 +3611,12 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     end
 
     # ---- Evaluate faq-valued initialization_equations into u0 ----
+    # A caller's u0 override (esm_problem's `u0`, through `_with_caller_u0`) is
+    # part of the state the equations read, and a cell it names keeps it.
+    caller_slots = _apply_caller_u0!(u0, layout.var_map, parts.init_equations)
     @_bench :seed_u0 _seed_faq_init_u0!(u0, parts.init_equations, initial_conditions, layout.var_map,
                            layout.array_var_info, const_registry, pgather,
-                           param_sym_set, reg_funcs, p)
+                           param_sym_set, reg_funcs, p; skip_slots = caller_slots)
 
     # ---- Scalar-observed slot plan (named prelude defs; ess-obs-slots) ----
     # Decide which scalar observeds compile as named prelude slots and which
@@ -3440,13 +3678,34 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     mat_levels_oop = Any[]
     mat_scan_fold_count = 0
     mat_array_contraction_count = 0
+    mat_recurrence_count = 0
+    recur_names = _recurrence_names(mat_defs, mat_vars)
     if !isempty(mat_vars)
         for lvl in _materialized_obs_levels(mat_defs, mat_vars, raw_obs)
             lvl_scalars = Tuple{Int,_Node}[]
             lvl_kernels = _AccKernel[]
             lvl_scans = _ScanFold[]
             lvl_acs = _ArrayContraction[]
+            lvl_recurs = Any[]
             for name in lvl
+                if name in recur_names
+                    # A causal self-reference: an ordered sweep, not a fill
+                    # equation (recurrence_sweep.jl). The out-of-place product
+                    # has no sweep section, so a compiler that builds it
+                    # refuses the rule by name.
+                    form === :oop && _refuse_rule(name,
+                        "an ordered recurrence sweep (esm-spec §4.3.1.1) has no " *
+                        "lowering in the out-of-place product this compiler emits; " *
+                        "its cells cannot be computed as one whole-array program " *
+                        "(CONFORMANCE_SPEC §5.19.2)")
+                    sw = _compile_recurrence_sweep(name, mat_defs[name],
+                        layout.mat_dims[name], get(model.variables, name, nothing),
+                        resolved_obs, array_var_info, var_map, const_registry,
+                        pgather, param_sym_set, reg_funcs)
+                    _record_rule!(name, :observed, _recurrence_tier(sw))
+                    push!(lvl_recurs, sw)
+                    continue
+                end
                 feq = _materialized_fill_equation(name, mat_defs[name],
                                                   layout.mat_dims[name])
                 se, pcs, aks, sfs, acs = _compile_derivative_equations(Equation[feq],
@@ -3466,6 +3725,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             merged, _ = _merge_acc_kernel_classes(lvl_kernels)
             mat_scan_fold_count += length(lvl_scans)
             mat_array_contraction_count += length(lvl_acs)
+            mat_recurrence_count += length(lvl_recurs)
             if form === :oop
                 push!(mat_levels_oop,
                       (lvl_scalars, merged,
@@ -3474,7 +3734,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             else
                 push!(mat_levels,
                       (lvl_scalars, _make_kernel_section(merged), lvl_scans,
-                       _make_contraction_section(lvl_acs)))
+                       _make_contraction_section(lvl_acs), Tuple(lvl_recurs)))
             end
         end
     end
@@ -3590,11 +3850,14 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         # closure (and its zero-allocation property) is byte-identical.
         # The inner state RHS keeps its own `scan_folds` (the prefix reductions
         # among the STATE equations); each fill level carries its own.
-        _make_rhs_with_obs_buffers(
+        # The discrete caches are brought up to the call's `p` first (see
+        # `_DiscreteRefill`); without a cache the wrapper is not applied.
+        rhs0 = _make_rhs_with_obs_buffers(
             _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
                       const_slots, time_slots, dyn_slots, scan_folds,
                       _make_contraction_section(array_contractions)),
             n_total, n_states, Tuple(mat_levels))
+        discrete_refill === nothing ? rhs0 : _make_rhs_discrete_refill(rhs0, discrete_refill)
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
         # along so the out-of-place build can expose its live forcing buffers as
@@ -3645,6 +3908,9 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               # to the kernel counts above.
               n_array_contractions = length(array_contractions) +
                                      mat_array_contraction_count,
+              # Causal self-references (recurrence_sweep.jl), each one ordered
+              # sweep in the observed fill levels.
+              n_recurrence_sweeps = mat_recurrence_count,
               n_acc_kernels = length(acc_kernels),
               n_acc_cse_slots = sum(length(K.cse.recipes) for K in acc_kernels; init=0),
               n_acc_inv_slots = sum(length(K.cse.inv_recipes) for K in acc_kernels; init=0),
@@ -3892,6 +4158,9 @@ function _build_evaluator_impl_inner(model::Model;
     # does not integrate (esm-spec §9.6.6); refused on the same terms.
     wiener = _first_wiener_parameter(model)
     wiener === nothing || throw(_wiener_refusal(wiener))
+    # A parameter recomputed by a symbolic update is an event in all but name.
+    symbolic = _first_symbolic_update(model)
+    symbolic === nothing || throw(_symbolic_update_refusal(symbolic...))
     # Runtime contraction-loop var registry (ess-runtime-contraction) is a
     # build-scoped resolve→compile side channel; clear any stale entries from a
     # prior build so it never accumulates across builds. Loop-var names are
@@ -3929,6 +4198,8 @@ function _build_evaluator_impl_inner(model::Model;
     # BEFORE any pass that drops a tree (the elementwise fold, dead-observed
     # elimination), so an op in a tree the build would discard is still refused.
     _reject_unlowered_operators(model)
+    # ---- esm-spec §6.3.1: an equation never defines a parameter ----
+    _refuse_parameter_definitions(model.equations, model.variables)
     # ---- `broadcast` lowering (esm-spec §4.3.4; see `_lower_broadcast_model`) ----
     # Rewrite every `broadcast(fn=F, …)` node to its plain scalar-op spelling
     # `F(…)` BEFORE any other pass sees it, so `broadcast` has exactly the
@@ -3983,9 +4254,17 @@ function _build_evaluator_impl_inner(model::Model;
     # seeds from. Both are no-ops (and the registries byte-identical) for a
     # document that declares no shaped parameter.
     const_arrays = _normalize_const_array_keys(model, const_arrays; model_name=_model_name)
+    # A derived index set value invention has already sized (the front door
+    # ran it) resolves a declared shape here too, keyed by the SET's name.
+    vi_set_extents = isempty(_vi_extents) ? _EMPTY_DERIVED_EXTENTS :
+        Dict{String,Int}(String(k) => Int(_vi_extents[is.from_faq])
+                         for (k, is) in index_sets
+                         if is.kind == "derived" && is.from_faq !== nothing &&
+                            haskey(_vi_extents, is.from_faq))
     const_arrays = _register_inline_array_parameters(model, const_arrays,
                                                      parameter_overrides, index_sets;
-                                                     param_arrays=param_arrays)
+                                                     param_arrays=param_arrays,
+                                                     derived_extents=vi_set_extents)
     initial_conditions = _expand_inline_array_ics(model, initial_conditions, index_sets)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;
@@ -4028,7 +4307,8 @@ function _build_evaluator_impl_inner(model::Model;
     layout = @_bench :state_layout _build_state_layout(model, cls, parts;
         initial_conditions=initial_conditions, index_sets=index_sets,
         registered_functions=registered_functions, const_arrays=ic_const_arrays,
-        vi_vars=_vi_vars, param_reads=param_reads)
+        vi_vars=_vi_vars, param_reads=param_reads,
+        unvalued=inspect === nothing ? nothing : empty!(inspect.unvalued_slots))
 
     # ---- The parameter partition (differentiability plan §3 Phase 5) ----
     # Every build-time consumer has now run, so the read set is complete.
@@ -4233,6 +4513,21 @@ function _affine_reduce_form(contract_names::Vector{String}, contract_const,
     end
     prod(length, rngs) >= 2 || return nothing
     return _AffineReduce(copy(contract_names), rngs, Symbol(oplus), zerobar)
+end
+
+# Which of `_affine_reduce_form`'s conditions a join-free contraction fails, in
+# words, for a refusal to name the construct it actually refuses.
+function _fold_form_refusal(contract_names::Vector{String}, contract_const, oplus::String)
+    oplus in ("+", "*", "max", "min") ||
+        return "its ⊕ must be +, *, max or min, and this one is `$(oplus)`"
+    for (name, c) in zip(contract_names, contract_const)
+        (c === nothing || isempty(c)) && continue
+        c == collect(first(c):last(c)) ||
+            return "it folds unit-step ranges only, and `$(name)` steps " *
+                   (length(c) >= 2 ? "by $(c[2] - c[1]) " : "") *
+                   "from $(first(c)) to $(last(c))"
+    end
+    return "it needs at least two terms over constant ranges"
 end
 
 # ess-scan: recognize a CUMULATIVE (prefix) reduction — an aggregate whose
@@ -5151,8 +5446,8 @@ function _refuse_faq_percell(label::AbstractString, lhs_body::OpExpr, rhs_body::
         " (the affine tier takes no ragged contraction, whose terms vary per output cell)"
     elseif long_contraction && !has_fold_form
         " (the affine tier does not unroll a contraction this long, and its " *
-        "run-time fold needs unit-step constant ranges, no join gate and a ⊕ of " *
-        "+, *, max or min; this one is `$(rhs_oplus)`)"
+        "run-time fold does not take this one: " * _fold_form_refusal(contract_names,
+            contract_const, rhs_oplus) * ")"
     else
         ""
     end
@@ -5611,8 +5906,10 @@ assumes equations have already been scalarized by the discretize
 pipeline. `faq` and `makearray` are supported in expression
 position: scalar `faq` (empty `output_idx`) is expanded inline;
 `index(faq(...), k...)` and `index(makearray(...), k...)` are
-resolved at build time. Other array-typed ops (`broadcast`, `reshape`,
-`transpose`, `concat`) are refused at build with `unevaluable_operator`.
+resolved at build time, and so are `index(reshape|transpose|concat(...), k...)`
+(each is a gather of its operand) and `broadcast` (lowered to its `fn`). A bare
+`reshape`, `transpose` or `concat` outside an `index` is refused at build with
+`unevaluable_operator`.
 
 The returned `f!` closure reads `u`, the captured parameter vector
 `p` (a NamedTuple keyed by parameter name), and `t`, and writes
@@ -6227,6 +6524,21 @@ function _build_evaluator_dict(esm::AbstractDict;
                                                                    _vi_ca, _params)
           end
 
+    # ---- Arg-witness and grouped buffers as const factors ----
+    # An `argmin`/`argmax` assignment and the grouped / derived buffers keyed on
+    # it are CONST-cadence data materialized above and dropped from the ODE; a
+    # right-hand side that reads one (`index(gx, index(assign, i))`) reads that
+    # buffer, exactly as it reads a supplied const array.
+    if _vi !== nothing && (!isempty(_vi.assignments) || !isempty(_vi.groups))
+        for (n, buf) in _vi.assignments
+            haskey(_ca, n) || (_ca[n] = Float64.(buf))
+        end
+        for (n, buf) in _vi.groups
+            haskey(_ca, n) || (_ca[n] = Vector{Float64}(buf))
+        end
+        kwd[:const_arrays] = _ca
+    end
+
     # ---- Phase 2b Hook 1: value-invention MEMBERS fed back as const factors ----
     # A `kind:"derived"` index set may name a `member_factor` — a model parameter
     # const factor the build fills HERE with the set's materialised member ids
@@ -6317,6 +6629,7 @@ function _build_evaluator(flat::FlattenedSystem; kwargs...)
     # the flattened system still holds them (esm-spec §9.6.6).
     _refuse_flat_events(flat)
     _refuse_flat_wiener_noise(flat)
+    _refuse_flat_symbolic_updates(flat)
     return _build_evaluator(flattened_to_esm(flat); kwargs...)
 end
 

@@ -319,6 +319,15 @@ const (
 	// wrong outright rather than wrong-unless-declared. It replaces both
 	// `invalid_discrete_param` and `undeclared_discrete_parameter`.
 	ErrorEventAffectsParameter = "event_affects_parameter"
+	// ErrorEquationDefinesParameter is raised when an equation's left-hand side
+	// names a PARAMETER — bare, indexed, inside a `faq`, or through a scoped
+	// reference into a subsystem (esm-spec §6.3.1). An equation defines unknowns
+	// only.
+	ErrorEquationDefinesParameter = "equation_defines_parameter"
+	// ErrorUnboundIndexSymbol is raised when a string subscript of an `index`
+	// on an equation's left-hand side names no declared variable or
+	// metaparameter and no `faq` binds it (esm-spec §6.3.1).
+	ErrorUnboundIndexSymbol = "unbound_index_symbol"
 	// ErrorDataSourceUndefined is raised when a parameter's `update.source` names
 	// no declared `data_sources` entry (esm-spec §8.5).
 	ErrorDataSourceUndefined = "data_source_undefined"
@@ -507,6 +516,10 @@ const (
 	// equation, reached an evaluator that cannot run it (esm-spec §9.6.6). Go does not simulate,
 	// so it never raises this; the constant keeps the §9.6.6 vocabulary uniform.
 	CodeUnsupportedConstruct = "unsupported_construct"
+	// CodeCallbackUnregistered: an equation reads a `callback` coupling variable
+	// and no callback supplies it at construction (esm-spec §9.6.6). Go does not
+	// simulate, so it never raises this.
+	CodeCallbackUnregistered = "callback_unregistered"
 	// CodeDataSourceUnbound: a data-fed parameter (an `update` of
 	// `kind: "data"`, esm-spec §5.4/§8.5) reached a build with nothing bound to
 	// it -- no provider, no loaded array, no caller-supplied `p` value

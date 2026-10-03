@@ -237,25 +237,54 @@ fn compiled_rhs_matches_the_interpreter_over_the_tier() {
 /// A model with a `Fallback` rule is a HARD refusal naming the rule, never a
 /// mixed run and never a silent pass.
 ///
-/// The fixture is a CAUSAL SELF-REFERENCE (`k[i]` reads `k[i-1]`), which
-/// CONFORMANCE_SPEC §5.19.2 forbids the tape from ever lowering — its cells
-/// are not independent and the tape's scheduler reorders and batches. That is
-/// what makes it durable here: unlike the array-valued `const` this test used
-/// to lean on, it cannot quietly become tapeable and turn the assertion into a
-/// tautology.
+/// The fixture is a CAUSAL SELF-REFERENCE whose self-read sits inside an
+/// array-valued part of its cell body (a nested `faq` over `j`): the tape
+/// lowers a recurrence as a sweep that evaluates each self-read one scalar
+/// cell at a time, so this rule stays a `Fallback`. (A plain recurrence is on
+/// the tape now, and is refused for a different reason — see
+/// [`a_recurrence_sweep_is_refused_by_name`].)
 #[test]
 fn a_fallback_rule_is_refused_by_name() {
     if !runtime_available() {
         return;
     }
-    let path = repo_root().join("tests/fixtures/recurrence/01_recurrence_doubling.esm");
-    let compiled = build(&path);
+    let text = r#"{
+        "esm": "1.1.0",
+        "metadata": {"name": "XlaFallback"},
+        "index_sets": {"steps": {"kind": "interval", "size": 4}},
+        "models": {"R": {
+            "variables": {
+                "u": {"type": "unknown", "units": "1", "default": 1.0},
+                "s": {"type": "unknown", "units": "1", "shape": ["steps"]}
+            },
+            "equations": [
+                {"lhs": "s", "rhs": {
+                    "op": "faq", "args": [], "output_idx": ["k"],
+                    "ranges": {"k": {"from": "steps"}},
+                    "expr": {"op": "ifelse", "args": [
+                        {"op": "<=", "args": ["k", 1]},
+                        1.0,
+                        {"op": "index", "args": [
+                            {"op": "faq", "args": [], "output_idx": ["j"],
+                             "ranges": {"j": [1, 2]},
+                             "expr": {"op": "*", "args": [
+                                 {"op": "index", "args": ["s", {"op": "-", "args": ["k", 1]}]},
+                                 "j"]}},
+                            2]}
+                    ]}}},
+                {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                 "rhs": {"op": "*", "args": [-0.01, "u", {"op": "index", "args": ["s", 4]}]}}
+            ]
+        }}
+    }"#;
+    let file = load_string(text).expect("fixture loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
     match CompiledRhs::compile(&compiled) {
         Ok(_) => panic!(
-            "{} now lowers completely. If the tape really did learn causal \
-             self-reference, move this to another fallback-carrying fixture; if it \
-             did not, the emitter is silently dropping a Fallback instruction.",
-            path.display()
+            "the fixture now lowers completely. If the tape really did learn a \
+             self-read inside an array-valued part of a recurrence body, move this to \
+             another fallback-carrying fixture; if it did not, the emitter is silently \
+             dropping a Fallback instruction."
         ),
         Err(CompileRhsError::Refused(e)) => {
             assert!(!e.rule.is_empty(), "refusal names no rule");
@@ -265,6 +294,30 @@ fn a_fallback_rule_is_refused_by_name() {
                 e.reason
             );
             eprintln!("refused rule {}: {}", e.rule, e.reason);
+        }
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+    }
+}
+
+/// A recurrence is on the tape as an ordered `Sweep`, which this emitter does
+/// not lower (it has no per-cell loop and no channel for the self-read's
+/// fail-closed fault): a refusal naming the rule and the construct, never a
+/// number (CONFORMANCE_SPEC §5.19.3b).
+#[test]
+fn a_recurrence_sweep_is_refused_by_name() {
+    if !runtime_available() {
+        return;
+    }
+    let path = repo_root().join("tests/fixtures/recurrence/01_recurrence_doubling.esm");
+    let compiled = build(&path);
+    match CompiledRhs::compile(&compiled) {
+        Ok(_) => panic!(
+            "{} lowered to XLA: the sweep must be refused",
+            path.display()
+        ),
+        Err(CompileRhsError::Refused(e)) => {
+            assert!(!e.rule.is_empty(), "refusal names no rule");
+            assert!(e.reason.contains("recurrence"), "{}", e.reason);
         }
         Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
     }
@@ -1202,4 +1255,68 @@ fn geometry_and_data_subscript_gathers_lower() {
             }
         }
     }
+}
+
+/// A lookup into an `out_of_bounds: "error"` table (esm-spec §9.5.1) must raise
+/// `table_lookup_out_of_bounds` for a query outside its axis, which a compiled
+/// program has no channel to do; the emitter refuses it by name rather than
+/// compiling the clamp. `esm_problem(compiler = Xla)` surfaces that refusal.
+#[test]
+fn a_strict_table_lookup_is_refused_by_name() {
+    if !runtime_available() {
+        return;
+    }
+    let doc = r#"{
+  "esm": "1.0.0",
+  "metadata": { "name": "XlaStrictTable", "authors": ["test"] },
+  "function_tables": {
+    "ramp_tab": {
+      "axes": [{ "name": "q", "values": [0.0, 1.0, 2.0, 3.0] }],
+      "interpolation": "linear", "out_of_bounds": "error",
+      "data": [1.0, 3.0, 2.0, 5.0]
+    }
+  },
+  "models": { "M": {
+    "variables": {
+      "q": { "type": "unknown", "default": 0.0 },
+      "y": { "type": "unknown", "default": 0.0 }
+    },
+    "equations": [
+      { "lhs": { "op": "D", "args": ["q"], "wrt": "t" }, "rhs": 1.0 },
+      { "lhs": { "op": "D", "args": ["y"], "wrt": "t" },
+        "rhs": { "op": "table_lookup", "table": "ramp_tab", "axes": { "q": "q" }, "args": [] } }
+    ]
+  } }
+}"#;
+    let file = load_string(doc).expect("loads");
+    let native = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            compiler: Some(earthsci_ast::Compiler::Native),
+            ..Default::default()
+        },
+    )
+    .expect("native builds a strict table");
+    let compiled = native.debug_array_compiled().expect("an array backend");
+    match CompiledRhs::compile(&compiled) {
+        Ok(_) => panic!("a strict-table program compiled"),
+        Err(CompileRhsError::Refused(e)) => assert!(
+            e.reason.contains("ramp_tab") && e.reason.contains("out_of_bounds"),
+            "the refusal does not name the table and its mode: {}",
+            e.reason
+        ),
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+    }
+    let Err(err) = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            compiler: Some(earthsci_ast::Compiler::Xla),
+            ..Default::default()
+        },
+    ) else {
+        panic!("xla refuses");
+    };
+    assert!(err.to_string().contains("ramp_tab"), "{err}");
 }

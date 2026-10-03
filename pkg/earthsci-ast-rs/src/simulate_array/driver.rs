@@ -249,7 +249,8 @@ fn same_bits(a: &[f64], b: &[f64]) -> bool {
 pub(crate) struct FieldIcRecord {
     /// The `ic` target, or the state-free observed materialized for its scope.
     pub name: String,
-    /// `"initial condition"` or `"initial-condition scope"`.
+    /// `"initial condition"`, `"initial-condition scope"` or
+    /// `"initialization equation"`.
     pub kind: &'static str,
     /// Whether the reference evaluator walked a `faq` in it cell by cell.
     pub per_cell: bool,
@@ -391,6 +392,27 @@ impl ArrayCompiled {
         &self.merged_renames
     }
 
+    /// The shaped parameters this build left with no value (see the field).
+    pub(crate) fn unvalued_shaped_params(&self) -> &[String] {
+        &self.unvalued_shaped_params
+    }
+
+    /// The names the forcing buffer serves: every parameter refreshed from
+    /// outside the model (a data source or a registered handler).
+    pub(crate) fn forcing_names(&self) -> impl Iterator<Item = &String> {
+        self.forcing_decls.keys()
+    }
+
+    /// The declared default of forcing parameter `name`: `None` when it
+    /// declares none, `Some(None)` when its shape does not resolve yet, and
+    /// otherwise the dense field it denotes over that shape.
+    pub(crate) fn forcing_default(&self, name: &str) -> Option<Option<ArrayD<f64>>> {
+        let entry = self.forcing_defaults.get(name)?;
+        Some(entry.as_ref().and_then(|(shape, values)| {
+            ArrayD::from_shape_vec(ndarray::IxDyn(shape), values.clone()).ok()
+        }))
+    }
+
     /// A clonable handle to the external forcing buffer (PR-1, ess-14f.7). A
     /// driver that integrates this model in discrete-cadence segments holds the
     /// returned `Rc` and, at each cadence boundary, refreshes a loader-fed
@@ -415,7 +437,6 @@ impl ArrayCompiled {
     /// where [`FieldIcMemo`] allows: before construction records the memo, or
     /// after the initial state is built. Unlike [`Self::forcing_handle`] it
     /// leaves the memo standing.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn forcing_buffer(&self) -> Rc<RefCell<HashMap<String, ArrayD<f64>>>> {
         Rc::clone(&self.forcing)
     }
@@ -954,6 +975,172 @@ impl ArrayCompiled {
         Ok(out)
     }
 
+    /// The initial state before any override: each variable's default (one
+    /// fill, or one gather of its inline data), then the field `ic` slots.
+    /// The mask, when present, flags the slots neither of them set.
+    #[cfg(feature = "solve")]
+    fn seeded_defaults(&self, field_ic_map: &HashMap<usize, f64>) -> (Vec<f64>, Option<Vec<bool>>) {
+        let mut ic_vec = vec![0.0f64; self.n_states];
+        let mut unset: Option<Vec<bool>> = None;
+        for ((_, vs), default) in self.var_shapes.iter().zip(&self.state_defaults) {
+            let n = vs.shape.iter().copied().product::<usize>().max(1);
+            let range = vs.flat_offset..vs.flat_offset + n;
+            if !super::layout::write_state_default(vs, default, &mut ic_vec[range.clone()]) {
+                unset.get_or_insert_with(|| vec![false; self.n_states])[range].fill(true);
+            }
+        }
+        for (&slot, &v) in field_ic_map {
+            ic_vec[slot] = v;
+            if let Some(u) = unset.as_mut() {
+                u[slot] = false;
+            }
+        }
+        (ic_vec, unset)
+    }
+
+    /// Evaluate the `faq`-valued initialization equations (esm-spec §6.2:
+    /// equations that hold at t = 0) into `ic_vec`, in document order: each
+    /// assigns every cell of its ranges the value its body takes there, read
+    /// against the initial state seeded so far (defaults, field `ic`s, the
+    /// caller's overrides and the equations before it) and the parameters and
+    /// forcing fields, at t = 0. A cell in `keep` — one the caller's `u0`
+    /// names — keeps its value. Returns the slots assigned. The Julia
+    /// reference's `_seed_faq_init_u0!`, whose order and precedence this
+    /// follows.
+    ///
+    /// The whole `faq` is one build-time field evaluation, as a field `ic`'s
+    /// coordinate expression is: the interpreter walks it cell by cell, the
+    /// other compilers take the whole-array overlay, and a strict compiler's
+    /// walk stops at its first cell (`records` then carries the refusal).
+    #[cfg(feature = "solve")]
+    pub(crate) fn seed_initialization_faqs(
+        &self,
+        ic_vec: &mut [f64],
+        params: &HashMap<String, f64>,
+        keep: &HashSet<usize>,
+        mut records: Option<&mut Vec<FieldIcRecord>>,
+    ) -> Result<Vec<usize>, SimulateError> {
+        let mut assigned = Vec::new();
+        if self.init_faqs.is_empty() {
+            return Ok(assigned);
+        }
+        let walks = crate::simulate_array::per_cell_walks;
+        let _overlay = OverlayGuard::armed(self.is_interpreter());
+        for (target, rhs) in &self.init_faqs {
+            let rule = format!("init({target})");
+            let invalid = |details: String| SimulateError::InvalidFieldInitialCondition {
+                name: rule.clone(),
+                details,
+            };
+            let vs = self.var_shapes.get(target).ok_or_else(|| {
+                invalid(format!(
+                    "the left-hand side `{target}` of a `faq` initialization equation is not a \
+                     state variable"
+                ))
+            })?;
+            // The state as seeded so far, where a state array would bind, and
+            // the forcing fields a state does not shadow.
+            let mut scope: HashMap<String, ArrayD<f64>> = HashMap::new();
+            for (name, s) in &self.var_shapes {
+                let n = s.shape.iter().copied().product::<usize>().max(1);
+                let flat = &ic_vec[s.flat_offset..s.flat_offset + n];
+                scope.insert(name.clone(), col_major_to_arrayd(flat, &s.shape));
+            }
+            for (name, arr) in self.forcing.borrow().iter() {
+                scope.entry(name.clone()).or_insert_with(|| arr.clone());
+            }
+            let mut resolved = rhs.clone();
+            crate::faq::resolve_expr_ranges(&mut resolved, &self.index_sets)
+                .map_err(|e| invalid(e.to_string()))?;
+            let Expr::Operator(node) = &resolved else {
+                unreachable!("an initialization faq is an operator");
+            };
+            let names = node.output_idx.clone().unwrap_or_default();
+            let mut ranges: Vec<(i64, i64)> = Vec::with_capacity(names.len());
+            for n in &names {
+                let b = node
+                    .ranges
+                    .as_ref()
+                    .and_then(|r| r.get(n))
+                    .and_then(|s| s.bounds());
+                let Some([lo, hi]) = b else {
+                    return Err(invalid(format!("output index `{n}` has no static range")));
+                };
+                ranges.push((lo, hi));
+            }
+            if ranges.len() != vs.shape.len() {
+                return Err(invalid(format!(
+                    "{} output indices for a {}-D state",
+                    ranges.len(),
+                    vs.shape.len()
+                )));
+            }
+            let before = walks();
+            let value = eval_buildtime_field_in_scope(&resolved, &self.index_sets, params, &scope);
+            if per_cell_walk_refused() {
+                if let Some(sink) = records.as_deref_mut() {
+                    sink.push(FieldIcRecord {
+                        name: rule,
+                        kind: "initialization equation",
+                        per_cell: true,
+                    });
+                }
+                return Ok(assigned);
+            }
+            if let Some(sink) = records.as_deref_mut() {
+                sink.push(FieldIcRecord {
+                    name: rule.clone(),
+                    kind: "initialization equation",
+                    per_cell: walks() != before,
+                });
+            }
+            let arr = match value {
+                Ok(Value::Array(a)) if a.ndim() == ranges.len() => a,
+                Ok(_) => return Err(invalid("the `faq` did not evaluate to its box".to_string())),
+                Err(e) => return Err(invalid(e.to_string())),
+            };
+            if let Some(details) = crate::simulate_array::take_const_array_oob() {
+                return Err(invalid(details));
+            }
+            // Every cell of the ranges, the box `eval_faq` fills from `lo`.
+            let total: usize = ranges
+                .iter()
+                .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
+                .product();
+            let mut cell: Vec<i64> = ranges.iter().map(|(lo, _)| *lo).collect();
+            for _ in 0..total {
+                if cell
+                    .iter()
+                    .zip(&vs.origin)
+                    .zip(&vs.shape)
+                    .any(|((&c, &o), &n)| c < o || c >= o + n as i64)
+                {
+                    return Err(invalid(format!("cell {cell:?} is outside `{target}`")));
+                }
+                let slot = vs.flat_offset + multi_to_flat_col_major(&cell, &vs.shape, &vs.origin);
+                if !keep.contains(&slot) {
+                    let at: Vec<usize> = cell
+                        .iter()
+                        .zip(&ranges)
+                        .map(|(c, (lo, _))| (c - lo) as usize)
+                        .collect();
+                    ic_vec[slot] = arr[IxDyn(&at)];
+                    assigned.push(slot);
+                }
+                let mut d = cell.len();
+                while d > 0 {
+                    d -= 1;
+                    cell[d] += 1;
+                    if cell[d] <= ranges[d].1 {
+                        break;
+                    }
+                    cell[d] = ranges[d].0;
+                }
+            }
+        }
+        Ok(assigned)
+    }
+
     /// Every evaluation the field initial conditions perform, exercised at
     /// CONSTRUCTION against `params` so a strict compiler can refuse a per-cell
     /// one there (esm-libraries-spec §2.5.10 asks that every evaluation a
@@ -974,7 +1161,7 @@ impl ArrayCompiled {
         params: &HashMap<String, f64>,
         strict: bool,
     ) -> Vec<FieldIcRecord> {
-        if self.field_ics.is_empty() {
+        if self.field_ics.is_empty() && self.init_faqs.is_empty() {
             return Vec::new();
         }
         let Ok(param_vec) = self.build_param_vec(params) else {
@@ -990,8 +1177,24 @@ impl ArrayCompiled {
         let mut records = Vec::new();
         let stop = strict.then(crate::simulate_array::StopAtFirstCell::arm);
         let result = self.resolve_field_ics(&resolved, Some(&mut records));
+        let stopped = stop.as_ref().is_some_and(|s| s.stopped());
+        if let Ok(slots) = &result
+            && !stopped
+            && !self.init_faqs.is_empty()
+        {
+            // The initialization equations over the defaults and these fields:
+            // the caller's `u0` is not known yet, and only the route each one
+            // takes is recorded here. `build_initial_state` evaluates them.
+            let (mut ic_vec, _) = self.seeded_defaults(slots);
+            let _ = self.seed_initialization_faqs(
+                &mut ic_vec,
+                &resolved,
+                &HashSet::new(),
+                Some(&mut records),
+            );
+        }
         if let Ok(slots) = result
-            && !stop.as_ref().is_some_and(|s| s.stopped())
+            && !stopped
         {
             *self.field_ic_memo.borrow_mut() = Some(FieldIcMemo {
                 params: param_bits(&param_vec),
@@ -1021,6 +1224,94 @@ impl ArrayCompiled {
                 .map(String::as_str),
             self.namespace.as_deref(),
         )
+    }
+
+    /// The scalar-table parameters neither `params` (the caller's `p`,
+    /// canonicalized as [`Self::build_param_vec`] does) nor a declared default
+    /// gives a value. Empty when a key does not canonicalize: that is the
+    /// solve's diagnostic, not this one.
+    pub(crate) fn unsupplied_params(&self, params: &HashMap<String, f64>) -> Vec<String> {
+        let Ok(params) = crate::simulate::canonicalize_override_keys(
+            &self.param_index,
+            &self.override_namespaces(),
+            params,
+            &self.merged_renames,
+        ) else {
+            return Vec::new();
+        };
+        self.param_names
+            .iter()
+            .zip(&self.param_defaults)
+            .filter(|(name, d)| d.is_none() && !params.contains_key(*name))
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// The states none of whose slots anything gives a starting value — no
+    /// default, no field `ic`, no initialization equation, no entry of
+    /// `initial_conditions` (the caller's `u0`) — by name. Read at construction, from the field `ic`s
+    /// construction resolved ([`FieldIcMemo`], left in place for the first
+    /// solve); empty when those could not be resolved there, or a key does not
+    /// canonicalize, which leaves the diagnostic to the solve.
+    #[cfg(feature = "solve")]
+    pub(crate) fn unset_initial_slots(
+        &self,
+        initial_conditions: &HashMap<String, f64>,
+    ) -> Vec<String> {
+        let Ok(initial_conditions) = crate::simulate::canonicalize_override_keys(
+            &super::layout::SlotNames(&self.var_shapes),
+            &self.override_namespaces(),
+            initial_conditions,
+            &self.merged_renames,
+        ) else {
+            return Vec::new();
+        };
+        let memo_slots;
+        let empty = HashMap::new();
+        let field_ic_map = if self.field_ics.is_empty() {
+            &empty
+        } else {
+            match self.field_ic_memo.borrow().as_ref() {
+                Some(m) => {
+                    memo_slots = m.slots.clone();
+                    &memo_slots
+                }
+                None => return Vec::new(),
+            }
+        };
+        let (_, unset) = self.seeded_defaults(field_ic_map);
+        let Some(mut unset) = unset else {
+            return Vec::new();
+        };
+        for name in initial_conditions.keys() {
+            if let Some(slot) = super::layout::lookup_slot(&self.var_shapes, name) {
+                unset[slot] = false;
+            }
+        }
+        // An initialization equation assigns its whole target, and a held
+        // state (no `D`, no definition) is not an ODE state.
+        for target in self
+            .init_faqs
+            .iter()
+            .map(|(t, _)| t)
+            .chain(&self.held_at_ic)
+        {
+            if let Some(vs) = self.var_shapes.get(target) {
+                let n = vs.shape.iter().copied().product::<usize>().max(1);
+                unset[vs.flat_offset..vs.flat_offset + n].fill(false);
+            }
+        }
+        // A state is refused only when NONE of its slots got a value: cells left
+        // over in a partly seeded one are layout (a grid widened past the cells
+        // the document names) and keep their placeholder.
+        self.var_shapes
+            .iter()
+            .filter(|(_, vs)| {
+                let n = vs.shape.iter().copied().product::<usize>().max(1);
+                unset[vs.flat_offset..vs.flat_offset + n].iter().all(|&u| u)
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 
     /// Run the simulation.
@@ -1082,47 +1373,41 @@ impl ArrayCompiled {
             m.params == param_bits(param_vec)
                 && m.forcing_generation == self.forcing_generation.get()
         });
+        // Resolved scalar-parameter scope (load-time constants) for the ic
+        // coordinate-expression path — a parameter-dependent grid-geometry
+        // template (`x0 + (i − 1/2)·dx`) binds here — and for the
+        // initialization equations.
+        let resolved_params: HashMap<String, f64> = self
+            .param_names
+            .iter()
+            .cloned()
+            .zip(param_vec.iter().copied())
+            .collect();
         let field_ic_map = match memo {
             Some(m) => m.slots,
-            None => {
-                // Resolved scalar-parameter scope (load-time constants) for the
-                // ic coordinate-expression path — a parameter-dependent
-                // grid-geometry template (`x0 + (i − 1/2)·dx`) binds here; STATE
-                // is not in scope.
-                let resolved_params: HashMap<String, f64> = self
-                    .param_names
-                    .iter()
-                    .cloned()
-                    .zip(param_vec.iter().copied())
-                    .collect();
-                self.resolve_field_ics(&resolved_params, None)?
-            }
+            None => self.resolve_field_ics(&resolved_params, None)?,
         };
-        // Per slot, the first of: an explicit override, a field `ic`, the
-        // variable's default. Written lowest priority first, each variable's
-        // default as one fill (or one gather of its inline data); a slot left
-        // with none of the three is flagged, and only a variable that
-        // declares no default can leave one.
-        let mut ic_vec = vec![0.0f64; self.n_states];
-        let mut unset: Option<Vec<bool>> = None;
-        for ((_, vs), default) in self.var_shapes.iter().zip(&self.state_defaults) {
-            let n = vs.shape.iter().copied().product::<usize>().max(1);
-            let range = vs.flat_offset..vs.flat_offset + n;
-            if !super::layout::write_state_default(vs, default, &mut ic_vec[range.clone()]) {
-                unset.get_or_insert_with(|| vec![false; self.n_states])[range].fill(true);
-            }
-        }
-        for (&slot, &v) in &field_ic_map {
-            ic_vec[slot] = v;
-            if let Some(u) = unset.as_mut() {
-                u[slot] = false;
-            }
-        }
+        // Per slot, the first of: an explicit override, an initialization
+        // equation, a field `ic`, the variable's default. Written lowest
+        // priority first; a slot left with none of them is flagged, and only a
+        // variable that declares no default can leave one.
+        let (mut ic_vec, mut unset) = self.seeded_defaults(&field_ic_map);
+        let mut overridden: HashSet<usize> = HashSet::new();
         for (name, &v) in &initial_conditions {
             // Canonicalization answers only with names the layout resolves.
             let slot = super::layout::lookup_slot(&self.var_shapes, name)
                 .expect("a canonical initial-condition key names a slot");
             ic_vec[slot] = v;
+            overridden.insert(slot);
+            if let Some(u) = unset.as_mut() {
+                u[slot] = false;
+            }
+        }
+        // After the overrides, so a body reading a state reads the caller's
+        // value, and around them, so the caller's value stands.
+        for slot in
+            self.seed_initialization_faqs(&mut ic_vec, &resolved_params, &overridden, None)?
+        {
             if let Some(u) = unset.as_mut() {
                 u[slot] = false;
             }

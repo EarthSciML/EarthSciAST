@@ -33,7 +33,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
             cp(chem_leaf, joinpath(tmp, "chem_leaf.esm"))
             refasm = joinpath(tmp, "assembly_ref.esm")
             write(refasm, """{
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "assembly_ref", "authors": ["Test"]},
                 "reaction_systems": {"Chem": {"ref": "./chem_leaf.esm"}}
             }""")
@@ -56,7 +56,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
                 cp(chem_leaf, joinpath(tmp, "chem_leaf.esm"))
                 refasm = joinpath(tmp, "assembly_ref.esm")
                 write(refasm, """{
-                    "esm": "0.8.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "assembly_ref", "authors": ["Test"]},
                     "reaction_systems": {"Chem": {"ref": "./chem_leaf.esm"}}
                 }""")
@@ -111,7 +111,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
                 # `systems: ["A", "B"]`.
                 asm = joinpath(tmp, "coupled.esm")
                 write(asm, """{
-                    "esm": "0.8.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "coupled", "authors": ["Test"]},
                     "models": {"Extra": {
                         "variables": {
@@ -149,7 +149,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
         tmp = mktempdir()
         try
             write(joinpath(tmp, "two.esm"), """{
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "two", "authors": ["Test"]},
                 "reaction_systems": {
                     "X": {"species": {"A": {"default": 1.0}},
@@ -167,14 +167,14 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
             main_path = joinpath(tmp, "main.esm")
             # No selector over a 2-reaction-system file is an error.
             write(main_path, """{
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main", "authors": ["Test"]},
                 "reaction_systems": {"Sel": {"ref": "./two.esm"}}
             }""")
             @test_throws ESM_RR.SubsystemRefError ESM_RR.load_path(main_path)
             # `reaction_system` selects one.
             write(main_path, """{
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main", "authors": ["Test"]},
                 "reaction_systems": {"Sel": {"ref": "./two.esm", "reaction_system": "Y"}}
             }""")
@@ -183,7 +183,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
             @test !any(s -> s.name == "A", loaded.reaction_systems["Sel"].species)
             # A selector naming a missing reaction system errors.
             write(main_path, """{
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main", "authors": ["Test"]},
                 "reaction_systems": {"Sel": {"ref": "./two.esm", "reaction_system": "Z"}}
             }""")
@@ -197,14 +197,14 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
         tmp = mktempdir()
         try
             write(joinpath(tmp, "modelonly.esm"), """{
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "modelonly", "authors": ["Test"]},
                 "models": {"M": {"variables": {"u": {"type": "unknown", "default": 1.0}},
                                  "equations": []}}
             }""")
             main_path = joinpath(tmp, "main.esm")
             write(main_path, """{
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main", "authors": ["Test"]},
                 "reaction_systems": {"Chem": {"ref": "./modelonly.esm"}}
             }""")
@@ -218,12 +218,12 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
         tmp = mktempdir()
         try
             write(joinpath(tmp, "a.esm"), """{
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "a", "authors": ["Test"]},
                 "reaction_systems": {"B": {"ref": "./b.esm"}}
             }""")
             write(joinpath(tmp, "b.esm"), """{
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "b", "authors": ["Test"]},
                 "reaction_systems": {"A": {"ref": "./a.esm"}}
             }""")
@@ -243,7 +243,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
             try
                 asm = joinpath(tmp, "sf_assembly.esm")
                 write(asm, """{
-                    "esm": "0.8.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "sf_assembly", "authors": ["Test"]},
                     "reaction_systems": {"SuperFast": {"ref": "$(superfast)"}}
                 }""")

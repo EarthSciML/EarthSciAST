@@ -86,7 +86,8 @@ def test_a_shaped_parameter_with_no_value_at_all_is_not_zero_filled(tmp_path: Pa
 
     Rust (`lower_inline_array_parameters` skips a ``None`` default) and Julia
     (``scalar === nothing`` skips) both leave such a name alone, so Python does
-    too: the read stays scalar and ``index(p, k)`` says so.
+    too — and all three refuse the build with ``E_TREEWALK_MISSING_DATA`` naming
+    ``p`` (esm-spec §10.10; tests/conformance/missing_data).
     """
     doc = {
         "esm": "1.1.0",
@@ -142,4 +143,4 @@ def test_a_shaped_parameter_with_no_value_at_all_is_not_zero_filled(tmp_path: Pa
         "a shaped parameter with no supplied value was broadcast as a column of zeros, "
         "so the assertion passed on a value nothing in the document supplies"
     )
-    assert "index applied to scalar value" in r.message, r.message
+    assert "E_TREEWALK_MISSING_DATA" in r.message and "'C.p'" in r.message, r.message

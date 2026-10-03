@@ -386,7 +386,6 @@ mod tests {
             "neg",
             "exp",
             "log",
-            "ln",
             "log10",
             "sqrt",
             "abs",

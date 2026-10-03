@@ -187,3 +187,96 @@ fn scalar_ic_seeding_precedence() {
         assert_eq!(at0(&sol, "M.w"), 4.0, "{key}: unnamed state lost its ic");
     }
 }
+
+/// esm-spec §6.2: `faq`-valued initialization equations seed the initial state
+/// in document order, a body reading a state reads the value seeded so far
+/// (the declared default, a caller override, an earlier equation's result),
+/// and a cell the caller names keeps the caller's value. Both compilers build
+/// the same `u0`, bit for bit; the interpreter walks each `faq` cell by cell
+/// and `native` evaluates it whole.
+#[test]
+fn faq_initialization_equations_seed_in_order_on_both_compilers() {
+    use earthsci_ast::{Compiler, ProblemOptions, Rhs, esm_problem, solve};
+    let faq = |ranges: serde_json::Value, expr: serde_json::Value| {
+        serde_json::json!({"op": "faq", "args": [], "output_idx": ["i"],
+                           "ranges": ranges, "expr": expr})
+    };
+    let idx = |v: &str| serde_json::json!({"op": "index", "args": [v, "i"]});
+    let d = |v: &str| serde_json::json!({"op": "D", "wrt": "t", "args": [idx(v)]});
+    let all = serde_json::json!({"i": [1, 4]});
+    let doc = serde_json::json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "faq_init_order"},
+        "index_sets": {"x": {"kind": "interval", "size": 4}},
+        "models": {"M": {
+            "variables": {
+                "A": {"type": "parameter", "units": "1", "default": 0.25},
+                "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+                "v": {"type": "unknown", "units": "1", "shape": ["x"], "default": 2.0}
+            },
+            "equations": [
+                {"lhs": faq(all.clone(), d("u")), "rhs": faq(all.clone(), serde_json::json!(0))},
+                {"lhs": faq(all.clone(), d("v")), "rhs": faq(all.clone(), serde_json::json!(0))}
+            ],
+            "initialization_equations": [
+                // u = A*i + v, reading v's default (or the caller's value).
+                {"lhs": "u", "rhs": faq(all.clone(), serde_json::json!(
+                    {"op": "+", "args": [{"op": "*", "args": ["A", "i"]}, idx("v")]}))},
+                // v = 3*u over cells 2..3, reading the u just seeded.
+                {"lhs": "v", "rhs": faq(serde_json::json!({"i": [2, 3]}), serde_json::json!(
+                    {"op": "*", "args": [3.0, idx("u")]}))}
+            ]
+        }}
+    });
+    let file = load_string(&doc.to_string()).expect("document loads");
+    let u0_of = |compiler: Compiler, u0: &[(&str, f64)]| -> Vec<(String, u64)> {
+        let prob = esm_problem(
+            &file,
+            (0.0, 1.0),
+            ProblemOptions {
+                rhs: Rhs::Always,
+                compiler: Some(compiler),
+                u0: u0.iter().map(|&(k, v)| (k.to_string(), v)).collect(),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{compiler:?} builds: {e}"));
+        let sol = solve(
+            &prob,
+            &SolveOptions {
+                saveat: Some(vec![0.0]),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{compiler:?} solves: {e}"));
+        sol.state_variable_names
+            .iter()
+            .zip(&sol.state)
+            .map(|(n, row)| (n.clone(), row[0].to_bits()))
+            .collect()
+    };
+    let value = |rows: &[(String, u64)], name: &str| -> f64 {
+        let (_, b) = rows
+            .iter()
+            .find(|(n, _)| n == name || n.ends_with(&format!(".{name}")))
+            .unwrap_or_else(|| panic!("no state {name}: {rows:?}"));
+        f64::from_bits(*b)
+    };
+    for u0 in [&[][..], &[("v[1]", 10.0), ("u[3]", -1.0)][..]] {
+        let native = u0_of(Compiler::Native, u0);
+        let interp = u0_of(Compiler::Interpreter, u0);
+        assert_eq!(
+            native, interp,
+            "native and the interpreter seed the same u0 ({u0:?})"
+        );
+        let v1 = if u0.is_empty() { 2.0 } else { 10.0 };
+        let u3 = if u0.is_empty() { 0.75 + 2.0 } else { -1.0 };
+        assert_eq!(value(&native, "u[1]"), 0.25 + v1);
+        assert_eq!(value(&native, "u[2]"), 0.5 + 2.0);
+        assert_eq!(value(&native, "u[3]"), u3);
+        assert_eq!(value(&native, "v[1]"), v1, "outside v's ranges");
+        assert_eq!(value(&native, "v[2]"), 3.0 * 2.5, "reads the seeded u");
+        assert_eq!(value(&native, "v[3]"), 3.0 * u3);
+        assert_eq!(value(&native, "v[4]"), 2.0, "outside v's ranges");
+    }
+}

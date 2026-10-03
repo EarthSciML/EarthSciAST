@@ -1,0 +1,79 @@
+{
+  "fixture": "shape_ops_symbolic_subscripts",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "symbolic_subscript_gathers",
+      "assertion_idx": 1,
+      "variable": "v[1]",
+      "actual": 20.999999999999993
+    },
+    {
+      "test_id": "symbolic_subscript_gathers",
+      "assertion_idx": 2,
+      "variable": "v[2]",
+      "actual": 21.999999999999993
+    },
+    {
+      "test_id": "symbolic_subscript_gathers",
+      "assertion_idx": 3,
+      "variable": "v[3]",
+      "actual": 22.99999999999999
+    },
+    {
+      "test_id": "symbolic_subscript_gathers",
+      "assertion_idx": 4,
+      "variable": "w[1]",
+      "actual": 1.4999999999999998
+    },
+    {
+      "test_id": "symbolic_subscript_gathers",
+      "assertion_idx": 5,
+      "variable": "w[2]",
+      "actual": 2.4999999999999996
+    },
+    {
+      "test_id": "symbolic_subscript_gathers",
+      "assertion_idx": 6,
+      "variable": "w[3]",
+      "actual": 3.4999999999999982
+    },
+    {
+      "test_id": "symbolic_subscript_gathers",
+      "assertion_idx": 7,
+      "variable": "z[1]",
+      "actual": 2.25
+    },
+    {
+      "test_id": "symbolic_subscript_gathers",
+      "assertion_idx": 8,
+      "variable": "z[2]",
+      "actual": 3.249999999999999
+    },
+    {
+      "test_id": "symbolic_subscript_gathers",
+      "assertion_idx": 9,
+      "variable": "z[3]",
+      "actual": 4.249999999999998
+    },
+    {
+      "test_id": "symbolic_subscript_gathers",
+      "assertion_idx": 10,
+      "variable": "q[1]",
+      "actual": -3.9999999999999987
+    },
+    {
+      "test_id": "symbolic_subscript_gathers",
+      "assertion_idx": 11,
+      "variable": "q[2]",
+      "actual": -7.999999999999997
+    },
+    {
+      "test_id": "symbolic_subscript_gathers",
+      "assertion_idx": 12,
+      "variable": "s",
+      "actual": 12.999999999999996
+    }
+  ]
+}

@@ -21,7 +21,7 @@ from typing import Any, Callable
 import numpy as np
 
 from . import compiler as _compiler
-from .classification import is_implicit_lhs
+from .classification import _derivative_targets, is_implicit_lhs
 from .compiler import (
     CompilerPolicy,
     CompilerRefusedRuleError,
@@ -30,6 +30,7 @@ from .compiler import (
     use_policy,
 )
 from .error_handling import INDEXED_DEFINITION_UNSUPPORTED_FORM
+from .errors import MissingDataError, MissingInitialValueError
 from .esm_types import EsmFile, Expr, ExprNode, is_aggregate_op
 from .expr_walk import iter_children, map_children
 from .expression import UnsupportedConstructError
@@ -46,6 +47,7 @@ from .flatten import (
 from .index_alignment import align_expression, axis_sizes, declared_axes
 from .numpy_interpreter import (
     ConstArrayOutOfRangeError,
+    DegenerateOperandError,
     EvalContext,
     NumpyInterpreterError,
     _RaggedRange,
@@ -303,8 +305,9 @@ def _apply_initial_conditions(
     shapes: dict[str, tuple[int, ...]],
     state_names: list[str],
     initial_conditions: dict[str, Any],
-) -> None:
-    """Write initial-value overrides into ``y0``.
+) -> set[int]:
+    """Write initial-value overrides into ``y0``, returning the flat positions
+    they wrote.
 
     Keys may be bare (``"u[1]"``) or namespaced (``"Chem.u[1]"``); scalar state
     variables use a bare name without brackets. A whole-state key may carry a
@@ -312,6 +315,7 @@ def _apply_initial_conditions(
     row-major nested JSON array matching the state's declared shape (esm-spec
     §6.6.2), which is what lets a column test supply a whole profile.
     """
+    written: set[int] = set()
     for key, value in initial_conditions.items():
         resolved = (
             None
@@ -340,6 +344,8 @@ def _apply_initial_conditions(
                         value,
                         origin="initial_conditions",
                     )
+                    sl = state_layout[name]
+                    written.update(range(sl.start, sl.stop))
                     continue
             if is_inline_array_value(value):
                 raise SimulationError(
@@ -349,6 +355,83 @@ def _apply_initial_conditions(
             continue
         _, flat_pos = resolved
         y0[flat_pos] = float(value)
+        written.add(flat_pos)
+    return written
+
+
+def _faq_output_ranges(node: ExprNode, index_sets: dict[str, Any]) -> list[tuple[int, int]]:
+    """The dense ``(lo, hi)`` range of each of ``node``'s output indices, in
+    ``output_idx`` order: a ``[lo, hi]`` tuple, or an interval / categorical
+    index-set reference."""
+    out: list[tuple[int, int]] = []
+    for name in node.output_idx or []:
+        spec = (node.ranges or {}).get(name)
+        if isinstance(spec, dict) and "from" in spec:
+            entry = (index_sets or {}).get(spec["from"]) or {}
+            if entry.get("kind") == "interval":
+                spec = [1, int(entry["size"])]
+            elif entry.get("kind") == "categorical":
+                spec = [1, len(entry.get("members") or [])]
+        if not (isinstance(spec, (list, tuple)) and len(spec) == 2):
+            raise SimulationError(f"output index {name!r} has no static [lo, hi] range")
+        out.append((int(spec[0]), int(spec[1])))
+    return out
+
+
+def _seed_initialization_faqs(
+    y0: np.ndarray,
+    init_faqs: list[tuple[str, Expr]],
+    shapes: dict[str, tuple[int, ...]],
+    state_layout: dict[str, slice],
+    scope_arrays: dict[str, np.ndarray],
+    *,
+    keep: set[int],
+    index_sets: dict[str, Any] | None = None,
+    param_values: dict[str, float] | None = None,
+) -> None:
+    """Evaluate the ``faq``-valued initialization equations (esm-spec §6.2:
+    equations that hold at t = 0) into ``y0``, in document order.
+
+    Each assigns every cell of its ranges the value its body takes there, read
+    against the initial state seeded so far (defaults, field ``ic``s, the
+    caller's overrides and the equations before it), the parameters and the
+    loaded fields, at t = 0. A cell in ``keep`` — one the caller's initial
+    conditions name — keeps its value. Mirrors the Julia reference's
+    ``_seed_faq_init_u0!`` and Rust's ``seed_initialization_faqs``.
+    """
+    for target, rhs in init_faqs:
+        rule = f"init({target})"
+        if target not in state_layout:
+            raise SimulationError(
+                f"{rule}: the left-hand side of a faq initialization equation is not a "
+                f"state variable of the flattened system"
+            )
+        shape = tuple(shapes.get(target, ()))
+        ranges = _faq_output_ranges(rhs, index_sets or {})
+        if len(ranges) != len(shape):
+            raise SimulationError(
+                f"{rule}: {len(ranges)} output indices for a {len(shape)}-D state"
+            )
+        arrays = dict(scope_arrays)
+        for name, sl in state_layout.items():
+            arrays[name] = y0[sl].reshape(shapes.get(name, ()))
+        value = np.asarray(
+            _eval_buildtime_field(
+                rhs, index_sets=index_sets, param_values=param_values, input_arrays=arrays
+            ),
+            dtype=float,
+        )
+        extents = tuple(max(hi - lo + 1, 0) for lo, hi in ranges)
+        if value.shape != extents:
+            raise SimulationError(
+                f"{rule}: the faq evaluated to shape {value.shape}, not its box {extents}"
+            )
+        start = state_layout[target].start
+        for multi in np.ndindex(*extents):
+            cell = [lo + int(k) for k, (lo, _) in zip(multi, ranges)]
+            pos = start + _linear_pos(shape, cell)
+            if pos not in keep:
+                y0[pos] = float(value[multi])
 
 
 def _collect_algebraic_substitutions(
@@ -1060,7 +1143,7 @@ def _materialize_observeds(
             try:
                 val = _materialize_one_observed(name, rhs, ctx)
             except (NumpyInterpreterError, RecurrenceError) as exc:
-                if isinstance(exc, ConstArrayOutOfRangeError):
+                if isinstance(exc, (ConstArrayOutOfRangeError, DegenerateOperandError)):
                     raise
                 if skip_reasons is not None:
                     skip_reasons[name] = str(exc)
@@ -1728,6 +1811,20 @@ def _binning_coord_arrays(
     return {**ctx.observed_values, **ctx.derived_rings}
 
 
+def _has_arg_witness(flat: FlattenedSystem) -> bool:
+    """Whether an equation carries an ``argmin`` / ``argmax`` arg-witness, whose
+    assignment the value-invention front door materializes (§5.7 rule 6)."""
+
+    def walk(e: Any) -> bool:
+        if isinstance(e, ExprNode):
+            if e.op in ("argmin", "argmax"):
+                return True
+            return any(walk(a) for a in (e.args or [])) or walk(e.expr)
+        return False
+
+    return any(walk(eq.rhs) for eq in flat.equations)
+
+
 def _frontdoor_join_keys_and_extents(
     flat: FlattenedSystem,
     ordered_observed: list[tuple[str, Expr]],
@@ -1738,11 +1835,15 @@ def _frontdoor_join_keys_and_extents(
     total_size: int,
     factor_scope: dict[str, str],
     loader_arrays: dict[str, np.ndarray],
-) -> tuple[dict[str, np.ndarray], dict[str, str], dict[str, int], dict[str, list]]:
+) -> tuple[
+    dict[str, np.ndarray], dict[str, str], dict[str, int], dict[str, list], dict[str, np.ndarray]
+]:
     """Run the value-invention front-door ONCE at setup and return the broad-phase
     join-key buffers plus the derived-index-set extents AND the derived-set
     MEMBERS (RFC §5.3 / §6.1; members feed the Phase-3 pushdown hooks — the
-    ``member_factor`` const feedback and the gated-provider selection).
+    ``member_factor`` const feedback and the gated-provider selection), and the
+    arg-witness assignment and grouped / derived buffers, which a right-hand side
+    reads as build-time data.
 
     This is the single source of truth that RETIRES the former per-cell mirror
     (``_materialize_join_key_buffers`` + ``_value_invention_extents``): the
@@ -1766,8 +1867,8 @@ def _frontdoor_join_keys_and_extents(
         isinstance(s, dict) and s.get("kind") == "derived" and s.get("from_faq") is not None
         for s in flat.index_sets.values()
     )
-    if not bin_specs and not has_derived:
-        return {}, {}, {}, {}
+    if not bin_specs and not has_derived and not _has_arg_witness(flat):
+        return {}, {}, {}, {}, {}
     model_json = _reconstruct_model_json(flat)
     # Phase 3 pushdown hook 3: an OVERLAP-GATED `distinct` producer (the
     # auto-rewrite's generated support-set aggregate) carries no bin_spec, but
@@ -1849,7 +1950,10 @@ def _frontdoor_join_keys_and_extents(
             model_json, const_arrays, param_values, index_sets=flat.index_sets
         )
         buffers, idx_sets = _buffers(res)
-        return buffers, idx_sets, dict(res.extents), dict(res.members)
+        outputs = {
+            str(k): np.asarray(v, dtype=float) for k, v in {**res.assignments, **res.groups}.items()
+        }
+        return buffers, idx_sets, dict(res.extents), dict(res.members), outputs
     except ValueInventionError as exc:
         # A producer a derived index set names could not run, so that set has no
         # members. Degrading its extent to {} would let a contraction over it fold
@@ -1871,7 +1975,7 @@ def _frontdoor_join_keys_and_extents(
             model_json, const_arrays, param_values, index_sets=flat.index_sets, maps_only=True
         )
         buffers, idx_sets = _buffers(res)
-        return buffers, idx_sets, {}, {}
+        return buffers, idx_sets, {}, {}, {}
 
 
 # --------------------------------------------------------------------------- #
@@ -2909,8 +3013,9 @@ def _build_numpy_rhs(
         join_key_index_sets = static_cache["join_key_index_sets"]
         derived_extents = static_cache["derived_extents"]
         vi_members = static_cache.get("vi_members", {})
+        vi_outputs = static_cache.get("vi_outputs", {})
     else:
-        join_key_buffers, join_key_index_sets, derived_extents, vi_members = (
+        join_key_buffers, join_key_index_sets, derived_extents, vi_members, vi_outputs = (
             _frontdoor_join_keys_and_extents(
                 flat,
                 ordered_observed,
@@ -2928,6 +3033,7 @@ def _build_numpy_rhs(
             static_cache["join_key_index_sets"] = join_key_index_sets
             static_cache["derived_extents"] = derived_extents
             static_cache["vi_members"] = vi_members
+            static_cache["vi_outputs"] = vi_outputs
 
     # ---- Phase 3 pushdown hook 1: value-invention MEMBERS fed back as const
     # factors. A `kind:"derived"` index set naming a `member_factor` gets that
@@ -2949,6 +3055,15 @@ def _build_numpy_rhs(
         for _k, _v in _feed_back_vi_members(flat.index_sets, vi_members, _all_var_names).items():
             loader_arrays[_k] = _v  # engine-derived: overwrites, like Julia merge!
             axis_valued_input_names.add(_k)
+    # An arg-witness assignment (`assign[i] = argmin_g …`) and the grouped /
+    # derived buffers keyed on it are CONST-cadence data the front door has just
+    # materialized: a right-hand side reads them as it reads a supplied const
+    # array, and the observed hoist does not re-evaluate their definitions.
+    if vi_outputs:
+        for _k, _v in vi_outputs.items():
+            loader_arrays[_k] = _v
+            axis_valued_input_names.add(_k)
+        ordered_observed = [(n, r) for n, r in ordered_observed if n not in vi_outputs]
 
     # ---- Phase 3 pushdown hook 2: gated-provider deferral → post-VI selective
     # fetch. Providers stashed by `prepare` (skipped by its eager const loop)
@@ -2969,8 +3084,25 @@ def _build_numpy_rhs(
             axis_valued_input_names.add(_k)
     axis_valued_names = frozenset(axis_valued_input_names)
 
-    # Initial conditions.
+    # esm-spec §10.10: a parameter with neither a default nor a supplied value
+    # is an error when a problem is built. One no channel above filled would
+    # otherwise keep the 0.0 stand-in ``_resolve_override`` binds.
+    for pname, pvar in flat.parameters.items():
+        if pname in loader_arrays:
+            continue
+        if getattr(pvar, "distribution", None) is not None:
+            continue
+        raw = resolve_override_raw(
+            pname, parameters, pvar.default, known=known_params, namespaces=param_namespaces
+        )
+        if raw is None:
+            raise MissingDataError(pname, pvar)
+
+    # Initial conditions. A state with no declared default starts as NaN, a
+    # marker the checks after the folds and overrides below read: a slot
+    # nothing then set is refused (esm-spec §11.4), not run from 0.0.
     y0 = np.zeros(total_size, dtype=float)
+    no_default: list[str] = []
     for name in state_names:
         default = flat.state_variables[name].default
         if is_inline_array_value(default):
@@ -2982,6 +3114,9 @@ def _build_numpy_rhs(
         elif isinstance(default, (int, float)) and not isinstance(default, bool):
             sl = state_layout[name]
             y0[sl] = float(default)
+        else:
+            y0[state_layout[name]] = np.nan
+            no_default.append(name)
     # Scoped-reference / array ``ic`` fold (esm-spec §11.4.1): now that each array
     # state's grid shape is known, fold every deferred field-ic into per-element
     # initial values. The RHS may be a LOADED FIELD (a ``loader_arrays`` entry —
@@ -3024,7 +3159,34 @@ def _build_numpy_rhs(
         index_sets=flat.index_sets,
         param_values=param_values,
     )
-    _apply_initial_conditions(y0, state_layout, shapes, state_names, initial_conditions)
+    overridden = _apply_initial_conditions(
+        y0, state_layout, shapes, state_names, initial_conditions
+    )
+    # The faq-valued initialization equations (esm-spec §6.2): after the
+    # overrides, so a body reading a state reads the caller's value, and
+    # around them, so the caller's value stands.
+    _seed_initialization_faqs(
+        y0,
+        flat.initialization_faqs,
+        shapes,
+        state_layout,
+        ic_scope_arrays,
+        keep=overridden,
+        index_sets=flat.index_sets,
+        param_values=param_values,
+    )
+    # Only an ODE state needs a starting value; an unknown the build solves for
+    # or eliminates takes it from its definition.
+    # A state some of whose cells were set is not refused: the cells left over
+    # are layout (a grid widened past the cells the document names), and keep
+    # the 0.0 they always had.
+    ode = set().union(*(_derivative_targets(eq.lhs) for eq in flat.equations))
+    unset = [n for n in no_default if n in ode and np.isnan(y0[state_layout[n]]).all()]
+    if unset:
+        raise MissingInitialValueError(unset)
+    for n in no_default:
+        seg = y0[state_layout[n]]
+        seg[np.isnan(seg)] = 0.0
 
     # Const-geometry hoist + cadence split of the observeds: materialize the
     # STATE-FREE (loader-invariant, then loader-volatile) observeds ONCE here and

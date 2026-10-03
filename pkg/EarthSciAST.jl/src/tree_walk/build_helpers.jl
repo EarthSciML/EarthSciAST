@@ -278,9 +278,10 @@ end
 # The `fn` contract is checked here (`_broadcast_fn_problem`, op_registry.jl —
 # the same predicate `validate()` reports as `invalid_broadcast_fn`), so a bogus
 # `fn` is a BUILD error even for a caller that never ran `validate()`.
-# `reshape`/`transpose`/`concat` are NOT lowered — they are genuine shape ops
-# with no scalar-operator spelling, and keep their `unevaluable_operator`
-# rejection in `_compile_op`.
+# `reshape`/`transpose`/`concat` are NOT lowered here — they are genuine shape
+# ops with no scalar-operator spelling. Under an `index` they become gathers of
+# their operand (`_index_through_shape_op`, resolve.jl); a bare one still meets
+# its `unevaluable_operator` rejection in `_compile_op`.
 #
 # DAG-SAFE, WITHOUT TAXING THE COMMON CASE (ESS-0hh).
 # `map_children` already declines to REBUILD an unchanged node, which keeps a
@@ -432,7 +433,8 @@ end
 # where the shell's `output_idx` is exactly the identity gather's subscripts in
 # order, its `ranges` bind exactly those symbols, it carries no contraction or
 # gating clause (`filter` / `join` / `key` / `distinct`), and `V` is an
-# ARRAY-shaped OBSERVED unknown of this model whose declared rank matches. A
+# OBSERVED unknown of this model whose declared rank matches, or whose shape is
+# undeclared (the frame then gives it). A
 # derivative LHS (`aggregate{k}(D(index(u,k)))`) has a `D` body, not an `index`
 # body, so the ODE partition is untouched; so is an ODE state, an algebraic
 # unknown, and any genuine expression LHS.
@@ -502,7 +504,11 @@ function _rewrite_indexed_observed_lhs(eq::Equation, model::Model,
     name = (head::VarExpr).name
     name in observed_here || return nothing
     var = get(model.variables, name, nothing)
-    (var !== nothing && _is_array_shape(var.shape)) || return nothing
+    var === nothing && return nothing
+    # An observed whose `shape` was never declared takes its rank and extent
+    # from this frame (it is anonymous, esm-spec §4.3.4); a declared shape must
+    # agree in rank.
+    declared = _is_array_shape(var.shape)
     idx = shell.output_idx
     idx === nothing && return nothing
     syms = String[]
@@ -511,7 +517,7 @@ function _rewrite_indexed_observed_lhs(eq::Equation, model::Model,
         push!(syms, String(x))
     end
     isempty(syms) && return nothing                 # a SCALAR reduction, not a frame
-    length(syms) == length(var.shape) || return nothing
+    (!declared || length(syms) == length(var.shape)) || return nothing
     # The gather must be the IDENTITY on the frame: `index(V, k…)`, same symbols,
     # same order. `index(V, k+1)` or a permutation writes something else.
     length(gather.args) == length(syms) + 1 || return nothing
@@ -564,6 +570,30 @@ function _rewrite_bare_index_observed_lhs(eq::Equation, model::Model,
     prefix = (dot = findlast('.', name)) === nothing ? "" : name[1:dot]
     rhs = eq.rhs
     frame = rhs isa OpExpr && (rhs::OpExpr).op == "faq" ? (rhs::OpExpr).output_idx : nothing
+    # A plain-symbol subscript at any level of the gather that neither the
+    # right-hand frame binds nor a variable names is a free index symbol: the
+    # document is invalid (esm-spec §6.3.1, `unbound_index_symbol`). Flatten
+    # namespaces a free LHS symbol (`k` becomes `Model.k`) but not a binder.
+    binders = Set{String}()
+    frame === nothing || for b in frame
+        b isa AbstractString || continue
+        push!(binders, String(b)); push!(binders, prefix * String(b))
+    end
+    g = gather
+    while true
+        for s in view(g.args, 2:length(g.args))
+            s isa VarExpr || continue
+            sn = (s::VarExpr).name
+            (sn in binders || haskey(model.variables, sn)) && continue
+            local_sym = startswith(sn, prefix) ? sn[(length(prefix) + 1):end] : sn
+            throw(TreeWalkError(ERROR_CODES.UNBOUND_INDEX_SYMBOL,
+                "'$name' is defined by a left-hand side that subscripts with " *
+                "'$local_sym', which no faq binds (esm-spec §6.3.1)"))
+        end
+        h = g.args[1]
+        (h isa OpExpr && (h::OpExpr).op == "index" && !isempty((h::OpExpr).args)) || break
+        g = h::OpExpr
+    end
     binds = head isa VarExpr &&
         frame !== nothing && !isempty(subs) && length(frame) == length(subs) &&
         all(zip(subs, frame)) do (s, b)
@@ -763,7 +793,7 @@ function _index_pushdown_arrayish(e::ASTExpr, is_array_leaf,
         o = e::OpExpr
         cached = get(memo, o, nothing)
         cached === nothing || return cached::Bool
-        r = _is_array_producer(o) ||
+        r = _is_array_producer(o) || o.op in _SHAPE_REMAP_OPS ||
             (_is_scalar_op(o.op) &&
              any(a -> _index_pushdown_arrayish(a, is_array_leaf, memo), o.args))
         memo[o] = r

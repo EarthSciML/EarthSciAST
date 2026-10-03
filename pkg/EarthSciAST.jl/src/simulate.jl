@@ -121,6 +121,98 @@ function _resolve_merged_renames(renames::AbstractDict, overrides::AbstractDict)
     return out
 end
 
+# esm-libraries-spec §8.1: a library MUST reject a document whose major version
+# it does not implement. Python and Rust refuse it at load; here it is refused at
+# the build, before a document of another major is run as if it were this one.
+function _refuse_unsupported_major_version(version)
+    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(version))
+    m === nothing && return nothing
+    supported = parse(Int, match(r"^(\d+)\.", SCHEMA_VERSION).captures[1])
+    major = parse(Int, m.captures[1])
+    major == supported || throw(ParseError(
+        "Unsupported major version $major. This library supports major version " *
+        "$supported only."))
+    return nothing
+end
+
+# esm-spec §4.9.1.1: a declaration spelled with the independent variable or
+# `_var` is unreachable — every reader gets the implicit symbol instead of the
+# declared quantity, and the run is finite, plausible and wrong. `validate`
+# reports it; the build refuses it rather than run that document.
+function _refuse_reserved_declaration_names(file::EsmFile)
+    errors = _check_reserved_file_names!(StructuralError[], file)
+    isempty(errors) && return nothing
+    e = first(errors)
+    throw(ParseError("[$(e.error_type)] $(e.path): $(e.message) (esm-spec §4.9.1.1)";
+                     code=e.error_type, path=e.path, details=e.details))
+end
+
+# esm-spec §9.6.6 `callback_unregistered`: an equation that reads a variable a
+# `callback` coupling injects (`config.callback_variables[].name`) reads a value
+# only a registered callback supplies. Nothing registers one at construction, so
+# a build would read a placeholder the document does not describe.
+function _refuse_unregistered_callback_reads(file::EsmFile)
+    injected = Dict{String,String}()          # variable name => callback_id
+    for entry in file.coupling
+        entry isa CouplingCallback || continue
+        cfg = entry.config
+        cvs = cfg === nothing ? nothing : get(cfg, "callback_variables", nothing)
+        cvs isa AbstractVector || continue
+        for cv in cvs
+            nm = cv isa AbstractDict ? get(cv, "name", nothing) : nothing
+            nm isa AbstractString && (injected[String(nm)] = entry.callback_id)
+        end
+    end
+    (isempty(injected) || file.models === nothing) && return nothing
+    for name in sort!(collect(keys(file.models)))
+        _refuse_callback_reads_in(file.models[name], name, injected)
+    end
+    return nothing
+end
+
+function _refuse_callback_reads_in(model::Model, path::AbstractString,
+                                   injected::AbstractDict{String,String})
+    for eq in model.equations, side in (eq.lhs, eq.rhs)
+        for v in sort!(collect(free_variables(side)))
+            haskey(model.variables, v) && continue
+            id = get(injected, v, nothing)
+            id === nothing && continue
+            throw(TreeWalkError(ERROR_CODES.CALLBACK_UNREGISTERED,
+                "'$path' reads '$v', which the `callback` coupling '$id' supplies, " *
+                "but no callback is registered to supply it at construction; refusing " *
+                "the build rather than reading a value the document does not give " *
+                "(esm-spec §9.6.6)"))
+        end
+    end
+    for (sub_name, sub) in model.subsystems
+        sub isa Model && _refuse_callback_reads_in(sub, "$path.$sub_name", injected)
+    end
+    return nothing
+end
+
+# esm-libraries-spec §2.5.2: the structural-validation codes a build refuses on.
+# They are the reference-integrity findings: a name, reference or data source the
+# document uses and does not declare. A build that went ahead would read a value
+# the document does not describe. Equation-count and unit findings are not here:
+# they stay `validate`'s to report.
+const _BUILD_REFUSED_VALIDATION_CODES = ("undefined_variable", "undefined_parameter", "undefined_species", "undefined_system", "undefined_index_set", "unresolved_scoped_ref", "event_var_undeclared", "data_source_undefined", "missing_required_field")
+
+function _refuse_reference_integrity_errors(file::EsmFile; supplied_names = ())
+    for e in validate_structural(file)
+        e.error_type in _BUILD_REFUSED_VALIDATION_CODES || continue
+        # An inline test's references are the test runner's to report (§6.6);
+        # the build does not evaluate them.
+        occursin("/tests/", e.path) && continue
+        # A bare name the caller binds at construction — a `const_arrays`,
+        # `param_arrays` or `providers` key — is in scope for this build.
+        e.error_type == ERROR_CODES.UNDEFINED_VARIABLE &&
+            get(e.details, "variable", nothing) in supplied_names && continue
+        throw(ParseError("[$(e.error_type)] $(e.path): $(e.message) (esm-libraries-spec §2.5.2)";
+                         code=e.error_type, path=e.path, details=e.details))
+    end
+    return nothing
+end
+
 #
 # `renames_out`, when given, is filled with the flattened system's
 # `merged_variable_renames` (issue #230) — the states an `operator_compose`
@@ -130,7 +222,8 @@ end
 # the existing callers that want only the doc are unchanged.
 function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}(),
                           base_path::AbstractString = pwd(),
-                          renames_out::Union{Nothing,AbstractDict} = nothing)
+                          renames_out::Union{Nothing,AbstractDict} = nothing,
+                          supplied_names = ())
     if input isa AbstractString
         isfile(input) || throw(SimulateError("simulate: no such file '$input'"))
         input = load_path(input; metaparameters=metaparameters)
@@ -149,9 +242,21 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
     # all; without it the run doc never carries the key and the document's
     # declared tolerances were silently dropped.
     run_solver = nothing
+    # And the `faq`-valued initialization equations (esm-spec §6.2), which ride
+    # on each `Model`, not on `FlattenedSystem`: namespaced here, re-attached to
+    # the run doc's model below, where the tree-walk build seeds `u0` from them
+    # (`_seed_faq_init_u0!`).
+    run_init = Equation[]
     if input isa EsmFile
+        _refuse_unsupported_major_version(input.esm)
+        _refuse_reserved_declaration_names(input)
+        _refuse_unregistered_callback_reads(input)
+        _refuse_reference_integrity_errors(input; supplied_names=supplied_names)
         run_coordinates = input.coordinates
         run_solver = input.solver
+        for (mname, model) in something(input.models, ())
+            _collect_initialization_faqs!(run_init, model, String(mname))
+        end
         # esm-spec §9.6.4 Option B: `flatten` ALWAYS carries surviving
         # `apply_expression_template` references into the FlattenedSystem; they
         # ride to the tree-walk build boundary below.
@@ -164,6 +269,7 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         # model without it.
         _refuse_flat_events(input)
         _refuse_flat_wiener_noise(input)
+        _refuse_flat_symbolic_updates(input)
         # esm-spec §9.5.3: lower `table_lookup` to its `interp.*` form HERE —
         # the one point every input kind (path, native Dict, EsmFile,
         # already-flattened system) has funnelled into, and the first point
@@ -210,10 +316,38 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
             block = serialize_solver(run_solver)
             isempty(block) || (doc["solver"] = block)
         end
+        if !isempty(run_init)
+            for (_, m) in doc["models"]
+                m["initialization_equations"] = Any[serialize_equation(eq) for eq in run_init]
+            end
+        end
         return doc
     end
     throw(SimulateError("simulate: unsupported input of type $(typeof(input)); " *
                         "pass a path, EsmFile, FlattenedSystem, or native ESM Dict"))
+end
+
+# The `faq`-valued initialization equations of `model` and its subsystems —
+# `u ~ faq(…)`, a bare-variable left-hand side and an array-valued right-hand
+# side (esm-spec §6.2) — namespaced under `prefix` exactly as `flatten`
+# namespaces the model's equations, appended to `out` in document order. The
+# other spellings name no cells for the tree-walk seed to assign.
+function _collect_initialization_faqs!(out::Vector{Equation}, model::Model, prefix::String)
+    local_names = Set{String}(keys(model.variables))
+    for (sub_name, _) in model.subsystems
+        push!(local_names, sub_name)
+    end
+    for eq in model.initialization_equations
+        (eq.lhs isa VarExpr && eq.rhs isa OpExpr && _is_faq_op(eq.rhs.op) &&
+         eq.rhs.output_idx !== nothing && !isempty(eq.rhs.output_idx)) || continue
+        push!(out, Equation(namespace_expr(eq.lhs, prefix, local_names),
+                            namespace_expr(eq.rhs, prefix, local_names)))
+    end
+    for (sub_name, sub_model) in model.subsystems
+        sub_model isa Model || continue
+        _collect_initialization_faqs!(out, sub_model, "$(prefix).$(sub_name)")
+    end
+    return out
 end
 
 # --------------------------------------------------------------------------- #
@@ -1084,7 +1218,9 @@ function esm_problem(input, tspan;
     # the flattened system's metadata is still reachable.
     merged_renames = OrderedDict{String,String}()
     doc = _prepare_run_doc(input; metaparameters=metaparams, base_path=base_path,
-                           renames_out=merged_renames)
+                           renames_out=merged_renames,
+                           supplied_names=Set{String}(string(k) for d in
+                               (const_arrays, param_arrays, providers) if d !== nothing for k in keys(d)))
 
     # esm-spec §6.6.2: a `p` binding is a scalar, or — for a SHAPED parameter —
     # INLINE ARRAY DATA (a row-major nested array supplying the whole column).
@@ -1186,7 +1322,8 @@ function esm_problem(input, tspan;
     # executable is wrapped back into the in-place `f!` this Problem's surface
     # promises, just below. Every other compiler builds the in-place evaluator
     # directly. See src/compiler_xla.jl.
-    f!, u0_built, p_built, _tspan, var_map = _build_evaluator(doc;
+    f!, u0_built, p_built, _tspan, var_map = _with_caller_u0(u0) do
+      _build_evaluator(doc;
         compiler = compiler,
         form = compiler === :xla ? :oop : :inplace,
         model_name = model_name,
@@ -1200,6 +1337,7 @@ function esm_problem(input, tspan;
         # The front door fetches these pre-sliced right after value-invention.
         _gated_providers = gated_providers,
         _sample_time = t_sample)
+    end
 
     if compiler === :xla
         f! = _xla_problem_rhs(f!, var_map, u0_built, p_built,
@@ -1213,6 +1351,7 @@ function esm_problem(input, tspan;
     u0_run = _with_compiler_plan(_plan_for(compiler)) do
         _seed_u0(u0_built, var_map, u0, seed_ic!)
     end
+    _refuse_missing_initial_values(insp.unvalued_slots, u0_built, var_map, u0, seed_ic!)
 
     # ---- the problem's callback set (§2.5.4) --------------------------------
     # Composed HERE, at construction, because a callback that refreshes provider
@@ -1310,6 +1449,38 @@ end
 # argument (a Dict of per-element / broadcast overrides, or a whole vector),
 # then the `seed_ic!` hook. Always a fresh vector — the build's `u0` is never
 # mutated, so `remake(prob; u0 = …)` cannot disturb the problem it came from.
+# esm-spec §11.4: an unknown that needs a starting value and has none — no
+# `default`, no initial condition, no `ic` equation, no caller `u0` — is an
+# error when the problem is built. The build reports the slots it could not
+# seed (`BuildInspection.unvalued_slots`, holding a 0.0 placeholder); a caller
+# `u0` that names them, a whole replacement vector, or a `seed_ic!` hook covers
+# them.
+function _refuse_missing_initial_values(unvalued::Vector{Int}, u0_built::Vector{Float64},
+                                        var_map::AbstractDict, u0, seed_ic!)
+    isempty(unvalued) && return nothing
+    (u0 isa AbstractVector || seed_ic! !== nothing) && return nothing
+    probe = copy(u0_built)
+    probe[unvalued] .= NaN
+    u0 isa AbstractDict && !isempty(u0) && _apply_initial_conditions!(probe, var_map, u0)
+    missing_slots = Set(s for s in unvalued if isnan(probe[s]))
+    isempty(missing_slots) && return nothing
+    # A state is refused only when NONE of its slots got a value: cells left
+    # over in a partly seeded one are layout (a grid widened past the cells the
+    # document names) and keep their placeholder.
+    base(k) = String(first(split(String(k), '['; limit = 2)))
+    partly = Set(base(k) for (k, s) in var_map if !(s in missing_slots))
+    names = sort!(unique!(String[base(k) for (k, s) in var_map
+                                 if s in missing_slots && !(base(k) in partly)]))
+    isempty(names) && return nothing
+    shown = join(("'$(n)'" for n in first(names, 5)), ", ") * (length(names) > 5 ? ", …" : "")
+    throw(TreeWalkError("E_TREEWALK_MISSING_INITIAL_VALUE",
+        "no starting value for $(length(names)) unknown(s) ($(shown)): the unknown " *
+        "declares no `default`, and no initial condition, `ic` equation or caller " *
+        "`u0` sets it. An unknown with no starting value is an error when a problem " *
+        "is built (esm-spec §11.4). To supply it, pass `u0 = Dict(\"$(first(names))\" " *
+        "=> value)` to `esm_problem`, or declare a `default` on the unknown."))
+end
+
 function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!)
     out = copy(u0_built)
     if u0 isa AbstractDict

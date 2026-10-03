@@ -24,6 +24,11 @@ const CSEL = EarthSciAST
 const _CSEL_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
 _csel_fixture(parts...) = joinpath(_CSEL_ROOT, "tests", parts...)
 
+include("testutils.jl")  # harness_u0
+# A corpus fixture through `esm_problem`, with the starting values its ODE
+# states leave to the harness (esm-spec §11.4).
+_csel_problem(f::AbstractString, tspan; kw...) = esm_problem(f, tspan; u0 = harness_u0(f), kw...)
+
 # A scalar ODE, a PDE-simulation diffusion fixture and a `faq` reduction: three
 # shapes that route through three different arms of the cascade.
 const _CSEL_AGREE = [
@@ -201,7 +206,7 @@ end
         # …and `:interpreter` runs the same document, since it turns the tier
         # off rather than taking what the tier accepts.
         @test withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-            compiler(esm_problem(_CSEL_AGREE[1], (0.0, 1.0); compiler = :interpreter))
+            compiler(_csel_problem(_CSEL_AGREE[1], (0.0, 1.0); compiler = :interpreter))
         end === :interpreter
     end
 
@@ -239,8 +244,8 @@ end
     end
 
     @testset "native and interpreter agree bit for bit: $(basename(f))" for f in _CSEL_AGREE
-        pn = esm_problem(f, (0.0, 1.0))
-        pi = esm_problem(f, (0.0, 1.0); compiler = :interpreter)
+        pn = _csel_problem(f, (0.0, 1.0))
+        pi = _csel_problem(f, (0.0, 1.0); compiler = :interpreter)
         @test compiler(pn) === :native
         @test compiler(pi) === :interpreter
         # `isequal`, not `==`: two evaluators that differ only in producing NaN
@@ -268,8 +273,8 @@ end
          ["Sites.North.u", "Sites.North.ur", "Sites.South.u"]),
     ]
         if isfile(f)
-            pn = esm_problem(f, (0.0, 1.0))
-            pi = esm_problem(f, (0.0, 1.0); compiler = :interpreter)
+            pn = _csel_problem(f, (0.0, 1.0))
+            pi = _csel_problem(f, (0.0, 1.0); compiler = :interpreter)
             @test compiler(pn) === :native
             @test compiler(pi) === :interpreter
             for n in names
@@ -287,7 +292,7 @@ end
 
     @testset "the report names every rule and a tier" begin
         for f in _CSEL_AGREE
-            rep = compiler_report(esm_problem(f, (0.0, 1.0)))
+            rep = compiler_report(_csel_problem(f, (0.0, 1.0)))
             @test rep isa CSEL.CompilerReport
             @test rep.compiler === :native
             @test !isempty(rep.rules)
@@ -303,13 +308,13 @@ end
         end
         # A scalar ODE's one equation lands on a tier that is named after the
         # cascade arm that took it, not after the compiler.
-        rep = compiler_report(esm_problem(_CSEL_AGREE[1], (0.0, 1.0)))
+        rep = compiler_report(_csel_problem(_CSEL_AGREE[1], (0.0, 1.0)))
         @test any(r -> occursin("PureODE.u", r.rule), rep.rules)
     end
 
     @testset "show says which compiler ran" begin
-        pn = esm_problem(_CSEL_AGREE[1], (0.0, 1.0))
-        pi = esm_problem(_CSEL_AGREE[1], (0.0, 1.0); compiler = :interpreter)
+        pn = _csel_problem(_CSEL_AGREE[1], (0.0, 1.0))
+        pi = _csel_problem(_CSEL_AGREE[1], (0.0, 1.0); compiler = :interpreter)
         @test occursin("compiler :native", sprint(show, pn))
         @test occursin("compiler :interpreter", sprint(show, pi))
         # The tier histogram rides along, so the printed problem says where the
@@ -321,7 +326,7 @@ end
 
     @testset "BuildInspection carries the report" begin
         insp = BuildInspection()
-        esm_problem(_CSEL_AGREE[1], (0.0, 1.0); inspect = insp)
+        _csel_problem(_CSEL_AGREE[1], (0.0, 1.0); inspect = insp)
         @test insp.compiler_report.compiler === :native
         @test !isempty(insp.compiler_report.rules)
         # …and it is filled even when the build THREW, which is the case a
@@ -402,7 +407,7 @@ end
         @test isapprox(dT, [v[2], 0.0, -2t]; rtol = 1e-6, atol = 1e-6)
         # Only an `:xla` Problem carries them; every other compiler's `f!` is a
         # Julia function the solver differentiates itself.
-        @test CSEL._ode_derivatives(esm_problem(_CSEL_AGREE[1], (0.0, 1.0))) ==
+        @test CSEL._ode_derivatives(_csel_problem(_CSEL_AGREE[1], (0.0, 1.0))) ==
               NamedTuple()
     end
 
@@ -432,12 +437,12 @@ end
 
         # What the seam used to publish now hangs on the Problem, for every
         # compiler rather than only for the out-of-place build form.
-        prob = esm_problem(_CSEL_AGREE[1], (0.0, 1.0))
+        prob = _csel_problem(_CSEL_AGREE[1], (0.0, 1.0))
         @test forcing_buffers(prob) isa NamedTuple
         @test forcing_buffer_index(prob) isa Dict{String,Int}
         @test length(forcing_buffers(prob)) == length(forcing_buffer_index(prob))
         insp = BuildInspection()
-        esm_problem(_CSEL_AGREE[1], (0.0, 1.0); inspect = insp)
+        _csel_problem(_CSEL_AGREE[1], (0.0, 1.0); inspect = insp)
         @test compiler_report(insp) === insp.compiler_report
         @test compiler_report(insp).compiler === :native
     end

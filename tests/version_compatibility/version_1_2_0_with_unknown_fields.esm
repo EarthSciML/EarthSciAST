@@ -110,7 +110,7 @@
     "Transport": {
       "variables": {
         "u": {
-          "type": "parameter",
+          "type": "unknown",
           "units": "m/s",
           "default": 1.0
         },

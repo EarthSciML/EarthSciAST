@@ -48,6 +48,7 @@ from earthsci_ast.inline_tests import run_inline_tests
 from earthsci_ast.problem import esm_problem
 
 E2 = math.exp(2.0)
+UNBOUND_INDEX_SYMBOL = "unbound_index_symbol"
 
 
 def _agg(expr, sym="k"):
@@ -402,10 +403,11 @@ def test_the_bare_index_lhs_stays_as_authored_in_the_flattened_equations(tmp_pat
 
 
 @pytest.mark.parametrize(
-    "name,equation",
+    "name,equation,code,names",
     [
-        # A SCALAR RHS binds no range, so nothing says which cells it fills.
-        ("scalar_rhs", {"lhs": _idx("w"), "rhs": 5.0}),
+        # A SCALAR RHS binds no range, so nothing binds `k`: esm-spec §6.3.1
+        # makes the free subscript itself invalid.
+        ("scalar_rhs", {"lhs": _idx("w"), "rhs": 5.0}, UNBOUND_INDEX_SYMBOL, "'w'"),
         # An OFFSET subscript writes a shifted window, not the whole array.
         (
             "offset_subscript",
@@ -413,26 +415,37 @@ def test_the_bare_index_lhs_stays_as_authored_in_the_flattened_equations(tmp_pat
                 "lhs": {"op": "index", "args": ["w", {"op": "+", "args": ["k", 1]}]},
                 "rhs": _agg({"op": "*", "args": [2.0, _idx("u")]}),
             },
+            INDEXED_DEFINITION_UNSUPPORTED_FORM,
+            "Column.w",
         ),
         # A subscript the RHS faq does not bind.
         (
             "unbound_subscript",
             {"lhs": _idx("w", "j"), "rhs": _agg({"op": "*", "args": [2.0, _idx("u")]})},
+            UNBOUND_INDEX_SYMBOL,
+            "'w'",
         ),
-        # A NESTED gather addresses a cell of a cell, not the whole array.
+        # A NESTED gather addresses a cell of a cell, not the whole array, and
+        # nothing binds its inner subscript `j`.
         (
             "nested_index",
             {
                 "lhs": {"op": "index", "args": [_idx("w", "j"), "k"]},
                 "rhs": _agg({"op": "*", "args": [2.0, _idx("u")]}),
             },
+            UNBOUND_INDEX_SYMBOL,
+            "'w'",
         ),
     ],
 )
-def test_a_bare_index_lhs_outside_the_runnable_form_is_refused(tmp_path, name, equation):
-    """No pass, no actual, the ``indexed_definition_unsupported_form`` code, and
-    the offending variable named. Before this, every one of these failed with
-    ``Unresolved symbol`` and no code."""
+def test_a_bare_index_lhs_outside_the_runnable_form_is_refused(
+    tmp_path, name, equation, code, names
+):
+    """No pass, no actual, the diagnostic code, and the offending variable
+    named. A subscript nothing binds is ``unbound_index_symbol`` (esm-spec
+    §6.3.1), refused at validation; a bound but non-identity subscript is
+    ``indexed_definition_unsupported_form``, refused at the build. Before
+    either, every one of these failed with ``Unresolved symbol`` and no code."""
     path = _write(
         tmp_path, _doc(name, [equation, EQ_D_INDEXED], ASSERT_U_AND_W), name + ".esm.json"
     )
@@ -442,7 +455,7 @@ def test_a_bare_index_lhs_outside_the_runnable_form_is_refused(tmp_path, name, e
     for r in results:
         assert not r.passed
         assert r.actual is None, "a refused document must report no actual"
-        assert INDEXED_DEFINITION_UNSUPPORTED_FORM in (r.message or ""), r.message
-        assert "Column.w" in (r.message or ""), (
+        assert code in (r.message or ""), r.message
+        assert names in (r.message or ""), (
             f"the refusal must name the offending variable: {r.message!r}"
         )

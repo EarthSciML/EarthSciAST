@@ -45,6 +45,7 @@ import {
   validateReservedDeclarationNames,
   validateReservedModelNames,
   validateArrayDefaultsHaveShape,
+  validateLhsRules,
 } from './model-checks.js'
 import { validateBroadcastFns, validateArrayBroadcastShapes } from './array-checks.js'
 import { validateObservedCycles } from './observed-checks.js'
@@ -202,6 +203,8 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // esm-spec §6.3: inline array data is a shaped variable's value, so on a
       // variable with no `shape` it has nothing to fill.
       errors.push(...validateArrayDefaultsHaveShape(model, modelPath, `Model '${modelName}'`))
+      // esm-spec §6.3.1: what an equation's left-hand side may name.
+      errors.push(...validateLhsRules(model, modelPath, modelName, esmFile))
 
       // (F-6) Static `faq` semantics decidable from this document alone:
       // a value-equality join key of a non-comparable type, an index-set range

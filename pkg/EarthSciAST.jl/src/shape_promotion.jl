@@ -37,10 +37,30 @@ function _infer_expr_shape(expr::ASTExpr,
             # A gather selects one element (or a fixed slice) — scalar output for
             # promotion purposes (the level-set already indexes its own field).
             return String[]
+        elseif op in _GEOMETRY_KERNEL_OPS
+            # A geometry kernel consumes each operand as a WHOLE ring, not per
+            # cell, so its operands' shapes do not broadcast: two rings of
+            # different vertex counts are independent operands. The scalar
+            # `polygon_intersection_area` is scalar; an `intersect_polygon` clip
+            # ring takes the shape its defining variable declares.
+            return String[]
         elseif op in _ARRAY_PRODUCER_OPS
-            # Output is exactly the uncontracted axes named in output_idx.
-            return expr.output_idx === nothing ? String[] :
-                   String[string(x) for x in expr.output_idx]
+            # Output is exactly the uncontracted axes named in output_idx, each
+            # named by the index set its range draws `{from}`. An output symbol
+            # is a node-local loop name, not an index set; one ranging over an
+            # inline interval (or a literal singleton axis) names no index set,
+            # so the producer is ANONYMOUS here: its variable takes its extent
+            # from those ranges in the build (esm-spec §6.3) rather than being
+            # promoted onto a named shape.
+            expr.output_idx === nothing && return String[]
+            names = String[]
+            for x in expr.output_idx
+                x isa AbstractString || return String[]
+                r = expr.ranges === nothing ? nothing : get(expr.ranges, String(x), nothing)
+                r isa IndexSetRef || return String[]
+                push!(names, r.from)
+            end
+            return names
         else
             # Elementwise: broadcast over the operands' index-set NAMES
             # (esm-spec §4.3.4). Operand shapes are compared as name SETS, not
@@ -82,6 +102,10 @@ function _infer_expr_shape(expr::ASTExpr,
     end
     return String[]
 end
+
+# The geometry kernel leaves (esm-spec §4.2 "Relational / value-invention &
+# geometry"), whose operands are whole polygon rings.
+const _GEOMETRY_KERNEL_OPS = Set{String}(s.name for s in _OP_TABLE if s.category === :geometry)
 
 # Op-class memberships for the array rewrites below and in pointwise_lift.jl,
 # derived from the registry flags (src/op_registry.jl); memberships are
@@ -467,6 +491,38 @@ function promote_downstream_shapes(flat::FlattenedSystem;
         defs[(eq.lhs::VarExpr).name] = eq.rhs
     end
 
+    # A variable defined by a `faq` whose output indices range over inline
+    # intervals takes its shape from those ranges (esm-spec §6.3): each axis is
+    # named by the index set of that extent the output symbol names, or else by
+    # an anonymous interval index set registered here. A declared shape must
+    # agree with the ranges' extents.
+    index_sets = flat.index_sets
+    added = false
+    for (name, rhs) in defs
+        axes = _inline_producer_axes(rhs)
+        axes === nothing && continue
+        cur = get(shapes, name, String[])
+        if !isempty(cur)
+            _check_declared_producer_extents(name, cur, axes, index_sets)
+            continue
+        end
+        names = String[]
+        for (sym, n) in axes
+            is = get(index_sets, sym, nothing)
+            if is isa IndexSet && is.kind == "interval" && is.size == n
+                push!(names, sym)
+            else
+                anon = string(name, "__", sym)
+                if !haskey(index_sets, anon)
+                    added || (index_sets = OrderedDict{String,IndexSet}(index_sets); added = true)
+                    index_sets[anon] = IndexSet("interval"; size = n)
+                end
+                push!(names, anon)
+            end
+        end
+        shapes[name] = names
+    end
+
     # Fixed-point shape inference: a scalar var whose defining expression infers
     # an array shape is promoted. Repeat until stable (acyclic chain ⇒ converges).
     changed = true
@@ -534,7 +590,43 @@ function promote_downstream_shapes(flat::FlattenedSystem;
     end
 
     return FlattenedSystem(flat; state_variables=new_states, parameters=new_params,
-                           observed_variables=new_observeds, equations=new_eqs)
+                           observed_variables=new_observeds, equations=new_eqs,
+                           index_sets=index_sets)
+end
+
+# `[(output symbol, extent)…]` of a `faq` producer every one of whose output
+# indices ranges over an inline dense interval starting at 1, or `nothing`.
+function _inline_producer_axes(rhs::ASTExpr)
+    (rhs isa OpExpr && (rhs::OpExpr).op in _ARRAY_PRODUCER_OPS) || return nothing
+    o = rhs::OpExpr
+    (o.output_idx === nothing || isempty(o.output_idx) || o.ranges === nothing) &&
+        return nothing
+    axes = Tuple{String,Int}[]
+    for x in o.output_idx
+        x isa AbstractString || return nothing
+        r = get(o.ranges, String(x), nothing)
+        (r isa AbstractVector && length(r) == 2 && all(v -> v isa Integer, r)) || return nothing
+        (r[1] == 1 && r[2] >= 1) || return nothing
+        push!(axes, (String(x), Int(r[2])))
+    end
+    return axes
+end
+
+# A declared shape against the inline extents of the `faq` defining it.
+function _check_declared_producer_extents(name::String, declared::Vector{String},
+                                          axes::Vector{Tuple{String,Int}}, index_sets)
+    ext = Int[]
+    for d in declared
+        is = get(index_sets, d, nothing)
+        (is isa IndexSet && is.kind == "interval" && is.size !== nothing) || return nothing
+        push!(ext, is.size)
+    end
+    ext == Int[n for (_, n) in axes] && return nothing
+    throw(DimensionPromotionError(
+        "array_shape_mismatch: '$(name)' declares shape $(declared) with extents $(ext), " *
+        "but the faq defining it ranges over extents $([n for (_, n) in axes]) " *
+        "(esm-spec §6.3: a variable defined over inline ranges takes its shape from " *
+        "them, and a declared shape must agree)"))
 end
 
 """

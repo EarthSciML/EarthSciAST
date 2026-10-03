@@ -438,14 +438,12 @@ impl ArrayCompiled {
             .into_iter()
             .collect();
         // `from_model` clones the model internally anyway, so taking the clone
-        // here to rewrite it costs nothing extra — same shape as
-        // `from_file_owned` below, which owns its model outright.
-        let hits = self_qualified_references(model, model_name);
-        let mut local = model.clone();
-        if !hits.is_empty() {
-            resolve_self_qualified_references(&mut local, &hits);
-        }
-        let mut compiled = Self::from_model_owned(local, &index_sets)?;
+        // here costs nothing extra — same shape as `from_file_owned` below,
+        // which owns its model outright. The model's name rides along so the
+        // pipeline can resolve self-qualified references once the subsystems
+        // are mounted.
+        let mut compiled =
+            Self::compile_pipeline(model.clone(), &index_sets, None, Some(model_name))?;
         // Record the model's namespace so overrides may be keyed `Model.param`
         // (the scalar/flatten/Julia convention) as well as the raw `param` this
         // single-model path builds (WS3 override-naming parity).
@@ -457,7 +455,7 @@ impl ArrayCompiled {
     /// [`Self::from_file`], consuming the file. The peak-memory-lean build for
     /// a large expanded discretization: the single model is MOVED out of the
     /// file (nothing is cloned), the rest of the document is dropped here, and
-    /// [`Self::from_model_owned`] then moves each observed body into its
+    /// [`Self::compile_pipeline`] then moves each observed body into its
     /// compiled rule instead of deep-copying it. For `simpleclimate.esm` at
     /// the production grid the borrowed `from_file` holds three ~1 GiB copies
     /// live at once (the caller's file, the compile's private model clone, the
@@ -473,12 +471,8 @@ impl ArrayCompiled {
         }
         let index_sets: HashMap<String, IndexSet> =
             file.index_sets.unwrap_or_default().into_iter().collect();
-        let (model_name, mut model) = models.into_iter().next().unwrap();
-        let hits = self_qualified_references(&model, &model_name);
-        if !hits.is_empty() {
-            resolve_self_qualified_references(&mut model, &hits);
-        }
-        let mut compiled = Self::from_model_owned(model, &index_sets)?;
+        let (model_name, model) = models.into_iter().next().unwrap();
+        let mut compiled = Self::compile_pipeline(model, &index_sets, None, Some(&model_name))?;
         compiled.qualify_data_fed(&model_name);
         compiled.namespace = Some(model_name);
         Ok(compiled)
@@ -651,33 +645,37 @@ impl ArrayCompiled {
     ) -> Result<Self, CompileError> {
         // The rewrite passes below need an owned model; clone so the caller's
         // model — and its serialized form — is untouched. A caller that can
-        // give up its model avoids this copy via [`Self::from_model_owned`]
+        // give up its model avoids this copy via [`Self::compile_pipeline`]
         // (reached through [`Self::from_file_owned`] / `compile_array`).
         Self::from_model_owned_with_arrays(model.clone(), index_sets, vi_arrays)
     }
 
-    /// [`Self::from_model`], consuming the model: the compile pipeline's
-    /// rewrite passes mutate it in place (no private clone), and the observed
-    /// bodies — the dominant allocation of a large expanded discretization —
-    /// are MOVED into the compiled rules rather than deep-copied
-    /// (`build_observed_rules` takes each `var.expression`). Behaviourally
-    /// identical to `from_model`: every stage runs in the same order on the
-    /// same values.
-    fn from_model_owned(
+    /// [`Self::from_model_with_arrays`], consuming the model: the compile
+    /// pipeline's rewrite passes mutate it in place (no private clone), and
+    /// the observed bodies — the dominant allocation of a large expanded
+    /// discretization — are MOVED into the compiled rules rather than
+    /// deep-copied (`build_observed_rules` takes each `var.expression`).
+    /// Behaviourally identical to `from_model`: every stage runs in the same
+    /// order on the same values.
+    fn from_model_owned_with_arrays(
         model_owned: Model,
         index_sets: &HashMap<String, IndexSet>,
+        vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
     ) -> Result<Self, CompileError> {
-        Self::from_model_owned_with_arrays(model_owned, index_sets, None)
+        Self::compile_pipeline(model_owned, index_sets, vi_arrays, None)
     }
 
-    /// The compile pipeline itself: [`Self::from_model_owned`] with the
-    /// caller-supplied factor-array channel of
-    /// [`Self::from_model_with_arrays`]. Every public entry point above
-    /// delegates here.
-    fn from_model_owned_with_arrays(
+    /// The compile pipeline itself; every public entry point above delegates
+    /// here. `model_name` names the document model being compiled on the
+    /// single-model route. With a name, every self-qualified reference (`M.x`,
+    /// `M.sub.x`) is resolved to its local spelling right after the subsystems
+    /// are mounted, so one authored inside a subsystem body resolves as well
+    /// as one in the parent's own equations.
+    fn compile_pipeline(
         mut model_owned: Model,
         index_sets: &HashMap<String, IndexSet>,
         vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+        model_name: Option<&str>,
     ) -> Result<Self, CompileError> {
         // Resolve `{ "from": <index set> }` range references (RFC
         // semiring-faq-unified-ir §5.2) into concrete `[lo, hi]` intervals
@@ -703,6 +701,9 @@ impl ArrayCompiled {
         }
         let mut index_sets_owned = index_sets.clone();
         mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
+        if let Some(name) = model_name {
+            resolve_self_references(&mut model_owned, name);
+        }
         // `flatten`'s rewrites, which this SINGLE-MODEL route never gets
         // (see `from_file_owned`). Runs after mounting so a subsystem's
         // equations and declarations are in scope under their mounted names.
@@ -751,6 +752,14 @@ impl ArrayCompiled {
         // producer. A producer that cannot run is recorded rather than raised, and
         // is refused below only if a surviving expression ranges over its set.
         let derived = materialize_derived_extents(&model_owned, &index_sets_owned, vi_arrays);
+        // A skolem map buffer (a broad-phase bin key per cell) becomes constant
+        // data, so a `join.on` gate comparing two of them stays a gate — a
+        // value-equality filter on data columns — rather than being dropped.
+        let mut map_names: Vec<&String> = derived.map_codes.keys().collect();
+        map_names.sort();
+        for name in map_names {
+            rewrite_equation_to_const(&mut model_owned, name, &derived.map_codes[name]);
+        }
         let index_sets = &index_sets_owned;
         // Drop value-invention (relational) scaffolding — skolem-id bin maps and
         // membership sets over `kind: "derived"` index sets — plus the broad-phase
@@ -760,7 +769,13 @@ impl ArrayCompiled {
         // inert only where a dense narrow phase follows (see
         // `strip_value_invention`). A no-op unless a `skolem` op or a
         // derived-set-shaped variable is present.
-        strip_value_invention(&mut model_owned, index_sets)?;
+        // A producer that could not run leaves its derived set with no
+        // members: a stage that then trips over the stripped producer (a
+        // surviving read of one of its outputs, an output shaped on its set)
+        // names that set (`derived_index_set_unmaterialized`, esm-spec §4.2)
+        // rather than the operator or the axis it met.
+        strip_value_invention(&mut model_owned, index_sets)
+            .or_else(|e| derived.refuse_on_failure(index_sets).and(Err(e)))?;
         // The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5): the
         // `const`-literal factor variables — Fornberg weights, mesh
         // connectivity, a geometry table — that [`collect_const_factor_arrays`]
@@ -791,7 +806,8 @@ impl ArrayCompiled {
             &mut model_owned,
             index_sets,
             &derived.extents,
-        )?;
+        )
+        .or_else(|e| derived.refuse_on_failure(index_sets).and(Err(e)))?;
         // A range over a non-geometry derived set that value invention did not
         // size would contract as empty and read 0 (esm-spec §9.6.6): refuse it.
         refuse_unmaterialized_derived_ranges(&model_owned, index_sets, &derived)?;
@@ -814,6 +830,8 @@ impl ArrayCompiled {
             param_names,
             param_index,
             param_defaults,
+            unvalued_shaped_params,
+            forcing_defaults,
             data_fed,
         ) = {
             let model = &model_owned;
@@ -875,6 +893,22 @@ impl ArrayCompiled {
 
             // (5) Build the param tables.
             let (param_names, param_index, param_defaults) = build_param_tables(model, &param_vars);
+            // A SHAPED parameter that reached the scalar table with no value —
+            // no `default`, no `distribution`, no inline data, not refreshed
+            // from outside. The front door refuses these by name
+            // (`crate::problem::esm_problem`, esm-spec §10.10); a lower-level
+            // caller reaches them as a solve-time missing parameter.
+            let unvalued_shaped_params: Vec<String> = param_vars
+                .iter()
+                .filter(|name| {
+                    model.variables.get(**name).is_some_and(|v| {
+                        v.shape.as_ref().is_some_and(|s| !s.is_empty())
+                            && v.default.is_none()
+                            && v.distribution.is_none()
+                    })
+                })
+                .map(|name| (*name).clone())
+                .collect();
 
             // Stage (6) consumes the observed bodies by NAME (sorted order,
             // exactly the order `classify_variables` produced them in).
@@ -895,6 +929,7 @@ impl ArrayCompiled {
                 })
                 .collect();
             infer_unsized_forcing_shapes(&mut forcing_decls, &model.equations);
+            let forcing_defaults = forcing_default_values(&observed_vars, &forcing_decls)?;
             (
                 observed_names,
                 forcing_decls,
@@ -904,6 +939,8 @@ impl ArrayCompiled {
                 param_names,
                 param_index,
                 param_defaults,
+                unvalued_shaped_params,
+                forcing_defaults,
                 data_fed,
             )
         };
@@ -922,10 +959,12 @@ impl ArrayCompiled {
         // Classify scoped-reference / array `ic` equations (esm-spec §11.4.1)
         // out of the rule builder into `field_ics` (see [`classify_field_ics`]).
         let field_ics = classify_field_ics(model);
+        let init_faqs = classify_initialization_faqs(model);
 
         // (7)+(7b)+(8) Build the RHS rules, cover held-at-ic slots, and
         // validate that every state slot has a defining equation.
         let rhs_rules = build_rhs_rules(model, &slots, &held_at_ic)?;
+        let held_at_ic_names = held_at_ic.clone();
 
         let SlotTables {
             var_shapes,
@@ -962,6 +1001,7 @@ impl ArrayCompiled {
             data_fed,
             forcing_generation: std::cell::Cell::new(0),
             field_ics,
+            init_faqs,
             ic_scope_defs,
             index_sets: index_sets.clone(),
             namespace: None,
@@ -972,6 +1012,9 @@ impl ArrayCompiled {
             field_ic_memo: RefCell::new(None),
             inline_param_arrays,
             forcing_decls,
+            forcing_defaults,
+            unvalued_shaped_params,
+            held_at_ic: held_at_ic_names,
             tape_cache: tape::TapeCache::new(),
             shared_observed: std::cell::OnceCell::new(),
         })
@@ -1165,7 +1208,7 @@ pub(crate) fn check_free_variables(
             continue;
         }
         collect_binders(&eq.lhs, &mut binders);
-        collect_binders(&eq.rhs, &mut binders);
+        collect_rhs_binders(&eq.rhs, false, &mut binders);
         with_binders(&mut bound, &mut binders, |scope| {
             check_expr_free_vars(&eq.lhs, scope)?;
             check_expr_free_vars(&eq.rhs, scope)
@@ -1259,6 +1302,30 @@ fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
         node_binders(node, out);
         node.for_each_child(&mut |child| collect_binders(child, out));
     }
+}
+
+/// [`collect_binders`] for an equation's right-hand side, less one case: a
+/// bare `index(array, i)` subscript that no enclosing node binds and the
+/// left-hand side does not bind either. There it is a READ of `i` with nothing
+/// in scope to give it a value — `d ~ index(faq{i}(…), i)` reads the `i` of no
+/// loop, since the `faq`'s own `i` is bound only inside it — so it is checked
+/// rather than credited. Under any node that carries binders (`faq`,
+/// `makearray`, `integral`, a template call…) every bare subscript still
+/// counts as a binder, as [`collect_binders`] has it.
+fn collect_rhs_binders(expr: &Expr, enclosed: bool, out: &mut HashSet<String>) {
+    let Expr::Operator(node) = expr else {
+        return;
+    };
+    let carries = node.output_idx.is_some()
+        || node.ranges.is_some()
+        || node.int_var.is_some()
+        || node.arg.is_some()
+        || node.bindings.is_some();
+    if enclosed || node.op != "index" {
+        node_binders(node, out);
+    }
+    let enclosed = enclosed || carries;
+    node.for_each_child(&mut |child| collect_rhs_binders(child, enclosed, out));
 }
 
 /// Collect every free BARE (non-dotted, non-builtin) symbol in the subtree —
@@ -1625,15 +1692,33 @@ fn classify_variables(
                     }
                     // What is left is a parameter that recomputes itself from a
                     // symbolic `expression` at each refresh, which needs event
-                    // machinery this backend does not have. Binning it as a
-                    // state (integrated) or a plain parameter (frozen) would
-                    // both be WRONG — and silently so. Fail loudly instead; the
-                    // document still VALIDATES, it just cannot be simulated by
-                    // this backend yet.
+                    // machinery this backend does not have: esm-spec §5.4 makes
+                    // `schedule` / `condition` / `crossing` updates the 1.0.0
+                    // spelling of the discrete and continuous events that
+                    // wrote parameters. Binning it as a state (integrated) or a
+                    // plain parameter (frozen) would both be WRONG — and
+                    // silently so. Fail loudly instead, naming the rule kinds;
+                    // the document still VALIDATES, it just cannot be simulated
+                    // by this backend yet.
+                    let kinds: Vec<&str> = var
+                        .update
+                        .iter()
+                        .flat_map(|spec| spec.rules())
+                        .filter(|rule| {
+                            rule.value()
+                                .is_some_and(|v| v.from.is_none() && v.handler.is_none())
+                        })
+                        .map(|rule| rule.kind())
+                        .collect();
                     return Err(CompileError::UnsupportedFeatureError {
                         feature: "discrete".to_string(),
                         message: format!(
-                            "Rust array simulation backend does not yet support a discrete parameter that recomputes itself symbolically; parameter '{name}' carries an `expression` update"
+                            "Rust array simulation backend does not yet support a discrete parameter that recomputes itself symbolically; parameter '{name}' carries an `expression` update of kind {} (esm-spec §5.4: the event-driven parameter update)",
+                            kinds
+                                .iter()
+                                .map(|k| format!("`{k}`"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         ),
                     });
                 }
@@ -2401,6 +2486,7 @@ fn build_observed_rules(
 ) -> Result<Vec<AlgebraicRule>, CompileError> {
     let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
     let array_axes = declared_axis_names(model);
+    let declared: HashSet<String> = model.variables.keys().cloned().collect();
 
     // Declared observed variables with an `expression` field. An array-shaped
     // observed — a discretization-agnostic PDE leaf's `psi_x`, `grad_mag`,
@@ -2445,7 +2531,7 @@ fn build_observed_rules(
         if let Expr::Operator(lhs) = &eq.lhs
             && lhs.op == "index"
         {
-            check_bare_index_definition(name, lhs, &eq.rhs, &array_axes)?;
+            check_bare_index_definition(name, lhs, &eq.rhs, &array_axes, &declared)?;
         }
         // A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) is recognized before
         // either ordinary lowering, because both of them would compile the
@@ -2543,11 +2629,17 @@ fn build_observed_rules(
 ///
 /// Flatten namespaces a free subscript (`k` becomes `Model.k`) but not a `faq`
 /// binder, so a subscript matches its binder in either spelling.
+///
+/// Checked first: a plain-symbol subscript at any level of the gather that the
+/// right-hand `faq` does not bind and that names no declared variable is an
+/// index symbol nothing binds — `unbound_index_symbol` (esm-spec §6.3.1), the
+/// finding `validate` reports for the same left-hand side.
 fn check_bare_index_definition(
     name: &str,
     lhs: &ExpressionNode,
     rhs: &Expr,
     array_axes: &HashMap<String, Vec<String>>,
+    declared: &HashSet<String>,
 ) -> Result<(), CompileError> {
     let head_is_the_variable = matches!(lhs.args.first(), Some(Expr::Variable(_)));
     let subs = lhs.args.get(1..).unwrap_or_default();
@@ -2556,6 +2648,32 @@ fn check_bare_index_definition(
         Expr::Variable(v) => v == binder || v.strip_prefix(prefix) == Some(binder.as_str()),
         _ => false,
     };
+    let frame: &[String] = match rhs {
+        Expr::Operator(node) if is_faq_op(&node.op) => node.output_idx.as_deref().unwrap_or(&[]),
+        _ => &[],
+    };
+    let mut gather = Some(lhs);
+    while let Some(g) = gather {
+        for sub in g.args.iter().skip(1) {
+            if let Expr::Variable(v) = sub
+                && !declared.contains(v)
+                && !frame.iter().any(|b| names_binder(sub, b))
+            {
+                let sym = v.strip_prefix(prefix).unwrap_or(v);
+                return Err(CompileError::InterpreterBuildError {
+                    details: format!(
+                        "{}: equation defining '{name}' subscripts its left-hand side with \
+                         '{sym}', which no faq binds (esm-spec §6.3.1)",
+                        crate::diagnostic::codes::UNBOUND_INDEX_SYMBOL
+                    ),
+                });
+            }
+        }
+        gather = match g.args.first() {
+            Some(Expr::Operator(inner)) if inner.op == "index" => Some(inner),
+            _ => None,
+        };
+    }
     let binds_subscripts = match rhs {
         Expr::Operator(node) if is_faq_op(&node.op) => match node.output_idx.as_deref() {
             Some(frame) => {
@@ -2655,6 +2773,29 @@ fn classify_field_ics(model: &Model) -> Vec<(String, Expr)> {
         }
     }
     field_ics
+}
+
+/// The `faq`-valued initialization equations (esm-spec §6.2, "equations that
+/// hold only at t=0"): `u ~ faq(…)` with a bare-variable left-hand side and an
+/// array-valued right-hand side, in document order. Each assigns the cells of
+/// its ranges at `u0` build time ([`ArrayCompiled::seed_initialization_faqs`]);
+/// the other spellings name no cells to assign and are not evaluated, as in
+/// the Julia reference's `_seed_faq_init_u0!`.
+fn classify_initialization_faqs(model: &Model) -> Vec<(String, Expr)> {
+    model
+        .initialization_equations
+        .iter()
+        .flatten()
+        .filter_map(|eq| match (&eq.lhs, &eq.rhs) {
+            (Expr::Variable(target), Expr::Operator(node))
+                if is_faq_op(&node.op)
+                    && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
+            {
+                Some((target.clone(), eq.rhs.clone()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// (7) Build the RHS rules. Each equation with a derivative LHS produces
@@ -3249,6 +3390,22 @@ pub(super) fn expr_contains_skolem(expr: &Expr) -> bool {
     }
 }
 
+/// Whether `expr` contains a `rank` over a `kind: "derived"` index set — the
+/// dense ids of an invented set, a build-time relational output.
+fn ranks_a_derived_set(expr: &Expr, index_sets: &HashMap<String, IndexSet>) -> bool {
+    match expr {
+        Expr::Operator(node) => {
+            (node.op == "rank"
+                && node.args.iter().any(|a| {
+                    matches!(a, Expr::Variable(v)
+                        if index_sets.get(v).is_some_and(|is| is.kind == "derived"))
+                }))
+                || node.any_child(&mut |c| ranks_a_derived_set(c, index_sets))
+        }
+        _ => false,
+    }
+}
+
 /// Collect the `id`s of every geometry ring producer (`intersect_polygon` /
 /// `polygon_intersection_area`) reachable from `expr`. A `kind: "derived"` index
 /// set whose `from_faq` names one of these is the materialized clip ring (kept),
@@ -3309,6 +3466,12 @@ pub(super) fn strip_vi_joins(expr: &mut Expr, vi_cols: &HashSet<String>) {
         if joins.is_empty() {
             node.join = None;
         }
+        // A `faq`'s `args` is the declarative operand list (esm-spec §4.3.1);
+        // the key columns the gate read leave it with the gate.
+        if is_faq_op(&node.op) {
+            node.args
+                .retain(|a| !matches!(a, Expr::Variable(v) if vi_cols.contains(v)));
+        }
     }
     node.for_each_child_mut(&mut |child| strip_vi_joins(child, vi_cols));
 }
@@ -3350,8 +3513,20 @@ pub(super) fn strip_value_invention(
     }
     // (a) A variable shaped over a `kind: "derived"` index set whose FAQ producer
     //     is NOT a geometry ring producer — a relational membership / candidate
-    //     set the dense runtime does not enumerate.
+    //     set the dense runtime does not enumerate. Build-time DATA over such a
+    //     set (a parameter, or an unknown defined by a `const` node, e.g. a
+    //     per-edge length over invented edges) is an ordinary array sized by the
+    //     set's extent, and is kept.
+    let const_defined: HashSet<String> = model
+        .equations
+        .iter()
+        .filter(|eq| matches!(&eq.rhs, Expr::Operator(n) if n.op == "const"))
+        .filter_map(|eq| equation_defined_var(&eq.lhs))
+        .collect();
     for (name, var) in &model.variables {
+        if var.var_type == VariableType::Parameter || const_defined.contains(name) {
+            continue;
+        }
         if let Some(shape) = &var.shape {
             if shape.iter().any(|s| {
                 index_sets
@@ -3369,9 +3544,11 @@ pub(super) fn strip_value_invention(
             }
         }
     }
-    // (b) A variable defined by an equation whose RHS produces a skolem id.
+    // (b) A variable defined by an equation whose RHS produces a skolem id, or
+    //     a `rank` dense id over an invented set: build-time relational
+    //     outputs, dropped as the other bindings drop them.
     for eq in &model.equations {
-        if expr_contains_skolem(&eq.rhs) {
+        if expr_contains_skolem(&eq.rhs) || ranks_a_derived_set(&eq.rhs, index_sets) {
             if let Some(v) = equation_defined_var(&eq.lhs) {
                 vi_vars.insert(v);
             }
@@ -3523,6 +3700,53 @@ fn model_contains_arg_witness(model: &Model) -> bool {
 /// own (CONFORMANCE_SPEC §5.10.1, §5.13.2). A rule with an `expression` value
 /// form is the opposite case — the model computes it, and something has to run
 /// that computation on each refresh.
+/// The declared `default` of every parameter the forcing buffer serves that
+/// declares one, as the dense field it denotes over the parameter's resolved
+/// shape: a scalar broadcast over the whole grid (esm-spec §6.3), or its inline
+/// array data. `None` for a parameter whose shape does not resolve yet (an
+/// unmaterialized derived set), which has no field to fill.
+///
+/// This is the parameter's value when the caller supplies no data for it:
+/// construction writes it into the buffer ([`crate::problem::esm_problem`]).
+///
+/// # Errors
+///
+/// [`CompileError::InterpreterBuildError`] when inline array data does not
+/// match the declared shape (esm-spec §6.6.2).
+#[allow(clippy::type_complexity)]
+fn forcing_default_values(
+    observed_vars: &[(&String, &ModelVariable)],
+    forcing_decls: &IndexMap<String, Option<Vec<usize>>>,
+) -> Result<HashMap<String, Option<(Vec<usize>, Vec<f64>)>>, CompileError> {
+    let mut out = HashMap::new();
+    for (name, var) in observed_vars {
+        let (Some(default), Some(decl)) = (var.default.as_ref(), forcing_decls.get(name.as_str()))
+        else {
+            continue;
+        };
+        let Some(want) = decl else {
+            out.insert((*name).clone(), None);
+            continue;
+        };
+        let values = if let Some(scalar) = default.as_scalar() {
+            vec![scalar; want.iter().product::<usize>()]
+        } else {
+            let (shape, values) = default.to_dense().map_err(|e| {
+                CompileError::build_err(format!("parameter '{name}': {e} (esm-spec §6.3)"))
+            })?;
+            if &shape != want {
+                return Err(CompileError::build_err(format!(
+                    "parameter '{name}': inline array data has shape {shape:?}, which does not \
+                     match the declared shape {want:?} (esm-spec §6.6.2)"
+                )));
+            }
+            values
+        };
+        out.insert((*name).clone(), Some((want.clone(), values)));
+    }
+    Ok(out)
+}
+
 /// The `data_sources` key of the first data feed in `spec` — a rule of
 /// `kind: "data"` carrying a `from` binding (esm-spec §5.4). Lives here rather
 /// than in `data_fed` because that module is not built for wasm32, while the
@@ -3614,18 +3838,27 @@ fn vi_factor_arrays<S: std::hash::BuildHasher>(
     arrays
 }
 
-/// Scalar parameter defaults, the value-invention engine's scalar `params` map
-/// (e.g. the bin width of a broad-phase skolem quantization). Only 0-D
-/// parameters with a `default` contribute — an array parameter carries no inline
-/// data and is supplied (if at all) through [`collect_const_factor_arrays`].
-fn collect_scalar_param_defaults(model: &Model) -> HashMap<String, f64> {
+/// The value-invention engine's scalar `params` map (e.g. the bin width of a
+/// broad-phase skolem quantization): each 0-D parameter's caller override —
+/// keyed by its name or its model-local tail — else its `default`. An array
+/// parameter carries no scalar and is supplied (if at all) through
+/// [`collect_const_factor_arrays`].
+fn collect_scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> HashMap<String, f64> {
     let mut out: HashMap<String, f64> = HashMap::new();
     for (name, var) in &model.variables {
-        if var.var_type == VariableType::Parameter
-            && var.shape.as_ref().map(|s| s.is_empty()).unwrap_or(true)
-            && let Some(d) = var.default_scalar()
+        if var.var_type != VariableType::Parameter
+            || !var.shape.as_ref().map(|s| s.is_empty()).unwrap_or(true)
         {
-            out.insert(name.clone(), d);
+            continue;
+        }
+        let tail = name.rsplit('.').next().unwrap_or(name);
+        let value = overrides
+            .get(name)
+            .or_else(|| overrides.get(tail))
+            .copied()
+            .or_else(|| var.default_scalar());
+        if let Some(v) = value {
+            out.insert(name.clone(), v);
         }
     }
     out
@@ -3707,8 +3940,20 @@ pub fn run_value_invention<S: std::hash::BuildHasher>(
     index_sets: &HashMap<String, IndexSet>,
     caller_arrays: Option<&HashMap<String, ArrayD<f64>, S>>,
 ) -> Result<ValueInventionResult, CompileError> {
+    run_value_invention_with_params(model, index_sets, caller_arrays, &HashMap::new())
+}
+
+/// [`run_value_invention`] with the caller's scalar parameter overrides (the
+/// SciML `p`), which a producer reads in place of the declared defaults: a
+/// bin width is build-time data, so a `p` entry for it sizes the invented set.
+pub fn run_value_invention_with_params<S: std::hash::BuildHasher>(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>, S>>,
+    overrides: &HashMap<String, f64>,
+) -> Result<ValueInventionResult, CompileError> {
     let const_arrays = vi_factor_arrays(model, caller_arrays);
-    let params = collect_scalar_param_defaults(model);
+    let params = collect_scalar_params(model, overrides);
 
     // The engine walks the RAW `serde_json::Value` document (it preserves the
     // aggregate `key`/`distinct`/`arg` fields), with the document-scoped
@@ -3740,6 +3985,9 @@ pub(super) struct DerivedMaterialization {
     geometry_ids: HashSet<String>,
     /// The engine's error, if it could not run.
     failure: Option<String>,
+    /// The skolem map buffers as integer codes
+    /// ([`ValueInventionResult::map_codes`]).
+    map_codes: HashMap<String, Vec<f64>>,
 }
 
 /// Run value invention when the model has a derived index set whose producer is
@@ -3760,6 +4008,7 @@ fn materialize_derived_extents(
         extents: HashMap::new(),
         geometry_ids,
         failure: None,
+        map_codes: HashMap::new(),
     };
     let needs_value_invention = index_sets.values().any(|is| {
         is.kind == "derived"
@@ -3770,7 +4019,10 @@ fn materialize_derived_extents(
     });
     if needs_value_invention {
         match run_value_invention(model, index_sets, caller_arrays) {
-            Ok(result) => out.extents = result.extents,
+            Ok(result) => {
+                out.extents = result.extents;
+                out.map_codes = result.map_codes;
+            }
             Err(e) => out.failure = Some(e.to_string()),
         }
     }
@@ -3840,6 +4092,34 @@ pub(super) fn unmaterialized_derived_error(
                 failure.unwrap_or("no geometry or value-invention producer supplied its extent")
             ),
         },
+    }
+}
+
+impl DerivedMaterialization {
+    /// The refusal for the first (by set name) non-geometry derived set, when
+    /// value invention failed.
+    fn refuse_on_failure(
+        &self,
+        index_sets: &HashMap<String, IndexSet>,
+    ) -> Result<(), CompileError> {
+        let Some(failure) = self.failure.as_deref() else {
+            return Ok(());
+        };
+        let mut sets: Vec<(&String, &str)> = index_sets
+            .iter()
+            .filter(|(_, is)| is.kind == "derived")
+            .filter_map(|(n, is)| Some((n, is.from_faq.as_deref()?)))
+            .filter(|(_, f)| !self.geometry_ids.contains(*f))
+            .collect();
+        sets.sort();
+        match sets.first() {
+            Some((_, from_faq)) => Err(unmaterialized_derived_error(
+                from_faq,
+                index_sets,
+                Some(failure),
+            )),
+            None => Ok(()),
+        }
     }
 }
 
@@ -3978,8 +4258,14 @@ pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
 /// Resolve every self-qualified reference in `model` (`M.a` written inside
 /// model `M`) to its local name, as the single-model route does before it
 /// compiles — for the build pipeline, which reads the same authored model.
+/// Run it after [`mount_subsystems`], so a reference authored inside a
+/// subsystem body is resolved too.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn resolve_model_self_references(model: &mut Model, model_name: &str) {
+    resolve_self_references(model, model_name);
+}
+
+fn resolve_self_references(model: &mut Model, model_name: &str) {
     let hits = self_qualified_references(model, model_name);
     if !hits.is_empty() {
         resolve_self_qualified_references(model, &hits);
@@ -3999,11 +4285,11 @@ pub(crate) fn resolve_model_self_references(model: &mut Model, model_name: &str)
 /// left alone for the usual unbound-name diagnostics. Empty — the common case,
 /// costing one read-only walk — means the model is used untouched.
 ///
-/// Scope: the PARENT's own expressions. This runs before `mount_subsystems`,
-/// and `Model::subsystems` is still raw `serde_json::Value`, so a self-qualified
-/// reference authored INSIDE a subsystem body is not collected — an
-/// incompleteness of this rule, not a regression (that spelling never resolved
-/// on this path).
+/// Scope: every expression of the model as it stands. The callers run this
+/// after `mount_subsystems`, so a subsystem's equations are already the
+/// model's own under their mounted names, and a self-qualified reference
+/// authored inside a subsystem body (`M.Ocean.Surface.sst` in
+/// `M.Atmosphere`'s equation) is collected like one in the parent's.
 fn self_qualified_references(model: &Model, model_name: &str) -> Vec<(String, String)> {
     let prefix = format!("{model_name}.");
     let subsystems: HashSet<&str> = model
@@ -5608,6 +5894,100 @@ mod subsystem_ragged_and_inspection_tests {
             matches!(&mul.args[0], Expr::Variable(v) if v == "M.i"),
             "a node binding `i` must keep the qualified spelling, got {:?}",
             mul.args[0]
+        );
+    }
+
+    /// esm-spec §4.6: a self-qualified reference authored INSIDE a subsystem
+    /// body — `M.B.y` in `M.A`'s equation, `M.k` two levels down — names the
+    /// same variable as the mounted spelling, and resolves on the single-model
+    /// route like one in the parent's own equations. Each tendency reads a
+    /// value no other rule supplies, so an unresolved name cannot hide.
+    #[test]
+    fn self_qualified_references_inside_subsystem_bodies_resolve() {
+        let file = typed(json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "nested_self_refs"},
+            "models": {"M": {
+                "variables": {"k": {"type": "parameter", "units": "1", "default": 2.0}},
+                "equations": [],
+                "subsystems": {
+                    "A": {
+                        "variables": {"x": {"type": "unknown", "units": "1", "default": 1.0}},
+                        "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                       "rhs": {"op": "*", "args": ["M.k", "M.B.C.z"]}}],
+                        "subsystems": {"C": {
+                            "variables": {"z": {"type": "unknown", "units": "1", "default": 3.0}},
+                            "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"},
+                                           "rhs": {"op": "-", "args": ["M.A.x"]}}]
+                        }}
+                    },
+                    "B": {
+                        "variables": {},
+                        "equations": [],
+                        "subsystems": {"C": {
+                            "variables": {"z": {"type": "unknown", "units": "1", "default": 5.0}},
+                            "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"},
+                                           "rhs": {"op": "*", "args": ["M.k", "M.A.C.z"]}}]
+                        }}
+                    }
+                }
+            }}
+        }));
+        let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+        let (_, report) = compiled.build_tape(&HashSet::new());
+        assert!(
+            report.fallbacks.is_empty(),
+            "every self-qualified read must resolve: {:?}",
+            report.fallbacks
+        );
+        let names = compiled.state_variable_names();
+        let at = |n: &str| names.iter().position(|s| s == n).expect(n);
+        let mut state = vec![0.0; names.len()];
+        state[at("A.x")] = 1.0;
+        state[at("A.C.z")] = 3.0;
+        state[at("B.C.z")] = 5.0;
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+        assert_eq!(dy[at("A.x")], 10.0, "D(A.x) = k * B.C.z");
+        assert_eq!(dy[at("A.C.z")], -1.0, "D(A.C.z) = -A.x");
+        assert_eq!(dy[at("B.C.z")], 6.0, "D(B.C.z) = k * A.C.z");
+    }
+}
+
+#[cfg(test)]
+mod event_driven_update_refusal_tests {
+    use super::*;
+
+    /// A parameter whose `update` recomputes it from an `expression` on a
+    /// `schedule` / `condition` / `crossing` trigger (esm-spec §5.4) is
+    /// refused, never frozen at its default, and the refusal names the rule
+    /// kinds it cannot run. A `data` rule on another parameter is the forcing
+    /// seam and is not named.
+    #[test]
+    fn an_expression_update_is_refused_naming_its_kinds() {
+        let file = crate::parse::load_string(
+            r#"{
+  "esm": "1.0.0",
+  "metadata": { "name": "ExprUpdates", "authors": ["test"] },
+  "models": { "M": {
+    "variables": {
+      "x": { "type": "unknown", "default": 0.0 },
+      "k": { "type": "parameter", "default": 1.0, "shape": [],
+             "update": [
+               { "kind": "schedule", "interval": 2.0, "expression": 2.0 },
+               { "kind": "crossing", "when": { "op": "-", "args": ["x", 1.0] }, "expression": 3.0 }
+             ] }
+    },
+    "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": "k" } ]
+  } }
+}"#,
+        )
+        .expect("loads");
+        let model = &file.models.as_ref().unwrap()["M"];
+        let err = classify_variables(model).expect_err("refused");
+        let text = err.to_string();
+        assert!(
+            text.contains("parameter 'k'") && text.contains("`schedule`, `crossing`"),
+            "{text}"
         );
     }
 }

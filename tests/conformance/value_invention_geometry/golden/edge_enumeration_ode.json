@@ -1,0 +1,25 @@
+{
+  "fixture": "edge_enumeration_ode",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "edge_enumeration_ode",
+      "assertion_idx": 1,
+      "variable": "n_edges",
+      "actual": 4.999999999999999
+    },
+    {
+      "test_id": "edge_enumeration_ode",
+      "assertion_idx": 2,
+      "variable": "area_eff[1]",
+      "actual": 42.999999999999986
+    },
+    {
+      "test_id": "edge_enumeration_ode",
+      "assertion_idx": 3,
+      "variable": "area_eff[2]",
+      "actual": 143.74999999999994
+    }
+  ]
+}
