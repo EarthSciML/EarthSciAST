@@ -60,6 +60,7 @@ pub(super) fn run_range(
         plan_full,
         fregs,
         fscratch,
+        idx_tables,
         exports_active,
         simd,
         dy_home,
@@ -684,6 +685,7 @@ pub(super) fn run_range(
                 }
             }
             Instr::Fused { spec } => {
+                let idx = &idx_tables[*spec as usize];
                 let dy_ptr = dy.as_mut_ptr();
                 unsafe {
                     exec_fused(
@@ -694,6 +696,7 @@ pub(super) fn run_range(
                         obs,
                         fregs,
                         fscratch,
+                        idx,
                         simd,
                         dy_home,
                         dy_ptr,

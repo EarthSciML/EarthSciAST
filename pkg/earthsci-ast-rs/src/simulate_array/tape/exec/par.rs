@@ -19,7 +19,7 @@
 //! a caller already running inside a one-thread pool, or setting
 //! `RAYON_NUM_THREADS=1`, gets the serial executor.
 
-use super::fused::{RunCursor, Window, n_shifted, run_fused_window};
+use super::fused::{IndexTable, RunCursor, Window, n_scans, n_shifted, run_fused_window};
 use super::pool;
 use super::resolve::rm_strides;
 use super::*;
@@ -117,11 +117,33 @@ fn fused_cost(fs: &FusedSpec) -> usize {
 /// How many workers a fused group splits across under call width `ways`:
 /// over its elements, or over its absorbed reduction's inner positions (each
 /// folded whole by one worker, so every fold keeps its order).
+///
+/// A group with an absorbed scan carries the scan's running value along each
+/// row, so it splits only at row starts (where the scan restarts), and not
+/// at all when it also folds a reduction.
 pub(super) fn split_ways(fs: &FusedSpec, ways: usize) -> usize {
-    match &fs.reduce {
-        Some(r) => ways_for(r.n_inner, ways),
-        None => ways_for(fs.shape.iter().product(), ways),
+    let n: usize = fs.shape.iter().product();
+    match (&fs.reduce, scan_row(fs)) {
+        (Some(_), Some(_)) => 1,
+        (Some(r), None) => ways_for(r.n_inner, ways),
+        (None, Some(row)) if n / row < ways => 1,
+        (None, _) => ways_for(n, ways),
     }
+}
+
+/// The row length a group's absorbed scans restart at (the least common
+/// multiple when several differ), or `None` without a scan.
+fn scan_row(fs: &FusedSpec) -> Option<usize> {
+    fn gcd(a: usize, b: usize) -> usize {
+        if b == 0 { a } else { gcd(b, a % b) }
+    }
+    fs.micro
+        .iter()
+        .filter_map(|m| match m {
+            MicroOp::Scan { row, .. } => Some((*row as usize).max(1)),
+            _ => None,
+        })
+        .reduce(|a, b| a / gcd(a, b) * b)
 }
 
 /// [`super::kernels::copy_strided`], split across the pool under call width
@@ -197,11 +219,16 @@ unsafe impl Sync for SendPtr {}
 
 /// The `[lo, hi)` share of `n` elements worker `w` of `ways` takes.
 pub(super) fn share(n: usize, w: usize, ways: usize) -> (usize, usize) {
+    share_aligned(n, w, ways, ALIGN)
+}
+
+/// [`share`] with the cuts rounded down to multiples of `align`.
+fn share_aligned(n: usize, w: usize, ways: usize, align: usize) -> (usize, usize) {
     let cut = |k: usize| {
         if k == ways {
             n
         } else {
-            ((n as u128 * k as u128 / ways as u128) as usize / ALIGN * ALIGN).min(n)
+            ((n as u128 * k as u128 / ways as u128) as usize / align * align).min(n)
         }
     };
     (cut(w), cut(w + 1))
@@ -223,6 +250,7 @@ pub(in crate::simulate_array::tape) struct FusedWorkers {
     fregs_len: usize,
     depth: usize,
     shifted: usize,
+    scans: usize,
 }
 
 /// The resolved operands of one group, shared read-only by its workers.
@@ -233,6 +261,7 @@ struct Shared<'a> {
     bases: &'a [*const f64],
     outs: &'a [(GroupIx, *mut f64)],
     red: *mut f64,
+    idx: &'a [Option<IndexTable>],
     node_elems: &'a [usize],
     simd: SimdLevel,
     precision: crate::precision::Precision,
@@ -256,6 +285,7 @@ impl FusedWorkers {
             }) * super::fused::FCHUNK,
             depth: most(|f| f.schedule.depth),
             shifted: most(n_shifted),
+            scans: most(n_scans),
         }
     }
 
@@ -272,6 +302,7 @@ impl FusedWorkers {
         bases: &[*const f64],
         outs: &[(GroupIx, *mut f64)],
         red: *mut f64,
+        idx: &[Option<IndexTable>],
         node_elems: &[usize],
         simd: SimdLevel,
         ways: usize,
@@ -279,7 +310,7 @@ impl FusedWorkers {
         while self.workers.len() < ways {
             self.workers.push(FusedWorker {
                 fregs: vec![0.0f64; self.fregs_len],
-                cursor: RunCursor::with_room(self.depth, self.shifted),
+                cursor: RunCursor::with_room(self.depth, self.shifted, self.scans),
             });
         }
         // A reduction splits its inner positions: worker `w` takes the same
@@ -289,12 +320,15 @@ impl FusedWorkers {
             Some(r) => (r.n_inner, r.n_inner),
             None => (fs.shape.iter().product(), 0),
         };
+        // Row starts, for a group with an absorbed scan (see `split_ways`).
+        let align = scan_row(fs).map_or(ALIGN, |row| row);
         let sh = Shared {
             fs,
             svals,
             bases,
             outs,
             red,
+            idx,
             node_elems,
             simd,
             precision: crate::precision::active(),
@@ -302,7 +336,7 @@ impl FusedWorkers {
         let ws = WorkersPtr(self.workers.as_mut_ptr());
         pool::run(ways, &move |w| {
             let (sh, ws) = (sh, ws);
-            let (lo, hi) = share(n, w, ways);
+            let (lo, hi) = share_aligned(n, w, ways, align);
             if lo >= hi {
                 return;
             }
@@ -319,6 +353,7 @@ impl FusedWorkers {
                     sh.bases,
                     sh.outs,
                     sh.red,
+                    sh.idx,
                     &mut wk.fregs,
                     &mut wk.cursor,
                     Window {

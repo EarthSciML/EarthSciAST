@@ -332,6 +332,7 @@ fn drive(with_nan: bool) {
         outputs: SmallVec::new(), // outs are passed directly
         schedule,
         reduce: None,
+        interleave: None,
         n_fused_instrs: 0,
         n_folded_gathers: 0,
     };
@@ -365,6 +366,7 @@ fn drive(with_nan: bool) {
                         &bases,
                         &outs,
                         std::ptr::null_mut(),
+                        &[],
                         &mut fregs,
                         &mut cursor,
                         win,
@@ -378,6 +380,7 @@ fn drive(with_nan: bool) {
                         &bases,
                         &outs,
                         std::ptr::null_mut(),
+                        &[],
                         &mut fregs,
                         &mut cursor,
                         win,
@@ -391,6 +394,7 @@ fn drive(with_nan: bool) {
                         &bases,
                         &outs,
                         std::ptr::null_mut(),
+                        &[],
                         &mut fregs,
                         &mut cursor,
                         win,
