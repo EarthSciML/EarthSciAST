@@ -1928,13 +1928,19 @@ end
 # (globally shared out-slots — permanent, decided at build).
 # `ncells`/`disjoint` are build facts (`_CGBuilt`); `nchunks` is fixed
 # at the first threaded call, so the partition is identical call to call.
+# `job1`/`job2` hold the section's dispatch jobs (thread_dispatch.jl) for the
+# last two argument types it ran at, so a caller alternating between Float64
+# and dual-number calls (a solver and its Jacobian) reuses both.
 mutable struct _SecTCache
     state::Int
     ncells::Int
     disjoint::Bool
     nchunks::Int
+    job1::Any
+    job2::Any
 end
-_SecTCache(ncells::Int, disjoint::Bool) = _SecTCache(0, ncells, disjoint, 1)
+_SecTCache(ncells::Int, disjoint::Bool) =
+    _SecTCache(0, ncells, disjoint, 1, nothing, nothing)
 _sec_tcache(cg::_CGBuilt) = _SecTCache(cg.ncells, cg.outs_disjoint)
 _sec_tcache(::Nothing) = _SecTCache(0, false)
 
@@ -1961,24 +1967,55 @@ function _sec_prep_threads!(tc::_SecTCache)
     return tc
 end
 
-# Run one generated function's cells as `nchunks` STATIC chunks — the
-# batch runner over the `_chunk_ordinals` partition; each chunk re-runs the
-# (pure) tab-hoist + invariant prologue on its own stack and walks its `[a, b)`
-# slice of every kernel.
-function _run_cg_section_threaded!(f, tabs, du, u, p, t, tc::_SecTCache)
-    nchunks = tc.nchunks
-    run_chunk = function (c::Int)
-        f(du, u, p, t, tabs, c, nchunks)
-        return nothing
+# This section's job for body type `B` and argument type `A`, from the two
+# cached slots or freshly made (the only allocation, once per argument type).
+@inline function _section_job!(tc::_SecTCache, ::Type{B}, ::Type{A}) where {B,A}
+    J = _ThreadJob{B,A}
+    j = tc.job1
+    j isa J && return j
+    j2 = tc.job2
+    tc.job2 = j
+    if j2 isa J
+        tc.job1 = j2
+        return j2
     end
-    _batch_run!(run_chunk, nchunks)
+    jn = J()
+    tc.job1 = jn
+    return jn
+end
+
+# Run `body(args, c, nchunks)` for every chunk of the section's verdict.
+@inline function _run_chunked!(tc::_SecTCache, body::B, args::A) where {B,A}
+    j = _section_job!(tc, B, A)
+    j.body = body
+    j.args = args
+    j.nchunks = tc.nchunks
+    _dispatch_job!(j)
     return nothing
 end
 
-# Per-call gate for the chunked path (the shared `_threads_available()` plus
-# the codegen-specific kill switch; both re-read per call, so toggling either
-# env var between calls flips the route without touching the cached verdict).
-@inline _cg_threads_available() = _threads_available()
+# A generated function's chunk: the static partition (`_chunk_ordinals`) is
+# computed inside it, and each chunk re-runs the (pure) tab-hoist + invariant
+# prologue on its own stack and walks its `[a, b)` slice of every kernel.
+struct _CGChunk{F,TB}
+    f::F
+    tabs::TB
+end
+@inline (b::_CGChunk)(args, c::Int, nchunks::Int) =
+    b.f(args[1], args[2], args[3], args[4], b.tabs, c, nchunks)
+
+# Run one generated function chunked when the section's verdict allows, and
+# its serial `(1, 1)` instance otherwise (one thread, too few cells, shared
+# out-slots). Every value type takes the same route: a chunk computes each of
+# its cells exactly as the serial instance does.
+@inline function _run_cg_maybe_threaded!(f, tabs, du, u, p, t, tc::_SecTCache)
+    if _threads_available() && _sec_prep_threads!(tc).state == 1
+        _run_chunked!(tc, _CGChunk(f, tabs), (du, u, p, t))
+    else
+        f(du, u, p, t, tabs, 1, 1)
+    end
+    return nothing
+end
 
 # ---- The RHS's kernel section (wired into `_make_rhs`, acc_merge.jl) --------
 # One concretely-typed callable holding the generated function (or `Nothing`)
@@ -2016,17 +2053,10 @@ end
 
 @inline function (s::_KernelSection{F,TB,G})(du, u, p, t, ::Type{T}) where {F,TB,G,T}
     if F !== Nothing
-        # PRIMARY generated function, chunked at Float64 when the section
-        # verdict allows (threaded cell axis above; Float64-only — Dual calls
-        # stay serial). Any serial verdict (small,
-        # shared outs, one thread) runs the (1, 1)
-        # instance — the serial entry.
-        if T === Float64 && _cg_threads_available() &&
-           _sec_prep_threads!(s.tcache).state == 1
-            _run_cg_section_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache)
-        else
-            s.cgf(du, u, p, t, s.cgtabs, 1, 1)
-        end
+        # PRIMARY generated function, chunked when the section verdict allows
+        # (threaded cell axis above), at every value type. Any serial verdict
+        # (small, shared outs, one thread) runs the (1, 1) instance.
+        _run_cg_maybe_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache)
     end
     kernels = s.kernels
     if G !== Nothing && T !== Float64
@@ -2034,7 +2064,7 @@ end
         # `dual_resid`. Emitted kernels write disjoint du slots from residual
         # ones (each state slot has exactly one equation/cell), so the order
         # generated-first is value-identical to the in-order kernel loop.
-        s.dualf(du, u, p, t, s.dualtabs, 1, 1)
+        _run_cg_maybe_threaded!(s.dualf, s.dualtabs, du, u, p, t, s.dual_tcache)
         @inbounds for j in s.dual_resid
             _run_acc_kernel!(du, u, p, t, kernels[j], T)
         end
@@ -2056,12 +2086,7 @@ end
         # the per-cell interpreter. Kernels the overflow emission itself
         # declined keep the interpreter, in the same order as the plain loop
         # below.
-        if _cg_threads_available() && _sec_prep_threads!(s.dual_tcache).state == 1
-            _run_cg_section_threaded!(s.dualf, s.dualtabs, du, u, p, t,
-                                      s.dual_tcache)
-        else
-            s.dualf(du, u, p, t, s.dualtabs, 1, 1)
-        end
+        _run_cg_maybe_threaded!(s.dualf, s.dualtabs, du, u, p, t, s.dual_tcache)
         @inbounds for j in s.dual_resid
             _run_acc_kernel!(du, u, p, t, kernels[j], Float64)
         end

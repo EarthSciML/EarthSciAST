@@ -126,6 +126,7 @@ function _cgt_build(model, ics; compiler::Symbol=:native, env...)
 end
 
 _cgt_du(f!, u, p, t) = (d = similar(u); fill!(d, 0.0); f!(d, u, p, t); d)
+_cgt_alloc(f!, du, u, p, t) = (f!(du, u, p, t); f!(du, u, p, t); @allocated f!(du, u, p, t))
 
 # The serial oracle: the SAME program built with the per-chunk min-cells floor
 # above the whole section, which is what keeps a section off the threaded
@@ -251,6 +252,80 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             du_ser = _cgt_du(f2s, u2, p2s, 0.4)
             @test getfield(getfield(f2, :kernel_section), :tcache).state == 1
             @test _cgt_bitsame(du_thr, du_ser)
+        end
+
+        @testset "a threaded call allocates nothing" begin
+            fA, uA, pA, _ = _cgt_build(model, ics)
+            du = similar(uA)
+            if VERSION >= v"1.12"
+                @test _cgt_alloc(fA, du, uA, pA, 0.3) == 0
+            end
+            @test getfield(getfield(fA, :kernel_section), :tcache).state == 1
+        end
+
+        @testset "dual numbers thread: threaded ≡ serial, partials included" begin
+            if Base.find_package("ForwardDiff") === nothing
+                @info "ForwardDiff not in the active environment; skipping"
+            else
+                @eval using ForwardDiff
+                fA, uA, pA, _ = _cgt_build(model, ics)
+                fS, _, pS, _ = _cgt_serial(model, ics)
+                ud = [Base.invokelatest(ForwardDiff.Dual, x, 1.0, -0.5 * i)
+                      for (i, x) in enumerate(uA)]
+                dthr = similar(ud); dser = similar(ud)
+                Base.invokelatest(fA, dthr, ud, pA, 0.7)
+                withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
+                    Base.invokelatest(fS, dser, ud, pS, 0.7)
+                end
+                @test getfield(getfield(fA, :kernel_section), :tcache).state == 1
+                @test all(i -> dthr[i] === dser[i], eachindex(dthr))
+            end
+        end
+
+        @testset "an error in a chunk reaches the caller" begin
+            Ns = 1024
+            body = _op("sqrt", _idx("u", _v("i")))
+            vars = Dict{String,ESM.ModelVariable}("u" => ESM.ModelVariable(ESM.UnknownVariable))
+            m = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, Ns),
+                                              _ao1(body, "i", 1, Ns))])
+            ic = Dict("u[$k]" => 1.0 + k for k in 1:Ns)
+            fE, uE, pE, _ = _cgt_build(m, ic)
+            du = similar(uE)
+            fE(du, uE, pE, 0.0)
+            @test getfield(getfield(fE, :kernel_section), :tcache).state == 1
+            bad = copy(uE); bad[end] = -1.0          # a cell in the last chunk
+            @test_throws DomainError fE(du, bad, pE, 0.0)
+            fE(du, uE, pE, 0.0)                      # the pool is usable again
+            @test du[1] === sqrt(uE[1])
+        end
+
+        @testset "scan folds: lanes run in parallel, each lane in order" begin
+            len = 1000
+            folds = ESM._ScanFold[]
+            off = 0
+            for (nl, op, z, incl) in ((5, :+, 0.0, true), (3, :max, -Inf, false),
+                                      (6, :*, 1.0, true))
+                push!(folds, ESM._ScanFold(collect(off .+ (1:nl*len)), len, op, z, incl))
+                off += nl * len
+            end
+            base = [1.0 + 1e-3 * sin(0.37k) for k in 1:off]
+            dser = copy(base); ESM._apply_scan_folds!(dser, folds)
+            sec = ESM._make_scan_section(folds)
+            dthr = copy(base); ESM._apply_scan_folds!(dthr, sec)
+            @test sec.tcache.state == 1
+            @test 2 <= sec.tcache.nchunks <= 14
+            @test _cgt_bitsame(dthr, dser)
+            if VERSION >= v"1.12"
+                dthr2 = copy(base)
+                _scan_once(d, s) = (ESM._apply_scan_folds!(d, s); nothing)
+                _scan_once(dthr2, sec)
+                copyto!(dthr2, base)
+                @test (@allocated _scan_once(dthr2, sec)) == 0
+            end
+            one = ESM._make_scan_section(ESM._ScanFold[ESM._ScanFold(collect(1:5000), 5000, :+, 0.0, true)])
+            d1 = [1.0 * k for k in 1:5000]; ESM._apply_scan_folds!(d1, one)
+            @test one.tcache.state == -1              # one lane: nothing to split
+            @test d1[end] == sum(1.0:5000.0)
         end
     end
 else

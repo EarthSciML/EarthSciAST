@@ -1098,8 +1098,8 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 # ("Threaded cell axis for the codegen tier", codegen_kernel.jl): the section
 # builder proves at build time that every emitted `du` slot is globally unique,
 # and the runtime then runs the generated function as `nchunks` static
-# contiguous cell-ordinal chunks. The pieces below are tier-agnostic: an
-# env-gated batch-runner hook, a verdict tally, and the partition arithmetic.
+# contiguous cell-ordinal chunks. The pieces below are tier-agnostic: a
+# verdict tally and the partition arithmetic.
 #
 # WHY THE CELL AXIS IS THE SAFE ONE. Every ⊕-fold a kernel hosts is WITHIN a
 # cell (`_NK_REDUCE` / `_NK_CONTRACTION` loops are per-cell); nothing
@@ -1120,13 +1120,8 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 # section's cell count forces a serial run — chunking changes no bit, so it is
 # not a choice of evaluator and has no `compiler` value of its own.
 
-# Run `chunkbody(c)` for `c in 1:nchunks`, in parallel, with a barrier at the end.
-function _batch_run!(chunkbody, nchunks::Int)
-    Polyester.@batch for c in 1:nchunks
-        chunkbody(c)
-    end
-    return nothing
-end
+# The dispatch itself is thread_dispatch.jl's: Polyester's worker pool, driven
+# without a per-call allocation.
 
 # One-time threading verdicts, in the `_CASCADE_TALLY` spirit: bumped once per
 # generated SECTION (not per eval) by `_sec_prep_threads!` (codegen_kernel.jl).

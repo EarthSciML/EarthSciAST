@@ -105,18 +105,20 @@ end
     return nothing
 end
 
-function _apply_scan_fold!(du, S::_ScanFold)
+# Fold lanes `l1:l2` of `S` (all of them by default); lanes are independent.
+function _apply_scan_fold!(du, S::_ScanFold, l1::Int = 1,
+                           l2::Int = S.len >= 1 ? div(length(S.slots), S.len) : 0)
     op = S.oplus
     # Resolve the semiring ⊕ ONCE per fold, then run a type-stable lane loop
     # specialized on the concrete function (the `where {F}` on `_scan_lanes!`).
     if op === :+
-        _scan_lanes!(du, S, +)
+        _scan_lanes!(du, S, +, l1, l2)
     elseif op === :*
-        _scan_lanes!(du, S, *)
+        _scan_lanes!(du, S, *, l1, l2)
     elseif op === :max
-        _scan_lanes!(du, S, max)
+        _scan_lanes!(du, S, max, l1, l2)
     elseif op === :min
-        _scan_lanes!(du, S, min)
+        _scan_lanes!(du, S, min, l1, l2)
     else
         throw(TreeWalkError("E_TREEWALK_SCAN_UNKNOWN_OPLUS",
             "prefix scan carries unsupported ⊕ '$(op)'; expected +, *, max or min"))
@@ -124,13 +126,12 @@ function _apply_scan_fold!(du, S::_ScanFold)
     return nothing
 end
 
-function _scan_lanes!(du, S::_ScanFold, combine::F) where {F}
+function _scan_lanes!(du, S::_ScanFold, combine::F, l1::Int, l2::Int) where {F}
     slots = S.slots
     len = S.len
     z = S.zerobar
     len >= 1 || return nothing
-    nlanes = div(length(slots), len)
-    @inbounds for l in 1:nlanes
+    @inbounds for l in l1:l2
         base = (l - 1) * len
         if S.inclusive
             # acc_i = acc_{i-1} ⊕ term_i, seeded 0̄ ⊕ term_1.

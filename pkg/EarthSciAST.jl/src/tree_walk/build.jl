@@ -3733,7 +3733,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                        lvl_scans, lvl_acs))
             else
                 push!(mat_levels,
-                      (lvl_scalars, _make_kernel_section(merged), lvl_scans,
+                      (lvl_scalars, _make_kernel_section(merged),
+                       _make_scan_section(lvl_scans),
                        _make_contraction_section(lvl_acs), Tuple(lvl_recurs)))
             end
         end
