@@ -61,8 +61,10 @@ pub(super) fn run_range(
         fscratch,
         exports_active,
         simd,
+        dy_home,
         ..
     } = exec;
+    let dy_home: &[usize] = dy_home;
     let exports_active = *exports_active;
     let simd = *simd;
     let prog = env.prog;
@@ -682,10 +684,20 @@ pub(super) fn run_range(
             }
             Instr::Fused { spec } => {
                 let fs = &prog.fused[*spec as usize];
-                unsafe { exec_fused(fs, env, slab_ptr, slot_off, obs, fregs, fscratch, simd) };
+                let dy_ptr = dy.as_mut_ptr();
+                unsafe {
+                    exec_fused(
+                        fs, env, slab_ptr, slot_off, obs, fregs, fscratch, simd, dy_home, dy_ptr,
+                    )
+                };
             }
             Instr::DyWrite { write } => {
                 let w = &prog.dy_writes[*write as usize];
+                // Its fused group already stored the slot into `dy`.
+                if dy_home[w.slot as usize] != usize::MAX {
+                    pc += 1;
+                    continue;
+                }
                 let desc = &prog.slots[w.slot as usize];
                 let off = slot_off[w.slot as usize];
                 if let Some(pos) = &w.scatter {

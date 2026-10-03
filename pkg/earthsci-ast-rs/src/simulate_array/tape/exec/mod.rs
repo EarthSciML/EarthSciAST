@@ -188,6 +188,10 @@ pub(crate) struct TapeExec {
     /// (`usize::MAX` until the first call computes them).
     dy_zero: Vec<(usize, usize)>,
     dy_zero_len: usize,
+    /// Per slot: the `dy` offset the slot is written to directly instead of
+    /// the slab, or `usize::MAX` (see [`dy_homes`]); computed with
+    /// `dy_zero`.
+    dy_home: Vec<usize>,
     /// Per gather plan: `true` when its per-axis segments tile the whole
     /// output box, so the ghost zero-fill can be skipped (every element is
     /// overwritten by a segment copy).
@@ -313,6 +317,7 @@ impl TapeExec {
             mirror,
             dy_zero: Vec::new(),
             dy_zero_len: usize::MAX,
+            dy_home: Vec::new(),
             plan_full,
             primed_param_epoch: 0,
             primed_forcing_epoch: 0,
@@ -532,18 +537,7 @@ fn dy_zero_ranges(prog: &TapeProgram, n: usize, n_fallback: usize) -> Vec<(usize
         return vec![(0, n)];
     }
     let cont = prog.section_range(Cadence::Continuous);
-    let mut conditional = vec![false; prog.instrs.len()];
-    for (pc, i) in prog.instrs.iter().enumerate() {
-        let len = match i {
-            Instr::JmpIfZero {
-                n_true, n_false, ..
-            } => (*n_true + *n_false) as usize,
-            Instr::Sweep { spec } => prog.sweeps[*spec as usize].body_len as usize,
-            _ => 0,
-        };
-        let end = (pc + 1 + len).min(conditional.len());
-        conditional[pc + 1..end].fill(true);
-    }
+    let conditional = conditional_mask(prog);
     let mut written = vec![false; n];
     for pc in cont {
         let Instr::DyWrite { write } = &prog.instrs[pc] else {
@@ -598,6 +592,86 @@ fn dy_zero_ranges(prog: &TapeProgram, n: usize, n_fallback: usize) -> Vec<(usize
         ranges.push((start, k));
     }
     ranges
+}
+
+/// Per instruction: whether it sits in a region that may not run on a call
+/// (a `JmpIfZero` branch or a sweep body).
+fn conditional_mask(prog: &TapeProgram) -> Vec<bool> {
+    let mut conditional = vec![false; prog.instrs.len()];
+    for (pc, i) in prog.instrs.iter().enumerate() {
+        let len = match i {
+            Instr::JmpIfZero {
+                n_true, n_false, ..
+            } => (*n_true + *n_false) as usize,
+            Instr::Sweep { spec } => prog.sweeps[*spec as usize].body_len as usize,
+            _ => 0,
+        };
+        let end = (pc + 1 + len).min(conditional.len());
+        conditional[pc + 1..end].fill(true);
+    }
+    conditional
+}
+
+/// Per slot, the `dy` offset a fused group writes it to directly, or
+/// `usize::MAX` for the slab: a fused output whose only reader is one
+/// whole-box `DyWrite` onto a CONTIGUOUS run of a `dy` of `n` elements, both
+/// in the CONTINUOUS section and outside any conditional region. The group
+/// then stores the derivative where the `DyWrite` would have copied it (the
+/// same values, one pass fewer), and that `DyWrite` does nothing.
+fn dy_homes(prog: &TapeProgram, n: usize) -> Vec<usize> {
+    let mut home = vec![usize::MAX; prog.slots.len()];
+    let tables = prog.tables();
+    let mut readers = vec![0u32; prog.slots.len()];
+    let mut defs = vec![0u32; prog.slots.len()];
+    let mut def_pc = vec![usize::MAX; prog.slots.len()];
+    for (pc, i) in prog.instrs.iter().enumerate() {
+        i.for_each_read(&tables, |s| readers[s as usize] += 1);
+        i.for_each_def(&tables, |s| {
+            defs[s as usize] += 1;
+            def_pc[s as usize] = pc;
+        });
+    }
+    let cont = prog.section_range(Cadence::Continuous);
+    let conditional = conditional_mask(prog);
+    for pc in cont.clone() {
+        let Instr::DyWrite { write } = &prog.instrs[pc] else {
+            continue;
+        };
+        let w = &prog.dy_writes[*write as usize];
+        let s = w.slot as usize;
+        if conditional[pc] || w.scatter.is_some() || w.scalar_flat.is_some() {
+            continue;
+        }
+        if readers[s] != 1 || defs[s] != 1 || !cont.contains(&def_pc[s]) || conditional[def_pc[s]]
+        {
+            continue;
+        }
+        let Instr::Fused { spec } = &prog.instrs[def_pc[s]] else {
+            continue;
+        };
+        let fs = &prog.fused[*spec as usize];
+        if fs.reduce.as_ref().is_some_and(|r| r.out as usize == s)
+            || !fs.outputs.iter().any(|&(_, o)| o as usize == s)
+        {
+            continue;
+        }
+        let desc = &prog.slots[s];
+        if desc.scalar || desc.shape[..] != fs.shape[..] {
+            continue;
+        }
+        let sv = &prog.state_vars[w.var as usize];
+        let st = dy_strides(prog, &sv.shape);
+        let rm = rm_strides(&desc.shape);
+        let contiguous = (0..desc.shape.len()).all(|d| desc.shape[d] <= 1 || st[d] == rm[d]);
+        let mut off = sv.flat_offset;
+        for d in 0..desc.shape.len() {
+            off += w.dest_lo[d] * st[d] as usize;
+        }
+        if contiguous && off + desc.elems() <= n {
+            home[s] = off;
+        }
+    }
+    home
 }
 
 /// The strides of a state variable's `dy` (and state) block over `shape`,
@@ -658,6 +732,7 @@ pub(in crate::simulate_array) fn run_tape_call(
     // Zero what no rule writes; every other element is overwritten below.
     if exec.dy_zero_len != dy.len() {
         exec.dy_zero = dy_zero_ranges(prog, dy.len(), exec.n_fallback);
+        exec.dy_home = dy_homes(prog, dy.len());
         exec.dy_zero_len = dy.len();
     }
     for &(a, b) in &exec.dy_zero {

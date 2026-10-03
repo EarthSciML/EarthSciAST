@@ -420,6 +420,8 @@ pub(super) unsafe fn exec_fused(
     fregs: &mut [f64],
     scratch: &mut FusedScratch,
     simd: SimdLevel,
+    dy_home: &[usize],
+    dy: *mut f64,
 ) {
     let FusedScratch {
         svals,
@@ -460,10 +462,14 @@ pub(super) unsafe fn exec_fused(
         };
         bases.push(p);
     }
-    // Output slab pointers.
+    // Output pointers: the slab, or `dy` for a slot homed there.
     outs.clear();
     for &(reg, slot) in &fs.outputs {
-        outs.push((reg, unsafe { slab_ptr.add(slot_off[slot as usize]) }));
+        let p = match dy_home.get(slot as usize) {
+            Some(&off) if off != usize::MAX => unsafe { dy.add(off) },
+            _ => unsafe { slab_ptr.add(slot_off[slot as usize]) },
+        };
+        outs.push((reg, p));
     }
     // An absorbed reduction's accumulator, seeded with its identity.
     let red: *mut f64 = match &fs.reduce {
