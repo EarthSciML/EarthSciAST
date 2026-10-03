@@ -3766,9 +3766,13 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # the (fewer) merged kernels. Bound ONCE to a fresh local (`acc_kernels`),
     # never reassigned, so every downstream closure captures it unboxed.
     # With the class merge off the build is the unmerged one, byte for byte.
+    # The in-place build keeps its affine box kernels out of the merge
+    # (`keep_affine`, oop_merge.jl), so the emitter compiles each as its own
+    # loop nest instead of a slot-table lane loop.
     # The per-cell reference is untouched either way: its trees live on
     # `percell_scalar`, never in the kernel list.
-    acc_kernels, class_merge_diag = @_bench :class_merge _merge_acc_kernel_classes(acc_kernels_pre)
+    acc_kernels, class_merge_diag = @_bench :class_merge _merge_acc_kernel_classes(acc_kernels_pre;
+        keep_affine = form === :inplace)
 
     # ---- Common-subexpression elimination on the scalar/indexed-D RHS (ess-r7h) ----
     # Batched compile of every scalar resolved-RHS expr: subexpressions sharing a

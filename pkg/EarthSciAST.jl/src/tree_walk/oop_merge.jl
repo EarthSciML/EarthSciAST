@@ -1071,6 +1071,56 @@ function _merge_oop_x_kernels(kernels::AbstractVector{_AccKernel},
     return (out_kernels, out_plans, diag)
 end
 
+# ---- Affine boxes stay out of the merge on the compiled in-place path ------
+#
+# A class merge turns every member's reads into per-lane slot tables: one
+# indexed load and a ghost test per operand per cell, where the member's own
+# affine box reads `u[o + Δ]` at a constant offset. On a stencil's boundary
+# classes (the faces, edges and corners around an affine interior) that is
+# several times the arithmetic it feeds. The in-place emitter compiles each
+# affine box kernel into its own loop nest, so for it a box kernel is better
+# left alone; what the merge buys there is fewer kernels, which matters only
+# when the count is large. So `keep_affine` (the in-place build, with the
+# emitter on) holds back every box kernel that reads only through affine,
+# fixed or box-addressed descriptors and that spans more than one cell along
+# at least one axis, up to `_affine_keep_max()` kernels (by the number of such
+# axes, then build order, both independent of the grid size); the merge runs
+# on the rest. Corner boxes (one cell along every axis) are merged as before:
+# they are a handful of cells whatever the grid size. The out-of-place product
+# (the compiled backends' input) and the interpreter runner keep the full
+# merge. Keeping a kernel out of a merge never changes a value: each cell
+# evaluates the same op sequence either way.
+_affine_keep_max() =
+    something(tryparse(Int, get(ENV, "ESS_AFFINE_KEEP_MAX_KERNELS", "")), 256)
+
+_affine_keep_kind(k) =
+    k in (_AK_STATE_AFFINE, _AK_CONST_AFFINE, _AK_CONST_BOX, _AK_STATE_FIXED,
+          _AK_LOOP_IDX, _AK_SCALAR, _AK_ARR_FIXED, _AK_FORCING_BOX)
+
+# The number of axes along which `K`'s box is more than one cell thick, or 0
+# when `K` is not an affine box kernel the emitter compiles as its own nest.
+# A template sub-kernel is inlined into its parent's nest, so its descriptors
+# count as the parent's.
+_affine_keep_reads(K::_AccKernel) =
+    all(a -> _affine_keep_kind(a.kind), K.acc) && all(_affine_keep_reads, K.subs)
+function _affine_box_rank(K::_AccKernel)
+    cs = K.cells
+    (_is_outs(cs) || isempty(cs.strides) || !_affine_keep_reads(K)) && return 0
+    return count(d -> !_cellset_slab(cs, d), eachindex(cs.strides))
+end
+
+# Sorted indices of the kernels `keep_affine` holds back (see above).
+function _affine_boxes_to_keep(kernels::AbstractVector{_AccKernel})
+    (_codegen_disabled() || _codegen_node_budget() <= 0) && return Int[]
+    cap = _affine_keep_max()
+    cap <= 0 && return Int[]
+    rk = [_affine_box_rank(K) for K in kernels]
+    cand = [j for j in eachindex(kernels) if rk[j] > 0]
+    sort!(cand; by = j -> (-rk[j], j))
+    length(cand) > cap && resize!(cand, cap)
+    return sort!(cand)
+end
+
 """
     _merge_acc_kernel_classes(kernels) -> (kernels′, diag_or_nothing)
 
@@ -1102,8 +1152,18 @@ DECIDED the classes (the direct stage when it ran — so `n_in` is always the
 pre-merge kernel count), `n_out` the final list, `n_failed` the sum over
 every stage.
 """
-function _merge_acc_kernel_classes(kernels::AbstractVector{_AccKernel})
+function _merge_acc_kernel_classes(kernels::AbstractVector{_AccKernel};
+                                   keep_affine::Bool=false)
     (_oop_merge_disabled() || length(kernels) <= 1) && return (kernels, nothing)
+    kept = keep_affine ? _affine_boxes_to_keep(kernels) : Int[]
+    if !isempty(kept)
+        rest = _AccKernel[kernels[j] for j in eachindex(kernels) if !insorted(j, kept)]
+        merged, diag = _merge_acc_kernel_classes(rest)
+        out = vcat(_AccKernel[kernels[j] for j in kept], merged)
+        diag === nothing && return (out, nothing)
+        return (out, (; diag..., n_in = length(kernels), n_out = length(out),
+                      n_blocked = diag.n_blocked + length(kept)))
+    end
     plans = _LazyOopPlans(kernels)
 
     # ---- DIRECT class-emission stage (cross-eq/affine-box families) ------
