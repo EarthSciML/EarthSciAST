@@ -1229,6 +1229,13 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
         end
     end
     ohi = _cg_name(ctx, "e")          # last ordinal of the chunk (b - 1)
+    # A box one cell thick along its leading axis (a boundary slab of a
+    # stencil's x faces) runs one cell per i-loop, so once LLVM folds that
+    # loop the j (or k) loop is innermost, and it strides through `u` by a
+    # whole row: vectorizing it turns every operand into a gather, which is
+    # several times slower than the scalar loop. The outer loops of such a box
+    # are kept scalar. Leaving a loop scalar never changes a value.
+    nv = _cellset_slab(cs, 1) ? Any[_cg_novec()] : Any[]
     ilo = _cg_name(ctx, "il")
     ihi = _cg_name(ctx, "ih")
     jlo = _cg_name(ctx, "jl")
@@ -1248,6 +1255,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                         local $oln = $olnexpr
                         $(body...)
                     end
+                    $(nv...)
                 end
             end
         end
@@ -1278,11 +1286,17 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                         local $oln = $olnexpr
                         $(body...)
                     end
+                    $(nv...)
                 end
+                $(nv...)
             end
         end
     end
 end
+
+# The loop annotation that keeps a loop scalar (LLVM's loop vectorizer off for
+# it). It is the loop body's last statement, where `@simd` puts its own.
+_cg_novec() = Expr(:loopinfo, (Symbol("llvm.loop.vectorize.enable"), false))
 
 # A strided Cartesian box of rank above 3, in `_run_box_kernel!`'s iteration
 # order (dim 1 fastest). The chunk `[a, b)` is walked as whole dim-1 ROWS, the
