@@ -51,6 +51,7 @@ pub(super) fn run_range(
     dy: &mut [f64],
     stats: &mut RhsStats,
 ) {
+    let dy_ways = call_ways(exec);
     let TapeExec {
         slab,
         slot_off,
@@ -662,8 +663,18 @@ pub(super) fn run_range(
                 }
             }
             Instr::Fused { spec } => {
-                let fs = &prog.fused[*spec as usize];
-                unsafe { exec_fused(fs, env, slab_ptr, slot_off, obs, fregs, fscratch, simd) };
+                unsafe {
+                    exec_fused(
+                        *spec as usize,
+                        env,
+                        slab_ptr,
+                        slot_off,
+                        obs,
+                        fregs,
+                        fscratch,
+                        simd,
+                    )
+                };
             }
             Instr::DyWrite { write } => {
                 let w = &prog.dy_writes[*write as usize];
@@ -694,7 +705,8 @@ pub(super) fn run_range(
                             sv.flat_offset + sv.shape.iter().product::<usize>().max(1) <= dy.len()
                         );
                         unsafe {
-                            copy_strided(
+                            copy_strided_maybe_split(
+                                dy_ways,
                                 dy.as_mut_ptr().offset(dbase as isize),
                                 &cm,
                                 slab_ptr.add(off) as *const f64,

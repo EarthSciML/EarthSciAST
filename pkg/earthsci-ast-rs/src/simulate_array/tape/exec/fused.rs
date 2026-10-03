@@ -351,6 +351,13 @@ pub(super) struct FusedScratch {
     bases: Vec<*const f64>,
     outs: Vec<(GroupIx, *mut f64)>,
     cursor: RunCursor,
+    /// Per group, [`node_elems`] of its schedule: what lets a worker step
+    /// straight to the start of its share of the group.
+    node_elems: Vec<Vec<usize>>,
+    /// The register files and cursors of the workers a split group runs on
+    /// (native targets only; see `par`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) workers: super::par::FusedWorkers,
 }
 
 impl FusedScratch {
@@ -361,12 +368,102 @@ impl FusedScratch {
             bases: Vec::with_capacity(most(|f| f.inputs.len())),
             outs: Vec::with_capacity(most(|f| f.outputs.len())),
             cursor: RunCursor::with_room(most(|f| f.schedule.depth), most(n_shifted)),
+            node_elems: prog
+                .fused
+                .iter()
+                .map(|f| node_elems(&f.schedule.nodes))
+                .collect(),
+            #[cfg(not(target_arch = "wasm32"))]
+            workers: super::par::FusedWorkers::for_program(prog),
         }
     }
 }
 
-fn n_shifted(fs: &FusedSpec) -> usize {
+pub(super) fn n_shifted(fs: &FusedSpec) -> usize {
     fs.inputs.iter().filter(|i| i.shifted_ix.is_some()).count()
+}
+
+/// The elements one execution of each schedule node covers: a run's length,
+/// or ONE repetition of a `Repeat`'s body (its whole span is that times its
+/// count). Pre-order, like the nodes.
+pub(super) fn node_elems(nodes: &[RunNode]) -> Vec<usize> {
+    fn span(nodes: &[RunNode], out: &mut [usize], i: usize) -> (usize, usize) {
+        match &nodes[i] {
+            RunNode::Run(r) => {
+                out[i] = r.len as usize;
+                (out[i], i + 1)
+            }
+            RunNode::Repeat { count, body, .. } => {
+                let end = i + 1 + *body as usize;
+                let (mut rep, mut j) = (0usize, i + 1);
+                while j < end {
+                    let (t, next) = span(nodes, out, j);
+                    rep += t;
+                    j = next;
+                }
+                out[i] = rep;
+                (rep * *count as usize, end)
+            }
+        }
+    }
+    let mut out = vec![0usize; nodes.len()];
+    let mut j = 0usize;
+    while j < nodes.len() {
+        j = span(nodes, &mut out, j).1;
+    }
+    out
+}
+
+/// The share of a fused group one execution of the chunk loop runs: the
+/// elements at flat positions `[lo, hi)` of the schedule's execution order,
+/// or, with a `period`, every element whose position modulo `period` lies in
+/// `[lo, hi)` (the inner positions of an absorbed reduction, each of which
+/// one worker then folds over every leading position, in order). Every
+/// element is computed by the same micro-ops whatever window it falls in, so
+/// splitting a group into windows cannot change a bit.
+#[derive(Clone, Copy)]
+pub(super) struct Window<'a> {
+    pub(super) lo: usize,
+    pub(super) hi: usize,
+    /// 0 for a plain window.
+    pub(super) period: usize,
+    /// [`node_elems`] of the group's schedule.
+    pub(super) node_elems: &'a [usize],
+}
+
+impl<'a> Window<'a> {
+    /// The whole group.
+    pub(super) fn all(node_elems: &'a [usize]) -> Self {
+        Window {
+            lo: 0,
+            hi: usize::MAX,
+            period: 0,
+            node_elems,
+        }
+    }
+
+    /// The first piece `[s, e)` (relative to the run) at or after `from` of
+    /// the run of `len` elements starting at schedule position `g0` that
+    /// falls in the window.
+    #[inline(always)]
+    fn piece(&self, g0: usize, len: usize, from: usize) -> Option<(usize, usize)> {
+        if self.period == 0 {
+            let s = from.max(self.lo.saturating_sub(g0));
+            let e = len.min(self.hi.saturating_sub(g0));
+            return (s < e).then_some((s, e));
+        }
+        let mut p = g0 + from;
+        while p < g0 + len {
+            let base = p - p % self.period;
+            let s = p.max(base + self.lo);
+            let e = (g0 + len).min(base + self.hi);
+            if s < e {
+                return Some((s - g0, e - g0));
+            }
+            p = base + self.period;
+        }
+        None
+    }
 }
 
 /// The executor's position in a [`RunSchedule`]: one frame per open
@@ -412,7 +509,7 @@ impl RunCursor {
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused(
-    fs: &FusedSpec,
+    spec: usize,
     env: &Env,
     slab_ptr: *mut f64,
     slot_off: &[usize],
@@ -421,12 +518,17 @@ pub(super) unsafe fn exec_fused(
     scratch: &mut FusedScratch,
     simd: SimdLevel,
 ) {
+    let fs = &env.prog.fused[spec];
     let FusedScratch {
         svals,
         bases,
         outs,
         cursor,
+        node_elems,
+        #[cfg(not(target_arch = "wasm32"))]
+        workers,
     } = scratch;
+    let node_elems = &node_elems[spec][..];
     // Resolve scalar inputs once.
     svals.clear();
     for op in &fs.scalars {
@@ -476,20 +578,58 @@ pub(super) unsafe fn exec_fused(
         None => std::ptr::null_mut(),
     };
 
-    // Step 4b: run the chunked micro-program through the SIMD clone selected
-    // at executor construction. Same source, same scalar semantics — the
-    // `#[target_feature]` wrappers only widen the auto-vectorized lanes.
+    // A large group is split into windows across the caller's worker
+    // threads (see `par`).
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ways = super::par::split_ways(fs, workers.call_ways);
+        if ways > 1 {
+            unsafe { workers.run_split(fs, svals, bases, outs, red, node_elems, simd, ways) };
+            return;
+        }
+    }
+    unsafe {
+        run_fused_window(
+            simd,
+            fs,
+            svals,
+            bases,
+            outs,
+            red,
+            fregs,
+            cursor,
+            Window::all(node_elems),
+        )
+    }
+}
+
+/// Run one window of a fused group through the SIMD clone selected at
+/// executor construction (Step 4b). Same source, same scalar semantics — the
+/// `#[target_feature]` wrappers only widen the auto-vectorized lanes.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+pub(super) unsafe fn run_fused_window(
+    simd: SimdLevel,
+    fs: &FusedSpec,
+    svals: &[f64],
+    bases: &[*const f64],
+    outs: &[(GroupIx, *mut f64)],
+    red: *mut f64,
+    fregs: &mut [f64],
+    cursor: &mut RunCursor,
+    win: Window,
+) {
     match simd {
         SimdLevel::Generic => unsafe {
-            exec_fused_runs_generic(fs, svals, bases, outs, red, fregs, cursor)
+            exec_fused_runs_generic(fs, svals, bases, outs, red, fregs, cursor, win)
         },
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx2 => unsafe {
-            exec_fused_runs_avx2(fs, svals, bases, outs, red, fregs, cursor)
+            exec_fused_runs_avx2(fs, svals, bases, outs, red, fregs, cursor, win)
         },
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 => unsafe {
-            exec_fused_runs_avx512(fs, svals, bases, outs, red, fregs, cursor)
+            exec_fused_runs_avx512(fs, svals, bases, outs, red, fregs, cursor, win)
         },
     }
 }
@@ -527,6 +667,7 @@ unsafe fn fold_chunk(
 /// so each wrapper compiles the WHOLE loop nest — micro-op dispatch, chunk
 /// kernels and stores — under its feature set).
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 unsafe fn exec_fused_runs(
     fs: &FusedSpec,
     svals: &[f64],
@@ -535,6 +676,7 @@ unsafe fn exec_fused_runs(
     red: *mut f64,
     fregs: &mut [f64],
     cursor: &mut RunCursor,
+    win: Window,
 ) {
     let rp = fregs.as_mut_ptr();
     // Bin3 splat registers: one FCHUNK broadcast per scalar plus a zero
@@ -575,7 +717,12 @@ unsafe fn exec_fused_runs(
     in_off.resize(in_delta.len(), 0);
     let mut out_delta = 0i64;
     let mut i = 0usize;
+    // Elements of the schedule before node `i` (executed or stepped over).
+    let mut g = 0usize;
     loop {
+        if win.period == 0 && g >= win.hi {
+            break;
+        }
         while let Some(fr) = frames.last_mut()
             && i == fr.end
         {
@@ -606,11 +753,39 @@ unsafe fn exec_fused_runs(
         }
         let run = match nodes.get(i) {
             None => break,
-            Some(RunNode::Repeat { count, body, .. }) => {
+            Some(RunNode::Repeat {
+                count,
+                body,
+                out_step,
+                in_step,
+            }) => {
+                let rep = win.node_elems[i];
+                let span = rep * *count as usize;
+                if win.period == 0 && g + span <= win.lo {
+                    // Wholly before the window: step over the subtree.
+                    g += span;
+                    i += 1 + *body as usize;
+                    continue;
+                }
+                // Whole repetitions before the window are stepped over at
+                // once; the frame then counts down only the rest, and closing
+                // it still takes back `count - 1` steps in all.
+                let skip = if win.period == 0 && win.lo > g {
+                    (win.lo - g) / rep
+                } else {
+                    0
+                };
+                if skip > 0 {
+                    out_delta += skip as i64 * out_step;
+                    for (d, s) in in_delta.iter_mut().zip(in_step) {
+                        *d += skip as i64 * s;
+                    }
+                    g += skip * rep;
+                }
                 frames.push(RepeatFrame {
                     node: i,
                     end: i + 1 + *body as usize,
-                    left: *count,
+                    left: *count - skip as u32,
                 });
                 i += 1;
                 continue;
@@ -618,15 +793,27 @@ unsafe fn exec_fused_runs(
             Some(RunNode::Run(run)) => run,
         };
         i += 1;
+        let len = run.len as usize;
+        let g0 = g;
+        g += len;
+        let Some(first) = win.piece(g0, len, 0) else {
+            continue;
+        };
         for ((o, &r), &d) in in_off.iter_mut().zip(&run.in_off).zip(in_delta.iter()) {
             *o = if r == GHOST_OFF { r } else { r + d };
         }
         let in_off: &[i64] = in_off;
         let out_off = (run.out_off as i64 + out_delta) as usize;
-        let mut done = 0usize;
-        let len = run.len as usize;
-        while done < len {
-            let c = (len - done).min(FCHUNK);
+        let (mut done, mut end) = first;
+        loop {
+            if done >= end {
+                match win.piece(g0, len, end) {
+                    Some(next) => (done, end) = next,
+                    None => break,
+                }
+                continue;
+            }
+            let c = (end - done).min(FCHUNK);
             let at = out_off + done;
             // Pre-load strided shifted inputs into their dedicated chunk
             // registers (a ghost run needs no load — reads resolve to 0.0).
@@ -976,6 +1163,7 @@ unsafe fn exec_fused_runs(
 
 /// Baseline-codegen instantiation of the fused chunk loop.
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused_runs_generic(
     fs: &FusedSpec,
     svals: &[f64],
@@ -984,8 +1172,9 @@ pub(super) unsafe fn exec_fused_runs_generic(
     red: *mut f64,
     fregs: &mut [f64],
     cursor: &mut RunCursor,
+    win: Window,
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor, win) }
 }
 
 /// AVX2 clone: identical Rust source compiled under `avx2` (+`fma` is NOT
@@ -994,6 +1183,7 @@ pub(super) unsafe fn exec_fused_runs_generic(
 /// support, so the `unsafe` target-feature contract holds.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused_runs_avx2(
     fs: &FusedSpec,
     svals: &[f64],
@@ -1002,8 +1192,9 @@ pub(super) unsafe fn exec_fused_runs_avx2(
     red: *mut f64,
     fregs: &mut [f64],
     cursor: &mut RunCursor,
+    win: Window,
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor, win) }
 }
 
 /// AVX-512 clone (f+vl+dq+bw, all runtime-checked). Note LLVM keeps its
@@ -1016,6 +1207,7 @@ pub(super) unsafe fn exec_fused_runs_avx2(
     enable = "avx512dq",
     enable = "avx512bw"
 )]
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused_runs_avx512(
     fs: &FusedSpec,
     svals: &[f64],
@@ -1024,8 +1216,9 @@ pub(super) unsafe fn exec_fused_runs_avx512(
     red: *mut f64,
     fregs: &mut [f64],
     cursor: &mut RunCursor,
+    win: Window,
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor, win) }
 }
 
 /// The SINGLE definition of micro-op scalar semantics: one element of one

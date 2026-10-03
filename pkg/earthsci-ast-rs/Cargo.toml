@@ -200,6 +200,13 @@ xla = { version = "0.4", optional = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
 
+# The tape executor splits large right-hand-side calls across the caller's
+# rayon pool on native targets (src/simulate_array/tape/exec/par.rs). Always
+# on there: threading is the default, and diffsol's faer links rayon anyway.
+# The wasm build has no such dependency and runs serially.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = "1.8"
+
 
 # Native-only dev-dependencies. `criterion` pulls `wait-timeout` (whose `imp`
 # module is unix/windows-only and fails to compile for wasm32), and
