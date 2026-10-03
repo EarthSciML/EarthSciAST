@@ -30,12 +30,13 @@ file.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sys
 from pathlib import Path
 from typing import Any
 
-from earthsci_ast import evaluate_rhs, load_path
+from earthsci_ast import EsmFile, evaluate_rhs, load_path
 
 #: The binding name this adapter reports under.
 BINDING = "python"
@@ -74,6 +75,23 @@ def tests_dir_for(manifest_path: Path) -> Path:
         if ancestor.name == "tests":
             return ancestor
     return resolved.parent
+
+
+def _only_model(esm: EsmFile, model: str) -> EsmFile:
+    """The document reduced to the one model the fixture names.
+
+    The tier compares the right-hand side of ``model`` alone: the manifest's
+    ``state_order`` and probe states cover only its unknowns, and the Julia and
+    Rust adapters build only that model. Building the whole document would
+    also build its other components, whose unknowns no probe supplies, and an
+    unknown with no starting value is refused at build. The coupling entries go
+    with the other components, since every one of them joins two components."""
+    others = [name for name in esm.models if name != model]
+    if not others and not esm.reaction_systems:
+        return esm
+    return dataclasses.replace(
+        esm, models={model: esm.models[model]}, reaction_systems={}, coupling=[]
+    )
 
 
 def _state_vector(fixture: dict[str, Any], probe: dict[str, Any]) -> dict[str, float]:
@@ -140,6 +158,9 @@ def run_fixture(
             f"fixture {fixture.get('id')!r} names model {model!r}, which "
             f"{fixture['path']} does not define (has {sorted(esm.models)})"
         )
+
+    if model:
+        esm = _only_model(esm, model)
 
     parameters = {str(k): v for k, v in (fixture.get("parameters") or {}).items()}
 
