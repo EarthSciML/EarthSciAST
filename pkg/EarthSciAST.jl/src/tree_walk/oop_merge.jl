@@ -1081,12 +1081,17 @@ end
 # affine box kernel into its own loop nest, so for it a box kernel is better
 # left alone; what the merge buys there is fewer kernels, which matters only
 # when the count is large. So `keep_affine` (the in-place build, with the
-# emitter on) holds back every box kernel that reads only through affine,
-# fixed or box-addressed descriptors and that spans more than one cell along
-# at least one axis, up to `_affine_keep_max()` kernels (by the number of such
-# axes, then build order, both independent of the grid size); the merge runs
-# on the rest. Corner boxes (one cell along every axis) are merged as before:
-# they are a handful of cells whatever the grid size. The out-of-place product
+# emitter on) holds back every box kernel of rank 2 or more that reads only
+# through affine, fixed or box-addressed descriptors, calls no function, and
+# spans more than one cell along at least one axis, up to `_affine_keep_max()`
+# kernels (by the number of such axes, then build order, both independent of
+# the grid size); the merge runs on the rest. Corner boxes (one cell along
+# every axis) are merged as before: they are a handful of cells whatever the
+# grid size. One-axis boxes are merged as before too: there the box processor
+# also cuts an irregular gather into affine runs, whose number moves with the
+# grid size, and only the merge keeps that program the same at every size. A
+# box calling a function (an interpolation with per-region tables) keeps the
+# merge's one lane-table kernel; the call dominates its cost. The out-of-place product
 # (the compiled backends' input) and the interpreter runner keep the full
 # merge. Keeping a kernel out of a merge never changes a value: each cell
 # evaluates the same op sequence either way.
@@ -1103,9 +1108,22 @@ _affine_keep_kind(k) =
 # count as the parent's.
 _affine_keep_reads(K::_AccKernel) =
     all(a -> _affine_keep_kind(a.kind), K.acc) && all(_affine_keep_reads, K.subs)
+function _affine_keep_has_fn(n::_Node, seen::IdDict{_Node,Nothing})
+    haskey(seen, n) && return false
+    seen[n] = nothing
+    (n.kind === _NK_OP && n.op === :fn) && return true
+    return any(c -> _affine_keep_has_fn(c, seen), n.children)
+end
+function _affine_keep_has_fn(K::_AccKernel, seen=IdDict{_Node,Nothing}())
+    _affine_keep_has_fn(K.spine, seen) && return true
+    any(r -> _affine_keep_has_fn(r, seen), K.cse.recipes) && return true
+    any(r -> _affine_keep_has_fn(r, seen), K.cse.inv_recipes) && return true
+    return any(S -> _affine_keep_has_fn(S, seen), K.subs)
+end
 function _affine_box_rank(K::_AccKernel)
     cs = K.cells
-    (_is_outs(cs) || isempty(cs.strides) || !_affine_keep_reads(K)) && return 0
+    (_is_outs(cs) || length(cs.strides) < 2 || !_affine_keep_reads(K) ||
+     _affine_keep_has_fn(K)) && return 0
     return count(d -> !_cellset_slab(cs, d), eachindex(cs.strides))
 end
 
