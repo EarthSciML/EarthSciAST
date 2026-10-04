@@ -6543,6 +6543,7 @@ impl<'m> TapeBuilder<'m> {
             precision,
             n_const,
             n_segment,
+            n_rhs: 0,
             slots: std::mem::take(&mut self.slots),
             plans: std::mem::take(&mut self.plans),
             regions: std::mem::take(&mut self.regions),
@@ -6572,6 +6573,9 @@ impl<'m> TapeBuilder<'m> {
         if let Some(cfg) = fuse {
             super::reroll::reroll_program(&mut prog);
             super::fuse::fuse_program(&mut prog, cfg);
+            super::prune::split_output_only(&mut prog);
+        } else {
+            prog.n_rhs = prog.section_range(Cadence::Continuous).len() as u32;
         }
         color_slab(&mut prog);
         prog
@@ -6682,6 +6686,7 @@ fn color_slab(prog: &mut TapeProgram) {
             Instr::Gather { .. }
                 | Instr::Region { .. }
                 | Instr::Fused { .. }
+                | Instr::Lanes { .. }
                 | Instr::Reduce { .. }
                 | Instr::Scan { .. }
                 | Instr::Assemble { .. }

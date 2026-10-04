@@ -48,6 +48,9 @@ const MIN_LANES: usize = 4;
 /// ([`GroupIx`]).
 const MAX_PIECE: usize = 1 << 14;
 
+/// The fewest scalar instructions worth compiling into a one-lane block.
+const MIN_BLOCK: usize = 4;
+
 /// Encoding tags (high byte of a token).
 const T_BIN: u64 = 1 << 56;
 const T_UN: u64 = 2 << 56;
@@ -144,7 +147,7 @@ pub(super) fn reroll_program(prog: &mut TapeProgram) {
     }
 
     let a = Analysis::of(prog);
-    let runs = a.runs(prog, 2 * MIN_LANES);
+    let runs = a.runs(prog, MIN_BLOCK);
     let ctx = Ctx {
         prog,
         def_pc: &a.def_pc,
@@ -367,6 +370,10 @@ struct Piece {
 struct RunPlan {
     keep: Vec<usize>,
     classes: Vec<Vec<Piece>>,
+    /// Compile `keep` into consecutive one-lane blocks (see [`emit_block`]):
+    /// each block's instructions (a run of `keep`) and the slots of it that
+    /// are read after it. Empty: `keep` stays as it is.
+    blocks: Vec<(Vec<usize>, Vec<SlotId>)>,
 }
 
 impl Ctx<'_> {
@@ -391,6 +398,9 @@ impl Ctx<'_> {
         targets.sort_unstable();
         if targets.windows(2).any(|w| w[0] == w[1]) {
             return None;
+        }
+        if len < 2 * MIN_LANES {
+            return self.block_plan(&run, (0..len).map(|k| run.start + k).collect(), Vec::new());
         }
 
         // Lane-free instructions read no state and no lane-dependent value of
@@ -484,9 +494,6 @@ impl Ctx<'_> {
             });
             out_classes.push(lanes);
         }
-        if out_classes.is_empty() {
-            return None;
-        }
         let mut moved = vec![false; len];
         for (pi, ks) in pieces.iter().enumerate() {
             if chosen[pi] {
@@ -499,9 +506,64 @@ impl Ctx<'_> {
             .filter(|&k| !moved[k])
             .map(|k| run.start + k)
             .collect();
+        self.block_plan(&run, keep, out_classes)
+    }
+
+    /// The plan for a run whose `keep` instructions stay outside every
+    /// class: a block when there are enough of them, else as they are.
+    fn block_plan(
+        &self,
+        run: &std::ops::Range<usize>,
+        keep: Vec<usize>,
+        classes: Vec<Vec<Piece>>,
+    ) -> Option<RunPlan> {
+        if keep.len() < MIN_BLOCK {
+            return (!classes.is_empty()).then_some(RunPlan {
+                keep,
+                classes,
+                blocks: Vec::new(),
+            });
+        }
+        // A value of the block is written back when anything after the block
+        // reads it: the classes (emitted after it), or the program after the
+        // run.
+        let prog = self.prog;
+        let tables = prog.tables();
+        let mut read_by_class = rustc_hash::FxHashSet::default();
+        for p in classes.iter().flatten() {
+            for &pc in &p.instrs {
+                prog.instrs[pc].for_each_read(&tables, |s| {
+                    read_by_class.insert(s);
+                });
+            }
+        }
+        // Blocks of at most `MAX_PIECE` instructions (a block indexes its
+        // registers and scalars in 16 bits); a value a later block reads is
+        // written back too.
+        let mut blocks: Vec<(Vec<usize>, Vec<SlotId>)> = Vec::new();
+        let mut read_later = read_by_class;
+        for part in keep.chunks(MAX_PIECE).rev() {
+            let outs = part
+                .iter()
+                .filter_map(|&pc| prog.instrs[pc].out())
+                .filter(|s| {
+                    self.exported[*s as usize]
+                        || self.last_read[*s as usize] >= run.end
+                        || read_later.contains(s)
+                })
+                .collect();
+            for &pc in part {
+                prog.instrs[pc].for_each_read(&tables, |s| {
+                    read_later.insert(s);
+                });
+            }
+            blocks.push((part.to_vec(), outs));
+        }
+        blocks.reverse();
         Some(RunPlan {
             keep,
-            classes: out_classes,
+            classes,
+            blocks,
         })
     }
 
@@ -596,8 +658,13 @@ fn rewrite(prog: &mut TapeProgram, plans: Vec<(std::ops::Range<usize>, RunPlan)>
     let old = std::mem::take(&mut prog.instrs);
     let mut edits: Vec<(std::ops::Range<usize>, Vec<(Instr, usize)>)> = Vec::new();
     for (range, plan) in plans {
-        let mut body: Vec<(Instr, usize)> =
-            plan.keep.iter().map(|&k| (old[k].clone(), k)).collect();
+        let mut body: Vec<(Instr, usize)> = Vec::new();
+        if plan.blocks.is_empty() {
+            body.extend(plan.keep.iter().map(|&k| (old[k].clone(), k)));
+        }
+        for (pcs, outs) in &plan.blocks {
+            emit_block(prog, &old, pcs, outs, &mut body);
+        }
         for lanes in &plan.classes {
             emit_class(prog, &old, lanes, &mut body);
         }
@@ -786,7 +853,7 @@ fn emit_class(
                 MRef::Reg(_) => MRef::Reg(live.next().expect("one per register write").0),
                 other => other,
             },
-            pos,
+            dst: LaneDst::Dy(pos),
         })
         .collect();
     let spec = prog.lanes.len() as u32;
@@ -799,6 +866,113 @@ fn emit_class(
         writes,
     });
     out.push((Instr::Lanes { spec }, head.instrs[0]));
+}
+
+/// Compile the straight run `pcs` into one one-lane [`Instr::Lanes`]: every
+/// operand it does not define becomes a scalar, read once per call; its
+/// values live in registers; each `dy` write becomes a write and each value
+/// in `outs` (read after the block) is written back to its slot.
+fn emit_block(
+    prog: &mut TapeProgram,
+    old: &[Instr],
+    pcs: &[usize],
+    outs: &[SlotId],
+    out: &mut Vec<(Instr, usize)>,
+) {
+    let mut scalars: Vec<Operand> = Vec::new();
+    let mut scal_ix: FxHashMap<[u64; 2], GroupIx> = FxHashMap::default();
+    let mut micro: Vec<MicroOp> = Vec::new();
+    let mut value: FxHashMap<SlotId, MRef> = FxHashMap::default();
+    let mut writes: Vec<(MRef, LaneDst)> = Vec::new();
+    for &pc in pcs {
+        let mut map = |o: Operand| -> MRef {
+            if let Operand::Slot(s) = o
+                && let Some(m) = value.get(&s)
+            {
+                return *m;
+            }
+            let ix = *scal_ix.entry(op_key(&o)).or_insert_with(|| {
+                scalars.push(o);
+                (scalars.len() - 1) as GroupIx
+            });
+            MRef::Scal(ix)
+        };
+        let k = micro.len() as GroupIx;
+        let (op, def) = match &old[pc] {
+            Instr::Bin { op, a, b, out } => {
+                let (a, b) = (map(*a), map(*b));
+                (
+                    MicroOp::Bin {
+                        op: *op,
+                        a,
+                        b,
+                        out: k,
+                    },
+                    *out,
+                )
+            }
+            Instr::Un { op, a, out } => (
+                MicroOp::Un {
+                    op: *op,
+                    a: map(*a),
+                    out: k,
+                },
+                *out,
+            ),
+            Instr::Neg { a, out } => (MicroOp::Neg { a: map(*a), out: k }, *out),
+            Instr::Select { cond, a, b, out } => {
+                let (cond, a, b) = (map(*cond), map(*a), map(*b));
+                (MicroOp::Select { cond, a, b, out: k }, *out)
+            }
+            Instr::Fill { v: a, out } | Instr::Copy { a, out } => {
+                let v = map(*a);
+                value.insert(*out, v);
+                continue;
+            }
+            Instr::DyWrite { write } => {
+                let w = &prog.dy_writes[*write as usize];
+                let v = map(Operand::Slot(w.slot));
+                let pos = w.scalar_flat.expect("scalar write") as u32;
+                writes.push((v, LaneDst::Dy(LaneIx::Affine { base: pos, step: 0 })));
+                continue;
+            }
+            _ => unreachable!("only batchable instructions reach a block"),
+        };
+        micro.push(op);
+        value.insert(def, MRef::Reg(k));
+    }
+    for &s in outs {
+        writes.push((value[&s], LaneDst::Slot(s)));
+    }
+    let mut live: Vec<(GroupIx, SlotId)> = writes
+        .iter()
+        .filter_map(|(m, _)| match m {
+            MRef::Reg(r) => Some((*r, 0)),
+            _ => None,
+        })
+        .collect();
+    let n_regs = super::fuse::allocate_registers(&mut micro, &mut live);
+    let mut live = live.into_iter();
+    let writes = writes
+        .into_iter()
+        .map(|(m, dst)| LaneWrite {
+            src: match m {
+                MRef::Reg(_) => MRef::Reg(live.next().expect("one per register write").0),
+                other => other,
+            },
+            dst,
+        })
+        .collect();
+    let spec = prog.lanes.len() as u32;
+    prog.lanes.push(LaneSpec {
+        lanes: 1,
+        inputs: Vec::new(),
+        scalars,
+        micro,
+        n_regs,
+        writes,
+    });
+    out.push((Instr::Lanes { spec }, pcs[0]));
 }
 
 /// The leaf a non-literal operand names.

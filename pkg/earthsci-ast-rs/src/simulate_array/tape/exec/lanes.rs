@@ -61,6 +61,10 @@ pub(super) unsafe fn exec_lanes(
     for op in &ls.scalars {
         svals.push(resolve_scalar(op, env, slab_ptr, slot_off, obs));
     }
+    if ls.lanes == 1 && ls.inputs.is_empty() {
+        exec_block(ls, svals, regs, slab_ptr, slot_off, dy);
+        return;
+    }
     let src = Sources {
         state: env.state,
         params: env.params,
@@ -73,6 +77,63 @@ pub(super) unsafe fn exec_lanes(
         SimdLevel::Avx2 => unsafe { exec_lanes_avx2(ls, &src, svals, regs, dy) },
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 => unsafe { exec_lanes_avx512(ls, &src, svals, regs, dy) },
+    }
+}
+
+/// A one-lane program: the micro-ops one after another over scalar
+/// registers, each through the same kernel definitions the chunk loops
+/// expand (`dispatch_bin_kernel` / `dispatch_un_kernel`).
+fn exec_block(
+    ls: &LaneSpec,
+    svals: &[f64],
+    regs: &mut [f64],
+    slab_ptr: *mut f64,
+    slot_off: &[usize],
+    dy: &mut [f64],
+) {
+    let regs = &mut regs[..ls.n_regs as usize];
+    let get = |m: &MRef, regs: &[f64]| match m {
+        MRef::Reg(r) => regs[*r as usize],
+        MRef::Scal(i) => svals[*i as usize],
+        MRef::In(_) => unreachable!("a one-lane block reads scalars only"),
+    };
+    for op in &ls.micro {
+        match op {
+            MicroOp::Bin { op, a, b, out } => {
+                let (x, y) = (get(a, regs), get(b, regs));
+                macro_rules! one {
+                    ($f:expr) => {
+                        regs[*out as usize] = ($f)(x, y)
+                    };
+                }
+                dispatch_bin_kernel!(op, one);
+            }
+            MicroOp::Un { op, a, out } => {
+                let x = get(a, regs);
+                macro_rules! one {
+                    ($f:expr) => {
+                        regs[*out as usize] = ($f)(x)
+                    };
+                }
+                dispatch_un_kernel!(op, one);
+            }
+            MicroOp::Neg { a, out } => regs[*out as usize] = -get(a, regs),
+            MicroOp::Select { cond, a, b, out } => {
+                let (c, x, y) = (get(cond, regs), get(a, regs), get(b, regs));
+                regs[*out as usize] = if c != 0.0 { x } else { y };
+            }
+            MicroOp::Mov { a, out } => regs[*out as usize] = get(a, regs),
+            MicroOp::Bin2 { .. } | MicroOp::Bin3 { .. } => {
+                unreachable!("a lane program holds no superops")
+            }
+        }
+    }
+    for w in &ls.writes {
+        let v = get(&w.src, regs);
+        match &w.dst {
+            LaneDst::Dy(pos) => dy[pos.at(0) as usize] = v,
+            LaneDst::Slot(s) => unsafe { *slab_ptr.add(slot_off[*s as usize]) = v },
+        }
     }
 }
 
@@ -201,9 +262,12 @@ unsafe fn exec_lanes_chunks(
             }
         }
         for w in &ls.writes {
+            let LaneDst::Dy(pos) = &w.dst else {
+                unreachable!("only a one-lane program writes a slot")
+            };
             match msrc(&w.src) {
-                MSrc::P(p) => scatter(dy, &w.pos, l0, c, |k| unsafe { *p.add(k) }),
-                MSrc::C(v) => scatter(dy, &w.pos, l0, c, |_| v),
+                MSrc::P(p) => scatter(dy, pos, l0, c, |k| unsafe { *p.add(k) }),
+                MSrc::C(v) => scatter(dy, pos, l0, c, |_| v),
             }
         }
         l0 += c;

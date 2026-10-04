@@ -596,7 +596,14 @@ pub(in crate::simulate_array) fn run_tape_call(
         SECTION_PRIMES.with(|c| c.set((c.get().0, c.get().1 + 1)));
         run_range(&env, const_end..prime_end, exec, dy, stats);
     }
-    run_range(&env, prime_end..prog.instrs.len(), exec, dy, stats);
+    // With nothing reading the published observeds, the output-only tail of
+    // the section is not run.
+    let end = if exec.exports_active {
+        prog.instrs.len()
+    } else {
+        prime_end + prog.n_rhs as usize
+    };
+    run_range(&env, prime_end..end, exec, dy, stats);
     exec.state_rm = state_rm;
 
     stats.taped_rules += exec.n_taped;
