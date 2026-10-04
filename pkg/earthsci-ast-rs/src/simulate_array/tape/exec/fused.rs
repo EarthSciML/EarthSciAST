@@ -1362,7 +1362,7 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
             out,
         } => {
             let acc = &mut carries[*carry as usize];
-            if at % *row as usize == 0 {
+            if at.is_multiple_of(*row as usize) {
                 *acc = *init;
             }
             let x = get(a, regs);

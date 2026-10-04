@@ -1934,6 +1934,10 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     if reduce.is_some() {
         fx.sink.stats.n_reduces_folded += 1;
     }
+    fx.sink.stats.n_scans_folded += micro
+        .iter()
+        .filter(|m| matches!(m, MicroOp::Scan { .. }))
+        .count();
     let reduce = reduce.map(|r| {
         let (reg, slot) = outputs.pop().expect("the reduction rides last");
         debug_assert_eq!(slot, r.out);
@@ -1957,8 +1961,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     let interleave = reduce.as_ref().and_then(|r| {
         const MAX_INTERLEAVED: usize = 16;
         let n_pos = n_elems / r.n_inner;
-        if n_pos < 2
-            || n_pos > MAX_INTERLEAVED
+        if !(2..=MAX_INTERLEAVED).contains(&n_pos)
             || schedule.n_runs != n_pos
             || micro.iter().any(|m| matches!(m, MicroOp::Scan { .. }))
         {

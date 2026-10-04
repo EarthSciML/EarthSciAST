@@ -1144,6 +1144,9 @@ pub struct FuseStats {
     /// Reductions absorbed into the group producing their source
     /// ([`FusedReduce`]; the `Reduce` instruction is deleted).
     pub n_reduces_folded: usize,
+    /// Scans absorbed into a group as [`MicroOp::Scan`] (the `Scan`
+    /// instruction is deleted).
+    pub n_scans_folded: usize,
     /// Group size histogram buckets: [2-3, 4-7, 8-15, 16-31, 32-63, 64+]
     /// member instructions.
     pub group_size_hist: [usize; 6],
