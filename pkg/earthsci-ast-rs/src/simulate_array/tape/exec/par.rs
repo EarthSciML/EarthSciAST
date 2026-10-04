@@ -26,10 +26,22 @@ use super::*;
 
 /// Estimated element-operations per worker a call's continuous section must
 /// have before the call splits.
-const MIN_WORK_PER_WORKER: usize = 1 << 16;
+const MIN_WORK_PER_WORKER: usize = 1 << 14;
 
 /// Elements each worker must get for one instruction to split.
 const MIN_ELEMS_PER_WORKER: usize = 1024;
+
+/// Accumulator cells each worker of a split reduction must own at least.
+const REDUCE_CELLS_PER_WORKER: usize = 64;
+
+/// [`REDUCE_CELLS_PER_WORKER`], or 1 while a test forces splits.
+fn reduce_cells_floor() -> usize {
+    #[cfg(test)]
+    if FORCE.with(std::cell::Cell::get).is_some() {
+        return 1;
+    }
+    REDUCE_CELLS_PER_WORKER
+}
 
 /// Window boundaries are rounded to this many elements, so two workers never
 /// write the same cache line of an output.
@@ -129,7 +141,11 @@ pub(super) fn split_ways(fs: &FusedSpec, ways: usize) -> usize {
     let n: usize = fs.shape.iter().product();
     match (&fs.reduce, scan_row(fs)) {
         (Some(_), Some(_)) => 1,
-        (Some(r), None) => ways_for(r.n_inner, ways),
+        // Every worker folds whole cells, so the split needs only enough
+        // cells per worker to own whole cache lines, while the work is all
+        // of the group's elements.
+        (Some(r), None) if r.n_inner >= ways * reduce_cells_floor() => ways_for(n, ways),
+        (Some(_), None) => 1,
         (None, Some(row)) if n / row < ways => 1,
         (None, _) => ways_for(n, ways),
     }
