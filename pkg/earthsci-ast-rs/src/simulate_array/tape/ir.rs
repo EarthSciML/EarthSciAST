@@ -1690,6 +1690,14 @@ pub(crate) struct TapeProgram {
     pub fused: Vec<FusedSpec>,
     /// Fusion-pass diagnostics (all-zero when fusion is disabled).
     pub fuse_stats: FuseStats,
+    /// Every box in the program is stored AXIS-REVERSED (see
+    /// [`super::layout`]): slot and state shapes, plans, regions, axis
+    /// fields and table positions all count axes from the last logical axis,
+    /// so a row-major slot is the column-major array the state vector holds.
+    /// A state block is then read in place and a whole-box `dy` write is one
+    /// copy. The boundaries with logical arrays (forcing loads, exports)
+    /// transpose. `false` is the program exactly as lowered.
+    pub col_major: bool,
 }
 
 impl TapeProgram {

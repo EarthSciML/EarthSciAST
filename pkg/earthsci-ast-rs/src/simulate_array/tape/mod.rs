@@ -70,6 +70,7 @@ mod forcing_tests;
 mod fuse;
 mod geom;
 mod ir;
+mod layout;
 mod lower;
 #[cfg(test)]
 mod lowering_limit_tests;
@@ -425,10 +426,23 @@ impl ArrayCompiled {
         discrete_forcing: &HashSet<String>,
         fuse: Option<fuse::SuperopCfg>,
     ) -> (TapeProgram, TapeBuildReport) {
+        self.build_tape_layout(discrete_forcing, fuse, true)
+    }
+
+    /// [`Self::build_tape_opts`] with the state-layout alignment
+    /// ([`layout`]) explicitly on/off. The XLA emitter builds with it off: it
+    /// lowers logical boxes.
+    pub(crate) fn build_tape_layout(
+        &self,
+        discrete_forcing: &HashSet<String>,
+        fuse: Option<fuse::SuperopCfg>,
+        align_layout: bool,
+    ) -> (TapeProgram, TapeBuildReport) {
         let const_names = self.classify_static_observeds(discrete_forcing);
         let seg_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
         let forcing = self.forcing_inputs(discrete_forcing);
-        let (prog, vn_hits) = build_tape_program(self, &const_names, &seg_names, &forcing, fuse);
+        let (prog, vn_hits) =
+            build_tape_program(self, &const_names, &seg_names, &forcing, fuse, align_layout);
         let report = make_report(&prog, vn_hits);
         (prog, report)
     }
