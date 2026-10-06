@@ -38,7 +38,9 @@
 //! The module is pure text→AST: no filesystem, clock or thread APIs, so it
 //! compiles for `wasm32` unchanged.
 
-use crate::types::{Equation, Expr, ExpressionNode, JoinClause, RangeSpec, RegionBound};
+use crate::types::{
+    Equation, Expr, ExpressionNode, JoinClause, OverlapClause, RangeSpec, RegionBound,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -771,7 +773,8 @@ impl Parser {
     }
 
     /// Parse an `argmin` / `argmax` arg-witness — the inverse of the printer's
-    /// `formatArgWitness`: `op '[' arg ']' '(' expr ')' ('where' '{' ranges '}')?`.
+    /// `formatArgWitness`: `op '[' arg ']' '(' expr ')' ('where' '{' ranges '}')?
+    /// ('join' '(' … ')')? ('if' filter)? ('id' '=' name)?`.
     fn parse_arg_witness(&mut self, op: &str) -> PResult<Expr> {
         self.next(); // '['
         let at = self.next();
@@ -790,16 +793,31 @@ impl Parser {
             self.next();
             ranges = self.parse_ranges()?;
         }
+        // The candidate-pruning `join(…)` and `if` filter, exactly as on `faq`.
+        let mut join: Vec<JoinClause> = Vec::new();
+        if self.at_word("join") {
+            self.next();
+            join = self.parse_join()?;
+        }
+        let mut filter: Option<Expr> = None;
+        if self.at_word("if") {
+            self.next();
+            filter = Some(self.parse_expr(0)?);
+        }
         // `id=<name>` (RFC §6.1 node identity), emitted by `format_arg_witness`
-        // after the where-clause. Mirrors the aggregate tail.
+        // after the filter. Mirrors the aggregate tail.
         let id = self.parse_id_clause()?;
         let mut n = ExpressionNode {
             op: op.to_string(),
-            args: derive_aggregate_args(&expr, &[], None, None),
+            args: derive_aggregate_args(&expr, &join, filter.as_ref(), None),
             ..Default::default()
         };
         n.arg = Some(at.text);
         n.ranges = Some(ranges);
+        if !join.is_empty() {
+            n.join = Some(join);
+        }
+        n.filter = filter.map(Box::new);
         n.expr = Some(Box::new(expr));
         n.id = id;
         Ok(Expr::operator(n))
@@ -946,44 +964,175 @@ impl Parser {
         Err(self.fail_here("malformed range (expected a set name, set(of…), or lo:hi)"))
     }
 
-    /// Parse `( a=b, c=d ; e=f )` → `[{on:[[a,b],[c,d]]}, {on:[[e,f]]}]`.
+    /// Parse a join body — the inverse of `format_join_clause`. Clauses are
+    /// separated by `;`. An equality clause is one or more `l=r` key-column pairs
+    /// plus an optional `syms=[left, right]` (in any position); an overlap clause
+    /// is exactly `overlap(src=[…], tgt=[…][, eps=<number>])`. An empty `join()`,
+    /// an empty clause, and an overlap mixed with key pairs are refused — none of
+    /// them is a schema-valid clause.
     fn parse_join(&mut self) -> PResult<Vec<JoinClause>> {
         self.expect(Kind::LParen, "'(' after join")?;
         let mut clauses: Vec<JoinClause> = Vec::new();
-        let mut cur: Vec<[String; 2]> = Vec::new();
-        if self.peek().kind != Kind::RParen {
-            loop {
-                let a = self.next();
-                if a.kind != Kind::Name {
-                    return Err(ExpressionParseError::new("Expected a join key name", a.pos));
+        loop {
+            clauses.push(self.parse_join_clause()?);
+            if self.peek().kind == Kind::Semi {
+                self.next();
+                continue;
+            }
+            break;
+        }
+        self.expect(Kind::RParen, "')' to close join(…)")?;
+        Ok(clauses)
+    }
+
+    fn parse_join_clause(&mut self) -> PResult<JoinClause> {
+        if self.at_word("overlap") && self.peek_at(1).kind == Kind::LParen {
+            self.next(); // 'overlap'
+            return Ok(JoinClause {
+                overlap: Some(self.parse_overlap()?),
+                ..Default::default()
+            });
+        }
+        let start = self.peek().pos;
+        let mut on: Vec<[String; 2]> = Vec::new();
+        let mut syms: Option<[String; 2]> = None;
+        loop {
+            let a = self.next();
+            if a.kind != Kind::Name {
+                return Err(ExpressionParseError::new("Expected a join key name", a.pos));
+            }
+            self.expect(Kind::Eq, "'=' in a join pair")?;
+            if a.text == "syms" && self.peek().kind == Kind::LBrack {
+                if syms.is_some() {
+                    return Err(ExpressionParseError::new(
+                        "duplicate syms=[…] in a join clause",
+                        a.pos,
+                    ));
                 }
-                self.expect(Kind::Eq, "'=' in a join pair")?;
+                let names = self.parse_name_list("syms")?;
+                let Ok(pair) = <[String; 2]>::try_from(names) else {
+                    return Err(ExpressionParseError::new(
+                        "syms=[…] names exactly two range symbols",
+                        a.pos,
+                    ));
+                };
+                syms = Some(pair);
+            } else {
                 let b = self.next();
                 if b.kind != Kind::Name {
                     return Err(ExpressionParseError::new("Expected a join key name", b.pos));
                 }
-                cur.push([a.text, b.text]);
+                on.push([a.text, b.text]);
+            }
+            if self.peek().kind == Kind::Comma {
+                self.next();
+                continue;
+            }
+            break;
+        }
+        if on.is_empty() {
+            return Err(ExpressionParseError::new(
+                "a join clause needs at least one key pair l=r",
+                start,
+            ));
+        }
+        Ok(JoinClause {
+            on,
+            syms,
+            ..Default::default()
+        })
+    }
+
+    /// `( src=[…], tgt=[…] [, eps=<number>] )` → an overlap gate, in canonical
+    /// field order regardless of the order the text spelled them in.
+    fn parse_overlap(&mut self) -> PResult<OverlapClause> {
+        self.expect(Kind::LParen, "'(' after overlap")?;
+        let mut src: Option<Vec<String>> = None;
+        let mut tgt: Option<Vec<String>> = None;
+        let mut eps: Option<f64> = None;
+        loop {
+            let k = self.next();
+            if k.kind != Kind::Name {
+                return Err(ExpressionParseError::new(
+                    "Expected src=, tgt= or eps= in overlap(…)",
+                    k.pos,
+                ));
+            }
+            self.expect(Kind::Eq, &format!("'=' after {} in overlap(…)", k.text))?;
+            match k.text.as_str() {
+                "src" | "tgt" if (if k.text == "src" { &src } else { &tgt }).is_none() => {
+                    let names = self.parse_name_list(&k.text)?;
+                    if names.is_empty() {
+                        return Err(ExpressionParseError::new(
+                            format!("overlap {}=[…] must name at least one factor", k.text),
+                            k.pos,
+                        ));
+                    }
+                    if k.text == "src" {
+                        src = Some(names);
+                    } else {
+                        tgt = Some(names);
+                    }
+                }
+                "eps" if eps.is_none() => match self.parse_expr(0)? {
+                    Expr::Number(v) if v >= 0.0 => eps = Some(v),
+                    Expr::Integer(v) if v >= 0 => eps = Some(v as f64),
+                    _ => {
+                        return Err(ExpressionParseError::new(
+                            "overlap eps= must be a non-negative number",
+                            k.pos,
+                        ));
+                    }
+                },
+                _ => {
+                    return Err(ExpressionParseError::new(
+                        format!("unexpected or duplicate {}= in overlap(…)", k.text),
+                        k.pos,
+                    ));
+                }
+            }
+            if self.peek().kind == Kind::Comma {
+                self.next();
+                continue;
+            }
+            break;
+        }
+        self.expect(Kind::RParen, "')' to close overlap(…)")?;
+        let (Some(src_env), Some(tgt_env)) = (src, tgt) else {
+            return Err(self.fail_here("overlap(…) requires both src=[…] and tgt=[…]"));
+        };
+        Ok(OverlapClause {
+            src_env,
+            tgt_env,
+            eps,
+            sym_src: None,
+            sym_tgt: None,
+        })
+    }
+
+    /// `[name, name, …]` (possibly empty).
+    fn parse_name_list(&mut self, what: &str) -> PResult<Vec<String>> {
+        self.expect(Kind::LBrack, &format!("'[' after {what}="))?;
+        let mut names: Vec<String> = Vec::new();
+        if self.peek().kind != Kind::RBrack {
+            loop {
+                let t = self.next();
+                if t.kind != Kind::Name {
+                    return Err(ExpressionParseError::new(
+                        format!("Expected a name in {what}=[…]"),
+                        t.pos,
+                    ));
+                }
+                names.push(t.text);
                 if self.peek().kind == Kind::Comma {
                     self.next();
-                    continue;
-                }
-                if self.peek().kind == Kind::Semi {
-                    self.next();
-                    clauses.push(JoinClause {
-                        on: std::mem::take(&mut cur),
-                        ..Default::default()
-                    });
                     continue;
                 }
                 break;
             }
         }
-        clauses.push(JoinClause {
-            on: cur,
-            ..Default::default()
-        });
-        self.expect(Kind::RParen, "')' to close join(…)")?;
-        Ok(clauses)
+        self.expect(Kind::RBrack, &format!("']' to close {what}=[…]"))?;
+        Ok(names)
     }
 
     /// Parse `name<binding = value, …>` (or empty `name<>`) →
@@ -1277,6 +1426,28 @@ fn make_call(name: &str, args: Vec<Expr>, named: Vec<(String, Expr)>, pos: usize
         }
         return Ok(Expr::operator(n));
     }
+    // `skolem(a, b, label=<name>)` — the documentary relation tag.
+    if name == "skolem" && take_named(&named, "label").is_some() {
+        if let Some((k, _)) = named.iter().find(|(k, _)| k != "label") {
+            return Err(ExpressionParseError::new(
+                format!("unexpected {k}=… in skolem(...)"),
+                pos,
+            ));
+        }
+        let Some(Expr::Variable(label)) = take_named(&named, "label") else {
+            return Err(ExpressionParseError::new(
+                "skolem(...) label=… must be a name",
+                pos,
+            ));
+        };
+        let mut n = ExpressionNode {
+            op: "skolem".to_string(),
+            args,
+            ..Default::default()
+        };
+        n.label = Some(label);
+        return Ok(Expr::operator(n));
+    }
     no_named(&named, name, pos)?;
     if STRUCTURAL_OPS.contains(&name) {
         return Err(ExpressionParseError::new(
@@ -1325,6 +1496,11 @@ fn derive_aggregate_args(
     let mut out: Vec<String> = Vec::new();
     collect_index_bases(expr, &mut out);
     for c in join {
+        if let Some(ov) = &c.overlap {
+            for name in ov.src_env.iter().chain(&ov.tgt_env) {
+                push_unique(&mut out, name);
+            }
+        }
         for pair in &c.on {
             push_unique(&mut out, &pair[0]);
             push_unique(&mut out, &pair[1]);
@@ -1361,17 +1537,25 @@ fn collect_index_bases(e: &Expr, out: &mut Vec<String>) {
 
 // --- normalization -----------------------------------------------------------
 
-/// Flatten nested same-op `+` / `*` in `args` into the n-ary form the printer
-/// emits and authored ASTs use: `a + b + c` → one `+` with three args, not
-/// left-nested pairs. (`-` and `/` are binary and stay as parsed.) Non-`args`
-/// expression fields (integral bounds, aggregate bodies, …) are left as parsed.
+/// Flatten nested same-op `+` / `*` / `and` / `or` in `args` into the n-ary
+/// form the printer emits and authored ASTs use: `a + b + c` → one `+` with
+/// three args, not left-nested pairs. (`-` and `/` are binary and stay as
+/// parsed.) A reduction's `expr` / `filter` / `key` are flattened too; other
+/// non-`args` expression fields (integral bounds, etc.) are left as parsed.
 fn flatten(e: &Expr) -> Expr {
     let Expr::Operator(nd) = e else {
         return e.clone();
     };
     let args: Vec<Expr> = nd.args.iter().map(flatten).collect();
     let mut out = (**nd).clone();
-    if nd.op == "+" || nd.op == "*" {
+    // The reduction-body fields of `faq` / `argmin` / `argmax` are expressions
+    // in their own right and are normalized the same way.
+    for field in [&mut out.expr, &mut out.filter, &mut out.key] {
+        if let Some(v) = field.as_deref() {
+            *field = Some(Box::new(flatten(v)));
+        }
+    }
+    if matches!(nd.op.as_str(), "+" | "*" | "and" | "or") {
         let mut merged: Vec<Expr> = Vec::with_capacity(args.len());
         for a in args {
             match &a {

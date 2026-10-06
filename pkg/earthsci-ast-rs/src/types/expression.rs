@@ -197,6 +197,18 @@ pub(crate) fn serialize_canonical_f64<S: serde::Serializer>(
     }
 }
 
+/// `serialize_with` adapter for [`OverlapClause::eps`]: canonical-number form
+/// for a present value (the field is skipped when absent).
+fn serialize_canonical_eps<S: serde::Serializer>(
+    eps: &Option<f64>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match eps {
+        Some(n) => serialize_canonical_f64(*n, serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
 /// One bound of a `makearray` region box (esm-spec §4.3.2).
 ///
 /// Almost always a concrete integer: esm-spec §9.7.6 folds metaparameter bound
@@ -417,8 +429,14 @@ pub struct OverlapClause {
     pub src_env: Vec<String>,
     /// INDEXED (cell) side envelope factor name(s).
     pub tgt_env: Vec<String>,
-    /// Non-negative outward envelope inflation (default `0.0`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Non-negative outward envelope inflation (default `0.0`). Serialized in
+    /// canonical-number form (§5.5.3.1), so an authored `"eps": 0` re-emits as
+    /// `0`, not `0.0`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_canonical_eps"
+    )]
     pub eps: Option<f64>,
     /// The aggregate range symbol the `src_env` axis runs over, resolved at
     /// build time by [`crate::join::resolve_overlap_join_syms`] while each
