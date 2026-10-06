@@ -622,17 +622,24 @@ function needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::
     # `(a^b)^c` (left) and `a^(b^c)` (right) — RENDERING_CONTRACT.md
     # "Associativity and parenthesization". (In LaTeX the exponent sits in
     # `{}`, so the right `^` operand is rendered without `needs_parentheses`
-    # and needs no extra parens: `a^{b^{c}}`.) The left-associative `-`/`/`
-    # parenthesize only their RIGHT operand (`a - (b - c)`, `a / (b / c)`).
+    # and needs no extra parens: `a^{b^{c}}`.)
     if parent_op == "^"
         return true
     end
-    if is_right_operand && (parent_op == "-" || parent_op == "/")
-        return true
+    # A same-level RIGHT operand: the parser groups same-level operators to the
+    # LEFT, so it keeps its parentheses unless it is the very same associative
+    # operator, which the parser re-flattens into one n-ary node (`a + b + c`).
+    # `a * (b / c)` printed bare reads back as `(a * b) / c`, `a == (b < c)` as
+    # `(a == b) < c`.
+    if is_right_operand
+        return !(child.op == parent_op && parent_op in _ASSOCIATIVE_OPS)
     end
 
     return false
 end
+
+"""Operators whose same-op right operand needs no parentheses (the parser re-flattens them)."""
+const _ASSOCIATIVE_OPS = ("+", "*", "and", "or")
 
 """
     Base.show(io::IO, ::MIME"text/plain", expr::ASTExpr)
@@ -806,17 +813,26 @@ function format_ranges_clause(ranges, format::Symbol)
         " where {$(join(parts, ", "))}"
 end
 
-# One join clause → its display fragment. A bin-equality clause renders its
-# key-column pairs `l=r, …`; an overlap clause (Phase 2a) renders its envelope
-# factors `overlap([src]~[tgt])` with the `eps` slack when non-zero.
-function _display_join_clause(clause::_OverlapJoinSpec)
-    slack = clause.eps == 0.0 ? "" : "; eps=$(clause.eps)"
-    return "overlap([$(join(clause.src_env, ","))]~[$(join(clause.tgt_env, ","))]$slack)"
+# One join clause → its display fragment (RENDERING_CONTRACT.md, faq join). An
+# equality clause renders its key-column pairs `l=r, …` then, when present, the
+# self-join side assignment `, syms=[s0, s1]`; an overlap clause (Phase 2a)
+# renders `overlap(src=[…], tgt=[…])` with `, eps=E` whenever `eps` was spelled
+# (an explicit 0 included), `E` per the format's number rules.
+function _display_join_clause(clause::_OverlapJoinSpec, format::Symbol)
+    slack = clause.eps_given ? ", eps=$(format_number(clause.eps, format))" : ""
+    return "overlap(src=[$(join(clause.src_env, ", "))], " *
+           "tgt=[$(join(clause.tgt_env, ", "))]$slack)"
 end
-function _display_join_clause(clause)
+function _display_join_clause(clause, format::Symbol)
     body = join(["$(p[1])=$(p[2])" for p in clause], ", ")
     syms = _clause_syms(clause)
-    return syms === nothing ? body : "$body @ $(syms[1]),$(syms[2])"
+    return syms === nothing ? body : "$body, syms=[$(syms[1]), $(syms[2])]"
+end
+
+"""Render the ` join(…)` clause shared by `faq` and `argmin`/`argmax` (`""` if none)."""
+function format_join_clause(joins, format::Symbol)
+    (joins === nothing || isempty(joins)) && return ""
+    return " join($(join([_display_join_clause(c, format) for c in joins], "; ")))"
 end
 
 """Render a `faq` node per the rendering contract."""
@@ -833,10 +849,7 @@ function format_aggregate(node::OpExpr, format::Symbol)
     if node.ranges !== nothing && !isempty(node.ranges)
         out *= format_ranges_clause(node.ranges, format)
     end
-    if node.join !== nothing && !isempty(node.join)
-        clauses = join([_display_join_clause(clause) for clause in node.join], "; ")
-        out *= " join($clauses)"
-    end
+    out *= format_join_clause(node.join, format)
     if node.filter !== nothing
         out *= " if $(r(node.filter))"
     end
@@ -868,6 +881,11 @@ function format_arg_witness(node::OpExpr, format::Symbol)
     out = "$name$idx_part ($expr_str)"
     if node.ranges !== nothing && !isempty(node.ranges)
         out *= format_ranges_clause(node.ranges, format)
+    end
+    # The candidate-pruning join and filter, spelled exactly as on `faq`.
+    out *= format_join_clause(node.join, format)
+    if node.filter !== nothing
+        out *= " if $(r(node.filter))"
     end
     if node.id !== nothing
         out *= " id=$(node.id)"
@@ -989,6 +1007,12 @@ function format_structural_op(node::OpExpr, format::Symbol)
         # before, so every existing rendering is unchanged.
         id_part = node.id === nothing ? "" : ", id=$(node.id)"
         return "$name($inner, manifold=$manifold$id_part)"
+    elseif op == "skolem" && node.label !== nothing
+        # The documentary `label` is a trailing named argument, like
+        # intersect_polygon's `manifold=`; an unlabeled skolem is a plain call.
+        inner = join([r(a) for a in args], ", ")
+        name = format == :latex ? "\\mathrm{skolem}" : "skolem"
+        return "$name($inner, label=$(node.label))"
     elseif op == "faq"
         return format_aggregate(node, format)
     elseif op == "argmin" || op == "argmax"
@@ -1036,6 +1060,12 @@ _latex_product_sep(args) =
 function _format_operand(op::String, arg::ASTExpr, format::Symbol,
                          is_right_operand::Bool=false, parent_argc::Int=2)
     result = format_expression(arg, format)
+    # A LaTeX `\frac{…}{…}` is self-delimiting, so it never needs the
+    # same-precedence right-operand parentheses the linear forms do.
+    if format == :latex && op == "*" && arg isa OpExpr && arg.op == "/" &&
+       length(arg.args) == 2
+        return result
+    end
     return needs_parentheses(op, arg, is_right_operand, parent_argc) ? "($result)" : result
 end
 
@@ -1211,7 +1241,7 @@ function _format_unary_op(node::OpExpr, format::Symbol)
     return nothing
 end
 
-"""Render ternary `ifelse` and n-ary (≥ 3) `+`/`*`/`or` chains, or `nothing`."""
+"""Render ternary `ifelse` and n-ary (≥ 3) `+`/`*`/`and`/`or` chains, or `nothing`."""
 function _format_nary_op(node::OpExpr, format::Symbol)
     op = node.op
     args = node.args
@@ -1226,13 +1256,15 @@ function _format_nary_op(node::OpExpr, format::Symbol)
     end
 
     if length(args) >= 3
+        # Every argument after the first is a RIGHT operand (`k * (a / b) * c`).
         if op == "+"
-            return join([fa(arg) for arg in args], " + ")
+            return join([fa(arg, i > 1) for (i, arg) in enumerate(args)], " + ")
         elseif op == "*"
             sep = format == :latex ? _latex_product_sep(args) : _infix_separator(op, format)
-            return join([fa(arg) for arg in args], sep)
-        elseif op == "or"
-            return join([fa(arg) for arg in args], _infix_separator(op, format))
+            return join([fa(arg, i > 1) for (i, arg) in enumerate(args)], sep)
+        elseif op == "or" || op == "and"
+            return join([fa(arg, i > 1) for (i, arg) in enumerate(args)],
+                        _infix_separator(op, format))
         end
     end
 
