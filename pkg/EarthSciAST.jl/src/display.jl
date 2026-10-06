@@ -450,6 +450,27 @@ function format_chemical_subscripts(variable::AbstractString, format::Symbol)
 end
 
 """
+    _shortest_decimal_digits(x::Float64) -> (digits::String, exp::Int)
+
+The significant digits of the shortest decimal that round-trips the positive
+finite `x` (no leading or trailing zeros), and the exponent `exp` such that
+`x == parse(Float64, "d.ddd" * "e" * exp)`. Derived from `string(x)`, which
+Julia already prints as the shortest round-tripping form.
+"""
+function _shortest_decimal_digits(x::Float64)
+    s = string(x)
+    m, e = occursin('e', s) ? split(s, 'e') : (s, "0")
+    e10 = parse(Int, e)
+    ip, fp = occursin('.', m) ? split(m, '.') : (m, "")
+    all_digits = ip * fp
+    lead = findfirst(!=('0'), all_digits)
+    digits = rstrip(all_digits[lead:end], '0')
+    # Position of the first significant digit relative to the decimal point.
+    exp = e10 + length(ip) - lead
+    return String(digits), exp
+end
+
+"""
     format_number(num::Real, format::Symbol) -> String
 
 Format a number in scientific notation with appropriate formatting.
@@ -474,19 +495,13 @@ function format_number(num::Real, format::Symbol)
     absnum = abs(num)
     # Scientific notation for very small / very large magnitudes (spec §6.1).
     if absnum < 0.01 || absnum >= 10000
-        exp = floor(Int, log10(absnum))
-        mant = num / exp10(exp)
-        # Normalize the mantissa into [1, 10) (guards log10 rounding at exact powers).
-        while abs(mant) >= 10
-            exp += 1; mant = num / exp10(exp)
-        end
-        while abs(mant) < 1
-            exp -= 1; mant = num / exp10(exp)
-        end
-        # Strip floating-point noise so a clean mantissa round-trips (`9.999`, not
-        # `9.998999…`) while preserving genuine precision.
-        mant = parse(Float64, string(round(mant, sigdigits=15)))
-        ms = string(mant)
+        digits, exp = _shortest_decimal_digits(Float64(absnum))
+        # Mantissa `d.ddd` from the shortest round-tripping digit string; a
+        # one-digit mantissa keeps `.0` (`1.0e21`). Dividing by `exp10(exp)` and
+        # rounding instead lost precision (4.4308006468156513e-17 printed as
+        # 4.43080064681565e-17, which reads back as a different number).
+        ms = (num < 0 ? "-" : "") * digits[1:1] * "." *
+             (length(digits) == 1 ? "0" : digits[2:end])
         if format == :unicode
             return "$(_uni_minus(ms))×10$(to_superscript(string(exp)))"
         elseif format == :latex
