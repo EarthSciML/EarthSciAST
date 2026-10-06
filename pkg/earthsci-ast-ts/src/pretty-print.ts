@@ -660,7 +660,11 @@ function formatNumber(num: number, format: 'unicode' | 'latex' | 'ascii'): strin
   // Use scientific notation for very small or large numbers (spec Section 6.1)
   if (absNum < SCI_NOTATION_MIN || absNum >= SCI_NOTATION_MAX) {
     const [mantissaTok, exponentTok] = num.toExponential().split('e')
-    let mantissa = parseFloat(mantissaTok).toString() // remove trailing zeros
+    // `toExponential()` with no argument already yields the shortest mantissa
+    // that round-trips, with no trailing zeros. Re-rendering it through
+    // `parseFloat(…).toString()` rounded a 17-digit mantissa a second time and
+    // lost precision (4.4308006468156513e-17 printed as 4.430800646815651e-17).
+    let mantissa = mantissaTok
     // An integer-valued mantissa keeps one fractional digit (`1` → `1.0`) so the
     // rendering advertises its scientific form (contract number-formatting).
     if (!mantissa.includes('.')) mantissa += '.0'
