@@ -584,7 +584,8 @@ class _Parser:
 
     def _parse_arg_witness(self, op: str) -> Any:
         """Parse an ``argmin`` / ``argmax`` arg-witness (esm-spec §4.2):
-        ``op '[' arg ']' '(' expr ')' ('where' '{' ranges '}')?``. Like aggregate,
+        ``op '[' arg ']' '(' expr ')' ('where' '{' ranges '}')?
+        ('join' '(' … ')')? ('if' filter)? ('id' '=' name)?``. Like aggregate,
         its ``args`` operand cache isn't printed and is derived."""
         self._next()  # '['
         at = self._next()
@@ -598,16 +599,31 @@ class _Parser:
         if self._at_word("where"):
             self._next()
             ranges = self._parse_ranges()
+        # The candidate-pruning `join(…)` and `if` filter, exactly as on `faq`.
+        join: list[dict[str, Any]] = []
+        if self._at_word("join"):
+            self._next()
+            join.extend(self._parse_join())
+        filter_: Any = _MISSING
+        if self._at_word("if"):
+            self._next()
+            filter_ = self._parse_expr(0)
         # `id=<name>` (RFC §6.1 node identity), emitted after the where-clause.
         # Mirrors the aggregate tail.
         node_id = self._parse_id_clause()
         node: dict[str, Any] = {
             "op": op,
-            "args": _derive_aggregate_args(expr, [], None, None),
+            "args": _derive_aggregate_args(
+                expr, join, None if filter_ is _MISSING else filter_, None
+            ),
             "arg": at.v,
             "ranges": ranges,
             "expr": expr,
         }
+        if join:
+            node["join"] = join
+        if filter_ is not _MISSING:
+            node["filter"] = filter_
         if node_id is not None:
             node["id"] = node_id
         return node
@@ -692,32 +708,112 @@ class _Parser:
         return self._fail("malformed range (expected a set name, set(of…), or lo:hi)")
 
     def _parse_join(self) -> list[dict[str, Any]]:
-        """Parse ``( a=b, c=d ; e=f )`` -> ``[{on:[[a,b],[c,d]]}, {on:[[e,f]]}]``."""
+        """Parse a join body — the inverse of the printer's join clause.
+
+        Clauses are separated by ``;``. An equality clause is one or more
+        ``l=r`` key-column pairs plus an optional ``syms=[left, right]`` (in any
+        order); an overlap clause is exactly
+        ``overlap(src=[…], tgt=[…][, eps=<number>])``. An empty ``join()``, an
+        empty clause, and an overlap mixed with key pairs are refused — none of
+        them is a schema-valid clause.
+        """
         self._expect("(", "'(' after join")
         clauses: list[dict[str, Any]] = []
-        cur: list[list[str]] = []
-        if self._peek().k != ")":
-            while True:
-                a = self._next()
-                if a.k != "name":
-                    self._fail("Expected a join key name", a)
-                self._expect("eq", "'=' in a join pair")
+        while True:
+            clauses.append(self._parse_join_clause())
+            if self._peek().k == ";":
+                self._next()
+                continue
+            break
+        self._expect(")", "')' to close join(…)")
+        return clauses
+
+    def _parse_join_clause(self) -> dict[str, Any]:
+        """One join clause: key-column equality (with optional ``syms``) or overlap."""
+        if self._at_word("overlap") and self._peek(1).k == "(":
+            self._next()  # 'overlap'
+            return {"overlap": self._parse_overlap()}
+        on: list[list[str]] = []
+        syms: list[str] | None = None
+        while True:
+            a = self._next()
+            if a.k != "name":
+                self._fail("Expected a join key name", a)
+            self._expect("eq", "'=' in a join pair")
+            if a.v == "syms" and self._peek().k == "[":
+                if syms is not None:
+                    self._fail("duplicate syms=[…] in a join clause", a)
+                names = self._parse_name_list("syms")
+                if len(names) != 2:
+                    self._fail("syms=[…] names exactly two range symbols", a)
+                syms = names
+            else:
                 b = self._next()
                 if b.k != "name":
                     self._fail("Expected a join key name", b)
-                cur.append([a.v, b.v])
+                on.append([a.v, b.v])
+            if self._peek().k == ",":
+                self._next()
+                continue
+            break
+        if not on:
+            self._fail("a join clause needs at least one key pair l=r")
+        clause: dict[str, Any] = {"on": on}
+        if syms is not None:
+            clause["syms"] = syms
+        return clause
+
+    def _parse_overlap(self) -> dict[str, Any]:
+        """``( src=[…], tgt=[…] [, eps=<number>] )`` -> an overlap gate, in the
+        canonical field order ``src_env``, ``tgt_env``, ``eps`` whatever order
+        the text spelled them in."""
+        self._expect("(", "'(' after overlap")
+        gate: dict[str, Any] = {}
+        while True:
+            k = self._next()
+            if k.k != "name":
+                self._fail("Expected src=, tgt= or eps= in overlap(…)", k)
+            self._expect("eq", f"'=' after {k.v} in overlap(…)")
+            if k.v in ("src", "tgt") and f"{k.v}_env" not in gate:
+                names = self._parse_name_list(k.v)
+                if not names:
+                    self._fail(f"overlap {k.v}=[…] must name at least one factor", k)
+                gate[f"{k.v}_env"] = names
+            elif k.v == "eps" and "eps" not in gate:
+                v = self._parse_expr(0)
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+                    self._fail("overlap eps= must be a non-negative number", k)
+                gate["eps"] = v
+            else:
+                self._fail(f"unexpected or duplicate {k.v}= in overlap(…)", k)
+            if self._peek().k == ",":
+                self._next()
+                continue
+            break
+        self._expect(")", "')' to close overlap(…)")
+        if "src_env" not in gate or "tgt_env" not in gate:
+            self._fail("overlap(…) requires both src=[…] and tgt=[…]")
+        out: dict[str, Any] = {"src_env": gate["src_env"], "tgt_env": gate["tgt_env"]}
+        if "eps" in gate:
+            out["eps"] = gate["eps"]
+        return out
+
+    def _parse_name_list(self, what: str) -> list[str]:
+        """``[name, name, …]`` (possibly empty)."""
+        self._expect("[", f"'[' after {what}=")
+        names: list[str] = []
+        if self._peek().k != "]":
+            while True:
+                t = self._next()
+                if t.k != "name":
+                    self._fail(f"Expected a name in {what}=[…]", t)
+                names.append(t.v)
                 if self._peek().k == ",":
                     self._next()
                     continue
-                if self._peek().k == ";":
-                    self._next()
-                    clauses.append({"on": cur})
-                    cur = []
-                    continue
                 break
-        clauses.append({"on": cur})
-        self._expect(")", "')' to close join(…)")
-        return clauses
+        self._expect("]", f"']' to close {what}=[…]")
+        return names
 
     def _parse_template(self, name: str) -> Any:
         """Parse ``name<binding = value, …>`` (or empty ``name<>``) ->
@@ -847,6 +943,14 @@ def _make_call(name: str, args: list[Any], named: dict[str, Any], pos: int) -> A
                 raise ExpressionParseError(f"{name}(...) id=… must be a name", pos)
             node["id"] = named["id"]
         return node
+    # `skolem(a, b, label=<name>)` — the documentary relation tag.
+    if name == "skolem" and "label" in named:
+        for k in named:
+            if k != "label":
+                raise ExpressionParseError(f"unexpected {k}=… in skolem(...)", pos)
+        if not isinstance(named["label"], str):
+            raise ExpressionParseError("skolem(...) label=… must be a name", pos)
+        return {"op": "skolem", "args": args, "label": named["label"]}
     _no_named(named, name, pos)
     if name in _STRUCTURAL_OPS:
         raise ExpressionParseError(f"'{name}' is not yet expressible in the text form", pos)
@@ -904,9 +1008,13 @@ def _derive_aggregate_args(
 
     bases(expr)
     for c in join:
-        for a, b in c["on"]:
-            add(a)
-            add(b)
+        if "overlap" in c:
+            for n in (*c["overlap"]["src_env"], *c["overlap"]["tgt_env"]):
+                add(n)
+        else:
+            for a, b in c["on"]:
+                add(a)
+                add(b)
     bases(filter_)
     bases(key)
     return out
@@ -916,14 +1024,16 @@ def _derive_aggregate_args(
 
 
 def _flatten(e: Any) -> Any:
-    """Flatten nested same-op ``+`` / ``*`` in ``args`` into the n-ary form the
-    printer emits and authored ASTs use: ``a + b + c`` -> one ``+`` with three
-    args, not left-nested pairs. (``-`` and ``/`` are binary and stay as parsed.)
-    Non-``args`` expression fields (integral bounds, etc.) are left as parsed."""
+    """Flatten nested same-op ``+`` / ``*`` / ``and`` / ``or`` in ``args`` into
+    the n-ary form the printer emits and authored ASTs use: ``a + b + c`` -> one
+    ``+`` with three args, not left-nested pairs. (``-`` and ``/`` are binary
+    and stay as parsed.) A reduction's ``expr`` / ``filter`` / ``key`` are
+    flattened too; other non-``args`` expression fields (integral bounds, etc.)
+    are left as parsed."""
     if not _is_expr_node(e):
         return e
     args = [_flatten(a) for a in e["args"]]
-    if e["op"] in ("+", "*"):
+    if e["op"] in _FLATTENED_OPS:
         out: list[Any] = []
         for a in args:
             if _is_expr_node(a) and a["op"] == e["op"] and a.get("wrt") is None:
@@ -932,8 +1042,19 @@ def _flatten(e: Any) -> Any:
                 out.append(a)
         args = out
     node = dict(e)
+    # The reduction-body fields of `faq` / `argmin` / `argmax` are expressions
+    # in their own right and are normalized the same way.
+    for k in _FLATTENED_FIELDS:
+        if k in node:
+            node[k] = _flatten(node[k])
     node["args"] = args
     return node
+
+
+#: Associative operators whose nested same-op chains :func:`_flatten` merges.
+_FLATTENED_OPS = frozenset({"+", "*", "and", "or"})
+#: Non-``args`` expression fields :func:`_flatten` also normalizes.
+_FLATTENED_FIELDS = ("expr", "filter", "key")
 
 
 # --- public API --------------------------------------------------------------
