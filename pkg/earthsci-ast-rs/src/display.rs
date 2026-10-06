@@ -334,10 +334,11 @@ fn format_display_float(n: f64) -> FloatParts {
 
     let abs_n = n.abs();
     if !(SCI_NOTATION_MIN..SCI_NOTATION_MAX).contains(&abs_n) {
-        // Rust's `{:e}` yields the shortest round-tripping mantissa with no
-        // precision loss (e.g. 0.009999 -> "9.999e-3") and an exponent with no
-        // leading `+`, matching the normative number-formatting contract.
-        let sci = format!("{n:e}");
+        // The shortest round-tripping mantissa with no precision loss (e.g.
+        // 0.009999 -> "9.999e-3") and an exponent with no leading `+`, matching
+        // the normative number-formatting contract. See `shortest_sci` for why
+        // it is not plain `{:e}`.
+        let sci = shortest_sci(n);
         if let Some(e_pos) = sci.find('e') {
             let mut mantissa = sci[..e_pos].to_string();
             // Ensure at least one decimal place: "1" -> "1.0", "8.64" stays.
@@ -357,8 +358,39 @@ fn format_display_float(n: f64) -> FloatParts {
         return FloatParts::Plain(format!("{}", n as i64));
     }
 
-    // In-range fractional value: shortest round-tripping decimal, no rounding.
-    FloatParts::Plain(format!("{n}"))
+    // In-range fractional value: shortest round-tripping decimal, no rounding,
+    // printed at that many fraction digits so a tie breaks to even (see
+    // `shortest_sci`).
+    let (digits, exp) = shortest_digit_count(n);
+    let frac = usize::try_from(digits as i64 - 1 - exp).unwrap_or(0);
+    FloatParts::Plain(format!("{n:.frac$}"))
+}
+
+/// The significant-digit count and decimal exponent of the shortest decimal
+/// that round-trips `n` (finite, non-zero), read off Rust's `{:e}`.
+fn shortest_digit_count(n: f64) -> (usize, i64) {
+    let s = format!("{n:e}");
+    let e_pos = s.find('e').expect("`{:e}` always has an exponent");
+    let digits = s[..e_pos].trim_start_matches('-').replace('.', "").len();
+    let exp = s[e_pos + 1..]
+        .parse()
+        .expect("`{:e}` exponent is an integer");
+    (digits, exp)
+}
+
+/// `n` in scientific notation with the shortest round-tripping mantissa.
+///
+/// `{:e}` finds the right digit COUNT, but when the float lies exactly halfway
+/// between two candidates of that length (844280270821319.2 is stored as
+/// …319.25) it rounds the last digit up, while every other binding — and
+/// JavaScript's and Python's own float printing — breaks the tie to even
+/// (`8.442802708213192e14`). Re-printing at that precision uses exact decimal
+/// conversion, which rounds half to even, so all five bindings agree digit for
+/// digit.
+fn shortest_sci(n: f64) -> String {
+    let (digits, _) = shortest_digit_count(n);
+    let prec = digits - 1;
+    format!("{n:.prec$e}")
 }
 
 /// Replace a leading ASCII hyphen with the Unicode U+2212 MINUS SIGN (used by
