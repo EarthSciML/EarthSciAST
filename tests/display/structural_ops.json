@@ -469,6 +469,277 @@
         "ascii": "argmin[g] (abs(d)) where {g in 1:10}"
       },
       {
+        "name": "faq self-join with syms",
+        "input": {
+          "op": "faq",
+          "args": [],
+          "output_idx": [],
+          "expr": {
+            "op": "index",
+            "args": [
+              "payload",
+              "b"
+            ]
+          },
+          "reduce": "+",
+          "semiring": "sum_product",
+          "ranges": {
+            "a": {
+              "from": "rows"
+            },
+            "b": {
+              "from": "rows"
+            }
+          },
+          "join": [
+            {
+              "on": [
+                [
+                  "row_prior",
+                  "row_id"
+                ]
+              ],
+              "syms": [
+                "b",
+                "a"
+              ]
+            }
+          ]
+        },
+        "unicode": "Σ[] (payload[b]) where {a∈rows, b∈rows} join(row_prior=row_id, syms=[b, a])",
+        "latex": "\\sum_{} (\\mathrm{payload}[b]) \\text{ where } \\{a \\in rows, b \\in rows\\} join(row_prior=row_id, syms=[b, a])",
+        "ascii": "sum[] (payload[b]) where {a in rows, b in rows} join(row_prior=row_id, syms=[b, a])"
+      },
+      {
+        "name": "faq join with two clauses",
+        "input": {
+          "op": "faq",
+          "args": [],
+          "output_idx": [],
+          "expr": 1,
+          "semiring": "sum_product",
+          "ranges": {
+            "i": {
+              "from": "src"
+            },
+            "j": {
+              "from": "tgt"
+            }
+          },
+          "join": [
+            {
+              "on": [
+                [
+                  "src_bin",
+                  "tgt_bin"
+                ],
+                [
+                  "src_lvl",
+                  "tgt_lvl"
+                ]
+              ]
+            },
+            {
+              "on": [
+                [
+                  "i",
+                  "j"
+                ]
+              ]
+            }
+          ]
+        },
+        "unicode": "Σ[] (1) where {i∈src, j∈tgt} join(src_bin=tgt_bin, src_lvl=tgt_lvl; i=j)",
+        "latex": "\\sum_{} (1) \\text{ where } \\{i \\in src, j \\in tgt\\} join(src_bin=tgt_bin, src_lvl=tgt_lvl; i=j)",
+        "ascii": "sum[] (1) where {i in src, j in tgt} join(src_bin=tgt_bin, src_lvl=tgt_lvl; i=j)"
+      },
+      {
+        "name": "faq overlap join",
+        "input": {
+          "op": "faq",
+          "args": [],
+          "output_idx": [
+            "m"
+          ],
+          "expr": {
+            "op": "true",
+            "args": []
+          },
+          "semiring": "bool_and_or",
+          "distinct": true,
+          "ranges": {
+            "c": {
+              "from": "cells"
+            },
+            "r": {
+              "from": "records"
+            }
+          },
+          "join": [
+            {
+              "overlap": {
+                "src_env": [
+                  "px",
+                  "py"
+                ],
+                "tgt_env": [
+                  "W",
+                  "S",
+                  "E",
+                  "N"
+                ]
+              }
+            }
+          ],
+          "filter": {
+            "op": "*",
+            "args": [
+              {
+                "op": "<=",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      "W",
+                      "c"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      "px",
+                      "r"
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "<",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      "px",
+                      "r"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      "E",
+                      "c"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "key": {
+            "op": "skolem",
+            "args": [
+              "c"
+            ],
+            "label": "cell"
+          }
+        },
+        "unicode": "⋁[m] (true) where {c∈cells, r∈records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] ≤ px[r])·(px[r] < E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]",
+        "latex": "\\bigvee_{m} (true) \\text{ where } \\{c \\in cells, r \\in records\\} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] \\leq \\mathrm{px}[r]) \\cdot (\\mathrm{px}[r] < E[c]) distinct key=\\mathrm{skolem}(c, label=cell) [semiring=bool_and_or]",
+        "ascii": "any[m] (true) where {c in cells, r in records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] <= px[r]) * (px[r] < E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]"
+      },
+      {
+        "name": "faq overlap join with eps",
+        "input": {
+          "op": "faq",
+          "args": [],
+          "output_idx": [
+            "c"
+          ],
+          "expr": {
+            "op": "index",
+            "args": [
+              "w",
+              "r"
+            ]
+          },
+          "ranges": {
+            "c": {
+              "from": "cells"
+            },
+            "r": {
+              "from": "records"
+            }
+          },
+          "join": [
+            {
+              "overlap": {
+                "src_env": [
+                  "xmin",
+                  "ymin",
+                  "xmax",
+                  "ymax"
+                ],
+                "tgt_env": [
+                  "W",
+                  "S",
+                  "E",
+                  "N"
+                ],
+                "eps": 0.001
+              }
+            }
+          ]
+        },
+        "unicode": "Σ[c] (w[r]) where {c∈cells, r∈records} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0×10⁻³))",
+        "latex": "\\sum_{c} (w[r]) \\text{ where } \\{c \\in cells, r \\in records\\} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0 \\times 10^{-3}))",
+        "ascii": "sum[c] (w[r]) where {c in cells, r in records} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0e-3))"
+      },
+      {
+        "name": "argmin with join and filter",
+        "input": {
+          "op": "argmin",
+          "args": [],
+          "arg": "g",
+          "expr": {
+            "op": "index",
+            "args": [
+              "d",
+              "g"
+            ]
+          },
+          "ranges": {
+            "g": {
+              "from": "gens"
+            }
+          },
+          "join": [
+            {
+              "on": [
+                [
+                  "point_bin",
+                  "gen_bin"
+                ]
+              ]
+            }
+          ],
+          "filter": {
+            "op": ">",
+            "args": [
+              {
+                "op": "index",
+                "args": [
+                  "d",
+                  "g"
+                ]
+              },
+              0
+            ]
+          }
+        },
+        "unicode": "argmin[g] (d[g]) where {g∈gens} join(point_bin=gen_bin) if d[g] > 0",
+        "latex": "\\mathrm{argmin}_{g} (d[g]) \\text{ where } \\{g \\in gens\\} join(point_bin=gen_bin) if d[g] > 0",
+        "ascii": "argmin[g] (d[g]) where {g in gens} join(point_bin=gen_bin) if d[g] > 0"
+      },
+      {
         "name": "grad (generic)",
         "input": {
           "op": "grad",
@@ -547,9 +818,9 @@
             "v"
           ]
         },
-        "unicode": "skolem(u, v)",
-        "latex": "\\mathrm{skolem}(u, v)",
-        "ascii": "skolem(u, v)"
+        "unicode": "skolem(u, v, label=edge)",
+        "latex": "\\mathrm{skolem}(u, v, label=edge)",
+        "ascii": "skolem(u, v, label=edge)"
       },
       {
         "name": "rank (generic, args-only)",

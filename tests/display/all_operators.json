@@ -541,9 +541,9 @@
         }
       ]
     },
-    "unicode": "a + b − c",
-    "latex": "a + b - c",
-    "ascii": "a + b - c"
+    "unicode": "a + (b − c)",
+    "latex": "a + (b - c)",
+    "ascii": "a + (b - c)"
   },
   {
     "input": {
@@ -937,9 +937,9 @@
         }
       ]
     },
-    "unicode": "a·b/c",
+    "unicode": "a·(b/c)",
     "latex": "a \\cdot \\frac{b}{c}",
-    "ascii": "a * b / c"
+    "ascii": "a * (b / c)"
   },
   {
     "input": {
@@ -1445,5 +1445,115 @@
     "unicode": "argmin[g] (a[g]) where {g∈gens} id=cheapest",
     "latex": "\\mathrm{argmin}_{g} (a[g]) \\text{ where } \\{g \\in gens\\} id=cheapest",
     "ascii": "argmin[g] (a[g]) where {g in gens} id=cheapest"
+  },
+  {
+    "input": {
+      "op": "*",
+      "args": [
+        {
+          "op": "<=",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
+        {
+          "op": "<",
+          "args": [
+            "c",
+            "d"
+          ]
+        }
+      ]
+    },
+    "unicode": "(a ≤ b)·(c < d)",
+    "latex": "(a \\leq b) \\cdot (c < d)",
+    "ascii": "(a <= b) * (c < d)"
+  },
+  {
+    "input": {
+      "op": "+",
+      "args": [
+        {
+          "op": "<",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
+        "c"
+      ]
+    },
+    "unicode": "(a < b) + c",
+    "latex": "(a < b) + c",
+    "ascii": "(a < b) + c"
+  },
+  {
+    "input": {
+      "op": "==",
+      "args": [
+        "a",
+        {
+          "op": "<",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a = (b < c)",
+    "latex": "a = (b < c)",
+    "ascii": "a == (b < c)"
+  },
+  {
+    "input": {
+      "op": "and",
+      "args": [
+        {
+          "op": "<=",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
+        {
+          "op": "<",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        {
+          "op": "<",
+          "args": [
+            "c",
+            "d"
+          ]
+        }
+      ]
+    },
+    "unicode": "a ≤ b ∧ b < c ∧ c < d",
+    "latex": "a \\leq b \\land b < c \\land c < d",
+    "ascii": "a <= b and b < c and c < d"
+  },
+  {
+    "input": {
+      "op": "*",
+      "args": [
+        "k",
+        {
+          "op": "/",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
+        "c"
+      ]
+    },
+    "unicode": "k·(a/b)·c",
+    "latex": "k \\cdot \\frac{a}{b} \\cdot c",
+    "ascii": "k * (a / b) * c"
   }
 ]

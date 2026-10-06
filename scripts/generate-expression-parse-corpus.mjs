@@ -134,6 +134,35 @@ const REDUCTION_TIER = [
   'makearray([2:NLON, 1:NLAT] = central_D<f=f>, [1:1, 1:NLAT] = sum[j] (u[1, j]) where {j in lat})',
 ]
 
+// The faq fields that used to be dropped by the printer (2026-10-06): a join
+// clause's `syms`, an `overlap` join gate, a join/filter on argmin/argmax, and a
+// skolem `label`. Plus the parenthesization cases the same sweep found: a
+// same-level right operand, comparisons under arithmetic, and n-ary `and`.
+const FAQ_FIELD_TIER = [
+  'sum[] (payload[b]) where {a in rows, b in rows} join(row_prior=row_id, syms=[b, a])',
+  'sum[] (1) where {i in src, j in tgt} join(src_bin=tgt_bin, src_lvl=tgt_lvl; i=j)',
+  'sum[] (1) where {i in src, j in tgt} join(syms=[j, i], a=b)',
+  'any[m] (true) where {c in cells, r in records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] <= px[r]) * (px[r] < E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]',
+  'sum[c] (w[r]) where {c in cells, r in records} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0e-3))',
+  'sum[c] (w[r]) where {c in cells, r in records} join(overlap(tgt=[W, S, E, N], src=[x, y], eps=0))',
+  'sum[c] (w[r]) where {c in cells, r in records} join(overlap(src=[px, py], tgt=[W, S, E, N]); a=b)',
+  'argmin[g] (d[g]) where {g in gens} join(point_bin=gen_bin) if d[g] > 0',
+  'argmax[g] (d[g]) where {g in gens} if d[g] < dmax id=best',
+  'skolem(a, b, label=edge)',
+  'skolem(floor(px[i] / w), floor(py[i] / w))',
+  'a * (b / c)',
+  'a * b / c',
+  'a + (b - c)',
+  'k * (a / b) * c',
+  '(a <= b) * (c < d)',
+  'a <= b * c < d',
+  '(a < b) + c',
+  'a == (b < c)',
+  'a <= b and b < c and c < d',
+  'p or q or r',
+  'sum[i] (0.25 * a[i] * b[i]) where {i in cells}',
+]
+
 // Structural ops with no text surface yet, plus malformed input. Both MUST be
 // refused with the binding's expression-parse error.
 const REFUSALS = [
@@ -149,6 +178,17 @@ const REFUSALS = [
   { text: 'makearray(x)', reason: 'makearray body without its [region] bracket' },
   { text: '', reason: 'empty input' },
   { text: '∑', reason: 'unicode big-operator display form is not input syntax' },
+  { text: 'sum[] (1) where {i in s} join()', reason: 'an empty join() is not a schema-valid clause' },
+  { text: 'sum[] (1) where {i in s} join(a=b; )', reason: 'an empty join clause' },
+  { text: 'sum[] (1) where {i in s} join(syms=[a, b])', reason: 'syms without any key pair' },
+  { text: 'sum[] (1) where {i in s} join(a=b, syms=[i])', reason: 'syms must name exactly two symbols' },
+  { text: 'sum[] (1) where {i in s} join(a=b, syms=[i, j], syms=[j, i])', reason: 'duplicate syms' },
+  { text: 'sum[] (1) where {i in s} join(overlap(src=[x]))', reason: 'overlap needs both src and tgt' },
+  { text: 'sum[] (1) where {i in s} join(overlap(src=[x], tgt=[W], dx=1))', reason: 'unknown overlap field' },
+  { text: 'sum[] (1) where {i in s} join(overlap(src=[], tgt=[W]))', reason: 'overlap env lists must be non-empty' },
+  { text: 'sum[] (1) where {i in s} join(overlap(src=[x], tgt=[W]), a=b)', reason: 'overlap mixed with key pairs in one clause' },
+  { text: 'skolem(a, label=1)', reason: 'a skolem label is a name' },
+  { text: 'skolem(a, tag=edge)', reason: 'skolem takes no other named argument' },
 ]
 
 const EQUATIONS = [
@@ -222,6 +262,7 @@ function addExpression(text, tier) {
 for (const t of SCALAR) addExpression(t, 'scalar')
 for (const t of ARRAY_TIER) addExpression(t, 'array')
 for (const t of REDUCTION_TIER) addExpression(t, 'reduction')
+for (const t of FAQ_FIELD_TIER) addExpression(t, 'reduction')
 for (const t of ID_AND_TABLE_TIER) addExpression(t, 'id-and-table')
 for (const t of displayAsciiTexts()) addExpression(t, 'display-fixture')
 
