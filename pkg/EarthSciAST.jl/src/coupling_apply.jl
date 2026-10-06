@@ -1291,7 +1291,8 @@ function _rename_join_clauses(expr::OpExpr, renames::AbstractDict{String, String
     (expr.join === nothing || isempty(renames)) && return expr
     ren(n) = get(renames, String(n), String(n))
     renclause(c::_OverlapJoinSpec) = _OverlapJoinSpec(String[ren(n) for n in c.src_env],
-                                                      String[ren(n) for n in c.tgt_env], c.eps)
+                                                      String[ren(n) for n in c.tgt_env], c.eps,
+                                                      c.eps_given)
     # As in `namespacing.jl`: rename the key COLUMNS, never the clause's `syms`,
     # which are binders of the node rather than variable references.
     renclause(c) = _with_pairs(c, Tuple{String,String}[(ren(l), ren(r)) for (l, r) in c])

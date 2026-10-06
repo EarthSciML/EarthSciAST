@@ -20,8 +20,10 @@ Coverage:
    the `true` and `false` literals, and `integral` / `reshape` / `transpose` / `concat`;
  - reduction & array-query tier: `faq` reductions
    `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
-   key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax`
-   arg-witnesses `argmin[g] (expr) where {…}`, template application
+   key=k [semiring=…]` (all clause shapes, including `syms=[…]` and
+   `overlap(src=[…], tgt=[…], eps=…)` join clauses), the `argmin`/`argmax`
+   arg-witnesses `argmin[g] (expr) where {…} join(…) if pred`, the labeled
+   `skolem(a, b, label=edge)`, template application
    `name<binding = value, …>` (`apply_expression_template`),
    `polygon_intersection_area(a, b, manifold=…)`,
    `intersect_polygon(a, b, manifold=…[, id=…])`, the `table_lookup` bracket
@@ -644,7 +646,8 @@ end
 
 """
 Parse an `argmin` / `argmax` arg-witness (esm-spec §4.2) — the inverse of
-`format_arg_witness`: `op '[' arg ']' '(' expr ')' ('where' '{' ranges '}')?`.
+`format_arg_witness`: `op '[' arg ']' '(' expr ')' ('where' '{' ranges '}')?
+('join' '(' … ')')? ('if' filter)? ('id' '=' name)?`.
 Like aggregate, its `args` operand cache isn't printed and is derived.
 """
 function _tp_parse_arg_witness(ps::_TPParser, op::AbstractString)
@@ -660,13 +663,26 @@ function _tp_parse_arg_witness(ps::_TPParser, op::AbstractString)
         _tp_next!(ps)
         ranges = _tp_parse_ranges(ps)
     end
+    # The candidate-pruning `join(…)` and `if` filter, exactly as on `faq`.
+    joins = Any[]
+    if _tp_at_word(ps, "join")
+        _tp_next!(ps)
+        append!(joins, _tp_parse_join(ps))
+    end
+    filt = nothing
+    if _tp_at_word(ps, "if")
+        _tp_next!(ps)
+        filt = _tp_parse_expr(ps, 0)
+    end
     # `id=<name>` (RFC §6.1 node identity), emitted by `format_arg_witness`
-    # after the where-clause. Mirrors the aggregate tail.
+    # after the filter. Mirrors the aggregate tail.
     id = _tp_parse_id_clause!(ps)
     return OpExpr(String(op),
         ASTExpr[VarExpr(n) for n in
-                _tp_derive_aggregate_args(body, Any[], nothing, nothing)];
-        arg=at.val::String, ranges=ranges, id=id, expr_body=body)
+                _tp_derive_aggregate_args(body, joins, filt, nothing)];
+        arg=at.val::String, ranges=ranges,
+        join=isempty(joins) ? nothing : joins, filter=filt,
+        id=id, expr_body=body)
 end
 
 """
@@ -767,35 +783,116 @@ function _tp_parse_range_rhs(ps::_TPParser)
     _tp_fail(ps, "malformed range (expected a set name, set(of…), or lo:hi)")
 end
 
-"""Parse `( a=b, c=d ; e=f )` → the wire join clauses `[[(a,b),(c,d)], [(e,f)]]`."""
+"""
+Parse a join body — the inverse of `format_join_clause` (display.jl). Clauses are
+separated by `;`. An equality clause is one or more `l=r` key-column pairs plus
+an optional `syms=[left, right]` (in any position, at most once) and becomes an
+`_OnJoinSpec`; an overlap clause is exactly `overlap(src=[…], tgt=[…][, eps=E])`
+and becomes an `_OverlapJoinSpec`. An empty `join()`, an empty clause, and an
+overlap mixed with key pairs are refused — none of them is a schema-valid clause.
+"""
 function _tp_parse_join(ps::_TPParser)
     _tp_expect!(ps, :lparen, "'(' after join")
     clauses = Any[]
-    cur = Tuple{String,String}[]
-    if _tp_peek(ps).kind !== :rparen
-        while true
-            a = _tp_next!(ps)
-            a.kind === :name || _tp_fail_at(a, "Expected a join key name")
-            _tp_expect!(ps, :eq, "'=' in a join pair")
+    while true
+        push!(clauses, _tp_parse_join_clause(ps))
+        if _tp_peek(ps).kind === :semicolon
+            _tp_next!(ps)
+            continue
+        end
+        break
+    end
+    _tp_expect!(ps, :rparen, "')' to close join(…)")
+    return clauses
+end
+
+function _tp_parse_join_clause(ps::_TPParser)
+    if _tp_at_word(ps, "overlap") && _tp_peek(ps, 1).kind === :lparen
+        _tp_next!(ps)  # 'overlap'
+        return _tp_parse_overlap(ps)
+    end
+    pairs = Tuple{String,String}[]
+    syms = nothing
+    while true
+        a = _tp_next!(ps)
+        a.kind === :name || _tp_fail_at(a, "Expected a join key name")
+        _tp_expect!(ps, :eq, "'=' in a join pair")
+        if a.val == "syms" && _tp_peek(ps).kind === :lbracket
+            syms === nothing || _tp_fail_at(a, "duplicate syms=[…] in a join clause")
+            names = _tp_parse_name_list(ps, "syms")
+            length(names) == 2 ||
+                _tp_fail_at(a, "syms=[…] names exactly two range symbols")
+            syms = (names[1], names[2])
+        else
             b = _tp_next!(ps)
             b.kind === :name || _tp_fail_at(b, "Expected a join key name")
-            push!(cur, (a.val::String, b.val::String))
+            push!(pairs, (a.val::String, b.val::String))
+        end
+        if _tp_peek(ps).kind === :comma
+            _tp_next!(ps)
+            continue
+        end
+        break
+    end
+    isempty(pairs) && _tp_fail(ps, "a join clause needs at least one key pair l=r")
+    return _OnJoinSpec(pairs, syms)
+end
+
+"""`( src=[…], tgt=[…] [, eps=<number>] )` → an `_OverlapJoinSpec`, fields in any order."""
+function _tp_parse_overlap(ps::_TPParser)
+    _tp_expect!(ps, :lparen, "'(' after overlap")
+    src = nothing
+    tgt = nothing
+    eps = nothing
+    while true
+        k = _tp_next!(ps)
+        k.kind === :name || _tp_fail_at(k, "Expected src=, tgt= or eps= in overlap(…)")
+        kv = k.val::String
+        _tp_expect!(ps, :eq, "'=' after $kv in overlap(…)")
+        if kv == "src" && src === nothing
+            src = _tp_parse_name_list(ps, kv)
+            isempty(src) && _tp_fail_at(k, "overlap src=[…] must name at least one factor")
+        elseif kv == "tgt" && tgt === nothing
+            tgt = _tp_parse_name_list(ps, kv)
+            isempty(tgt) && _tp_fail_at(k, "overlap tgt=[…] must name at least one factor")
+        elseif kv == "eps" && eps === nothing
+            v = _tp_parse_expr(ps, 0)
+            ((v isa IntExpr || v isa NumExpr) && v.value >= 0) ||
+                _tp_fail_at(k, "overlap eps= must be a non-negative number")
+            eps = Float64(v.value)
+        else
+            _tp_fail_at(k, "unexpected or duplicate $kv= in overlap(…)")
+        end
+        if _tp_peek(ps).kind === :comma
+            _tp_next!(ps)
+            continue
+        end
+        break
+    end
+    _tp_expect!(ps, :rparen, "')' to close overlap(…)")
+    (src === nothing || tgt === nothing) &&
+        _tp_fail(ps, "overlap(…) requires both src=[…] and tgt=[…]")
+    return _OverlapJoinSpec(src, tgt, eps === nothing ? 0.0 : eps, eps !== nothing)
+end
+
+"""`[name, name, …]` (possibly empty) → the names."""
+function _tp_parse_name_list(ps::_TPParser, what::AbstractString)
+    _tp_expect!(ps, :lbracket, "'[' after $what=")
+    names = String[]
+    if _tp_peek(ps).kind !== :rbracket
+        while true
+            t = _tp_next!(ps)
+            t.kind === :name || _tp_fail_at(t, "Expected a name in $what=[…]")
+            push!(names, t.val::String)
             if _tp_peek(ps).kind === :comma
                 _tp_next!(ps)
-                continue
-            end
-            if _tp_peek(ps).kind === :semicolon
-                _tp_next!(ps)
-                push!(clauses, cur)
-                cur = Tuple{String,String}[]
                 continue
             end
             break
         end
     end
-    push!(clauses, cur)
-    _tp_expect!(ps, :rparen, "')' to close join(…)")
-    return clauses
+    _tp_expect!(ps, :rbracket, "']' to close $what=[…]")
+    return names
 end
 
 """Parse `name<binding = value, …>` (or empty `name<>`) → apply_expression_template."""
@@ -959,6 +1056,17 @@ function _tp_make_call(name::String, args::Vector{ASTExpr},
             manifold=(manifold::VarExpr).name,
             id=idv === nothing ? nothing : (idv::VarExpr).name)
     end
+    # `skolem(a, b, label=<name>)` — the documentary relation tag.
+    if name == "skolem" && haskey(named, "label")
+        for k in order
+            k == "label" ||
+                throw(ExpressionParseError("unexpected $k=… in skolem(...)", pos))
+        end
+        lbl = named["label"]
+        lbl isa VarExpr ||
+            throw(ExpressionParseError("skolem(...) label=… must be a name", pos))
+        return OpExpr("skolem", args; label=(lbl::VarExpr).name)
+    end
     _tp_no_named(named, order, name, pos)
     if name in _TP_STRUCTURAL_OPS
         throw(ExpressionParseError(
@@ -994,10 +1102,16 @@ function _tp_derive_aggregate_args(body::ASTExpr, joins::Vector{Any},
     filt::Union{ASTExpr,Nothing}, key::Union{ASTExpr,Nothing})
     out = String[]
     _tp_bases!(out, body)
+    add(n) = (n in out || push!(out, n))
     for clause in joins
-        for (a, b) in clause
-            a in out || push!(out, a)
-            b in out || push!(out, b)
+        if clause isa _OverlapJoinSpec
+            foreach(add, clause.src_env)
+            foreach(add, clause.tgt_env)
+        else
+            for (a, b) in clause
+                add(a)
+                add(b)
+            end
         end
     end
     filt === nothing || _tp_bases!(out, filt)
@@ -1050,11 +1164,12 @@ end
 # --- normalization -----------------------------------------------------------
 
 """
-Flatten nested same-op `+` / `*` in `args` into the n-ary form the printer emits
-and authored ASTs use: `a + b + c` → one `+` with three args, not left-nested
-pairs. (`-` and `/` are binary and stay as parsed.) Non-`args` expression fields
-(integral bounds, aggregate bodies, …) are left as parsed — exactly as in the
-reference implementation.
+Flatten nested same-op `+` / `*` / `and` / `or` in `args` into the n-ary form the
+printer emits and authored ASTs use: `a + b + c` → one `+` with three args, not
+left-nested pairs. (`-` and `/` are binary and stay as parsed.) A reduction's
+`expr` / `filter` / `key` (`faq`, `argmin`, `argmax`) are flattened too; other
+non-`args` expression fields (integral bounds, …) are left as parsed — exactly as
+in the reference implementation.
 
 Safe to mutate in place: every node it sees was freshly built by this parser and
 is not shared with any other tree.
@@ -1062,7 +1177,11 @@ is not shared with any other tree.
 function _tp_flatten(e::ASTExpr)
     e isa OpExpr || return e
     args = ASTExpr[_tp_flatten(a) for a in e.args]
-    if e.op == "+" || e.op == "*"
+    # The reduction-body fields are expressions in their own right.
+    e.expr_body === nothing || (e.expr_body = _tp_flatten(e.expr_body))
+    e.filter === nothing || (e.filter = _tp_flatten(e.filter))
+    e.key === nothing || (e.key = _tp_flatten(e.key))
+    if e.op == "+" || e.op == "*" || e.op == "and" || e.op == "or"
         out = ASTExpr[]
         for a in args
             if a isa OpExpr && a.op == e.op && a.wrt === nothing
