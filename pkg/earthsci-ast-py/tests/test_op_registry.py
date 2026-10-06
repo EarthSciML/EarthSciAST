@@ -302,12 +302,12 @@ def _op_literals_in_source(module) -> set[str]:
 # Registered ops for which display's generic `op(args)` fallback IS the intended
 # rendering (they carry no dedicated math notation): the equation-LHS `ic` and the
 # build-time relational ops. Every OTHER registered op must be specifically rendered.
+# (`skolem` is NOT listed: it has a structural branch for its `label=` named arg.)
 # (The open-tier spatial sugar grad/div/laplacian/curl is UNregistered — it also
 # renders via the generic fallback, but is not a *registered* op, so it is not
 # listed here.)
 DISPLAY_GENERIC_OK = {
     "ic",  # equation-LHS declaration
-    "skolem",
     "rank",
     "distinct",
     "join",  # build-time value-invention ops

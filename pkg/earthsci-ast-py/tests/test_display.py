@@ -118,6 +118,10 @@ class TestDisplayFixtures:
             input_expr = case.get("input")
             expected_unicode = self._get_expected(case, "unicode")
             expected_latex = self._get_expected(case, "latex")
+            expected_ascii = self._get_expected(case, "ascii")
+
+            if input_expr and expected_ascii:
+                assert to_ascii(input_expr) == expected_ascii
 
             if input_expr and expected_unicode:
                 result_unicode = to_unicode(input_expr)
@@ -205,6 +209,29 @@ class TestDisplayFixtures:
                     f"ascii mismatch for {case['name']}: "
                     f"got {result_ascii!r}, expected {case['ascii']!r}"
                 )
+
+    def test_number_formatting(self, fixtures_dir):
+        """Numbers byte-match tests/display/number_formatting.json in all three
+        formats — including the contract's "precision is never lost" rule."""
+        with open(fixtures_dir / "number_formatting.json") as f:
+            groups = json.load(f)
+
+        n = 0
+        for group in groups:
+            for case in group["test_cases"]:
+                for fmt, render in (
+                    ("unicode", to_unicode),
+                    ("latex", to_latex),
+                    ("ascii", to_ascii),
+                ):
+                    if fmt not in case:
+                        continue
+                    n += 1
+                    got = render(case["input"])
+                    assert got == case[fmt], (
+                        f"{fmt} mismatch for {case['input']!r}: got {got!r}, expected {case[fmt]!r}"
+                    )
+        assert n > 0
 
     def test_expression_precedence_display(self, fixtures_dir):
         """Test expression precedence in display formatting."""
