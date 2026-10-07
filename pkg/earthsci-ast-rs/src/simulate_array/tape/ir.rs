@@ -749,20 +749,24 @@ pub(crate) enum MicroOp {
         swap3: bool,
         out: GroupIx,
     },
-    /// An absorbed [`Instr::Scan`] along the group box's LAST axis (`row`
-    /// elements): the running fold of `a` from `init`, restarted at the first
-    /// element of every row and carried across chunks and runs in carry slot
-    /// `carry`. Inclusive: `acc = kernel(op)(acc, a); out = acc`; exclusive:
-    /// `out = acc; acc = kernel(op)(acc, a)`. A group visits its box in
-    /// ascending flat order, which is `Instr::Scan`'s order along that axis,
-    /// so every element folds the same terms in the same association.
+    /// An absorbed [`Instr::Scan`] along one axis of the group box: `row`
+    /// steps along that axis, each `post` flat elements apart (the extent of
+    /// the axes after it). Lane `q = flat % post` keeps its running fold of
+    /// `a` from `init` in carry slot `carry + q`, restarted where the step
+    /// index `(flat / post) % row` is 0 and carried across chunks and runs.
+    /// Inclusive: `acc = kernel(op)(acc, a); out = acc`; exclusive: `out =
+    /// acc; acc = kernel(op)(acc, a)`. A group visits its box in ascending
+    /// flat order, which visits every lane's steps in ascending order, so
+    /// every element folds the same terms in the same association as
+    /// `Instr::Scan`.
     Scan {
         op: BinCode,
         a: MRef,
         init: f64,
         inclusive: bool,
         row: u32,
-        carry: GroupIx,
+        post: u32,
+        carry: u32,
         out: GroupIx,
     },
 }
@@ -819,6 +823,11 @@ pub(crate) struct ChunkGather {
     pub strides: SmallVec<[i64; 4]>,
     /// The output box.
     pub shape: DimU,
+    /// Read the whole box once when the group starts, into the executor's
+    /// scratch, and then like an aligned input — for rows so short, or a
+    /// group so light, that the per-row work of a chunk read costs more. The
+    /// choice changes no instruction, so it may depend on the box.
+    pub whole: bool,
 }
 
 impl ChunkGather {

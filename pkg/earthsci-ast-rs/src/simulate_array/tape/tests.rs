@@ -1176,11 +1176,13 @@ fn scan_micro_ops(prog: &TapeProgram) -> usize {
         .count()
 }
 
-/// A scan along the last axis joins the fused group that computes its
-/// source, and the scan's readers join it too (the identity read of the
-/// scanned observed and its export no longer split the group). Rows longer
-/// than the executor's chunk, and a box whose chunks start mid-row, exercise
-/// the carry from one chunk to the next and the restart at each row.
+/// A scan joins the fused group that computes its source, and the scan's
+/// readers join it too (the identity read of the scanned observed and its
+/// export no longer split the group). Scans longer than the executor's
+/// chunk, with chunks that start mid-scan, exercise the carry from one chunk
+/// to the next and the restart at each scan's first step; the program's
+/// column-major layout puts the scanned axis first, so each lane of the box
+/// carries its own running value.
 #[test]
 fn ab_scan_absorbed_into_its_group() {
     let (ni, nk) = (3, 1100);
@@ -1244,39 +1246,54 @@ fn ab_scan_absorbed_into_its_group() {
 /// end mid-row), together with a wrap along the outer axis.
 #[test]
 fn ab_chunk_gathers_on_short_rows() {
-    let (ni, nj, nk) = (8i64, 4i64, 40i64);
-    let ix3 = |i: serde_json::Value, k: serde_json::Value| json!({"op": "index", "args": ["u", i, "j", k]});
-    let lap = json!({"op": "+", "args": [
-        ix3(json!("i"), json!({"op": "-", "args": ["k", 1]})),
-        {"op": "*", "args": [-2.0, ix3(json!("i"), json!("k"))]},
-        ix3(json!("i"), json!({"op": "+", "args": ["k", 1]})),
-        {"op": "*", "args": [0.5, ix3(wrap(json!({"op": "+", "args": ["i", 1]}), 1, ni), json!("k"))]}
-    ]});
-    let ranges = json!({"i": [1, ni], "j": [1, nj], "k": [1, nk]});
-    let doc = json!({
-        "esm": "1.1.0",
-        "metadata": {"name": "tape_chunk_gather"},
-        "models": {"M": {
-            "variables": {"u": {"type": "unknown", "shape": ["i", "j", "k"]}},
-            "equations": [{
-                "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
-                        "expr": {"op": "D", "args": [
-                            {"op": "index", "args": ["u", "i", "j", "k"]}], "wrt": "t"},
-                        "ranges": ranges},
-                "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
-                        "ranges": ranges, "expr": {"op": "*", "args": [0.25, lap]}}
-            }]
-        }}
-    });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
-    assert!(
-        prog.fused
-            .iter()
-            .flat_map(|f| &f.inputs)
-            .any(|i| i.gather.is_some()),
-        "the innermost-axis shifts are read through their plans"
-    );
-    assert_eq!(opcount(&prog, "Gather"), 0, "no gather is materialized");
+    let build = |ni: i64, nk: i64| {
+        let nj = 4i64;
+        let ix3 = |i: serde_json::Value, k: serde_json::Value| json!({"op": "index", "args": ["u", i, "j", k]});
+        let lap = json!({"op": "+", "args": [
+            ix3(json!("i"), json!({"op": "-", "args": ["k", 1]})),
+            {"op": "*", "args": [-2.0, ix3(json!("i"), json!("k"))]},
+            ix3(json!("i"), json!({"op": "+", "args": ["k", 1]})),
+            {"op": "*", "args": [0.5, ix3(wrap(json!({"op": "+", "args": ["i", 1]}), 1, ni), json!("k"))]}
+        ]});
+        let ranges = json!({"i": [1, ni], "j": [1, nj], "k": [1, nk]});
+        let doc = json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "tape_chunk_gather"},
+            "models": {"M": {
+                "variables": {"u": {"type": "unknown", "shape": ["i", "j", "k"]}},
+                "equations": [{
+                    "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
+                            "expr": {"op": "D", "args": [
+                                {"op": "index", "args": ["u", "i", "j", "k"]}], "wrt": "t"},
+                            "ranges": ranges},
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
+                            "ranges": ranges, "expr": {"op": "*", "args": [0.25, lap]}}
+                }]
+            }}
+        });
+        ab_check(doc, 0, -2.0, 2.0)
+    };
+    // Long rows along both shifted axes (read per chunk), short ones (read
+    // whole), and a mix: absorbed either way, so the program is the same.
+    let progs: Vec<TapeProgram> = [(40, 40), (8, 6), (40, 6), (8, 40)]
+        .into_iter()
+        .map(|(ni, nk)| build(ni, nk))
+        .collect();
+    for prog in &progs {
+        assert!(
+            prog.fused
+                .iter()
+                .flat_map(|f| &f.inputs)
+                .any(|i| i.gather.is_some()),
+            "an innermost-axis shift is read through its plan"
+        );
+        assert_eq!(opcount(prog, "Gather"), 0, "no gather is materialized");
+        assert_eq!(
+            prog.instrs.len(),
+            progs[0].instrs.len(),
+            "the program is flat in the box"
+        );
+    }
 }
 
 /// The unstructured-mesh gather `sum_k kappa * (u[nbr[i, k]] - u[i])` over a

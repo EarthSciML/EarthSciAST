@@ -272,6 +272,53 @@ unsafe fn fch_scan(
     *carry = acc;
 }
 
+/// One chunk of an absorbed scan whose lanes are `post` elements wide (an
+/// axis other than the last): position `at + k` is lane `(at + k) % post` at
+/// step `((at + k) / post) % row`; a lane restarts at `init` on step 0 and
+/// otherwise continues from its slot in `carry`.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn fch_scan_lanes(
+    dst: *mut f64,
+    c: usize,
+    at: usize,
+    a: MSrc,
+    row: usize,
+    post: usize,
+    init: f64,
+    inclusive: bool,
+    carry: &mut [f64],
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    let mut k = 0usize;
+    while k < c {
+        let q0 = (at + k) % post;
+        let step = ((at + k) / post) % row;
+        let len = (c - k).min(post - q0);
+        let acc = &mut carry[q0..q0 + len];
+        if step == 0 {
+            acc.fill(init);
+        }
+        unsafe {
+            let d = std::slice::from_raw_parts_mut(dst.add(k), len);
+            for (j, (o, y)) in d.iter_mut().zip(acc.iter_mut()).enumerate() {
+                let x = match a {
+                    MSrc::P(p) => *p.add(k + j),
+                    MSrc::C(v) => v,
+                };
+                if inclusive {
+                    *y = f(*y, x);
+                    *o = *y;
+                } else {
+                    *o = *y;
+                    *y = f(*y, x);
+                }
+            }
+        }
+        k += len;
+    }
+}
+
 /// The `vec_select` pick over one chunk.
 #[inline(always)]
 unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MSrc) {
@@ -431,6 +478,9 @@ pub(super) struct FusedScratch {
     bases: Vec<*const f64>,
     outs: Vec<(GroupIx, *mut f64)>,
     cursor: RunCursor,
+    /// The boxes of a group's whole-read gathers ([`ChunkGather::whole`]),
+    /// back to back, sized for the largest group's.
+    whole: Vec<f64>,
 }
 
 impl FusedScratch {
@@ -445,6 +495,7 @@ impl FusedScratch {
                 most(n_shifted),
                 most(n_scans),
             ),
+            whole: vec![0.0; most(whole_len)],
         }
     }
 }
@@ -453,12 +504,25 @@ fn n_shifted(fs: &FusedSpec) -> usize {
     fs.inputs.iter().filter(|i| i.shifted_ix.is_some()).count()
 }
 
-/// The carry slots a group's absorbed scans use.
+/// The elements a group's whole-read gathers occupy in `FusedScratch::whole`.
+fn whole_len(fs: &FusedSpec) -> usize {
+    let n = fs.n_elems();
+    fs.inputs
+        .iter()
+        .filter(|i| i.gather.as_deref().is_some_and(|g| g.whole))
+        .count()
+        * n
+}
+
+/// The carry slots a group's absorbed scans use (one per lane).
 fn n_scans(fs: &FusedSpec) -> usize {
     fs.micro
         .iter()
-        .filter(|m| matches!(m, MicroOp::Scan { .. }))
-        .count()
+        .map(|m| match m {
+            MicroOp::Scan { post, .. } => *post as usize,
+            _ => 0,
+        })
+        .sum()
 }
 
 /// The executor's position in a [`RunSchedule`]: one frame per open
@@ -610,6 +674,7 @@ pub(super) unsafe fn exec_fused(
         bases,
         outs,
         cursor,
+        whole,
     } = scratch;
     // Resolve scalar inputs once.
     svals.clear();
@@ -643,6 +708,20 @@ pub(super) unsafe fn exec_fused(
             }
         };
         bases.push(p);
+    }
+    // Whole-read gathers: the box read once, then addressed like an aligned
+    // input.
+    let n_elems = fs.n_elems();
+    let mut next = 0usize;
+    for (inp, base) in fs.inputs.iter().zip(bases.iter_mut()) {
+        if let Some(g) = inp.gather.as_deref()
+            && g.whole
+        {
+            let dst = &mut whole[next..next + n_elems];
+            unsafe { g.fill(*base, 0, n_elems, dst.as_mut_ptr()) };
+            *base = dst.as_ptr();
+            next += n_elems;
+        }
     }
     // Output pointers: the slab, or `dy` for a slot homed there.
     outs.clear();
@@ -770,7 +849,9 @@ unsafe fn exec_fused_runs(
                     continue;
                 }
                 // A gather read through its plan, one chunk at a time.
-                if let Some(g) = &inp.gather {
+                if let Some(g) = inp.gather.as_deref()
+                    && !g.whole
+                {
                     unsafe { g.fill(bases[i], at, c, rp.add(inp.load_reg as usize * cs)) };
                     continue;
                 }
@@ -835,7 +916,9 @@ unsafe fn exec_fused_runs(
                     MRef::In(i) => {
                         let inp = &fs.inputs[*i as usize];
                         match inp.shifted_ix {
-                            None if inp.index.is_some() || inp.gather.is_some() => {
+                            None if inp.index.is_some()
+                                || inp.gather.as_deref().is_some_and(|g| !g.whole) =>
+                            {
                                 MSrc::P(unsafe { rp.add(inp.load_reg as usize * cs) as *const f64 })
                             }
                             None => MSrc::P(unsafe { bases[*i as usize].add(at) }),
@@ -924,19 +1007,35 @@ unsafe fn exec_fused_runs(
                         init,
                         inclusive,
                         row,
+                        post,
                         carry,
                         out,
                     } => {
                         let a = msrc(a);
                         let dst = unsafe { rp.add(*out as usize * cs) };
-                        let cv = &mut carries[*carry as usize];
-                        let (row, init, inclusive) = (*row as usize, *init, *inclusive);
-                        macro_rules! chunk {
-                            ($f:expr) => {
-                                unsafe { fch_scan(dst, c, at, a, row, init, inclusive, cv, $f) }
-                            };
+                        let (row, post, init, inclusive) =
+                            (*row as usize, *post as usize, *init, *inclusive);
+                        let cv = &mut carries[*carry as usize..*carry as usize + post];
+                        if post == 1 {
+                            let cv = &mut cv[0];
+                            macro_rules! chunk {
+                                ($f:expr) => {
+                                    unsafe { fch_scan(dst, c, at, a, row, init, inclusive, cv, $f) }
+                                };
+                            }
+                            dispatch_bin_kernel!(op, chunk);
+                        } else {
+                            macro_rules! chunk {
+                                ($f:expr) => {
+                                    unsafe {
+                                        fch_scan_lanes(
+                                            dst, c, at, a, row, post, init, inclusive, cv, $f,
+                                        )
+                                    }
+                                };
+                            }
+                            dispatch_bin_kernel!(op, chunk);
                         }
-                        dispatch_bin_kernel!(op, chunk);
                     }
                     MicroOp::Bin2 {
                         op1,
@@ -1318,9 +1417,9 @@ pub(super) unsafe fn exec_fused_runs_avx512(
 ///   then `swap3` for `Bin3`). The constituent kernels are applied strictly
 ///   in order — never contracted into a hardware FMA, which would change
 ///   bits.
-/// * `Scan` folds into `carries[carry]`, restarting at `init` where the
-///   element's flat box offset `at` begins a row; the caller visits the box
-///   in ascending flat order.
+/// * `Scan` folds into `carries[carry + at % post]`, restarting at `init`
+///   where the element's flat box offset `at` is at step 0 of its lane; the
+///   caller visits the box in ascending flat order.
 /// * `get` resolves an [`MRef`] operand (register / broadcast scalar / array
 ///   input at the current element, including the [`GHOST_OFF`] `+0.0` read).
 ///   Operand reads are pure, so `Select` reading only the taken operand is
@@ -1363,11 +1462,13 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
             init,
             inclusive,
             row,
+            post,
             carry,
             out,
         } => {
-            let acc = &mut carries[*carry as usize];
-            if at.is_multiple_of(*row as usize) {
+            let (row, post) = (*row as usize, *post as usize);
+            let acc = &mut carries[*carry as usize + at % post];
+            if (at / post).is_multiple_of(row) {
                 *acc = *init;
             }
             let x = get(a, regs);

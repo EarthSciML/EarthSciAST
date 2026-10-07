@@ -706,11 +706,14 @@ pub(super) fn run_reference(
                     .reduce
                     .as_ref()
                     .map_or_else(Vec::new, |r| vec![r.init; r.n_inner]);
-                let n_scans = fs
+                let n_scans: usize = fs
                     .micro
                     .iter()
-                    .filter(|m| matches!(m, MicroOp::Scan { .. }))
-                    .count();
+                    .map(|m| match m {
+                        MicroOp::Scan { post, .. } => *post as usize,
+                        _ => 0,
+                    })
+                    .sum();
                 let mut carries = vec![0.0f64; n_scans];
                 let mut covered = 0usize;
                 for run in &fs.schedule.expanded() {

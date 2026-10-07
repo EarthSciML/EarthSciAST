@@ -50,11 +50,12 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use std::collections::BTreeSet;
 
-/// Shortest innermost-axis extent a [`ChunkGather`] is formed for.
+/// A [`ChunkGather`] with rows shorter than this is read whole
+/// ([`ChunkGather::whole`]).
 const MIN_CHUNK_GATHER_ROW: usize = 12;
 
-/// A [`ChunkGather`] with rows shorter than this is materialized after all
-/// when its group has fewer than [`LIGHT_GROUP_OPS`] micro-ops.
+/// So is one with rows shorter than this when its group has fewer than
+/// [`LIGHT_GROUP_OPS`] micro-ops.
 const SHORT_CHUNK_GATHER_ROW: usize = 32;
 const LIGHT_GROUP_OPS: usize = 8;
 
@@ -156,8 +157,9 @@ struct GBuilder {
     /// kernel and the same operands as an earlier one is that op's register
     /// (the kernels are pure, so it would compute the same bits).
     vn: FxHashMap<MKey, GroupIx>,
-    /// Absorbed scans so far (each owns the next carry slot).
-    n_scans: GroupIx,
+    /// Carry slots the absorbed scans use so far (each scan owns one per
+    /// lane, the next ones).
+    n_carries: u32,
     /// `Export`s and `DyWrite`s of slots this group defines, held back until
     /// it flushes (see `fuse_section`).
     deferred: Vec<u32>,
@@ -220,7 +222,7 @@ impl GBuilder {
             prec,
             reduce: None,
             vn: FxHashMap::default(),
-            n_scans: 0,
+            n_carries: 0,
             deferred: Vec::new(),
         }
     }
@@ -281,9 +283,9 @@ impl GBuilder {
         self.member_instrs.push(ix);
     }
 
-    /// Absorb `Scan` at instruction `ix` when it runs along the LAST axis of
-    /// this group's box: a [`MicroOp::Scan`] over its source, which the group
-    /// may compute itself or read as an aligned input. Returns `false` (group
+    /// Absorb `Scan` at instruction `ix` when it runs along an axis of this
+    /// group's box: a [`MicroOp::Scan`] over its source, which the group may
+    /// compute itself or read as an aligned input. Returns `false` (group
     /// untouched) otherwise.
     fn try_add_scan(&mut self, ix: u32, ins: &Instr, prog: &TapeProgram) -> bool {
         let Instr::Scan {
@@ -298,7 +300,7 @@ impl GBuilder {
         else {
             return false;
         };
-        if *src_shape != self.shape || *axis as usize + 1 != self.shape.len() {
+        if *src_shape != self.shape || *axis as usize >= self.shape.len() {
             return false;
         }
         let operand = match src {
@@ -317,6 +319,13 @@ impl GBuilder {
         {
             return false;
         }
+        let Ok(post) = u32::try_from(self.shape[*axis as usize + 1..].iter().product::<usize>())
+        else {
+            return false;
+        };
+        if self.n_carries.checked_add(post).is_none() {
+            return false;
+        }
         let a = self.commit(r);
         let ssa = self.micro.len() as GroupIx;
         self.micro.push(MicroOp::Scan {
@@ -325,10 +334,11 @@ impl GBuilder {
             init: *init,
             inclusive: *inclusive,
             row: self.shape[*axis as usize] as u32,
-            carry: self.n_scans,
+            post,
+            carry: self.n_carries,
             out: ssa,
         });
-        self.n_scans += 1;
+        self.n_carries += post;
         self.val_of.insert(*out, MRef::Reg(ssa));
         self.defs.push((*out, ssa));
         self.members.insert(ix);
@@ -1904,26 +1914,13 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
 
     merge_superops(&mut micro, &mut outputs, fx.cfg);
     // A chunk-read gather with short rows in a group with little else to do
-    // costs more per row than materializing it once: materialize it after
-    // all (the Gather lands before the group, like an externally read one).
+    // costs more per row than reading its box once: read it whole.
     if micro.len() < LIGHT_GROUP_OPS {
-        for &(orig_ix, slot, input_ix) in &folded_index {
-            let short = inputs[input_ix as usize]
-                .gather
-                .as_deref()
-                .is_some_and(|g| g.shape.last().is_some_and(|&l| l < SHORT_CHUNK_GATHER_ROW));
-            if short {
-                fx.sink.passthrough(prog, orig_ix as usize);
-                fx.sink.stats.n_gathers_folded -= 1;
-                inputs[input_ix as usize] = FusedInput {
-                    src: SrcRef::Slot(slot),
-                    shifted_ix: None,
-                    src_shape: shape.clone(),
-                    elem_stride: 1,
-                    load_reg: GroupIx::MAX,
-                    index: None,
-                    gather: None,
-                };
+        for inp in inputs.iter_mut() {
+            if let Some(g) = inp.gather.as_deref_mut()
+                && g.shape.last().is_some_and(|&l| l < SHORT_CHUNK_GATHER_ROW)
+            {
+                g.whole = true;
             }
         }
     }
@@ -1981,7 +1978,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     // needs every operand in a register.
     for inp in inputs.iter_mut() {
         if inp.index.is_some()
-            || inp.gather.is_some()
+            || inp.gather.as_deref().is_some_and(|g| !g.whole)
             || inp.shifted_ix.is_some()
                 && inp.elem_stride != 1
                 && (inp.elem_stride != 0 || n_splat_regs > 0)
@@ -2198,16 +2195,10 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                 continue;
             }
             // A same-rank shift whose runs would shatter the box: read it
-            // through its plan, chunk by chunk, inside its box's group —
-            // unless its rows are so short that the per-row work outweighs
-            // materializing it.
-            if out_desc.shape == plan_ref.shape
-                && foldable_plan(plan_ref)
-                && plan_ref
-                    .shape
-                    .last()
-                    .is_some_and(|&l| l >= MIN_CHUNK_GATHER_ROW)
-            {
+            // through its plan inside its box's group, chunk by chunk or (for
+            // short rows) the whole box at once. Absorbed either way, so the
+            // program does not depend on the box's extents.
+            if out_desc.shape == plan_ref.shape && foldable_plan(plan_ref) {
                 flush_hazards(ins, None, &mut open, fx);
                 let shape = out_desc.shape.clone();
                 let gi = find_or_open(&mut open, shape, prog.provenance[i], prec_at(prog, i), fx);
@@ -2221,6 +2212,10 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                     segs,
                     strides: rm_strides(&plan_ref.src_shape),
                     shape: plan_ref.shape.clone(),
+                    whole: plan_ref
+                        .shape
+                        .last()
+                        .is_none_or(|&l| l < MIN_CHUNK_GATHER_ROW),
                 };
                 open[gi].add_chunk_gather(i as u32, *src, g, &plan_ref.src_shape, *out);
                 i += 1;
@@ -2293,7 +2288,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             continue;
         }
 
-        // A scan along the last axis joins the group of its box.
+        // A scan along any axis joins the group of its box.
         if let Instr::Scan { src_shape, .. } = ins
             && !src_shape.is_empty()
             && !src_shape.contains(&0)
