@@ -221,8 +221,6 @@ struct _OverlapJoinSpec
     eps::Float64
     eps_given::Bool
 end
-# A hand-built clause without the flag counts a non-zero `eps` as spelled.
-_OverlapJoinSpec(src_env, tgt_env, eps) = _OverlapJoinSpec(src_env, tgt_env, eps, eps != 0)
 
 """
     OpExpr(op::String, args::Vector{ASTExpr}; wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce, ranges, regions, values, shape, perm, axis, fn)

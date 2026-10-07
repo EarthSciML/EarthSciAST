@@ -851,10 +851,14 @@ function _tp_parse_overlap(ps::_TPParser)
         _tp_expect!(ps, :eq, "'=' after $kv in overlap(…)")
         if kv == "src" && src === nothing
             src = _tp_parse_name_list(ps, kv)
-            isempty(src) && _tp_fail_at(k, "overlap src=[…] must name at least one factor")
+            _valid_env_arity(length(src)) || _tp_fail_at(k,
+                "overlap src=[…] must name 1 (rings), 2 (point [x,y]), or 4 " *
+                "(rect [xmin,ymin,xmax,ymax]) factors; got $(length(src))")
         elseif kv == "tgt" && tgt === nothing
             tgt = _tp_parse_name_list(ps, kv)
-            isempty(tgt) && _tp_fail_at(k, "overlap tgt=[…] must name at least one factor")
+            _valid_env_arity(length(tgt)) || _tp_fail_at(k,
+                "overlap tgt=[…] must name 1 (rings), 2 (point [x,y]), or 4 " *
+                "(rect [xmin,ymin,xmax,ymax]) factors; got $(length(tgt))")
         elseif kv == "eps" && eps === nothing
             v = _tp_parse_expr(ps, 0)
             ((v isa IntExpr || v isa NumExpr) && v.value >= 0) ||
