@@ -418,6 +418,143 @@ fn native_builds_an_ic_scope_with_state_reading_and_out_of_order_observeds() {
     }
 }
 
+/// `with_ic(ic)` plus array observeds over `x`, each `(name, body)`.
+fn with_ic_scope(rhs_ic: Value, observeds: &[(&str, Value)]) -> Value {
+    let mut doc = with_ic(rhs_ic);
+    let m = &mut doc["models"]["M"];
+    for (name, body) in observeds {
+        let shape = if body.get("op").and_then(Value::as_str) == Some("faq") {
+            json!({"type": "unknown", "units": "1", "shape": ["x"]})
+        } else {
+            json!({"type": "unknown", "units": "1"})
+        };
+        m["variables"][*name] = shape;
+        m["equations"]
+            .as_array_mut()
+            .expect("equations")
+            .push(json!({"lhs": name, "rhs": body}));
+    }
+    doc
+}
+
+fn over_x(idx: &str, expr: Value) -> Value {
+    json!({"op": "faq", "args": [], "output_idx": [idx],
+           "ranges": {idx: {"from": "x"}}, "expr": expr})
+}
+
+fn ic_values(file: &earthsci_ast::EsmFile, compiler: Compiler) -> Vec<f64> {
+    let prob = esm_problem(file, (0.0, 1.0), opts(compiler))
+        .unwrap_or_else(|e| panic!("[{compiler}] {e}"));
+    let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+    sol.state.iter().map(|r| r[0]).collect()
+}
+
+/// A `faq` index is no read: `zc`'s loop index `k` shares its name with the
+/// state-reading observed `k`, and `zc` is still state-free.
+#[test]
+fn an_ic_scope_loop_index_is_not_a_read_of_the_observed_it_shadows() {
+    let doc = with_ic_scope(
+        json!("zc"),
+        &[
+            (
+                "k",
+                over_x(
+                    "i",
+                    json!({"op": "*", "args": [2, {"op": "index", "args": ["u", "i"]}]}),
+                ),
+            ),
+            ("zc", over_x("k", json!({"op": "*", "args": [3, "k"]}))),
+        ],
+    );
+    let file = load_string(&doc.to_string()).expect("loads");
+    for compiler in [Compiler::Native, Compiler::Interpreter] {
+        assert_eq!(ic_values(&file, compiler), [3.0, 6.0, 9.0], "[{compiler}]");
+    }
+}
+
+/// Only the observeds an `ic` reads are evaluated: `unread` is a running sum
+/// the reference evaluator walks per cell, which native would refuse, but no
+/// `ic` reads it.
+#[test]
+fn native_does_not_evaluate_a_state_free_observed_no_ic_reads() {
+    let doc = with_ic_scope(
+        json!("zbase"),
+        &[
+            ("zbase", over_x("i", json!("i"))),
+            (
+                "unread",
+                json!({"op": "faq", "args": [], "output_idx": ["i"],
+                              "ranges": {"i": {"from": "x"}, "j": {"from": "x"}},
+                              "filter": {"op": "<=", "args": ["j", "i"]},
+                              "expr": {"op": "index", "args": ["zbase", "j"]}}),
+            ),
+        ],
+    );
+    let file = load_string(&doc.to_string()).expect("loads");
+    for compiler in [Compiler::Native, Compiler::Interpreter] {
+        let prob = esm_problem(&file, (0.0, 1.0), opts(compiler))
+            .unwrap_or_else(|e| panic!("[{compiler}] {e}"));
+        let report = prob.compiler_report();
+        assert!(
+            !report
+                .rules()
+                .iter()
+                .any(|r| r.rule.ends_with("unread") && r.kind == "initial-condition scope"),
+            "[{compiler}] an observed no ic reads was evaluated: {report}"
+        );
+        assert_eq!(ic_values(&file, compiler), [1.0, 2.0, 3.0], "[{compiler}]");
+    }
+}
+
+/// A scalar scope observed binds like a parameter for what reads it.
+#[test]
+fn an_ic_scope_observed_reads_a_scalar_one() {
+    let doc = with_ic_scope(
+        json!("zc"),
+        &[
+            ("dz", json!({"op": "/", "args": [1, 2]})),
+            ("zc", over_x("i", json!({"op": "*", "args": ["i", "dz"]}))),
+        ],
+    );
+    let file = load_string(&doc.to_string()).expect("loads");
+    for compiler in [Compiler::Native, Compiler::Interpreter] {
+        // `u`'s three cells; `dz` follows them in the state vector.
+        assert_eq!(
+            ic_values(&file, compiler)[..3],
+            [0.5, 1.0, 1.5],
+            "[{compiler}]"
+        );
+    }
+}
+
+/// An `ic` reading an observed that is not state-free says so, naming the
+/// chain to the state.
+#[test]
+fn an_ic_reading_a_state_dependent_observed_says_why() {
+    let doc = with_ic_scope(
+        json!("b"),
+        &[
+            ("a", over_x("i", json!({"op": "index", "args": ["u", "i"]}))),
+            (
+                "b",
+                over_x(
+                    "i",
+                    json!({"op": "*", "args": [2, {"op": "index", "args": ["a", "i"]}]}),
+                ),
+            ),
+        ],
+    );
+    let file = load_string(&doc.to_string()).expect("loads");
+    let prob = esm_problem(&file, (0.0, 1.0), opts(Compiler::Interpreter)).expect("builds");
+    let err = solve(&prob, &SolveOptions::default()).expect_err("ic reads state");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("'b' is not in the build-time scope")
+            && msg.contains("reads 'a', which reads 'u'"),
+        "{msg}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // (d) Value invention
 // ---------------------------------------------------------------------------

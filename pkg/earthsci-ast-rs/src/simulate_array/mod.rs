@@ -731,20 +731,18 @@ pub struct ArrayCompiled {
     /// so far, except a cell the caller's `u0` names
     /// ([`Self::seed_initialization_faqs`]).
     init_faqs: Vec<(String, Expr)>,
-    /// The STATE-FREE observed definitions a field `ic` RHS may read, in name
-    /// order (esm-spec §6.6.5 "Build-time evaluation scope").
+    /// The STATE-FREE observed definitions a field `ic` RHS reads, in
+    /// dependency order (esm-spec §6.6.5 "Build-time evaluation scope").
     ///
     /// A state-free observed — one whose defining expression closes over
-    /// parameters, inline `const` data and other state-free observeds — is
-    /// resolvable before the simulation runs, so §11.4.1 admits it as an `ic`
-    /// right-hand side alongside a loaded field, a constant and a coordinate
-    /// expression. Captured at compile (before the observed bodies are moved
-    /// into the rules) and materialized lazily at `u0` build time, in the
-    /// resolved parameter scope, by [`Self::resolve_field_ics`]. Empty for a
-    /// document with no field `ic`. Each definition carries the names of the
-    /// OTHER scope definitions its body reads, so it is evaluated only once
-    /// those are built.
-    ic_scope_defs: Vec<(String, Expr, Vec<String>)>,
+    /// parameters, inline `const` data, provider-served fields and other
+    /// state-free observeds — is resolvable before the simulation runs, so
+    /// §11.4.1 admits it as an `ic` right-hand side alongside a loaded field,
+    /// a constant and a coordinate expression. Captured at compile (before the
+    /// observed bodies are moved into the rules) and materialized lazily at
+    /// `u0` build time, in the resolved parameter scope, by
+    /// [`Self::resolve_field_ics`]. Empty for a document with no field `ic`.
+    ic_scope: compile::IcScope,
     /// Document-scoped index-set registry, kept so `ic` RHS coordinate
     /// expressions (whose `faq` ranges may still carry `{ "from": <set> }`
     /// references on the flattened path) resolve at `u0` build time exactly as
