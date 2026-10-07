@@ -509,6 +509,13 @@ impl Instr {
                     f(c);
                 }
             }
+            Instr::Lanes { spec } => {
+                for w in &t.lanes[*spec as usize].writes {
+                    if let LaneDst::Slot(s) = w.dst {
+                        f(s);
+                    }
+                }
+            }
             Instr::Fused { spec } => {
                 let fs = &t.fused[*spec as usize];
                 for &(_, slot) in &fs.outputs {
@@ -1674,19 +1681,33 @@ pub(crate) struct LaneTable {
     pub ix: LaneIx,
 }
 
-/// One `dy` write of a lane program: lane `l` writes `src` to `dy[pos.at(l)]`.
+/// Where a lane program's write lands.
+#[derive(Clone, Debug)]
+pub(crate) enum LaneDst {
+    /// Lane `l` writes `dy[pos.at(l)]`.
+    Dy(LaneIx),
+    /// The scalar slot (a one-lane program only): a value read after the
+    /// program.
+    Slot(SlotId),
+}
+
+/// One write of a lane program, after its micro-program.
 #[derive(Clone, Debug)]
 pub(crate) struct LaneWrite {
     pub src: MRef,
-    pub pos: LaneIx,
+    pub dst: LaneDst,
 }
 
 /// A lane program ([`Instr::Lanes`]): `micro` runs once per lane over a
 /// register file of `n_regs` registers, `MRef::In(i)` reading lane `l`'s
 /// entry of `inputs[i]` and `MRef::Scal(i)` the operand `scalars[i]` (the
 /// same for every lane). Then each write stores its value at its lane's `dy`
-/// position. The `dy` positions of all lanes and writes are distinct, so the
-/// order lanes run in reaches no result.
+/// position, or (one lane only) in its slot. The `dy` positions of all lanes
+/// and writes are distinct, so the order lanes run in reaches no result.
+///
+/// A one-lane program is a compiled straight run of scalar instructions:
+/// its operands are all scalars, read once, and its micro-ops run one
+/// after another over a scalar register file.
 #[derive(Clone, Debug)]
 pub(crate) struct LaneSpec {
     pub lanes: u32,
@@ -1769,6 +1790,11 @@ pub(crate) struct TapeProgram {
     pub n_const: u32,
     /// Instruction count of the SEGMENT section.
     pub n_segment: u32,
+    /// How many leading CONTINUOUS instructions a call whose exports are
+    /// off runs: the ones a derivative or a fault depends on. The rest
+    /// compute observeds only the observed and output passes read
+    /// (`prune`).
+    pub n_rhs: u32,
     pub slots: Vec<SlotDesc>,
     pub plans: Vec<GatherPlan>,
     pub regions: Vec<RegionSpec>,

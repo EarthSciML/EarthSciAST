@@ -868,7 +868,14 @@ pub(in crate::simulate_array) fn run_tape_call(
             fused::refill_index_tables(&mut exec.idx_tables, exec.slab.as_ptr(), &exec.slot_off)
         };
     }
-    run_range(&env, prime_end..prog.instrs.len(), exec, dy, stats);
+    // With nothing reading the published observeds, the output-only tail of
+    // the section is not run.
+    let end = if exec.exports_active {
+        prog.instrs.len()
+    } else {
+        prime_end + prog.n_rhs as usize
+    };
+    run_range(&env, prime_end..end, exec, dy, stats);
     exec.state_rm = state_rm;
     exec.mirror = mirror;
 

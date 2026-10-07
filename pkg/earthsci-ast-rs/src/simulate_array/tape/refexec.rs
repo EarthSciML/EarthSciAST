@@ -796,6 +796,7 @@ pub(super) fn run_reference(
                 };
                 let svals: Vec<f64> = ls.scalars.iter().map(scalar).collect();
                 let mut regs = vec![0.0f64; ls.n_regs as usize];
+                let mut published: Vec<(SlotId, f64)> = Vec::new();
                 for l in 0..ls.lanes as usize {
                     let ins: Vec<f64> = ls
                         .inputs
@@ -827,8 +828,15 @@ pub(super) fn run_reference(
                         eval_micro_op(op, &mut regs, l, &mut [], get);
                     }
                     for w in &ls.writes {
-                        dy[w.pos.at(l) as usize] = get(&w.src, &regs);
+                        let v = get(&w.src, &regs);
+                        match &w.dst {
+                            LaneDst::Dy(pos) => dy[pos.at(l) as usize] = v,
+                            LaneDst::Slot(s) => published.push((*s, v)),
+                        }
                     }
+                }
+                for (s, v) in published {
+                    slots[s as usize] = Some(RefVal::Scalar(v));
                 }
             }
             Instr::DyWrite { write } => {
