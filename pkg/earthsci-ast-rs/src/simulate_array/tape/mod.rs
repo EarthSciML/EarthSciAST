@@ -74,8 +74,10 @@ mod layout;
 mod lower;
 #[cfg(test)]
 mod lowering_limit_tests;
+mod prune;
 #[cfg(test)]
 mod refexec;
+mod reroll;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
