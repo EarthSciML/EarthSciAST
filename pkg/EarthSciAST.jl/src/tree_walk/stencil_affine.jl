@@ -1395,7 +1395,7 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
     D >= 1 || return nothing
     ranges = UnitRange{Int}[]
     for r in range_iters
-        (length(r) >= 1 && collect(r) == collect(first(r):last(r))) || return nothing
+        (length(r) >= 1 && _is_unit_run(r)) || return nothing
         push!(ranges, first(r):last(r))
     end
 
