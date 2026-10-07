@@ -105,6 +105,24 @@ describe('Basic expressions', () => {
     expect(toLatex(expr)).toBe('\\frac{\\partial x}{\\partial t}')
     expect(toAscii(expr)).toBe('D(x)/Dt')
   })
+
+  it('converts a Greek name only where it is not glued to a preceding letter', () => {
+    expect(toUnicode('nu')).toBe('ν')
+    expect(toUnicode('theta')).toBe('θ')
+    expect(toUnicode('beta_x')).toBe('β_x')
+    expect(toUnicode('pressure_eta')).toBe('pressure_η')
+    expect(toUnicode('annual')).toBe('annual')
+    expect(toUnicode('menu')).toBe('menu')
+    // A faq renders its MathML from the Unicode text, so it inherits the rule.
+    const faq = {
+      op: 'faq',
+      output_idx: ['r'],
+      ranges: { r: { from: 'records' } },
+      args: ['annual'],
+      expr: { op: 'index', args: ['annual', 'r'] },
+    }
+    expect(toMathML(faq as never)).toContain('annual[r]')
+  })
 })
 
 // ---------------------------------------------------------------------------

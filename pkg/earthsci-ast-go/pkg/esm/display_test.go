@@ -319,6 +319,27 @@ func TestFormatChemicalSpecies(t *testing.T) {
 	}
 }
 
+func TestUnicodeGreekNameNeedsAWordStart(t *testing.T) {
+	tests := []struct {
+		name    string
+		unicode string
+	}{
+		{"nu", "ν"},
+		{"theta", "θ"},
+		{"beta_x", "β_x"},
+		{"pressure_eta", "pressure_η"},
+		// A Greek name glued to a preceding letter is part of a word.
+		{"annual", "annual"},
+		{"menu", "menu"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.unicode, ToUnicode(tt.name))
+		})
+	}
+}
+
 func TestIfElse(t *testing.T) {
 	input := ExprNode{
 		Op: "ifelse",

@@ -249,8 +249,10 @@ const GREEK_LATEX_RE = new RegExp(
   `${GREEK_CHAR_CLASS}|(?<![\\\\A-Za-z])${GREEK_NAME_GROUP}(?![A-Z}])`,
   'g',
 )
-// Unicode: a named letter not followed by an uppercase letter (chemical prefix).
-const GREEK_UNICODE_RE = new RegExp(`${GREEK_NAME_GROUP}(?![A-Z])`, 'g')
+// Unicode: a named letter not preceded by a backslash or another letter (so the
+// `nu` inside `annual` and the `eta` inside `theta` are left alone) and not
+// followed by an uppercase letter (chemical prefix).
+const GREEK_UNICODE_RE = new RegExp(`(?<![\\\\A-Za-z])${GREEK_NAME_GROUP}(?![A-Z])`, 'g')
 // ASCII / MathML: bare Greek Unicode chars.
 const GREEK_CHAR_RE = new RegExp(GREEK_CHAR_CLASS, 'g')
 // MathML: bare named letters (no lookahead).
@@ -262,7 +264,8 @@ function convertGreekLetters(text: string, format: 'unicode' | 'latex' | 'ascii'
     // (chemical prefix) or closing brace (inside \mathrm{}).
     return text.replace(GREEK_LATEX_RE, (match) => GREEK_LETTERS[match] || match)
   } else if (format === 'unicode') {
-    // Negative lookahead (?![A-Z]) prevents conversion when followed by uppercase.
+    // Lookbehind (?<![\\A-Za-z]) keeps a name glued to a letter; lookahead
+    // (?![A-Z]) prevents conversion when followed by uppercase.
     return text.replace(GREEK_UNICODE_RE, (match) => GREEK_NAME_TO_CHAR[match] || match)
   } else if (format === 'ascii') {
     return text.replace(GREEK_CHAR_RE, (match) => GREEK_CHAR_TO_NAME[match] || match)

@@ -431,3 +431,19 @@ def test_format_number_accepts_numpy_scalars():
     assert _format_number(np.float64(1e-5), "ascii") == "1.0e-5"
     assert _format_number(np.int64(123456), "ascii") == "1.23456e5"
     assert _format_number(np.int64(5), "ascii") == "5"
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("nu", "ν"),
+        ("theta", "θ"),
+        ("beta_x", "β_x"),
+        ("pressure_eta", "pressure_η"),
+        # A Greek name glued to a preceding letter is part of a word.
+        ("annual", "annual"),
+        ("menu", "menu"),
+    ],
+)
+def test_unicode_greek_name_needs_a_word_start(name, expected):
+    assert to_unicode(name) == expected
