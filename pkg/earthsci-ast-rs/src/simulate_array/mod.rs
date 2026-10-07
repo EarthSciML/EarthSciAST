@@ -741,8 +741,10 @@ pub struct ArrayCompiled {
     /// expression. Captured at compile (before the observed bodies are moved
     /// into the rules) and materialized lazily at `u0` build time, in the
     /// resolved parameter scope, by [`Self::resolve_field_ics`]. Empty for a
-    /// document with no field `ic`.
-    ic_scope_defs: Vec<(String, Expr)>,
+    /// document with no field `ic`. Each definition carries the names of the
+    /// OTHER scope definitions its body reads, so it is evaluated only once
+    /// those are built.
+    ic_scope_defs: Vec<(String, Expr, Vec<String>)>,
     /// Document-scoped index-set registry, kept so `ic` RHS coordinate
     /// expressions (whose `faq` ranges may still carry `{ "from": <set> }`
     /// references on the flattened path) resolve at `u0` build time exactly as

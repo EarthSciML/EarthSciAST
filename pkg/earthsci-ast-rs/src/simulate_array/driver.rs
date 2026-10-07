@@ -879,8 +879,15 @@ impl ArrayCompiled {
             // already in scope, so `n` passes close a chain of length `n`.
             for _ in 0..self.ic_scope_defs.len() {
                 let before = built.len();
-                for (name, body) in &self.ic_scope_defs {
+                for (name, body, deps) in &self.ic_scope_defs {
                     if built.contains_key(name) {
+                        continue;
+                    }
+                    // Not before the definitions it reads are built: the
+                    // overlay cannot resolve an absent name, so it would fall
+                    // to a per-cell walk — which a strict compiler refuses —
+                    // only to fail and be retried on a later pass anyway.
+                    if !deps.iter().all(|d| built.contains_key(d)) {
                         continue;
                     }
                     let before = walks();

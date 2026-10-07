@@ -368,6 +368,56 @@ fn native_refuses_a_per_cell_initial_condition() {
     );
 }
 
+/// The build-time scope an `ic` reads holds only the TRANSITIVELY state-free
+/// observeds, each evaluated after the ones it reads. `Acum` is a running sum
+/// over `flux`, which reads the state `u`: it is not state-free, so it is no
+/// part of the scope (it was, since it names no state itself, and native
+/// refused its per-cell prefix scan). `a_dep` reads `zbase`, which sorts
+/// after it: evaluated first, `zbase` was absent and the overlay fell to a
+/// per-cell walk that native refused.
+#[test]
+fn native_builds_an_ic_scope_with_state_reading_and_out_of_order_observeds() {
+    let mut doc = with_ic(json!("a_dep"));
+    let m = &mut doc["models"]["M"];
+    for name in ["a_dep", "zbase", "flux", "Acum"] {
+        m["variables"][name] = json!({"type": "unknown", "units": "1", "shape": ["x"]});
+    }
+    let map = |expr: Value| {
+        json!({"op": "faq", "args": [], "output_idx": ["i"],
+               "ranges": {"i": {"from": "x"}}, "expr": expr})
+    };
+    let eqs = m["equations"].as_array_mut().expect("equations");
+    eqs.push(json!({"lhs": "zbase", "rhs": map(json!("i"))}));
+    eqs.push(json!({"lhs": "a_dep",
+                    "rhs": map(json!({"op": "*", "args": [2, {"op": "index", "args": ["zbase", "i"]}]}))}));
+    eqs.push(json!({"lhs": "flux",
+                    "rhs": map(json!({"op": "*", "args": [3, {"op": "index", "args": ["u", "i"]}]}))}));
+    eqs.push(json!({"lhs": "Acum",
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                            "ranges": {"i": {"from": "x"}, "j": {"from": "x"}},
+                            "filter": {"op": "<=", "args": ["j", "i"]},
+                            "expr": {"op": "index", "args": ["flux", "j"]}}}));
+    let file = load_string(&doc.to_string()).expect("loads");
+    for compiler in [Compiler::Native, Compiler::Interpreter] {
+        let prob = esm_problem(&file, (0.0, 1.0), opts(compiler))
+            .unwrap_or_else(|e| panic!("[{compiler}] {e}"));
+        let report = prob.compiler_report();
+        assert!(
+            !report
+                .rules()
+                .iter()
+                .any(|r| r.rule.ends_with("Acum") && r.kind == "initial-condition scope"),
+            "[{compiler}] a state-reading observed is in the ic scope: {report}"
+        );
+        let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+        assert_eq!(
+            sol.state.iter().map(|r| r[0]).collect::<Vec<_>>(),
+            [2.0, 4.0, 6.0],
+            "[{compiler}]"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // (d) Value invention
 // ---------------------------------------------------------------------------

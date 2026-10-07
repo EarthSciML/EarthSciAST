@@ -1445,7 +1445,7 @@ fn capture_ic_scope_defs(
     model: &Model,
     observed_names: &[String],
     state_names: &IndexMap<String, VarShape>,
-) -> Vec<(String, Expr)> {
+) -> Vec<(String, Expr, Vec<String>)> {
     if !model
         .equations
         .iter()
@@ -1454,22 +1454,55 @@ fn capture_ic_scope_defs(
         return Vec::new();
     }
     let observed: HashSet<&String> = observed_names.iter().collect();
-    let bodies = observed_bodies(model);
-    let mut out: Vec<(String, Expr)> = Vec::new();
-    for (name, body) in bodies {
-        if !observed.contains(&name) {
-            continue;
+    let candidates: Vec<(String, Expr, HashSet<String>)> = observed_bodies(model)
+        .into_iter()
+        .filter(|(name, _)| observed.contains(name))
+        .map(|(name, body)| {
+            let mut names = HashSet::new();
+            collect_expr_names(&body, &mut names);
+            (name, body, names)
+        })
+        .collect();
+    // State-freedom is TRANSITIVE: an observed that reads another observed
+    // reading state (`Mz_conv` ← `div_h` ← `conv_x` ← `u`) is not state-free
+    // either. Checking only direct references admitted such a definition into
+    // the scope; under the interpreter it merely failed to evaluate and was
+    // skipped, but a strict compiler's first-cell stop turned its per-cell
+    // walk into a build refusal. Taint to a fixpoint.
+    let mut tainted: HashSet<&str> = HashSet::new();
+    loop {
+        let before = tainted.len();
+        for (name, _, names) in &candidates {
+            if !tainted.contains(name.as_str())
+                && names.iter().any(|n| {
+                    n == "t" || state_names.contains_key(n) || tainted.contains(n.as_str())
+                })
+            {
+                tainted.insert(name.as_str());
+            }
         }
-        let mut names = HashSet::new();
-        collect_expr_names(&body, &mut names);
-        if names
-            .iter()
-            .any(|n| n == "t" || state_names.contains_key(n))
-        {
-            continue;
+        if tainted.len() == before {
+            break;
         }
-        out.push((name, body));
     }
+    let tainted: HashSet<String> = tainted.into_iter().map(str::to_owned).collect();
+    let kept: HashSet<String> = candidates
+        .iter()
+        .map(|(name, _, _)| name.clone())
+        .filter(|name| !tainted.contains(name))
+        .collect();
+    let mut out: Vec<(String, Expr, Vec<String>)> = candidates
+        .into_iter()
+        .filter(|(name, _, _)| kept.contains(name))
+        .map(|(name, body, names)| {
+            let mut deps: Vec<String> = names
+                .into_iter()
+                .filter(|n| *n != name && kept.contains(n))
+                .collect();
+            deps.sort();
+            (name, body, deps)
+        })
+        .collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }
