@@ -286,7 +286,7 @@ fn reverse_plan(plan: &mut GatherPlan) {
         .iter()
         .map(|&(d, i)| (m - 1 - d, i))
         .collect();
-    fixed.sort_unstable_by(|x, y| y.0.cmp(&x.0));
+    fixed.sort_unstable_by_key(|&(d, _)| std::cmp::Reverse(d));
     let r = plan.perm.len();
     debug_assert_eq!(r, plan.mapped.iter().filter(|&&b| b).count());
     let perm: SmallVec<[usize; 4]> = (0..r).map(|q| r - 1 - plan.perm[r - 1 - q]).collect();
