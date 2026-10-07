@@ -247,7 +247,10 @@ end
         # buffers. A model with an empty prelude cannot exercise it.
         doc = _gi_zerod()
         f!, u0, p, _, _ = ESM._build_evaluator(doc)
-        @test !isempty(getfield(f!, :cse_prelude))      # the prelude is real
+        # The prelude is real: the interpreter build walks the same one (the
+        # native build compiles it, so its closure carries no walked prelude).
+        @test !isempty(getfield(ESM._build_evaluator(doc; compiler=:interpreter)[1],
+                                :cse_prelude))
         u = [0.7, -0.4]
 
         J = ForwardDiff.jacobian((d, uu) -> f!(d, uu, p, 0.0), zeros(2), u)

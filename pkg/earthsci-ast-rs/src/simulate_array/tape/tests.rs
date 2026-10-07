@@ -103,12 +103,30 @@ pub(super) fn ab_check(
         // Rebuild for the reference arm (the scratch consumed the first).
         compiled.build_tape_opts(&HashSet::new(), None).0
     };
+    // The fused program as lowered, without the state-layout alignment
+    // (`layout`), which `prog` may carry: both storage orders must agree.
+    let rm_build = || {
+        compiled
+            .build_tape_layout(&HashSet::new(), Some(default_cfg()), false)
+            .0
+    };
+    let prog_rm = rm_build();
+    assert!(!prog_rm.col_major);
+    let mut fast_rm = super::super::RhsScratch::new(&compiled.var_shapes);
+    fast_rm.install_tape(
+        std::rc::Rc::new(rm_build()),
+        std::rc::Rc::new(compiled.observed_rules.clone()),
+    );
     let mut fast_stats = RhsStats::default();
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, lo, hi);
         for &t in &[0.0, 0.37, 2.5] {
             let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
-            for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
+            for (label, p) in [
+                ("fused", &prog),
+                ("unfused", &prog_uf),
+                ("row-major fused", &prog_rm),
+            ] {
                 let mut dy = vec![0.0f64; n];
                 run_reference(p, &compiled, &state, &param_vec, t, &mut dy);
                 for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
@@ -122,7 +140,11 @@ pub(super) fn ab_check(
                     );
                 }
             }
-            for (label, scratch) in [("fused", &mut fast_scratch), ("unfused", &mut fast_uf)] {
+            for (label, scratch) in [
+                ("fused", &mut fast_scratch),
+                ("unfused", &mut fast_uf),
+                ("row-major fused", &mut fast_rm),
+            ] {
                 let mut dy_fast = vec![0.0f64; n];
                 compiled.debug_eval_rhs_into(
                     &state,
@@ -1354,9 +1376,12 @@ fn ab_model_file_if_available() {
 // ---------------------------------------------------------------------------
 
 /// Shifted-read gather folding, all three fold shapes at once on a 2-D box:
-/// a periodic WRAP along the leading axis (two-segment roll), a Dirichlet
-/// GHOST-edge shift (uncovered edge rows read `+0.0`), and a LINEAR
-/// level-slice read (constant element stride from a deeper box). The A/B
+/// a periodic WRAP (two-segment roll), a Dirichlet GHOST-edge shift
+/// (uncovered edge rows read `+0.0`), and a LINEAR level-slice read
+/// (constant element stride from a deeper box). The wrap and the ghost shift
+/// run along both axes: on a box this small only a shift along the axis
+/// stored leading folds, which is `i` as lowered and `j` in a column-major
+/// program (`layout`). The A/B
 /// harness proves byte equality of the fused program (shifted reads) against
 /// the unfused program (materialized gathers) and the legacy interpreter.
 #[test]
@@ -1369,12 +1394,16 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
     let lap_wrap = json!({"op": "+", "args": [
         idx2("u", wrap(json!({"op": "-", "args": ["i", 1]}), 1, ni), json!("j")),
         {"op": "*", "args": [-2.0, idx2("u", json!("i"), json!("j"))]},
-        idx2("u", wrap(json!({"op": "+", "args": ["i", 1]}), 1, ni), json!("j"))
+        idx2("u", wrap(json!({"op": "+", "args": ["i", 1]}), 1, ni), json!("j")),
+        idx2("u", json!("i"), wrap(json!({"op": "-", "args": ["j", 1]}), 1, nj)),
+        idx2("u", json!("i"), wrap(json!({"op": "+", "args": ["j", 1]}), 1, nj))
     ]});
     let lap_ghost = json!({"op": "+", "args": [
         idx2("v", json!({"op": "-", "args": ["i", 1]}), json!("j")),
         {"op": "*", "args": [-2.0, idx2("v", json!("i"), json!("j"))]},
-        idx2("v", json!({"op": "+", "args": ["i", 1]}), json!("j"))
+        idx2("v", json!({"op": "+", "args": ["i", 1]}), json!("j")),
+        idx2("v", json!("i"), json!({"op": "-", "args": ["j", 1]})),
+        idx2("v", json!("i"), json!({"op": "+", "args": ["j", 1]}))
     ]});
     let d2 = |var: &str, rhs: serde_json::Value| {
         json!({
@@ -1397,18 +1426,26 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
                 "u": {"type": "unknown", "shape": ["i", "j"]},
                 "v": {"type": "unknown", "shape": ["i", "j"]},
                 "w": {"type": "unknown", "shape": ["i", "j"]},
-                // s[i] = 0.5 * w[i, 3]: a linear (strided) slice read.
-                "s": {"type": "unknown", "shape": ["i"]}
+                // s[i] = 0.5 * w[i, 3] and r[j] = 0.5 * w[2, j]: linear slice
+                // reads, one of them strided in either storage order.
+                "s": {"type": "unknown", "shape": ["i"]},
+                "r": {"type": "unknown", "shape": ["j"]}
             },
             "equations": [
                 {"lhs": "s", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                           "ranges": {"i": [1, ni]},
                           "expr": {"op": "*", "args": [0.5,
                               {"op": "index", "args": ["w", "i", 3]}]}}},
+                {"lhs": "r", "rhs": {"op": "faq", "args": [], "output_idx": ["j"],
+                          "ranges": {"j": [1, nj]},
+                          "expr": {"op": "*", "args": [0.5,
+                              {"op": "index", "args": ["w", 2, "j"]}]}}},
                 d2("u", agg2(json!({"op": "*", "args": [0.25, lap_wrap]}))),
                 d2("v", agg2(json!({"op": "*", "args": [0.25, lap_ghost]}))),
                 d2("w", agg2(json!({"op": "*", "args": [
-                    {"op": "index", "args": ["s", "i"]},
+                    {"op": "+", "args": [
+                        {"op": "index", "args": ["s", "i"]},
+                        {"op": "index", "args": ["r", "j"]}]},
                     {"op": "index", "args": ["w", "i", "j"]}
                 ]})))
             ]
@@ -2680,10 +2717,16 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
     });
     let prog = ab_check(doc.clone(), 0, -2.0, 2.0);
     let payloads: Vec<&ConstArrayData> = prog.const_data.iter().collect();
+    // A column-major program stores the box axis-reversed (`layout`).
+    let (shape, values): ([usize; 2], [f64; 6]) = if prog.col_major {
+        ([2, 3], [0.5, 2.0, -0.75, -1.25, 3.5, 1e-3])
+    } else {
+        ([3, 2], [0.5, -1.25, 2.0, 3.5, -0.75, 1e-3])
+    };
     assert!(
         payloads
             .iter()
-            .any(|d| d.shape[..] == [3, 2] && d.values == [0.5, -1.25, 2.0, 3.5, -0.75, 1e-3]),
+            .any(|d| d.shape[..] == shape && d.values == values),
         "the default's row-major data is a ConstArray payload: {payloads:?}"
     );
     // And against the per-cell oracle, not only the overlay.

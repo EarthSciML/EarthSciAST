@@ -489,11 +489,15 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key=nothing)
         addr = _cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off, a.sx, key)
         # A table that is one ascending run of slots with no ghost (the box of
         # an array laid out as one column-major block) reads the same slot as
-        # base + address, without the table load and the ghost test.
+        # base + address, without the table load and the ghost test. Whether a
+        # table is such a run can depend on the grid size (a boundary slab one
+        # cell wide), so the choice is run-time data (`-1` = not a run) and the
+        # emitted code is the same at every N; the branch is loop-invariant.
         c0 = _cg_affine_conn(a.conn)
-        c0 > 0 && return :(u[$(_cg_geo!(ctx, c0 - 1, _cg_gkey(key, :tblbase))) + $addr])
+        cb = _cg_geo!(ctx, c0 > 0 ? c0 - 1 : -1, _cg_gkey(key, :tblbase))
         # Exactly `_fetch`'s ghost test: slot 0 ⇒ the ghost literal 0.0.
-        return :(let $s = $(_cg_tab!(ctx, a.conn))[$addr]
+        return :($cb >= 0 ? u[$cb + $addr] :
+                 let $s = $(_cg_tab!(ctx, a.conn))[$addr]
                      $s == 0 ? 0.0 : u[$s]
                  end)
     elseif k === _AK_ARR_TBL_BOX
@@ -2122,14 +2126,16 @@ end
     b.f(args[1], args[2], args[3], args[4], b.tabs, c, nchunks)
 
 # Run one generated function chunked when the section's verdict allows, and
-# its serial `(1, 1)` instance otherwise (one thread, too few cells, shared
-# out-slots). Every value type takes the same route: a chunk computes each of
+# serially otherwise (one thread, too few cells, shared out-slots): its
+# `(1, 1)` instance, or `ntiles` serial cell tiles (`_run_cg_section_serial!`).
+# Every value type takes the same route: a chunk computes each of
 # its cells exactly as the serial instance does.
-@inline function _run_cg_maybe_threaded!(f, tabs, du, u, p, t, tc::_SecTCache)
+@inline function _run_cg_maybe_threaded!(f, tabs, du, u, p, t, tc::_SecTCache,
+                                         ntiles::Int = 1)
     if _threads_available() && _sec_prep_threads!(tc).state == 1
         _run_chunked!(tc, _CGChunk(f, tabs), (du, u, p, t))
     else
-        f(du, u, p, t, tabs, 1, 1)
+        _run_cg_section_serial!(f, tabs, du, u, p, t, ntiles)
     end
     return nothing
 end
@@ -2166,14 +2172,46 @@ struct _KernelSection{F,TB,G,GTB}
     # function (primary / overflow), see `_SecTCache` above.
     tcache::_SecTCache
     dual_tcache::_SecTCache
+    # Serial cell tiling of the primary function: the number of static chunks
+    # a serial call runs back to back (1 = one pass per kernel). See
+    # `_section_tiles`.
+    ntiles::Int
+end
+
+# SERIAL TILING. The primary function runs chunk `c` of every emitted kernel
+# back to back (the threaded path's granularity, above), so a serial call can
+# run the chunks one after another instead of each kernel over all its cells:
+# several kernels over the same cells — one per species of a reaction system
+# lifted onto a grid — then share the cells' operands while they are still in
+# cache, where one pass per kernel streams every operand from memory once per
+# kernel. Chunk boundaries are not observable (the threaded path's argument:
+# every fold is inside one cell, out-slots are disjoint, `u` is read-only), so
+# a tiled call is bitwise the untiled one. Tiled only when the section has
+# several kernels and globally disjoint out-slots, with about
+# `_SECTION_TILE_CELLS` cells of each kernel per chunk.
+const _SECTION_TILE_CELLS = 1024
+function _section_tiles(ncells::Int, n_emitted::Int, disjoint::Bool)
+    (disjoint && n_emitted >= 2) || return 1
+    return max(1, div(ncells, n_emitted * _SECTION_TILE_CELLS))
+end
+
+@inline function _run_cg_section_serial!(f, tabs, du, u, p, t, ntiles::Int)
+    if ntiles == 1
+        f(du, u, p, t, tabs, 1, 1)
+    else
+        for c in 1:ntiles
+            f(du, u, p, t, tabs, c, ntiles)
+        end
+    end
+    return nothing
 end
 
 @inline function (s::_KernelSection{F,TB,G})(du, u, p, t, ::Type{T}) where {F,TB,G,T}
     if F !== Nothing
         # PRIMARY generated function, chunked when the section verdict allows
         # (threaded cell axis above), at every value type. Any serial verdict
-        # (small, shared outs, one thread) runs the (1, 1) instance.
-        _run_cg_maybe_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache)
+        # (small, shared outs, one thread) runs it tiled serially.
+        _run_cg_maybe_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache, s.ntiles)
     end
     kernels = s.kernels
     if G !== Nothing && T !== Float64
@@ -2297,7 +2335,8 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
                                     primary_reasons, isempty(primary_reasons))
         return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                               nothing, nothing, 0, collect(Int, 1:length(kernels)),
-                              false, _sec_tcache(cg), _sec_tcache(nothing))
+                              false, _sec_tcache(cg), _sec_tcache(nothing),
+                              _cg_section_tiles(cg, n_emitted))
     end
     # Float64 overflow routing (ess-f64ofl): armed whenever the overflow
     # function exists and the plan has not turned the routing off. A build with
@@ -2309,5 +2348,10 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
     _refuse_interpreted_kernels(kernels, dual_resid, dg.reasons, false)
     return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                           dg.f, dg.tabs, count(dg.covered), dual_resid, f64cg,
-                          _sec_tcache(cg), _sec_tcache(dg))
+                          _sec_tcache(cg), _sec_tcache(dg),
+                          _cg_section_tiles(cg, n_emitted))
 end
+
+_cg_section_tiles(::Nothing, ::Int) = 1
+_cg_section_tiles(cg::_CGBuilt, n_emitted::Int) =
+    _section_tiles(cg.ncells, n_emitted, cg.outs_disjoint)

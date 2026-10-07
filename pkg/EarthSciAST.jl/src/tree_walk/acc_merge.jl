@@ -641,7 +641,15 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    time_slots::AbstractVector{Int},
                    dyn_slots::AbstractVector{Int},
                    scan_folds::AbstractVector{_ScanFold}=_ScanFold[],
-                   array_contractions=_make_contraction_section(_ArrayContraction[]))
+                   array_contractions=_make_contraction_section(_ArrayContraction[]);
+                   scalar=nothing)
+    # The scalar codegen tier (scalar_codegen.jl): with a scalar section the
+    # equations and the prelude run as generated code, and only what it left
+    # behind is walked.
+    scalar === nothing ||
+        return _make_rhs_scalar_cg(scalar, cse_prelude, cse_cache, acc_kernels,
+                                   const_slots, time_slots, scan_folds,
+                                   array_contractions)
     # B1 codegen tier (codegen_kernel.jl): every kernel the emitter can model is
     # compiled ONCE, here at build time, into a single RuntimeGeneratedFunction
     # (bit-identical, eltype-generic); the rest keep the per-cell scalar

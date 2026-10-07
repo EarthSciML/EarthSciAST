@@ -141,7 +141,7 @@ _cg_oplus_fn(op::Symbol) =
 # out-of-range subscript takes the array's declared boundary policy, including
 # its throw), linearize with the build-time strides, read the flat buffer. The
 # `let` bindings are sequential, which is the walker's subscript order.
-function _cg_const_gather(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
+function _cg_const_gather(ctx::_CGCtx, kc, nd::_Node)
     cg = nd.payload::_ConstGatherArray
     children = nd.children
     cgv = _cg_name(ctx, "cga")
@@ -162,7 +162,7 @@ end
 # evaluated. Nested conditionals reproduce that exactly — a flat guard chain
 # would evaluate every subscript first, which a subscript that throws out of
 # range would turn into a different program.
-function _cg_state_gather(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
+function _cg_state_gather(ctx::_CGCtx, kc, nd::_Node)
     sg = nd.payload::_StateGather
     children = nd.children
     sgv = _cg_name(ctx, "sga")
@@ -171,7 +171,7 @@ function _cg_state_gather(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
                 Expr(:block, inner))
 end
 
-function _cg_state_gather_dim(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node,
+function _cg_state_gather_dim(ctx::_CGCtx, kc, nd::_Node,
                               sg::_StateGather, sgv::Symbol, d::Int, off::Vector{Any})
     children = nd.children
     d > length(children) &&
