@@ -1266,6 +1266,13 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
         end
     end
     ohi = _cg_name(ctx, "e")          # last ordinal of the chunk (b - 1)
+    # A box one cell thick along its leading axis (a boundary slab of a
+    # stencil's x faces) runs one cell per i-loop, so once LLVM folds that
+    # loop the j (or k) loop is innermost, and it strides through `u` by a
+    # whole row: vectorizing it turns every operand into a gather, which is
+    # several times slower than the scalar loop. The outer loops of such a box
+    # are kept scalar. Leaving a loop scalar never changes a value.
+    nv = _cellset_slab(cs, 1) ? Any[_cg_novec()] : Any[]
     ilo = _cg_name(ctx, "il")
     ihi = _cg_name(ctx, "ih")
     jlo = _cg_name(ctx, "jl")
@@ -1285,6 +1292,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                         local $oln = $olnexpr
                         $(body...)
                     end
+                    $(nv...)
                 end
             end
         end
@@ -1315,6 +1323,167 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                         local $oln = $olnexpr
                         $(body...)
                     end
+                    $(nv...)
+                end
+                $(nv...)
+            end
+        end
+    end
+end
+
+# ---- Row-fused box kernels ---------------------------------------------------
+# A stencil's region classes split each row of the grid along its leading axis:
+# the two faces, the near-face classes and the interior of a row are separate
+# box kernels with the same rows (identical ranges along every other axis).
+# Emitted one by one, each kernel walks all the rows again, and a face kernel
+# one cell thick runs a loop per row for that one cell. Row fusion emits such a
+# group as ONE nest over the shared rows whose row body runs every member's
+# segment of that row in leading-axis order, the way a hand-written loop peels a
+# row's ends: each member's cells keep their own body, their own geometry and
+# their own invariants, so every cell evaluates the op sequence it did alone.
+# Members write disjoint cells (the section's out-slot check covers them) and
+# read only `u`, so running them row by row instead of kernel by kernel cannot
+# change a value. The threaded cell axis chunks the group's ROWS, so a chunk
+# still writes whole cells no other chunk writes.
+
+# The rows a box kernel shares with others of its group, or `nothing` when it is
+# not a rank-2/3 box kernel the emitter compiles as its own nest.
+function _cg_rowfuse_key(K::_AccKernel)
+    cs = K.cells
+    nd = length(cs.strides)
+    (_is_outs(cs) || !(2 <= nd <= 3)) && return nothing
+    return (nd, cs.base, Tuple(cs.strides), Tuple(cs.ranges[2:nd]),
+            Tuple(_cellset_slab(cs, d) for d in 2:nd))
+end
+
+# Groups of kernel indices to row-fuse (two or more members, leading-axis
+# ranges pairwise disjoint, ordered along that axis), keyed by the index of
+# the group's first kernel in build order.
+function _cg_rowfuse_groups(kernels::AbstractVector{_AccKernel})
+    out = Dict{Int,Vector{Int}}()
+    (_cg_split_supported() && !_cg_subcall_fn_disabled()) && return out
+    byrow = Dict{Any,Vector{Int}}()
+    for (j, K) in enumerate(kernels)
+        key = _cg_rowfuse_key(K)
+        key === nothing || push!(get!(byrow, key, Int[]), j)
+    end
+    for js in values(byrow)
+        length(js) >= 2 || continue
+        ord = sort(js; by = j -> first(kernels[j].cells.ranges[1]))
+        ok = all(m -> last(kernels[ord[m-1]].cells.ranges[1]) <
+                      first(kernels[ord[m]].cells.ranges[1]), 2:length(ord))
+        ok && (out[minimum(js)] = ord)
+    end
+    return out
+end
+
+function _cg_emit_rowgroup!(ctx::_CGCtx, Ks::Vector{_AccKernel})
+    invs = Vector{Vector{Symbol}}()
+    for K in Ks
+        for S in K.subs
+            _cg_inv!(ctx, S)
+        end
+        push!(invs, _cg_inv!(ctx, K))
+    end
+    geo = Any[]
+    nest = _cg_with_geosink(() -> _cg_emit_rowgroup_nest!(ctx, Ks, invs), ctx, geo)
+    return Expr(:block, geo..., nest)
+end
+
+function _cg_emit_rowgroup_nest!(ctx::_CGCtx, Ks::Vector{_AccKernel},
+                                 invs::Vector{Vector{Symbol}})
+    cs1 = Ks[1].cells
+    nd = length(cs1.strides)
+    # The same geometry rules as `_cg_emit_kernel_nest!`: bounds, base and
+    # strides are run-time data, a slab's thin extent a literal.
+    function axis(cs, d)
+        g(v, f) = _cg_geo!(ctx, v, (cs, f))
+        lo = g(first(cs.ranges[d]), (d, :first))
+        _cellset_slab(cs, d) && return (lo, lo, 1)
+        return (lo, g(last(cs.ranges[d]), (d, :last)), g(length(cs.ranges[d]), (d, :len)))
+    end
+    st = Any[_cg_geo!(ctx, cs1.strides[d], (cs1, d, :stride), true) for d in 1:nd]
+    base = _cg_geo!(ctx, cs1.base, (cs1, :base))
+    jv = _cg_name(ctx, "j")
+    kv = nd >= 3 ? _cg_name(ctx, "k") : 1
+    j0, j1, nj = axis(cs1, 2)
+    k0, _, nk = nd >= 3 ? axis(cs1, 3) : (1, 1, 1)
+    olnof(iv) = (e = :($base + $iv * $(st[1]) + $jv * $(st[2]));
+                 nd >= 3 ? :($e + $kv * $(st[3])) : e)
+    seg(iv, i0, i1, oln, body) = quote
+        for $iv in $i0:$i1
+            local $oln = $(olnof(iv))
+            $(body...)
+        end
+    end
+    parts = Any[]
+    for (m, K) in enumerate(Ks)
+        iv = _cg_name(ctx, "i")
+        oln = _cg_name(ctx, "o")
+        kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invs[m])
+        rec = _cg_emit_recipes!(Any[], ctx, kc)
+        val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
+        i0, i1, _ = axis(K.cells, 1)
+        push!(parts, (; iv, oln, rec, val, i0, i1))
+    end
+    segs = Any[seg(q.iv, q.i0, q.i1, q.oln, Any[q.rec..., :(du[$(q.oln)] = $(q.val))])
+               for q in parts]
+    fis = _cg_row_fission(ctx, Ks, parts)
+    if fis !== nothing
+        holes, stages, iF, oF = fis
+        fsegs = Any[seg(q.iv, q.i0, q.i1, q.oln, Any[:(du[$(q.oln)] = $(holes[m]))])
+                    for (m, q) in enumerate(parts)]
+        # A stage reads and writes only its own cell's `du` slot, so its
+        # iterations are independent; `julia.ivdep` says so to the loop
+        # vectorizer, which cannot prove it for a load and a store of one
+        # array. It licenses no reassociation (that is `julia.simdloop`).
+        for F in stages
+            push!(fsegs, seg(iF, parts[1].i0, parts[end].i1, oF,
+                             Any[:(du[$oF] = $F), Expr(:loopinfo, Symbol("julia.ivdep"))]))
+        end
+        # The split form stores each segment's hole value in `du` and reads it
+        # back, which is exact only when that value already has `du`'s element
+        # type: it does when `u`, `du` and the value type agree (the hole reads
+        # `u`), and every other call takes the one-pass form.
+        segs = Any[quote
+            if eltype(u) === _cgT && eltype(du) === _cgT
+                $(fsegs...)
+            else
+                $(segs...)
+            end
+        end]
+        _tally_cascade!(:cg_row_fission)
+    end
+    tv = _cg_name(ctx, "ab")
+    av = _cg_name(ctx, "a")
+    bv = _cg_name(ctx, "b")
+    hdr = Any[:(local $tv = _chunk_ordinals($nj * $nk, _cgci, _cgnc)),
+              :(local $av = $tv[1]),
+              :(local $bv = $tv[2])]
+    if nd == 2
+        return quote
+            $(hdr...)
+            for $jv in ($j0 + $av):($j0 + $bv - 1)
+                $(segs...)
+            end
+        end
+    end
+    ohi = _cg_name(ctx, "e")
+    klo = _cg_name(ctx, "kl")
+    khi = _cg_name(ctx, "kh")
+    jlo = _cg_name(ctx, "jl")
+    jhi = _cg_name(ctx, "jh")
+    return quote
+        $(hdr...)
+        if $av < $bv
+            local $ohi = $bv - 1
+            local $klo = $k0 + div($av, $nj)
+            local $khi = $k0 + div($ohi, $nj)
+            for $kv in $klo:$khi
+                local $jlo = $kv == $klo ? $j0 + rem($av, $nj) : $j0
+                local $jhi = $kv == $khi ? $j0 + rem($ohi, $nj) : $j1
+                for $jv in $jlo:$jhi
+                    $(segs...)
                 end
             end
         end
@@ -1404,6 +1573,131 @@ function _cg_reduce_strides_favor_cells(K::_AccKernel, body::_Node, rdim::Int)
     visit(body)
     return gain > 0
 end
+
+# ---- Row fission -------------------------------------------------------------
+# The members of a row group often differ in ONE subexpression only: a
+# transport cell is `-((Dx + Dy) + Dz)` where only `Dx` depends on the cell's
+# class along the row, while `Dy` and `Dz` are the same expression with the same
+# offsets for every segment. Evaluated per segment, the near-face segments (one
+# cell wide) run all of it scalar. Row fission evaluates each segment's own
+# subexpression (the hole) into `du`, then the shared context over the whole
+# row in one loop that reads the hole back from `du`, the way a hand-written
+# loop adds the y and z derivatives over a full row. Each cell computes the
+# same operations on the same operands in the same order; the hole's value
+# round-trips through `du` at its own element type (see the guard at the call
+# site), so the result is bit-identical.
+#
+# Applies when: every member's body is a single expression (no per-cell CSE
+# locals), there is no lazy guard anywhere in it, the members' leading-axis
+# ranges tile the row with no gap, the bodies agree everywhere but at one
+# position (compared with every geometry local replaced by its value, and each
+# segment's own loop and slot variables by placeholders), the hole reads the
+# state and is more than a leaf, and the context around it reads the state at
+# least `_CG_FISSION_READS` times.
+# Returns `(holes, F, iF, oF)` or `nothing`.
+function _cg_row_fission(ctx::_CGCtx, Ks::Vector{_AccKernel}, parts)
+    length(Ks) >= 2 || return nothing
+    all(q -> isempty(q.rec), parts) || return nothing
+    for m in 2:length(Ks)
+        last(Ks[m-1].cells.ranges[1]) + 1 == first(Ks[m].cells.ranges[1]) || return nothing
+    end
+    gval = Dict{Symbol,Int}()
+    for st in ctx.geosink
+        (st isa Expr && st.head === :local && st.args[1] isa Expr) || continue
+        a = st.args[1]
+        r = a.args[2]
+        (r isa Expr && r.head === :ref && r.args[2] isa Int) || continue
+        gval[a.args[1]] = ctx.geo[r.args[2]]
+    end
+    canon(e, q) = e === q.iv ? :_cgFI : e === q.oln ? :_cgFO :
+                  e isa Symbol ? get(gval, e, e) :
+                  e isa Expr ? Expr(e.head, Any[canon(a, q) for a in e.args]...) : e
+    lazy(e) = e isa Expr && (e.head in (:if, :&&, :||, :let, :block) ||
+                             any(lazy, e.args))
+    any(q -> lazy(q.val), parts) && return nothing
+    cs = Any[canon(q.val, q) for q in parts]
+    # The hole: descend while the members differ in exactly one child.
+    function walk(es, at)
+        e1 = es[1]
+        all(e -> isequal(e, e1), es) && return nothing
+        if e1 isa Expr && all(e -> e isa Expr && e.head === e1.head &&
+                                  length(e.args) == length(e1.args), es)
+            diffs = [i for i in eachindex(e1.args)
+                     if !all(e -> isequal(e.args[i], e1.args[i]), es)]
+            length(diffs) == 1 &&
+                return walk(Any[e.args[diffs[1]] for e in es], (at..., diffs[1]))
+        end
+        return at
+    end
+    path = walk(cs, ())
+    (path === nothing || isempty(path)) && return nothing
+    sub(e, pth) = isempty(pth) ? e : sub(e.args[pth[1]], pth[2:end])
+    reads_u(e) = e isa Expr && ((e.head === :ref && e.args[1] === :u) || any(reads_u, e.args))
+    holes = Any[sub(q.val, path) for q in parts]
+    all(reads_u, holes) || return nothing
+    any(h -> h isa Expr && _cg_expr_size(h) >= 4, holes) || return nothing
+    iF = _cg_name(ctx, "i")
+    oF = _cg_name(ctx, "o")
+    q1 = parts[1]
+    rename(e) = e === q1.iv ? iF : e === q1.oln ? oF :
+                e isa Expr ? Expr(e.head, Any[rename(a) for a in e.args]...) : e
+    E = rename(q1.val)
+    # The context, innermost ancestor of the hole first, cut into stages: a new
+    # stage starts at an ancestor whose other operands read the state once the
+    # current stage already holds one such ancestor. Each stage is one pass
+    # over the row that reads the previous value back from `du`, so a long
+    # context runs as a few short loops rather than one with many operand
+    # streams, as a hand-written loop adds one axis's derivative per pass.
+    stages = Any[]
+    cur = :(du[$oF])
+    nreads = 0
+    total = 0
+    for d in (length(path) - 1):-1:0
+        node = sub(E, path[1:d])
+        k = path[d + 1]
+        sib = Set{Any}()
+        for i in eachindex(node.args)
+            (i == k || (node.head === :call && i == 1)) && continue
+            _cg_state_reads!(sib, node.args[i])
+        end
+        if !isempty(sib) && nreads >= _CG_FISSION_READS
+            push!(stages, cur)
+            cur = :(du[$oF])
+            nreads = 0
+        end
+        args = copy(node.args)
+        args[k] = cur
+        cur = Expr(node.head, args...)
+        nreads += length(sib)
+        total += length(sib)
+    end
+    push!(stages, cur)
+    total >= _CG_FISSION_READS || return nothing
+    return (holes, stages, iF, oF)
+end
+
+# The distinct state reads (`u[…]`) in an emitted expression.
+function _cg_state_reads!(acc::Set{Any}, e)
+    e isa Expr || return acc
+    if e.head === :ref && e.args[1] === :u
+        push!(acc, e)
+    else
+        for a in e.args
+            _cg_state_reads!(acc, a)
+        end
+    end
+    return acc
+end
+
+# Row fission pays when the shared context is heavy enough that evaluating it
+# once per row, vectorized, beats the extra pass through `du`: it needs at least
+# this many distinct state reads, and a stage is closed (a new pass begun) once
+# it holds this many.
+const _CG_FISSION_READS = 8
+
+# The loop annotation that keeps a loop scalar (LLVM's loop vectorizer off for
+# it). It is the loop body's last statement, where `@simd` puts its own.
+_cg_novec() = Expr(:loopinfo, (Symbol("llvm.loop.vectorize.enable"), false))
 
 # A strided Cartesian box of rank above 3, in `_run_box_kernel!`'s iteration
 # order (dim 1 fastest). The chunk `[a, b)` is walked as whole dim-1 ROWS, the
@@ -1822,7 +2116,43 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     covered = fill(false, length(acc_kernels))
     reasons = fill(:none, length(acc_kernels))
     kloops = Tuple{Any,Int}[]         # (loop-nest expr, its emitted-node cost)
+    # Row-fused groups (see `_cg_emit_rowgroup!`): a group is emitted at its
+    # first member's position; if it declines, its members are emitted one by
+    # one, exactly as without fusion.
+    groups = _cg_rowfuse_groups(acc_kernels)
+    ingroup = falses(length(acc_kernels))
     for (j, K) in enumerate(acc_kernels)
+        if haskey(groups, j)
+            js = groups[j]
+            nprologue = length(ctx.prologue)
+            ninvlog = length(ctx.invlog)
+            nhelpers = length(ctx.helpers)
+            nodes0 = ctx.nodes
+            fscratch0 = ctx.fscratch
+            empty!(ctx.helper_dedup)
+            try
+                lx = _cg_emit_rowgroup!(ctx, _AccKernel[acc_kernels[m] for m in js])
+                push!(kloops, (lx, ctx.nodes - nodes0))
+                for m in js
+                    covered[m] = true
+                    ingroup[m] = true
+                    _tally_cascade!(Symbol(tally, :_kernel))
+                end
+                _tally_cascade!(:cg_rowfused_group)
+                ctx.fscratch > fscratch0 && _tally_cascade!(:cg_foreign_scratch_emit)
+            catch err
+                err isa _CodegenDecline || rethrow()
+                resize!(ctx.prologue, nprologue)
+                for i in length(ctx.invlog):-1:(ninvlog + 1)
+                    delete!(ctx.invdone, ctx.invlog[i])
+                end
+                resize!(ctx.invlog, ninvlog)
+                resize!(ctx.helpers, nhelpers)
+                ctx.nodes = nodes0
+                ctx.fscratch = fscratch0
+            end
+        end
+        ingroup[j] && continue
         # Snapshot for rollback: a mid-kernel decline must discard its partial
         # prologue statements AND its invariant registrations (a later kernel
         # sharing that sub-kernel would otherwise reference rolled-back locals).
