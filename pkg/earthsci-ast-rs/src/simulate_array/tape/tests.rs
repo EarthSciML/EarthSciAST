@@ -921,6 +921,97 @@ fn ab_scalar_rules() {
     ab_check(doc, 0, -1.5, 1.5);
 }
 
+/// Many scalar boxes of one mechanism (the `scalar_chemistry` shape): the
+/// rerolling pass shares each rate across the equations that read it and
+/// runs the boxes as the lanes of one lane program, bit-identical to the
+/// interpreter. Box `k` reads its own `kb_k` (a parameter input) and the
+/// shared `k1`, `t` and literals (scalar operands). The off-grid state `a_1x`
+/// sits between two boxes' `a` in the state order, so `a`'s lanes are not
+/// evenly spaced and go through a position table; an equation written another
+/// way runs in a one-lane block.
+#[test]
+fn ab_rerolled_scalar_boxes() {
+    let boxes = [1, 2, 3, 5, 8, 13, 21];
+    let mut vars = serde_json::Map::new();
+    let mut eqs: Vec<serde_json::Value> = Vec::new();
+    vars.insert("k1".into(), json!({"type": "parameter", "default": 0.7}));
+    for b in boxes {
+        let (a, c, kb) = (format!("a_{b}"), format!("c_{b}"), format!("kb_{b}"));
+        vars.insert(a.clone(), json!({"type": "unknown"}));
+        vars.insert(c.clone(), json!({"type": "unknown"}));
+        vars.insert(
+            kb.clone(),
+            json!({"type": "parameter", "default": 0.1 * b as f64}),
+        );
+        // r = k1 * a * c, read by both equations.
+        let r = json!({"op": "*", "args": ["k1", a, c]});
+        eqs.push(json!({"lhs": {"op": "D", "args": [a], "wrt": "t"},
+            "rhs": {"op": "+", "args": [
+                {"op": "-", "args": [r]},
+                {"op": "*", "args": [kb, {"op": "exp", "args": [{"op": "-", "args": [c]}]}]},
+                {"op": "*", "args": [0.25, "t"]}]}}));
+        eqs.push(json!({"lhs": {"op": "D", "args": [c], "wrt": "t"},
+            "rhs": {"op": "-", "args": [r, {"op": "max", "args": [c, 0.5]}]}}));
+    }
+    vars.insert("a_1x".into(), json!({"type": "unknown"}));
+    eqs.push(json!({"lhs": {"op": "D", "args": ["a_1x"], "wrt": "t"},
+        "rhs": {"op": "*", "args": ["a_1x", "a_1x", "k1"]}}));
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_reroll"},
+        "models": {"M": {"variables": vars, "equations": eqs}}
+    });
+    let prog = ab_check(doc, 0, 0.1, 2.0);
+    let lanes: Vec<&LaneSpec> = prog
+        .instrs
+        .iter()
+        .filter_map(|i| match i {
+            Instr::Lanes { spec } => Some(&prog.lanes[*spec as usize]),
+            _ => None,
+        })
+        .collect();
+    // The boxes' lane program, and one one-lane block holding the rest of
+    // the run (`0.25 * t` and the off-grid equation).
+    assert_eq!(lanes.len(), 2, "{:?}", prog.instrs);
+    let (blocks, multi): (Vec<&LaneSpec>, Vec<&LaneSpec>) =
+        lanes.into_iter().partition(|ls| ls.lanes == 1);
+    assert_eq!((blocks.len(), multi.len()), (1, 1));
+    assert!(blocks[0].inputs.is_empty());
+    // It writes the off-grid derivative, and `0.25 * t` back to its slot for
+    // the lanes to read.
+    let dsts: Vec<bool> = blocks[0]
+        .writes
+        .iter()
+        .map(|w| matches!(w.dst, LaneDst::Dy(_)))
+        .collect();
+    assert_eq!(dsts, vec![true, false], "{:?}", blocks[0].writes);
+    let ls = multi[0];
+    assert_eq!(ls.lanes as usize, boxes.len());
+    assert_eq!(ls.writes.len(), 2);
+    // The rate is computed once per lane: two `*` for r, `-r`, `-c`, `exp`,
+    // `* kb`, two `+`, `max`, the final `-`. `0.25 * t` reads no box, so it
+    // runs once outside and every lane reads it.
+    assert_eq!(ls.micro.len(), 10, "{:?}", ls.micro);
+    let kinds: Vec<LaneKind> = ls.inputs.iter().map(|i| i.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![LaneKind::State, LaneKind::State, LaneKind::Param],
+        "{:?}",
+        ls.inputs
+    );
+    assert!(
+        ls.inputs.iter().any(|i| matches!(i.ix, LaneIx::Table(_))),
+        "the off-grid state breaks one input's spacing"
+    );
+    assert!(
+        !prog
+            .instrs
+            .iter()
+            .any(|i| matches!(i, Instr::DyWrite { .. })),
+        "every derivative is written by a lane program"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Structural invariants.
 // ---------------------------------------------------------------------------
@@ -1665,6 +1756,84 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
 /// `Export` publish memcpys are skipped (nothing can read them); forcing
 /// them back on (the check-mode/diagnostic path) publishes the same values —
 /// and `dy` is bit-identical either way.
+/// An observed no derivative reads sits after the part of the section a
+/// right-hand-side call runs; a call that publishes runs it too and gets
+/// its value, and the derivatives are bit-identical either way.
+#[test]
+fn output_only_observeds_leave_the_rhs() {
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_output_only"},
+        "models": {"M": {
+            "variables": {
+                "x": {"type": "unknown"},
+                "s": {"type": "unknown"},
+                "o": {"type": "unknown"}
+            },
+            "equations": [
+                {"lhs": "o", "rhs": {"op": "*", "args": [{"op": "sin", "args": ["x"]}, 3.0]}},
+                {"lhs": "s", "rhs": {"op": "*", "args": [2.0, "x"]}},
+                {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                 "rhs": {"op": "neg", "args": ["s"]}}
+            ]
+        }}
+    });
+    ab_check(doc.clone(), 0, -1.0, 1.0);
+    let compiled = compile(doc);
+    let (prog, _) = compiled.build_tape(&HashSet::new());
+    let cont = prog.section_range(Cadence::Continuous).len() as u32;
+    assert!(
+        prog.n_rhs < cont,
+        "o's instructions leave the call: {:?}",
+        prog.instrs
+    );
+    let exported = prog.exports.iter().any(|(n, _)| n == "o");
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let state = vec![1.5f64];
+    let run_call = |ctx: &mut super::exec::TapeCtx, dy: &mut [f64]| {
+        let mut stats = RhsStats::default();
+        let call = super::super::RhsCall {
+            rhs_rules: &compiled.rhs_rules,
+            observed_rules: &compiled.observed_rules,
+            var_shapes: &compiled.var_shapes,
+            param_names: &compiled.param_names,
+            state: &state,
+            params: &param_vec,
+            forcing: &compiled.forcing,
+            t: 0.0,
+            declared: &compiled.declared_names,
+        };
+        super::exec::run_tape_call(
+            ctx,
+            &call,
+            &super::super::ArrMap::default(),
+            &compiled.const_scope,
+            &super::super::ConstLitMemo::default(),
+            dy,
+            &mut stats,
+        );
+    };
+    let mut ctx = super::exec::TapeCtx::new(
+        std::rc::Rc::new(prog),
+        std::rc::Rc::new(compiled.observed_rules.clone()),
+    );
+    let mut dy = vec![0.0f64; 1];
+    run_call(&mut ctx, &mut dy);
+    assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
+    ctx.set_exports_active(true);
+    let mut dy2 = vec![0.0f64; 1];
+    run_call(&mut ctx, &mut dy2);
+    assert_eq!(dy2[0].to_bits(), dy[0].to_bits());
+    if exported {
+        let o = ctx.exec.obs.get("o").expect("o published");
+        assert_eq!(
+            o[ndarray::IxDyn(&[])].to_bits(),
+            (1.5f64.sin() * 3.0).to_bits()
+        );
+    }
+}
+
 #[test]
 fn export_demotion_skips_unread_publishes() {
     let doc = json!({

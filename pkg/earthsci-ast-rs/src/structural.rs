@@ -200,12 +200,23 @@ impl<'a> ModelCtx<'a> {
         // throughout it (a `makearray` binds its grid indices for every
         // value; see `collect_bound_symbols`). Seed those before the descent,
         // which then adds nested binders on top per node.
-        let mut scope = self.defined_vars.clone();
-        scope.extend(bound.iter().cloned());
-        collect_bound_symbols(expr, &mut scope);
+        // Only an expression that binds something pays for a scope of its
+        // own: cloning the model's whole declared set per equation made this
+        // check quadratic in the equation count.
+        let mut binders: HashSet<String> = bound.clone();
+        collect_bound_symbols(expr, &mut binders);
+        let extended;
+        let scope = if binders.iter().all(|b| self.defined_vars.contains(b)) {
+            &self.defined_vars
+        } else {
+            let mut s = self.defined_vars.clone();
+            s.extend(binders);
+            extended = s;
+            &extended
+        };
         validate_expression_references_with_systems(
             expr,
-            &scope,
+            scope,
             self.system_refs,
             &self.local_scoped,
             path,

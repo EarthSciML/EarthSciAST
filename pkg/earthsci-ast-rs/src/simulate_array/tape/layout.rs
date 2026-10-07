@@ -142,8 +142,8 @@ fn reversible(prog: &TapeProgram) -> bool {
             None => true,
         },
         Instr::PolyArea { .. } | Instr::Sweep { .. } | Instr::Fallback { .. } => false,
-        // The pass runs ahead of fusion.
-        Instr::Fused { .. } => false,
+        // The pass runs ahead of fusion and rerolling.
+        Instr::Fused { .. } | Instr::Lanes { .. } => false,
     })
 }
 

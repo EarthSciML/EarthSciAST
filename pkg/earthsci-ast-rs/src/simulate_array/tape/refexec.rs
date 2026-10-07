@@ -787,6 +787,68 @@ pub(super) fn run_reference(
                     slots[slot as usize] = Some(RefVal::Arr(arr));
                 }
             }
+            Instr::Lanes { spec } => {
+                // Lane by lane through the shared micro-op semantics, each
+                // input read through the reference resolver.
+                let ls = &prog.lanes[*spec as usize];
+                let scalar = |op: &Operand| match resolve(
+                    prog,
+                    &slots,
+                    &state_arrays,
+                    &obs,
+                    params,
+                    t,
+                    op,
+                ) {
+                    RefVal::Scalar(v) => v,
+                    RefVal::Arr(a) if a.ndim() == 0 => a[IxDyn(&[])],
+                    other => panic!("lane operand is {other:?}"),
+                };
+                let svals: Vec<f64> = ls.scalars.iter().map(scalar).collect();
+                let mut regs = vec![0.0f64; ls.n_regs as usize];
+                let mut published: Vec<(SlotId, f64)> = Vec::new();
+                for l in 0..ls.lanes as usize {
+                    let ins: Vec<f64> = ls
+                        .inputs
+                        .iter()
+                        .map(|inp| {
+                            let i = inp.ix.at(l);
+                            scalar(&match inp.kind {
+                                LaneKind::State => Operand::State(
+                                    prog.state_vars
+                                        .iter()
+                                        .position(|sv| {
+                                            sv.shape.is_empty() && sv.flat_offset == i as usize
+                                        })
+                                        .expect("a lane reads a scalar state")
+                                        as u32,
+                                ),
+                                LaneKind::Param => Operand::Param(i),
+                                LaneKind::Slot => Operand::Slot(i),
+                            })
+                        })
+                        .collect();
+                    let get = |m: &MRef, regs: &[f64]| match m {
+                        MRef::Reg(r) => regs[*r as usize],
+                        MRef::In(i) => ins[*i as usize],
+                        MRef::Scal(i) => svals[*i as usize],
+                    };
+                    for op in &ls.micro {
+                        // A lane program holds no scan, so no carries.
+                        eval_micro_op(op, &mut regs, 0, &mut [], get);
+                    }
+                    for w in &ls.writes {
+                        let v = get(&w.src, &regs);
+                        match &w.dst {
+                            LaneDst::Dy(pos) => dy[pos.at(l) as usize] = v,
+                            LaneDst::Slot(s) => published.push((*s, v)),
+                        }
+                    }
+                }
+                for (s, v) in published {
+                    slots[s as usize] = Some(RefVal::Scalar(v));
+                }
+            }
             Instr::DyWrite { write } => {
                 let w = &prog.dy_writes[*write as usize];
                 let v = slots[w.slot as usize]

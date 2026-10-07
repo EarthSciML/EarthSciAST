@@ -60,6 +60,7 @@ pub(super) fn run_range(
         fregs,
         fscratch,
         idx_tables,
+        lscratch,
         exports_active,
         simd,
         dy_home,
@@ -741,6 +742,18 @@ pub(super) fn run_range(
                     }
                 }
             }
+            Instr::Lanes { spec } => unsafe {
+                super::lanes::exec_lanes(
+                    &prog.lanes[*spec as usize],
+                    env,
+                    slab_ptr,
+                    slot_off,
+                    obs,
+                    lscratch,
+                    dy,
+                    simd,
+                )
+            },
         }
         pc += 1;
     }

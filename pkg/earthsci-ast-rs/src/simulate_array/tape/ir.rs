@@ -446,6 +446,17 @@ pub(crate) enum Instr {
     /// identity is by construction (elementwise maps are independent across
     /// elements; no reductions are ever fused).
     Fused { spec: u32 },
+    /// Execute the lane program `lanes[spec]`: one scalar micro-program run
+    /// once per lane, each lane reading its own scalar sources and writing
+    /// its own `dy` positions (see [`LaneSpec`]). Defines no slot.
+    ///
+    /// The rerolling pass ([`super::reroll`]) emits it: scalar instructions
+    /// repeated with one structure over different scalars (one box of a
+    /// many-box chemistry document per repetition) become one lane each.
+    /// Per lane it applies exactly the kernels the scalar instructions
+    /// applied, in their order, to the same operand values, so every value
+    /// is the one the scalar program computed.
+    Lanes { spec: u32 },
 }
 
 impl Instr {
@@ -481,7 +492,8 @@ impl Instr {
             | Instr::Fallback { .. }
             | Instr::Export { .. }
             | Instr::DyWrite { .. }
-            | Instr::Fused { .. } => None,
+            | Instr::Fused { .. }
+            | Instr::Lanes { .. } => None,
         }
     }
 
@@ -495,6 +507,13 @@ impl Instr {
                 f(sw.out);
                 for &c in &sw.coords {
                     f(c);
+                }
+            }
+            Instr::Lanes { spec } => {
+                for w in &t.lanes[*spec as usize].writes {
+                    if let LaneDst::Slot(s) = w.dst {
+                        f(s);
+                    }
                 }
             }
             Instr::Fused { spec } => {
@@ -567,6 +586,19 @@ impl Instr {
                 }
             }
             Instr::Ramp { .. } | Instr::ConstArray { .. } | Instr::LoadForcing { .. } => {}
+            Instr::Lanes { spec } => {
+                let ls = &t.lanes[*spec as usize];
+                for inp in &ls.inputs {
+                    if inp.kind == LaneKind::Slot {
+                        for l in 0..ls.lanes as usize {
+                            op(&Operand::Slot(inp.ix.at(l)));
+                        }
+                    }
+                }
+                for sc in &ls.scalars {
+                    op(sc);
+                }
+            }
             Instr::Interp { x, y, .. } => {
                 op(x);
                 if let Some(y) = y {
@@ -650,6 +682,7 @@ impl Instr {
             Instr::Export { .. } => "Export",
             Instr::DyWrite { .. } => "DyWrite",
             Instr::Fused { .. } => "Fused",
+            Instr::Lanes { .. } => "Lanes",
         }
     }
 }
@@ -1446,6 +1479,7 @@ pub(crate) struct SlotTables<'a> {
     pub assemblies: &'a [AssembleSpec],
     pub sweeps: &'a [SweepSpec],
     pub scalar_reads: &'a [ScalarReadSpec],
+    pub lanes: &'a [LaneSpec],
 }
 
 /// One forcing-buffer entry the program reads ([`Instr::LoadForcing`]).
@@ -1732,6 +1766,97 @@ pub(crate) struct DyWrite {
     pub scatter: Option<Vec<usize>>,
 }
 
+/// What the entries of a [`LaneTable`] address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum LaneKind {
+    /// A flat offset into the state vector (a scalar state's element).
+    State,
+    /// A position in the parameter vector.
+    Param,
+    /// A scalar slot.
+    Slot,
+}
+
+/// One `u32` per lane: a table, or `base + l * step` when the lanes are
+/// evenly spaced (stored without the table).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LaneIx {
+    Affine { base: u32, step: u32 },
+    Table(Vec<u32>),
+}
+
+impl LaneIx {
+    /// The compact form of `ix`.
+    pub(crate) fn of(ix: Vec<u32>) -> Self {
+        if let [b, n, ..] = ix[..]
+            && n >= b
+        {
+            let step = n - b;
+            if ix
+                .iter()
+                .enumerate()
+                .all(|(l, &v)| u64::from(b) + l as u64 * u64::from(step) == u64::from(v))
+            {
+                return LaneIx::Affine { base: b, step };
+            }
+        }
+        LaneIx::Table(ix)
+    }
+
+    /// Lane `l`'s entry.
+    #[inline(always)]
+    pub(crate) fn at(&self, l: usize) -> u32 {
+        match self {
+            LaneIx::Affine { base, step } => base + l as u32 * step,
+            LaneIx::Table(t) => t[l],
+        }
+    }
+}
+
+/// The per-lane scalar sources of one lane-program input, all of one kind.
+#[derive(Clone, Debug)]
+pub(crate) struct LaneTable {
+    pub kind: LaneKind,
+    pub ix: LaneIx,
+}
+
+/// Where a lane program's write lands.
+#[derive(Clone, Debug)]
+pub(crate) enum LaneDst {
+    /// Lane `l` writes `dy[pos.at(l)]`.
+    Dy(LaneIx),
+    /// The scalar slot (a one-lane program only): a value read after the
+    /// program.
+    Slot(SlotId),
+}
+
+/// One write of a lane program, after its micro-program.
+#[derive(Clone, Debug)]
+pub(crate) struct LaneWrite {
+    pub src: MRef,
+    pub dst: LaneDst,
+}
+
+/// A lane program ([`Instr::Lanes`]): `micro` runs once per lane over a
+/// register file of `n_regs` registers, `MRef::In(i)` reading lane `l`'s
+/// entry of `inputs[i]` and `MRef::Scal(i)` the operand `scalars[i]` (the
+/// same for every lane). Then each write stores its value at its lane's `dy`
+/// position, or (one lane only) in its slot. The `dy` positions of all lanes
+/// and writes are distinct, so the order lanes run in reaches no result.
+///
+/// A one-lane program is a compiled straight run of scalar instructions:
+/// its operands are all scalars, read once, and its micro-ops run one
+/// after another over a scalar register file.
+#[derive(Clone, Debug)]
+pub(crate) struct LaneSpec {
+    pub lanes: u32,
+    pub inputs: Vec<LaneTable>,
+    pub scalars: Vec<Operand>,
+    pub micro: Vec<MicroOp>,
+    pub n_regs: GroupIx,
+    pub writes: Vec<LaneWrite>,
+}
+
 /// What kind of source rule a program rule entry describes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuleKind {
@@ -1804,6 +1929,11 @@ pub(crate) struct TapeProgram {
     pub n_const: u32,
     /// Instruction count of the SEGMENT section.
     pub n_segment: u32,
+    /// How many leading CONTINUOUS instructions a call whose exports are
+    /// off runs: the ones a derivative or a fault depends on. The rest
+    /// compute observeds only the observed and output passes read
+    /// (`prune`).
+    pub n_rhs: u32,
     pub slots: Vec<SlotDesc>,
     pub plans: Vec<GatherPlan>,
     pub regions: Vec<RegionSpec>,
@@ -1849,6 +1979,8 @@ pub(crate) struct TapeProgram {
     pub params_len: usize,
     /// Step 4: fused elementwise groups (`Instr::Fused` indexes here).
     pub fused: Vec<FusedSpec>,
+    /// Lane programs (`Instr::Lanes` indexes here).
+    pub lanes: Vec<LaneSpec>,
     /// Fusion-pass diagnostics (all-zero when fusion is disabled).
     pub fuse_stats: FuseStats,
     /// Every box in the program is stored AXIS-REVERSED (see
@@ -1870,6 +2002,7 @@ impl TapeProgram {
             assemblies: &self.assemblies,
             sweeps: &self.sweeps,
             scalar_reads: &self.scalar_reads,
+            lanes: &self.lanes,
         }
     }
 
