@@ -75,8 +75,10 @@ _GREEK_CHAR_CLASS = "[α-ωΑ-Ω]"
 _GREEK_LATEX_RE = re.compile(
     _GREEK_CHAR_CLASS + r"|(?<![\\A-Za-z])" + _GREEK_NAME_GROUP + r"(?![A-Z}])"
 )
-# Unicode: a named letter not followed by an uppercase letter (chemical prefix).
-_GREEK_UNICODE_RE = re.compile(f"{_GREEK_NAME_GROUP}(?![A-Z])")
+# Unicode: a named letter not preceded by a backslash or another letter (so the
+# `nu` inside `annual` is left alone) and not followed by an uppercase letter
+# (chemical prefix).
+_GREEK_UNICODE_RE = re.compile(r"(?<![\\A-Za-z])" + _GREEK_NAME_GROUP + r"(?![A-Z])")
 # ASCII: bare Greek Unicode chars.
 _GREEK_CHAR_RE = re.compile(_GREEK_CHAR_CLASS)
 

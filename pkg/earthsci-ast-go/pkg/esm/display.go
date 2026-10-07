@@ -324,8 +324,8 @@ func isGreekLetterKey(v string) bool {
 
 // convertGreekLetters rewrites Greek letters in already-rendered text, mirroring
 // pretty-print.ts convertGreekLetters. ascii maps each Greek char to its name;
-// unicode maps a Greek NAME (not followed by an uppercase letter — a chemical
-// prefix) to its char; latex maps a Greek char to its command AND a Greek name
+// unicode maps a Greek NAME (not glued to a preceding letter, and not followed
+// by an uppercase letter — a chemical prefix) to its char; latex maps a Greek char to its command AND a Greek name
 // (not followed by an uppercase letter or '}' — already inside \mathrm{}) to its
 // command. Go's regexp lacks lookahead, so the name+lookahead scan is manual.
 func convertGreekLetters(text, format string) string {
@@ -359,19 +359,18 @@ func convertGreekLetters(text, format string) string {
 				next = runes[i+n]
 			}
 			blocked := next >= 'A' && next <= 'Z'
-			if latex {
-				// GREEK_LATEX_RE lookahead (?![A-Z}]) and lookbehind
-				// (?<![\\A-Za-z]): a name inside a \command or glued to a letter
-				// (the `eta` in `\theta`) is left alone.
-				if next == '}' {
+			// GREEK_LATEX_RE / GREEK_UNICODE_RE lookbehind (?<![\\A-Za-z]): a name
+			// inside a \command or glued to a letter (the `eta` in `\theta`, the
+			// `nu` in `annual`) is left alone.
+			if i > 0 {
+				prev := runes[i-1]
+				if prev == '\\' || (prev >= 'A' && prev <= 'Z') || (prev >= 'a' && prev <= 'z') {
 					blocked = true
 				}
-				if i > 0 {
-					prev := runes[i-1]
-					if prev == '\\' || (prev >= 'A' && prev <= 'Z') || (prev >= 'a' && prev <= 'z') {
-						blocked = true
-					}
-				}
+			}
+			// GREEK_LATEX_RE lookahead (?![A-Z}]): already inside \mathrm{}.
+			if latex && next == '}' {
+				blocked = true
 			}
 			if !blocked {
 				b.WriteString(repl)
