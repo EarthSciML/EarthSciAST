@@ -858,69 +858,113 @@ impl ArrayCompiled {
         // `interpreter` runs these on the per-cell oracle like every other
         // evaluation it performs; the other compilers leave the overlay on.
         let _overlay = OverlayGuard::armed(self.is_interpreter());
-        // esm-spec §6.6.5 build-time scope: materialize the STATE-FREE array
-        // observeds an `ic` RHS may read (a `const` gather, a parameter-only
-        // expression) and overlay them on the provider forcing buffer. A
-        // provider-served field of the same name still WINS — loaded data beats
-        // a document-side definition, the same direction `vi_factor_arrays`
-        // takes. An observed that does not evaluate is skipped rather than
-        // raised on: it simply is not in the ic scope, and the resolver's own
-        // diagnostic then names the unusable RHS.
+        // esm-spec §6.6.5 build-time scope: materialize the STATE-FREE
+        // observeds an `ic` RHS reads (a `const` gather, a parameter-only
+        // expression) over the provider forcing buffer. A provider-served field
+        // of the same name WINS — loaded data beats a document-side definition,
+        // the same direction `vi_factor_arrays` takes — and the definitions
+        // only it read are not evaluated. An observed that does not evaluate is
+        // skipped rather than raised on: it simply is not in the ic scope, and
+        // the resolver's own diagnostic then names the unusable RHS, and why.
         //
         // Built ONLY when the document has such definitions: with none (every
         // document before this), the resolver reads the forcing buffer straight
         // through and no provider field is copied.
         let borrowed = self.forcing.borrow();
         let mut scope: Option<HashMap<String, ArrayD<f64>>> = None;
-        if !self.ic_scope_defs.is_empty() {
-            let mut built: HashMap<String, ArrayD<f64>> = HashMap::new();
-            // One pass per definition is enough for any acyclic chain: each
-            // pass resolves at least the definitions whose dependencies are
-            // already in scope, so `n` passes close a chain of length `n`.
-            for _ in 0..self.ic_scope_defs.len() {
-                let before = built.len();
-                for (name, body) in &self.ic_scope_defs {
-                    if built.contains_key(name) {
+        // A scalar-valued scope definition (`dz = H/N`) binds where a
+        // parameter does, for the definitions after it and for the targets.
+        let mut scope_params: Option<HashMap<String, f64>> = None;
+        let mut skipped: HashMap<&str, String> = self
+            .ic_scope
+            .excluded
+            .iter()
+            .map(|(name, reason)| (name.as_str(), reason.clone()))
+            .collect();
+        if !self.ic_scope.defs.is_empty() {
+            // The cone still to evaluate: from the definitions the `ic`s name,
+            // through what each reads, stopping at a provider-served field.
+            let by_name: HashMap<&str, &super::compile::IcScopeDef> = self
+                .ic_scope
+                .defs
+                .iter()
+                .map(|d| (d.name.as_str(), d))
+                .collect();
+            let mut live: HashSet<&str> = HashSet::new();
+            let mut stack: Vec<&str> = self.ic_scope.roots.iter().map(String::as_str).collect();
+            while let Some(name) = stack.pop() {
+                if borrowed.contains_key(name) || !live.insert(name) {
+                    continue;
+                }
+                if let Some(def) = by_name.get(name) {
+                    stack.extend(def.deps.iter().map(String::as_str));
+                }
+            }
+            let mut built: HashMap<String, ArrayD<f64>> = borrowed.clone();
+            let mut bound: HashMap<String, f64> = params.clone();
+            // In dependency order: everything a definition reads is built (or
+            // known not to be) by the time it is reached, so one pass is enough.
+            for def in &self.ic_scope.defs {
+                if !live.contains(def.name.as_str()) {
+                    continue;
+                }
+                // Never evaluated with a read missing: the overlay cannot
+                // resolve an absent name, so it would fall to a per-cell walk —
+                // which a strict compiler refuses — only to fail anyway.
+                if let Some(missing) = def
+                    .needs
+                    .iter()
+                    .find(|n| !built.contains_key(*n) && !bound.contains_key(*n))
+                {
+                    let why = match skipped.get(missing.as_str()) {
+                        Some(inner) => format!("reads '{missing}', which {inner}"),
+                        None => format!("reads '{missing}', which is not in the build-time scope"),
+                    };
+                    skipped.insert(&def.name, why);
+                    continue;
+                }
+                let before = walks();
+                let value =
+                    eval_buildtime_field_in_scope(&def.body, &self.index_sets, &bound, &built);
+                if per_cell_walk_refused() {
+                    // A strict caller's walk stopped at its first cell
+                    // (`StopAtFirstCell`): this evaluation is the refusal,
+                    // and nothing computed from its placeholder counts —
+                    // not even a failure. Only construction arms the stop.
+                    if let Some(sink) = records.as_deref_mut() {
+                        sink.push(FieldIcRecord {
+                            name: def.name.clone(),
+                            kind: "initial-condition scope",
+                            per_cell: true,
+                        });
+                    }
+                    return Ok(out);
+                }
+                match value {
+                    Ok(Value::Array(arr)) => {
+                        built.insert(def.name.clone(), *arr);
+                    }
+                    Ok(Value::Scalar(v)) => {
+                        bound.insert(def.name.clone(), v);
+                    }
+                    Err(e) => {
+                        skipped.insert(&def.name, format!("does not evaluate at build time: {e}"));
                         continue;
                     }
-                    let before = walks();
-                    let value =
-                        eval_buildtime_field_in_scope(body, &self.index_sets, params, &built);
-                    if per_cell_walk_refused() {
-                        // A strict caller's walk stopped at its first cell
-                        // (`StopAtFirstCell`): this evaluation is the refusal,
-                        // and nothing computed from its placeholder counts —
-                        // not even a failure. Only construction arms the stop.
-                        if let Some(sink) = records.as_deref_mut() {
-                            sink.push(FieldIcRecord {
-                                name: name.clone(),
-                                kind: "initial-condition scope",
-                                per_cell: true,
-                            });
-                        }
-                        return Ok(out);
-                    }
-                    if let Ok(Value::Array(arr)) = value {
-                        built.insert(name.clone(), *arr);
-                        if let Some(sink) = records.as_deref_mut() {
-                            sink.push(FieldIcRecord {
-                                name: name.clone(),
-                                kind: "initial-condition scope",
-                                per_cell: walks() != before,
-                            });
-                        }
-                    }
                 }
-                if built.len() == before {
-                    break;
+                if let Some(sink) = records.as_deref_mut() {
+                    sink.push(FieldIcRecord {
+                        name: def.name.clone(),
+                        kind: "initial-condition scope",
+                        per_cell: walks() != before,
+                    });
                 }
-            }
-            for (name, arr) in borrowed.iter() {
-                built.insert(name.clone(), arr.clone());
             }
             scope = Some(built);
+            scope_params = Some(bound);
         }
         let forcing: &HashMap<String, ArrayD<f64>> = scope.as_ref().unwrap_or(&borrowed);
+        let params: &HashMap<String, f64> = scope_params.as_ref().unwrap_or(params);
         for (target, rhs) in &self.field_ics {
             let vs = self.var_shapes.get(target).ok_or_else(|| {
                 SimulateError::InvalidFieldInitialCondition {
@@ -962,7 +1006,10 @@ impl ArrayCompiled {
                     }
                     return Ok(out);
                 }
-                out.insert(slot, value?);
+                out.insert(
+                    slot,
+                    value.map_err(|e| explain_ic_scope_miss(e, rhs, &skipped))?,
+                );
             }
             if let Some(sink) = records.as_deref_mut() {
                 sink.push(FieldIcRecord {
@@ -3408,6 +3455,32 @@ pub(super) fn dependency_cone(
             .map(|(r, _)| r.clone())
             .collect(),
     )
+}
+
+/// A field `ic` that could not be resolved, told why the build-time scope
+/// lacks the observeds its RHS reads, when that is the reason: an observed
+/// left out of the scope is otherwise just an "unusable RHS".
+#[cfg(feature = "solve")]
+fn explain_ic_scope_miss(
+    err: SimulateError,
+    rhs: &Expr,
+    skipped: &HashMap<&str, String>,
+) -> SimulateError {
+    let SimulateError::InvalidFieldInitialCondition { name, mut details } = err else {
+        return err;
+    };
+    if !skipped.is_empty() {
+        let mut reads: Vec<String> = super::compile::free_names(rhs).into_iter().collect();
+        reads.sort();
+        for read in reads {
+            if let Some(why) = skipped.get(read.as_str()) {
+                details.push_str(&format!(
+                    "; the observed '{read}' is not in the build-time scope: it {why}"
+                ));
+            }
+        }
+    }
+    SimulateError::InvalidFieldInitialCondition { name, details }
 }
 
 #[cfg(test)]
