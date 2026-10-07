@@ -152,6 +152,21 @@ fn total(sol: &earthsci_ast::Solution) -> f64 {
     *sol.state[i].last().expect("the row has a value")
 }
 
+/// The issue's number, to within a few ulp. The sum runs `exp` 103·140 times,
+/// and the platform libm's `exp` is not correctly rounded: glibc on x86-64
+/// gives `14450.338994229463`, Apple's aarch64 libm two ulp more. A pin that
+/// demands the bits fails on every arm machine while proving nothing more —
+/// "the answer did not move" is a statement about the value, and the
+/// bit-for-bit claim this file does make (the two arms agree with EACH OTHER on
+/// one machine) stays exact below.
+fn assert_documented_total(got: f64, msg: &str) {
+    const DOCUMENTED: f64 = 14450.338994229463;
+    assert!(
+        ((got - DOCUMENTED) / DOCUMENTED).abs() <= 1e-13,
+        "{msg}: got {got:?}, documented {DOCUMENTED:?}"
+    );
+}
+
 /// Semantics first: skipping the solver must not move the answer. Both arms
 /// produce the issue's number, and produce it BIT-IDENTICALLY to each other —
 /// the recurrence is evaluated by the same sweep whether or not its leaf is a
@@ -165,10 +180,7 @@ fn both_arms_agree_bit_for_bit_on_an_empty_span() {
         state.to_bits(),
         "the observed arm gave {observed:?} and the state arm {state:?}"
     );
-    assert_eq!(
-        observed, 14450.338994229463,
-        "the reproducer's documented value moved"
-    );
+    assert_documented_total(observed, "the reproducer's documented value moved");
 }
 
 /// The mechanism, asserted directly and machine-independently: over an empty
@@ -258,10 +270,9 @@ fn an_output_grid_that_never_leaves_the_start_builds_no_solver_either() {
         sol.metadata.n_rhs_calls,
         sol.metadata.n_jacobian_calls
     );
-    assert_eq!(
+    assert_documented_total(
         total(&sol),
-        14450.338994229463,
-        "the answer at t0 is the answer at t0 whatever the span says"
+        "the answer at t0 is the answer at t0 whatever the span says",
     );
 }
 
