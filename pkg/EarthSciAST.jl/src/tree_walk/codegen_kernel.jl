@@ -442,6 +442,18 @@ end
 
 _cg_offset(base, delta) = delta === 0 ? base : :($base + $delta)
 
+# The first slot of a slot table that is `c0, c0+1, …` with no ghost (0)
+# entry, or 0 when it is not one such run.
+function _cg_affine_conn(conn::Vector{Int})
+    isempty(conn) && return 0
+    c0 = conn[1]
+    c0 >= 1 || return 0
+    @inbounds for k in eachindex(conn)
+        conn[k] == c0 + k - 1 || return 0
+    end
+    return c0
+end
+
 # ---- One access descriptor → one indexing expression (mirrors `_fetch`) -----
 # `key` identifies the descriptor (its table and position) for `_cg_geo!`.
 function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key=nothing)
@@ -475,8 +487,17 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key=nothing)
     elseif k === _AK_STATE_TBL_BOX
         s = _cg_name(ctx, "s")
         addr = _cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off, a.sx, key)
+        # A table that is one ascending run of slots with no ghost (the box of
+        # an array laid out as one column-major block) reads the same slot as
+        # base + address, without the table load and the ghost test. Whether a
+        # table is such a run can depend on the grid size (a boundary slab one
+        # cell wide), so the choice is run-time data (`-1` = not a run) and the
+        # emitted code is the same at every N; the branch is loop-invariant.
+        c0 = _cg_affine_conn(a.conn)
+        cb = _cg_geo!(ctx, c0 > 0 ? c0 - 1 : -1, _cg_gkey(key, :tblbase))
         # Exactly `_fetch`'s ghost test: slot 0 ⇒ the ghost literal 0.0.
-        return :(let $s = $(_cg_tab!(ctx, a.conn))[$addr]
+        return :($cb >= 0 ? u[$cb + $addr] :
+                 let $s = $(_cg_tab!(ctx, a.conn))[$addr]
                      $s == 0 ? 0.0 : u[$s]
                  end)
     elseif k === _AK_ARR_TBL_BOX
@@ -1219,6 +1240,22 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invsyms)
     body = cellbody(kc)
     i0, i1, ni = axis(1)
+    if nd == 1 && cellfn === nothing
+        inter = _cg_areduce_interchanged(ctx, K, kc, iv, oln, olnexpr, i0, av, bv)
+        if inter !== nothing
+            return quote
+                $(hdr...)
+                if _cgT === Float64 && eltype(du) === Float64
+                    $inter
+                else
+                    for $iv in ($i0 + $av):($i0 + $bv - 1)
+                        local $oln = $olnexpr
+                        $(body...)
+                    end
+                end
+            end
+        end
+    end
     if nd == 1
         return quote
             $(hdr...)
@@ -1229,6 +1266,13 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
         end
     end
     ohi = _cg_name(ctx, "e")          # last ordinal of the chunk (b - 1)
+    # A box one cell thick along its leading axis (a boundary slab of a
+    # stencil's x faces) runs one cell per i-loop, so once LLVM folds that
+    # loop the j (or k) loop is innermost, and it strides through `u` by a
+    # whole row: vectorizing it turns every operand into a gather, which is
+    # several times slower than the scalar loop. The outer loops of such a box
+    # are kept scalar. Leaving a loop scalar never changes a value.
+    nv = _cellset_slab(cs, 1) ? Any[_cg_novec()] : Any[]
     ilo = _cg_name(ctx, "il")
     ihi = _cg_name(ctx, "ih")
     jlo = _cg_name(ctx, "jl")
@@ -1248,6 +1292,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                         local $oln = $olnexpr
                         $(body...)
                     end
+                    $(nv...)
                 end
             end
         end
@@ -1278,11 +1323,381 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                         local $oln = $olnexpr
                         $(body...)
                     end
+                    $(nv...)
+                end
+                $(nv...)
+            end
+        end
+    end
+end
+
+# ---- Row-fused box kernels ---------------------------------------------------
+# A stencil's region classes split each row of the grid along its leading axis:
+# the two faces, the near-face classes and the interior of a row are separate
+# box kernels with the same rows (identical ranges along every other axis).
+# Emitted one by one, each kernel walks all the rows again, and a face kernel
+# one cell thick runs a loop per row for that one cell. Row fusion emits such a
+# group as ONE nest over the shared rows whose row body runs every member's
+# segment of that row in leading-axis order, the way a hand-written loop peels a
+# row's ends: each member's cells keep their own body, their own geometry and
+# their own invariants, so every cell evaluates the op sequence it did alone.
+# Members write disjoint cells (the section's out-slot check covers them) and
+# read only `u`, so running them row by row instead of kernel by kernel cannot
+# change a value. The threaded cell axis chunks the group's ROWS, so a chunk
+# still writes whole cells no other chunk writes.
+
+# The rows a box kernel shares with others of its group, or `nothing` when it is
+# not a rank-2/3 box kernel the emitter compiles as its own nest.
+function _cg_rowfuse_key(K::_AccKernel)
+    cs = K.cells
+    nd = length(cs.strides)
+    (_is_outs(cs) || !(2 <= nd <= 3)) && return nothing
+    return (nd, cs.base, Tuple(cs.strides), Tuple(cs.ranges[2:nd]),
+            Tuple(_cellset_slab(cs, d) for d in 2:nd))
+end
+
+# Groups of kernel indices to row-fuse (two or more members, leading-axis
+# ranges pairwise disjoint, ordered along that axis), keyed by the index of
+# the group's first kernel in build order.
+function _cg_rowfuse_groups(kernels::AbstractVector{_AccKernel})
+    out = Dict{Int,Vector{Int}}()
+    (_cg_split_supported() && !_cg_subcall_fn_disabled()) && return out
+    byrow = Dict{Any,Vector{Int}}()
+    for (j, K) in enumerate(kernels)
+        key = _cg_rowfuse_key(K)
+        key === nothing || push!(get!(byrow, key, Int[]), j)
+    end
+    for js in values(byrow)
+        length(js) >= 2 || continue
+        ord = sort(js; by = j -> first(kernels[j].cells.ranges[1]))
+        ok = all(m -> last(kernels[ord[m-1]].cells.ranges[1]) <
+                      first(kernels[ord[m]].cells.ranges[1]), 2:length(ord))
+        ok && (out[minimum(js)] = ord)
+    end
+    return out
+end
+
+function _cg_emit_rowgroup!(ctx::_CGCtx, Ks::Vector{_AccKernel})
+    invs = Vector{Vector{Symbol}}()
+    for K in Ks
+        for S in K.subs
+            _cg_inv!(ctx, S)
+        end
+        push!(invs, _cg_inv!(ctx, K))
+    end
+    geo = Any[]
+    nest = _cg_with_geosink(() -> _cg_emit_rowgroup_nest!(ctx, Ks, invs), ctx, geo)
+    return Expr(:block, geo..., nest)
+end
+
+function _cg_emit_rowgroup_nest!(ctx::_CGCtx, Ks::Vector{_AccKernel},
+                                 invs::Vector{Vector{Symbol}})
+    cs1 = Ks[1].cells
+    nd = length(cs1.strides)
+    # The same geometry rules as `_cg_emit_kernel_nest!`: bounds, base and
+    # strides are run-time data, a slab's thin extent a literal.
+    function axis(cs, d)
+        g(v, f) = _cg_geo!(ctx, v, (cs, f))
+        lo = g(first(cs.ranges[d]), (d, :first))
+        _cellset_slab(cs, d) && return (lo, lo, 1)
+        return (lo, g(last(cs.ranges[d]), (d, :last)), g(length(cs.ranges[d]), (d, :len)))
+    end
+    st = Any[_cg_geo!(ctx, cs1.strides[d], (cs1, d, :stride), true) for d in 1:nd]
+    base = _cg_geo!(ctx, cs1.base, (cs1, :base))
+    jv = _cg_name(ctx, "j")
+    kv = nd >= 3 ? _cg_name(ctx, "k") : 1
+    j0, j1, nj = axis(cs1, 2)
+    k0, _, nk = nd >= 3 ? axis(cs1, 3) : (1, 1, 1)
+    olnof(iv) = (e = :($base + $iv * $(st[1]) + $jv * $(st[2]));
+                 nd >= 3 ? :($e + $kv * $(st[3])) : e)
+    seg(iv, i0, i1, oln, body) = quote
+        for $iv in $i0:$i1
+            local $oln = $(olnof(iv))
+            $(body...)
+        end
+    end
+    parts = Any[]
+    for (m, K) in enumerate(Ks)
+        iv = _cg_name(ctx, "i")
+        oln = _cg_name(ctx, "o")
+        kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invs[m])
+        rec = _cg_emit_recipes!(Any[], ctx, kc)
+        val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
+        i0, i1, _ = axis(K.cells, 1)
+        push!(parts, (; iv, oln, rec, val, i0, i1))
+    end
+    segs = Any[seg(q.iv, q.i0, q.i1, q.oln, Any[q.rec..., :(du[$(q.oln)] = $(q.val))])
+               for q in parts]
+    fis = _cg_row_fission(ctx, Ks, parts)
+    if fis !== nothing
+        holes, stages, iF, oF = fis
+        fsegs = Any[seg(q.iv, q.i0, q.i1, q.oln, Any[:(du[$(q.oln)] = $(holes[m]))])
+                    for (m, q) in enumerate(parts)]
+        # A stage reads and writes only its own cell's `du` slot, so its
+        # iterations are independent; `julia.ivdep` says so to the loop
+        # vectorizer, which cannot prove it for a load and a store of one
+        # array. It licenses no reassociation (that is `julia.simdloop`).
+        for F in stages
+            push!(fsegs, seg(iF, parts[1].i0, parts[end].i1, oF,
+                             Any[:(du[$oF] = $F), Expr(:loopinfo, Symbol("julia.ivdep"))]))
+        end
+        # The split form stores each segment's hole value in `du` and reads it
+        # back, which is exact only when that value already has `du`'s element
+        # type: it does when `u`, `du` and the value type agree (the hole reads
+        # `u`), and every other call takes the one-pass form.
+        segs = Any[quote
+            if eltype(u) === _cgT && eltype(du) === _cgT
+                $(fsegs...)
+            else
+                $(segs...)
+            end
+        end]
+        _tally_cascade!(:cg_row_fission)
+    end
+    tv = _cg_name(ctx, "ab")
+    av = _cg_name(ctx, "a")
+    bv = _cg_name(ctx, "b")
+    hdr = Any[:(local $tv = _chunk_ordinals($nj * $nk, _cgci, _cgnc)),
+              :(local $av = $tv[1]),
+              :(local $bv = $tv[2])]
+    if nd == 2
+        return quote
+            $(hdr...)
+            for $jv in ($j0 + $av):($j0 + $bv - 1)
+                $(segs...)
+            end
+        end
+    end
+    ohi = _cg_name(ctx, "e")
+    klo = _cg_name(ctx, "kl")
+    khi = _cg_name(ctx, "kh")
+    jlo = _cg_name(ctx, "jl")
+    jhi = _cg_name(ctx, "jh")
+    return quote
+        $(hdr...)
+        if $av < $bv
+            local $ohi = $bv - 1
+            local $klo = $k0 + div($av, $nj)
+            local $khi = $k0 + div($ohi, $nj)
+            for $kv in $klo:$khi
+                local $jlo = $kv == $klo ? $j0 + rem($av, $nj) : $j0
+                local $jhi = $kv == $khi ? $j0 + rem($ohi, $nj) : $j1
+                for $jv in $jlo:$jhi
+                    $(segs...)
                 end
             end
         end
     end
 end
+
+# ---- Loop interchange for an affine reduction over a strided operand --------
+# A rank-1 kernel whose whole cell value is one affine reduction
+# (`du[o] = ⊕_j body(i, j)`, `_cg_emit_areduce`) runs the reduction innermost,
+# so an operand read contiguously along the CELL axis and at a large stride
+# along the reduced one — `Σ_j K[i,j]·e[j]` over a column-major `K` — is walked
+# at that large stride on every term. The interchanged nest keeps each cell's
+# accumulator in its own `du` slot and runs the cells innermost:
+#
+#     du[o] = 0̄                          for every cell of the chunk
+#     for each reduced tuple, in `_cg_emit_areduce`'s order
+#         du[o] = du[o] ⊕ body(i, tuple)   for every cell of the chunk
+#
+# Every cell folds the same terms in the same order from the same Float64 seed,
+# so each `du[o]` is bitwise the per-cell nest's; only the order in which
+# different cells advance changes, and cells are independent. It is emitted for
+# the Float64 value type only (the caller's branch): under any other type a
+# `du` slot could not hold the Float64 seed unchanged (`_cg_fold` explains why
+# that matters). Chosen when more of the body's box reads are contiguous (or
+# invariant) along the cell axis and strided along the innermost reduced axis
+# than the other way round. Returns the nest, or `nothing` when it does not
+# apply.
+function _cg_areduce_interchanged(ctx::_CGCtx, K::_AccKernel, kc::_CGKernCtx,
+                                  iv::Symbol, oln::Symbol, olnexpr, i0, av, bv)
+    nd = K.spine
+    nd.kind === _NK_AREDUCE || return nothing
+    isempty(K.cse.recipes) || return nothing
+    spec = nd.payload::_AReduceSpec
+    isempty(spec.dims) && return nothing
+    _cg_reduce_strides_favor_cells(K, nd.children[1], spec.dims[1]) || return nothing
+    fnsym = _cg_oplus_fn(nd.op)
+    js = Symbol[_cg_name(ctx, "j") for _ in spec.dims]
+    inner = kc
+    for r in eachindex(spec.dims)
+        inner = _cg_with_mi(inner, spec.dims[r], js[r])
+    end
+    body = _cg_emit(ctx, inner, nd.children[1])
+    cap = _codegen_fn_node_cap()
+    cap > 0 && _cg_expr_size(body) > cap && return nothing
+    loop = quote
+        for $iv in ($i0 + $av):($i0 + $bv - 1)
+            local $oln = $olnexpr
+            du[$oln] = $fnsym(du[$oln], $body)
+        end
+    end
+    for r in eachindex(spec.dims)
+        rg = spec.ranges[r]
+        lo = _cg_geo!(ctx, first(rg), (spec.ranges, r, :lo))
+        hi = _cg_geo!(ctx, last(rg), (spec.ranges, r, :hi))
+        loop = Expr(:for, :($(js[r]) = $lo:$hi), Expr(:block, loop))
+    end
+    return quote
+        for $iv in ($i0 + $av):($i0 + $bv - 1)
+            du[$olnexpr] = $(nd.literal)
+        end
+        $loop
+    end
+end
+
+# Whether the box reads under `body` favour the cell axis (loop dim 1) in the
+# inner loop over the reduced axis `rdim`: a read gains when it is contiguous or
+# invariant along the cells and strided along `rdim`, and loses the other way.
+function _cg_reduce_strides_favor_cells(K::_AccKernel, body::_Node, rdim::Int)
+    gain = 0
+    stride(a::_AccDesc, d::Int) = d == 1 ? a.s1 : d == 2 ? a.s2 : d == 3 ? a.s3 :
+        (d - 3 <= length(a.sx) ? a.sx[d - 3] : 0)
+    near(s) = s == 0 || s == 1
+    function visit(n::_Node)
+        if n.kind === _NK_ACCESS
+            a = K.acc[n.idx]
+            if a.kind === _AK_STATE_TBL_BOX || a.kind === _AK_CONST_BOX ||
+               a.kind === _AK_FORCING_BOX || a.kind === _AK_ARR_TBL_BOX
+                so = stride(a, 1)
+                sk = stride(a, rdim)
+                near(so) && !near(sk) && (gain += 1)
+                near(sk) && !near(so) && (gain -= 1)
+            end
+        end
+        foreach(visit, n.children)
+        return nothing
+    end
+    visit(body)
+    return gain > 0
+end
+
+# ---- Row fission -------------------------------------------------------------
+# The members of a row group often differ in ONE subexpression only: a
+# transport cell is `-((Dx + Dy) + Dz)` where only `Dx` depends on the cell's
+# class along the row, while `Dy` and `Dz` are the same expression with the same
+# offsets for every segment. Evaluated per segment, the near-face segments (one
+# cell wide) run all of it scalar. Row fission evaluates each segment's own
+# subexpression (the hole) into `du`, then the shared context over the whole
+# row in one loop that reads the hole back from `du`, the way a hand-written
+# loop adds the y and z derivatives over a full row. Each cell computes the
+# same operations on the same operands in the same order; the hole's value
+# round-trips through `du` at its own element type (see the guard at the call
+# site), so the result is bit-identical.
+#
+# Applies when: every member's body is a single expression (no per-cell CSE
+# locals), there is no lazy guard anywhere in it, the members' leading-axis
+# ranges tile the row with no gap, the bodies agree everywhere but at one
+# position (compared with every geometry local replaced by its value, and each
+# segment's own loop and slot variables by placeholders), the hole reads the
+# state and is more than a leaf, and the context around it reads the state at
+# least `_CG_FISSION_READS` times.
+# Returns `(holes, F, iF, oF)` or `nothing`.
+function _cg_row_fission(ctx::_CGCtx, Ks::Vector{_AccKernel}, parts)
+    length(Ks) >= 2 || return nothing
+    all(q -> isempty(q.rec), parts) || return nothing
+    for m in 2:length(Ks)
+        last(Ks[m-1].cells.ranges[1]) + 1 == first(Ks[m].cells.ranges[1]) || return nothing
+    end
+    gval = Dict{Symbol,Int}()
+    for st in ctx.geosink
+        (st isa Expr && st.head === :local && st.args[1] isa Expr) || continue
+        a = st.args[1]
+        r = a.args[2]
+        (r isa Expr && r.head === :ref && r.args[2] isa Int) || continue
+        gval[a.args[1]] = ctx.geo[r.args[2]]
+    end
+    canon(e, q) = e === q.iv ? :_cgFI : e === q.oln ? :_cgFO :
+                  e isa Symbol ? get(gval, e, e) :
+                  e isa Expr ? Expr(e.head, Any[canon(a, q) for a in e.args]...) : e
+    lazy(e) = e isa Expr && (e.head in (:if, :&&, :||, :let, :block) ||
+                             any(lazy, e.args))
+    any(q -> lazy(q.val), parts) && return nothing
+    cs = Any[canon(q.val, q) for q in parts]
+    # The hole: descend while the members differ in exactly one child.
+    function walk(es, at)
+        e1 = es[1]
+        all(e -> isequal(e, e1), es) && return nothing
+        if e1 isa Expr && all(e -> e isa Expr && e.head === e1.head &&
+                                  length(e.args) == length(e1.args), es)
+            diffs = [i for i in eachindex(e1.args)
+                     if !all(e -> isequal(e.args[i], e1.args[i]), es)]
+            length(diffs) == 1 &&
+                return walk(Any[e.args[diffs[1]] for e in es], (at..., diffs[1]))
+        end
+        return at
+    end
+    path = walk(cs, ())
+    (path === nothing || isempty(path)) && return nothing
+    sub(e, pth) = isempty(pth) ? e : sub(e.args[pth[1]], pth[2:end])
+    reads_u(e) = e isa Expr && ((e.head === :ref && e.args[1] === :u) || any(reads_u, e.args))
+    holes = Any[sub(q.val, path) for q in parts]
+    all(reads_u, holes) || return nothing
+    any(h -> h isa Expr && _cg_expr_size(h) >= 4, holes) || return nothing
+    iF = _cg_name(ctx, "i")
+    oF = _cg_name(ctx, "o")
+    q1 = parts[1]
+    rename(e) = e === q1.iv ? iF : e === q1.oln ? oF :
+                e isa Expr ? Expr(e.head, Any[rename(a) for a in e.args]...) : e
+    E = rename(q1.val)
+    # The context, innermost ancestor of the hole first, cut into stages: a new
+    # stage starts at an ancestor whose other operands read the state once the
+    # current stage already holds one such ancestor. Each stage is one pass
+    # over the row that reads the previous value back from `du`, so a long
+    # context runs as a few short loops rather than one with many operand
+    # streams, as a hand-written loop adds one axis's derivative per pass.
+    stages = Any[]
+    cur = :(du[$oF])
+    nreads = 0
+    total = 0
+    for d in (length(path) - 1):-1:0
+        node = sub(E, path[1:d])
+        k = path[d + 1]
+        sib = Set{Any}()
+        for i in eachindex(node.args)
+            (i == k || (node.head === :call && i == 1)) && continue
+            _cg_state_reads!(sib, node.args[i])
+        end
+        if !isempty(sib) && nreads >= _CG_FISSION_READS
+            push!(stages, cur)
+            cur = :(du[$oF])
+            nreads = 0
+        end
+        args = copy(node.args)
+        args[k] = cur
+        cur = Expr(node.head, args...)
+        nreads += length(sib)
+        total += length(sib)
+    end
+    push!(stages, cur)
+    total >= _CG_FISSION_READS || return nothing
+    return (holes, stages, iF, oF)
+end
+
+# The distinct state reads (`u[…]`) in an emitted expression.
+function _cg_state_reads!(acc::Set{Any}, e)
+    e isa Expr || return acc
+    if e.head === :ref && e.args[1] === :u
+        push!(acc, e)
+    else
+        for a in e.args
+            _cg_state_reads!(acc, a)
+        end
+    end
+    return acc
+end
+
+# Row fission pays when the shared context is heavy enough that evaluating it
+# once per row, vectorized, beats the extra pass through `du`: it needs at least
+# this many distinct state reads, and a stage is closed (a new pass begun) once
+# it holds this many.
+const _CG_FISSION_READS = 8
+
+# The loop annotation that keeps a loop scalar (LLVM's loop vectorizer off for
+# it). It is the loop body's last statement, where `@simd` puts its own.
+_cg_novec() = Expr(:loopinfo, (Symbol("llvm.loop.vectorize.enable"), false))
 
 # A strided Cartesian box of rank above 3, in `_run_box_kernel!`'s iteration
 # order (dim 1 fastest). The chunk `[a, b)` is walked as whole dim-1 ROWS, the
@@ -1701,7 +2116,43 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     covered = fill(false, length(acc_kernels))
     reasons = fill(:none, length(acc_kernels))
     kloops = Tuple{Any,Int}[]         # (loop-nest expr, its emitted-node cost)
+    # Row-fused groups (see `_cg_emit_rowgroup!`): a group is emitted at its
+    # first member's position; if it declines, its members are emitted one by
+    # one, exactly as without fusion.
+    groups = _cg_rowfuse_groups(acc_kernels)
+    ingroup = falses(length(acc_kernels))
     for (j, K) in enumerate(acc_kernels)
+        if haskey(groups, j)
+            js = groups[j]
+            nprologue = length(ctx.prologue)
+            ninvlog = length(ctx.invlog)
+            nhelpers = length(ctx.helpers)
+            nodes0 = ctx.nodes
+            fscratch0 = ctx.fscratch
+            empty!(ctx.helper_dedup)
+            try
+                lx = _cg_emit_rowgroup!(ctx, _AccKernel[acc_kernels[m] for m in js])
+                push!(kloops, (lx, ctx.nodes - nodes0))
+                for m in js
+                    covered[m] = true
+                    ingroup[m] = true
+                    _tally_cascade!(Symbol(tally, :_kernel))
+                end
+                _tally_cascade!(:cg_rowfused_group)
+                ctx.fscratch > fscratch0 && _tally_cascade!(:cg_foreign_scratch_emit)
+            catch err
+                err isa _CodegenDecline || rethrow()
+                resize!(ctx.prologue, nprologue)
+                for i in length(ctx.invlog):-1:(ninvlog + 1)
+                    delete!(ctx.invdone, ctx.invlog[i])
+                end
+                resize!(ctx.invlog, ninvlog)
+                resize!(ctx.helpers, nhelpers)
+                ctx.nodes = nodes0
+                ctx.fscratch = fscratch0
+            end
+        end
+        ingroup[j] && continue
         # Snapshot for rollback: a mid-kernel decline must discard its partial
         # prologue statements AND its invariant registrations (a later kernel
         # sharing that sub-kernel would otherwise reference rolled-back locals).
@@ -2013,6 +2464,38 @@ struct _KernelSection{F,TB,G,GTB}
     # function (primary / overflow), see `_SecTCache` above.
     tcache::_SecTCache
     dual_tcache::_SecTCache
+    # Serial cell tiling of the primary function: the number of static chunks
+    # a serial call runs back to back (1 = one pass per kernel). See
+    # `_section_tiles`.
+    ntiles::Int
+end
+
+# SERIAL TILING. The primary function runs chunk `c` of every emitted kernel
+# back to back (the threaded path's granularity, above), so a serial call can
+# run the chunks one after another instead of each kernel over all its cells:
+# several kernels over the same cells — one per species of a reaction system
+# lifted onto a grid — then share the cells' operands while they are still in
+# cache, where one pass per kernel streams every operand from memory once per
+# kernel. Chunk boundaries are not observable (the threaded path's argument:
+# every fold is inside one cell, out-slots are disjoint, `u` is read-only), so
+# a tiled call is bitwise the untiled one. Tiled only when the section has
+# several kernels and globally disjoint out-slots, with about
+# `_SECTION_TILE_CELLS` cells of each kernel per chunk.
+const _SECTION_TILE_CELLS = 1024
+function _section_tiles(ncells::Int, n_emitted::Int, disjoint::Bool)
+    (disjoint && n_emitted >= 2) || return 1
+    return max(1, div(ncells, n_emitted * _SECTION_TILE_CELLS))
+end
+
+@inline function _run_cg_section_serial!(f, tabs, du, u, p, t, ntiles::Int)
+    if ntiles == 1
+        f(du, u, p, t, tabs, 1, 1)
+    else
+        for c in 1:ntiles
+            f(du, u, p, t, tabs, c, ntiles)
+        end
+    end
+    return nothing
 end
 
 @inline function (s::_KernelSection{F,TB,G})(du, u, p, t, ::Type{T}) where {F,TB,G,T}
@@ -2026,7 +2509,7 @@ end
            _sec_prep_threads!(s.tcache).state == 1
             _run_cg_section_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache)
         else
-            s.cgf(du, u, p, t, s.cgtabs, 1, 1)
+            _run_cg_section_serial!(s.cgf, s.cgtabs, du, u, p, t, s.ntiles)
         end
     end
     kernels = s.kernels
@@ -2156,7 +2639,8 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
                                     primary_reasons, isempty(primary_reasons))
         return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                               nothing, nothing, 0, collect(Int, 1:length(kernels)),
-                              false, _sec_tcache(cg), _sec_tcache(nothing))
+                              false, _sec_tcache(cg), _sec_tcache(nothing),
+                              _cg_section_tiles(cg, n_emitted))
     end
     # Float64 overflow routing (ess-f64ofl): armed whenever the overflow
     # function exists and the plan has not turned the routing off. A build with
@@ -2168,5 +2652,10 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
     _refuse_interpreted_kernels(kernels, dual_resid, dg.reasons, false)
     return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                           dg.f, dg.tabs, count(dg.covered), dual_resid, f64cg,
-                          _sec_tcache(cg), _sec_tcache(dg))
+                          _sec_tcache(cg), _sec_tcache(dg),
+                          _cg_section_tiles(cg, n_emitted))
 end
+
+_cg_section_tiles(::Nothing, ::Int) = 1
+_cg_section_tiles(cg::_CGBuilt, n_emitted::Int) =
+    _section_tiles(cg.ncells, n_emitted, cg.outs_disjoint)

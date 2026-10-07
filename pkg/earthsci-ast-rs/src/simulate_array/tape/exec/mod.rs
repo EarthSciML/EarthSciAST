@@ -227,6 +227,9 @@ pub(crate) struct TapeExec {
     /// variable whose two layouts are the same walk; those read the caller's
     /// state in place.
     mirror: Vec<bool>,
+    /// The variables `mirror` marks, so a call's refill does not walk every
+    /// state variable (a 0-d state model has one per state).
+    mirror_vars: Vec<u32>,
     /// The `[start, end)` ranges of `dy` no `DyWrite` is certain to write,
     /// which each call zeroes, for a `dy` of `dy_zero_len` elements
     /// (`usize::MAX` until the first call computes them).
@@ -368,6 +371,9 @@ impl TapeExec {
             export_sites,
             pending: Vec::with_capacity(16),
             state_rm: vec![0.0f64; n_state],
+            mirror_vars: (0..mirror.len() as u32)
+                .filter(|&i| mirror[i as usize])
+                .collect(),
             mirror,
             dy_zero: Vec::new(),
             dy_zero_len: usize::MAX,
@@ -598,12 +604,25 @@ fn dy_zero_ranges(prog: &TapeProgram, n: usize, n_fallback: usize) -> Vec<(usize
     let conditional = conditional_mask(prog);
     let mut written = vec![false; n];
     for pc in cont {
-        let Instr::DyWrite { write } = &prog.instrs[pc] else {
-            continue;
-        };
         if conditional[pc] {
             continue;
         }
+        let write = match &prog.instrs[pc] {
+            Instr::DyWrite { write } => write,
+            // A lane program writes each of its lanes' positions.
+            Instr::Lanes { spec } => {
+                let ls = &prog.lanes[*spec as usize];
+                for w in &ls.writes {
+                    if let LaneDst::Dy(pos) = &w.dst {
+                        for l in 0..ls.lanes as usize {
+                            written[pos.at(l) as usize] = true;
+                        }
+                    }
+                }
+                continue;
+            }
+            _ => continue,
+        };
         let w = &prog.dy_writes[*write as usize];
         if let Some(pos) = &w.scatter {
             for &p in pos {
@@ -802,12 +821,8 @@ pub(in crate::simulate_array) fn run_tape_call(
     // Refill the row-major state mirror: one strided pass per mirrored
     // variable block (column-major flat -> row-major at the same offset).
     let ways = call_ways(exec);
-    for (sv, _) in prog
-        .state_vars
-        .iter()
-        .zip(&exec.mirror)
-        .filter(|(_, m)| **m)
-    {
+    for &i in &exec.mirror_vars {
+        let sv = &prog.state_vars[i as usize];
         let rm = rm_strides(&sv.shape);
         let cm = cm_strides(&sv.shape);
         unsafe {

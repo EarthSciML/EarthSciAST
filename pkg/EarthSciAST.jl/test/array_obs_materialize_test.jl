@@ -116,6 +116,46 @@ end
         end
     end
 
+    # ---- Const-cadence observeds fill only when `p` moves ----
+    # c[i] = k·sin(i) reads only a parameter and its index, so its buffer is
+    # filled once per `p`; d[i] = c[i]·u[i] reads the state and q[i] = t·c[i]
+    # the time, so both refill on every call. Each call must still be bitwise
+    # the oracle's — across repeated calls, a new `t`, a new state and a new `p`.
+    @testset "const-cadence observeds refill only when p moves" begin
+        vars3 = Dict(
+            "u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "c" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "d" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "q" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "k" => ESM_AOM.ModelVariable(ESM_AOM.ParameterVariable; default = 0.25),
+        )
+        eqs3 = [
+            ESM_AOM.Equation(_v("c"), _agg(_op("*", _v("k"), _op("sin", _v("i"))))),
+            ESM_AOM.Equation(_v("d"), _agg(_op("*", _idx("c", _v("i")), _idx("u", _v("i"))))),
+            ESM_AOM.Equation(_v("q"), _agg(_op("*", _v("t"), _idx("c", _v("i"))))),
+            ESM_AOM.Equation(_agg(_Didx("u", _v("i"))),
+                             _agg(_op("+", _idx("d", _v("i")), _idx("q", _v("i"))))),
+        ]
+        m3 = ESM_AOM.Model(vars3, eqs3)
+        f3, i3 = _aom_build_both(m3; index_sets = isets, initial_conditions = ics)
+        @test f3[6].n_mat_array_obs == 3
+        @test f3[6].n_mat_const_levels == 1          # c alone
+        @test i3[6].n_mat_array_obs == 0
+        ff!, u0, p, _, _, _ = f3
+        fi!, _, _, _, _, _ = i3
+        du, dref = similar(u0), similar(u0)
+        p2 = typeof(p)(map(x -> 3.0 * x, values(p)))
+        for (uu, pp, tt) in ((u0, p, 0.0), (u0, p, 0.0), (u0, p, 1.5),
+                             (fill(2.0, N), p, 1.5), (u0, p2, 1.5), (u0, p2, 1.5),
+                             (u0, p, 0.5))
+            ff!(du, uu, pp, tt)
+            fi!(dref, uu, pp, tt)
+            @test du == dref
+        end
+        ff!(du, u0, p, 0.0)
+        @test (@allocated ff!(du, u0, p, 0.0)) == 0
+    end
+
     # ---- A fill that reads its own buffer through an inlined observed ----
     # g[i] = u[i] + s with s = g[3]: g's fill reads g's buffer through the
     # scalar observed s. `validate()` calls this an observed cycle, and so does

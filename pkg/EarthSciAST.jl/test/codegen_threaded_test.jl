@@ -341,6 +341,24 @@ else
             end
         end
 
+        # Serial tiling: a section of several kernels large enough to tile runs
+        # its chunk instances back to back on the serial route; du must be
+        # bitwise the untiled (1, 1) instance's and the interpreter's.
+        @testset "serial tiling of a multi-kernel section" begin
+            N = 4096
+            model, ics = _cgt_1d_model(N), _cgt_1d_ics(N)
+            f!, u0, p, _ = _cgt_serial(model, ics)
+            ks = getfield(f!, :kernel_section)
+            @test getfield(ks, :ntiles) > 1
+            fi!, ui, pi_, _ = _cgt_build(model, ics; compiler=:interpreter)
+            u = u0 .* (1.0 .+ 1e-3 .* sin.(1:length(u0)))
+            du1 = fill(0.0, length(u0))
+            getfield(ks, :cgf)(du1, u, p, 0.4, getfield(ks, :cgtabs), 1, 1)
+            @test _cgt_bitsame(_cgt_du(f!, u, p, 0.4), du1)
+            @test ui == u0
+            @test _cgt_bitsame(_cgt_du(fi!, u, pi_, 0.4), du1)
+        end
+
         @testset "overflow RGF chunk instances (budget 0)" begin
             model = _cgt_1d_model(41)
             ics = _cgt_1d_ics(41)
