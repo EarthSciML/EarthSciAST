@@ -212,6 +212,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("dual_fast_path_test.jl")                # ess-dualfp Dual overflow tier ≡ interpreter
     include("f64_overflow_codegen_test.jl")          # ess-f64ofl overflow RGF serves budget-declined Float64 kernels (interpreter oracle)
     include("cg_foreign_scratch_test.jl")            # ess-cgfsc codegen emits xcse shared-prelude reads (interpreter oracle)
+    include("scalar_codegen_test.jl")                # scalar equations + prelude as generated code, emitted by structure (interpreter oracle)
     include("codegen_threaded_test.jl")              # codegen threaded cell axis: chunk instances ≡ serial, disjointness, threaded subprocess
     include("codegen_body_split_test.jl")            # ess-iip-body-split oversized kernel body split across @noinline helpers ≡ un-split (node-cap oracle)
     include("codegen_subcall_fn_test.jl")            # ess-cg-subcall-fn template sub-kernels emitted ONCE as @noinline fns ≡ per-site inline (opt-in tier)

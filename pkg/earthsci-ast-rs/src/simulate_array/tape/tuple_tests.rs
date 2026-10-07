@@ -261,10 +261,12 @@ fn a_ragged_gather_of_a_two_dimensional_state_reads_it_in_place() {
     assert_eq!(count(&prog, "SegReduce"), 1);
     assert_eq!(prog.seg_tables[0].rows, vec![0, 2, 5, 6]);
     // The gather of `u` sees one ghost: row 2's member 5 lies past node 4.
+    // A column-major program stores `u`'s box axis-reversed (`layout`).
+    let u_box: [usize; 2] = if prog.col_major { [2, 4] } else { [4, 2] };
     let ghosts: usize = prog
         .gather_tables
         .iter()
-        .filter(|t| t.src_shape[..] == [4, 2])
+        .filter(|t| t.src_shape[..] == u_box)
         .map(|t| t.pos.iter().filter(|&&p| p == GATHER_GHOST).count())
         .sum();
     assert_eq!(ghosts, 1);

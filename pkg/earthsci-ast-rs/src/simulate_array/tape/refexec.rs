@@ -39,7 +39,13 @@ pub(super) fn run_reference(
     t: f64,
     dy: &mut [f64],
 ) -> RefRun {
-    let state_arrays = build_state_arrays(&compiled.var_shapes, state);
+    let mut state_arrays = build_state_arrays(&compiled.var_shapes, state);
+    // A column-major program reads every state box axis-reversed.
+    if prog.col_major {
+        for a in state_arrays.values_mut() {
+            *a = a.view().reversed_axes().as_standard_layout().into_owned();
+        }
+    }
     let mut obs: ArrMap = ArrMap::default();
     let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     let mut slots: Vec<Option<RefVal>> = vec![None; prog.slots.len()];
@@ -260,13 +266,19 @@ pub(super) fn run_reference(
                     fr,
                     &compiled.forcing.borrow(),
                     &compiled.declared_names,
+                    prog.col_major,
                     &mut buf,
                 );
+                let shape: Vec<usize> = if prog.col_major {
+                    fr.shape.iter().rev().copied().collect()
+                } else {
+                    fr.shape.to_vec()
+                };
                 slots[*out as usize] = Some(if fr.shape.is_empty() {
                     RefVal::Scalar(buf[0])
                 } else {
                     RefVal::Arr(
-                        ArrayD::from_shape_vec(IxDyn(&fr.shape[..]), buf)
+                        ArrayD::from_shape_vec(IxDyn(&shape), buf)
                             .expect("a forcing load fills its whole box"),
                     )
                 });
@@ -644,6 +656,9 @@ pub(super) fn run_reference(
                     .expect("exported slot is defined");
                 let arr = match v {
                     RefVal::Scalar(s) => ArrayD::from_elem(IxDyn(&[]), *s),
+                    RefVal::Arr(a) if prog.col_major => {
+                        a.view().reversed_axes().as_standard_layout().into_owned()
+                    }
                     RefVal::Arr(a) => a.clone(),
                 };
                 obs.insert(name, arr);
@@ -786,13 +801,30 @@ pub(super) fn run_reference(
                     (Some(flat), RefVal::Scalar(s)) => dy[flat] = *s,
                     (Some(flat), RefVal::Arr(a)) if a.ndim() == 0 => dy[flat] = a[IxDyn(&[])],
                     (None, RefVal::Arr(a)) => {
+                        // Back to logical axes for a column-major program.
                         let sv = &prog.state_vars[w.var as usize];
+                        let logical = |v: &[usize]| -> Vec<usize> {
+                            if prog.col_major {
+                                v.iter().rev().copied().collect()
+                            } else {
+                                v.to_vec()
+                            }
+                        };
+                        let mut origin = sv.origin.to_vec();
+                        if prog.col_major {
+                            origin.reverse();
+                        }
                         let vs = VarShape {
-                            shape: sv.shape.to_vec(),
-                            origin: sv.origin.to_vec(),
+                            shape: logical(&sv.shape),
+                            origin,
                             flat_offset: sv.flat_offset,
                         };
-                        scatter_col_major_offset(a.view(), dy, &vs, &w.dest_lo);
+                        let view = if prog.col_major {
+                            a.view().reversed_axes()
+                        } else {
+                            a.view()
+                        };
+                        scatter_col_major_offset(view, dy, &vs, &logical(&w.dest_lo));
                     }
                     other => panic!("malformed DyWrite: {other:?}"),
                 }
