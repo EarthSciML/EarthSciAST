@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import decimal
 import math
+import numbers
 import re
 
 from .classification import algebraic_unknowns, observed_unknowns, ode_states
@@ -569,6 +570,9 @@ def _format_number(num: int | float, format_type: str) -> str:
     sign is U+2212 (mantissa AND exponent); ascii scientific notation carries NO
     ``+`` on a positive exponent; mantissa precision is never lost.
     """
+    # Normalize numpy (or other ``numbers``) scalars to the builtin types the
+    # rest of this function, and :func:`_shortest_scientific`, assume.
+    num = int(num) if isinstance(num, numbers.Integral) else float(num)
     if isinstance(num, float):
         if math.isinf(num):
             if format_type == "unicode":
@@ -698,9 +702,25 @@ def _starts_with_literal_power(child) -> bool:
 _ASSOCIATIVE_OPS = frozenset({"+", "*", "and", "or"})
 
 
-def _needs_parentheses(parent: ExprNode, child: Expr, is_right_operand: bool = False) -> bool:
+def _needs_parentheses(
+    parent: ExprNode,
+    child: Expr,
+    is_right_operand: bool = False,
+    format_type: str | None = None,
+) -> bool:
     """Check if parentheses are needed around a subexpression."""
     if isinstance(child, (int, float, str)):
+        return False
+
+    # A LaTeX `\frac{…}{…}` is self-delimiting, so a product never needs to
+    # parenthesize one (the linear forms do: `a * (b / c)`).
+    if (
+        format_type == "latex"
+        and parent.op == "*"
+        and _is_op_node(child)
+        and _node_field(child, "op") == "/"
+        and len(_node_field(child, "args") or []) == 2
+    ):
         return False
 
     # Read the child's operator whether the child is an ExprNode or a
@@ -1227,17 +1247,7 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
 
     def format_arg(arg: Expr, is_right_operand: bool = False) -> str:
         result = _fmt(arg)
-        # A LaTeX `\frac{…}{…}` is self-delimiting, so it never needs the
-        # same-precedence right-operand parentheses the linear forms do.
-        if (
-            format_type == "latex"
-            and op == "*"
-            and _is_op_node(arg)
-            and _node_field(arg, "op") == "/"
-            and len(_node_field(arg, "args") or []) == 2
-        ):
-            return result
-        if _needs_parentheses(node, arg, is_right_operand):
+        if _needs_parentheses(node, arg, is_right_operand, format_type):
             return f"({result})"
         return result
 
@@ -1268,16 +1278,7 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
                         result = f"{result} * {fa}"
                 return result
             if op == "+":
-                result = format_arg(args[0])
-                for a in args[1:]:
-                    # a + (-b) → a − b (per-term, mirroring the 2-arg branch).
-                    neg_inner = _unary_negation_operand(a)
-                    if neg_inner is not None:
-                        sep = " − " if format_type == "unicode" else " - "
-                        result = f"{result}{sep}{_fmt(neg_inner)}"
-                    else:
-                        result = f"{result} + {format_arg(a, True)}"
-                return result
+                return " + ".join(format_arg(a, i > 0) for i, a in enumerate(args))
             if op in ("and", "or"):
                 if format_type == "unicode":
                     sym = " ∧ " if op == "and" else " ∨ "
@@ -1296,10 +1297,13 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
 
         if op == "+":
             # Detect a + (-b) → render as a − b
+            # Simplify a + (-b) → a − b: recurse on a synthetic binary-minus
+            # node so `b` keeps its right-operand parentheses (`a − (b + c)`).
             neg_inner = _unary_negation_operand(right)
             if neg_inner is not None:
-                sep = " − " if format_type == "unicode" else " - "
-                return f"{format_arg(left)}{sep}{_fmt(neg_inner)}"
+                return _format_expression_node(
+                    ExprNode(op="-", args=[left, neg_inner]), format_type
+                )
             return f"{format_arg(left)} + {format_arg(right, True)}"
 
         if op == "-":

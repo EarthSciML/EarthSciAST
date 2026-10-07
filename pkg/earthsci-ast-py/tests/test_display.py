@@ -404,3 +404,30 @@ class TestDisplayErrorHandling:
 
         latex_result = to_latex(expr)
         assert latex_result is not None
+
+
+def _op(op, *args):
+    return {"op": op, "args": list(args)}
+
+
+@pytest.mark.parametrize(
+    "expr, expected",
+    [
+        # a + (-(b + c)) keeps the parentheses: `a - b + c` would mean (a - b) + c.
+        (_op("+", "a", _op("-", _op("+", "b", "c"))), "a - (b + c)"),
+        (_op("+", "a", _op("-", "b")), "a - b"),
+        # An n-ary sum is not simplified term by term (matches the other bindings).
+        (_op("+", "a", "b", _op("-", "c")), "a + b + (-c)"),
+    ],
+)
+def test_ascii_negated_addend(expr, expected):
+    assert to_ascii(expr) == expected
+
+
+def test_format_number_accepts_numpy_scalars():
+    np = pytest.importorskip("numpy")
+    from earthsci_ast.display import _format_number
+
+    assert _format_number(np.float64(1e-5), "ascii") == "1.0e-5"
+    assert _format_number(np.int64(123456), "ascii") == "1.23456e5"
+    assert _format_number(np.int64(5), "ascii") == "5"
