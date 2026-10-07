@@ -5530,6 +5530,9 @@ pub(super) fn build_tape_program(
     // configuration (`None` = the unfused program, bitwise-identical
     // results — the arm `build_tape_opts` gives the fused-vs-unfused tests).
     fuse: Option<super::fuse::SuperopCfg>,
+    // Store the program axis-reversed where the state layout gains from it
+    // (`super::layout`); off for the XLA emitter, which reads logical boxes.
+    align_layout: bool,
 ) -> (TapeProgram, (usize, usize)) {
     let rhs_rules: &[RhsRule] = &compiled.rhs_rules;
     let observed_rules: &[AlgebraicRule] = &compiled.observed_rules;
@@ -5643,7 +5646,7 @@ pub(super) fn build_tape_program(
 
     // ---- flatten + fusion + liveness + coloring ----------------------------
     let vn_hits = b.vn_hits();
-    (b.finish(exports, fuse), vn_hits)
+    (b.finish(exports, fuse, align_layout), vn_hits)
 }
 
 impl<'m> TapeBuilder<'m> {
@@ -6509,6 +6512,7 @@ impl<'m> TapeBuilder<'m> {
         mut self,
         exports: Vec<(String, SlotId)>,
         fuse: Option<super::fuse::SuperopCfg>,
+        align_layout: bool,
     ) -> TapeProgram {
         let mut instrs: Vec<Instr> = Vec::new();
         let mut precision: Vec<Precision> = Vec::new();
@@ -6569,7 +6573,11 @@ impl<'m> TapeBuilder<'m> {
             fused: Vec::new(),
             lanes: Vec::new(),
             fuse_stats: FuseStats::default(),
+            col_major: false,
         };
+        if align_layout {
+            super::layout::align_state_layout(&mut prog);
+        }
         if let Some(cfg) = fuse {
             super::reroll::reroll_program(&mut prog);
             super::fuse::fuse_program(&mut prog, cfg);

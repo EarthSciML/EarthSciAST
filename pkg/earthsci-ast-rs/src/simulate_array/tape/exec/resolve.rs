@@ -37,6 +37,20 @@ pub(super) fn cm_strides(shape: &[usize]) -> DimI {
     st
 }
 
+/// Where state variable `ix`'s block starts in the layout the program reads
+/// it in: the row-major mirror for a mirrored variable, else the caller's
+/// state in place (a column-major program's reversed box, or a variable whose
+/// two layouts are the same walk). Either way it is row-major over the
+/// program's `state_vars[ix].shape`.
+pub(super) fn state_ptr(env: &Env, ix: u32) -> *const f64 {
+    let sv = &env.prog.state_vars[ix as usize];
+    if env.mirror[ix as usize] {
+        unsafe { env.state_rm.as_ptr().add(sv.flat_offset) }
+    } else {
+        unsafe { env.state.as_ptr().add(sv.flat_offset) }
+    }
+}
+
 /// A resolved operand for the elementwise kernels: a scalar value, or an
 /// array view whose strides are aligned to the CONSUMER's logical shape.
 pub(super) enum Rv {
@@ -120,7 +134,7 @@ pub(super) fn resolve_rv(
             } else {
                 debug_assert_eq!(&sv.shape[..], shape, "state box mismatch");
                 Rv::V {
-                    ptr: unsafe { env.state_rm.as_ptr().add(sv.flat_offset) },
+                    ptr: state_ptr(env, *ix),
                     strides: rm_strides(&sv.shape),
                 }
             }
@@ -162,15 +176,8 @@ pub(super) fn resolve_src(
         }
         SrcRef::State(ix) => {
             let sv = &env.prog.state_vars[*ix as usize];
-            // A 0-d state has one layout, so it is read where it lives and
-            // the row-major mirror holds array states only.
-            let base = if sv.shape.is_empty() {
-                env.state
-            } else {
-                env.state_rm
-            };
             SrcView {
-                ptr: unsafe { base.as_ptr().add(sv.flat_offset) },
+                ptr: state_ptr(env, *ix),
                 shape: sv.shape.clone(),
                 strides: rm_strides(&sv.shape),
             }

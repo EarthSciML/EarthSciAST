@@ -8,13 +8,11 @@
 use super::super::geom::{RingTable, run_poly_area};
 use super::fused::{dispatch_bin_kernel, dispatch_un_kernel, exec_fused};
 use super::kernels::{
-    copy_strided, ew_select, ew1, ew2, exec_gather, fill_strided, index_gather, reduce_rows,
-    scan_axis, seg_reduce, table_gather,
+    copy_strided, ew_select, ew1, ew2, exec_gather, fill_strided, index_gather, reduce_axis,
+    reduce_rows, scan_axis, seg_reduce, table_gather,
 };
 use super::oracle::run_rhs_oracle;
-use super::resolve::{
-    Rv, SrcView, cm_strides, resolve_rv, resolve_scalar, resolve_src, rm_strides,
-};
+use super::resolve::{Rv, SrcView, resolve_rv, resolve_scalar, resolve_src, rm_strides};
 use super::*;
 use crate::simulate_array::eval::latch_gather_fault;
 
@@ -64,8 +62,10 @@ pub(super) fn run_range(
         lscratch,
         exports_active,
         simd,
+        dy_home,
         ..
     } = exec;
+    let dy_home: &[usize] = dy_home;
     let exports_active = *exports_active;
     let simd = *simd;
     let prog = env.prog;
@@ -396,7 +396,7 @@ pub(super) fn run_range(
                 let off = slot_off[*out as usize];
                 let dst =
                     unsafe { std::slice::from_raw_parts_mut(slab_ptr.add(off), forcing_len(fr)) };
-                load_forcing(fr, &env.forcing.borrow(), env.declared, dst);
+                load_forcing(fr, &env.forcing.borrow(), env.declared, prog.col_major, dst);
             }
             Instr::Reduce {
                 op,
@@ -434,6 +434,22 @@ pub(super) fn run_range(
                         };
                     }
                     dispatch_bin_kernel!(op, fold_rows);
+                    pc += 1;
+                    continue;
+                }
+                // One folded axis anywhere in a contiguous source: each output
+                // cell folds its own run in axis order.
+                if axes.len() == 1 && sv.strides[..] == rm_strides(&sv.shape)[..] {
+                    let a = axes[0] as usize;
+                    let pre: usize = sv.shape[..a].iter().product();
+                    let post: usize = sv.shape[a + 1..].iter().product();
+                    let (src, len) = (sv.ptr, sv.shape[a]);
+                    macro_rules! fold_axis {
+                        ($f:expr) => {
+                            unsafe { reduce_axis(dst, src, pre, len, post, $f) }
+                        };
+                    }
+                    dispatch_bin_kernel!(op, fold_axis);
                     pc += 1;
                     continue;
                 }
@@ -649,25 +665,40 @@ pub(super) fn run_range(
                 if desc.scalar {
                     a[IxDyn(&[])] = unsafe { *slab_ptr.add(off) };
                 } else {
-                    let dst = a.as_slice_mut().expect("export arrays are standard layout");
-                    // `dst.len()`, not `desc.elems()`: an empty box keeps a
+                    // `a.len()`, not `desc.elems()`: an empty box keeps a
                     // one-element storage but publishes an empty array.
-                    debug_assert_eq!(dst.len(), desc.shape.iter().product::<usize>());
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            slab_ptr.add(off) as *const f64,
-                            dst.as_mut_ptr(),
-                            dst.len(),
-                        );
+                    debug_assert_eq!(a.len(), desc.shape.iter().product::<usize>());
+                    let n = a.len();
+                    let src = unsafe { std::slice::from_raw_parts(slab_ptr.add(off), n) };
+                    if prog.col_major && !super::super::layout::order_free(&desc.shape) {
+                        // The slot is the logical array axis-reversed; the
+                        // reversed view of the export walks in slot order.
+                        for (d, &v) in a.view_mut().reversed_axes().iter_mut().zip(src) {
+                            *d = v;
+                        }
+                    } else {
+                        a.as_slice_mut()
+                            .expect("export arrays are standard layout")
+                            .copy_from_slice(src);
                     }
                 }
             }
             Instr::Fused { spec } => {
                 let fs = &prog.fused[*spec as usize];
-                unsafe { exec_fused(fs, env, slab_ptr, slot_off, obs, fregs, fscratch, simd) };
+                let dy_ptr = dy.as_mut_ptr();
+                unsafe {
+                    exec_fused(
+                        fs, env, slab_ptr, slot_off, obs, fregs, fscratch, simd, dy_home, dy_ptr,
+                    )
+                };
             }
             Instr::DyWrite { write } => {
                 let w = &prog.dy_writes[*write as usize];
+                // Its fused group already stored the slot into `dy`.
+                if dy_home[w.slot as usize] != usize::MAX {
+                    pc += 1;
+                    continue;
+                }
                 let desc = &prog.slots[w.slot as usize];
                 let off = slot_off[w.slot as usize];
                 if let Some(pos) = &w.scatter {
@@ -685,8 +716,10 @@ pub(super) fn run_range(
                         dy[flat] = unsafe { *slab_ptr.add(off) };
                     }
                     None => {
+                        // A column-major program's slot has the state block's
+                        // own layout, so a whole-box write is one copy.
                         let sv = &prog.state_vars[w.var as usize];
-                        let cm = cm_strides(&sv.shape);
+                        let cm = dy_strides(prog, &sv.shape);
                         let mut dbase = sv.flat_offset as i64;
                         for d in 0..sv.shape.len() {
                             dbase += w.dest_lo[d] as i64 * cm[d];

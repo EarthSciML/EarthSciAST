@@ -426,6 +426,8 @@ pub(super) unsafe fn exec_fused(
     fregs: &mut [f64],
     scratch: &mut FusedScratch,
     simd: SimdLevel,
+    dy_home: &[usize],
+    dy: *mut f64,
 ) {
     let FusedScratch {
         svals,
@@ -447,9 +449,8 @@ pub(super) unsafe fn exec_fused(
                 unsafe { slab_ptr.add(slot_off[*s as usize]) as *const f64 }
             }
             SrcRef::State(ix) => {
-                let sv = &env.prog.state_vars[*ix as usize];
-                debug_assert_eq!(&sv.shape, &inp.src_shape);
-                unsafe { env.state_rm.as_ptr().add(sv.flat_offset) }
+                debug_assert_eq!(&env.prog.state_vars[*ix as usize].shape, &inp.src_shape);
+                super::resolve::state_ptr(env, *ix)
             }
             SrcRef::Obs(ix) => {
                 let name = &env.prog.obs_reads[*ix as usize];
@@ -467,10 +468,14 @@ pub(super) unsafe fn exec_fused(
         };
         bases.push(p);
     }
-    // Output slab pointers.
+    // Output pointers: the slab, or `dy` for a slot homed there.
     outs.clear();
     for &(reg, slot) in &fs.outputs {
-        outs.push((reg, unsafe { slab_ptr.add(slot_off[slot as usize]) }));
+        let p = match dy_home.get(slot as usize) {
+            Some(&off) if off != usize::MAX => unsafe { dy.add(off) },
+            _ => unsafe { slab_ptr.add(slot_off[slot as usize]) },
+        };
+        outs.push((reg, p));
     }
     // An absorbed reduction's accumulator, seeded with its identity.
     let red: *mut f64 = match &fs.reduce {
