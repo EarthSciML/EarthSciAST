@@ -215,8 +215,8 @@ fn exec_block(
                 regs[*out as usize] = if c != 0.0 { x } else { y };
             }
             MicroOp::Mov { a, out } => regs[*out as usize] = get(a, regs),
-            MicroOp::Bin2 { .. } | MicroOp::Bin3 { .. } => {
-                unreachable!("a lane program holds no superops")
+            MicroOp::Bin2 { .. } | MicroOp::Bin3 { .. } | MicroOp::Scan { .. } => {
+                unreachable!("a lane program holds no superops or scans")
             }
         }
     }
