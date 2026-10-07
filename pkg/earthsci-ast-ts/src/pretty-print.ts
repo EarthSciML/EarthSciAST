@@ -718,10 +718,6 @@ function startsWithLiteralPower(child: Expr): boolean {
   return false
 }
 
-/**
- * Left-associative binary operators for which a same-precedence RIGHT operand
- * must be parenthesized (`a - (b - c)`, `a / (b / c)`, `a ^ (b ^ c)`).
- */
 /** Operators whose same-op right operand needs no parentheses (the parser re-flattens them). */
 const ASSOCIATIVE_OPS = new Set(['+', '*', 'and', 'or'])
 
@@ -730,8 +726,25 @@ const ASSOCIATIVE_OPS = new Set(['+', '*', 'and', 'or'])
  * function-call classification come from the central op registry
  * (op-registry.ts).
  */
-function needsParentheses(parent: ExprNode, child: Expr, isRightOperand = false): boolean {
+function needsParentheses(
+  parent: ExprNode,
+  child: Expr,
+  isRightOperand = false,
+  format?: TextFormat,
+): boolean {
   if (typeof child === 'number' || typeof child === 'string' || isNumericLiteral(child)) {
+    return false
+  }
+
+  // A LaTeX `\frac{…}{…}` is self-delimiting, so a product never needs to
+  // parenthesize one (the linear forms do: `a * (b / c)`).
+  if (
+    format === 'latex' &&
+    parent.op === '*' &&
+    isExprNode(child) &&
+    child.op === '/' &&
+    child.args.length === 2
+  ) {
     return false
   }
 
@@ -1916,18 +1929,7 @@ function formatExpressionNode(node: ExprNode, format: TextFormat): string {
     format,
     arg: (a, isRight = false) => {
       const result = renderExpr(a, format)
-      // A LaTeX `\frac{…}{…}` is self-delimiting, so it never needs the
-      // same-precedence right-operand parentheses the linear forms do.
-      if (
-        format === 'latex' &&
-        node.op === '*' &&
-        isExprNode(a) &&
-        a.op === '/' &&
-        a.args.length === 2
-      ) {
-        return result
-      }
-      return needsParentheses(node, a, isRight) ? `(${result})` : result
+      return needsParentheses(node, a, isRight, format) ? `(${result})` : result
     },
     raw: (a) => renderExpr(a, format),
   }

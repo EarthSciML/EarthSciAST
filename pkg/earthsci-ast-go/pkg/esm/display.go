@@ -873,12 +873,7 @@ func formatExprNode(node ExprNode, format string) string {
 	raw := func(a any) string { return formatExpression(a, format) }
 	arg := func(a any, isRight bool) string {
 		s := formatExpression(a, format)
-		// A LaTeX `\frac{…}{…}` is self-delimiting, so it never needs the
-		// same-precedence right-operand parentheses the linear forms do.
-		if format == FmtLatex && op == "*" && isBinaryDivide(a) {
-			return s
-		}
-		if needsParentheses(op, len(args), a, isRight) {
+		if needsParentheses(op, len(args), a, isRight, format) {
 			return "(" + s + ")"
 		}
 		return s
@@ -2146,10 +2141,15 @@ var associativeOps = map[string]bool{"+": true, "*": true, "and": true, "or": tr
 // It mirrors pretty-print.ts needsParentheses, with the F-7 correction that a
 // LEFT operand of the right-associative `^` at equal precedence is parenthesized
 // ((a^b)^c, not a^b^c).
-func needsParentheses(parentOp string, parentArgc int, child any, isRight bool) bool {
+func needsParentheses(parentOp string, parentArgc int, child any, isRight bool, format string) bool {
 	childOp, ok := opNodeOp(child)
 	if !ok {
 		return false // number / string leaf never needs parentheses
+	}
+	// A LaTeX `\frac{…}{…}` is self-delimiting, so a product never needs to
+	// parenthesize one (the linear forms do: `a * (b / c)`).
+	if format == FmtLatex && parentOp == "*" && isBinaryDivide(child) {
+		return false
 	}
 	parentPrec := opPrecedence(parentOp)
 	childPrec := opPrecedence(childOp)
@@ -2177,7 +2177,7 @@ func needsParentheses(parentOp string, parentArgc int, child any, isRight bool) 
 	// as `(a == b) < c`. A right-nested power keeps its parentheses too
 	// (`a^(b^c)`): redundant under right-associativity, but explicit.
 	if isRight {
-		return !(childOp == parentOp && associativeOps[parentOp])
+		return childOp != parentOp || !associativeOps[parentOp]
 	}
 	// (F-7) A LEFT operand of the right-associative `^` is parenthesized.
 	if parentOp == "^" {

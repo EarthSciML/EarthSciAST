@@ -63,14 +63,6 @@ const ASSOCIATIVE_OPS: &[&str] = &["+", "*", "and", "or"];
 /// none. Mirrors `UMINUS_OPERAND_MIN` in pretty-print.ts.
 const UMINUS_OPERAND_PARENT_PREC: i32 = 4;
 
-/// Whether a unary-minus operand needs parentheses that the precedence table
-/// cannot express: a `-` directly before a numeric literal is part of the
-/// literal, so `-(2^2)` printed as `-2^2` reads back as `(-2)^2`; the base is
-/// the leftmost leaf of the operand, reached through `*` / `/`.
-fn uminus_operand_needs_parens(operand: &Expr) -> bool {
-    starts_with_literal_power(operand)
-}
-
 /// Render operand `arg` of the infix operator `op` (precedence `op_prec`).
 /// A LEFT operand is parenthesized only when it binds strictly looser; a RIGHT
 /// operand (for an n-ary `+ * and or`, every argument after the first) also
@@ -91,6 +83,10 @@ fn render_operand(op: &str, op_prec: i32, arg: &Expr, is_right: bool, fmt: Fmt) 
     render_at(arg, fmt, if bare { op_prec - 1 } else { op_prec })
 }
 
+/// Whether a unary-minus operand needs parentheses that the precedence table
+/// cannot express: a `-` directly before a numeric literal is part of the
+/// literal, so `-(2^2)` printed as `-2^2` reads back as `(-2)^2`; the base is
+/// the leftmost leaf of the operand, reached through `*` / `/`.
 fn starts_with_literal_power(expr: &Expr) -> bool {
     let Expr::Operator(n) = expr else {
         return false;
@@ -1291,7 +1287,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                 // operands the parser re-absorbs. See
                 // `UMINUS_OPERAND_PARENT_PREC`.
                 let operand = render_at(&args[0], fmt, UMINUS_OPERAND_PARENT_PREC);
-                if uminus_operand_needs_parens(&args[0]) {
+                if starts_with_literal_power(&args[0]) {
                     format!("{minus}({operand})")
                 } else {
                     format!("{minus}{operand}")

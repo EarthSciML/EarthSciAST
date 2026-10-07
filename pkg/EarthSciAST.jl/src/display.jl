@@ -592,20 +592,26 @@ end
 
 """
     needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::Bool=false,
-                      parent_argc::Int=2) -> Bool
+                      parent_argc::Int=2; format::Symbol=:ascii) -> Bool
 
 Check if parentheses are needed around a subexpression, mirroring
 pretty-print.ts `needsParentheses`. A function-call argument is parenthesized
 only when it is a logical-`or` (loosest precedence). `parent_argc` distinguishes
-a unary `-` from a binary one; it defaults to the binary case.
+a unary `-` from a binary one; it defaults to the binary case. Under
+`format=:latex` a product never parenthesizes a binary `/` operand, since
+`\\frac{…}{…}` is self-delimiting.
 """
 function needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::Bool=false,
-                           parent_argc::Int=2)
+                           parent_argc::Int=2; format::Symbol=:ascii)
     if isa(child, NumExpr) || isa(child, IntExpr) || isa(child, VarExpr)
         return false
     end
 
     if !isa(child, OpExpr)
+        return false
+    end
+
+    if format == :latex && parent_op == "*" && child.op == "/" && length(child.args) == 2
         return false
     end
 
@@ -1075,13 +1081,8 @@ _latex_product_sep(args) =
 function _format_operand(op::String, arg::ASTExpr, format::Symbol,
                          is_right_operand::Bool=false, parent_argc::Int=2)
     result = format_expression(arg, format)
-    # A LaTeX `\frac{…}{…}` is self-delimiting, so it never needs the
-    # same-precedence right-operand parentheses the linear forms do.
-    if format == :latex && op == "*" && arg isa OpExpr && arg.op == "/" &&
-       length(arg.args) == 2
-        return result
-    end
-    return needs_parentheses(op, arg, is_right_operand, parent_argc) ? "($result)" : result
+    return needs_parentheses(op, arg, is_right_operand, parent_argc; format) ? "($result)" :
+           result
 end
 
 # LaTeX function-call: `\left( \right)` only when the argument is tall
