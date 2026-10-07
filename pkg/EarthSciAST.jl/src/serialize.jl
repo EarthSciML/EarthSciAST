@@ -53,11 +53,14 @@ end
 # One join clause → its wire form. A bin-equality clause is a list of key-column
 # pairs → `{ "on": [[l,r], …] }`; an overlap clause (Phase 2a) → `{ "overlap":
 # { "src_env": […], "tgt_env": […], "eps": … } }`.
-_serialize_join_clause(clause::_OverlapJoinSpec) = Dict{String,Any}(
-    "overlap" => Dict{String,Any}(
+# `eps` is emitted only when the clause spelled it (absent ⇒ the schema default 0).
+function _serialize_join_clause(clause::_OverlapJoinSpec)
+    ov = Dict{String,Any}(
         "src_env" => copy(clause.src_env),
-        "tgt_env" => copy(clause.tgt_env),
-        "eps" => clause.eps))
+        "tgt_env" => copy(clause.tgt_env))
+    clause.eps_given && (ov["eps"] = clause.eps)
+    return Dict{String,Any}("overlap" => ov)
+end
 function _serialize_join_clause(clause)
     out = Dict{String,Any}("on" => [[p[1], p[2]] for p in clause])
     syms = _clause_syms(clause)

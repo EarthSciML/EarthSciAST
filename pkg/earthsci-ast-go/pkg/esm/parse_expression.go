@@ -725,7 +725,8 @@ func (p *exprTextParser) parseAggregate(sym string) Expression {
 
 // parseArgWitness parses an `argmin` / `argmax` arg-witness (esm-spec §4.2) —
 // the inverse of formatArgWitness:
-// `op '[' arg ']' '(' expr ')' ('where' '{' ranges '}')?`. Like aggregate, its
+// `op '[' arg ']' '(' expr ')' ('where' '{' ranges '}')? ('join' '(' … ')')?
+// ('if' filter)? ('id' '=' name)?`. Like aggregate, its
 // `args` operand cache isn't printed and is derived.
 func (p *exprTextParser) parseArgWitness(op string) Expression {
 	p.next() // '['
@@ -742,16 +743,33 @@ func (p *exprTextParser) parseArgWitness(op string) Expression {
 		p.next()
 		ranges = p.parseRanges()
 	}
+	// The candidate-pruning `join(…)` and `if` filter, exactly as on `faq`.
+	var join []any
+	if p.atWord("join") {
+		p.next()
+		join = p.parseJoin()
+	}
+	var filter Expression
+	if p.atWord("if") {
+		p.next()
+		filter = p.parseExpr(0)
+	}
 	// `id=<name>` (RFC §6.1 node identity), emitted by formatArgWitness after
-	// the where-clause. Mirrors the aggregate tail.
+	// the filter. Mirrors the aggregate tail.
 	id := p.parseIDClause()
 	arg := at.s
 	node := ExprNode{
 		Op:     op,
-		Args:   deriveAggregateArgs(expr, nil, nil, nil),
+		Args:   deriveAggregateArgs(expr, join, filter, nil),
 		Arg:    &arg,
 		Ranges: ranges,
 		Expr:   expr,
+	}
+	if len(join) > 0 {
+		node.Join = join
+	}
+	if filter != nil {
+		node.Filter = filter
 	}
 	if id != nil {
 		node.ID = id
@@ -873,39 +891,142 @@ func exprOpIsNameLike(op string) bool {
 	return exprNameRe.MatchString(op)
 }
 
-// parseJoin parses `( a=b, c=d ; e=f )` → [{on:[[a,b],[c,d]]}, {on:[[e,f]]}].
+// parseJoin parses a join body — the inverse of formatJoinClause. Clauses are
+// separated by `;`. An equality clause is one or more `l=r` key-column pairs
+// plus an optional `syms=[left, right]` (in any position); an overlap clause is
+// exactly `overlap(src=[…], tgt=[…][, eps=<number>])`. An empty `join()`, an
+// empty clause, and an overlap mixed with key pairs are refused — none of them
+// is a schema-valid clause.
 func (p *exprTextParser) parseJoin() []any {
 	p.expect(tkLParen, "'(' after join")
 	clauses := []any{}
-	cur := []any{}
-	if p.peek().k != tkRParen {
-		for {
-			a := p.next()
-			if a.k != tkName {
-				p.failAt("Expected a join key name", a)
+	for {
+		clauses = append(clauses, p.parseJoinClause())
+		if p.peek().k == tkSemi {
+			p.next()
+			continue
+		}
+		break
+	}
+	p.expect(tkRParen, "')' to close join(…)")
+	return clauses
+}
+
+// parseJoinClause parses one `;`-separated join clause.
+func (p *exprTextParser) parseJoinClause() map[string]any {
+	if p.atWord("overlap") && p.peekAt(1).k == tkLParen {
+		p.next() // 'overlap'
+		return map[string]any{"overlap": p.parseOverlap()}
+	}
+	on := []any{}
+	var syms []any
+	for {
+		a := p.next()
+		if a.k != tkName {
+			p.failAt("Expected a join key name", a)
+		}
+		p.expect(tkEq, "'=' in a join pair")
+		if a.s == "syms" && p.peek().k == tkLBracket {
+			if syms != nil {
+				p.failAt("duplicate syms=[…] in a join clause", a)
 			}
-			p.expect(tkEq, "'=' in a join pair")
+			names := p.parseNameList("syms")
+			if len(names) != 2 {
+				p.failAt("syms=[…] names exactly two range symbols", a)
+			}
+			syms = names
+		} else {
 			b := p.next()
 			if b.k != tkName {
 				p.failAt("Expected a join key name", b)
 			}
-			cur = append(cur, []any{a.s, b.s})
+			on = append(on, []any{a.s, b.s})
+		}
+		if p.peek().k == tkComma {
+			p.next()
+			continue
+		}
+		break
+	}
+	if len(on) == 0 {
+		p.fail("a join clause needs at least one key pair l=r")
+	}
+	clause := map[string]any{"on": on}
+	if syms != nil {
+		clause["syms"] = syms
+	}
+	return clause
+}
+
+// parseOverlap parses `( src=[…], tgt=[…] [, eps=<number>] )` (fields in any
+// order) into an overlap gate with keys src_env, tgt_env and optional eps.
+func (p *exprTextParser) parseOverlap() map[string]any {
+	p.expect(tkLParen, "'(' after overlap")
+	var src, tgt []any
+	var eps any
+	for {
+		k := p.next()
+		if k.k != tkName {
+			p.failAt("Expected src=, tgt= or eps= in overlap(…)", k)
+		}
+		p.expect(tkEq, "'=' after "+k.s+" in overlap(…)")
+		switch {
+		case k.s == "src" && src == nil, k.s == "tgt" && tgt == nil:
+			names := p.parseNameList(k.s)
+			if len(names) == 0 {
+				p.failAt("overlap "+k.s+"=[…] must name at least one factor", k)
+			}
+			if k.s == "src" {
+				src = names
+			} else {
+				tgt = names
+			}
+		case k.s == "eps" && eps == nil:
+			v, ok := p.parseExpr(0).(float64)
+			if !ok || v < 0 {
+				p.failAt("overlap eps= must be a non-negative number", k)
+			}
+			eps = v
+		default:
+			p.failAt("unexpected or duplicate "+k.s+"= in overlap(…)", k)
+		}
+		if p.peek().k == tkComma {
+			p.next()
+			continue
+		}
+		break
+	}
+	p.expect(tkRParen, "')' to close overlap(…)")
+	if src == nil || tgt == nil {
+		p.fail("overlap(…) requires both src=[…] and tgt=[…]")
+	}
+	gate := map[string]any{"src_env": src, "tgt_env": tgt}
+	if eps != nil {
+		gate["eps"] = eps
+	}
+	return gate
+}
+
+// parseNameList parses `[name, name, …]` (possibly empty).
+func (p *exprTextParser) parseNameList(what string) []any {
+	p.expect(tkLBracket, "'[' after "+what+"=")
+	names := []any{}
+	if p.peek().k != tkRBracket {
+		for {
+			t := p.next()
+			if t.k != tkName {
+				p.failAt("Expected a name in "+what+"=[…]", t)
+			}
+			names = append(names, t.s)
 			if p.peek().k == tkComma {
 				p.next()
-				continue
-			}
-			if p.peek().k == tkSemi {
-				p.next()
-				clauses = append(clauses, map[string]any{"on": cur})
-				cur = []any{}
 				continue
 			}
 			break
 		}
 	}
-	clauses = append(clauses, map[string]any{"on": cur})
-	p.expect(tkRParen, "')' to close join(…)")
-	return clauses
+	p.expect(tkRBracket, "']' to close "+what+"=[…]")
+	return names
 }
 
 // parseTemplate parses `name<binding = value, …>` (or the empty `name<>`) into
@@ -1079,6 +1200,25 @@ func (p *exprTextParser) makeParsedCall(name string, args []any, named []exprNam
 		}
 		return node
 	}
+	// `skolem(a, b, label=<name>)` — the documentary relation tag.
+	if name == "skolem" {
+		if labelVal, ok := lookup("label"); ok {
+			for _, n := range named {
+				if n.key != "label" {
+					panic(exprParseFailure{&ExpressionParseError{
+						Message: fmt.Sprintf("unexpected %s=… in skolem(...)", n.key), Pos: pos,
+					}})
+				}
+			}
+			label, isStr := labelVal.(string)
+			if !isStr {
+				panic(exprParseFailure{&ExpressionParseError{
+					Message: "skolem(...) label=… must be a name", Pos: pos,
+				}})
+			}
+			return ExprNode{Op: "skolem", Args: args, Label: &label}
+		}
+	}
 	p.noNamed(named, name, pos)
 	if exprStructuralRefusals[name] {
 		panic(exprParseFailure{&ExpressionParseError{
@@ -1172,6 +1312,17 @@ func deriveAggregateArgs(expr Expression, join []any, filter, key Expression) []
 		if !ok {
 			continue
 		}
+		if ov, ok := cm["overlap"].(map[string]any); ok {
+			for _, side := range []string{"src_env", "tgt_env"} {
+				names, _ := ov[side].([]any)
+				for _, n := range names {
+					if s, ok := n.(string); ok {
+						add(s)
+					}
+				}
+			}
+			continue
+		}
 		on, _ := cm["on"].([]any)
 		for _, pair := range on {
 			pp, ok := pair.([]any)
@@ -1222,11 +1373,12 @@ func exprNodeChildValues(n ExprNode) []any {
 // normalization
 // ---------------------------------------------------------------------------
 
-// flattenParsedExpr flattens nested same-op `+` / `*` in `args` into the n-ary
-// form the printer emits and authored ASTs use: `a + b + c` → one `+` with three
-// args, not left-nested pairs. (`-` and `/` are binary and stay as parsed.)
-// Non-`args` expression fields (integral bounds, aggregate bodies, …) are left
-// as parsed, matching the TypeScript oracle.
+// flattenParsedExpr flattens nested same-op `+` / `*` / `and` / `or` in `args`
+// into the n-ary form the printer emits and authored ASTs use: `a + b + c` →
+// one `+` with three args, not left-nested pairs. (`-` and `/` are binary and
+// stay as parsed.) A reduction's `expr` / `filter` / `key` are flattened too;
+// other non-`args` expression fields (integral bounds, etc.) are left as
+// parsed, matching the TypeScript oracle.
 func flattenParsedExpr(e Expression) Expression {
 	n, ok := e.(ExprNode)
 	if !ok {
@@ -1236,7 +1388,16 @@ func flattenParsedExpr(e Expression) Expression {
 	for i, a := range n.Args {
 		args[i] = flattenParsedExpr(a)
 	}
-	if n.Op == "+" || n.Op == "*" {
+	if n.Expr != nil {
+		n.Expr = flattenParsedExpr(n.Expr)
+	}
+	if n.Filter != nil {
+		n.Filter = flattenParsedExpr(n.Filter)
+	}
+	if n.Key != nil {
+		n.Key = flattenParsedExpr(n.Key)
+	}
+	if n.Op == "+" || n.Op == "*" || n.Op == "and" || n.Op == "or" {
 		out := make([]any, 0, len(args))
 		for _, a := range args {
 			if an, ok := a.(ExprNode); ok && an.Op == n.Op && an.Wrt == nil {

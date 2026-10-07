@@ -42,10 +42,15 @@ emitted in **sorted key order** for determinism.
 Numbers, variable strings, `+ - * / ^`, comparisons, `and/or/not`, `ifelse`,
 all elementary/trig/hyperbolic functions, `D` (uses `wrt`), `Pre`, `ic`,
 `min/max`, `skolem`, `rank`. `skolem`/`rank`/`ic` use the generic fallback
-(args-only ⇒ already non-lossy). `skolem` additionally carries a documentary
-`label` field (the relation-kind tag, e.g. `"edge"`/`"bin"`/`"pair"`) that
-lives outside `args` and is **not rendered** — only its component `args` are
-shown, e.g. `skolem(u, v)`.
+(args-only ⇒ already non-lossy), except as follows.
+
+### skolem  `{op:"skolem", args:[…], label?:L}`
+Without `label`: the generic fallback, `skolem(u, v)`. With the documentary
+`label` (the relation-kind tag, e.g. `"edge"`/`"bin"`/`"pair"`), it is a trailing
+named argument in all three formats, exactly like `intersect_polygon`'s
+`manifold=`: `skolem(u, v, label=edge)`, latex `\mathrm{skolem}(u, v, label=edge)`.
+The label does not affect the key, but the text form is lossless, so it is
+shown. (Changed 2026-10-06; it was previously not rendered.)
 
 ### const  `{op:"const", value:V, args:[]}`
 Render the literal value `V` itself — indistinguishable from a bare literal.
@@ -133,16 +138,35 @@ Then append, in this exact order, each clause only when the field is present:
 1. ranges → ` where {k0∈r0, k1∈r1}` (keys sorted). Range `[a,b]`→`a:b`,
    `[a,s,b]`→`a:s:b`, `{from:F}`→`F` (with `of:[…]` → `F(of…)`). latex uses
    `\text{ where } \{k0 \in r0\}`; ascii ` where {k0 in r0}`.
-2. join → ` join(l0=r0, l1=r1)` (pairs from every clause's `on`, clauses
-   joined `; `). latex `\mathrm{…}` wrapper not used — literal ` join(…)`.
+2. join → ` join(C0; C1; …)`, one item per clause, clauses joined `; `. latex
+   `\mathrm{…}` wrapper not used — literal ` join(…)` in all three formats. A
+   clause is EITHER:
+   - an equality clause `{on:[[l0,r0], …], syms?:[s0,s1]}` → `l0=r0, l1=r1`,
+     followed by `, syms=[s0, s1]` when `syms` is present (the self-join side
+     assignment, CONFORMANCE_SPEC §5.5.8 — it changes the result, so it is never
+     dropped). e.g. `join(row_prior=row_id, syms=[b, a])`;
+   - an overlap clause `{overlap:{src_env:[…], tgt_env:[…], eps?:E}}` →
+     `overlap(src=[a0, a1], tgt=[b0, b1, b2, b3])`, with `, eps=E` appended
+     inside the parentheses whenever `eps` is present — including an explicit
+     `0`, so the field round-trips as written (absent ⇒ 0, the schema default,
+     and nothing is printed). `E` is formatted per the number rules of each format.
+     e.g. `join(overlap(src=[px, py], tgt=[W, S, E, N], eps=1.0e-3))`.
+
+   A parser MUST refuse an empty `join()`, an empty clause, a `syms` that does
+   not name exactly two symbols, and an `overlap(…)` mixed with key pairs in
+   one clause — none is a schema-valid clause. (Changed 2026-10-06: `syms` and
+   overlap clauses were previously dropped, printing an empty `join()`.)
 3. filter → ` if F` (F recursive).
 4. distinct (true) → ` distinct`.
 5. key → ` key=K` (K recursive).
 6. semiring present and ≠ `sum_product` → ` [semiring=NAME]`.
 
-### argmin / argmax  `{op:"argmin"|"argmax", arg:G, expr:E, ranges?:{…}}`
-- unicode `argmin[G] (E)`, latex `\mathrm{argmin}_{G} (E)`, ascii `argmin[G](E)`.
-- If `ranges` present, append the same ` where {…}` clause as `faq`.
+### argmin / argmax  `{op:"argmin"|"argmax", arg:G, expr:E, ranges?:{…}, join?, filter?, id?}`
+- unicode `argmin[G] (E)`, latex `\mathrm{argmin}_{G} (E)`, ascii `argmin[G] (E)`.
+- Then append, in this order, each clause only when present, spelled exactly as
+  on `faq`: ranges ` where {…}`, join ` join(…)`, filter ` if F`, ` id=ID`.
+  e.g. `argmin[g] (d[g]) where {g in gens} join(point_bin=gen_bin) if d[g] > 0`.
+  (Changed 2026-10-06: `join` and `filter` were previously dropped.)
 
 ## Associativity and parenthesization (NORMATIVE — added 2026-07-15)
 
@@ -164,6 +188,26 @@ fixture to match the code:
   means `(−a) + b`. A negated PRODUCT, QUOTIENT or POWER needs no parentheses, because
   unary minus binds LOOSER than `*`, `/` and `^`: `−a · b` reads back as
   `−(a · b)` and `−a^2` as `−(a^2)`, the very nodes that were printed.
+
+- **A RIGHT operand at the SAME precedence level is parenthesized unless it is the very
+  same associative operator** (NORMATIVE — added 2026-10-06). The parser groups
+  same-level operators to the LEFT, so `{op:"*", args:["a", {op:"/", args:["b","c"]}]}`
+  MUST render `a * (b / c)` (bare `a * b / c` reads back as `(a * b) / c`), `a + (b - c)`
+  likewise, and `{op:"==", args:["a", {op:"<", args:["b","c"]}]}` MUST render
+  `a == (b < c)`. "Right operand" means every argument after the first, so in an
+  n-ary `+`/`*`/`and`/`or` the rule applies to arguments 2…n: `k * (a / b) * c`. The
+  associative operators are `+`, `*`, `and` and `or`; a same-op right operand of one
+  of them needs no parentheses because the parser re-flattens it into one n-ary node
+  (`a + b + c`). `^` is not in that set, so a right-nested power keeps its explicit
+  parentheses: `a^(b^c)`. The one exception is latex, where a `\frac{…}{…}` operand of
+  `*` is self-delimiting and is not wrapped: `a \cdot \frac{b}{c}`.
+- **A comparison or logical operand of an arithmetic operator MUST be parenthesized.**
+  Comparisons and `and`/`or` bind looser than every arithmetic operator, so
+  `{op:"*", args:[{op:"<=", args:["a","b"]}, {op:"<", args:["c","d"]}]}` (a product
+  of indicator factors, common in `faq` filters) MUST render `(a <= b) * (c < d)`;
+  bare `a <= b * c < d` reads back as a different expression.
+- **An n-ary `and` renders infix**, like `or`: `a <= b and b < c and c < d`. A
+  function-call spelling `and(…)` is not parseable — `and` is an infix keyword.
 
 Conversely, parentheses are NOT added where precedence already disambiguates: a comparison
 inside an `and`/`or` renders `x > 0 and x < 10`, not `(x > 0) and (x < 10)` (only a

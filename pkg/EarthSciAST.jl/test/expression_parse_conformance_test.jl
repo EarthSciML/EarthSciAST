@@ -158,4 +158,14 @@ const _EPC_CORPUS = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
         @test ESMP.serialize_expression(from_text) ==
               ESMP.serialize_expression(from_json)
     end
+
+    # The text parser builds the overlap clause directly, so it must enforce the
+    # same 1/2/4 envelope-factor count the JSON path (`_coerce_overlap_clause`) does.
+    @testset "overlap factor count" begin
+        agg(src) = "any[m] (true) where {c in cells, r in records} " *
+            "join(overlap(src=[$src], tgt=[W, S, E, N])) [semiring=bool_and_or]"
+        @test ESMP.parse_expression(agg("px, py")) isa ESMP.OpExpr
+        @test_throws ESMP.ExpressionParseError ESMP.parse_expression(agg("px, py, pz"))
+        @test_throws ESMP.ExpressionParseError ESMP.parse_expression(agg(""))
+    end
 end

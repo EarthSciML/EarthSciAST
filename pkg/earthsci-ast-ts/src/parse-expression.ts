@@ -115,6 +115,16 @@ const TEMPLATE_ARG_MIN = opPrecedence('+')
  */
 const STRUCTURAL_OPS = new Set<string>(['table_lookup', 'broadcast', 'enum'])
 
+/** An overlap (envelope-candidacy) join gate. */
+interface OverlapGate {
+  src_env: string[]
+  tgt_env: string[]
+  eps?: number
+}
+
+/** One join clause: key-column equality (with an optional `syms`) or overlap. */
+type JoinClause = { on: [string, string][]; syms?: [string, string] } | { overlap: OverlapGate }
+
 /**
  * The aggregate reduction symbols `toAscii` emits (`formatAggregate`). Each maps
  * to a default `reduce` when no explicit `[semiring=…]` supersedes it; `sum` and
@@ -516,7 +526,7 @@ class Parser {
       this.next()
       ranges = this.parseRanges()
     }
-    const join: Array<{ on: [string, string][] }> = []
+    const join: JoinClause[] = []
     if (this.atWord('join')) {
       this.next()
       join.push(...this.parseJoin())
@@ -634,6 +644,17 @@ class Parser {
       this.next()
       ranges = this.parseRanges()
     }
+    // The candidate-pruning `join(…)` and `if` filter, exactly as on `faq`.
+    const join: JoinClause[] = []
+    if (this.atWord('join')) {
+      this.next()
+      join.push(...this.parseJoin())
+    }
+    let filter: Expr | undefined
+    if (this.atWord('if')) {
+      this.next()
+      filter = this.parseExpr(0)
+    }
     // `id=<name>` (RFC §6.1 node identity), emitted by formatArgWitness after
     // the where-clause. Mirrors the aggregate tail.
     let id: string | undefined
@@ -646,11 +667,13 @@ class Parser {
     }
     const node: Record<string, unknown> = {
       op,
-      args: deriveAggregateArgs(expr, [], undefined, undefined),
+      args: deriveAggregateArgs(expr, join, filter, undefined),
       arg: at.v,
       ranges,
       expr,
     }
+    if (join.length > 0) node.join = join
+    if (filter !== undefined) node.filter = filter
     if (id !== undefined) node.id = id
     return node as unknown as Expr
   }
@@ -696,35 +719,114 @@ class Parser {
     return this.fail('malformed range (expected a set name, set(of…), or lo:hi)')
   }
 
-  /** Parse `( a=b, c=d ; e=f )` → [{on:[[a,b],[c,d]]}, {on:[[e,f]]}]. */
-  private parseJoin(): Array<{ on: [string, string][] }> {
+  /**
+   * Parse a join body — the inverse of `formatJoinClause`. Clauses are separated
+   * by `;`. An equality clause is one or more `l=r` key-column pairs plus an
+   * optional `syms=[left, right]`; an overlap clause is exactly
+   * `overlap(src=[…], tgt=[…][, eps=<number>])`. An empty `join()`, an empty
+   * clause, and an overlap mixed with key pairs are refused — none of them is a
+   * schema-valid clause.
+   */
+  private parseJoin(): JoinClause[] {
     this.expect('(', "'(' after join")
-    const clauses: Array<{ on: [string, string][] }> = []
-    let cur: [string, string][] = []
-    if (this.peek().k !== ')') {
-      for (;;) {
-        const a = this.next()
-        if (a.k !== 'name') this.fail('Expected a join key name', a)
-        this.expect('eq', "'=' in a join pair")
+    const clauses: JoinClause[] = []
+    for (;;) {
+      clauses.push(this.parseJoinClause())
+      if (this.peek().k === ';') {
+        this.next()
+        continue
+      }
+      break
+    }
+    this.expect(')', "')' to close join(…)")
+    return clauses
+  }
+
+  private parseJoinClause(): JoinClause {
+    if (this.atWord('overlap') && this.peek(1).k === '(') {
+      this.next() // 'overlap'
+      return { overlap: this.parseOverlap() }
+    }
+    const on: [string, string][] = []
+    let syms: [string, string] | undefined
+    for (;;) {
+      const a = this.next()
+      if (a.k !== 'name') this.fail('Expected a join key name', a)
+      this.expect('eq', "'=' in a join pair")
+      if (a.v === 'syms' && this.peek().k === '[') {
+        if (syms !== undefined) this.fail('duplicate syms=[…] in a join clause', a)
+        const names = this.parseNameList('syms')
+        if (names.length !== 2) this.fail('syms=[…] names exactly two range symbols', a)
+        syms = [names[0], names[1]]
+      } else {
         const b = this.next()
         if (b.k !== 'name') this.fail('Expected a join key name', b)
-        cur.push([a.v, b.v])
+        on.push([a.v, b.v])
+      }
+      if (this.peek().k === ',') {
+        this.next()
+        continue
+      }
+      break
+    }
+    if (on.length === 0) this.fail('a join clause needs at least one key pair l=r')
+    return syms !== undefined ? { on, syms } : { on }
+  }
+
+  /** `( src=[…], tgt=[…] [, eps=<number>] )` → an overlap gate. */
+  private parseOverlap(): OverlapGate {
+    this.expect('(', "'(' after overlap")
+    const gate: Partial<OverlapGate> = {}
+    for (;;) {
+      const k = this.next()
+      if (k.k !== 'name') this.fail('Expected src=, tgt= or eps= in overlap(…)', k)
+      this.expect('eq', `'=' after ${k.v} in overlap(…)`)
+      if ((k.v === 'src' || k.v === 'tgt') && gate[`${k.v}_env`] === undefined) {
+        const names = this.parseNameList(k.v)
+        if (names.length === 0) this.fail(`overlap ${k.v}=[…] must name at least one factor`, k)
+        gate[`${k.v}_env`] = names
+      } else if (k.v === 'eps' && gate.eps === undefined) {
+        const v = this.parseExpr(0)
+        if (typeof v !== 'number' || v < 0)
+          this.fail('overlap eps= must be a non-negative number', k)
+        gate.eps = v as number
+      } else {
+        this.fail(`unexpected or duplicate ${k.v}= in overlap(…)`, k)
+      }
+      if (this.peek().k === ',') {
+        this.next()
+        continue
+      }
+      break
+    }
+    this.expect(')', "')' to close overlap(…)")
+    if (gate.src_env === undefined || gate.tgt_env === undefined) {
+      this.fail('overlap(…) requires both src=[…] and tgt=[…]')
+    }
+    // Canonical field order regardless of the order the text spelled them in.
+    const out: OverlapGate = { src_env: gate.src_env!, tgt_env: gate.tgt_env! }
+    if (gate.eps !== undefined) out.eps = gate.eps
+    return out
+  }
+
+  /** `[name, name, …]` (possibly empty). */
+  private parseNameList(what: string): string[] {
+    this.expect('[', `'[' after ${what}=`)
+    const names: string[] = []
+    if (this.peek().k !== ']') {
+      for (;;) {
+        const t = this.next()
+        if (t.k !== 'name') this.fail(`Expected a name in ${what}=[…]`, t)
+        names.push(t.v)
         if (this.peek().k === ',') {
           this.next()
-          continue
-        }
-        if (this.peek().k === ';') {
-          this.next()
-          clauses.push({ on: cur })
-          cur = []
           continue
         }
         break
       }
     }
-    clauses.push({ on: cur })
-    this.expect(')', "')' to close join(…)")
-    return clauses
+    this.expect(']', `']' to close ${what}=[…]`)
+    return names
   }
 
   /** Parse `name<binding = value, …>` (or empty `name<>`) → apply_expression_template. */
@@ -859,6 +961,16 @@ function makeCall(name: string, args: Expr[], named: Record<string, Expr>, pos: 
     }
     return node as unknown as Expr
   }
+  // `skolem(a, b, label=<name>)` — the documentary relation tag.
+  if (name === 'skolem' && named.label !== undefined) {
+    for (const k of Object.keys(named)) {
+      if (k !== 'label') throw new ExpressionParseError(`unexpected ${k}=… in skolem(...)`, pos)
+    }
+    if (typeof named.label !== 'string') {
+      throw new ExpressionParseError('skolem(...) label=… must be a name', pos)
+    }
+    return { op: 'skolem', args, label: named.label } as unknown as Expr
+  }
   noNamed(named, name, pos)
   if (STRUCTURAL_OPS.has(name)) {
     throw new ExpressionParseError(`'${name}' is not yet expressible in the text form`, pos)
@@ -888,7 +1000,7 @@ function makeCall(name: string, args: Expr[], named: Record<string, Expr>, pos: 
  */
 function deriveAggregateArgs(
   expr: Expr,
-  join: Array<{ on: [string, string][] }>,
+  join: JoinClause[],
   filter: Expr | undefined,
   key: Expr | undefined,
 ): string[] {
@@ -905,11 +1017,16 @@ function deriveAggregateArgs(
     }
   }
   bases(expr)
-  for (const c of join)
-    for (const [a, b] of c.on) {
-      add(a)
-      add(b)
-    }
+  for (const c of join) {
+    if ('overlap' in c) {
+      c.overlap.src_env.forEach(add)
+      c.overlap.tgt_env.forEach(add)
+    } else
+      for (const [a, b] of c.on) {
+        add(a)
+        add(b)
+      }
+  }
   bases(filter)
   bases(key)
   return out
@@ -918,24 +1035,35 @@ function deriveAggregateArgs(
 // --- normalization -----------------------------------------------------------
 
 /**
- * Flatten nested same-op `+` / `*` in `args` into the n-ary form the printer
- * emits and authored ASTs use: `a + b + c` → one `+` with three args, not
- * left-nested pairs. (`-` and `/` are binary and stay as parsed.) Non-`args`
+ * Flatten nested same-op `+` / `*` / `and` / `or` in `args` into the n-ary form
+ * the printer emits and authored ASTs use: `a + b + c` → one `+` with three
+ * args, not left-nested pairs. (`-` and `/` are binary and stay as parsed.) A
+ * reduction's `expr` / `filter` / `key` are flattened too; other non-`args`
  * expression fields (integral bounds, etc.) are left as parsed.
  */
 function flatten(e: Expr): Expr {
   if (!isExprNode(e)) return e
   const args = (e.args as Expr[]).map(flatten)
-  if (e.op === '+' || e.op === '*') {
+  // The reduction-body fields of `faq` / `argmin` / `argmax` are expressions
+  // in their own right and are normalized the same way.
+  const fields: Record<string, Expr> = {}
+  for (const k of FLATTENED_FIELDS) {
+    const v = (e as Record<string, unknown>)[k]
+    if (v !== undefined) fields[k] = flatten(v as Expr)
+  }
+  if (e.op === '+' || e.op === '*' || e.op === 'and' || e.op === 'or') {
     const out: Expr[] = []
     for (const a of args) {
       if (isExprNode(a) && a.op === e.op && a.wrt === undefined) out.push(...(a.args as Expr[]))
       else out.push(a)
     }
-    return { ...(e as ExprNode), args: out }
+    return { ...(e as ExprNode), ...fields, args: out }
   }
-  return { ...(e as ExprNode), args }
+  return { ...(e as ExprNode), ...fields, args }
 }
+
+/** Non-`args` expression fields {@link flatten} also normalizes. */
+const FLATTENED_FIELDS = ['expr', 'filter', 'key'] as const
 
 // --- public API --------------------------------------------------------------
 

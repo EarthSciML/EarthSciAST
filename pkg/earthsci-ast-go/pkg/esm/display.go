@@ -873,7 +873,7 @@ func formatExprNode(node ExprNode, format string) string {
 	raw := func(a any) string { return formatExpression(a, format) }
 	arg := func(a any, isRight bool) string {
 		s := formatExpression(a, format)
-		if needsParentheses(op, len(args), a, isRight) {
+		if needsParentheses(op, len(args), a, isRight, format) {
 			return "(" + s + ")"
 		}
 		return s
@@ -892,7 +892,7 @@ func formatExprNode(node ExprNode, format string) string {
 		if len(args) >= 3 {
 			parts := make([]string, len(args))
 			for i, a := range args {
-				parts[i] = arg(a, false)
+				parts[i] = arg(a, i > 0)
 			}
 			return strings.Join(parts, " + ")
 		}
@@ -926,7 +926,7 @@ func formatExprNode(node ExprNode, format string) string {
 			}
 			parts := make([]string, len(args))
 			for i, a := range args {
-				parts[i] = arg(a, false)
+				parts[i] = arg(a, i > 0)
 			}
 			return strings.Join(parts, sep)
 		}
@@ -989,6 +989,20 @@ func formatExprNode(node ExprNode, format string) string {
 			}
 			return arg(args[0], false) + " " + sym + " " + arg(args[1], true)
 		}
+		if len(args) >= 3 {
+			sym := " and "
+			switch {
+			case uni:
+				sym = " ∧ "
+			case format == FmtLatex:
+				sym = " \\land "
+			}
+			parts := make([]string, len(args))
+			for i, a := range args {
+				parts[i] = arg(a, i > 0)
+			}
+			return strings.Join(parts, sym)
+		}
 
 	case "or":
 		if len(args) == 2 {
@@ -1004,7 +1018,7 @@ func formatExprNode(node ExprNode, format string) string {
 			}
 			parts := make([]string, len(args))
 			for i, a := range args {
-				parts[i] = arg(a, false)
+				parts[i] = arg(a, i > 0)
 			}
 			return strings.Join(parts, sep)
 		}
@@ -1684,6 +1698,55 @@ func formatRangesClause(ranges map[string]any, format string) string {
 	return " where {" + strings.Join(parts, ", ") + "}"
 }
 
+// formatJoinClause renders the ` join(…)` clause shared by `faq` and
+// `argmin`/`argmax`, or "" when there is none. Clauses are joined `; `. An
+// equality clause lists its key-column pairs `l=r` and then, when present, the
+// self-join side assignment `syms=[left, right]`; an overlap clause is the
+// keyword call `overlap(src=[…], tgt=[…])` with `, eps=E` whenever `eps` is
+// present (including an explicit 0).
+func formatJoinClause(join []any, format string) string {
+	if len(join) == 0 {
+		return ""
+	}
+	nameList := func(v any) string {
+		items, _ := v.([]any)
+		parts := make([]string, len(items))
+		for i, it := range items {
+			parts[i] = plainScalar(it)
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	}
+	clauses := make([]string, 0, len(join))
+	for _, c := range join {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if ov, ok := cm["overlap"].(map[string]any); ok {
+			epsPart := ""
+			if eps, ok := numericValueOf(ov["eps"]); ok {
+				epsPart = ", eps=" + formatNumber(eps, format)
+			}
+			clauses = append(clauses, "overlap(src="+nameList(ov["src_env"])+", tgt="+nameList(ov["tgt_env"])+epsPart+")")
+			continue
+		}
+		onRaw, _ := cm["on"].([]any)
+		parts := make([]string, 0, len(onRaw)+1)
+		for _, p := range onRaw {
+			pp, ok := p.([]any)
+			if !ok || len(pp) < 2 {
+				continue
+			}
+			parts = append(parts, plainScalar(pp[0])+"="+plainScalar(pp[1]))
+		}
+		if syms, ok := cm["syms"].([]any); ok && len(syms) > 0 {
+			parts = append(parts, "syms="+nameList(syms))
+		}
+		clauses = append(clauses, strings.Join(parts, ", "))
+	}
+	return " join(" + strings.Join(clauses, "; ") + ")"
+}
+
 // formatAggregate renders a `faq` node per the rendering contract.
 func formatAggregate(node ExprNode, format string) string {
 	outParts := make([]string, len(node.OutputIdx))
@@ -1716,26 +1779,7 @@ func formatAggregate(node ExprNode, format string) string {
 	if len(node.Ranges) > 0 {
 		out += formatRangesClause(node.Ranges, format)
 	}
-	if len(node.Join) > 0 {
-		clauses := make([]string, 0, len(node.Join))
-		for _, c := range node.Join {
-			cm, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
-			onRaw, _ := cm["on"].([]any)
-			pairs := make([]string, 0, len(onRaw))
-			for _, p := range onRaw {
-				pp, ok := p.([]any)
-				if !ok || len(pp) < 2 {
-					continue
-				}
-				pairs = append(pairs, plainScalar(pp[0])+"="+plainScalar(pp[1]))
-			}
-			clauses = append(clauses, strings.Join(pairs, ", "))
-		}
-		out += " join(" + strings.Join(clauses, "; ") + ")"
-	}
+	out += formatJoinClause(node.Join, format)
 	if node.Filter != nil {
 		out += " if " + formatExpression(node.Filter, format)
 	}
@@ -1774,6 +1818,10 @@ func formatArgWitness(node ExprNode, format string) string {
 	}
 	if len(node.Ranges) > 0 {
 		out += formatRangesClause(node.Ranges, format)
+	}
+	out += formatJoinClause(node.Join, format)
+	if node.Filter != nil {
+		out += " if " + formatExpression(node.Filter, format)
 	}
 	if node.ID != nil {
 		out += " id=" + *node.ID
@@ -1981,6 +2029,14 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		}
 		return opDisplayName(op, format) + "(" + inner + ", manifold=" + manifold + idPart + ")", true
 
+	case "skolem":
+		// The documentary `label` is a trailing named argument, like
+		// intersect_polygon's `manifold=`; an unlabeled skolem is a plain call.
+		if node.Label == nil {
+			return "", false
+		}
+		return opDisplayName("skolem", format) + "(" + joinArgList(args, format) + ", label=" + *node.Label + ")", true
+
 	case "faq":
 		return formatAggregate(node, format), true
 
@@ -2077,14 +2133,23 @@ func startsWithLiteralPower(child any) bool {
 	return false
 }
 
+// associativeOps are the operators whose same-op right operand needs no
+// parentheses: the parser re-flattens it into one n-ary node.
+var associativeOps = map[string]bool{"+": true, "*": true, "and": true, "or": true}
+
 // needsParentheses reports whether child needs parentheses inside a parent op.
 // It mirrors pretty-print.ts needsParentheses, with the F-7 correction that a
 // LEFT operand of the right-associative `^` at equal precedence is parenthesized
 // ((a^b)^c, not a^b^c).
-func needsParentheses(parentOp string, parentArgc int, child any, isRight bool) bool {
+func needsParentheses(parentOp string, parentArgc int, child any, isRight bool, format string) bool {
 	childOp, ok := opNodeOp(child)
 	if !ok {
 		return false // number / string leaf never needs parentheses
+	}
+	// A LaTeX `\frac{…}{…}` is self-delimiting, so a product never needs to
+	// parenthesize one (the linear forms do: `a * (b / c)`).
+	if format == FmtLatex && parentOp == "*" && isBinaryDivide(child) {
+		return false
 	}
 	parentPrec := opPrecedence(parentOp)
 	childPrec := opPrecedence(childOp)
@@ -2105,13 +2170,33 @@ func needsParentheses(parentOp string, parentArgc int, child any, isRight bool) 
 	if childPrec > parentPrec {
 		return false
 	}
-	// Same precedence: a right operand of a non-associative op is parenthesized,
-	// and (F-7) so is a LEFT operand of the right-associative `^`.
-	if isRight && (parentOp == "-" || parentOp == "/" || parentOp == "^") {
+	// Same precedence, right operand: the parser groups same-level operators to
+	// the LEFT, so a right operand keeps its parentheses unless it is the very
+	// same associative operator (`a + (b + c)` re-flattens to `a + b + c`).
+	// `a * (b / c)` printed bare reads back as `(a * b) / c`, and `a == (b < c)`
+	// as `(a == b) < c`. A right-nested power keeps its parentheses too
+	// (`a^(b^c)`): redundant under right-associativity, but explicit.
+	if isRight {
+		return childOp != parentOp || !associativeOps[parentOp]
+	}
+	// (F-7) A LEFT operand of the right-associative `^` is parenthesized.
+	if parentOp == "^" {
 		return true
 	}
-	if !isRight && parentOp == "^" {
-		return true
+	return false
+}
+
+// isBinaryDivide reports whether v is a two-argument `/` node (which LaTeX
+// renders as a self-delimiting `\frac{…}{…}`).
+func isBinaryDivide(v any) bool {
+	switch x := v.(type) {
+	case ExprNode:
+		return x.Op == "/" && len(x.Args) == 2
+	case *ExprNode:
+		return x != nil && x.Op == "/" && len(x.Args) == 2
+	case map[string]any:
+		args, _ := x["args"].([]any)
+		return x["op"] == "/" && len(args) == 2
 	}
 	return false
 }

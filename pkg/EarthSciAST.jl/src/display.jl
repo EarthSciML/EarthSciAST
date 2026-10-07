@@ -450,6 +450,27 @@ function format_chemical_subscripts(variable::AbstractString, format::Symbol)
 end
 
 """
+    _shortest_decimal_digits(x::Float64) -> (digits::String, exp::Int)
+
+The significant digits of the shortest decimal that round-trips the positive
+finite `x` (no leading or trailing zeros), and the exponent `exp` such that
+`x == parse(Float64, "d.ddd" * "e" * exp)`. Derived from `string(x)`, which
+Julia already prints as the shortest round-tripping form.
+"""
+function _shortest_decimal_digits(x::Float64)
+    s = string(x)
+    m, e = occursin('e', s) ? split(s, 'e') : (s, "0")
+    e10 = parse(Int, e)
+    ip, fp = occursin('.', m) ? split(m, '.') : (m, "")
+    all_digits = ip * fp
+    lead = findfirst(!=('0'), all_digits)
+    digits = rstrip(all_digits[lead:end], '0')
+    # Position of the first significant digit relative to the decimal point.
+    exp = e10 + length(ip) - lead
+    return String(digits), exp
+end
+
+"""
     format_number(num::Real, format::Symbol) -> String
 
 Format a number in scientific notation with appropriate formatting.
@@ -474,19 +495,13 @@ function format_number(num::Real, format::Symbol)
     absnum = abs(num)
     # Scientific notation for very small / very large magnitudes (spec §6.1).
     if absnum < 0.01 || absnum >= 10000
-        exp = floor(Int, log10(absnum))
-        mant = num / exp10(exp)
-        # Normalize the mantissa into [1, 10) (guards log10 rounding at exact powers).
-        while abs(mant) >= 10
-            exp += 1; mant = num / exp10(exp)
-        end
-        while abs(mant) < 1
-            exp -= 1; mant = num / exp10(exp)
-        end
-        # Strip floating-point noise so a clean mantissa round-trips (`9.999`, not
-        # `9.998999…`) while preserving genuine precision.
-        mant = parse(Float64, string(round(mant, sigdigits=15)))
-        ms = string(mant)
+        digits, exp = _shortest_decimal_digits(Float64(absnum))
+        # Mantissa `d.ddd` from the shortest round-tripping digit string; a
+        # one-digit mantissa keeps `.0` (`1.0e21`). Dividing by `exp10(exp)` and
+        # rounding instead lost precision (4.4308006468156513e-17 printed as
+        # 4.43080064681565e-17, which reads back as a different number).
+        ms = (num < 0 ? "-" : "") * digits[1:1] * "." *
+             (length(digits) == 1 ? "0" : digits[2:end])
         if format == :unicode
             return "$(_uni_minus(ms))×10$(to_superscript(string(exp)))"
         elseif format == :latex
@@ -577,20 +592,26 @@ end
 
 """
     needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::Bool=false,
-                      parent_argc::Int=2) -> Bool
+                      parent_argc::Int=2; format::Symbol=:ascii) -> Bool
 
 Check if parentheses are needed around a subexpression, mirroring
 pretty-print.ts `needsParentheses`. A function-call argument is parenthesized
 only when it is a logical-`or` (loosest precedence). `parent_argc` distinguishes
-a unary `-` from a binary one; it defaults to the binary case.
+a unary `-` from a binary one; it defaults to the binary case. Under
+`format=:latex` a product never parenthesizes a binary `/` operand, since
+`\\frac{…}{…}` is self-delimiting.
 """
 function needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::Bool=false,
-                           parent_argc::Int=2)
+                           parent_argc::Int=2; format::Symbol=:ascii)
     if isa(child, NumExpr) || isa(child, IntExpr) || isa(child, VarExpr)
         return false
     end
 
     if !isa(child, OpExpr)
+        return false
+    end
+
+    if format == :latex && parent_op == "*" && child.op == "/" && length(child.args) == 2
         return false
     end
 
@@ -622,17 +643,24 @@ function needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::
     # `(a^b)^c` (left) and `a^(b^c)` (right) — RENDERING_CONTRACT.md
     # "Associativity and parenthesization". (In LaTeX the exponent sits in
     # `{}`, so the right `^` operand is rendered without `needs_parentheses`
-    # and needs no extra parens: `a^{b^{c}}`.) The left-associative `-`/`/`
-    # parenthesize only their RIGHT operand (`a - (b - c)`, `a / (b / c)`).
+    # and needs no extra parens: `a^{b^{c}}`.)
     if parent_op == "^"
         return true
     end
-    if is_right_operand && (parent_op == "-" || parent_op == "/")
-        return true
+    # A same-level RIGHT operand: the parser groups same-level operators to the
+    # LEFT, so it keeps its parentheses unless it is the very same associative
+    # operator, which the parser re-flattens into one n-ary node (`a + b + c`).
+    # `a * (b / c)` printed bare reads back as `(a * b) / c`, `a == (b < c)` as
+    # `(a == b) < c`.
+    if is_right_operand
+        return !(child.op == parent_op && parent_op in _ASSOCIATIVE_OPS)
     end
 
     return false
 end
+
+"""Operators whose same-op right operand needs no parentheses (the parser re-flattens them)."""
+const _ASSOCIATIVE_OPS = ("+", "*", "and", "or")
 
 """
     Base.show(io::IO, ::MIME"text/plain", expr::ASTExpr)
@@ -806,17 +834,26 @@ function format_ranges_clause(ranges, format::Symbol)
         " where {$(join(parts, ", "))}"
 end
 
-# One join clause → its display fragment. A bin-equality clause renders its
-# key-column pairs `l=r, …`; an overlap clause (Phase 2a) renders its envelope
-# factors `overlap([src]~[tgt])` with the `eps` slack when non-zero.
-function _display_join_clause(clause::_OverlapJoinSpec)
-    slack = clause.eps == 0.0 ? "" : "; eps=$(clause.eps)"
-    return "overlap([$(join(clause.src_env, ","))]~[$(join(clause.tgt_env, ","))]$slack)"
+# One join clause → its display fragment (RENDERING_CONTRACT.md, faq join). An
+# equality clause renders its key-column pairs `l=r, …` then, when present, the
+# self-join side assignment `, syms=[s0, s1]`; an overlap clause (Phase 2a)
+# renders `overlap(src=[…], tgt=[…])` with `, eps=E` whenever `eps` was spelled
+# (an explicit 0 included), `E` per the format's number rules.
+function _display_join_clause(clause::_OverlapJoinSpec, format::Symbol)
+    slack = clause.eps_given ? ", eps=$(format_number(clause.eps, format))" : ""
+    return "overlap(src=[$(join(clause.src_env, ", "))], " *
+           "tgt=[$(join(clause.tgt_env, ", "))]$slack)"
 end
-function _display_join_clause(clause)
+function _display_join_clause(clause, format::Symbol)
     body = join(["$(p[1])=$(p[2])" for p in clause], ", ")
     syms = _clause_syms(clause)
-    return syms === nothing ? body : "$body @ $(syms[1]),$(syms[2])"
+    return syms === nothing ? body : "$body, syms=[$(syms[1]), $(syms[2])]"
+end
+
+"""Render the ` join(…)` clause shared by `faq` and `argmin`/`argmax` (`""` if none)."""
+function format_join_clause(joins, format::Symbol)
+    (joins === nothing || isempty(joins)) && return ""
+    return " join($(join([_display_join_clause(c, format) for c in joins], "; ")))"
 end
 
 """Render a `faq` node per the rendering contract."""
@@ -833,10 +870,7 @@ function format_aggregate(node::OpExpr, format::Symbol)
     if node.ranges !== nothing && !isempty(node.ranges)
         out *= format_ranges_clause(node.ranges, format)
     end
-    if node.join !== nothing && !isempty(node.join)
-        clauses = join([_display_join_clause(clause) for clause in node.join], "; ")
-        out *= " join($clauses)"
-    end
+    out *= format_join_clause(node.join, format)
     if node.filter !== nothing
         out *= " if $(r(node.filter))"
     end
@@ -868,6 +902,11 @@ function format_arg_witness(node::OpExpr, format::Symbol)
     out = "$name$idx_part ($expr_str)"
     if node.ranges !== nothing && !isempty(node.ranges)
         out *= format_ranges_clause(node.ranges, format)
+    end
+    # The candidate-pruning join and filter, spelled exactly as on `faq`.
+    out *= format_join_clause(node.join, format)
+    if node.filter !== nothing
+        out *= " if $(r(node.filter))"
     end
     if node.id !== nothing
         out *= " id=$(node.id)"
@@ -989,6 +1028,12 @@ function format_structural_op(node::OpExpr, format::Symbol)
         # before, so every existing rendering is unchanged.
         id_part = node.id === nothing ? "" : ", id=$(node.id)"
         return "$name($inner, manifold=$manifold$id_part)"
+    elseif op == "skolem" && node.label !== nothing
+        # The documentary `label` is a trailing named argument, like
+        # intersect_polygon's `manifold=`; an unlabeled skolem is a plain call.
+        inner = join([r(a) for a in args], ", ")
+        name = format == :latex ? "\\mathrm{skolem}" : "skolem"
+        return "$name($inner, label=$(node.label))"
     elseif op == "faq"
         return format_aggregate(node, format)
     elseif op == "argmin" || op == "argmax"
@@ -1036,7 +1081,8 @@ _latex_product_sep(args) =
 function _format_operand(op::String, arg::ASTExpr, format::Symbol,
                          is_right_operand::Bool=false, parent_argc::Int=2)
     result = format_expression(arg, format)
-    return needs_parentheses(op, arg, is_right_operand, parent_argc) ? "($result)" : result
+    return needs_parentheses(op, arg, is_right_operand, parent_argc; format) ? "($result)" :
+           result
 end
 
 # LaTeX function-call: `\left( \right)` only when the argument is tall
@@ -1211,7 +1257,7 @@ function _format_unary_op(node::OpExpr, format::Symbol)
     return nothing
 end
 
-"""Render ternary `ifelse` and n-ary (≥ 3) `+`/`*`/`or` chains, or `nothing`."""
+"""Render ternary `ifelse` and n-ary (≥ 3) `+`/`*`/`and`/`or` chains, or `nothing`."""
 function _format_nary_op(node::OpExpr, format::Symbol)
     op = node.op
     args = node.args
@@ -1226,13 +1272,15 @@ function _format_nary_op(node::OpExpr, format::Symbol)
     end
 
     if length(args) >= 3
+        # Every argument after the first is a RIGHT operand (`k * (a / b) * c`).
         if op == "+"
-            return join([fa(arg) for arg in args], " + ")
+            return join([fa(arg, i > 1) for (i, arg) in enumerate(args)], " + ")
         elseif op == "*"
             sep = format == :latex ? _latex_product_sep(args) : _infix_separator(op, format)
-            return join([fa(arg) for arg in args], sep)
-        elseif op == "or"
-            return join([fa(arg) for arg in args], _infix_separator(op, format))
+            return join([fa(arg, i > 1) for (i, arg) in enumerate(args)], sep)
+        elseif op == "or" || op == "and"
+            return join([fa(arg, i > 1) for (i, arg) in enumerate(args)],
+                        _infix_separator(op, format))
         end
     end
 
