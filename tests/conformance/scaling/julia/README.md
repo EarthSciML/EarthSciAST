@@ -125,7 +125,8 @@ out of the innermost loop, no `@simd`, no intrinsics, the document's order of
 operations. Each is a function of the outermost index, so:
 
 - the serial reference runs the rows in order;
-- the threaded reference is the same rows under `Threads.@threads :static`.
+- the threaded reference is the same rows under Polyester's `@batch`, one
+  contiguous block of rows per thread.
 
 Every loop is checked against native's dy at the measured state
 (`hand_loop_max_abs_diff`); on the PR fixtures every one agrees bit for bit.
@@ -151,6 +152,11 @@ Notes per family:
 - `scalar_chemistry` reads each box's 20 species through a slot table, since
   scalar states have no array layout.
 
-`Threads.@threads` costs a few microseconds per call to start its tasks,
-where native's Polyester dispatch costs less, so at the smallest sizes a
-threaded ratio favours native.
+The threaded reference uses `@batch` rather than `Threads.@threads` because
+of what each costs per call. `Threads.@threads` spawns and waits on one task
+per thread every call, which on a typical node is on the order of 100 µs:
+more than the whole loop below about 10^6 states, so a threaded ratio against
+it would compare native with task startup. `@batch` wakes Polyester's
+persistent worker pool, the same pool native's threaded sections use, for
+well under a microsecond, so the threaded reference is the loop's own time
+from the smallest size the gate measures.
