@@ -66,10 +66,15 @@ pub(super) fn run_range(
         exports_active,
         simd,
         dy_home,
+        dy_home_quiet,
         ..
     } = exec;
-    let dy_home: &[usize] = dy_home;
     let exports_active = *exports_active;
+    let dy_home: &[usize] = if exports_active {
+        dy_home
+    } else {
+        dy_home_quiet
+    };
     let simd = *simd;
     let prog = env.prog;
     let slab_ptr = slab.as_mut_ptr();

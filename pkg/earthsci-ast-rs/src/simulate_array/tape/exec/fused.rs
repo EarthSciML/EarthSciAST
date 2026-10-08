@@ -278,6 +278,220 @@ unsafe fn fch_scan(
     *carry = acc;
 }
 
+/// One chunk of a [`ScanFuse`] (Float64): per element, in order, the scanned
+/// value (`pre`'s `op(a, b)`, else `src`), the scan's combine `sop` with the
+/// running value as in [`fch_scan`], and the stored value (`post`'s `op` of
+/// the scan's value and `other`, the scan's value on the right when `swap`;
+/// else the scan's value), and the scan's value again at `keep` when given.
+/// `dst` may be the register of an operand of `pre` or `post`: each element
+/// is read before it is written.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn fch_scan_fused(
+    dst: *mut f64,
+    c: usize,
+    at: usize,
+    row: usize,
+    init: f64,
+    inclusive: bool,
+    carry: &mut f64,
+    sop: BinCode,
+    pre: Option<(BinCode, MSrc, MSrc)>,
+    src: MSrc,
+    post: Option<(BinCode, MSrc, bool)>,
+    keep: Option<*mut f64>,
+) {
+    // The pieces between row starts, each one plain loop over operands read
+    // as (pointer, stride) — stride 0 for a constant — so the loop has no
+    // operand-kind branch.
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn pieces(
+        c: usize,
+        at: usize,
+        row: usize,
+        init: f64,
+        inclusive: bool,
+        carry: &mut f64,
+        f: impl Fn(f64, f64) -> f64,
+        x: impl Fn(usize) -> f64,
+        y: impl Fn(f64, usize) -> f64,
+        dst: *mut f64,
+        keep: Option<*mut f64>,
+    ) {
+        let mut acc = *carry;
+        let mut k = 0usize;
+        while k < c {
+            let pos = (at + k) % row;
+            if pos == 0 {
+                acc = init;
+            }
+            let end = k + (c - k).min(row - pos);
+            for j in k..end {
+                let v = if inclusive {
+                    acc = f(acc, x(j));
+                    acc
+                } else {
+                    let v = acc;
+                    acc = f(acc, x(j));
+                    v
+                };
+                if let Some(kp) = keep {
+                    unsafe { *kp.add(j) = v };
+                }
+                unsafe { *dst.add(j) = y(v, j) };
+            }
+            k = end;
+        }
+        *carry = acc;
+    }
+    let mut consts = [0.0f64; 3];
+    let mut strided = |m: MSrc, slot: usize| -> (*const f64, usize) {
+        match m {
+            MSrc::P(p) => (p, 1),
+            MSrc::C(v) => {
+                consts[slot] = v;
+                (std::ptr::null(), 0)
+            }
+        }
+    };
+    let (pa, sa, pb, sb) = match pre {
+        Some((_, a, b)) => {
+            let (pa, sa) = strided(a, 0);
+            let (pb, sb) = strided(b, 1);
+            (pa, sa, pb, sb)
+        }
+        None => {
+            let (pa, sa) = strided(src, 0);
+            (pa, sa, std::ptr::null(), 0)
+        }
+    };
+    let (po, so) = match post {
+        Some((_, o, _)) => strided(o, 2),
+        None => (std::ptr::null(), 0),
+    };
+    // A constant reads its slot of `consts`, which now holds every value.
+    let kp = consts.as_ptr();
+    let fix = |p: *const f64, slot: usize| {
+        if p.is_null() {
+            unsafe { kp.add(slot) }
+        } else {
+            p
+        }
+    };
+    let (pa, pb, po) = (fix(pa, 0), fix(pb, 1), fix(po, 2));
+    let ld = |p: *const f64, s: usize, j: usize| unsafe { *p.add(j * s) };
+    macro_rules! kernel {
+        (Add) => {
+            |x: f64, y: f64| x + y
+        };
+        (Sub) => {
+            |x: f64, y: f64| x - y
+        };
+        (Mul) => {
+            |x: f64, y: f64| x * y
+        };
+        (Div) => {
+            |x: f64, y: f64| x / y
+        };
+    }
+    macro_rules! with_post {
+        ($f:expr, $x:expr) => {
+            match post {
+                None => unsafe {
+                    pieces(
+                        c,
+                        at,
+                        row,
+                        init,
+                        inclusive,
+                        carry,
+                        $f,
+                        $x,
+                        |v, _| v,
+                        dst,
+                        keep,
+                    )
+                },
+                Some((op, _, swap)) => {
+                    macro_rules! go {
+                        ($g:tt) => {{
+                            let g = kernel!($g);
+                            if swap {
+                                unsafe {
+                                    pieces(
+                                        c,
+                                        at,
+                                        row,
+                                        init,
+                                        inclusive,
+                                        carry,
+                                        $f,
+                                        $x,
+                                        |v, j| g(ld(po, so, j), v),
+                                        dst,
+                                        keep,
+                                    )
+                                }
+                            } else {
+                                unsafe {
+                                    pieces(
+                                        c,
+                                        at,
+                                        row,
+                                        init,
+                                        inclusive,
+                                        carry,
+                                        $f,
+                                        $x,
+                                        |v, j| g(v, ld(po, so, j)),
+                                        dst,
+                                        keep,
+                                    )
+                                }
+                            }
+                        }};
+                    }
+                    match op {
+                        BinCode::Add => go!(Add),
+                        BinCode::Sub => go!(Sub),
+                        BinCode::Mul => go!(Mul),
+                        BinCode::Div => go!(Div),
+                        other => unreachable!("scan fusion post-op {other:?}"),
+                    }
+                }
+            }
+        };
+    }
+    macro_rules! with_pre {
+        ($f:expr) => {
+            match pre {
+                None => with_post!($f, |j| ld(pa, sa, j)),
+                Some((op, _, _)) => {
+                    macro_rules! go {
+                        ($h:tt) => {{
+                            let h = kernel!($h);
+                            with_post!($f, |j| h(ld(pa, sa, j), ld(pb, sb, j)))
+                        }};
+                    }
+                    match op {
+                        BinCode::Add => go!(Add),
+                        BinCode::Sub => go!(Sub),
+                        BinCode::Mul => go!(Mul),
+                        BinCode::Div => go!(Div),
+                        other => unreachable!("scan fusion pre-op {other:?}"),
+                    }
+                }
+            }
+        };
+    }
+    match sop {
+        BinCode::Add => with_pre!(kernel!(Add)),
+        BinCode::Mul => with_pre!(kernel!(Mul)),
+        other => unreachable!("scan fusion scan op {other:?}"),
+    }
+}
+
 /// One chunk of an absorbed scan whose lanes are `post` elements wide (an
 /// axis other than the last): position `at + k` is lane `(at + k) % post` at
 /// step `((at + k) / post) % row`; a lane restarts at `init` on step 0 and
@@ -835,6 +1049,7 @@ pub(super) unsafe fn exec_fused(
     outs.clear();
     for &(reg, slot) in &fs.outputs {
         let p = match dy_home.get(slot as usize) {
+            Some(&super::UNSTORED) => std::ptr::null_mut(),
             Some(&off) if off != usize::MAX => unsafe { dy.add(off) },
             _ => unsafe { slab_ptr.add(slot_off[slot as usize]) },
         };
@@ -843,7 +1058,10 @@ pub(super) unsafe fn exec_fused(
     // An absorbed reduction's accumulator, seeded with its identity.
     let red: *mut f64 = match &fs.reduce {
         Some(r) => unsafe {
-            let p = slab_ptr.add(slot_off[r.out as usize]);
+            let p = match dy_home.get(r.out as usize) {
+                Some(&off) if off != usize::MAX => dy.add(off),
+                _ => slab_ptr.add(slot_off[r.out as usize]),
+            };
             std::slice::from_raw_parts_mut(p, r.n_inner).fill(r.init);
             p
         },
@@ -955,6 +1173,9 @@ unsafe fn exec_fused_runs(
 ) {
     let rp = fregs.as_mut_ptr();
     let cs = FCHUNK;
+    // Scan fusions run under Float64 only (their loop composes the f64
+    // arithmetic directly); otherwise the three passes run as written.
+    let scan_fused = !fs.scan_fuse.is_empty() && !crate::precision::is_f32();
     // Bin3 splat registers: one FCHUNK broadcast per scalar plus a zero
     // register (the ghost read), filled once per call. The values are the
     // EXACT scalars / the exact `+0.0` ghost, so an all-pointer superop
@@ -1114,11 +1335,98 @@ unsafe fn exec_fused_runs(
                     }
                 }
             };
-            for op in &fs.micro {
+            // Where micro-op `mi` writes: its register, or straight into its
+            // output when it is that output's last writer and nothing after
+            // it reads the register (`FusedSpec::direct`).
+            let dst_of = |mi: usize, out: GroupIx| -> *mut f64 {
+                for &(m, k) in &fs.direct {
+                    let o = outs[k as usize].1;
+                    if m as usize == mi && !o.is_null() {
+                        return unsafe { o.add(at) };
+                    }
+                }
+                unsafe { rp.add(out as usize * cs) }
+            };
+            for (mi, op) in fs.micro.iter().enumerate() {
+                if scan_fused {
+                    let mut role = None;
+                    for f in &fs.scan_fuse {
+                        let s = f.scan as usize;
+                        if f.pre && s == mi + 1 || f.post && s + 1 == mi {
+                            role = Some(None);
+                        } else if s == mi {
+                            role = Some(Some(*f));
+                        }
+                    }
+                    match role {
+                        // Absorbed into its scan's loop.
+                        Some(None) => continue,
+                        Some(Some(f)) => {
+                            let MicroOp::Scan {
+                                op: sop,
+                                a,
+                                init,
+                                inclusive,
+                                row,
+                                carry,
+                                out,
+                                ..
+                            } = op
+                            else {
+                                unreachable!("a scan fusion names a scan")
+                            };
+                            let pre = f.pre.then(|| match &fs.micro[mi - 1] {
+                                MicroOp::Bin { op, a, b, .. } => (*op, msrc(a), msrc(b)),
+                                _ => unreachable!("a fused pre-op is a Bin"),
+                            });
+                            let (post, dst) = if f.post {
+                                let MicroOp::Bin {
+                                    op,
+                                    a,
+                                    b,
+                                    out: pout,
+                                } = &fs.micro[mi + 1]
+                                else {
+                                    unreachable!("a fused post-op is a Bin")
+                                };
+                                // `swap`: the scan's value is the right operand.
+                                let swap = *b == MRef::Reg(*out);
+                                let other = if swap { msrc(a) } else { msrc(b) };
+                                (Some((*op, other, swap)), dst_of(mi + 1, *pout))
+                            } else {
+                                (None, dst_of(mi, *out))
+                            };
+                            let src = if f.pre { MSrc::C(0.0) } else { msrc(a) };
+                            // The scan's own value, when it is also a live-out
+                            // that this call stores.
+                            let keep = (f.keep
+                                && outs.iter().any(|o| o.0 == *out && !o.1.is_null()))
+                            .then(|| dst_of(mi, *out));
+                            unsafe {
+                                fch_scan_fused(
+                                    dst,
+                                    c,
+                                    at,
+                                    *row as usize,
+                                    *init,
+                                    *inclusive,
+                                    &mut carries[*carry as usize],
+                                    *sop,
+                                    pre,
+                                    src,
+                                    post,
+                                    keep,
+                                )
+                            };
+                            continue;
+                        }
+                        None => {}
+                    }
+                }
                 match op {
                     MicroOp::Bin { op, a, b, out } => {
                         let (a, b) = (msrc(a), msrc(b));
-                        let dst = unsafe { rp.add(*out as usize * cs) };
+                        let dst = dst_of(mi, *out);
                         // Monomorphized over the shared table — the same
                         // kernel bodies as the unfused `Instr::Bin` arm.
                         macro_rules! chunk {
@@ -1130,7 +1438,7 @@ unsafe fn exec_fused_runs(
                     }
                     MicroOp::Un { op, a, out } => {
                         let a = msrc(a);
-                        let dst = unsafe { rp.add(*out as usize * cs) };
+                        let dst = dst_of(mi, *out);
                         macro_rules! chunk {
                             ($f:expr) => {
                                 unsafe { fch1(dst, c, a, $f) }
@@ -1140,15 +1448,15 @@ unsafe fn exec_fused_runs(
                     }
                     MicroOp::Neg { a, out } => {
                         let a = msrc(a);
-                        unsafe { fch1(rp.add(*out as usize * cs), c, a, |x| -x) };
+                        unsafe { fch1(dst_of(mi, *out), c, a, |x| -x) };
                     }
                     MicroOp::Select { cond, a, b, out } => {
                         let (cv, av, bv) = (msrc(cond), msrc(a), msrc(b));
-                        unsafe { fch_sel(rp.add(*out as usize * cs), c, cv, av, bv) };
+                        unsafe { fch_sel(dst_of(mi, *out), c, cv, av, bv) };
                     }
                     MicroOp::Mov { a, out } => {
                         let a = msrc(a);
-                        unsafe { fch1(rp.add(*out as usize * cs), c, a, |x| x) };
+                        unsafe { fch1(dst_of(mi, *out), c, a, |x| x) };
                     }
                     MicroOp::Scan {
                         op,
@@ -1161,7 +1469,7 @@ unsafe fn exec_fused_runs(
                         out,
                     } => {
                         let a = msrc(a);
-                        let dst = unsafe { rp.add(*out as usize * cs) };
+                        let dst = dst_of(mi, *out);
                         let (row, post, init, inclusive) =
                             (*row as usize, *post as usize, *init, *inclusive);
                         let cv = &mut carries[*carry as usize..*carry as usize + post];
@@ -1196,7 +1504,7 @@ unsafe fn exec_fused_runs(
                         out,
                     } => {
                         let (av, bv, cv) = (msrc(a), msrc(b), msrc(c3));
-                        let dst = unsafe { rp.add(*out as usize * cs) };
+                        let dst = dst_of(mi, *out);
                         // Under `element_type: "Float32"` the monomorphized
                         // closures below are hand-copied f64 arithmetic that
                         // never sees the precision, so compose the SAME two
@@ -1282,7 +1590,7 @@ unsafe fn exec_fused_runs(
                         out,
                     } => {
                         let (pa, pb, pc, pd) = (msrc_p(a), msrc_p(b), msrc_p(c3), msrc_p(d4));
-                        let dst = unsafe { rp.add(*out as usize * cs) };
+                        let dst = dst_of(mi, *out);
                         // See `Bin2`: Float32 composes the three shared kernels
                         // in the same order rather than the f64-only closures.
                         if crate::precision::is_f32() {
@@ -1383,7 +1691,10 @@ unsafe fn exec_fused_runs(
                     }
                 }
             }
-            for &(reg, optr) in outs {
+            for (k, &(reg, optr)) in outs.iter().enumerate() {
+                if optr.is_null() || fs.direct.iter().any(|&(_, d)| d as usize == k) {
+                    continue;
+                }
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         rp.add(reg as usize * cs) as *const f64,
