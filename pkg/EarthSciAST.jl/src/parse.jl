@@ -47,8 +47,11 @@ Base.showerror(io::IO, e::ParseError) = print(io, "ParseError: ", e.message)
 #     JSON3-write byte surface of `save` depends on that staying so;
 #   * carrier-independent input to JSONSchema.jl (`validate_schema`), whose
 #     `type: array` check does not recognize `JSON3.Array`.
+#
+# A leaf-only `Vector{Any}` (an inline number array) is already plain and is
+# returned as is, not copied: none of the jobs above mutates one.
 function _to_native_json(x)
-    x isa Vector{Any} && _leaves_only(x) && return copy(x)
+    x isa Vector{Any} && _leaves_only(x) && return x
     if x isa JSON3.Array || x isa AbstractVector
         return Any[_to_native_json(v) for v in x]
     elseif x isa JSON3.Object || x isa AbstractDict
@@ -581,10 +584,12 @@ the single post-wire carrier (`_to_ordered`: string-keyed `OrderedDict` tree),
 so every nested coercer speaks plain string-keyed `get`. The normalization is
 sharing-preserving, so the structural sharing template expansion builds
 carries through into the `expression_from_json` identity memo. Callers never need
-a `JSON3.read(JSON3.write(doc))` type-launder.
+a `JSON3.read(JSON3.write(doc))` type-launder. Coercion only reads the tree, so
+inline number arrays are shared with `data` rather than copied
+(`_to_ordered_shared`).
 """
 function coerce_esm_file(data::Any)::EsmFile
-    data = _to_ordered(data)
+    data = _to_ordered_shared(data)
 
     # Extract required fields
     esm_raw = _get_field(data, :esm, nothing)

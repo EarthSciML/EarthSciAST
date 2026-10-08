@@ -122,7 +122,8 @@ function _plain_hash(x::AbstractVector, h::UInt)
     for el in x
         # Inline number arrays: the common leaves hash without a dynamic call.
         h = el isa Int64 ? _plain_hash(el, h) :
-            el isa Float64 ? _plain_hash(el, h) : _plain_hash(el, h)
+            el isa Float64 ? _plain_hash(el, h) :
+            el isa Vector{Any} ? _plain_hash(el, h)::UInt : _plain_hash(el, h)::UInt
     end
     return h
 end

@@ -234,12 +234,16 @@ function _fill_const_dense!(A::Array{Float64}, val, dims::Vector{Int})
         strides[d] = s
         s *= dims[d]
     end
-    return _fill_const_level!(A, val, 1, 1, dims, strides)
+    return _fill_const_level!(vec(A), val, 1, 1, dims, strides)
 end
 
-function _fill_const_level!(A::Array{Float64}, node, depth::Int, off::Int,
-                            dims::Vector{Int}, strides::Vector{Int})::Bool
-    (node isa Vector{Any} || node isa AbstractVector) || return false
+_fill_const_level!(A::Vector{Float64}, node, depth::Int, off::Int, dims::Vector{Int},
+                   strides::Vector{Int})::Bool =
+    node isa Vector{Any} ? _fill_const_level_vec!(A, node, depth, off, dims, strides) :
+    node isa AbstractVector ? _fill_const_level_vec!(A, node, depth, off, dims, strides) : false
+
+function _fill_const_level_vec!(A::Vector{Float64}, node::AbstractVector, depth::Int, off::Int,
+                                dims::Vector{Int}, strides::Vector{Int})::Bool
     n = length(node)
     n == dims[depth] || return false
     s = strides[depth]
@@ -247,12 +251,16 @@ function _fill_const_level!(A::Array{Float64}, node, depth::Int, off::Int,
         for k in 1:n
             x = node[k]
             v = x isa Int64 ? Float64(x) : x isa Float64 ? x :
-                x isa Number ? Float64(x) : return false
+                x isa Number ? Float64(x)::Float64 : return false
             @inbounds A[off + (k - 1) * s] = v
         end
     else
         for k in 1:n
-            _fill_const_level!(A, node[k], depth + 1, off + (k - 1) * s, dims, strides) ||
+            sub = node[k]
+            o = off + (k - 1) * s
+            # The common nested `Vector{Any}` row takes a static call.
+            (sub isa Vector{Any} ? _fill_const_level_vec!(A, sub, depth + 1, o, dims, strides) :
+                                   _fill_const_level!(A, sub, depth + 1, o, dims, strides)) ||
                 return false
         end
     end

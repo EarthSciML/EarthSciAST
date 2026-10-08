@@ -91,7 +91,12 @@ may mutate the result without touching the input.
 """
 _to_ordered(x) = _to_ordered_memo(x, IdDict{Any,Any}())
 
-function _to_ordered_memo(x, memo::IdDict{Any,Any})
+# `_to_ordered` for a consumer that only reads the result: a leaf-only
+# `Vector{Any}` (an inline number array) is shared with the input instead of
+# copied, so normalizing an already-native document allocates nothing per row.
+_to_ordered_shared(x) = _to_ordered_memo(x, IdDict{Any,Any}(), true)
+
+function _to_ordered_memo(x, memo::IdDict{Any,Any}, share_leaves::Bool=false)
     if x isa JSON3.Object || x isa JSON3.Array
         key = _view_key(x)
         r = get(memo, key, nothing)
@@ -105,19 +110,20 @@ function _to_ordered_memo(x, memo::IdDict{Any,Any})
         out = OrderedDict{String,Any}()
         memo[x] = out
         for (k, v) in pairs(x)
-            out[string(k)] = _to_ordered_memo(v, memo)
+            out[string(k)] = _to_ordered_memo(v, memo, share_leaves)
         end
         return out
     elseif _is_array(x)
         # A leaf-only array holds nothing to share or normalize: copy it as is,
         # without an identity-memo entry per (possibly millions of) row.
-        x isa Vector{Any} && _leaves_only(x) && return copy(x)
+        x isa Vector{Any} && _leaves_only(x) && return share_leaves ? x : copy(x)
         r = get(memo, x, nothing)
         r === nothing || return r
         out = Vector{Any}()
+        sizehint!(out, length(x))
         memo[x] = out
         for v in x
-            push!(out, _to_ordered_memo(v, memo))
+            push!(out, _to_ordered_memo(v, memo, share_leaves))
         end
         return out
     end
@@ -178,7 +184,8 @@ function _find_json_segs(hit, node)
     elseif _is_array(node)
         for (i, v) in enumerate(node)
             _is_json_leaf(v) && continue        # `hit` only ever sees objects
-            h = _find_json_segs(hit, v)
+            # The common nested `Vector{Any}` row takes a static call.
+            h = v isa Vector{Any} ? _find_json_segs(hit, v) : _find_json_segs(hit, v)
             h === nothing || return push!(h, i - 1)
         end
     end
