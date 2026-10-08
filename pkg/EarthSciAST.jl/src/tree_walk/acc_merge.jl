@@ -642,7 +642,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    dyn_slots::AbstractVector{Int},
                    scan_folds::AbstractVector{_ScanFold}=_ScanFold[],
                    array_contractions=_make_contraction_section(_ArrayContraction[]);
-                   scalar=nothing, fused_scans::Tuple=())
+                   scalar=nothing, fused_scans::Tuple=(), nst::Int=0)
     # The prefix scans: the unfused folds and the fused ones (scan_fused.jl).
     scan_section = _make_scan_section(scan_folds, fused_scans)
     # The scalar codegen tier (scalar_codegen.jl): with a scalar section the
@@ -651,7 +651,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
     scalar === nothing ||
         return _make_rhs_scalar_cg(scalar, cse_prelude, cse_cache, acc_kernels,
                                    const_slots, time_slots, scan_section,
-                                   array_contractions)
+                                   array_contractions; nst=nst)
     # B1 codegen tier (codegen_kernel.jl): every kernel the emitter can model is
     # compiled ONCE, here at build time, into a single RuntimeGeneratedFunction
     # (bit-identical, eltype-generic); the rest keep the per-cell scalar
@@ -661,7 +661,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # `f!` below fills every prelude tier into that exact cache — at the same
     # value type `T` — before `kernel_section(du, u, p, t, T)` runs.
     kernel_section = _make_kernel_section(acc_kernels;
-                                          shared_cache=cse_cache)
+                                          shared_cache=cse_cache, nst=nst)
     function f!(du, u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         T = _rhs_value_type(u, p, t)

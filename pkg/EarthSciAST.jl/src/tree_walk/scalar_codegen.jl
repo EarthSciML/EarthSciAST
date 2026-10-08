@@ -922,8 +922,8 @@ function _make_rhs_scalar_cg(sec::_ScalarSection, full_prelude::AbstractVector{_
                              const_slots::AbstractVector{Int},
                              time_slots::AbstractVector{Int},
                              scan_section::_ScanSection,
-                             array_contractions)
-    kernel_section = _make_kernel_section(acc_kernels; shared_cache=cse_cache)
+                             array_contractions; nst::Int=0)
+    kernel_section = _make_kernel_section(acc_kernels; shared_cache=cse_cache, nst=nst)
     constp = sec.constp
     timep = sec.timep
     dynp = sec.dynp
