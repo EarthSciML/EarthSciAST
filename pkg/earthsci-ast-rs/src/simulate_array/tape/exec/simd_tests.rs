@@ -337,6 +337,8 @@ fn drive(with_nan: bool) {
         n_load_regs: 1,
         n_splat_regs: 6,          // 5 scalars + the zero register
         outputs: SmallVec::new(), // outs are passed directly
+        direct: SmallVec::new(),
+        scan_fuse: SmallVec::new(),
         schedule,
         reduce: None,
         interleave: None,

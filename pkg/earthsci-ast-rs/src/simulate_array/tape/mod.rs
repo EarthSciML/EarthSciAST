@@ -495,6 +495,27 @@ impl ArrayCompiled {
                 let _ = writeln!(out, "  {op:?}");
             }
         }
+        for (i, ls) in prog.lanes.iter().enumerate() {
+            let _ = writeln!(
+                out,
+                "lanes {i}: {} lanes, {} micro-ops, {} inputs, {} scalars, {} registers, {} writes",
+                ls.lanes,
+                ls.micro.len(),
+                ls.inputs.len(),
+                ls.scalars.len(),
+                ls.n_regs,
+                ls.writes.len()
+            );
+            for (k, inp) in ls.inputs.iter().enumerate() {
+                let _ = writeln!(out, "  in {k}: {:?} {:?}", inp.kind, inp.ix);
+            }
+            for op in &ls.micro {
+                let _ = writeln!(out, "  {op:?}");
+            }
+            for w in &ls.writes {
+                let _ = writeln!(out, "  write {:?} -> {:?}", w.src, w.dst);
+            }
+        }
         out
     }
 

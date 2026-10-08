@@ -948,6 +948,61 @@ fn ab_scalar_rules() {
     ab_check(doc, 0, -1.5, 1.5);
 }
 
+/// Scalar boxes declared species-major (every `a` before every `c`, the
+/// `scalar_chemistry` layout) and more of them than one lane chunk: the lane
+/// program reads its state and parameter lanes in place and stores each
+/// derivative straight into its `dy` run (`LaneSpec::direct`).
+#[test]
+fn ab_species_major_lanes_read_and_write_in_place() {
+    let boxes = 300;
+    let mut vars = serde_json::Map::new();
+    let mut eqs: Vec<serde_json::Value> = Vec::new();
+    vars.insert("k1".into(), json!({"type": "parameter", "default": 0.7}));
+    for sp in ["a", "c"] {
+        for b in 0..boxes {
+            vars.insert(format!("{sp}_{b}"), json!({"type": "unknown"}));
+        }
+    }
+    for b in 0..boxes {
+        vars.insert(
+            format!("kb_{b}"),
+            json!({"type": "parameter", "default": 0.01 * b as f64}),
+        );
+    }
+    for b in 0..boxes {
+        let (a, c, kb) = (format!("a_{b}"), format!("c_{b}"), format!("kb_{b}"));
+        let r = json!({"op": "*", "args": ["k1", a, c]});
+        eqs.push(json!({"lhs": {"op": "D", "args": [a], "wrt": "t"},
+            "rhs": {"op": "+", "args": [{"op": "-", "args": [r]},
+                {"op": "*", "args": [kb, {"op": "exp", "args": [{"op": "-", "args": [c]}]}]}]}}));
+        eqs.push(json!({"lhs": {"op": "D", "args": [c], "wrt": "t"},
+            "rhs": {"op": "-", "args": [r, {"op": "max", "args": [c, 0.5]}]}}));
+    }
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_reroll_species_major"},
+        "models": {"M": {"variables": vars, "equations": eqs}}
+    });
+    let prog = ab_check(doc, 0, 0.1, 2.0);
+    let ls = prog
+        .lanes
+        .iter()
+        .find(|ls| ls.lanes as usize == boxes)
+        .expect("the boxes run as one lane program");
+    assert!(
+        ls.inputs.iter().all(|i| matches!(
+            (i.kind, &i.ix),
+            (
+                LaneKind::State | LaneKind::Param,
+                LaneIx::Affine { step: 1, .. }
+            )
+        )),
+        "{:?}",
+        ls.inputs
+    );
+    assert_eq!(ls.direct.len(), ls.writes.len(), "{:?}", ls.writes);
+}
+
 /// Many scalar boxes of one mechanism (the `scalar_chemistry` shape): the
 /// rerolling pass shares each rate across the equations that read it and
 /// runs the boxes as the lanes of one lane program, bit-identical to the
@@ -1356,6 +1411,149 @@ fn ab_scan_absorbed_into_its_group() {
         .filter(|i| matches!(i, Instr::Fused { .. }))
         .count();
     assert_eq!(fused_cont, 1, "the scans and their reader run as one group");
+}
+
+/// Last-axis scans run in one loop with their single-use neighbours
+/// (`ScanFuse`), which fusion moves next to them: a weighted running sum
+/// (`u * w` in front, a scale behind), an exclusive sum, a running product,
+/// and a running sum of a scaled running sum (the `* 0.5` between the two
+/// joins one of them only). 2500 cells cross several executor chunks, so the
+/// carries run from one chunk to the next. The program a solve builds also
+/// publishes the scans' observeds, which a fused loop then stores too.
+#[test]
+fn ab_scan_fused_with_its_neighbours() {
+    let n = 2500;
+    let ranges = json!({"k": [1, n], "m": [1, n]});
+    let scan = |cmp: &str, red: &str, term: serde_json::Value| {
+        json!({"op": "faq", "args": [], "output_idx": ["k"], "reduce": red,
+            "ranges": ranges, "filter": {"op": cmp, "args": ["m", "k"]}, "expr": term})
+    };
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_scan_neighbours"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["k"]},
+                "v": {"type": "unknown", "shape": ["k"]},
+                "w": {"type": "unknown", "shape": ["k"]},
+                "P": {"type": "unknown", "shape": ["k"]},
+                "Q": {"type": "unknown", "shape": ["k"]},
+                "R": {"type": "unknown", "shape": ["k"]},
+                "z": {"type": "unknown", "shape": ["k"]},
+                "Z1": {"type": "unknown", "shape": ["k"]},
+                "Z2": {"type": "unknown", "shape": ["k"]}
+            },
+            "equations": [
+                {"lhs": "w", "rhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                    "ranges": {"k": [1, n]},
+                    "expr": {"op": "+", "args": [1.0, {"op": "*", "args": [0.5,
+                        {"op": "sin", "args": ["k"]}]}]}}},
+                {"lhs": "P", "rhs": scan("<=", "+", json!({"op": "*", "args": [
+                    {"op": "index", "args": ["u", "m"]}, {"op": "index", "args": ["w", "m"]}]}))},
+                {"lhs": "Q", "rhs": scan("<", "+", json!({"op": "-", "args": [
+                    {"op": "index", "args": ["v", "m"]}, 0.25]}))},
+                {"lhs": "R", "rhs": scan("<=", "*", json!({"op": "+", "args": [1.0,
+                    {"op": "*", "args": [1e-4, {"op": "index", "args": ["v", "m"]}]}]}))},
+                // A scan of a scaled scan: the `* 0.5` between them is
+                // absorbed behind the first one only.
+                {"lhs": "Z1", "rhs": scan("<=", "+", json!({"op": "*", "args": [
+                    {"op": "index", "args": ["z", "m"]}, 2.0]}))},
+                {"lhs": "Z2", "rhs": scan("<=", "+", json!({"op": "*", "args": [
+                    {"op": "index", "args": ["Z1", "m"]}, 0.5]}))},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                    "expr": {"op": "D", "args": [{"op": "index", "args": ["z", "k"]}], "wrt": "t"},
+                    "ranges": {"k": [1, n]}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["k"], "ranges": {"k": [1, n]},
+                    "expr": {"op": "*", "args": [{"op": "index", "args": ["Z2", "k"]}, 0.01]}}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                    "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "k"]}], "wrt": "t"},
+                    "ranges": {"k": [1, n]}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["k"], "ranges": {"k": [1, n]},
+                    "expr": {"op": "*", "args": [-0.001, {"op": "index", "args": ["P", "k"]}]}}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                    "expr": {"op": "D", "args": [{"op": "index", "args": ["v", "k"]}], "wrt": "t"},
+                    "ranges": {"k": [1, n]}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["k"], "ranges": {"k": [1, n]},
+                    "expr": {"op": "+", "args": [
+                        {"op": "/", "args": [{"op": "index", "args": ["Q", "k"]}, 3.0]},
+                        {"op": "index", "args": ["R", "k"]}]}}}
+            ]
+        }}
+    });
+    let prog = ab_check(doc.clone(), 0, -2.0, 2.0);
+    let fusions: Vec<ScanFuse> = prog
+        .fused
+        .iter()
+        .flat_map(|f| f.scan_fuse.iter().copied())
+        .collect();
+    assert!(scan_micro_ops(&prog) >= 4, "{fusions:?}");
+    assert!(
+        fusions.iter().filter(|f| f.pre && f.post).count() >= 2,
+        "the weighted sum and the scan of the scaled scan run with both \
+         neighbours: {fusions:?}"
+    );
+
+    // The program a solve builds publishes the scanned observeds: a quiet
+    // call stores none of them, a publishing call stores them from inside
+    // the fused loops (`keep`); both write the interpreter's `dy`.
+    let mut compiled = compile(doc);
+    compiled.runtime_mode = super::super::RuntimeMode::Native;
+    let (prog, _) = compiled.build_tape(&HashSet::new());
+    assert!(
+        prog.exports.iter().any(|(e, _)| e == "P"),
+        "fixture exports P"
+    );
+    assert!(
+        prog.fused.iter().flat_map(|f| &f.scan_fuse).any(|f| f.keep),
+        "{:?}",
+        prog.fused.iter().map(|f| &f.scan_fuse).collect::<Vec<_>>()
+    );
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let state = seeded_state(3 * n, 7, -2.0, 2.0);
+    let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+    let mut ctx = super::exec::TapeCtx::new(
+        std::rc::Rc::new(prog),
+        std::rc::Rc::new(compiled.observed_rules.clone()),
+    );
+    for publish in [false, true, false] {
+        ctx.set_exports_active(publish);
+        let mut dy = vec![f64::NAN; 3 * n];
+        let mut stats = RhsStats::default();
+        let call = super::super::RhsCall {
+            rhs_rules: &compiled.rhs_rules,
+            observed_rules: &compiled.observed_rules,
+            var_shapes: &compiled.var_shapes,
+            param_names: &compiled.param_names,
+            state: &state,
+            params: &param_vec,
+            forcing: &compiled.forcing,
+            t: 0.0,
+            declared: &compiled.declared_names,
+        };
+        super::exec::run_tape_call(
+            &mut ctx,
+            &call,
+            &super::super::ArrMap::default(),
+            &compiled.const_scope,
+            &super::super::ConstLitMemo::default(),
+            &mut dy,
+            &mut stats,
+        );
+        for (k, (a, b)) in dy.iter().zip(&dy_ref).enumerate() {
+            assert_eq!(a.to_bits(), b.to_bits(), "publish {publish}: dy[{k}]");
+        }
+        if publish {
+            // P[k] = sum over m <= k of u[m] * w[m], folded from 0.0.
+            let p = ctx.exec.obs.get("P").expect("P published");
+            let mut acc = 0.0f64;
+            for k in 0..n {
+                let w = 1.0 + 0.5 * ((k + 1) as f64).sin();
+                acc += state[k] * w;
+                assert_eq!(p[ndarray::IxDyn(&[k])].to_bits(), acc.to_bits(), "P[{k}]");
+            }
+        }
+    }
 }
 
 /// A ghost Laplacian along the innermost axis of a 3-D box whose rows are

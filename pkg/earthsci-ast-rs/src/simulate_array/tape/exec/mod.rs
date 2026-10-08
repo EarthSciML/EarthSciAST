@@ -241,6 +241,10 @@ pub(crate) struct TapeExec {
     /// the slab, or `usize::MAX` (see [`dy_homes`]); computed with
     /// `dy_zero`.
     dy_home: Vec<usize>,
+    /// `dy_home` for a call that publishes no observeds: a fused output
+    /// that only the output-only tail reads is [`UNSTORED`] (see
+    /// [`quiet_homes`]).
+    dy_home_quiet: Vec<usize>,
     /// Per gather plan: `true` when its per-axis segments tile the whole
     /// output box, so the ghost zero-fill can be skipped (every element is
     /// overwritten by a segment copy).
@@ -388,6 +392,7 @@ impl TapeExec {
             dy_zero: Vec::new(),
             dy_zero_len: usize::MAX,
             dy_home: Vec::new(),
+            dy_home_quiet: Vec::new(),
             plan_full,
             asm_covered: assemblies_covered(prog),
             #[cfg(not(target_arch = "wasm32"))]
@@ -798,6 +803,38 @@ fn dy_homes(prog: &TapeProgram, n: usize) -> Vec<usize> {
     home
 }
 
+/// A [`dy_homes`] entry: the fused output is not stored at all.
+pub(super) const UNSTORED: usize = usize::MAX - 1;
+
+/// `home` with [`UNSTORED`] for every output of a CONTINUOUS fused group
+/// whose readers all sit in the section's output-only tail (past
+/// [`TapeProgram::n_rhs`]), which a call that publishes no observeds does
+/// not run: the group still computes the value (a later micro-op may need
+/// it) but writes it nowhere.
+fn quiet_homes(prog: &TapeProgram, home: &[usize]) -> Vec<usize> {
+    let mut quiet = home.to_vec();
+    let rhs_end = (prog.n_const + prog.n_segment + prog.n_rhs) as usize;
+    let cont = prog.section_range(Cadence::Continuous);
+    let tables = prog.tables();
+    // Per slot: whether any instruction a quiet call runs reads it.
+    let mut read_early = vec![false; prog.slots.len()];
+    for i in prog.instrs.iter().take(rhs_end) {
+        i.for_each_read(&tables, |s| read_early[s as usize] = true);
+    }
+    for pc in cont.start..rhs_end.min(cont.end) {
+        let Instr::Fused { spec } = &prog.instrs[pc] else {
+            continue;
+        };
+        for &(_, slot) in &prog.fused[*spec as usize].outputs {
+            let s = slot as usize;
+            if !read_early[s] && home[s] == usize::MAX {
+                quiet[s] = UNSTORED;
+            }
+        }
+    }
+    quiet
+}
+
 /// The strides of a state variable's `dy` (and state) block over `shape`,
 /// the box the program stores it as: row-major over a column-major
 /// program's reversed box, column-major over a row-major program's.
@@ -861,6 +898,7 @@ pub(in crate::simulate_array) fn run_tape_call(
     if exec.dy_zero_len != dy.len() {
         exec.dy_zero = dy_zero_ranges(prog, dy.len(), exec.n_fallback);
         exec.dy_home = dy_homes(prog, dy.len());
+        exec.dy_home_quiet = quiet_homes(prog, &exec.dy_home);
         exec.dy_zero_len = dy.len();
     }
     for &(a, b) in &exec.dy_zero {

@@ -1,12 +1,14 @@
 //! Lane-program execution ([`Instr::Lanes`]).
 //!
 //! The lanes are strip-mined into chunks of [`LCHUNK`]. Per chunk each input
-//! is gathered from its lanes' sources into a chunk register, the
-//! micro-program runs over the chunk through the same chunk kernels and
-//! kernel dispatch the fused executor uses, and each write scatters its
-//! chunk into `dy`. Every lane applies exactly the kernels its scalar
-//! instructions applied, in their order; the lanes are independent and
-//! write distinct `dy` positions, so chunking cannot change a bit.
+//! is gathered from its lanes' sources into a chunk register (a unit-step
+//! state or parameter input is read where it lies), the micro-program runs
+//! over the chunk through the same chunk kernels and kernel dispatch the
+//! fused executor uses, and each write scatters its chunk into `dy` (or, for
+//! a unit-step write, the micro-op computing it stores there directly).
+//! Every lane applies exactly the kernels its scalar instructions applied,
+//! in their order; the lanes are independent and write distinct `dy`
+//! positions, so chunking cannot change a bit.
 
 use super::fused::{MSrc, dispatch_bin_kernel, dispatch_un_kernel, fch_sel, fch1, fch2};
 use super::resolve::resolve_scalar;
@@ -238,6 +240,24 @@ struct Sources<'a> {
 }
 
 impl Sources<'_> {
+    /// Where lanes `l0 ..` of `inp` already lie contiguously (a unit-step
+    /// state or parameter input), so the chunk reads them in place; checks
+    /// that its `c` lanes are in bounds.
+    #[inline(always)]
+    fn in_place(&self, inp: &LaneTable, l0: usize, c: usize) -> Option<*const f64> {
+        let (LaneKind::State | LaneKind::Param, LaneIx::Affine { base, step: 1 }) =
+            (inp.kind, &inp.ix)
+        else {
+            return None;
+        };
+        let v = if inp.kind == LaneKind::State {
+            self.state
+        } else {
+            self.params
+        };
+        Some(v[*base as usize + l0..*base as usize + l0 + c].as_ptr())
+    }
+
     /// Gather lanes `l0 .. l0 + c` of `inp` into `dst`.
     #[inline(always)]
     unsafe fn gather(&self, inp: &LaneTable, l0: usize, c: usize, dst: *mut f64) {
@@ -314,20 +334,44 @@ unsafe fn exec_lanes_chunks(
     while l0 < hi {
         let c = (hi - l0).min(LCHUNK);
         for (i, inp) in ls.inputs.iter().enumerate() {
-            unsafe { src.gather(inp, l0, c, reg(n_regs + i)) };
+            if src.in_place(inp, l0, c).is_none() {
+                unsafe { src.gather(inp, l0, c, reg(n_regs + i)) };
+            }
         }
         let msrc = |m: &MRef| -> MSrc {
             match m {
                 MRef::Reg(r) => MSrc::P(reg(*r as usize)),
-                MRef::In(i) => MSrc::P(reg(n_regs + *i as usize)),
+                MRef::In(i) => {
+                    let inp = &ls.inputs[*i as usize];
+                    MSrc::P(
+                        src.in_place(inp, l0, c)
+                            .unwrap_or_else(|| reg(n_regs + *i as usize)),
+                    )
+                }
                 MRef::Scal(i) => MSrc::C(svals[*i as usize]),
             }
         };
-        for op in &ls.micro {
+        // Where micro-op `mi` writes: its register, or the `dy` run of the
+        // write it feeds directly (`LaneSpec::direct`).
+        let dst_of = |mi: usize, out: GroupIx| -> *mut f64 {
+            for &(m, k) in &ls.direct {
+                if m as usize == mi {
+                    let LaneDst::Dy(LaneIx::Affine { base, .. }) = &ls.writes[k as usize].dst
+                    else {
+                        unreachable!("a direct write is a unit-step dy run")
+                    };
+                    let first = *base as usize + l0;
+                    assert!(first + c <= dy.len, "lane write out of dy");
+                    return unsafe { dy.ptr.add(first) };
+                }
+            }
+            reg(out as usize)
+        };
+        for (mi, op) in ls.micro.iter().enumerate() {
             match op {
                 MicroOp::Bin { op, a, b, out } => {
                     let (a, b) = (msrc(a), msrc(b));
-                    let dst = reg(*out as usize);
+                    let dst = dst_of(mi, *out);
                     macro_rules! chunk {
                         ($f:expr) => {
                             unsafe { fch2(dst, c, a, b, $f) }
@@ -337,7 +381,7 @@ unsafe fn exec_lanes_chunks(
                 }
                 MicroOp::Un { op, a, out } => {
                     let a = msrc(a);
-                    let dst = reg(*out as usize);
+                    let dst = dst_of(mi, *out);
                     macro_rules! chunk {
                         ($f:expr) => {
                             unsafe { fch1(dst, c, a, $f) }
@@ -345,17 +389,20 @@ unsafe fn exec_lanes_chunks(
                     }
                     dispatch_un_kernel!(op, chunk);
                 }
-                MicroOp::Neg { a, out } => unsafe { fch1(reg(*out as usize), c, msrc(a), |x| -x) },
+                MicroOp::Neg { a, out } => unsafe { fch1(dst_of(mi, *out), c, msrc(a), |x| -x) },
                 MicroOp::Select { cond, a, b, out } => unsafe {
-                    fch_sel(reg(*out as usize), c, msrc(cond), msrc(a), msrc(b))
+                    fch_sel(dst_of(mi, *out), c, msrc(cond), msrc(a), msrc(b))
                 },
-                MicroOp::Mov { a, out } => unsafe { fch1(reg(*out as usize), c, msrc(a), |x| x) },
+                MicroOp::Mov { a, out } => unsafe { fch1(dst_of(mi, *out), c, msrc(a), |x| x) },
                 MicroOp::Bin2 { .. } | MicroOp::Bin3 { .. } | MicroOp::Scan { .. } => {
                     unreachable!("a lane program holds no superops or scans")
                 }
             }
         }
-        for w in &ls.writes {
+        for (k, w) in ls.writes.iter().enumerate() {
+            if ls.direct.iter().any(|&(_, d)| d as usize == k) {
+                continue;
+            }
             let LaneDst::Dy(pos) = &w.dst else {
                 unreachable!("only a one-lane program writes a slot")
             };

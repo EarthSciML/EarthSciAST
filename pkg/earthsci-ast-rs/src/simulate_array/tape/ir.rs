@@ -890,13 +890,18 @@ impl ChunkGather {
     /// Write output positions `at .. at + c` into `dst[0 .. c]`, one row of
     /// the innermost axis at a time: the leading axes' source offset is
     /// carried from row to row like an odometer, and each row is its
-    /// innermost-axis segments copied and the gaps between them zeroed.
+    /// innermost-axis segments copied and the gaps between them zeroed. A
+    /// plain shift ([`Self::flat_shift`]) is copied in one piece instead.
     ///
     /// # Safety
     /// `src` must hold the plan's source box row-major and `dst` `c`
     /// elements, disjoint from it.
     #[inline(always)]
     pub(crate) unsafe fn fill(&self, src: *const f64, at: usize, c: usize, dst: *mut f64) {
+        if let Some(delta) = self.flat_shift() {
+            unsafe { self.fill_shifted(delta, src, at, c, dst) };
+            return;
+        }
         let nd = self.shape.len();
         let last = self.shape[nd - 1];
         let s_last = self.strides[nd - 1];
@@ -963,6 +968,88 @@ impl ChunkGather {
                 idx[a] = 0;
                 part[a] = self.coord(a, 0).map(|x| self.strides[a] * x as i64);
             }
+        }
+    }
+
+    /// The flat offset `delta` when the gather is one shift of a source laid
+    /// out like its output box (`strides` row-major over `shape`, one
+    /// non-empty segment per axis): output position `flat` inside the
+    /// segment box then reads source position `flat + delta`.
+    #[inline(always)]
+    fn flat_shift(&self) -> Option<i64> {
+        let mut stride = 1i64;
+        let mut delta = 0i64;
+        for a in (0..self.shape.len()).rev() {
+            let &[(o, l, so)] = &self.segs[a][..] else {
+                return None;
+            };
+            if self.strides[a] != stride || l == 0 {
+                return None;
+            }
+            delta += stride * (so as i64 - o as i64);
+            stride *= self.shape[a] as i64;
+        }
+        Some(delta)
+    }
+
+    /// [`Self::fill`] for a [`Self::flat_shift`] gather: the window's part of
+    /// the segment box's flat span copied in one piece, then the ghost
+    /// positions in it zeroed, axis by axis (each axis's out-of-segment
+    /// slabs, a ghost reached twice is zeroed twice).
+    ///
+    /// # Safety
+    /// As for [`Self::fill`].
+    #[inline(always)]
+    unsafe fn fill_shifted(&self, delta: i64, src: *const f64, at: usize, c: usize, dst: *mut f64) {
+        let nd = self.shape.len();
+        let (mut first, mut last, mut stride) = (0usize, 0usize, 1usize);
+        for a in (0..nd).rev() {
+            let (o, l, _) = self.segs[a][0];
+            first += stride * o;
+            last += stride * (o + l - 1);
+            stride *= self.shape[a];
+        }
+        let end = at + c;
+        let (lo, hi) = (at.max(first), end.min(last + 1));
+        if lo < hi {
+            // Every position of `[first, last]` reads in bounds: its ends
+            // read the segment box's first and last source elements.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    src.offset(lo as isize + delta as isize),
+                    dst.add(lo - at),
+                    hi - lo,
+                )
+            };
+        }
+        let mut inner = 1usize;
+        for a in (0..nd).rev() {
+            let (o, l, _) = self.segs[a][0];
+            let n = self.shape[a];
+            let blk = n * inner;
+            if o > 0 || o + l < n {
+                let gaps = [(0, o * inner), ((o + l) * inner, blk)];
+                let mut q = at - at % blk;
+                while q < end {
+                    for &(g0, g1) in &gaps {
+                        let (s, e) = ((q + g0).max(at), (q + g1).min(end));
+                        if s >= e {
+                            continue;
+                        }
+                        // One-element gaps (a unit shift's ghost row ends)
+                        // are stored directly rather than through `memset`.
+                        unsafe {
+                            if e - s == 1 {
+                                *dst.add(s - at) = 0.0;
+                            } else {
+                                std::slice::from_raw_parts_mut(dst.add(s - at), e - s).fill(0.0);
+                            }
+                        }
+                    }
+                    q += blk;
+                }
+            }
+            inner = blk;
         }
     }
 }
@@ -1117,6 +1204,17 @@ pub(crate) struct FusedSpec {
     pub n_splat_regs: GroupIx,
     /// `(register, slot)` live-outs stored back to the slab.
     pub outputs: SmallVec<[(GroupIx, SlotId); 2]>,
+    /// `(micro-op, output)`: the micro-op writes that entry of `outputs`
+    /// straight to its destination instead of its register, which is then
+    /// not stored. It is the register's last writer, no later micro-op (nor
+    /// the reduction) reads the register, and no other output names it. A
+    /// group's outputs never share storage with its inputs (a `Fused`
+    /// instruction is not alias-safe for the slab coloring), so an early
+    /// store cannot change what a later micro-op reads.
+    pub direct: SmallVec<[(u32, u32); 2]>,
+    /// Absorbed scans the executor runs in one loop with their single-use
+    /// `+ - * /` neighbours (see [`ScanFuse`]).
+    pub scan_fuse: SmallVec<[ScanFuse; 1]>,
     /// Precompiled run schedule (see [`RunSchedule`]); a group with no
     /// shifted inputs has the single run `(0, n_elems, [])`.
     pub schedule: RunSchedule,
@@ -1133,6 +1231,27 @@ pub(crate) struct FusedSpec {
     /// folded gathers).
     pub n_fused_instrs: u32,
     pub n_folded_gathers: u32,
+}
+
+/// A [`MicroOp::Scan`] along the group box's last axis (`post == 1`) whose
+/// operand, when `pre`, is the `Bin` just before it (read by the scan
+/// alone), and whose value, when `post`, no micro-op but the `Bin` just
+/// after it reads (it may still be a live-out, which `keep` says). The
+/// neighbours are `+ - * /`, the scan a sum or a product. Under Float64 the
+/// executor runs them as one loop, element by element in order: `x =
+/// pre(..)`, the scan's combine, `out = post(..)` — the same kernels in the
+/// same order as the three passes, with the absorbed neighbours' registers
+/// never written. The latency-bound fold then carries the neighbours' loads
+/// and stores, which otherwise each take a pass of their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScanFuse {
+    /// The scan's micro-op index.
+    pub scan: u32,
+    pub pre: bool,
+    pub post: bool,
+    /// With `post`: the scan's value is also a live-out, so the loop stores
+    /// it to its register as well (unless no output it feeds is stored).
+    pub keep: bool,
 }
 
 /// The fold of a fused group's value over its box's LEADING axes — an
@@ -1855,6 +1974,12 @@ pub(crate) struct LaneSpec {
     pub micro: Vec<MicroOp>,
     pub n_regs: GroupIx,
     pub writes: Vec<LaneWrite>,
+    /// `(micro-op, write)`: the micro-op stores its chunk straight into the
+    /// `dy` run of that write (an evenly spaced, unit-step `Dy` write),
+    /// which then does nothing. It is the last writer of the write's
+    /// register, nothing after it reads that register, and no other write
+    /// names it. Empty for a one-lane program.
+    pub direct: Vec<(u32, u32)>,
 }
 
 /// What kind of source rule a program rule entry describes.

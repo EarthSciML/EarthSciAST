@@ -846,7 +846,7 @@ fn emit_class(
         .collect();
     let n_regs = super::fuse::allocate_registers(&mut micro, &mut live);
     let mut live = live.into_iter();
-    let writes = writes
+    let writes: Vec<LaneWrite> = writes
         .into_iter()
         .map(|(m, pos)| LaneWrite {
             src: match m {
@@ -856,6 +856,7 @@ fn emit_class(
             dst: LaneDst::Dy(pos),
         })
         .collect();
+    let direct = direct_writes(&micro, &writes);
     let spec = prog.lanes.len() as u32;
     prog.lanes.push(LaneSpec {
         lanes: lanes.len() as u32,
@@ -864,8 +865,36 @@ fn emit_class(
         micro,
         n_regs,
         writes,
+        direct,
     });
     out.push((Instr::Lanes { spec }, head.instrs[0]));
+}
+
+/// [`LaneSpec::direct`] of an allocated lane program.
+fn direct_writes(micro: &[MicroOp], writes: &[LaneWrite]) -> Vec<(u32, u32)> {
+    let mut direct = Vec::new();
+    for (k, w) in writes.iter().enumerate() {
+        let (MRef::Reg(r), LaneDst::Dy(LaneIx::Affine { step: 1, .. })) = (&w.src, &w.dst) else {
+            continue;
+        };
+        if writes.iter().filter(|o| o.src == MRef::Reg(*r)).count() > 1 {
+            continue;
+        }
+        let Some(at) = micro
+            .iter()
+            .rposition(|op| super::fuse::micro_out(op) == *r)
+        else {
+            continue;
+        };
+        if micro[at + 1..]
+            .iter()
+            .any(|op| super::fuse::reads_reg(op, *r))
+        {
+            continue;
+        }
+        direct.push((at as u32, k as u32));
+    }
+    direct
 }
 
 /// Compile the straight run `pcs` into one one-lane [`Instr::Lanes`]: every
@@ -971,6 +1000,7 @@ fn emit_block(
         micro,
         n_regs,
         writes,
+        direct: Vec::new(),
     });
     out.push((Instr::Lanes { spec }, pcs[0]));
 }

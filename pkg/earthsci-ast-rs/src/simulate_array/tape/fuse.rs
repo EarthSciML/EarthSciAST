@@ -1324,8 +1324,230 @@ fn ssa_uses(micro: &[MicroOp], outputs: &[(GroupIx, SlotId)]) -> Vec<u32> {
     uses
 }
 
-/// `true` when `op` reads SSA register `r`.
-fn reads_reg(op: &MicroOp, r: GroupIx) -> bool {
+/// A `+ - * /` `Bin`'s operands, or `None` for any other micro-op.
+fn arith_bin(op: &MicroOp) -> Option<(&MRef, &MRef)> {
+    match op {
+        MicroOp::Bin { op, a, b, .. } if bin2_arith(*op) => Some((a, b)),
+        _ => None,
+    }
+}
+
+/// The [`ScanFuse`]s of an SSA micro-program (`outputs` holding its
+/// live-outs, an absorbed reduction's register included), after moving each
+/// fusable neighbour next to its scan: the `Bin` computing a scan's operand
+/// (read by the scan alone) to just before it, and the one `Bin` reading a
+/// scan's value (whose other operand exists before the scan) to just after
+/// it. Moving an op past ops it neither reads nor feeds keeps the program's
+/// values, and a `Bin` joins one scan at most.
+fn scan_fusions(
+    micro: &mut Vec<MicroOp>,
+    outputs: &mut [(GroupIx, SlotId)],
+) -> SmallVec<[ScanFuse; 1]> {
+    let mut found: SmallVec<[ScanFuse; 1]> = SmallVec::new();
+    if !micro.iter().any(|m| {
+        matches!(
+            m,
+            MicroOp::Scan {
+                post: 1,
+                op: BinCode::Add | BinCode::Mul,
+                ..
+            }
+        )
+    }) {
+        return found;
+    }
+    let n = micro.len();
+    let uses = ssa_uses(micro, outputs);
+    let mut readers: Vec<SmallVec<[usize; 2]>> = vec![SmallVec::new(); n];
+    for (i, op) in micro.iter().enumerate() {
+        for_each_operand(op, |m| {
+            if let MRef::Reg(r) = m {
+                readers[*r as usize].push(i);
+            }
+        });
+    }
+    let live_out = |r: usize| outputs.iter().filter(|o| o.0 as usize == r).count() as u32;
+    // Per scan: the op moved in front of it and the op moved behind it.
+    let mut taken = vec![false; n];
+    let mut plan: Vec<(usize, Option<usize>, Option<usize>)> = Vec::new();
+    for (s, op) in micro.iter().enumerate() {
+        // The executor monomorphizes these two folds (sums and products).
+        let MicroOp::Scan {
+            op: BinCode::Add | BinCode::Mul,
+            a,
+            post: 1,
+            ..
+        } = op
+        else {
+            continue;
+        };
+        let pre = match a {
+            MRef::Reg(q) => Some(*q as usize)
+                .filter(|&q| !taken[q] && uses[q] == 1 && arith_bin(&micro[q]).is_some()),
+            _ => None,
+        };
+        let post = match &readers[s][..] {
+            &[p] if uses[s] == 1 + live_out(s) && !taken[p] => {
+                arith_bin(&micro[p]).and_then(|(x, y)| {
+                    let me = MRef::Reg(s as GroupIx);
+                    let other = match (*x == me, *y == me) {
+                        (true, false) => y,
+                        (false, true) => x,
+                        _ => return None,
+                    };
+                    let early = !matches!(other, MRef::Reg(r) if *r as usize > s);
+                    early.then_some(p)
+                })
+            }
+            _ => None,
+        };
+        if pre.is_none() && post.is_none() {
+            continue;
+        }
+        for &i in pre.iter().chain(post.iter()) {
+            taken[i] = true;
+        }
+        plan.push((s, pre, post));
+    }
+    if plan.is_empty() {
+        return found;
+    }
+    // The new order, then every register renamed to its op's new position.
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    let mut next = plan.iter().peekable();
+    for i in 0..n {
+        if taken[i] {
+            continue;
+        }
+        match next.peek() {
+            Some(&&(s, pre, post)) if s == i => {
+                order.extend(pre);
+                order.push(s);
+                order.extend(post);
+                found.push(ScanFuse {
+                    scan: order.len() as u32 - 1 - post.is_some() as u32,
+                    pre: pre.is_some(),
+                    post: post.is_some(),
+                    keep: post.is_some() && live_out(s) > 0,
+                });
+                next.next();
+            }
+            _ => order.push(i),
+        }
+    }
+    debug_assert_eq!(order.len(), n);
+    let mut new_of = vec![0 as GroupIx; n];
+    for (new, &old) in order.iter().enumerate() {
+        new_of[old] = new as GroupIx;
+    }
+    let mut old_micro = std::mem::take(micro);
+    for &old in &order {
+        let mut op = std::mem::replace(
+            &mut old_micro[old],
+            MicroOp::Mov {
+                a: MRef::Scal(0),
+                out: 0,
+            },
+        );
+        for_each_operand_mut(&mut op, |m| {
+            if let MRef::Reg(r) = m {
+                *r = new_of[*r as usize];
+            }
+        });
+        set_micro_out(&mut op, new_of[old]);
+        micro.push(op);
+    }
+    for o in outputs.iter_mut() {
+        o.0 = new_of[o.0 as usize];
+    }
+    found
+}
+
+/// Visit every operand of a micro-op, mutably.
+fn for_each_operand_mut(op: &mut MicroOp, mut f: impl FnMut(&mut MRef)) {
+    match op {
+        MicroOp::Bin { a, b, .. } => {
+            f(a);
+            f(b);
+        }
+        MicroOp::Un { a, .. }
+        | MicroOp::Neg { a, .. }
+        | MicroOp::Mov { a, .. }
+        | MicroOp::Scan { a, .. } => f(a),
+        MicroOp::Select { cond, a, b, .. } => {
+            f(cond);
+            f(a);
+            f(b);
+        }
+        MicroOp::Bin2 { a, b, c, .. } => {
+            f(a);
+            f(b);
+            f(c);
+        }
+        MicroOp::Bin3 { a, b, c, d, .. } => {
+            f(a);
+            f(b);
+            f(c);
+            f(d);
+        }
+    }
+}
+
+/// Set the register a micro-op writes.
+fn set_micro_out(op: &mut MicroOp, r: GroupIx) {
+    match op {
+        MicroOp::Bin { out, .. }
+        | MicroOp::Un { out, .. }
+        | MicroOp::Neg { out, .. }
+        | MicroOp::Mov { out, .. }
+        | MicroOp::Select { out, .. }
+        | MicroOp::Bin2 { out, .. }
+        | MicroOp::Bin3 { out, .. }
+        | MicroOp::Scan { out, .. } => *out = r,
+    }
+}
+
+/// The register a micro-op writes.
+pub(super) fn micro_out(op: &MicroOp) -> GroupIx {
+    match op {
+        MicroOp::Bin { out, .. }
+        | MicroOp::Un { out, .. }
+        | MicroOp::Neg { out, .. }
+        | MicroOp::Mov { out, .. }
+        | MicroOp::Select { out, .. }
+        | MicroOp::Bin2 { out, .. }
+        | MicroOp::Bin3 { out, .. }
+        | MicroOp::Scan { out, .. } => *out,
+    }
+}
+
+/// [`FusedSpec::direct`] of an allocated micro-program: each output whose
+/// register's last writer is followed by no read of it, which `reduce_reg`
+/// (an absorbed reduction's register) is not, and which no other output
+/// names.
+fn direct_stores(
+    micro: &[MicroOp],
+    outputs: &[(GroupIx, SlotId)],
+    reduce_reg: Option<GroupIx>,
+) -> SmallVec<[(u32, u32); 2]> {
+    let mut direct = SmallVec::new();
+    for (k, &(reg, _)) in outputs.iter().enumerate() {
+        if Some(reg) == reduce_reg || outputs.iter().filter(|o| o.0 == reg).count() > 1 {
+            continue;
+        }
+        let Some(w) = micro.iter().rposition(|op| micro_out(op) == reg) else {
+            continue;
+        };
+        if micro[w + 1..].iter().any(|op| reads_reg(op, reg)) {
+            continue;
+        }
+        direct.push((w as u32, k as u32));
+    }
+    direct
+}
+
+/// `true` when `op` reads register `r`.
+pub(super) fn reads_reg(op: &MicroOp, r: GroupIx) -> bool {
     let mut hit = false;
     for_each_operand(op, |m| {
         if *m == MRef::Reg(r) {
@@ -1916,6 +2138,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     }
 
     merge_superops(&mut micro, &mut outputs, fx.cfg);
+    let scan_fuse = scan_fusions(&mut micro, &mut outputs);
     // A chunk-read gather with short rows in a group with little else to do
     // costs more per row than reading its box once: read it whole.
     if micro.len() < LIGHT_GROUP_OPS {
@@ -2004,6 +2227,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     };
     fx.sink.stats.group_size_hist[bucket] += 1;
 
+    let direct = direct_stores(&micro, &outputs, reduce.as_ref().map(|r| r.reg));
     let spec_ix = fx.sink.fused.len() as u32;
     fx.sink.fused.push(FusedSpec {
         shape,
@@ -2014,6 +2238,8 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         n_load_regs,
         n_splat_regs,
         outputs,
+        direct,
+        scan_fuse,
         schedule,
         reduce,
         interleave,

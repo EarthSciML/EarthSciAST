@@ -985,4 +985,86 @@ mod tests {
             assert_eq!(out[k], if covered { 7.0 } else { 0.0 }, "cell {c:?}");
         }
     }
+
+    /// `ChunkGather::fill` writes, over any window of the box, exactly the
+    /// per-element definition (`src_offset`): unit and wider shifts along
+    /// every axis (the flat-shift path), and plans it does not take
+    /// (two segments on an axis, a source of another layout).
+    #[test]
+    fn chunk_gather_fill_matches_its_definition() {
+        type Segs = SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]>;
+        let shift = |n: usize, d: i64| -> SmallVec<[(usize, usize, usize); 2]> {
+            let k = d.unsigned_abs() as usize;
+            if d >= 0 {
+                SmallVec::from_slice(&[(0, n - k, k)])
+            } else {
+                SmallVec::from_slice(&[(k, n - k, 0)])
+            }
+        };
+        let rm = |shape: &[usize]| -> SmallVec<[i64; 4]> {
+            let mut st: SmallVec<[i64; 4]> = SmallVec::from_elem(1, shape.len());
+            for a in (0..shape.len().saturating_sub(1)).rev() {
+                st[a] = st[a + 1] * shape[a + 1] as i64;
+            }
+            st
+        };
+        let mut cases: Vec<(DimU, Segs, SmallVec<[i64; 4]>)> = Vec::new();
+        for shape in [vec![7usize], vec![10, 10], vec![3, 4, 5], vec![4, 3, 2, 6]] {
+            let nd = shape.len();
+            for a in 0..nd {
+                for d in [-2i64, -1, 1, 2] {
+                    if d.unsigned_abs() as usize >= shape[a] {
+                        continue;
+                    }
+                    let segs: Segs = (0..nd)
+                        .map(|b| {
+                            if b == a {
+                                shift(shape[b], d)
+                            } else {
+                                shift(shape[b], 0)
+                            }
+                        })
+                        .collect();
+                    cases.push((SmallVec::from_slice(&shape), segs, rm(&shape)));
+                }
+            }
+            // Every axis shifted at once.
+            let segs: Segs = (0..nd).map(|b| shift(shape[b], 1)).collect();
+            cases.push((SmallVec::from_slice(&shape), segs, rm(&shape)));
+        }
+        // Two segments on an axis, and a wider source: the row walk.
+        let mut two: Segs = SmallVec::new();
+        two.push(SmallVec::from_slice(&[(0, 2, 1), (3, 1, 0)]));
+        two.push(shift(5, 1));
+        cases.push((SmallVec::from_slice(&[4, 5]), two, rm(&[4, 5])));
+        let mut wide: Segs = SmallVec::new();
+        wide.push(shift(4, 1));
+        wide.push(shift(5, 0));
+        cases.push((
+            SmallVec::from_slice(&[4, 5]),
+            wide,
+            SmallVec::from_slice(&[7, 1]),
+        ));
+        for (shape, segs, strides) in cases {
+            let g = ChunkGather {
+                segs,
+                strides,
+                shape: shape.clone(),
+                whole: false,
+            };
+            let n: usize = shape.iter().product();
+            let src: Vec<f64> = (0..4 * n).map(|k| k as f64 + 0.25).collect();
+            let want: Vec<f64> = (0..n)
+                .map(|f| g.src_offset(f).map_or(0.0, |o| src[o as usize]))
+                .collect();
+            for (at, c) in [(0, n), (1, n - 1), (n / 3, n / 2), (n - 1, 1), (2, 3)] {
+                if c == 0 || at + c > n {
+                    continue;
+                }
+                let mut got = vec![f64::NAN; c];
+                unsafe { g.fill(src.as_ptr(), at, c, got.as_mut_ptr()) };
+                assert_eq!(got, want[at..at + c], "{g:?} window {at}+{c}");
+            }
+        }
+    }
 }
