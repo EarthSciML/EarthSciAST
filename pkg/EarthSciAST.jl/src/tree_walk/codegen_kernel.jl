@@ -578,9 +578,26 @@ const _CG_MINMAX_FN = Dict{Symbol,Symbol}(row.sym => row.fnsym for row in _NARY_
 
 # Left-nested binary fold `((e1 op e2) op e3)…` — the interpreters' exact
 # `acc = ev(c1); acc = op(acc, ev(ci))` association.
+#
+# A long fold (a contraction unrolled over thousands of terms) is emitted as
+# that accumulation itself, one statement per term in a `let`, rather than as
+# a call nested once per term: Julia's lowering recurses on expression depth,
+# and a chain some 10^4 calls deep exhausts it ("out of gc handles"). The
+# operations, their operands and their order are the same, so are the values.
+const _CG_FOLD_NEST_MAX = 64
 function _cg_foldl(fnsym::Symbol, exprs::Vector{Any})
+    n = length(exprs)
+    if n > _CG_FOLD_NEST_MAX
+        acc = :_cgfacc
+        stmts = Any[:(local $acc = $(exprs[1]))]
+        for i in 2:n
+            push!(stmts, :($acc = $(Expr(:call, fnsym, acc, exprs[i]))))
+        end
+        push!(stmts, acc)
+        return Expr(:let, Expr(:block), Expr(:block, stmts...))
+    end
     acc = exprs[1]
-    for i in 2:length(exprs)
+    for i in 2:n
         acc = Expr(:call, fnsym, acc, exprs[i])
     end
     return acc
