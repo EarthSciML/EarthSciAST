@@ -1247,9 +1247,194 @@ fn ab_prefix_scan_observeds() {
         }}
     });
     let prog = ab_check(doc, 0, -2.0, 2.0);
-    // Each scan is ONE `Scan` over its whole box, with no per-step writes.
-    assert_eq!(opcount(&prog, "Scan"), 2, "one Scan per scan observed");
+    // Each scan is ONE `Scan` over its whole box (an instruction, or a
+    // micro-op of the fused group that computes its source), with no
+    // per-step writes.
+    assert_eq!(
+        opcount(&prog, "Scan") + scan_micro_ops(&prog),
+        2,
+        "one Scan per scan observed"
+    );
     assert_eq!(opcount(&prog, "Region"), 0, "no per-step region writes");
+}
+
+/// Absorbed scans (`MicroOp::Scan`) over every fused group.
+fn scan_micro_ops(prog: &TapeProgram) -> usize {
+    prog.fused
+        .iter()
+        .flat_map(|f| &f.micro)
+        .filter(|m| matches!(m, MicroOp::Scan { .. }))
+        .count()
+}
+
+/// A scan joins the fused group that computes its source, and the scan's
+/// readers join it too (the identity read of the scanned observed and its
+/// export no longer split the group). Scans longer than the executor's
+/// chunk, with chunks that start mid-scan, exercise the carry from one chunk
+/// to the next and the restart at each scan's first step; the program's
+/// column-major layout puts the scanned axis first, so each lane of the box
+/// carries its own running value.
+#[test]
+fn ab_scan_absorbed_into_its_group() {
+    let (ni, nk) = (3, 1100);
+    let scan_obs = |cmp: &str| {
+        json!({"op": "faq", "args": [], "output_idx": ["i", "k"],
+            "reduce": "+",
+            "ranges": {"i": [1, ni], "k": [1, nk], "m": [1, nk]},
+            "filter": {"op": cmp, "args": ["m", "k"]},
+            "expr": {"op": "*", "args": [
+                {"op": "index", "args": ["u", "i", "m"]},
+                {"op": "index", "args": ["w", "i", "m"]}]}})
+    };
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_scan_fused"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["i", "k"]},
+                "w": {"type": "unknown", "shape": ["i", "k"]},
+                "P": {"type": "unknown", "shape": ["i", "k"]},
+                "Q": {"type": "unknown", "shape": ["i", "k"]}
+            },
+            "equations": [
+                {"lhs": "w", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
+                    "ranges": {"i": [1, ni], "k": [1, nk]},
+                    "expr": {"op": "+", "args": [1.0, {"op": "*", "args": [0.5,
+                        {"op": "sin", "args": [{"op": "*", "args": ["i", "k"]}]}]}]}}},
+                {"lhs": "P", "rhs": scan_obs("<=")},
+                {"lhs": "Q", "rhs": scan_obs("<")},
+                {
+                    "lhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
+                            "expr": {"op": "D", "args": [
+                                {"op": "index", "args": ["u", "i", "k"]}], "wrt": "t"},
+                            "ranges": {"i": [1, ni], "k": [1, nk]}},
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
+                            "ranges": {"i": [1, ni], "k": [1, nk]},
+                            "expr": {"op": "+", "args": [
+                                {"op": "*", "args": [-0.001,
+                                    {"op": "index", "args": ["P", "i", "k"]}]},
+                                {"op": "*", "args": [0.002,
+                                    {"op": "index", "args": ["Q", "i", "k"]}]}
+                            ]}}
+                }
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    assert_eq!(opcount(&prog, "Scan"), 0, "both scans are absorbed");
+    assert_eq!(scan_micro_ops(&prog), 2);
+    let cont = prog.section_range(Cadence::Continuous);
+    let fused_cont = prog.instrs[cont]
+        .iter()
+        .filter(|i| matches!(i, Instr::Fused { .. }))
+        .count();
+    assert_eq!(fused_cont, 1, "the scans and their reader run as one group");
+}
+
+/// A ghost Laplacian along the innermost axis of a 3-D box whose rows are
+/// too short to fold as shifted reads: the gathers are read through their
+/// plans one chunk at a time inside the consumer's group (chunks start and
+/// end mid-row), together with a wrap along the outer axis.
+#[test]
+fn ab_chunk_gathers_on_short_rows() {
+    let build = |ni: i64, nk: i64| {
+        let nj = 4i64;
+        let ix3 = |i: serde_json::Value, k: serde_json::Value| json!({"op": "index", "args": ["u", i, "j", k]});
+        let lap = json!({"op": "+", "args": [
+            ix3(json!("i"), json!({"op": "-", "args": ["k", 1]})),
+            {"op": "*", "args": [-2.0, ix3(json!("i"), json!("k"))]},
+            ix3(json!("i"), json!({"op": "+", "args": ["k", 1]})),
+            {"op": "*", "args": [0.5, ix3(wrap(json!({"op": "+", "args": ["i", 1]}), 1, ni), json!("k"))]}
+        ]});
+        let ranges = json!({"i": [1, ni], "j": [1, nj], "k": [1, nk]});
+        let doc = json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "tape_chunk_gather"},
+            "models": {"M": {
+                "variables": {"u": {"type": "unknown", "shape": ["i", "j", "k"]}},
+                "equations": [{
+                    "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
+                            "expr": {"op": "D", "args": [
+                                {"op": "index", "args": ["u", "i", "j", "k"]}], "wrt": "t"},
+                            "ranges": ranges},
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
+                            "ranges": ranges, "expr": {"op": "*", "args": [0.25, lap]}}
+                }]
+            }}
+        });
+        ab_check(doc, 0, -2.0, 2.0)
+    };
+    // Long rows along both shifted axes (read per chunk), short ones (read
+    // whole), and a mix: absorbed either way, so the program is the same.
+    let progs: Vec<TapeProgram> = [(40, 40), (8, 6), (40, 6), (8, 40)]
+        .into_iter()
+        .map(|(ni, nk)| build(ni, nk))
+        .collect();
+    for prog in &progs {
+        assert!(
+            prog.fused
+                .iter()
+                .flat_map(|f| &f.inputs)
+                .any(|i| i.gather.is_some()),
+            "an innermost-axis shift is read through its plan"
+        );
+        assert_eq!(opcount(prog, "Gather"), 0, "no gather is materialized");
+        assert_eq!(
+            prog.instrs.len(),
+            progs[0].instrs.len(),
+            "the program is flat in the box"
+        );
+    }
+}
+
+/// The unstructured-mesh gather `sum_k kappa * (u[nbr[i, k]] - u[i])` over a
+/// constant neighbour table, with more cells than one executor chunk: the
+/// folded gather reads positions resolved when the CONST section runs, and
+/// the reduction over the four neighbour positions walks its accumulator
+/// chunk by chunk.
+#[test]
+fn ab_index_gather_reduction_interleaved() {
+    let n = 1500usize;
+    let nbr: Vec<Vec<f64>> = (0..n)
+        .map(|i| {
+            (0..4)
+                .map(|k| ((i * 7 + k * 389 + 1) % n + 1) as f64)
+                .collect()
+        })
+        .collect();
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_mesh_gather"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["cells"]},
+                "nbr": {"type": "unknown", "shape": ["cells", "nb"]},
+                "kappa": {"type": "parameter", "default": 0.1}
+            },
+            "equations": [
+                {"lhs": "nbr", "rhs": {"op": "const", "args": [], "value": nbr}},
+                {
+                    "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                            "expr": {"op": "D", "args": [
+                                {"op": "index", "args": ["u", "i"]}], "wrt": "t"},
+                            "ranges": {"i": [1, n]}},
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                            "ranges": {"i": [1, n], "k": [1, 4]},
+                            "expr": {"op": "*", "args": ["kappa", {"op": "-", "args": [
+                                {"op": "index", "args": ["u",
+                                    {"op": "index", "args": ["nbr", "i", "k"]}]},
+                                {"op": "index", "args": ["u", "i"]}]}]}}
+                }
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    assert!(
+        prog.fused
+            .iter()
+            .any(|f| f.interleave.is_some() && f.inputs.iter().any(|i| i.index.is_some())),
+        "the neighbour reduction runs interleaved over its folded gather"
+    );
 }
 
 /// A declared observed whose whole body is a `makearray` (the boundary-

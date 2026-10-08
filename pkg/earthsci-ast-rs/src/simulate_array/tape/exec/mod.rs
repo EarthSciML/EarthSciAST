@@ -59,6 +59,12 @@ mod interp;
 mod kernels;
 mod lanes;
 mod oracle;
+#[cfg(not(target_arch = "wasm32"))]
+mod par;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod par_tests;
+#[cfg(not(target_arch = "wasm32"))]
+mod pool;
 mod resolve;
 #[cfg(test)]
 mod simd_tests;
@@ -73,7 +79,38 @@ pub(super) use oracle::run_rhs_oracle;
 
 use fused::FCHUNK;
 use interp::run_range;
-use kernels::copy_strided;
+// A large block copy splits across the pool on native targets.
+#[cfg(not(target_arch = "wasm32"))]
+use par::copy_strided as copy_strided_maybe_split;
+
+/// The wasm build's block copy: always serial.
+///
+/// # Safety
+/// As for [`kernels::copy_strided`].
+#[cfg(target_arch = "wasm32")]
+unsafe fn copy_strided_maybe_split(
+    _call: usize,
+    dst: *mut f64,
+    dstr: &[i64],
+    src: *const f64,
+    sstr: &[i64],
+    shape: &[usize],
+) {
+    unsafe { kernels::copy_strided(dst, dstr, src, sstr, shape) }
+}
+
+/// The current call's split width (always 1 on wasm).
+fn call_ways(exec: &TapeExec) -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        exec.fscratch.workers.call_ways
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = exec;
+        1
+    }
+}
 use resolve::{cm_strides, rm_strides};
 
 // ---------------------------------------------------------------------------
@@ -99,11 +136,18 @@ pub(crate) enum SimdLevel {
     Avx512,
 }
 
-/// Detect the widest supported clone, once.
+/// Select the clone, once: AVX2 where the CPU has it, the generic codegen
+/// otherwise.
+///
+/// The AVX-512 clone is opt-in. Its loops run in 512-bit registers, and on
+/// the Xeon cores this tier is measured on that lowers the core clock for the
+/// whole call, the scalar pieces included (scan chains, gathers, the per-call
+/// passes), which costs more than the wider lanes give back.
 ///
 /// `ESS_TAPE_SIMD_DISABLE=1` forces the generic codegen and
-/// `ESS_TAPE_SIMD_LEVEL=generic|avx2|avx512` caps the selection below the
-/// detected width: DEVICE selection, not strategy selection — every level runs
+/// `ESS_TAPE_SIMD_LEVEL=generic|avx2|avx512` chooses a level (one the CPU
+/// lacks falls back to the next narrower): DEVICE selection, not strategy
+/// selection — every level runs
 /// the same program and is bit-identical (`simd_clone_bit_identity`), so
 /// neither is a way to reach a different evaluator
 /// (`esm-libraries-spec.md` §2.5.10).
@@ -117,16 +161,15 @@ pub(crate) fn simd_level() -> SimdLevel {
         if off {
             return SimdLevel::Generic;
         }
-        // `ESS_TAPE_SIMD_LEVEL=generic|avx2|avx512`: cap the selection below
-        // the detected width (measurement aid; a level the CPU lacks is
-        // ignored). Unset = widest detected.
+        // `ESS_TAPE_SIMD_LEVEL=generic|avx2|avx512` (measurement aid; a level
+        // the CPU lacks falls back). Unset = AVX2 where available.
         let cap = std::env::var("ESS_TAPE_SIMD_LEVEL").unwrap_or_default();
         if cap.eq_ignore_ascii_case("generic") {
             return SimdLevel::Generic;
         }
         #[cfg(target_arch = "x86_64")]
         {
-            let allow512 = !cap.eq_ignore_ascii_case("avx2");
+            let allow512 = cap.eq_ignore_ascii_case("avx512");
             if allow512
                 && std::arch::is_x86_feature_detected!("avx512f")
                 && std::arch::is_x86_feature_detected!("avx512vl")
@@ -211,6 +254,10 @@ pub(crate) struct TapeExec {
     /// A fused group's resolved operands, sized for the largest group so a
     /// call never allocates.
     fscratch: fused::FusedScratch,
+    /// Per fused group: the resolved positions of its folded gathers whose
+    /// subscripts the CONST or SEGMENT section defines, refilled each time
+    /// those sections run.
+    idx_tables: Vec<Vec<Option<fused::IndexTable>>>,
     /// The lane programs' chunk registers.
     lscratch: lanes::LaneScratch,
     /// Step 4 export demotion: `Export` instructions only execute when
@@ -226,6 +273,10 @@ pub(crate) struct TapeExec {
     /// Step 4b: the SIMD clone this executor runs its fused loops through,
     /// selected ONCE at executor construction (never per element).
     simd: SimdLevel,
+    /// Estimated element-operations of one steady call, which sets how wide
+    /// a call splits (see `par::call_ways`).
+    #[cfg(not(target_arch = "wasm32"))]
+    call_work: usize,
 }
 
 impl TapeExec {
@@ -332,11 +383,14 @@ impl TapeExec {
             primed_forcing_epoch: 0,
             fregs: vec![0.0f64; max_fregs * FCHUNK],
             fscratch: fused::FusedScratch::for_program(prog),
+            idx_tables: fused::index_tables_for(prog),
             lscratch: lanes::LaneScratch::for_program(prog),
             exports_active: n_fallback > 0,
             n_taped: prog.rules.len() - n_fallback,
             n_fallback,
             simd: simd_level(),
+            #[cfg(not(target_arch = "wasm32"))]
+            call_work: par::program_work(prog),
         }
     }
 }
@@ -751,6 +805,10 @@ pub(in crate::simulate_array) fn run_tape_call(
     let (param_epoch, forcing_epoch) = (ctx.param_epoch, ctx.forcing_epoch);
     let prog = &*ctx.prog;
     let exec = &mut ctx.exec;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        exec.fscratch.workers.call_ways = par::call_ways(exec.call_work);
+    }
     // Zero what no rule writes; every other element is overwritten below.
     if exec.dy_zero_len != dy.len() {
         exec.dy_zero = dy_zero_ranges(prog, dy.len(), exec.n_fallback);
@@ -762,12 +820,14 @@ pub(in crate::simulate_array) fn run_tape_call(
     }
     // Refill the row-major state mirror: one strided pass per mirrored
     // variable block (column-major flat -> row-major at the same offset).
+    let ways = call_ways(exec);
     for &i in &exec.mirror_vars {
         let sv = &prog.state_vars[i as usize];
         let rm = rm_strides(&sv.shape);
         let cm = cm_strides(&sv.shape);
         unsafe {
-            copy_strided(
+            copy_strided_maybe_split(
+                ways,
                 exec.state_rm.as_mut_ptr().add(sv.flat_offset),
                 &rm,
                 state.as_ptr().add(sv.flat_offset),
@@ -811,11 +871,17 @@ pub(in crate::simulate_array) fn run_tape_call(
         #[cfg(test)]
         SECTION_PRIMES.with(|c| c.set((c.get().0 + 1, c.get().1)));
         run_range(&env, 0..prime_end, exec, dy, stats);
+        unsafe {
+            fused::refill_index_tables(&mut exec.idx_tables, exec.slab.as_ptr(), &exec.slot_off)
+        };
     } else if exec.primed_forcing_epoch != forcing_epoch {
         exec.primed_forcing_epoch = forcing_epoch;
         #[cfg(test)]
         SECTION_PRIMES.with(|c| c.set((c.get().0, c.get().1 + 1)));
         run_range(&env, const_end..prime_end, exec, dy, stats);
+        unsafe {
+            fused::refill_index_tables(&mut exec.idx_tables, exec.slab.as_ptr(), &exec.slot_off)
+        };
     }
     // With nothing reading the published observeds, the output-only tail of
     // the section is not run.

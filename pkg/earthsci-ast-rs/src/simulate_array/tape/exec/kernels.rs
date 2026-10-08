@@ -538,6 +538,7 @@ pub(super) unsafe fn exec_gather(
     src: &SrcView,
     out: *mut f64,
     full_cover: bool,
+    ways: usize,
 ) {
     assert_eq!(
         &src.shape[..],
@@ -587,8 +588,10 @@ pub(super) unsafe fn exec_gather(
             sbase += eff[d] * s as i64;
             bshape[d] = l;
         }
+        // A large segment splits under the call's width (see `par`).
         unsafe {
-            copy_strided(
+            super::copy_strided_maybe_split(
+                ways,
                 out.offset(dbase as isize),
                 &out_rm,
                 base.offset(sbase as isize),

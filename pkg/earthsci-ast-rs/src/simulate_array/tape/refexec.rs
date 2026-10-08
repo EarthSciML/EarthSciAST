@@ -706,6 +706,15 @@ pub(super) fn run_reference(
                     .reduce
                     .as_ref()
                     .map_or_else(Vec::new, |r| vec![r.init; r.n_inner]);
+                let n_scans: usize = fs
+                    .micro
+                    .iter()
+                    .map(|m| match m {
+                        MicroOp::Scan { post, .. } => *post as usize,
+                        _ => 0,
+                    })
+                    .sum();
+                let mut carries = vec![0.0f64; n_scans];
                 let mut covered = 0usize;
                 for run in &fs.schedule.expanded() {
                     for k in 0..run.len as usize {
@@ -717,6 +726,13 @@ pub(super) fn run_reference(
                                 MRef::In(i) => {
                                     let inp = &fs.inputs[*i as usize];
                                     match inp.shifted_ix {
+                                        None if inp.gather.is_some() => {
+                                            let g = inp.gather.as_deref().expect("a chunk gather");
+                                            match g.src_offset(at) {
+                                                Some(o) => flats[*i as usize][o as usize],
+                                                None => 0.0,
+                                            }
+                                        }
                                         None => match inp.index {
                                             Some((by, n)) => {
                                                 match data_subscript(flats[by as usize][at], n) {
@@ -740,7 +756,7 @@ pub(super) fn run_reference(
                             }
                         };
                         for op in &fs.micro {
-                            eval_micro_op(op, &mut regs, get);
+                            eval_micro_op(op, &mut regs, at, &mut carries, get);
                         }
                         for (oi, &(reg, _)) in fs.outputs.iter().enumerate() {
                             outs[oi][at] = regs[reg as usize];
@@ -818,7 +834,8 @@ pub(super) fn run_reference(
                         MRef::Scal(i) => svals[*i as usize],
                     };
                     for op in &ls.micro {
-                        eval_micro_op(op, &mut regs, get);
+                        // A lane program holds no scan, so no carries.
+                        eval_micro_op(op, &mut regs, l, &mut [], get);
                     }
                     for w in &ls.writes {
                         let v = get(&w.src, &regs);
