@@ -773,13 +773,14 @@ fn dy_homes(prog: &TapeProgram, n: usize) -> Vec<usize> {
             continue;
         };
         let fs = &prog.fused[*spec as usize];
-        if fs.reduce.as_ref().is_some_and(|r| r.out as usize == s)
-            || !fs.outputs.iter().any(|&(_, o)| o as usize == s)
-        {
-            continue;
-        }
+        // A stored output over the group's box, or an absorbed reduction's
+        // accumulator (folded in place, so straight into `dy`).
         let desc = &prog.slots[s];
-        if desc.scalar || desc.shape[..] != fs.shape[..] {
+        let fits = match &fs.reduce {
+            Some(r) if r.out as usize == s => desc.elems() == r.n_inner,
+            _ => fs.outputs.iter().any(|&(_, o)| o as usize == s) && desc.shape[..] == fs.shape[..],
+        };
+        if desc.scalar || !fits {
             continue;
         }
         let sv = &prog.state_vars[w.var as usize];

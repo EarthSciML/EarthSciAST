@@ -632,6 +632,11 @@ impl<'a> Window<'a> {
     }
 }
 
+/// Unused bytes past the end of each buffer a split's worker writes (two
+/// cache lines, the pair the adjacent-line prefetcher moves together).
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) const PAD_BYTES: usize = 128;
+
 /// The executor's position in a [`RunSchedule`]: one frame per open
 /// [`RunNode::Repeat`], the offsets the open repetitions have stepped so far,
 /// and the current run's shifted-input offsets with them applied. Sized for
@@ -662,6 +667,23 @@ impl RunCursor {
             in_delta: Vec::with_capacity(n_shifted),
             in_off: Vec::with_capacity(n_shifted),
             carries: Vec::with_capacity(n_scans),
+        }
+    }
+
+    /// [`RunCursor::with_room`] for a split's worker: every buffer has
+    /// unused room for [`PAD_BYTES`] past its end, so what one worker writes
+    /// never shares a cache line with the next allocation (another worker's
+    /// cursor or registers).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn for_worker(depth: usize, n_shifted: usize, n_scans: usize) -> Self {
+        fn room<T>(n: usize) -> Vec<T> {
+            Vec::with_capacity(n + PAD_BYTES.div_ceil(std::mem::size_of::<T>().max(1)))
+        }
+        RunCursor {
+            frames: room(depth),
+            in_delta: room(n_shifted),
+            in_off: room(n_shifted),
+            carries: room(n_scans),
         }
     }
 
@@ -844,12 +866,12 @@ pub(super) unsafe fn exec_fused(
         };
         outs.push((reg, p));
     }
-    // An absorbed reduction's accumulator, seeded with its identity.
+    // An absorbed reduction's accumulator: its slot, or `dy` when homed
+    // there.
     let red: *mut f64 = match &fs.reduce {
-        Some(r) => unsafe {
-            let p = slab_ptr.add(slot_off[r.out as usize]);
-            std::slice::from_raw_parts_mut(p, r.n_inner).fill(r.init);
-            p
+        Some(r) => match dy_home.get(r.out as usize) {
+            Some(&off) if off != usize::MAX => unsafe { dy.add(off) },
+            _ => unsafe { slab_ptr.add(slot_off[r.out as usize]) },
         },
         None => std::ptr::null_mut(),
     };
@@ -867,6 +889,11 @@ pub(super) unsafe fn exec_fused(
             };
             return;
         }
+    }
+    // Seeded with the reduction's identity (a split's workers seed their
+    // own cells).
+    if let Some(r) = &fs.reduce {
+        unsafe { std::slice::from_raw_parts_mut(red, r.n_inner).fill(r.init) };
     }
     unsafe { fill_whole(fs, bases, whole_src, 0, n_elems, 0) };
     unsafe {
@@ -965,7 +992,9 @@ pub(super) unsafe fn run_fused_window(
 /// Fold one chunk (`c` values at flat box offset `at`) into an absorbed
 /// reduction's accumulator: `acc[(at + k) % n_inner] = f(acc[..], v[k])`,
 /// ascending in `k` — contiguous pieces of the accumulator, one per crossing
-/// of a leading-axes position.
+/// of a leading-axes position. `acc` is where cell 0 would be: a split's
+/// worker backs only its own cells, so it may point before that buffer
+/// (hence the wrapping offset).
 #[inline(always)]
 unsafe fn fold_chunk(
     acc: *mut f64,
@@ -980,7 +1009,7 @@ unsafe fn fold_chunk(
         let o = (at + k) % n_inner;
         let len = (c - k).min(n_inner - o);
         unsafe {
-            let a = std::slice::from_raw_parts_mut(acc.add(o), len);
+            let a = std::slice::from_raw_parts_mut(acc.wrapping_add(o), len);
             let x = std::slice::from_raw_parts(v.add(k), len);
             for (y, &t) in a.iter_mut().zip(x) {
                 *y = f(*y, t);

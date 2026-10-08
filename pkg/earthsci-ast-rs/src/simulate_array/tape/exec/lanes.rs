@@ -96,7 +96,7 @@ pub(super) unsafe fn exec_lanes(
         let ways = super::par::lane_ways(lanes, super::par::lane_cost(ls), ways);
         if ways > 1 {
             while workers.len() < ways {
-                workers.push(vec![0.0; regs.len()]);
+                workers.push(super::par::padded(regs.len()));
             }
             let sh = SplitLanes {
                 ls,
