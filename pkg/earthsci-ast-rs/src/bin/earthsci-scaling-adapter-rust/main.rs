@@ -27,9 +27,11 @@
 //! native's `dy` with the interpreter's.
 //!
 //! `--threads T` sets the thread count of both native's right-hand side (the
-//! child's global rayon pool, which the tape splits large calls across) and
-//! the hand loop; `--threads 1` runs both serially.
+//! child's global rayon pool size, which the tape splits large calls across)
+//! and the hand loop (its own fork-join, `fork_join.rs`); `--threads 1` runs
+//! both serially.
 
+mod fork_join;
 mod hand_loops;
 #[rustfmt::skip]
 mod pollu_box;
@@ -605,12 +607,7 @@ fn measure_one(one: &One) -> Map<String, Value> {
     // The hand loop, on the canonical order.
     match build_hand_loop(&family, &doc, &entry["shape"]) {
         Ok(hl) => {
-            let pool = (one.threads > 1).then(|| {
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(one.threads)
-                    .build()
-                    .expect("a rayon pool")
-            });
+            let pool = (one.threads > 1).then(|| fork_join::ForkJoin::new(one.threads));
             let mut hdy = vec![0.0f64; n];
             hl.run(&canon_state, &mut hdy, pool.as_ref());
             let mut native_canon = vec![0.0f64; n];

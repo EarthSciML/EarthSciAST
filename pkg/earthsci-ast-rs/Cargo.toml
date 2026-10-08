@@ -74,7 +74,6 @@ required-features = ["conformance-adapters"]
 # allocated per call and the hand-written reference loops, one document per
 # child process. Its own directory because it carries the reference loops and a
 # counting global allocator, which must not leak into any other binary.
-# `parallel` (rayon) runs the threaded reference loops.
 [[bin]]
 name = "earthsci-scaling-adapter-rust"
 path = "src/bin/earthsci-scaling-adapter-rust/main.rs"
