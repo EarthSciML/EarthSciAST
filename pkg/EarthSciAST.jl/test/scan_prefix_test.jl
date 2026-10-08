@@ -352,3 +352,83 @@ end
         @test diag.n_scan_folds == 0
     end
 end
+
+# An observed `w` filled by a prefix scan and read cell by cell by a state
+# equation (`D(u[i]) = -0.5 * w[i] + u[i]`): the scan's fold also computes the
+# state equation (scan_fused.jl, its consumer), and drops `w`'s store when
+# nothing else reads it. `extra` adds a second reader of `w` (an observed `v`
+# feeding a state `z`); `other` makes the state equation read a second observed
+# as well, which a consumer may not.
+function _obs_scan_doc(n; filt="<=", reduce="+", extra=false, other=false)
+    ix(v, i) = "{\"op\":\"index\",\"args\":[\"$v\",\"$i\"]}"
+    faq(body; j=false, flt=nothing, red=nothing) =
+        "{\"op\":\"faq\",\"args\":[],\"output_idx\":[\"i\"],\"ranges\":{\"i\":{\"from\":\"x\"}" *
+        (j ? ",\"j\":{\"from\":\"x\"}" : "") * "}" *
+        (red === nothing ? "" : ",\"reduce\":\"$red\"") *
+        (flt === nothing ? "" : ",\"filter\":{\"op\":\"$flt\",\"args\":[\"j\",\"i\"]}") *
+        ",\"expr\":$body}"
+    dlhs(v) = "{\"op\":\"faq\",\"args\":[],\"output_idx\":[\"i\"],\"ranges\":{\"i\":{\"from\":\"x\"}}," *
+              "\"expr\":{\"op\":\"D\",\"args\":[$(ix(v, "i"))],\"wrt\":\"t\"}}"
+    var(v) = "\"$v\":{\"type\":\"unknown\",\"units\":\"1\",\"shape\":[\"x\"],\"default\":1.0}"
+    vars = [var("u"), var("w")]
+    term = "{\"op\":\"*\",\"args\":[$(ix("u", "j")),$(ix("u", "j"))]}"
+    cons = "{\"op\":\"*\",\"args\":[-0.5,$(ix("w", "i"))]}"
+    other && (cons = "{\"op\":\"+\",\"args\":[$cons,$(ix("s", "i"))]}")
+    cons = "{\"op\":\"+\",\"args\":[$cons,$(ix("u", "i"))]}"
+    eqs = ["{\"lhs\":\"w\",\"rhs\":$(faq(term; j=true, flt=filt, red=reduce))}",
+           "{\"lhs\":$(dlhs("u")),\"rhs\":$(faq(cons))}"]
+    if extra
+        append!(vars, [var("v"), var("z")])
+        push!(eqs, "{\"lhs\":\"v\",\"rhs\":$(faq("{\"op\":\"*\",\"args\":[2.0,$(ix("w", "i"))]}"))}")
+        push!(eqs, "{\"lhs\":$(dlhs("z")),\"rhs\":$(faq(ix("v", "i")))}")
+    end
+    if other
+        push!(vars, var("s"))
+        push!(eqs, "{\"lhs\":\"s\",\"rhs\":$(faq("{\"op\":\"sin\",\"args\":[$(ix("u", "i"))]}"))}")
+    end
+    return "{\"esm\":\"1.1.0\",\"metadata\":{\"name\":\"obs_scan\",\"authors\":[\"test\"]}," *
+           "\"index_sets\":{\"x\":{\"kind\":\"interval\",\"size\":$n}}," *
+           "\"models\":{\"Column\":{\"variables\":{$(join(vars, ","))}," *
+           "\"equations\":[$(join(eqs, ","))]}}}"
+end
+
+function _obs_scan_eval(json; compiler=:native)
+    path = joinpath(mktempdir(), "obs_scan.esm")
+    write(path, json)
+    ESM._reset_cascade_tally!()
+    prob = ESM.esm_problem(path, (0.0, 1.0); compiler=compiler)
+    tally = copy(ESM._CASCADE_TALLY)
+    u = Float64[_sc_val(k) for k in 1:length(prob.u0)]
+    du = zero(u)
+    prob.f!(du, u, prob.p, 0.0)
+    seed = Float64[isodd(k) ? 1.0 : -0.5 for k in 1:length(u)]
+    jd = ForwardDiff.derivative(
+        s -> (d = zeros(typeof(s), length(u)); prob.f!(d, u .+ s .* seed, prob.p, 0.0); d), 0.0)
+    allocs = (prob.f!(du, u, prob.p, 0.0); @allocated prob.f!(du, u, prob.p, 0.0))
+    return (du=du, jd=jd, tally=tally, allocs=allocs)
+end
+
+@testset "a prefix-scanned observed's state consumer runs inside the fold" begin
+    for filt in ("<=", "<"), red in ("+", "max"), n in (1, 7, 40)
+        json = _obs_scan_doc(n; filt=filt, reduce=red)
+        a = _obs_scan_eval(json)
+        r = _obs_scan_eval(json; compiler=:interpreter)
+        @test get(a.tally, :scan_fused_consumer, 0) == 1
+        @test get(a.tally, :scan_fused_store_dropped, 0) == 1
+        @test _bits(a.du) == _bits(r.du)
+        @test _bits(a.jd) == _bits(r.jd)
+        VERSION >= v"1.12" && @test a.allocs == 0
+    end
+    # A second reader of the observed keeps its store.
+    json = _obs_scan_doc(9; extra=true)
+    a = _obs_scan_eval(json)
+    @test get(a.tally, :scan_fused_consumer, 0) == 1
+    @test get(a.tally, :scan_fused_store_dropped, 0) == 0
+    @test _bits(a.du) == _bits(_obs_scan_eval(json; compiler=:interpreter).du)
+    # A state equation that also reads another observed is not a consumer.
+    json = _obs_scan_doc(9; other=true)
+    a = _obs_scan_eval(json)
+    @test get(a.tally, :scan_fused_consumer, 0) == 0
+    @test get(a.tally, :scan_fused, 0) == 1
+    @test _bits(a.du) == _bits(_obs_scan_eval(json; compiler=:interpreter).du)
+end

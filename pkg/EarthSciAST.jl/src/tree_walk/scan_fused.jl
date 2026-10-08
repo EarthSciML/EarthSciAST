@@ -57,41 +57,32 @@ end
 
 # The fold's slots are the kernel's output slots, in the kernel's own cell
 # order (the order every nest emits a chunk's cells in).
-function _scan_fusable(K::_AccKernel, S::_ScanFold)
-    S.len >= 1 || return false
-    cs = K.cells
-    _cellset_ncells(cs) == length(S.slots) || return false
-    slots = S.slots
+_scan_fusable(K::_AccKernel, S::_ScanFold) =
+    S.len >= 1 && _cellset_is_shifted(K.cells, S.slots, 0)
+
+# Whether a cell set's slots, in its cell order, are `slots .- delta`.
+function _cellset_is_shifted(cs::_CellSet, slots::Vector{Int}, delta::Int)
+    _cellset_ncells(cs) == length(slots) || return false
     if _is_outs(cs)
-        return cs.outs == slots
+        return all(k -> cs.outs[k] + delta == slots[k], eachindex(slots))
     elseif _is_contig(cs)
-        return collect(cs.ranges[1]) == slots
+        r = cs.ranges[1]
+        return all(k -> r[k] + delta == slots[k], eachindex(slots))
     end
+    return _box_is_shifted(cs.base, Tuple(cs.strides), Tuple(cs.ranges), slots, delta)
+end
+function _box_is_shifted(base::Int, st::NTuple{N,Int}, rs::NTuple{N,UnitRange{Int}},
+                         slots::Vector{Int}, delta::Int) where {N}
     k = 0
-    for I in CartesianIndices(Tuple(cs.ranges))
-        o = cs.base
-        for d in eachindex(cs.strides)
-            o += I[d] * cs.strides[d]
+    @inbounds for I in CartesianIndices(rs)
+        o = base
+        for d in 1:N
+            o += I[d] * st[d]
         end
         k += 1
-        slots[k] == o || return false
+        o + delta == slots[k] || return false
     end
     return true
-end
-
-# The slots a cell set writes, in its cell order.
-function _cellset_slots(cs::_CellSet)
-    _is_outs(cs) && return copy(cs.outs)
-    _is_contig(cs) && return collect(cs.ranges[1])
-    out = Int[]
-    for I in CartesianIndices(Tuple(cs.ranges))
-        o = cs.base
-        for d in eachindex(cs.strides)
-            o += I[d] * cs.strides[d]
-        end
-        push!(out, o)
-    end
-    return out
 end
 
 # ---- The consumer of a fused scan ---------------------------------------------
@@ -159,7 +150,7 @@ end
 
 # The consumer of fold `S` among the state kernels `Ks`, or `nothing`: the one
 # kernel that reads the observed's slots, through one affine descriptor that
-# maps its cells onto the fold's slots one to one, with a body
+# maps its cells onto the fold's slots one to one and in order, with a body
 # `_scan_consumer_node_ok` accepts.
 function _scan_consumer(S::_ScanFold, Ks::AbstractVector{_AccKernel}, nst::Int)
     isempty(S.slots) && return nothing
@@ -196,7 +187,7 @@ function _scan_consumer(S::_ScanFold, Ks::AbstractVector{_AccKernel}, nst::Int)
      all(_scan_consumer_node_ok, K.cse.inv_recipes)) || return nothing
     any(r -> _scan_node_reads(r, ix), K.cse.inv_recipes) && return nothing
     delta = K.acc[ix].delta
-    sort!(_cellset_slots(K.cells) .+ delta) == sort(S.slots) || return nothing
+    _cellset_is_shifted(K.cells, S.slots, delta) || return nothing
     return (K, ix, delta)
 end
 
