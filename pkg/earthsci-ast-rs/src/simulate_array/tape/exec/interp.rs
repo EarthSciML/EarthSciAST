@@ -59,6 +59,9 @@ pub(super) fn run_range(
         export_sites,
         pending,
         plan_full,
+        asm_covered,
+        #[cfg(not(target_arch = "wasm32"))]
+        asm_parts,
         fregs,
         fscratch,
         idx_tables,
@@ -329,20 +332,56 @@ pub(super) fn run_range(
                 let desc = &prog.slots[*out as usize];
                 let off = slot_off[*out as usize];
                 let dst = unsafe { slab_ptr.add(off) };
-                unsafe { std::slice::from_raw_parts_mut(dst, desc.elems()).fill(0.0) };
+                let parts = &prog.assemblies[*table as usize].parts;
+                let covered = asm_covered[*table as usize];
                 let out_rm = rm_strides(&desc.shape);
-                for (src, region) in &prog.assemblies[*table as usize].parts {
-                    let spec = &prog.regions[*region as usize];
-                    let mut dbase = 0i64;
-                    for d in 0..desc.shape.len() {
-                        dbase += out_rm[d] * spec.dest_lo[d] as i64;
+                // A large assembly splits across the call's workers, each
+                // assembling its own share of the box (see `par`).
+                #[cfg(not(target_arch = "wasm32"))]
+                let split = super::par::ways_for(desc.elems(), call_split);
+                #[cfg(target_arch = "wasm32")]
+                let split = 1;
+                if split > 1 && !desc.shape.is_empty() {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        asm_parts.clear();
+                        for (src, region) in parts {
+                            let spec = &prog.regions[*region as usize];
+                            let mut dbase = 0i64;
+                            for d in 0..desc.shape.len() {
+                                dbase += out_rm[d] * spec.dest_lo[d] as i64;
+                            }
+                            let rv = resolve_rv(src, &spec.shape, env, slab_ptr, slot_off, obs);
+                            asm_parts.push(super::par::AsmPart::new(*region, dbase, rv));
+                        }
+                        unsafe {
+                            super::par::assemble(
+                                split,
+                                dst,
+                                &desc.shape,
+                                &prog.regions,
+                                asm_parts,
+                                covered,
+                            )
+                        };
                     }
-                    let sub_dst = unsafe { dst.offset(dbase as isize) };
-                    match resolve_rv(src, &spec.shape, env, slab_ptr, slot_off, obs) {
-                        Rv::S(v) => unsafe { fill_strided(sub_dst, &out_rm, &spec.shape, v) },
-                        Rv::V { ptr, strides } => unsafe {
-                            copy_strided(sub_dst, &out_rm, ptr, &strides, &spec.shape);
-                        },
+                } else {
+                    if !covered {
+                        unsafe { std::slice::from_raw_parts_mut(dst, desc.elems()).fill(0.0) };
+                    }
+                    for (src, region) in parts {
+                        let spec = &prog.regions[*region as usize];
+                        let mut dbase = 0i64;
+                        for d in 0..desc.shape.len() {
+                            dbase += out_rm[d] * spec.dest_lo[d] as i64;
+                        }
+                        let sub_dst = unsafe { dst.offset(dbase as isize) };
+                        match resolve_rv(src, &spec.shape, env, slab_ptr, slot_off, obs) {
+                            Rv::S(v) => unsafe { fill_strided(sub_dst, &out_rm, &spec.shape, v) },
+                            Rv::V { ptr, strides } => unsafe {
+                                copy_strided(sub_dst, &out_rm, ptr, &strides, &spec.shape);
+                            },
+                        }
                     }
                 }
             }
