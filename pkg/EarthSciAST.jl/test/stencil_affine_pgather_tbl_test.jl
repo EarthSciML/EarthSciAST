@@ -33,9 +33,9 @@ function _pgt_build3(model, ics, bufs)
     end
     out
 end
-function _pgt_eval(t)
-    f!, u0, p, _ = t
-    du = zero(u0); f!(du, u0, p, 0.0); du
+function _pgt_eval(b, t=0.0)
+    f!, u0, p, _ = b
+    du = zero(u0); f!(du, u0, p, t); du
 end
 
 # Clamped subscript helpers: max(e, 1) / min(e, N).
@@ -108,11 +108,21 @@ function _pgt_oracle(model, ics, bufs; refresh!)
     @test any(!iszero, du[:ref])
     # LIVENESS: refresh the buffers in place; every path sees the new values
     # (the index tables are static, the VALUES are read through the aliased
-    # buffer) and they still agree bit-for-bit.
+    # buffer) and they still agree bit-for-bit. A state-free observed over a
+    # buffer is memoized on (p, t, forcing epoch), so the refresh is seen at
+    # a `t` not evaluated yet, and at an already-seen `t` once announced
+    # (`notify_forcing_refresh!`'s contract).
     refresh!()
-    du2 = Dict(tag => _pgt_eval(b[tag]) for tag in (:tbl, :ref))
+    du2 = Dict(tag => _pgt_eval(b[tag], 1.0) for tag in (:tbl, :ref))
     @test du2[:tbl] == du2[:ref]
     @test du2[:tbl] != du[:tbl]
+    for buf in values(bufs)
+        buf .= 0.5 .- 1.5 .* buf
+        ESM.notify_forcing_refresh!(buf)
+    end
+    du3 = Dict(tag => _pgt_eval(b[tag], 1.0) for tag in (:tbl, :ref))
+    @test du3[:tbl] == du3[:ref]
+    @test du3[:tbl] != du2[:tbl]
     return nothing
 end
 
