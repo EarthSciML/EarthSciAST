@@ -21,6 +21,10 @@ pub(super) const LCHUNK: usize = 256;
 pub(super) struct LaneScratch {
     regs: Vec<f64>,
     svals: Vec<f64>,
+    /// The register files of the workers a split lane program runs on
+    /// (native targets only), grown the first time a call splits wider.
+    #[cfg(not(target_arch = "wasm32"))]
+    workers: Vec<Vec<f64>>,
 }
 
 impl LaneScratch {
@@ -40,11 +44,14 @@ impl LaneScratch {
         LaneScratch {
             regs: vec![0.0; regs * LCHUNK],
             svals: Vec::with_capacity(svals),
+            #[cfg(not(target_arch = "wasm32"))]
+            workers: Vec::new(),
         }
     }
 }
 
-/// Execute one lane program.
+/// Execute one lane program; under call split width `ways` (see `par`) its
+/// lanes are divided between workers, each lane whole on one of them.
 #[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_lanes(
     ls: &LaneSpec,
@@ -55,8 +62,16 @@ pub(super) unsafe fn exec_lanes(
     scratch: &mut LaneScratch,
     dy: &mut [f64],
     simd: SimdLevel,
+    ways: usize,
 ) {
-    let LaneScratch { regs, svals } = scratch;
+    #[cfg(target_arch = "wasm32")]
+    let _ = ways;
+    let LaneScratch {
+        regs,
+        svals,
+        #[cfg(not(target_arch = "wasm32"))]
+        workers,
+    } = scratch;
     svals.clear();
     for op in &ls.scalars {
         svals.push(resolve_scalar(op, env, slab_ptr, slot_off, obs));
@@ -71,12 +86,89 @@ pub(super) unsafe fn exec_lanes(
         slab: slab_ptr,
         slot_off,
     };
+    let out = Out {
+        ptr: dy.as_mut_ptr(),
+        len: dy.len(),
+    };
+    let lanes = ls.lanes as usize;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ways = super::par::ways_for(lanes, ways);
+        if ways > 1 {
+            while workers.len() < ways {
+                workers.push(vec![0.0; regs.len()]);
+            }
+            let sh = SplitLanes {
+                ls,
+                src: &src,
+                svals,
+                out,
+                regs: workers.as_mut_ptr(),
+                simd,
+                precision: crate::precision::active(),
+            };
+            super::pool::run(ways, &move |w| {
+                let sh = &sh;
+                let (lo, hi) = (lanes * w / ways, lanes * (w + 1) / ways);
+                if lo >= hi {
+                    return;
+                }
+                // The caller's precision is thread-local; carry it over.
+                let _p = crate::precision::enter(sh.precision);
+                // SAFETY: share `w` runs once per dispatch, so each register
+                // file has one user; lanes write distinct `dy` positions.
+                let regs = unsafe { &mut *sh.regs.add(w) };
+                unsafe { run_lanes(sh.simd, sh.ls, sh.src, sh.svals, regs, sh.out, lo, hi) };
+            });
+            return;
+        }
+    }
+    unsafe { run_lanes(simd, ls, &src, svals, regs, out, 0, lanes) }
+}
+
+/// The derivative a lane program scatters into.
+#[derive(Clone, Copy)]
+struct Out {
+    ptr: *mut f64,
+    len: usize,
+}
+
+/// One split lane program, shared read-only by its workers.
+#[cfg(not(target_arch = "wasm32"))]
+struct SplitLanes<'a> {
+    ls: &'a LaneSpec,
+    src: &'a Sources<'a>,
+    svals: &'a [f64],
+    out: Out,
+    regs: *mut Vec<f64>,
+    simd: SimdLevel,
+    precision: crate::precision::Precision,
+}
+
+// SAFETY: workers read the sources and the slab, and write only the `dy`
+// positions of their own lanes and their own register files.
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl Sync for SplitLanes<'_> {}
+
+/// Lanes `[lo, hi)` through the SIMD clone `simd`.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+unsafe fn run_lanes(
+    simd: SimdLevel,
+    ls: &LaneSpec,
+    src: &Sources,
+    svals: &[f64],
+    regs: &mut [f64],
+    out: Out,
+    lo: usize,
+    hi: usize,
+) {
     match simd {
-        SimdLevel::Generic => unsafe { exec_lanes_generic(ls, &src, svals, regs, dy) },
+        SimdLevel::Generic => unsafe { exec_lanes_generic(ls, src, svals, regs, out, lo, hi) },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 => unsafe { exec_lanes_avx2(ls, &src, svals, regs, dy) },
+        SimdLevel::Avx2 => unsafe { exec_lanes_avx2(ls, src, svals, regs, out, lo, hi) },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx512 => unsafe { exec_lanes_avx512(ls, &src, svals, regs, dy) },
+        SimdLevel::Avx512 => unsafe { exec_lanes_avx512(ls, src, svals, regs, out, lo, hi) },
     }
 }
 
@@ -185,19 +277,20 @@ impl Sources<'_> {
 
 /// Scatter `c` values (`val(k)` for lane `l0 + k`) to their `dy` positions.
 #[inline(always)]
-fn scatter(dy: &mut [f64], pos: &LaneIx, l0: usize, c: usize, val: impl Fn(usize) -> f64) {
+fn scatter(dy: Out, pos: &LaneIx, l0: usize, c: usize, val: impl Fn(usize) -> f64) {
     match pos {
         LaneIx::Affine { base, step } => {
             let (base, step) = (*base as usize, *step as usize);
             let first = base + l0 * step;
-            let d = &mut dy[first..first + (c - 1) * step + 1];
+            assert!(first + (c - 1) * step < dy.len, "lane write out of dy");
             for k in 0..c {
-                unsafe { *d.get_unchecked_mut(k * step) = val(k) };
+                unsafe { *dy.ptr.add(first + k * step) = val(k) };
             }
         }
         LaneIx::Table(t) => {
             for (k, &p) in t[l0..l0 + c].iter().enumerate() {
-                dy[p as usize] = val(k);
+                assert!((p as usize) < dy.len, "lane write out of dy");
+                unsafe { *dy.ptr.add(p as usize) = val(k) };
             }
         }
     }
@@ -210,15 +303,16 @@ unsafe fn exec_lanes_chunks(
     src: &Sources,
     svals: &[f64],
     regs: &mut [f64],
-    dy: &mut [f64],
+    dy: Out,
+    lo: usize,
+    hi: usize,
 ) {
     let rp = regs.as_mut_ptr();
     let n_regs = ls.n_regs as usize;
-    let lanes = ls.lanes as usize;
     let reg = |r: usize| unsafe { rp.add(r * LCHUNK) };
-    let mut l0 = 0usize;
-    while l0 < lanes {
-        let c = (lanes - l0).min(LCHUNK);
+    let mut l0 = lo;
+    while l0 < hi {
+        let c = (hi - l0).min(LCHUNK);
         for (i, inp) in ls.inputs.iter().enumerate() {
             unsafe { src.gather(inp, l0, c, reg(n_regs + i)) };
         }
@@ -280,9 +374,11 @@ unsafe fn exec_lanes_generic(
     src: &Sources,
     svals: &[f64],
     regs: &mut [f64],
-    dy: &mut [f64],
+    dy: Out,
+    lo: usize,
+    hi: usize,
 ) {
-    unsafe { exec_lanes_chunks(ls, src, svals, regs, dy) }
+    unsafe { exec_lanes_chunks(ls, src, svals, regs, dy, lo, hi) }
 }
 
 /// AVX2 clone (no `fma`: a contracted multiply-add would change bits).
@@ -293,9 +389,11 @@ unsafe fn exec_lanes_avx2(
     src: &Sources,
     svals: &[f64],
     regs: &mut [f64],
-    dy: &mut [f64],
+    dy: Out,
+    lo: usize,
+    hi: usize,
 ) {
-    unsafe { exec_lanes_chunks(ls, src, svals, regs, dy) }
+    unsafe { exec_lanes_chunks(ls, src, svals, regs, dy, lo, hi) }
 }
 
 /// AVX-512 clone (f+vl+dq+bw, all runtime-checked).
@@ -311,7 +409,9 @@ unsafe fn exec_lanes_avx512(
     src: &Sources,
     svals: &[f64],
     regs: &mut [f64],
-    dy: &mut [f64],
+    dy: Out,
+    lo: usize,
+    hi: usize,
 ) {
-    unsafe { exec_lanes_chunks(ls, src, svals, regs, dy) }
+    unsafe { exec_lanes_chunks(ls, src, svals, regs, dy, lo, hi) }
 }

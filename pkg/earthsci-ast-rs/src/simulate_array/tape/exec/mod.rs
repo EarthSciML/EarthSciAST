@@ -59,6 +59,12 @@ mod interp;
 mod kernels;
 mod lanes;
 mod oracle;
+#[cfg(not(target_arch = "wasm32"))]
+mod par;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod par_tests;
+#[cfg(not(target_arch = "wasm32"))]
+mod pool;
 mod resolve;
 #[cfg(test)]
 mod simd_tests;
@@ -73,7 +79,38 @@ pub(super) use oracle::run_rhs_oracle;
 
 use fused::FCHUNK;
 use interp::run_range;
-use kernels::copy_strided;
+// A large block copy splits across the pool on native targets.
+#[cfg(not(target_arch = "wasm32"))]
+use par::copy_strided as copy_strided_maybe_split;
+
+/// The wasm build's block copy: always serial.
+///
+/// # Safety
+/// As for [`kernels::copy_strided`].
+#[cfg(target_arch = "wasm32")]
+unsafe fn copy_strided_maybe_split(
+    _call: usize,
+    dst: *mut f64,
+    dstr: &[i64],
+    src: *const f64,
+    sstr: &[i64],
+    shape: &[usize],
+) {
+    unsafe { kernels::copy_strided(dst, dstr, src, sstr, shape) }
+}
+
+/// The current call's split width (always 1 on wasm).
+fn call_ways(exec: &TapeExec) -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        exec.fscratch.workers.call_ways
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = exec;
+        1
+    }
+}
 use resolve::{cm_strides, rm_strides};
 
 // ---------------------------------------------------------------------------
@@ -236,6 +273,10 @@ pub(crate) struct TapeExec {
     /// Step 4b: the SIMD clone this executor runs its fused loops through,
     /// selected ONCE at executor construction (never per element).
     simd: SimdLevel,
+    /// Estimated element-operations of one steady call, which sets how wide
+    /// a call splits (see `par::call_ways`).
+    #[cfg(not(target_arch = "wasm32"))]
+    call_work: usize,
 }
 
 impl TapeExec {
@@ -348,6 +389,8 @@ impl TapeExec {
             n_taped: prog.rules.len() - n_fallback,
             n_fallback,
             simd: simd_level(),
+            #[cfg(not(target_arch = "wasm32"))]
+            call_work: par::program_work(prog),
         }
     }
 }
@@ -762,6 +805,10 @@ pub(in crate::simulate_array) fn run_tape_call(
     let (param_epoch, forcing_epoch) = (ctx.param_epoch, ctx.forcing_epoch);
     let prog = &*ctx.prog;
     let exec = &mut ctx.exec;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        exec.fscratch.workers.call_ways = par::call_ways(exec.call_work);
+    }
     // Zero what no rule writes; every other element is overwritten below.
     if exec.dy_zero_len != dy.len() {
         exec.dy_zero = dy_zero_ranges(prog, dy.len(), exec.n_fallback);
@@ -773,12 +820,14 @@ pub(in crate::simulate_array) fn run_tape_call(
     }
     // Refill the row-major state mirror: one strided pass per mirrored
     // variable block (column-major flat -> row-major at the same offset).
+    let ways = call_ways(exec);
     for &i in &exec.mirror_vars {
         let sv = &prog.state_vars[i as usize];
         let rm = rm_strides(&sv.shape);
         let cm = cm_strides(&sv.shape);
         unsafe {
-            copy_strided(
+            copy_strided_maybe_split(
+                ways,
                 exec.state_rm.as_mut_ptr().add(sv.flat_offset),
                 &rm,
                 state.as_ptr().add(sv.flat_offset),

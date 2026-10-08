@@ -835,7 +835,7 @@ pub(super) fn run_reference(
                     };
                     for op in &ls.micro {
                         // A lane program holds no scan, so no carries.
-                        eval_micro_op(op, &mut regs, 0, &mut [], get);
+                        eval_micro_op(op, &mut regs, l, &mut [], get);
                     }
                     for w in &ls.writes {
                         let v = get(&w.src, &regs);

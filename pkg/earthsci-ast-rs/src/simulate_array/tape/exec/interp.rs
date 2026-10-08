@@ -49,6 +49,8 @@ pub(super) fn run_range(
     dy: &mut [f64],
     stats: &mut RhsStats,
 ) {
+    // The call's split width (see `par`), for the copies and lanes below.
+    let call_split = call_ways(exec);
     let TapeExec {
         slab,
         slot_off,
@@ -214,7 +216,7 @@ pub(super) fn run_range(
                 let plan = &prog.plans[*plan as usize];
                 let sv = resolve_src(src, env, slab_ptr, slot_off, obs);
                 let off = slot_off[*out as usize];
-                unsafe { exec_gather(plan, &sv, slab_ptr.add(off), full) };
+                unsafe { exec_gather(plan, &sv, slab_ptr.add(off), full, call_split) };
             }
             Instr::LoadElem { src, idx, out } => {
                 let sv = resolve_src(src, env, slab_ptr, slot_off, obs);
@@ -274,7 +276,8 @@ pub(super) fn run_range(
                     match av {
                         Rv::S(_) => panic!("array Copy from a scalar operand"),
                         Rv::V { ptr, strides } => unsafe {
-                            copy_strided(
+                            copy_strided_maybe_split(
+                                call_split,
                                 slab_ptr.add(off),
                                 &rm_strides(&desc.shape),
                                 ptr,
@@ -685,12 +688,20 @@ pub(super) fn run_range(
                 }
             }
             Instr::Fused { spec } => {
-                let fs = &prog.fused[*spec as usize];
                 let idx = &idx_tables[*spec as usize];
                 let dy_ptr = dy.as_mut_ptr();
                 unsafe {
                     exec_fused(
-                        fs, env, slab_ptr, slot_off, obs, fregs, fscratch, idx, simd, dy_home,
+                        *spec as usize,
+                        env,
+                        slab_ptr,
+                        slot_off,
+                        obs,
+                        fregs,
+                        fscratch,
+                        idx,
+                        simd,
+                        dy_home,
                         dy_ptr,
                     )
                 };
@@ -731,7 +742,8 @@ pub(super) fn run_range(
                             sv.flat_offset + sv.shape.iter().product::<usize>().max(1) <= dy.len()
                         );
                         unsafe {
-                            copy_strided(
+                            copy_strided_maybe_split(
+                                call_split,
                                 dy.as_mut_ptr().offset(dbase as isize),
                                 &cm,
                                 slab_ptr.add(off) as *const f64,
@@ -752,6 +764,7 @@ pub(super) fn run_range(
                     lscratch,
                     dy,
                     simd,
+                    call_split,
                 )
             },
         }
