@@ -487,6 +487,9 @@ pub(super) struct FusedScratch {
     /// The boxes of a group's whole-read gathers ([`ChunkGather::whole`]),
     /// back to back, sized for the largest group's.
     whole: Vec<f64>,
+    /// The sources of the current group's whole-read gathers, in input
+    /// order (their `bases` entries point into `whole`).
+    whole_src: Vec<*const f64>,
     /// Per group, [`node_elems`] of its schedule: what lets a worker step
     /// straight to the start of its share of the group.
     node_elems: Vec<Vec<usize>>,
@@ -509,6 +512,7 @@ impl FusedScratch {
                 most(n_scans),
             ),
             whole: vec![0.0; most(whole_len)],
+            whole_src: Vec::with_capacity(most(|f| f.inputs.len())),
             node_elems: prog
                 .fused
                 .iter()
@@ -779,6 +783,7 @@ pub(super) unsafe fn exec_fused(
         outs,
         cursor,
         whole,
+        whole_src,
         node_elems,
         #[cfg(not(target_arch = "wasm32"))]
         workers,
@@ -818,16 +823,15 @@ pub(super) unsafe fn exec_fused(
         bases.push(p);
     }
     // Whole-read gathers: the box read once, then addressed like an aligned
-    // input.
+    // input. The read itself happens with the group's chunks (each worker of
+    // a split reads the positions of its own window).
     let n_elems = fs.n_elems();
     let mut next = 0usize;
+    whole_src.clear();
     for (inp, base) in fs.inputs.iter().zip(bases.iter_mut()) {
-        if let Some(g) = inp.gather.as_deref()
-            && g.whole
-        {
-            let dst = &mut whole[next..next + n_elems];
-            unsafe { g.fill(*base, 0, n_elems, dst.as_mut_ptr()) };
-            *base = dst.as_ptr();
+        if inp.gather.as_deref().is_some_and(|g| g.whole) {
+            whole_src.push(*base);
+            *base = whole[next..next + n_elems].as_ptr();
             next += n_elems;
         }
     }
@@ -856,10 +860,15 @@ pub(super) unsafe fn exec_fused(
     {
         let ways = super::par::split_ways(fs, workers.call_ways);
         if ways > 1 {
-            unsafe { workers.run_split(fs, svals, bases, outs, red, idx, node_elems, simd, ways) };
+            unsafe {
+                workers.run_split(
+                    fs, svals, bases, whole_src, outs, red, idx, node_elems, simd, ways,
+                )
+            };
             return;
         }
     }
+    unsafe { fill_whole(fs, bases, whole_src, 0, n_elems, 0) };
     unsafe {
         run_fused_window(
             simd,
@@ -873,6 +882,51 @@ pub(super) unsafe fn exec_fused(
             cursor,
             Window::all(node_elems),
         )
+    }
+}
+
+/// Read a group's whole-read gathers (sources `whole_src`, destinations their
+/// `bases` entries) at the flat positions `[lo, hi)`, or with a `period`, at
+/// the positions whose remainder modulo `period` lies in `[lo, hi)`: the
+/// positions a [`Window`] with the same bounds runs.
+///
+/// # Safety
+/// `bases` must be the group's resolved inputs with every whole-read gather's
+/// entry pointing at its `n_elems` scratch box, and `whole_src` their sources.
+pub(super) unsafe fn fill_whole(
+    fs: &FusedSpec,
+    bases: &[*const f64],
+    whole_src: &[*const f64],
+    lo: usize,
+    hi: usize,
+    period: usize,
+) {
+    if whole_src.is_empty() {
+        return;
+    }
+    let n = fs.n_elems();
+    let mut k = 0usize;
+    for (inp, &dst) in fs.inputs.iter().zip(bases) {
+        let Some(g) = inp.gather.as_deref().filter(|g| g.whole) else {
+            continue;
+        };
+        let (src, dst) = (whole_src[k], dst as *mut f64);
+        k += 1;
+        if period == 0 {
+            let hi = hi.min(n);
+            if lo < hi {
+                unsafe { g.fill(src, lo, hi - lo, dst.add(lo)) };
+            }
+            continue;
+        }
+        let mut base = 0usize;
+        while base < n {
+            let (a, b) = (base + lo, (base + hi).min(base + period).min(n));
+            if a < b {
+                unsafe { g.fill(src, a, b - a, dst.add(a)) };
+            }
+            base += period;
+        }
     }
 }
 
