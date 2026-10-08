@@ -19,9 +19,11 @@
 //! a caller already running inside a one-thread pool, or setting
 //! `RAYON_NUM_THREADS=1`, gets the serial executor.
 
-use super::fused::{IndexTable, RunCursor, Window, n_scans, n_shifted, run_fused_window};
+use super::fused::{
+    IndexTable, PAD_BYTES, RunCursor, Window, fill_whole, n_scans, n_shifted, run_fused_window,
+};
 use super::pool;
-use super::resolve::rm_strides;
+use super::resolve::{Rv, rm_strides};
 use super::*;
 
 /// Estimated element-operations per worker a call's continuous section must
@@ -43,8 +45,9 @@ fn reduce_cells_floor() -> usize {
     REDUCE_CELLS_PER_WORKER
 }
 
-/// Window boundaries are rounded to this many elements, so two workers never
-/// write the same cache line of an output.
+/// Elements per cache line: window boundaries fall on cache-line boundaries
+/// of the output they are cut for (see [`share_at`]), so two workers never
+/// write the same line of it.
 const ALIGN: usize = 8;
 
 /// The split width of one call: how many workers every large instruction of
@@ -79,6 +82,34 @@ pub(super) fn ways_for(n: usize, ways: usize) -> usize {
     }
 }
 
+/// Lanes each worker of a split lane program must get.
+const MIN_LANES_PER_WORKER: usize = 32;
+
+/// The workers a lane program of `lanes` lanes, each `cost` operations,
+/// splits across under call width `ways`: all of them when every worker gets
+/// enough lanes and enough work, else none. A lane is a whole scalar
+/// program, so a few hundred lanes are already a large split.
+pub(super) fn lane_ways(lanes: usize, cost: usize, ways: usize) -> usize {
+    #[cfg(test)]
+    if FORCE.with(std::cell::Cell::get).is_some() {
+        return ways.min(lanes).max(1);
+    }
+    if ways > 1
+        && lanes >= ways * MIN_LANES_PER_WORKER
+        && lanes.saturating_mul(cost) >= ways * MIN_WORK_PER_WORKER
+    {
+        ways
+    } else {
+        1
+    }
+}
+
+/// The operations of one lane of `ls`: its micro-ops, input gathers and
+/// writes.
+pub(super) fn lane_cost(ls: &LaneSpec) -> usize {
+    ls.micro.len() + ls.inputs.len() + ls.writes.len()
+}
+
 /// The estimated element-operations of one call's continuous section, the
 /// part every steady call runs (see [`call_ways`]).
 pub(super) fn program_work(prog: &TapeProgram) -> usize {
@@ -111,7 +142,7 @@ pub(super) fn program_work(prog: &TapeProgram) -> usize {
             | Instr::Scan { out, .. } => prog.slots[*out as usize].elems(),
             Instr::Lanes { spec } => {
                 let ls = &prog.lanes[*spec as usize];
-                (ls.lanes as usize).saturating_mul(ls.micro.len() + ls.inputs.len() + 1)
+                (ls.lanes as usize).saturating_mul(lane_cost(ls) + 1)
             }
             _ => 0,
         });
@@ -201,7 +232,7 @@ pub(super) unsafe fn copy_strided(
         // (`share`), so each worker copies what it computed.
         pool::run(ways, &move |w| {
             let (dp, sp) = (dp, sp);
-            let (a, b) = share(tot, w, ways);
+            let (a, b) = share_at(tot, w, ways, dp.0);
             if a < b {
                 unsafe { std::ptr::copy_nonoverlapping(sp.0.add(a), dp.0.add(a), b - a) };
             }
@@ -229,6 +260,181 @@ pub(super) unsafe fn copy_strided(
     });
 }
 
+/// One resolved part of a split `makearray` assembly: its region (an index
+/// into `TapeProgram::regions`), the flat offset of the region's first
+/// element in the output box, and its source.
+pub(in crate::simulate_array::tape) struct AsmPart {
+    region: u32,
+    dbase: i64,
+    src: Rv,
+}
+
+impl AsmPart {
+    pub(super) fn new(region: u32, dbase: i64, src: Rv) -> Self {
+        AsmPart { region, dbase, src }
+    }
+}
+
+/// `Instr::Assemble` split across the pool under width `ways`: worker `w`
+/// writes the flat positions [`share`]`(n, w, ways)` of the row-major output
+/// box -- zeroed unless `covered`, then each part's elements that fall there,
+/// in part order, so a later region still overwrites an earlier one. Pure
+/// data movement, so the result is the serial assembly's, bit for bit.
+///
+/// # Safety
+/// `dst` must address the whole output box `shape`, and every part's source
+/// must be valid over its region.
+pub(super) unsafe fn assemble(
+    ways: usize,
+    dst: *mut f64,
+    shape: &[usize],
+    regions: &[RegionSpec],
+    parts: &[AsmPart],
+    covered: bool,
+) {
+    let n: usize = shape.iter().product();
+    let out_rm = rm_strides(shape);
+    let sh = AsmShared {
+        dst: SendPtr(dst),
+        regions,
+        parts,
+        out_rm: &out_rm,
+        n,
+        covered,
+    };
+    pool::run(ways, &move |w| {
+        let sh = &sh;
+        let (lo, hi) = share_at(sh.n, w, ways, sh.dst.0);
+        if lo < hi {
+            unsafe { assemble_window(sh, lo, hi) };
+        }
+    });
+}
+
+/// A split assembly, shared read-only by its workers.
+struct AsmShared<'a> {
+    dst: SendPtr,
+    regions: &'a [RegionSpec],
+    parts: &'a [AsmPart],
+    out_rm: &'a [i64],
+    n: usize,
+    covered: bool,
+}
+
+// SAFETY: the sources are only read, and each worker writes only the output
+// positions of its own share.
+unsafe impl Sync for AsmShared<'_> {}
+
+/// The output positions `[lo, hi)` of a split assembly.
+unsafe fn assemble_window(sh: &AsmShared, lo: usize, hi: usize) {
+    let dst = sh.dst.0;
+    if !sh.covered {
+        unsafe { std::slice::from_raw_parts_mut(dst.add(lo), hi - lo).fill(0.0) };
+    }
+    for part in sh.parts {
+        let rsh = &sh.regions[part.region as usize].shape;
+        if rsh.contains(&0) {
+            continue;
+        }
+        let sstr: &[i64] = match &part.src {
+            Rv::V { strides, .. } => strides,
+            Rv::S(_) => &[],
+        };
+        // The region's axes longer than 1: the last is walked as rows (one
+        // output stride apart), the others as an odometer over rows. Unit
+        // axes are fixed in `dbase`.
+        let axes: DimU = (0..rsh.len()).filter(|&d| rsh[d] > 1).collect();
+        let db = part.dbase as usize;
+        let (row_ax, lead) = match axes.split_last() {
+            Some((&r, lead)) => (Some(r), lead),
+            None => (None, &[][..]),
+        };
+        let (len, ds, ss) = match row_ax {
+            Some(r) => (
+                rsh[r],
+                sh.out_rm[r] as usize,
+                sstr.get(r).copied().unwrap_or(0) as isize,
+            ),
+            None => (1, 1, 0),
+        };
+        // Positions with first-walked index `i` lie in `[db + i s, db +
+        // (i + 1) s)` (`s` the output stride of that axis, every axis before
+        // it fixed), so only the indices in `[i0, i1)` reach the share.
+        let (i0, i1) = match lead.first() {
+            None => (0, 1),
+            Some(&a0) => {
+                let s0 = sh.out_rm[a0] as usize;
+                let i1 = if hi > db { (hi - db).div_ceil(s0) } else { 0 };
+                (lo.saturating_sub(db) / s0, i1.min(rsh[a0]))
+            }
+        };
+        if i0 >= i1 {
+            continue;
+        }
+        let mut idx: DimU = SmallVec::from_elem(0, lead.len());
+        if let Some(i) = idx.first_mut() {
+            *i = i0;
+        }
+        loop {
+            let mut f = db;
+            let mut soff = 0isize;
+            for (k, &a) in lead.iter().enumerate() {
+                f += idx[k] * sh.out_rm[a] as usize;
+                soff += sstr.get(a).copied().unwrap_or(0) as isize * idx[k] as isize;
+            }
+            // The row's elements `k` with `f + k ds` in `[lo, hi)`.
+            let k0 = if f >= lo { 0 } else { (lo - f).div_ceil(ds) };
+            let k1 = if hi > f {
+                (hi - f).div_ceil(ds).min(len)
+            } else {
+                0
+            };
+            if k0 < k1 {
+                let out = unsafe { dst.add(f + k0 * ds) };
+                let n = k1 - k0;
+                match &part.src {
+                    Rv::S(v) => {
+                        for k in 0..n {
+                            unsafe { *out.add(k * ds) = *v };
+                        }
+                    }
+                    Rv::V { ptr, .. } => {
+                        let p = unsafe { ptr.offset(soff + k0 as isize * ss) };
+                        if ds == 1 && ss == 1 {
+                            unsafe { std::ptr::copy_nonoverlapping(p, out, n) };
+                        } else {
+                            for k in 0..n {
+                                unsafe { *out.add(k * ds) = *p.offset(k as isize * ss) };
+                            }
+                        }
+                    }
+                }
+            }
+            // Next row: the inner walked axes fastest, the first bounded by
+            // `i1`.
+            let mut k = lead.len();
+            let more = loop {
+                if k == 0 {
+                    break false;
+                }
+                k -= 1;
+                idx[k] += 1;
+                let end = if k == 0 { i1 } else { rsh[lead[k]] };
+                if idx[k] < end {
+                    break true;
+                }
+                if k == 0 {
+                    break false;
+                }
+                idx[k] = 0;
+            };
+            if !more {
+                break;
+            }
+        }
+    }
+}
+
 /// A raw pointer a split hands its workers.
 #[derive(Clone, Copy)]
 struct SendPtr(*mut f64);
@@ -238,12 +444,27 @@ struct SendPtr(*mut f64);
 unsafe impl Send for SendPtr {}
 unsafe impl Sync for SendPtr {}
 
-/// The `[lo, hi)` share of `n` elements worker `w` of `ways` takes.
-pub(super) fn share(n: usize, w: usize, ways: usize) -> (usize, usize) {
-    share_aligned(n, w, ways, ALIGN)
+/// The `[lo, hi)` share of the `n` elements at `at` that worker `w` of `ways`
+/// takes: cut where `at + cut` starts a cache line, so workers that write
+/// their shares never write a common line. That matters most for an
+/// absorbed reduction, whose workers write their accumulator cells once per
+/// leading position: a line two of them shared would move between their
+/// cores every time.
+pub(super) fn share_at(n: usize, w: usize, ways: usize, at: *const f64) -> (usize, usize) {
+    let phase = (at as usize / std::mem::size_of::<f64>()) % ALIGN;
+    let cut = |k: usize| {
+        if k == ways {
+            n
+        } else {
+            let c = (n as u128 * k as u128 / ways as u128) as usize;
+            ((c + phase) / ALIGN * ALIGN).saturating_sub(phase).min(n)
+        }
+    };
+    (cut(w), cut(w + 1))
 }
 
-/// [`share`] with the cuts rounded down to multiples of `align`.
+/// The share of worker `w` with every cut a multiple of `align` (a scan's
+/// restart period).
 fn share_aligned(n: usize, w: usize, ways: usize, align: usize) -> (usize, usize) {
     let cut = |k: usize| {
         if k == ways {
@@ -255,10 +476,15 @@ fn share_aligned(n: usize, w: usize, ways: usize, align: usize) -> (usize, usize
     (cut(w), cut(w + 1))
 }
 
-/// One worker's private state for a split fused group.
+/// One worker's private state for a split fused group, on cache lines of its
+/// own (the cursor's lengths change as the worker walks).
+#[repr(align(128))]
 struct FusedWorker {
     fregs: Vec<f64>,
     cursor: RunCursor,
+    /// The worker's own accumulator cells of a split reduction, copied to
+    /// the shared accumulator when its window is done.
+    acc: Vec<f64>,
 }
 
 /// The workers a program's split fused groups run on, sized for its largest
@@ -280,6 +506,7 @@ struct Shared<'a> {
     fs: &'a FusedSpec,
     svals: &'a [f64],
     bases: &'a [*const f64],
+    whole_src: &'a [*const f64],
     outs: &'a [(GroupIx, *mut f64)],
     red: *mut f64,
     idx: &'a [Option<IndexTable>],
@@ -314,13 +541,15 @@ impl FusedWorkers {
     ///
     /// # Safety
     /// As for [`run_fused_window`]: `bases` and `outs` must be the group's
-    /// resolved operands, valid for its whole box.
+    /// resolved operands, valid for its whole box; `whole_src` as for
+    /// [`fill_whole`] (each worker reads its own window of them).
     #[allow(clippy::too_many_arguments)]
     pub(super) unsafe fn run_split(
         &mut self,
         fs: &FusedSpec,
         svals: &[f64],
         bases: &[*const f64],
+        whole_src: &[*const f64],
         outs: &[(GroupIx, *mut f64)],
         red: *mut f64,
         idx: &[Option<IndexTable>],
@@ -330,8 +559,9 @@ impl FusedWorkers {
     ) {
         while self.workers.len() < ways {
             self.workers.push(FusedWorker {
-                fregs: vec![0.0f64; self.fregs_len],
-                cursor: RunCursor::with_room(self.depth, self.shifted, self.scans),
+                fregs: padded(self.fregs_len),
+                cursor: RunCursor::for_worker(self.depth, self.shifted, self.scans),
+                acc: Vec::new(),
             });
         }
         // A reduction splits its inner positions: worker `w` takes the same
@@ -341,12 +571,36 @@ impl FusedWorkers {
             Some(r) => (r.n_inner, r.n_inner),
             None => (fs.shape.iter().product(), 0),
         };
-        // Row starts, for a group with an absorbed scan (see `split_ways`).
-        let align = scan_row(fs).map_or(ALIGN, |row| row);
+        // Row starts, for a group with an absorbed scan (see `split_ways`);
+        // else cache lines of the accumulator or the first output.
+        let row = scan_row(fs);
+        let anchor = match outs.first() {
+            _ if !red.is_null() => red as usize,
+            Some(&(_, p)) => p as usize,
+            None => 0,
+        };
+        let cut = |w: usize| match row {
+            Some(row) => share_aligned(n, w, ways, row),
+            None => share_at(n, w, ways, anchor as *const f64),
+        };
+        // Each worker of a split reduction folds into cells of its own, in
+        // memory no other worker writes: folding into adjacent ranges of
+        // the shared accumulator lets the hardware prefetchers pull a
+        // neighbour's lines away from it every leading position.
+        let init = fs.reduce.as_ref().map(|r| r.init);
+        if init.is_some() {
+            for (w, wk) in self.workers[..ways].iter_mut().enumerate() {
+                let (lo, hi) = cut(w);
+                if wk.acc.len() < hi.saturating_sub(lo) {
+                    wk.acc = padded(hi - lo);
+                }
+            }
+        }
         let sh = Shared {
             fs,
             svals,
             bases,
+            whole_src,
             outs,
             red,
             idx,
@@ -357,7 +611,7 @@ impl FusedWorkers {
         let ws = WorkersPtr(self.workers.as_mut_ptr());
         pool::run(ways, &move |w| {
             let (sh, ws) = (sh, ws);
-            let (lo, hi) = share_aligned(n, w, ways, align);
+            let (lo, hi) = cut(w);
             if lo >= hi {
                 return;
             }
@@ -366,14 +620,25 @@ impl FusedWorkers {
             let wk = unsafe { &mut *ws.0.add(w) };
             // The caller's precision is thread-local; carry it over.
             let _p = crate::precision::enter(sh.precision);
+            // A reduction's cells `[lo, hi)` live in the worker's own buffer,
+            // addressed as if it started at cell 0.
+            let red = match init {
+                Some(init) => {
+                    let acc = &mut wk.acc[..hi - lo];
+                    acc.fill(init);
+                    acc.as_mut_ptr().wrapping_sub(lo)
+                }
+                None => sh.red,
+            };
             unsafe {
+                fill_whole(sh.fs, sh.bases, sh.whole_src, lo, hi, period);
                 run_fused_window(
                     sh.simd,
                     sh.fs,
                     sh.svals,
                     sh.bases,
                     sh.outs,
-                    sh.red,
+                    red,
                     sh.idx,
                     &mut wk.fregs,
                     &mut wk.cursor,
@@ -383,10 +648,21 @@ impl FusedWorkers {
                         period,
                         node_elems: sh.node_elems,
                     },
-                )
+                );
+                if init.is_some() {
+                    std::ptr::copy_nonoverlapping(wk.acc.as_ptr(), sh.red.add(lo), hi - lo);
+                }
             }
         });
     }
+}
+
+/// A zeroed register file of `len` for one worker, with [`PAD_BYTES`] of
+/// unused room past its end (see [`RunCursor::for_worker`]).
+pub(super) fn padded(len: usize) -> Vec<f64> {
+    let mut v = Vec::with_capacity(len + PAD_BYTES / std::mem::size_of::<f64>());
+    v.resize(len, 0.0);
+    v
 }
 
 /// The worker states of a split, indexed by share.

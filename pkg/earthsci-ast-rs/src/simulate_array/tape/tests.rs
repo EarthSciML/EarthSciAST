@@ -165,6 +165,33 @@ pub(super) fn ab_check(
                     );
                 }
             }
+            // Every instruction split three wide, whatever its size, is the
+            // serial executor bit for bit.
+            #[cfg(not(target_arch = "wasm32"))]
+            for (label, scratch) in [
+                ("fused split", &mut fast_scratch),
+                ("row-major fused split", &mut fast_rm),
+            ] {
+                let mut dy_split = vec![0.0f64; n];
+                super::exec::force_split(Some(3));
+                compiled.debug_eval_rhs_into(
+                    &state,
+                    t,
+                    &param_vec,
+                    &mut dy_split,
+                    scratch,
+                    &mut fast_stats,
+                );
+                super::exec::force_split(None);
+                for (k, (a, b)) in dy_split.iter().zip(dy_ref.iter()).enumerate() {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "seed {seed} t {t}: dy[{k}] diverged: {label} exec {a:?} vs \
+                         interpreter {b:?}"
+                    );
+                }
+            }
         }
     }
     assert!(
