@@ -257,6 +257,10 @@ mutable struct _CGCtx
     # `tblcbs` collects the run-mode locals the version guard tests.
     tblaffine::Bool
     tblcbs::Vector{Symbol}
+    # A fused prefix scan's nest (scan_fused.jl): `nothing`, or the names and
+    # rule its loop body folds each cell's term with — `(acc, a, b, op,
+    # inclusive)`, the nest running ordinals `[a, b)` (one lane).
+    scanmode::Any
 end
 _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing) =
     _CGCtx(DataType[], Vector{Any}[], IdDict{Any,Tuple{Int,Int}}(),
@@ -264,7 +268,7 @@ _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing) =
            Any[], Any[], 0, budget, 0, shared_cache, 0, Any[], Dict{String,Any}(),
            IdDict{Any,Any}(), Any[],
            Dict{String,Tuple{Symbol,Vector{Symbol}}}(), String[], false,
-           Int[], Any[], IdDict{Any,Symbol}(), false, false, Symbol[])
+           Int[], Any[], IdDict{Any,Symbol}(), false, false, Symbol[], nothing)
 
 _cg_helper_dedup_disabled() = !_compiler_plan_now().cg_helper_dedup
 
@@ -1246,7 +1250,8 @@ function _cg_tbl_versions(emit, ctx::_CGCtx)
 end
 
 function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbol})
-    cellfn = (_cg_split_supported() && !_cg_subcall_fn_disabled() &&
+    sm = ctx.scanmode
+    cellfn = (sm === nothing && _cg_split_supported() && !_cg_subcall_fn_disabled() &&
               length(K.cells.strides) <= 3) ?
              _cg_cell_fn!(ctx, K, invsyms) : nothing
 
@@ -1265,7 +1270,24 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                             Expr(:tuple, invsyms...), extra...)]
         end
         stmts = _cg_emit_recipes!(Any[], ctx, kc)
-        push!(stmts, :(du[$(kc.oln)] = $(_cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine)))))
+        val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
+        if sm === nothing
+            push!(stmts, :(du[$(kc.oln)] = $val))
+        else
+            # A fused scan's cell (scan_fused.jl): the term, converted exactly
+            # as its store into `du` would convert it, folded into the lane's
+            # running value in `_scan_lanes!`'s order.
+            tv = _cg_name(ctx, "term")
+            acc = sm.acc
+            push!(stmts, :(local $tv = convert(eltype(du), $val)))
+            if sm.inclusive
+                push!(stmts, :($acc = $(sm.op)($acc, $tv)))
+                push!(stmts, :(du[$(kc.oln)] = $acc))
+            else
+                push!(stmts, :(du[$(kc.oln)] = $acc))
+                push!(stmts, :($acc = $(sm.op)($acc, $tv)))
+            end
+        end
         return stmts
     end
 
@@ -1289,9 +1311,16 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
         return (lo, geo(last(cs.ranges[d]), (d, :last)), geo(n, (d, :len)))
     end
     corner = !isempty(cs.strides) && all(d -> _cellset_slab(cs, d), eachindex(cs.strides))
-    hdr = Any[:(local $tv = _chunk_ordinals($(corner ? 1 : geo(ncells, :n)), _cgci, _cgnc)),
-              :(local $av = $tv[1]),
-              :(local $bv = $tv[2])]
+    hdr = if sm === nothing
+        Any[:(local $tv = _chunk_ordinals($(corner ? 1 : geo(ncells, :n)), _cgci, _cgnc)),
+            :(local $av = $tv[1]),
+            :(local $bv = $tv[2])]
+    else
+        # A fused scan's nest runs the one lane its caller bound.
+        av = sm.a
+        bv = sm.b
+        Any[]
+    end
     if _is_outs(cs)
         outs = _cg_tab!(ctx, cs.outs)
         c = _cg_name(ctx, "c")
@@ -1347,7 +1376,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     # a slot table (`_cg_tblread!`).
     tv1 = _cg_tblread!(ctx)
     i0, i1, ni = axis(1)
-    if nd == 1 && cellfn === nothing
+    if nd == 1 && cellfn === nothing && sm === nothing
         inter = _cg_areduce_interchanged(ctx, K, kc, iv, oln, olnexpr, i0, av, bv)
         if inter !== nothing
             return quote

@@ -3114,7 +3114,7 @@ end
     # position, that `_make_rhs` runs behind the state kernel section. Empty for
     # every level whose observeds carry no cumulative reduction.
     sf = lv[3]
-    isempty(sf) || _apply_scan_folds!(ue, sf)
+    isempty(sf) || _apply_scan_folds!(ue, ue, p, t, sf)
     # ess-array-contraction: this level's whole-array contraction nests, in the
     # same position behind the kernel section that `_make_rhs` puts them in.
     ac = lv[4]
@@ -3897,8 +3897,15 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                 append!(lvl_scans, sfs)
                 append!(lvl_acs, acs)
             end
-            merged, _ = _merge_acc_kernel_classes(lvl_kernels)
             mat_scan_fold_count += length(lvl_scans)
+            # A scan whose term kernel compiles into its fold's own pass
+            # (scan_fused.jl) leaves that kernel out of the level's section.
+            lvl_fused = ()
+            if form === :inplace
+                lvl_kernels, lvl_scans, lvl_fused =
+                    _detach_fused_scans(lvl_kernels, lvl_scans)
+            end
+            merged, _ = _merge_acc_kernel_classes(lvl_kernels)
             mat_array_contraction_count += length(lvl_acs)
             mat_recurrence_count += length(lvl_recurs)
             if form === :oop
@@ -3910,7 +3917,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                 push!(lvl_cadence === :const ? mat_const_levels :
                       lvl_cadence === :time ? mat_time_levels : mat_levels,
                       (lvl_scalars, _make_kernel_section(merged),
-                       _make_scan_section(lvl_scans),
+                       _make_scan_section(lvl_scans, lvl_fused),
                        _make_contraction_section(lvl_acs), Tuple(lvl_recurs)))
             end
         end
@@ -3948,6 +3955,14 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # loop nest instead of a slot-table lane loop.
     # The per-cell reference is untouched either way: its trees live on
     # `percell_scalar`, never in the kernel list.
+    # A state scan whose term kernel compiles into its fold's own pass
+    # (scan_fused.jl) leaves that kernel out of the merge and the section.
+    n_state_scan_folds = length(scan_folds)
+    state_fused_scans = ()
+    if form === :inplace
+        acc_kernels_pre, scan_folds, state_fused_scans =
+            _detach_fused_scans(acc_kernels_pre, scan_folds)
+    end
     acc_kernels, class_merge_diag = @_bench :class_merge _merge_acc_kernel_classes(acc_kernels_pre;
         keep_affine = form === :inplace)
 
@@ -4050,7 +4065,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
                       const_slots, time_slots, dyn_slots, scan_folds,
                       _make_contraction_section(array_contractions);
-                      scalar = scalar_section),
+                      scalar = scalar_section, fused_scans = state_fused_scans),
             n_total, n_states, Tuple(mat_levels), Tuple(mat_const_levels),
             Tuple(mat_time_levels), forcing_epoch)
         discrete_refill === nothing ? rhs0 : _make_rhs_discrete_refill(rhs0, discrete_refill)
@@ -4096,7 +4111,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               # factored array-observed fills — a prefix reduction that defines a
               # materialized observed is the same rewrite in the same position,
               # just over the observed's buffer block instead of the state.
-              n_scan_folds = length(scan_folds) + mat_scan_fold_count,
+              n_scan_folds = n_state_scan_folds + mat_scan_fold_count,
               # ess-array-contraction: array einsums compiled to ONE loop nest
               # each (array_contraction.jl). Zero on every model whose reductions
               # stay under the tier's floor; counted here for the same reason
@@ -5496,8 +5511,10 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         # order, so the post-pass can fold them. Only now, so a declined affine
         # build costs nothing.
         if scan !== nothing && affine_kernels !== nothing
-            scan_fold = _build_scan_fold(scan[1], scan[2], idx_names, range_iters,
-                                         lhs_body, var_map, rhs_oplus, rhs_zerobar)
+            sf = _build_scan_fold(scan[1], scan[2], idx_names, range_iters,
+                                  lhs_body, var_map, rhs_oplus, rhs_zerobar)
+            scan_fold = _ScanFold(sf.slots, sf.len, sf.oplus, sf.zerobar,
+                                  sf.inclusive, Any[affine_kernels...])
         end
     end
     if affine_kernels !== nothing

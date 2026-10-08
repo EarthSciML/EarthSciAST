@@ -921,7 +921,7 @@ function _make_rhs_scalar_cg(sec::_ScalarSection, full_prelude::AbstractVector{_
                              acc_kernels::AbstractVector{_AccKernel},
                              const_slots::AbstractVector{Int},
                              time_slots::AbstractVector{Int},
-                             scan_folds::AbstractVector{_ScanFold},
+                             scan_section::_ScanSection,
                              array_contractions)
     kernel_section = _make_kernel_section(acc_kernels; shared_cache=cse_cache)
     constp = sec.constp
@@ -974,7 +974,7 @@ function _make_rhs_scalar_cg(sec::_ScalarSection, full_prelude::AbstractVector{_
             du[idx_and_node[1]] = _eval_node(idx_and_node[2], u, p, t, T)
         end
         kernel_section(du, u, p, t, T)
-        isempty(scan_folds) || _apply_scan_folds!(du, scan_folds)
+        isempty(scan_section) || _apply_scan_folds!(du, u, p, t, scan_section)
         isempty(array_contractions) ||
             _apply_array_contractions!(du, u, p, t, array_contractions, T)
         return nothing

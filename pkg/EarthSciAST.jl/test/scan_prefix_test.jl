@@ -20,6 +20,7 @@
 #     scanned output symbol, must keep the triangular path AND stay correct.
 using Test
 using EarthSciAST
+using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
@@ -86,8 +87,45 @@ end
             a = _scan_du(m)
             @test a.diag.n_scan_folds == 1            # the rewrite FIRED
             @test get(a.tally, :scan, 0) == 1
+            # …and its term compiled into the fold's own pass (scan_fused.jl).
+            @test get(a.tally, :scan_fused, 0) == 1
             @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
         end
+    end
+
+    @testset "fused scan over several lanes, and through ForwardDiff" begin
+        # c[i, k] = ⊕_{j ⋚ i} u[j, k] * w: one lane per k, each lane folded
+        # whole by whichever thread runs it.
+        n, nk = 9, 5
+        for filt in ("<=", "<"), red in ("+", "*", "max", "min")
+            vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
+                        "c" => ESM.ModelVariable(ESM.UnknownVariable))
+            rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "k"],
+                expr_body=_op("*", _idx("u", _v("j"), _v("k")), _n(0.75)),
+                ranges=Dict("i" => [1, n], "j" => [1, n], "k" => [1, nk]),
+                reduce=red, filter=_op(filt, _v("j"), _v("i")))
+            zero2 = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "k"],
+                expr_body=_n(0.0), ranges=Dict("i" => [1, n], "k" => [1, nk]))
+            lhs(v) = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "k"],
+                expr_body=_Didx(v, _v("i"), _v("k")),
+                ranges=Dict("i" => [1, n], "k" => [1, nk]))
+            m = ESM.Model(vars, [ESM.Equation(lhs("c"), rhs),
+                                 ESM.Equation(lhs("u"), zero2)])
+            a = _scan_du(m)
+            @test a.diag.n_scan_folds == 1
+            @test get(a.tally, :scan_fused, 0) == 1
+            @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
+        end
+        # Dual numbers take the same generated fold: the Jacobian column is the
+        # reference build's, bit for bit.
+        m = _scan_model(16; body=_op("*", _idx("u", _v("j")), _idx("u", _v("j"))))
+        fn, u0n, pn, _ = ESM._build_evaluator_impl(m; compiler=:native)
+        fi, u0i, pi_, _ = ESM._build_evaluator_impl(m; compiler=:interpreter)
+        u = Float64[_sc_val(k) for k in 1:length(u0n)]
+        seed = Float64[isodd(k) ? 1.0 : -0.5 for k in 1:length(u)]
+        jd(f, p) = ForwardDiff.derivative(
+            s -> (du = zeros(typeof(s), length(u)); f(du, u .+ s .* seed, p, 0.0); du), 0.0)
+        @test _bits(jd(fn, pn)) == _bits(jd(fi, pi_))
     end
 
     @testset "running totals are the expected values" begin
@@ -176,6 +214,8 @@ end
             a = _scan_du(m)
             @test a.diag.n_scan_folds == 1            # the rewrite FIRED
             @test get(a.tally, :scan, 0) == 1
+            # The last node has no term, so the two-pass form runs it.
+            @test get(a.tally, :scan_fused, 0) == 0
             @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
         end
     end
