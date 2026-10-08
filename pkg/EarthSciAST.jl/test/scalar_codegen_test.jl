@@ -154,6 +154,31 @@ _scg_tiers(rep) = Dict(ESM.tier_histogram(rep))
         end
     end
 
+    @testset "a 10^4-term scalar sum compiles, and keeps its order" begin
+        # One scalar equation whose right-hand side is a single 10 000-term
+        # `+`: emitted as a nested call it is 10^4 levels deep, past what
+        # Julia's lowering takes, so the fold is emitted as an accumulation.
+        nx, nt = 7, 10_000
+        vars = Dict{String,ESM.ModelVariable}(
+            "S" => ESM.ModelVariable(ESM.UnknownVariable; default=0.0),
+            "kx" => ESM.ModelVariable(ESM.ParameterVariable; default=-0.5))
+        eqs = ESM.Equation[]
+        for k in 1:nx
+            vars["X_$k"] = ESM.ModelVariable(ESM.UnknownVariable; default=0.1k)
+            push!(eqs, ESM.Equation(_scg_D("X_$k"), _scg_op("*", _scg_v("kx"), _scg_v("X_$k"))))
+        end
+        # Catastrophic magnitudes with sign flips: a reassociated sum would not
+        # reproduce these bit for bit.
+        terms = ESM.ASTExpr[_scg_op("*", _scg_n((isodd(j) ? 1.0 : -1.0) * 10.0^((j * 7) % 17 - 8)),
+                                    _scg_v("X_$(1 + j % nx)")) for j in 1:nt]
+        push!(eqs, ESM.Equation(_scg_D("S"), OpExpr("+", terms)))
+        m = ESM.Model(vars, eqs)
+        bn = _scg_build(m)
+        bi = _scg_build(m; compiler=:interpreter)
+        @test _scg_tiers(bn.report)[:scalar_codegen] == nx + 1
+        @test _scg_agree(bn, bi)
+    end
+
     if VERSION >= v"1.12"
         @testset "zero allocations per steady call" begin
             bn = _scg_build(_scg_model(5))

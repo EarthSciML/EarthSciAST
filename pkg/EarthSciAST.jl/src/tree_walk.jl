@@ -61,6 +61,7 @@ include("tree_walk/oop_merge.jl")        #      kernel-CLASS merge, for both for
 include("tree_walk/xcse.jl")             #      cross-kernel / kernel↔prelude fn-CSE
 include("tree_walk/codegen_kernel.jl")   # §4f  Julia-codegen tier for access kernels
 include("tree_walk/thread_dispatch.jl")  #      allocation-free chunk dispatch (Polyester's pool)
+include("tree_walk/scan_fused.jl")       #      a prefix scan's term and fold in one pass
 include("tree_walk/array_contraction.jl") # §4f  …and for the whole-array contraction nest
 include("tree_walk/recurrence_sweep.jl") #      the ordered sweep of a causal self-reference
 include("tree_walk/scalar_codegen.jl")   #      …and for the scalar equations and the prelude

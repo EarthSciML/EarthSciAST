@@ -249,6 +249,18 @@ mutable struct _CGCtx
     geo::Vector{Int}
     geosink::Vector{Any}
     geomemo::IdDict{Any,Symbol}
+    # Set when a fetch reads the state through a slot table (`_cg_tabh!`); the
+    # loop nests read and clear it to keep such a loop scalar (`_cg_tblread!`).
+    tblread::Bool
+    # Slot-table reads and their two emitted versions (`_cg_tbl_versions`):
+    # `tblaffine` emits every `_AK_STATE_TBL_BOX` read as its run form, and
+    # `tblcbs` collects the run-mode locals the version guard tests.
+    tblaffine::Bool
+    tblcbs::Vector{Symbol}
+    # A fused prefix scan's nest (scan_fused.jl): `nothing`, or the names and
+    # rule its loop body folds each cell's term with — `(acc, a, b, op,
+    # inclusive)`, the nest running ordinals `[a, b)` (one lane).
+    scanmode::Any
 end
 _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing) =
     _CGCtx(DataType[], Vector{Any}[], IdDict{Any,Tuple{Int,Int}}(),
@@ -256,7 +268,7 @@ _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing) =
            Any[], Any[], 0, budget, 0, shared_cache, 0, Any[], Dict{String,Any}(),
            IdDict{Any,Any}(), Any[],
            Dict{String,Tuple{Symbol,Vector{Symbol}}}(), String[], false,
-           Int[], Any[], IdDict{Any,Symbol}())
+           Int[], Any[], IdDict{Any,Symbol}(), false, false, Symbol[], nothing)
 
 _cg_helper_dedup_disabled() = !_compiler_plan_now().cg_helper_dedup
 
@@ -348,6 +360,36 @@ function _cg_geo!(ctx::_CGCtx, v::Int, key=nothing, unit::Bool=false)
     push!(ctx.geosink, :(local $s = $(_cg_tab!(ctx, ctx.geo))[$(length(ctx.geo))]))
     key === nothing || (ctx.geomemo[key] = s)
     return s
+end
+
+# A table a loop body indexes, as a local read once ahead of the loops (in the
+# geometry sink) rather than `_cggrpG[pos]` at every use: a store to `du` may
+# alias the container's memory as far as the compiler knows, so the in-loop
+# form reloads the table's address on every iteration. Inside a structural
+# sub-kernel body (`ctx.subivt`) the table stays the container read, as there
+# every name it references must be one of the body's parameters.
+function _cg_tabh!(ctx::_CGCtx, obj)
+    ref = _cg_tab!(ctx, obj)
+    ctx.subivt && return ref
+    key = (:tab, obj)
+    got = get(ctx.geomemo, key, nothing)
+    got === nothing || return got
+    s = _cg_name(ctx, "tb")
+    push!(ctx.geosink, :(local $s = $ref))
+    ctx.geomemo[key] = s
+    return s
+end
+
+# A gather of the state through a slot table, once its table is a local
+# (`_cg_tabh!`), invites the loop vectorizer to turn every neighbour read into
+# a vector gather, which is several times slower here than the scalar loop. A
+# fetch that emits one sets `ctx.tblread`; `_cg_tblread!` returns the loop
+# annotation that keeps the loop scalar (or nothing) and clears the flag.
+# Leaving a loop scalar never changes a value.
+function _cg_tblread!(ctx::_CGCtx)
+    r = ctx.tblread
+    ctx.tblread = false
+    return r ? Any[_cg_novec()] : Any[]
 end
 
 # Run `f()` with geometry locals going to `sink` (and a fresh memo, since a
@@ -461,6 +503,17 @@ function _cg_affine_conn(conn::Vector{Int})
     return c0
 end
 
+# How `_cg_fetch` reads a slot table, as run-time data: `c0 - 1 >= 0` for a run
+# starting at slot `c0` (`_cg_affine_conn`), `-2` for a table with no ghost
+# entry, `-1` for one that has some.
+_cg_conn_mode(conn::UnitRange{Int}) =
+    _cg_affine_conn(conn) > 0 ? first(conn) - 1 : _cg_conn_mode(collect(conn))
+function _cg_conn_mode(conn::Vector{Int})
+    c0 = _cg_affine_conn(conn)
+    c0 > 0 && return c0 - 1
+    return any(iszero, conn) ? -1 : -2
+end
+
 # ---- One access descriptor → one indexing expression (mirrors `_fetch`) -----
 # `key` identifies the descriptor (its table and position) for `_cg_geo!`.
 function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key=nothing)
@@ -488,28 +541,40 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key=nothing)
     elseif k === _AK_ARR_FIXED
         return :($(_cg_tab!(ctx, a.arr))[$(_cg_geo!(ctx, a.idx, _cg_gkey(key, :idx)))])
     elseif k === _AK_STATE_INDIRECT
-        return :(u[$(_cg_tab!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(kc.n)]])
+        ctx.tblread = true
+        return :(u[$(_cg_tabh!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(kc.n)]])
     elseif k === _AK_STATE_INDIRECT_COL
-        return :(u[$(_cg_tab!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(a.col)]])
+        ctx.tblread = true
+        return :(u[$(_cg_tabh!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(a.col)]])
     elseif k === _AK_STATE_TBL_BOX
         s = _cg_name(ctx, "s")
         addr = _cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off, a.sx, key)
         # A table that is one ascending run of slots with no ghost (the box of
         # an array laid out as one column-major block) reads the same slot as
-        # base + address, without the table load and the ghost test. Whether a
-        # table is such a run can depend on the grid size (a boundary slab one
-        # cell wide), so the choice is run-time data (`-1` = not a run) and the
-        # emitted code is the same at every N; the branch is loop-invariant.
-        c0 = _cg_affine_conn(a.conn)
-        cb = _cg_geo!(ctx, c0 > 0 ? c0 - 1 : -1, _cg_gkey(key, :tblbase))
+        # base + address, without the table load and the ghost test; a table
+        # with no ghost entry skips the ghost test. Which of the three a table
+        # is can depend on the grid size (a boundary slab one cell wide), so
+        # the choice is run-time data (`_cg_conn_mode`) and the emitted code is
+        # the same at every N; the branches are loop-invariant.
+        cb = _cg_geo!(ctx, _cg_conn_mode(a.conn), _cg_gkey(key, :tblbase))
+        if cb isa Symbol
+            # The version of the loop that runs only when every table it reads
+            # is a run (`_cg_tbl_versions`).
+            ctx.tblaffine && return :(u[$cb + $addr])
+            push!(ctx.tblcbs, cb)
+        end
+        tb = _cg_tabh!(ctx, _cg_run_tbl(a.conn, _cg_affine_conn(a.conn)))
+        ctx.tblread = true
         # Exactly `_fetch`'s ghost test: slot 0 ⇒ the ghost literal 0.0.
-        return :($cb >= 0 ? u[$cb + $addr] :
-                 let $s = $(_cg_tab!(ctx, _cg_run_tbl(a.conn, c0)))[$addr]
+        return :($cb == -2 ? u[$tb[$addr]] :
+                 $cb >= 0 ? u[$cb + $addr] :
+                 let $s = $tb[$addr]
                      $s == 0 ? 0.0 : u[$s]
                  end)
     elseif k === _AK_ARR_TBL_BOX
         addr = _cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off, a.sx, key)
-        return :($(_cg_tab!(ctx, a.arr))[$(_cg_tab!(ctx, a.conn))[$addr]])
+        ctx.tblread = true
+        return :($(_cg_tabh!(ctx, a.arr))[$(_cg_tabh!(ctx, a.conn))[$addr]])
     end
     throw(_CodegenDecline(:unsupported_desc))
 end
@@ -522,9 +587,26 @@ const _CG_MINMAX_FN = Dict{Symbol,Symbol}(row.sym => row.fnsym for row in _NARY_
 
 # Left-nested binary fold `((e1 op e2) op e3)…` — the interpreters' exact
 # `acc = ev(c1); acc = op(acc, ev(ci))` association.
+#
+# A long fold (a contraction unrolled over thousands of terms) is emitted as
+# that accumulation itself, one statement per term in a `let`, rather than as
+# a call nested once per term: Julia's lowering recurses on expression depth,
+# and a chain some 10^4 calls deep exhausts it ("out of gc handles"). The
+# operations, their operands and their order are the same, so are the values.
+const _CG_FOLD_NEST_MAX = 64
 function _cg_foldl(fnsym::Symbol, exprs::Vector{Any})
+    n = length(exprs)
+    if n > _CG_FOLD_NEST_MAX
+        acc = :_cgfacc
+        stmts = Any[:(local $acc = $(exprs[1]))]
+        for i in 2:n
+            push!(stmts, :($acc = $(Expr(:call, fnsym, acc, exprs[i]))))
+        end
+        push!(stmts, acc)
+        return Expr(:let, Expr(:block), Expr(:block, stmts...))
+    end
     acc = exprs[1]
-    for i in 2:length(exprs)
+    for i in 2:n
         acc = Expr(:call, fnsym, acc, exprs[i])
     end
     return acc
@@ -1150,13 +1232,52 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     # The kernel's geometry locals head its own block, outside every loop, so a
     # chunk sub-function that carries the nest carries them too.
     geo = Any[]
-    nest = _cg_with_geosink(() -> _cg_emit_kernel_nest!(ctx, K, invsyms), ctx, geo)
+    nest = _cg_with_geosink(ctx, geo) do
+        _cg_tbl_versions(() -> _cg_emit_kernel_nest!(ctx, K, invsyms), ctx)
+    end
     isempty(geo) && return nest
     return Expr(:block, geo..., nest)
 end
 
+# A nest that reads the state through slot tables (`_AK_STATE_TBL_BOX`) is
+# emitted twice: once with each read in its general form (a run, a table with
+# no ghost, or one with ghosts, chosen per table by run-time data), and once
+# with every read as its run form, `u[base + address]`, behind a test that
+# every table of the nest is a run. A stencil whose tables are runs at this
+# grid size runs a loop with no table in it, which the compiler can vectorize,
+# whatever the general form's branches; and the general form's loop, which
+# gathers, stays scalar (`_cg_tblread!`). Both forms read the same slot of `u`
+# for every cell, so the values are the same.
+function _cg_tbl_versions(emit, ctx::_CGCtx)
+    cbs0 = ctx.tblcbs
+    ctx.tblcbs = Symbol[]
+    try
+        nestG = emit()
+        isempty(ctx.tblcbs) && return nestG
+        cond = nothing
+        for cb in unique(ctx.tblcbs)
+            c = :($cb >= 0)
+            cond = cond === nothing ? c : :($cond && $c)
+        end
+        ctx.tblaffine = true
+        nestA = try
+            emit()
+        finally
+            ctx.tblaffine = false
+        end
+        return :(if $cond
+                     $nestA
+                 else
+                     $nestG
+                 end)
+    finally
+        ctx.tblcbs = cbs0
+    end
+end
+
 function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbol})
-    cellfn = (_cg_split_supported() && !_cg_subcall_fn_disabled() &&
+    sm = ctx.scanmode
+    cellfn = (sm === nothing && _cg_split_supported() && !_cg_subcall_fn_disabled() &&
               length(K.cells.strides) <= 3) ?
              _cg_cell_fn!(ctx, K, invsyms) : nothing
 
@@ -1175,7 +1296,24 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                             Expr(:tuple, invsyms...), extra...)]
         end
         stmts = _cg_emit_recipes!(Any[], ctx, kc)
-        push!(stmts, :(du[$(kc.oln)] = $(_cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine)))))
+        val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
+        if sm === nothing
+            push!(stmts, :(du[$(kc.oln)] = $val))
+        else
+            # A fused scan's cell (scan_fused.jl): the term, converted exactly
+            # as its store into `du` would convert it, folded into the lane's
+            # running value in `_scan_lanes!`'s order.
+            tv = _cg_name(ctx, "term")
+            acc = sm.acc
+            push!(stmts, :(local $tv = convert(eltype(du), $val)))
+            if sm.inclusive
+                push!(stmts, :($acc = $(sm.op)($acc, $tv)))
+                push!(stmts, :(du[$(kc.oln)] = $acc))
+            else
+                push!(stmts, :(du[$(kc.oln)] = $acc))
+                push!(stmts, :($acc = $(sm.op)($acc, $tv)))
+            end
+        end
         return stmts
     end
 
@@ -1199,31 +1337,44 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
         return (lo, geo(last(cs.ranges[d]), (d, :last)), geo(n, (d, :len)))
     end
     corner = !isempty(cs.strides) && all(d -> _cellset_slab(cs, d), eachindex(cs.strides))
-    hdr = Any[:(local $tv = _chunk_ordinals($(corner ? 1 : geo(ncells, :n)), _cgci, _cgnc)),
-              :(local $av = $tv[1]),
-              :(local $bv = $tv[2])]
+    hdr = if sm === nothing
+        Any[:(local $tv = _chunk_ordinals($(corner ? 1 : geo(ncells, :n)), _cgci, _cgnc)),
+            :(local $av = $tv[1]),
+            :(local $bv = $tv[2])]
+    else
+        # A fused scan's nest runs the one lane its caller bound.
+        av = sm.a
+        bv = sm.b
+        Any[]
+    end
     if _is_outs(cs)
         outs = _cg_tab!(ctx, cs.outs)
         c = _cg_name(ctx, "c")
         oln = _cg_name(ctx, "o")
         kc = _CGKernCtx(K, c, 0, oln, c, 1, 1, Symbol[], invsyms)
+        ctx.tblread = false
         body = cellbody(kc)
+        tv1 = _cg_tblread!(ctx)
         return quote
             $(hdr...)
             for $c in ($av + 1):$bv
                 local $oln = $outs[$c]
                 $(body...)
+                $(tv1...)
             end
         end
     elseif _is_contig(cs)
         c0 = geo(first(cs.ranges[1]), (1, :first))
         c = _cg_name(ctx, "c")
         kc = _CGKernCtx(K, c, 0, c, c, 1, 1, Symbol[], invsyms)
+        ctx.tblread = false
         body = cellbody(kc)
+        tv1 = _cg_tblread!(ctx)
         return quote
             $(hdr...)
             for $c in ($c0 + $av):($c0 + $bv - 1)
                 $(body...)
+                $(tv1...)
             end
         end
     end
@@ -1245,9 +1396,13 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     nd >= 2 && (olnexpr = :($olnexpr + $jv * $(st[2])))
     nd >= 3 && (olnexpr = :($olnexpr + $kv * $(st[3])))
     kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invsyms)
+    ctx.tblread = false
     body = cellbody(kc)
+    # The innermost loop's own annotation: kept scalar when it gathers through
+    # a slot table (`_cg_tblread!`).
+    tv1 = _cg_tblread!(ctx)
     i0, i1, ni = axis(1)
-    if nd == 1 && cellfn === nothing
+    if nd == 1 && cellfn === nothing && sm === nothing
         inter = _cg_areduce_interchanged(ctx, K, kc, iv, oln, olnexpr, i0, av, bv)
         if inter !== nothing
             return quote
@@ -1258,6 +1413,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                     for $iv in ($i0 + $av):($i0 + $bv - 1)
                         local $oln = $olnexpr
                         $(body...)
+                        $(tv1...)
                     end
                 end
             end
@@ -1269,6 +1425,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
             for $iv in ($i0 + $av):($i0 + $bv - 1)
                 local $oln = $olnexpr
                 $(body...)
+                $(tv1...)
             end
         end
     end
@@ -1298,6 +1455,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                     for $iv in $ilo:$ihi
                         local $oln = $olnexpr
                         $(body...)
+                        $(tv1...)
                     end
                     $(nv...)
                 end
@@ -1329,6 +1487,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                     for $iv in $ilo:$ihi
                         local $oln = $olnexpr
                         $(body...)
+                        $(tv1...)
                     end
                     $(nv...)
                 end
@@ -1393,7 +1552,9 @@ function _cg_emit_rowgroup!(ctx::_CGCtx, Ks::Vector{_AccKernel})
         push!(invs, _cg_inv!(ctx, K))
     end
     geo = Any[]
-    nest = _cg_with_geosink(() -> _cg_emit_rowgroup_nest!(ctx, Ks, invs), ctx, geo)
+    nest = _cg_with_geosink(ctx, geo) do
+        _cg_tbl_versions(() -> _cg_emit_rowgroup_nest!(ctx, Ks, invs), ctx)
+    end
     return Expr(:block, geo..., nest)
 end
 
@@ -1428,12 +1589,15 @@ function _cg_emit_rowgroup_nest!(ctx::_CGCtx, Ks::Vector{_AccKernel},
         iv = _cg_name(ctx, "i")
         oln = _cg_name(ctx, "o")
         kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invs[m])
+        ctx.tblread = false
         rec = _cg_emit_recipes!(Any[], ctx, kc)
         val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
+        tv1 = _cg_tblread!(ctx)
         i0, i1, _ = axis(K.cells, 1)
-        push!(parts, (; iv, oln, rec, val, i0, i1))
+        push!(parts, (; iv, oln, rec, val, i0, i1, tv1))
     end
-    segs = Any[seg(q.iv, q.i0, q.i1, q.oln, Any[q.rec..., :(du[$(q.oln)] = $(q.val))])
+    segs = Any[seg(q.iv, q.i0, q.i1, q.oln,
+                   Any[q.rec..., :(du[$(q.oln)] = $(q.val)), q.tv1...])
                for q in parts]
     fis = _cg_row_fission(ctx, Ks, parts)
     if fis !== nothing
@@ -1613,6 +1777,8 @@ function _cg_row_fission(ctx::_CGCtx, Ks::Vector{_AccKernel}, parts)
         (st isa Expr && st.head === :local && st.args[1] isa Expr) || continue
         a = st.args[1]
         r = a.args[2]
+        # Geometry locals only (`_cg_geo!`'s `_cgG…`), not hoisted tables.
+        startswith(String(a.args[1]), "_cgG") || continue
         (r isa Expr && r.head === :ref && r.args[2] isa Int) || continue
         gval[a.args[1]] = ctx.geo[r.args[2]]
     end
@@ -1734,7 +1900,9 @@ function _cg_emit_box_rank_n(ctx::_CGCtx, K::_AccKernel, cs::_CellSet, hdr, av, 
     end
     kc = _CGKernCtx(K, oln, 0, oln, ovs[1], ovs[2], ovs[3], Symbol[], _cg_inv!(ctx, K),
                     Any[ovs[d] for d in 4:nd])
+    ctx.tblread = false
     body = cellbody(kc)
+    tv1 = _cg_tblread!(ctx)
     i0 = lo[1]; i1 = hi[1]; ni = len[1]
     ohi = _cg_name(ctx, "e")
     rlo = _cg_name(ctx, "rl")
@@ -1776,6 +1944,7 @@ function _cg_emit_box_rank_n(ctx::_CGCtx, K::_AccKernel, cs::_CellSet, hdr, av, 
                 for $iv in $ilo:$ihi
                     local $oln = $rowb + $iv * $(st[1])
                     $(body...)
+                    $(tv1...)
                 end
                 $step
             end

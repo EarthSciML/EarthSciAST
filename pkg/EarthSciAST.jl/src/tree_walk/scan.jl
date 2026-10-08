@@ -85,13 +85,21 @@
 # `inclusive` distinguishes `j <= i` (cell `i` includes its own term) from
 # `j < i` (cell `i` is the accumulation BEFORE its own term; cell 1 is the
 # empty reduction, which takes 0̄ — esm-spec §4.3.1).
+#
+# `terms` holds the term kernels the build made for this fold (`_AccKernel`s,
+# untyped here because they are defined later). The in-place build uses them
+# to compile the term into the fold's own pass (scan_fused.jl); the fold itself
+# never reads them.
 struct _ScanFold
     slots::Vector{Int}
     len::Int
     oplus::Symbol         # :+ :* :max :min
     zerobar::Float64
     inclusive::Bool
+    terms::Vector{Any}
 end
+_ScanFold(slots::Vector{Int}, len::Int, oplus::Symbol, zerobar::Float64,
+          inclusive::Bool) = _ScanFold(slots, len, oplus, zerobar, inclusive, Any[])
 
 # Apply every prefix fold of this build, in place over `du`. Runs AFTER the
 # kernel section, so each fold reads back the per-cell terms its own term
