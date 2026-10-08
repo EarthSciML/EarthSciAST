@@ -38,11 +38,13 @@ def result(family, n, **kw):
     return r
 
 
-def run(results, ledger, *args):
+def run(results, ledger, *args, binding="rust", gates=None):
     with open(os.path.join(HERE, "manifest.json")) as fh:
         manifest = json.load(fh)
     manifest = copy.deepcopy(manifest)
-    manifest["ledger"] = {"rust": ledger}
+    manifest["ledger"] = {binding: ledger}
+    for gate, fields in (gates or {}).items():
+        manifest["gates"][gate].update(fields)
     with tempfile.TemporaryDirectory() as d:
         mp = os.path.join(d, "manifest.json")
         rp = os.path.join(d, "r.json")
@@ -51,7 +53,7 @@ def run(results, ledger, *args):
             json.dump(manifest, fh)
         with open(rp, "w") as fh:
             json.dump(
-                {"binding": "rust", "compiler": "native", "threads": 1, "results": results}, fh
+                {"binding": binding, "compiler": "native", "threads": 1, "results": results}, fh
             )
         code = check.main([rp, "--manifest", mp, "--json", op, *args])
         with open(op) as fh:
@@ -180,6 +182,54 @@ def main():
     # to its size cap: a null there stays unmeasured.
     code, o = run(refused, [{"family": "regrid", "gate": "builds", "phase": 3}])
     assert o[("regrid", 100, "hand_loop_agrees")] == "skip", o
+
+    # regrid's speed gate applies from 2000 states (its ladder stops at 6324),
+    # so its N = 1000 and 3162 points are gated and N = 100 is not.
+    rg = [
+        result("regrid", n, n_states=2 * n, steady_rhs_s=1.0, hand_loop_s=1e-6)
+        for n in (100, 1000, 3162)
+    ]
+    code, o = run(rg, [], "--report-timing")
+    assert o[("regrid", 100, "speed")] == "skip", o
+    assert o[("regrid", 1000, "speed")] == "FAIL" and o[("regrid", 3162, "speed")] == "FAIL", o
+
+    # build_slope's document-size allowance: the limit is max_ns_per_state
+    # plus per_byte_ns times the document bytes each added state costs.
+    per_byte = {"build_slope": {"max_ns_per_state": 20, "per_byte_ns": {"rust": 10, "julia": 100}}}
+
+    def grows(build_hi, bytes_hi, bytes_lo=1000, **kw):
+        lo = result("unstructured_gather", 100, build_s=0.0, n_bytes=bytes_lo, **kw)
+        hi = result(
+            "unstructured_gather", 1000, n_states=1100, build_s=build_hi, n_bytes=bytes_hi, **kw
+        )
+        return [lo, hi]
+
+    # 30 bytes/state at 10 ns/byte allows 20 + 300 ns/state under Rust:
+    # 310 ns/state passes, 330 does not.
+    code, o = run(grows(310e-9 * 1000, 31000), [], gates=per_byte)
+    assert code == 0 and o[("unstructured_gather", None, "build_slope")] == "pass", o
+    code, o = run(grows(330e-9 * 1000, 31000), [], gates=per_byte)
+    assert code == 1 and o[("unstructured_gather", None, "build_slope")] == "FAIL", o
+    # Each binding has its own per-byte cost: the same 330 ns/state is within
+    # Julia's 20 + 3000.
+    code, o = run(grows(330e-9 * 1000, 31000), [], binding="julia", gates=per_byte)
+    assert code == 0 and o[("unstructured_gather", None, "build_slope")] == "pass", o
+    # A document whose size does not grow with N gets no allowance.
+    code, o = run(grows(30e-9 * 1000, 1000), [], gates=per_byte)
+    assert code == 1 and o[("unstructured_gather", None, "build_slope")] == "FAIL", o
+    # Nor does a result written before the adapters recorded n_bytes.
+    old = grows(310e-9 * 1000, 31000)
+    for r in old:
+        del r["n_bytes"]
+    code, o = run(old, [], gates=per_byte)
+    assert code == 1 and o[("unstructured_gather", None, "build_slope")] == "FAIL", o
+    assert check.build_slope_limit(
+        {"binding": "go"}, per_byte["build_slope"], *grows(0, 31000)
+    ) == (20, "")
+    lim, _ = check.build_slope_limit(
+        {"binding": "rust"}, {"max_ns_per_state": 20, "per_byte_ns": 10}, *grows(0, 31000)
+    )
+    assert abs(lim - 320) < 1e-9, lim
 
     # --require names what is missing.
     code, o = run(ok, [], "--require", "pr")
