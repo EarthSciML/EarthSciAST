@@ -218,6 +218,7 @@ def family_checks(run, fam, results, gates, family_spec):
         else:
             lo, hi = cand[0], cand[-1]
             ns = (hi["build_s"] - lo["build_s"]) / (hi["n_states"] - lo["n_states"]) * 1e9
+            limit, why = build_slope_limit(run, gates["build_slope"], lo, hi)
             out.append(
                 Check(
                     run,
@@ -225,12 +226,42 @@ def family_checks(run, fam, results, gates, family_spec):
                     None,
                     "build_slope",
                     TIMING,
-                    ns < gates["build_slope"]["max_ns_per_state"],
+                    ns < limit,
                     ns,
-                    f"ns/state over N={lo.get('n')}..{hi.get('n')}",
+                    f"ns/state over N={lo.get('n')}..{hi.get('n')}; limit {limit:.4g}{why}",
                 )
             )
     return out
+
+
+def build_slope_limit(run, gate, lo, hi):
+    """`build_slope`'s limit in ns per state between results `lo` and `hi`,
+    and a note saying how it was reached.
+
+    The limit is `max_ns_per_state` plus the gate's `per_byte_ns` (a number,
+    or a map from binding to number; a binding it does not name gets 0) times
+    the document bytes each added state costs, `(n_bytes(hi) - n_bytes(lo)) /
+    (n_states(hi) - n_states(lo))`. Reading the document is part of the build,
+    and a document that carries its data inline grows with N however good the
+    compiler is; the allowance pays for that reading at the binding's measured
+    load cost, so what the compiler adds on top still has to fit
+    `max_ns_per_state`. A document whose size does not grow with N gets no
+    allowance. A result without `n_bytes` (written before the adapters
+    recorded it) gets none either, so the gate is the plain one there."""
+    base = gate["max_ns_per_state"]
+    per_byte = gate.get("per_byte_ns", 0)
+    if isinstance(per_byte, dict):
+        per_byte = per_byte.get(run.get("binding"), 0)
+    if not per_byte:
+        return base, ""
+    b_lo, b_hi = lo.get("n_bytes"), hi.get("n_bytes")
+    if b_lo is None or b_hi is None:
+        return base, " (no n_bytes in the result: no size allowance)"
+    bytes_per_state = max(0.0, (b_hi - b_lo) / (hi["n_states"] - lo["n_states"]))
+    allowance = per_byte * bytes_per_state
+    return base + allowance, (
+        f" = {base:.4g} + {allowance:.4g} for {bytes_per_state:.3g} document bytes/state"
+    )
 
 
 def threads_label(run):

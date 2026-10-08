@@ -61,6 +61,8 @@ Linux only.
   Before a family's ladder the adapter builds that family's smallest document
   once, untimed, so no recorded build includes compiling the build path
   itself (most of a minute in a fresh process).
+- `n_bytes` is `filesize(path)` of the document, read before the build (the
+  build-slope gate's document-size allowance is per byte of it).
 - `first_call_s` is the first `prob.f!` call after the build. It includes
   compiling the generated functions, unless a previous size emitted the same
   expressions, in which case Julia reuses the compiled code: that is a

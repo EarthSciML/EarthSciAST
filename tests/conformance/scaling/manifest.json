@@ -85,7 +85,13 @@
       "description": "A conservative regrid (bin-skolem broad phase, inline polygon_intersection_area) applied on every call. The overlap arrays are declared dense over source x target, so the ladder stops at 3162.",
       "size_meaning": "source cells = target cells (2 states per index)",
       "sizes": [100, 1000, 3162],
-      "pr_sizes": [100, 1000]
+      "pr_sizes": [100, 1000],
+      "gate_overrides": {
+        "speed": {
+          "min_n_states": 2000,
+          "why": "the ladder stops at 3162 (6324 states) because the overlap arrays are declared dense over source x target, so the default 10^4 would never check regrid at all. From 2000 states (N = 1000) a hand-loop call takes microseconds (about 3-6 us, and 10-20 us at 6324 states), long enough for a median over hundreds of calls to resolve; at 200 states it is under a microsecond and stays ungated"
+        }
+      }
     },
     "unstructured_gather": {
       "description": "A four-neighbour indirect gather u[nbr[i,k]] over a permuted numbering of a periodic 2-D mesh; the neighbour table is an inline const array.",
@@ -125,8 +131,13 @@
     },
     "build_slope": {
       "kind": "timing",
-      "description": "(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin)) over the smallest and largest N that built, with Nmax <= 10^6 cells, under max_ns_per_state. Needs two built sizes.",
-      "max_ns_per_state": 20
+      "description": "(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin)) over the smallest and largest N that built, with Nmax <= 10^6 cells, under max_ns_per_state + per_byte_ns[binding] * (n_bytes(Nmax) - n_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin)): the build may also read the document bytes each added state brings, at twice the binding's measured load cost per byte of inline data. A document whose size does not grow with N, or a result without n_bytes, gets no allowance. Needs two built sizes.",
+      "max_ns_per_state": 20,
+      "per_byte_ns": {
+        "julia": 170,
+        "rust": 85
+      },
+      "per_byte_ns_why": "twice each binding's document load (no build) per byte of inline data, measured on regrid and unstructured_gather (the larger rate, regrid's) between the smallest and largest document of each, two rounds, cf30558cb, cores 18-19: Julia load_path 82-84 ns/byte (unstructured_gather 46-47), Rust serde_json parse plus typed load, the two steps esm_problem runs, 39-43 ns/byte (unstructured_gather 24-25). Twice: the load, plus one more pass of the same cost for the build to read the inline values out of the loaded document into its own arrays, the least a build that uses the data has to do"
     },
     "speed": {
       "kind": "timing",

@@ -454,8 +454,9 @@ fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
     m
 }
 
-const FIELDS: [&str; 13] = [
+const FIELDS: [&str; 14] = [
     "reason",
+    "n_bytes",
     "build_s",
     "code_size",
     "first_call_s",
@@ -504,6 +505,9 @@ fn measure_one(one: &One) -> Map<String, Value> {
     }
 
     warm_up();
+    if let Ok(meta) = std::fs::metadata(&one.doc) {
+        r.insert("n_bytes".into(), json!(meta.len()));
+    }
     let t = Instant::now();
     let built = esm_problem(one.doc.as_path(), (0.0, 1.0), options(Compiler::Native));
     let build_s = t.elapsed().as_secs_f64();
