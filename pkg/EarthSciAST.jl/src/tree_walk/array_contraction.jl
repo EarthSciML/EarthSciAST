@@ -80,7 +80,8 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     if k === _NK_LITERAL
         return nd.literal
     elseif k === _NK_STATE
-        return :(u[$(_cg_geo!(ctx, nd.idx, (nd, :idx)))])
+        return _cg_uread(_cg_slot_side(ctx.nst, nd.idx, nd.idx),
+                         _cg_geo!(ctx, nd.idx, (nd, :idx)))
     elseif k === _NK_PARAM
         return :(_read_param(p, $(QuoteNode(nd.sym)), $(nd.idx)))
     elseif k === _NK_TIME
@@ -214,10 +215,11 @@ function _cg_state_gather(ctx::_CGCtx, kc, nd::_Node)
         if pre !== nothing
             col = _ac_entry_local(ctx, pre)
             ev = (kc.entry::_ACEntries).ev
-            all(!=(0), pre) && return :(u[$col[$ev]])
+            side = _cg_slot_side(ctx.nst, _cg_table_extent(ctx, pre)...)
+            all(!=(0), pre) && return _cg_uread(side, :($col[$ev]))
             sv = _cg_name(ctx, "esl")
             return :(let $sv = $col[$ev]
-                         $sv == 0 ? zero(eltype(u)) : u[$sv]
+                         $sv == 0 ? zero(eltype(u)) : $(_cg_uread(side, sv))
                      end)
         end
     end
@@ -231,7 +233,8 @@ function _cg_state_gather_dim(ctx::_CGCtx, kc, nd::_Node,
                               sg::_StateGather, sgv::Symbol, d::Int, off::Vector{Any})
     children = nd.children
     d > length(children) &&
-        return :(u[$sgv.slot_flat[$(_cg_foldl(:+, off)) + 1]])
+        return _cg_uread(_cg_slot_side(ctx.nst, _cg_table_extent(ctx, sg.slot_flat)...),
+                         :($sgv.slot_flat[$(_cg_foldl(:+, off)) + 1]))
     sd = _cg_name(ctx, "sgs")
     lo = _cg_geo!(ctx, sg.lo[d], (sg.lo, d))
     hi = _cg_geo!(ctx, sg.hi[d], (sg.hi, d))
@@ -356,9 +359,10 @@ _cg_boxaddr(::_CGCtx, ::_CGScalarCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int},
 
 function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
         los::Vector{Int}, steps::Vector{Int}, lens::Vector{Int},
-        outs::Vector{Int}, body::_Node; fold::Union{Nothing,_ACFold}=nothing)
+        outs::Vector{Int}, body::_Node; fold::Union{Nothing,_ACFold}=nothing,
+        nst::Int=0)
     _codegen_disabled() && return :codegen_disabled
-    ctx = _CGCtx(_codegen_node_budget())
+    ctx = _CGCtx(_codegen_node_budget(); nst=nst)
     entries = fold !== nothing && _acfold_is_table(fold) ?
         _ACEntries(_cg_name(ctx, "ent"), fold, refs, los, steps, lens,
                    IdDict{Any,Vector{Int}}()) : nothing
@@ -398,15 +402,20 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
     bv = _cg_name(ctx, "b")
     tv = _cg_name(ctx, "ab")
     ncells = _cg_geo!(ctx, length(outs))
+    # On a two-buffer slot space, `du` as the buffer every output cell is in.
+    oside = isempty(outs) ? :x : _cg_slot_side(nst, extrema(outs)...)
+    dstore = oside === :x ? :du : :(_cg_dview(du, Val($(QuoteNode(oside)))))
     loop = quote
         $(ctx.geosink...)
         local $ov = $outsv
         local $tv = _chunk_ordinals($ncells, _cgci, _cgnc)
         local $av = $tv[1]
         local $bv = $tv[2]
-        for $cv in ($av + 1):$bv
-            $(seek...)
-            du[$ov[$cv]] = $cell
+        let du = $dstore
+            for $cv in ($av + 1):$bv
+                $(seek...)
+                du[$ov[$cv]] = $cell
+            end
         end
     end
     ngrp = length(ctx.tab_types)
