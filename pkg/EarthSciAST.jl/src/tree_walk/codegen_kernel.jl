@@ -444,6 +444,13 @@ _cg_offset(base, delta) = delta === 0 ? base : :($base + $delta)
 
 # The first slot of a slot table that is `c0, c0+1, …` with no ghost (0)
 # entry, or 0 when it is not one such run.
+# The table an `_AK_STATE_TBL_BOX` read passes to the emitted code: a range is
+# an identity run (`c0 > 0`), whose table the emitted branch never loads, so
+# every such read shares one empty vector and the table types stay `Vector{Int}`.
+const _CG_RUN_TBL = Int[]
+_cg_run_tbl(conn::Vector{Int}, c0::Int) = conn
+_cg_run_tbl(conn::UnitRange{Int}, c0::Int) = c0 > 0 ? _CG_RUN_TBL : collect(conn)
+_cg_affine_conn(conn::UnitRange{Int}) = (!isempty(conn) && first(conn) >= 1) ? first(conn) : 0
 function _cg_affine_conn(conn::Vector{Int})
     isempty(conn) && return 0
     c0 = conn[1]
@@ -497,7 +504,7 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key=nothing)
         cb = _cg_geo!(ctx, c0 > 0 ? c0 - 1 : -1, _cg_gkey(key, :tblbase))
         # Exactly `_fetch`'s ghost test: slot 0 ⇒ the ghost literal 0.0.
         return :($cb >= 0 ? u[$cb + $addr] :
-                 let $s = $(_cg_tab!(ctx, a.conn))[$addr]
+                 let $s = $(_cg_tab!(ctx, _cg_run_tbl(a.conn, c0)))[$addr]
                      $s == 0 ? 0.0 : u[$s]
                  end)
     elseif k === _AK_ARR_TBL_BOX

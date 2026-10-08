@@ -607,18 +607,16 @@ function _materialized_obs_dims(def::ASTExpr, shape, index_sets::AbstractDict,
             for n in idx_names
                 haskey(ranges, n) || return nothing
                 r = try
-                    collect(_expand_int_range(ranges[n]))
+                    _expand_int_range(ranges[n])
                 catch err
                     # A range this pass cannot read as a dense integer interval
                     # means "not a declared-dims producer" — decline. Running
-                    # out of memory MATERIALIZING one does not: `collect` on a
-                    # huge range is exactly how a document's own extents exhaust
-                    # the allocator, and declining here would hide that behind a
-                    # shape the caller reports some other way.
+                    # out of memory does not: declining here would hide that
+                    # behind a shape the caller reports some other way.
                     _is_resource_error(err) && rethrow()
                     return nothing
                 end
-                (!isempty(r) && r == collect(1:length(r))) || return nothing
+                (!isempty(r) && first(r) == 1 && _is_unit_run(r)) || return nothing
                 push!(dims, length(r))
             end
             produced = dims
@@ -2815,7 +2813,7 @@ mutable struct _ObsExtVec
     epoch::_ForcingEpoch
 end
 _ObsExtVec(n::Int, epoch::_ForcingEpoch = _new_forcing_epoch()) =
-    _ObsExtVec(zeros(Float64, n), nothing, _CSE_INVALID, _CSE_INVALID,
+    _ObsExtVec(_zeros_f64(n), nothing, _CSE_INVALID, _CSE_INVALID,
                _CSE_INVALID, NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID, UInt64(0),
                epoch)
 @inline _obsext_buf(s::_ObsExtVec, ::Type{Float64}) = s.f64
@@ -3658,7 +3656,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # respect to the build: nothing downstream consults `inspect`.
     if inspect !== nothing
         for (k, arr) in parts.geom_setup_arrays
-            inspect.setup_arrays[String(k)] = Array{Float64}(arr)
+            # Published by reference, as the const arrays below are.
+            inspect.setup_arrays[String(k)] = arr isa Array{Float64} ? arr : Array{Float64}(arr)
         end
         for (k, arr) in const_registry
             inspect.const_arrays[String(k)] = arr
@@ -4212,18 +4211,10 @@ function _build_evaluator_impl_pools(model::Model; kwargs...)
     prev = _LANE_INTERN_POOL[]
     _LANE_INTERN_POOL[] = _lane_intern_disabled() ? nothing :
                           Dict{_LaneInternKey,Any}()
-    # Same lifetime, same save/restore: the identity slot tables the lane-affine
-    # STATE-BOX lowering addresses through (`_state_slot_identity`,
-    # stencil_affine.jl) are shared across every equation of THIS build and
-    # dropped with it.
-    prev_sb = _STATE_SLOT_TBL_POOL[]
-    _STATE_SLOT_TBL_POOL[] = _state_box_disabled() ? nothing :
-                             Dict{Tuple{String,Int,Int},Vector{Int}}()
     try
         return _build_evaluator_impl_inner(model; kwargs...)
     finally
         _LANE_INTERN_POOL[] = prev
-        _STATE_SLOT_TBL_POOL[] = prev_sb
     end
 end
 
@@ -4680,7 +4671,7 @@ end
 # runtime `ifelse` guard the box processor verifies affine.
 function _unrolled_contraction_body(rhs_body::ASTExpr, contract_names::Vector{String},
         contract_const, filt, oplus::String, zerobar::Float64)
-    iters = Vector{Int}[c::Vector{Int} for c in contract_const]
+    iters = Vector{Int}[convert(Vector{Int}, c) for c in contract_const]
     terms = ASTExpr[]
     _foreach_aggregate_term(rhs_body, contract_names, iters, nothing, filt, zerobar,
                             nothing) do term
@@ -4706,8 +4697,8 @@ function _affine_reduce_form(contract_names::Vector{String}, contract_const,
     rngs = UnitRange{Int}[]
     for c in contract_const
         (c === nothing || isempty(c)) && return nothing
+        _is_unit_run(c) || return nothing
         r = first(c):last(c)
-        c == collect(r) || return nothing
         push!(rngs, r)
     end
     prod(length, rngs) >= 2 || return nothing
@@ -4721,7 +4712,7 @@ function _fold_form_refusal(contract_names::Vector{String}, contract_const, oplu
         return "its ⊕ must be +, *, max or min, and this one is `$(oplus)`"
     for (name, c) in zip(contract_names, contract_const)
         (c === nothing || isempty(c)) && continue
-        c == collect(first(c):last(c)) ||
+        _is_unit_run(c) ||
             return "it folds unit-step ranges only, and `$(name)` steps " *
                    (length(c) >= 2 ? "by $(c[2] - c[1]) " : "") *
                    "from $(first(c)) to $(last(c))"
@@ -4932,11 +4923,11 @@ end
 
 # Returns `nothing` (same-range), a term range vector (staggered), or `:decline`.
 function _scan_term_iters(range_iters, axis::Int, citer, inclusive::Bool)
-    out = collect(range_iters[axis])
+    out = range_iters[axis]
     out == citer && return nothing
     (!inclusive && length(citer) == length(out) - 1 &&
      @views(out[1:end-1]) == citer) || return :decline
-    term_iters = copy(range_iters)
+    term_iters = AbstractVector{Int}[r for r in range_iters]
     term_iters[axis] = citer
     return term_iters
 end
@@ -5015,7 +5006,7 @@ function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
         range_iters, lhs_body::OpExpr, var_map::AbstractDict{String,Int},
         oplus::String, zerobar::Float64)
     nd = length(idx_names)
-    scan_range = collect(range_iters[axis])
+    scan_range = range_iters[axis]
     len = length(scan_range)
     # Unreachable — `_try_affine_stencil` already refused an empty range before
     # the caller got here — but a `nothing` return would leave the term kernels
@@ -5028,7 +5019,7 @@ function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
     outer_iters = Vector{Vector{Int}}(undef, nd)
     for d in 1:nd
         outer_iters[d] = d == axis ? Int[first(range_iters[d])] :
-                                     collect(range_iters[d])
+                                     convert(Vector{Int}, range_iters[d])
     end
     slots = Int[]
     sizehint!(slots, len * prod(length(it) for it in outer_iters; init=1))
@@ -5261,7 +5252,7 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # per-cell fallback via `_expand_contract_range`.
     contract_names = String[]
     contract_ranges = Vector{Any}[]            # raw [lo,hi]/[lo,step,hi]
-    contract_const  = Union{Vector{Int},Nothing}[]  # nothing ⇒ per-cell
+    contract_const  = Union{AbstractVector{Int},Nothing}[]  # nothing ⇒ per-cell
     # Semiring ⊕ and its 0̄ identity (§5.1). Default sum_product (+, 0̄=0).
     rhs_oplus = "+"
     rhs_zerobar = 0.0
@@ -5281,7 +5272,7 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
             push!(contract_ranges, rspec)
             push!(contract_const,
                   _is_const_int_range(rspec) ?
-                      collect(_expand_int_range(rspec)) : nothing)
+                      _dense_range_or_list(_expand_int_range(rspec)) : nothing)
         end
         # A POINTWISE aggregate (no contracted index) with a filter: each output
         # cell is one combination, which contributes its term where the
@@ -5296,7 +5287,7 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         end
     end
 
-    range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
+    range_iters = _output_range_iters(ranges_dict, idx_names)
     label = _faq_debug_label(lhs_body, idx_names, range_iters)
     # Open this rule's report entry first: every tier below either lands it
     # (through the routing tally) or refuses it, and a refusal raised several
@@ -5894,6 +5885,7 @@ function _array_contraction_table(contract_refs::Vector{Base.RefValue{Int}},
         contract_ranges, contract_const, agg_gates, oplus::String, zerobar::Float64,
         const_registry::AbstractDict)
     nc = length(contract_names)
+    contract_const = _contract_lists(contract_const)
     sentinel = OpExpr(_AC_KEYS_OP, ASTExpr[VarExpr(n) for n in contract_names])
     n_cells = prod(length(r) for r in range_iters)
     seg = Vector{Int}(undef, n_cells + 1)
@@ -5952,6 +5944,7 @@ function _compile_faq_percell!(percell_scalar, acc_kernels, covered::BitVector,
         pgather::AbstractDict, param_sym_set, reg_funcs,
         contraction_loop::Bool=false,
         pooled_cells=nothing)   # `nothing` or `Vector{Tuple{Int,_Node}}` — see above
+    contract_const = _contract_lists(contract_const)
     cell_entries = Tuple{Int,_Node}[]
     cell_memo = _BuildMemo()
     # A scalar aggregate NESTED in this array-equation cell body must keep

@@ -1166,6 +1166,7 @@ function _has_apply_op(x)
     seen = IdDict{Any,Nothing}()
     _walk_json(x) do _, n
         found && return false   # already answered — prune the rest
+        n isa AbstractVector && _leaves_only(n) && return false   # holds no object
         if _is_object(n) || _is_array(n)
             haskey(seen, n) && return false
             seen[n] = nothing
