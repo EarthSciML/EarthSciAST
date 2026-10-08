@@ -221,8 +221,17 @@ values out of the loaded document into its own arrays (the manifest's
 and one read of its data passes, and whatever else the build does per state
 still has to fit in 20 ns. The rate is measured on data arrays; a document
 whose growth is equations rather than data (`scalar_chemistry`) loads at a
-higher rate per byte in both bindings, and the allowance does not cover the
-difference.
+higher rate per byte in both bindings, which the gate's own rate does not
+cover.
+
+A family whose document grows by equations states its own rate in its
+`gate_overrides.build_slope.per_byte_ns`, per binding, with a `why`. Only
+`scalar_chemistry` does: one scalar ODE per state, which the Julia loader
+validates and coerces equation by equation at about 3000 ns per byte, and the
+Rust loader at about 100. That per-equation load cost (schema validation, in
+Julia) is a known cost separate from the compiler, so the family's rate is
+twice it, by the same reasoning as above. It excuses loading, not compiling:
+the rest of the build must still fit in 20 ns per state.
 
 A document whose size does not grow with N (every stencil, `transport_3d`,
 `chemistry_grid`, `prefix_scan`, `source_receptor`: their size changes by a

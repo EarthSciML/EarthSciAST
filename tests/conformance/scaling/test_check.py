@@ -231,6 +231,24 @@ def main():
     )
     assert abs(lim - 320) < 1e-9, lim
 
+    # A family whose document grows by equations states its own per-byte rate
+    # (scalar_chemistry's gate_overrides); the gate's data rate applies to the rest.
+    def chem(fam, build_hi):
+        lo = result(fam, 100, build_s=0.0, n_bytes=0)
+        hi = result(fam, 1100, n_states=1100, build_s=build_hi, n_bytes=328_000)
+        return [lo, hi]
+
+    code, o = run(chem("scalar_chemistry", 60_000e-9 * 1000), [], "--report-timing")
+    assert o[("scalar_chemistry", None, "build_slope")] == "pass", o
+    code, o = run(chem("scalar_chemistry", 70_000e-9 * 1000), [], "--report-timing")
+    assert o[("scalar_chemistry", None, "build_slope")] == "FAIL", o
+    code, o = run(chem("unstructured_gather", 60_000e-9 * 1000), [], "--report-timing")
+    assert o[("unstructured_gather", None, "build_slope")] == "FAIL", o
+    code, o = run(
+        chem("scalar_chemistry", 1_900_000e-9 * 1000), [], "--report-timing", binding="julia"
+    )
+    assert o[("scalar_chemistry", None, "build_slope")] == "pass", o
+
     # --require names what is missing.
     code, o = run(ok, [], "--require", "pr")
     assert code == 1 and o[("stencil_2d", 100, "present")] == "MISSING", o
