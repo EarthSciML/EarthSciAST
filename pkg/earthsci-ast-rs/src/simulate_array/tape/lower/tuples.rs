@@ -73,6 +73,10 @@ struct BuiltGate {
     n_src: usize,
     n_tgt: usize,
     clause_ix: usize,
+    /// The gate's test is also a conjunct of the aggregate's `filter` (an
+    /// `on` gate, which `crate::join` lowers into it), so the gate only
+    /// narrows an enumeration and never has to mask a cell itself.
+    in_filter: bool,
 }
 
 /// The admitted tuple list: per output cell a contiguous run.
@@ -281,13 +285,8 @@ impl TapeBuilder<'_> {
         if shape.contains(&0) {
             bail_tape!("faq: empty output box");
         }
-        let list = enumerate_tuples(idx_names, ranges, &[], &[], &gates)?;
-        let keep: Vec<f64> = list
-            .rows
-            .windows(2)
-            .map(|w| if w[1] > w[0] { 1.0 } else { 0.0 })
-            .collect();
-        if keep.iter().all(|&k| k == 0.0) {
+        let keep = pointwise_keep(idx_names, ranges, &gates)?;
+        if keep.as_ref().is_some_and(|k| k.iter().all(|&k| k == 0.0)) {
             return Ok(if ranges.is_empty() {
                 LV::Lit(identity)
             } else {
@@ -303,11 +302,11 @@ impl TapeBuilder<'_> {
             tuple: 0,
             visit: SmallVec::new(),
         };
-        if keep.iter().all(|&k| k != 0.0) {
+        let Some(keep) = keep.filter(|k| !k.iter().all(|&k| k != 0.0)) else {
             return self
                 .lower_filtered(body, filter, &bx, LV::Lit(identity))
                 .map(|t| t.unwrap_or(LV::Lit(identity)));
-        }
+        };
         if ranges.is_empty() {
             bail_tape!("aggregate: a rank-0 join gate");
         }
@@ -444,6 +443,7 @@ impl TapeBuilder<'_> {
                     n_src: src.len(),
                     n_tgt: tgt.len(),
                     clause_ix,
+                    in_filter: false,
                 });
                 continue;
             }
@@ -499,6 +499,7 @@ impl TapeBuilder<'_> {
                 n_src,
                 n_tgt,
                 clause_ix,
+                in_filter: true,
             });
         }
         // `JoinGate::selectivity_cmp`: admitted fraction, then clause order.
@@ -810,6 +811,78 @@ fn enumerate_tuples(
     Ok(TupleList { rows, cols })
 }
 
+/// The admitted cells of a gated aggregate with no contracted index, as a
+/// row-major 0/1 mask over the output box: what [`enumerate_tuples`] admits
+/// with nothing contracted (a cell is kept when every gate over two output
+/// symbols holds its pair), built from each gate's pair list rather than by
+/// testing every cell. A gate the aggregate's `filter` already tests is left
+/// to the filter; `None` when no other gate masks a cell.
+fn pointwise_keep(
+    idx_names: &[String],
+    ranges: &[(i64, i64)],
+    gates: &[BuiltGate],
+) -> LResult<Option<Vec<f64>>> {
+    let shape: Vec<usize> = ranges
+        .iter()
+        .map(|(l, h)| (h - l + 1).max(0) as usize)
+        .collect();
+    let n: usize = shape.iter().product::<usize>().max(1);
+    let mut strides = vec![1usize; shape.len()];
+    for d in (0..shape.len().saturating_sub(1)).rev() {
+        strides[d] = strides[d + 1] * shape[d + 1];
+    }
+    // `None` until a gate applies: then the cells every applicable gate so
+    // far admits.
+    let mut keep: Option<Vec<f64>> = None;
+    for g in gates.iter().filter(|g| !g.in_filter) {
+        let pos = |s: &str| idx_names.iter().position(|x| x == s);
+        let (Some(a), Some(b)) = (pos(&g.sym_src), pos(&g.sym_tgt)) else {
+            continue;
+        };
+        // Offsets of every combination of the other output axes.
+        let mut offsets = vec![0usize];
+        for d in 0..shape.len() {
+            if d == a || d == b {
+                continue;
+            }
+            let (len, stride) = (shape[d], strides[d]);
+            offsets = offsets
+                .iter()
+                .flat_map(|&o| (0..len).map(move |k| o + k * stride))
+                .collect();
+        }
+        let in_range = |d: usize, v: i64| v >= ranges[d].0 && v <= ranges[d].1;
+        let mut admitted = vec![0.0f64; n];
+        for (s, t) in g.index.pairs() {
+            if !in_range(a, s) || !in_range(b, t) || (a == b && s != t) {
+                continue;
+            }
+            let base = (s - ranges[a].0) as usize * strides[a]
+                + if a == b {
+                    0
+                } else {
+                    (t - ranges[b].0) as usize * strides[b]
+                };
+            for &o in &offsets {
+                admitted[base + o] = match &keep {
+                    Some(k) => k[base + o],
+                    None => 1.0,
+                };
+            }
+        }
+        keep = Some(admitted);
+    }
+    if let Some(k) = &keep
+        && n > MAX_PROMOTED_ELEMS
+    {
+        let m = k.iter().filter(|&&k| k != 0.0).count();
+        if m > MAX_PROMOTED_ELEMS {
+            bail_tape!("contracted: tuple list too long ({m} tuples)");
+        }
+    }
+    Ok(keep)
+}
+
 /// The odometer over `srcs` (last dimension fastest), the later dimension of
 /// a both-contracted gate walking only its partners of the earlier one's
 /// current value (`drive_partner_restricted`).
@@ -916,4 +989,57 @@ fn ragged_bound(shape: &[usize], vals: &[f64], parents: &[usize], cell: &[i64]) 
         flat = flat * shape[d] + (v - 1) as usize;
     }
     vals[flat].round() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gate(src: &str, tgt: &str, pairs: &[(i64, i64)], clause_ix: usize) -> BuiltGate {
+        BuiltGate {
+            sym_src: src.to_string(),
+            sym_tgt: tgt.to_string(),
+            index: OverlapIndex::from_pairs(pairs),
+            n_src: 0,
+            n_tgt: 0,
+            clause_ix,
+            in_filter: false,
+        }
+    }
+
+    /// The pair-driven mask admits exactly the cells the per-cell walk does:
+    /// gates over two of three output axes (in either order, one reaching
+    /// outside the box), a gate on a symbol that is not an output axis, and
+    /// no gate at all.
+    #[test]
+    fn pointwise_keep_matches_the_cell_walk() {
+        let names: Vec<String> = ["i", "k", "j"].iter().map(|s| s.to_string()).collect();
+        let ranges = [(1, 4), (0, 2), (2, 6)];
+        let gate_sets = vec![
+            vec![],
+            vec![gate(
+                "i",
+                "j",
+                &[(1, 2), (1, 5), (3, 3), (4, 6), (4, 9), (9, 2)],
+                0,
+            )],
+            vec![
+                gate("j", "i", &[(2, 1), (3, 3), (6, 4), (5, 2)], 0),
+                gate("k", "i", &[(0, 1), (2, 3), (1, 4), (2, 4)], 1),
+            ],
+            vec![gate("i", "q", &[(1, 1)], 0)],
+        ];
+        for gates in &gate_sets {
+            let list = enumerate_tuples(&names, &ranges, &[], &[], gates).expect("walks");
+            let walked: Vec<f64> = list
+                .rows
+                .windows(2)
+                .map(|w| if w[1] > w[0] { 1.0 } else { 0.0 })
+                .collect();
+            let keep = pointwise_keep(&names, &ranges, gates)
+                .expect("keeps")
+                .unwrap_or_else(|| vec![1.0; walked.len()]);
+            assert_eq!(keep, walked);
+        }
+    }
 }
