@@ -89,7 +89,7 @@
       "gate_overrides": {
         "speed": {
           "min_n_states": 2000,
-          "why": "the ladder stops at 3162 (6324 states) because the overlap arrays are declared dense over source x target, so the default 10^4 would never check regrid at all. From 2000 states (N = 1000) a hand-loop call takes microseconds (about 3-6 us, and 10-18 us at 6324 states), long enough for a median over hundreds of calls to resolve; at 200 states it is under a microsecond and stays ungated"
+          "why": "the ladder stops at 3162 (6324 states) because the overlap arrays are declared dense over source x target, so the default 10^4 would never check regrid at all. From 2000 states (N = 1000) a hand-loop call takes microseconds (about 3-6 us, and 10-20 us at 6324 states), long enough for a median over hundreds of calls to resolve; at 200 states it is under a microsecond and stays ungated"
         }
       }
     },
