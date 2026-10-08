@@ -17,7 +17,7 @@ use crate::value_invention::{
 };
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 // ============================================================================
 // Detection: does the file contain array-op expressions anywhere?
@@ -4010,15 +4010,21 @@ fn materialize_derived_extents(
         failure: None,
         map_codes: HashMap::new(),
     };
+    // A skolem bin map that a `join.on` gate compares needs the engine too,
+    // derived set or not: its codes keep the gate (`map_codes` below), which
+    // is what makes the gated contraction cost its admitted pairs rather than
+    // the full product on every evaluation.
     let needs_value_invention = index_sets.values().any(|is| {
         is.kind == "derived"
             && is
                 .from_faq
                 .as_deref()
                 .is_some_and(|f| !out.geometry_ids.contains(f))
-    });
+    }) || skolem_map_keys_a_join(model);
     if needs_value_invention {
-        match run_value_invention(model, index_sets, caller_arrays) {
+        let factors = value_invention_factors(model, index_sets, caller_arrays);
+        let lean = without_factor_literals(model, &factors);
+        match run_value_invention(&lean, index_sets, Some(&factors)) {
             Ok(result) => {
                 out.extents = result.extents;
                 out.map_codes = result.map_codes;
@@ -4027,6 +4033,145 @@ fn materialize_derived_extents(
         }
     }
     out
+}
+
+/// Whether a `join.on` key pair anywhere in `model` names a variable defined by
+/// a `skolem` (a broad-phase bin map). A column matches by its qualified name
+/// or its unqualified suffix, as [`strip_value_invention`] matches it.
+fn skolem_map_keys_a_join(model: &Model) -> bool {
+    let mut maps: HashSet<String> = HashSet::new();
+    for eq in &model.equations {
+        if expr_contains_skolem(&eq.rhs)
+            && let Some(v) = equation_defined_var(&eq.lhs)
+        {
+            if let Some(pos) = v.rfind('.') {
+                maps.insert(v[pos + 1..].to_string());
+            }
+            maps.insert(v);
+        }
+    }
+    if maps.is_empty() {
+        return false;
+    }
+    fn keys_on(e: &Expr, maps: &HashSet<String>) -> bool {
+        let Expr::Operator(node) = e else {
+            return false;
+        };
+        node.join.as_ref().is_some_and(|j| {
+            j.iter()
+                .any(|c| c.on.iter().flatten().any(|col| maps.contains(col)))
+        }) || node.any_child(&mut |c| keys_on(c, maps))
+    }
+    model.equations.iter().any(|eq| keys_on(&eq.rhs, &maps))
+}
+
+/// The factor arrays value invention reads: the `const`-literal variables and
+/// the caller's arrays ([`vi_factor_arrays`]), plus the build-time coordinates
+/// a skolem map gathers from (`src_lon` in `skolem("bin", floor(index(src_lon,
+/// i) / dx), ...)`) when they are observeds of that data alone, so the engine
+/// can read them as factors. The analogue of Julia's `_derive_binning_coords`.
+/// A coordinate that reads a parameter, a state or anything else stays out
+/// (the engine then reports it as before).
+fn value_invention_factors(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+) -> HashMap<String, ArrayD<f64>> {
+    fn index_targets(e: &Expr, out: &mut BTreeSet<String>) {
+        let Expr::Operator(node) = e else {
+            return;
+        };
+        if node.op == "index"
+            && let Some(Expr::Variable(v)) = node.args.first()
+        {
+            out.insert(v.clone());
+        }
+        node.for_each_child(&mut |c| index_targets(c, out));
+    }
+    /// The names `e` reads that it does not bind itself.
+    fn free_names(e: &Expr, bound: &mut Vec<String>, out: &mut BTreeSet<String>) {
+        match e {
+            Expr::Variable(v) => {
+                if !bound.contains(v) {
+                    out.insert(v.clone());
+                }
+            }
+            Expr::Operator(node) => {
+                let mark = bound.len();
+                bound.extend(node.output_idx.iter().flatten().cloned());
+                bound.extend(node.ranges.iter().flat_map(|r| r.keys().cloned()));
+                node.for_each_child(&mut |c| free_names(c, bound, out));
+                bound.truncate(mark);
+            }
+            _ => {}
+        }
+    }
+    struct Cx<'a> {
+        defs: BTreeMap<String, Expr>,
+        index_sets: &'a HashMap<String, IndexSet>,
+        scope: HashMap<String, ArrayD<f64>>,
+    }
+    fn derive(cx: &mut Cx<'_>, name: &str, depth: usize) -> bool {
+        if cx.scope.contains_key(name) {
+            return true;
+        }
+        if depth > 16 {
+            return false;
+        }
+        let Some(body) = cx.defs.get(name).cloned() else {
+            return false;
+        };
+        let mut free = BTreeSet::new();
+        free_names(&body, &mut Vec::new(), &mut free);
+        for v in &free {
+            if !cx.index_sets.contains_key(v) && !derive(cx, v, depth + 1) {
+                return false;
+            }
+        }
+        match eval_buildtime_field_in_scope(&body, cx.index_sets, &HashMap::new(), &cx.scope) {
+            Ok(Value::Array(a)) => {
+                cx.scope.insert(name.to_string(), *a);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    let mut targets = BTreeSet::new();
+    for eq in &model.equations {
+        if expr_contains_skolem(&eq.rhs) {
+            index_targets(&eq.rhs, &mut targets);
+        }
+    }
+    let mut cx = Cx {
+        defs: observed_bodies(model),
+        index_sets,
+        scope: vi_factor_arrays(model, caller_arrays),
+    };
+    for t in &targets {
+        derive(&mut cx, t, 0);
+    }
+    cx.scope
+}
+
+/// `model` with the literal of every `const` equation whose variable is
+/// already one of `factors` replaced by a placeholder. Value invention reads
+/// factors from its array map, never from the document's literals, and the
+/// literals are most of what serializing the model for it would cost.
+fn without_factor_literals(model: &Model, factors: &HashMap<String, ArrayD<f64>>) -> Model {
+    let mut lean = model.clone();
+    for eq in &mut lean.equations {
+        let is_factor = matches!(&eq.rhs, Expr::Operator(n) if n.op == "const")
+            && equation_defined_var(&eq.lhs).is_some_and(|v| factors.contains_key(&v));
+        if is_factor {
+            eq.rhs = Expr::operator(ExpressionNode {
+                op: "const".into(),
+                value: Some(serde_json::Value::from(0)),
+                ..Default::default()
+            });
+        }
+    }
+    lean
 }
 
 /// The `from_faq` of the first range in `expr` over a derived set that neither
