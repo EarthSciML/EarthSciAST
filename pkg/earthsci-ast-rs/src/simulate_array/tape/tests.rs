@@ -165,6 +165,33 @@ pub(super) fn ab_check(
                     );
                 }
             }
+            // Every instruction split three wide, whatever its size, is the
+            // serial executor bit for bit.
+            #[cfg(not(target_arch = "wasm32"))]
+            for (label, scratch) in [
+                ("fused split", &mut fast_scratch),
+                ("row-major fused split", &mut fast_rm),
+            ] {
+                let mut dy_split = vec![0.0f64; n];
+                super::exec::force_split(Some(3));
+                compiled.debug_eval_rhs_into(
+                    &state,
+                    t,
+                    &param_vec,
+                    &mut dy_split,
+                    scratch,
+                    &mut fast_stats,
+                );
+                super::exec::force_split(None);
+                for (k, (a, b)) in dy_split.iter().zip(dy_ref.iter()).enumerate() {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "seed {seed} t {t}: dy[{k}] diverged: {label} exec {a:?} vs \
+                         interpreter {b:?}"
+                    );
+                }
+            }
         }
     }
     assert!(
@@ -3441,6 +3468,39 @@ fn ab_poly_area_spherical_dense() {
         .collect();
     let prog = ab_check(regrid_doc("spherical", src, tgt), 0, 0.5, 2.0);
     assert_eq!(only_poly_area(&prog).pairs, None);
+}
+
+/// The scaling tier's conservative regrid: a bin-skolem `join.on` gate whose
+/// bin maps read coordinates the document derives from its `const` rings
+/// (`src_lon[i] = min_v src_poly[i, v, 1]`), with no derived index set. The
+/// build evaluates those coordinates so value invention can key the bins and
+/// the gate drives the contractions, so a call applies the regrid over the
+/// admitted pairs only — no per-call instruction spans the `src × tgt` box —
+/// bit for bit as the interpreter does.
+#[test]
+fn ab_regrid_bin_skolem_gate_drives_the_apply() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/scaling/fixtures/regrid/regrid_N100.esm");
+    let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
+    let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
+    let prog = ab_check(doc, 0, 0.5, 2.0);
+    let n = 100usize;
+    let cont = (prog.n_const + prog.n_segment) as usize;
+    let mut seg = 0;
+    for ins in &prog.instrs[cont..] {
+        let elems = match ins {
+            Instr::Fused { spec } => prog.fused[*spec as usize].shape.iter().product::<usize>(),
+            _ => ins.out().map_or(0, |o| {
+                prog.slots[o as usize].shape.iter().product::<usize>()
+            }),
+        };
+        assert!(
+            elems <= 2 * n,
+            "a per-call instruction spans {elems} elements: {ins:?}"
+        );
+        seg += usize::from(matches!(ins, Instr::SegReduce { .. }));
+    }
+    assert_eq!(seg, 1, "the apply is one gated segmented sum");
 }
 
 /// The wholesale form — `polygon_intersection_area` of two whole `[V, 2]`

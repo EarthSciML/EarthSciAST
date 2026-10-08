@@ -135,13 +135,16 @@ end
 # every lane of its folds globally and runs them as static chunks of that
 # numbering: a lane is folded whole, ascending, by whichever thread owns it, so
 # each slot gets the same value as the serial fold.
-struct _ScanSection
+# `fused` holds the section's fused scans (scan_fused.jl), a tuple of
+# `_FusedScan`s, each its own generated function that computes its terms too.
+struct _ScanSection{FS}
     folds::Vector{_ScanFold}
     lanecum::Vector{Int}      # lanes before fold f; the last entry is the total
     tcache::_SecTCache
+    fused::FS
 end
 
-function _make_scan_section(folds::AbstractVector{_ScanFold})
+function _make_scan_section(folds::AbstractVector{_ScanFold}, fused::Tuple = ())
     lanecum = Vector{Int}(undef, length(folds) + 1)
     lanecum[1] = 0
     nslots = 0
@@ -152,10 +155,10 @@ function _make_scan_section(folds::AbstractVector{_ScanFold})
     end
     # Fewer than two lanes leave nothing to split; the verdict sees no cells.
     return _ScanSection(collect(folds), lanecum,
-                        _SecTCache(lanecum[end] >= 2 ? nslots : 0, true))
+                        _SecTCache(lanecum[end] >= 2 ? nslots : 0, true), fused)
 end
 
-Base.isempty(s::_ScanSection) = isempty(s.folds)
+Base.isempty(s::_ScanSection) = isempty(s.folds) && isempty(s.fused)
 
 struct _ScanChunk
     folds::Vector{_ScanFold}
@@ -173,7 +176,9 @@ function (b::_ScanChunk)(args, c::Int, nchunks::Int)
     return nothing
 end
 
+# The section's unfused folds, over the terms already in `du`.
 function _apply_scan_folds!(du, s::_ScanSection)
+    isempty(s.folds) && return nothing
     tc = s.tcache
     if _threads_available() && _sec_prep_threads!(tc).state == 1
         tc.nchunks = min(tc.nchunks, s.lanecum[end])
@@ -181,5 +186,14 @@ function _apply_scan_folds!(du, s::_ScanSection)
     else
         _apply_scan_folds!(du, s.folds)
     end
+    return nothing
+end
+
+# The whole section: the fused scans (which compute their own terms from
+# `u`), then the unfused folds. They write disjoint slots and read none the
+# other writes, so the order between them is free.
+function _apply_scan_folds!(du, u, p, t, s::_ScanSection)
+    _run_fused_scans!(s.fused, du, u, p, t)
+    _apply_scan_folds!(du, s)
     return nothing
 end

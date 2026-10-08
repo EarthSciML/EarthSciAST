@@ -121,7 +121,8 @@ const _AK_ARR_TBL_BOX        = UInt8(14)  # arr[conn[off + Σ(midx_d-1)·s_d]] (
 struct _AccDesc
     kind::UInt8
     arr::Vector{Float64}   # CONST_*, ARR_FIXED, FORCING_BOX (empty sentinel otherwise)
-    conn::Vector{Int}      # STATE_INDIRECT[_COL] (empty sentinel otherwise)
+    conn::Union{Vector{Int},UnitRange{Int}}  # STATE_INDIRECT[_COL], *_TBL_BOX (empty sentinel otherwise);
+                                             # a range is an identity table (`_state_slot_identity`)
     delta::Int             # STATE_AFFINE, CONST_AFFINE
     idx::Int               # STATE_FIXED, ARR_FIXED
     width::Int             # STATE_INDIRECT[_COL], CONST_EDGE
@@ -142,7 +143,8 @@ end
 const _AK_NO_ARR  = Float64[]
 const _AK_NO_CONN = Int[]
 
-@inline _mkacc(kind::UInt8; arr::Vector{Float64}=_AK_NO_ARR, conn::Vector{Int}=_AK_NO_CONN,
+@inline _mkacc(kind::UInt8; arr::Vector{Float64}=_AK_NO_ARR,
+               conn::Union{Vector{Int},UnitRange{Int}}=_AK_NO_CONN,
                delta::Int=0, idx::Int=0, width::Int=0, col::Int=0, dim::Int=0,
                s1::Int=0, s2::Int=0, s3::Int=0, off::Int=0, v::Float64=0.0,
                sx::Vector{Int}=_AK_NO_CONN) =
@@ -180,9 +182,9 @@ _AccStateFixed(idx::Int)                         = _mkacc(_AK_STATE_FIXED; idx=i
 _AccArrFixed(arr::Vector{Float64}, idx::Int)     = _mkacc(_AK_ARR_FIXED; arr=arr, idx=idx)
 _AccLoopIdx(dim::Int)                            = _mkacc(_AK_LOOP_IDX; dim=dim)
 _AccScalar(v::Float64)                           = _mkacc(_AK_SCALAR; v=v)
-_AccStateTblBox(conn::Vector{Int}, s1::Int, s2::Int, s3::Int, off::Int) =
+_AccStateTblBox(conn::Union{Vector{Int},UnitRange{Int}}, s1::Int, s2::Int, s3::Int, off::Int) =
     _mkacc(_AK_STATE_TBL_BOX; conn=conn, s1=s1, s2=s2, s3=s3, off=off)
-_AccStateTblBox(conn::Vector{Int}, s::AbstractVector{Int}, off::Int) =
+_AccStateTblBox(conn::Union{Vector{Int},UnitRange{Int}}, s::AbstractVector{Int}, off::Int) =
     _mkacc(_AK_STATE_TBL_BOX; conn=conn, s1=_box_s(s, 1), s2=_box_s(s, 2),
            s3=_box_s(s, 3), off=off, sx=_box_sx(s))
 _AccArrTblBox(arr::Vector{Float64}, conn::Vector{Int}, s1::Int, s2::Int, s3::Int, off::Int) =

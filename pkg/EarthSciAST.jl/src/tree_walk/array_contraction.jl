@@ -69,15 +69,9 @@ end
 # different objects.
 struct _CGScalarCtx
     loops::IdDict{Any,Symbol}
+    entry::Any      # `nothing`, or the TABLE fold's `_ACEntries` while its term is emitted
 end
-_CGScalarCtx() = _CGScalarCtx(IdDict{Any,Symbol}())
-
-# A lane-spec `interp.*` payload reaches `_cg_emit_fn` only from a kernel-CLASS
-# merge, which no scalar spine goes through. Declining keeps that arm's address
-# arithmetic a kernel-only concern instead of a `MethodError` escaping the
-# emitter's decline protocol.
-_cg_boxaddr(::_CGCtx, ::_CGScalarCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
-    throw(_CodegenDecline(:lane_spec_on_scalar_spine))
+_CGScalarCtx() = _CGScalarCtx(IdDict{Any,Symbol}(), nothing)
 
 # ---- Scalar spine node → expression (mirrors `_eval_node`) ------------------
 function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
@@ -144,6 +138,10 @@ _cg_oplus_fn(op::Symbol) =
 function _cg_const_gather(ctx::_CGCtx, kc, nd::_Node)
     cg = nd.payload::_ConstGatherArray
     children = nd.children
+    if kc isa _CGScalarCtx
+        pre = _ac_const_gather_entries(kc, cg, children)
+        pre === nothing || return :($(_ac_entry_local(ctx, pre))[$((kc.entry::_ACEntries).ev)])
+    end
     cgv = _cg_name(ctx, "cga")
     binds = Any[:($cgv = $(_cg_tab!(ctx, cg)))]
     off = Any[1]
@@ -157,6 +155,52 @@ function _cg_const_gather(ctx::_CGCtx, kc, nd::_Node)
                 Expr(:block, :($cgv.flat[$(_cg_foldl(:+, off))])))
 end
 
+# The element a const gather reads at each TABLE entry, by `_const_gather_sub`
+# as the call would resolve it; `nothing` when the gather is not resolvable per
+# entry or some entry's subscript would throw, which stays the call's error.
+function _ac_const_gather_entries(kc::_CGScalarCtx, cg::_ConstGatherArray, children)
+    cols = _ac_entry_cols(kc, children)
+    cols === nothing && return nothing
+    nent = length(cols[1])
+    for d in eachindex(cols), e in 1:nent
+        x = cols[d][e]
+        n = cg.dims[d]
+        (1 <= x <= n || (n >= 1 && (cg.boundary[d] === :periodic ||
+                                    cg.boundary[d] === :clamp))) || return nothing
+    end
+    vals = Vector{Float64}(undef, nent)
+    for e in 1:nent
+        lin = 1
+        for d in eachindex(cols)
+            lin += (_const_gather_sub(cg, d, cols[d][e]) - 1) * cg.strides[d]
+        end
+        vals[e] = cg.flat[lin]
+    end
+    return vals
+end
+
+# The slot a state gather reads at each TABLE entry, 0 where a subscript is out
+# of its axis (the zero ghost); `nothing` when it is not resolvable per entry.
+function _ac_state_gather_entries(kc::_CGScalarCtx, sg::_StateGather, children)
+    cols = _ac_entry_cols(kc, children)
+    cols === nothing && return nothing
+    nent = length(cols[1])
+    slots = Vector{Int}(undef, nent)
+    for e in 1:nent
+        off = 0
+        for d in eachindex(cols)
+            x = cols[d][e]
+            if !(sg.lo[d] <= x <= sg.hi[d])
+                off = -1
+                break
+            end
+            off += (x - sg.lo[d]) * sg.strides[d]
+        end
+        slots[e] = off < 0 ? 0 : sg.slot_flat[off + 1]
+    end
+    return slots
+end
+
 # `_NK_STATE_GATHER`: the walker checks each subscript against its axis and
 # returns 0̄ at the FIRST out-of-range one, so the later subscripts are not
 # evaluated. Nested conditionals reproduce that exactly — a flat guard chain
@@ -165,6 +209,18 @@ end
 function _cg_state_gather(ctx::_CGCtx, kc, nd::_Node)
     sg = nd.payload::_StateGather
     children = nd.children
+    if kc isa _CGScalarCtx
+        pre = _ac_state_gather_entries(kc, sg, children)
+        if pre !== nothing
+            col = _ac_entry_local(ctx, pre)
+            ev = (kc.entry::_ACEntries).ev
+            all(!=(0), pre) && return :(u[$col[$ev]])
+            sv = _cg_name(ctx, "esl")
+            return :(let $sv = $col[$ev]
+                         $sv == 0 ? zero(eltype(u)) : u[$sv]
+                     end)
+        end
+    end
     sgv = _cg_name(ctx, "sga")
     inner = _cg_state_gather_dim(ctx, kc, nd, sg, sgv, 1, Any[0])
     return Expr(:let, Expr(:block, :($sgv = $(_cg_tab!(ctx, sg)))),
@@ -229,12 +285,84 @@ _ACFold(refs, op::Symbol, zerobar::Float64, seg::Vector{Int}, cols::Vector{Vecto
     _ACFold(refs, op, zerobar, StepRange{Int,Int}[], seg, cols)
 _acfold_is_table(f::_ACFold) = !isempty(f.seg)
 
+# A TABLE fold fixes every loop counter its term can read at each entry: the
+# contracted ones are the entry's table columns, the output ones follow from the
+# entry's cell. So a gather whose subscripts are all bare counters reads the same
+# element at entry `e` on every call, and the emitter resolves it at build into a
+# per-entry column (`_ac_entry_cols`): a const gather becomes the gathered values,
+# a state gather the slots it reads (0 where it reads the zero ghost). The call
+# then loads `col[ent]` where it would decode subscripts, apply the boundary
+# policy and look the slot up per term; the value read is the same element.
+struct _ACEntries
+    ev::Symbol                         # the generated entry counter
+    fold::_ACFold
+    out_refs::Vector{Base.RefValue{Int}}
+    los::Vector{Int}
+    steps::Vector{Int}
+    lens::Vector{Int}
+    vals::IdDict{Any,Vector{Int}}      # counter → its value at each entry (filled lazily)
+end
+
+function _ac_entry_vals!(en::_ACEntries, ref)
+    got = get(en.vals, ref, nothing)
+    got === nothing || return got
+    f = en.fold
+    r = findfirst(x -> x === ref, f.refs)
+    if r !== nothing
+        return en.vals[ref] = f.cols[r]
+    end
+    d = findfirst(x -> x === ref, en.out_refs)
+    d === nothing && return nothing
+    v = Vector{Int}(undef, f.seg[end] - 1)
+    div_d = prod(@view en.lens[1:d-1]; init = 1)
+    for c in 1:(length(f.seg) - 1)
+        x = en.los[d] + (div((c - 1), div_d) % en.lens[d]) * en.steps[d]
+        for e in f.seg[c]:(f.seg[c+1] - 1)
+            v[e] = x
+        end
+    end
+    return en.vals[ref] = v
+end
+
+# The per-entry value of each subscript in `children`, or `nothing` unless every
+# one is a bare counter the TABLE fold fixes per entry.
+function _ac_entry_cols(kc::_CGScalarCtx, children)
+    en = kc.entry
+    en === nothing && return nothing
+    cols = Vector{Vector{Int}}(undef, length(children))
+    for d in eachindex(children)
+        ch = children[d]
+        ch.kind === _NK_LOOPVAR || return nothing
+        v = _ac_entry_vals!(en::_ACEntries, ch.payload)
+        v === nothing && return nothing
+        cols[d] = v
+    end
+    return cols
+end
+
+# A per-entry column bound to a local ahead of the cell loop.
+function _ac_entry_local(ctx::_CGCtx, col)
+    s = _cg_name(ctx, "ecol")
+    push!(ctx.geosink, :(local $s = $(_cg_tab!(ctx, col))))
+    return s
+end
+
+# A lane-spec `interp.*` payload reaches `_cg_emit_fn` only from a kernel-CLASS
+# merge, which no scalar spine goes through. Declining keeps that arm's address
+# arithmetic a kernel-only concern instead of a `MethodError` escaping the
+# emitter's decline protocol.
+_cg_boxaddr(::_CGCtx, ::_CGScalarCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
+    throw(_CodegenDecline(:lane_spec_on_scalar_spine))
+
 function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
         los::Vector{Int}, steps::Vector{Int}, lens::Vector{Int},
         outs::Vector{Int}, body::_Node; fold::Union{Nothing,_ACFold}=nothing)
     _codegen_disabled() && return :codegen_disabled
     ctx = _CGCtx(_codegen_node_budget())
-    kc = _CGScalarCtx()
+    entries = fold !== nothing && _acfold_is_table(fold) ?
+        _ACEntries(_cg_name(ctx, "ent"), fold, refs, los, steps, lens,
+                   IdDict{Any,Vector{Int}}()) : nothing
+    kc = _CGScalarCtx(IdDict{Any,Symbol}(), entries)
     cv = _cg_name(ctx, "c")
     rv = _cg_name(ctx, "r")
     seek = Any[:(local $rv = $cv - 1)]
@@ -257,7 +385,8 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
     end
     cell = try
         term = _cg_emit(ctx, kc, body)
-        fold === nothing ? term : _cg_fold(ctx, fold, cv, kvs, term)
+        fold === nothing ? term : _cg_fold(ctx, fold, cv, kvs, term,
+                                           entries === nothing ? nothing : entries.ev)
     catch err
         err isa _CodegenDecline || rethrow()
         return err.reason
@@ -303,14 +432,15 @@ end
 # (`_eval_contraction`) seeds it: under a `Dual` value type `0̄ ⊕ term` then
 # carries the term's partials exactly, where a seed converted to the value type
 # would add zero partials to them and turn a `-0.0` partial into `0.0`.
-function _cg_fold(ctx::_CGCtx, fold::_ACFold, cv::Symbol, kvs::Vector{Symbol}, term)
+function _cg_fold(ctx::_CGCtx, fold::_ACFold, cv::Symbol, kvs::Vector{Symbol}, term,
+                  ev::Union{Nothing,Symbol}=nothing)
     fnsym = _cg_oplus_fn(fold.op)
     acc = _cg_name(ctx, "acc")
     upd = :($acc = $fnsym($acc, $term))
     loop = if _acfold_is_table(fold)
-        ev = _cg_name(ctx, "ent")
-        segv = _cg_tab!(ctx, fold.seg)
-        binds = Any[:(local $(kvs[r]) = $(_cg_tab!(ctx, fold.cols[r]))[$ev])
+        ev === nothing && (ev = _cg_name(ctx, "ent"))
+        segv = _ac_entry_local(ctx, fold.seg)
+        binds = Any[:(local $(kvs[r]) = $(_ac_entry_local(ctx, fold.cols[r]))[$ev])
                     for r in eachindex(kvs)]
         quote
             for $ev in $segv[$cv]:($segv[$cv + 1] - 1)

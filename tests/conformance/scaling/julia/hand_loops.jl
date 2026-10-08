@@ -9,8 +9,11 @@
 #
 # SHAPE. Every loop is written as `row!(du, u, t, st, r)` over its OUTERMOST
 # index `r in 1:st.nrows`. The serial reference runs the rows in order; the
-# threaded reference is the same rows under `Threads.@threads :static`. A row
-# writes only its own `du` slots, so the two agree bit for bit. The one family
+# threaded reference is the same rows under Polyester's `@batch`, one contiguous
+# block of rows per thread. `@batch` hands the blocks to a persistent worker
+# pool, where `Threads.@threads` spawns a task per thread on every call, which
+# at the sizes the gate measures costs more than the loop itself. A row writes
+# only its own `du` slots, so the two agree bit for bit. The one family
 # whose outermost index carries a dependence (the prefix scan) has a single
 # row, so its threaded reference is its serial loop; the README says so.
 #
@@ -20,6 +23,8 @@
 # column-major block is addressed by offset; the scalar chemistry boxes, which
 # have no array structure, go through a slot table. The document itself is read
 # for its inline data (the mesh neighbour table, the regrid polygons).
+
+using EarthSciAST: Polyester
 
 struct HandLoop
     setup::Function      # (prob, doc, entry) -> st, st.nrows the outermost extent
@@ -35,9 +40,23 @@ function hand_serial!(row!::F, du, u, t, st) where {F}
     return nothing
 end
 
+# `@batch` passes each array it captures to the workers as a pointer array.
+# A row that picks between `u` and an array of its own (the stencils' zero row)
+# would then see two array types where the serial loop sees one, and dispatch
+# dynamically in its innermost loop. Capturing one struct instead hands the
+# workers the same arrays the serial loop reads.
+struct _RowArgs{F,D,U,T,S}
+    row!::F
+    du::D
+    u::U
+    t::T
+    st::S
+end
+
 function hand_threaded!(row!::F, du, u, t, st) where {F}
-    Threads.@threads :static for r in 1:st.nrows
-        row!(du, u, t, st, r)
+    a = _RowArgs(row!, du, u, t, st)
+    Polyester.@batch for r in 1:st.nrows
+        a.row!(a.du, a.u, a.t, a.st, r)
     end
     return nothing
 end

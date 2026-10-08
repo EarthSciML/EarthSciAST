@@ -701,6 +701,9 @@ pub(super) struct FusedScratch {
     /// The boxes of a group's whole-read gathers ([`ChunkGather::whole`]),
     /// back to back, sized for the largest group's.
     whole: Vec<f64>,
+    /// The sources of the current group's whole-read gathers, in input
+    /// order (their `bases` entries point into `whole`).
+    whole_src: Vec<*const f64>,
     /// Per group, [`node_elems`] of its schedule: what lets a worker step
     /// straight to the start of its share of the group.
     node_elems: Vec<Vec<usize>>,
@@ -723,6 +726,7 @@ impl FusedScratch {
                 most(n_scans),
             ),
             whole: vec![0.0; most(whole_len)],
+            whole_src: Vec::with_capacity(most(|f| f.inputs.len())),
             node_elems: prog
                 .fused
                 .iter()
@@ -842,6 +846,11 @@ impl<'a> Window<'a> {
     }
 }
 
+/// Unused bytes past the end of each buffer a split's worker writes (two
+/// cache lines, the pair the adjacent-line prefetcher moves together).
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) const PAD_BYTES: usize = 128;
+
 /// The executor's position in a [`RunSchedule`]: one frame per open
 /// [`RunNode::Repeat`], the offsets the open repetitions have stepped so far,
 /// and the current run's shifted-input offsets with them applied. Sized for
@@ -872,6 +881,23 @@ impl RunCursor {
             in_delta: Vec::with_capacity(n_shifted),
             in_off: Vec::with_capacity(n_shifted),
             carries: Vec::with_capacity(n_scans),
+        }
+    }
+
+    /// [`RunCursor::with_room`] for a split's worker: every buffer has
+    /// unused room for [`PAD_BYTES`] past its end, so what one worker writes
+    /// never shares a cache line with the next allocation (another worker's
+    /// cursor or registers).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn for_worker(depth: usize, n_shifted: usize, n_scans: usize) -> Self {
+        fn room<T>(n: usize) -> Vec<T> {
+            Vec::with_capacity(n + PAD_BYTES.div_ceil(std::mem::size_of::<T>().max(1)))
+        }
+        RunCursor {
+            frames: room(depth),
+            in_delta: room(n_shifted),
+            in_off: room(n_shifted),
+            carries: room(n_scans),
         }
     }
 
@@ -993,6 +1019,7 @@ pub(super) unsafe fn exec_fused(
         outs,
         cursor,
         whole,
+        whole_src,
         node_elems,
         #[cfg(not(target_arch = "wasm32"))]
         workers,
@@ -1032,16 +1059,15 @@ pub(super) unsafe fn exec_fused(
         bases.push(p);
     }
     // Whole-read gathers: the box read once, then addressed like an aligned
-    // input.
+    // input. The read itself happens with the group's chunks (each worker of
+    // a split reads the positions of its own window).
     let n_elems = fs.n_elems();
     let mut next = 0usize;
+    whole_src.clear();
     for (inp, base) in fs.inputs.iter().zip(bases.iter_mut()) {
-        if let Some(g) = inp.gather.as_deref()
-            && g.whole
-        {
-            let dst = &mut whole[next..next + n_elems];
-            unsafe { g.fill(*base, 0, n_elems, dst.as_mut_ptr()) };
-            *base = dst.as_ptr();
+        if inp.gather.as_deref().is_some_and(|g| g.whole) {
+            whole_src.push(*base);
+            *base = whole[next..next + n_elems].as_ptr();
             next += n_elems;
         }
     }
@@ -1055,15 +1081,12 @@ pub(super) unsafe fn exec_fused(
         };
         outs.push((reg, p));
     }
-    // An absorbed reduction's accumulator, seeded with its identity.
+    // An absorbed reduction's accumulator: its slot, or `dy` when homed
+    // there.
     let red: *mut f64 = match &fs.reduce {
-        Some(r) => unsafe {
-            let p = match dy_home.get(r.out as usize) {
-                Some(&off) if off != usize::MAX => dy.add(off),
-                _ => slab_ptr.add(slot_off[r.out as usize]),
-            };
-            std::slice::from_raw_parts_mut(p, r.n_inner).fill(r.init);
-            p
+        Some(r) => match dy_home.get(r.out as usize) {
+            Some(&off) if off != usize::MAX => unsafe { dy.add(off) },
+            _ => unsafe { slab_ptr.add(slot_off[r.out as usize]) },
         },
         None => std::ptr::null_mut(),
     };
@@ -1074,10 +1097,20 @@ pub(super) unsafe fn exec_fused(
     {
         let ways = super::par::split_ways(fs, workers.call_ways);
         if ways > 1 {
-            unsafe { workers.run_split(fs, svals, bases, outs, red, idx, node_elems, simd, ways) };
+            unsafe {
+                workers.run_split(
+                    fs, svals, bases, whole_src, outs, red, idx, node_elems, simd, ways,
+                )
+            };
             return;
         }
     }
+    // Seeded with the reduction's identity (a split's workers seed their
+    // own cells).
+    if let Some(r) = &fs.reduce {
+        unsafe { std::slice::from_raw_parts_mut(red, r.n_inner).fill(r.init) };
+    }
+    unsafe { fill_whole(fs, bases, whole_src, 0, n_elems, 0) };
     unsafe {
         run_fused_window(
             simd,
@@ -1091,6 +1124,51 @@ pub(super) unsafe fn exec_fused(
             cursor,
             Window::all(node_elems),
         )
+    }
+}
+
+/// Read a group's whole-read gathers (sources `whole_src`, destinations their
+/// `bases` entries) at the flat positions `[lo, hi)`, or with a `period`, at
+/// the positions whose remainder modulo `period` lies in `[lo, hi)`: the
+/// positions a [`Window`] with the same bounds runs.
+///
+/// # Safety
+/// `bases` must be the group's resolved inputs with every whole-read gather's
+/// entry pointing at its `n_elems` scratch box, and `whole_src` their sources.
+pub(super) unsafe fn fill_whole(
+    fs: &FusedSpec,
+    bases: &[*const f64],
+    whole_src: &[*const f64],
+    lo: usize,
+    hi: usize,
+    period: usize,
+) {
+    if whole_src.is_empty() {
+        return;
+    }
+    let n = fs.n_elems();
+    let mut k = 0usize;
+    for (inp, &dst) in fs.inputs.iter().zip(bases) {
+        let Some(g) = inp.gather.as_deref().filter(|g| g.whole) else {
+            continue;
+        };
+        let (src, dst) = (whole_src[k], dst as *mut f64);
+        k += 1;
+        if period == 0 {
+            let hi = hi.min(n);
+            if lo < hi {
+                unsafe { g.fill(src, lo, hi - lo, dst.add(lo)) };
+            }
+            continue;
+        }
+        let mut base = 0usize;
+        while base < n {
+            let (a, b) = (base + lo, (base + hi).min(base + period).min(n));
+            if a < b {
+                unsafe { g.fill(src, a, b - a, dst.add(a)) };
+            }
+            base += period;
+        }
     }
 }
 
@@ -1129,7 +1207,9 @@ pub(super) unsafe fn run_fused_window(
 /// Fold one chunk (`c` values at flat box offset `at`) into an absorbed
 /// reduction's accumulator: `acc[(at + k) % n_inner] = f(acc[..], v[k])`,
 /// ascending in `k` — contiguous pieces of the accumulator, one per crossing
-/// of a leading-axes position.
+/// of a leading-axes position. `acc` is where cell 0 would be: a split's
+/// worker backs only its own cells, so it may point before that buffer
+/// (hence the wrapping offset).
 #[inline(always)]
 unsafe fn fold_chunk(
     acc: *mut f64,
@@ -1144,7 +1224,7 @@ unsafe fn fold_chunk(
         let o = (at + k) % n_inner;
         let len = (c - k).min(n_inner - o);
         unsafe {
-            let a = std::slice::from_raw_parts_mut(acc.add(o), len);
+            let a = std::slice::from_raw_parts_mut(acc.wrapping_add(o), len);
             let x = std::slice::from_raw_parts(v.add(k), len);
             for (y, &t) in a.iter_mut().zip(x) {
                 *y = f(*y, t);

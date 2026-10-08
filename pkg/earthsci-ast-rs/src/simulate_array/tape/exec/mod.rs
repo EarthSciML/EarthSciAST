@@ -63,6 +63,8 @@ mod oracle;
 mod par;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod par_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(super) use par::force_split;
 #[cfg(not(target_arch = "wasm32"))]
 mod pool;
 mod resolve;
@@ -247,6 +249,14 @@ pub(crate) struct TapeExec {
     /// output box, so the ghost zero-fill can be skipped (every element is
     /// overwritten by a segment copy).
     plan_full: Vec<bool>,
+    /// Per `makearray` assembly: `true` when its regions cover the whole
+    /// output box, so its zero fill can be skipped (every element is
+    /// overwritten by a part).
+    asm_covered: Vec<bool>,
+    /// The resolved parts of the assembly being split (native targets
+    /// only), sized by the first split so steady calls do not allocate.
+    #[cfg(not(target_arch = "wasm32"))]
+    asm_parts: Vec<par::AsmPart>,
     /// Step 4 epochs: the parameter / forcing epochs the CONST resp. SEGMENT
     /// sections last primed under (0 = never primed; live epochs start at 1).
     /// Checked per call as two integer compares — see `run_tape_call`.
@@ -384,6 +394,9 @@ impl TapeExec {
             dy_home: Vec::new(),
             dy_home_quiet: Vec::new(),
             plan_full,
+            asm_covered: assemblies_covered(prog),
+            #[cfg(not(target_arch = "wasm32"))]
+            asm_parts: Vec::new(),
             primed_param_epoch: 0,
             primed_forcing_epoch: 0,
             fregs: vec![0.0f64; max_fregs * FCHUNK],
@@ -398,6 +411,40 @@ impl TapeExec {
             call_work: par::program_work(prog),
         }
     }
+}
+
+/// Per assembly of `prog`, whether its regions cover every element of the box
+/// it assembles (for every `Assemble` that uses it).
+fn assemblies_covered(prog: &TapeProgram) -> Vec<bool> {
+    let mut covered = vec![true; prog.assemblies.len()];
+    for ins in &prog.instrs {
+        let Instr::Assemble { table, out } = ins else {
+            continue;
+        };
+        let shape = &prog.slots[*out as usize].shape;
+        let rm = rm_strides(shape);
+        let mut hit = vec![false; shape.iter().product::<usize>().max(1)];
+        for (_, region) in &prog.assemblies[*table as usize].parts {
+            let spec = &prog.regions[*region as usize];
+            let n: usize = spec.shape.iter().product();
+            let mut idx: DimU = SmallVec::from_elem(0, spec.shape.len());
+            for _ in 0..n {
+                let flat: i64 = (0..idx.len())
+                    .map(|d| rm[d] * (spec.dest_lo[d] + idx[d]) as i64)
+                    .sum();
+                hit[flat as usize] = true;
+                for d in (0..idx.len()).rev() {
+                    idx[d] += 1;
+                    if idx[d] < spec.shape[d] {
+                        break;
+                    }
+                    idx[d] = 0;
+                }
+            }
+        }
+        covered[*table as usize] &= hit.iter().all(|&h| h);
+    }
+    covered
 }
 
 /// The compiled-tape context a [`super::super::RhsScratch`] carries. `None`
@@ -731,20 +778,14 @@ fn dy_homes(prog: &TapeProgram, n: usize) -> Vec<usize> {
             continue;
         };
         let fs = &prog.fused[*spec as usize];
+        // A stored output over the group's box, or an absorbed reduction's
+        // accumulator (folded in place, so straight into `dy`).
         let desc = &prog.slots[s];
-        // An absorbed reduction folds into its home as it would into the
-        // slab: the accumulator is seeded there and read by nothing else.
-        // Only when its folds are few per output (`FusedSpec::interleave`):
-        // the copy it saves is then a real share of the group's work.
-        let reduced = fs.reduce.as_ref().is_some_and(|r| r.out as usize == s);
-        if reduced {
-            if desc.scalar || fs.interleave.is_none() {
-                continue;
-            }
-        } else if !fs.outputs.iter().any(|&(_, o)| o as usize == s)
-            || desc.scalar
-            || desc.shape[..] != fs.shape[..]
-        {
+        let fits = match &fs.reduce {
+            Some(r) if r.out as usize == s => desc.elems() == r.n_inner,
+            _ => fs.outputs.iter().any(|&(_, o)| o as usize == s) && desc.shape[..] == fs.shape[..],
+        };
+        if desc.scalar || !fits {
             continue;
         }
         let sv = &prog.state_vars[w.var as usize];

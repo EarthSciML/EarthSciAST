@@ -9,8 +9,8 @@
 //! same body; the threaded run splits the family's outermost index into one
 //! contiguous chunk per thread.
 
+use super::fork_join::ForkJoin;
 use super::pollu_box::{NSPEC, box_rhs};
-use rayon::prelude::*;
 
 /// The output slice, shared across the chunks of a threaded run. Every chunk
 /// writes only the elements of its own outer-index range, so the writes are
@@ -90,23 +90,23 @@ impl HandLoop {
         }
     }
 
-    /// `du = f(u)` on the canonical order. `pool` is the threaded run's pool,
-    /// or `None` for the serial loop.
-    pub fn run(&self, u: &[f64], du: &mut [f64], pool: Option<&rayon::ThreadPool>) {
+    /// `du = f(u)` on the canonical order. `pool` is the threaded run's
+    /// fork-join, or `None` for the serial loop.
+    pub fn run(&self, u: &[f64], du: &mut [f64], pool: Option<&ForkJoin>) {
         let out = Out(du.as_mut_ptr(), du.len());
         let outer = self.outer();
-        let chunks = pool.map_or(1, |p| self.threads_used(p.current_num_threads()));
+        let chunks = pool.map_or(1, |p| self.threads_used(p.threads()));
         if chunks <= 1 {
             self.chunk(u, out, 0, outer);
             return;
         }
         let pool = pool.expect("chunks > 1 only with a pool");
-        pool.install(|| {
-            (0..chunks).into_par_iter().for_each(|t| {
+        pool.run(&|t| {
+            if t < chunks {
                 let lo = outer * t / chunks;
                 let hi = outer * (t + 1) / chunks;
                 self.chunk(u, out, lo, hi);
-            })
+            }
         });
     }
 

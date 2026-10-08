@@ -1267,6 +1267,19 @@ function _eval_cells(ce::CE, cells::AbstractVector) where {CE<:_CellEval}
     return out
 end
 
+# True iff `c` holds consecutive ascending integers (`first(c):last(c)` element
+# for element), without materializing either side.
+_is_unit_run(c::AbstractUnitRange{<:Integer}) = true
+function _is_unit_run(c)
+    isempty(c) && return true
+    nxt = first(c)
+    for x in c
+        x == nxt || return false
+        nxt += 1
+    end
+    return true
+end
+
 # Expand a ranges entry to the concrete list of integer values.
 # `r` is [lo, hi] or [lo, step, hi] (elements may be Int or Any, but must all
 # be concrete integers — expression-valued bounds are not supported by the
@@ -1280,6 +1293,37 @@ function _expand_int_range(r::AbstractVector)
     length(r) == 3 && return Int(r[1]):Int(r[2]):Int(r[3])
     throw(TreeWalkError("E_TREEWALK_RANGE_ARITY",
           "range entry must have 2 or 3 entries, got $(length(r))"))
+end
+
+# A unit-step range as itself, any other range as its value list.
+_dense_range_or_list(r::UnitRange{Int}) = r
+_dense_range_or_list(r) = collect(r)
+
+# A zero-filled `Array{Float64}` of size `dims`. A large one comes from
+# `calloc`, whose pages the kernel hands out already zero, so a buffer that is
+# mostly left zero, or filled later by the right-hand side, costs the build
+# nothing per element; the array owns the memory and frees it when collected.
+function _zeros_f64(dims::Int...)
+    n = prod(dims; init = 1)
+    n < 1 << 16 && return zeros(Float64, dims...)
+    ptr = Libc.calloc(n, sizeof(Float64))
+    ptr == C_NULL && throw(OutOfMemoryError())
+    return unsafe_wrap(Array, Ptr{Float64}(ptr), dims; own = true)
+end
+
+# The constant contracted ranges as value lists, for the per-cell loops that
+# store them into `Vector{Int}` slots (converted once here, not once per cell).
+_contract_lists(::Nothing) = nothing
+_contract_lists(cc) = Union{Vector{Int},Nothing}[c === nothing ? nothing : convert(Vector{Int}, c)
+                                                 for c in cc]
+
+# The output-index iterators of a `faq` equation, one per name: the ranges
+# themselves when every one is unit-step (so a grid-sized axis is never
+# materialized), the expanded value lists otherwise.
+function _output_range_iters(ranges_dict, idx_names)
+    rs = [_expand_int_range(ranges_dict[n]) for n in idx_names]
+    all(r -> r isa UnitRange{Int}, rs) && return UnitRange{Int}[r for r in rs]
+    return Vector{Int}[collect(r) for r in rs]
 end
 
 # True iff every element of a range spec is already a concrete Integer — i.e.
