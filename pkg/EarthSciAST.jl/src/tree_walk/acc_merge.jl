@@ -660,6 +660,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # value type `T` — before `kernel_section(du, u, p, t, T)` runs.
     kernel_section = _make_kernel_section(acc_kernels;
                                           shared_cache=cse_cache)
+    scan_section = _make_scan_section(scan_folds)
     function f!(du, u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         T = _rhs_value_type(u, p, t)
@@ -702,7 +703,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # These slots' defs read no state; they are pure functions of `p`, `t`, and
         # the CONTENTS of any live forcing buffer they gather (const_tier.jl). They
         # stay good in THIS buffer while `p` and `t` are egal to the stamp and no
-        # in-place forcing refresh has bumped `_FORCING_EPOCH` — exactly what
+        # in-place forcing refresh has bumped the build's forcing epoch — exactly what
         # `_cse_t_stale` tests. The payoff is the FD-Jacobian shape: N+1 calls at
         # the bit-same `t` with perturbed `u` evaluate the FastJX-style photolysis /
         # met-gather / w_time chains ONCE instead of N+1 times. A time def may read
@@ -748,7 +749,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # here, after the whole kernel section, so it is ordered behind every
         # threaded chunk and every codegen'd loop nest. Empty on every model
         # without a forward prefix reduction, which is the common case.
-        isempty(scan_folds) || _apply_scan_folds!(du, scan_folds)
+        isempty(scan_section) || _apply_scan_folds!(du, scan_section)
 
         # ---- Whole-array contractions (ess-array-contraction) ----
         # Each runs its own output loop nest over disjoint `du` slots, so it is

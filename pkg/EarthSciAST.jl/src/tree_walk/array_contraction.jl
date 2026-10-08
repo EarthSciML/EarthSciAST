@@ -337,12 +337,7 @@ function _cg_fold(ctx::_CGCtx, fold::_ACFold, cv::Symbol, kvs::Vector{Symbol}, t
 end
 
 @inline function _run_acgen!(g::_ArrayContraction, du, u, p, t, ::Type{T}) where {T}
-    if T === Float64 && _cg_threads_available() &&
-       _sec_prep_threads!(g.tcache).state == 1
-        _run_cg_section_threaded!(g.f, g.tabs, du, u, p, t, g.tcache)
-    else
-        g.f(du, u, p, t, g.tabs, 1, 1)
-    end
+    _run_cg_maybe_threaded!(g.f, g.tabs, du, u, p, t, g.tcache)
     return nothing
 end
 

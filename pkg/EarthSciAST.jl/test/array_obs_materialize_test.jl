@@ -156,6 +156,53 @@ end
         @test (@allocated ff!(du, u0, p, 0.0)) == 0
     end
 
+    # ---- Time-cadence observeds fill only when (p, t, forcing epoch) moves ----
+    # w[i] = t·F[i] + c[i] reads the time, a live forcing buffer and a const
+    # observed, but no state: it is filled once per (p, t, forcing epoch), so the
+    # columns of a Jacobian (one `t`, many states) fill it once. A refresh of F in
+    # place at the SAME t must still reach it, through the build's epoch.
+    @testset "time-cadence observeds refill only when p, t or the forcing moves" begin
+        vars4 = Dict(
+            "u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "c" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "w" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "k" => ESM_AOM.ModelVariable(ESM_AOM.ParameterVariable; default = 0.25),
+        )
+        eqs4 = [
+            ESM_AOM.Equation(_v("c"), _agg(_op("*", _v("k"), _op("sin", _v("i"))))),
+            ESM_AOM.Equation(_v("w"), _agg(_op("+", _op("*", _v("t"), _idx("F", _v("i"))),
+                                                _idx("c", _v("i"))))),
+            ESM_AOM.Equation(_agg(_Didx("u", _v("i"))),
+                             _agg(_op("*", _idx("w", _v("i")), _idx("u", _v("i"))))),
+        ]
+        m4 = ESM_AOM.Model(vars4, eqs4)
+        F = [1.0 + 0.5j for j in 1:N]
+        f4, i4 = _aom_build_both(m4; index_sets = isets, initial_conditions = ics,
+                                 param_arrays = Dict("F" => F))
+        @test f4[6].n_mat_const_levels == 1
+        @test f4[6].n_mat_time_levels == 1
+        ff!, u0, p, _, _, _ = f4
+        fi!, _, _, _, _, _ = i4
+        du, dref = similar(u0), similar(u0)
+        p2 = typeof(p)(map(x -> 3.0 * x, values(p)))
+        check(uu, pp, tt) = (ff!(du, uu, pp, tt); fi!(dref, uu, pp, tt); du == dref)
+        for (uu, pp, tt) in ((u0, p, 0.0), (u0, p, 0.0), (fill(2.0, N), p, 0.0),
+                             (u0, p, 1.5), (u0, p2, 1.5), (u0, p, 1.5))
+            @test check(uu, pp, tt)
+        end
+        # A refresh in place at the same t, through the supported write path.
+        ESM_AOM._write_forcing!(F, "F", Dict("F" => F .* 2.0))
+        @test check(u0, p, 1.5)
+        # ... and through a direct write plus the buffer-specific notify.
+        F[3] = -7.0
+        ESM_AOM.notify_forcing_refresh!(F)
+        @test check(u0, p, 1.5)
+        ff!(du, u0, p, 1.5)
+        if VERSION >= v"1.12"
+            @test (@allocated ff!(du, u0, p, 1.5)) == 0
+        end
+    end
+
     # ---- A fill that reads its own buffer through an inlined observed ----
     # g[i] = u[i] + s with s = g[3]: g's fill reads g's buffer through the
     # scalar observed s. `validate()` calls this an observed cycle, and so does

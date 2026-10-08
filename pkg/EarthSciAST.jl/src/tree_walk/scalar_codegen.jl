@@ -706,17 +706,19 @@ end
 # runs its share of every class's members in every generated function, in
 # order. A member's statements run in one chunk, in order, and two members
 # share nothing but the cache slots they read (filled before) and write
-# (distinct per member), so a chunked call is bit-identical to the serial one.
+# (distinct per member), so a chunked call is bit-identical to the serial one,
+# at every value type.
+struct _ScChunk{G,C}
+    gens::G
+    cache::C
+end
+@inline (b::_ScChunk)(args, c::Int, nc::Int) =
+    _run_scgens!(b.gens, args[1], args[2], args[3], args[4], b.cache, c, nc)
+
 @inline function (sp::_ScalarProgram)(du, u, p, t, cache, ::Type{T}) where {T}
-    if sp.threaded && T === Float64 && _cg_threads_available() &&
+    if sp.threaded && _threads_available() &&
        _sec_prep_threads!(sp.tcache).state == 1
-        nc = sp.tcache.nchunks
-        gens = sp.gens
-        run_chunk = function (c::Int)
-            _run_scgens!(gens, du, u, p, t, cache, c, nc)
-            return nothing
-        end
-        _BATCH_RUNNER[](run_chunk, nc)
+        _run_chunked!(sp.tcache, _ScChunk(sp.gens, cache), (du, u, p, t))
     else
         _run_scgens!(sp.gens, du, u, p, t, cache, 1, 1)
     end

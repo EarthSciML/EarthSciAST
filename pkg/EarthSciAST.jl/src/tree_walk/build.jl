@@ -7,7 +7,7 @@
 # ========================================================================
 
 # One `observed_field` answer: the forcing epoch it was computed at
-# (`_FORCING_EPOCH`) and the field. The field is state-free, so it moves only
+# (`_epoch_value`, cadence_stamp.jl) and the field. The field is state-free, so it moves only
 # when a live buffer is refreshed in place. It is filed under the build it
 # belongs to, named by the problem's `run_file` slot — each build allocates its
 # own and `remake` shares it — so a record reused for a second build, or a
@@ -188,9 +188,13 @@ mutable struct DiscreteMaterializer
     caches::Dict{String,Array{Float64}}
     materialize!::Function
     var_order::Vector{String}
+    # The forcing epoch of the build this sink belongs to (cadence_stamp.jl):
+    # bumped by `materialize!` and by a refresh of any buffer the build reads.
+    epoch::_ForcingEpoch
 end
 DiscreteMaterializer() =
-    DiscreteMaterializer(Dict{String,Array{Float64}}(), () -> nothing, String[])
+    DiscreteMaterializer(Dict{String,Array{Float64}}(), () -> nothing, String[],
+                         _new_forcing_epoch())
 
 # ============================================================
 # 2b. Build-pipeline stages
@@ -2624,38 +2628,39 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
     # 3. `materialize!`: every fill into its cache, in dependency order, with the
     #    `p` given (by default the one the caches already hold).
     filled_p = Ref{Any}(pp)
+    stamp = Ref{Any}(_pstamp(pp))
+    epoch = mut.epoch
     function materialize!(q = filled_p[])
         for fill in fills
             fill(q)
         end
         filled_p[] = q
+        stamp[] = _pstamp(q)
         # The caches just changed IN PLACE under readers gathering them via
         # `_NK_PARAM_GATHER` — invalidate the memoized time-cadence prelude slots
         # (B3, const_tier.jl): a refresh fires AT its tstop, so the next RHS call
         # is at a `t` the t-tier stamp may already hold.
-        _bump_forcing_epoch!()
+        _bump_epoch!(epoch)
         return nothing
     end
     materialize!()          # initial fill — valid caches for u0 seeding + first step
     mut.caches = caches
     mut.materialize! = materialize!
     mut.var_order = order
-    return _DiscreteRefill{typeof(pp),typeof(materialize!)}(filled_p, materialize!)
+    return _DiscreteRefill{typeof(pp),typeof(materialize!)}(stamp, materialize!)
 end
 
 # The right-hand side's check that the discrete caches hold its own `p`, and the
-# refill when they do not. The compare is the const tier's (`_cse_const_stale`):
-# egal on an `isbits` `p`, so a same-`p` call is a load and a bit compare and
-# never allocates, and a `p` that is not `isbits` refills on every call rather
-# than trust object identity. A `p` of another type than the build's — dual
+# refill when they do not. The compare is the const tier's (`_pstamp_same`,
+# cadence_stamp.jl): a same-`p` call is a compare and never allocates. A `p` of another type than the build's — dual
 # numbers, for a derivative with respect to parameters — leaves the caches as
 # they are: they hold Float64 values and cannot carry a derivative.
 struct _DiscreteRefill{P,F}
-    filled_p::Base.RefValue{Any}
+    stamp::Base.RefValue{Any}
     materialize!::F
 end
 @inline function (g::_DiscreteRefill{P})(p::P) where {P}
-    (isbits(p) && g.filled_p[] === p) || g.materialize!(p)
+    _pstamp_same(g.stamp[], p) || g.materialize!(p)
     return nothing
 end
 @inline (g::_DiscreteRefill)(p) = nothing
@@ -2791,17 +2796,28 @@ end
 # `_AccScratch`, so the RHS stays zero-alloc at Float64 AND differentiable.
 # Allocated ONCE at build and reused across every RHS call.
 #
-# `stamp64` / `stampalt` are the `p` each buffer's const-cadence observeds were
-# filled for, with exactly the prelude's `_cse_const_stale` semantics (egal on
-# an `isbits` `p`, never stamped otherwise); a freshly allocated `alt` holds no
-# valid const block, so allocating one invalidates its stamp.
+# Each buffer carries the cadence stamps of the prelude (`_CSECache`): `stamp64` /
+# `stampalt` the `p` its const-cadence observeds were filled for, and
+# `tp*`/`tt*`/`te*` the `(p, t, forcing epoch)` its time-cadence observeds were
+# filled for (`_pstamp`, cadence_stamp.jl). A freshly allocated `alt` holds no
+# valid block, so allocating one invalidates both of its stamps.
 mutable struct _ObsExtVec
     f64::Vector{Float64}
     alt::Any
     stamp64::Any
     stampalt::Any
+    tp64::Any
+    tt64::Float64
+    te64::UInt64
+    tpalt::Any
+    ttalt::Any
+    tealt::UInt64
+    epoch::_ForcingEpoch
 end
-_ObsExtVec(n::Int) = _ObsExtVec(zeros(Float64, n), nothing, _CSE_INVALID, _CSE_INVALID)
+_ObsExtVec(n::Int, epoch::_ForcingEpoch = _new_forcing_epoch()) =
+    _ObsExtVec(zeros(Float64, n), nothing, _CSE_INVALID, _CSE_INVALID,
+               _CSE_INVALID, NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID, UInt64(0),
+               epoch)
 @inline _obsext_buf(s::_ObsExtVec, ::Type{Float64}) = s.f64
 @inline function _obsext_buf(s::_ObsExtVec, ::Type{T}) where {T}
     b = s.alt
@@ -2809,18 +2825,46 @@ _ObsExtVec(n::Int) = _ObsExtVec(zeros(Float64, n), nothing, _CSE_INVALID, _CSE_I
     nb = zeros(T, length(s.f64))
     s.alt = nb
     s.stampalt = _CSE_INVALID
+    s.tpalt = _CSE_INVALID
     return nb
 end
 @inline _obsext_const_stale(s::_ObsExtVec, ::Type{Float64}, p) =
-    !(isbits(p) && s.stamp64 === p)
+    !_pstamp_same(s.stamp64, p)
 @inline _obsext_const_stale(s::_ObsExtVec, ::Type{T}, p) where {T} =
-    !(isbits(p) && s.stampalt === p)
+    !_pstamp_same(s.stampalt, p)
 @inline function _obsext_mark_const!(s::_ObsExtVec, ::Type{Float64}, p)
-    s.stamp64 = isbits(p) ? p : _CSE_INVALID
+    s.stamp64 = _pstamp(p)
     return nothing
 end
 @inline function _obsext_mark_const!(s::_ObsExtVec, ::Type{T}, p) where {T}
-    s.stampalt = isbits(p) ? p : _CSE_INVALID
+    s.stampalt = _pstamp(p)
+    return nothing
+end
+# The time tier's test and mark, with `_cse_t_stale` / `_cse_mark_t!`'s rules:
+# `t` by egal (the Float64 buffer stamps only a Float64 `t`, the other only an
+# isbits one), `p` by `_pstamp_same`, and the build's forcing epoch.
+@inline _obsext_t_stale(s::_ObsExtVec, ::Type{Float64}, p, t) =
+    !(t === s.tt64 && s.te64 === _epoch_value(s.epoch) && _pstamp_same(s.tp64, p))
+@inline _obsext_t_stale(s::_ObsExtVec, ::Type{T}, p, t) where {T} =
+    !(s.ttalt === t && s.tealt === _epoch_value(s.epoch) && _pstamp_same(s.tpalt, p))
+@inline function _obsext_mark_t!(s::_ObsExtVec, ::Type{Float64}, p, t)
+    if t isa Float64
+        _pstamp_same(s.tp64, p) || (s.tp64 = _pstamp(p))
+        s.tt64 = t
+        s.te64 = _epoch_value(s.epoch)
+    else
+        s.tp64 === _CSE_INVALID || (s.tp64 = _CSE_INVALID)
+    end
+    return nothing
+end
+@inline function _obsext_mark_t!(s::_ObsExtVec, ::Type{T}, p, t) where {T}
+    if isbits(t)
+        _pstamp_same(s.tpalt, p) || (s.tpalt = _pstamp(p))
+        s.ttalt === t || (s.ttalt = t)
+        s.tealt = _epoch_value(s.epoch)
+    else
+        s.tpalt === _CSE_INVALID || (s.tpalt = _CSE_INVALID)
+    end
     return nothing
 end
 
@@ -2971,10 +3015,16 @@ end
 # forcing buffer, a recurrence's self-read, a name bound by a construct other
 # than a `faq`'s indices) makes the observed dynamic, which costs a refill per
 # call and never a stale number.
+#
+# With `allowed` (the names of `t` and of the live buffers) the same walk finds
+# the observeds whose leaves may also be those: the observeds that read no
+# state, whose buffers are a function of `(p, t, forcing data)` — the
+# TIME-cadence ones, once the const ones are taken out.
 function _const_cadence_mat_obs(mat_defs::Dict{String,ASTExpr}, mat_vars,
                                 inline_obs::AbstractDict, dynamic::Set{String},
                                 param_sym_set::AbstractDict,
-                                const_registry::AbstractDict)
+                                const_registry::AbstractDict,
+                                allowed::Set{String} = Set{String}())
     memo = Dict{String,Bool}()
     visiting = Set{String}()
     function bound_names(e::ASTExpr)
@@ -2995,7 +3045,8 @@ function _const_cadence_mat_obs(mat_defs::Dict{String,ASTExpr}, mat_vars,
         def = (n in mat_vars && haskey(mat_defs, n)) ? mat_defs[n] :
               haskey(inline_obs, n) ? inline_obs[n] : nothing
         def === nothing &&
-            return haskey(param_sym_set, Symbol(n)) || haskey(const_registry, n)
+            return n in allowed || haskey(param_sym_set, Symbol(n)) ||
+                   haskey(const_registry, n)
         push!(visiting, n)
         b = bound_names(def)
         c = all(r -> r in b || name_const(r), _referenced_var_names(def))
@@ -3014,11 +3065,16 @@ end
 # recurrence_sweeps)` in dependency order. `const_levels` has the same shape and
 # holds the const-cadence observeds (`_const_cadence_mat_obs`), which read no
 # `levels` entry; they run first, and only when the buffer's const stamp says
-# `p` moved or the buffer is new.
+# `p` moved or the buffer is new. `time_levels` holds the time-cadence ones,
+# which read only const ones and each other; they run next, and only when
+# `(p, t, the build's forcing epoch)` moved — so the columns of a Jacobian, all
+# at one `t`, fill them once.
 function _make_rhs_with_obs_buffers(f_state!, n_total::Int, n_states::Int,
-                                    levels::Tuple, const_levels::Tuple=())
-    isempty(levels) && isempty(const_levels) && return f_state!
-    ext = _ObsExtVec(n_total)
+                                    levels::Tuple, const_levels::Tuple=(),
+                                    time_levels::Tuple=(),
+                                    epoch::_ForcingEpoch=_new_forcing_epoch())
+    isempty(levels) && isempty(const_levels) && isempty(time_levels) && return f_state!
+    ext = _ObsExtVec(n_total, epoch)
     function f!(du, u, p, t)
         T = _rhs_value_type(u, p, t)
         ue = _obsext_buf(ext, T)
@@ -3026,6 +3082,10 @@ function _make_rhs_with_obs_buffers(f_state!, n_total::Int, n_states::Int,
         if !isempty(const_levels) && _obsext_const_stale(ext, T, p)
             _fill_obs_levels!(const_levels, ue, p, t, T)
             _obsext_mark_const!(ext, T, p)
+        end
+        if !isempty(time_levels) && _obsext_t_stale(ext, T, p, t)
+            _fill_obs_levels!(time_levels, ue, p, t, T)
+            _obsext_mark_t!(ext, T, p, t)
         end
         # Fill the observed buffers level by level: a level's defs read only the
         # state and STRICTLY LOWER levels, both already valid in `ue`.
@@ -3653,6 +3713,11 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # ---- Live forcing buffers (ess-14f.3, JL-J0) ----
     # (see `_build_pgather` for the feasibility-gate design note)
     pgather = @_bench :build_pgather _build_pgather(param_arrays)
+    # This build's forcing epoch: the problem's (its discrete sink carries it),
+    # bumped by a refresh of any buffer the build reads.
+    forcing_epoch = materialize_out === nothing ? _new_forcing_epoch() :
+                    materialize_out.epoch
+    _register_forcing_buffers!(forcing_epoch, values(param_arrays))
 
     # ---- Discrete-cadence materialization: cache buffers + fill kernels ----
     # (the middle cadence phase; see DiscreteMaterializer). Each discrete var gets a
@@ -3754,6 +3819,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     mat_array_contraction_count = 0
     mat_recurrence_count = 0
     mat_const_levels = Any[]
+    mat_time_levels = Any[]
     recur_names = _recurrence_names(mat_defs, mat_vars)
     # The const-cadence observeds fill in their own levels, ahead of the rest
     # and only when `p` moves (`_make_rhs_with_obs_buffers`). The untiered
@@ -3768,15 +3834,29 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     else
         Set{String}()
     end
-    level_plan = Tuple{Vector{String},Bool}[]
+    # The time-cadence observeds: no state anywhere below them, but `t` or a
+    # live buffer (a `param_arrays` buffer, a discrete cache) somewhere.
+    mat_time = if form === :inplace && !_untiered() && !isempty(mat_vars)
+        tleaves = Set{String}(keys(pgather))
+        push!(tleaves, "t")
+        setdiff!(_const_cadence_mat_obs(mat_defs, mat_vars, raw_obs,
+                     _state_base_names(layout.var_map, layout.array_var_info),
+                     param_sym_set, const_registry, tleaves), mat_const)
+    else
+        Set{String}()
+    end
+    level_plan = Tuple{Vector{String},Symbol}[]
     if !isempty(mat_vars)
-        isempty(mat_const) || foreach(l -> push!(level_plan, (l, true)),
+        isempty(mat_const) || foreach(l -> push!(level_plan, (l, :const)),
             _materialized_obs_levels(mat_defs, mat_const, raw_obs))
-        foreach(l -> push!(level_plan, (l, false)),
-            _materialized_obs_levels(mat_defs, setdiff(mat_vars, mat_const), raw_obs))
+        isempty(mat_time) || foreach(l -> push!(level_plan, (l, :time)),
+            _materialized_obs_levels(mat_defs, mat_time, raw_obs))
+        foreach(l -> push!(level_plan, (l, :dynamic)),
+            _materialized_obs_levels(mat_defs,
+                setdiff(mat_vars, mat_const, mat_time), raw_obs))
     end
     if !isempty(level_plan)
-        for (lvl, lvl_const) in level_plan
+        for (lvl, lvl_cadence) in level_plan
             lvl_scalars = Tuple{Int,_Node}[]
             lvl_kernels = _AccKernel[]
             lvl_scans = _ScanFold[]
@@ -3827,8 +3907,10 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                        _OopAccPlan[_build_oop_acc_plan(K) for K in merged],
                        lvl_scans, lvl_acs))
             else
-                push!(lvl_const ? mat_const_levels : mat_levels,
-                      (lvl_scalars, _make_kernel_section(merged), lvl_scans,
+                push!(lvl_cadence === :const ? mat_const_levels :
+                      lvl_cadence === :time ? mat_time_levels : mat_levels,
+                      (lvl_scalars, _make_kernel_section(merged),
+                       _make_scan_section(lvl_scans),
                        _make_contraction_section(lvl_acs), Tuple(lvl_recurs)))
             end
         end
@@ -3883,6 +3965,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     rhs_list, scalar_prelude, scalar_cache, cse_diag =
         @_bench :cse_scalar _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs;
                             has_pgather = !isempty(pgather), obs_defs=obs_defs)
+    scalar_cache.epoch = forcing_epoch
 
     # ---- Cross-kernel / kernel↔prelude fn-CSE (perf plan B4; xcse.jl) ----
     # A lane-invariant fn/interp subtree appearing in several array kernels'
@@ -3968,7 +4051,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                       const_slots, time_slots, dyn_slots, scan_folds,
                       _make_contraction_section(array_contractions);
                       scalar = scalar_section),
-            n_total, n_states, Tuple(mat_levels), Tuple(mat_const_levels))
+            n_total, n_states, Tuple(mat_levels), Tuple(mat_const_levels),
+            Tuple(mat_time_levels), forcing_epoch)
         discrete_refill === nothing ? rhs0 : _make_rhs_discrete_refill(rhs0, discrete_refill)
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
@@ -4069,8 +4153,10 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               # buffer cells that is, and the dependency depth the fills run in.
               n_mat_array_obs = length(mat_vars),
               n_mat_array_cells = n_total - n_states,
-              n_mat_levels = length(mat_levels) + length(mat_const_levels),
+              n_mat_levels = length(mat_levels) + length(mat_const_levels) +
+                             length(mat_time_levels),
               n_mat_const_levels = length(mat_const_levels),
+              n_mat_time_levels = length(mat_time_levels),
               # Parameter NAME → position in a vector `p` — the build's own copy
               # of what the public `param_map(p)` recomputes from the NamedTuple.
               # Here so an internal consumer never has to re-derive the order.

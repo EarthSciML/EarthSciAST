@@ -27,10 +27,9 @@
 # prefix_scan's 10^4 cells and source_receptor's 3162, where native needs
 # under 3 GB, and the oracle's memory would be charged to native's document.
 #
-# THREADS. Native threads its compiled sections only when Polyester is loaded
-# (the opt-in lives in EarthSciASTPolyesterExt), so this adapter always loads
-# it: with one thread native runs its serial path, and with `-t K` native runs
-# whatever it threads today. The result file's `threads` is Julia's thread
+# THREADS. Native threads its compiled sections by default whenever Julia has
+# more than one thread: with one thread native runs its serial path, and with
+# `-t K` native runs whatever it threads today. The result file's `threads` is Julia's thread
 # count, and `hand_loop_s` is then the threaded hand loop.
 #
 # ONE CHILD PROCESS PER FAMILY. The adapter measures each family's ladder in a
@@ -73,7 +72,6 @@ end
 
 using EarthSciAST
 using JSON3
-using Polyester
 
 const ESA = EarthSciAST
 const RGF = EarthSciAST.RuntimeGeneratedFunctions
@@ -502,7 +500,6 @@ function run_header(o, compiler)
         "binding" => "julia", "compiler" => String(compiler), "threads" => Threads.nthreads(),
         "commit" => git_commit(), "host" => gethostname(),
         "target" => string(Sys.MACHINE), "julia_version" => string(VERSION),
-        "polyester_loaded" => ESA._polyester_loaded(),
         "machine" => machine_note(), "load_average" => load_average(),
         "cpus" => Sys.CPU_THREADS, "max_rss_gb" => o["in-process"] ? nothing : _gb(_cap(o)),
         "timeout_s" => o["in-process"] ? nothing : o["timeout-s"])
