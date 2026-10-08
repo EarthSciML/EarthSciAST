@@ -218,7 +218,11 @@ def family_checks(run, fam, results, gates, family_spec):
         else:
             lo, hi = cand[0], cand[-1]
             ns = (hi["build_s"] - lo["build_s"]) / (hi["n_states"] - lo["n_states"]) * 1e9
-            limit, why = build_slope_limit(run, gates["build_slope"], lo, hi)
+            g = {
+                **gates["build_slope"],
+                **family_spec.get("gate_overrides", {}).get("build_slope", {}),
+            }
+            limit, why = build_slope_limit(run, g, lo, hi)
             out.append(
                 Check(
                     run,

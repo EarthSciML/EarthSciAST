@@ -106,6 +106,15 @@
       "pr_sizes": [100, 1000],
       "gate_exclusions": {
         "code_size_flat": "one equation per state is written in the document, so code proportional to N is the document's own size, not a compiler defect"
+      },
+      "gate_overrides": {
+        "build_slope": {
+          "per_byte_ns": {
+            "julia": 6000,
+            "rust": 200
+          },
+          "why": "the document grows by equations, not inline data, and each binding's loader costs far more per byte of equations than per byte of data: Julia load_path about 3000 ns/byte (100..10^4 states; its per-equation schema validation and coercion, a known cost separate from the compiler), Rust serde_json parse plus typed load about 100 ns/byte (100..10^5), measured on cf30558cb, cores 18-19, two rounds. Twice that, by the same reasoning as the gate's own per_byte_ns. It excuses loading, not compiling: the rest of the build must still fit max_ns_per_state"
+        }
       }
     }
   },
