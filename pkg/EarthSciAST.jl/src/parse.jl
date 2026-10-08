@@ -48,6 +48,7 @@ Base.showerror(io::IO, e::ParseError) = print(io, "ParseError: ", e.message)
 #   * carrier-independent input to JSONSchema.jl (`validate_schema`), whose
 #     `type: array` check does not recognize `JSON3.Array`.
 function _to_native_json(x)
+    x isa Vector{Any} && _leaves_only(x) && return copy(x)
     if x isa JSON3.Array || x isa AbstractVector
         return Any[_to_native_json(v) for v in x]
     elseif x isa JSON3.Object || x isa AbstractDict

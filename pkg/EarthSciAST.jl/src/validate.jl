@@ -393,6 +393,19 @@ Unlike JSONSchema.jl's single-issue `validate`, this enumerates leaf failures
 INSIDE failed `oneOf`/`anyOf`/`allOf`/`if` branches (see
 `_collect_schema_errors!`), matching TypeScript's AJV `allErrors` output.
 """
+# `_to_native_json` for the read-only validator walk: a leaf-only `Vector{Any}`
+# is already a native array and is passed through, not copied.
+function _schema_native(x)
+    x isa Vector{Any} && _leaves_only(x) && return x
+    if x isa JSON3.Array || x isa AbstractVector
+        return Any[_schema_native(v) for v in x]
+    elseif x isa JSON3.Object || x isa AbstractDict
+        return Dict{String,Any}(string(k) => _schema_native(v) for (k, v) in pairs(x))
+    else
+        return x
+    end
+end
+
 function validate_schema(data::Any)::Vector{SchemaError}
     if ESM_SCHEMA === nothing
         @warn "Schema validation skipped - schema not loaded"
@@ -407,7 +420,7 @@ function validate_schema(data::Any)::Vector{SchemaError}
         # not a `Base.Array`, so JSONSchema.jl's `type: array` check (and every
         # `oneOf` branch that depends on it) misfires on the JSON3 carrier.
         # Coercing to native containers makes the walk carrier-independent.
-        native = _to_native_json(data)
+        native = _schema_native(data)
         _collect_schema_errors!(errors, native, ESM_SCHEMA.data, "")
     catch e
         return [SchemaError("", "Schema validation error: $(e)", "error")]

@@ -120,7 +120,9 @@ function _plain_hash(x::AbstractVector, h::UInt)
     h = hash(objectid(typeof(x)), hash(0x76, h))
     h = hash(length(x), h)
     for el in x
-        h = _plain_hash(el, h)
+        # Inline number arrays: the common leaves hash without a dynamic call.
+        h = el isa Int64 ? _plain_hash(el, h) :
+            el isa Float64 ? _plain_hash(el, h) : _plain_hash(el, h)
     end
     return h
 end
