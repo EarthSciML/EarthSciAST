@@ -4091,10 +4091,8 @@ fn value_invention_factors(
     /// The names `e` reads that it does not bind itself.
     fn free_names(e: &Expr, bound: &mut Vec<String>, out: &mut BTreeSet<String>) {
         match e {
-            Expr::Variable(v) => {
-                if !bound.contains(v) {
-                    out.insert(v.clone());
-                }
+            Expr::Variable(v) if !bound.contains(v) => {
+                out.insert(v.clone());
             }
             Expr::Operator(node) => {
                 let mark = bound.len();
