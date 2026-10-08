@@ -3596,7 +3596,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # respect to the build: nothing downstream consults `inspect`.
     if inspect !== nothing
         for (k, arr) in parts.geom_setup_arrays
-            inspect.setup_arrays[String(k)] = Array{Float64}(arr)
+            # Published by reference, as the const arrays below are.
+            inspect.setup_arrays[String(k)] = arr isa Array{Float64} ? arr : Array{Float64}(arr)
         end
         for (k, arr) in const_registry
             inspect.const_arrays[String(k)] = arr
@@ -4124,18 +4125,10 @@ function _build_evaluator_impl_pools(model::Model; kwargs...)
     prev = _LANE_INTERN_POOL[]
     _LANE_INTERN_POOL[] = _lane_intern_disabled() ? nothing :
                           Dict{_LaneInternKey,Any}()
-    # Same lifetime, same save/restore: the identity slot tables the lane-affine
-    # STATE-BOX lowering addresses through (`_state_slot_identity`,
-    # stencil_affine.jl) are shared across every equation of THIS build and
-    # dropped with it.
-    prev_sb = _STATE_SLOT_TBL_POOL[]
-    _STATE_SLOT_TBL_POOL[] = _state_box_disabled() ? nothing :
-                             Dict{Tuple{String,Int,Int},Vector{Int}}()
     try
         return _build_evaluator_impl_inner(model; kwargs...)
     finally
         _LANE_INTERN_POOL[] = prev
-        _STATE_SLOT_TBL_POOL[] = prev_sb
     end
 end
 

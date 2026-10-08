@@ -218,8 +218,45 @@ function _const_op_to_array(val)::Array{Float64}
         node = first(node)
     end
     A = Array{Float64}(undef, dims...)
-    _fill_const_array!(A, val, ())
+    _fill_const_dense!(A, val, dims) || _fill_const_array!(A, val, ())
     return A
+end
+
+# The fill for a value whose every level is a list of exactly the probed
+# extent with numbers at the bottom (every well-formed inline array): each
+# element goes straight to its column-major offset. Returns `false` on any
+# other shape, and the caller redoes the fill with `_fill_const_array!`.
+function _fill_const_dense!(A::Array{Float64}, val, dims::Vector{Int})
+    (isempty(dims) || any(==(0), dims)) && return false
+    strides = Vector{Int}(undef, length(dims))
+    s = 1
+    for d in eachindex(dims)
+        strides[d] = s
+        s *= dims[d]
+    end
+    return _fill_const_level!(A, val, 1, 1, dims, strides)
+end
+
+function _fill_const_level!(A::Array{Float64}, node, depth::Int, off::Int,
+                            dims::Vector{Int}, strides::Vector{Int})::Bool
+    (node isa Vector{Any} || node isa AbstractVector) || return false
+    n = length(node)
+    n == dims[depth] || return false
+    s = strides[depth]
+    if depth == length(dims)
+        for k in 1:n
+            x = node[k]
+            v = x isa Int64 ? Float64(x) : x isa Float64 ? x :
+                x isa Number ? Float64(x) : return false
+            @inbounds A[off + (k - 1) * s] = v
+        end
+    else
+        for k in 1:n
+            _fill_const_level!(A, node[k], depth + 1, off + (k - 1) * s, dims, strides) ||
+                return false
+        end
+    end
+    return true
 end
 
 function _fill_const_array!(A, node, idx::Tuple)
@@ -1030,7 +1067,7 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
     body = _geo_compile(faq.expr_body, g)
     u = zeros(Float64, nslots[])
     nout = length(out)
-    arr  = zeros(Float64, exts...)
+    arr  = _zeros_f64(exts...)
     # ---- The OVERLAP broad phase (see `_geo_overlap_gate` above) ----
     # Resolve the gate, then ask the SHARED planner (`_overlap_drive_plan`,
     # src/broad_phase.jl) which symbol(s) its candidate set drives. Only the two

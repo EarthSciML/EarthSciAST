@@ -201,9 +201,41 @@ mutable struct _AffineSig
     # branch; see `_lane_nonaffine_args!`.
     lane_ref::Dict{String,Vector{Vector{Bool}}}
     back_scratch::Vector{Int}    # reused per keyed cell for the backward probe
+    # Per branch key, each state lane's compiled evaluator (`_lane_evaluator`)
+    # or `nothing`, so a keyed cell does not walk the subscripts through the
+    # Dict environment; and the visited set `_branch_key!` clears per keyed cell.
+    lane_evals::Dict{String,Any}
+    bseen::IdDict{OpExpr,Nothing}
+    # Per body: whether it holds an indexed array producer (`makearray` or a
+    # `faq`), the only nodes `_branch_key!` prints. A body without one has the
+    # empty branch key at every cell.
+    bkey_sites::IdDict{Any,Bool}
 end
 _AffineSig() = _AffineSig(Dict{String,_StencilBranch}(), IdDict{OpExpr,Bool}(), IOBuffer(), Int[],
-                          Dict{String,Vector{Vector{Bool}}}(), Int[])
+                          Dict{String,Vector{Vector{Bool}}}(), Int[], Dict{String,Any}(),
+                          IdDict{OpExpr,Nothing}(), IdDict{Any,Bool}())
+
+# Whether `e` reaches an `index` of a `makearray` or `faq` producer, through the
+# same children `_branch_key!` descends into.
+function _has_indexed_producer(e, seen::IdDict{OpExpr,Nothing}=IdDict{OpExpr,Nothing}())
+    e isa OpExpr || return false
+    haskey(seen, e) && return false
+    seen[e] = nothing
+    if e.op == "index" && !isempty(e.args)
+        fa = e.args[1]
+        fa isa OpExpr && (fa.op == "makearray" || _is_faq_op(fa.op)) && return true
+    end
+    for a in e.args
+        _has_indexed_producer(a, seen) && return true
+    end
+    e.expr_body !== nothing && _has_indexed_producer(e.expr_body, seen) && return true
+    if e.values !== nothing
+        for v in e.values
+            _has_indexed_producer(v, seen) && return true
+        end
+    end
+    return false
+end
 
 # ── LANE-AFFINE SIGNATURE (the cut key measures the LANE, not the output) ─────
 #
@@ -384,7 +416,11 @@ function _cell_bkey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
     env = ctx_proto.idx_env
     empty!(env)
     _set_env!(env, idx_names, loop)
-    _branch_key!(sig.bio, body, ctx_proto.idxset, env, ctx_proto.const_arrays, sig.bmemo)
+    if get!(() -> _has_indexed_producer(body), sig.bkey_sites, body)
+        empty!(sig.bseen)
+        _branch_key!(sig.bio, body, ctx_proto.idxset, env, ctx_proto.const_arrays, sig.bmemo,
+                     sig.bseen)
+    end
     bkey = String(take!(sig.bio))
     branch = get(sig.branch_cache, bkey, nothing)
     if branch === nothing
@@ -393,6 +429,38 @@ function _cell_bkey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
     end
     return bkey, branch
 end
+# The state lanes' slots at the keyed cell: each recipe's compiled evaluator
+# where it answers (the same integer arithmetic and slot map as `_eval_recipe`),
+# `_eval_recipe` itself otherwise, so every error is the per-cell resolution's.
+function _ckey_state_slots!(state_vals::Vector{Int}, sig::_AffineSig, bkey::String,
+                            recipes, state_ks, loop, idx_names, env, var_map,
+                            const_arrays)
+    evs = get!(sig.lane_evals, bkey) do
+        compiled = loop isa Vector{Int} && idx_names isa Vector{String}
+        Union{Nothing,_LaneEval{typeof(var_map)}}[
+            compiled ? _lane_evaluator(recipes[k], idx_names, var_map, const_arrays) : nothing
+            for k in state_ks]
+    end
+    _ckey_fill_slots!(state_vals, evs, recipes, state_ks, loop, env, var_map, const_arrays)
+    return state_vals
+end
+
+function _ckey_fill_slots!(state_vals::Vector{Int}, evs::Vector{Union{Nothing,E}}, recipes,
+                           state_ks, loop, env, var_map, const_arrays) where {E}
+    @inbounds for i in eachindex(state_ks)
+        le = evs[i]
+        if le !== nothing
+            v, ok = _lane_eval(le, loop)
+            if ok
+                state_vals[i] = Int(v)
+                continue
+            end
+        end
+        state_vals[i] = _eval_recipe(recipes[state_ks[i]], env, var_map, const_arrays)::Int
+    end
+    return state_vals
+end
+
 function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
                      var_map, param_sym_set, reg_funcs,
                      okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing,
@@ -406,10 +474,8 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
     # Vector{Int} (no Vector{Any}, no boxing, and no wasted non-state recipe evals).
     state_vals = sig.state_scratch
     resize!(state_vals, length(state_ks))
-    @inbounds for i in eachindex(state_ks)
-        state_vals[i] = _eval_recipe(recipes[state_ks[i]], env, var_map,
-                                     ctx_proto.const_arrays)::Int
-    end
+    _ckey_state_slots!(state_vals, sig, bkey, recipes, state_ks, loop, idx_names, env,
+                       var_map, ctx_proto.const_arrays)
     io = sig.bio                       # empty again after the take! above
     print(io, bkey, '|')
     if okey === nothing
@@ -784,24 +850,13 @@ end
 # affine in the loop needs no per-cell table at all: it needs the strides, and a
 # table that is the IDENTITY over the variable's own slot block. That block is
 # one dense contiguous run per array variable (`_enumerate_array_cell_names`
-# lays cells out column-major, contiguously), it is shared by every lane, every
-# box and every equation of the build through the pool below, and it is the same
-# size as the variable — never O(#cells) per lane.
+# lays cells out column-major, contiguously), so the table is the range
+# `lo0:hi0` itself, never materialized.
 #
 # Off, every lane gets the dense per-box table.
 _state_box_disabled() = !_compiler_plan_now().state_box
 
-# Build-scoped, mirroring `_LANE_INTERN_POOL`: installed in
-# `_build_evaluator_impl`, torn down in its `finally`. `nothing` outside a build
-# (or with the lowering off) simply means the table is not shared.
-const _STATE_SLOT_TBL_POOL =
-    Base.RefValue{Union{Nothing,Dict{Tuple{String,Int,Int},Vector{Int}}}}(nothing)
-
-function _state_slot_identity(var_name::String, lo0::Int, hi0::Int)
-    pool = _STATE_SLOT_TBL_POOL[]
-    pool === nothing && return collect(lo0:hi0)
-    return get!(() -> collect(lo0:hi0), pool, (var_name, lo0, hi0))
-end
+_state_slot_identity(lo0::Int, hi0::Int) = lo0:hi0
 
 # The variable's own contiguous slot block, from the affine slot map the recipe
 # already carries (`rec.affine`, corner-verified against `var_map` in
@@ -1060,7 +1115,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                     end
                 end
                 ok && return _AccRepl(_AccStateTblBox(
-                    _state_slot_identity(rec.var_name, lo0, hi0), ls, o))
+                    _state_slot_identity(lo0, hi0), ls, o))
             end
         end
         return _materialize_state_tbl(rec, idx_names, box, D, var_map, const_arrays)

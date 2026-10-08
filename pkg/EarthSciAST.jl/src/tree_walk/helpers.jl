@@ -1299,15 +1299,16 @@ end
 _dense_range_or_list(r::UnitRange{Int}) = r
 _dense_range_or_list(r) = collect(r)
 
-# A zero-filled `Vector{Float64}` of length `n`. A large one comes from
-# `calloc`, whose pages the kernel hands out already zero, so a scratch buffer
-# the right-hand side fills on its first call costs the build nothing per
-# element; the array owns the memory and frees it when collected.
-function _zeros_f64(n::Int)
-    n < 1 << 16 && return zeros(Float64, n)
+# A zero-filled `Array{Float64}` of size `dims`. A large one comes from
+# `calloc`, whose pages the kernel hands out already zero, so a buffer that is
+# mostly left zero, or filled later by the right-hand side, costs the build
+# nothing per element; the array owns the memory and frees it when collected.
+function _zeros_f64(dims::Int...)
+    n = prod(dims; init = 1)
+    n < 1 << 16 && return zeros(Float64, dims...)
     ptr = Libc.calloc(n, sizeof(Float64))
     ptr == C_NULL && throw(OutOfMemoryError())
-    return unsafe_wrap(Array, Ptr{Float64}(ptr), n; own = true)
+    return unsafe_wrap(Array, Ptr{Float64}(ptr), dims; own = true)
 end
 
 # The constant contracted ranges as value lists, for the per-cell loops that
