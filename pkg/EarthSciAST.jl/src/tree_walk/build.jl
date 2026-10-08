@@ -3944,7 +3944,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                     resolved_obs, array_var_info, var_map, const_registry,
                     pgather, param_sym_set, reg_funcs, n_total;
                     template_sites=template_sites,
-                    rhs_list_compiled=form === :oop)
+                    rhs_list_compiled=form === :oop,
+                    obs_nst=form === :inplace ? n_states : 0)
                 for (slot, ex) in se
                     push!(lvl_scalars,
                           (slot, _compile(ex, var_map, param_sym_set, reg_funcs)))
@@ -3985,7 +3986,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             resolved_obs, array_var_info, var_map, const_registry, pgather,
             param_sym_set, reg_funcs, n_states; template_sites=template_sites,
             scalar_obs_inline=obs_plan.inline,
-            rhs_list_compiled=form === :oop)
+            rhs_list_compiled=form === :oop,
+            obs_nst=(form === :inplace && n_total > n_states) ? n_states : 0)
     # States without a D(...) equation get du=0 (integrator leaves them
     # at their initial value — a common pattern for reified constants).
 
@@ -4654,7 +4656,10 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         # contraction loop's nodes into their own program; the in-place `f!`
         # walks `rhs_list` with `_eval_node`, so there the loop tier is an
         # interpreter and is retired (see `_compile_faq_equation!`).
-        rhs_list_compiled::Bool=false)
+        rhs_list_compiled::Bool=false,
+        # The state length of the two-buffer slot space the in-place RHS runs
+        # on (`_ObsSplitVec`), or 0; the contraction nests address by it.
+        obs_nst::Int=0)
     scalar_inline = scalar_obs_inline === nothing ? resolved_obs : scalar_obs_inline
     scalar_entries = Tuple{Int,ASTExpr}[]
     percell_scalar = Tuple{Int,_Node}[]
@@ -4722,7 +4727,8 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
                                        pgather, param_sym_set, reg_funcs;
                                        template_sites=template_sites, xeq=xeq,
                                        pooled_cells=pooled_cells,
-                                       rhs_list_compiled=rhs_list_compiled)
+                                       rhs_list_compiled=rhs_list_compiled,
+                                       obs_nst=obs_nst)
         end
     end
     # The pooled scalarizer-level emitter: one grouping over EVERY per-cell
@@ -5322,7 +5328,10 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         # `_acc_from_cell_entries` once after the whole equation loop.
         pooled_cells=nothing,
         # See `_compile_derivative_equations`.
-        rhs_list_compiled::Bool=false)
+        rhs_list_compiled::Bool=false,
+        # The state length of the two-buffer slot space the in-place RHS runs
+        # on (`_ObsSplitVec`), or 0; the contraction nests address by it.
+        obs_nst::Int=0)
     lhs_op = eq.lhs::OpExpr
     idx_names = _output_idx_strings(lhs_op)
     ranges_dict = _ranges_dict(lhs_op)
@@ -5501,7 +5510,7 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
                  rhs_zerobar=rhs_zerobar, resolved_obs=resolved_obs,
                  array_var_info=array_var_info, var_map=var_map,
                  const_registry=const_registry, pgather=pgather,
-                 param_sym_set=param_sym_set, reg_funcs=reg_funcs)
+                 param_sym_set=param_sym_set, reg_funcs=reg_funcs, obs_nst=obs_nst)
     # The compile-once forms offered this equation, in order — what a refusal
     # below says declined it.
     offered = Symbol[]
@@ -5858,7 +5867,7 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         # the admitted tuples become data (the TABLE form of `_ACFold`); a
         # filter is the per-cell expansion's `ifelse(filter, term, 0̄)` guard,
         # kept symbolic in the term.
-        agg_gates=nothing, agg_filter=nothing, contract_const=nothing)
+        agg_gates=nothing, agg_filter=nothing, contract_const=nothing, obs_nst::Int=0)
     # With no contracted index the equation is elementwise: the cell's value is
     # its term, written as it is with no fold and no seed (a pointwise filter is
     # already the term's `ifelse` guard, see `_compile_faq_equation!`).
@@ -5957,7 +5966,7 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     # equation goes back to the cascade, whose next and last form is the
     # per-cell build (refused by a strict compiler, with this reason).
     gen = _try_codegen_array_contraction(out_refs, los, stps, lens, outs, node;
-                                         fold=fold)
+                                         fold=fold, nst=obs_nst)
     if gen isa Symbol
         # Hand the cells back untouched: every one was unclaimed on entry (the
         # loop above throws on a second claim), so clearing restores `covered`.
