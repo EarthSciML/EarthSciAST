@@ -59,6 +59,7 @@ mod chain;
 mod fused;
 mod interp;
 mod kernels;
+mod lane_fold;
 mod lanes;
 mod oracle;
 #[cfg(not(target_arch = "wasm32"))]

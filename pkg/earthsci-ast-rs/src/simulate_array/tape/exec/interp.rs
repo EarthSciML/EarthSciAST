@@ -838,6 +838,7 @@ pub(super) fn run_range(
             }
             Instr::Lanes { spec } => unsafe {
                 super::lanes::exec_lanes(
+                    *spec as usize,
                     &prog.lanes[*spec as usize],
                     env,
                     slab_ptr,

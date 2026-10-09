@@ -9,10 +9,21 @@
 //! Every lane applies exactly the kernels its scalar instructions applied,
 //! in their order; the lanes are independent and write distinct `dy`
 //! positions, so chunking cannot change a bit.
+//!
+//! In `f64` a program of at least [`STRIP`] lanes runs in its folded form
+//! (`lane_fold.rs`) instead, strip by strip: the whole program over
+//! [`STRIP`] lanes at a time, its registers one strip long, so they stay in
+//! the first-level cache whatever the program's size, and its inputs and
+//! derivative runs are each read or written once per strip, in order.
 
 use super::fused::{MSrc, dispatch_bin_kernel, dispatch_un_kernel, fch_sel, fch1, fch2};
+use super::lane_fold::{
+    B_DY, B_PARAM, B_REG, B_SPLAT, B_STATE, LOp, LaneCode, N_BASES, OTHER, SSTRIDE, STRIP,
+    strip_fold,
+};
 use super::resolve::resolve_scalar;
 use super::*;
+use crate::simulate_array::tape::fuse::micro_out;
 
 /// Lanes per chunk: long enough to amortize each micro-op's dispatch, short
 /// enough that a mechanism-sized program's registers stay cache-resident.
@@ -21,20 +32,45 @@ pub(super) const LCHUNK: usize = 256;
 /// The per-executor buffers of the lane programs, sized for the largest
 /// program so a call never allocates.
 pub(super) struct LaneScratch {
-    regs: Vec<f64>,
+    /// Per lane program, its folded form (`None` for a one-lane block or a
+    /// program too large to decode).
+    codes: Vec<Option<LaneCode>>,
+    /// The calling thread's register file.
+    own: LaneWorker,
     svals: Vec<f64>,
-    /// The register files of the workers a split lane program runs on
-    /// (native targets only), grown the first time a call splits wider.
+    /// Per folded program, each scalar operand repeated over a strip, and
+    /// the values they were filled with (refilled only when one changes).
+    splats: Vec<(Vec<f64>, Vec<f64>)>,
+    /// The workers a split lane program runs on (native targets only),
+    /// grown the first time a call splits wider.
     #[cfg(not(target_arch = "wasm32"))]
-    workers: Vec<Vec<f64>>,
+    workers: Vec<LaneWorker>,
+}
+
+/// One thread's register file for a lane program's chunks or strips.
+struct LaneWorker {
+    regs: Vec<f64>,
 }
 
 impl LaneScratch {
     pub(super) fn for_program(prog: &TapeProgram) -> Self {
+        let codes: Vec<Option<LaneCode>> = prog
+            .lanes
+            .iter()
+            .map(|ls| {
+                (ls.lanes > 1 || !ls.inputs.is_empty())
+                    .then(|| super::lane_fold::decode(ls))
+                    .flatten()
+            })
+            .collect();
         let regs = prog
             .lanes
             .iter()
-            .map(|ls| ls.n_regs as usize + ls.inputs.len())
+            .zip(&codes)
+            .map(|(ls, c)| {
+                let chunked = (ls.n_regs as usize + ls.inputs.len()) * LCHUNK;
+                chunked.max(c.as_ref().map_or(0, |c| c.strips.reg_elems))
+            })
             .max()
             .unwrap_or(0);
         let svals = prog
@@ -43,9 +79,25 @@ impl LaneScratch {
             .map(|ls| ls.scalars.len())
             .max()
             .unwrap_or(0);
+        let splats = prog
+            .lanes
+            .iter()
+            .zip(&codes)
+            .map(|(ls, c)| match c {
+                Some(_) => (
+                    vec![0.0; ls.scalars.len() * STRIP],
+                    Vec::with_capacity(ls.scalars.len()),
+                ),
+                None => (Vec::new(), Vec::new()),
+            })
+            .collect();
         LaneScratch {
-            regs: vec![0.0; regs * LCHUNK],
+            codes,
+            own: LaneWorker {
+                regs: vec![0.0; regs],
+            },
             svals: Vec::with_capacity(svals),
+            splats,
             #[cfg(not(target_arch = "wasm32"))]
             workers: Vec::new(),
         }
@@ -56,6 +108,7 @@ impl LaneScratch {
 /// lanes are divided between workers, each lane whole on one of them.
 #[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_lanes(
+    spec: usize,
     ls: &LaneSpec,
     env: &Env,
     slab_ptr: *mut f64,
@@ -69,8 +122,10 @@ pub(super) unsafe fn exec_lanes(
     #[cfg(target_arch = "wasm32")]
     let _ = ways;
     let LaneScratch {
-        regs,
+        codes,
+        own,
         svals,
+        splats,
         #[cfg(not(target_arch = "wasm32"))]
         workers,
     } = scratch;
@@ -79,9 +134,31 @@ pub(super) unsafe fn exec_lanes(
         svals.push(resolve_scalar(op, env, slab_ptr, slot_off, obs));
     }
     if ls.lanes == 1 && ls.inputs.is_empty() {
-        exec_block(ls, svals, regs, slab_ptr, slot_off, dy);
+        exec_block(ls, svals, &mut own.regs, slab_ptr, slot_off, dy);
         return;
     }
+    // The folds are the `f64` kernels; Float32 runs the micro-ops.
+    let code = codes[spec].as_ref().filter(|_| !crate::precision::is_f32());
+    let (splat, filled) = &mut splats[spec];
+    // Compared by bits: a scalar going from 0.0 to -0.0 must be refilled.
+    let same = filled.len() == svals.len()
+        && filled
+            .iter()
+            .zip(svals.iter())
+            .all(|(a, b)| a.to_bits() == b.to_bits());
+    if code.is_some() && !same {
+        filled.clear();
+        filled.extend_from_slice(svals);
+        for (strip, &v) in splat.chunks_exact_mut(STRIP).zip(svals.iter()) {
+            strip.fill(v);
+        }
+    }
+    let prog = Prog {
+        ls,
+        code,
+        svals,
+        splat,
+    };
     let src = Sources {
         state: env.state,
         params: env.params,
@@ -98,34 +175,54 @@ pub(super) unsafe fn exec_lanes(
         let ways = super::par::lane_ways(lanes, super::par::lane_cost(ls), ways);
         if ways > 1 {
             while workers.len() < ways {
-                workers.push(super::par::padded(regs.len()));
+                workers.push(LaneWorker {
+                    regs: super::par::padded(own.regs.len()),
+                });
             }
             let sh = SplitLanes {
-                ls,
+                prog: &prog,
                 src: &src,
-                svals,
                 out,
-                regs: workers.as_mut_ptr(),
+                workers: workers.as_mut_ptr(),
                 simd,
                 precision: crate::precision::active(),
             };
             super::pool::run(ways, &move |w| {
                 let sh = &sh;
-                let (lo, hi) = (lanes * w / ways, lanes * (w + 1) / ways);
+                let (lo, hi) = (cut(lanes, w, ways), cut(lanes, w + 1, ways));
                 if lo >= hi {
                     return;
                 }
                 // The caller's precision is thread-local; carry it over.
                 let _p = crate::precision::enter(sh.precision);
-                // SAFETY: share `w` runs once per dispatch, so each register
-                // file has one user; lanes write distinct `dy` positions.
-                let regs = unsafe { &mut *sh.regs.add(w) };
-                unsafe { run_lanes(sh.simd, sh.ls, sh.src, sh.svals, regs, sh.out, lo, hi) };
+                // SAFETY: share `w` runs once per dispatch, so each worker's
+                // buffers have one user; lanes write distinct `dy` positions.
+                let wk = unsafe { &mut *sh.workers.add(w) };
+                unsafe { run_lanes(sh.simd, sh.prog, sh.src, wk, sh.out, lo, hi) };
             });
             return;
         }
     }
-    unsafe { run_lanes(simd, ls, &src, svals, regs, out, 0, lanes) }
+    unsafe { run_lanes(simd, &prog, &src, own, out, 0, lanes) }
+}
+
+/// Where share `w` of `ways` starts: on the nearest multiple of [`STRIP`] lanes (so
+/// each share's folds run whole strips and two shares' unit-step `dy` runs
+/// seldom meet inside a cache line), the last share ending at `lanes`.
+#[cfg(not(target_arch = "wasm32"))]
+fn cut(lanes: usize, w: usize, ways: usize) -> usize {
+    if w >= ways {
+        return lanes;
+    }
+    ((lanes * w / ways + STRIP / 2) / STRIP * STRIP).min(lanes)
+}
+
+/// What every chunk of one lane program call reads.
+struct Prog<'a> {
+    ls: &'a LaneSpec,
+    code: Option<&'a LaneCode>,
+    svals: &'a [f64],
+    splat: &'a [f64],
 }
 
 /// The derivative a lane program scatters into.
@@ -138,17 +235,16 @@ struct Out {
 /// One split lane program, shared read-only by its workers.
 #[cfg(not(target_arch = "wasm32"))]
 struct SplitLanes<'a> {
-    ls: &'a LaneSpec,
+    prog: &'a Prog<'a>,
     src: &'a Sources<'a>,
-    svals: &'a [f64],
     out: Out,
-    regs: *mut Vec<f64>,
+    workers: *mut LaneWorker,
     simd: SimdLevel,
     precision: crate::precision::Precision,
 }
 
 // SAFETY: workers read the sources and the slab, and write only the `dy`
-// positions of their own lanes and their own register files.
+// positions of their own lanes and their own buffers.
 #[cfg(not(target_arch = "wasm32"))]
 unsafe impl Sync for SplitLanes<'_> {}
 
@@ -157,20 +253,19 @@ unsafe impl Sync for SplitLanes<'_> {}
 #[inline(always)]
 unsafe fn run_lanes(
     simd: SimdLevel,
-    ls: &LaneSpec,
+    prog: &Prog,
     src: &Sources,
-    svals: &[f64],
-    regs: &mut [f64],
+    wk: &mut LaneWorker,
     out: Out,
     lo: usize,
     hi: usize,
 ) {
     match simd {
-        SimdLevel::Generic => unsafe { exec_lanes_generic(ls, src, svals, regs, out, lo, hi) },
+        SimdLevel::Generic => unsafe { exec_lanes_generic(prog, src, wk, out, lo, hi) },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 => unsafe { exec_lanes_avx2(ls, src, svals, regs, out, lo, hi) },
+        SimdLevel::Avx2 => unsafe { exec_lanes_avx2(prog, src, wk, out, lo, hi) },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx512 => unsafe { exec_lanes_avx512(ls, src, svals, regs, out, lo, hi) },
+        SimdLevel::Avx512 => unsafe { exec_lanes_avx512(prog, src, wk, out, lo, hi) },
     }
 }
 
@@ -368,36 +463,7 @@ unsafe fn exec_lanes_chunks(
             reg(out as usize)
         };
         for (mi, op) in ls.micro.iter().enumerate() {
-            match op {
-                MicroOp::Bin { op, a, b, out } => {
-                    let (a, b) = (msrc(a), msrc(b));
-                    let dst = dst_of(mi, *out);
-                    macro_rules! chunk {
-                        ($f:expr) => {
-                            unsafe { fch2(dst, c, a, b, $f) }
-                        };
-                    }
-                    dispatch_bin_kernel!(op, chunk);
-                }
-                MicroOp::Un { op, a, out } => {
-                    let a = msrc(a);
-                    let dst = dst_of(mi, *out);
-                    macro_rules! chunk {
-                        ($f:expr) => {
-                            unsafe { fch1(dst, c, a, $f) }
-                        };
-                    }
-                    dispatch_un_kernel!(op, chunk);
-                }
-                MicroOp::Neg { a, out } => unsafe { fch1(dst_of(mi, *out), c, msrc(a), |x| -x) },
-                MicroOp::Select { cond, a, b, out } => unsafe {
-                    fch_sel(dst_of(mi, *out), c, msrc(cond), msrc(a), msrc(b))
-                },
-                MicroOp::Mov { a, out } => unsafe { fch1(dst_of(mi, *out), c, msrc(a), |x| x) },
-                MicroOp::Bin2 { .. } | MicroOp::Bin3 { .. } | MicroOp::Scan { .. } => {
-                    unreachable!("a lane program holds no superops or scans")
-                }
-            }
+            unsafe { micro_chunk(op, &msrc, dst_of(mi, micro_out(op)), c) };
         }
         for (k, w) in ls.writes.iter().enumerate() {
             if ls.direct.iter().any(|&(_, d)| d as usize == k) {
@@ -415,32 +481,150 @@ unsafe fn exec_lanes_chunks(
     }
 }
 
-#[inline(never)]
-unsafe fn exec_lanes_generic(
-    ls: &LaneSpec,
+/// One micro-op over a chunk of `c` lanes into `dst`.
+#[inline(always)]
+unsafe fn micro_chunk(op: &MicroOp, msrc: &impl Fn(&MRef) -> MSrc, dst: *mut f64, c: usize) {
+    match op {
+        MicroOp::Bin { op, a, b, .. } => {
+            let (a, b) = (msrc(a), msrc(b));
+            macro_rules! chunk {
+                ($f:expr) => {
+                    unsafe { fch2(dst, c, a, b, $f) }
+                };
+            }
+            dispatch_bin_kernel!(op, chunk);
+        }
+        MicroOp::Un { op, a, .. } => {
+            let a = msrc(a);
+            macro_rules! chunk {
+                ($f:expr) => {
+                    unsafe { fch1(dst, c, a, $f) }
+                };
+            }
+            dispatch_un_kernel!(op, chunk);
+        }
+        MicroOp::Neg { a, .. } => unsafe { fch1(dst, c, msrc(a), |x| -x) },
+        MicroOp::Select { cond, a, b, .. } => unsafe {
+            fch_sel(dst, c, msrc(cond), msrc(a), msrc(b))
+        },
+        MicroOp::Mov { a, .. } => unsafe { fch1(dst, c, msrc(a), |x| x) },
+        MicroOp::Bin2 { .. } | MicroOp::Bin3 { .. } | MicroOp::Scan { .. } => {
+            unreachable!("a lane program holds no superops or scans")
+        }
+    }
+}
+
+/// The strip loop of a folded lane program (see `lane_fold.rs` and the
+/// module docs) over lanes `[lo, hi)`. The last strip ends at `hi`,
+/// overlapping the one before it when the lanes are not a whole number of
+/// strips: a lane computed twice gets the same bits both times, and it is
+/// a lane of this call's own range. Fewer lanes than a strip run through
+/// the chunk loop.
+#[inline(always)]
+unsafe fn exec_folded_strips(
+    prog: &Prog,
+    code: &LaneCode,
     src: &Sources,
-    svals: &[f64],
-    regs: &mut [f64],
+    wk: &mut LaneWorker,
     dy: Out,
     lo: usize,
     hi: usize,
 ) {
-    unsafe { exec_lanes_chunks(ls, src, svals, regs, dy, lo, hi) }
+    let ls = prog.ls;
+    let len = hi - lo;
+    if len < STRIP {
+        unsafe { exec_lanes_chunks(ls, src, prog.svals, &mut wk.regs, dy, lo, hi) };
+        return;
+    }
+    let st = &code.strips;
+    // Every strip the loop reads or stores lies within lanes `[0, lanes)`
+    // of its run, and each run within its vector.
+    let lens = [src.state.len(), src.params.len(), 0, 0, dy.len];
+    for b in [B_STATE, B_PARAM, B_DY] {
+        assert!(st.ends[b] <= lens[b], "a lane run leaves its vector");
+    }
+    assert!(hi <= ls.lanes as usize && wk.regs.len() >= st.reg_elems);
+    let mut bases = [std::ptr::null_mut::<f64>(); N_BASES];
+    bases[B_STATE] = src.state.as_ptr().wrapping_add(lo) as *mut f64;
+    bases[B_PARAM] = src.params.as_ptr().wrapping_add(lo) as *mut f64;
+    bases[B_REG] = wk.regs.as_mut_ptr();
+    bases[B_SPLAT] = prog.splat.as_ptr() as *mut f64;
+    bases[B_DY] = dy.ptr.wrapping_add(lo);
+    let b = &bases;
+    let mut off = 0;
+    loop {
+        for &i in &st.gathered {
+            let dst = st.inputs[i as usize].ptr(b, off) as *mut f64;
+            unsafe { src.gather(&ls.inputs[i as usize], lo + off, STRIP, dst) };
+        }
+        let msrc = |m: &MRef| -> MSrc {
+            match m {
+                MRef::Reg(r) => MSrc::P(b[B_REG].wrapping_add(*r as usize * SSTRIDE)),
+                MRef::In(i) => MSrc::P(st.inputs[*i as usize].ptr(b, off)),
+                MRef::Scal(i) => MSrc::C(prog.svals[*i as usize]),
+            }
+        };
+        for so in &st.sops {
+            if so.kind == OTHER {
+                let LOp::Other(m) = &code.ops[so.n as usize] else {
+                    unreachable!("an OTHER entry is a micro-op")
+                };
+                unsafe { micro_chunk(m, &msrc, so.dst(b, off), STRIP) };
+            } else {
+                unsafe { strip_fold(so, &st.tptr, b, off, so.dst(b, off)) };
+            }
+        }
+        for (w, src) in ls.writes.iter().zip(&code.writes) {
+            let Some(src) = src else { continue };
+            let LaneDst::Dy(pos) = &w.dst else {
+                unreachable!("only a one-lane program writes a slot")
+            };
+            match msrc(src) {
+                MSrc::P(p) => scatter(dy, pos, lo + off, STRIP, |k| unsafe { *p.add(k) }),
+                MSrc::C(v) => scatter(dy, pos, lo + off, STRIP, |_| v),
+            }
+        }
+        if off + STRIP == len {
+            break;
+        }
+        off = (off + STRIP).min(len - STRIP);
+    }
+}
+
+#[inline(never)]
+unsafe fn exec_lanes_generic(
+    prog: &Prog,
+    src: &Sources,
+    wk: &mut LaneWorker,
+    dy: Out,
+    lo: usize,
+    hi: usize,
+) {
+    unsafe {
+        match prog.code {
+            Some(code) => exec_folded_strips(prog, code, src, wk, dy, lo, hi),
+            None => exec_lanes_chunks(prog.ls, src, prog.svals, &mut wk.regs, dy, lo, hi),
+        }
+    }
 }
 
 /// AVX2 clone (no `fma`: a contracted multiply-add would change bits).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn exec_lanes_avx2(
-    ls: &LaneSpec,
+    prog: &Prog,
     src: &Sources,
-    svals: &[f64],
-    regs: &mut [f64],
+    wk: &mut LaneWorker,
     dy: Out,
     lo: usize,
     hi: usize,
 ) {
-    unsafe { exec_lanes_chunks(ls, src, svals, regs, dy, lo, hi) }
+    unsafe {
+        match prog.code {
+            Some(code) => exec_folded_strips(prog, code, src, wk, dy, lo, hi),
+            None => exec_lanes_chunks(prog.ls, src, prog.svals, &mut wk.regs, dy, lo, hi),
+        }
+    }
 }
 
 /// AVX-512 clone (f+vl+dq+bw, all runtime-checked).
@@ -452,13 +636,17 @@ unsafe fn exec_lanes_avx2(
     enable = "avx512bw"
 )]
 unsafe fn exec_lanes_avx512(
-    ls: &LaneSpec,
+    prog: &Prog,
     src: &Sources,
-    svals: &[f64],
-    regs: &mut [f64],
+    wk: &mut LaneWorker,
     dy: Out,
     lo: usize,
     hi: usize,
 ) {
-    unsafe { exec_lanes_chunks(ls, src, svals, regs, dy, lo, hi) }
+    unsafe {
+        match prog.code {
+            Some(code) => exec_folded_strips(prog, code, src, wk, dy, lo, hi),
+            None => exec_lanes_chunks(prog.ls, src, prog.svals, &mut wk.regs, dy, lo, hi),
+        }
+    }
 }
