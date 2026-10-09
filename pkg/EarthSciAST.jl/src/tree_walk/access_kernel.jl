@@ -967,10 +967,27 @@ end
            s isa _InterpSearchsortedLaneSpec
 end
 
+# A value-number key (`_acc_vn_key`) with its hash, compared type first. The
+# keys are tuples of several types; in a `Dict{Any}` two keys whose hashes share
+# a slot are compared with `isequal` on whatever pair of types they have, a
+# method compiled on first use. Which pairs meet depends on the hash values, so
+# on the document's sizes. Here keys of different types are unequal without a
+# call (no key equals one of another type: the leading tag and the payload
+# types keep the kinds apart), and `isequal` runs only on full-hash matches of
+# one type.
+struct _VNKey
+    k::Any
+    h::UInt
+end
+_VNKey(k) = _VNKey(k, hash(k))
+Base.hash(x::_VNKey, h::UInt) = hash(x.h, h)
+Base.isequal(a::_VNKey, b::_VNKey) =
+    a.h == b.h && typeof(a.k) === typeof(b.k) && isequal(a.k, b.k)
+
 function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     _acc_has_reduce(spine) && return (spine, _ACC_NO_CSE)
     inv_only = _acc_has_areduce(spine)
-    key_to_vn = Dict{Any,Int}()
+    key_to_vn = Dict{_VNKey,Int}()
     counts = Int[]; is_op = Bool[]; is_inv = Bool[]; rep = _Node[]
     # Occurrence counting must stay PER PATH (a value occurring on ≥2 paths is
     # exactly what earns a CSE slot — collapsing to distinct-node visits would
@@ -1006,7 +1023,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     vn_by_pos = Vector{Int}(undef, P)
     for (p, n) in enumerate(order)    # postorder ⇒ children already numbered
         childvns = Int[vn_by_pos[pos_of[c]] for c in n.children]
-        key = _acc_vn_key(n, childvns, acc)
+        key = _VNKey(_acc_vn_key(n, childvns, acc))
         vn = get(key_to_vn, key, 0)
         if vn == 0
             vn = length(counts) + 1
