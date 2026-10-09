@@ -1464,10 +1464,8 @@ pub(super) struct IcScope {
 /// happens to share its name.
 fn collect_free_names(expr: &Expr, bound: &mut Vec<String>, out: &mut HashSet<String>) {
     match expr {
-        Expr::Variable(name) => {
-            if !bound.contains(name) {
-                out.insert(name.clone());
-            }
+        Expr::Variable(name) if !bound.contains(name) => {
+            out.insert(name.clone());
         }
         Expr::Operator(node) => {
             let mut own = HashSet::new();
