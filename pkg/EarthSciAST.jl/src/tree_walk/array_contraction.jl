@@ -432,7 +432,22 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
     # Output slots are globally unique — each was claimed in `covered` at build,
     # which throws on a second claim — so the cell axis chunks like the kernel
     # section's, and for the same reason: every ⊕-fold is inside one cell.
-    return _ArrayContraction(f, tabpack, _SecTCache(length(outs), true))
+    return _ArrayContraction(f, tabpack,
+                             _SecTCache(length(outs), true, _ac_work(length(outs), fold)))
+end
+
+# The work the threading verdict weighs: one unit per output cell plus one per
+# fold term, so a contraction whose cells each fold many terms (a dense
+# contraction, a TABLE fold's admitted pairs) is chunked at fewer cells than a
+# section whose cells are one expression each.
+function _ac_work(ncells::Int, fold::Union{Nothing,_ACFold})
+    fold === nothing && return ncells
+    _acfold_is_table(fold) && return ncells + (fold.seg[end] - 1)
+    terms = 1
+    for r in fold.ranges
+        terms = Base.Checked.checked_mul(terms, length(r))
+    end
+    return Base.Checked.checked_add(ncells, Base.Checked.checked_mul(ncells, terms))
 end
 
 # The fold around the term for cell `cv`: `acc = acc ⊕ term` innermost, with the

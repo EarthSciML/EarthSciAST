@@ -2742,6 +2742,9 @@ end
 # (globally shared out-slots — permanent, decided at build).
 # `ncells`/`disjoint` are build facts (`_CGBuilt`); `nchunks` is fixed
 # at the first threaded call, so the partition is identical call to call.
+# `work` is what the min-cells floor is held against: the cell count, unless
+# a cell does more than one cell's worth (a contraction's fold terms count
+# too, array_contraction.jl); the chunk count never exceeds `ncells`.
 # `job1`/`job2` hold the section's dispatch jobs (thread_dispatch.jl) for the
 # last two argument types it ran at, so a caller alternating between Float64
 # and dual-number calls (a solver and its Jacobian) reuses both.
@@ -2749,12 +2752,13 @@ mutable struct _SecTCache
     state::Int
     ncells::Int
     disjoint::Bool
+    work::Int
     nchunks::Int
     job1::Any
     job2::Any
 end
-_SecTCache(ncells::Int, disjoint::Bool) =
-    _SecTCache(0, ncells, disjoint, 1, nothing, nothing)
+_SecTCache(ncells::Int, disjoint::Bool, work::Int = ncells) =
+    _SecTCache(0, ncells, disjoint, work, 1, nothing, nothing)
 _sec_tcache(cg::_CGBuilt) = _SecTCache(cg.ncells, cg.outs_disjoint)
 _sec_tcache(::Nothing) = _SecTCache(0, false)
 
@@ -2764,7 +2768,7 @@ _sec_tcache(::Nothing) = _SecTCache(0, false)
 function _sec_prep_threads!(tc::_SecTCache)
     tc.state == 0 || return tc
     minc = _thread_min_cells()
-    nchunks = min(Threads.nthreads(), max(1, div(tc.ncells, max(minc, 1))))
+    nchunks = min(Threads.nthreads(), tc.ncells, max(1, div(tc.work, max(minc, 1))))
     if nchunks < 2
         tc.state = -1                 # too few cells to be worth a dispatch
         _tally_thread!(:cg_serial_small)
