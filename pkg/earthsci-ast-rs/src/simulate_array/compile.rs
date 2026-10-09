@@ -398,15 +398,23 @@ pub(crate) fn apply_flatten_rewrites(model: &mut Model) -> Result<(), CompileErr
 /// that phase, against the authored model's own declarations, so every route
 /// answers one document with one number.
 fn normalize_model_angle_arguments(model: &mut Model) {
-    let (env, _) = crate::units::build_unit_env(&model.variables);
     // A document that declares no angle at a scale other than 1 cannot be
-    // rewritten, so decide that from the DECLARATIONS and walk nothing.
-    if !env
+    // rewritten, so decide that from the DECLARATIONS (each distinct unit
+    // string once) and walk nothing.
+    let mut seen: HashSet<&str> = HashSet::new();
+    let declares_angle = model
+        .variables
         .values()
-        .any(|u| crate::units::angle_normalization_factor(u).is_some())
-    {
+        .filter_map(|v| v.units.as_deref())
+        .filter(|u| seen.insert(u))
+        .any(|u| {
+            crate::units::parse_unit(u)
+                .is_ok_and(|unit| crate::units::angle_normalization_factor(&unit).is_some())
+        });
+    if !declares_angle {
         return;
     }
+    let (env, _) = crate::units::build_unit_env(&model.variables);
     for eq in &mut model.equations {
         if let Some(next) = crate::units::normalize_angle_arguments(&eq.rhs, &env) {
             eq.rhs = next;

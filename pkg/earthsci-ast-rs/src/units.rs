@@ -1542,16 +1542,21 @@ pub fn build_unit_env(
 ) -> (HashMap<String, Unit>, Vec<UnitParseFailure>) {
     let mut env = HashMap::new();
     let mut failures = Vec::new();
+    // Many declarations share one unit string; each is parsed once.
+    let mut parsed: HashMap<&str, Option<Unit>> = HashMap::new();
     for (name, var) in variables {
         let Some(declared) = &var.units else {
             // No declared units — dimension unknown, not dimensionless.
             continue;
         };
-        match parse_unit(declared) {
-            Ok(unit) => {
-                env.insert(name.clone(), unit);
+        let unit = parsed
+            .entry(declared.as_str())
+            .or_insert_with(|| parse_unit(declared).ok());
+        match unit {
+            Some(unit) => {
+                env.insert(name.clone(), unit.clone());
             }
-            Err(_) => failures.push(UnitParseFailure {
+            None => failures.push(UnitParseFailure {
                 name: name.clone(),
                 units: declared.clone(),
             }),
