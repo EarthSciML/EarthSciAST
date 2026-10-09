@@ -188,6 +188,133 @@ end
 # With this tier off the equation takes the per-cell reference, which is what
 # the differential tests compare against.
 
+# The scan key of a body whose every cell has the same branch and whose key is
+# its state lanes' ghost pattern alone: no indexed array producer (so the branch
+# key is constant), every lane subscript structurally affine (so the lane-affine
+# key adds nothing), no boundary-policy const lane (so no fold class), and every
+# state lane on an affine slot map. Each state subscript is then an exact
+# integer affine function `c0 + Σ_d c[d]·loop[d]` of the cell, and the key is
+# computed from those coefficients instead of walking the subscripts.
+struct _FastKey
+    id::Int                                 # the branch key's number
+    lo::Vector{Vector{Int}}                 # per state lane, its subscripts' bounds
+    hi::Vector{Vector{Int}}
+    c0::Vector{Vector{Int}}                 # per state lane and subscript
+    c::Vector{Vector{Vector{Int}}}          # per state lane, subscript and loop dim
+    base::Vector{Int}                       # per state lane, its affine slot map
+    strides::Vector{Vector{Int}}
+    lane_affine_key_off::Bool               # `_lane_affine_key_disabled()` at build
+end
+
+# `(c0, c)` with `e == c0 + Σ_d c[d]·loop[d]` for every cell, by the same integer
+# arithmetic `_eval_const_int` does; `nothing` for anything but integer literals,
+# the loop names, `+`, `-`, `neg` and a `*` with at most one non-constant factor.
+function _affine_int_coeffs(e::ASTExpr, idx_names::Vector{String})
+    D = length(idx_names)
+    if e isa IntExpr
+        return ((e::IntExpr).value, zeros(Int, D))
+    elseif e isa NumExpr
+        v = (e::NumExpr).value
+        (isfinite(v) && isinteger(v) && abs(v) < 9.0e18) || return nothing
+        return (Int(v), zeros(Int, D))
+    elseif e isa VarExpr
+        d = findfirst(==((e::VarExpr).name), idx_names)
+        d === nothing && return nothing
+        c = zeros(Int, D); c[d] = 1
+        return (0, c)
+    end
+    e isa OpExpr || return nothing
+    o = e::OpExpr
+    _affine_idx_expr(o, idx_names) || return nothing
+    parts = Tuple{Int,Vector{Int}}[]
+    for a in o.args
+        r = _affine_int_coeffs(a, idx_names)
+        r === nothing && return nothing
+        push!(parts, r)
+    end
+    n = length(parts)
+    if o.op == "+" && n >= 1
+        c0 = parts[1][1]; c = copy(parts[1][2])
+        for j in 2:n
+            c0 += parts[j][1]; c .+= parts[j][2]
+        end
+        return (c0, c)
+    elseif (o.op == "-" || o.op == "neg") && n == 1
+        return (-parts[1][1], -parts[1][2])
+    elseif o.op == "-" && n == 2
+        return (parts[1][1] - parts[2][1], parts[1][2] .- parts[2][2])
+    elseif o.op == "*" && n >= 1
+        # At most one factor moves with the loop (`_affine_idx_expr`); the
+        # product of the constant ones scales it.
+        k = 1; var = nothing
+        for (c0, c) in parts
+            if any(!iszero, c)
+                var === nothing || return nothing
+                var = (c0, c)
+            else
+                k *= c0
+            end
+        end
+        var === nothing && return (k, zeros(Int, D))
+        return (k * var[1], k .* var[2])
+    end
+    return nothing
+end
+
+# The body's `_FastKey`, or `false`. `branch` is its one branch, `id` that
+# branch key's number.
+function _fast_key_model(sig, body, branch, id::Int, idx_names, idxset)
+    idx_names isa Vector{String} || return false
+    get(sig.bkey_sites, body, true) && return false
+    _tmpl, recipes, state_ks, _subcalls = branch
+    for rec in recipes
+        all(a -> _affine_idx_expr(a, idxset), rec.idx_args) || return false
+        rec.kind == LANE_CONST && rec.arr isa BoundedConstArray && return false
+    end
+    los = Vector{Int}[]; his = Vector{Int}[]; c0s = Vector{Int}[]
+    cs = Vector{Vector{Int}}[]; bases = Int[]; strs = Vector{Int}[]
+    for k in state_ks
+        rec = recipes[k]
+        aff = rec.affine
+        aff === nothing && return false
+        n = length(rec.idx_args)
+        (length(rec.lo) == n && length(rec.hi) == n && length(aff[2]) == n) || return false
+        c0 = Int[]; c = Vector{Int}[]
+        for a in rec.idx_args
+            r = _affine_int_coeffs(a, idx_names)
+            r === nothing && return false
+            push!(c0, r[1]); push!(c, r[2])
+        end
+        push!(los, rec.lo); push!(his, rec.hi); push!(c0s, c0); push!(cs, c)
+        push!(bases, aff[1]); push!(strs, aff[2])
+    end
+    return _FastKey(id, los, his, c0s, cs, bases, strs, _lane_affine_key_disabled())
+end
+
+# `_cell_ckey!`'s key from the closed form: the branch number, then per state
+# lane 1 for a ghost and 0 otherwise, as `_eval_recipe`'s slot (0 for a ghost,
+# else `base + Σ v·strides`) decides it.
+function _fast_ckey!(key::Vector{Int}, fk::_FastKey, loop::Vector{Int})
+    empty!(key)
+    push!(key, fk.id)
+    @inbounds for i in eachindex(fk.base)
+        lo = fk.lo[i]; hi = fk.hi[i]; c0 = fk.c0[i]; c = fk.c[i]; st = fk.strides[i]
+        ghost = false
+        slot = fk.base[i]
+        for m in eachindex(c0)
+            cm = c[m]
+            v = c0[m]
+            for d in eachindex(cm)
+                v += cm[d] * loop[d]
+            end
+            (v < lo[m] || v > hi[m]) && (ghost = true)
+            slot += v * st[m]
+        end
+        push!(key, (ghost || slot == 0) ? 1 : 0)
+    end
+    return key
+end
+
 # Reusable caches for the per-cell signature (branch template memo + branch-key
 # guard memo + a scratch IOBuffer), shared across the whole equation's sweep.
 mutable struct _AffineSig
@@ -210,10 +337,20 @@ mutable struct _AffineSig
     # `faq`), the only nodes `_branch_key!` prints. A body without one has the
     # empty branch key at every cell.
     bkey_sites::IdDict{Any,Bool}
+    # A number per branch key, the first entry of a scan key (`_cell_ckey!`).
+    bkey_ids::Dict{String,Int}
+    # Per branch key, every lane's compiled evaluator for the box processor
+    # (`_box_lane_evals!`); the equation's compiled output subscripts.
+    box_evals::Dict{String,Vector{Union{Nothing,_LaneEval}}}
+    lhs_ix::Union{Nothing,Vector{Union{Nothing,_IdxNode}}}
+    # The scan key in closed form (`_FastKey`), `false` where the body has none,
+    # `nothing` until the first keyed cell decides.
+    fast_key::Union{Nothing,Bool,_FastKey}
 end
 _AffineSig() = _AffineSig(Dict{String,_StencilBranch}(), IdDict{OpExpr,Bool}(), IOBuffer(), Int[],
                           Dict{String,Vector{Vector{Bool}}}(), Int[], Dict{String,Any}(),
-                          IdDict{OpExpr,Nothing}(), IdDict{Any,Bool}())
+                          IdDict{OpExpr,Nothing}(), IdDict{Any,Bool}(), Dict{String,Int}(),
+                          Dict{String,Vector{Union{Nothing,_LaneEval}}}(), nothing, nothing)
 
 # Whether `e` reaches an `index` of a `makearray` or `faq` producer, through the
 # same children `_branch_key!` descends into.
@@ -450,9 +587,9 @@ function _ckey_fill_slots!(state_vals::Vector{Int}, evs::Vector{Union{Nothing,E}
     @inbounds for i in eachindex(state_ks)
         le = evs[i]
         if le !== nothing
-            v, ok = _lane_eval(le, loop)
+            v, ok = _lane_eval_state(le, loop)
             if ok
-                state_vals[i] = Int(v)
+                state_vals[i] = v
                 continue
             end
         end
@@ -461,11 +598,16 @@ function _ckey_fill_slots!(state_vals::Vector{Int}, evs::Vector{Union{Nothing,E}
     return state_vals
 end
 
-function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
+function _cell_ckey!(key::Vector{Int}, sig::_AffineSig, loop, idx_names, body, ctx_proto,
                      var_map, param_sym_set, reg_funcs,
                      okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing,
                      ranges::Union{Nothing,Vector{UnitRange{Int}}}=nothing)
     _BENCH_ON[] && (_BENCH_PHASE_N[:cell_ckey] = get(_BENCH_PHASE_N, :cell_ckey, 0) + 1)
+    # The closed form gives the same key wherever it applies; the lane-affine
+    # key off keys slot deltas instead, which it does not model.
+    fk = sig.fast_key
+    fk isa _FastKey && (okey === nothing || !fk.lane_affine_key_off) &&
+        loop isa Vector{Int} && return _fast_ckey!(key, fk, loop)
     bkey, branch = _cell_bkey!(sig, loop, idx_names, body, ctx_proto,
                                var_map, param_sym_set, reg_funcs)
     env = ctx_proto.idx_env    # left populated with `loop` by _cell_bkey! (branch_key restores its temp binds)
@@ -476,17 +618,21 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
     resize!(state_vals, length(state_ks))
     _ckey_state_slots!(state_vals, sig, bkey, recipes, state_ks, loop, idx_names, env,
                        var_map, ctx_proto.const_arrays)
-    io = sig.bio                       # empty again after the take! above
-    print(io, bkey, '|')
+    # The key is a vector of integers. Its first entry numbers the branch key;
+    # everything after it has a length and a layout fixed by the branch (its
+    # lanes, their subscripts, its policy-bearing const lanes), so two cells'
+    # keys are equal exactly when the branch and every entry agree.
+    empty!(key)
+    push!(key, get!(sig.bkey_ids, bkey, length(sig.bkey_ids) + 1))
     if okey === nothing
         @inbounds for v in state_vals
-            print(io, v == 0 ? '1' : '0')
+            push!(key, v == 0 ? 1 : 0)
         end
     elseif _lane_affine_key_disabled()
         base, strides = okey
         oln = _box_oln(base, strides, loop, length(idx_names))
         @inbounds for v in state_vals
-            v == 0 ? print(io, "G,") : print(io, v - oln, ',')
+            v == 0 ? (push!(key, 0); push!(key, 0)) : (push!(key, 1); push!(key, v - oln))
         end
     else
         # LANE-AFFINE key (see `_lane_nonaffine_args!`): the ghost pattern, then
@@ -495,9 +641,8 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
         # cross-shape gather (lower-rank geometry, staggered face, surface
         # field) stops manufacturing a cut at every cell.
         @inbounds for v in state_vals
-            print(io, v == 0 ? '1' : '0')
+            push!(key, v == 0 ? 1 : 0)
         end
-        print(io, '|')
         ref = _lane_nonaffine_args!(sig, bkey, recipes, ctx_proto.idxset)
         D = length(idx_names)
         ca = ctx_proto.const_arrays
@@ -517,7 +662,6 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
                 # can poison it. `loop − e_d` may leave the range; a subscript is
                 # a total integer function of the loop, so evaluating there is
                 # always safe (unlike a slot, which can be a ghost).
-                print(io, k, ':')
                 for d in 1:D
                     @inbounds for dd in 1:D; back[dd] = loop[dd]; end
                     # CLAMPED to the dim's own range. A subscript is NOT a total
@@ -531,50 +675,52 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
                     back[d] = ranges === nothing ? loop[d] - 1 :
                               max(first(ranges[d]), loop[d] - 1)
                     vb = _eval_const_int(a, _set_env!(env, idx_names, back), ca)
-                    print(io, v - vb, ',')
+                    push!(key, v - vb)
                 end
                 _set_env!(env, idx_names, loop)    # restore for the next lane
-                print(io, ';')
             end
         end
     end
-    _const_fold_key!(io, recipes, env, ctx_proto.const_arrays)
-    return bkey, String(take!(io)), branch
+    _const_fold_key!(key, recipes, env, ctx_proto.const_arrays)
+    fk === nothing && (okey === nothing || !_lane_affine_key_disabled()) &&
+        (sig.fast_key = _fast_key_model(sig, body, branch, key[1], idx_names,
+                                        ctx_proto.idxset))
+    return key
 end
 
 # Append each policy-bearing const lane's per-dim boundary-fold class to the
-# signature: '.' in-range, 'l'/'h' clamp-low/high, 'w<k>' the periodic wrap
-# count (`fld(raw-1, n)` — the multiple of n the fold subtracts, so two cells
-# share a class iff the resolved index is the SAME affine function of the raw
-# one), 'E' an out-of-range index on an :error dim (the derive step then throws
-# the exact per-cell `E_TREEWALK_CONSTARRAY_OOB`). Plain const arrays (no
-# declared policy) contribute nothing: in-range indices have one class, and an
-# out-of-range one throws identically on every path.
-function _const_fold_key!(io::IOBuffer, recipes::Vector{_LaneRecipe}, env,
+# key, as two integers: (0, 0) in-range, (1, 0) / (2, 0) clamp-low/high,
+# (3, k) the periodic wrap count k (`fld(raw-1, n)` — the multiple of n the fold
+# subtracts, so two cells share a class iff the resolved index is the SAME
+# affine function of the raw one), (4, 0) an out-of-range index on an :error
+# dim (the derive step then throws the exact per-cell
+# `E_TREEWALK_CONSTARRAY_OOB`). Plain const arrays (no declared policy)
+# contribute nothing: in-range indices have one class, and an out-of-range one
+# throws identically on every path.
+function _const_fold_key!(key::Vector{Int}, recipes::Vector{_LaneRecipe}, env,
                           const_arrays)
     for rec in recipes
         rec.kind == LANE_CONST || continue
         arr = rec.arr
         arr isa BoundedConstArray || continue
-        print(io, '|')
         for d in 1:length(rec.idx_args)
             v = _eval_const_int(rec.idx_args[d], env, const_arrays)
             n = size(arr, d)
             if 1 <= v <= n
-                print(io, '.')
+                push!(key, 0); push!(key, 0)
             else
                 pol = _const_dim_boundary(arr, d)
                 if pol === :clamp
-                    print(io, v < 1 ? 'l' : 'h')
+                    push!(key, v < 1 ? 1 : 2); push!(key, 0)
                 elseif pol === :periodic
-                    print(io, 'w', fld(v - 1, n))
+                    push!(key, 3); push!(key, fld(v - 1, n))
                 else
-                    print(io, 'E')
+                    push!(key, 4); push!(key, 0)
                 end
             end
         end
     end
-    return io
+    return key
 end
 
 # Probe values for a range: low / mid / high (deduplicated).
@@ -708,9 +854,11 @@ function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
     probesets = isempty(otherdims) ? [()] :
         collect(Iterators.product((_probe_values(ranges[dd]) for dd in otherdims)...))
     loop = Vector{Int}(undef, D)
-    ck(iv) = (loop[d] = iv;
-              (_cell_ckey!(sig, loop, idx_names, body, ctx_proto,
-                           var_map, param_sym_set, reg_funcs, okey, ranges))[2])
+    # Two key buffers, alternated: `ck` fills the one `prev` does not hold.
+    kb1 = Int[]; kb2 = Int[]
+    ck(iv, prev) = (loop[d] = iv;
+                    _cell_ckey!(prev === kb1 ? kb2 : kb1, sig, loop, idx_names, body,
+                                ctx_proto, var_map, param_sym_set, reg_funcs, okey, ranges))
     # Region boundaries in this dim, kept only where they open a real segment
     # (lo < C ≤ hi). Each is confirmed below by comparing C-1 to C.
     cand_d = sort!(Int[c for c in region_cands[d] if lo < c <= hi])
@@ -728,7 +876,7 @@ function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
         # Scan up from the low end: a change at `iv` opens a segment there.
         prev = nothing; stable = 0; iv = lo
         while iv <= mid
-            cur = ck(iv)
+            cur = ck(iv, prev)
             if prev !== nothing
                 if cur != prev
                     push!(starts, iv); stable = 0
@@ -741,7 +889,7 @@ function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
         # segment at `iv+1`.
         prev = nothing; stable = 0; iv = hi
         while iv >= mid && !overcap()
-            cur = ck(iv)
+            cur = ck(iv, prev)
             if prev !== nothing
                 if cur != prev
                     push!(starts, iv + 1); stable = 0
@@ -753,7 +901,7 @@ function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
         # Mid-domain region boundaries the edge scans cannot reach: confirm each
         # candidate is a genuine transition (C-1 vs C) before opening a segment.
         for C in cand_d
-            ck(C - 1) != ck(C) && push!(starts, C)
+            (kc = ck(C - 1, nothing); ck(C, kc) != kc) && push!(starts, C)
         end
         # A Δ-keyed scan past the cap is abandoned early — the caller redoes the
         # dim with the base key, so finishing the sweep would be wasted work.
@@ -1023,13 +1171,18 @@ end
 # a cell or a box, so the box processor passes the per-branch classification
 # `_lane_nonaffine_args!` already memoizes; the default derives it for a direct
 # caller.
+#
+# `le` is the lane's compiled evaluator (`_lane_evaluator`) or `nothing`; a STATE
+# lane is evaluated through it wherever it answers, which is the same slot
+# `_eval_recipe` returns there.
 function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                            oln_rep, base, strides, D, var_map, const_arrays,
                            flat_cache, box,
                            structural::Bool =
-                               all(a -> _affine_idx_expr(a, idx_names), rec.idx_args))
+                               all(a -> _affine_idx_expr(a, idx_names), rec.idx_args);
+                           le::Union{Nothing,_LaneEval}=nothing)
     env = Dict{String,Int}()
-    ev(loop) = _eval_recipe(rec, _set_env!(env, idx_names, loop), var_map, const_arrays)
+    ev(loop) = _ev_lane(le, rec, loop, env, idx_names, var_map, const_arrays)
     if rec.kind == LANE_STATE
         slot_rep = ev(rep)
         if slot_rep == 0                              # ghost → literal 0.0
@@ -1039,7 +1192,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                                                   var_map, const_arrays)
             end
             _ghost_box(rec, idx_names, corners, structural, box, D, ev,
-                       const_arrays) ||
+                       const_arrays, le) ||
                 return _materialize_state_tbl(rec, idx_names, box, D,
                                               var_map, const_arrays)
             return _LitRepl(0.0)
@@ -1236,6 +1389,28 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
     end
 end
 
+# One lane's `_eval_recipe` at `loop`, through its compiled evaluator `le` where
+# that answers (a STATE lane at a `Vector{Int}` cell).
+@inline function _ev_lane(le, rec::_LaneRecipe, loop, env, idx_names, var_map,
+                          const_arrays)
+    if le !== nothing && rec.kind == LANE_STATE && loop isa Vector{Int}
+        v, ok = _lane_eval_state(le, loop)
+        ok && return v
+    end
+    return _eval_recipe(rec, _set_env!(env, idx_names, loop), var_map, const_arrays)
+end
+
+# `_eval_const_int` of the lane's `d`-th subscript at `loop`, through the
+# compiled subscript where it answers.
+@inline function _ev_subscript(le, rec::_LaneRecipe, d::Int, loop, env, idx_names,
+                               const_arrays)
+    if le !== nothing && loop isa Vector{Int} && d <= length(le.args)
+        v, ok = _ix_eval(le.args[d], loop)
+        ok && return v
+    end
+    return _eval_const_int(rec.idx_args[d], _set_env!(env, idx_names, loop), const_arrays)
+end
+
 # Does `pred(loop)` hold at EVERY cell of the box? The exact counterpart of a
 # corner check, for a lane whose subscripts are not structurally affine
 # (`_affine_idx_expr`): such a subscript can be arbitrary data (an
@@ -1257,14 +1432,13 @@ end
 # its lower bound at every corner, or above its upper bound at every corner.
 # Otherwise (and always for a non-affine subscript) every cell is checked.
 function _ghost_box(rec::_LaneRecipe, idx_names, corners, structural, box, D,
-                    ev, const_arrays)
+                    ev, const_arrays, le::Union{Nothing,_LaneEval}=nothing)
     if structural
         env = Dict{String,Int}()
         for d in eachindex(rec.idx_args)
             below = above = true
             for cn in corners
-                v = _eval_const_int(rec.idx_args[d], _set_env!(env, idx_names, cn),
-                                    const_arrays)
+                v = _ev_subscript(le, rec, d, cn, env, idx_names, const_arrays)
                 below &= v < rec.lo[d]
                 above &= v > rec.hi[d]
             end
@@ -1274,11 +1448,19 @@ function _ghost_box(rec::_LaneRecipe, idx_names, corners, structural, box, D,
     return _holds_on_box(l -> ev(l) == 0, box, D)
 end
 
-# All 2^D corners of a box, as loop tuples.
+# All 2^D corners of a box, as loop vectors, the first dim varying fastest (the
+# order of `Iterators.product`), repeats included where a dim is one cell wide.
 function _box_corners(box)
     D = length(box)
-    Vector{Int}[collect(Int, tup) for tup in
-        Iterators.product(((first(box[d]), last(box[d])) for d in 1:D)...)]
+    out = Vector{Vector{Int}}(undef, 1 << D)
+    for c in 0:(1 << D) - 1
+        cn = Vector{Int}(undef, D)
+        @inbounds for d in 1:D
+            cn[d] = (c >> (d - 1)) & 1 == 0 ? first(box[d]) : last(box[d])
+        end
+        out[c + 1] = cn
+    end
+    return out
 end
 
 # A contraction the affine tier compiles as a loop rather than an unroll: its
@@ -1316,9 +1498,10 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
 
     # verify the output slot map on this box against var_map (catches a bad omap)
     denv = Dict{String,Int}()
+    lhs_ix = _lhs_ix_compile(sig, lhs_idx_args, idx_names, const_arrays)
     for cn in corners
         _box_oln(base, strides, cn, D) ==
-            _oln_via_varmap(lhs_var, lhs_idx_args, _set_env!(denv, idx_names, cn), var_map) ||
+            _oln_via_ix(lhs_ix, lhs_var, lhs_idx_args, cn, denv, idx_names, var_map) ||
             throw(_StencilFallback("box output slot ≠ var_map"))
     end
     oln_rep = _box_oln(base, strides, rep, D)
@@ -1328,12 +1511,13 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
     # than a sample, so `_derive_lane_repl` re-verifies at every cell only where
     # it must. Classified once per branch, not once per box.
     nonaff = _lane_nonaffine_args!(sig, bkey, recipes, ctx_proto.idxset)
+    evs = _box_lane_evals!(sig, bkey, recipes, idx_names, var_map, const_arrays)
     lane_repl = Vector{_LaneRepl}(undef, length(recipes))
     for k in eachindex(recipes)
         lane_repl[k] = @_bench :lane_repl _derive_lane_repl(recipes[k], idx_names, rep, corners, thin,
                                          oln_rep, base, strides, D, var_map,
                                          const_arrays, flat_cache, box,
-                                         !any(nonaff[k]))
+                                         !any(nonaff[k]); le=evs[k])
     end
 
     spine, acc, cse, subs = @_bench_hot :spine_lower get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
@@ -1355,6 +1539,52 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
     cs = _CellSet(Int[strides[d] for d in 1:nout],
                   UnitRange{Int}[box[d] for d in 1:nout], base, Int[], slab)
     push!(kernels, _AccKernel(cs, spine, acc, _FixedBound(0), 0.0, cse, subs))
+end
+
+# Every lane recipe's compiled evaluator (`nothing` where it has none), per
+# branch key: what `_derive_lane_repl` evaluates a state lane through.
+function _box_lane_evals!(sig::_AffineSig, bkey::String, recipes, idx_names, var_map,
+                          const_arrays)
+    return get!(sig.box_evals, bkey) do
+        compiled = idx_names isa Vector{String}
+        Union{Nothing,_LaneEval}[
+            compiled && rec.kind == LANE_STATE ?
+                _lane_evaluator(rec, idx_names, var_map, const_arrays) : nothing
+            for rec in recipes]
+    end::Vector{Union{Nothing,_LaneEval}}
+end
+
+# The output subscripts compiled once per equation (`nothing` for one that has
+# no compiled form), for `_oln_via_ix`.
+function _lhs_ix_compile(sig::_AffineSig, lhs_idx_args, idx_names, const_arrays)
+    sig.lhs_ix === nothing || return sig.lhs_ix
+    ix = Union{Nothing,_IdxNode}[idx_names isa Vector{String} ?
+                                     _ix_compile(a, idx_names, const_arrays) : nothing
+                                 for a in lhs_idx_args]
+    sig.lhs_ix = ix
+    return ix
+end
+
+# `_oln_via_varmap` at cell `loop`: the subscripts through their compiled form
+# and the slot by the layout's arithmetic where both answer, the string lookup
+# (and its error) otherwise.
+function _oln_via_ix(lhs_ix, lhs_var, lhs_idx_args, loop, env, idx_names, var_map)
+    if loop isa Vector{Int}
+        du = Vector{Int}(undef, length(lhs_ix))
+        ok = true
+        @inbounds for m in eachindex(lhs_ix)
+            x = lhs_ix[m]
+            x === nothing && (ok = false; break)
+            v, okm = _ix_eval(x, loop)
+            okm || (ok = false; break)
+            du[m] = v
+        end
+        if ok
+            slot = _vm_slot(var_map, lhs_var, du)
+            slot == 0 || return slot
+        end
+    end
+    return _oln_via_varmap(lhs_var, lhs_idx_args, _set_env!(env, idx_names, loop), var_map)
 end
 
 # Mark every output slot a box owns (O(box cells) bit-ops — the sole remaining
