@@ -530,7 +530,7 @@ fn first_event_in_json(value: &serde_json::Value) -> Option<(&'static str, Optio
 pub fn first_implicit_equation(
     equations: &[crate::types::Equation],
 ) -> Option<&crate::types::Equation> {
-    use crate::classification::{LhsForm, lhs_form};
+    use crate::classification::{LhsFormRef, lhs_form_ref};
     use crate::types::Expr;
     equations.iter().find(|eq| {
         let structural = matches!(
@@ -538,7 +538,7 @@ pub fn first_implicit_equation(
             Expr::Operator(n) if matches!(n.op.as_str(), "ic" | "grad" | "div" | "laplacian")
                 || (n.op == "D" && n.wrt.as_deref().is_some_and(|w| w != "t"))
         );
-        !structural && matches!(lhs_form(&eq.lhs), LhsForm::Expression)
+        !structural && matches!(lhs_form_ref(&eq.lhs), LhsFormRef::Expression)
     })
 }
 
@@ -559,26 +559,32 @@ pub fn first_implicit_equation(
 pub fn first_doubly_defined_unknown(
     equations: &[crate::types::Equation],
 ) -> Option<(String, &crate::types::Equation, &crate::types::Equation)> {
-    use crate::classification::{LhsForm, lhs_form};
+    use crate::classification::{LhsFormRef, lhs_form_ref};
     use crate::types::Expr;
     use std::collections::HashMap;
 
-    let mut differential: HashMap<String, &crate::types::Equation> = HashMap::new();
     let mut bare: HashMap<&str, &crate::types::Equation> = HashMap::new();
     for eq in equations {
-        if let LhsForm::Derivative(name) = lhs_form(&eq.lhs) {
-            differential.entry(name).or_insert(eq);
-        } else if let Expr::Variable(name) = &eq.lhs {
+        if let Expr::Variable(name) = &eq.lhs {
             bare.entry(name.as_str()).or_insert(eq);
         }
     }
+    if bare.is_empty() {
+        return None;
+    }
+    let mut differential: HashMap<&str, &crate::types::Equation> = HashMap::new();
+    for eq in equations {
+        if let LhsFormRef::Derivative(name) = lhs_form_ref(&eq.lhs) {
+            differential.entry(name).or_insert(eq);
+        }
+    }
     equations.iter().find_map(|eq| {
-        let LhsForm::Derivative(name) = lhs_form(&eq.lhs) else {
+        let LhsFormRef::Derivative(name) = lhs_form_ref(&eq.lhs) else {
             return None;
         };
-        let diff = *differential.get(&name)?;
-        let alg = *bare.get(name.as_str())?;
-        Some((name, diff, alg))
+        let diff = *differential.get(name)?;
+        let alg = *bare.get(name)?;
+        Some((name.to_string(), diff, alg))
     })
 }
 

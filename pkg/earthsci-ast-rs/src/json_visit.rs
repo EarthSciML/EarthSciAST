@@ -50,6 +50,19 @@ impl fmt::Display for JsonPath<'_> {
 /// `f` receives each value together with its [`JsonPath`] from `root` (`""`
 /// for the root itself). Callers that don't need the path just ignore it; it
 /// is formatted only by a caller that displays it.
+/// `map.get(key)` for the small objects an expression tree is made of: for a
+/// handful of entries, comparing the keys in order is cheaper than hashing the
+/// one looked up.
+pub(crate) fn small_get<'a>(
+    map: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Option<&'a Value> {
+    if map.len() > 8 {
+        return map.get(key);
+    }
+    map.iter().find_map(|(k, v)| (k == key).then_some(v))
+}
+
 pub(crate) fn visit_values(root: &Value, f: &mut impl FnMut(&JsonPath<'_>, &Value)) {
     fn go(v: &Value, at: &JsonPath<'_>, f: &mut impl FnMut(&JsonPath<'_>, &Value)) {
         f(at, v);

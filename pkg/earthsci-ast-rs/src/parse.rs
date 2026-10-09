@@ -112,8 +112,7 @@ pub fn load_document_with_options(
     load_value(document.clone(), options)
 }
 
-/// [`load_document_with_options`] on a document the caller gives up, so the
-/// loader works on it in place rather than on a copy.
+/// [`load_document_with_options`], consuming the document.
 pub(crate) fn load_document_owned(
     document: Value,
     options: &LoadOptions,
@@ -822,7 +821,7 @@ pub(crate) fn reject_reserved_index_symbols(
             return;
         };
         // An Expression NODE: the only place these two fields carry meaning.
-        let Some(op) = obj.get("op").and_then(Value::as_str) else {
+        let Some(op) = crate::json_visit::small_get(obj, "op").and_then(Value::as_str) else {
             return;
         };
         let mut seen: Vec<&str> = Vec::new();
@@ -832,7 +831,8 @@ pub(crate) fn reject_reserved_index_symbols(
                  but '{sym}' is {role}"
             ));
         };
-        if let Some(ranges) = obj.get("ranges").and_then(Value::as_object) {
+        if let Some(ranges) = crate::json_visit::small_get(obj, "ranges").and_then(Value::as_object)
+        {
             for key in ranges.keys() {
                 if let Some(role) = reserved(key) {
                     seen.push(key);
@@ -840,7 +840,9 @@ pub(crate) fn reject_reserved_index_symbols(
                 }
             }
         }
-        if let Some(output_idx) = obj.get("output_idx").and_then(Value::as_array) {
+        if let Some(output_idx) =
+            crate::json_visit::small_get(obj, "output_idx").and_then(Value::as_array)
+        {
             for entry in output_idx.iter().filter_map(Value::as_str) {
                 if let Some(role) = reserved(entry)
                     && !seen.contains(&entry)
@@ -1805,7 +1807,7 @@ fn scan_document_ops(
     use crate::json_visit::JsonPath;
     match value {
         serde_json::Value::Object(map) => {
-            match map.get("op").and_then(|v| v.as_str()) {
+            match crate::json_visit::small_get(map, "op").and_then(|v| v.as_str()) {
                 Some("arrayop") => {
                     scan.removed = Some(at.to_string());
                     return;

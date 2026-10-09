@@ -284,7 +284,9 @@ fn cse_run(
     run: std::ops::Range<usize>,
 ) -> Option<Vec<(Instr, usize)>> {
     let mut rename: FxHashMap<SlotId, SlotId> = FxHashMap::default();
-    let mut seen: FxHashMap<[u64; 7], SlotId> = FxHashMap::default();
+    // Sized for the run up front: growing a map this size rehashes every key.
+    let mut seen: FxHashMap<[u64; 7], SlotId> =
+        FxHashMap::with_capacity_and_hasher(run.len(), Default::default());
     let mut body: Vec<(Instr, usize)> = Vec::with_capacity(run.len());
     let ren = |o: &mut Operand, rename: &FxHashMap<SlotId, SlotId>| {
         if let Operand::Slot(s) = o

@@ -249,7 +249,7 @@ fn lower_mounted_enum_ops(source: &Value, node: &mut Value) -> Result<(), EnumLo
 fn find_enum_paths(view: &Value, hits: &mut Vec<String>) {
     crate::json_visit::visit_values(view, &mut |path, v| {
         if let Value::Object(obj) = v
-            && obj.get("op").and_then(|w| w.as_str()) == Some(ENUM_OP)
+            && crate::json_visit::small_get(obj, "op").and_then(|w| w.as_str()) == Some(ENUM_OP)
         {
             hits.push(path.to_string());
         }
