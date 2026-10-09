@@ -1183,7 +1183,7 @@ pub(crate) fn lhs_name_errors(
         .map(|m| m.keys().cloned().collect())
         .unwrap_or_default();
     scope.insert(independent_variable(esm_file));
-    let model_json = serde_json::to_value(model).unwrap_or(serde_json::Value::Null);
+    let model_json = lhs_view(model);
     lhs_name_errors_in(
         esm_file,
         &format!("/models/{model_name}"),
@@ -1192,6 +1192,45 @@ pub(crate) fn lhs_name_errors(
         &mut out,
     );
     out
+}
+
+/// `model` as JSON, as much of it as [`lhs_name_errors_in`] reads: the
+/// variables, the subsystems and every equation's left-hand side in full, but
+/// of a right-hand side only its `op` and `output_idx`. A right-hand side's
+/// body can carry a model's inline data, which the check never looks at.
+fn lhs_view(model: &crate::Model) -> serde_json::Value {
+    let rhs_head = |rhs: &crate::Expr| match rhs {
+        crate::Expr::Operator(node) => serde_json::to_value(crate::ExpressionNode {
+            op: node.op.clone(),
+            output_idx: node.output_idx.clone(),
+            ..Default::default()
+        })
+        .unwrap_or(serde_json::Value::Null),
+        _ => serde_json::Value::Null,
+    };
+    let equations = model
+        .equations
+        .iter()
+        .map(|eq| {
+            serde_json::json!({
+                "lhs": serde_json::to_value(&eq.lhs).unwrap_or(serde_json::Value::Null),
+                "rhs": rhs_head(&eq.rhs),
+            })
+        })
+        .collect();
+    let mut m = serde_json::Map::new();
+    m.insert(
+        "variables".into(),
+        serde_json::to_value(&model.variables).unwrap_or(serde_json::Value::Null),
+    );
+    m.insert("equations".into(), serde_json::Value::Array(equations));
+    if let Some(subs) = &model.subsystems {
+        m.insert(
+            "subsystems".into(),
+            serde_json::to_value(subs).unwrap_or(serde_json::Value::Null),
+        );
+    }
+    serde_json::Value::Object(m)
 }
 
 /// The `equation_defines_parameter` findings of every model in `esm_file`,
