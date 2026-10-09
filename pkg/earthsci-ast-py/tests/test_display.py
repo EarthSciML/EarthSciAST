@@ -118,6 +118,10 @@ class TestDisplayFixtures:
             input_expr = case.get("input")
             expected_unicode = self._get_expected(case, "unicode")
             expected_latex = self._get_expected(case, "latex")
+            expected_ascii = self._get_expected(case, "ascii")
+
+            if input_expr and expected_ascii:
+                assert to_ascii(input_expr) == expected_ascii
 
             if input_expr and expected_unicode:
                 result_unicode = to_unicode(input_expr)
@@ -205,6 +209,29 @@ class TestDisplayFixtures:
                     f"ascii mismatch for {case['name']}: "
                     f"got {result_ascii!r}, expected {case['ascii']!r}"
                 )
+
+    def test_number_formatting(self, fixtures_dir):
+        """Numbers byte-match tests/display/number_formatting.json in all three
+        formats — including the contract's "precision is never lost" rule."""
+        with open(fixtures_dir / "number_formatting.json") as f:
+            groups = json.load(f)
+
+        n = 0
+        for group in groups:
+            for case in group["test_cases"]:
+                for fmt, render in (
+                    ("unicode", to_unicode),
+                    ("latex", to_latex),
+                    ("ascii", to_ascii),
+                ):
+                    if fmt not in case:
+                        continue
+                    n += 1
+                    got = render(case["input"])
+                    assert got == case[fmt], (
+                        f"{fmt} mismatch for {case['input']!r}: got {got!r}, expected {case[fmt]!r}"
+                    )
+        assert n > 0
 
     def test_expression_precedence_display(self, fixtures_dir):
         """Test expression precedence in display formatting."""
@@ -377,3 +404,46 @@ class TestDisplayErrorHandling:
 
         latex_result = to_latex(expr)
         assert latex_result is not None
+
+
+def _op(op, *args):
+    return {"op": op, "args": list(args)}
+
+
+@pytest.mark.parametrize(
+    "expr, expected",
+    [
+        # a + (-(b + c)) keeps the parentheses: `a - b + c` would mean (a - b) + c.
+        (_op("+", "a", _op("-", _op("+", "b", "c"))), "a - (b + c)"),
+        (_op("+", "a", _op("-", "b")), "a - b"),
+        # An n-ary sum is not simplified term by term (matches the other bindings).
+        (_op("+", "a", "b", _op("-", "c")), "a + b + (-c)"),
+    ],
+)
+def test_ascii_negated_addend(expr, expected):
+    assert to_ascii(expr) == expected
+
+
+def test_format_number_accepts_numpy_scalars():
+    np = pytest.importorskip("numpy")
+    from earthsci_ast.display import _format_number
+
+    assert _format_number(np.float64(1e-5), "ascii") == "1.0e-5"
+    assert _format_number(np.int64(123456), "ascii") == "1.23456e5"
+    assert _format_number(np.int64(5), "ascii") == "5"
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("nu", "ν"),
+        ("theta", "θ"),
+        ("beta_x", "β_x"),
+        ("pressure_eta", "pressure_η"),
+        # A Greek name glued to a preceding letter is part of a word.
+        ("annual", "annual"),
+        ("menu", "menu"),
+    ],
+)
+def test_unicode_greek_name_needs_a_word_start(name, expected):
+    assert to_unicode(name) == expected

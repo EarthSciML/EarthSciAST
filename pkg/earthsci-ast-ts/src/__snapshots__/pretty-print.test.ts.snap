@@ -571,7 +571,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
     "unicode": "b − c + d",
   },
   {
-    "ascii": "a + b - c",
+    "ascii": "a + (b - c)",
     "input": {
       "args": [
         "a",
@@ -585,9 +585,9 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       ],
       "op": "+",
     },
-    "latex": "a + b - c",
+    "latex": "a + (b - c)",
     "mathml": "<mrow><mi>a</mi><mo>+</mo><mrow><mi>b</mi><mo>-</mo><mi>c</mi></mrow></mrow>",
-    "unicode": "a + b − c",
+    "unicode": "a + (b − c)",
   },
   {
     "ascii": "b * c + d",
@@ -989,7 +989,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
     "unicode": "b/c·d",
   },
   {
-    "ascii": "a * b / c",
+    "ascii": "a * (b / c)",
     "input": {
       "args": [
         "a",
@@ -1005,7 +1005,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
     },
     "latex": "a \\cdot \\frac{b}{c}",
     "mathml": "<mrow><mi>a</mi><mo>&#x22C5;</mo><mfrac><mi>b</mi><mi>c</mi></mfrac></mrow>",
-    "unicode": "a·b/c",
+    "unicode": "a·(b/c)",
   },
   {
     "ascii": "b^c * d",
@@ -1539,6 +1539,121 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
     "latex": "\\mathrm{argmin}_{g} (a[g]) \\text{ where } \\{g \\in gens\\} id=cheapest",
     "mathml": "<mtext>argmin[g] (a[g]) where {g∈gens} id=cheapest</mtext>",
     "unicode": "argmin[g] (a[g]) where {g∈gens} id=cheapest",
+  },
+  {
+    "ascii": "(a <= b) * (c < d)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "<=",
+        },
+        {
+          "args": [
+            "c",
+            "d",
+          ],
+          "op": "<",
+        },
+      ],
+      "op": "*",
+    },
+    "latex": "(a \\leq b) \\cdot (c < d)",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>&#x2264;</mo><mi>b</mi></mrow><mo>&#x22C5;</mo><mrow><mi>c</mi><mo>&lt;</mo><mi>d</mi></mrow></mrow>",
+    "unicode": "(a ≤ b)·(c < d)",
+  },
+  {
+    "ascii": "(a < b) + c",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "<",
+        },
+        "c",
+      ],
+      "op": "+",
+    },
+    "latex": "(a < b) + c",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>&lt;</mo><mi>b</mi></mrow><mo>+</mo><mi>c</mi></mrow>",
+    "unicode": "(a < b) + c",
+  },
+  {
+    "ascii": "a == (b < c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "<",
+        },
+      ],
+      "op": "==",
+    },
+    "latex": "a = (b < c)",
+    "mathml": "<mrow><mi>a</mi><mo>=</mo><mrow><mi>b</mi><mo>&lt;</mo><mi>c</mi></mrow></mrow>",
+    "unicode": "a = (b < c)",
+  },
+  {
+    "ascii": "a <= b and b < c and c < d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "<=",
+        },
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "<",
+        },
+        {
+          "args": [
+            "c",
+            "d",
+          ],
+          "op": "<",
+        },
+      ],
+      "op": "and",
+    },
+    "latex": "a \\leq b \\land b < c \\land c < d",
+    "mathml": "<mrow><mrow><mi>a</mi><mo>&#x2264;</mo><mi>b</mi></mrow><mo>&#x2227;</mo><mrow><mi>b</mi><mo>&lt;</mo><mi>c</mi></mrow><mo>&#x2227;</mo><mrow><mi>c</mi><mo>&lt;</mo><mi>d</mi></mrow></mrow>",
+    "unicode": "a ≤ b ∧ b < c ∧ c < d",
+  },
+  {
+    "ascii": "k * (a / b) * c",
+    "input": {
+      "args": [
+        "k",
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "/",
+        },
+        "c",
+      ],
+      "op": "*",
+    },
+    "latex": "k \\cdot \\frac{a}{b} \\cdot c",
+    "mathml": "<mrow><mi>k</mi><mo>&#x22C5;</mo><mfrac><mi>a</mi><mi>b</mi></mfrac><mo>&#x22C5;</mo><mi>c</mi></mrow>",
+    "unicode": "k·(a/b)·c",
   },
 ]
 `;
@@ -5389,6 +5504,277 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
     "unicode": "argmin[g] (|d|) where {g∈1:10}",
   },
   {
+    "ascii": "sum[] (payload[b]) where {a in rows, b in rows} join(row_prior=row_id, syms=[b, a])",
+    "input": {
+      "args": [],
+      "expr": {
+        "args": [
+          "payload",
+          "b",
+        ],
+        "op": "index",
+      },
+      "join": [
+        {
+          "on": [
+            [
+              "row_prior",
+              "row_id",
+            ],
+          ],
+          "syms": [
+            "b",
+            "a",
+          ],
+        },
+      ],
+      "op": "faq",
+      "output_idx": [],
+      "ranges": {
+        "a": {
+          "from": "rows",
+        },
+        "b": {
+          "from": "rows",
+        },
+      },
+      "reduce": "+",
+      "semiring": "sum_product",
+    },
+    "latex": "\\sum_{} (\\mathrm{payload}[b]) \\text{ where } \\{a \\in rows, b \\in rows\\} join(row_prior=row_id, syms=[b, a])",
+    "mathml": "<mtext>Σ[] (payload[b]) where {a∈rows, b∈rows} join(row_prior=row_id, syms=[b, a])</mtext>",
+    "unicode": "Σ[] (payload[b]) where {a∈rows, b∈rows} join(row_prior=row_id, syms=[b, a])",
+  },
+  {
+    "ascii": "sum[] (1) where {i in src, j in tgt} join(src_bin=tgt_bin, src_lvl=tgt_lvl; i=j)",
+    "input": {
+      "args": [],
+      "expr": 1,
+      "join": [
+        {
+          "on": [
+            [
+              "src_bin",
+              "tgt_bin",
+            ],
+            [
+              "src_lvl",
+              "tgt_lvl",
+            ],
+          ],
+        },
+        {
+          "on": [
+            [
+              "i",
+              "j",
+            ],
+          ],
+        },
+      ],
+      "op": "faq",
+      "output_idx": [],
+      "ranges": {
+        "i": {
+          "from": "src",
+        },
+        "j": {
+          "from": "tgt",
+        },
+      },
+      "semiring": "sum_product",
+    },
+    "latex": "\\sum_{} (1) \\text{ where } \\{i \\in src, j \\in tgt\\} join(src_bin=tgt_bin, src_lvl=tgt_lvl; i=j)",
+    "mathml": "<mtext>Σ[] (1) where {i∈src, j∈tgt} join(src_bin=tgt_bin, src_lvl=tgt_lvl; i=j)</mtext>",
+    "unicode": "Σ[] (1) where {i∈src, j∈tgt} join(src_bin=tgt_bin, src_lvl=tgt_lvl; i=j)",
+  },
+  {
+    "ascii": "any[m] (true) where {c in cells, r in records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] <= px[r]) * (px[r] < E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]",
+    "input": {
+      "args": [],
+      "distinct": true,
+      "expr": {
+        "args": [],
+        "op": "true",
+      },
+      "filter": {
+        "args": [
+          {
+            "args": [
+              {
+                "args": [
+                  "W",
+                  "c",
+                ],
+                "op": "index",
+              },
+              {
+                "args": [
+                  "px",
+                  "r",
+                ],
+                "op": "index",
+              },
+            ],
+            "op": "<=",
+          },
+          {
+            "args": [
+              {
+                "args": [
+                  "px",
+                  "r",
+                ],
+                "op": "index",
+              },
+              {
+                "args": [
+                  "E",
+                  "c",
+                ],
+                "op": "index",
+              },
+            ],
+            "op": "<",
+          },
+        ],
+        "op": "*",
+      },
+      "join": [
+        {
+          "overlap": {
+            "src_env": [
+              "px",
+              "py",
+            ],
+            "tgt_env": [
+              "W",
+              "S",
+              "E",
+              "N",
+            ],
+          },
+        },
+      ],
+      "key": {
+        "args": [
+          "c",
+        ],
+        "label": "cell",
+        "op": "skolem",
+      },
+      "op": "faq",
+      "output_idx": [
+        "m",
+      ],
+      "ranges": {
+        "c": {
+          "from": "cells",
+        },
+        "r": {
+          "from": "records",
+        },
+      },
+      "semiring": "bool_and_or",
+    },
+    "latex": "\\bigvee_{m} (true) \\text{ where } \\{c \\in cells, r \\in records\\} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] \\leq \\mathrm{px}[r]) \\cdot (\\mathrm{px}[r] < E[c]) distinct key=\\mathrm{skolem}(c, label=cell) [semiring=bool_and_or]",
+    "mathml": "<mtext>⋁[m] (true) where {c∈cells, r∈records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] ≤ px[r])·(px[r] &lt; E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]</mtext>",
+    "unicode": "⋁[m] (true) where {c∈cells, r∈records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] ≤ px[r])·(px[r] < E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]",
+  },
+  {
+    "ascii": "sum[c] (w[r]) where {c in cells, r in records} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0e-3))",
+    "input": {
+      "args": [],
+      "expr": {
+        "args": [
+          "w",
+          "r",
+        ],
+        "op": "index",
+      },
+      "join": [
+        {
+          "overlap": {
+            "eps": 0.001,
+            "src_env": [
+              "xmin",
+              "ymin",
+              "xmax",
+              "ymax",
+            ],
+            "tgt_env": [
+              "W",
+              "S",
+              "E",
+              "N",
+            ],
+          },
+        },
+      ],
+      "op": "faq",
+      "output_idx": [
+        "c",
+      ],
+      "ranges": {
+        "c": {
+          "from": "cells",
+        },
+        "r": {
+          "from": "records",
+        },
+      },
+    },
+    "latex": "\\sum_{c} (w[r]) \\text{ where } \\{c \\in cells, r \\in records\\} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0 \\times 10^{-3}))",
+    "mathml": "<mtext>Σ[c] (w[r]) where {c∈cells, r∈records} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0×10⁻³))</mtext>",
+    "unicode": "Σ[c] (w[r]) where {c∈cells, r∈records} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0×10⁻³))",
+  },
+  {
+    "ascii": "argmin[g] (d[g]) where {g in gens} join(point_bin=gen_bin) if d[g] > 0",
+    "input": {
+      "arg": "g",
+      "args": [],
+      "expr": {
+        "args": [
+          "d",
+          "g",
+        ],
+        "op": "index",
+      },
+      "filter": {
+        "args": [
+          {
+            "args": [
+              "d",
+              "g",
+            ],
+            "op": "index",
+          },
+          0,
+        ],
+        "op": ">",
+      },
+      "join": [
+        {
+          "on": [
+            [
+              "point_bin",
+              "gen_bin",
+            ],
+          ],
+        },
+      ],
+      "op": "argmin",
+      "ranges": {
+        "g": {
+          "from": "gens",
+        },
+      },
+    },
+    "latex": "\\mathrm{argmin}_{g} (d[g]) \\text{ where } \\{g \\in gens\\} join(point_bin=gen_bin) if d[g] > 0",
+    "mathml": "<mtext>argmin[g] (d[g]) where {g∈gens} join(point_bin=gen_bin) if d[g] &gt; 0</mtext>",
+    "unicode": "argmin[g] (d[g]) where {g∈gens} join(point_bin=gen_bin) if d[g] > 0",
+  },
+  {
     "ascii": "grad(phi)",
     "input": {
       "args": [
@@ -5458,7 +5844,7 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
     "unicode": "godunov_hamiltonian(u, v)",
   },
   {
-    "ascii": "skolem(u, v)",
+    "ascii": "skolem(u, v, label=edge)",
     "input": {
       "args": [
         "u",
@@ -5467,9 +5853,9 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
       "label": "edge",
       "op": "skolem",
     },
-    "latex": "\\mathrm{skolem}(u, v)",
-    "mathml": "<mrow><mi>skolem</mi><mo>(</mo><mi>u</mi><mo>,</mo><mi>v</mi><mo>)</mo></mrow>",
-    "unicode": "skolem(u, v)",
+    "latex": "\\mathrm{skolem}(u, v, label=edge)",
+    "mathml": "<mtext>skolem(u, v, label=edge)</mtext>",
+    "unicode": "skolem(u, v, label=edge)",
   },
   {
     "ascii": "rank(S)",

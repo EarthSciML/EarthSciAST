@@ -95,11 +95,15 @@ sits in a **3-day AutoMerge waiting period**.
 
 ## Cutting a release
 
-1. Bump the version in all **six** places **in one reviewed commit**:
+1. Bump the version in all **seven** places **in one reviewed commit**:
    - `pkg/EarthSciAST.jl/Project.toml`
    - `pkg/earthsci-ast-ts/package.json` (and run `npm install --package-lock-only`)
    - `pkg/earthsci-ast-py/pyproject.toml`
-   - `pkg/earthsci-ast-rs/Cargo.toml` (`Cargo.lock` is not tracked)
+   - `pkg/earthsci-ast-rs/Cargo.toml`, and the crate's own entry in
+     `pkg/earthsci-ast-rs/Cargo.lock` (run `cargo metadata --format-version 1 >/dev/null`
+     in that directory). The lock IS tracked, and the release job's `cargo build`
+     rewrites a stale one, after which `cargo publish` refuses the dirty tree.
+     That is how v0.3.0 reached every registry except crates.io.
    - `pkg/earthsci-ast-ts/src/version.ts` — `LIBRARY_VERSION`
    - `pkg/earthsci-ast-go/pkg/esm/version.go` — `LibraryVersion`
 
@@ -110,7 +114,7 @@ sits in a **3-day AutoMerge waiting period**.
    (tsconfig's `rootDir` is `./src`) and a Go module has no in-tree version
    manifest at all, so both mirror the number by hand.
 
-   `./scripts/check-version-sync.sh` checks all six and runs in the lint job.
+   `./scripts/check-version-sync.sh` checks all seven and runs in the lint job.
    Go carries no version in its own manifest; the module version comes from
    the tag.
 

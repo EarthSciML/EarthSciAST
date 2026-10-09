@@ -1389,6 +1389,7 @@ mod kernel_equivalence_tests {
     //! paths must stay bit-identical, so pin them here rather than trusting two
     //! hand-kept copies of the same match to drift together.
     use super::*;
+    use std::hint::black_box;
 
     /// Operand spread: signed zeros, subnormals, ±inf and NaN, so a divergence
     /// in a branchy arm (`min`/`max`/`sign`/the comparisons) cannot hide.
@@ -1487,25 +1488,26 @@ mod kernel_equivalence_tests {
         let _g = crate::precision::enter(crate::precision::Precision::Float32);
         for &x in F32_XS {
             for &y in F32_XS {
-                let (xf, yf) = (x as f32, y as f32);
+                // Opaque operands per `want`: see `unary_kernels_f32_are_binary32`.
+                let (xf, yf) = (|| black_box(x as f32), || black_box(y as f32));
                 #[rustfmt::skip]
                 let cases: &[(&str, f64)] = &[
-                    ("+", (xf + yf) as f64),
-                    ("-", (xf - yf) as f64),
-                    ("*", (xf * yf) as f64),
-                    ("/", (xf / yf) as f64),
-                    ("^", xf.powf(yf) as f64),
-                    ("atan2", xf.atan2(yf) as f64),
-                    ("min", xf.min(yf) as f64),
-                    ("max", xf.max(yf) as f64),
-                    ("==", (xf == yf) as i32 as f64),
-                    ("!=", (xf != yf) as i32 as f64),
-                    ("<", (xf < yf) as i32 as f64),
-                    ("<=", (xf <= yf) as i32 as f64),
-                    (">", (xf > yf) as i32 as f64),
-                    (">=", (xf >= yf) as i32 as f64),
-                    ("and", (xf != 0.0 && yf != 0.0) as i32 as f64),
-                    ("or", (xf != 0.0 || yf != 0.0) as i32 as f64),
+                    ("+", (xf() + yf()) as f64),
+                    ("-", (xf() - yf()) as f64),
+                    ("*", (xf() * yf()) as f64),
+                    ("/", (xf() / yf()) as f64),
+                    ("^", xf().powf(yf()) as f64),
+                    ("atan2", xf().atan2(yf()) as f64),
+                    ("min", xf().min(yf()) as f64),
+                    ("max", xf().max(yf()) as f64),
+                    ("==", (xf() == yf()) as i32 as f64),
+                    ("!=", (xf() != yf()) as i32 as f64),
+                    ("<", (xf() < yf()) as i32 as f64),
+                    ("<=", (xf() <= yf()) as i32 as f64),
+                    (">", (xf() > yf()) as i32 as f64),
+                    (">=", (xf() >= yf()) as i32 as f64),
+                    ("and", (xf() != 0.0 && yf() != 0.0) as i32 as f64),
+                    ("or", (xf() != 0.0 || yf() != 0.0) as i32 as f64),
                 ];
                 for &(op, want) in cases {
                     let got = apply_binary(op, x, y);
@@ -1533,29 +1535,38 @@ mod kernel_equivalence_tests {
     fn unary_kernels_f32_are_binary32() {
         let _g = crate::precision::enter(crate::precision::Precision::Float32);
         for &x in F32_XS {
-            let xf = x as f32;
+            // Each `want` gets its OWN opaque operand. Handed one shared `xf`,
+            // LLVM fuses `xf.sin()` and `xf.cos()` into a single `sincosf`
+            // (Apple: `__sincosf_stret`), and on a constant operand it folds
+            // the call outright — by evaluating in binary64 and rounding.
+            // Neither is the lone `cosf` the kernel calls, so wherever the
+            // platform `cosf` is not correctly rounded (Apple aarch64:
+            // `cosf(1e38)` is one ulp off) the test failed while the kernel
+            // was right. glibc's x86-64 `cosf` is correctly rounded, which is
+            // why it only ever failed on arm.
+            let xf = || black_box(x as f32);
             #[rustfmt::skip]
             let cases: &[(&str, f64)] = &[
-                ("exp", xf.exp() as f64),
-                ("log", xf.ln() as f64),
-                ("log10", xf.log10() as f64),
-                ("sqrt", xf.sqrt() as f64),
-                ("abs", xf.abs() as f64),
-                ("floor", xf.floor() as f64),
-                ("ceil", xf.ceil() as f64),
-                ("sin", xf.sin() as f64),
-                ("cos", xf.cos() as f64),
-                ("tan", xf.tan() as f64),
-                ("asin", xf.asin() as f64),
-                ("acos", xf.acos() as f64),
-                ("atan", xf.atan() as f64),
-                ("sinh", xf.sinh() as f64),
-                ("cosh", xf.cosh() as f64),
-                ("tanh", xf.tanh() as f64),
-                ("asinh", xf.asinh() as f64),
-                ("acosh", xf.acosh() as f64),
-                ("atanh", xf.atanh() as f64),
-                ("not", (xf == 0.0) as i32 as f64),
+                ("exp", xf().exp() as f64),
+                ("log", xf().ln() as f64),
+                ("log10", xf().log10() as f64),
+                ("sqrt", xf().sqrt() as f64),
+                ("abs", xf().abs() as f64),
+                ("floor", xf().floor() as f64),
+                ("ceil", xf().ceil() as f64),
+                ("sin", xf().sin() as f64),
+                ("cos", xf().cos() as f64),
+                ("tan", xf().tan() as f64),
+                ("asin", xf().asin() as f64),
+                ("acos", xf().acos() as f64),
+                ("atan", xf().atan() as f64),
+                ("sinh", xf().sinh() as f64),
+                ("cosh", xf().cosh() as f64),
+                ("tanh", xf().tanh() as f64),
+                ("asinh", xf().asinh() as f64),
+                ("acosh", xf().acosh() as f64),
+                ("atanh", xf().atanh() as f64),
+                ("not", (xf() == 0.0) as i32 as f64),
             ];
             for &(op, want) in cases {
                 let got = apply_unary(op, x);

@@ -25,40 +25,68 @@ const UNICODE_SUBSCRIPTS: [char; 10] = ['₀', '₁', '₂', '₃', '₄', '₅'
 // Unicode superscript digits
 const UNICODE_SUPERSCRIPTS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
 
-// Operator precedence levels (higher = tighter binding)
-const PRECEDENCE: &[(&str, i32)] = &[("+", 1), ("-", 1), ("*", 2), ("/", 2), ("^", 3)];
+// Operator precedence levels (higher = tighter binding): the esm-spec §4.1.1
+// table, identical to `op_precedence` in parse_expression.rs. Comparisons and
+// `and`/`or` carry their real levels so the generic rule parenthesizes them
+// under arithmetic: `(a <= b) * (c < d)`, never `a <= b * c < d`.
+const PRECEDENCE: &[(&str, i32)] = &[
+    ("or", 1),
+    ("and", 2),
+    ("==", 3),
+    ("!=", 3),
+    ("=", 3),
+    ("<", 3),
+    (">", 3),
+    ("<=", 3),
+    (">=", 3),
+    ("+", 4),
+    ("-", 4),
+    ("*", 5),
+    ("/", 5),
+    ("not", 6),
+    ("^", 7),
+];
 
-/// The `parent_prec` a unary-minus operand renders at: the ADDITIVE level of
-/// this module's compressed table, so a `+`/binary-`-` child (precedence 1) is
-/// parenthesized and a `*`/`/`/`^` child (2/3) is not. It mirrors the parser's
+/// Operators whose same-op RIGHT operand needs no parentheses: the parser
+/// re-flattens `a + (b + c)` into one n-ary node. Every other same-level right
+/// operand keeps its parentheses (`a * (b / c)`, `a == (b < c)`, `a^(b^c)`),
+/// because the parser groups same-level operators to the LEFT. Mirrors
+/// `ASSOCIATIVE_OPS` in pretty-print.ts.
+const ASSOCIATIVE_OPS: &[&str] = &["+", "*", "and", "or"];
+
+/// The `parent_prec` a unary-minus operand renders at: the ADDITIVE level, so
+/// a `+`/binary-`-` child (and anything looser: comparisons, `and`, `or`) is
+/// parenthesized and a `*`/`/`/`^` child is not. It mirrors the parser's
 /// `UMINUS_MIN` (parse_expression.rs), which reads a unary-minus operand at
 /// multiplicative precedence — print `-(a + b)` without the parentheses and it
 /// reads back as `(-a) + b`, a different expression. `-a * b` and `-a^2` need
 /// none. Mirrors `UMINUS_OPERAND_MIN` in pretty-print.ts.
-const UMINUS_OPERAND_PARENT_PREC: i32 = 1;
+const UMINUS_OPERAND_PARENT_PREC: i32 = 4;
 
-/// Whether a unary-minus operand needs parentheses that the precedence table
-/// cannot express. This table gives comparisons and `and`/`or` precedence 0
-/// ("never parenthesize"), but the parser reads a unary-minus operand at
-/// multiplicative precedence, so `-(a < b)` printed bare reads back as
-/// `(-a) < b`. Separately, a `-` directly before a numeric literal is part of
-/// the literal, so `-(2^2)` printed as `-2^2` reads back as `(-2)^2`; the base
-/// is the leftmost leaf of the operand, reached through `*` / `/`.
-fn uminus_operand_needs_parens(operand: &Expr) -> bool {
-    let Expr::Operator(n) = operand else {
-        return false;
-    };
-    match n.op.as_str() {
-        "<" | ">" | "<=" | ">=" | "==" | "!=" | "=" | "and" | "or" => true,
-        "^" => matches!(
-            n.args.first(),
-            Some(Expr::Integer(_)) | Some(Expr::Number(_))
-        ),
-        "*" | "/" => n.args.first().is_some_and(starts_with_literal_power),
-        _ => false,
+/// Render operand `arg` of the infix operator `op` (precedence `op_prec`).
+/// A LEFT operand is parenthesized only when it binds strictly looser; a RIGHT
+/// operand (for an n-ary `+ * and or`, every argument after the first) also
+/// when it sits at the SAME level, unless it is the very same associative
+/// operator. The one exception is LaTeX, where a binary `\frac` operand of `*`
+/// is self-delimiting and is never wrapped.
+fn render_operand(op: &str, op_prec: i32, arg: &Expr, is_right: bool, fmt: Fmt) -> String {
+    if !is_right {
+        return render_at(arg, fmt, op_prec - 1);
     }
+    let bare = match arg {
+        Expr::Operator(n) => {
+            (n.op == op && ASSOCIATIVE_OPS.contains(&op))
+                || (fmt == Fmt::Latex && op == "*" && n.op == "/" && n.args.len() == 2)
+        }
+        _ => true,
+    };
+    render_at(arg, fmt, if bare { op_prec - 1 } else { op_prec })
 }
 
+/// Whether a unary-minus operand needs parentheses that the precedence table
+/// cannot express: a `-` directly before a numeric literal is part of the
+/// literal, so `-(2^2)` printed as `-2^2` reads back as `(-2)^2`; the base is
+/// the leftmost leaf of the operand, reached through `*` / `/`.
 fn starts_with_literal_power(expr: &Expr) -> bool {
     let Expr::Operator(n) = expr else {
         return false;
@@ -302,10 +330,11 @@ fn format_display_float(n: f64) -> FloatParts {
 
     let abs_n = n.abs();
     if !(SCI_NOTATION_MIN..SCI_NOTATION_MAX).contains(&abs_n) {
-        // Rust's `{:e}` yields the shortest round-tripping mantissa with no
-        // precision loss (e.g. 0.009999 -> "9.999e-3") and an exponent with no
-        // leading `+`, matching the normative number-formatting contract.
-        let sci = format!("{n:e}");
+        // The shortest round-tripping mantissa with no precision loss (e.g.
+        // 0.009999 -> "9.999e-3") and an exponent with no leading `+`, matching
+        // the normative number-formatting contract. See `shortest_sci` for why
+        // it is not plain `{:e}`.
+        let sci = shortest_sci(n);
         if let Some(e_pos) = sci.find('e') {
             let mut mantissa = sci[..e_pos].to_string();
             // Ensure at least one decimal place: "1" -> "1.0", "8.64" stays.
@@ -325,8 +354,39 @@ fn format_display_float(n: f64) -> FloatParts {
         return FloatParts::Plain(format!("{}", n as i64));
     }
 
-    // In-range fractional value: shortest round-tripping decimal, no rounding.
-    FloatParts::Plain(format!("{n}"))
+    // In-range fractional value: shortest round-tripping decimal, no rounding,
+    // printed at that many fraction digits so a tie breaks to even (see
+    // `shortest_sci`).
+    let (digits, exp) = shortest_digit_count(n);
+    let frac = usize::try_from(digits as i64 - 1 - exp).unwrap_or(0);
+    FloatParts::Plain(format!("{n:.frac$}"))
+}
+
+/// The significant-digit count and decimal exponent of the shortest decimal
+/// that round-trips `n` (finite, non-zero), read off Rust's `{:e}`.
+fn shortest_digit_count(n: f64) -> (usize, i64) {
+    let s = format!("{n:e}");
+    let e_pos = s.find('e').expect("`{:e}` always has an exponent");
+    let digits = s[..e_pos].trim_start_matches('-').replace('.', "").len();
+    let exp = s[e_pos + 1..]
+        .parse()
+        .expect("`{:e}` exponent is an integer");
+    (digits, exp)
+}
+
+/// `n` in scientific notation with the shortest round-tripping mantissa.
+///
+/// `{:e}` finds the right digit COUNT, but when the float lies exactly halfway
+/// between two candidates of that length (844280270821319.2 is stored as
+/// …319.25) it rounds the last digit up, while every other binding — and
+/// JavaScript's and Python's own float printing — breaks the tie to even
+/// (`8.442802708213192e14`). Re-printing at that precision uses exact decimal
+/// conversion, which rounds half to even, so all five bindings agree digit for
+/// digit.
+fn shortest_sci(n: f64) -> String {
+    let (digits, _) = shortest_digit_count(n);
+    let prec = digits - 1;
+    format!("{n:.prec$e}")
 }
 
 /// Replace a leading ASCII hyphen with the Unicode U+2212 MINUS SIGN (used by
@@ -444,29 +504,38 @@ fn pick(fmt: Fmt, unicode: &'static str, latex: &'static str, ascii: &'static st
     }
 }
 
-/// Render a binary infix op `a SYM b`, or fall back to a call form at any other
-/// arity. `infix`/`call` are the already-selected backend symbols.
-fn binary_or_call(
+/// Render a binary comparison `a SYM b` (left operand at the strictly-looser
+/// level, right operand under the same-level rule of [`render_operand`]), or
+/// fall back to a call form at any other arity. `infix`/`call` are the
+/// already-selected backend symbols.
+fn comparison_or_call(
+    op: &str,
+    op_prec: i32,
     args: &[Expr],
     infix: &str,
     call: &str,
-    render: impl Fn(&Expr) -> String,
+    fmt: Fmt,
 ) -> String {
     if args.len() == 2 {
-        format!("{} {} {}", render(&args[0]), infix, render(&args[1]))
+        format!(
+            "{} {} {}",
+            render_operand(op, op_prec, &args[0], false, fmt),
+            infix,
+            render_operand(op, op_prec, &args[1], true, fmt)
+        )
     } else {
-        call_form(call, args, render)
+        call_form(call, args, |a| render_at(a, fmt, 0))
     }
 }
 
-/// Render an n-ary op by joining its (≥2) operands with `sep`, or fall back to a
-/// call form. `sep`/`call` are the already-selected backend symbols.
-fn join_or_call(args: &[Expr], sep: &str, call: &str, render: impl Fn(&Expr) -> String) -> String {
-    if args.len() >= 2 {
-        args.iter().map(&render).collect::<Vec<_>>().join(sep)
-    } else {
-        call_form(call, args, render)
-    }
+/// Render an n-ary infix chain `a SEP b SEP c`: every argument after the first
+/// is a RIGHT operand (see [`render_operand`]), so `k * (a / b) * c`.
+fn infix_chain(op: &str, op_prec: i32, args: &[Expr], sep: &str, fmt: Fmt) -> String {
+    args.iter()
+        .enumerate()
+        .map(|(i, a)| render_operand(op, op_prec, a, i > 0, fmt))
+        .collect::<Vec<_>>()
+        .join(sep)
 }
 
 /// The three text-rendering backends. Shared by the structural / array-query
@@ -645,11 +714,7 @@ fn format_const_value(value: &serde_json::Value, fmt: Fmt) -> String {
             } else if let Some(u) = num.as_u64() {
                 u.to_string()
             } else if let Some(f) = num.as_f64() {
-                match fmt {
-                    Fmt::Unicode => format_number_unicode(f),
-                    Fmt::Latex => format_number_latex(f),
-                    Fmt::Ascii => format_number_ascii(f),
-                }
+                format_number_fmt(f, fmt)
             } else {
                 num.to_string()
             }
@@ -744,6 +809,51 @@ fn format_ranges_clause(ranges: &std::collections::HashMap<String, RangeSpec>, f
     }
 }
 
+/// Render the ` join(…)` clause shared by `faq` and `argmin`/`argmax`, or `""`
+/// when there is none. Clauses are joined `; `. An equality clause lists its
+/// key-column pairs `l=r` and then, when present, the self-join side assignment
+/// `syms=[left, right]`; an overlap clause is the keyword call
+/// `overlap(src=[…], tgt=[…])` with `, eps=E` whenever `eps` is present
+/// (including `0`). Mirrors `formatJoinClause` in pretty-print.ts.
+fn format_join_clause(join: Option<&[JoinClause]>, fmt: Fmt) -> String {
+    let Some(join) = join.filter(|j| !j.is_empty()) else {
+        return String::new();
+    };
+    let clauses = join
+        .iter()
+        .map(|c| {
+            if let Some(ov) = &c.overlap {
+                let eps = match ov.eps {
+                    Some(e) => format!(", eps={}", format_number_fmt(e, fmt)),
+                    None => String::new(),
+                };
+                return format!(
+                    "overlap(src=[{}], tgt=[{}]{eps})",
+                    ov.src_env.join(", "),
+                    ov.tgt_env.join(", ")
+                );
+            }
+            let mut parts: Vec<String> =
+                c.on.iter().map(|p| format!("{}={}", p[0], p[1])).collect();
+            if let Some(syms) = &c.syms {
+                parts.push(format!("syms=[{}]", syms.join(", ")));
+            }
+            parts.join(", ")
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(" join({clauses})")
+}
+
+/// A float in the backend's number formatting.
+fn format_number_fmt(n: f64, fmt: Fmt) -> String {
+    match fmt {
+        Fmt::Unicode => format_number_unicode(n),
+        Fmt::Latex => format_number_latex(n),
+        Fmt::Ascii => format_number_ascii(n),
+    }
+}
+
 /// Render a `faq` node per tests/display/RENDERING_CONTRACT.md §aggregate.
 fn format_aggregate(node: &ExpressionNode, fmt: Fmt) -> String {
     let out_idx = node
@@ -770,21 +880,7 @@ fn format_aggregate(node: &ExpressionNode, fmt: Fmt) -> String {
     {
         out.push_str(&format_ranges_clause(ranges, fmt));
     }
-    if let Some(join) = &node.join
-        && !join.is_empty()
-    {
-        let clauses = join
-            .iter()
-            .map(|c| {
-                c.on.iter()
-                    .map(|p| format!("{}={}", p[0], p[1]))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        out.push_str(&format!(" join({clauses})"));
-    }
+    out.push_str(&format_join_clause(node.join.as_deref(), fmt));
     if let Some(filter) = node.filter.as_deref() {
         out.push_str(&format!(" if {}", render_fmt(filter, fmt)));
     }
@@ -830,6 +926,10 @@ fn format_arg_witness(node: &ExpressionNode, fmt: Fmt) -> String {
         && !ranges.is_empty()
     {
         out.push_str(&format_ranges_clause(ranges, fmt));
+    }
+    out.push_str(&format_join_clause(node.join.as_deref(), fmt));
+    if let Some(filter) = node.filter.as_deref() {
+        out.push_str(&format!(" if {}", render_fmt(filter, fmt)));
     }
     if let Some(id) = node.id.as_deref() {
         out.push_str(&format!(" id={id}"));
@@ -1106,6 +1206,24 @@ fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
             Some(format!("{name}({inner}, manifold={manifold}{id_part})"))
         }
 
+        // The documentary `label` is a trailing named argument, like
+        // `intersect_polygon`'s `manifold=`; an unlabeled skolem is a plain
+        // call (the generic fallback).
+        "skolem" => {
+            let label = node.label.as_deref()?;
+            let inner = args
+                .iter()
+                .map(|a| render_fmt(a, fmt))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let name = if fmt == Fmt::Latex {
+                "\\mathrm{skolem}"
+            } else {
+                "skolem"
+            };
+            Some(format!("{name}({inner}, label={label})"))
+        }
+
         "faq" => Some(format_aggregate(node, fmt)),
 
         "argmin" | "argmax" => Some(format_arg_witness(node, fmt)),
@@ -1155,10 +1273,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
             if let Some(s) = sum_as_difference(args, op_prec, fmt) {
                 s
             } else if args.len() >= 2 {
-                args.iter()
-                    .map(|arg| render_at(arg, fmt, op_prec - 1))
-                    .collect::<Vec<_>>()
-                    .join(" + ")
+                infix_chain(op, op_prec, args, " + ", fmt)
             } else {
                 call_form("+", args, r0)
             }
@@ -1172,7 +1287,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                 // operands the parser re-absorbs. See
                 // `UMINUS_OPERAND_PARENT_PREC`.
                 let operand = render_at(&args[0], fmt, UMINUS_OPERAND_PARENT_PREC);
-                if uminus_operand_needs_parens(&args[0]) {
+                if starts_with_literal_power(&args[0]) {
                     format!("{minus}({operand})")
                 } else {
                     format!("{minus}{operand}")
@@ -1204,10 +1319,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                     Fmt::Latex if latex_mul_juxtapose(args) => " ",
                     Fmt::Latex => " \\cdot ",
                 };
-                args.iter()
-                    .map(|arg| render_at(arg, fmt, op_prec - 1))
-                    .collect::<Vec<_>>()
-                    .join(sep)
+                infix_chain(op, op_prec, args, sep, fmt)
             } else {
                 call_form(pick(fmt, "·", "\\cdot", "*"), args, r0)
             }
@@ -1290,44 +1402,60 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                 call_form("D", args, r0)
             }
         }
-        ">" => binary_or_call(args, ">", ">", r0),
-        "<" => binary_or_call(args, "<", "<", r0),
-        ">=" => binary_or_call(
+        ">" => comparison_or_call(op, op_prec, args, ">", ">", fmt),
+        "<" => comparison_or_call(op, op_prec, args, "<", "<", fmt),
+        ">=" => comparison_or_call(
+            op,
+            op_prec,
             args,
             pick(fmt, "≥", "\\geq", ">="),
             pick(fmt, ">=", "\\geq", ">="),
-            r0,
+            fmt,
         ),
-        "<=" => binary_or_call(
+        "<=" => comparison_or_call(
+            op,
+            op_prec,
             args,
             pick(fmt, "≤", "\\leq", "<="),
             pick(fmt, "<=", "\\leq", "<="),
-            r0,
+            fmt,
         ),
-        "=" | "==" => binary_or_call(
+        "=" | "==" => comparison_or_call(
+            op,
+            op_prec,
             args,
             pick(fmt, "=", "=", "=="),
             pick(fmt, "=", "=", "=="),
-            r0,
+            fmt,
         ),
-        "!=" => binary_or_call(
+        "!=" => comparison_or_call(
+            op,
+            op_prec,
             args,
             pick(fmt, "≠", "\\neq", "!="),
             pick(fmt, "!=", "\\neq", "!="),
-            r0,
+            fmt,
         ),
-        "and" => join_or_call(
-            args,
-            pick(fmt, " ∧ ", " \\land ", " and "),
-            pick(fmt, "and", "\\land", "and"),
-            r0,
-        ),
-        "or" => join_or_call(
-            args,
-            pick(fmt, " ∨ ", " \\lor ", " or "),
-            pick(fmt, "or", "\\lor", "or"),
-            r0,
-        ),
+        "and" => {
+            if args.len() >= 2 {
+                infix_chain(
+                    op,
+                    op_prec,
+                    args,
+                    pick(fmt, " ∧ ", " \\land ", " and "),
+                    fmt,
+                )
+            } else {
+                call_form(pick(fmt, "and", "\\land", "and"), args, r0)
+            }
+        }
+        "or" => {
+            if args.len() >= 2 {
+                infix_chain(op, op_prec, args, pick(fmt, " ∨ ", " \\lor ", " or "), fmt)
+            } else {
+                call_form(pick(fmt, "or", "\\lor", "or"), args, r0)
+            }
+        }
         "not" => {
             if args.len() == 1 {
                 // Parenthesize a complex operand (`¬(x == 0)`).
@@ -2533,14 +2661,53 @@ mod tests {
         assert_eq!(to_latex(&pow), "(a + b)^{2}");
         assert_eq!(to_ascii(&pow), "(a + b)^2");
 
-        // `*` is associative, so a same-precedence `/` operand takes NO
-        // parentheses in any backend — `a·b/c`, matching the reference printer
-        // (pretty-print.ts keeps `*` out of NON_ASSOCIATIVE_RIGHT_OPS) and the
-        // Julia / Python / Go bindings. `\frac` additionally groups visually.
+        // A same-precedence RIGHT operand keeps its parentheses unless it is
+        // the same associative op: `a * b / c` reads back as `(a * b) / c`, so
+        // `a * (b / c)` must print its parentheses. LaTeX `\frac` is
+        // self-delimiting and stays bare (RENDERING_CONTRACT.md).
         let frac_mul = op_node("*", vec![var("a"), op_node("/", vec![var("b"), var("c")])]);
-        assert_eq!(to_unicode(&frac_mul), "a·b/c");
+        assert_eq!(to_unicode(&frac_mul), "a·(b/c)");
         assert_eq!(to_latex(&frac_mul), "a \\cdot \\frac{b}{c}");
-        assert_eq!(to_ascii(&frac_mul), "a * b / c");
+        assert_eq!(to_ascii(&frac_mul), "a * (b / c)");
+
+        // Comparisons and `and`/`or` bind looser than arithmetic, so as
+        // arithmetic operands they are parenthesized.
+        let ind = op_node(
+            "*",
+            vec![
+                op_node("<=", vec![var("a"), var("b")]),
+                op_node("<", vec![var("c"), var("d")]),
+            ],
+        );
+        assert_eq!(to_ascii(&ind), "(a <= b) * (c < d)");
+        let lt_plus = op_node("+", vec![op_node("<", vec![var("a"), var("b")]), var("c")]);
+        assert_eq!(to_ascii(&lt_plus), "(a < b) + c");
+        let and_mul = op_node(
+            "*",
+            vec![op_node("and", vec![var("a"), var("b")]), var("c")],
+        );
+        assert_eq!(to_ascii(&and_mul), "(a and b) * c");
+        // ...but a comparison inside `and` needs none, and an n-ary `and`
+        // renders infix.
+        let and3 = op_node(
+            "and",
+            vec![
+                op_node("<=", vec![var("a"), var("b")]),
+                op_node("<", vec![var("b"), var("c")]),
+                op_node("<", vec![var("c"), var("d")]),
+            ],
+        );
+        assert_eq!(to_ascii(&and3), "a <= b and b < c and c < d");
+        assert_eq!(to_unicode(&and3), "a ≤ b ∧ b < c ∧ c < d");
+        let eq_lt = op_node("==", vec![var("a"), op_node("<", vec![var("b"), var("c")])]);
+        assert_eq!(to_ascii(&eq_lt), "a == (b < c)");
+        // A unary-minus operand that is a comparison is wrapped exactly once.
+        let neg_lt = op_node("-", vec![op_node("<", vec![var("a"), var("b")])]);
+        assert_eq!(to_ascii(&neg_lt), "-(a < b)");
+        let neg_sum = op_node("-", vec![op_node("+", vec![var("a"), var("b")])]);
+        assert_eq!(to_ascii(&neg_sum), "-(a + b)");
+        let neg_prod = op_node("-", vec![op_node("*", vec![var("a"), var("b")])]);
+        assert_eq!(to_ascii(&neg_prod), "-a * b");
     }
 
     #[test]
@@ -2620,14 +2787,14 @@ mod tests {
             r"\frac{a + b}{c}",
             "(a + b) / c",
         );
-        // `*` is associative: a same-precedence `/` operand takes no parens in
-        // the inline backends (`a·b/c`), matching pretty-print.ts and the
-        // Julia / Python / Go bindings.
+        // A same-precedence `/` RIGHT operand of `*` keeps its parentheses in
+        // the inline backends (`a * b / c` reads back as `(a * b) / c`);
+        // LaTeX `\frac` is self-delimiting and stays bare.
         chk(
             opn("*", vec![a(), opn("/", vec![b(), c()])]),
-            "a·b/c",
+            "a·(b/c)",
             r"a \cdot \frac{b}{c}",
-            "a * b / c",
+            "a * (b / c)",
         );
         // powers: LaTeX braces, Unicode integer superscripts
         chk(opn("^", vec![a(), b()]), "a^b", r"a^{b}", "a^b");

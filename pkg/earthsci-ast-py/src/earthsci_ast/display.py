@@ -10,7 +10,9 @@ Based on ESM Format Specification Section 6.1
 
 from __future__ import annotations
 
+import decimal
 import math
+import numbers
 import re
 
 from .classification import algebraic_unknowns, observed_unknowns, ode_states
@@ -73,8 +75,10 @@ _GREEK_CHAR_CLASS = "[α-ωΑ-Ω]"
 _GREEK_LATEX_RE = re.compile(
     _GREEK_CHAR_CLASS + r"|(?<![\\A-Za-z])" + _GREEK_NAME_GROUP + r"(?![A-Z}])"
 )
-# Unicode: a named letter not followed by an uppercase letter (chemical prefix).
-_GREEK_UNICODE_RE = re.compile(f"{_GREEK_NAME_GROUP}(?![A-Z])")
+# Unicode: a named letter not preceded by a backslash or another letter (so the
+# `nu` inside `annual` is left alone) and not followed by an uppercase letter
+# (chemical prefix).
+_GREEK_UNICODE_RE = re.compile(r"(?<![\\A-Za-z])" + _GREEK_NAME_GROUP + r"(?![A-Z])")
 # ASCII: bare Greek Unicode chars.
 _GREEK_CHAR_RE = re.compile(_GREEK_CHAR_CLASS)
 
@@ -540,12 +544,25 @@ def _format_chemical_subscripts(variable: str, format_type: str) -> str:
 # scientific notation; everything between renders as a plain decimal / integer.
 _SCI_NOTATION_MIN = 0.01
 _SCI_NOTATION_MAX = 10000
-# Precision format for plain-decimal floats (trailing zeros stripped afterward).
-_DECIMAL_FLOAT_FORMAT = "%.12g"
-# Precision format for scientific-notation numbers.
-_SCIENTIFIC_FORMAT = "%.6e"
 # JSON string tokens for non-finite values → their float value.
 _NONFINITE = {"Infinity": math.inf, "-Infinity": -math.inf, "NaN": math.nan}
+
+
+def _shortest_scientific(num: int | float) -> tuple[str, int]:
+    """Split ``num`` into a scientific ``(mantissa, exponent)`` pair whose
+    mantissa carries the SHORTEST digit string that round-trips the value
+    exactly (a float's ``repr`` digits; an int's own digits), with trailing
+    zeros dropped and a whole mantissa kept as ``"2.0"``. Mirrors
+    ``Number.prototype.toExponential()`` with no fraction-digit argument, which
+    pretty-print.ts formatNumber uses."""
+    if isinstance(num, float):
+        sign, digits, dexp = decimal.Decimal(repr(num)).as_tuple()
+    else:
+        sign, digits, dexp = decimal.Decimal(num).as_tuple()
+    ds = "".join(str(d) for d in digits)
+    exp = len(ds) - 1 + int(dexp)
+    frac = ds[1:].rstrip("0") or "0"
+    return f"{'-' if sign else ''}{ds[0]}.{frac}", exp
 
 
 def _format_number(num: int | float, format_type: str) -> str:
@@ -555,6 +572,9 @@ def _format_number(num: int | float, format_type: str) -> str:
     sign is U+2212 (mantissa AND exponent); ascii scientific notation carries NO
     ``+`` on a positive exponent; mantissa precision is never lost.
     """
+    # Normalize numpy (or other ``numbers``) scalars to the builtin types the
+    # rest of this function, and :func:`_shortest_scientific`, assume.
+    num = int(num) if isinstance(num, numbers.Integral) else float(num)
     if isinstance(num, float):
         if math.isinf(num):
             if format_type == "unicode":
@@ -573,14 +593,7 @@ def _format_number(num: int | float, format_type: str) -> str:
     abs_num = abs(num)
 
     if abs_num < _SCI_NOTATION_MIN or abs_num >= _SCI_NOTATION_MAX:
-        mantissa, exponent = (_SCIENTIFIC_FORMAT % num).split("e")
-        exp = int(exponent)
-        mantissa_val = float(mantissa)
-        # A whole mantissa keeps one decimal place ("2.0") to preserve precision.
-        if mantissa_val == int(mantissa_val):
-            mantissa = f"{int(mantissa_val)}.0"
-        else:
-            mantissa = str(mantissa_val)
+        mantissa, exp = _shortest_scientific(num)
         if format_type == "unicode":
             return f"{mantissa.replace('-', '−')}×10{_to_superscript(str(exp))}"
         if format_type == "latex":
@@ -590,11 +603,11 @@ def _format_number(num: int | float, format_type: str) -> str:
 
     # Plain-decimal band. Integers (and integral floats) print without a point,
     # via the shared canonical-number rule (:func:`serialize._canonical_number`).
+    # A non-integral float uses ``repr``, the shortest decimal that round-trips
+    # the double exactly (``repr`` only switches to exponent form outside
+    # [1e-4, 1e16), which this band never reaches).
     canon = _canonical_number(num)
-    if isinstance(canon, int):
-        s = str(canon)
-    else:
-        s = (_DECIMAL_FLOAT_FORMAT % num).rstrip("0").rstrip(".")
+    s = str(canon) if isinstance(canon, int) else repr(float(num))
     if format_type == "unicode":
         s = s.replace("-", "−")
     return s
@@ -686,9 +699,30 @@ def _starts_with_literal_power(child) -> bool:
     return False
 
 
-def _needs_parentheses(parent: ExprNode, child: Expr, is_right_operand: bool = False) -> bool:
+#: Operators whose same-op right operand needs no parentheses (the parser
+#: re-flattens them into one n-ary node). Mirrors ASSOCIATIVE_OPS in pretty-print.ts.
+_ASSOCIATIVE_OPS = frozenset({"+", "*", "and", "or"})
+
+
+def _needs_parentheses(
+    parent: ExprNode,
+    child: Expr,
+    is_right_operand: bool = False,
+    format_type: str | None = None,
+) -> bool:
     """Check if parentheses are needed around a subexpression."""
     if isinstance(child, (int, float, str)):
+        return False
+
+    # A LaTeX `\frac{…}{…}` is self-delimiting, so a product never needs to
+    # parenthesize one (the linear forms do: `a * (b / c)`).
+    if (
+        format_type == "latex"
+        and parent.op == "*"
+        and _is_op_node(child)
+        and _node_field(child, "op") == "/"
+        and len(_node_field(child, "args") or []) == 2
+    ):
         return False
 
     # Read the child's operator whether the child is an ExprNode or a
@@ -716,10 +750,14 @@ def _needs_parentheses(parent: ExprNode, child: Expr, is_right_operand: bool = F
     if child_prec > parent_prec:
         return False
 
-    # Same precedence: need parens if child is right operand and operator is not
-    # associative (subtraction / division / exponentiation).
-    if is_right_operand and parent.op in ["-", "/", "^", "**", "pow"]:
-        return True
+    # Same precedence, right operand: the parser groups same-level operators to
+    # the LEFT, so a right operand keeps its parentheses unless it is the very
+    # same associative operator (`a + (b + c)` re-flattens to `a + b + c`).
+    # `a * (b / c)` printed bare reads back as `(a * b) / c`, and `a == (b < c)`
+    # as `(a == b) < c`. A right-nested power keeps its parentheses too
+    # (`a^(b^c)`): redundant under right-associativity, but explicit.
+    if is_right_operand:
+        return not (child_op == parent.op and parent.op in _ASSOCIATIVE_OPS)
 
     # `^` is RIGHT-associative, so a LEFT-nested power must be parenthesized:
     # `(a^b)^c` reads back correctly, `a^b^c` would mean `a^(b^c)` (contract F-7).
@@ -938,6 +976,39 @@ def _format_ranges_clause(ranges: dict, format_type: str) -> str:
     return " where {" + ", ".join(parts) + "}"
 
 
+def _format_join_clause(join, format_type: str) -> str:
+    """Render the `` join(…)`` clause shared by ``faq`` and ``argmin``/``argmax``.
+
+    Returns ``""`` when there is none. Clauses are joined ``; ``. An equality
+    clause lists its key-column pairs ``l=r`` and then, when present, the
+    self-join side assignment ``syms=[left, right]``; an overlap clause is the
+    keyword call ``overlap(src=[…], tgt=[…])`` with ``, eps=E`` whenever ``eps``
+    is present (including ``0``). Mirrors formatJoinClause in pretty-print.ts.
+    """
+    if not join:
+        return ""
+    clauses = []
+    for c in join:
+        overlap = c.get("overlap")
+        if overlap:
+            src = ", ".join(overlap.get("src_env") or [])
+            tgt = ", ".join(overlap.get("tgt_env") or [])
+            eps = overlap.get("eps")
+            eps_part = (
+                f", eps={_format_number(eps, format_type)}"
+                if isinstance(eps, (int, float)) and not isinstance(eps, bool)
+                else ""
+            )
+            clauses.append(f"overlap(src=[{src}], tgt=[{tgt}]{eps_part})")
+            continue
+        parts = [f"{p[0]}={p[1]}" for p in (c.get("on") or [])]
+        syms = c.get("syms")
+        if syms:
+            parts.append(f"syms=[{', '.join(syms)}]")
+        clauses.append(", ".join(parts))
+    return f" join({'; '.join(clauses)})"
+
+
 def _format_aggregate(node, format_type: str) -> str:
     """Render an ``faq`` node per the rendering contract."""
 
@@ -958,10 +1029,7 @@ def _format_aggregate(node, format_type: str) -> str:
     ranges = _node_field(node, "ranges")
     if ranges:
         out += _format_ranges_clause(ranges, format_type)
-    join = _node_field(node, "join")
-    if join:
-        clauses = "; ".join(", ".join(f"{p[0]}={p[1]}" for p in (c.get("on") or [])) for c in join)
-        out += f" join({clauses})"
+    out += _format_join_clause(_node_field(node, "join"), format_type)
     filt = _node_field(node, "filter")
     if filt is not None:
         out += f" if {r(filt)}"
@@ -996,6 +1064,10 @@ def _format_arg_witness(node, format_type: str) -> str:
     ranges = _node_field(node, "ranges")
     if ranges:
         out += _format_ranges_clause(ranges, format_type)
+    out += _format_join_clause(_node_field(node, "join"), format_type)
+    filt = _node_field(node, "filter")
+    if filt is not None:
+        out += f" if {r(filt)}"
     node_id = _node_field(node, "id")
     if node_id is not None:
         out += f" id={node_id}"
@@ -1142,6 +1214,16 @@ def _format_structural_op(node, format_type: str):
         id_part = f", id={node_id}" if node_id is not None else ""
         return f"{name}({inner}, manifold={manifold if manifold is not None else ''}{id_part})"
 
+    if op == "skolem":
+        # The documentary `label` is a trailing named argument, like
+        # intersect_polygon's `manifold=`; an unlabeled skolem is a plain call.
+        label = _node_field(node, "label")
+        if label is None:
+            return None
+        inner = ", ".join(r(a) for a in args)
+        name = "\\mathrm{skolem}" if format_type == "latex" else "skolem"
+        return f"{name}({inner}, label={label})"
+
     if op == "faq":
         return _format_aggregate(node, format_type)
 
@@ -1167,7 +1249,7 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
 
     def format_arg(arg: Expr, is_right_operand: bool = False) -> str:
         result = _fmt(arg)
-        if _needs_parentheses(node, arg, is_right_operand):
+        if _needs_parentheses(node, arg, is_right_operand, format_type):
             return f"({result})"
         return result
 
@@ -1198,26 +1280,16 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
                         result = f"{result} * {fa}"
                 return result
             if op == "+":
-                result = format_arg(args[0])
-                for a in args[1:]:
-                    # a + (-b) → a − b (per-term, mirroring the 2-arg branch).
-                    neg_inner = _unary_negation_operand(a)
-                    if neg_inner is not None:
-                        sep = " − " if format_type == "unicode" else " - "
-                        result = f"{result}{sep}{_fmt(neg_inner)}"
-                    else:
-                        result = f"{result} + {format_arg(a, True)}"
-                return result
+                return " + ".join(format_arg(a, i > 0) for i, a in enumerate(args))
             if op in ("and", "or"):
                 if format_type == "unicode":
                     sym = " ∧ " if op == "and" else " ∨ "
-                    return sym.join(format_arg(a) for a in args)
-                if format_type == "latex":
+                elif format_type == "latex":
                     sym = " \\land " if op == "and" else " \\lor "
-                    return sym.join(format_arg(a) for a in args)
-                # ascii: word operators, precedence disambiguates (no parens).
-                sym = " and " if op == "and" else " or "
-                return sym.join(format_arg(a) for a in args)
+                else:
+                    # ascii: word operators, precedence disambiguates.
+                    sym = " and " if op == "and" else " or "
+                return sym.join(format_arg(a, i > 0) for i, a in enumerate(args))
             if op in ("min", "max"):
                 if format_type == "latex":
                     return f"\\{op}(" + ", ".join(to_latex(a) for a in args) + ")"
@@ -1227,10 +1299,13 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
 
         if op == "+":
             # Detect a + (-b) → render as a − b
+            # Simplify a + (-b) → a − b: recurse on a synthetic binary-minus
+            # node so `b` keeps its right-operand parentheses (`a − (b + c)`).
             neg_inner = _unary_negation_operand(right)
             if neg_inner is not None:
-                sep = " − " if format_type == "unicode" else " - "
-                return f"{format_arg(left)}{sep}{_fmt(neg_inner)}"
+                return _format_expression_node(
+                    ExprNode(op="-", args=[left, neg_inner]), format_type
+                )
             return f"{format_arg(left)} + {format_arg(right, True)}"
 
         if op == "-":

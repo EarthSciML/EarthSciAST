@@ -249,8 +249,10 @@ const GREEK_LATEX_RE = new RegExp(
   `${GREEK_CHAR_CLASS}|(?<![\\\\A-Za-z])${GREEK_NAME_GROUP}(?![A-Z}])`,
   'g',
 )
-// Unicode: a named letter not followed by an uppercase letter (chemical prefix).
-const GREEK_UNICODE_RE = new RegExp(`${GREEK_NAME_GROUP}(?![A-Z])`, 'g')
+// Unicode: a named letter not preceded by a backslash or another letter (so the
+// `nu` inside `annual` and the `eta` inside `theta` are left alone) and not
+// followed by an uppercase letter (chemical prefix).
+const GREEK_UNICODE_RE = new RegExp(`(?<![\\\\A-Za-z])${GREEK_NAME_GROUP}(?![A-Z])`, 'g')
 // ASCII / MathML: bare Greek Unicode chars.
 const GREEK_CHAR_RE = new RegExp(GREEK_CHAR_CLASS, 'g')
 // MathML: bare named letters (no lookahead).
@@ -262,7 +264,8 @@ function convertGreekLetters(text: string, format: 'unicode' | 'latex' | 'ascii'
     // (chemical prefix) or closing brace (inside \mathrm{}).
     return text.replace(GREEK_LATEX_RE, (match) => GREEK_LETTERS[match] || match)
   } else if (format === 'unicode') {
-    // Negative lookahead (?![A-Z]) prevents conversion when followed by uppercase.
+    // Lookbehind (?<![\\A-Za-z]) keeps a name glued to a letter; lookahead
+    // (?![A-Z]) prevents conversion when followed by uppercase.
     return text.replace(GREEK_UNICODE_RE, (match) => GREEK_NAME_TO_CHAR[match] || match)
   } else if (format === 'ascii') {
     return text.replace(GREEK_CHAR_RE, (match) => GREEK_CHAR_TO_NAME[match] || match)
@@ -660,7 +663,11 @@ function formatNumber(num: number, format: 'unicode' | 'latex' | 'ascii'): strin
   // Use scientific notation for very small or large numbers (spec Section 6.1)
   if (absNum < SCI_NOTATION_MIN || absNum >= SCI_NOTATION_MAX) {
     const [mantissaTok, exponentTok] = num.toExponential().split('e')
-    let mantissa = parseFloat(mantissaTok).toString() // remove trailing zeros
+    // `toExponential()` with no argument already yields the shortest mantissa
+    // that round-trips, with no trailing zeros. Re-rendering it through
+    // `parseFloat(…).toString()` rounded a 17-digit mantissa a second time and
+    // lost precision (4.4308006468156513e-17 printed as 4.430800646815651e-17).
+    let mantissa = mantissaTok
     // An integer-valued mantissa keeps one fractional digit (`1` → `1.0`) so the
     // rendering advertises its scientific form (contract number-formatting).
     if (!mantissa.includes('.')) mantissa += '.0'
@@ -714,19 +721,33 @@ function startsWithLiteralPower(child: Expr): boolean {
   return false
 }
 
-/**
- * Left-associative binary operators for which a same-precedence RIGHT operand
- * must be parenthesized (`a - (b - c)`, `a / (b / c)`, `a ^ (b ^ c)`).
- */
-const NON_ASSOCIATIVE_RIGHT_OPS = new Set(['-', '/', '^'])
+/** Operators whose same-op right operand needs no parentheses (the parser re-flattens them). */
+const ASSOCIATIVE_OPS = new Set(['+', '*', 'and', 'or'])
 
 /**
  * Check if parentheses are needed around a subexpression. Precedence and
  * function-call classification come from the central op registry
  * (op-registry.ts).
  */
-function needsParentheses(parent: ExprNode, child: Expr, isRightOperand = false): boolean {
+function needsParentheses(
+  parent: ExprNode,
+  child: Expr,
+  isRightOperand = false,
+  format?: TextFormat,
+): boolean {
   if (typeof child === 'number' || typeof child === 'string' || isNumericLiteral(child)) {
+    return false
+  }
+
+  // A LaTeX `\frac{…}{…}` is self-delimiting, so a product never needs to
+  // parenthesize one (the linear forms do: `a * (b / c)`).
+  if (
+    format === 'latex' &&
+    parent.op === '*' &&
+    isExprNode(child) &&
+    child.op === '/' &&
+    child.args.length === 2
+  ) {
     return false
   }
 
@@ -750,9 +771,15 @@ function needsParentheses(parent: ExprNode, child: Expr, isRightOperand = false)
   if (childPrec < parentPrec) return true
   if (childPrec > parentPrec) return false
 
-  // Same precedence: need parens if child is right operand and operator is not associative
-  if (isRightOperand && NON_ASSOCIATIVE_RIGHT_OPS.has(parent.op)) {
-    return true
+  // Same precedence, right operand: the parser groups same-level operators to
+  // the LEFT, so a right operand keeps its parentheses unless it is the very
+  // same associative operator (`a + (b + c)` re-flattens to `a + b + c`).
+  // `a * (b / c)` printed bare reads back as `(a * b) / c`, and `a == (b < c)`
+  // as `(a == b) < c`. A right-nested power keeps its parentheses too
+  // (`a^(b^c)`): redundant under right-associativity, but explicit.
+  if (isRightOperand) {
+    const childOp = (child as ExprNode).op
+    return !(childOp === parent.op && ASSOCIATIVE_OPS.has(parent.op))
   }
 
   // `^` is RIGHT-associative, so a LEFT-nested power must be parenthesized:
@@ -1044,7 +1071,15 @@ interface StructuralView {
   reduce?: string
   distinct?: boolean
   ranges?: Record<string, unknown>
-  join?: Array<{ on?: string[][] }>
+  join?: JoinClauseView[]
+  label?: string
+}
+
+/** One `faq` / `argmin` join clause: a key-column equality gate or an overlap gate. */
+interface JoinClauseView {
+  on?: string[][]
+  syms?: string[]
+  overlap?: { src_env?: string[]; tgt_env?: string[]; eps?: number }
 }
 
 /** View an `ExpressionNode` through its structural (non-`args`) fields. */
@@ -1189,7 +1224,7 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
         }
         return `${c.arg(left)} + ${c.arg(right, true)}`
       }
-      if (args.length >= 3) return args.map((a) => c.arg(a)).join(' + ')
+      if (args.length >= 3) return args.map((a, i) => c.arg(a, i > 0)).join(' + ')
       return undefined
     },
     mathml: (c) => {
@@ -1235,7 +1270,7 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
       }
       if (args.length >= 3) {
         const sep = format === 'unicode' ? '·' : format === 'latex' ? latexSep : ' * '
-        return args.map((a) => c.arg(a)).join(sep)
+        return args.map((a, i) => c.arg(a, i > 0)).join(sep)
       }
       return undefined
     },
@@ -1282,7 +1317,21 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
   '=': { text: textInfix('=', '=', '==') },
   '==': { text: textInfix('=', '=', '=='), mathml: mathmlInfix('<mo>=</mo>') },
   '!=': { text: textInfix('≠', '\\neq', '!='), mathml: mathmlInfix('<mo>&#x2260;</mo>') },
-  and: { text: textInfix('∧', '\\land', 'and'), mathml: mathmlInfix('<mo>&#x2227;</mo>') },
+  and: {
+    text: (c) => {
+      const { args, format } = c
+      const sym = format === 'unicode' ? '∧' : format === 'latex' ? '\\land' : 'and'
+      if (args.length === 2) return `${c.arg(args[0])} ${sym} ${c.arg(args[1], true)}`
+      if (args.length >= 3) return args.map((a, i) => c.arg(a, i > 0)).join(` ${sym} `)
+      return undefined
+    },
+    mathml: (c) => {
+      const { args } = c
+      if (args.length >= 2)
+        return `<mrow>${args.map((a) => c.m(a)).join('<mo>&#x2227;</mo>')}</mrow>`
+      return undefined
+    },
+  },
 
   or: {
     text: (c) => {
@@ -1293,7 +1342,7 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
       }
       if (args.length >= 3) {
         const sep = format === 'unicode' ? ' ∨ ' : format === 'latex' ? ' \\lor ' : ' or '
-        return args.map((a) => c.arg(a)).join(sep)
+        return args.map((a, i) => c.arg(a, i > 0)).join(sep)
       }
       return undefined
     },
@@ -1647,6 +1696,28 @@ function formatRangesClause(ranges: Record<string, unknown>, format: TextFormat)
   return ` where {${parts.join(', ')}}`
 }
 
+/**
+ * Render the ` join(…)` clause shared by `faq` and `argmin`/`argmax`, or `''`
+ * when there is none. Clauses are joined `; `. An equality clause lists its
+ * key-column pairs `l=r` and then, when present, the self-join side assignment
+ * `syms=[left, right]`; an overlap clause is the keyword call
+ * `overlap(src=[…], tgt=[…])` with `, eps=E` whenever `eps` is present.
+ */
+function formatJoinClause(join: JoinClauseView[] | undefined, format: TextFormat): string {
+  if (!join || join.length === 0) return ''
+  const clauses = join.map((c) => {
+    if (c.overlap) {
+      const { src_env, tgt_env, eps } = c.overlap
+      const epsPart = typeof eps === 'number' ? `, eps=${formatNumber(eps, format)}` : ''
+      return `overlap(src=[${(src_env ?? []).join(', ')}], tgt=[${(tgt_env ?? []).join(', ')}]${epsPart})`
+    }
+    const parts = (c.on ?? []).map((p) => `${p[0]}=${p[1]}`)
+    if (c.syms && c.syms.length > 0) parts.push(`syms=[${c.syms.join(', ')}]`)
+    return parts.join(', ')
+  })
+  return ` join(${clauses.join('; ')})`
+}
+
 /** Render a `faq` node per the rendering contract. */
 function formatAggregate(node: ExprNode, format: TextFormat): string {
   const n = structuralView(node)
@@ -1660,13 +1731,7 @@ function formatAggregate(node: ExprNode, format: TextFormat): string {
   let out = `${sym}${idxPart} (${exprStr})`
   const ranges = n.ranges
   if (ranges && Object.keys(ranges).length > 0) out += formatRangesClause(ranges, format)
-  const join = n.join
-  if (join && join.length > 0) {
-    const clauses = join
-      .map((c) => (c.on ?? []).map((p) => `${p[0]}=${p[1]}`).join(', '))
-      .join('; ')
-    out += ` join(${clauses})`
-  }
+  out += formatJoinClause(n.join, format)
   if (n.filter !== undefined) out += ` if ${r(n.filter)}`
   if (n.distinct === true) out += ` distinct`
   if (n.key !== undefined) out += ` key=${r(n.key)}`
@@ -1688,6 +1753,8 @@ function formatArgWitness(node: ExprNode, format: TextFormat): string {
   let out = `${name}${idxPart} (${exprStr})`
   const ranges = n.ranges
   if (ranges && Object.keys(ranges).length > 0) out += formatRangesClause(ranges, format)
+  out += formatJoinClause(n.join, format)
+  if (n.filter !== undefined) out += ` if ${r(n.filter)}`
   if (n.id !== undefined && n.id !== null) out += ` id=${String(n.id)}`
   return out
 }
@@ -1827,6 +1894,15 @@ function formatStructuralOp(node: ExprNode, format: TextFormat): string | undefi
       return `${name}(${inner}, manifold=${String(n.manifold ?? '')}${idPart})`
     }
 
+    case 'skolem': {
+      // The documentary `label` is a trailing named argument, like
+      // intersect_polygon's `manifold=`; an unlabeled skolem is a plain call.
+      if (n.label === undefined) return undefined
+      const inner = args.map(r).join(', ')
+      const name = format === 'latex' ? '\\mathrm{skolem}' : 'skolem'
+      return `${name}(${inner}, label=${String(n.label)})`
+    }
+
     case 'faq':
       return formatAggregate(node, format)
 
@@ -1856,7 +1932,7 @@ function formatExpressionNode(node: ExprNode, format: TextFormat): string {
     format,
     arg: (a, isRight = false) => {
       const result = renderExpr(a, format)
-      return needsParentheses(node, a, isRight) ? `(${result})` : result
+      return needsParentheses(node, a, isRight, format) ? `(${result})` : result
     },
     raw: (a) => renderExpr(a, format),
   }

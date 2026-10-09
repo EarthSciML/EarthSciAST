@@ -947,7 +947,13 @@ impl ArrayCompiled {
 
         // (5c) The build-time array scope a field `ic` may read (esm-spec
         // §6.6.5) — captured before stage (6) moves the bodies out.
-        let ic_scope_defs = capture_ic_scope_defs(&model_owned, &observed_names, &slots.var_shapes);
+        let ic_scope = capture_ic_scope(
+            &model_owned,
+            &observed_names,
+            &forcing_decls,
+            &slots.var_shapes,
+            &eliminated,
+        );
 
         // (6)+(6b) Build the dependency-ordered observed algebraic rules,
         // MOVING each declared observed's body expression out of the model.
@@ -1002,7 +1008,7 @@ impl ArrayCompiled {
             forcing_generation: std::cell::Cell::new(0),
             field_ics,
             init_faqs,
-            ic_scope_defs,
+            ic_scope,
             index_sets: index_sets.clone(),
             namespace: None,
             const_scope,
@@ -1268,6 +1274,21 @@ fn is_ic_lhs(lhs: &Expr) -> bool {
 /// `integral` `int_var`, an argmin/argmax `arg`, the BARE subscript positions of
 /// an `index(array, i…)` node, and `apply_expression_template` `bindings` keys.
 fn node_binders(node: &ExpressionNode, out: &mut HashSet<String>) {
+    node_loop_binders(node, out);
+    if node.op == "index" {
+        // Only a BARE position (`index(u, i)`) is a binder; an index EXPRESSION
+        // (`index(u, i+1)`) is a USE of a symbol bound elsewhere and is checked.
+        for arg in node.args.iter().skip(1) {
+            if let Expr::Variable(name) = arg {
+                out.insert(name.clone());
+            }
+        }
+    }
+}
+
+/// [`node_binders`] less the bare `index` subscripts: the names a node binds
+/// for its body and nothing else.
+fn node_loop_binders(node: &ExpressionNode, out: &mut HashSet<String>) {
     if let Some(idx) = &node.output_idx {
         out.extend(idx.iter().cloned());
     }
@@ -1279,15 +1300,6 @@ fn node_binders(node: &ExpressionNode, out: &mut HashSet<String>) {
     }
     if let Some(a) = &node.arg {
         out.insert(a.clone());
-    }
-    if node.op == "index" {
-        // Only a BARE position (`index(u, i)`) is a binder; an index EXPRESSION
-        // (`index(u, i+1)`) is a USE of a symbol bound elsewhere and is checked.
-        for arg in node.args.iter().skip(1) {
-            if let Expr::Variable(name) = arg {
-                out.insert(name.clone());
-            }
-        }
     }
     if let Some(bindings) = &node.bindings {
         out.extend(bindings.keys().cloned());
@@ -1414,64 +1426,267 @@ fn check_expr_free_vars(expr: &Expr, scope: &HashSet<String>) -> Result<(), Comp
     }
 }
 
-/// Collect every bare-variable name an expression references, at any depth.
-fn collect_expr_names(expr: &Expr, out: &mut HashSet<String>) {
+/// One state-free observed in the build-time scope a field `ic` reads.
+#[derive(Clone, Debug)]
+pub(super) struct IcScopeDef {
+    pub(super) name: String,
+    pub(super) body: Expr,
+    /// The other scope definitions the body reads. Each sorts before this one
+    /// in [`IcScope::defs`].
+    pub(super) deps: Vec<String>,
+    /// Every name the body reads that must be bound before it is evaluated:
+    /// the observeds it reads, in the scope or not, and the provider-served
+    /// fields. An absent one is never handed to the evaluator, which could
+    /// only walk the body per cell (and a strict compiler refuse it) before
+    /// failing on it; the definition is left out of the scope instead.
+    pub(super) needs: Vec<String>,
+}
+
+/// The STATE-FREE observeds a field `ic` right-hand side reads (esm-spec
+/// §6.6.5 "Build-time evaluation scope"), captured by [`capture_ic_scope`].
+#[derive(Clone, Debug, Default)]
+pub(super) struct IcScope {
+    /// The definitions in the dependency cone of the `ic` right-hand sides,
+    /// in dependency order: one forward pass evaluates each after everything
+    /// it reads.
+    pub(super) defs: Vec<IcScopeDef>,
+    /// The scope definitions an `ic` right-hand side names directly — where
+    /// the cone a provider-served field may cut short starts.
+    pub(super) roots: Vec<String>,
+    /// The observeds in that cone left out of the scope at compile time, with
+    /// the reason, for the diagnostic of an `ic` that reads one.
+    pub(super) excluded: Vec<(String, String)>,
+}
+
+/// The names `expr` reads FREE: every bare variable reference not bound by an
+/// enclosing node (a `faq`'s `output_idx` / `ranges` keys, an `integral`'s
+/// variable, …). A loop index is no read of the observed or state that
+/// happens to share its name.
+fn collect_free_names(expr: &Expr, bound: &mut Vec<String>, out: &mut HashSet<String>) {
     match expr {
         Expr::Variable(name) => {
-            out.insert(name.clone());
+            if !bound.contains(name) {
+                out.insert(name.clone());
+            }
         }
         Expr::Operator(node) => {
-            node.for_each_child(&mut |child| collect_expr_names(child, out));
+            let mut own = HashSet::new();
+            node_loop_binders(node, &mut own);
+            let depth = bound.len();
+            bound.extend(own);
+            node.for_each_child(&mut |child| collect_free_names(child, bound, out));
+            bound.truncate(depth);
         }
         _ => {}
     }
 }
 
-/// The STATE-FREE observed definitions an `ic` right-hand side may read
+pub(super) fn free_names(expr: &Expr) -> HashSet<String> {
+    let mut out = HashSet::new();
+    collect_free_names(expr, &mut Vec::new(), &mut out);
+    out
+}
+
+/// Memoized walk over the observed definitions marking each one that reads
+/// state or `t`, directly or through another observed — linear in the
+/// definitions' reads.
+struct StateTaint<'a> {
+    defs: &'a BTreeMap<String, (Expr, HashSet<String>)>,
+    is_state: &'a dyn Fn(&str) -> bool,
+    /// `None` while a definition is being visited (a cycle reads it as clean:
+    /// the cycle itself keeps it out of the scope), then why it is tainted, if
+    /// it is.
+    marks: HashMap<&'a str, Option<Option<String>>>,
+}
+
+impl<'a> StateTaint<'a> {
+    fn cause(&mut self, name: &'a str) -> Option<String> {
+        match self.marks.get(name) {
+            Some(Some(cause)) => return cause.clone(),
+            Some(None) => return None,
+            None => {}
+        }
+        self.marks.insert(name, None);
+        let defs = self.defs;
+        let reads = &defs[name].1;
+        let mut cause = reads
+            .iter()
+            .filter(|n| (self.is_state)(n))
+            .min()
+            .map(|n| format!("reads '{n}'"));
+        if cause.is_none() {
+            let mut deps: Vec<&'a String> = reads
+                .iter()
+                .filter(|n| n.as_str() != name && defs.contains_key(n.as_str()))
+                .collect();
+            deps.sort();
+            for dep in deps {
+                if let Some(inner) = self.cause(dep) {
+                    cause = Some(format!("reads '{dep}', which {inner}"));
+                    break;
+                }
+            }
+        }
+        self.marks.insert(name, Some(cause.clone()));
+        cause
+    }
+}
+
+/// The STATE-FREE observed definitions the `ic` right-hand sides read
 /// (esm-spec §6.6.5 "Build-time evaluation scope").
 ///
-/// A state-free observed — one whose defining expression closes over parameters,
-/// inline `const` data and other state-free observeds, with no state and no `t`
-/// — is resolvable BEFORE the simulation runs; the build already materializes
-/// exactly this class of field as a setup array for `BuildInspection`.
-/// Admitting it as an `ic` RHS (esm-spec §11.4.1) is the same evaluator reached
-/// from one more place, and it is what lets a column test seed `u` from a
-/// `const` gather instead of minting a per-regime rewrite-rule library.
+/// A state-free observed — one whose defining expression closes over
+/// parameters, inline `const` data, provider-served fields and other
+/// state-free observeds, with no state and no `t` — is resolvable BEFORE the
+/// simulation runs; the build already materializes exactly this class of field
+/// as a setup array for `BuildInspection`. Admitting it as an `ic` RHS
+/// (esm-spec §11.4.1) is the same evaluator reached from one more place, and it
+/// is what lets a column test seed `u` from a `const` gather instead of minting
+/// a per-regime rewrite-rule library.
+///
+/// State-freedom is TRANSITIVE: an observed that reads another observed
+/// reading state (`Mz_conv` ← `div_h` ← `conv_x` ← `u`) is not state-free
+/// either, and a state is any unknown that is not observed — an eliminated
+/// algebraic one too. Only the cone the `ic` right-hand sides actually read is
+/// kept, as the Python binding's `_buildtime_observed_arrays` keeps it, so an
+/// unrelated observed is never evaluated; it is ordered so one pass evaluates
+/// each definition after everything it reads. A definition on a dependency
+/// cycle has no such place, and is left out.
 ///
 /// Captured HERE, before stage (6) MOVES each observed's body out of the model,
 /// and evaluated lazily by [`ArrayCompiled::resolve_field_ics`] — only when the
 /// document actually has a field `ic` to fold.
-fn capture_ic_scope_defs(
+fn capture_ic_scope(
     model: &Model,
     observed_names: &[String],
+    forcing_names: &IndexMap<String, Option<Vec<usize>>>,
     state_names: &IndexMap<String, VarShape>,
-) -> Vec<(String, Expr)> {
-    if !model
+    eliminated: &HashSet<String>,
+) -> IcScope {
+    let ic_reads: HashSet<String> = model
         .equations
         .iter()
-        .any(|eq| matches!(&eq.lhs, Expr::Operator(n) if n.op == "ic"))
-    {
-        return Vec::new();
+        .filter(|eq| is_ic_lhs(&eq.lhs))
+        .flat_map(|eq| free_names(&eq.rhs))
+        .collect();
+    if ic_reads.is_empty() {
+        return IcScope::default();
     }
-    let observed: HashSet<&String> = observed_names.iter().collect();
-    let bodies = observed_bodies(model);
-    let mut out: Vec<(String, Expr)> = Vec::new();
-    for (name, body) in bodies {
-        if !observed.contains(&name) {
+    let observed: HashSet<&str> = observed_names.iter().map(String::as_str).collect();
+    let defs: BTreeMap<String, (Expr, HashSet<String>)> = observed_bodies(model)
+        .into_iter()
+        .filter(|(name, _)| observed.contains(name.as_str()))
+        .map(|(name, body)| {
+            let reads = free_names(&body);
+            (name, (body, reads))
+        })
+        .collect();
+    let is_state = |n: &str| n == "t" || state_names.contains_key(n) || eliminated.contains(n);
+    let mut taint = StateTaint {
+        defs: &defs,
+        is_state: &is_state,
+        marks: HashMap::new(),
+    };
+
+    // The state-free cone of the `ic` reads.
+    let mut excluded: Vec<(String, String)> = Vec::new();
+    let mut roots: Vec<String> = ic_reads
+        .iter()
+        .filter(|n| defs.contains_key(n.as_str()))
+        .cloned()
+        .collect();
+    roots.sort();
+    let mut wanted: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut stack: Vec<&str> = roots.iter().map(String::as_str).collect();
+    while let Some(name) = stack.pop() {
+        if wanted.contains_key(name) || excluded.iter().any(|(n, _)| n == name) {
             continue;
         }
-        let mut names = HashSet::new();
-        collect_expr_names(&body, &mut names);
-        if names
+        if let Some(cause) = taint.cause(name) {
+            excluded.push((name.to_string(), format!("is not state-free: it {cause}")));
+            continue;
+        }
+        let deps: Vec<&str> = defs[name]
+            .1
             .iter()
-            .any(|n| n == "t" || state_names.contains_key(n))
-        {
-            continue;
-        }
-        out.push((name, body));
+            .map(String::as_str)
+            .filter(|n| *n != name && defs.contains_key(*n))
+            .collect();
+        stack.extend(&deps);
+        wanted.insert(name, deps);
     }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
+    // A clean definition can still read a tainted one through a cycle the
+    // memoized walk saw only half of; keep only reads of the cone.
+    for deps in wanted.values_mut() {
+        deps.retain(|d| !excluded.iter().any(|(n, _)| n == d));
+    }
+
+    // Dependency order (Kahn), ties by name so the order is deterministic.
+    let mut pending: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut readers: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (name, deps) in &wanted {
+        pending.insert(name, deps.len());
+        for dep in deps {
+            readers.entry(dep).or_default().push(name);
+        }
+    }
+    let mut ready: std::collections::BTreeSet<&str> = pending
+        .iter()
+        .filter(|(_, n)| **n == 0)
+        .map(|(name, _)| *name)
+        .collect();
+    let mut order: Vec<&str> = Vec::with_capacity(wanted.len());
+    while let Some(name) = ready.pop_first() {
+        pending.remove(name);
+        order.push(name);
+        for reader in readers.get(name).into_iter().flatten() {
+            if let Some(n) = pending.get_mut(reader) {
+                *n -= 1;
+                if *n == 0 {
+                    ready.insert(reader);
+                }
+            }
+        }
+    }
+    if !pending.is_empty() {
+        let cycle: Vec<&str> = pending.keys().copied().collect();
+        let reason = format!(
+            "is on, or reads, a dependency cycle among the observeds {}, so no evaluation \
+             order exists",
+            cycle.join(", ")
+        );
+        excluded.extend(cycle.iter().map(|n| (n.to_string(), reason.clone())));
+    }
+
+    let defs = order
+        .into_iter()
+        .map(|name| {
+            let (body, reads) = &defs[name];
+            let mut deps: Vec<String> = wanted[name].iter().map(|d| d.to_string()).collect();
+            deps.sort();
+            let mut needs: Vec<String> = reads
+                .iter()
+                .filter(|n| {
+                    n.as_str() != name
+                        && (defs.contains_key(n.as_str()) || forcing_names.contains_key(n.as_str()))
+                })
+                .cloned()
+                .collect();
+            needs.sort();
+            IcScopeDef {
+                name: name.to_string(),
+                body: body.clone(),
+                deps,
+                needs,
+            }
+        })
+        .collect();
+    excluded.sort();
+    IcScope {
+        defs,
+        roots,
+        excluded,
+    }
 }
 
 /// Lower every SHAPED parameter whose value the document itself supplies —

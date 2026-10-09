@@ -100,7 +100,7 @@ function _namespace_join(join, binders::Set{String}, prefix::String,
     # scalar and never rewrites. A bin-equality clause namespaces its key columns.
     nsclause(clause::_OverlapJoinSpec) = _OverlapJoinSpec(
         String[nsname(n) for n in clause.src_env],
-        String[nsname(n) for n in clause.tgt_env], clause.eps)
+        String[nsname(n) for n in clause.tgt_env], clause.eps, clause.eps_given)
     # Key COLUMNS are references and are namespaced; a clause's `syms` name
     # range symbols the node BINDS and must be carried through untouched.
     nsclause(clause) = _with_pairs(clause,

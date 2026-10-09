@@ -254,13 +254,18 @@ jobs:
   # Run each language's individual tests first.
   # Matrices absorbed from the per-language CI workflows (gt-9ju):
   #   python-package.yml, rust-ci.yml, julia-ci.yml, go-ci.yml, npm-publish.yml
+  # Two legs: the current LTS and the current stable release, both resolved
+  # by setup-julia at run time, so a new Julia release is picked up without
+  # editing this file. (`'1'` is setup-julia's alias for the newest stable
+  # 1.x; `'lts'` for the long-term-support line.) When the two aliases name
+  # the same version the matrix simply runs it twice.
   julia-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        julia-version: ['1.10', '1.12', '1.13']
+        julia-version: ['lts', '1']
     defaults:
       run:
         working-directory: pkg/EarthSciAST.jl
@@ -270,6 +275,7 @@ jobs:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Julia
+        id: setup-julia
         uses: julia-actions/setup-julia@v2
         with:
           version: ${{ matrix.julia-version }}
@@ -277,31 +283,32 @@ jobs:
       # Depot cache: RESTORE on every run, SAVE only on `main`.
       #
       # `Pkg.test()` builds a separate environment (the `[targets] test` set)
-      # and precompiles it under `--check-bounds=yes` — a different
-      # `Base.CacheFlags` configuration from the one the step below builds, and
-      # ~437 packages deep. Warm that costs 40-70 s. Cold it costs 8-24 min,
-      # and it was cold on 6 of 15 legs sampled.
+      # and precompiles it under its own `Base.CacheFlags` configuration
+      # (`--check-bounds=yes` before 1.13, `--code-coverage` when coverage is
+      # on), ~240 packages that the install step below does not build. Warm
+      # that costs well under a minute; cold it costs 7-16 min of every leg.
       #
-      # Not because dependencies drifted — the resolved version sets of a cold
-      # leg (34703909739) and a warm one (34671026222) are byte-identical, 303
-      # entries, zero diff. Because the repo was permanently over GitHub's 10
-      # GB cache limit and in continuous LRU eviction:
-      # `actions/cache/usage` reported 11.6 GB across 24 caches, of which the
-      # ten largest were all julia depots. Every leg saved a ~0.8-1.5 GB cache
-      # under a `run_id`-unique key on EVERY run, and caches are scoped per
-      # ref, so each open PR kept its own full set. Three legs x ~1 GB x ~20
-      # runs/day went into a 10 GB budget.
+      # Saving only from `main` keeps the repo under GitHub's 10 GB cache
+      # budget: caches are scoped per ref, and a per-run key on every PR leg
+      # once kept 11.6 GB of julia depots in continuous LRU eviction. PR runs
+      # still restore main's depot.
       #
-      # Saving only from `main` fixes that at the source. PR runs still restore
-      # it — a PR run CAN read its base branch's caches, and did: run
-      # 34700838214 (a pull request) restored the cache written by run
-      # 34671026222 (a push to main). Steady state is one depot per julia
-      # version, ~3 GB total, instead of one per version per live ref.
-      #
-      # The key is pinned to the package's Project.toml, not to the run, so
-      # main re-saves only when the dependency set changes; between those the
-      # exact-key hit makes the save step a no-op. Bump `v1` by hand to force a
-      # rebuild if a depot ever goes stale enough to be worth discarding.
+      # The key carries the RESOLVED Julia version (the matrix names aliases)
+      # and the ISO week. Nothing pins the dependency set — no Manifest is
+      # committed — so the registry moves under a fixed Project.toml, and a key
+      # pinned to Project.toml alone was an exact hit forever: the depot saved
+      # 2026-09-16 was still being restored three weeks later, and every leg of
+      # every run recompiled ~240 packages it no longer matched. The week
+      # bounds that drift: main's first run of each week misses, falls back to
+      # the newest depot through `restore-keys`, and saves a fresh one; the
+      # old week's entry goes unread and GitHub evicts it after seven days.
+      # Bump `v2` by hand to discard every depot at once.
+      - name: Cache key
+        id: depot-key
+        run: |
+          echo "key=julia-depot-v2-${{ runner.os }}-${{ steps.setup-julia.outputs.julia-version }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml') }}-$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+          echo "prefix=julia-depot-v2-${{ runner.os }}-${{ steps.setup-julia.outputs.julia-version }}-" >> "$GITHUB_OUTPUT"
+
       - name: Restore Julia depot
         id: julia-depot
         uses: actions/cache/restore@v4
@@ -313,9 +320,9 @@ jobs:
             ~/.julia/compiled
             ~/.julia/scratchspaces
             ~/.julia/logs
-          key: julia-depot-v1-${{ runner.os }}-${{ matrix.julia-version }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml') }}
+          key: ${{ steps.depot-key.outputs.key }}
           restore-keys: |
-            julia-depot-v1-${{ runner.os }}-${{ matrix.julia-version }}-
+            ${{ steps.depot-key.outputs.prefix }}
 
       - name: Install Julia dependencies
         run: |
@@ -325,20 +332,101 @@ jobs:
             Pkg.precompile()
           '
 
-      - name: Run Julia tests (with coverage)
+      # Coverage on ONE leg — the one that uploads it. Instrumented code runs
+      # slower and precompiles under a separate cache configuration, which the
+      # other leg paid for and then threw away. It rides on the LTS leg, the
+      # faster of the two, so the 90-minute ceiling has the most headroom
+      # where the extra cost lands.
+      - name: Run Julia tests
         run: |
-          julia --project=. -e 'using Pkg; Pkg.test(coverage=true)'
+          julia --project=. -e 'using Pkg; Pkg.test(coverage=${{ matrix.julia-version == 'lts' }})'
+
+      - name: Process Julia coverage
+        uses: julia-actions/julia-processcoverage@v1
+        if: matrix.julia-version == 'lts'
+        with:
+          directories: pkg/EarthSciAST.jl/src
+
+      - name: Upload Julia coverage to Codecov
+        uses: codecov/codecov-action@v5
+        if: matrix.julia-version == 'lts'
+        with:
+          files: lcov.info
+          flags: julia
+
+      # See the restore step above for why this is main-only. `always()` so a
+      # red suite still banks the precompile work, which is just as valid; the
+      # `cache-hit` guard makes this a no-op on every run after the week's
+      # first.
+      - name: Save Julia depot
+        if: ${{ always() && github.ref == 'refs/heads/main' && steps.julia-depot.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.julia/artifacts
+            ~/.julia/packages
+            ~/.julia/registries
+            ~/.julia/compiled
+            ~/.julia/scratchspaces
+            ~/.julia/logs
+          key: ${{ steps.depot-key.outputs.key }}
+
+  # The Julia checks that need ONE Julia, not a matrix: they used to ride on the
+  # 1.12 test leg, after its full suite, adding ~4 min to the leg that already
+  # ran closest to the 90-minute limit. As their own job they run beside the
+  # suite instead of after it, and they no longer wait on — or get cancelled
+  # with — a suite they do not depend on.
+  julia-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || '' }}
+
+      - name: Setup Julia
+        id: setup-julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+
+      # Restore only: julia-tests owns this depot (same key) and saves it.
+      - name: Cache key
+        id: depot-key
+        run: |
+          echo "key=julia-depot-v2-${{ runner.os }}-${{ steps.setup-julia.outputs.julia-version }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml') }}-$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+          echo "prefix=julia-depot-v2-${{ runner.os }}-${{ steps.setup-julia.outputs.julia-version }}-" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Julia depot
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.julia/artifacts
+            ~/.julia/packages
+            ~/.julia/registries
+            ~/.julia/compiled
+            ~/.julia/scratchspaces
+            ~/.julia/logs
+          key: ${{ steps.depot-key.outputs.key }}
+          restore-keys: |
+            ${{ steps.depot-key.outputs.prefix }}
+
+      - name: Install Julia dependencies
+        run: |
+          julia --project=pkg/EarthSciAST.jl -e '
+            using Pkg
+            Pkg.instantiate()
+            Pkg.precompile()
+          '
 
       # The §9.7 golden generator is the only sanctioned way to produce the
       # template-import goldens, so a generator that does not reproduce what is
       # committed hands every fixture author an unrelated diff to notice and
       # revert by hand (#256: a stale hardcoded `esm` version went unnoticed
       # precisely because nothing ran the script). Re-run it and require the
-      # tree to be unchanged. One matrix leg is enough — the writer sorts keys,
-      # so the output does not vary by Julia version.
+      # tree to be unchanged. One Julia is enough — the writer sorts keys, so
+      # the output does not vary by Julia version.
       - name: Template-import goldens regenerate byte-identically
-        if: matrix.julia-version == '1.12'
-        working-directory: ${{ github.workspace }}
         run: |
           julia --project=pkg/EarthSciAST.jl scripts/generate-template-import-goldens.jl
           julia --project=pkg/EarthSciAST.jl scripts/generate-pushdown-goldens.jl
@@ -352,16 +440,15 @@ jobs:
       # timing gates need a clean machine and run in the Slurm sweep instead,
       # so the adapter samples each call only the minimum five times
       # (`--budget 0`) and skips the interpreter oracle, which the
-      # compiler-agreement tier already covers. One leg, like the goldens:
+      # compiler-agreement tier already covers. One Julia, like the goldens:
       # code size and allocation are properties of the emitted program, not of
       # the Julia version. `--in-process` measures in this one process: the
       # PR sizes fit any runner, and a watched child per family (the
       # scheduled sweep's guard against a document that outgrows the runner)
-      # would load the package once per family. `!cancelled()` so a red suite
-      # above still reports this gate.
+      # would load the package once per family. `!cancelled()` so a red
+      # goldens check above still reports this gate.
       - name: Scaling tier, deterministic gates (Julia native)
-        if: ${{ !cancelled() && matrix.julia-version == '1.12' }}
-        working-directory: ${{ github.workspace }}
+        if: ${{ !cancelled() }}
         run: |
           julia --project=pkg/EarthSciAST.jl/scripts/scaling_env \
             tests/conformance/scaling/julia/adapter.jl \
@@ -369,36 +456,6 @@ jobs:
             --budget 0 --interpreter-max-states 0 --in-process
           python3 tests/conformance/scaling/check.py scaling-julia-serial.json \
             --gates deterministic --require pr
-
-      - name: Process Julia coverage
-        uses: julia-actions/julia-processcoverage@v1
-        if: matrix.julia-version == '1.12'
-        with:
-          directories: pkg/EarthSciAST.jl/src
-
-      - name: Upload Julia coverage to Codecov
-        uses: codecov/codecov-action@v5
-        if: matrix.julia-version == '1.12'
-        with:
-          files: lcov.info
-          flags: julia
-
-      # See the restore step above for why this is main-only. `always()` so a
-      # red suite still banks the precompile work, which is just as valid; the
-      # `cache-hit` guard makes this a no-op on the runs that already had an
-      # exact-key hit, which is most of them.
-      - name: Save Julia depot
-        if: ${{ always() && github.ref == 'refs/heads/main' && steps.julia-depot.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.julia/artifacts
-            ~/.julia/packages
-            ~/.julia/registries
-            ~/.julia/compiled
-            ~/.julia/scratchspaces
-            ~/.julia/logs
-          key: julia-depot-v1-${{ runner.os }}-${{ matrix.julia-version }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml') }}
 
   typescript-tests:
     runs-on: ubuntu-latest

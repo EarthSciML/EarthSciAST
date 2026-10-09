@@ -422,7 +422,7 @@ function _coerce_overlap_clause(ov)
         "(rect [xmin,ymin,xmax,ymax]) factors; got $(length(tgt_env))"))
     eps_raw = _get_field(ov, :eps, nothing)
     eps = eps_raw === nothing ? 0.0 : Float64(eps_raw)
-    return _OverlapJoinSpec(src_env, tgt_env, eps)
+    return _OverlapJoinSpec(src_env, tgt_env, eps, eps_raw !== nothing)
 end
 
 function _coerce_join(data)

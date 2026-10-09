@@ -376,7 +376,13 @@ is part of the literal, not a unary-minus node, which is what lets `2^-3` and
 
 Because a unary-minus operand extends only to the next `+` or binary `-`, a printer MUST
 parenthesize a negated sum or difference — `-(a + b)`, `-(a - b)` — or the text it emits
-reads back as a different expression. The full printing contract is
+reads back as a different expression. For the same reason, because every level groups
+to the LEFT, a printer MUST parenthesize a right operand at the same level unless it is
+the same associative operator (`+`, `*`, `and`, `or`, which a parser flattens into one
+n-ary node): `a * (b / c)`, `a + (b - c)`, `a == (b < c)`. A parser reads `a and b and c`
+as one n-ary `and`, exactly as it reads `a + b + c` as one n-ary `+`. The full printing
+contract, including the text spelling of every `faq` field (join clauses with `syms` or an
+`overlap` gate, `argmin`/`argmax` joins and filters, a skolem `label`), is
 `tests/display/RENDERING_CONTRACT.md`.
 
 This section documents the text surface only; it places no requirement on `.esm`

@@ -209,6 +209,9 @@ _with_pairs(::Any, pairs) = pairs
 # `src_env` maps to one join range, `tgt_env` to the other (each factor's 1-D
 # shape index set names the range, exactly like the `on` gate's key columns).
 # `eps` is the outward envelope inflation (FP-conservative slack, default 0.0).
+# `eps_given` records whether the clause SPELLED `eps` (an explicit `0` included):
+# an absent `eps` means the schema default 0 and is neither serialized nor
+# printed, while a present one round-trips as written (RENDERING_CONTRACT.md).
 # It is BUILT by `_coerce_join`, round-trips through `serialize`/`namespacing`/
 # `display`, and is CONSUMED by `_resolve_join_gates_for` (main-graph) and
 # `_vi_resolve_join` (value-invention) into the resolved gates above.
@@ -216,6 +219,7 @@ struct _OverlapJoinSpec
     src_env::Vector{String}
     tgt_env::Vector{String}
     eps::Float64
+    eps_given::Bool
 end
 
 """
@@ -268,8 +272,8 @@ Operator expression node containing:
   empty for a const node.
 - `label`: optional documentary relation tag for a `skolem` node (e.g. "edge",
   "bin", "pair") — the human-facing name of the relation the emitted key belongs
-  to. Purely documentary: it is NOT part of the emitted key and is NOT rendered;
-  `args` are the pure key components.
+  to. Purely documentary: it is NOT part of the emitted key (it renders as a
+  trailing `label=L` named argument); `args` are the pure key components.
 """
 # `mutable struct` (not `struct`) is a deliberate PERFORMANCE choice, not a
 # licence to mutate: the build path treats `OpExpr` as an immutable value and only
@@ -392,8 +396,9 @@ mutable struct OpExpr <: ASTExpr
     #           FIRST `args` position, where a typo silently masqueraded as a real
     #           key component; it now lives in its own field so `args` are PURE key
     #           components. Purely documentary — NOT part of the emitted key
-    #           (`_vi_skolem` reads it for provenance only) and NOT rendered by the
-    #           pretty-printer (a skolem renders as `skolem(<args>)`).
+    #           (`_vi_skolem` reads it for provenance only). The pretty-printer
+    #           shows it as a trailing named argument, `skolem(<args>, label=L)`,
+    #           so the text form stays lossless.
     label::Union{String,Nothing}
 
     # ── Author annotations: carried verbatim, never interpreted here ──
