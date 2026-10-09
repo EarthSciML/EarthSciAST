@@ -144,24 +144,20 @@ impl Classification {
             .map(|n| (*n).to_string())
             .collect();
 
-        let mut brownian = Vec::new();
-        let mut discrete = Vec::new();
-        let mut sampled = Vec::new();
-        let mut constant = Vec::new();
-        for (name, var) in variables {
-            if var.var_type != VariableType::Parameter {
-                continue;
-            }
-            match (&var.update, &var.distribution) {
-                (Some(update), _) if update.is_wiener() => brownian.push(name.clone()),
-                (Some(_), _) => discrete.push(name.clone()),
-                (None, Some(_)) => sampled.push(name.clone()),
-                (None, None) => constant.push(name.clone()),
-            }
-        }
-        for set in [&mut brownian, &mut discrete, &mut sampled, &mut constant] {
-            set.sort();
-        }
+        let ParameterPartition {
+            brownian,
+            discrete,
+            sampled,
+            constant,
+        } = ParameterPartition::of(variables);
+        let owned =
+            |names: Vec<&str>| -> Vec<String> { names.into_iter().map(str::to_string).collect() };
+        let (brownian, discrete, sampled, constant) = (
+            owned(brownian),
+            owned(discrete),
+            owned(sampled),
+            owned(constant),
+        );
 
         let system_kind = derive_system_kind(&brownian, equations, &ode_states);
 
@@ -672,13 +668,101 @@ impl<'a> UnknownPartition<'a> {
     }
 }
 
+/// The parameter half of a [`Classification`], each list sorted.
+struct ParameterPartition<'a> {
+    brownian: Vec<&'a str>,
+    discrete: Vec<&'a str>,
+    sampled: Vec<&'a str>,
+    constant: Vec<&'a str>,
+}
+
+impl<'a> ParameterPartition<'a> {
+    fn of(variables: &'a IndexMap<String, ModelVariable>) -> Self {
+        let mut p = ParameterPartition {
+            brownian: Vec::new(),
+            discrete: Vec::new(),
+            sampled: Vec::new(),
+            constant: Vec::new(),
+        };
+        for (name, var) in variables {
+            if var.var_type != VariableType::Parameter {
+                continue;
+            }
+            let set = match (&var.update, &var.distribution) {
+                (Some(update), _) if update.is_wiener() => &mut p.brownian,
+                (Some(_), _) => &mut p.discrete,
+                (None, Some(_)) => &mut p.sampled,
+                (None, None) => &mut p.constant,
+            };
+            set.push(name.as_str());
+        }
+        for set in [
+            &mut p.brownian,
+            &mut p.discrete,
+            &mut p.sampled,
+            &mut p.constant,
+        ] {
+            set.sort_unstable();
+        }
+        p
+    }
+}
+
+/// The role of each variable as a [`Classification`] decides it (an observed
+/// unknown, a Brownian or a discrete parameter), without the system kind's
+/// walk over every equation and without copying names.
+pub(crate) struct VariableRoles<'a> {
+    observed: BTreeSet<&'a str>,
+    parameters: ParameterPartition<'a>,
+}
+
+impl<'a> VariableRoles<'a> {
+    pub(crate) fn of(model: &'a Model) -> Self {
+        let observed = if defines_by_name(&model.equations) {
+            UnknownPartition::of(&model.variables, &model.equations).observed
+        } else {
+            BTreeSet::new()
+        };
+        VariableRoles {
+            observed,
+            parameters: ParameterPartition::of(&model.variables),
+        }
+    }
+
+    /// [`Classification::is_observed`].
+    pub(crate) fn is_observed(&self, name: &str) -> bool {
+        self.observed.contains(name)
+    }
+
+    /// [`Classification::is_brownian`].
+    pub(crate) fn is_brownian(&self, name: &str) -> bool {
+        self.parameters.brownian.binary_search(&name).is_ok()
+    }
+
+    /// [`Classification::is_discrete_parameter`].
+    pub(crate) fn is_discrete_parameter(&self, name: &str) -> bool {
+        self.parameters.discrete.binary_search(&name).is_ok()
+    }
+}
+
 /// [`Classification::observed_definitions`] from the raw parts, without the
 /// rest of the classification (the system kind walks every equation).
 pub(crate) fn observed_definitions_of_parts(
     variables: &IndexMap<String, ModelVariable>,
     equations: &[Equation],
 ) -> BTreeMap<String, Expr> {
+    if !defines_by_name(equations) {
+        return BTreeMap::new();
+    }
     owned_definitions(UnknownPartition::of(variables, equations).observed_definitions)
+}
+
+/// Whether any equation's left-hand side is a bare (or indexed) variable, the
+/// only form that defines an observed unknown.
+fn defines_by_name(equations: &[Equation]) -> bool {
+    equations
+        .iter()
+        .any(|eq| matches!(lhs_form_ref(&eq.lhs), LhsFormRef::Bare(_)))
 }
 
 fn owned_definitions(defs: BTreeMap<&str, &Expr>) -> BTreeMap<String, Expr> {

@@ -377,8 +377,11 @@ pub(crate) fn apply_flatten_rewrites(model: &mut Model) -> Result<(), CompileErr
         .filter(|(_, v)| v.var_type == crate::types::VariableType::Parameter)
         .map(|(name, _)| name.clone())
         .collect();
-    crate::flatten::resolve_rhs_time_derivatives(&mut model.equations, &time_invariant);
-    if crate::flatten::first_unresolved_rhs_time_derivative_in(&model.equations).is_some() {
+    let carried =
+        crate::flatten::resolve_rhs_time_derivatives(&mut model.equations, &time_invariant);
+    if carried
+        && crate::flatten::first_unresolved_rhs_time_derivative_in(&model.equations).is_some()
+    {
         return Err(CompileError::UnloweredOperatorError {
             op: "D".to_string(),
         });
@@ -810,21 +813,29 @@ impl ArrayCompiled {
         // Then rewrite every `{ "from": <index set> }` range reference (§5.2)
         // into a concrete `[lo, hi]` interval before shape inference / rule
         // building, so every downstream consumer sees only dense intervals.
-        crate::faq::resolve_aggregate_ranges_with_extents(
-            &mut model_owned,
-            index_sets,
-            &derived.extents,
-        )
-        .or_else(|e| derived.refuse_on_failure(index_sets).and(Err(e)))?;
-        // A range over a non-geometry derived set that value invention did not
-        // size would contract as empty and read 0 (esm-spec §9.6.6): refuse it.
-        refuse_unmaterialized_derived_ranges(&model_owned, index_sets, &derived)?;
+        // The next three passes look only at nodes with `ranges` and at `faq`
+        // nodes, and none adds either; one walk says whether there are any.
+        let census = RangeCensus::of(&model_owned);
+        if census.ranges {
+            crate::faq::resolve_aggregate_ranges_with_extents(
+                &mut model_owned,
+                index_sets,
+                &derived.extents,
+            )
+            .or_else(|e| derived.refuse_on_failure(index_sets).and(Err(e)))?;
+            // A range over a non-geometry derived set that value invention did
+            // not size would contract as empty and read 0 (esm-spec §9.6.6):
+            // refuse it.
+            refuse_unmaterialized_derived_ranges(&model_owned, index_sets, &derived)?;
+        }
         // Reject any aggregate whose ⊕ is spelled outside the schema's closed
         // `reduce` / `semiring` enums. The gate lives here, at the one funnel
         // every array-runtime build passes through, because the seams that
         // actually resolve ⊕ (`extract_derivative_faq`, `faq_spec`)
         // return `Option` and so could only decline silently.
-        validate_oplus_spellings(&model_owned)?;
+        if census.faq {
+            validate_oplus_spellings(&model_owned)?;
+        }
 
         // Stages (0)-(5) read the model immutably; only OWNED products leave
         // this block, so stage (6) below can borrow the model mutably (it
@@ -1200,17 +1211,13 @@ pub(crate) fn check_free_variables(
         if is_ic_lhs(&eq.lhs) {
             collect_free_bare_symbols(&eq.rhs, &mut bound);
         }
-        collect_dim_symbols(&eq.lhs, &mut bound);
-        collect_dim_symbols(&eq.rhs, &mut bound);
-        // Array-valued leaves (potential bare forcing FIELDS) — see the doc note.
-        collect_index_head_names(&eq.lhs, &mut bound);
-        collect_index_head_names(&eq.rhs, &mut bound);
+        // And array-valued leaves (potential bare forcing FIELDS) — see the
+        // doc note on `collect_dims_and_index_heads`.
+        collect_dims_and_index_heads(&eq.lhs, &mut bound);
+        collect_dims_and_index_heads(&eq.rhs, &mut bound);
     }
     for var in model.variables.values() {
-        var.for_each_expression(&mut |expr| {
-            collect_dim_symbols(expr, &mut bound);
-            collect_index_head_names(expr, &mut bound);
-        });
+        var.for_each_expression(&mut |expr| collect_dims_and_index_heads(expr, &mut bound));
     }
 
     // ---- Check every equation (skipping `ic`) and observed expression. -------
@@ -1362,34 +1369,30 @@ fn collect_free_bare_symbols(expr: &Expr, out: &mut HashSet<String>) {
     }
 }
 
-/// Collect the bare name at the HEAD (first arg) of every `index(name, …)` op in
-/// the subtree — an array-valued leaf (a declared state/observed, or a bare,
-/// undeclared, loader-fed forcing FIELD read at runtime through the forcing
-/// buffer). Crediting these keeps a legitimate bare forcing field in scope.
-fn collect_index_head_names(expr: &Expr, out: &mut HashSet<String>) {
+/// Collect, in one walk of the subtree:
+///
+/// - the `dim` axis of every node that carries one, regardless of `op`
+///   (esm-spec §4.9.1 (ii), as revised): a coordinate axis is resolved
+///   STRUCTURALLY by the presence of a `dim` field, not by a hardcoded
+///   spatial-operator name list (the sugar ops carry no privileged status).
+///   Defensive: the array path rejects unlowered spatial ops earlier, but a
+///   coordinate an `ic` RHS shares with a node's `dim` stays creditable;
+/// - the bare name at the HEAD (first arg) of every `index(name, …)` op — an
+///   array-valued leaf (a declared state/observed, or a bare, undeclared,
+///   loader-fed forcing FIELD read at runtime through the forcing buffer).
+///   Crediting these keeps a legitimate bare forcing field in scope.
+fn collect_dims_and_index_heads(expr: &Expr, out: &mut HashSet<String>) {
     if let Expr::Operator(node) = expr {
+        if let Some(dim) = &node.dim {
+            out.insert(dim.clone());
+        }
         if node.op == "index"
             && let Some(Expr::Variable(name)) = node.args.first()
             && !name.contains('.')
         {
             out.insert(name.clone());
         }
-        node.for_each_child(&mut |child| collect_index_head_names(child, out));
-    }
-}
-
-/// Collect the `dim` axis of every node that carries one, regardless of `op`
-/// (esm-spec §4.9.1 (ii), as revised): a coordinate axis is resolved
-/// STRUCTURALLY by the presence of a `dim` field, not by a hardcoded
-/// spatial-operator name list (the sugar ops carry no privileged status).
-/// Defensive: the array path rejects unlowered spatial ops earlier, but a
-/// coordinate an `ic` RHS shares with a node's `dim` stays creditable.
-fn collect_dim_symbols(expr: &Expr, out: &mut HashSet<String>) {
-    if let Expr::Operator(node) = expr {
-        if let Some(dim) = &node.dim {
-            out.insert(dim.clone());
-        }
-        node.for_each_child(&mut |child| collect_dim_symbols(child, out));
+        node.for_each_child(&mut |child| collect_dims_and_index_heads(child, out));
     }
 }
 
@@ -1868,7 +1871,7 @@ fn classify_variables(
     // flatten, and no re-derivation of the document's namespacing.
     let mut data_fed: Vec<(String, String)> = Vec::new();
 
-    let class = crate::classification::Classification::of(model);
+    let class = crate::classification::VariableRoles::of(model);
 
     let mut var_keys: Vec<&String> = model.variables.keys().collect();
     var_keys.sort();
@@ -3722,9 +3725,10 @@ pub(super) fn strip_value_invention(
     // A `kind: "derived"` index set whose `from_faq` names one of these IS
     // materialized by the dense runtime (the clipped overlap ring), so a variable
     // shaped over it — e.g. a geometry `clip` — must be KEPT.
+    let any_derived = index_sets.values().any(|is| is.kind == "derived");
     // Only read for a shape over a derived set, so not collected without one.
     let mut geom_ids: HashSet<String> = HashSet::new();
-    if index_sets.values().any(|is| is.kind == "derived") {
+    if any_derived {
         for eq in &model.equations {
             collect_geometry_producer_ids(&eq.rhs, &mut geom_ids);
         }
@@ -3772,7 +3776,9 @@ pub(super) fn strip_value_invention(
     //     a `rank` dense id over an invented set: build-time relational
     //     outputs, dropped as the other bindings drop them.
     for eq in &model.equations {
-        if expr_contains_skolem(&eq.rhs) || ranks_a_derived_set(&eq.rhs, index_sets) {
+        if expr_contains_skolem(&eq.rhs)
+            || (any_derived && ranks_a_derived_set(&eq.rhs, index_sets))
+        {
             if let Some(v) = equation_defined_var(&eq.lhs) {
                 vi_vars.insert(v);
             }
@@ -4487,6 +4493,45 @@ impl DerivedMaterialization {
             )),
             None => Ok(()),
         }
+    }
+}
+
+/// Whether any expression of a model has a node carrying `ranges`, or a `faq`
+/// node: the equations (both sides), the initialization equations, and the
+/// variables' own expressions.
+struct RangeCensus {
+    ranges: bool,
+    faq: bool,
+}
+
+impl RangeCensus {
+    fn of(model: &Model) -> Self {
+        fn walk(expr: &Expr, c: &mut RangeCensus) {
+            let Expr::Operator(node) = expr else {
+                return;
+            };
+            c.ranges |= node.ranges.is_some();
+            c.faq |= crate::faq::is_faq_op(&node.op);
+            if !(c.ranges && c.faq) {
+                node.for_each_child(&mut |child| walk(child, c));
+            }
+        }
+        let mut c = RangeCensus {
+            ranges: false,
+            faq: false,
+        };
+        for eq in model
+            .equations
+            .iter()
+            .chain(model.initialization_equations.iter().flatten())
+        {
+            walk(&eq.lhs, &mut c);
+            walk(&eq.rhs, &mut c);
+        }
+        for var in model.variables.values() {
+            var.for_each_expression(&mut |expr| walk(expr, &mut c));
+        }
+        c
     }
 }
 
