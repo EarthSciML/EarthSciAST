@@ -3714,15 +3714,18 @@ pub(super) fn strip_value_invention(
     // A `kind: "derived"` index set whose `from_faq` names one of these IS
     // materialized by the dense runtime (the clipped overlap ring), so a variable
     // shaped over it — e.g. a geometry `clip` — must be KEPT.
+    // Only read for a shape over a derived set, so not collected without one.
     let mut geom_ids: HashSet<String> = HashSet::new();
-    for eq in &model.equations {
-        collect_geometry_producer_ids(&eq.rhs, &mut geom_ids);
-    }
-    // An observed unknown's defining body is one of those equation RHSs from
-    // esm 1.0.0, so the loop above already covers it; what is left on a
-    // variable is a parameter `update`'s expressions.
-    for var in model.variables.values() {
-        var.for_each_expression(&mut |expr| collect_geometry_producer_ids(expr, &mut geom_ids));
+    if index_sets.values().any(|is| is.kind == "derived") {
+        for eq in &model.equations {
+            collect_geometry_producer_ids(&eq.rhs, &mut geom_ids);
+        }
+        // An observed unknown's defining body is one of those equation RHSs from
+        // esm 1.0.0, so the loop above already covers it; what is left on a
+        // variable is a parameter `update`'s expressions.
+        for var in model.variables.values() {
+            var.for_each_expression(&mut |expr| collect_geometry_producer_ids(expr, &mut geom_ids));
+        }
     }
     // (a) A variable shaped over a `kind: "derived"` index set whose FAQ producer
     //     is NOT a geometry ring producer — a relational membership / candidate

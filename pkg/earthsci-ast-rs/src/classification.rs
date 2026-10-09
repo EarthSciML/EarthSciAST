@@ -72,7 +72,8 @@ impl std::fmt::Display for SystemKind {
     }
 }
 
-/// One model's complete §6.3.1 classification, computed once.
+/// One model's complete §6.3.1 classification, computed once. Every name list
+/// is sorted.
 ///
 /// The free functions below ([`ode_states`], [`brownian_parameters`], …) are
 /// thin wrappers over this; build it directly when a caller needs several sets,
@@ -139,7 +140,7 @@ impl Classification {
         // partition here.
         let algebraic: Vec<String> = unknowns
             .iter()
-            .filter(|n| !ode_states.contains(**n) && !observed.contains(**n))
+            .filter(|n| ode_states.binary_search(n).is_err() && !observed.contains(*n))
             .map(|n| (*n).to_string())
             .collect();
 
@@ -165,16 +166,16 @@ impl Classification {
         let system_kind = derive_system_kind(&brownian, equations, &ode_states);
 
         Classification {
-            ode_states: ode_states.into_iter().collect(),
-            observed_unknowns: observed.into_iter().collect(),
-            inlined_unknowns: inlined.into_iter().collect(),
+            ode_states: ode_states.into_iter().map(str::to_string).collect(),
+            observed_unknowns: observed.into_iter().map(str::to_string).collect(),
+            inlined_unknowns: inlined.into_iter().map(str::to_string).collect(),
             algebraic_unknowns: algebraic,
             brownian_parameters: brownian,
             discrete_parameters: discrete,
             sampled_parameters: sampled,
             constant_parameters: constant,
             system_kind,
-            observed_definitions,
+            observed_definitions: owned_definitions(observed_definitions),
         }
     }
 
@@ -211,27 +212,27 @@ impl Classification {
 
     /// Membership test for [`Classification::ode_states`].
     pub fn is_ode_state(&self, name: &str) -> bool {
-        self.ode_states.iter().any(|s| s == name)
+        sorted_contains(&self.ode_states, name)
     }
 
     /// Membership test for [`Classification::observed_unknowns`].
     pub fn is_observed(&self, name: &str) -> bool {
-        self.observed_unknowns.iter().any(|s| s == name)
+        sorted_contains(&self.observed_unknowns, name)
     }
 
     /// Membership test for [`Classification::inlined_unknowns`].
     pub fn is_inlined(&self, name: &str) -> bool {
-        self.inlined_unknowns.iter().any(|s| s == name)
+        sorted_contains(&self.inlined_unknowns, name)
     }
 
     /// Membership test for [`Classification::brownian_parameters`].
     pub fn is_brownian(&self, name: &str) -> bool {
-        self.brownian_parameters.iter().any(|s| s == name)
+        sorted_contains(&self.brownian_parameters, name)
     }
 
     /// Membership test for [`Classification::discrete_parameters`].
     pub fn is_discrete_parameter(&self, name: &str) -> bool {
-        self.discrete_parameters.iter().any(|s| s == name)
+        sorted_contains(&self.discrete_parameters, name)
     }
 
     /// Every unknown of the model, sorted — the union of the three unknown
@@ -502,6 +503,11 @@ pub fn observed_definition_json<'a>(
         .get("rhs")
 }
 
+/// Membership in one of a [`Classification`]'s name lists, which are sorted.
+fn sorted_contains(names: &[String], name: &str) -> bool {
+    names.binary_search_by(|s| s.as_str().cmp(name)).is_ok()
+}
+
 // === LHS forms ============================================================
 
 /// What an equation's LHS says about the unknown it names (esm-spec §6.3.1).
@@ -523,8 +529,23 @@ pub enum LhsForm {
 /// The same unwrapping applies to a bare LHS, so `faq{expr: y[i]}` still
 /// reads as a definition of `y`.
 pub fn lhs_form(lhs: &Expr) -> LhsForm {
+    match lhs_form_ref(lhs) {
+        LhsFormRef::Derivative(name) => LhsForm::Derivative(name.to_string()),
+        LhsFormRef::Bare(name) => LhsForm::Bare(name.to_string()),
+        LhsFormRef::Expression => LhsForm::Expression,
+    }
+}
+
+/// [`LhsForm`], borrowing the name from the left-hand side.
+pub(crate) enum LhsFormRef<'a> {
+    Derivative(&'a str),
+    Bare(&'a str),
+    Expression,
+}
+
+pub(crate) fn lhs_form_ref(lhs: &Expr) -> LhsFormRef<'_> {
     match lhs {
-        Expr::Variable(name) => LhsForm::Bare(name.clone()),
+        Expr::Variable(name) => LhsFormRef::Bare(name),
         Expr::Operator(node) => match node.op.as_str() {
             // `D(x)` / `D(x[i])`, time only: a `wrt` naming a SPATIAL
             // dimension is a spatial derivative and defines no ODE state.
@@ -532,33 +553,33 @@ pub fn lhs_form(lhs: &Expr) -> LhsForm {
                 .args
                 .first()
                 .and_then(base_variable)
-                .map(LhsForm::Derivative)
-                .unwrap_or(LhsForm::Expression),
+                .map(LhsFormRef::Derivative)
+                .unwrap_or(LhsFormRef::Expression),
             // A `faq` LHS is a shell around the real form.
             "faq" => node
                 .expr
                 .as_deref()
-                .map(lhs_form)
-                .unwrap_or(LhsForm::Expression),
+                .map(lhs_form_ref)
+                .unwrap_or(LhsFormRef::Expression),
             // `u[i] ~ …` defines `u`.
             "index" => node
                 .args
                 .first()
                 .and_then(base_variable)
-                .map(LhsForm::Bare)
-                .unwrap_or(LhsForm::Expression),
-            _ => LhsForm::Expression,
+                .map(LhsFormRef::Bare)
+                .unwrap_or(LhsFormRef::Expression),
+            _ => LhsFormRef::Expression,
         },
-        Expr::Integer(_) | Expr::Number(_) => LhsForm::Expression,
+        Expr::Integer(_) | Expr::Number(_) => LhsFormRef::Expression,
     }
 }
 
 /// The base variable of an LHS operand, peeling the wrappers that do not
 /// change WHICH quantity is being written: `index`, `faq`
 /// shells, and `broadcast`.
-fn base_variable(expr: &Expr) -> Option<String> {
+fn base_variable(expr: &Expr) -> Option<&str> {
     match expr {
-        Expr::Variable(name) => Some(name.clone()),
+        Expr::Variable(name) => Some(name),
         Expr::Operator(node) => match node.op.as_str() {
             "index" | "broadcast" => node.args.first().and_then(base_variable),
             "faq" => node
@@ -579,51 +600,58 @@ fn base_variable(expr: &Expr) -> Option<String> {
 /// definition. It walks no right-hand side, so a caller that wants only the
 /// definitions ([`observed_definitions_of_parts`]) pays for nothing else.
 struct UnknownPartition<'a> {
-    unknowns: BTreeSet<&'a str>,
-    ode_states: BTreeSet<String>,
-    observed: BTreeSet<String>,
-    inlined: BTreeSet<String>,
-    observed_definitions: BTreeMap<String, Expr>,
+    /// Sorted.
+    unknowns: Vec<&'a str>,
+    /// Sorted, without repeats.
+    ode_states: Vec<&'a str>,
+    observed: BTreeSet<&'a str>,
+    inlined: BTreeSet<&'a str>,
+    observed_definitions: BTreeMap<&'a str, &'a Expr>,
 }
 
 impl<'a> UnknownPartition<'a> {
-    fn of(variables: &'a IndexMap<String, ModelVariable>, equations: &[Equation]) -> Self {
-        let mut ode_states = BTreeSet::new();
+    fn of(variables: &'a IndexMap<String, ModelVariable>, equations: &'a [Equation]) -> Self {
+        let mut ode_states = Vec::new();
         let mut observed = BTreeSet::new();
         let mut inlined = BTreeSet::new();
         let mut observed_definitions = BTreeMap::new();
 
-        let unknowns: BTreeSet<&str> = variables
+        let mut unknowns: Vec<&str> = variables
             .iter()
             .filter(|(_, v)| v.var_type == VariableType::Unknown)
             .map(|(k, _)| k.as_str())
             .collect();
+        unknowns.sort_unstable();
+        let is_unknown = |name: &str| unknowns.binary_search(&name).is_ok();
 
         for eq in equations {
-            match lhs_form(&eq.lhs) {
+            match lhs_form_ref(&eq.lhs) {
                 // `D(x)/dt ~ …`, including the wrapped spellings `D(x[i])` and
                 // a `faq` whose `expr` is the derivative.
-                LhsForm::Derivative(name) => {
-                    if unknowns.contains(name.as_str()) {
-                        ode_states.insert(name);
+                LhsFormRef::Derivative(name) => {
+                    if is_unknown(name) {
+                        ode_states.push(name);
                     }
                 }
                 // `y ~ f(…)` / `y[i] ~ f(…)` — the LHS DEFINES y.
-                LhsForm::Bare(name) => {
-                    if unknowns.contains(name.as_str()) {
-                        if !observed.contains(&name) {
-                            observed_definitions.insert(name.clone(), eq.rhs.clone());
+                LhsFormRef::Bare(name) => {
+                    if is_unknown(name) {
+                        if !observed.contains(name) {
+                            observed_definitions.insert(name, &eq.rhs);
                         }
                         if matches!(eq.lhs, Expr::Variable(_)) {
-                            inlined.insert(name.clone());
+                            inlined.insert(name);
                         }
                         observed.insert(name);
                     }
                 }
                 // An expression LHS constrains its unknowns only implicitly.
-                LhsForm::Expression => {}
+                LhsFormRef::Expression => {}
             }
         }
+
+        ode_states.sort_unstable();
+        ode_states.dedup();
 
         // An unknown that is BOTH differentiated somewhere and bare-LHS
         // elsewhere is an ODE state: the derivative is what the solver
@@ -650,7 +678,13 @@ pub(crate) fn observed_definitions_of_parts(
     variables: &IndexMap<String, ModelVariable>,
     equations: &[Equation],
 ) -> BTreeMap<String, Expr> {
-    UnknownPartition::of(variables, equations).observed_definitions
+    owned_definitions(UnknownPartition::of(variables, equations).observed_definitions)
+}
+
+fn owned_definitions(defs: BTreeMap<&str, &Expr>) -> BTreeMap<String, Expr> {
+    defs.into_iter()
+        .map(|(name, rhs)| (name.to_string(), rhs.clone()))
+        .collect()
 }
 
 // === system_kind ==========================================================
@@ -662,7 +696,7 @@ pub(crate) fn observed_definitions_of_parts(
 fn derive_system_kind(
     brownian: &[String],
     equations: &[Equation],
-    ode_states: &BTreeSet<String>,
+    ode_states: &[&str],
 ) -> SystemKind {
     if !brownian.is_empty() {
         return SystemKind::Sde;
