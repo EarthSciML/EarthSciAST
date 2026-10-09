@@ -5977,11 +5977,6 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     return gen
 end
 
-# Sentinel term for enumerating a contraction's admitted tuples: the per-cell
-# expansion substitutes each tuple's values into it, so its arguments read back
-# as the tuple.
-const _AC_KEYS_OP = "__esm_ac_keys"
-
 # The admitted contracted tuples of every output cell, as the TABLE form of
 # `_ACFold` the nest walks. Enumerated by the SAME `_foreach_aggregate_term` the
 # per-cell expansion runs, with the same per-cell iterators (a ragged bound
@@ -5994,7 +5989,6 @@ function _array_contraction_table(contract_refs::Vector{Base.RefValue{Int}},
         const_registry::AbstractDict)
     nc = length(contract_names)
     contract_const = _contract_lists(contract_const)
-    sentinel = OpExpr(_AC_KEYS_OP, ASTExpr[VarExpr(n) for n in contract_names])
     n_cells = prod(length(r) for r in range_iters)
     seg = Vector{Int}(undef, n_cells + 1)
     seg[1] = 1
@@ -6012,11 +6006,10 @@ function _array_contraction_table(contract_refs::Vector{Base.RefValue{Int}},
             iters[d] = cc === nothing ?
                 _expand_contract_range(contract_ranges[d], idx_env, const_registry) : cc
         end
-        _foreach_aggregate_term(sentinel, contract_names, iters, agg_gates, nothing,
-                                zerobar, idx_env) do t
-            ks = (t::OpExpr).args
+        _foreach_aggregate_term(nothing, contract_names, iters, agg_gates, nothing,
+                                zerobar, idx_env) do ks
             @inbounds for d in 1:nc
-                push!(cols[d], Int((ks[d]::IntExpr).value))
+                push!(cols[d], Int(ks[d]))
             end
         end
         seg[c + 1] = length(cols[1]) + 1

@@ -232,7 +232,13 @@ end
 # already carry the output-index substitution (only the contracted indices are
 # substituted here); `nothing` disables the guard, as a `nothing` `gates`
 # disables the join.
-function _foreach_aggregate_term(emit!::F, body::ASTExpr,
+# `body === nothing` is KEYS mode: `emit!` receives each surviving contracted
+# index tuple itself (in the same order, through the same gates) instead of the
+# substituted term, for a caller that only needs the indices (the TABLE fold's
+# entry list, `_array_contraction_table`). A filter is not applied in keys mode.
+const _AggBody = Union{ASTExpr,Nothing}
+
+function _foreach_aggregate_term(emit!::F, body::_AggBody,
         contract_names::Vector{String}, contract_iters,
         gates, filt, zerobar::Float64,
         out_env::Union{Nothing,Dict{String,Int}}=nothing) where {F}
@@ -257,9 +263,11 @@ end
 # `_VI_ENUM_VISITS` instrumentation exists ONLY in the overlap-gated
 # specialisation — the ungated expansion, the engine's hottest loop, keeps
 # exactly the instruction stream it had.
-function _foreach_aggregate_product(emit!::F, body::ASTExpr,
+function _foreach_aggregate_product(emit!::F, body::_AggBody,
         contract_names::Vector{String}, iters, gates, filt, zerobar::Float64,
         binding, k_exprs::Dict{String,ASTExpr}, ::Val{COUNT}) where {F,COUNT}
+    body === nothing && length(iters) == 1 &&
+        return _foreach_keys1(emit!, contract_names[1], iters[1], gates, binding, Val(COUNT))
     for k_tuple in Iterators.product(iters...)
         if binding !== nothing
             COUNT && (_VI_ENUM_VISITS[] += 1)
@@ -267,6 +275,10 @@ function _foreach_aggregate_product(emit!::F, body::ASTExpr,
                 binding[contract_names[d]] = k_tuple[d]
             end
             _join_admits(gates, binding) || continue
+        end
+        if body === nothing
+            emit!(k_tuple)
+            continue
         end
         for d in 1:length(contract_names)
             k_exprs[contract_names[d]] = IntExpr(Int64(k_tuple[d]))
@@ -277,6 +289,21 @@ function _foreach_aggregate_product(emit!::F, body::ASTExpr,
             term = OpExpr("ifelse", ASTExpr[fsub, term, NumExpr(zerobar)])
         end
         emit!(term)
+    end
+    return nothing
+end
+
+# Keys mode over one contracted index: the product above with a single
+# iterator, behind a function barrier so the loop is typed.
+function _foreach_keys1(emit!::F, name::String, it, gates, binding,
+                        ::Val{COUNT}) where {F,COUNT}
+    for k in it
+        if binding !== nothing
+            COUNT && (_VI_ENUM_VISITS[] += 1)
+            binding[name] = k
+            _join_admits(gates, binding) || continue
+        end
+        emit!((k,))
     end
     return nothing
 end
@@ -311,7 +338,7 @@ end
 # (`_combine_with_reducer`, and the explicit `rhs_zerobar` literal in
 # `_compile_faq_percell!`) — e.g. an emission record outside the grid sums
 # to 0 under `(+, 0)`.
-function _foreach_aggregate_term_gated(emit!::F, body::ASTExpr,
+function _foreach_aggregate_term_gated(emit!::F, body::_AggBody,
         contract_names::Vector{String}, contract_iters, gates, filt,
         zerobar::Float64, binding, ov, k_exprs::Dict{String,ASTExpr}) where {F}
     plan = _overlap_drive_plan(ov, contract_names, binding,
@@ -344,7 +371,7 @@ end
 # the gate's candidate pairs (already reordered by the caller to match
 # `Iterators.product`'s slow/fast convention), so the emitted term sequence is
 # the exact subsequence the filtered full product emitted.
-function _foreach_aggregate_pairs(emit!::F, body::ASTExpr,
+function _foreach_aggregate_pairs(emit!::F, body::_AggBody,
         contract_names::Vector{String}, cols, gates, filt, zerobar::Float64,
         binding, k_exprs::Dict{String,ASTExpr}) where {F}
     for p in 1:length(cols[1])
@@ -353,6 +380,10 @@ function _foreach_aggregate_pairs(emit!::F, body::ASTExpr,
             binding[contract_names[d]] = cols[d][p]
         end
         _join_admits(gates, binding) || continue
+        if body === nothing
+            emit!(ntuple(d -> cols[d][p]::Int, length(contract_names)))
+            continue
+        end
         for d in 1:length(contract_names)
             k_exprs[contract_names[d]] = IntExpr(Int64(cols[d][p]))
         end
