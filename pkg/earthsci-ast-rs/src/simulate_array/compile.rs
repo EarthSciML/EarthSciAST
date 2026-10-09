@@ -814,8 +814,9 @@ impl ArrayCompiled {
         // into a concrete `[lo, hi]` interval before shape inference / rule
         // building, so every downstream consumer sees only dense intervals.
         // The next three passes look only at nodes with `ranges` and at `faq`
-        // nodes, and none adds either; one walk says whether there are any.
-        let census = RangeCensus::of(&model_owned);
+        // nodes, and shape inference only at `index` nodes; no pass from here
+        // to there adds any of them, so one walk says whether there are any.
+        let census = OpCensus::of(&model_owned);
         if census.ranges {
             crate::faq::resolve_aggregate_ranges_with_extents(
                 &mut model_owned,
@@ -901,7 +902,7 @@ impl ArrayCompiled {
             // (2)+(2b) Infer state shapes from every equation usage, seeding
             // declared array shapes where the index-usage inference left an
             // array state scalar.
-            let shape_map = infer_state_shapes(model, &state_vars, index_sets)?;
+            let shape_map = infer_state_shapes(model, &state_vars, index_sets, census.index)?;
 
             // (3) Partition state variables into integrated / eliminated /
             // held-at-ic.
@@ -1964,12 +1965,22 @@ fn classify_variables(
 /// offsets past its true extent, so inference alone WIDENS it past the grid.
 /// Usage inference remains the fallback for states with no (resolvable)
 /// declared shape.
+/// `any_index`: whether the model has an `index` node at all; without one no
+/// equation indexes a state, and every state's inferred shape is empty.
 fn infer_state_shapes(
     model: &Model,
     state_vars: &[&String],
     index_sets: &HashMap<String, IndexSet>,
+    any_index: bool,
 ) -> Result<HashMap<String, Vec<usize>>, CompileError> {
-    let mut shape_map = infer_shapes(state_vars, &model.equations)?;
+    let mut shape_map = if any_index {
+        infer_shapes(state_vars, &model.equations)?
+    } else {
+        state_vars
+            .iter()
+            .map(|name| ((*name).clone(), Vec::new()))
+            .collect()
+    };
 
     // (2a) A declared shape naming an index set the registry does not hold, on a
     // state no equation indexes, has no extent from either source. Laying it out
@@ -2710,7 +2721,8 @@ fn build_observed_rules(
 ) -> Result<Vec<AlgebraicRule>, CompileError> {
     let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
     let array_axes = declared_axis_names(model);
-    let declared: HashSet<String> = model.variables.keys().cloned().collect();
+    // Read only for a bare-index definition.
+    let declared: std::cell::OnceCell<HashSet<String>> = std::cell::OnceCell::new();
 
     // Declared observed variables with an `expression` field. An array-shaped
     // observed — a discretization-agnostic PDE leaf's `psi_x`, `grad_mag`,
@@ -2738,9 +2750,10 @@ fn build_observed_rules(
     // * a bare-variable LHS lowers WHOLESALE through [`lower_algebraic_body`]:
     //   `eval` materializes the body's arrays and broadcasts the elementwise ops
     //   over them, so a readable intermediate decomposition runs as authored.
-    let mut def_eq: HashMap<String, &crate::types::Equation> = HashMap::new();
+    let mut def_eq: HashMap<&str, &crate::types::Equation> = HashMap::new();
     for eq in &model.equations {
-        if let crate::classification::LhsForm::Bare(name) = crate::classification::lhs_form(&eq.lhs)
+        if let crate::classification::LhsFormRef::Bare(name) =
+            crate::classification::lhs_form_ref(&eq.lhs)
         {
             def_eq.entry(name).or_insert(eq);
         }
@@ -2755,7 +2768,8 @@ fn build_observed_rules(
         if let Expr::Operator(lhs) = &eq.lhs
             && lhs.op == "index"
         {
-            check_bare_index_definition(name, lhs, &eq.rhs, &array_axes, &declared)?;
+            let declared = declared.get_or_init(|| model.variables.keys().cloned().collect());
+            check_bare_index_definition(name, lhs, &eq.rhs, &array_axes, declared)?;
         }
         // A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) is recognized before
         // either ordinary lowering, because both of them would compile the
@@ -2796,9 +2810,14 @@ fn build_observed_rules(
     // forms, for a name the DAE pass removed from the state vector rather than
     // one the classification calls observed. An observed's own defining equation
     // was lowered above, so it is skipped here rather than emitted twice.
+    let is_observed: HashSet<&str> = if eliminated.is_empty() {
+        HashSet::new()
+    } else {
+        observed_names.iter().map(String::as_str).collect()
+    };
     for eq in &model.equations {
         if let Some(a) = extract_algebraic_faq(&eq.lhs, &eq.rhs) {
-            if eliminated.contains(&a.var) && !observed_names.contains(&a.var) {
+            if eliminated.contains(&a.var) && !is_observed.contains(a.var.as_str()) {
                 if let Some(r) = lower_recurrence(&a.var, &eq.lhs, &eq.rhs)? {
                     observed_rules.push(AlgebraicRule::Recurrence {
                         var: a.var.clone(),
@@ -2822,7 +2841,7 @@ fn build_observed_rules(
         }
         if let Expr::Variable(name) = &eq.lhs
             && eliminated.contains(name)
-            && !observed_names.iter().any(|n| n == name)
+            && !is_observed.contains(name.as_str())
         {
             observed_rules.push(lower_algebraic_body(
                 name,
@@ -4496,29 +4515,32 @@ impl DerivedMaterialization {
     }
 }
 
-/// Whether any expression of a model has a node carrying `ranges`, or a `faq`
-/// node: the equations (both sides), the initialization equations, and the
-/// variables' own expressions.
-struct RangeCensus {
+/// Whether any expression of a model has a node carrying `ranges`, a `faq`
+/// node, or an `index` node: the equations (both sides), the initialization
+/// equations, and the variables' own expressions.
+struct OpCensus {
     ranges: bool,
     faq: bool,
+    index: bool,
 }
 
-impl RangeCensus {
+impl OpCensus {
     fn of(model: &Model) -> Self {
-        fn walk(expr: &Expr, c: &mut RangeCensus) {
+        fn walk(expr: &Expr, c: &mut OpCensus) {
             let Expr::Operator(node) = expr else {
                 return;
             };
             c.ranges |= node.ranges.is_some();
             c.faq |= crate::faq::is_faq_op(&node.op);
-            if !(c.ranges && c.faq) {
+            c.index |= node.op == "index";
+            if !(c.ranges && c.faq && c.index) {
                 node.for_each_child(&mut |child| walk(child, c));
             }
         }
-        let mut c = RangeCensus {
+        let mut c = OpCensus {
             ranges: false,
             faq: false,
+            index: false,
         };
         for eq in model
             .equations
