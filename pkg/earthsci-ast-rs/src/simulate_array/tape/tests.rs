@@ -1094,6 +1094,70 @@ fn ab_rerolled_scalar_boxes() {
     );
 }
 
+/// Enough boxes for the folded strip loop (`exec/lane_fold.rs`), and not a
+/// whole number of strips, with every kind of chain and operand it handles:
+/// products led by a shared scalar, `-` and `/` chains, a negated value read
+/// by two folds and a negated fold result, a sum that becomes a unit-step
+/// derivative and one whose value is also read elsewhere, micro-ops no fold
+/// covers (`exp`, `max`), and inputs read in place, through a table (the
+/// off-grid `a_050x` breaks `a`'s spacing) and per lane from parameters.
+#[test]
+fn ab_folded_lane_strips() {
+    let boxes = 101;
+    let mut vars = serde_json::Map::new();
+    let mut eqs: Vec<serde_json::Value> = Vec::new();
+    vars.insert("k1".into(), json!({"type": "parameter", "default": 0.7}));
+    vars.insert("k2".into(), json!({"type": "parameter", "default": 1.3}));
+    for b in 0..boxes {
+        let [a, c, e, f, kb] = ["a", "c", "e", "f", "kb"].map(|v| format!("{v}_{b:03}"));
+        for v in [&a, &c, &e, &f] {
+            vars.insert(v.clone(), json!({"type": "unknown"}));
+        }
+        vars.insert(
+            kb.clone(),
+            json!({"type": "parameter", "default": 0.5 + 0.01 * b as f64}),
+        );
+        let r1 = json!({"op": "*", "args": ["k1", a, c]});
+        let r2 = json!({"op": "/", "args": [kb, c]});
+        let nr1 = json!({"op": "-", "args": [r1]});
+        eqs.push(json!({"lhs": {"op": "D", "args": [a], "wrt": "t"},
+            "rhs": {"op": "+", "args": [nr1, r2, {"op": "exp", "args": [{"op": "-", "args": [c]}]}]}}));
+        eqs.push(json!({"lhs": {"op": "D", "args": [c], "wrt": "t"},
+            "rhs": {"op": "-", "args": [{"op": "-", "args": [r1, {"op": "max", "args": [c, 0.5]}]}, e]}}));
+        eqs.push(json!({"lhs": {"op": "D", "args": [e], "wrt": "t"},
+            "rhs": {"op": "/", "args": [{"op": "/", "args": [{"op": "-", "args": [{"op": "*", "args": [a, e]}]}, kb]}, "k2"]}}));
+        eqs.push(json!({"lhs": {"op": "D", "args": [f], "wrt": "t"},
+            "rhs": {"op": "+", "args": [nr1, {"op": "*", "args": [r2, "k2", f]}]}}));
+    }
+    vars.insert("a_050x".into(), json!({"type": "unknown"}));
+    eqs.push(json!({"lhs": {"op": "D", "args": ["a_050x"], "wrt": "t"},
+        "rhs": {"op": "*", "args": ["a_050x", "k1"]}}));
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_folded_lanes"},
+        "models": {"M": {"variables": vars, "equations": eqs}}
+    });
+    let prog = ab_check(doc, 0, 0.1, 2.0);
+    let ls = prog
+        .lanes
+        .iter()
+        .find(|ls| ls.lanes as usize == boxes)
+        .expect("the boxes run as one lane program");
+    assert!(
+        ls.inputs.iter().any(|i| matches!(i.ix, LaneIx::Table(_))),
+        "{:?}",
+        ls.inputs
+    );
+    assert!(
+        ls.inputs
+            .iter()
+            .any(|i| i.kind == LaneKind::State && matches!(i.ix, LaneIx::Affine { step: 1, .. })),
+        "{:?}",
+        ls.inputs
+    );
+    assert!(ls.inputs.iter().any(|i| i.kind == LaneKind::Param));
+}
+
 // ---------------------------------------------------------------------------
 // Structural invariants.
 // ---------------------------------------------------------------------------
