@@ -24,10 +24,15 @@ pub(crate) fn validate_model(
     model_name: &str,
     model: &crate::Model,
     system_refs: &HashMap<String, SystemInfo>,
+    scope: crate::validate::ValidationScope,
     errors: &mut Vec<StructuralError>,
     warnings: &mut Vec<UnitWarning>,
 ) {
     let ctx = ModelCtx::new(esm_file, model_name, model, system_refs);
+    if scope == crate::validate::ValidationScope::References {
+        validate_model_references(&ctx, errors);
+        return;
+    }
 
     // esm-spec §4.9.1.1. A `variables` key spelled with a globally-scoped name
     // is unreachable — `ModelCtx::new` puts the independent variable and `_var`
@@ -97,6 +102,22 @@ pub(crate) fn validate_model(
 /// The per-model validation context the `check_*` passes below share: the
 /// document, the model under check, and the scope sets every reference check
 /// resolves against — derived once in [`ModelCtx::new`].
+/// The reference-integrity half of [`validate_model`]
+/// ([`crate::validate::ValidationScope::References`]): the same checks, in the
+/// same order, less those that report only other codes (declaration names,
+/// array defaults, left-hand-side names, equation counts, units, observed
+/// cycles, broadcast shapes).
+fn validate_model_references(ctx: &ModelCtx<'_>, errors: &mut Vec<StructuralError>) {
+    ctx.check_initialization_equation_refs(errors);
+    ctx.check_guess_refs(errors);
+    ctx.check_test_reference_refs(errors);
+    ctx.check_equation_refs(errors);
+    ctx.check_aggregate_nodes(errors);
+    ctx.check_update_expression_refs(errors);
+    ctx.check_discrete_events(errors);
+    ctx.check_continuous_events(errors);
+}
+
 struct ModelCtx<'a> {
     esm_file: &'a EsmFile,
     model_name: &'a str,
@@ -391,25 +412,8 @@ impl<'a> ModelCtx<'a> {
     ) {
         for (eq_idx, equation) in self.model.equations.iter().enumerate() {
             let eq_path = format!("{}/equations/{eq_idx}", self.model_path);
-            // Reference integrity attaches to the containing expression FIELD
-            // (§7.1.2): an undefined name on the RHS is reported at
-            // `.../equations/<i>/rhs`, not at the whole equation. (Dimensional
-            // findings below stay at the equation level — an inconsistency is a
-            // property of the equation, not of one side.)
-            // A binder either side introduces is in scope on both: an indexed
-            // definition `w[k+1] ~ faq{k}(…)` subscripts its LHS with the
-            // RHS's loop index.
-            let mut eq_bound = HashSet::new();
-            collect_bound_symbols(&equation.lhs, &mut eq_bound);
-            collect_bound_symbols(&equation.rhs, &mut eq_bound);
+            self.check_one_equation_refs(eq_idx, equation, &eq_path, errors);
             for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
-                self.check_refs_bound(
-                    expr,
-                    &format!("{eq_path}/{field}"),
-                    eq_idx,
-                    &eq_bound,
-                    errors,
-                );
                 // A declared `const` unit string that does not resolve is a
                 // defect at the containing expression field (esm-spec §4.8.5).
                 for units in crate::units::unresolvable_const_units(expr) {
@@ -436,6 +440,43 @@ impl<'a> ModelCtx<'a> {
         }
     }
 
+    /// The reference-integrity part of [`Self::check_equations`].
+    fn check_equation_refs(&self, errors: &mut Vec<StructuralError>) {
+        for (eq_idx, equation) in self.model.equations.iter().enumerate() {
+            let eq_path = format!("{}/equations/{eq_idx}", self.model_path);
+            self.check_one_equation_refs(eq_idx, equation, &eq_path, errors);
+        }
+    }
+
+    fn check_one_equation_refs(
+        &self,
+        eq_idx: usize,
+        equation: &crate::types::Equation,
+        eq_path: &str,
+        errors: &mut Vec<StructuralError>,
+    ) {
+        // Reference integrity attaches to the containing expression FIELD
+        // (§7.1.2): an undefined name on the RHS is reported at
+        // `.../equations/<i>/rhs`, not at the whole equation. (Dimensional
+        // findings stay at the equation level — an inconsistency is a
+        // property of the equation, not of one side.)
+        // A binder either side introduces is in scope on both: an indexed
+        // definition `w[k+1] ~ faq{k}(…)` subscripts its LHS with the
+        // RHS's loop index.
+        let mut eq_bound = HashSet::new();
+        collect_bound_symbols(&equation.lhs, &mut eq_bound);
+        collect_bound_symbols(&equation.rhs, &mut eq_bound);
+        for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
+            self.check_refs_bound(
+                expr,
+                &format!("{eq_path}/{field}"),
+                eq_idx,
+                &eq_bound,
+                errors,
+            );
+        }
+    }
+
     /// Static `faq`-node constraints (RFC semiring-faq-unified-ir): an
     /// undeclared `from` index set, a value-equality join over an unportable
     /// (float/null) categorical key, and a value-invention `distinct` node that
@@ -448,13 +489,13 @@ impl<'a> ModelCtx<'a> {
         // CONTINUOUS, which guard 2 forbids for relational work. (An OBSERVED
         // unknown's class depends on its defining equation, which only the cadence
         // pass resolves; this static check stays with the leaves it can decide.)
-        let state_var_set: HashSet<String> = self
+        let state_var_set: HashSet<&str> = self
             .class
             .ode_states
             .iter()
             .chain(&self.class.algebraic_unknowns)
             .chain(&self.class.brownian_parameters)
-            .cloned()
+            .map(String::as_str)
             .collect();
         validate_aggregate_constraints(
             self.esm_file,
@@ -547,7 +588,14 @@ impl<'a> ModelCtx<'a> {
     /// `from` binding's `unit_conversion`. Reference integrity applies to every
     /// expression-bearing field (§4.9.5), and nothing else walks these.
     fn check_update_expression_refs(&self, errors: &mut Vec<StructuralError>) {
-        let mut var_names: Vec<&String> = self.model.variables.keys().collect();
+        // Only a variable with an `update` carries an expression here.
+        let mut var_names: Vec<&String> = self
+            .model
+            .variables
+            .iter()
+            .filter(|(_, v)| v.update.is_some())
+            .map(|(n, _)| n)
+            .collect();
         var_names.sort();
         for var_name in var_names {
             let variable = &self.model.variables[var_name];
@@ -945,12 +993,12 @@ fn check_reserved_declaration_names<'a, I: IntoIterator<Item = &'a String>>(
     kind: &str,
     errors: &mut Vec<StructuralError>,
 ) {
-    let mut names: Vec<&String> = declarations.into_iter().collect();
-    names.sort();
-    for name in names {
-        let Some((reason, role)) = reserved_declaration_reason(esm_file, name) else {
-            continue;
-        };
+    let mut found: Vec<(&String, _)> = declarations
+        .into_iter()
+        .filter_map(|name| Some((name, reserved_declaration_reason(esm_file, name)?)))
+        .collect();
+    found.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, (reason, role)) in found {
         errors.push(StructuralError {
             path: format!("{container_path}/{name}"),
             code: StructuralErrorCode::ReservedVariableName,
@@ -1091,21 +1139,24 @@ fn check_array_defaults_have_shape(
     owner: &str,
     errors: &mut Vec<StructuralError>,
 ) {
-    let mut names: Vec<&String> = model.variables.keys().collect();
-    names.sort();
-    for name in names {
-        let var = &model.variables[name];
-        let is_array = matches!(var.default, Some(crate::types::InlineValue::Array(_)));
-        let shaped = var.shape.as_ref().is_some_and(|s| !s.is_empty());
-        if is_array && !shaped {
-            let var_type = serde_json::to_value(var.var_type)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_string))
-                .unwrap_or_default();
-            errors.push(array_default_without_shape(
-                model_path, owner, name, &var_type,
-            ));
-        }
+    let mut unshaped: Vec<(&String, &crate::ModelVariable)> = model
+        .variables
+        .iter()
+        .filter(|(_, var)| {
+            let is_array = matches!(var.default, Some(crate::types::InlineValue::Array(_)));
+            let shaped = var.shape.as_ref().is_some_and(|s| !s.is_empty());
+            is_array && !shaped
+        })
+        .collect();
+    unshaped.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, var) in unshaped {
+        let var_type = serde_json::to_value(var.var_type)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        errors.push(array_default_without_shape(
+            model_path, owner, name, &var_type,
+        ));
     }
     if let Some(subsystems) = &model.subsystems {
         check_subsystem_array_defaults(
@@ -1568,7 +1619,7 @@ fn validate_aggregate_constraints(
     esm_file: &EsmFile,
     model_name: &str,
     model: &crate::Model,
-    state_vars: &HashSet<String>,
+    state_vars: &HashSet<&str>,
     errors: &mut Vec<StructuralError>,
 ) {
     let model_path = format!("/models/{model_name}");
@@ -2452,7 +2503,7 @@ fn check_aggregates_in_expr(
     expr: &crate::Expr,
     field_path: &str,
     esm_file: &EsmFile,
-    state_vars: &HashSet<String>,
+    state_vars: &HashSet<&str>,
     var_shapes: &HashMap<String, Vec<String>>,
     errors: &mut Vec<StructuralError>,
 ) {
@@ -2634,7 +2685,7 @@ fn check_aggregate_node(
     node: &crate::types::ExpressionNode,
     field_path: &str,
     esm_file: &EsmFile,
-    state_vars: &HashSet<String>,
+    state_vars: &HashSet<&str>,
     var_shapes: &HashMap<String, Vec<String>>,
     errors: &mut Vec<StructuralError>,
 ) {
@@ -2799,7 +2850,7 @@ fn check_aggregate_node(
         }
         let mut states_read: Vec<String> = free
             .into_iter()
-            .filter(|name| state_vars.contains(name))
+            .filter(|name| state_vars.contains(name.as_str()))
             .collect();
         if !states_read.is_empty() {
             states_read.sort();

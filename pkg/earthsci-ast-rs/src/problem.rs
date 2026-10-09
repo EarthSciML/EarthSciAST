@@ -3136,7 +3136,8 @@ const BUILD_REFUSED_VALIDATION_CODES: &[&str] = &[
 /// Refuse the first [`BUILD_REFUSED_VALIDATION_CODES`] finding `validate`
 /// reports for `file`, with the validator's code, pointer and message.
 fn refuse_reference_integrity_errors(file: &EsmFile) -> Result<(), SimulateError> {
-    let result = crate::validate::validate(file);
+    let result =
+        crate::validate::validate_scoped(file, crate::validate::ValidationScope::References);
     if let Some(e) = result.structural_errors.iter().find(|e| {
         // An inline test's references are the test runner's to report
         // (esm-spec §6.6); the build does not evaluate them.
