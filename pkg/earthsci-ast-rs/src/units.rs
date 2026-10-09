@@ -1795,8 +1795,10 @@ pub fn reject_const_units_pre_v12(
         return Ok(());
     }
     let offending = crate::json_visit::find_value_path(view, &mut |v| {
-        v.as_object()
-            .is_some_and(|o| o.contains_key("op") && o.contains_key("units"))
+        v.as_object().is_some_and(|o| {
+            crate::json_visit::small_get(o, "op").is_some()
+                && crate::json_visit::small_get(o, "units").is_some()
+        })
     });
     match offending {
         None => Ok(()),

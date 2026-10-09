@@ -1261,7 +1261,7 @@ fn scan_without_templates(
             }
         }
         Value::Object(obj) => {
-            let op = obj.get("op").and_then(|v| v.as_str());
+            let op = crate::json_visit::small_get(obj, "op").and_then(|v| v.as_str());
             if op == Some(APPLY_OP) {
                 out.uses_apply = true;
                 return;
