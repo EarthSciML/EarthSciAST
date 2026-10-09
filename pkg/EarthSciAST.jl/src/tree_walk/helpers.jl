@@ -749,6 +749,13 @@ end
 
 # Format an array-cell key like "u[3]" (1D) or "u[2,3]" (2D).
 function _cell_key(var_name::String, indices)
+    # The one- and two-index keys (every grid cell of a 1-D or 2-D variable)
+    # are spelled without `join`'s IOBuffer; the string is the same.
+    if indices isa Union{AbstractVector{<:Integer},Tuple{Vararg{Integer}}}
+        length(indices) == 1 && return string(var_name, "[", indices[1], "]")
+        length(indices) == 2 &&
+            return string(var_name, "[", indices[1], ",", indices[2], "]")
+    end
     return "$(var_name)[$(join(indices, ","))]"
 end
 
