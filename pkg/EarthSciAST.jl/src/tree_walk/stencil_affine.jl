@@ -1601,20 +1601,38 @@ function _mark_box_covered!(covered, box, base, strides, D, lhs_var, lhs_idx_arg
     _mark_box_cells!(covered, box, base, strides, D, lhs_var, lhs_idx_args, idx_names)
 end
 
-# `false`, with `covered` untouched, when a slot of the box is already set.
-function _mark_box_runs!(covered::BitVector, rngs::NTuple{N,UnitRange{Int}}, base::Int,
+# `false`, with `covered` untouched, when a slot of the box is already set. A
+# box whose slots are one contiguous run (each dim wider than one cell steps by
+# the number of slots the dims before it span) is checked and claimed as that
+# run.
+function _mark_box_runs!(covered::_Covered, rngs::NTuple{N,UnitRange{Int}}, base::Int,
                          strides) where {N}
     st = ntuple(d -> Int(strides[d]), N)
     r1 = rngs[1]
+    span = 1
+    for d in 1:N
+        length(rngs[d]) == 1 && continue
+        st[d] == span || (span = 0; break)
+        span *= length(rngs[d])
+    end
+    if span > 0
+        lo = base
+        @inbounds for d in 1:N
+            lo += first(rngs[d]) * st[d]
+        end
+        _cover_any(covered, lo, lo + span - 1) && return false
+        _cover_fill!(covered, lo, lo + span - 1; run=true)
+        return true
+    end
     outer = CartesianIndices(Base.tail(rngs))
     run_start(J) = (o = base + first(r1); @inbounds for d in 2:N; o += J[d-1] * st[d]; end; o)
     for J in outer
         lo = run_start(J)
-        _bits_any(covered, lo, lo + length(r1) - 1) && return false
+        _cover_any(covered, lo, lo + length(r1) - 1) && return false
     end
     for J in outer
         lo = run_start(J)
-        fill!(view(covered, lo:(lo + length(r1) - 1)), true)
+        _cover_fill!(covered, lo, lo + length(r1) - 1)
     end
     return true
 end
@@ -1663,7 +1681,7 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
                              resolved_obs::Dict{String,ASTExpr},
                              array_var_info, var_map::AbstractDict{String,Int},
                              const_arrays::AbstractDict, pgather::AbstractDict,
-                             param_sym_set, reg_funcs, covered::BitVector;
+                             param_sym_set, reg_funcs, covered::_Covered;
                              template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,
                              # A3: the per-BUILD cross-equation store (variant +
                              # bound-body caches, shared obs-inline memo).

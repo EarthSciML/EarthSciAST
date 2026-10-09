@@ -4668,7 +4668,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
     # ess-array-contraction whole-equation loop nests (array_contraction.jl);
     # empty unless a contraction clears the length floor.
     array_contractions = _ArrayContraction[]
-    covered = falses(n_states)
+    covered = _Covered(n_states)
     # A3: ONE cross-equation store for this build's whole equation loop — the
     # compile-once variant / bound-body caches and the shared obs-inline memo
     # move from per-equation to per-build (sound because every compile input
@@ -5311,7 +5311,7 @@ _with_rule_alias(f, target::String, label::String) =
 const _REFUSAL_DIAGNOSTIC_TERMS = 1024
 
 function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
-        array_contractions, covered::BitVector,
+        array_contractions, covered::_Covered,
         eq::Equation, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::AbstractDict{String,Int},
         const_registry::AbstractDict, pgather::AbstractDict,
@@ -5855,7 +5855,7 @@ end
 # build time to resolve or compile anything — the cell loop below only reads each
 # cell's slot out of `var_map`, which is an integer lookup, not IR.
 function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
-        covered::BitVector;
+        covered::_Covered;
         idx_names::Vector{String}, ranges_dict, range_iters,
         contract_names::Vector{String}, contract_ranges,
         rhs_oplus::String, rhs_zerobar::Float64,
@@ -5970,7 +5970,7 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     if gen isa Symbol
         # Hand the cells back untouched: every one was unclaimed on entry (the
         # loop above throws on a second claim), so clearing restores `covered`.
-        covered[outs] .= false
+        _uncover!(covered, outs)
         _note_decline!(:array_contraction, gen)
         return nothing
     end
@@ -6042,7 +6042,7 @@ end
 # reference the acc≡per-cell differentials compare against. The
 # equation-derived inputs are keyword-only (several share a type, so
 # positional passing could silently swap two of them).
-function _compile_faq_percell!(percell_scalar, acc_kernels, covered::BitVector,
+function _compile_faq_percell!(percell_scalar, acc_kernels, covered::_Covered,
         lhs_body::OpExpr, rhs_body::ASTExpr;
         idx_names::Vector{String}, range_iters,
         contract_names::Vector{String}, contract_ranges, contract_const,
