@@ -21,6 +21,7 @@
 
 use super::fused::{
     IndexTable, PAD_BYTES, RunCursor, Window, fill_whole, n_scans, n_shifted, run_fused_window,
+    seeds_itself,
 };
 use super::pool;
 use super::resolve::{Rv, rm_strides};
@@ -169,16 +170,47 @@ fn fused_cost(fs: &FusedSpec) -> usize {
 /// row, so it splits only at row starts (where the scan restarts), and not
 /// at all when it also folds a reduction.
 pub(super) fn split_ways(fs: &FusedSpec, ways: usize) -> usize {
+    if ways <= 1 {
+        return 1;
+    }
     let n: usize = fs.shape.iter().product();
+    let by_work = |n: usize| fused_ways(n, || fused_cost(fs), ways);
     match (&fs.reduce, scan_row(fs)) {
         (Some(_), Some(_)) => 1,
         // Every worker folds whole cells, so the split needs only enough
         // cells per worker to own whole cache lines, while the work is all
         // of the group's elements.
-        (Some(r), None) if r.n_inner >= ways * reduce_cells_floor() => ways_for(n, ways),
+        (Some(r), None) if r.n_inner >= ways * reduce_cells_floor() => by_work(n),
         (Some(_), None) => 1,
         (None, Some(row)) if n / row < ways => 1,
-        (None, _) => ways_for(n, ways),
+        (None, _) => by_work(n),
+    }
+}
+
+/// Elements each worker of a split fused group must get: a few chunks'
+/// worth of cache lines, so the window cuts stay small against the windows.
+const MIN_FUSED_ELEMS_PER_WORKER: usize = 64;
+
+/// The workers a fused group of `n` elements, `cost` operations each, splits
+/// across under call width `ways`: all of them when [`ways_for`] splits its
+/// elements, or when every worker still gets [`MIN_FUSED_ELEMS_PER_WORKER`]
+/// elements and [`MIN_WORK_PER_WORKER`] operations; else none. So a cheap
+/// group over many elements splits as before (every large pass of a call cut
+/// the same way, see [`call_ways`]), and an expensive group over fewer
+/// elements, a mechanism over a thousand cells, splits too.
+fn fused_ways(n: usize, cost: impl Fn() -> usize, ways: usize) -> usize {
+    #[cfg(test)]
+    if FORCE.with(std::cell::Cell::get).is_some() {
+        return ways.min(n).max(1);
+    }
+    if ways_for(n, ways) > 1
+        || ways > 1
+            && n >= ways * MIN_FUSED_ELEMS_PER_WORKER
+            && n.saturating_mul(cost()) >= ways * MIN_WORK_PER_WORKER
+    {
+        ways
+    } else {
+        1
     }
 }
 
@@ -588,6 +620,7 @@ impl FusedWorkers {
         // the shared accumulator lets the hardware prefetchers pull a
         // neighbour's lines away from it every leading position.
         let init = fs.reduce.as_ref().map(|r| r.init);
+        let seeded = seeds_itself(fs);
         if init.is_some() {
             for (w, wk) in self.workers[..ways].iter_mut().enumerate() {
                 let (lo, hi) = cut(w);
@@ -625,7 +658,9 @@ impl FusedWorkers {
             let red = match init {
                 Some(init) => {
                     let acc = &mut wk.acc[..hi - lo];
-                    acc.fill(init);
+                    if !seeded {
+                        acc.fill(init);
+                    }
                     acc.as_mut_ptr().wrapping_sub(lo)
                 }
                 None => sh.red,

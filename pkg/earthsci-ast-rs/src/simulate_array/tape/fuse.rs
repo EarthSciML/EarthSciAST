@@ -1524,7 +1524,7 @@ pub(super) fn micro_out(op: &MicroOp) -> GroupIx {
 /// [`FusedSpec::direct`] of an allocated micro-program: each output whose
 /// register's last writer is followed by no read of it, which `reduce_reg`
 /// (an absorbed reduction's register) is not, and which no other output
-/// names.
+/// names, in ascending micro-op order.
 fn direct_stores(
     micro: &[MicroOp],
     outputs: &[(GroupIx, SlotId)],
@@ -1543,6 +1543,7 @@ fn direct_stores(
         }
         direct.push((w as u32, k as u32));
     }
+    direct.sort_unstable();
     direct
 }
 
