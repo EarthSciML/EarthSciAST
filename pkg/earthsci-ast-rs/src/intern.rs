@@ -132,11 +132,16 @@ pub fn intern_node(node: ExpressionNode) -> Arc<ExpressionNode> {
         if !internable(&node) {
             return Arc::new(node);
         }
-        let key = Key(Arc::new(node));
+        let mut hasher = rustc_hash::FxHasher::default();
+        node_hash(&node, &mut hasher);
+        let key = Key {
+            hash: hasher.finish(),
+            node: Arc::new(node),
+        };
         match interner.set.get(&key) {
-            Some(canon) => Arc::clone(&canon.0),
+            Some(canon) => Arc::clone(&canon.node),
             None => {
-                let out = Arc::clone(&key.0);
+                let out = Arc::clone(&key.node);
                 interner.set.insert(key);
                 out
             }
@@ -153,18 +158,24 @@ fn internable(node: &ExpressionNode) -> bool {
 }
 
 /// Interning key: an owned canonical candidate with structural hash/equality.
-struct Key(Arc<ExpressionNode>);
+/// The structural hash is computed once, when the key is made: the set rehashes
+/// every key as it grows, and reading a stored node's fields again then is a
+/// cache miss per key.
+struct Key {
+    hash: u64,
+    node: Arc<ExpressionNode>,
+}
 
 impl PartialEq for Key {
     fn eq(&self, other: &Self) -> bool {
-        node_eq(&self.0, &other.0)
+        self.hash == other.hash && node_eq(&self.node, &other.node)
     }
 }
 impl Eq for Key {}
 
 impl Hash for Key {
     fn hash<H: Hasher>(&self, h: &mut H) {
-        node_hash(&self.0, h);
+        h.write_u64(self.hash);
     }
 }
 
