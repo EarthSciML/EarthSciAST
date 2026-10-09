@@ -60,11 +60,16 @@
 //! serialisation base, and the sort-then-enumerate `rank` pattern mirrors
 //! `src/performance.rs`. `polars`/`datafusion`/`arrow` are rejected (heavy, out of
 //! proportion — RFC A.3/A.4); a non-portable fast hasher (`ahash`,
-//! `rustc-hash`/FxHash) MUST NEVER drive emitted order or keys.
+//! `rustc-hash`/FxHash) MUST NEVER drive emitted order or keys (the join
+//! buckets below hash with it; their output order comes from a sort).
 
 use crate::canonicalize::format_canonical_float;
 use indexmap::IndexMap;
 use std::cmp::Ordering;
+
+/// An `IndexMap` on the fast hasher, for bucketing whose output order comes
+/// from a sort, never from the map.
+type FxIndexMap<K, V> = IndexMap<K, V, rustc_hash::FxBuildHasher>;
 
 /// Raised when a relational key contains a floating-point (or otherwise
 /// non-integer / out-of-domain) component, violating `CONFORMANCE_SPEC.md`
@@ -340,13 +345,15 @@ pub fn distinct(rows: &[Key]) -> Vec<Key> {
 pub fn equijoin(left: &[Key], right: &[Key]) -> Vec<(usize, usize)> {
     // Bucket the RIGHT side by key (IndexMap: iteration order is insertion
     // order, independent of the hasher — and we never iterate it anyway; the
-    // emitted order comes from the sorted key list below).
-    let mut buckets: IndexMap<&Key, Vec<usize>> = IndexMap::with_capacity(right.len());
+    // emitted order comes from the sorted key list below, so the fast hasher
+    // decides nothing about the output).
+    let mut buckets: FxIndexMap<&Key, Vec<usize>> =
+        FxIndexMap::with_capacity_and_hasher(right.len(), Default::default());
     for (j, k) in right.iter().enumerate() {
         buckets.entry(k).or_default().push(j);
     }
     // Probe with the LEFT side, collecting the matched left positions per key.
-    let mut matched: IndexMap<&Key, Vec<usize>> = IndexMap::new();
+    let mut matched: FxIndexMap<&Key, Vec<usize>> = FxIndexMap::default();
     for (i, k) in left.iter().enumerate() {
         if buckets.contains_key(k) {
             matched.entry(k).or_default().push(i);
@@ -387,7 +394,8 @@ pub fn equijoin(left: &[Key], right: &[Key]) -> Vec<(usize, usize)> {
 /// has already made redundant.
 #[must_use]
 pub(crate) fn equijoin_match_count(left: &[Key], right: &[Key]) -> usize {
-    let mut buckets: IndexMap<&Key, usize> = IndexMap::with_capacity(right.len());
+    let mut buckets: FxIndexMap<&Key, usize> =
+        FxIndexMap::with_capacity_and_hasher(right.len(), Default::default());
     for k in right {
         *buckets.entry(k).or_default() += 1;
     }

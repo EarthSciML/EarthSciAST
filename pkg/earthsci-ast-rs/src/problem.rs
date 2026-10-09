@@ -685,6 +685,40 @@ pub(crate) struct BuildProducts {
     pub static_eval_error: Option<String>,
 }
 
+/// An [`EsmProblem`]'s raw document: the value itself, or, for a document
+/// read from a file and never rewritten, that file's text, parsed again the
+/// first time [`EsmProblem::document`] asks (the build hands the parsed value
+/// to the loader instead of a copy of it).
+pub(crate) struct RawDoc {
+    value: std::cell::OnceCell<JsonValue>,
+    text: Option<String>,
+}
+
+impl RawDoc {
+    fn value(v: JsonValue) -> Self {
+        RawDoc {
+            value: std::cell::OnceCell::from(v),
+            text: None,
+        }
+    }
+
+    fn text(t: String) -> Self {
+        RawDoc {
+            value: std::cell::OnceCell::new(),
+            text: Some(t),
+        }
+    }
+
+    fn get(&self) -> &JsonValue {
+        self.value.get_or_init(|| {
+            self.text
+                .as_deref()
+                .and_then(|t| serde_json::from_str(t).ok())
+                .unwrap_or(JsonValue::Null)
+        })
+    }
+}
+
 /// A simulation problem: a document, an interval, and the bindings that fix
 /// the document rather than the run.
 ///
@@ -692,7 +726,7 @@ pub(crate) struct BuildProducts {
 /// Re-parameterized without rebuilding by [`remake`].
 pub struct EsmProblem {
     /// The (possibly rewritten) raw document.
-    pub(crate) doc: Rc<JsonValue>,
+    pub(crate) doc: Rc<RawDoc>,
     /// The name of the model this EsmProblem was built from, when one was
     /// selected.
     pub(crate) model_name: Option<String>,
@@ -789,7 +823,7 @@ impl EsmProblem {
 
     /// The (possibly rewritten) raw document.
     pub fn document(&self) -> &JsonValue {
-        &self.doc
+        self.doc.get()
     }
 
     /// The compiler that built this Problem's right-hand side (API_SPEC §5.8).
@@ -1591,6 +1625,8 @@ pub fn esm_problem<'a>(
 
     // ---- (1) Resolve the input to a raw document and/or a typed one. -------
     let mut owned_json: Option<JsonValue> = None;
+    // The file's text while `owned_json` is still exactly what it parses to.
+    let mut owned_text: Option<String> = None;
     let mut owned_file: Option<EsmFile> = None;
     let mut flat_only: Option<&FlattenedSystem> = None;
     // `owned_json` is exactly what the parser made of the file's text, so it
@@ -1616,6 +1652,7 @@ pub fn esm_problem<'a>(
                 )))
             })?;
             owned_json = Some(raw);
+            owned_text = Some(text);
             json_from_text = true;
             // A relative `{ref}` or template import resolves against the
             // referencing file's directory (esm-spec §4.7), not the process's
@@ -1826,6 +1863,7 @@ pub fn esm_problem<'a>(
             }));
             *raw = prepared.doc;
             json_from_text = false;
+            owned_text = None;
             rewritten_by_pipeline = true;
             model_name = Some(prepared.model_name);
             build.fields = prepared.fields;
@@ -1838,9 +1876,8 @@ pub fn esm_problem<'a>(
     }
 
     // ---- (3) Typed parse. -------------------------------------------------
-    if owned_file.is_none()
-        && let Some(raw) = owned_json.as_ref()
-    {
+    let mut text_solver: Option<Option<crate::Solver>> = None;
+    if owned_file.is_none() && owned_json.is_some() {
         {
             // The prepared document goes to the loader as the value it already
             // is. Writing it out and parsing the text back gives the same
@@ -1861,7 +1898,15 @@ pub fn esm_problem<'a>(
                     opts.metaparameters.clone()
                 },
             };
-            let loaded = if json_from_text || nesting_within(raw, NESTING_WITHOUT_ROUND_TRIP) {
+            let raw = owned_json.as_ref().expect("the raw document");
+            let loaded = if owned_text.is_some() {
+                // The document is still its file's text parsed, so the
+                // loader takes the value itself and the problem keeps the
+                // text (see `RawDoc`); the solver hints are read first.
+                text_solver = Some(document_solver(raw));
+                let raw = owned_json.take().expect("the raw document");
+                crate::parse::load_document_owned(raw, &load_opts)
+            } else if json_from_text || nesting_within(raw, NESTING_WITHOUT_ROUND_TRIP) {
                 crate::parse::load_document_with_options(raw, &load_opts)
             } else {
                 let text = serde_json::to_string(raw).map_err(|e| {
@@ -2048,6 +2093,7 @@ pub fn esm_problem<'a>(
     // carrier survived to here — the raw JSON when there is one, else the typed
     // file — so the §2.2.2 chain holds however the problem was built.
     let doc_solver = match (owned_json.as_ref(), owned_file.as_ref()) {
+        _ if text_solver.is_some() => text_solver.flatten(),
         (Some(raw), _) => document_solver(raw),
         (None, Some(file)) => crate::solver::normalize_empty(file.solver.clone()),
         (None, None) => None,
@@ -2088,7 +2134,10 @@ pub fn esm_problem<'a>(
     install_xla_program(&backend, model_name.as_deref(), compiler)?;
 
     let prob = EsmProblem {
-        doc: Rc::new(owned_json.unwrap_or(JsonValue::Null)),
+        doc: Rc::new(match (owned_json, owned_text) {
+            (None, Some(text)) => RawDoc::text(text),
+            (json, _) => RawDoc::value(json.unwrap_or(JsonValue::Null)),
+        }),
         solver: doc_solver,
         model_name,
         precision: precision::Env::capture(),

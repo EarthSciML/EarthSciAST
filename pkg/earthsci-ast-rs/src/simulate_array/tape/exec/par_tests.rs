@@ -90,3 +90,49 @@ fn split_calls_are_bit_identical_to_serial() {
         }
     }
 }
+
+/// The scaling regrid's apply — the gather of the source field at each
+/// admitted pair, the product with its weight, the segmented sum and the
+/// fused group over the target cells — is one chain, so a threaded steady
+/// call splits it in one dispatch.
+#[test]
+fn the_regrid_apply_is_one_split_chain() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/scaling/fixtures/regrid/regrid_N100.esm");
+    let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
+    let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
+    let compiled = crate::simulate_array::tape::tests::compile(doc);
+    let (prog, _) = compiled.build_tape(&std::collections::HashSet::new());
+    let exec = super::TapeExec::new(&prog);
+    assert_eq!(exec.seg_chains.len(), 1, "one chain");
+    let ch = &exec.seg_chains[0];
+    assert!(ch.fused.is_some(), "the target cells' fused group joins it");
+    assert!(ch.start < ch.seg, "the pair gather and product join it");
+
+    let opts = ProblemOptions {
+        compiler: Some(Compiler::Native),
+        rhs: Rhs::Always,
+        ..Default::default()
+    };
+    let prob = esm_problem(path.as_path(), (0.0, 1.0), opts).expect("regrid builds");
+    let c = prob.debug_array_compiled().expect("a right-hand side");
+    let n = c.state_variable_names().len();
+    let state: Vec<f64> = (0..n).map(|k| 1.0 + 0.1 * (k as f64).sin()).collect();
+    let params = c.debug_resolve_params(&HashMap::new());
+    let mut scratch = c.debug_new_scratch_taped();
+    let mut stats = crate::simulate_array::RhsStats::default();
+    let mut dy = vec![0.0; n];
+    force_split(Some(4));
+    c.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
+    // The counter is process-wide and other tests split too: the fewest
+    // dispatches any of a few steady calls saw is this call's own count.
+    let steady = (0..10)
+        .map(|_| {
+            let before = DISPATCHES.load(Ordering::Relaxed);
+            c.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
+            DISPATCHES.load(Ordering::Relaxed) - before
+        })
+        .min();
+    force_split(None);
+    assert_eq!(steady, Some(1), "one dispatch per steady call");
+}

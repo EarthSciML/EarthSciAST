@@ -54,6 +54,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod chain;
 mod fused;
 mod interp;
 mod kernels;
@@ -293,6 +295,12 @@ pub(crate) struct TapeExec {
     /// a call splits (see `par::call_ways`).
     #[cfg(not(target_arch = "wasm32"))]
     call_work: usize,
+    /// The continuous section's segmented reductions that split together
+    /// with the work around them (see `chain`), in program order.
+    #[cfg(not(target_arch = "wasm32"))]
+    seg_chains: Vec<chain::SegChain>,
+    #[cfg(not(target_arch = "wasm32"))]
+    chain_scratch: chain::ChainScratch,
 }
 
 impl TapeExec {
@@ -379,6 +387,8 @@ impl TapeExec {
             .map(|f| f.n_regs as usize + f.n_load_regs as usize + f.n_splat_regs as usize)
             .max()
             .unwrap_or(0);
+        #[cfg(not(target_arch = "wasm32"))]
+        let seg_chains = chain::seg_chains(prog, &slot_off);
         TapeExec {
             slab,
             slot_off,
@@ -411,6 +421,10 @@ impl TapeExec {
             simd: simd_level(),
             #[cfg(not(target_arch = "wasm32"))]
             call_work: par::program_work(prog),
+            #[cfg(not(target_arch = "wasm32"))]
+            seg_chains,
+            #[cfg(not(target_arch = "wasm32"))]
+            chain_scratch: chain::ChainScratch::default(),
         }
     }
 }
@@ -895,6 +909,7 @@ pub(in crate::simulate_array) fn run_tape_call(
     #[cfg(not(target_arch = "wasm32"))]
     {
         exec.fscratch.workers.call_ways = par::call_ways(exec.call_work);
+        exec.fscratch.workers.threads = par::thread_budget();
     }
     // Zero what no rule writes; every other element is overwritten below.
     if exec.dy_zero_len != dy.len() {

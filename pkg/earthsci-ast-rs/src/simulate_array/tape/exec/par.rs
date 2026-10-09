@@ -68,6 +68,25 @@ pub(super) fn call_ways(call_work: usize) -> usize {
     threads.min(call_work / MIN_WORK_PER_WORKER).max(1)
 }
 
+/// The threads a call may split across: the caller's rayon thread count, or
+/// the forced width while a test forces splits.
+pub(super) fn thread_budget() -> usize {
+    #[cfg(test)]
+    if let Some(w) = FORCE.with(std::cell::Cell::get) {
+        return w;
+    }
+    rayon::current_num_threads()
+}
+
+/// Whether a test is forcing this thread's calls to split.
+pub(super) fn forced() -> bool {
+    #[cfg(test)]
+    if FORCE.with(std::cell::Cell::get).is_some() {
+        return true;
+    }
+    false
+}
+
 /// The workers an instruction over `n` independent elements splits across
 /// under call width `ways`: all of them, or none when `n` is too small to
 /// give each its share.
@@ -525,6 +544,9 @@ struct FusedWorker {
 pub(in crate::simulate_array::tape) struct FusedWorkers {
     /// The current call's split width ([`call_ways`]), set at its start.
     pub(super) call_ways: usize,
+    /// The current call's thread budget ([`thread_budget`]), set at its
+    /// start.
+    pub(super) threads: usize,
     workers: Vec<FusedWorker>,
     fregs_len: usize,
     depth: usize,
@@ -559,6 +581,7 @@ impl FusedWorkers {
         let most = |f: fn(&FusedSpec) -> usize| prog.fused.iter().map(f).max().unwrap_or(0);
         FusedWorkers {
             call_ways: 1,
+            threads: 1,
             workers: Vec::new(),
             fregs_len: most(|f| {
                 f.n_regs as usize + f.n_load_regs as usize + f.n_splat_regs as usize
@@ -589,13 +612,7 @@ impl FusedWorkers {
         simd: SimdLevel,
         ways: usize,
     ) {
-        while self.workers.len() < ways {
-            self.workers.push(FusedWorker {
-                fregs: padded(self.fregs_len),
-                cursor: RunCursor::for_worker(self.depth, self.shifted, self.scans),
-                acc: Vec::new(),
-            });
-        }
+        self.grow(ways);
         // A reduction splits its inner positions: worker `w` takes the same
         // `[lo, hi)` of them at every leading position, so the accumulator
         // cells each worker folds into are its own.
@@ -688,6 +705,37 @@ impl FusedWorkers {
                     std::ptr::copy_nonoverlapping(wk.acc.as_ptr(), sh.red.add(lo), hi - lo);
                 }
             }
+        });
+    }
+}
+
+impl FusedWorkers {
+    /// At least `ways` worker states.
+    fn grow(&mut self, ways: usize) {
+        while self.workers.len() < ways {
+            self.workers.push(FusedWorker {
+                fregs: padded(self.fregs_len),
+                cursor: RunCursor::for_worker(self.depth, self.shifted, self.scans),
+                acc: Vec::new(),
+            });
+        }
+    }
+
+    /// Run `job(w, fregs, cursor)` for every share `w` of `ways` on the
+    /// pool, each with a fused-group register file and cursor of its own.
+    pub(super) fn run_with_workers(
+        &mut self,
+        ways: usize,
+        job: &(dyn Fn(usize, &mut [f64], &mut RunCursor) + Sync),
+    ) {
+        self.grow(ways);
+        let ws = WorkersPtr(self.workers.as_mut_ptr());
+        pool::run(ways, &move |w| {
+            let ws = ws;
+            // SAFETY: share `w` runs exactly once per dispatch, so each
+            // worker state has one user.
+            let wk = unsafe { &mut *ws.0.add(w) };
+            job(w, &mut wk.fregs, &mut wk.cursor);
         });
     }
 }
