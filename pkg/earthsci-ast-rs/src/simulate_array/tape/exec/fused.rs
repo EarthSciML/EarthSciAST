@@ -992,26 +992,43 @@ pub(super) unsafe fn refill_index_tables(
     }
 }
 
-/// Execute one fused group. Iterates the precompiled run schedule; each run
-/// is strip-mined into `FCHUNK`-element chunks whose micro-ops execute over
-/// the register file, then live-out registers store to the slab. Per element
-/// this applies exactly the same scalar kernels in the same order as the
-/// unfused instructions (elementwise maps — chunking cannot change a bit).
-#[inline(never)]
+/// A fused group's operands, resolved for one call (see [`resolve_fused`]).
+pub(super) struct Resolved<'a> {
+    pub(super) svals: &'a [f64],
+    pub(super) bases: &'a [*const f64],
+    pub(super) whole_src: &'a [*const f64],
+    pub(super) outs: &'a [(GroupIx, *mut f64)],
+    /// An absorbed reduction's accumulator (null without one).
+    pub(super) red: *mut f64,
+    pub(super) node_elems: &'a [usize],
+    pub(super) cursor: &'a mut RunCursor,
+}
+
+/// The workers of `scratch`, or a stand-in on wasm (which never splits).
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) type Workers = super::par::FusedWorkers;
+#[cfg(target_arch = "wasm32")]
+pub(super) type Workers = ();
+
+/// Resolve fused group `spec`'s operands for this call into `scratch`:
+/// scalar values, input base pointers (a whole-read gather's pointing at its
+/// scratch box, its source recorded in `whole_src`), output pointers (the
+/// slab, `dy` for a slot homed there, null for an unstored one) and the
+/// reduction's accumulator.
+///
+/// # Safety
+/// As for [`exec_fused`].
 #[allow(clippy::too_many_arguments)]
-pub(super) unsafe fn exec_fused(
+pub(super) unsafe fn resolve_fused<'a>(
     spec: usize,
     env: &Env,
     slab_ptr: *mut f64,
     slot_off: &[usize],
     obs: &ArrMap,
-    fregs: &mut [f64],
-    scratch: &mut FusedScratch,
-    idx: &[Option<IndexTable>],
-    simd: SimdLevel,
+    scratch: &'a mut FusedScratch,
     dy_home: &[usize],
     dy: *mut f64,
-) {
+) -> (Resolved<'a>, &'a mut Workers) {
     let fs = &env.prog.fused[spec];
     let FusedScratch {
         svals,
@@ -1090,15 +1107,63 @@ pub(super) unsafe fn exec_fused(
         },
         None => std::ptr::null_mut(),
     };
+    // Zero-sized: no allocation.
+    #[cfg(target_arch = "wasm32")]
+    let workers: &'a mut Workers = Box::leak(Box::new(()));
+    (
+        Resolved {
+            svals,
+            bases,
+            whole_src,
+            outs,
+            red,
+            node_elems,
+            cursor,
+        },
+        workers,
+    )
+}
 
+/// Execute one fused group. Iterates the precompiled run schedule; each run
+/// is strip-mined into `FCHUNK`-element chunks whose micro-ops execute over
+/// the register file, then live-out registers store to the slab. Per element
+/// this applies exactly the same scalar kernels in the same order as the
+/// unfused instructions (elementwise maps — chunking cannot change a bit).
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn exec_fused(
+    spec: usize,
+    env: &Env,
+    slab_ptr: *mut f64,
+    slot_off: &[usize],
+    obs: &ArrMap,
+    fregs: &mut [f64],
+    scratch: &mut FusedScratch,
+    idx: &[Option<IndexTable>],
+    simd: SimdLevel,
+    dy_home: &[usize],
+    dy: *mut f64,
+) {
+    let fs = &env.prog.fused[spec];
+    let (r, _workers) =
+        unsafe { resolve_fused(spec, env, slab_ptr, slot_off, obs, scratch, dy_home, dy) };
+    let Resolved {
+        svals,
+        bases,
+        whole_src,
+        outs,
+        red,
+        node_elems,
+        cursor,
+    } = r;
     // A large group is split into windows across the caller's worker
     // threads (see `par`).
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let ways = super::par::split_ways(fs, workers.call_ways);
+        let ways = super::par::split_ways(fs, _workers.call_ways);
         if ways > 1 {
             unsafe {
-                workers.run_split(
+                _workers.run_split(
                     fs, svals, bases, whole_src, outs, red, idx, node_elems, simd, ways,
                 )
             };
@@ -1110,7 +1175,7 @@ pub(super) unsafe fn exec_fused(
     if let Some(r) = &fs.reduce {
         unsafe { std::slice::from_raw_parts_mut(red, r.n_inner).fill(r.init) };
     }
-    unsafe { fill_whole(fs, bases, whole_src, 0, n_elems, 0) };
+    unsafe { fill_whole(fs, bases, whole_src, 0, fs.n_elems(), 0) };
     unsafe {
         run_fused_window(
             simd,

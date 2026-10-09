@@ -70,6 +70,10 @@ pub(super) fn run_range(
         simd,
         dy_home,
         dy_home_quiet,
+        #[cfg(not(target_arch = "wasm32"))]
+        seg_chains,
+        #[cfg(not(target_arch = "wasm32"))]
+        chain_scratch,
         ..
     } = exec;
     let exports_active = *exports_active;
@@ -98,6 +102,9 @@ pub(super) fn run_range(
     // and the 0-based frame cell its body is evaluating.
     let mut sweep: Option<(usize, SmallVec<[usize; 4]>)> = None;
     let mut pc = range.start;
+    // The next segmented-reduction chain that may split (see `chain`).
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut next_chain = seg_chains.partition_point(|c| c.start < range.start);
     while pc < range.end {
         while let Some(&(pos, skip)) = pending.last() {
             if pc == pos as usize {
@@ -138,6 +145,37 @@ pub(super) fn run_range(
         }
         if pc >= range.end {
             break;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if next_chain < seg_chains.len() {
+            while seg_chains.get(next_chain).is_some_and(|c| c.start < pc) {
+                next_chain += 1;
+            }
+            if let Some(ch) = seg_chains
+                .get(next_chain)
+                .filter(|c| c.start == pc && c.end <= range.end)
+            {
+                next_chain += 1;
+                let split = unsafe {
+                    super::chain::run_chain(
+                        ch,
+                        env,
+                        slab_ptr,
+                        slot_off,
+                        obs,
+                        chain_scratch,
+                        fscratch,
+                        idx_tables,
+                        simd,
+                        dy_home,
+                        dy.as_mut_ptr(),
+                    )
+                };
+                if split {
+                    pc = ch.end;
+                    continue;
+                }
+            }
         }
         // The instruction's own precision, armed for it alone (esm-spec
         // §11.3.1); a program without per-instruction precision skips this.
