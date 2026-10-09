@@ -89,7 +89,7 @@ pub(crate) fn validate_model(
     // order, and the equations alone decide it — esm-spec §4.9.6. Checked here,
     // beside the other whole-model structural checks, so `esm validate` names
     // the cycle instead of the build naming an innocent bystander (issue #181).
-    check_observed_dependency_cycle(model_name, model, &ctx.class, errors);
+    check_observed_dependency_cycle(model_name, model, ctx.class(), errors);
 
     ctx.check_default_units_identity(errors);
     ctx.check_observed_definitions(&unit_env, errors, warnings);
@@ -128,11 +128,12 @@ struct ModelCtx<'a> {
     /// ODE states, which are observed (and by which equation), and which
     /// parameters are Brownian / discrete. Every check below that used to branch
     /// on a declared type reads it.
-    class: crate::classification::Classification,
+    /// Computed on first use: the reference checks need it only for a
+    /// `distinct` `faq` node.
+    class: std::cell::OnceCell<crate::classification::Classification>,
     /// The model's UNKNOWNS, sorted. Sorted rather than declaration-ordered
     /// because `Model::variables` is a `HashMap`, which discards the JSON key
     /// order at parse: a stable answer is the only one this binding can give.
-    unknown_vars: Vec<String>,
     defined_vars: HashSet<String>,
     /// Scoped references this model's equations may use that are NOT top-level
     /// systems: the `<sub>.<var>` fields of each DataSource mounted as a
@@ -149,8 +150,6 @@ impl<'a> ModelCtx<'a> {
         system_refs: &'a HashMap<String, SystemInfo>,
     ) -> Self {
         let model_path = format!("/models/{model_name}");
-        let class = crate::classification::Classification::of(model);
-        let unknown_vars: Vec<String> = class.unknowns();
         let mut defined_vars: HashSet<String> = model.variables.keys().cloned().collect();
 
         // esm-spec §4.9.1: three classes of symbol are in scope WITHOUT appearing in
@@ -183,8 +182,7 @@ impl<'a> ModelCtx<'a> {
             model,
             system_refs,
             model_path,
-            class,
-            unknown_vars,
+            class: std::cell::OnceCell::new(),
             defined_vars,
             local_scoped,
             is_coupled,
@@ -197,6 +195,11 @@ impl<'a> ModelCtx<'a> {
     /// so the gate no longer short-circuits. Unit propagation is a separate
     /// pass: the dimensions of what a model spells must agree regardless of
     /// which system owns a name.
+    fn class(&self) -> &crate::classification::Classification {
+        self.class
+            .get_or_init(|| crate::classification::Classification::of(self.model))
+    }
+
     fn check_refs(
         &self,
         expr: &crate::Expr,
@@ -221,23 +224,33 @@ impl<'a> ModelCtx<'a> {
         // throughout it (a `makearray` binds its grid indices for every
         // value; see `collect_bound_symbols`). Seed those before the descent,
         // which then adds nested binders on top per node.
-        // Only an expression that binds something pays for a scope of its
-        // own: cloning the model's whole declared set per equation made this
-        // check quadratic in the equation count.
+        // The binders are layered over the declared set rather than joined to
+        // a copy of it, which would make this check quadratic in the
+        // equation count.
         let mut binders: HashSet<String> = bound.clone();
         collect_bound_symbols(expr, &mut binders);
-        let extended;
-        let scope = if binders.iter().all(|b| self.defined_vars.contains(b)) {
-            &self.defined_vars
+        self.check_refs_with(expr, path, idx, &binders, errs);
+    }
+
+    /// [`Self::check_refs_bound`] with every binder of `expr` already in
+    /// `binders`.
+    fn check_refs_with(
+        &self,
+        expr: &crate::Expr,
+        path: &str,
+        idx: usize,
+        binders: &HashSet<String>,
+        errs: &mut Vec<StructuralError>,
+    ) {
+        let declared = NameScope::Set(&self.defined_vars);
+        let scope = if binders.is_empty() {
+            declared
         } else {
-            let mut s = self.defined_vars.clone();
-            s.extend(binders);
-            extended = s;
-            &extended
+            NameScope::WithSet(&declared, binders)
         };
-        validate_expression_references_with_systems(
+        references_in_scope(
             expr,
-            scope,
+            &scope,
             self.system_refs,
             &self.local_scoped,
             path,
@@ -260,17 +273,21 @@ impl<'a> ModelCtx<'a> {
     /// `initialization_equations` (§6.2) are a separate block with a separate
     /// balance and are deliberately NOT counted here.
     fn check_equation_balance(&self, errors: &mut Vec<StructuralError>) {
+        if self.is_coupled {
+            return;
+        }
+        let unknown_vars: Vec<String> = self.class().unknowns();
         let defining_equations = count_defining_equations(&self.model.equations);
-        if !self.is_coupled && defining_equations != self.unknown_vars.len() {
+        if defining_equations != unknown_vars.len() {
             let (extra_equations_for, missing_equations_for) =
-                analyze_equation_mismatch(&self.model.equations, &self.unknown_vars);
+                analyze_equation_mismatch(&self.model.equations, &unknown_vars);
 
             // The settled cross-binding detail key is `unknowns`
             // (tests/invalid/expected_errors.json): esm 1.0.0 balances UNKNOWNS
             // against equations, and `state_variables` named a type that no longer
             // exists.
             let mut details = serde_json::json!({
-                "unknowns": self.unknown_vars,
+                "unknowns": unknown_vars,
                 "equations": defining_equations,
             });
 
@@ -287,7 +304,7 @@ impl<'a> ModelCtx<'a> {
                 message: format!(
                     "Number of equations ({}) does not match number of unknowns ({})",
                     defining_equations,
-                    self.unknown_vars.len()
+                    unknown_vars.len()
                 ),
                 details,
             });
@@ -466,8 +483,9 @@ impl<'a> ModelCtx<'a> {
         let mut eq_bound = HashSet::new();
         collect_bound_symbols(&equation.lhs, &mut eq_bound);
         collect_bound_symbols(&equation.rhs, &mut eq_bound);
+        // `eq_bound` holds every binder of both sides already.
         for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
-            self.check_refs_bound(
+            self.check_refs_with(
                 expr,
                 &format!("{eq_path}/{field}"),
                 eq_idx,
@@ -489,19 +507,26 @@ impl<'a> ModelCtx<'a> {
         // CONTINUOUS, which guard 2 forbids for relational work. (An OBSERVED
         // unknown's class depends on its defining equation, which only the cadence
         // pass resolves; this static check stays with the leaves it can decide.)
-        let state_var_set: HashSet<&str> = self
-            .class
-            .ode_states
-            .iter()
-            .chain(&self.class.algebraic_unknowns)
-            .chain(&self.class.brownian_parameters)
-            .map(String::as_str)
-            .collect();
+        let state_var_set: std::cell::OnceCell<HashSet<&str>> = std::cell::OnceCell::new();
+        let is_state = |name: &str| {
+            state_var_set
+                .get_or_init(|| {
+                    let class = self.class();
+                    class
+                        .ode_states
+                        .iter()
+                        .chain(&class.algebraic_unknowns)
+                        .chain(&class.brownian_parameters)
+                        .map(String::as_str)
+                        .collect()
+                })
+                .contains(name)
+        };
         validate_aggregate_constraints(
             self.esm_file,
             self.model_name,
             self.model,
-            &state_var_set,
+            &is_state,
             errors,
         );
     }
@@ -558,7 +583,7 @@ impl<'a> ModelCtx<'a> {
         errors: &mut Vec<StructuralError>,
         warnings: &mut Vec<UnitWarning>,
     ) {
-        for (var_name, rhs) in &self.class.observed_definitions {
+        for (var_name, rhs) in &self.class().observed_definitions {
             let Some(variable) = self.model.variables.get(var_name) else {
                 continue;
             };
@@ -806,7 +831,13 @@ pub(crate) fn validate_data_source_references(
     };
 
     for (model_name, model) in esm_file.models.iter().flatten() {
-        let mut var_names: Vec<&String> = model.variables.keys().collect();
+        // Only a variable with an `update` names a source.
+        let mut var_names: Vec<&String> = model
+            .variables
+            .iter()
+            .filter(|(_, v)| v.update.is_some())
+            .map(|(n, _)| n)
+            .collect();
         var_names.sort();
         for var_name in var_names {
             let var = &model.variables[var_name];
@@ -1255,14 +1286,10 @@ enum LhsModel<'a> {
 }
 
 impl<'a> LhsModel<'a> {
-    fn variable_names(self) -> Vec<&'a String> {
+    fn declares(self, name: &str) -> bool {
         match self {
-            LhsModel::Typed(m) => m.variables.keys().collect(),
-            LhsModel::Json(m) => m
-                .get("variables")
-                .and_then(|v| v.as_object())
-                .map(|vars| vars.keys().collect())
-                .unwrap_or_default(),
+            LhsModel::Typed(m) => m.variables.contains_key(name),
+            LhsModel::Json(m) => m.get("variables").and_then(|v| v.get(name)).is_some(),
         }
     }
 
@@ -1303,13 +1330,12 @@ impl<'a> LhsModel<'a> {
         }
     }
 
-    /// Each equation's left-hand side (as JSON) and, when its right-hand side
-    /// is a `faq`, the right-hand side's `output_idx` names.
-    fn for_each_equation(self, mut f: impl FnMut(usize, &serde_json::Value, Option<Vec<String>>)) {
+    /// Each equation's left-hand side and, when its right-hand side is a
+    /// `faq`, the right-hand side's `output_idx` names.
+    fn for_each_equation(self, mut f: impl FnMut(usize, LhsSide<'_>, Option<Vec<String>>)) {
         match self {
             LhsModel::Typed(m) => {
                 for (k, eq) in m.equations.iter().enumerate() {
-                    let lhs = serde_json::to_value(&eq.lhs).unwrap_or(serde_json::Value::Null);
                     let faq_idx = match &eq.rhs {
                         // An integer entry is written as a number, which
                         // names no subscript (as `json_output_idx` reads it).
@@ -1323,7 +1349,7 @@ impl<'a> LhsModel<'a> {
                         ),
                         _ => None,
                     };
-                    f(k, &lhs, faq_idx);
+                    f(k, LhsSide::Typed(&eq.lhs), faq_idx);
                 }
             }
             LhsModel::Json(m) => {
@@ -1344,9 +1370,83 @@ impl<'a> LhsModel<'a> {
                             )
                         })
                         .map(json_output_idx);
-                    f(k, lhs, faq_idx);
+                    f(k, LhsSide::Json(lhs), faq_idx);
                 }
             }
+        }
+    }
+}
+
+/// An equation's left-hand side as [`lhs_name_errors_in`] reads it: typed, or
+/// JSON in an inline subsystem. The typed readings mirror the JSON ones.
+#[derive(Clone, Copy)]
+enum LhsSide<'a> {
+    Typed(&'a crate::Expr),
+    Json(&'a serde_json::Value),
+}
+
+impl<'a> LhsSide<'a> {
+    fn is_ic(self) -> bool {
+        match self {
+            LhsSide::Typed(e) => is_ic_equation(e),
+            LhsSide::Json(v) => v.get("op").and_then(|o| o.as_str()) == Some("ic"),
+        }
+    }
+
+    fn defined_name(self) -> Option<&'a str> {
+        match self {
+            LhsSide::Typed(lhs) => {
+                let mut e = lhs;
+                loop {
+                    let crate::Expr::Operator(n) = e else {
+                        return match e {
+                            crate::Expr::Variable(s) => Some(s),
+                            _ => None,
+                        };
+                    };
+                    e = match n.op.as_str() {
+                        "faq" | "aggregate" => n.expr.as_deref()?,
+                        "index" => n.args.first()?,
+                        "D" if matches!(n.wrt.as_deref(), None | Some("t")) => n.args.first()?,
+                        _ => return None,
+                    };
+                }
+            }
+            LhsSide::Json(v) => lhs_defined_name(v),
+        }
+    }
+
+    fn subject_name(self) -> Option<&'a str> {
+        match self {
+            LhsSide::Typed(lhs) => {
+                let mut e = lhs;
+                loop {
+                    let crate::Expr::Operator(n) = e else {
+                        return match e {
+                            crate::Expr::Variable(s) => Some(s),
+                            _ => None,
+                        };
+                    };
+                    e = match n.op.as_str() {
+                        "faq" | "aggregate" => n.expr.as_deref()?,
+                        "index" | "D" => n.args.first()?,
+                        _ => return None,
+                    };
+                }
+            }
+            LhsSide::Json(v) => lhs_subject_name(v),
+        }
+    }
+
+    fn free_subscripts(
+        self,
+        bound: &HashSet<String>,
+        names: &dyn Fn(&str) -> bool,
+        out: &mut Vec<String>,
+    ) {
+        match self {
+            LhsSide::Typed(e) => collect_free_lhs_subscripts_typed(e, bound, names, out),
+            LhsSide::Json(v) => collect_free_lhs_subscripts(v, bound, names, out),
         }
     }
 }
@@ -1374,18 +1474,17 @@ fn lhs_name_errors_in(
     doc_scope: &HashSet<String>,
     out: &mut Vec<StructuralError>,
 ) {
-    let mut names: HashSet<String> = doc_scope.clone();
-    names.extend(model.variable_names().into_iter().cloned());
+    let names = |sym: &str| doc_scope.contains(sym) || model.declares(sym);
     model.for_each_equation(|k, lhs, faq_idx| {
-        let lhs_path = format!("{path}/equations/{k}/lhs");
-        if lhs.get("op").and_then(|o| o.as_str()) == Some("ic") {
+        let lhs_path = || format!("{path}/equations/{k}/lhs");
+        if lhs.is_ic() {
             return;
         }
-        if let Some(name) = lhs_defined_name(lhs)
+        if let Some(name) = lhs.defined_name()
             && lhs_names_parameter(esm_file, model, name)
         {
             out.push(StructuralError {
-                path: lhs_path.clone(),
+                path: lhs_path(),
                 code: StructuralErrorCode::EquationDefinesParameter,
                 message: format!(
                     "Equation {k} defines '{name}', which is a parameter; an equation \
@@ -1398,12 +1497,12 @@ fn lhs_name_errors_in(
         // subscripts from the right-hand side's `output_idx`.
         let bound: HashSet<String> = faq_idx.into_iter().flatten().collect();
         let mut free: Vec<String> = Vec::new();
-        collect_free_lhs_subscripts(lhs, &bound, &names, &mut free);
-        let subject = lhs_subject_name(lhs);
+        lhs.free_subscripts(&bound, &names, &mut free);
+        let subject = lhs.subject_name();
         for symbol in free {
             let defining = subject.map_or(String::new(), |v| format!(" (defining '{v}')"));
             out.push(StructuralError {
-                path: lhs_path.clone(),
+                path: lhs_path(),
                 code: StructuralErrorCode::UnboundIndexSymbol,
                 message: format!(
                     "Equation {k}{defining} subscripts its left-hand side with \
@@ -1508,7 +1607,7 @@ fn json_output_idx(node: &serde_json::Value) -> Vec<String> {
 fn collect_free_lhs_subscripts(
     e: &serde_json::Value,
     bound: &HashSet<String>,
-    names: &HashSet<String>,
+    names: &dyn Fn(&str) -> bool,
     out: &mut Vec<String>,
 ) {
     let Some(obj) = e.as_object() else { return };
@@ -1539,10 +1638,7 @@ fn collect_free_lhs_subscripts(
             for s in args.iter().skip(1) {
                 match s.as_str() {
                     Some(sym) => {
-                        if !bound.contains(sym)
-                            && !names.contains(sym)
-                            && !out.iter().any(|o| o == sym)
-                        {
+                        if !bound.contains(sym) && !names(sym) && !out.iter().any(|o| o == sym) {
                             out.push(sym.to_string());
                         }
                     }
@@ -1553,6 +1649,59 @@ fn collect_free_lhs_subscripts(
         _ => {
             for a in args {
                 collect_free_lhs_subscripts(a, bound, names, out);
+            }
+        }
+    }
+}
+
+/// [`collect_free_lhs_subscripts`] over a typed left-hand side.
+fn collect_free_lhs_subscripts_typed(
+    e: &crate::Expr,
+    bound: &HashSet<String>,
+    names: &dyn Fn(&str) -> bool,
+    out: &mut Vec<String>,
+) {
+    let crate::Expr::Operator(node) = e else {
+        return;
+    };
+    match node.op.as_str() {
+        "faq" | "aggregate" => {
+            let mut inner = bound.clone();
+            inner.extend(
+                node.output_idx
+                    .iter()
+                    .flatten()
+                    .filter(|s| !is_integer_literal(s))
+                    .cloned(),
+            );
+            if let Some(r) = &node.ranges {
+                inner.extend(r.keys().cloned());
+            }
+            if let Some(x) = node.expr.as_deref() {
+                collect_free_lhs_subscripts_typed(x, &inner, names, out);
+            }
+            for a in &node.args {
+                collect_free_lhs_subscripts_typed(a, &inner, names, out);
+            }
+        }
+        "index" => {
+            if let Some(base) = node.args.first() {
+                collect_free_lhs_subscripts_typed(base, bound, names, out);
+            }
+            for s in node.args.iter().skip(1) {
+                match s {
+                    crate::Expr::Variable(sym) => {
+                        if !bound.contains(sym) && !names(sym) && !out.iter().any(|o| o == sym) {
+                            out.push(sym.clone());
+                        }
+                    }
+                    _ => collect_free_lhs_subscripts_typed(s, bound, names, out),
+                }
+            }
+        }
+        _ => {
+            for a in &node.args {
+                collect_free_lhs_subscripts_typed(a, bound, names, out);
             }
         }
     }
@@ -1619,7 +1768,7 @@ fn validate_aggregate_constraints(
     esm_file: &EsmFile,
     model_name: &str,
     model: &crate::Model,
-    state_vars: &HashSet<&str>,
+    is_state: &dyn Fn(&str) -> bool,
     errors: &mut Vec<StructuralError>,
 ) {
     let model_path = format!("/models/{model_name}");
@@ -1636,16 +1785,18 @@ fn validate_aggregate_constraints(
         .collect();
     for (eq_idx, equation) in model.equations.iter().enumerate() {
         for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
-            let field_path = format!("{model_path}/equations/{eq_idx}/{field}");
-            check_aggregates_in_expr(expr, &field_path, esm_file, state_vars, &var_shapes, errors);
+            let field_path = || format!("{model_path}/equations/{eq_idx}/{field}");
+            check_aggregates_in_expr(expr, &field_path, esm_file, is_state, &var_shapes, errors);
         }
-        check_recurrence_equation(
-            equation,
-            &format!("{model_path}/equations/{eq_idx}/rhs"),
-            esm_file,
-            &array_shaped,
-            errors,
-        );
+        if recurrence_lhs_target(&equation.lhs).is_some_and(|(var, _)| array_shaped.contains(var)) {
+            check_recurrence_equation(
+                equation,
+                &format!("{model_path}/equations/{eq_idx}/rhs"),
+                esm_file,
+                &array_shaped,
+                errors,
+            );
+        }
     }
 }
 
@@ -2498,12 +2649,12 @@ fn collect_bare_array_operands<'a>(
 
 /// Recurse through `expr`, applying [`check_aggregate_node`] to every
 /// `faq` node reached (including nested ones), each reported at
-/// `field_path` — the top-level equation side that contains it.
+/// `field_path()` — the top-level equation side that contains it.
 fn check_aggregates_in_expr(
     expr: &crate::Expr,
-    field_path: &str,
+    field_path: &dyn Fn() -> String,
     esm_file: &EsmFile,
-    state_vars: &HashSet<&str>,
+    is_state: &dyn Fn(&str) -> bool,
     var_shapes: &HashMap<String, Vec<String>>,
     errors: &mut Vec<StructuralError>,
 ) {
@@ -2511,10 +2662,11 @@ fn check_aggregates_in_expr(
         return;
     };
     if node.op == "faq" {
-        check_aggregate_node(node, field_path, esm_file, state_vars, var_shapes, errors);
+        let path = field_path();
+        check_aggregate_node(node, &path, esm_file, is_state, var_shapes, errors);
     }
     node.for_each_child(&mut |child| {
-        check_aggregates_in_expr(child, field_path, esm_file, state_vars, var_shapes, errors);
+        check_aggregates_in_expr(child, field_path, esm_file, is_state, var_shapes, errors);
     });
 }
 
@@ -2685,7 +2837,7 @@ fn check_aggregate_node(
     node: &crate::types::ExpressionNode,
     field_path: &str,
     esm_file: &EsmFile,
-    state_vars: &HashSet<&str>,
+    is_state: &dyn Fn(&str) -> bool,
     var_shapes: &HashMap<String, Vec<String>>,
     errors: &mut Vec<StructuralError>,
 ) {
@@ -2848,10 +3000,7 @@ fn check_aggregate_node(
         if let Some(body) = node.expr.as_deref() {
             collect_free_symbols(body, &mut free);
         }
-        let mut states_read: Vec<String> = free
-            .into_iter()
-            .filter(|name| state_vars.contains(name.as_str()))
-            .collect();
+        let mut states_read: Vec<String> = free.into_iter().filter(|name| is_state(name)).collect();
         if !states_read.is_empty() {
             states_read.sort();
             errors.push(StructuralError {
@@ -3841,6 +3990,49 @@ pub(crate) fn validate_expression_references_with_systems(
     equation_index: usize,
     errors: &mut Vec<StructuralError>,
 ) {
+    references_in_scope(
+        expr,
+        &NameScope::Set(defined_vars),
+        system_refs,
+        local_scoped,
+        base_path,
+        equation_index,
+        errors,
+    );
+}
+
+/// The names in scope at one point of an expression: a declared set, with the
+/// index symbols bound on the way down layered over it, so entering a binding
+/// node does not copy the declared set.
+#[derive(Clone, Copy)]
+enum NameScope<'a> {
+    Set(&'a HashSet<String>),
+    With(&'a NameScope<'a>, &'a [String]),
+    WithSet(&'a NameScope<'a>, &'a HashSet<String>),
+}
+
+impl NameScope<'_> {
+    fn contains(&self, name: &str) -> bool {
+        match self {
+            NameScope::Set(s) => s.contains(name),
+            NameScope::With(outer, names) => {
+                names.iter().any(|n| n == name) || outer.contains(name)
+            }
+            NameScope::WithSet(outer, names) => names.contains(name) || outer.contains(name),
+        }
+    }
+}
+
+/// [`validate_expression_references_with_systems`] over a [`NameScope`].
+fn references_in_scope(
+    expr: &crate::Expr,
+    defined_vars: &NameScope<'_>,
+    system_refs: &HashMap<String, SystemInfo>,
+    local_scoped: &HashSet<String>,
+    base_path: &str,
+    equation_index: usize,
+    errors: &mut Vec<StructuralError>,
+) {
     match expr {
         crate::Expr::Variable(var_name) => {
             // Skip derivatives and built-in functions. The independent variable
@@ -3939,33 +4131,22 @@ pub(crate) fn validate_expression_references_with_systems(
             // for the descent so a bound loop index is not flagged as
             // undefined.
             let bound = bound_index_symbols(op_node);
-            if bound.is_empty() {
-                op_node.for_each_child(&mut |child| {
-                    validate_expression_references_with_systems(
-                        child,
-                        defined_vars,
-                        system_refs,
-                        local_scoped,
-                        base_path,
-                        equation_index,
-                        errors,
-                    )
-                });
+            let scope = if bound.is_empty() {
+                *defined_vars
             } else {
-                let mut scope = defined_vars.clone();
-                scope.extend(bound);
-                op_node.for_each_child(&mut |child| {
-                    validate_expression_references_with_systems(
-                        child,
-                        &scope,
-                        system_refs,
-                        local_scoped,
-                        base_path,
-                        equation_index,
-                        errors,
-                    )
-                });
-            }
+                NameScope::With(defined_vars, &bound)
+            };
+            op_node.for_each_child(&mut |child| {
+                references_in_scope(
+                    child,
+                    &scope,
+                    system_refs,
+                    local_scoped,
+                    base_path,
+                    equation_index,
+                    errors,
+                )
+            });
         }
         crate::Expr::Number(_) | crate::Expr::Integer(_) => {
             // Numbers are always valid
