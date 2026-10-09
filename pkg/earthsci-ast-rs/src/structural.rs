@@ -1183,15 +1183,121 @@ pub(crate) fn lhs_name_errors(
         .map(|m| m.keys().cloned().collect())
         .unwrap_or_default();
     scope.insert(independent_variable(esm_file));
-    let model_json = serde_json::to_value(model).unwrap_or(serde_json::Value::Null);
     lhs_name_errors_in(
         esm_file,
         &format!("/models/{model_name}"),
-        &model_json,
+        LhsModel::Typed(model),
         &scope,
         &mut out,
     );
     out
+}
+
+/// A model as [`lhs_name_errors_in`] reads it: the typed top-level model, or
+/// an inline subsystem, which [`crate::Model`] keeps as JSON. Reading the
+/// typed model in place keeps the check linear in the equations' size (each
+/// equation's left-hand side is the only part turned into JSON).
+#[derive(Clone, Copy)]
+enum LhsModel<'a> {
+    Typed(&'a crate::Model),
+    Json(&'a serde_json::Value),
+}
+
+impl<'a> LhsModel<'a> {
+    fn variable_names(self) -> Vec<&'a String> {
+        match self {
+            LhsModel::Typed(m) => m.variables.keys().collect(),
+            LhsModel::Json(m) => m
+                .get("variables")
+                .and_then(|v| v.as_object())
+                .map(|vars| vars.keys().collect())
+                .unwrap_or_default(),
+        }
+    }
+
+    fn subsystem(self, name: &str) -> Option<&'a serde_json::Value> {
+        match self {
+            LhsModel::Typed(m) => m.subsystems.as_ref()?.get(name),
+            LhsModel::Json(m) => m.get("subsystems")?.get(name),
+        }
+    }
+
+    fn subsystem_names(self) -> Vec<&'a String> {
+        match self {
+            LhsModel::Typed(m) => m.subsystems.iter().flat_map(|s| s.keys()).collect(),
+            LhsModel::Json(m) => m
+                .get("subsystems")
+                .and_then(|v| v.as_object())
+                .map(|subs| subs.keys().collect())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Whether the variable at the scoped path `rest` (subsystem names, then
+    /// the variable) is a parameter; `None` when there is no such variable.
+    fn is_param(self, rest: &[&str]) -> Option<bool> {
+        let (last, subs) = rest.split_last()?;
+        let mut cur = self;
+        for p in subs {
+            cur = LhsModel::Json(cur.subsystem(p)?);
+        }
+        match cur {
+            LhsModel::Typed(m) => {
+                Some(m.variables.get(*last)?.var_type == crate::VariableType::Parameter)
+            }
+            LhsModel::Json(m) => {
+                let v = m.get("variables")?.get(*last)?;
+                Some(v.get("type").and_then(|t| t.as_str()) == Some("parameter"))
+            }
+        }
+    }
+
+    /// Each equation's left-hand side (as JSON) and, when its right-hand side
+    /// is a `faq`, the right-hand side's `output_idx` names.
+    fn for_each_equation(self, mut f: impl FnMut(usize, &serde_json::Value, Option<Vec<String>>)) {
+        match self {
+            LhsModel::Typed(m) => {
+                for (k, eq) in m.equations.iter().enumerate() {
+                    let lhs = serde_json::to_value(&eq.lhs).unwrap_or(serde_json::Value::Null);
+                    let faq_idx = match &eq.rhs {
+                        // An integer entry is written as a number, which
+                        // names no subscript (as `json_output_idx` reads it).
+                        crate::Expr::Operator(n) if n.op == "faq" || n.op == "aggregate" => Some(
+                            n.output_idx
+                                .iter()
+                                .flatten()
+                                .filter(|s| !is_integer_literal(s))
+                                .cloned()
+                                .collect(),
+                        ),
+                        _ => None,
+                    };
+                    f(k, &lhs, faq_idx);
+                }
+            }
+            LhsModel::Json(m) => {
+                for (k, eq) in m
+                    .get("equations")
+                    .and_then(|v| v.as_array())
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                {
+                    let Some(lhs) = eq.get("lhs") else { continue };
+                    let faq_idx = eq
+                        .get("rhs")
+                        .filter(|rhs| {
+                            matches!(
+                                rhs.get("op").and_then(|o| o.as_str()),
+                                Some("faq") | Some("aggregate")
+                            )
+                        })
+                        .map(json_output_idx);
+                    f(k, lhs, faq_idx);
+                }
+            }
+        }
+    }
 }
 
 /// The `equation_defines_parameter` findings of every model in `esm_file`,
@@ -1209,30 +1315,20 @@ pub(crate) fn parameter_definition_errors(esm_file: &EsmFile) -> Vec<StructuralE
         .collect()
 }
 
-/// One model's equations (as JSON, so an inline subsystem — untyped in
-/// [`crate::Model`] — is walked by the same code), then its subsystems.
+/// One model's equations, then its inline subsystems.
 fn lhs_name_errors_in(
     esm_file: &EsmFile,
     path: &str,
-    model: &serde_json::Value,
+    model: LhsModel<'_>,
     doc_scope: &HashSet<String>,
     out: &mut Vec<StructuralError>,
 ) {
     let mut names: HashSet<String> = doc_scope.clone();
-    if let Some(vars) = model.get("variables").and_then(|v| v.as_object()) {
-        names.extend(vars.keys().cloned());
-    }
-    for (k, eq) in model
-        .get("equations")
-        .and_then(|v| v.as_array())
-        .into_iter()
-        .flatten()
-        .enumerate()
-    {
-        let Some(lhs) = eq.get("lhs") else { continue };
+    names.extend(model.variable_names().into_iter().cloned());
+    model.for_each_equation(|k, lhs, faq_idx| {
         let lhs_path = format!("{path}/equations/{k}/lhs");
         if lhs.get("op").and_then(|o| o.as_str()) == Some("ic") {
-            continue;
+            return;
         }
         if let Some(name) = lhs_defined_name(lhs)
             && lhs_names_parameter(esm_file, model, name)
@@ -1249,15 +1345,7 @@ fn lhs_name_errors_in(
         }
         // The bare-index definition `index(V, k) ~ faq{k}(…)` takes its
         // subscripts from the right-hand side's `output_idx`.
-        let mut bound: HashSet<String> = HashSet::new();
-        if let Some(rhs) = eq.get("rhs")
-            && matches!(
-                rhs.get("op").and_then(|o| o.as_str()),
-                Some("faq") | Some("aggregate")
-            )
-        {
-            bound.extend(json_output_idx(rhs));
-        }
+        let bound: HashSet<String> = faq_idx.into_iter().flatten().collect();
         let mut free: Vec<String> = Vec::new();
         collect_free_lhs_subscripts(lhs, &bound, &names, &mut free);
         let subject = lhs_subject_name(lhs);
@@ -1273,23 +1361,23 @@ fn lhs_name_errors_in(
                 details: serde_json::json!({ "symbol": symbol, "variable": subject }),
             });
         }
-    }
-    if let Some(subs) = model.get("subsystems").and_then(|v| v.as_object()) {
-        let mut sub_names: Vec<&String> = subs.keys().collect();
-        sub_names.sort();
-        for s in sub_names {
-            let sub = &subs[s];
-            if sub.get("ref").is_some() {
-                continue; // an unresolved mount: nothing inline to check
-            }
-            lhs_name_errors_in(
-                esm_file,
-                &format!("{path}/subsystems/{s}"),
-                sub,
-                doc_scope,
-                out,
-            );
+    });
+    let mut sub_names = model.subsystem_names();
+    sub_names.sort();
+    for s in sub_names {
+        let Some(sub) = model.subsystem(s) else {
+            continue;
+        };
+        if sub.get("ref").is_some() {
+            continue; // an unresolved mount: nothing inline to check
         }
+        lhs_name_errors_in(
+            esm_file,
+            &format!("{path}/subsystems/{s}"),
+            LhsModel::Json(sub),
+            doc_scope,
+            out,
+        );
     }
 }
 
@@ -1317,24 +1405,15 @@ fn lhs_defined_name(lhs: &serde_json::Value) -> Option<&str> {
 /// Whether `name`, written on a left-hand side in `model`, names a parameter:
 /// a local variable, a scoped path into `model`'s subsystems, or a path from a
 /// top-level model of the document (which may be `model` itself).
-fn lhs_names_parameter(esm_file: &EsmFile, model: &serde_json::Value, name: &str) -> bool {
+fn lhs_names_parameter(esm_file: &EsmFile, model: LhsModel<'_>, name: &str) -> bool {
     let parts: Vec<&str> = name.split('.').collect();
-    let is_param = |m: &serde_json::Value, rest: &[&str]| -> Option<bool> {
-        let mut cur = m;
-        for p in &rest[..rest.len() - 1] {
-            cur = cur.get("subsystems")?.get(*p)?;
-        }
-        let v = cur.get("variables")?.get(*rest.last()?)?;
-        Some(v.get("type").and_then(|t| t.as_str()) == Some("parameter"))
-    };
-    if let Some(found) = is_param(model, &parts) {
+    if let Some(found) = model.is_param(&parts) {
         return found;
     }
     if parts.len() > 1
         && let Some(models) = &esm_file.models
         && let Some(top) = models.get(parts[0])
-        && let Ok(top_json) = serde_json::to_value(top)
-        && let Some(found) = is_param(&top_json, &parts[1..])
+        && let Some(found) = LhsModel::Typed(top).is_param(&parts[1..])
     {
         return found;
     }
@@ -1355,6 +1434,12 @@ fn lhs_subject_name(lhs: &serde_json::Value) -> Option<&str> {
             _ => return None,
         }
     }
+}
+
+/// Whether an `output_idx` entry is a canonical integer, which the typed
+/// node stores as a string and writes back as a number.
+fn is_integer_literal(s: &str) -> bool {
+    matches!(s.parse::<i64>(), Ok(v) if v.to_string() == s)
 }
 
 fn json_output_idx(node: &serde_json::Value) -> Vec<String> {
