@@ -1210,7 +1210,8 @@ pub(crate) struct FusedSpec {
     /// the reduction) reads the register, and no other output names it. A
     /// group's outputs never share storage with its inputs (a `Fused`
     /// instruction is not alias-safe for the slab coloring), so an early
-    /// store cannot change what a later micro-op reads.
+    /// store cannot change what a later micro-op reads. In ascending
+    /// micro-op order (the executor walks it alongside the micro-ops).
     pub direct: SmallVec<[(u32, u32); 2]>,
     /// Absorbed scans the executor runs in one loop with their single-use
     /// `+ - * /` neighbours (see [`ScanFuse`]).

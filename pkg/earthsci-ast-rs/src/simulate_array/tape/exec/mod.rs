@@ -77,6 +77,8 @@ mod simd_tests;
 #[cfg(test)]
 pub(super) use fused::eval_micro_op;
 #[cfg(test)]
+pub(super) use fused::fold_fused_op;
+#[cfg(test)]
 pub(super) use oracle::run_rhs_oracle;
 
 use fused::FCHUNK;

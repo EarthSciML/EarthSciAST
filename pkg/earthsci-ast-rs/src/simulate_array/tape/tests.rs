@@ -1660,6 +1660,56 @@ fn ab_index_gather_reduction_interleaved() {
             .any(|f| f.interleave.is_some() && f.inputs.iter().any(|i| i.index.is_some())),
         "the neighbour reduction runs interleaved over its folded gather"
     );
+    assert!(
+        prog.fused
+            .iter()
+            .filter(|f| f.reduce.is_some())
+            .all(|f| super::exec::fold_fused_op(f).is_some()),
+        "the scaled difference folds straight into the accumulator"
+    );
+}
+
+/// A dense source-receptor contraction `dc[i] = sum_j K[i, j] e[j]` over a
+/// materialized non-uniform `K`, with more source positions than an
+/// interleaved reduction takes: the group folds each product straight into
+/// its accumulator.
+#[test]
+fn ab_dense_contraction_folds_its_product() {
+    let n = 40i64;
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_source_receptor"},
+        "models": {"M": {
+            "variables": {
+                "c": {"type": "unknown", "shape": ["i"]},
+                "e": {"type": "unknown", "shape": ["i"]},
+                "K": {"type": "unknown", "shape": ["i", "j"]}
+            },
+            "equations": [
+                {"lhs": "K", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                    "ranges": {"i": [1, n], "j": [1, n]},
+                    "expr": {"op": "*", "args": [0.001, {"op": "+", "args": [1,
+                        {"op": "sin", "args": [{"op": "*", "args": ["i", "j"]}]}]}]}}},
+                d_eq("c", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
+                    "reduce": "+",
+                    "ranges": {"i": [1, n], "j": [1, n]},
+                    "expr": {"op": "*", "args": [
+                        {"op": "index", "args": ["K", "i", "j"]}, idx("e", json!("j"))]}})),
+                d_eq("e", n, json!({"op": "*", "args": [-0.1, idx("e", json!("i"))]}))
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let red = prog
+        .fused
+        .iter()
+        .find(|f| f.reduce.is_some())
+        .expect("the contraction fuses with its reduction");
+    assert!(red.interleave.is_none());
+    assert!(
+        super::exec::fold_fused_op(red).is_some(),
+        "the product folds straight into the accumulator"
+    );
 }
 
 /// A declared observed whose whole body is a `makearray` (the boundary-

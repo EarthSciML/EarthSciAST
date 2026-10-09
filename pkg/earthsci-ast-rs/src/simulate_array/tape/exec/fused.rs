@@ -1107,7 +1107,9 @@ pub(super) unsafe fn exec_fused(
     }
     // Seeded with the reduction's identity (a split's workers seed their
     // own cells).
-    if let Some(r) = &fs.reduce {
+    if let Some(r) = &fs.reduce
+        && !seeds_itself(fs)
+    {
         unsafe { std::slice::from_raw_parts_mut(red, r.n_inner).fill(r.init) };
     }
     unsafe { fill_whole(fs, bases, whole_src, 0, n_elems, 0) };
@@ -1210,28 +1212,181 @@ pub(super) unsafe fn run_fused_window(
 /// of a leading-axes position. `acc` is where cell 0 would be: a split's
 /// worker backs only its own cells, so it may point before that buffer
 /// (hence the wrapping offset).
+///
+/// Every cell's first term sits at the first leading position (flat offset
+/// below `n_inner`), which the walk visits before the others, so there the
+/// cell is written as `f(init, v)` without reading it: the accumulator needs
+/// no seeding pass (see [`seeds_itself`]).
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 unsafe fn fold_chunk(
     acc: *mut f64,
     n_inner: usize,
     at: usize,
+    init: f64,
     v: *const f64,
     c: usize,
     f: impl Fn(f64, f64) -> f64 + Copy,
 ) {
     let mut k = 0usize;
     while k < c {
-        let o = (at + k) % n_inner;
+        let p = at + k;
+        let o = p % n_inner;
         let len = (c - k).min(n_inner - o);
         unsafe {
             let a = std::slice::from_raw_parts_mut(acc.wrapping_add(o), len);
             let x = std::slice::from_raw_parts(v.add(k), len);
-            for (y, &t) in a.iter_mut().zip(x) {
-                *y = f(*y, t);
+            if p < n_inner {
+                for (y, &t) in a.iter_mut().zip(x) {
+                    *y = f(init, t);
+                }
+            } else {
+                for (y, &t) in a.iter_mut().zip(x) {
+                    *y = f(*y, t);
+                }
             }
         }
         k += len;
     }
+}
+
+/// [`fold_chunk`] of the values `g(a[k], b[k])`, computed in the same loop
+/// instead of read back from a register: the group's last micro-op fused
+/// into its reduction (see [`fold_fused_op`]). Each element applies `g`
+/// then `f`, exactly the two kernels the unfused path applies.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn fold_chunk_bin(
+    acc: *mut f64,
+    n_inner: usize,
+    at: usize,
+    init: f64,
+    a: MSrc,
+    b: MSrc,
+    c: usize,
+    g: impl Fn(f64, f64) -> f64 + Copy,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    // One piece (inside the `unsafe` block below): `$x` / `$y` read the
+    // operands at piece element `$i`.
+    macro_rules! piece {
+        ($ac:expr, $len:expr, $first:expr, |$i:ident| $x:expr, $y:expr) => {{
+            let ac: &mut [f64] = $ac;
+            if $first {
+                for $i in 0..$len {
+                    *ac.get_unchecked_mut($i) = f(init, g($x, $y));
+                }
+            } else {
+                for $i in 0..$len {
+                    let r = ac.get_unchecked_mut($i);
+                    *r = f(*r, g($x, $y));
+                }
+            }
+        }};
+    }
+    let mut k = 0usize;
+    while k < c {
+        let p = at + k;
+        let o = p % n_inner;
+        let len = (c - k).min(n_inner - o);
+        let first = p < n_inner;
+        unsafe {
+            let ac = std::slice::from_raw_parts_mut(acc.wrapping_add(o), len);
+            match (a, b) {
+                (MSrc::P(pa), MSrc::P(pb)) => {
+                    let xa = std::slice::from_raw_parts(pa.add(k), len);
+                    let xb = std::slice::from_raw_parts(pb.add(k), len);
+                    piece!(
+                        ac,
+                        len,
+                        first,
+                        |i| *xa.get_unchecked(i),
+                        *xb.get_unchecked(i)
+                    )
+                }
+                (MSrc::P(pa), MSrc::C(y)) => {
+                    let xa = std::slice::from_raw_parts(pa.add(k), len);
+                    piece!(ac, len, first, |i| *xa.get_unchecked(i), y)
+                }
+                (MSrc::C(x), MSrc::P(pb)) => {
+                    let xb = std::slice::from_raw_parts(pb.add(k), len);
+                    piece!(ac, len, first, |i| x, *xb.get_unchecked(i))
+                }
+                (MSrc::C(x), MSrc::C(y)) => fold_piece_const(ac, first, init, x, y, g, f),
+            }
+        }
+        k += len;
+    }
+}
+
+/// One piece of [`fold_chunk_bin`] with both operands constant. Out of line:
+/// inlined, the compiler computes `g(x, y)` ahead of the operand match from
+/// whatever the operands hold, pointers included, and a pointer's bits read
+/// as a subnormal `f64` make that one multiply cost a microcode assist on
+/// every piece.
+#[cold]
+#[inline(never)]
+fn fold_piece_const(
+    ac: &mut [f64],
+    first: bool,
+    init: f64,
+    x: f64,
+    y: f64,
+    g: impl Fn(f64, f64) -> f64,
+    f: impl Fn(f64, f64) -> f64,
+) {
+    let v = g(x, y);
+    for r in ac.iter_mut() {
+        *r = f(if first { init } else { *r }, v);
+    }
+}
+
+/// The micro-op a group's absorbed reduction folds straight from: its last
+/// one, when it is a `+ - * /` [`MicroOp::Bin`] (or a [`MicroOp::Bin2`] of
+/// one scaled by a scalar, into a sum) writing the reduction's register,
+/// nothing else reads that register (not a stored output, not a direct
+/// store), the fold is a sum or product, and the arithmetic is Float64 (the
+/// fused loop composes the f64 kernels directly, as the scan fusion does).
+/// `None` runs the op and the fold as two passes.
+pub(in crate::simulate_array::tape) fn fold_fused_op(fs: &FusedSpec) -> Option<usize> {
+    use BinCode::{Add, Div, Mul, Sub};
+    let r = fs.reduce.as_ref()?;
+    let mi = fs.micro.len().checked_sub(1)?;
+    let (out, kinds_ok) = match &fs.micro[mi] {
+        MicroOp::Bin { op, out, .. } => (
+            out,
+            matches!(op, Add | Sub | Mul | Div) && matches!(r.op, Add | Mul),
+        ),
+        // A superop scaled by a scalar (`(a op1 b) op2 s`, either order),
+        // folded into a sum.
+        MicroOp::Bin2 {
+            op1,
+            op2,
+            c: MRef::Scal(_),
+            out,
+            ..
+        } => (
+            out,
+            matches!(op1, Add | Sub | Mul | Div) && matches!(op2, Mul | Div) && r.op == Add,
+        ),
+        _ => return None,
+    };
+    let ok = *out == r.reg
+        && kinds_ok
+        && fs.scan_fuse.is_empty()
+        && !fs.outputs.iter().any(|&(reg, _)| reg == r.reg)
+        && !fs.direct.iter().any(|&(m, _)| m as usize == mi)
+        && !crate::precision::is_f32();
+    ok.then_some(mi)
+}
+
+/// Whether a group's absorbed reduction writes every accumulator cell before
+/// reading it (see [`fold_chunk`]), so nothing seeds it: the group visits at
+/// least one leading position.
+pub(super) fn seeds_itself(fs: &FusedSpec) -> bool {
+    fs.reduce
+        .as_ref()
+        .is_some_and(|r| r.n_inner > 0 && fs.shape.iter().product::<usize>() >= r.n_inner)
 }
 
 /// The strip-mined chunk loop of [`exec_fused`], monomorphized per SIMD
@@ -1256,6 +1411,22 @@ unsafe fn exec_fused_runs(
     // Scan fusions run under Float64 only (their loop composes the f64
     // arithmetic directly); otherwise the three passes run as written.
     let scan_fused = !fs.scan_fuse.is_empty() && !crate::precision::is_f32();
+    // The last micro-op folded straight into the reduction, if it can be.
+    let fold_op = fold_fused_op(fs);
+    debug_assert!(fs.direct.windows(2).all(|w| w[0].0 < w[1].0));
+    // The outputs a micro-op stores directly (no end-of-chunk copy).
+    let direct_mask = fs
+        .direct
+        .iter()
+        .filter(|&&(_, k)| k < 128)
+        .fold(0u128, |m, &(_, k)| m | 1 << k);
+    let is_direct = |k: usize| {
+        if k < 128 {
+            direct_mask >> k & 1 != 0
+        } else {
+            fs.direct.iter().any(|&(_, d)| d as usize == k)
+        }
+    };
     // Bin3 splat registers: one FCHUNK broadcast per scalar plus a zero
     // register (the ghost read), filled once per call. The values are the
     // EXACT scalars / the exact `+0.0` ghost, so an all-pointer superop
@@ -1418,16 +1589,33 @@ unsafe fn exec_fused_runs(
             // Where micro-op `mi` writes: its register, or straight into its
             // output when it is that output's last writer and nothing after
             // it reads the register (`FusedSpec::direct`).
+            // `direct` is in ascending micro-op order, and the micro loop asks
+            // in that order too, so a cursor finds each entry in one step; a
+            // query behind the cursor (a scan fusion asks for its post-op
+            // first) starts over.
+            let dnext = std::cell::Cell::new(0usize);
             let dst_of = |mi: usize, out: GroupIx| -> *mut f64 {
-                for &(m, k) in &fs.direct {
-                    let o = outs[k as usize].1;
-                    if m as usize == mi && !o.is_null() {
+                let d = &fs.direct;
+                let mut p = dnext.get();
+                if p > 0 && d[p - 1].0 as usize >= mi {
+                    p = 0;
+                }
+                while p < d.len() && (d[p].0 as usize) < mi {
+                    p += 1;
+                }
+                dnext.set(p);
+                if p < d.len() && d[p].0 as usize == mi {
+                    let o = outs[d[p].1 as usize].1;
+                    if !o.is_null() {
                         return unsafe { o.add(at) };
                     }
                 }
                 unsafe { rp.add(out as usize * cs) }
             };
             for (mi, op) in fs.micro.iter().enumerate() {
+                if fold_op == Some(mi) {
+                    continue;
+                }
                 if scan_fused {
                     let mut role = None;
                     for f in &fs.scan_fuse {
@@ -1772,7 +1960,7 @@ unsafe fn exec_fused_runs(
                 }
             }
             for (k, &(reg, optr)) in outs.iter().enumerate() {
-                if optr.is_null() || fs.direct.iter().any(|&(_, d)| d as usize == k) {
+                if optr.is_null() || is_direct(k) {
                     continue;
                 }
                 unsafe {
@@ -1784,13 +1972,103 @@ unsafe fn exec_fused_runs(
                 }
             }
             if let Some(r) = &fs.reduce {
-                let v = unsafe { rp.add(r.reg as usize * cs) as *const f64 };
-                macro_rules! fold {
-                    ($f:expr) => {
-                        unsafe { fold_chunk(red, r.n_inner, at, v, c, $f) }
-                    };
+                if let Some(MicroOp::Bin2 {
+                    op1,
+                    a,
+                    b,
+                    op2,
+                    c: MRef::Scal(z),
+                    swap,
+                    ..
+                }) = fold_op.map(|mi| &fs.micro[mi])
+                {
+                    let (a, b, z) = (msrc(a), msrc(b), svals[*z as usize]);
+                    use BinCode::{Add, Div, Mul, Sub};
+                    // `g` composes the superop's two kernels in its order.
+                    macro_rules! ff {
+                        ($f1:expr, $f2:expr) => {{
+                            let (f1, f2) = ($f1, $f2);
+                            if *swap {
+                                unsafe {
+                                    fold_chunk_bin(
+                                        red,
+                                        r.n_inner,
+                                        at,
+                                        r.init,
+                                        a,
+                                        b,
+                                        c,
+                                        move |x, y| f2(z, f1(x, y)),
+                                        |x: f64, y: f64| x + y,
+                                    )
+                                }
+                            } else {
+                                unsafe {
+                                    fold_chunk_bin(
+                                        red,
+                                        r.n_inner,
+                                        at,
+                                        r.init,
+                                        a,
+                                        b,
+                                        c,
+                                        move |x, y| f2(f1(x, y), z),
+                                        |x: f64, y: f64| x + y,
+                                    )
+                                }
+                            }
+                        }};
+                    }
+                    let add = |x: f64, y: f64| x + y;
+                    let sub = |x: f64, y: f64| x - y;
+                    let mul = |x: f64, y: f64| x * y;
+                    let div = |x: f64, y: f64| x / y;
+                    match (op1, op2) {
+                        (Add, Mul) => ff!(add, mul),
+                        (Sub, Mul) => ff!(sub, mul),
+                        (Mul, Mul) => ff!(mul, mul),
+                        (Div, Mul) => ff!(div, mul),
+                        (Add, Div) => ff!(add, div),
+                        (Sub, Div) => ff!(sub, div),
+                        (Mul, Div) => ff!(mul, div),
+                        (Div, Div) => ff!(div, div),
+                        other => unreachable!(
+                            "fold fusion admits a + - * / then * / superop ({other:?})"
+                        ),
+                    }
+                } else if let Some(MicroOp::Bin { op, a, b, .. }) = fold_op.map(|mi| &fs.micro[mi])
+                {
+                    let (a, b) = (msrc(a), msrc(b));
+                    use BinCode::{Add, Div, Mul, Sub};
+                    macro_rules! ff {
+                        ($g:expr, $f:expr) => {
+                            unsafe { fold_chunk_bin(red, r.n_inner, at, r.init, a, b, c, $g, $f) }
+                        };
+                    }
+                    let add = |x: f64, y: f64| x + y;
+                    let sub = |x: f64, y: f64| x - y;
+                    let mul = |x: f64, y: f64| x * y;
+                    let div = |x: f64, y: f64| x / y;
+                    match (op, &r.op) {
+                        (Add, Add) => ff!(add, add),
+                        (Sub, Add) => ff!(sub, add),
+                        (Mul, Add) => ff!(mul, add),
+                        (Div, Add) => ff!(div, add),
+                        (Add, Mul) => ff!(add, mul),
+                        (Sub, Mul) => ff!(sub, mul),
+                        (Mul, Mul) => ff!(mul, mul),
+                        (Div, Mul) => ff!(div, mul),
+                        other => unreachable!("fold fusion admits + - * / into + * ({other:?})"),
+                    }
+                } else {
+                    let v = unsafe { rp.add(r.reg as usize * cs) as *const f64 };
+                    macro_rules! fold {
+                        ($f:expr) => {
+                            unsafe { fold_chunk(red, r.n_inner, at, r.init, v, c, $f) }
+                        };
+                    }
+                    dispatch_bin_kernel!(&r.op, fold);
                 }
-                dispatch_bin_kernel!(&r.op, fold);
             }
         }};
     }
