@@ -112,6 +112,14 @@ pub fn load_document_with_options(
     load_value(document.clone(), options)
 }
 
+/// [`load_document_with_options`], consuming the document.
+pub(crate) fn load_document_owned(
+    document: Value,
+    options: &LoadOptions,
+) -> Result<EsmFile, EsmError> {
+    load_value(document, options)
+}
+
 /// Options controlling how [`load_string_with_options`] /
 /// [`load_document_with_options`] / [`load_path_with_options`] parse an ESM
 /// file (esm-spec §9.7).
