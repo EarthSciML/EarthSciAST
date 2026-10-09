@@ -1075,7 +1075,6 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
     body = _geo_compile(faq.expr_body, g)
     u = zeros(Float64, nslots[])
     nout = length(out)
-    arr  = _zeros_f64(exts...)
     # ---- The OVERLAP broad phase (see `_geo_overlap_gate` above) ----
     # Resolve the gate, then ask the SHARED planner (`_overlap_drive_plan`,
     # src/broad_phase.jl) which symbol(s) its candidate set drives. Only the two
@@ -1106,6 +1105,8 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
             _GEOM_EQ_DRIVE[] += 1
         end
     end
+    # A candidate-driven MAP writes only the cells its pairs reach.
+    arr = _zeros_f64(exts...; sparse = drive !== nothing && isempty(contract))
     # ---- The sweep (see `_geom_sweep_map!` / `_geom_sweep_contract!`) ----
     # The sweep counters describe the DENSE sweeps only; a candidate-driven
     # sweep runs neither of them and is counted by `_GEOM_OVERLAP_DRIVE`.
