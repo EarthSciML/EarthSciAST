@@ -6264,7 +6264,10 @@ impl<'m> TapeBuilder<'m> {
                 )?;
                 let s = self.ensure_slot(&v);
                 let var_ix = tape_index(
-                    *self.state_ix.get(var_name.as_str()).expect("state var known"),
+                    *self
+                        .state_ix
+                        .get(var_name.as_str())
+                        .expect("state var known"),
                     "state variables",
                 )?;
                 let w = self.dy_writes.len() as u32;
