@@ -496,7 +496,7 @@
         "n": 1000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": 2.5775,
+        "measured": "native / hand loop = 2.58",
         "reason": "native regrid's segmented sum over the admitted pairs is not threaded: its threaded call takes as long as its serial one, while the threaded hand loop splits the target cells",
         "phase": 5,
         "provisional": "clean sweep at aa8b1f9fa on the local node: cores 12-15 pinned, nothing else of ours running, load average 2.9-3.1 (other users), median of 2 runs, 2026-10-08/09"
