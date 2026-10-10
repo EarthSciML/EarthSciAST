@@ -33,14 +33,17 @@ const _PW = Polyester.PolyesterWeave
 # One section's chunk job for one argument type. `body(args, c, nchunks)`
 # runs chunk `c`; `body` and `args` are rewritten on every dispatch (both are
 # immutable values stored inline, so that is a copy, not an allocation).
+# `err` is written by whichever chunks throw, from any thread, so it is an
+# atomic field: the first exception wins the compare-and-swap, and the calling
+# thread's atomic read after the waits sees it.
 mutable struct _ThreadJob{B,A}
     body::B
     args::A
     nchunks::Int
-    err::Any
+    @atomic err::Any
     function _ThreadJob{B,A}() where {B,A}
         j = new{B,A}()
-        j.err = nothing
+        @atomic j.err = nothing
         return j
     end
 end
@@ -49,7 +52,7 @@ end
     try
         j.body(j.args, c, j.nchunks)
     catch e
-        j.err === nothing && (j.err = e)
+        @atomicreplace j.err nothing => e
     end
     return nothing
 end
@@ -120,9 +123,9 @@ function _dispatch_job!(j::J) where {J<:_ThreadJob}
         end
     end
     _PW.free_threads!(torelease)
-    err = j.err
+    err = @atomic j.err
     if err !== nothing
-        j.err = nothing
+        @atomic j.err = nothing
         throw(err)
     end
     return nothing

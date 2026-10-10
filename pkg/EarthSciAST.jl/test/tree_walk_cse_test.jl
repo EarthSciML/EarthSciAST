@@ -1020,11 +1020,17 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
         @test ESM._pstamp_same(sm, mixed)
         mixed.arr[1] = 9.0
         @test !ESM._pstamp_same(sm, mixed)
-        # Nothing it cannot compare safely is ever matched.
-        d = Dict("k" => 1.0)
-        @test !ESM._pstamp_same(ESM._pstamp(d), d)
-        big = zeros(ESM._PSTAMP_MAX_ELEMS + 1)
-        @test !ESM._pstamp_same(ESM._pstamp(big), big)
+        # A `p` it cannot compare safely is refused, not refilled every call.
+        refused(x) = try
+            ESM._pstamp(x); false
+        catch e
+            e isa ESM.TreeWalkError && e.code == "E_TREEWALK_PARAM_UNSTAMPABLE"
+        end
+        @test refused(Dict("k" => 1.0))
+        @test refused((; k = 1.0, name = "a"))
+        @test refused(zeros(ESM._PSTAMP_MAX_ELEMS + 1))
+        @test ESM._pstamp_same(ESM._pstamp(zeros(ESM._PSTAMP_MAX_ELEMS)),
+                               zeros(ESM._PSTAMP_MAX_ELEMS))
     end
 
     # ----------------------------------------------------------------

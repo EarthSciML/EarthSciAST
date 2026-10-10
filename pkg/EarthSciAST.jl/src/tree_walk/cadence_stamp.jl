@@ -27,9 +27,10 @@
 # when the tier refills, and the test compares contents element by element
 # with the same egal rule. A `p` holding anything else (a Dict, a mutable
 # struct, a function closure over mutable state), or holding more than
-# `_PSTAMP_MAX_ELEMS` numbers, cannot be compared cheaply and safely; its
-# stamp is `_CSE_INVALID`, which no `p` matches, so the tier refills on every
-# call (never a stale value).
+# `_PSTAMP_MAX_ELEMS` numbers, cannot be compared cheaply and safely, and is
+# refused with `E_TREEWALK_PARAM_UNSTAMPABLE`: the alternative, refilling
+# every tier and re-walking `p` on every call, would silently cost an
+# O(length(p)) walk and an allocation per call.
 
 const _PSTAMP_MAX_ELEMS = 1 << 16
 
@@ -37,8 +38,18 @@ const _PSTAMP_MAX_ELEMS = 1 << 16
 
 function _pstamp_snapshot(p)
     n = Ref(0)
-    _pstamp_comparable(p, n) || return _CSE_INVALID
+    _pstamp_comparable(p, n) || _pstamp_refuse(p, n[])
     return deepcopy(p)
+end
+
+@noinline function _pstamp_refuse(p, nelems::Int)
+    why = nelems > _PSTAMP_MAX_ELEMS ?
+          "it holds more than $(_PSTAMP_MAX_ELEMS) numbers" :
+          "it holds a value that is not a number, tuple, NamedTuple or array of these"
+    throw(TreeWalkError("E_TREEWALK_PARAM_UNSTAMPABLE",
+          "parameter object of type $(typeof(p)) cannot be used with memoized " *
+          "parameter-dependent values: $(why). Pass `p` as a NamedTuple, tuple " *
+          "or array of numbers (at most $(_PSTAMP_MAX_ELEMS) in total)"))
 end
 
 _pstamp_comparable(x, n::Base.RefValue{Int}) = isbits(x)
@@ -110,7 +121,25 @@ _new_forcing_epoch() = _ForcingEpoch(UInt64(0))
 const _BUFFER_EPOCHS = Dict{UInt,Vector{Tuple{WeakRef,WeakRef}}}()
 const _BUFFER_EPOCHS_LOCK = ReentrantLock()
 
+# Registrations die with their build or buffer, but nothing removes them then (a
+# finalizer may not take the lock). Registration instead sweeps the whole table
+# once it has doubled since the last sweep, so the table stays within a constant
+# factor of the live registrations at an amortized O(1) per registration.
+const _BUFFER_EPOCHS_SWEEP_AT = Ref(64)
+
 _buffer_key(buf::AbstractArray) = UInt(pointer(buf))
+
+_live_registration(r::Tuple{WeakRef,WeakRef}) =
+    r[1].value !== nothing && r[2].value !== nothing
+
+function _sweep_buffer_epochs!()
+    filter!(_BUFFER_EPOCHS) do (_, regs)
+        filter!(_live_registration, regs)
+        !isempty(regs)
+    end
+    _BUFFER_EPOCHS_SWEEP_AT[] = max(64, 2 * length(_BUFFER_EPOCHS))
+    return nothing
+end
 
 function _register_forcing_buffers!(epoch::_ForcingEpoch, buffers)
     isempty(buffers) && return nothing
@@ -119,9 +148,10 @@ function _register_forcing_buffers!(epoch::_ForcingEpoch, buffers)
             buf isa DenseArray || continue
             k = _buffer_key(buf)
             regs = get!(Vector{Tuple{WeakRef,WeakRef}}, _BUFFER_EPOCHS, k)
-            filter!(r -> r[1].value !== nothing && r[2].value !== nothing, regs)
+            filter!(_live_registration, regs)
             push!(regs, (WeakRef(buf), WeakRef(epoch)))
         end
+        length(_BUFFER_EPOCHS) >= _BUFFER_EPOCHS_SWEEP_AT[] && _sweep_buffer_epochs!()
     end
     return nothing
 end

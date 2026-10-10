@@ -302,8 +302,9 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
         @testset "a threaded call allocates nothing" begin
             fA, uA, pA, _ = _cgt_build(model, ics)
             du = similar(uA)
+            bytes = _cgt_alloc(fA, du, uA, pA, 0.3)   # also takes the threaded route
             if VERSION >= v"1.12"
-                @test _cgt_alloc(fA, du, uA, pA, 0.3) == 0
+                @test bytes == 0
             end
             @test getfield(getfield(fA, :kernel_section), :tcache).state == 1
         end
