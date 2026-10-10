@@ -288,6 +288,10 @@ generic `polygon_area` FAQ (`_polygon_area_via_faq`). Equals
 non-overlapping clip (`< 3` distinct vertices) has zero overlap area.
 """
 function _polygon_intersection_area(poly_a, poly_b, manifold::AbstractString)::Float64
+    if manifold == "planar" && poly_a isa AbstractMatrix && poly_b isa AbstractMatrix
+        r = _planar_pia_noalloc(poly_a, poly_b)
+        r === nothing || return r
+    end
     ring = _clip_or_treewalk_error(poly_a, poly_b, manifold)
     size(ring, 1) < 3 && return 0.0
     return _polygon_area_via_faq(close_ring(ring), manifold)
@@ -921,7 +925,8 @@ end
 const _GEOM_EQ_DRIVE = Ref{Int}(0)
 
 function _geo_equality_drive(gates, out::Vector{String}, contract::Vector{String},
-                             exts::Vector{Int}, index_sets, derived_extents, faq)
+                             exts::Vector{Int}, index_sets, derived_extents, faq;
+                             eq_cache=nothing)
     (gates === nothing || isempty(gates)) && return nothing
     _join_on_gate_disabled() && return nothing
     nout = length(out)
@@ -936,7 +941,14 @@ function _geo_equality_drive(gates, out::Vector{String}, contract::Vector{String
         (a isa AbstractArray && b isa AbstractArray) || continue
         eA, eB = slotext(sA), slotext(sB)
         (length(a) >= eA && length(b) >= eB) || continue
-        oi = _equality_match_index(1:eA, p -> a[p], 1:eB, p -> b[p])
+        # The match index depends only on the two key columns and extents; one
+        # setup pass gates several aggregates on the same pair of bin buffers.
+        oi = if eq_cache === nothing
+            _equality_match_index(1:eA, p -> a[p], 1:eB, p -> b[p])
+        else
+            get!(() -> _equality_match_index(1:eA, p -> a[p], 1:eB, p -> b[p]),
+                 eq_cache, (objectid(a), objectid(b), eA, eB))
+        end
         oi === nothing && continue
         g = _GeoOverlapGate(_JoinGate(slotname(sA), slotname(sB), Dict{Int,Int}(),
                                       Dict{Int,Int}(), oi), sA, sB)
@@ -1041,7 +1053,7 @@ end
 # the setup-time twin of the ODE faq einsum path.
 function _materialize_geom_array(faq, env, index_sets, derived_extents,
                                  var_shapes=Dict{String,Vector{String}}();
-                                 ov_cache=nothing)
+                                 ov_cache=nothing, eq_cache=nothing)
     out  = String[v for v in faq.output_idx]
     exts = Int[_geo_index_extent(faq.ranges[v], index_sets, derived_extents) for v in out]
     # Contracted indices: `ranges` keys not among the output indices (§5.1). Their
@@ -1075,7 +1087,6 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
     body = _geo_compile(faq.expr_body, g)
     u = zeros(Float64, nslots[])
     nout = length(out)
-    arr  = _zeros_f64(exts...)
     # ---- The OVERLAP broad phase (see `_geo_overlap_gate` above) ----
     # Resolve the gate, then ask the SHARED planner (`_overlap_drive_plan`,
     # src/broad_phase.jl) which symbol(s) its candidate set drives. Only the two
@@ -1100,12 +1111,14 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
     dov = ov
     if ov === nothing
         eq = _geo_equality_drive(gates, out, contract, exts, index_sets,
-                                 derived_extents, faq)
+                                 derived_extents, faq; eq_cache=eq_cache)
         if eq !== nothing
             dov, drive = eq
             _GEOM_EQ_DRIVE[] += 1
         end
     end
+    # A candidate-driven MAP writes only the cells its pairs reach.
+    arr = _zeros_f64(exts...; sparse = drive !== nothing && isempty(contract))
     # ---- The sweep (see `_geom_sweep_map!` / `_geom_sweep_contract!`) ----
     # The sweep counters describe the DENSE sweeps only; a candidate-driven
     # sweep runs neither of them and is counted by `_GEOM_OVERLAP_DRIVE`.
@@ -1784,7 +1797,11 @@ function _vi_buf_vector(buf)
     for (k, val) in buf
         v[Int(k)] = val
     end
-    return v
+    # Bin keys of one concrete type (a skolem's integer tuples) are stored as
+    # that type, so the gate's per-pair comparison is not a dynamic dispatch.
+    all(i -> isassigned(v, i), 1:n) || return v
+    T = mapreduce(typeof, typejoin, v; init = Union{})
+    return isconcretetype(T) ? convert(Vector{T}, v) : v
 end
 
 # The shared setup-time value environment (name → const array / scalar / bin
@@ -1887,6 +1904,9 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
     # views six times, is pure waste. Scoped to this call, where a name→array
     # binding in `env` is written once and never replaced.
     ov_cache = Dict{Tuple{Vector{String},Vector{String},Float64},_OverlapIndex}()
+    # Likewise one bin-equality match index per pair of key columns (the env
+    # buffers stay bound, so their identities are stable for the pass).
+    eq_cache = Dict{Tuple{UInt,UInt,Int,Int},Union{Nothing,_OverlapIndex}}()
     for n in _geom_setup_order(setup, defs)
         rhs = defs[n]
         _open_rule!(n, :setup_array)
@@ -1911,7 +1931,7 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
                                            registered_functions)
         else
             _materialize_geom_array(rhs, env, index_sets, derived_extents, var_shapes;
-                                    ov_cache=ov_cache)
+                                    ov_cache=ov_cache, eq_cache=eq_cache)
         end
         env[n] = arr
         out[n] = arr

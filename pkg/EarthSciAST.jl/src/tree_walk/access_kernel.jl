@@ -1148,7 +1148,8 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 # `EarthSciAST._reset_thread_tally!()`.
 #   :cg_threaded              — the section's cell axes run as static chunks
 #   :cg_serial_small          — fewer than 2 chunks' worth of cells (summed
-#                               across the section's emitted kernels)
+#                               across the section's emitted kernels; a
+#                               contraction counts its fold terms too)
 #   :cg_serial_shared_outs    — two emitted cells (same or different kernel)
 #                               target the same `du` slot; the section never
 #                               chunks (see `_cg_covered_outs_disjoint`)

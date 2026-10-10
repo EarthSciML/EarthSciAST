@@ -221,6 +221,51 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             @test tc2.nchunks == min(Threads.nthreads(), 1_000_000 ÷ 512)
         end
 
+        @testset "contraction verdict weighs fold terms, chunks never exceed cells" begin
+            r = Ref(0)
+            @test ESM._ac_work(10, nothing) == 10
+            @test ESM._ac_work(10, ESM._ACFold([r], :+, 0.0, [1:1:3])) == 10 + 10 * 3
+            @test ESM._ac_work(2, ESM._ACFold([r], :+, 0.0, [1, 3, 6], [[1, 2, 1, 2, 3]])) == 2 + 5
+            # 600 cells alone stay serial at the 512 floor; their fold terms do not.
+            @test ESM._sec_prep_threads!(ESM._SecTCache(600, true)).state == -1
+            tc3 = ESM._SecTCache(600, true, ESM._ac_work(600, ESM._ACFold([r], :+, 0.0, [1:1:5])))
+            @test ESM._sec_prep_threads!(tc3).state == 1
+            @test tc3.nchunks == min(Threads.nthreads(), 3600 ÷ 512)
+            tc4 = ESM._SecTCache(2, true, 1_000_000)
+            @test ESM._sec_prep_threads!(tc4).state == 1
+            @test tc4.nchunks == 2
+        end
+
+        @testset "a join-gated TABLE contraction threads below the cell floor, bit-identically" begin
+            # The scaling tier's regrid at 1000 cells: 1000 output cells (under two
+            # chunks' worth at the 512 floor) folding about 2000 admitted pairs.
+            doc = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "scaling",
+                           "fixtures", "regrid", "regrid_N1000.esm")
+            function rhs(compiler, env...)
+                withenv(env...) do
+                    prob = ESM.esm_problem(doc, (0.0, 1.0); compiler=compiler)
+                    # A state that differs cell to cell, set by name so the two
+                    # compilers' layouts need not agree.
+                    u = zeros(length(prob.u0))
+                    for (k, i) in prob.var_map
+                        i <= length(u) && (u[i] = 1.0 + 1e-3 * sum(Int, codeunits(k)))
+                    end
+                    du = zeros(length(u))
+                    prob.f!(du, u, prob.p, 0.0)
+                    Dict(k => du[i] for (k, i) in prob.var_map if i <= length(du))
+                end
+            end
+            du_ser = rhs(:native, "ESS_THREADS_MIN_CELLS" => "100000000")
+            ESM._reset_thread_tally!()
+            du_thr = rhs(:native)
+            # Both sections chunk: the 2000-cell state kernels and the contraction.
+            @test get(ESM._THREAD_TALLY, :cg_threaded, 0) == 2
+            du_int = rhs(:interpreter)
+            @test length(du_thr) == 2000
+            @test all(du_thr[k] === du_ser[k] for k in keys(du_thr))
+            @test all(du_thr[k] === du_int[k] for k in keys(du_thr))
+        end
+
         @testset "overflow RGF (budget 0): threaded ≡ serial oracle ≡ interpreter" begin
             ESM._reset_thread_tally!()
             fO, uO, pO, tallyO = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET="0")
