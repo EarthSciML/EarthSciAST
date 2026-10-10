@@ -63,7 +63,8 @@
 //!   persistent root tombstone). See the module docs there.
 
 use crate::types::{Expr, ExpressionNode};
-use rustc_hash::FxHashSet;
+use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -77,7 +78,11 @@ struct Interner {
     /// Reentrancy depth of [`InternScope`]s; the map is dropped when the
     /// outermost scope closes.
     depth: usize,
-    set: FxHashSet<Key>,
+    /// The canonical nodes by structural hash (nodes whose hashes collide
+    /// share a bucket). Keyed by the hash rather than by the node, so a
+    /// candidate is looked up before it is allocated: a duplicate is never
+    /// boxed, and the map never re-reads a stored node to rehash it.
+    set: FxHashMap<u64, SmallVec<[Arc<ExpressionNode>; 1]>>,
 }
 
 /// RAII guard arming the thread-local interner. Reentrant: nested scopes share
@@ -134,18 +139,13 @@ pub fn intern_node(node: ExpressionNode) -> Arc<ExpressionNode> {
         }
         let mut hasher = rustc_hash::FxHasher::default();
         node_hash(&node, &mut hasher);
-        let key = Key {
-            hash: hasher.finish(),
-            node: Arc::new(node),
-        };
-        match interner.set.get(&key) {
-            Some(canon) => Arc::clone(&canon.node),
-            None => {
-                let out = Arc::clone(&key.node);
-                interner.set.insert(key);
-                out
-            }
+        let bucket = interner.set.entry(hasher.finish()).or_default();
+        if let Some(canon) = bucket.iter().find(|c| node_eq(c, &node)) {
+            return Arc::clone(canon);
         }
+        let out = Arc::new(node);
+        bucket.push(Arc::clone(&out));
+        out
     })
 }
 
@@ -155,28 +155,6 @@ pub fn intern_node(node: ExpressionNode) -> Arc<ExpressionNode> {
 /// carrying one is simply never shared.
 fn internable(node: &ExpressionNode) -> bool {
     node.value.is_none() && node.output.is_none() && node.join.is_none()
-}
-
-/// Interning key: an owned canonical candidate with structural hash/equality.
-/// The structural hash is computed once, when the key is made: the set rehashes
-/// every key as it grows, and reading a stored node's fields again then is a
-/// cache miss per key.
-struct Key {
-    hash: u64,
-    node: Arc<ExpressionNode>,
-}
-
-impl PartialEq for Key {
-    fn eq(&self, other: &Self) -> bool {
-        self.hash == other.hash && node_eq(&self.node, &other.node)
-    }
-}
-impl Eq for Key {}
-
-impl Hash for Key {
-    fn hash<H: Hasher>(&self, h: &mut H) {
-        h.write_u64(self.hash);
-    }
 }
 
 /// Child-expression equality under the hash-consing invariant: leaves by value
