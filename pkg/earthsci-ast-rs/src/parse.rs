@@ -161,7 +161,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // canonical `faq` at the wire boundary, ahead of every other pass, so the
     // version gates, the schema, the typed tree and `emit` all see exactly one
     // tag (docs/content/rfcs/faq-node-rename.md).
-    prepare_document_ops(&mut json_value)?;
+    let authored = prepare_document_ops_scanned(&mut json_value)?;
 
     let base = options.base_path.clone().unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -254,9 +254,16 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     )?;
 
     // Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
-    crate::units::reject_const_units_pre_v12(&json_value).map_err(
-        |e: crate::diagnostic::DiagnosticError| EsmError::SchemaValidation(e.to_string()),
-    )?;
+    // Ref resolution is the one step since the authored walk that can add
+    // nodes; without a mount it added none, and the walk's answer stands.
+    let const_units = if authored.mounts {
+        crate::units::reject_const_units_pre_v12(&json_value)
+    } else {
+        crate::units::reject_const_units_pre_v12_found(&json_value, || authored.op_with_units)
+    };
+    const_units.map_err(|e: crate::diagnostic::DiagnosticError| {
+        EsmError::SchemaValidation(e.to_string())
+    })?;
 
     // Validate against schema
     validate_schema(&json_value)?;
@@ -308,9 +315,22 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // Option B, RFC out-of-line-expression-templates). This pass now PRESERVES
     // surviving (non-eager) references and each component's
     // `expression_templates` block (they travel into emit, §9.6.4 rule 5).
-    let has_templates =
-        crate::lower_expression_templates::lower_expression_templates_found(&mut json_value)
-            .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+    // A document with no template machinery is left unchanged by this pass and
+    // the two after it (enum lowering finds nothing to lower without an `enum`
+    // node), so the template scan's walk also looks for `enum` nodes and
+    // reserved binders, which are then not walked for again.
+    let mut reserved = ReservedIndexScan::new(&json_value);
+    let mut has_enum_ops = false;
+    let (has_templates, scanned_whole) =
+        crate::lower_expression_templates::lower_expression_templates_visiting(
+            &mut json_value,
+            &mut |path, value| {
+                has_enum_ops |= crate::lower_enums::is_enum_node(value);
+                reserved.visit(path, value);
+            },
+        )
+        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+    let reserved = (scanned_whole && !has_enum_ops).then_some(reserved);
 
     // The typed IR / build path (simulate, flatten, graph, …) is Expand-at-build
     // (RFC out-of-line-expression-templates §7.7): expand every surviving
@@ -333,7 +353,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // Lower `enum`-op nodes to `const` integers using the file's `enums`
     // block (esm-spec §4.5 / §9.3). Mirrors the Julia / Python load-time
     // pass so that downstream consumers never see enum strings.
-    crate::lower_enums::lower_enums_raw(&mut json_value)
+    crate::lower_enums::lower_enums_raw_scanned(&mut json_value, has_enum_ops || !scanned_whole)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
     // Reject a `faq` binder that shadows a globally-scoped name (the
@@ -341,8 +361,11 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // binder a §9.6/§9.7 template body introduced is caught with the authored
     // ones. See `reject_reserved_index_symbols` for why this is a rejection
     // rather than a shadowing rule.
-    reject_reserved_index_symbols(&json_value)
-        .map_err(|e| EsmError::StructuralValidation(e.to_string()))?;
+    match reserved {
+        Some(scan) => scan.finish(),
+        None => reject_reserved_index_symbols(&json_value),
+    }
+    .map_err(|e| EsmError::StructuralValidation(e.to_string()))?;
 
     // Deserialize into our types. The interning scope makes every
     // structurally repeated operator subtree share ONE allocation as it is
@@ -797,26 +820,36 @@ fn compile_branch<'c>(
 pub(crate) fn reject_reserved_index_symbols(
     json_value: &Value,
 ) -> Result<(), crate::diagnostic::DiagnosticError> {
-    let independent = json_value
-        .get("domain")
-        .and_then(|d| d.get("independent_variable"))
-        .and_then(Value::as_str)
-        .unwrap_or("t");
-    let reserved = |name: &str| -> Option<&'static str> {
-        if name == independent {
-            Some("the document's independent variable")
-        } else if name == VAR_PLACEHOLDER {
-            Some("the §6.4 operator placeholder")
-        } else {
-            None
-        }
-    };
+    let mut scan = ReservedIndexScan::new(json_value);
+    crate::json_visit::visit_values(json_value, &mut |path, value| scan.visit(path, value));
+    scan.finish()
+}
 
-    // `(path, field, symbol, role)` for every offending binder, in document
-    // order. A symbol that is BOTH an `output_idx` entry and a `ranges` key of
-    // the same node is one mistake, so it is reported once, under `ranges`.
-    let mut offenders: Vec<String> = Vec::new();
-    crate::json_visit::visit_values(json_value, &mut |path, value| {
+/// [`reject_reserved_index_symbols`] as a visitor, so the walk can be shared:
+/// [`ReservedIndexScan::visit`] every value of the document in pre-order, then
+/// [`ReservedIndexScan::finish`].
+pub(crate) struct ReservedIndexScan {
+    independent: String,
+    /// `(path, field, symbol, role)` for every offending binder, in document
+    /// order, as the message lists them.
+    offenders: Vec<String>,
+}
+
+impl ReservedIndexScan {
+    pub(crate) fn new(json_value: &Value) -> Self {
+        let independent = json_value
+            .get("domain")
+            .and_then(|d| d.get("independent_variable"))
+            .and_then(Value::as_str)
+            .unwrap_or("t")
+            .to_string();
+        ReservedIndexScan {
+            independent,
+            offenders: Vec::new(),
+        }
+    }
+
+    pub(crate) fn visit(&mut self, path: &crate::json_visit::JsonPath<'_>, value: &Value) {
         let Some(obj) = value.as_object() else {
             return;
         };
@@ -824,6 +857,19 @@ pub(crate) fn reject_reserved_index_symbols(
         let Some(op) = crate::json_visit::small_get(obj, "op").and_then(Value::as_str) else {
             return;
         };
+        let independent = self.independent.as_str();
+        let reserved = |name: &str| -> Option<&'static str> {
+            if name == independent {
+                Some("the document's independent variable")
+            } else if name == VAR_PLACEHOLDER {
+                Some("the §6.4 operator placeholder")
+            } else {
+                None
+            }
+        };
+        // A symbol that is BOTH an `output_idx` entry and a `ranges` key of the
+        // same node is one mistake, so it is reported once, under `ranges`.
+        let offenders = &mut self.offenders;
         let mut seen: Vec<&str> = Vec::new();
         let mut record = |field: &str, sym: &str, role: &str| {
             offenders.push(format!(
@@ -851,25 +897,28 @@ pub(crate) fn reject_reserved_index_symbols(
                 }
             }
         }
-    });
-
-    if offenders.is_empty() {
-        return Ok(());
     }
-    Err(crate::diagnostic::err(
-        crate::diagnostic::codes::RESERVED_INDEX_SYMBOL,
-        format!(
-            "{}. Both '{independent}' (esm-spec §11.3) and '{VAR_PLACEHOLDER}' (§6.4) are \
-             implicitly declared in every model's expression scope (§4.9.1) and are resolved \
-             by name before the loop bindings, so a binder spelled with one of them declares \
-             a loop its body can never address — the reads inside the node see the \
-             independent variable's value instead of the index, silently (CONFORMANCE_SPEC \
-             §5.5.8 forbids the same silence for an unresolvable `join.on` key column). \
-             Rename the index symbol: an index symbol is the author's free choice \
-             (esm-spec §4.3.1)",
-            offenders.join("; ")
-        ),
-    ))
+
+    pub(crate) fn finish(self) -> Result<(), crate::diagnostic::DiagnosticError> {
+        if self.offenders.is_empty() {
+            return Ok(());
+        }
+        let independent = self.independent;
+        Err(crate::diagnostic::err(
+            crate::diagnostic::codes::RESERVED_INDEX_SYMBOL,
+            format!(
+                "{}. Both '{independent}' (esm-spec §11.3) and '{VAR_PLACEHOLDER}' (§6.4) are \
+                 implicitly declared in every model's expression scope (§4.9.1) and are resolved \
+                 by name before the loop bindings, so a binder spelled with one of them declares \
+                 a loop its body can never address — the reads inside the node see the \
+                 independent variable's value instead of the index, silently (CONFORMANCE_SPEC \
+                 §5.5.8 forbids the same silence for an unresolvable `join.on` key column). \
+                 Rename the index symbol: an index symbol is the author's free choice \
+                 (esm-spec §4.3.1)",
+                self.offenders.join("; ")
+            ),
+        ))
+    }
 }
 
 /// Run every post-schema structural check, collecting errors and returning
@@ -1714,6 +1763,24 @@ fn is_iso8601_duration(s: &str) -> bool {
 /// The older `arrayop` spelling is NOT normalized: it was removed at esm 0.8.0
 /// and is rejected like any other unknown non-rewrite-target op.
 pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), EsmError> {
+    prepare_document_ops_scanned(value).map(|_| ())
+}
+
+/// What [`prepare_document_ops_scanned`]'s walk also noted about the authored
+/// document, for a later pass that would otherwise walk it again.
+pub(crate) struct AuthoredFacts {
+    /// The path of the first object, in pre-order, with both an `op` and a
+    /// `units` key (what [`crate::units::reject_const_units_pre_v12`] looks for).
+    pub(crate) op_with_units: Option<String>,
+    /// Whether any object has a `ref` or a `subsystems` key: without one,
+    /// subsystem ref resolution has nothing to splice in.
+    pub(crate) mounts: bool,
+}
+
+/// [`prepare_document_ops`], returning the [`AuthoredFacts`] its walk noted.
+pub(crate) fn prepare_document_ops_scanned(
+    value: &mut serde_json::Value,
+) -> Result<AuthoredFacts, EsmError> {
     // The three steps below read and rewrite `op` tags, so they share ONE walk
     // over the document: it finds the first `arrayop` node, the first
     // AUTHORED `faq` node (looked for only when the declared version is below
@@ -1734,6 +1801,10 @@ pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), 
         ..OpScan::default()
     };
     scan_document_ops(value, &crate::json_visit::JsonPath::Root(""), &mut scan);
+    let facts = AuthoredFacts {
+        op_with_units: scan.op_with_units.take(),
+        mounts: scan.mounts,
+    };
     // 1. `arrayop` was REMOVED at 0.8.0 — rejected by name, before anything else.
     if let Some(path) = scan.removed {
         return Err(EsmError::SchemaValidation(format!(
@@ -1774,7 +1845,7 @@ pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), 
              (docs/content/rfcs/faq-node-rename.md)."
         );
     }
-    Ok(())
+    Ok(facts)
 }
 
 /// What [`scan_document_ops`] found.
@@ -1792,6 +1863,9 @@ struct OpScan {
     faq: Option<String>,
     /// `aggregate` nodes rewritten to `faq`.
     rewritten: usize,
+    /// See [`AuthoredFacts`].
+    op_with_units: Option<String>,
+    mounts: bool,
 }
 
 /// Pre-order walk (the root included, a container before its elements, array
@@ -1807,7 +1881,16 @@ fn scan_document_ops(
     use crate::json_visit::JsonPath;
     match value {
         serde_json::Value::Object(map) => {
-            match crate::json_visit::small_get(map, "op").and_then(|v| v.as_str()) {
+            let op = crate::json_visit::small_get(map, "op");
+            if scan.op_with_units.is_none()
+                && op.is_some()
+                && crate::json_visit::small_get(map, "units").is_some()
+            {
+                scan.op_with_units = Some(at.to_string());
+            }
+            scan.mounts |= crate::json_visit::small_get(map, "ref").is_some()
+                || crate::json_visit::small_get(map, "subsystems").is_some();
+            match op.and_then(|v| v.as_str()) {
                 Some("arrayop") => {
                     scan.removed = Some(at.to_string());
                     return;
