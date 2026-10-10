@@ -1206,16 +1206,19 @@ pub(crate) fn check_free_variables(
     extra_bound: &[String],
 ) -> Result<(), CompileError> {
     // ---- Build the bound set. ------------------------------------------------
-    let mut bound: NameSet = NameSet::default();
-    bound.insert("t".to_string());
-    bound.insert("_var".to_string());
-    bound.extend(model.variables.keys().cloned());
-    bound.extend(index_sets.keys().cloned());
+    // The names the model and its caller declare, borrowed; `bound` holds what
+    // the expressions themselves credit. A name is bound when either has it.
+    let mut declared: HashSet<&str, rustc_hash::FxBuildHasher> = HashSet::default();
+    declared.insert("t");
+    declared.insert("_var");
+    declared.extend(model.variables.keys().map(String::as_str));
+    declared.extend(index_sets.keys().map(String::as_str));
     // Names the CALLER's evaluation scope binds that this model does not declare
     // — a build-pipeline caller's const arrays / provider slabs / member-factor
     // columns. Widening the bound set can only ever prevent a false positive,
     // which is this gate's cardinal requirement; the compiled path passes none.
-    bound.extend(extra_bound.iter().cloned());
+    declared.extend(extra_bound.iter().map(String::as_str));
+    let mut bound: NameSet = NameSet::default();
     // Each checked equation's binders, collected in this pass over the
     // equations rather than in a second one.
     let mut eq_binders: Vec<NameSet> = Vec::with_capacity(model.equations.len());
@@ -1252,8 +1255,9 @@ pub(crate) fn check_free_variables(
             continue;
         }
         with_binders(&mut bound, &mut eq_binders, |scope| {
-            check_expr_free_vars(&eq.lhs, scope)?;
-            check_expr_free_vars(&eq.rhs, scope)
+            let is_bound = |name: &str| declared.contains(name) || scope.contains(name);
+            check_expr_free_vars(&eq.lhs, &is_bound)?;
+            check_expr_free_vars(&eq.rhs, &is_bound)
         })?;
     }
     for var in model.variables.values() {
@@ -1264,7 +1268,9 @@ pub(crate) fn check_free_variables(
             }
             collect_binders(expr, &mut binders);
             if let Err(e) = with_binders(&mut bound, &mut binders, |scope| {
-                check_expr_free_vars(expr, scope)
+                check_expr_free_vars(expr, &|name: &str| {
+                    declared.contains(name) || scope.contains(name)
+                })
             }) {
                 failure = Some(e);
             }
@@ -1451,7 +1457,7 @@ fn collect_dims_heads_and_binders(
 /// bound, table axis, aggregate key, or template binding is not missed. A `fn`
 /// op's callee lives in `node.name` (not a child), so it is never mistaken for a
 /// variable.
-fn check_expr_free_vars(expr: &Expr, scope: &NameSet) -> Result<(), CompileError> {
+fn check_expr_free_vars(expr: &Expr, scope: &dyn Fn(&str) -> bool) -> Result<(), CompileError> {
     match expr {
         Expr::Variable(name) => {
             // A dotted name is a qualified / forcing reference resolved at
@@ -1459,7 +1465,7 @@ fn check_expr_free_vars(expr: &Expr, scope: &NameSet) -> Result<(), CompileError
             if name.contains('.') || is_builtin_function_name(name) || name.starts_with("d(") {
                 return Ok(());
             }
-            if scope.contains(name) {
+            if scope(name) {
                 return Ok(());
             }
             Err(CompileError::build_err(format!(
@@ -1921,7 +1927,7 @@ fn classify_variables(
     let class = crate::classification::VariableRoles::of(model);
 
     let mut var_keys: Vec<&String> = model.variables.keys().collect();
-    var_keys.sort();
+    var_keys.sort_unstable();
     for name in var_keys {
         let var = &model.variables[name];
         match var.var_type {
@@ -2076,14 +2082,27 @@ fn partition_states(
     model: &Model,
     state_vars: &[&String],
 ) -> (Vec<String>, HashSet<String>, HashSet<String>) {
-    let derivative_targets = collect_derivative_targets(&model.equations);
+    // The scalar derivative targets borrow their names (one per state in a
+    // scalar document); the rarer `faq` targets are owned.
+    let mut scalar_targets: rustc_hash::FxHashSet<&str> = rustc_hash::FxHashSet::default();
+    let mut faq_targets: HashSet<String> = HashSet::new();
+    for eq in &model.equations {
+        if let Some(name) = derivative_scalar_target(&eq.lhs) {
+            scalar_targets.insert(name);
+        }
+        if let Some(DerivArrayop { var: name, .. }) = extract_derivative_faq(&eq.lhs, &eq.rhs) {
+            faq_targets.insert(name);
+        }
+    }
+    let is_derivative_target =
+        |name: &str| scalar_targets.contains(name) || faq_targets.contains(name);
     let algebraic_defined = collect_algebraic_defined(&model.equations);
 
     let mut final_states: Vec<String> = Vec::new();
     let mut eliminated: HashSet<String> = HashSet::new();
     let mut held_at_ic: HashSet<String> = HashSet::new();
     for name in state_vars {
-        if derivative_targets.contains(*name) {
+        if is_derivative_target(name) {
             final_states.push((*name).clone());
         } else if algebraic_defined.contains(*name) {
             // No D equation, but an algebraic equation defines it.
@@ -5424,25 +5443,35 @@ fn wholearray_body_loops_as_percell(
     }
 }
 
-/// Collect every state variable that receives a `D(..., t) = ...` definition
-/// somewhere in the equation list.
-pub(super) fn collect_derivative_targets(equations: &[crate::types::Equation]) -> HashSet<String> {
-    let mut out = HashSet::new();
-    for eq in equations {
-        if let Some((name, _)) = extract_derivative_scalar(&eq.lhs) {
-            out.insert(name);
-        }
-        if let Some(DerivArrayop { var: name, .. }) = extract_derivative_faq(&eq.lhs, &eq.rhs) {
-            out.insert(name);
-        }
-    }
-    out
-}
-
 /// If `lhs` is `D(var, t)` or `D(index(var, i1, ...), t)`, return
 /// `(var_name, Some(indices))` for the indexed form (with all concrete
 /// integer indices), `(var_name, None)` for the plain form. `None` result
 /// means this LHS is neither.
+/// The variable name [`extract_derivative_scalar`] returns for `lhs`, borrowed.
+fn derivative_scalar_target(lhs: &Expr) -> Option<&str> {
+    let Expr::Operator(node) = lhs else {
+        return None;
+    };
+    if node.op != "D" || node.args.len() != 1 {
+        return None;
+    }
+    match &node.args[0] {
+        Expr::Variable(name) => Some(name),
+        Expr::Operator(inner) if inner.op == "index" => {
+            let Expr::Variable(name) = inner.args.first()? else {
+                return None;
+            };
+            inner
+                .args
+                .iter()
+                .skip(1)
+                .all(|a| matches!(a, Expr::Number(_) | Expr::Integer(_)))
+                .then_some(name.as_str())
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn extract_derivative_scalar(lhs: &Expr) -> Option<(String, Option<Vec<i64>>)> {
     let Expr::Operator(node) = lhs else {
         return None;
