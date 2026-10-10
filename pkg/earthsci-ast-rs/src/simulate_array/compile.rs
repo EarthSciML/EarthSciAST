@@ -1132,6 +1132,10 @@ fn check_evaluable_side(expr: &Expr) -> Result<(), CompileError> {
     check_evaluable(expr)
 }
 
+/// A set of names, hashed with Fx, as the free-variable check credits them
+/// from the expressions and probes them at every variable reference.
+type NameSet = HashSet<String, rustc_hash::FxBuildHasher>;
+
 /// (0b) Reject a reference to a variable that is bound in NONE of the model's
 /// binding categories. Without it a typo'd or undeclared bare name falls
 /// through [`lookup_variable`]'s final arm, which fails closed only at the
@@ -1196,10 +1200,6 @@ fn check_evaluable_side(expr: &Expr) -> Result<(), CompileError> {
 ///    per-cell RHS oracle; its free symbols are already credited as coordinates
 ///    above;
 ///  * a builtin function name spelled as a bare leaf (`exp`, `min`, …).
-/// A set of names hashed with Fx: the free-variable check builds one over
-/// every declared name and probes it at every variable reference.
-type NameSet = HashSet<String, rustc_hash::FxBuildHasher>;
-
 pub(crate) fn check_free_variables(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
