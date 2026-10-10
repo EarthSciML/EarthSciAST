@@ -932,6 +932,14 @@ function _vic_value(compiled, v::Int)
     return Tuple(k(c) for c in comps)
 end
 
+function _vic_fill!(out, vals, compiled)
+    sizehint!(out, length(vals))
+    for v in vals
+        out[v] = _vic_value(compiled, v)
+    end
+    return out
+end
+
 # Materialise a per-element value-invention map var → Dict(output-index → value).
 function _vi_materialize_map!(ctx::_ViCtx, vname::AbstractString, node::OpExpr)
     output_idx = node.output_idx === nothing ? Any[] : node.output_idx
@@ -951,9 +959,7 @@ function _vi_materialize_map!(ctx::_ViCtx, vname::AbstractString, node::OpExpr)
         compiled = is !== nothing && is.kind in ("interval", "categorical") ?
                    _vi_compile_map_body(body, ctx, sym) : nothing
         if compiled !== nothing
-            for v in _vi_range_values(spec, ctx, Dict{String,Any}())
-                out[v] = _vic_value(compiled, v)
-            end
+            _vic_fill!(out, _vi_range_values(spec, ctx, Dict{String,Any}()), compiled)
             ctx.maps[vname] = out
             return out
         end

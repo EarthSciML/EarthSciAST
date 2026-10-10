@@ -5994,17 +5994,35 @@ function _array_contraction_table(contract_refs::Vector{Base.RefValue{Int}},
     seg[1] = 1
     cols = [Int[] for _ in 1:nc]
     iters = Vector{Vector{Int}}(undef, nc)
+    # A constant contracted range expands to the same list at every cell.
+    fixed = Bool[_is_const_int_range(contract_ranges[d]) for d in 1:nc]
     idx_env = Dict{String,Int}()
+    cells = length(range_iters) == 1 ? ((i,) for i in range_iters[1]) :
+                                       Iterators.product(range_iters...)
+    _ac_table_fill!(seg, cols, iters, fixed, idx_env, cells, idx_names, contract_names,
+                    contract_ranges, contract_const, agg_gates, zerobar, const_registry)
+    return _ACFold(contract_refs, Symbol(oplus), zerobar, seg, cols)
+end
+
+# `_array_contraction_table`'s cell loop, behind a barrier so it runs at the
+# concrete type of the cell iterator.
+function _ac_table_fill!(seg, cols, iters, fixed, idx_env, cells, idx_names,
+                         contract_names, contract_ranges, contract_const, agg_gates,
+                         zerobar, const_registry)
+    nc = length(contract_names)
     c = 0
-    for idx_tuple in Iterators.product(range_iters...)
+    for idx_tuple in cells
         c += 1
         for d in eachindex(idx_names)
             idx_env[idx_names[d]] = idx_tuple[d]
         end
         for d in 1:nc
             cc = contract_const === nothing ? nothing : contract_const[d]
-            iters[d] = cc === nothing ?
-                _expand_contract_range(contract_ranges[d], idx_env, const_registry) : cc
+            if cc !== nothing
+                iters[d] = cc
+            elseif c == 1 || !fixed[d]
+                iters[d] = _expand_contract_range(contract_ranges[d], idx_env, const_registry)
+            end
         end
         _foreach_aggregate_term(nothing, contract_names, iters, agg_gates, nothing,
                                 zerobar, idx_env) do ks
@@ -6014,7 +6032,7 @@ function _array_contraction_table(contract_refs::Vector{Base.RefValue{Int}},
         end
         seg[c + 1] = length(cols[1]) + 1
     end
-    return _ACFold(contract_refs, Symbol(oplus), zerobar, seg, cols)
+    return nothing
 end
 
 # ---- Stage: faq per-cell fallback ----

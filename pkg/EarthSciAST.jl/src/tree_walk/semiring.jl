@@ -423,15 +423,31 @@ function _on_gate_match_pairs(group, coded::AbstractVector)
     # stay cheap at 1e5 rows — keys on the bucket code itself; a composite key
     # keys on the per-pair code vector, which orders lexicographically exactly as
     # the §5.5.1 rule-4 skolem tuple does.
-    kl, kr = if length(coded) == 1
-        (Dict{Int,Int}(p => coded[1][1][i] for (i, p) in enumerate(pos_l)),
-         Dict{Int,Int}(p => coded[1][2][i] for (i, p) in enumerate(pos_r)))
-    else
-        (Dict{Int,Vector{Int}}(p => Int[c[1][i] for c in coded] for (i, p) in enumerate(pos_l)),
-         Dict{Int,Vector{Int}}(p => Int[c[2][i] for c in coded] for (i, p) in enumerate(pos_r)))
-    end
+    length(coded) == 1 && return _int_code_equijoin(pos_l, pos_r, coded[1][1], coded[1][2])
+    kl = Dict{Int,Vector{Int}}(p => Int[c[1][i] for c in coded] for (i, p) in enumerate(pos_l))
+    kr = Dict{Int,Vector{Int}}(p => Int[c[2][i] for c in coded] for (i, p) in enumerate(pos_r))
     matches = Relational.equijoin(pos_l, pos_r; on_left = p -> kl[p], on_right = p -> kr[p])
     return Tuple{Int,Int}[(Int(m[1]), Int(m[2])) for m in matches]
+end
+
+# `Relational.equijoin` on one integer bucket code per position, typed: the
+# pairs whose codes are equal, sorted by (code, left position, right
+# position) — the order `equijoin` sorts its output into.
+function _int_code_equijoin(pos_l, pos_r, codes_l::Vector{Int}, codes_r::Vector{Int})
+    buckets = Dict{Int,Vector{Int}}()
+    for (i, p) in enumerate(pos_r)
+        push!(get!(() -> Int[], buckets, codes_r[i]), Int(p))
+    end
+    out = Tuple{Int,Int,Int}[]
+    for (i, p) in enumerate(pos_l)
+        b = get(buckets, codes_l[i], nothing)
+        b === nothing && continue
+        for q in b
+            push!(out, (codes_l[i], Int(p), q))
+        end
+    end
+    sort!(out)
+    return Tuple{Int,Int}[(t[2], t[3]) for t in out]
 end
 
 # The empty value-invention map registry: no materialised buffers. A join over
