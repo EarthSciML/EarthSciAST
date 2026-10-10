@@ -756,20 +756,30 @@ impl ArrayCompiled {
         // intact when the buffer is computed. A NO-OP (byte-identical) for every
         // model without an arg-witness op; `skolem`/`distinct` producers are
         // handled by the two passes below.
-        materialize_vi_outputs_to_data(&mut model_owned, &mut index_sets_owned, vi_arrays)?;
+        // One walk says which value-invention producers the model has at all;
+        // the passes below look only for those. A pass that rewrites the
+        // equations is followed by a fresh look.
+        let mut vi = ViCensus::of(&model_owned);
+        if vi.arg_witness {
+            materialize_vi_outputs_to_data(&mut model_owned, &mut index_sets_owned, vi_arrays)?;
+            vi = ViCensus::of(&model_owned);
+        }
         // Build-time value invention for every non-geometry derived index set
         // (`skolem`/`distinct`/`rank`, RFC §6.1): the producer's member count sizes
         // a range over the set. Runs before `strip_value_invention` drops the
         // producer. A producer that cannot run is recorded rather than raised, and
         // is refused below only if a surviving expression ranges over its set.
-        let derived = materialize_derived_extents(&model_owned, &index_sets_owned, vi_arrays);
+        let derived = materialize_derived_extents(&model_owned, &index_sets_owned, vi_arrays, &vi);
         // A skolem map buffer (a broad-phase bin key per cell) becomes constant
         // data, so a `join.on` gate comparing two of them stays a gate — a
         // value-equality filter on data columns — rather than being dropped.
         let mut map_names: Vec<&String> = derived.map_codes.keys().collect();
         map_names.sort();
-        for name in map_names {
-            rewrite_equation_to_const(&mut model_owned, name, &derived.map_codes[name]);
+        if !map_names.is_empty() {
+            for name in map_names {
+                rewrite_equation_to_const(&mut model_owned, name, &derived.map_codes[name]);
+            }
+            vi = ViCensus::of(&model_owned);
         }
         let index_sets = &index_sets_owned;
         // Drop value-invention (relational) scaffolding — skolem-id bin maps and
@@ -785,7 +795,7 @@ impl ArrayCompiled {
         // surviving read of one of its outputs, an output shaped on its set)
         // names that set (`derived_index_set_unmaterialized`, esm-spec §4.2)
         // rather than the operator or the axis it met.
-        strip_value_invention(&mut model_owned, index_sets)
+        strip_value_invention(&mut model_owned, index_sets, &vi)
             .or_else(|e| derived.refuse_on_failure(index_sets).and(Err(e)))?;
         // The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5): the
         // `const`-literal factor variables — Fornberg weights, mesh
@@ -1186,13 +1196,17 @@ fn check_evaluable_side(expr: &Expr) -> Result<(), CompileError> {
 ///    per-cell RHS oracle; its free symbols are already credited as coordinates
 ///    above;
 ///  * a builtin function name spelled as a bare leaf (`exp`, `min`, …).
+/// A set of names hashed with Fx: the free-variable check builds one over
+/// every declared name and probes it at every variable reference.
+type NameSet = HashSet<String, rustc_hash::FxBuildHasher>;
+
 pub(crate) fn check_free_variables(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
     extra_bound: &[String],
 ) -> Result<(), CompileError> {
     // ---- Build the bound set. ------------------------------------------------
-    let mut bound: HashSet<String> = HashSet::new();
+    let mut bound: NameSet = NameSet::default();
     bound.insert("t".to_string());
     bound.insert("_var".to_string());
     bound.extend(model.variables.keys().cloned());
@@ -1202,6 +1216,9 @@ pub(crate) fn check_free_variables(
     // columns. Widening the bound set can only ever prevent a false positive,
     // which is this gate's cardinal requirement; the compiled path passes none.
     bound.extend(extra_bound.iter().cloned());
+    // Each checked equation's binders, collected in this pass over the
+    // equations rather than in a second one.
+    let mut eq_binders: Vec<NameSet> = Vec::with_capacity(model.equations.len());
     for eq in &model.equations {
         if let Some(v) = equation_defined_var(&eq.lhs) {
             bound.insert(v);
@@ -1209,13 +1226,18 @@ pub(crate) fn check_free_variables(
         // §11.4: an `ic` RHS's free symbols name spatial coordinates that are
         // implicitly in scope (e.g. the ignition front `psi(x)` over the bare
         // coordinate `x`). Spatial-op `dim`s name the same axes.
-        if is_ic_lhs(&eq.lhs) {
-            collect_free_bare_symbols(&eq.rhs, &mut bound);
-        }
         // And array-valued leaves (potential bare forcing FIELDS) — see the
         // doc note on `collect_dims_and_index_heads`.
-        collect_dims_and_index_heads(&eq.lhs, &mut bound);
-        collect_dims_and_index_heads(&eq.rhs, &mut bound);
+        let mut binders = NameSet::default();
+        if is_ic_lhs(&eq.lhs) {
+            collect_free_bare_symbols(&eq.rhs, &mut bound);
+            collect_dims_and_index_heads(&eq.lhs, &mut bound);
+            collect_dims_and_index_heads(&eq.rhs, &mut bound);
+        } else {
+            collect_dims_heads_and_binders(&eq.lhs, &mut bound, &mut binders, None);
+            collect_dims_heads_and_binders(&eq.rhs, &mut bound, &mut binders, Some(false));
+        }
+        eq_binders.push(binders);
     }
     for var in model.variables.values() {
         var.for_each_expression(&mut |expr| collect_dims_and_index_heads(expr, &mut bound));
@@ -1224,14 +1246,12 @@ pub(crate) fn check_free_variables(
     // ---- Check every equation (skipping `ic`) and observed expression. -------
     // Each check sees the shared bound set plus its own expression's binders,
     // added for the check and taken back out after it (see `with_binders`).
-    let mut binders: HashSet<String> = HashSet::new();
-    for eq in &model.equations {
+    let mut binders: NameSet = NameSet::default();
+    for (eq, mut eq_binders) in model.equations.iter().zip(eq_binders) {
         if is_ic_lhs(&eq.lhs) {
             continue;
         }
-        collect_binders(&eq.lhs, &mut binders);
-        collect_rhs_binders(&eq.rhs, false, &mut binders);
-        with_binders(&mut bound, &mut binders, |scope| {
+        with_binders(&mut bound, &mut eq_binders, |scope| {
             check_expr_free_vars(&eq.lhs, scope)?;
             check_expr_free_vars(&eq.rhs, scope)
         })?;
@@ -1262,9 +1282,9 @@ pub(crate) fn check_free_variables(
 /// cost is the expression's own binders, not the size of the bound set, so
 /// the whole check stays linear in the model.
 fn with_binders<T>(
-    bound: &mut HashSet<String>,
-    binders: &mut HashSet<String>,
-    check: impl FnOnce(&HashSet<String>) -> T,
+    bound: &mut NameSet,
+    binders: &mut NameSet,
+    check: impl FnOnce(&NameSet) -> T,
 ) -> T {
     let mut added: Vec<String> = Vec::new();
     for name in binders.drain() {
@@ -1289,7 +1309,7 @@ fn is_ic_lhs(lhs: &Expr) -> bool {
 /// `structural.rs` `bound_index_symbols`): `output_idx` / `ranges` keys, an
 /// `integral` `int_var`, an argmin/argmax `arg`, the BARE subscript positions of
 /// an `index(array, i…)` node, and `apply_expression_template` `bindings` keys.
-fn node_binders(node: &ExpressionNode, out: &mut HashSet<String>) {
+fn node_binders(node: &ExpressionNode, out: &mut NameSet) {
     node_loop_binders(node, out);
     if node.op == "index" {
         // Only a BARE position (`index(u, i)`) is a binder; an index EXPRESSION
@@ -1304,7 +1324,7 @@ fn node_binders(node: &ExpressionNode, out: &mut HashSet<String>) {
 
 /// [`node_binders`] less the bare `index` subscripts: the names a node binds
 /// for its body and nothing else.
-fn node_loop_binders(node: &ExpressionNode, out: &mut HashSet<String>) {
+fn node_loop_binders(node: &ExpressionNode, out: &mut NameSet) {
     if let Some(idx) = &node.output_idx {
         out.extend(idx.iter().cloned());
     }
@@ -1325,40 +1345,16 @@ fn node_loop_binders(node: &ExpressionNode, out: &mut HashSet<String>) {
 /// Union every binder introduced anywhere in the subtree (whole-tree, like
 /// `structural.rs` `collect_bound_symbols`). Widening the bound set only ever
 /// prevents a false positive, which is the cardinal requirement here.
-fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
+fn collect_binders(expr: &Expr, out: &mut NameSet) {
     if let Expr::Operator(node) = expr {
         node_binders(node, out);
         node.for_each_child(&mut |child| collect_binders(child, out));
     }
 }
 
-/// [`collect_binders`] for an equation's right-hand side, less one case: a
-/// bare `index(array, i)` subscript that no enclosing node binds and the
-/// left-hand side does not bind either. There it is a READ of `i` with nothing
-/// in scope to give it a value — `d ~ index(faq{i}(…), i)` reads the `i` of no
-/// loop, since the `faq`'s own `i` is bound only inside it — so it is checked
-/// rather than credited. Under any node that carries binders (`faq`,
-/// `makearray`, `integral`, a template call…) every bare subscript still
-/// counts as a binder, as [`collect_binders`] has it.
-fn collect_rhs_binders(expr: &Expr, enclosed: bool, out: &mut HashSet<String>) {
-    let Expr::Operator(node) = expr else {
-        return;
-    };
-    let carries = node.output_idx.is_some()
-        || node.ranges.is_some()
-        || node.int_var.is_some()
-        || node.arg.is_some()
-        || node.bindings.is_some();
-    if enclosed || node.op != "index" {
-        node_binders(node, out);
-    }
-    let enclosed = enclosed || carries;
-    node.for_each_child(&mut |child| collect_rhs_binders(child, enclosed, out));
-}
-
 /// Collect every free BARE (non-dotted, non-builtin) symbol in the subtree —
 /// used to credit an `ic` RHS's coordinate symbols into the bound set.
-fn collect_free_bare_symbols(expr: &Expr, out: &mut HashSet<String>) {
+fn collect_free_bare_symbols(expr: &Expr, out: &mut NameSet) {
     match expr {
         Expr::Variable(name) if !name.contains('.') && !is_builtin_function_name(name) => {
             out.insert(name.clone());
@@ -1382,7 +1378,7 @@ fn collect_free_bare_symbols(expr: &Expr, out: &mut HashSet<String>) {
 ///   array-valued leaf (a declared state/observed, or a bare, undeclared,
 ///   loader-fed forcing FIELD read at runtime through the forcing buffer).
 ///   Crediting these keeps a legitimate bare forcing field in scope.
-fn collect_dims_and_index_heads(expr: &Expr, out: &mut HashSet<String>) {
+fn collect_dims_and_index_heads(expr: &Expr, out: &mut NameSet) {
     if let Expr::Operator(node) = expr {
         if let Some(dim) = &node.dim {
             out.insert(dim.clone());
@@ -1397,6 +1393,56 @@ fn collect_dims_and_index_heads(expr: &Expr, out: &mut HashSet<String>) {
     }
 }
 
+/// [`collect_dims_and_index_heads`] into `credited` and, in the same walk, the
+/// binders into `binders`: as [`collect_binders`] for a left-hand side
+/// (`rhs: None`); for a right-hand side (`rhs: Some(enclosed)`), the same less
+/// one case: a bare `index(array, i)` subscript that no enclosing node binds
+/// and the left-hand side does not bind either. There it is a READ of `i` with
+/// nothing in scope to give it a value — `d ~ index(faq{i}(…), i)` reads the
+/// `i` of no loop, since the `faq`'s own `i` is bound only inside it — so it is
+/// checked rather than credited. Under any node that carries binders (`faq`,
+/// `makearray`, `integral`, a template call…) every bare subscript still
+/// counts as a binder.
+fn collect_dims_heads_and_binders(
+    expr: &Expr,
+    credited: &mut NameSet,
+    binders: &mut NameSet,
+    rhs: Option<bool>,
+) {
+    let Expr::Operator(node) = expr else {
+        return;
+    };
+    if let Some(dim) = &node.dim {
+        credited.insert(dim.clone());
+    }
+    if node.op == "index"
+        && let Some(Expr::Variable(name)) = node.args.first()
+        && !name.contains('.')
+    {
+        credited.insert(name.clone());
+    }
+    let child_rhs = match rhs {
+        None => {
+            node_binders(node, binders);
+            None
+        }
+        Some(enclosed) => {
+            let carries = node.output_idx.is_some()
+                || node.ranges.is_some()
+                || node.int_var.is_some()
+                || node.arg.is_some()
+                || node.bindings.is_some();
+            if enclosed || node.op != "index" {
+                node_binders(node, binders);
+            }
+            Some(enclosed || carries)
+        }
+    };
+    node.for_each_child(&mut |child| {
+        collect_dims_heads_and_binders(child, credited, binders, child_rhs)
+    });
+}
+
 /// Reject the first bare (non-dotted) variable reference bound in none of the
 /// categories in `scope`, as `Unknown variable '{name}' referenced in
 /// expression`. The full expression-bearing
@@ -1405,7 +1451,7 @@ fn collect_dims_and_index_heads(expr: &Expr, out: &mut HashSet<String>) {
 /// bound, table axis, aggregate key, or template binding is not missed. A `fn`
 /// op's callee lives in `node.name` (not a child), so it is never mistaken for a
 /// variable.
-fn check_expr_free_vars(expr: &Expr, scope: &HashSet<String>) -> Result<(), CompileError> {
+fn check_expr_free_vars(expr: &Expr, scope: &NameSet) -> Result<(), CompileError> {
     match expr {
         Expr::Variable(name) => {
             // A dotted name is a qualified / forcing reference resolved at
@@ -1480,7 +1526,7 @@ fn collect_free_names(expr: &Expr, bound: &mut Vec<String>, out: &mut HashSet<St
             out.insert(name.clone());
         }
         Expr::Operator(node) => {
-            let mut own = HashSet::new();
+            let mut own = NameSet::default();
             node_loop_binders(node, &mut own);
             let depth = bound.len();
             bound.extend(own);
@@ -3738,6 +3784,7 @@ pub(super) fn strip_vi_joins(expr: &mut Expr, vi_cols: &HashSet<String>) {
 pub(super) fn strip_value_invention(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
+    vi: &ViCensus,
 ) -> Result<(), CompileError> {
     let mut vi_vars: HashSet<String> = HashSet::new();
     // Ids of geometry ring producers (`intersect_polygon` / `polygon_intersection_area`).
@@ -3747,7 +3794,7 @@ pub(super) fn strip_value_invention(
     let any_derived = index_sets.values().any(|is| is.kind == "derived");
     // Only read for a shape over a derived set, so not collected without one.
     let mut geom_ids: HashSet<String> = HashSet::new();
-    if any_derived {
+    if any_derived && vi.geometry {
         for eq in &model.equations {
             collect_geometry_producer_ids(&eq.rhs, &mut geom_ids);
         }
@@ -3795,7 +3842,7 @@ pub(super) fn strip_value_invention(
     //     a `rank` dense id over an invented set: build-time relational
     //     outputs, dropped as the other bindings drop them.
     for eq in &model.equations {
-        if expr_contains_skolem(&eq.rhs)
+        if (vi.skolem && expr_contains_skolem(&eq.rhs))
             || (any_derived && ranks_a_derived_set(&eq.rhs, index_sets))
         {
             if let Some(v) = equation_defined_var(&eq.lhs) {
@@ -3925,6 +3972,45 @@ fn expr_contains_arg_witness(expr: &Expr) -> bool {
                 || node.op == "argmax"
                 || node.any_child(&mut expr_contains_arg_witness)
         }
+    }
+}
+
+/// Which value-invention producers a model's expressions (the equations, both
+/// sides, and the variables' own expressions) contain anywhere: an
+/// `argmin`/`argmax` witness, a `skolem`, a geometry ring producer.
+pub(super) struct ViCensus {
+    arg_witness: bool,
+    skolem: bool,
+    geometry: bool,
+}
+
+impl ViCensus {
+    fn of(model: &Model) -> Self {
+        fn walk(expr: &Expr, c: &mut ViCensus) {
+            let Expr::Operator(node) = expr else {
+                return;
+            };
+            match node.op.as_str() {
+                "argmin" | "argmax" => c.arg_witness = true,
+                "skolem" => c.skolem = true,
+                "intersect_polygon" | "polygon_intersection_area" => c.geometry = true,
+                _ => {}
+            }
+            node.for_each_child(&mut |child| walk(child, c));
+        }
+        let mut c = ViCensus {
+            arg_witness: false,
+            skolem: false,
+            geometry: false,
+        };
+        for eq in &model.equations {
+            walk(&eq.lhs, &mut c);
+            walk(&eq.rhs, &mut c);
+        }
+        for var in model.variables.values() {
+            var.for_each_expression(&mut |expr| walk(expr, &mut c));
+        }
+        c
     }
 }
 
@@ -4245,13 +4331,18 @@ fn materialize_derived_extents(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
     caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+    vi: &ViCensus,
 ) -> DerivedMaterialization {
     let mut geometry_ids = HashSet::new();
-    for eq in &model.equations {
-        collect_geometry_producer_ids(&eq.rhs, &mut geometry_ids);
-    }
-    for var in model.variables.values() {
-        var.for_each_expression(&mut |expr| collect_geometry_producer_ids(expr, &mut geometry_ids));
+    if vi.geometry {
+        for eq in &model.equations {
+            collect_geometry_producer_ids(&eq.rhs, &mut geometry_ids);
+        }
+        for var in model.variables.values() {
+            var.for_each_expression(&mut |expr| {
+                collect_geometry_producer_ids(expr, &mut geometry_ids)
+            });
+        }
     }
     let mut out = DerivedMaterialization {
         extents: HashMap::new(),
@@ -4269,7 +4360,7 @@ fn materialize_derived_extents(
                 .from_faq
                 .as_deref()
                 .is_some_and(|f| !out.geometry_ids.contains(f))
-    }) || skolem_map_keys_a_join(model);
+    }) || (vi.skolem && skolem_map_keys_a_join(model));
     if needs_value_invention {
         let factors = value_invention_factors(model, index_sets, caller_arrays);
         let lean = without_factor_literals(model, &factors);
