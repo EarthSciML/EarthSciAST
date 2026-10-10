@@ -1792,16 +1792,30 @@ end
 # `_vi_skolem`), compared only for equality by the gate.
 function _vi_buf_vector(buf)
     isempty(buf) && return Any[]
+    # Bin keys of one concrete type (a skolem's integer tuples) at the
+    # positions 1:n are stored as that type, so the gate's per-pair comparison
+    # is not a dynamic dispatch.
+    typed = _vi_buf_typed(buf, typeof(first(values(buf))))
+    typed === nothing || return typed
     n = maximum(Int(k) for k in keys(buf))
     v = Vector{Any}(undef, n)
     for (k, val) in buf
         v[Int(k)] = val
     end
-    # Bin keys of one concrete type (a skolem's integer tuples) are stored as
-    # that type, so the gate's per-pair comparison is not a dynamic dispatch.
-    all(i -> isassigned(v, i), 1:n) || return v
-    T = mapreduce(typeof, typejoin, v; init = Union{})
-    return isconcretetype(T) ? convert(Vector{T}, v) : v
+    return v
+end
+
+function _vi_buf_typed(buf, ::Type{T}) where {T}
+    isconcretetype(T) || return nothing
+    n = length(buf)
+    v = Vector{T}(undef, n)
+    seen = falses(n)
+    for (k, val) in buf
+        (k isa Int && 1 <= k <= n && !seen[k] && val isa T) || return nothing
+        seen[k] = true
+        v[k] = val
+    end
+    return v
 end
 
 # The shared setup-time value environment (name → const array / scalar / bin
