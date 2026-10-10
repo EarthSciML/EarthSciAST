@@ -123,6 +123,11 @@ pub(super) struct Strips {
     pub ends: [usize; N_BASES],
     /// `f64`s of strip registers: the program's, then one per input.
     pub reg_elems: usize,
+    /// The most common base, modulo a cache line's 8 `f64`s, of the
+    /// unit-step `dy` runs (`None`: no such run): split cuts are placed so
+    /// those runs' share boundaries fall on cache-line boundaries.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub dy_phase: Option<usize>,
 }
 
 /// Visit every operand of a lane micro-op.
@@ -304,6 +309,7 @@ pub(super) fn decode(ls: &LaneSpec) -> Option<LaneCode> {
             gathered: Vec::new(),
             ends: [0; N_BASES],
             reg_elems: 0,
+            dy_phase: None,
         },
     };
     for (p, &k) in order.iter().enumerate() {
@@ -421,7 +427,17 @@ fn strips_of(ls: &LaneSpec, code: &LaneCode) -> Strips {
             },
         })
         .collect();
+    let mut phases = [0usize; 8];
+    for w in &ls.writes {
+        if let LaneDst::Dy(LaneIx::Affine { base, step: 1 }) = w.dst {
+            phases[base as usize % 8] += 1;
+        }
+    }
+    let dy_phase = (0..8)
+        .max_by_key(|&p| (phases[p], std::cmp::Reverse(p)))
+        .filter(|&p| phases[p] > 0);
     Strips {
+        dy_phase,
         sops,
         tptr,
         inputs,

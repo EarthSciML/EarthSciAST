@@ -187,9 +187,22 @@ pub(super) unsafe fn exec_lanes(
                 simd,
                 precision: crate::precision::active(),
             };
+            // Each cut moved down to a cache-line boundary of the most
+            // common alignment of the unit-step `dy` runs, so a share's runs
+            // of that alignment start and end on line boundaries and fewer
+            // `dy` lines are written from two cores.
+            let line0 = out.ptr as usize / std::mem::size_of::<f64>();
+            let phase = code.and_then(|c| c.strips.dy_phase);
+            let cut = move |w: usize| {
+                let c = cut(lanes, w, ways);
+                match phase {
+                    Some(p) if c > 0 && c < lanes => c - ((line0 + p + c) % 8).min(c),
+                    _ => c,
+                }
+            };
             super::pool::run(ways, &move |w| {
                 let sh = &sh;
-                let (lo, hi) = (cut(lanes, w, ways), cut(lanes, w + 1, ways));
+                let (lo, hi) = (cut(w), cut(w + 1));
                 if lo >= hi {
                     return;
                 }
