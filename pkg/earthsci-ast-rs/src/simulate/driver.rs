@@ -165,6 +165,52 @@ impl std::ops::AddAssign for SolveStats {
     }
 }
 
+/// faer's process-wide parallelism held at sequential while an explicit solve
+/// runs (restored when the last one ends).
+///
+/// diffsol's Runge-Kutta step combines its stages with faer matrix-vector
+/// products over an `n x stages` matrix, and faer reads its parallelism from
+/// a process-wide setting whose default is every rayon thread. From about
+/// 10^4 states its threaded column-major product gives each thread a
+/// temporary `n`-vector to clear, fill and sum back serially, which costs
+/// several times the product itself, more the more threads there are, and
+/// makes the step's rounding depend on the thread count. Sequential is one
+/// pass, the same at any thread count. The right-hand side threads on its own
+/// pool (`simulate_array::tape::exec::par`). Implicit solves keep faer's
+/// setting: their dense factorizations are what its threads are for.
+#[cfg(feature = "solve")]
+pub(crate) struct SequentialFaer(());
+
+#[cfg(feature = "solve")]
+static SEQUENTIAL_FAER: std::sync::Mutex<(usize, Option<faer::Par>)> =
+    std::sync::Mutex::new((0, None));
+
+#[cfg(feature = "solve")]
+impl SequentialFaer {
+    pub(crate) fn enter() -> Self {
+        let mut held = SEQUENTIAL_FAER.lock().unwrap_or_else(|e| e.into_inner());
+        if held.0 == 0 {
+            held.1 = Some(faer::get_global_parallelism());
+            faer::set_global_parallelism(faer::Par::Seq);
+        }
+        held.0 += 1;
+        SequentialFaer(())
+    }
+}
+
+#[cfg(feature = "solve")]
+impl Drop for SequentialFaer {
+    fn drop(&mut self) {
+        let mut held = SEQUENTIAL_FAER.lock().unwrap_or_else(|e| e.into_inner());
+        held.0 -= 1;
+        if held.0 == 0
+            && let Some(par) = held.1.take()
+        {
+            faer::set_global_parallelism(par);
+        }
+    }
+}
+
 /// Run the configured solver from `t0` to `t_end`, honoring `opts.maxiters`
 /// and `opts.saveat`. Returns `(time_vec, state_matrix_rows)` where
 /// `state_matrix_rows[i]` is the trajectory of state variable `i`.

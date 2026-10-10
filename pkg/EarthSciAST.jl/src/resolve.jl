@@ -2263,6 +2263,7 @@ function _rewrite_op_aliases!(node)::Int
         end
     elseif node isa AbstractVector
         for v in node
+            _is_json_leaf(v) && continue
             n += _rewrite_op_aliases!(v)
         end
     end

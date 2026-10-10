@@ -367,8 +367,20 @@ function _encode_join_keys(vals_l::Vector{Any}, vals_r::Vector{Any})
             "string members); both sides must be the same exact-equality type " *
             "(RFC semiring-faq-unified-ir §5.3)"))
     end
+    # Keys of one concrete type (the integer IDs, a skolem's integer tuples)
+    # are coded through a typed table: the same values, the same `isless`
+    # order and the same `isequal` buckets as the `Any` table, without a
+    # dynamic dispatch per comparison.
+    T = mapreduce(typeof, typejoin, vals_l; init = mapreduce(typeof, typejoin, vals_r;
+                                                            init = Union{}))
+    isconcretetype(T) && return _encode_join_keys_typed(convert(Vector{T}, vals_l),
+                                                         convert(Vector{T}, vals_r))
+    return _encode_join_keys_typed(vals_l, vals_r)
+end
+
+function _encode_join_keys_typed(vals_l::Vector{T}, vals_r::Vector{T}) where {T}
     table = sort!(unique(vcat(vals_l, vals_r)))
-    code_of = Dict{Any,Int}(v => i for (i, v) in enumerate(table))
+    code_of = Dict{T,Int}(v => i for (i, v) in enumerate(table))
     return (Int[code_of[v] for v in vals_l], Int[code_of[v] for v in vals_r])
 end
 
@@ -400,24 +412,42 @@ _join_on_gate_disabled() = !_compiler_plan_now().join_on_gate
 # Returns `nothing` — no index, so the gate filters as it always did — when the
 # two gated symbols are the SAME range symbol. A pair set cannot bind one symbol
 # to two positions, and a self-equality gate admits every position anyway.
-function _on_gate_match_pairs(group)
+_on_gate_match_pairs(group) =
+    _on_gate_match_pairs(group, [_encode_join_keys(g[5], g[6]) for g in group])
+
+function _on_gate_match_pairs(group, coded::AbstractVector)
     sym_l, sym_r = group[1][1], group[1][2]
     sym_l == sym_r && return nothing
     pos_l, pos_r = group[1][3], group[1][4]
-    coded = [_encode_join_keys(g[5], g[6]) for g in group]
     # A SINGLE pair — the overwhelmingly common case, and the one that has to
     # stay cheap at 1e5 rows — keys on the bucket code itself; a composite key
     # keys on the per-pair code vector, which orders lexicographically exactly as
     # the §5.5.1 rule-4 skolem tuple does.
-    kl, kr = if length(coded) == 1
-        (Dict{Int,Int}(p => coded[1][1][i] for (i, p) in enumerate(pos_l)),
-         Dict{Int,Int}(p => coded[1][2][i] for (i, p) in enumerate(pos_r)))
-    else
-        (Dict{Int,Vector{Int}}(p => Int[c[1][i] for c in coded] for (i, p) in enumerate(pos_l)),
-         Dict{Int,Vector{Int}}(p => Int[c[2][i] for c in coded] for (i, p) in enumerate(pos_r)))
-    end
+    length(coded) == 1 && return _int_code_equijoin(pos_l, pos_r, coded[1][1], coded[1][2])
+    kl = Dict{Int,Vector{Int}}(p => Int[c[1][i] for c in coded] for (i, p) in enumerate(pos_l))
+    kr = Dict{Int,Vector{Int}}(p => Int[c[2][i] for c in coded] for (i, p) in enumerate(pos_r))
     matches = Relational.equijoin(pos_l, pos_r; on_left = p -> kl[p], on_right = p -> kr[p])
     return Tuple{Int,Int}[(Int(m[1]), Int(m[2])) for m in matches]
+end
+
+# `Relational.equijoin` on one integer bucket code per position, typed: the
+# pairs whose codes are equal, sorted by (code, left position, right
+# position) — the order `equijoin` sorts its output into.
+function _int_code_equijoin(pos_l, pos_r, codes_l::Vector{Int}, codes_r::Vector{Int})
+    buckets = Dict{Int,Vector{Int}}()
+    for (i, p) in enumerate(pos_r)
+        push!(get!(() -> Int[], buckets, codes_r[i]), Int(p))
+    end
+    out = Tuple{Int,Int,Int}[]
+    for (i, p) in enumerate(pos_l)
+        b = get(buckets, codes_l[i], nothing)
+        b === nothing && continue
+        for q in b
+            push!(out, (codes_l[i], Int(p), q))
+        end
+    end
+    sort!(out)
+    return Tuple{Int,Int}[(t[2], t[3]) for t in out]
 end
 
 # The empty value-invention map registry: no materialised buffers. A join over
@@ -631,16 +661,18 @@ function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
                 push!(resolved, (sym_l, sym_r, pos_l, pos_r, vals_l, vals_r))
             end
             indexed = Set{Tuple{String,String}}()
-            for r in resolved
-                codes_l, codes_r = _encode_join_keys(r[5], r[6])
+            coded = [_encode_join_keys(r[5], r[6]) for r in resolved]
+            for (ri, r) in enumerate(resolved)
+                codes_l, codes_r = coded[ri]
                 # The FIRST gate of each symbol-pair group carries the composite
                 # match index; the rest of the group stay pure code tests, so
                 # admission is unchanged and only the enumeration extent moves.
                 cands = nothing
                 if !((r[1], r[2]) in indexed) && !_join_on_gate_disabled()
                     push!(indexed, (r[1], r[2]))
-                    prs = _on_gate_match_pairs(
-                        [g for g in resolved if g[1] == r[1] && g[2] == r[2]])
+                    grp = [gi for gi in eachindex(resolved)
+                           if resolved[gi][1] == r[1] && resolved[gi][2] == r[2]]
+                    prs = _on_gate_match_pairs(resolved[grp], coded[grp])
                     prs === nothing || (cands = _OverlapIndex(Set{Tuple{Int,Int}}(prs)))
                 end
                 push!(gates, _JoinGate(r[1], r[2],

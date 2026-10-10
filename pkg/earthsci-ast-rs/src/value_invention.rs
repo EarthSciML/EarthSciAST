@@ -505,7 +505,7 @@ struct ViCtx<'a> {
     /// connectivity / stencil-weight bugs.
     const_array_boundaries: &'a HashMap<String, Vec<BoundaryKind>>,
     /// materialised map var → {output-index value → key value}
-    maps: HashMap<String, HashMap<i64, Val>>,
+    maps: HashMap<String, ViBuf>,
 }
 
 impl<'a> ViCtx<'a> {
@@ -538,6 +538,10 @@ impl<'a> ViCtx<'a> {
 }
 
 type Bindings = HashMap<String, i64>;
+
+/// A materialised buffer: output index → value. Read by key and by sorted
+/// key only, never iterated in its own order, so the hasher is the fast one.
+type ViBuf = rustc_hash::FxHashMap<i64, Val>;
 
 fn vi_eval(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, ValueInventionError> {
     match node {
@@ -977,7 +981,12 @@ where
     }
     let s = &syms[k];
     for v in vi_range_values(&ranges[s], ctx, bindings)? {
-        bindings.insert(s.clone(), v);
+        match bindings.get_mut(s) {
+            Some(slot) => *slot = v,
+            None => {
+                bindings.insert(s.clone(), v);
+            }
+        }
         vi_enumerate_rec(syms, k + 1, ranges, ctx, bindings, visit)?;
     }
     bindings.remove(s);
@@ -1403,17 +1412,25 @@ fn vi_materialize_map(
         .unwrap_or(&empty);
     let sym = output_idx[0].clone();
     let is_arg = is_argwitness(node);
-    let mut out: HashMap<i64, Val> = HashMap::new();
+    let mut out = ViBuf::default();
     // Borrow the body / ranges via a const reference inside the closure; collect
     // into `out`, then store it on the context after enumeration completes.
     {
         let ctx_ref = &*ctx;
+        let fast = if is_arg {
+            None
+        } else {
+            Fast::compile(body, ctx_ref, ranges)
+        };
         vi_enumerate(ranges, ctx_ref, |bindings| {
             // An arg-witness body runs the inner reduction (with the outer point
             // bound) and emits the witnessing INDEX; an ordinary body (skolem)
-            // emits its value.
+            // emits its value. A compiled body that fails is evaluated again
+            // by `vi_eval`, which reports the failure as it always has.
             let value = if is_arg {
                 Val::Int(vi_argreduce(body, ctx_ref, bindings, ranges)?)
+            } else if let Some(Ok(v)) = fast.as_ref().map(|f| f.eval(ctx_ref, bindings)) {
+                v
             } else {
                 vi_eval(body, ctx_ref, bindings)?
             };
@@ -1423,6 +1440,168 @@ fn vi_materialize_map(
     }
     ctx.maps.insert(vname.to_string(), out);
     Ok(())
+}
+
+/// A map body compiled once before its enumeration: the part of [`vi_eval`]
+/// whose names resolve before any point is bound — the map's own range
+/// symbols, scalar parameters and const-array factors — evaluated per point
+/// without walking the JSON or looking a name up more than once. Each arm
+/// computes exactly what the [`vi_eval`] arm of the same op does. A body
+/// with anything else is not compiled, and a point whose evaluation fails
+/// is evaluated again by [`vi_eval`] for its diagnostic.
+enum Fast<'a> {
+    Bool(bool),
+    Int(i64),
+    /// A literal, rounded on ingress at evaluation.
+    Float(f64),
+    /// A range symbol of the map.
+    Bound(&'a str),
+    /// A scalar parameter's value, rounded on ingress at evaluation.
+    Param(f64),
+    Index {
+        name: &'a str,
+        arr: &'a ArrayD<f64>,
+        subs: Vec<Fast<'a>>,
+    },
+    Skolem(Vec<Fast<'a>>),
+    Floor(Box<Fast<'a>>),
+    Ceil(Box<Fast<'a>>),
+    Div(Box<Fast<'a>>, Box<Fast<'a>>),
+    Mul(Vec<Fast<'a>>),
+    Add(Vec<Fast<'a>>),
+    Neg(Box<Fast<'a>>),
+    Sub(Box<Fast<'a>>, Box<Fast<'a>>),
+}
+
+impl<'a> Fast<'a> {
+    fn compile(node: &'a Value, ctx: &'a ViCtx, ranges: &Map<String, Value>) -> Option<Self> {
+        let sub = |n: &'a Value| Self::compile(n, ctx, ranges).map(Box::new);
+        let all = |ns: &'a [Value]| -> Option<Vec<Self>> {
+            ns.iter().map(|n| Self::compile(n, ctx, ranges)).collect()
+        };
+        match node {
+            Value::Bool(b) => Some(Fast::Bool(*b)),
+            Value::Number(n) => Some(match n.as_i64() {
+                Some(i) => Fast::Int(i),
+                None => Fast::Float(n.as_f64()?),
+            }),
+            Value::String(s) => {
+                if ranges.contains_key(s) {
+                    return Some(Fast::Bound(s));
+                }
+                if ctx.const_arrays.contains_key(s) {
+                    return None;
+                }
+                let is_param = ctx
+                    .variables
+                    .get(s)
+                    .and_then(|v| v.get("type"))
+                    .and_then(|v| v.as_str())
+                    == Some("parameter");
+                if is_param {
+                    ctx.param(s).ok().map(Fast::Param)
+                } else {
+                    None
+                }
+            }
+            Value::Object(_) => {
+                let args = node_args(node);
+                let a = |i: usize| args.get(i);
+                Some(match node_op(node)? {
+                    "index" => {
+                        let name = args.first()?.as_str()?;
+                        if ctx.maps.contains_key(name) {
+                            return None;
+                        }
+                        let arr = ctx.const_arrays.get(name)?;
+                        if args.len() - 1 != arr.ndim() {
+                            return None;
+                        }
+                        Fast::Index {
+                            name,
+                            arr,
+                            subs: all(&args[1..])?,
+                        }
+                    }
+                    "skolem" => Fast::Skolem(all(args)?),
+                    "true" => Fast::Bool(true),
+                    "false" => Fast::Bool(false),
+                    "floor" => Fast::Floor(sub(a(0)?)?),
+                    "ceil" => Fast::Ceil(sub(a(0)?)?),
+                    "/" => Fast::Div(sub(a(0)?)?, sub(a(1)?)?),
+                    "*" => Fast::Mul(all(args)?),
+                    "+" => Fast::Add(all(args)?),
+                    "-" if args.len() == 1 => Fast::Neg(sub(a(0)?)?),
+                    "-" => Fast::Sub(sub(a(0)?)?, sub(a(1)?)?),
+                    _ => return None,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn eval(&self, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, ValueInventionError> {
+        let prec = crate::precision::active();
+        let f = |e: &Self| e.eval(ctx, bindings)?.as_f64();
+        Ok(match self {
+            Fast::Bool(b) => Val::Bool(*b),
+            Fast::Int(i) => Val::Int(*i),
+            Fast::Float(x) => Val::Float(crate::precision::round(*x)),
+            Fast::Bound(s) => match bindings.get(*s) {
+                Some(v) => Val::Int(*v),
+                None => return err(format!("range symbol {s:?} is not bound")),
+            },
+            Fast::Param(x) => Val::Float(crate::precision::round(*x)),
+            Fast::Index { name, arr, subs } => {
+                let shape = arr.shape();
+                let mut idx: smallvec::SmallVec<[usize; 4]> = smallvec::SmallVec::new();
+                for (d, e) in subs.iter().enumerate() {
+                    let one_based = e.eval(ctx, bindings)?.key_int()?;
+                    let n = shape[d] as i64;
+                    idx.push((resolve_const_index(ctx, name, d, one_based, n)? - 1) as usize);
+                }
+                Val::Float(crate::precision::round(arr[IxDyn(&idx)]))
+            }
+            Fast::Skolem(args) => {
+                let mut comps: Vec<Key> = Vec::with_capacity(args.len());
+                for e in args {
+                    comps.push(Key::Int(e.eval(ctx, bindings)?.key_int()?));
+                }
+                Val::Key(if comps.len() == 1 {
+                    comps.pop().expect("one component")
+                } else {
+                    Key::Tuple(comps)
+                })
+            }
+            Fast::Floor(e) => Val::Int(f(e)?.floor() as i64),
+            Fast::Ceil(e) => Val::Int(f(e)?.ceil() as i64),
+            Fast::Div(a, b) => {
+                let a = f(a)?;
+                let b = f(b)?;
+                Val::Float(prec.round(a / b))
+            }
+            Fast::Mul(args) => {
+                let mut acc = 1.0;
+                for e in args {
+                    acc = prec.round(acc * f(e)?);
+                }
+                Val::Float(acc)
+            }
+            Fast::Add(args) => {
+                let mut acc = 0.0;
+                for e in args {
+                    acc = prec.round(acc + f(e)?);
+                }
+                Val::Float(acc)
+            }
+            Fast::Neg(e) => Val::Float(-f(e)?),
+            Fast::Sub(a, b) => {
+                let a = f(a)?;
+                let b = f(b)?;
+                Val::Float(prec.round(a - b))
+            }
+        })
+    }
 }
 
 /// Materialise an index-set-producing aggregate → the distinct member set (§5.5
@@ -1638,7 +1817,7 @@ fn vi_materialize_grouped(
         }
     }
     // Densify over the output index set; a generator with no assigned point is 0̄.
-    let mut out: HashMap<i64, Val> = HashMap::new();
+    let mut out = ViBuf::default();
     for g in out_vals {
         out.insert(g, Val::Float(*agg_map.get(&g).unwrap_or(&zerobar)));
     }
@@ -1679,7 +1858,7 @@ fn vi_materialize_derived(
     })?;
     let out = {
         let ctx_imm: &ViCtx = ctx;
-        let mut out: HashMap<i64, Val> = HashMap::new();
+        let mut out = ViBuf::default();
         vi_enumerate(ranges, ctx_imm, |bindings| {
             let g = *bindings.get(&gsym).ok_or_else(|| {
                 ValueInventionError(format!("derived output index {gsym:?} is unbound"))
@@ -1866,7 +2045,7 @@ pub fn materialize_value_invention(
         let mut all: Vec<&Key> = per_map.iter().flat_map(|(_, ks)| ks.iter()).collect();
         all.sort();
         all.dedup();
-        let code: HashMap<&Key, f64> = all
+        let code: rustc_hash::FxHashMap<&Key, f64> = all
             .into_iter()
             .enumerate()
             .map(|(i, k)| (k, (i + 1) as f64))

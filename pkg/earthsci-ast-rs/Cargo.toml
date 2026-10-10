@@ -74,7 +74,6 @@ required-features = ["conformance-adapters"]
 # allocated per call and the hand-written reference loops, one document per
 # child process. Its own directory because it carries the reference loops and a
 # counting global allocator, which must not leak into any other binary.
-# `parallel` (rayon) runs the threaded reference loops.
 [[bin]]
 name = "earthsci-scaling-adapter-rust"
 path = "src/bin/earthsci-scaling-adapter-rust/main.rs"
@@ -151,6 +150,10 @@ s2rst = "=0.4.0"
 # ["cli"]`) now yields a crate that parses, validates, flattens, classifies and
 # BUILDS a Problem with no ODE solver linked at all.
 diffsol = { version = "0.11", optional = true }
+# faer, the dense linear algebra under diffsol (the same 0.24 diffsol links),
+# named directly only to set its process-wide parallelism for an explicit
+# solve: see `simulate::driver::SequentialFaer`.
+faer = { version = "0.24", default-features = false, optional = true }
 clap = { version = "4.0", features = ["derive"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
@@ -200,6 +203,13 @@ xla = { version = "0.4", optional = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
 
+# The tape executor splits large right-hand-side calls across the caller's
+# rayon pool on native targets (src/simulate_array/tape/exec/par.rs). Always
+# on there: threading is the default, and diffsol's faer links rayon anyway.
+# The wasm build has no such dependency and runs serially.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = "1.8"
+
 
 # Native-only dev-dependencies. `criterion` pulls `wait-timeout` (whose `imp`
 # module is unix/windows-only and fails to compile for wasm32), and
@@ -234,7 +244,7 @@ conformance-adapters = ["solve"]
 # The ODE solver. See the `diffsol` dependency comment and
 # esm-libraries-spec.md §2.5.9: Problem CONSTRUCTION never needs this; only
 # `solve`, `init` and `solve_to_completion` do.
-solve = ["dep:diffsol"]
+solve = ["dep:diffsol", "dep:faer"]
 wasm = ["wasm-bindgen", "serde-wasm-bindgen", "js-sys", "web-sys"]
 # OPT-IN EarthSciIO data-provider bridge (src/esio_provider.rs): a
 # `CadenceProvider` delegating to a real `earthsciio::Provider`, so the loader

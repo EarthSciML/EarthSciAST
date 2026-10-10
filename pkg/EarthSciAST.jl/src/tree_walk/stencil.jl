@@ -1436,20 +1436,7 @@ function _lane_eval(le::_LaneEval, loop::Vector{Int})
     args = le.args
     n = length(args)
     if k == LANE_STATE
-        aff = le.affine
-        ghost = false
-        slot = aff === nothing ? 0 : aff[1]
-        @inbounds for d in 1:n
-            v, ok = _ix_eval(args[d], loop)
-            ok || return (0, false)
-            (v < le.lo[d] || v > le.hi[d]) && (ghost = true)
-            aff === nothing ? (le.cell[d] = v) : (slot += v * aff[2][d])
-        end
-        ghost && return (0, true)
-        aff === nothing || return (slot, true)
-        s = le.blk === nothing ? _vm_slot(le.var_map, le.var_name, le.cell) :
-            _block_slot(le.blk, le.cell)
-        return (s, s != 0)
+        return _lane_eval_state(le, loop)
     elseif k == LANE_CONST
         lin = 0
         stride = 1
@@ -1471,6 +1458,26 @@ function _lane_eval(le::_LaneEval, loop::Vector{Int})
         end
         return (lin + 1, true)
     end
+end
+
+# `_lane_eval` of a LANE_STATE evaluator: the slot (0 for a ghost) as an `Int`,
+# so a caller that knows the kind gets a concrete result type.
+function _lane_eval_state(le::_LaneEval, loop::Vector{Int})::Tuple{Int,Bool}
+    args = le.args
+    aff = le.affine
+    ghost = false
+    slot = aff === nothing ? 0 : aff[1]
+    @inbounds for d in 1:length(args)
+        v, ok = _ix_eval(args[d], loop)
+        ok || return (0, false)
+        (v < le.lo[d] || v > le.hi[d]) && (ghost = true)
+        aff === nothing ? (le.cell[d] = v) : (slot += v * aff[2][d])
+    end
+    ghost && return (0, true)
+    aff === nothing || return (slot, true)
+    s = le.blk === nothing ? _vm_slot(le.var_map, le.var_name, le.cell) :
+        _block_slot(le.blk, le.cell)
+    return (s, s != 0)
 end
 
 # Ghost pattern of the STATE lanes, from slots ALREADY isolated into a

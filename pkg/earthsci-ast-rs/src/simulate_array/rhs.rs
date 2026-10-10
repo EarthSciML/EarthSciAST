@@ -745,6 +745,10 @@ fn rule_set_key(call: &RhsCall) -> u64 {
 /// otherwise the legacy interpreter path runs, byte-identical to the pre-tape
 /// driver.
 ///
+/// Every element of `dy` is written: a state no rule writes reads zero. The
+/// caller need not clear it; the tape zeroes only the elements it does not
+/// write.
+///
 /// `force_scalar` is [`crate::Compiler::Interpreter`] reaching the runtime, so
 /// it also arms the per-cell oracle for the evaluations that do not pass
 /// through a compiled rule — a standalone `faq` observed, a `makearray` body
@@ -764,6 +768,7 @@ pub(super) fn evaluate_rhs_with_scratch(
     scratch.const_lits.retarget(rule_set_key(call));
     let _overlay = super::vectorized::OverlayGuard::armed(force_scalar);
     if force_scalar || scratch.tape.is_none() {
+        dy.fill(0.0);
         evaluate_rhs_legacy(call, dy, force_scalar, stats, scratch);
         return;
     }

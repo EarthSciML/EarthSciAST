@@ -1237,6 +1237,8 @@ mutable struct _CSECache
     tpalt::Any
     ttalt::Any
     tealt::UInt64
+    # The build's forcing epoch (cadence_stamp.jl), shared with its other tiers.
+    epoch::_ForcingEpoch
 end
 
 # "This buffer's const slots hold nothing valid." A private singleton, so it is `!==`
@@ -1246,36 +1248,17 @@ const _CSE_INVALID = _CSEInvalid()
 
 _CSECache() = _CSECache(Float64[], nothing, _CSE_INVALID, _CSE_INVALID,
                         _CSE_INVALID, NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID,
-                        UInt64(0))
-
-# ---- The forcing epoch (B3): the t-tier's view of "the forcing data moved" ----
-#
-# A t-only prelude slot may gather a LIVE forcing buffer (`_NK_PARAM_GATHER`) — a
-# `param_arrays` buffer or a discrete-cadence cache — whose CONTENTS are refreshed in
-# place while `p` and `t` stand still (a refresh callback fires AT its tstop, so the
-# first RHS call after it is at the SAME `t` as the calls before it). A `(p, t)`-keyed
-# stamp cannot see that change, so every in-place refresh must bump this counter: the
-# t-tier compares it and refills when it moved. Bumped by `_write_forcing!`
-# (data_refresh.jl — the refresh callback's write path) and by
-# `DiscreteMaterializer.materialize!` (build.jl — the discrete-cadence cache refill);
-# code that mutates a `param_arrays` buffer OUTSIDE those two paths must call
-# `notify_forcing_refresh!` itself (see its docstring).
-#
-# A single process-global counter, deliberately: a bump invalidates every evaluator's
-# t-tier, which is over-invalidation (one wasted refill), never staleness. Plain
-# `Ref`, same single-threaded-per-instance bargain the `_CSECache` buffers already
-# make (non-reentrancy note in acc_merge.jl).
-const _FORCING_EPOCH = Ref{UInt64}(0)
-
-@inline _bump_forcing_epoch!() = (_FORCING_EPOCH[] += UInt64(1); nothing)
+                        UInt64(0), _new_forcing_epoch())
 
 """
     notify_forcing_refresh!()
+    notify_forcing_refresh!(buffer)
 
 Tell the tree-walk evaluator that the contents of a live forcing buffer (a
 `param_arrays` buffer bound into `build_evaluator`) were mutated in place, so any
-memoized time-cadence prelude values that gather it are invalidated before the next
-RHS call.
+memoized time-cadence values that gather it are invalidated before the next
+RHS call. With `buffer`, only the builds that read that buffer are invalidated;
+without it, every build in the process is.
 
 The supported refresh surfaces call this automatically: the data-refresh callback
 (`build_refresh_callback` → `_write_forcing!`) and the discrete-cadence
@@ -1286,7 +1269,8 @@ at (the memo is keyed on `(p, t, forcing epoch)`, so any later `t` re-evaluates
 regardless). Calling it spuriously is always safe: it costs one refill of the
 time-cadence slots, never a wrong number.
 """
-notify_forcing_refresh!() = _bump_forcing_epoch!()
+notify_forcing_refresh!() = _bump_global_epoch!()
+notify_forcing_refresh!(buffer::AbstractArray) = _bump_buffer_epochs!(buffer)
 
 # Fetch the prelude scratch for value type `T`. `T` is a compile-time constant at
 # every call site (it is derived from the argument TYPES — see `_rhs_value_type`),
@@ -1315,37 +1299,25 @@ end
 # stays good until `p` changes — or until the buffer itself is replaced. `f!` refills
 # the const slots iff `_cse_const_stale` says so, and stamps the buffer afterwards.
 #
-# `===` (EGAL), not `==`, is the comparison. For an immutable `NamedTuple` of scalars
-# that is a cheap bitwise compare, and it is exactly the right predicate: egal is
-# STRICTLY FINER than `==` (it separates `0.0` from `-0.0`, and it makes two identical
-# `NaN` bit patterns compare equal), so two `p`s that compare egal have bit-identical
-# parameter values and therefore produce bit-identical const slots. Two NamedTuples
-# with equal values are legitimately interchangeable; a `remake`d `p` with any
-# different value is not egal and refills.
-#
-# `isbits(p)` is the fail-closed gate, and it is free: `typeof(p)` is a compile-time
-# constant at every specialization, so this folds to a literal. A `p` carrying a
-# MUTABLE field would compare by OBJECT IDENTITY under `===`, so an in-place mutation
-# of that field would not move the stamp and the const slots would silently go stale.
-# `p` is a NamedTuple of scalars (array-valued parameters ride `param_arrays`, and
-# gather as `_NK_PARAM_GATHER`, which is never const), so this holds today — but the
-# failure mode of it not holding is wrong numbers, so it is checked rather than assumed.
-# `nothing` (the parameter-free sentinel) is `isbits`.
+# The comparison is `_pstamp_same` (cadence_stamp.jl): egal for an `isbits` `p`, so
+# two `p`s that match have bit-identical parameter values and therefore produce
+# bit-identical const slots, and an element-by-element egal compare against a deep
+# copy for a `p` holding arrays, so an in-place mutation of one moves the stamp.
 @inline _cse_const_stale(c::_CSECache, ::Type{Float64}, p) =
-    !(isbits(p) && c.stamp64 === p)
+    !_pstamp_same(c.stamp64, p)
 @inline _cse_const_stale(c::_CSECache, ::Type{T}, p) where {T} =
-    !(isbits(p) && c.stampalt === p)
+    !_pstamp_same(c.stampalt, p)
 
 # Record which `p` this buffer's const slots now hold. Storing into an `Any` field
 # BOXES `p` — that is fine and deliberate: it happens only when `p` CHANGES, never on
 # the repeated same-`p` calls whose zero-allocation property `f!` must keep (pinned by
-# tree_walk_allocation_test.jl). A non-`isbits` `p` is never stored (see above).
+# tree_walk_allocation_test.jl). A `p` holding arrays is stored as a deep copy.
 @inline function _cse_mark_const!(c::_CSECache, ::Type{Float64}, p)
-    c.stamp64 = isbits(p) ? p : _CSE_INVALID
+    c.stamp64 = _pstamp(p)
     return nothing
 end
 @inline function _cse_mark_const!(c::_CSECache, ::Type{T}, p) where {T}
-    c.stampalt = isbits(p) ? p : _CSE_INVALID
+    c.stampalt = _pstamp(p)
     return nothing
 end
 
@@ -1372,35 +1344,35 @@ end
 # it), so the typed `tt64` field is sound.
 #
 # The epoch compare is what makes a live-forcing gather admissible in this tier at
-# all (the const tier must exclude it): an in-place refresh bumps `_FORCING_EPOCH`,
+# all (the const tier must exclude it): an in-place refresh bumps the build's forcing epoch,
 # the stamp stops matching, and the slots refill — at the same `t`, which is exactly
-# when a refresh callback fires. `isbits(p)` gates exactly as in the const tier.
+# when a refresh callback fires. `p` is compared exactly as in the const tier.
 @inline _cse_t_stale(c::_CSECache, ::Type{Float64}, p, t) =
-    !(isbits(p) && c.tp64 === p && t === c.tt64 && c.te64 === _FORCING_EPOCH[])
+    !(t === c.tt64 && c.te64 === _epoch_value(c.epoch) && _pstamp_same(c.tp64, p))
 @inline _cse_t_stale(c::_CSECache, ::Type{T}, p, t) where {T} =
-    !(isbits(p) && c.tpalt === p && c.ttalt === t && c.tealt === _FORCING_EPOCH[])
+    !(c.ttalt === t && c.tealt === _epoch_value(c.epoch) && _pstamp_same(c.tpalt, p))
 
 # Record the `(p, t, epoch)` this buffer's t-slots now hold. Zero-allocation on the
 # paths that repeat: `t` lands in a TYPED field (`tt64`) on the Float64 buffer, and
 # the `Any` fields (`tp64`/`tpalt`/`ttalt`) are only re-stored (boxed) when their
 # value actually moved — `p` on a `p` change, `ttalt` on a `t` change of the alt
-# path. A non-Float64 `t` on the Float64 buffer, or a non-isbits `p`/`t`, is never
+# path. A non-Float64 `t` on the Float64 buffer, or a non-isbits `t`, is never
 # stamped (fail closed: the tier refills every call, which is the pre-B3 behavior).
 @inline function _cse_mark_t!(c::_CSECache, ::Type{Float64}, p, t)
-    if t isa Float64 && isbits(p)
-        c.tp64 === p || (c.tp64 = p)
+    if t isa Float64
+        _pstamp_same(c.tp64, p) || (c.tp64 = _pstamp(p))
         c.tt64 = t
-        c.te64 = _FORCING_EPOCH[]
+        c.te64 = _epoch_value(c.epoch)
     else
         c.tp64 === _CSE_INVALID || (c.tp64 = _CSE_INVALID)
     end
     return nothing
 end
 @inline function _cse_mark_t!(c::_CSECache, ::Type{T}, p, t) where {T}
-    if isbits(p) && isbits(t)
-        c.tpalt === p || (c.tpalt = p)
+    if isbits(t)
+        _pstamp_same(c.tpalt, p) || (c.tpalt = _pstamp(p))
         c.ttalt === t || (c.ttalt = t)
-        c.tealt = _FORCING_EPOCH[]
+        c.tealt = _epoch_value(c.epoch)
     else
         c.tpalt === _CSE_INVALID || (c.tpalt = _CSE_INVALID)
     end

@@ -1,5 +1,5 @@
 # The codegen tier's threaded cell axis (codegen_kernel.jl, "Threaded cell
-# axis for the codegen tier"; partition + opt-in infrastructure in
+# axis for the codegen tier"; partition + dispatch infrastructure in
 # access_kernel.jl, "Threading infrastructure").
 #
 # Pinned here:
@@ -10,7 +10,7 @@
 #      `(1, 1)` du bitwise (`===`, so NaN/-0.0 count) for every cell-set kind
 #      the emitter chunks: outs/contig, rank-1, rank-2, rank-3 and rank-4 boxes.
 #      This pins the chunked loop-bound arithmetic (the row clamps of the
-#      rank-2/3/N nests) with no threads involved — under Polyester the chunks
+#      rank-2/3/N nests) with no threads involved — threaded, the chunks
 #      only ever run concurrently, which cannot change per-cell values when
 #      the out-slots are disjoint (the build-time check below).
 #   3. DISJOINTNESS — `_cellsets_outs_unique` catches duplicates within an
@@ -19,7 +19,7 @@
 #      cache yields the permanent `:cg_serial_shared_outs` verdict.
 #      (A shared-outs section under threading runs the serial `(1, 1)`
 #      instance — since the lane-tape retirement there is no other fallback.)
-#   4. THREADED EXECUTION (subprocess, `julia -t 4` + Polyester, mirroring the
+#   4. THREADED EXECUTION (subprocess, `julia -t 4`, mirroring the
 #      in-process env-toggle discipline of the other codegen tests):
 #      du bit-identity threaded vs a serial oracle — the same program built
 #      with the min-cells floor above the section, which is what keeps a
@@ -27,9 +27,6 @@
 #      build; `:cg_threaded` in `_THREAD_TALLY`; the min-cells threshold
 #      (`:cg_serial_small` at the 512-cell default on a small section); and
 #      the budget-0 OVERFLOW function threading the same way.
-# The subprocess block is skipped (with a warning) when Polyester is not
-# available in the active environment — it is a weakdep and not a test target
-# dependency.
 using Test
 using EarthSciAST
 include("testutils.jl")
@@ -129,6 +126,7 @@ function _cgt_build(model, ics; compiler::Symbol=:native, env...)
 end
 
 _cgt_du(f!, u, p, t) = (d = similar(u); fill!(d, 0.0); f!(d, u, p, t); d)
+_cgt_alloc(f!, du, u, p, t) = (f!(du, u, p, t); f!(du, u, p, t); @allocated f!(du, u, p, t))
 
 # The serial oracle: the SAME program built with the per-chunk min-cells floor
 # above the whole section, which is what keeps a section off the threaded
@@ -152,14 +150,11 @@ end
 
 if get(ENV, "ESS_CGT_CHILD", "") == "1"
     # =========================================================================
-    # CHILD: threaded end-to-end (spawned below with `-t 4` and a Polyester-
-    # capable project; everything here may assume Polyester loads).
+    # CHILD: threaded end-to-end (spawned below with `-t 4`).
     # =========================================================================
-    using Polyester
 
     @testset "codegen threaded cell axis (child, $(Threads.nthreads()) threads)" begin
         @test Threads.nthreads() >= 2
-        @test ESM._polyester_loaded()
         @test ESM._threads_available()
 
         N = 512                       # 1024 cells: 2 chunks at the 512 default
@@ -226,6 +221,51 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             @test tc2.nchunks == min(Threads.nthreads(), 1_000_000 ÷ 512)
         end
 
+        @testset "contraction verdict weighs fold terms, chunks never exceed cells" begin
+            r = Ref(0)
+            @test ESM._ac_work(10, nothing) == 10
+            @test ESM._ac_work(10, ESM._ACFold([r], :+, 0.0, [1:1:3])) == 10 + 10 * 3
+            @test ESM._ac_work(2, ESM._ACFold([r], :+, 0.0, [1, 3, 6], [[1, 2, 1, 2, 3]])) == 2 + 5
+            # 600 cells alone stay serial at the 512 floor; their fold terms do not.
+            @test ESM._sec_prep_threads!(ESM._SecTCache(600, true)).state == -1
+            tc3 = ESM._SecTCache(600, true, ESM._ac_work(600, ESM._ACFold([r], :+, 0.0, [1:1:5])))
+            @test ESM._sec_prep_threads!(tc3).state == 1
+            @test tc3.nchunks == min(Threads.nthreads(), 3600 ÷ 512)
+            tc4 = ESM._SecTCache(2, true, 1_000_000)
+            @test ESM._sec_prep_threads!(tc4).state == 1
+            @test tc4.nchunks == 2
+        end
+
+        @testset "a join-gated TABLE contraction threads below the cell floor, bit-identically" begin
+            # The scaling tier's regrid at 1000 cells: 1000 output cells (under two
+            # chunks' worth at the 512 floor) folding about 2000 admitted pairs.
+            doc = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "scaling",
+                           "fixtures", "regrid", "regrid_N1000.esm")
+            function rhs(compiler, env...)
+                withenv(env...) do
+                    prob = ESM.esm_problem(doc, (0.0, 1.0); compiler=compiler)
+                    # A state that differs cell to cell, set by name so the two
+                    # compilers' layouts need not agree.
+                    u = zeros(length(prob.u0))
+                    for (k, i) in prob.var_map
+                        i <= length(u) && (u[i] = 1.0 + 1e-3 * sum(Int, codeunits(k)))
+                    end
+                    du = zeros(length(u))
+                    prob.f!(du, u, prob.p, 0.0)
+                    Dict(k => du[i] for (k, i) in prob.var_map if i <= length(du))
+                end
+            end
+            du_ser = rhs(:native, "ESS_THREADS_MIN_CELLS" => "100000000")
+            ESM._reset_thread_tally!()
+            du_thr = rhs(:native)
+            # Both sections chunk: the 2000-cell state kernels and the contraction.
+            @test get(ESM._THREAD_TALLY, :cg_threaded, 0) == 2
+            du_int = rhs(:interpreter)
+            @test length(du_thr) == 2000
+            @test all(du_thr[k] === du_ser[k] for k in keys(du_thr))
+            @test all(du_thr[k] === du_int[k] for k in keys(du_thr))
+        end
+
         @testset "overflow RGF (budget 0): threaded ≡ serial oracle ≡ interpreter" begin
             ESM._reset_thread_tally!()
             fO, uO, pO, tallyO = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET="0")
@@ -257,6 +297,80 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             du_ser = _cgt_du(f2s, u2, p2s, 0.4)
             @test getfield(getfield(f2, :kernel_section), :tcache).state == 1
             @test _cgt_bitsame(du_thr, du_ser)
+        end
+
+        @testset "a threaded call allocates nothing" begin
+            fA, uA, pA, _ = _cgt_build(model, ics)
+            du = similar(uA)
+            if VERSION >= v"1.12"
+                @test _cgt_alloc(fA, du, uA, pA, 0.3) == 0
+            end
+            @test getfield(getfield(fA, :kernel_section), :tcache).state == 1
+        end
+
+        @testset "dual numbers thread: threaded ≡ serial, partials included" begin
+            if Base.find_package("ForwardDiff") === nothing
+                @info "ForwardDiff not in the active environment; skipping"
+            else
+                @eval using ForwardDiff
+                fA, uA, pA, _ = _cgt_build(model, ics)
+                fS, _, pS, _ = _cgt_serial(model, ics)
+                ud = [Base.invokelatest(ForwardDiff.Dual, x, 1.0, -0.5 * i)
+                      for (i, x) in enumerate(uA)]
+                dthr = similar(ud); dser = similar(ud)
+                Base.invokelatest(fA, dthr, ud, pA, 0.7)
+                withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
+                    Base.invokelatest(fS, dser, ud, pS, 0.7)
+                end
+                @test getfield(getfield(fA, :kernel_section), :tcache).state == 1
+                @test all(i -> dthr[i] === dser[i], eachindex(dthr))
+            end
+        end
+
+        @testset "an error in a chunk reaches the caller" begin
+            Ns = 1024
+            body = _op("sqrt", _idx("u", _v("i")))
+            vars = Dict{String,ESM.ModelVariable}("u" => ESM.ModelVariable(ESM.UnknownVariable))
+            m = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, Ns),
+                                              _ao1(body, "i", 1, Ns))])
+            ic = Dict("u[$k]" => 1.0 + k for k in 1:Ns)
+            fE, uE, pE, _ = _cgt_build(m, ic)
+            du = similar(uE)
+            fE(du, uE, pE, 0.0)
+            @test getfield(getfield(fE, :kernel_section), :tcache).state == 1
+            bad = copy(uE); bad[end] = -1.0          # a cell in the last chunk
+            @test_throws DomainError fE(du, bad, pE, 0.0)
+            fE(du, uE, pE, 0.0)                      # the pool is usable again
+            @test du[1] === sqrt(uE[1])
+        end
+
+        @testset "scan folds: lanes run in parallel, each lane in order" begin
+            len = 1000
+            folds = ESM._ScanFold[]
+            off = 0
+            for (nl, op, z, incl) in ((5, :+, 0.0, true), (3, :max, -Inf, false),
+                                      (6, :*, 1.0, true))
+                push!(folds, ESM._ScanFold(collect(off .+ (1:nl*len)), len, op, z, incl))
+                off += nl * len
+            end
+            base = [1.0 + 1e-3 * sin(0.37k) for k in 1:off]
+            dser = copy(base); ESM._apply_scan_folds!(dser, folds)
+            sec = ESM._make_scan_section(folds)
+            dthr = copy(base); ESM._apply_scan_folds!(dthr, sec)
+            @test sec.tcache.state == 1
+            @test 2 <= sec.tcache.nchunks <= 14
+            @test _cgt_bitsame(dthr, dser)
+            if VERSION >= v"1.12"
+                dthr2 = copy(base)
+                _scan_once(d, s) = (ESM._apply_scan_folds!(d, s); nothing)
+                _scan_once(dthr2, sec)
+                copyto!(dthr2, base)
+                @test (@allocated _scan_once(dthr2, sec)) == 0
+            end
+            one = ESM._make_scan_section(ESM._ScanFold[ESM._ScanFold(collect(1:5000), 5000, :+, 0.0, true)])
+            d1 = [1.0 * k for k in 1:5000]; ESM._apply_scan_folds!(d1, one)
+            @test one.tcache.state == -1              # one lane: nothing to split
+            @test d1[end] == sum(1.0:5000.0)
         end
     end
 else
@@ -341,6 +455,24 @@ else
             end
         end
 
+        # Serial tiling: a section of several kernels large enough to tile runs
+        # its chunk instances back to back on the serial route; du must be
+        # bitwise the untiled (1, 1) instance's and the interpreter's.
+        @testset "serial tiling of a multi-kernel section" begin
+            N = 4096
+            model, ics = _cgt_1d_model(N), _cgt_1d_ics(N)
+            f!, u0, p, _ = _cgt_serial(model, ics)
+            ks = getfield(f!, :kernel_section)
+            @test getfield(ks, :ntiles) > 1
+            fi!, ui, pi_, _ = _cgt_build(model, ics; compiler=:interpreter)
+            u = u0 .* (1.0 .+ 1e-3 .* sin.(1:length(u0)))
+            du1 = fill(0.0, length(u0))
+            getfield(ks, :cgf)(du1, u, p, 0.4, getfield(ks, :cgtabs), 1, 1)
+            @test _cgt_bitsame(_cgt_du(f!, u, p, 0.4), du1)
+            @test ui == u0
+            @test _cgt_bitsame(_cgt_du(fi!, u, pi_, 0.4), du1)
+        end
+
         @testset "overflow RGF chunk instances (budget 0)" begin
             model = _cgt_1d_model(41)
             ics = _cgt_1d_ics(41)
@@ -374,23 +506,17 @@ else
             end
         end
 
-        # ---- the threaded subprocess (skipped without Polyester) ----
-        polypath = Base.find_package("Polyester")
-        if polypath === nothing
-            @warn "Polyester not in the active environment; skipping the " *
-                  "threaded codegen-cell-axis subprocess tests"
-        else
-            @testset "threaded subprocess (julia -t 4)" begin
-                env = copy(ENV)
-                for k in collect(keys(env))
-                    startswith(k, "ESS_") && delete!(env, k)
-                end
-                env["ESS_CGT_CHILD"] = "1"
-                env["JULIA_PROJECT"] = Base.active_project()
-                cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 4 $(@__FILE__)`, env)
-                proc = run(pipeline(ignorestatus(cmd); stdout=stdout, stderr=stderr))
-                @test success(proc)
+        # ---- the threaded subprocess ----
+        @testset "threaded subprocess (julia -t 4)" begin
+            env = copy(ENV)
+            for k in collect(keys(env))
+                startswith(k, "ESS_") && delete!(env, k)
             end
+            env["ESS_CGT_CHILD"] = "1"
+            env["JULIA_PROJECT"] = Base.active_project()
+            cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 4 $(@__FILE__)`, env)
+            proc = run(pipeline(ignorestatus(cmd); stdout=stdout, stderr=stderr))
+            @test success(proc)
         end
     end
 end

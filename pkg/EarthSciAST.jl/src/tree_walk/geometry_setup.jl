@@ -218,8 +218,53 @@ function _const_op_to_array(val)::Array{Float64}
         node = first(node)
     end
     A = Array{Float64}(undef, dims...)
-    _fill_const_array!(A, val, ())
+    _fill_const_dense!(A, val, dims) || _fill_const_array!(A, val, ())
     return A
+end
+
+# The fill for a value whose every level is a list of exactly the probed
+# extent with numbers at the bottom (every well-formed inline array): each
+# element goes straight to its column-major offset. Returns `false` on any
+# other shape, and the caller redoes the fill with `_fill_const_array!`.
+function _fill_const_dense!(A::Array{Float64}, val, dims::Vector{Int})
+    (isempty(dims) || any(==(0), dims)) && return false
+    strides = Vector{Int}(undef, length(dims))
+    s = 1
+    for d in eachindex(dims)
+        strides[d] = s
+        s *= dims[d]
+    end
+    return _fill_const_level!(vec(A), val, 1, 1, dims, strides)
+end
+
+_fill_const_level!(A::Vector{Float64}, node, depth::Int, off::Int, dims::Vector{Int},
+                   strides::Vector{Int})::Bool =
+    node isa Vector{Any} ? _fill_const_level_vec!(A, node, depth, off, dims, strides) :
+    node isa AbstractVector ? _fill_const_level_vec!(A, node, depth, off, dims, strides) : false
+
+function _fill_const_level_vec!(A::Vector{Float64}, node::AbstractVector, depth::Int, off::Int,
+                                dims::Vector{Int}, strides::Vector{Int})::Bool
+    n = length(node)
+    n == dims[depth] || return false
+    s = strides[depth]
+    if depth == length(dims)
+        for k in 1:n
+            x = node[k]
+            v = x isa Int64 ? Float64(x) : x isa Float64 ? x :
+                x isa Number ? Float64(x)::Float64 : return false
+            @inbounds A[off + (k - 1) * s] = v
+        end
+    else
+        for k in 1:n
+            sub = node[k]
+            o = off + (k - 1) * s
+            # The common nested `Vector{Any}` row takes a static call.
+            (sub isa Vector{Any} ? _fill_const_level_vec!(A, sub, depth + 1, o, dims, strides) :
+                                   _fill_const_level!(A, sub, depth + 1, o, dims, strides)) ||
+                return false
+        end
+    end
+    return true
 end
 
 function _fill_const_array!(A, node, idx::Tuple)
@@ -243,6 +288,10 @@ generic `polygon_area` FAQ (`_polygon_area_via_faq`). Equals
 non-overlapping clip (`< 3` distinct vertices) has zero overlap area.
 """
 function _polygon_intersection_area(poly_a, poly_b, manifold::AbstractString)::Float64
+    if manifold == "planar" && poly_a isa AbstractMatrix && poly_b isa AbstractMatrix
+        r = _planar_pia_noalloc(poly_a, poly_b)
+        r === nothing || return r
+    end
     ring = _clip_or_treewalk_error(poly_a, poly_b, manifold)
     size(ring, 1) < 3 && return 0.0
     return _polygon_area_via_faq(close_ring(ring), manifold)
@@ -876,7 +925,8 @@ end
 const _GEOM_EQ_DRIVE = Ref{Int}(0)
 
 function _geo_equality_drive(gates, out::Vector{String}, contract::Vector{String},
-                             exts::Vector{Int}, index_sets, derived_extents, faq)
+                             exts::Vector{Int}, index_sets, derived_extents, faq;
+                             eq_cache=nothing)
     (gates === nothing || isempty(gates)) && return nothing
     _join_on_gate_disabled() && return nothing
     nout = length(out)
@@ -891,7 +941,14 @@ function _geo_equality_drive(gates, out::Vector{String}, contract::Vector{String
         (a isa AbstractArray && b isa AbstractArray) || continue
         eA, eB = slotext(sA), slotext(sB)
         (length(a) >= eA && length(b) >= eB) || continue
-        oi = _equality_match_index(1:eA, p -> a[p], 1:eB, p -> b[p])
+        # The match index depends only on the two key columns and extents; one
+        # setup pass gates several aggregates on the same pair of bin buffers.
+        oi = if eq_cache === nothing
+            _equality_match_index(1:eA, p -> a[p], 1:eB, p -> b[p])
+        else
+            get!(() -> _equality_match_index(1:eA, p -> a[p], 1:eB, p -> b[p]),
+                 eq_cache, (objectid(a), objectid(b), eA, eB))
+        end
         oi === nothing && continue
         g = _GeoOverlapGate(_JoinGate(slotname(sA), slotname(sB), Dict{Int,Int}(),
                                       Dict{Int,Int}(), oi), sA, sB)
@@ -996,7 +1053,7 @@ end
 # the setup-time twin of the ODE faq einsum path.
 function _materialize_geom_array(faq, env, index_sets, derived_extents,
                                  var_shapes=Dict{String,Vector{String}}();
-                                 ov_cache=nothing)
+                                 ov_cache=nothing, eq_cache=nothing)
     out  = String[v for v in faq.output_idx]
     exts = Int[_geo_index_extent(faq.ranges[v], index_sets, derived_extents) for v in out]
     # Contracted indices: `ranges` keys not among the output indices (§5.1). Their
@@ -1030,7 +1087,6 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
     body = _geo_compile(faq.expr_body, g)
     u = zeros(Float64, nslots[])
     nout = length(out)
-    arr  = zeros(Float64, exts...)
     # ---- The OVERLAP broad phase (see `_geo_overlap_gate` above) ----
     # Resolve the gate, then ask the SHARED planner (`_overlap_drive_plan`,
     # src/broad_phase.jl) which symbol(s) its candidate set drives. Only the two
@@ -1055,12 +1111,14 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
     dov = ov
     if ov === nothing
         eq = _geo_equality_drive(gates, out, contract, exts, index_sets,
-                                 derived_extents, faq)
+                                 derived_extents, faq; eq_cache=eq_cache)
         if eq !== nothing
             dov, drive = eq
             _GEOM_EQ_DRIVE[] += 1
         end
     end
+    # A candidate-driven MAP writes only the cells its pairs reach.
+    arr = _zeros_f64(exts...; sparse = drive !== nothing && isempty(contract))
     # ---- The sweep (see `_geom_sweep_map!` / `_geom_sweep_contract!`) ----
     # The sweep counters describe the DENSE sweeps only; a candidate-driven
     # sweep runs neither of them and is counted by `_GEOM_OVERLAP_DRIVE`.
@@ -1734,10 +1792,28 @@ end
 # `_vi_skolem`), compared only for equality by the gate.
 function _vi_buf_vector(buf)
     isempty(buf) && return Any[]
+    # Bin keys of one concrete type (a skolem's integer tuples) at the
+    # positions 1:n are stored as that type, so the gate's per-pair comparison
+    # is not a dynamic dispatch.
+    typed = _vi_buf_typed(buf, typeof(first(values(buf))))
+    typed === nothing || return typed
     n = maximum(Int(k) for k in keys(buf))
     v = Vector{Any}(undef, n)
     for (k, val) in buf
         v[Int(k)] = val
+    end
+    return v
+end
+
+function _vi_buf_typed(buf, ::Type{T}) where {T}
+    isconcretetype(T) || return nothing
+    n = length(buf)
+    v = Vector{T}(undef, n)
+    seen = falses(n)
+    for (k, val) in buf
+        (k isa Int && 1 <= k <= n && !seen[k] && val isa T) || return nothing
+        seen[k] = true
+        v[k] = val
     end
     return v
 end
@@ -1842,6 +1918,9 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
     # views six times, is pure waste. Scoped to this call, where a name→array
     # binding in `env` is written once and never replaced.
     ov_cache = Dict{Tuple{Vector{String},Vector{String},Float64},_OverlapIndex}()
+    # Likewise one bin-equality match index per pair of key columns (the env
+    # buffers stay bound, so their identities are stable for the pass).
+    eq_cache = Dict{Tuple{UInt,UInt,Int,Int},Union{Nothing,_OverlapIndex}}()
     for n in _geom_setup_order(setup, defs)
         rhs = defs[n]
         _open_rule!(n, :setup_array)
@@ -1866,7 +1945,7 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
                                            registered_functions)
         else
             _materialize_geom_array(rhs, env, index_sets, derived_extents, var_shapes;
-                                    ov_cache=ov_cache)
+                                    ov_cache=ov_cache, eq_cache=eq_cache)
         end
         env[n] = arr
         out[n] = arr

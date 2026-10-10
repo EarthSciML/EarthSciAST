@@ -778,6 +778,168 @@ function _vi_argreduce_gates(node::OpExpr, ctx::_ViCtx, outer_ranges)
     return _vi_resolve_join(node.join, combined, ctx)
 end
 
+# ---- Compiled map bodies ----------------------------------------------------
+# A map whose body is a skolem of build-time arithmetic over its one range
+# symbol (the bin key `skolem(floor(lon[i] / dx), floor(lat[i] / dy))`) is
+# evaluated once per cell. `_vi_eval` resolves every name through the bindings
+# dictionary and the const-array registry at each cell; this lowers the body
+# once into a small node tree whose names are already resolved (the range
+# symbol to the loop value, a parameter to its value, a gather to its array),
+# then evaluates it per cell with the same arms in the same order, so every key
+# is the one `_vi_eval` computes. A body with anything else (a ragged range, a
+# gather from a bounded or non-Float64 array or from an upstream buffer, an
+# unresolved name) returns `nothing` and keeps `_vi_eval`.
+const _VIC_INT = 1      # Int literal (`ival`)
+const _VIC_NUM = 2      # Float64 literal or resolved parameter (`fval`)
+const _VIC_SYM = 3      # the range symbol's value
+const _VIC_GATHER = 4   # `arr[Int(args)...]`
+const _VIC_OP = 5       # an arithmetic / comparison / rounding op (`op`)
+
+struct _ViC
+    kind::Int
+    op::Symbol
+    ival::Int
+    fval::Float64
+    arr::Array{Float64}
+    args::Vector{_ViC}
+end
+const _VIC_NOARR = Float64[]
+_ViC(kind::Int; op::Symbol = :none, ival::Int = 0, fval::Float64 = 0.0,
+     arr::Array{Float64} = _VIC_NOARR, args::Vector{_ViC} = _ViC[]) =
+    _ViC(kind, op, ival, fval, arr, args)
+
+const _VIC_OPS = Dict{String,Symbol}("floor" => :floor, "ceil" => :ceil, "/" => :/,
+    "*" => :*, "+" => :+, "-" => :-, "<" => :<, ">" => :>, "<=" => :<=,
+    ">=" => :>=, "==" => :(==), "!=" => :!=)
+
+function _vi_compile_node(node, ctx::_ViCtx, sym::String)
+    if node isa IntExpr
+        return _ViC(_VIC_INT; ival = Int(node.value))
+    elseif node isa NumExpr
+        return _ViC(_VIC_NUM; fval = Float64(node.value))
+    elseif node isa VarExpr
+        name = node.name
+        name == sym && return _ViC(_VIC_SYM)
+        haskey(ctx.const_arrays, name) && return nothing
+        v = get(ctx.variables, name, nothing)
+        (v !== nothing && v.type == ParameterVariable) || return nothing
+        return _ViC(_VIC_NUM; fval = Float64(_vi_param(ctx, name)))
+    elseif node isa OpExpr
+        args = node.args
+        if node.op == "index"
+            (length(args) >= 2 && args[1] isa VarExpr) || return nothing
+            name = args[1].name
+            haskey(ctx.maps, name) && return nothing
+            arr = get(ctx.const_arrays, name, nothing)
+            (arr isa Array{Float64} && ndims(arr) == length(args) - 1) || return nothing
+            sub = _ViC[]
+            for a in args[2:end]
+                c = _vi_compile_node(a, ctx, sym)
+                c === nothing && return nothing
+                push!(sub, c)
+            end
+            return _ViC(_VIC_GATHER; arr = arr, args = sub)
+        end
+        op = get(_VIC_OPS, node.op, nothing)
+        op === nothing && return nothing
+        nargs = length(args)
+        if op in (:floor, :ceil)
+            nargs >= 1 || return nothing
+        elseif op === :-
+            nargs >= 1 || return nothing
+        elseif op in (:*, :+)
+            nargs >= 1 || return nothing
+        else
+            nargs >= 2 || return nothing
+        end
+        sub = _ViC[]
+        for a in args
+            c = _vi_compile_node(a, ctx, sym)
+            c === nothing && return nothing
+            push!(sub, c)
+        end
+        return _ViC(_VIC_OP; op = op, args = sub)
+    end
+    return nothing
+end
+
+# The compiled form of a map body, or `nothing`: a skolem's key components, or
+# one scalar component.
+function _vi_compile_map_body(body, ctx::_ViCtx, sym::String)
+    if body isa OpExpr && body.op == "skolem"
+        comps = _ViC[]
+        for a in body.args
+            c = _vi_compile_node(a, ctx, sym)
+            c === nothing && return nothing
+            push!(comps, c)
+        end
+        return (true, comps)
+    end
+    body isa OpExpr && body.op in _VI_ARGWITNESS_OPS && return nothing
+    c = _vi_compile_node(body, ctx, sym)
+    return c === nothing ? nothing : (false, _ViC[c])
+end
+
+# `_vi_eval` arm for arm (the `_vi_num` guards cannot fire: every compiled
+# value is a number).
+function _vic_eval(n::_ViC, v::Int)::Union{Int,Float64,Bool}
+    k = n.kind
+    k == _VIC_INT && return n.ival
+    k == _VIC_NUM && return n.fval
+    k == _VIC_SYM && return v
+    a = n.args
+    if k == _VIC_GATHER
+        if length(a) == 1
+            return n.arr[Int(_vic_eval(a[1], v))]
+        end
+        return n.arr[(Int(_vic_eval(x, v)) for x in a)...]
+    end
+    op = n.op
+    if op === :floor
+        return floor(Int, Float64(_vic_eval(a[1], v)))
+    elseif op === :ceil
+        return ceil(Int, Float64(_vic_eval(a[1], v)))
+    elseif op === :/
+        return Float64(_vic_eval(a[1], v)) / Float64(_vic_eval(a[2], v))
+    elseif op === :* || op === :+
+        acc = Float64(_vic_eval(a[1], v))
+        for j in 2:length(a)
+            x = Float64(_vic_eval(a[j], v))
+            acc = op === :* ? acc * x : acc + x
+        end
+        return acc
+    elseif op === :-
+        return length(a) == 1 ? -Float64(_vic_eval(a[1], v)) :
+               Float64(_vic_eval(a[1], v)) - Float64(_vic_eval(a[2], v))
+    end
+    x = Float64(_vic_eval(a[1], v))
+    y = Float64(_vic_eval(a[2], v))
+    op === :< && return x < y
+    op === :> && return x > y
+    op === :<= && return x <= y
+    op === :>= && return x >= y
+    op === :(==) && return x == y
+    return x != y
+end
+
+function _vic_value(compiled, v::Int)
+    isskolem, comps = compiled
+    isskolem || return _vic_eval(comps[1], v)
+    k(c) = _vi_key_int(_vic_eval(c, v))::Int
+    length(comps) == 1 && return k(comps[1])
+    length(comps) == 2 && return (k(comps[1]), k(comps[2]))
+    length(comps) == 3 && return (k(comps[1]), k(comps[2]), k(comps[3]))
+    return Tuple(k(c) for c in comps)
+end
+
+function _vic_fill!(out, vals, compiled)
+    sizehint!(out, length(vals))
+    for v in vals
+        out[v] = _vic_value(compiled, v)
+    end
+    return out
+end
+
 # Materialise a per-element value-invention map var → Dict(output-index → value).
 function _vi_materialize_map!(ctx::_ViCtx, vname::AbstractString, node::OpExpr)
     output_idx = node.output_idx === nothing ? Any[] : node.output_idx
@@ -791,6 +953,17 @@ function _vi_materialize_map!(ctx::_ViCtx, vname::AbstractString, node::OpExpr)
     out = Dict{Any,Any}()
     sym = String(output_idx[1])
     gates = Ref{Any}(missing)
+    if !is_arg && length(outer_ranges) == 1 && haskey(outer_ranges, sym)
+        spec = outer_ranges[sym]
+        is = spec isa IndexSetRef ? get(ctx.index_sets, spec.from, nothing) : nothing
+        compiled = is !== nothing && is.kind in ("interval", "categorical") ?
+                   _vi_compile_map_body(body, ctx, sym) : nothing
+        if compiled !== nothing
+            _vic_fill!(out, _vi_range_values(spec, ctx, Dict{String,Any}()), compiled)
+            ctx.maps[vname] = out
+            return out
+        end
+    end
     _vi_enumerate(outer_ranges, ctx, bindings -> begin
         # An arg-witness body runs the inner reduction (with the outer point bound)
         # and emits the witnessing INDEX; an ordinary body (skolem) emits its value.

@@ -26,10 +26,12 @@
 //! state and compares its `dy` with native's, and, up to a size cap, compares
 //! native's `dy` with the interpreter's.
 //!
-//! `--threads T` sets the hand loop's thread count. Native Rust does not
-//! thread its right-hand side, so a threaded run records native's serial time
-//! against the threaded reference.
+//! `--threads T` sets the thread count of both native's right-hand side (the
+//! child's global rayon pool size, which the tape splits large calls across)
+//! and the hand loop (its own fork-join, `fork_join.rs`); `--threads 1` runs
+//! both serially.
 
+mod fork_join;
 mod hand_loops;
 #[rustfmt::skip]
 mod pollu_box;
@@ -452,8 +454,9 @@ fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
     m
 }
 
-const FIELDS: [&str; 13] = [
+const FIELDS: [&str; 14] = [
     "reason",
+    "n_bytes",
     "build_s",
     "code_size",
     "first_call_s",
@@ -492,8 +495,19 @@ fn measure_one(one: &One) -> Map<String, Value> {
     let entry = &one.entry;
     let mut r = blank(entry, "ok");
     let family = entry["family"].as_str().unwrap_or("").to_string();
+    // Native splits a large call across the caller's rayon pool, which is the
+    // global one here: give it this run's thread count before anything uses it.
+    if let Err(e) = rayon::ThreadPoolBuilder::new()
+        .num_threads(one.threads)
+        .build_global()
+    {
+        return failed(r, format!("sizing the global thread pool: {e}"));
+    }
 
     warm_up();
+    if let Ok(meta) = std::fs::metadata(&one.doc) {
+        r.insert("n_bytes".into(), json!(meta.len()));
+    }
     let t = Instant::now();
     let built = esm_problem(one.doc.as_path(), (0.0, 1.0), options(Compiler::Native));
     let build_s = t.elapsed().as_secs_f64();
@@ -597,12 +611,7 @@ fn measure_one(one: &One) -> Map<String, Value> {
     // The hand loop, on the canonical order.
     match build_hand_loop(&family, &doc, &entry["shape"]) {
         Ok(hl) => {
-            let pool = (one.threads > 1).then(|| {
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(one.threads)
-                    .build()
-                    .expect("a rayon pool")
-            });
+            let pool = (one.threads > 1).then(|| fork_join::ForkJoin::new(one.threads));
             let mut hdy = vec![0.0f64; n];
             hl.run(&canon_state, &mut hdy, pool.as_ref());
             let mut native_canon = vec![0.0f64; n];

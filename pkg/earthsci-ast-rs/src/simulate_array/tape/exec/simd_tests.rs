@@ -13,7 +13,10 @@
 // be rejected.
 // ---------------------------------------------------------------------------
 
-use super::fused::{FCHUNK, RunCursor, exec_fused_runs_generic};
+use super::fused::{
+    FCHUNK, RunCursor, Window, dispatch_bin_kernel, dispatch_un_kernel, exec_fused_runs_generic,
+    node_elems,
+};
 #[cfg(target_arch = "x86_64")]
 use super::fused::{exec_fused_runs_avx2, exec_fused_runs_avx512};
 use super::*;
@@ -100,6 +103,7 @@ fn drive(with_nan: bool) {
             elem_stride: 1,
             load_reg: GroupIx::MAX,
             index: None,
+            gather: None,
         },
         FusedInput {
             src: SrcRef::Slot(1),
@@ -108,6 +112,7 @@ fn drive(with_nan: bool) {
             elem_stride: 1,
             load_reg: GroupIx::MAX,
             index: None,
+            gather: None,
         },
         // 2: shifted stride-1 read (ghost over the last run).
         FusedInput {
@@ -117,6 +122,7 @@ fn drive(with_nan: bool) {
             elem_stride: 1,
             load_reg: GroupIx::MAX,
             index: None,
+            gather: None,
         },
         // 3: strided (elem_stride 2) read through a pre-load register.
         FusedInput {
@@ -126,6 +132,7 @@ fn drive(with_nan: bool) {
             elem_stride: 2,
             load_reg: GroupIx::MAX, // patched below once n_regs is known
             index: None,
+            gather: None,
         },
     ];
 
@@ -330,14 +337,21 @@ fn drive(with_nan: bool) {
         n_load_regs: 1,
         n_splat_regs: 6,          // 5 scalars + the zero register
         outputs: SmallVec::new(), // outs are passed directly
+        direct: SmallVec::new(),
+        scan_fuse: SmallVec::new(),
         schedule,
         reduce: None,
+        interleave: None,
         n_fused_instrs: 0,
         n_folded_gathers: 0,
     };
 
     let bases: Vec<*const f64> = vec![a.as_ptr(), b.as_ptr(), shifted.as_ptr(), strided.as_ptr()];
-    let run_level = |wider: u8| -> Vec<Vec<f64>> {
+    let ne = node_elems(&fs.schedule.nodes);
+    // Runs the group as the given `(lo, hi, period)` windows, in order (the
+    // whole group when `windows` is `[(0, usize::MAX, 0)]`), into fresh
+    // output buffers.
+    let run_windows = |wider: u8, windows: &[(usize, usize, usize)]| -> Vec<Vec<f64>> {
         let mut outbufs: Vec<Vec<f64>> = (0..n_ops).map(|_| vec![0.0f64; N]).collect();
         let outs: Vec<(GroupIx, *mut f64)> = outbufs
             .iter_mut()
@@ -346,51 +360,97 @@ fn drive(with_nan: bool) {
             .collect();
         let mut fregs = vec![0.0f64; (n_regs as usize + 1 + 6) * FCHUNK];
         let mut cursor = RunCursor::for_spec(&fs);
-        match wider {
-            0 => unsafe {
-                exec_fused_runs_generic(
-                    &fs,
-                    &svals,
-                    &bases,
-                    &outs,
-                    std::ptr::null_mut(),
-                    &mut fregs,
-                    &mut cursor,
-                )
-            },
-            #[cfg(target_arch = "x86_64")]
-            1 => unsafe {
-                exec_fused_runs_avx2(
-                    &fs,
-                    &svals,
-                    &bases,
-                    &outs,
-                    std::ptr::null_mut(),
-                    &mut fregs,
-                    &mut cursor,
-                )
-            },
-            #[cfg(target_arch = "x86_64")]
-            2 => unsafe {
-                exec_fused_runs_avx512(
-                    &fs,
-                    &svals,
-                    &bases,
-                    &outs,
-                    std::ptr::null_mut(),
-                    &mut fregs,
-                    &mut cursor,
-                )
-            },
-            _ => panic!("level unavailable in this build"),
+        for &(lo, hi, period) in windows {
+            let win = Window {
+                lo,
+                hi,
+                period,
+                node_elems: &ne,
+            };
+            match wider {
+                0 => unsafe {
+                    exec_fused_runs_generic(
+                        &fs,
+                        &svals,
+                        &bases,
+                        &outs,
+                        std::ptr::null_mut(),
+                        &[],
+                        &mut fregs,
+                        &mut cursor,
+                        win,
+                    )
+                },
+                #[cfg(target_arch = "x86_64")]
+                1 => unsafe {
+                    exec_fused_runs_avx2(
+                        &fs,
+                        &svals,
+                        &bases,
+                        &outs,
+                        std::ptr::null_mut(),
+                        &[],
+                        &mut fregs,
+                        &mut cursor,
+                        win,
+                    )
+                },
+                #[cfg(target_arch = "x86_64")]
+                2 => unsafe {
+                    exec_fused_runs_avx512(
+                        &fs,
+                        &svals,
+                        &bases,
+                        &outs,
+                        std::ptr::null_mut(),
+                        &[],
+                        &mut fregs,
+                        &mut cursor,
+                        win,
+                    )
+                },
+                _ => panic!("level unavailable in this build"),
+            }
         }
         outbufs
     };
+    let run_level = |wider: u8| run_windows(wider, &[(0, usize::MAX, 0)]);
 
     // Every wider clone this host can run is compared bit-for-bit against the
     // generic executor. Non-x86 targets build only the generic path, so there
     // the test checks just that it runs.
     let reference = run_level(0);
+    // A threaded call runs the group as disjoint windows on separate
+    // workers. Windows that cut through a repetition, a run, a chunk and the
+    // ghost run must reproduce the whole-group result exactly.
+    for cuts in [
+        &[0usize, 8, 650, 1024, 1296, 1304, 2048, N][..],
+        &[0, 1, 649, 651, 1299, 1301, N - 1, N],
+        &[0, 640, 1952, N],
+    ] {
+        let windows: Vec<(usize, usize, usize)> =
+            cuts.windows(2).map(|w| (w[0], w[1], 0)).collect();
+        assert_bits_eq(&reference, &run_windows(0, &windows), "windows", with_nan);
+        // Out of order, as workers may finish in any order.
+        let rev: Vec<(usize, usize, usize)> = windows.iter().rev().copied().collect();
+        assert_bits_eq(
+            &reference,
+            &run_windows(0, &rev),
+            "windows reversed",
+            with_nan,
+        );
+    }
+    // Periodic windows (an absorbed reduction's inner positions), cutting
+    // the period at unaligned places too.
+    for (period, cuts) in [
+        (650usize, &[0usize, 8, 333, 650][..]),
+        (1000, &[0, 1, 999, 1000]),
+        (N, &[0, 1300, N]),
+    ] {
+        let windows: Vec<(usize, usize, usize)> =
+            cuts.windows(2).map(|w| (w[0], w[1], period)).collect();
+        assert_bits_eq(&reference, &run_windows(0, &windows), "periodic", with_nan);
+    }
     #[cfg(target_arch = "x86_64")]
     {
         if std::arch::is_x86_feature_detected!("avx2") {
@@ -426,7 +486,6 @@ fn simd_clone_bit_identity_nan_inputs() {
     drive(true);
 }
 
-#[cfg(target_arch = "x86_64")]
 fn assert_bits_eq(want: &[Vec<f64>], got: &[Vec<f64>], label: &str, nan_class: bool) {
     for (op, (w, g)) in want.iter().zip(got.iter()).enumerate() {
         for (k, (a, b)) in w.iter().zip(g.iter()).enumerate() {
@@ -440,6 +499,101 @@ fn assert_bits_eq(want: &[Vec<f64>], got: &[Vec<f64>], label: &str, nan_class: b
                 a.to_bits(),
                 b.to_bits()
             );
+        }
+    }
+}
+
+/// Every arm of the kernel dispatch macros computes the same bits as the
+/// shared kernel table it stands in for, over every operator code.
+#[test]
+fn dispatch_arms_match_the_kernel_tables() {
+    use {BinCode as B, UnCode as U};
+    const XS: &[f64] = &[
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        0.5,
+        -3.25,
+        2.0,
+        0.999,
+        1.5,
+        f64::MIN_POSITIVE,
+        5e-324,
+        1e300,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ];
+    let bins = [
+        B::Add,
+        B::Sub,
+        B::Mul,
+        B::Div,
+        B::Pow,
+        B::Atan2,
+        B::Min,
+        B::Max,
+        B::Eq,
+        B::Ne,
+        B::Lt,
+        B::Le,
+        B::Gt,
+        B::Ge,
+        B::And,
+        B::Or,
+        B::Unknown,
+    ];
+    let uns = [
+        U::Exp,
+        U::Ln,
+        U::Log10,
+        U::Sqrt,
+        U::Abs,
+        U::Sign,
+        U::Floor,
+        U::Ceil,
+        U::Sin,
+        U::Cos,
+        U::Tan,
+        U::Asin,
+        U::Acos,
+        U::Atan,
+        U::Sinh,
+        U::Cosh,
+        U::Tanh,
+        U::Asinh,
+        U::Acosh,
+        U::Atanh,
+        U::Not,
+        U::Unknown,
+    ];
+    for op in bins {
+        for &x in XS {
+            for &y in XS {
+                macro_rules! k {
+                    ($f:expr) => {{
+                        let f = $f;
+                        f(x, y)
+                    }};
+                }
+                let got: f64 = dispatch_bin_kernel!(&op, k);
+                let want = binary_kernel_of(op)(x, y);
+                assert_eq!(got.to_bits(), want.to_bits(), "{op:?}({x:?}, {y:?})");
+            }
+        }
+    }
+    for op in uns {
+        for &x in XS {
+            macro_rules! k {
+                ($f:expr) => {{
+                    let f = $f;
+                    f(x)
+                }};
+            }
+            let got: f64 = dispatch_un_kernel!(&op, k);
+            let want = unary_kernel_of(op)(x);
+            assert_eq!(got.to_bits(), want.to_bits(), "{op:?}({x:?})");
         }
     }
 }

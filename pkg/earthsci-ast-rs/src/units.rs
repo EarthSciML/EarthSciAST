@@ -1542,16 +1542,21 @@ pub fn build_unit_env(
 ) -> (HashMap<String, Unit>, Vec<UnitParseFailure>) {
     let mut env = HashMap::new();
     let mut failures = Vec::new();
+    // Many declarations share one unit string; each is parsed once.
+    let mut parsed: HashMap<&str, Option<Unit>> = HashMap::new();
     for (name, var) in variables {
         let Some(declared) = &var.units else {
             // No declared units — dimension unknown, not dimensionless.
             continue;
         };
-        match parse_unit(declared) {
-            Ok(unit) => {
-                env.insert(name.clone(), unit);
+        let unit = parsed
+            .entry(declared.as_str())
+            .or_insert_with(|| parse_unit(declared).ok());
+        match unit {
+            Some(unit) => {
+                env.insert(name.clone(), unit.clone());
             }
-            Err(_) => failures.push(UnitParseFailure {
+            None => failures.push(UnitParseFailure {
                 name: name.clone(),
                 units: declared.clone(),
             }),
@@ -1785,6 +1790,23 @@ pub fn unresolvable_const_units(expr: &Expr) -> Vec<String> {
 pub fn reject_const_units_pre_v12(
     view: &serde_json::Value,
 ) -> Result<(), crate::diagnostic::DiagnosticError> {
+    reject_const_units_pre_v12_found(view, || {
+        crate::json_visit::find_value_path(view, &mut |v| {
+            v.as_object().is_some_and(|o| {
+                crate::json_visit::small_get(o, "op").is_some()
+                    && crate::json_visit::small_get(o, "units").is_some()
+            })
+        })
+    })
+}
+
+/// [`reject_const_units_pre_v12`] with the search for the first expression node
+/// declaring `units` supplied by the caller, and run only when the declared
+/// version is below 1.2.0.
+pub(crate) fn reject_const_units_pre_v12_found(
+    view: &serde_json::Value,
+    offending: impl FnOnce() -> Option<String>,
+) -> Result<(), crate::diagnostic::DiagnosticError> {
     let Some(esm) = view.get("esm").and_then(|v| v.as_str()) else {
         return Ok(());
     };
@@ -1794,11 +1816,7 @@ pub fn reject_const_units_pre_v12(
     if (major, minor) >= (1, 2) {
         return Ok(());
     }
-    let offending = crate::json_visit::find_value_path(view, &mut |v| {
-        v.as_object()
-            .is_some_and(|o| o.contains_key("op") && o.contains_key("units"))
-    });
-    match offending {
+    match offending() {
         None => Ok(()),
         Some(path) => Err(crate::diagnostic::err(
             crate::diagnostic::codes::CONST_UNITS_VERSION_TOO_OLD,

@@ -11,7 +11,7 @@ holds what is Julia's:
 | `sweep.sh`, `sweep.sbatch` | the Slurm driver for the full ladder, serial and threaded |
 
 The adapter runs in its own environment, `pkg/EarthSciAST.jl/scripts/scaling_env`
-(EarthSciAST, JSON3, Polyester). Only its `Project.toml` is committed; the
+(EarthSciAST, JSON3). Only its `Project.toml` is committed; the
 adapter develops the local package into it and instantiates it on first use.
 
 ## Running it
@@ -61,6 +61,8 @@ Linux only.
   Before a family's ladder the adapter builds that family's smallest document
   once, untimed, so no recorded build includes compiling the build path
   itself (most of a minute in a fresh process).
+- `n_bytes` is `filesize(path)` of the document, read before the build (the
+  build-slope gate's document-size allowance is per byte of it).
 - `first_call_s` is the first `prob.f!` call after the build. It includes
   compiling the generated functions, unless a previous size emitted the same
   expressions, in which case Julia reuses the compiled code: that is a
@@ -69,10 +71,9 @@ Linux only.
   untimed call: at least 5, at least `--budget` seconds, at most 1000.
 - `allocs_per_call` is `@allocated prob.f!(du, u, p, t)` behind a function
   barrier, after two warm calls.
-- `threads` in the file header is `Threads.nthreads()`. The adapter always
-  loads Polyester, because loading it is how native's threaded tier is turned
-  on today (`EarthSciASTPolyesterExt`); with one thread native runs its serial
-  path. In a threaded run `hand_loop_s` is the threaded hand loop and
+- `threads` in the file header is `Threads.nthreads()`. Native threads by
+  default whenever Julia has more than one thread; with one thread it runs its
+  serial path. In a threaded run `hand_loop_s` is the threaded hand loop and
   `hand_loop_serial_s` the serial one.
 - `status` is `refused` for a `compiler_refused_rule` out of the build and
   `error` for anything else; `reason` carries the message.
@@ -126,7 +127,8 @@ out of the innermost loop, no `@simd`, no intrinsics, the document's order of
 operations. Each is a function of the outermost index, so:
 
 - the serial reference runs the rows in order;
-- the threaded reference is the same rows under `Threads.@threads :static`.
+- the threaded reference is the same rows under Polyester's `@batch`, one
+  contiguous block of rows per thread.
 
 Every loop is checked against native's dy at the measured state
 (`hand_loop_max_abs_diff`); on the PR fixtures every one agrees bit for bit.
@@ -152,6 +154,11 @@ Notes per family:
 - `scalar_chemistry` reads each box's 20 species through a slot table, since
   scalar states have no array layout.
 
-`Threads.@threads` costs a few microseconds per call to start its tasks,
-where native's Polyester dispatch costs less, so at the smallest sizes a
-threaded ratio favours native.
+The threaded reference uses `@batch` rather than `Threads.@threads` because
+of what each costs per call. `Threads.@threads` spawns and waits on one task
+per thread every call, which on a typical node is on the order of 100 µs:
+more than the whole loop below about 10^6 states, so a threaded ratio against
+it would compare native with task startup. `@batch` wakes Polyester's
+persistent worker pool, the same pool native's threaded sections use, for
+well under a microsecond, so the threaded reference is the loop's own time
+from the smallest size the gate measures.

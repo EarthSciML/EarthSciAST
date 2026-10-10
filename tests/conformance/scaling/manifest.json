@@ -6,17 +6,37 @@
     "stencil_1d": {
       "description": "1-D diffusion, zero-ghost boundaries.",
       "size_meaning": "cells (nominal; the side is rounded)",
-      "sizes": [100, 1000, 10000, 100000, 1000000],
-      "pr_sizes": [100, 1000]
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ]
     },
     "stencil_2d": {
       "description": "2-D diffusion, zero-ghost boundaries.",
       "size_meaning": "cells (nominal; side = round(N^(1/2)))",
-      "sizes": [100, 1000, 10000, 100000, 1000000],
-      "pr_sizes": [100, 1000],
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ],
       "gate_overrides": {
         "code_size_flat": {
-          "slack": {"rust": 2},
+          "slack": {
+            "rust": 2
+          },
           "why": "fusion folds a stencil's shifted reads into one group only where rows are long enough to amortize a run (fold_runs_acceptable: at most 8 runs, or at least 64 elements a run), so at the small sides, whose rows are short, the fused tape keeps up to 2 more instructions (gathers left unfolded). Bounded: fusion only merges instructions, so the fused tape never exceeds the lowered one, which is 12 instructions at every N (code_size_detail.lowered)"
         }
       }
@@ -24,11 +44,22 @@
     "stencil_3d": {
       "description": "3-D diffusion, zero-ghost boundaries.",
       "size_meaning": "cells (nominal; side = round(N^(1/3)))",
-      "sizes": [100, 1000, 10000, 100000, 1000000],
-      "pr_sizes": [100, 1000],
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ],
       "gate_overrides": {
         "code_size_flat": {
-          "slack": {"rust": 2},
+          "slack": {
+            "rust": 2
+          },
           "why": "fusion folds a stencil's shifted reads into one group only where rows are long enough to amortize a run (fold_runs_acceptable: at most 8 runs, or at least 64 elements a run), so at the small sides, whose rows are short, the fused tape keeps up to 2 more instructions (gathers left unfolded). Bounded: fusion only merges instructions, so the fused tape never exceeds the lowered one, which is 16 instructions at every N (code_size_detail.lowered)"
         }
       }
@@ -36,11 +67,22 @@
     "stencil_4d": {
       "description": "Rank-4 diffusion, zero-ghost boundaries.",
       "size_meaning": "cells (nominal; side = round(N^(1/4)))",
-      "sizes": [100, 1000, 10000, 100000, 1000000],
-      "pr_sizes": [100, 1000],
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ],
       "gate_overrides": {
         "code_size_flat": {
-          "slack": {"rust": 2},
+          "slack": {
+            "rust": 2
+          },
           "why": "fusion folds a stencil's shifted reads into one group only where rows are long enough to amortize a run (fold_runs_acceptable: at most 8 runs, or at least 64 elements a run), so at the small sides, whose rows are short, the fused tape keeps up to 2 more instructions (gathers left unfolded). Bounded: fusion only merges instructions, so the fused tape never exceeds the lowered one, which is 20 instructions at every N (code_size_detail.lowered)"
         }
       }
@@ -48,11 +90,22 @@
     "transport_3d": {
       "description": "The 3-D limited transport benchmark (tests/bench/transport_3axis_7cubed_fullrank.esm) resized: five boundary classes per axis through expression-template matches.",
       "size_meaning": "cells (nominal; side = max(5, round(N^(1/3))))",
-      "sizes": [100, 1000, 10000, 100000, 1000000],
-      "pr_sizes": [100, 1000],
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ],
       "gate_overrides": {
         "code_size_flat": {
-          "slack": {"rust": 39},
+          "slack": {
+            "rust": 39
+          },
           "why": "fusion folds a stencil's shifted reads into one group only where rows are long enough to amortize a run (fold_runs_acceptable: at most 8 runs, or at least 64 elements a run), so where the grid's rows are short the fused tape keeps up to 39 more instructions (gathers left unfolded; at side 5 the boundary regions are small enough to fold whole). Bounded: fusion only merges instructions, so the fused tape never exceeds the lowered one, which is 169 instructions at every N (code_size_detail.lowered)"
         }
       }
@@ -60,20 +113,45 @@
     "chemistry_grid": {
       "description": "The Pollu mechanism (20 species) lifted pointwise onto a lon x lat grid by operator_compose, with lon advection.",
       "size_meaning": "grid cells (20 states per cell)",
-      "sizes": [100, 1000, 10000, 100000, 1000000],
-      "pr_sizes": [100, 1000]
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ]
     },
     "prefix_scan": {
       "description": "An inclusive measure-weighted prefix scan (a filtered faq) feeding a column settling term; the layer thickness dz[i] = 100 (1 + 0.5 sin(i)) is non-uniform.",
       "size_meaning": "cells",
-      "sizes": [100, 1000, 10000, 100000, 1000000],
-      "pr_sizes": [100, 1000]
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ]
     },
     "source_receptor": {
       "description": "A dense square source-receptor contraction over a non-uniform matrix K[i,j] = 0.001 (1 + sin(i j)), defined in the document by that formula, so it is materialized once and read on every call. The work per call is N^2, so the ladder stops at 3162 (10^7 matrix entries).",
       "size_meaning": "receptors = sources (2 states per index)",
-      "sizes": [100, 1000, 3162],
-      "pr_sizes": [100, 1000],
+      "sizes": [
+        100,
+        1000,
+        3162
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ],
       "gate_overrides": {
         "speed": {
           "min_n_states": 2000,
@@ -84,22 +162,61 @@
     "regrid": {
       "description": "A conservative regrid (bin-skolem broad phase, inline polygon_intersection_area) applied on every call. The overlap arrays are declared dense over source x target, so the ladder stops at 3162.",
       "size_meaning": "source cells = target cells (2 states per index)",
-      "sizes": [100, 1000, 3162],
-      "pr_sizes": [100, 1000]
+      "sizes": [
+        100,
+        1000,
+        3162
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ],
+      "gate_overrides": {
+        "speed": {
+          "min_n_states": 2000,
+          "why": "the ladder stops at 3162 (6324 states) because the overlap arrays are declared dense over source x target, so the default 10^4 would never check regrid at all. From 2000 states (N = 1000) a hand-loop call takes microseconds (about 3-6 us, and 10-20 us at 6324 states), long enough for a median over hundreds of calls to resolve; at 200 states it is under a microsecond and stays ungated"
+        }
+      }
     },
     "unstructured_gather": {
       "description": "A four-neighbour indirect gather u[nbr[i,k]] over a permuted numbering of a periodic 2-D mesh; the neighbour table is an inline const array.",
       "size_meaning": "cells (nominal; side = max(3, round(N^(1/2))))",
-      "sizes": [100, 1000, 10000, 100000, 1000000],
-      "pr_sizes": [100, 1000]
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ]
     },
     "scalar_chemistry": {
       "description": "N/20 independent scalar Pollu boxes written out as scalar ODEs. The document grows with N, so the flat-code-size gate does not apply; the ladder stops at 10^5 states.",
       "size_meaning": "scalar states (N/20 boxes)",
-      "sizes": [100, 1000, 10000, 100000],
-      "pr_sizes": [100, 1000],
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ],
       "gate_exclusions": {
         "code_size_flat": "one equation per state is written in the document, so code proportional to N is the document's own size, not a compiler defect"
+      },
+      "gate_overrides": {
+        "build_slope": {
+          "per_byte_ns": {
+            "julia": 6000,
+            "rust": 200
+          },
+          "why": "the document grows by equations, not inline data, and each binding's loader costs far more per byte of equations than per byte of data: Julia load_path about 3000 ns/byte (100..10^4 states; its per-equation schema validation and coercion, a known cost separate from the compiler), Rust serde_json parse plus typed load about 100 ns/byte (100..10^5), measured on cf30558cb, cores 18-19, two rounds. Twice that, by the same reasoning as the gate's own per_byte_ns. It excuses loading, not compiling: the rest of the build must still fit max_ns_per_state"
+        }
       }
     }
   },
@@ -125,8 +242,13 @@
     },
     "build_slope": {
       "kind": "timing",
-      "description": "(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin)) over the smallest and largest N that built, with Nmax <= 10^6 cells, under max_ns_per_state. Needs two built sizes.",
-      "max_ns_per_state": 20
+      "description": "(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin)) over the smallest and largest N that built, with Nmax <= 10^6 cells, under max_ns_per_state + per_byte_ns[binding] * (n_bytes(Nmax) - n_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin)): the build may also read the document bytes each added state brings, at twice the binding's measured load cost per byte of inline data. A document whose size does not grow with N, or a result without n_bytes, gets no allowance. Needs two built sizes.",
+      "max_ns_per_state": 20,
+      "per_byte_ns": {
+        "julia": 170,
+        "rust": 85
+      },
+      "per_byte_ns_why": "twice each binding's document load (no build) per byte of inline data, measured on regrid and unstructured_gather (the larger rate, regrid's) between the smallest and largest document of each, two rounds, cf30558cb, cores 18-19: Julia load_path 82-84 ns/byte (unstructured_gather 46-47), Rust serde_json parse plus typed load, the two steps esm_problem runs, 39-43 ns/byte (unstructured_gather 24-25). Twice: the load, plus one more pass of the same cost for the build to read the inline values out of the loaded document into its own arrays, the least a build that uses the data has to do"
     },
     "speed": {
       "kind": "timing",
@@ -142,169 +264,29 @@
         "gate": "speed",
         "n": 1000,
         "threads": "serial",
-        "measured": 1.5733,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "measured": 1.3985,
+        "reason": "at 1000 cells native's fixed per-call cost in the chunked executor (group setup, per-element register traffic) is not amortized; from 10^4 cells it is under 1x",
         "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "chemistry_grid",
-        "gate": "speed",
-        "n": 10000,
-        "threads": "serial",
-        "measured": 1.6624,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "chemistry_grid",
-        "gate": "speed",
-        "n": 100000,
-        "threads": "serial",
-        "measured": 2.7514,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "chemistry_grid",
-        "gate": "speed",
-        "n": 1000000,
-        "threads": "serial",
-        "measured": 2.1583,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "prefix_scan",
-        "gate": "speed",
-        "n": 10000,
-        "threads": "serial",
-        "measured": 2.0591,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "prefix_scan",
-        "gate": "speed",
-        "n": 100000,
-        "threads": "serial",
-        "measured": 3.2031,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
       },
       {
         "family": "scalar_chemistry",
         "gate": "speed",
         "n": 10000,
         "threads": "serial",
-        "measured": 222.164,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "measured": 1.252,
+        "reason": "the equations run as tape lane programs in strips, which still trail the hand-written per-box loop by about 1.2-1.25x; at 10^5 it is under 1.25x",
         "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "scalar_chemistry",
-        "gate": "speed",
-        "n": 100000,
-        "threads": "serial",
-        "measured": 259.1658,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "stencil_1d",
-        "gate": "speed",
-        "n": 1000000,
-        "threads": "serial",
-        "measured": 2.4106,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "stencil_2d",
-        "gate": "speed",
-        "n": 1000000,
-        "threads": "serial",
-        "measured": 2.9023,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "stencil_3d",
-        "gate": "speed",
-        "n": 100000,
-        "threads": "serial",
-        "measured": 1.5907,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "stencil_3d",
-        "gate": "speed",
-        "n": 1000000,
-        "threads": "serial",
-        "measured": 2.7532,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "stencil_4d",
-        "gate": "speed",
-        "n": 1000000,
-        "threads": "serial",
-        "measured": 3.4209,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "transport_3d",
-        "gate": "speed",
-        "n": 10000,
-        "threads": "serial",
-        "measured": 1.5683,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "transport_3d",
-        "gate": "speed",
-        "n": 100000,
-        "threads": "serial",
-        "measured": 2.1133,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "transport_3d",
-        "gate": "speed",
-        "n": 1000000,
-        "threads": "serial",
-        "measured": 1.5218,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
       },
       {
         "family": "chemistry_grid",
         "n": 1000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": 3.6643,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.60 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "measured": 4.8215,
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10",
+        "reason": "at this size the threaded call does not amortize its fixed cost (fork-join dispatch, the window split, gather fills per window) as well as the threaded hand loop does; from 10^5 states it is at or under 1.25x",
         "phase": 5
       },
       {
@@ -312,49 +294,9 @@
         "n": 10000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": 4.9517,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.60 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "chemistry_grid",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 11.2228,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.60 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "chemistry_grid",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 4.3534,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.60 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "prefix_scan",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 1473.6617,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.08 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "prefix_scan",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 21524.7707,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.08 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "measured": 1.3545,
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10",
+        "reason": "at this size the threaded call does not amortize its fixed cost (fork-join dispatch, the window split, gather fills per window) as well as the threaded hand loop does; from 10^5 states it is at or under 1.25x",
         "phase": 5
       },
       {
@@ -362,9 +304,9 @@
         "n": 10000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": 140.6465,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.92 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "measured": 1.48,
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10",
+        "reason": "the equations run as tape lane programs in strips, which still trail the hand-written per-box loop by about 1.2-1.25x, and the lane-range split adds dispatch that a 10^4-state call does not cover",
         "phase": 5
       },
       {
@@ -372,19 +314,9 @@
         "n": 100000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": 505.8614,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.92 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "source_receptor",
-        "n": 1000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": 1.2947,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.32 at the start), serial run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
+        "measured": 1.291,
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10",
+        "reason": "the equations run as tape lane programs in strips, which still trail the hand-written per-box loop by about 1.2-1.25x, and the lane-range split adds dispatch that a 10^4-state call does not cover",
         "phase": 5
       },
       {
@@ -392,831 +324,158 @@
         "n": 1000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": 1.4111,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.21 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
+        "measured": 1.415,
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10",
+        "reason": "at 1000 receptors the reduction's chunked-executor overhead and the fork-join dispatch are not amortized; 3162 passes",
         "phase": 5
       },
       {
-        "family": "source_receptor",
+        "family": "transport_3d",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.2865,
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10",
+        "reason": "at this size the threaded call does not amortize its fixed cost (fork-join dispatch, the window split, gather fills per window) as well as the threaded hand loop does; from 10^5 states it is at or under 1.25x",
+        "phase": 5
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.319,
+        "reason": "the per-window gather fill and dispatch are not amortized as well as in the threaded hand loop (10^6 passes)",
+        "phase": 5,
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
+      },
+      {
+        "family": "unstructured_gather",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.1205,
+        "reason": "the per-window gather fill and dispatch are not amortized as well as in the threaded hand loop (10^6 passes)",
+        "phase": 5,
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
+      },
+      {
+        "family": "regrid",
+        "n": 1000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.5725,
+        "reason": "the apply (gather, weight product, segmented sum, fused group over the targets) is split by target cell in one dispatch, but at 1000-3162 targets each worker's share does not amortize the dispatch, and the serial gap carries over",
+        "phase": 5,
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
+      },
+      {
+        "family": "regrid",
         "n": 3162,
         "gate": "speed",
         "threads": "threaded",
-        "measured": 2.3523,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.21 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "stencil_1d",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 2.8084,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.61 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "stencil_2d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": 1.3762,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x (also above 1.25x at 0082083c5 on the same node)",
+        "measured": 1.534,
+        "reason": "the apply (gather, weight product, segmented sum, fused group over the targets) is split by target cell in one dispatch, but at 1000-3162 targets each worker's share does not amortize the dispatch, and the serial gap carries over",
         "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "stencil_2d",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": 1.479,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x (also above 1.25x at 0082083c5 on the same node)",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "stencil_2d",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 2.6335,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.18 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "stencil_2d",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 3.9176,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.18 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "stencil_3d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": 1.3667,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.54 at the start), serial run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5
-      },
-      {
-        "family": "stencil_3d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 1.5457,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.58 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "stencil_3d",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 2.5272,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.58 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "stencil_3d",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 6.3524,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.58 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "stencil_4d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": 1.5099,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.77 at the start), serial run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x",
-        "phase": 5
-      },
-      {
-        "family": "stencil_4d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 1.8778,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.77 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "stencil_4d",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 2.0791,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.77 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "stencil_4d",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 10.1365,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.77 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "transport_3d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 2.5864,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.89 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "transport_3d",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 2.8522,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.89 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "transport_3d",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 3.1206,
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.89 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5
-      },
-      {
-        "family": "prefix_scan",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": 4.7472,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x (the size did not finish at 0082083c5: the unrolled scan timed out)",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "stencil_4d",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": 1.5937,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x (also above 1.25x at 0082083c5 on the same node)",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 13-22 during the run, nice 19), 2026-09-25, at p2-rust-loops"
-      },
-      {
-        "family": "scalar_chemistry",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": 73122.0,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..100000); the document itself grows with N (about 320 bytes of JSON per state) and every load pass reads all of it, so the build cannot be independent of N; the passes that could be merged or skipped have been",
-        "phase": 2,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 11.7-13.5 during the run, nice 19), serial run, 2026-09-26, at p2-rust-strided"
-      },
-      {
-        "family": "scalar_chemistry",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": 72507.2,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..100000); the document itself grows with N (about 320 bytes of JSON per state) and every load pass reads all of it, so the build cannot be independent of N; the passes that could be merged or skipped have been",
-        "phase": 2,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 11.8-13.0 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p2-rust-strided"
-      },
-      {
-        "family": "stencil_1d",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 3.639,
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 11.8-13.0 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p2-rust-strided"
-      },
-      {
-        "family": "stencil_2d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 2.538,
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 11.8-13.0 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p2-rust-strided"
-      },
-      {
-        "family": "prefix_scan",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 4.625,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x (a prefix scan's threaded reference is the serial loop; the size did not finish at 0082083c5)",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 11.8-13.0 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p2-rust-strided"
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
       },
       {
         "family": "regrid",
-        "gate": "build_slope",
+        "n": 1000,
+        "gate": "speed",
         "threads": "serial",
-        "measured": 3769.0,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..3162); the document carries both cell tables as inline const rings (about 55 bytes of JSON per state), and loading and lowering it is the whole build (0.03 s of 0.032 s at N=3162); the dense source x target overlap and weight arrays, and the geometry over the candidate pairs, are computed in the first call's build-once section (0.10 s at N=3162), which this gate does not time",
-        "phase": 2,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
+        "measured": 1.4155,
+        "reason": "native's apply over the admitted pairs is one chain run as a single gather-product-sum pass followed by the fused group, and still trails the hand loop's one pass per target; the gap is not yet profiled. It read 1.07-1.10 in earlier sweeps only because the hand loop's placement in those unaligned builds was about 10% slower",
+        "phase": 5,
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
       },
       {
         "family": "regrid",
+        "n": 3162,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.377,
+        "reason": "native's apply over the admitted pairs is one chain run as a single gather-product-sum pass followed by the fused group, and still trails the hand loop's one pass per target; the gap is not yet profiled. It read 1.07-1.10 in earlier sweeps only because the hand loop's placement in those unaligned builds was about 10% slower",
+        "phase": 5,
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
+      },
+      {
+        "family": "source_receptor",
+        "gate": "build_slope",
+        "threads": "serial",
+        "measured": "-282.6 ns per state (ns/state over N=100..3162)",
+        "reason": "timing noise, not growth: the build takes about 6 ms at every size from 100 to 3162 receptors with about 0.5 ms of jitter, so the fitted slope swings between about -800 and +100 ns/state from run to run; the gate has no noise floor for builds this small",
+        "phase": 5,
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
+      },
+      {
+        "family": "source_receptor",
         "gate": "build_slope",
         "threads": "threaded",
-        "measured": 3824.0,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..3162); the document carries both cell tables as inline const rings (about 55 bytes of JSON per state), and loading and lowering it is the whole build (0.03 s of 0.032 s at N=3162); the dense source x target overlap and weight arrays, and the geometry over the candidate pairs, are computed in the first call's build-once section (0.10 s at N=3162), which this gate does not time",
-        "phase": 2,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
-      },
-      {
-        "family": "unstructured_gather",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": 863.1,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000); the document carries the neighbour table as an inline const array (about 30 bytes of JSON per state), and loading it is most of the build (0.66 s of 0.87 s at 10^6 cells); the tape is 5 instructions at every N",
-        "phase": 2,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
-      },
-      {
-        "family": "unstructured_gather",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": 1010.0,
-        "reason": "build cost per state above 20 ns (ns/state over N=100..1000000); the document carries the neighbour table as an inline const array (about 30 bytes of JSON per state), and loading it is most of the build (0.66 s of 0.87 s at 10^6 cells); the tape is 5 instructions at every N",
-        "phase": 2,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
-      },
-      {
-        "family": "unstructured_gather",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": 2.812,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x; per call the fused gather rounds and range-checks each of the 4N floating-point subscripts where the hand loop reads integer indices, and the call also pays the whole-state passes (the row-major state copy, the zeroed dy)",
+        "measured": "-310.2 ns per state (ns/state over N=100..3162)",
+        "reason": "timing noise, not growth: the build takes about 6 ms at every size from 100 to 3162 receptors with about 0.5 ms of jitter, so the fitted slope swings between about -800 and +100 ns/state from run to run; the gate has no noise floor for builds this small",
         "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
-      },
-      {
-        "family": "unstructured_gather",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": 3.348,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x; per call the fused gather rounds and range-checks each of the 4N floating-point subscripts where the hand loop reads integer indices, and the call also pays the whole-state passes (the row-major state copy, the zeroed dy)",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
-      },
-      {
-        "family": "unstructured_gather",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": 2.052,
-        "reason": "steady right-hand side slower than the hand-written loop by more than 1.25x; per call the fused gather rounds and range-checks each of the 4N floating-point subscripts where the hand loop reads integer indices, and the call also pays the whole-state passes (the row-major state copy, the zeroed dy)",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 26.5-26.8 during the run, nice 19), serial run, 2026-09-26, at p3-rust-geometry"
-      },
-      {
-        "family": "unstructured_gather",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 8.008,
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
-      },
-      {
-        "family": "unstructured_gather",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 14.68,
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
-      },
-      {
-        "family": "unstructured_gather",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 11.75,
-        "reason": "native Rust does not thread its right-hand side, so a threaded run times native's serial call against the threaded hand loop",
-        "phase": 5,
-        "provisional": "measured on a shared, loaded node: ccc0234 (20 cores, load average 29.0-31.8 during the run, nice 19), threaded (4 threads) run, 2026-09-26, at p3-rust-geometry"
+        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
       }
     ],
     "julia": [
       {
-        "family": "stencil_4d",
+        "family": "regrid",
         "gate": "build_slope",
         "threads": "serial",
-        "measured": "284.5 ns per state (ns/state over N=100..100000)",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the generated code no longer depends on N (the box geometry is run-time data), so a new N compiles nothing; what still grows is the affine tier's work over the grid: of a 64 ms warm build at 10^5 cells, the cut-point scan is 24 ms, the box processing 17 ms and its lane derivation 12 ms (the largest size is over the gate's 10^6-cell cap, so the slope is read to 10^5)",
-        "phase": 2
-      },
-      {
-        "family": "transport_3d",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": "40.66 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the generated code no longer depends on N (the box geometry is run-time data), so a new N compiles nothing; what still grows is the build over the grid: of a 153 ms warm build at 10^6 cells, the kernel-class merge takes 58 ms (most of it the out-of-place plan's descriptor vectors) and the affine tier 41 ms (cut-point scan 21 ms, boxes 19 ms)",
-        "phase": 2
-      },
-      {
-        "family": "prefix_scan",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": "73.26 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the generated code no longer depends on N (the box geometry is run-time data), so a new N compiles nothing; the warm build at 10^6 cells (85 ms, 200 MiB allocated) is O(N) array work: the affine tier 17 ms, the state layout 13 ms, and zero-filling and copying state-sized buffers (the observed-extension buffer, the scanned equation's collected index ranges) for most of the rest",
-        "phase": 2
-      },
-      {
-        "family": "source_receptor",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": "9.18e+05 ns per state (ns/state over N=100..3162)",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the N x N array K is a materialized observed, so the build keeps per-cell bookkeeping for N^2 cells (the string-keyed layout of its fill, its affine box), against 2N states",
+        "measured": "9266 ns per state (ns/state over N=100..3162)",
+        "provisional": "sweep at 8e737ec4e on the local node: cores 12-15 pinned, nothing else of ours running, median of 2 full runs (2026-10-09) and, for regrid, 5 more regrid-only runs (2026-10-10)",
+        "reason": "build cost per state at or just over the inline-data allowance; what grows with N is loading the document's inline cell tables, the page faults of first writes to the overlap arrays, which are declared dense over source x target, and the build's linear work over the admitted pairs (value invention, the pair tables)",
         "phase": 2
       },
       {
         "family": "regrid",
         "gate": "build_slope",
-        "threads": "serial",
-        "measured": "5.375e+04 ns per state (ns/state over N=100..3162)",
-        "provisional": "measured on the agents' shared node under load (the adapter's header: 40 CPUs, load average 9.04 12.90 15.48), serial run, 2026-09-25; the scheduled sweep re-measures it",
-        "reason": "the overlap arrays are declared dense over source x target, so zero-filling them is O(N^2); the join-gated contractions compile once now (the whole-array contraction nest, with the admitted pairs as data)",
-        "phase": 2
-      },
-      {
-        "family": "unstructured_gather",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": "7230 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run (8 to 9 for stencil_1d and prefix_scan), serial run, 2026-09-25; the scheduled sweep re-measures it",
-        "reason": "loading the document dominates: at 10^6 cells two thirds of the build is reading and normalizing the 30 MB of inline neighbour-table JSON, plus the garbage collection that tree causes; the affine build itself is about 0.2 s",
-        "phase": 2
-      },
-      {
-        "family": "scalar_chemistry",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": "1.558e+06 ns per state (ns/state over N=100..100000)",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average between 4 and 27 on its 20 cores during the run, serial run, 2026-09-25; the scheduled sweep re-measures it",
-        "reason": "linear since the loader fix (1.5 us per state from 10^3 to 10^5); at 10^4 states about 63% of the build is JSON schema validation (about 0.8 ms per equation), 20% parsing, coercion and enum lowering, 6% the scalar common-subexpression pass, and the rest of the tree-walk build about 5%",
-        "phase": 2
-      },
-      {
-        "family": "stencil_2d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 1.32",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the affine kernel runs slower than the plain loop at this size",
-        "phase": 5
-      },
-      {
-        "family": "stencil_3d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 1.46",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the affine kernel runs slower than the plain loop at this size",
-        "phase": 5
-      },
-      {
-        "family": "transport_3d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 3.56",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
-        "phase": 5
-      },
-      {
-        "family": "transport_3d",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 2.95",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
-        "phase": 5
-      },
-      {
-        "family": "transport_3d",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 2.68",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
-        "phase": 5
-      },
-      {
-        "family": "chemistry_grid",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 1.66",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "one kernel per species, with no sharing of per-cell rates across the species equations",
-        "phase": 5
-      },
-      {
-        "family": "prefix_scan",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 9.76",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the scan fold walks a per-cell slot table on every call",
-        "phase": 5
-      },
-      {
-        "family": "prefix_scan",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 12.7",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the scan fold walks a per-cell slot table on every call",
-        "phase": 5
-      },
-      {
-        "family": "prefix_scan",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 13.4",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the scan fold walks a per-cell slot table on every call",
-        "phase": 5
-      },
-      {
-        "family": "source_receptor",
-        "n": 1000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 21.8",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the materialized N x N observed K is refilled on every call (N^2 sin evaluations), where the hand loop builds it once; the contraction itself is a run-time fold now",
-        "phase": 5
-      },
-      {
-        "family": "source_receptor",
-        "n": 3162,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 28.2",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the materialized N x N observed K is refilled on every call (N^2 sin evaluations), where the hand loop builds it once; the contraction itself is a run-time fold now",
-        "phase": 5
-      },
-      {
-        "family": "unstructured_gather",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 1.36",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "the gather reads the neighbour table through a per-cell table lookup",
-        "phase": 5
-      },
-      {
-        "family": "scalar_chemistry",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 123",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average about 20 on its 20 cores, serial run, 2026-09-24; the scheduled sweep re-measures it",
-        "reason": "scalar equations are walked as trees, once per slot, on every call",
-        "phase": 5
-      },
-      {
-        "family": "scalar_chemistry",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 157",
-        "provisional": "measured on a shared, loaded node: the agents' own node, load average 29 at the start of the run and 9 at its end on its 20 cores, serial run, 2026-09-25; the scheduled sweep re-measures it",
-        "reason": "scalar equations are walked as trees, once per slot, on every call",
-        "phase": 5
-      },
-      {
-        "family": "chemistry_grid",
-        "gate": "no_steady_alloc",
         "threads": "threaded",
-        "measured": "bytes per steady call with 4 threads: 100:544, 1000:544, 10000:544, 100000:544, 1000000:544",
-        "max_bytes_per_call": 1088,
-        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
-        "phase": 5
-      },
-      {
-        "family": "prefix_scan",
-        "gate": "no_steady_alloc",
-        "threads": "threaded",
-        "measured": "bytes per steady call with 4 threads: 10000:384, 100000:384, 1000000:384",
-        "max_bytes_per_call": 768,
-        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path; each of prefix_scan's three threaded sections now allocates 32 bytes more per dispatch, because the chunk closure carries the section's tab tuple, which holds one more container (the run-time box geometry)",
-        "phase": 5
+        "measured": "1.039e+04 ns per state (ns/state over N=100..3162)",
+        "provisional": "sweep at 8e737ec4e on the local node: cores 12-15 pinned, nothing else of ours running, median of 2 full runs (2026-10-09) and, for regrid, 5 more regrid-only runs (2026-10-10)",
+        "reason": "as for the serial entry; the threaded build also sets up per-thread state, and the fitted slope swings by about 1500 ns/state between runs",
+        "phase": 2
       },
       {
         "family": "regrid",
-        "gate": "no_steady_alloc",
-        "threads": "threaded",
-        "measured": "bytes per steady call with 4 threads: 1000:160, 3162:352",
-        "max_bytes_per_call": 704,
-        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
-        "phase": 5
-      },
-      {
-        "family": "source_receptor",
-        "gate": "no_steady_alloc",
-        "threads": "threaded",
-        "measured": "bytes per steady call with 4 threads: 100:128, 1000:256, 3162:256",
-        "max_bytes_per_call": 512,
-        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
-        "phase": 5
-      },
-      {
-        "family": "stencil_1d",
-        "gate": "no_steady_alloc",
-        "threads": "threaded",
-        "measured": "bytes per steady call with 4 threads: 10000:128, 100000:128, 1000000:128",
-        "max_bytes_per_call": 256,
-        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
-        "phase": 5
-      },
-      {
-        "family": "stencil_2d",
-        "gate": "no_steady_alloc",
-        "threads": "threaded",
-        "measured": "bytes per steady call with 4 threads: 1000:128, 10000:128, 100000:128, 1000000:128",
-        "max_bytes_per_call": 256,
-        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
-        "phase": 5
-      },
-      {
-        "family": "stencil_3d",
-        "gate": "no_steady_alloc",
-        "threads": "threaded",
-        "measured": "bytes per steady call with 4 threads: 10000:128, 100000:128, 1000000:128",
-        "max_bytes_per_call": 256,
-        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
-        "phase": 5
-      },
-      {
-        "family": "stencil_4d",
-        "gate": "no_steady_alloc",
-        "threads": "threaded",
-        "measured": "bytes per steady call with 4 threads: 1000:128, 10000:128, 100000:128",
-        "max_bytes_per_call": 256,
-        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
-        "phase": 5
-      },
-      {
-        "family": "transport_3d",
-        "gate": "no_steady_alloc",
-        "threads": "threaded",
-        "measured": "bytes per steady call with 4 threads: 10000:128, 100000:128, 1000000:128",
-        "max_bytes_per_call": 256,
-        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
-        "phase": 5
-      },
-      {
-        "family": "unstructured_gather",
-        "gate": "no_steady_alloc",
-        "threads": "threaded",
-        "measured": "bytes per steady call with 4 threads: 1000:128, 10000:128, 100000:128",
-        "max_bytes_per_call": 256,
-        "reason": "a threaded call allocates in its thread dispatch: each threaded generated section passes its chunk closure through the untyped _BATCH_RUNNER Ref (a dynamic call) into Polyester's @batch, and both allocate per call (a probe measured 64 bytes per dispatch through the Ref and 32 through a typed @batch); sections below the per-thread cell floor run serial and allocate nothing. The ledger's serial measurements never exercised this path",
-        "phase": 5
-      },
-      {
-        "family": "chemistry_grid",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 1.47",
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 2.55 at the start), serial run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "one kernel per species, with no sharing of per-cell rates across the species equations",
-        "phase": 5
-      },
-      {
-        "family": "chemistry_grid",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "7326 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.00 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "per-state string layout plus the per-template var_map copies in the affine cut scan",
-        "phase": 2
-      },
-      {
-        "family": "prefix_scan",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "72.29 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the generated code no longer depends on N (the box geometry is run-time data), so a new N compiles nothing; the warm build is O(N) array work (the serial entry's breakdown)",
-        "phase": 2
-      },
-      {
-        "family": "prefix_scan",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": "native / hand loop = 3.26",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the scan fold walks a per-cell slot table on every call",
-        "phase": 5
-      },
-      {
-        "family": "prefix_scan",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": "native / hand loop = 4.54",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the scan fold walks a per-cell slot table on every call",
-        "phase": 5
-      },
-      {
-        "family": "prefix_scan",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": "native / hand loop = 4.49",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the scan fold walks a per-cell slot table on every call",
-        "phase": 5
-      },
-      {
-        "family": "regrid",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "7.004e+05 ns per state (ns/state over N=100..3162)",
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.24 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "the join-gated contractions land on the per-cell build, and the geometry setup and value-invention join sweep the source x target product",
-        "phase": 2
-      },
-      {
-        "family": "scalar_chemistry",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "2.486e+07 ns per state (ns/state over N=100..10000)",
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.06 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "one scalar equation per state, and the scalar build grows faster than linearly (210 s at 10^4 states)",
-        "phase": 2
-      },
-      {
-        "family": "scalar_chemistry",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": "native / hand loop = 12.3",
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.06 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "scalar equations are walked as trees, once per slot, on every call",
-        "phase": 5
-      },
-      {
-        "family": "source_receptor",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "8.34e+05 ns per state (ns/state over N=100..3162)",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the N x N array K is a materialized observed, so the build keeps per-cell bookkeeping for N^2 cells (the string-keyed layout of its fill, its affine box), against 2N states",
-        "phase": 2
-      },
-      {
-        "family": "source_receptor",
         "n": 1000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": "native / hand loop = 22.2",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the materialized N x N observed K is refilled on every call (N^2 sin evaluations), where the hand loop builds it once; the contraction itself is a run-time fold now",
-        "phase": 5
+        "measured": "native / hand loop = 1.4",
+        "reason": "native's threaded regrid splits the admitted pairs by target, but at 1000 targets each share does not amortize the dispatch as well as the threaded hand loop's @batch split does; 3162 passes",
+        "phase": 5,
+        "provisional": "sweep at 8e737ec4e on the local node: cores 12-15 pinned, nothing else of ours running, median of 2 full runs (2026-10-09) and, for regrid, 5 more regrid-only runs (2026-10-10)"
       },
       {
-        "family": "source_receptor",
+        "family": "regrid",
+        "n": 1000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": "native / hand loop = 1.14",
+        "reason": "borderline, from the reference rather than native: native's call takes 3.8-4.1 us at every run, while the hand loop's takes 2.9-3.7 us depending on the process, so single runs read 1.02-1.34",
+        "phase": 5,
+        "provisional": "sweep at 8e737ec4e on the local node: cores 12-15 pinned, nothing else of ours running, median of 2 full runs (2026-10-09) and, for regrid, 5 more regrid-only runs (2026-10-10)"
+      },
+      {
+        "family": "regrid",
+        "n": 3162,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": "native / hand loop = 1.05",
+        "reason": "borderline, from the reference rather than native: native's call takes 3.8-4.1 us at every run, while the hand loop's takes 2.9-3.7 us depending on the process, so single runs read 1.02-1.34",
+        "phase": 5,
+        "provisional": "sweep at 8e737ec4e on the local node: cores 12-15 pinned, nothing else of ours running, median of 2 full runs (2026-10-09) and, for regrid, 5 more regrid-only runs (2026-10-10)"
+      },
+      {
+        "family": "regrid",
         "n": 3162,
         "gate": "speed",
         "threads": "threaded",
-        "measured": "native / hand loop = 30.4",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the materialized N x N observed K is refilled on every call (N^2 sin evaluations), where the hand loop builds it once; the contraction itself is a run-time fold now",
-        "phase": 5
-      },
-      {
-        "family": "stencil_4d",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "277.7 ns per state (ns/state over N=100..100000)",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the generated code no longer depends on N (the box geometry is run-time data), so a new N compiles nothing; what still grows is the affine tier's work over the grid (the serial entry's breakdown); the slope is read to 10^5, the largest size being over the gate's 10^6-cell cap",
-        "phase": 2
-      },
-      {
-        "family": "transport_3d",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "47.11 ns per state (ns/state over N=100..1000000)",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the generated code no longer depends on N (the box geometry is run-time data), so a new N compiles nothing; what still grows is the kernel-class merge and the affine tier's work over the grid (the serial entry's breakdown)",
-        "phase": 2
-      },
-      {
-        "family": "transport_3d",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": "native / hand loop = 2.72",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables",
-        "phase": 5
-      },
-      {
-        "family": "unstructured_gather",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "6.927e+05 ns per state (ns/state over N=100..100000)",
-        "provisional": "measured on a GitHub-hosted runner (ubuntu-latest, 4 cores, load average 1.07 at the start), threaded (4 threads) run, 2026-09-25, first scheduled sweep (run 36175182083, commit 0082083c5); a hosted runner is not a clean machine",
-        "reason": "the build grows as N^2 (107 s at 10^5 cells)",
-        "phase": 2
-      },
-      {
-        "family": "stencil_3d",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 1.27",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 14.18 at the start and 9.21 at the end, nice 19, serial run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the affine kernel runs slower than the plain loop at this size; it sits at the gate either way (1.28 with the box geometry as literals, in a run straight after this one)",
-        "phase": 5
-      },
-      {
-        "family": "transport_3d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": "native / hand loop = 2.6",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables (the serial entries' cause; 2.34 with the box geometry as literals, in a run straight after this one)",
-        "phase": 5
-      },
-      {
-        "family": "transport_3d",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": "native / hand loop = 2.73",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the boundary classes are merged into one kernel that reads its operands through per-cell slot tables (the serial entries' cause; 2.49 with the box geometry as literals, in a run straight after this one)",
-        "phase": 5
-      },
-      {
-        "family": "stencil_3d",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": "native / hand loop = 1.26",
-        "provisional": "measured on the agents' shared node (20 cores) under load, load average 2.20 at the start and 13.30 at the end, nice 19, threaded (4 threads) run, 2026-09-26; the scheduled sweep re-measures it",
-        "reason": "the box geometry is run-time data, so the vectorized rows read at run-time slot offsets and their trip counts are not constants; at this size the steady call is about 15% slower than with literal geometry (1.11 in a run straight after this one)",
-        "phase": 5
+        "measured": "native / hand loop = 1.2",
+        "reason": "borderline: single runs read 1.14-1.27 as the hand loop's time moves between processes",
+        "phase": 5,
+        "provisional": "sweep at 8e737ec4e on the local node: cores 12-15 pinned, nothing else of ours running, median of 2 full runs (2026-10-09) and, for regrid, 5 more regrid-only runs (2026-10-10)"
       }
     ]
   }

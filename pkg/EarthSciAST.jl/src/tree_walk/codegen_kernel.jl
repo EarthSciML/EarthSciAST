@@ -124,8 +124,8 @@ _dual_codegen_node_budget() =
 # few ms); what this routing adds is the residual kernels' NATIVE compile at the
 # first Float64 call — roughly linear in emitted nodes, the per-function
 # `ESS_CODEGEN_FN_NODE_CAP` chunking being what keeps it linear, and the same
-# latency a Dual caller already pays at its first call. With Polyester threading
-# active, the overflow RGF runs CHUNKED on its own threaded cell axis (see
+# latency a Dual caller already pays at its first call. With more than one
+# thread, the overflow RGF runs CHUNKED on its own threaded cell axis (see
 # "Threaded cell axis for the codegen tier" below).
 #
 # Off, every residual Float64 kernel routes to the per-cell interpreter
@@ -249,14 +249,42 @@ mutable struct _CGCtx
     geo::Vector{Int}
     geosink::Vector{Any}
     geomemo::IdDict{Any,Symbol}
+    # Set when a fetch reads the state through a slot table (`_cg_tabh!`); the
+    # loop nests read and clear it to keep such a loop scalar (`_cg_tblread!`).
+    tblread::Bool
+    # Slot-table reads and their two emitted versions (`_cg_tbl_versions`):
+    # `tblaffine` emits every `_AK_STATE_TBL_BOX` read as its run form, and
+    # `tblcbs` collects the run-mode locals the version guard tests.
+    tblaffine::Bool
+    tblcbs::Vector{Symbol}
+    # A fused prefix scan's nest (scan_fused.jl): `nothing`, or the names and
+    # rule its loop body folds each cell's term with — `(acc, a, b, op,
+    # inclusive)`, the nest running ordinals `[a, b)` (one lane).
+    scanmode::Any
+    # Two-buffer addressing (`_ObsSplitVec`, build.jl): the state length of the
+    # slot space the section runs on, or 0 for one plain vector. With `nst > 0`
+    # each state read is emitted against the buffer its slots live in
+    # (`_cg_side`); `olnext` holds the output-slot extent of every kernel whose
+    # loop nest binds `oln` (an affine read's slots are `oln + delta`),
+    # `subks` the sub-kernels emitted with a parent's `oln`, and `sidememo`
+    # the slot extent of each slot table already scanned.
+    nst::Int
+    olnext::IdDict{Any,Tuple{Int,Int}}
+    subks::IdDict{Any,Bool}
+    sidememo::IdDict{Any,Tuple{Int,Int}}
+    # A fused scan's consumer body (scan_fused.jl): `nothing`, or `(K, ix, v)`
+    # — kernel `K`'s descriptor `ix` reads as the local `v`.
+    subst::Any
 end
-_CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing) =
+_CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing; nst::Int=0) =
     _CGCtx(DataType[], Vector{Any}[], IdDict{Any,Tuple{Int,Int}}(),
            IdDict{Any,Vector{Symbol}}(),
            Any[], Any[], 0, budget, 0, shared_cache, 0, Any[], Dict{String,Any}(),
            IdDict{Any,Any}(), Any[],
            Dict{String,Tuple{Symbol,Vector{Symbol}}}(), String[], false,
-           Int[], Any[], IdDict{Any,Symbol}())
+           Int[], Any[], IdDict{Any,Symbol}(), false, false, Symbol[], nothing,
+           nst, IdDict{Any,Tuple{Int,Int}}(), IdDict{Any,Bool}(),
+           IdDict{Any,Tuple{Int,Int}}(), nothing)
 
 _cg_helper_dedup_disabled() = !_compiler_plan_now().cg_helper_dedup
 
@@ -348,6 +376,36 @@ function _cg_geo!(ctx::_CGCtx, v::Int, key=nothing, unit::Bool=false)
     push!(ctx.geosink, :(local $s = $(_cg_tab!(ctx, ctx.geo))[$(length(ctx.geo))]))
     key === nothing || (ctx.geomemo[key] = s)
     return s
+end
+
+# A table a loop body indexes, as a local read once ahead of the loops (in the
+# geometry sink) rather than `_cggrpG[pos]` at every use: a store to `du` may
+# alias the container's memory as far as the compiler knows, so the in-loop
+# form reloads the table's address on every iteration. Inside a structural
+# sub-kernel body (`ctx.subivt`) the table stays the container read, as there
+# every name it references must be one of the body's parameters.
+function _cg_tabh!(ctx::_CGCtx, obj)
+    ref = _cg_tab!(ctx, obj)
+    ctx.subivt && return ref
+    key = (:tab, obj)
+    got = get(ctx.geomemo, key, nothing)
+    got === nothing || return got
+    s = _cg_name(ctx, "tb")
+    push!(ctx.geosink, :(local $s = $ref))
+    ctx.geomemo[key] = s
+    return s
+end
+
+# A gather of the state through a slot table, once its table is a local
+# (`_cg_tabh!`), invites the loop vectorizer to turn every neighbour read into
+# a vector gather, which is several times slower here than the scalar loop. A
+# fetch that emits one sets `ctx.tblread`; `_cg_tblread!` returns the loop
+# annotation that keeps the loop scalar (or nothing) and clears the flag.
+# Leaving a loop scalar never changes a value.
+function _cg_tblread!(ctx::_CGCtx)
+    r = ctx.tblread
+    ctx.tblread = false
+    return r ? Any[_cg_novec()] : Any[]
 end
 
 # Run `f()` with geometry locals going to `sink` (and a fresh memo, since a
@@ -442,12 +500,150 @@ end
 
 _cg_offset(base, delta) = delta === 0 ? base : :($base + $delta)
 
+# The first slot of a slot table that is `c0, c0+1, …` with no ghost (0)
+# entry, or 0 when it is not one such run.
+# The table an `_AK_STATE_TBL_BOX` read passes to the emitted code: a range is
+# an identity run (`c0 > 0`), whose table the emitted branch never loads, so
+# every such read shares one empty vector and the table types stay `Vector{Int}`.
+const _CG_RUN_TBL = Int[]
+_cg_run_tbl(conn::Vector{Int}, c0::Int) = conn
+_cg_run_tbl(conn::UnitRange{Int}, c0::Int) = c0 > 0 ? _CG_RUN_TBL : collect(conn)
+_cg_affine_conn(conn::UnitRange{Int}) = (!isempty(conn) && first(conn) >= 1) ? first(conn) : 0
+function _cg_affine_conn(conn::Vector{Int})
+    isempty(conn) && return 0
+    c0 = conn[1]
+    c0 >= 1 || return 0
+    @inbounds for k in eachindex(conn)
+        conn[k] == c0 + k - 1 || return 0
+    end
+    return c0
+end
+
+# How `_cg_fetch` reads a slot table, as run-time data: `c0 - 1 >= 0` for a run
+# starting at slot `c0` (`_cg_affine_conn`), `-2` for a table with no ghost
+# entry, `-1` for one that has some.
+_cg_conn_mode(conn::UnitRange{Int}) =
+    _cg_affine_conn(conn) > 0 ? first(conn) - 1 : _cg_conn_mode(collect(conn))
+function _cg_conn_mode(conn::Vector{Int})
+    c0 = _cg_affine_conn(conn)
+    c0 > 0 && return c0 - 1
+    return any(iszero, conn) ? -1 : -2
+end
+
+# ---- Two-buffer addressing ------------------------------------------------
+# A right-hand side with materialized array observeds runs on a slot space of
+# two buffers (`_ObsSplitVec`): the state, then the observed buffer. Where the
+# emitter knows which of the two an access reads — every slot it can address
+# is a state slot, or every one an observed slot — it indexes that buffer
+# directly instead of through the view's per-read test. Both accessors are the
+# vector itself on a plain vector, so the emitted code is valid for either.
+@inline _cg_bufS(x) = x
+@inline _cg_bufS(s::_ObsSplitVec) = s.u
+@inline _cg_oview(x) = x
+@inline _cg_oview(s::_ObsSplitVec) = _ObsShift(s.o, s.n)
+
+# The observed buffer addressed by slot: slot `i` is `o[i - n]`.
+struct _ObsShift{T,O} <: AbstractVector{T}
+    o::O
+    n::Int
+end
+_ObsShift(o::AbstractVector{T}, n::Int) where {T} = _ObsShift{T,typeof(o)}(o, n)
+Base.size(s::_ObsShift) = (s.n + length(s.o),)
+Base.IndexStyle(::Type{<:_ObsShift}) = IndexLinear()
+@inline function Base.getindex(s::_ObsShift, i::Int)
+    @boundscheck checkbounds(s.o, i - s.n)
+    return @inbounds s.o[i - s.n]
+end
+@inline function Base.setindex!(s::_ObsShift, v, i::Int)
+    @boundscheck checkbounds(s.o, i - s.n)
+    @inbounds s.o[i - s.n] = v
+    return s
+end
+
+# The `du` a section writes through: its state part (`Val(:s)`) or its
+# observed part (`Val(:o)`) when every slot the section writes is one of them.
+@inline _cg_dview(du, ::Val) = du
+@inline _cg_dview(du::_ObsSplitVec, ::Val{:s}) = du.u
+@inline _cg_dview(du::_ObsSplitVec, ::Val{:o}) = _ObsShift(du.o, du.n)
+
+# Which buffer slots `lo:hi` live in: `:s` (state), `:o` (observed) or `:x`
+# (both, or unknown — read through the view).
+_cg_slot_side(nst::Int, lo::Int, hi::Int) =
+    nst <= 0 || lo > hi ? :x : (lo >= 1 && hi <= nst) ? :s : lo > nst ? :o : :x
+
+# The output-slot extent of a kernel's cells.
+function _cg_oln_extent(cs::_CellSet)
+    _is_outs(cs) && return extrema(cs.outs)
+    _is_contig(cs) && return (first(cs.ranges[1]), last(cs.ranges[1]))
+    lo = hi = cs.base
+    for d in eachindex(cs.strides)
+        a = cs.strides[d] * first(cs.ranges[d])
+        b = cs.strides[d] * last(cs.ranges[d])
+        lo += min(a, b)
+        hi += max(a, b)
+    end
+    return (lo, hi)
+end
+_cg_oln_extent(Ks::AbstractVector{_AccKernel}) =
+    isempty(Ks) ? (1, 0) :
+    (minimum(K -> _cg_oln_extent(K.cells)[1], Ks), maximum(K -> _cg_oln_extent(K.cells)[2], Ks))
+
+# Record that `K`'s loop nest binds `oln` over its own cells.
+function _cg_note_nest!(ctx::_CGCtx, K::_AccKernel)
+    ctx.nst > 0 && !haskey(ctx.olnext, K) && (ctx.olnext[K] = _cg_oln_extent(K.cells))
+    return nothing
+end
+
+# The slot extent of a slot table, ghost (0) entries left out.
+function _cg_table_extent(ctx::_CGCtx, conn)
+    got = get(ctx.sidememo, conn, nothing)
+    got === nothing || return got
+    ext = if conn isa UnitRange{Int}
+        isempty(conn) ? (1, 0) : (first(conn), last(conn))
+    else
+        lo, hi = typemax(Int), typemin(Int)
+        @inbounds for s in conn
+            s == 0 && continue
+            lo = min(lo, s); hi = max(hi, s)
+        end
+        lo > hi ? (1, 0) : (lo, hi)
+    end
+    ctx.sidememo[conn] = ext
+    return ext
+end
+
+# The buffer descriptor `a` reads in kernel context `kc`.
+function _cg_side(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc)
+    ctx.nst > 0 || return :x
+    k = a.kind
+    if k === _AK_STATE_AFFINE
+        (kc.oln isa Symbol && !haskey(ctx.subks, kc.K)) || return :x
+        e = get(ctx.olnext, kc.K, nothing)
+        e === nothing && return :x
+        return _cg_slot_side(ctx.nst, e[1] + a.delta, e[2] + a.delta)
+    elseif k === _AK_STATE_FIXED
+        return _cg_slot_side(ctx.nst, a.idx, a.idx)
+    elseif k === _AK_STATE_INDIRECT || k === _AK_STATE_INDIRECT_COL ||
+           k === _AK_STATE_TBL_BOX
+        lo, hi = _cg_table_extent(ctx, a.conn)
+        # An indirect table has no ghost entry; one that did would read slot 0.
+        k !== _AK_STATE_TBL_BOX && lo > hi && return :x
+        return _cg_slot_side(ctx.nst, lo, hi)
+    end
+    return :x
+end
+
+# A state read of slot expression `i` from the buffer `side` names.
+_cg_uread(side::Symbol, i) =
+    side === :s ? :(_cg_bufS(u)[$i]) : side === :o ? :(_cg_oview(u)[$i]) : :(u[$i])
+
 # ---- One access descriptor → one indexing expression (mirrors `_fetch`) -----
 # `key` identifies the descriptor (its table and position) for `_cg_geo!`.
 function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key=nothing)
     k = a.kind
     if k === _AK_STATE_AFFINE
-        return :(u[$(_cg_offset(kc.oln, _cg_geo!(ctx, a.delta, _cg_gkey(key, :delta), true)))])
+        return _cg_uread(_cg_side(ctx, kc, a),
+                         _cg_offset(kc.oln, _cg_geo!(ctx, a.delta, _cg_gkey(key, :delta), true)))
     elseif k === _AK_CONST_AFFINE
         return :($(_cg_tab!(ctx, a.arr))[$(_cg_offset(kc.oln,
                      _cg_geo!(ctx, a.delta, _cg_gkey(key, :delta), true)))])
@@ -457,7 +653,7 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key=nothing)
         return :($(_cg_tab!(ctx, a.arr))[$(_cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off,
                                                        a.sx, key))])
     elseif k === _AK_STATE_FIXED
-        return :(u[$(_cg_geo!(ctx, a.idx, _cg_gkey(key, :idx)))])
+        return _cg_uread(_cg_side(ctx, kc, a), _cg_geo!(ctx, a.idx, _cg_gkey(key, :idx)))
     elseif k === _AK_LOOP_IDX
         return :(Float64($(_cg_mi(kc, a.dim))))
     elseif k === _AK_SCALAR
@@ -469,19 +665,43 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key=nothing)
     elseif k === _AK_ARR_FIXED
         return :($(_cg_tab!(ctx, a.arr))[$(_cg_geo!(ctx, a.idx, _cg_gkey(key, :idx)))])
     elseif k === _AK_STATE_INDIRECT
-        return :(u[$(_cg_tab!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(kc.n)]])
+        ctx.tblread = true
+        return _cg_uread(_cg_side(ctx, kc, a),
+                         :($(_cg_tabh!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(kc.n)]))
     elseif k === _AK_STATE_INDIRECT_COL
-        return :(u[$(_cg_tab!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(a.col)]])
+        ctx.tblread = true
+        return _cg_uread(_cg_side(ctx, kc, a),
+                         :($(_cg_tabh!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(a.col)]))
     elseif k === _AK_STATE_TBL_BOX
         s = _cg_name(ctx, "s")
         addr = _cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off, a.sx, key)
+        # A table that is one ascending run of slots with no ghost (the box of
+        # an array laid out as one column-major block) reads the same slot as
+        # base + address, without the table load and the ghost test; a table
+        # with no ghost entry skips the ghost test. Which of the three a table
+        # is can depend on the grid size (a boundary slab one cell wide), so
+        # the choice is run-time data (`_cg_conn_mode`) and the emitted code is
+        # the same at every N; the branches are loop-invariant.
+        cb = _cg_geo!(ctx, _cg_conn_mode(a.conn), _cg_gkey(key, :tblbase))
+        side = _cg_side(ctx, kc, a)
+        if cb isa Symbol
+            # The version of the loop that runs only when every table it reads
+            # is a run (`_cg_tbl_versions`).
+            ctx.tblaffine && return _cg_uread(side, :($cb + $addr))
+            push!(ctx.tblcbs, cb)
+        end
+        tb = _cg_tabh!(ctx, _cg_run_tbl(a.conn, _cg_affine_conn(a.conn)))
+        ctx.tblread = true
         # Exactly `_fetch`'s ghost test: slot 0 ⇒ the ghost literal 0.0.
-        return :(let $s = $(_cg_tab!(ctx, a.conn))[$addr]
-                     $s == 0 ? 0.0 : u[$s]
+        return :($cb == -2 ? $(_cg_uread(side, :($tb[$addr]))) :
+                 $cb >= 0 ? $(_cg_uread(side, :($cb + $addr))) :
+                 let $s = $tb[$addr]
+                     $s == 0 ? 0.0 : $(_cg_uread(side, s))
                  end)
     elseif k === _AK_ARR_TBL_BOX
         addr = _cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off, a.sx, key)
-        return :($(_cg_tab!(ctx, a.arr))[$(_cg_tab!(ctx, a.conn))[$addr]])
+        ctx.tblread = true
+        return :($(_cg_tabh!(ctx, a.arr))[$(_cg_tabh!(ctx, a.conn))[$addr]])
     end
     throw(_CodegenDecline(:unsupported_desc))
 end
@@ -494,9 +714,26 @@ const _CG_MINMAX_FN = Dict{Symbol,Symbol}(row.sym => row.fnsym for row in _NARY_
 
 # Left-nested binary fold `((e1 op e2) op e3)…` — the interpreters' exact
 # `acc = ev(c1); acc = op(acc, ev(ci))` association.
+#
+# A long fold (a contraction unrolled over thousands of terms) is emitted as
+# that accumulation itself, one statement per term in a `let`, rather than as
+# a call nested once per term: Julia's lowering recurses on expression depth,
+# and a chain some 10^4 calls deep exhausts it ("out of gc handles"). The
+# operations, their operands and their order are the same, so are the values.
+const _CG_FOLD_NEST_MAX = 64
 function _cg_foldl(fnsym::Symbol, exprs::Vector{Any})
+    n = length(exprs)
+    if n > _CG_FOLD_NEST_MAX
+        acc = :_cgfacc
+        stmts = Any[:(local $acc = $(exprs[1]))]
+        for i in 2:n
+            push!(stmts, :($acc = $(Expr(:call, fnsym, acc, exprs[i]))))
+        end
+        push!(stmts, acc)
+        return Expr(:let, Expr(:block), Expr(:block, stmts...))
+    end
     acc = exprs[1]
-    for i in 2:length(exprs)
+    for i in 2:n
         acc = Expr(:call, fnsym, acc, exprs[i])
     end
     return acc
@@ -518,6 +755,8 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
     _cg_budget!(ctx)
     k = nd.kind
     if k === _NK_ACCESS
+        sb = ctx.subst
+        (sb !== nothing && kc.K === sb[1] && nd.idx == sb[2]) && return sb[3]
         return _cg_fetch(ctx, kc, kc.K.acc[nd.idx], (kc.K.acc, nd.idx))
     elseif k === _NK_LITERAL
         return nd.literal
@@ -736,6 +975,7 @@ function _cg_subcall_fn!(ctx::_CGCtx, S::_AccKernel, invsyms::Vector{Symbol})
     c = :_cgsc; n = :_cgsn; oln = :_cgso
     m1 = :_cgsm1; m2 = :_cgsm2; m3 = :_cgsm3
     nodes0 = ctx.nodes
+    ctx.subks[S] = true
     inner = _CGKernCtx(S, c, n, oln, m1, m2, m3, Symbol[], Symbol[])
     subivt0 = ctx.subivt
     ctx.subivt = true
@@ -832,6 +1072,7 @@ function _cg_emit_subcall(ctx::_CGCtx, kc::_CGKernCtx, S::_AccKernel)
     # Pre-tier emission: inline the body at the call site — per-cell CSE
     # recipes become occurrence-local locals, then the body spine evaluates
     # against its OWN descriptor table.
+    ctx.subks[S] = true
     inner = _CGKernCtx(S, kc.c, kc.n, kc.oln, kc.mi1, kc.mi2, kc.mi3,
                        Symbol[], invsyms, kc.mix)
     stmts = _cg_emit_recipes!(Any[], ctx, inner)
@@ -1122,13 +1363,73 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     # The kernel's geometry locals head its own block, outside every loop, so a
     # chunk sub-function that carries the nest carries them too.
     geo = Any[]
-    nest = _cg_with_geosink(() -> _cg_emit_kernel_nest!(ctx, K, invsyms), ctx, geo)
+    nest = _cg_with_geosink(ctx, geo) do
+        _cg_tbl_versions(() -> _cg_emit_kernel_nest!(ctx, K, invsyms), ctx)
+    end
     isempty(geo) && return nest
     return Expr(:block, geo..., nest)
 end
 
+# A nest that reads the state through slot tables (`_AK_STATE_TBL_BOX`) is
+# emitted twice: once with each read in its general form (a run, a table with
+# no ghost, or one with ghosts, chosen per table by run-time data), and once
+# with every read as its run form, `u[base + address]`, behind a test that
+# every table of the nest is a run. A stencil whose tables are runs at this
+# grid size runs a loop with no table in it, which the compiler can vectorize,
+# whatever the general form's branches; and the general form's loop, which
+# gathers, stays scalar (`_cg_tblread!`). Both forms read the same slot of `u`
+# for every cell, so the values are the same.
+function _cg_tbl_versions(emit, ctx::_CGCtx)
+    cbs0 = ctx.tblcbs
+    ctx.tblcbs = Symbol[]
+    try
+        nestG = emit()
+        isempty(ctx.tblcbs) && return nestG
+        cond = nothing
+        for cb in unique(ctx.tblcbs)
+            c = :($cb >= 0)
+            cond = cond === nothing ? c : :($cond && $c)
+        end
+        ctx.tblaffine = true
+        nestA = try
+            emit()
+        finally
+            ctx.tblaffine = false
+        end
+        return :(if $cond
+                     $nestA
+                 else
+                     $nestG
+                 end)
+    finally
+        ctx.tblcbs = cbs0
+    end
+end
+
+# A fused scan's consumer cell (scan_fused.jl): kernel `cons.K`'s body at the
+# state slot `oln - delta`, with its scanned-observed read as the local `xv`,
+# stored into the state part of `du`.
+function _cg_scan_consumer_cell(ctx::_CGCtx, cons, oln::Symbol, xv::Symbol)
+    Kc = cons.K
+    oc = _cg_name(ctx, "oc")
+    d = _cg_geo!(ctx, cons.delta, (Kc, :scan_consumer_delta))
+    kc = _CGKernCtx(Kc, oc, 0, oc, 1, 1, 1, Symbol[], cons.invsyms)
+    stmts = Any[:(local $oc = $oln - $d)]
+    ctx.subst = (Kc, cons.ix, xv)
+    try
+        _cg_emit_recipes!(stmts, ctx, kc)
+        val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, Kc.spine))
+        push!(stmts, :(_cg_bufS(du)[$oc] = $val))
+    finally
+        ctx.subst = nothing
+    end
+    return stmts
+end
+
 function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbol})
-    cellfn = (_cg_split_supported() && !_cg_subcall_fn_disabled() &&
+    sm = ctx.scanmode
+    _cg_note_nest!(ctx, K)
+    cellfn = (sm === nothing && _cg_split_supported() && !_cg_subcall_fn_disabled() &&
               length(K.cells.strides) <= 3) ?
              _cg_cell_fn!(ctx, K, invsyms) : nothing
 
@@ -1147,7 +1448,36 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                             Expr(:tuple, invsyms...), extra...)]
         end
         stmts = _cg_emit_recipes!(Any[], ctx, kc)
-        push!(stmts, :(du[$(kc.oln)] = $(_cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine)))))
+        val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
+        if sm === nothing
+            push!(stmts, :(du[$(kc.oln)] = $val))
+        else
+            # A fused scan's cell (scan_fused.jl): the term, converted exactly
+            # as its store into `du` would convert it, folded into the lane's
+            # running value in `_scan_lanes!`'s order.
+            tv = _cg_name(ctx, "term")
+            acc = sm.acc
+            push!(stmts, :(local $tv = convert(eltype(du), $val)))
+            cons = sm.cons
+            if cons === nothing
+                if sm.inclusive
+                    push!(stmts, :($acc = $(sm.op)($acc, $tv)))
+                    push!(stmts, :(du[$(kc.oln)] = $acc))
+                else
+                    push!(stmts, :(du[$(kc.oln)] = $acc))
+                    push!(stmts, :($acc = $(sm.op)($acc, $tv)))
+                end
+            else
+                # The cell's value as the store converts it, stored (unless the
+                # store was dropped), then the consumer's cell computed from it.
+                sm.inclusive && push!(stmts, :($acc = $(sm.op)($acc, $tv)))
+                xv = _cg_name(ctx, "x")
+                push!(stmts, :(local $xv = convert(eltype(du), $acc)))
+                cons.store && push!(stmts, :(_cg_oview(du)[$(kc.oln)] = $xv))
+                append!(stmts, _cg_scan_consumer_cell(ctx, cons, kc.oln, xv))
+                sm.inclusive || push!(stmts, :($acc = $(sm.op)($acc, $tv)))
+            end
+        end
         return stmts
     end
 
@@ -1171,31 +1501,44 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
         return (lo, geo(last(cs.ranges[d]), (d, :last)), geo(n, (d, :len)))
     end
     corner = !isempty(cs.strides) && all(d -> _cellset_slab(cs, d), eachindex(cs.strides))
-    hdr = Any[:(local $tv = _chunk_ordinals($(corner ? 1 : geo(ncells, :n)), _cgci, _cgnc)),
-              :(local $av = $tv[1]),
-              :(local $bv = $tv[2])]
+    hdr = if sm === nothing
+        Any[:(local $tv = _chunk_ordinals($(corner ? 1 : geo(ncells, :n)), _cgci, _cgnc)),
+            :(local $av = $tv[1]),
+            :(local $bv = $tv[2])]
+    else
+        # A fused scan's nest runs the one lane its caller bound.
+        av = sm.a
+        bv = sm.b
+        Any[]
+    end
     if _is_outs(cs)
         outs = _cg_tab!(ctx, cs.outs)
         c = _cg_name(ctx, "c")
         oln = _cg_name(ctx, "o")
         kc = _CGKernCtx(K, c, 0, oln, c, 1, 1, Symbol[], invsyms)
+        ctx.tblread = false
         body = cellbody(kc)
+        tv1 = _cg_tblread!(ctx)
         return quote
             $(hdr...)
             for $c in ($av + 1):$bv
                 local $oln = $outs[$c]
                 $(body...)
+                $(tv1...)
             end
         end
     elseif _is_contig(cs)
         c0 = geo(first(cs.ranges[1]), (1, :first))
         c = _cg_name(ctx, "c")
         kc = _CGKernCtx(K, c, 0, c, c, 1, 1, Symbol[], invsyms)
+        ctx.tblread = false
         body = cellbody(kc)
+        tv1 = _cg_tblread!(ctx)
         return quote
             $(hdr...)
             for $c in ($c0 + $av):($c0 + $bv - 1)
                 $(body...)
+                $(tv1...)
             end
         end
     end
@@ -1217,18 +1560,47 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     nd >= 2 && (olnexpr = :($olnexpr + $jv * $(st[2])))
     nd >= 3 && (olnexpr = :($olnexpr + $kv * $(st[3])))
     kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invsyms)
+    ctx.tblread = false
     body = cellbody(kc)
+    # The innermost loop's own annotation: kept scalar when it gathers through
+    # a slot table (`_cg_tblread!`).
+    tv1 = _cg_tblread!(ctx)
     i0, i1, ni = axis(1)
+    if nd == 1 && cellfn === nothing && sm === nothing
+        inter = _cg_areduce_interchanged(ctx, K, kc, iv, oln, olnexpr, i0, av, bv)
+        if inter !== nothing
+            return quote
+                $(hdr...)
+                if _cgT === Float64 && eltype(du) === Float64
+                    $inter
+                else
+                    for $iv in ($i0 + $av):($i0 + $bv - 1)
+                        local $oln = $olnexpr
+                        $(body...)
+                        $(tv1...)
+                    end
+                end
+            end
+        end
+    end
     if nd == 1
         return quote
             $(hdr...)
             for $iv in ($i0 + $av):($i0 + $bv - 1)
                 local $oln = $olnexpr
                 $(body...)
+                $(tv1...)
             end
         end
     end
     ohi = _cg_name(ctx, "e")          # last ordinal of the chunk (b - 1)
+    # A box one cell thick along its leading axis (a boundary slab of a
+    # stencil's x faces) runs one cell per i-loop, so once LLVM folds that
+    # loop the j (or k) loop is innermost, and it strides through `u` by a
+    # whole row: vectorizing it turns every operand into a gather, which is
+    # several times slower than the scalar loop. The outer loops of such a box
+    # are kept scalar. Leaving a loop scalar never changes a value.
+    nv = _cellset_slab(cs, 1) ? Any[_cg_novec()] : Any[]
     ilo = _cg_name(ctx, "il")
     ihi = _cg_name(ctx, "ih")
     jlo = _cg_name(ctx, "jl")
@@ -1247,7 +1619,9 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                     for $iv in $ilo:$ihi
                         local $oln = $olnexpr
                         $(body...)
+                        $(tv1...)
                     end
+                    $(nv...)
                 end
             end
         end
@@ -1277,12 +1651,397 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                     for $iv in $ilo:$ihi
                         local $oln = $olnexpr
                         $(body...)
+                        $(tv1...)
                     end
+                    $(nv...)
+                end
+                $(nv...)
+            end
+        end
+    end
+end
+
+# ---- Row-fused box kernels ---------------------------------------------------
+# A stencil's region classes split each row of the grid along its leading axis:
+# the two faces, the near-face classes and the interior of a row are separate
+# box kernels with the same rows (identical ranges along every other axis).
+# Emitted one by one, each kernel walks all the rows again, and a face kernel
+# one cell thick runs a loop per row for that one cell. Row fusion emits such a
+# group as ONE nest over the shared rows whose row body runs every member's
+# segment of that row in leading-axis order, the way a hand-written loop peels a
+# row's ends: each member's cells keep their own body, their own geometry and
+# their own invariants, so every cell evaluates the op sequence it did alone.
+# Members write disjoint cells (the section's out-slot check covers them) and
+# read only `u`, so running them row by row instead of kernel by kernel cannot
+# change a value. The threaded cell axis chunks the group's ROWS, so a chunk
+# still writes whole cells no other chunk writes.
+
+# The rows a box kernel shares with others of its group, or `nothing` when it is
+# not a rank-2/3 box kernel the emitter compiles as its own nest.
+function _cg_rowfuse_key(K::_AccKernel)
+    cs = K.cells
+    nd = length(cs.strides)
+    (_is_outs(cs) || !(2 <= nd <= 3)) && return nothing
+    return (nd, cs.base, Tuple(cs.strides), Tuple(cs.ranges[2:nd]),
+            Tuple(_cellset_slab(cs, d) for d in 2:nd))
+end
+
+# Groups of kernel indices to row-fuse (two or more members, leading-axis
+# ranges pairwise disjoint, ordered along that axis), keyed by the index of
+# the group's first kernel in build order.
+function _cg_rowfuse_groups(kernels::AbstractVector{_AccKernel})
+    out = Dict{Int,Vector{Int}}()
+    (_cg_split_supported() && !_cg_subcall_fn_disabled()) && return out
+    byrow = Dict{Any,Vector{Int}}()
+    for (j, K) in enumerate(kernels)
+        key = _cg_rowfuse_key(K)
+        key === nothing || push!(get!(byrow, key, Int[]), j)
+    end
+    for js in values(byrow)
+        length(js) >= 2 || continue
+        ord = sort(js; by = j -> first(kernels[j].cells.ranges[1]))
+        ok = all(m -> last(kernels[ord[m-1]].cells.ranges[1]) <
+                      first(kernels[ord[m]].cells.ranges[1]), 2:length(ord))
+        ok && (out[minimum(js)] = ord)
+    end
+    return out
+end
+
+function _cg_emit_rowgroup!(ctx::_CGCtx, Ks::Vector{_AccKernel})
+    invs = Vector{Vector{Symbol}}()
+    for K in Ks
+        for S in K.subs
+            _cg_inv!(ctx, S)
+        end
+        push!(invs, _cg_inv!(ctx, K))
+    end
+    geo = Any[]
+    nest = _cg_with_geosink(ctx, geo) do
+        _cg_tbl_versions(() -> _cg_emit_rowgroup_nest!(ctx, Ks, invs), ctx)
+    end
+    return Expr(:block, geo..., nest)
+end
+
+function _cg_emit_rowgroup_nest!(ctx::_CGCtx, Ks::Vector{_AccKernel},
+                                 invs::Vector{Vector{Symbol}})
+    cs1 = Ks[1].cells
+    nd = length(cs1.strides)
+    # The same geometry rules as `_cg_emit_kernel_nest!`: bounds, base and
+    # strides are run-time data, a slab's thin extent a literal.
+    function axis(cs, d)
+        g(v, f) = _cg_geo!(ctx, v, (cs, f))
+        lo = g(first(cs.ranges[d]), (d, :first))
+        _cellset_slab(cs, d) && return (lo, lo, 1)
+        return (lo, g(last(cs.ranges[d]), (d, :last)), g(length(cs.ranges[d]), (d, :len)))
+    end
+    st = Any[_cg_geo!(ctx, cs1.strides[d], (cs1, d, :stride), true) for d in 1:nd]
+    base = _cg_geo!(ctx, cs1.base, (cs1, :base))
+    jv = _cg_name(ctx, "j")
+    kv = nd >= 3 ? _cg_name(ctx, "k") : 1
+    j0, j1, nj = axis(cs1, 2)
+    k0, _, nk = nd >= 3 ? axis(cs1, 3) : (1, 1, 1)
+    olnof(iv) = (e = :($base + $iv * $(st[1]) + $jv * $(st[2]));
+                 nd >= 3 ? :($e + $kv * $(st[3])) : e)
+    seg(iv, i0, i1, oln, body) = quote
+        for $iv in $i0:$i1
+            local $oln = $(olnof(iv))
+            $(body...)
+        end
+    end
+    parts = Any[]
+    for (m, K) in enumerate(Ks)
+        iv = _cg_name(ctx, "i")
+        oln = _cg_name(ctx, "o")
+        _cg_note_nest!(ctx, K)
+        kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invs[m])
+        ctx.tblread = false
+        rec = _cg_emit_recipes!(Any[], ctx, kc)
+        val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
+        tv1 = _cg_tblread!(ctx)
+        i0, i1, _ = axis(K.cells, 1)
+        push!(parts, (; iv, oln, rec, val, i0, i1, tv1))
+    end
+    segs = Any[seg(q.iv, q.i0, q.i1, q.oln,
+                   Any[q.rec..., :(du[$(q.oln)] = $(q.val)), q.tv1...])
+               for q in parts]
+    fis = _cg_row_fission(ctx, Ks, parts)
+    if fis !== nothing
+        holes, stages, iF, oF = fis
+        fsegs = Any[seg(q.iv, q.i0, q.i1, q.oln, Any[:(du[$(q.oln)] = $(holes[m]))])
+                    for (m, q) in enumerate(parts)]
+        # A stage reads and writes only its own cell's `du` slot, so its
+        # iterations are independent; `julia.ivdep` says so to the loop
+        # vectorizer, which cannot prove it for a load and a store of one
+        # array. It licenses no reassociation (that is `julia.simdloop`).
+        for F in stages
+            push!(fsegs, seg(iF, parts[1].i0, parts[end].i1, oF,
+                             Any[:(du[$oF] = $F), Expr(:loopinfo, Symbol("julia.ivdep"))]))
+        end
+        # The split form stores each segment's hole value in `du` and reads it
+        # back, which is exact only when that value already has `du`'s element
+        # type: it does when `u`, `du` and the value type agree (the hole reads
+        # `u`), and every other call takes the one-pass form.
+        segs = Any[quote
+            if eltype(u) === _cgT && eltype(du) === _cgT
+                $(fsegs...)
+            else
+                $(segs...)
+            end
+        end]
+        _tally_cascade!(:cg_row_fission)
+    end
+    tv = _cg_name(ctx, "ab")
+    av = _cg_name(ctx, "a")
+    bv = _cg_name(ctx, "b")
+    hdr = Any[:(local $tv = _chunk_ordinals($nj * $nk, _cgci, _cgnc)),
+              :(local $av = $tv[1]),
+              :(local $bv = $tv[2])]
+    if nd == 2
+        return quote
+            $(hdr...)
+            for $jv in ($j0 + $av):($j0 + $bv - 1)
+                $(segs...)
+            end
+        end
+    end
+    ohi = _cg_name(ctx, "e")
+    klo = _cg_name(ctx, "kl")
+    khi = _cg_name(ctx, "kh")
+    jlo = _cg_name(ctx, "jl")
+    jhi = _cg_name(ctx, "jh")
+    return quote
+        $(hdr...)
+        if $av < $bv
+            local $ohi = $bv - 1
+            local $klo = $k0 + div($av, $nj)
+            local $khi = $k0 + div($ohi, $nj)
+            for $kv in $klo:$khi
+                local $jlo = $kv == $klo ? $j0 + rem($av, $nj) : $j0
+                local $jhi = $kv == $khi ? $j0 + rem($ohi, $nj) : $j1
+                for $jv in $jlo:$jhi
+                    $(segs...)
                 end
             end
         end
     end
 end
+
+# ---- Loop interchange for an affine reduction over a strided operand --------
+# A rank-1 kernel whose whole cell value is one affine reduction
+# (`du[o] = ⊕_j body(i, j)`, `_cg_emit_areduce`) runs the reduction innermost,
+# so an operand read contiguously along the CELL axis and at a large stride
+# along the reduced one — `Σ_j K[i,j]·e[j]` over a column-major `K` — is walked
+# at that large stride on every term. The interchanged nest keeps each cell's
+# accumulator in its own `du` slot and runs the cells innermost:
+#
+#     du[o] = 0̄                          for every cell of the chunk
+#     for each reduced tuple, in `_cg_emit_areduce`'s order
+#         du[o] = du[o] ⊕ body(i, tuple)   for every cell of the chunk
+#
+# Every cell folds the same terms in the same order from the same Float64 seed,
+# so each `du[o]` is bitwise the per-cell nest's; only the order in which
+# different cells advance changes, and cells are independent. It is emitted for
+# the Float64 value type only (the caller's branch): under any other type a
+# `du` slot could not hold the Float64 seed unchanged (`_cg_fold` explains why
+# that matters). Chosen when more of the body's box reads are contiguous (or
+# invariant) along the cell axis and strided along the innermost reduced axis
+# than the other way round. Returns the nest, or `nothing` when it does not
+# apply.
+function _cg_areduce_interchanged(ctx::_CGCtx, K::_AccKernel, kc::_CGKernCtx,
+                                  iv::Symbol, oln::Symbol, olnexpr, i0, av, bv)
+    nd = K.spine
+    nd.kind === _NK_AREDUCE || return nothing
+    isempty(K.cse.recipes) || return nothing
+    spec = nd.payload::_AReduceSpec
+    isempty(spec.dims) && return nothing
+    _cg_reduce_strides_favor_cells(K, nd.children[1], spec.dims[1]) || return nothing
+    fnsym = _cg_oplus_fn(nd.op)
+    js = Symbol[_cg_name(ctx, "j") for _ in spec.dims]
+    inner = kc
+    for r in eachindex(spec.dims)
+        inner = _cg_with_mi(inner, spec.dims[r], js[r])
+    end
+    body = _cg_emit(ctx, inner, nd.children[1])
+    cap = _codegen_fn_node_cap()
+    cap > 0 && _cg_expr_size(body) > cap && return nothing
+    loop = quote
+        for $iv in ($i0 + $av):($i0 + $bv - 1)
+            local $oln = $olnexpr
+            du[$oln] = $fnsym(du[$oln], $body)
+        end
+    end
+    for r in eachindex(spec.dims)
+        rg = spec.ranges[r]
+        lo = _cg_geo!(ctx, first(rg), (spec.ranges, r, :lo))
+        hi = _cg_geo!(ctx, last(rg), (spec.ranges, r, :hi))
+        loop = Expr(:for, :($(js[r]) = $lo:$hi), Expr(:block, loop))
+    end
+    return quote
+        for $iv in ($i0 + $av):($i0 + $bv - 1)
+            du[$olnexpr] = $(nd.literal)
+        end
+        $loop
+    end
+end
+
+# Whether the box reads under `body` favour the cell axis (loop dim 1) in the
+# inner loop over the reduced axis `rdim`: a read gains when it is contiguous or
+# invariant along the cells and strided along `rdim`, and loses the other way.
+function _cg_reduce_strides_favor_cells(K::_AccKernel, body::_Node, rdim::Int)
+    gain = 0
+    stride(a::_AccDesc, d::Int) = d == 1 ? a.s1 : d == 2 ? a.s2 : d == 3 ? a.s3 :
+        (d - 3 <= length(a.sx) ? a.sx[d - 3] : 0)
+    near(s) = s == 0 || s == 1
+    function visit(n::_Node)
+        if n.kind === _NK_ACCESS
+            a = K.acc[n.idx]
+            if a.kind === _AK_STATE_TBL_BOX || a.kind === _AK_CONST_BOX ||
+               a.kind === _AK_FORCING_BOX || a.kind === _AK_ARR_TBL_BOX
+                so = stride(a, 1)
+                sk = stride(a, rdim)
+                near(so) && !near(sk) && (gain += 1)
+                near(sk) && !near(so) && (gain -= 1)
+            end
+        end
+        foreach(visit, n.children)
+        return nothing
+    end
+    visit(body)
+    return gain > 0
+end
+
+# ---- Row fission -------------------------------------------------------------
+# The members of a row group often differ in ONE subexpression only: a
+# transport cell is `-((Dx + Dy) + Dz)` where only `Dx` depends on the cell's
+# class along the row, while `Dy` and `Dz` are the same expression with the same
+# offsets for every segment. Evaluated per segment, the near-face segments (one
+# cell wide) run all of it scalar. Row fission evaluates each segment's own
+# subexpression (the hole) into `du`, then the shared context over the whole
+# row in one loop that reads the hole back from `du`, the way a hand-written
+# loop adds the y and z derivatives over a full row. Each cell computes the
+# same operations on the same operands in the same order; the hole's value
+# round-trips through `du` at its own element type (see the guard at the call
+# site), so the result is bit-identical.
+#
+# Applies when: every member's body is a single expression (no per-cell CSE
+# locals), there is no lazy guard anywhere in it, the members' leading-axis
+# ranges tile the row with no gap, the bodies agree everywhere but at one
+# position (compared with every geometry local replaced by its value, and each
+# segment's own loop and slot variables by placeholders), the hole reads the
+# state and is more than a leaf, and the context around it reads the state at
+# least `_CG_FISSION_READS` times.
+# Returns `(holes, F, iF, oF)` or `nothing`.
+function _cg_row_fission(ctx::_CGCtx, Ks::Vector{_AccKernel}, parts)
+    length(Ks) >= 2 || return nothing
+    all(q -> isempty(q.rec), parts) || return nothing
+    for m in 2:length(Ks)
+        last(Ks[m-1].cells.ranges[1]) + 1 == first(Ks[m].cells.ranges[1]) || return nothing
+    end
+    gval = Dict{Symbol,Int}()
+    for st in ctx.geosink
+        (st isa Expr && st.head === :local && st.args[1] isa Expr) || continue
+        a = st.args[1]
+        r = a.args[2]
+        # Geometry locals only (`_cg_geo!`'s `_cgG…`), not hoisted tables.
+        startswith(String(a.args[1]), "_cgG") || continue
+        (r isa Expr && r.head === :ref && r.args[2] isa Int) || continue
+        gval[a.args[1]] = ctx.geo[r.args[2]]
+    end
+    canon(e, q) = e === q.iv ? :_cgFI : e === q.oln ? :_cgFO :
+                  e isa Symbol ? get(gval, e, e) :
+                  e isa Expr ? Expr(e.head, Any[canon(a, q) for a in e.args]...) : e
+    lazy(e) = e isa Expr && (e.head in (:if, :&&, :||, :let, :block) ||
+                             any(lazy, e.args))
+    any(q -> lazy(q.val), parts) && return nothing
+    cs = Any[canon(q.val, q) for q in parts]
+    # The hole: descend while the members differ in exactly one child.
+    function walk(es, at)
+        e1 = es[1]
+        all(e -> isequal(e, e1), es) && return nothing
+        if e1 isa Expr && all(e -> e isa Expr && e.head === e1.head &&
+                                  length(e.args) == length(e1.args), es)
+            diffs = [i for i in eachindex(e1.args)
+                     if !all(e -> isequal(e.args[i], e1.args[i]), es)]
+            length(diffs) == 1 &&
+                return walk(Any[e.args[diffs[1]] for e in es], (at..., diffs[1]))
+        end
+        return at
+    end
+    path = walk(cs, ())
+    (path === nothing || isempty(path)) && return nothing
+    sub(e, pth) = isempty(pth) ? e : sub(e.args[pth[1]], pth[2:end])
+    reads_u(e) = e isa Expr && (_cg_is_uread(e) || any(reads_u, e.args))
+    holes = Any[sub(q.val, path) for q in parts]
+    all(reads_u, holes) || return nothing
+    any(h -> h isa Expr && _cg_expr_size(h) >= 4, holes) || return nothing
+    iF = _cg_name(ctx, "i")
+    oF = _cg_name(ctx, "o")
+    q1 = parts[1]
+    rename(e) = e === q1.iv ? iF : e === q1.oln ? oF :
+                e isa Expr ? Expr(e.head, Any[rename(a) for a in e.args]...) : e
+    E = rename(q1.val)
+    # The context, innermost ancestor of the hole first, cut into stages: a new
+    # stage starts at an ancestor whose other operands read the state once the
+    # current stage already holds one such ancestor. Each stage is one pass
+    # over the row that reads the previous value back from `du`, so a long
+    # context runs as a few short loops rather than one with many operand
+    # streams, as a hand-written loop adds one axis's derivative per pass.
+    stages = Any[]
+    cur = :(du[$oF])
+    nreads = 0
+    total = 0
+    for d in (length(path) - 1):-1:0
+        node = sub(E, path[1:d])
+        k = path[d + 1]
+        sib = Set{Any}()
+        for i in eachindex(node.args)
+            (i == k || (node.head === :call && i == 1)) && continue
+            _cg_state_reads!(sib, node.args[i])
+        end
+        if !isempty(sib) && nreads >= _CG_FISSION_READS
+            push!(stages, cur)
+            cur = :(du[$oF])
+            nreads = 0
+        end
+        args = copy(node.args)
+        args[k] = cur
+        cur = Expr(node.head, args...)
+        nreads += length(sib)
+        total += length(sib)
+    end
+    push!(stages, cur)
+    total >= _CG_FISSION_READS || return nothing
+    return (holes, stages, iF, oF)
+end
+
+# Whether `e` is one emitted state read (`_cg_uread`).
+_cg_is_uread(e::Expr) =
+    e.head === :ref && (e.args[1] === :u ||
+                        (e.args[1] isa Expr && e.args[1].head === :call &&
+                         e.args[1].args[1] in (:_cg_bufS, :_cg_oview)))
+
+# The distinct state reads (`u[…]`) in an emitted expression.
+function _cg_state_reads!(acc::Set{Any}, e)
+    e isa Expr || return acc
+    if _cg_is_uread(e)
+        push!(acc, e)
+    else
+        for a in e.args
+            _cg_state_reads!(acc, a)
+        end
+    end
+    return acc
+end
+
+# Row fission pays when the shared context is heavy enough that evaluating it
+# once per row, vectorized, beats the extra pass through `du`: it needs at least
+# this many distinct state reads, and a stage is closed (a new pass begun) once
+# it holds this many.
+const _CG_FISSION_READS = 8
+
+# The loop annotation that keeps a loop scalar (LLVM's loop vectorizer off for
+# it). It is the loop body's last statement, where `@simd` puts its own.
+_cg_novec() = Expr(:loopinfo, (Symbol("llvm.loop.vectorize.enable"), false))
 
 # A strided Cartesian box of rank above 3, in `_run_box_kernel!`'s iteration
 # order (dim 1 fastest). The chunk `[a, b)` is walked as whole dim-1 ROWS, the
@@ -1312,7 +2071,9 @@ function _cg_emit_box_rank_n(ctx::_CGCtx, K::_AccKernel, cs::_CellSet, hdr, av, 
     end
     kc = _CGKernCtx(K, oln, 0, oln, ovs[1], ovs[2], ovs[3], Symbol[], _cg_inv!(ctx, K),
                     Any[ovs[d] for d in 4:nd])
+    ctx.tblread = false
     body = cellbody(kc)
+    tv1 = _cg_tblread!(ctx)
     i0 = lo[1]; i1 = hi[1]; ni = len[1]
     ohi = _cg_name(ctx, "e")
     rlo = _cg_name(ctx, "rl")
@@ -1354,6 +2115,7 @@ function _cg_emit_box_rank_n(ctx::_CGCtx, K::_AccKernel, cs::_CellSet, hdr, av, 
                 for $iv in $ilo:$ihi
                     local $oln = $rowb + $iv * $(st[1])
                     $(body...)
+                    $(tv1...)
                 end
                 $step
             end
@@ -1364,7 +2126,20 @@ end
 # The read-only view of `u` the generated section's alias scope reads through
 # (see `_build_codegen_rhs`). `Const` wraps an `Array` only.
 @inline _cg_readonly(u::Array) = Base.Experimental.Const(u)
+@inline _cg_readonly(s::_ObsSplitVec) =
+    _ObsSplitVec(_cg_readonly(s.u), _cg_readonly(s.o), s.n)
 @inline _cg_readonly(u) = u
+
+# The `let` bindings a generated section runs its kernels under: `u` read-only,
+# and on a two-buffer slot space `du` as the buffer all of `Ks`' cells write.
+function _cg_section_bindings(nst::Int, Ks::AbstractVector{_AccKernel})
+    b = Expr(:block, :(u = _cg_readonly(u)))
+    if nst > 0
+        side = _cg_slot_side(nst, _cg_oln_extent(Ks)...)
+        side === :x || push!(b.args, :(du = _cg_dview(du, Val($(QuoteNode(side))))))
+    end
+    return b
+end
 
 # ---- Build the fused generated RHS section ----------------------------------
 struct _CGBuilt{F,TB}
@@ -1695,13 +2470,50 @@ end
 function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
                             budget::Int=_codegen_node_budget(),
                             tally::Symbol=:codegen,
-                            shared_cache::Union{Nothing,_CSECache}=nothing)
+                            shared_cache::Union{Nothing,_CSECache}=nothing,
+                            nst::Int=0)
     isempty(acc_kernels) && return nothing
-    ctx = _CGCtx(budget, shared_cache)
+    ctx = _CGCtx(budget, shared_cache; nst=nst)
     covered = fill(false, length(acc_kernels))
     reasons = fill(:none, length(acc_kernels))
     kloops = Tuple{Any,Int}[]         # (loop-nest expr, its emitted-node cost)
+    # Row-fused groups (see `_cg_emit_rowgroup!`): a group is emitted at its
+    # first member's position; if it declines, its members are emitted one by
+    # one, exactly as without fusion.
+    groups = _cg_rowfuse_groups(acc_kernels)
+    ingroup = falses(length(acc_kernels))
     for (j, K) in enumerate(acc_kernels)
+        if haskey(groups, j)
+            js = groups[j]
+            nprologue = length(ctx.prologue)
+            ninvlog = length(ctx.invlog)
+            nhelpers = length(ctx.helpers)
+            nodes0 = ctx.nodes
+            fscratch0 = ctx.fscratch
+            empty!(ctx.helper_dedup)
+            try
+                lx = _cg_emit_rowgroup!(ctx, _AccKernel[acc_kernels[m] for m in js])
+                push!(kloops, (lx, ctx.nodes - nodes0))
+                for m in js
+                    covered[m] = true
+                    ingroup[m] = true
+                    _tally_cascade!(Symbol(tally, :_kernel))
+                end
+                _tally_cascade!(:cg_rowfused_group)
+                ctx.fscratch > fscratch0 && _tally_cascade!(:cg_foreign_scratch_emit)
+            catch err
+                err isa _CodegenDecline || rethrow()
+                resize!(ctx.prologue, nprologue)
+                for i in length(ctx.invlog):-1:(ninvlog + 1)
+                    delete!(ctx.invdone, ctx.invlog[i])
+                end
+                resize!(ctx.invlog, ninvlog)
+                resize!(ctx.helpers, nhelpers)
+                ctx.nodes = nodes0
+                ctx.fscratch = fscratch0
+            end
+        end
+        ingroup[j] && continue
         # Snapshot for rollback: a mid-kernel decline must discard its partial
         # prologue statements AND its invariant registrations (a later kernel
         # sharing that sub-kernel would otherwise reference rolled-back locals).
@@ -1851,8 +2663,10 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     # row whose reads sit at run-time slot offsets (`_cg_geo!`) without a
     # run-time overlap check per offset. Loads and stores only move relative to
     # each other; no arithmetic changes.
+    # On a two-buffer slot space `du` is rebound to the one buffer every cell
+    # of the section writes (`_cg_dview`), when there is one.
     kernels = Expr(:macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
-                   Expr(:let, Expr(:block, :(u = _cg_readonly(u))),
+                   Expr(:let, _cg_section_bindings(nst, acc_kernels),
                         Expr(:block,
                              Expr(:macrocall, Symbol("@inbounds"), ln,
                                   Expr(:block, ctx.prologue...)),
@@ -1918,8 +2732,8 @@ end
 # `_chunk_ordinals`, and disjoint writes commute. Threaded `du` is bitwise
 # `===` serial `du`.
 #
-# OPT-IN semantics: no Polyester ⇒ serial; a section total below the per-chunk
-# min-cells threshold (ESS_THREADS_MIN_CELLS) ⇒ serial.
+# One Julia thread ⇒ serial; a section total below the per-chunk min-cells
+# threshold (ESS_THREADS_MIN_CELLS) ⇒ serial.
 # Verdicts land in `_THREAD_TALLY` (`:cg_threaded` / `:cg_serial_small` /
 # `:cg_serial_shared_outs`), documented with the existing keys.
 
@@ -1928,13 +2742,23 @@ end
 # (globally shared out-slots — permanent, decided at build).
 # `ncells`/`disjoint` are build facts (`_CGBuilt`); `nchunks` is fixed
 # at the first threaded call, so the partition is identical call to call.
+# `work` is what the min-cells floor is held against: the cell count, unless
+# a cell does more than one cell's worth (a contraction's fold terms count
+# too, array_contraction.jl); the chunk count never exceeds `ncells`.
+# `job1`/`job2` hold the section's dispatch jobs (thread_dispatch.jl) for the
+# last two argument types it ran at, so a caller alternating between Float64
+# and dual-number calls (a solver and its Jacobian) reuses both.
 mutable struct _SecTCache
     state::Int
     ncells::Int
     disjoint::Bool
+    work::Int
     nchunks::Int
+    job1::Any
+    job2::Any
 end
-_SecTCache(ncells::Int, disjoint::Bool) = _SecTCache(0, ncells, disjoint, 1)
+_SecTCache(ncells::Int, disjoint::Bool, work::Int = ncells) =
+    _SecTCache(0, ncells, disjoint, work, 1, nothing, nothing)
 _sec_tcache(cg::_CGBuilt) = _SecTCache(cg.ncells, cg.outs_disjoint)
 _sec_tcache(::Nothing) = _SecTCache(0, false)
 
@@ -1944,7 +2768,7 @@ _sec_tcache(::Nothing) = _SecTCache(0, false)
 function _sec_prep_threads!(tc::_SecTCache)
     tc.state == 0 || return tc
     minc = _thread_min_cells()
-    nchunks = min(Threads.nthreads(), max(1, div(tc.ncells, max(minc, 1))))
+    nchunks = min(Threads.nthreads(), tc.ncells, max(1, div(tc.work, max(minc, 1))))
     if nchunks < 2
         tc.state = -1                 # too few cells to be worth a dispatch
         _tally_thread!(:cg_serial_small)
@@ -1961,25 +2785,57 @@ function _sec_prep_threads!(tc::_SecTCache)
     return tc
 end
 
-# Run one generated function's cells as `nchunks` STATIC chunks — the
-# `_BATCH_RUNNER` hook (EarthSciASTPolyesterExt) over the `_chunk_ordinals`
-# partition; each chunk re-runs the (pure) tab-hoist + invariant prologue on
-# its own stack and walks its `[a, b)` slice of every kernel. Only reached
-# when `_threads_available()` was true, so the runner is non-null.
-function _run_cg_section_threaded!(f, tabs, du, u, p, t, tc::_SecTCache)
-    nchunks = tc.nchunks
-    run_chunk = function (c::Int)
-        f(du, u, p, t, tabs, c, nchunks)
-        return nothing
+# This section's job for body type `B` and argument type `A`, from the two
+# cached slots or freshly made (the only allocation, once per argument type).
+@inline function _section_job!(tc::_SecTCache, ::Type{B}, ::Type{A}) where {B,A}
+    J = _ThreadJob{B,A}
+    j = tc.job1
+    j isa J && return j
+    j2 = tc.job2
+    tc.job2 = j
+    if j2 isa J
+        tc.job1 = j2
+        return j2
     end
-    _BATCH_RUNNER[](run_chunk, nchunks)
+    jn = J()
+    tc.job1 = jn
+    return jn
+end
+
+# Run `body(args, c, nchunks)` for every chunk of the section's verdict.
+@inline function _run_chunked!(tc::_SecTCache, body::B, args::A) where {B,A}
+    j = _section_job!(tc, B, A)
+    j.body = body
+    j.args = args
+    j.nchunks = tc.nchunks
+    _dispatch_job!(j)
     return nothing
 end
 
-# Per-call gate for the chunked path (the shared `_threads_available()` plus
-# the codegen-specific kill switch; both re-read per call, so toggling either
-# env var between calls flips the route without touching the cached verdict).
-@inline _cg_threads_available() = _threads_available()
+# A generated function's chunk: the static partition (`_chunk_ordinals`) is
+# computed inside it, and each chunk re-runs the (pure) tab-hoist + invariant
+# prologue on its own stack and walks its `[a, b)` slice of every kernel.
+struct _CGChunk{F,TB}
+    f::F
+    tabs::TB
+end
+@inline (b::_CGChunk)(args, c::Int, nchunks::Int) =
+    b.f(args[1], args[2], args[3], args[4], b.tabs, c, nchunks)
+
+# Run one generated function chunked when the section's verdict allows, and
+# serially otherwise (one thread, too few cells, shared out-slots): its
+# `(1, 1)` instance, or `ntiles` serial cell tiles (`_run_cg_section_serial!`).
+# Every value type takes the same route: a chunk computes each of
+# its cells exactly as the serial instance does.
+@inline function _run_cg_maybe_threaded!(f, tabs, du, u, p, t, tc::_SecTCache,
+                                         ntiles::Int = 1)
+    if _threads_available() && _sec_prep_threads!(tc).state == 1
+        _run_chunked!(tc, _CGChunk(f, tabs), (du, u, p, t))
+    else
+        _run_cg_section_serial!(f, tabs, du, u, p, t, ntiles)
+    end
+    return nothing
+end
 
 # ---- The RHS's kernel section (wired into `_make_rhs`, acc_merge.jl) --------
 # One concretely-typed callable holding the generated function (or `Nothing`)
@@ -2013,21 +2869,46 @@ struct _KernelSection{F,TB,G,GTB}
     # function (primary / overflow), see `_SecTCache` above.
     tcache::_SecTCache
     dual_tcache::_SecTCache
+    # Serial cell tiling of the primary function: the number of static chunks
+    # a serial call runs back to back (1 = one pass per kernel). See
+    # `_section_tiles`.
+    ntiles::Int
+end
+
+# SERIAL TILING. The primary function runs chunk `c` of every emitted kernel
+# back to back (the threaded path's granularity, above), so a serial call can
+# run the chunks one after another instead of each kernel over all its cells:
+# several kernels over the same cells — one per species of a reaction system
+# lifted onto a grid — then share the cells' operands while they are still in
+# cache, where one pass per kernel streams every operand from memory once per
+# kernel. Chunk boundaries are not observable (the threaded path's argument:
+# every fold is inside one cell, out-slots are disjoint, `u` is read-only), so
+# a tiled call is bitwise the untiled one. Tiled only when the section has
+# several kernels and globally disjoint out-slots, with about
+# `_SECTION_TILE_CELLS` cells of each kernel per chunk.
+const _SECTION_TILE_CELLS = 1024
+function _section_tiles(ncells::Int, n_emitted::Int, disjoint::Bool)
+    (disjoint && n_emitted >= 2) || return 1
+    return max(1, div(ncells, n_emitted * _SECTION_TILE_CELLS))
+end
+
+@inline function _run_cg_section_serial!(f, tabs, du, u, p, t, ntiles::Int)
+    if ntiles == 1
+        f(du, u, p, t, tabs, 1, 1)
+    else
+        for c in 1:ntiles
+            f(du, u, p, t, tabs, c, ntiles)
+        end
+    end
+    return nothing
 end
 
 @inline function (s::_KernelSection{F,TB,G})(du, u, p, t, ::Type{T}) where {F,TB,G,T}
     if F !== Nothing
-        # PRIMARY generated function, chunked at Float64 when the section
-        # verdict allows (threaded cell axis above; Float64-only — Dual calls
-        # stay serial). Any serial verdict (small,
-        # shared outs, no Polyester, either kill switch) runs the (1, 1)
-        # instance — the serial entry.
-        if T === Float64 && _cg_threads_available() &&
-           _sec_prep_threads!(s.tcache).state == 1
-            _run_cg_section_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache)
-        else
-            s.cgf(du, u, p, t, s.cgtabs, 1, 1)
-        end
+        # PRIMARY generated function, chunked when the section verdict allows
+        # (threaded cell axis above), at every value type. Any serial verdict
+        # (small, shared outs, one thread) runs it tiled serially.
+        _run_cg_maybe_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache, s.ntiles)
     end
     kernels = s.kernels
     if G !== Nothing && T !== Float64
@@ -2035,7 +2916,7 @@ end
         # `dual_resid`. Emitted kernels write disjoint du slots from residual
         # ones (each state slot has exactly one equation/cell), so the order
         # generated-first is value-identical to the in-order kernel loop.
-        s.dualf(du, u, p, t, s.dualtabs, 1, 1)
+        _run_cg_maybe_threaded!(s.dualf, s.dualtabs, du, u, p, t, s.dual_tcache)
         @inbounds for j in s.dual_resid
             _run_acc_kernel!(du, u, p, t, kernels[j], T)
         end
@@ -2057,12 +2938,7 @@ end
         # the per-cell interpreter. Kernels the overflow emission itself
         # declined keep the interpreter, in the same order as the plain loop
         # below.
-        if _cg_threads_available() && _sec_prep_threads!(s.dual_tcache).state == 1
-            _run_cg_section_threaded!(s.dualf, s.dualtabs, du, u, p, t,
-                                      s.dual_tcache)
-        else
-            s.dualf(du, u, p, t, s.dualtabs, 1, 1)
-        end
+        _run_cg_maybe_threaded!(s.dualf, s.dualtabs, du, u, p, t, s.dual_tcache)
         @inbounds for j in s.dual_resid
             _run_acc_kernel!(du, u, p, t, kernels[j], Float64)
         end
@@ -2125,9 +3001,10 @@ function _refuse_interpreted_cells(cells::AbstractVector)
 end
 
 function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
-                              shared_cache::Union{Nothing,_CSECache}=nothing)
+                              shared_cache::Union{Nothing,_CSECache}=nothing,
+                              nst::Int=0)
     cg = _codegen_disabled() ? nothing :
-         _build_codegen_rhs(acc_kernels; shared_cache=shared_cache)
+         _build_codegen_rhs(acc_kernels; shared_cache=shared_cache, nst=nst)
     if cg === nothing
         kernels = collect(_AccKernel, acc_kernels)
         n_emitted = 0
@@ -2150,13 +3027,14 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
     dg = (_codegen_disabled() || _dual_codegen_disabled() || isempty(kernels)) ?
          nothing :
          _build_codegen_rhs(kernels; budget=_dual_codegen_node_budget(),
-                            tally=:dual_codegen, shared_cache=shared_cache)
+                            tally=:dual_codegen, shared_cache=shared_cache, nst=nst)
     if dg === nothing
         _refuse_interpreted_kernels(kernels, collect(Int, 1:length(kernels)),
                                     primary_reasons, isempty(primary_reasons))
         return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                               nothing, nothing, 0, collect(Int, 1:length(kernels)),
-                              false, _sec_tcache(cg), _sec_tcache(nothing))
+                              false, _sec_tcache(cg), _sec_tcache(nothing),
+                              _cg_section_tiles(cg, n_emitted))
     end
     # Float64 overflow routing (ess-f64ofl): armed whenever the overflow
     # function exists and the plan has not turned the routing off. A build with
@@ -2168,5 +3046,10 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
     _refuse_interpreted_kernels(kernels, dual_resid, dg.reasons, false)
     return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                           dg.f, dg.tabs, count(dg.covered), dual_resid, f64cg,
-                          _sec_tcache(cg), _sec_tcache(dg))
+                          _sec_tcache(cg), _sec_tcache(dg),
+                          _cg_section_tiles(cg, n_emitted))
 end
+
+_cg_section_tiles(::Nothing, ::Int) = 1
+_cg_section_tiles(cg::_CGBuilt, n_emitted::Int) =
+    _section_tiles(cg.ncells, n_emitted, cg.outs_disjoint)

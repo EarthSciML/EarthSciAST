@@ -13,20 +13,14 @@
 # and `rhs_alloc_bytes(f!,du,u0,p,t)` — which any future evaluator work can call.
 #
 # THREADED TIER, and why this file pins the SERIAL path explicitly.
-# The codegen tier can run a section's cell axis as static chunks through
-# Polyester (`_run_cg_section_threaded!`, codegen_kernel.jl). That dispatch is
-# NOT free: handing a closure over `du`/`u`/`p`/`tabs` to Polyester's batch
-# runner costs a fixed ~96 B per call (48 B closure + 48 B
-# `ManualMemory.Reference`; both non-isbits, so Polyester boxes them). The cost
-# is per DISPATCH, not per cell — it does not grow with N — but it is not 0.
+# The codegen tier can run a section's cell axis as static chunks on
+# Polyester's worker pool (`_run_cg_maybe_threaded!`, codegen_kernel.jl;
+# the dispatch is thread_dispatch.jl's, and allocates nothing either).
 #
-# The tier arms itself when Polyester is loaded, and Polyester arrives as a
-# TRANSITIVE dependency of the SciML stack (ModelingToolkit / OrdinaryDiffEq /
-# Catalyst). So whether these measurements see the serial or the threaded path
-# depends on which OTHER test files ran first in the same process — this file
-# alone loads no SciML package and measures the serial path, while the full
-# `runtests.jl` has MTK loaded by the time it gets here and measures the
-# threaded one. That is a property of the process, not of the kernels.
+# The tier arms itself whenever Julia runs with more than one thread, so
+# whether these measurements see the serial or the threaded path depends on
+# how the process was started. That is a property of the process, not of the
+# kernels.
 #
 # The zero-allocation DISCIPLINE this file exists to guard (`@views`/gather
 # slices, preallocated scratch, fused in-place broadcasts, in-place semiring
@@ -36,9 +30,7 @@
 # and caches. A gate re-read on EVERY call could not be used here at all: the
 # `get(ENV, …)` itself allocates a String per call once the variable is set.
 #
-# The threaded dispatch is then covered on its own terms by the final testset:
-# its cost must stay CONSTANT in N, which is the real invariant (a per-cell
-# leak on the chunked path would grow with the grid).
+# The threaded dispatch is then covered on its own terms by the final testset.
 
 using Test
 using EarthSciAST
@@ -308,21 +300,14 @@ end
 end  # withenv(_SERIAL_PIN...)
 
 # The chunked cell axis on its own terms. Only reachable when the threaded tier
-# is actually armed (Polyester loaded — usually transitively via the SciML
-# stack — and `nthreads() > 1`), so it is skipped in a bare `julia --project`
-# run of this file and exercised in the full suite.
+# is actually armed (`nthreads() > 1`), so it is skipped in a one-thread run
+# of this file.
 #
-# The dispatch costs a FIXED ~96 B per call (see the header). What must hold is
-# that the cost is per dispatch and not per CELL: a real leak in a chunked
-# kernel would scale with the grid. So this pins N-INDEPENDENCE plus a small
-# absolute ceiling, which is the same property the serial testsets pin with
-# `== 0` — just at the constant the batch runner actually costs.
-@testset "threaded cell axis: per-dispatch cost is constant in N (ess-9cc)" begin
+# A threaded call allocates nothing, exactly like a serial one, at every N.
+@testset "threaded cell axis: a threaded call allocates nothing (ess-9cc)" begin
     if !EarthSciAST._threads_available()
         @info "skipping threaded-tier allocation test: threaded tier not armed " *
-              "(needs Polyester loaded and nthreads() > 1; " *
-              "nthreads=$(Threads.nthreads()), " *
-              "polyester=$(EarthSciAST._polyester_loaded()))"
+              "(needs nthreads() > 1; nthreads=$(Threads.nthreads()))"
     else
         # Small min-cells so every N below genuinely chunks; read once per
         # section and cached, so it adds no per-call allocation.
@@ -331,10 +316,7 @@ end  # withenv(_SERIAL_PIN...)
                 ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
                 built_rhs_alloc_bytes(_stencil_model(N); initial_conditions=ics)
             end
-            # Grid grows 16x; the per-call cost must not move at all.
-            @test allequal(bytes)
-            # And it must stay a small constant, not creep toward per-cell.
-            @test all(<=(256), bytes)
+            VERSION >= v"1.12" && @test all(==(0), bytes)
 
             fbytes = map((1024, 16384)) do N
                 ics = Dict("u[$k]" => 0.1k for k in 1:N)
@@ -342,8 +324,7 @@ end  # withenv(_SERIAL_PIN...)
                     initial_conditions=ics,
                     param_arrays=Dict("forcing" => collect(1.0:Float64(N))))
             end
-            @test allequal(fbytes)
-            @test all(<=(256), fbytes)
+            VERSION >= v"1.12" && @test all(==(0), fbytes)
         end
     end
 end

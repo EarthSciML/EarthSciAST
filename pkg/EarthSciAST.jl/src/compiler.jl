@@ -52,6 +52,7 @@ struct CompilerPlan
     codegen_body_split::Bool
     cg_foreign_scratch::Bool
     cg_helper_dedup::Bool
+    scalar_codegen::Bool          # the scalar equations and the prelude (scalar_codegen.jl)
     # ---- the array cascade ----
     stencil::Bool                 # the affine stencil tier
     array_contraction::Bool
@@ -92,7 +93,7 @@ end
 
 _plan_all(name::Symbol, strict::Bool, on::Bool) =
     CompilerPlan(name, strict,
-                 on, on, on, on, on, on,
+                 on, on, on, on, on, on, on,
                  on, on, on, on, on, on, on, on, on,
                  on, on, on, on, on, on, on,
                  on, on,
@@ -232,9 +233,12 @@ landed on, and every decline it collected getting there.
     build or run), `:percell_build` (scalarized per output cell at BUILD, then
     compiled),
     `:codegen`, `:interpreter` (walked per cell as trees on every call);
-    `:scalar` (a scalar equation, walked once per slot on every call by the
-    scalar walker) and `:scalar_loop` (the same, with a reduction kept as a
-    runtime loop the walker runs over its whole length on every call);
+    `:scalar_codegen` (a scalar equation emitted as generated code, with the
+    other units of its structural class, by the scalar codegen tier) and
+    `:scalar_loop_codegen` (the same, with a reduction kept as a runtime loop
+    in that code); `:scalar` and `:scalar_loop` are those equations when the
+    tier is off (`interpreter`) or could not model them: walked once per slot
+    on every call by the scalar walker;
   - construction: `:setup_codegen` (filled through the right-hand-side cascade
     and emitted code, run once), `:setup_compiled` (compiled once, evaluated per
     cell),
