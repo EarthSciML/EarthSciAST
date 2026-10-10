@@ -1616,7 +1616,7 @@ function _observed_field_memo(prob::EsmProblem, name::String,
     insp = prob.inspection
     memoizable = u === nothing && t === nothing
     memoizable && (p = nothing)
-    epoch = _FORCING_EPOCH[]
+    epoch = _epoch_value(prob.dm.epoch)
     key = (prob.run_file, name)
     if memoizable
         hit = lock(() -> get(insp.observed_memo, key, nothing), insp.observed_lock)

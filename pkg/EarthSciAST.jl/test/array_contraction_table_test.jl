@@ -229,6 +229,99 @@ end
         @test allequal(nodes)
     end
 
+    @testset "a gather of bare loop counters is resolved per table entry" begin
+        # At a table entry every loop counter has one value, so a gather whose
+        # subscripts are all counters reads a per-entry column built once:
+        # `mem[i, j]` (a const gather of an output and a contracted counter)
+        # and `y[j]` (a state gather that is out of `y`'s range, the zero
+        # ghost, at the longest parent's last member). Bit-identical to the
+        # interpreter; the gathers no longer resolve subscripts per term.
+        # `C[j]` past its end is the run's error under both compilers.
+        sizes = [1, 3, 2, 0, 4]
+        n, mx, nf = length(sizes), maximum(sizes), sum(sizes)
+        members = [vcat(collect(sum(sizes[1:i-1]; init=0) .+ (1:sizes[i])),
+                        zeros(Int, mx - sizes[i])) for i in 1:n]
+        idx(v, a...) = Dict("op" => "index", "args" => Any[v, a...])
+        op(o, a...) = Dict("op" => o, "args" => Any[a...])
+        cst(v) = Dict("op" => "const", "args" => Any[], "value" => v)
+        dlhs(v, i, set) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[i],
+            "ranges" => Dict(i => Dict("from" => set)),
+            "expr" => Dict("op" => "D", "args" => Any[idx(v, i)], "wrt" => "t"))
+        decay(v, i, set) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[i],
+            "ranges" => Dict(i => Dict("from" => set)), "expr" => op("*", -0.1, idx(v, i)))
+        mk(term) = Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "act_entry"),
+            "index_sets" => Dict(
+                "parents" => Dict("kind" => "interval", "size" => n),
+                "maxm" => Dict("kind" => "interval", "size" => mx),
+                "short" => Dict("kind" => "interval", "size" => mx - 1),
+                "flat" => Dict("kind" => "interval", "size" => nf),
+                "mop" => Dict("kind" => "ragged", "of" => Any["parents"],
+                              "offsets" => "cnt", "values" => "mem")),
+            "models" => Dict("M" => Dict{String,Any}(
+                "variables" => Dict(
+                    "cnt" => Dict("type" => "unknown", "shape" => Any["parents"]),
+                    "mem" => Dict("type" => "unknown", "shape" => Any["parents", "maxm"]),
+                    "C" => Dict("type" => "unknown", "shape" => Any["short"]),
+                    "x" => Dict("type" => "unknown", "shape" => Any["flat"]),
+                    "y" => Dict("type" => "unknown", "shape" => Any["short"]),
+                    "tot" => Dict("type" => "unknown", "shape" => Any["parents"])),
+                "equations" => Any[
+                    Dict("lhs" => "cnt", "rhs" => cst(sizes)),
+                    Dict("lhs" => "mem", "rhs" => cst(members)),
+                    Dict("lhs" => "C", "rhs" => cst([1.5 + 0.25k for k in 1:mx-1])),
+                    Dict("lhs" => dlhs("x", "k", "flat"), "rhs" => decay("x", "k", "flat")),
+                    Dict("lhs" => dlhs("y", "k", "short"), "rhs" => decay("y", "k", "short")),
+                    Dict("lhs" => dlhs("tot", "i", "parents"),
+                         "rhs" => Dict("op" => "faq", "args" => Any[], "semiring" => "sum_product",
+                             "output_idx" => Any["i"],
+                             "ranges" => Dict("i" => Dict("from" => "parents"),
+                                              "j" => Dict("from" => "mop", "of" => Any["i"])),
+                             "expr" => term))])))
+        good = op("+", op("*", idx("x", idx("mem", "i", "j")), op("+", "j", 0.5)),
+                  op("*", idx("y", "j"), op("+", idx("mem", "i", "j"), 0.25)))
+        path = joinpath(mktempdir(), "act_entry.esm")
+        open(io -> JSON3.write(io, mk(good)), path, "w")
+        same, tally, tiers, (pn, u), _ = _act_agree(path)
+        @test same
+        @test get(tally, :array_contraction_codegen, 0) == 1
+        @test !haskey(tiers, :percell_build)
+        RGF = _ACT.RuntimeGeneratedFunctions
+        src = Ref("")
+        seen = IdDict{Any,Nothing}()
+        walk(x) = begin
+            T = typeof(x)
+            (isbitstype(T) || x isa AbstractString || x isa Symbol || x isa Module) && return
+            if ismutable(x)
+                haskey(seen, x) && return
+                seen[x] = nothing
+            end
+            if x isa _ACT._ArrayContraction
+                src[] *= string(RGF.get_expression(x.f))
+            elseif x isa Array
+                eltype(x) <: Number && return
+                for i in eachindex(x); isassigned(x, i) && walk(x[i]); end
+            elseif !(x isa AbstractDict)
+                for i in 1:nfields(x); isdefined(x, i) && walk(getfield(x, i)); end
+            end
+        end
+        walk(pn.f!)
+        @test occursin("_cgent", src[])
+        @test !occursin("_const_gather_sub", src[])
+        bad = op("+", good, idx("C", "j"))
+        path = joinpath(mktempdir(), "act_entry_oob.esm")
+        open(io -> JSON3.write(io, mk(bad)), path, "w")
+        for c in (:native, :interpreter)
+            err = try
+                pr, _ = _act_problem(path, c)
+                _act_du(pr, pr.u0 .+ 0.5)
+                nothing
+            catch e
+                e
+            end
+            @test err isa _ACT.TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY_OOB"
+        end
+    end
+
     # A FILTER with no contracted index: each output cell is one combination,
     # 0̄ where the predicate is false (esm-schema `filter`). The array-equation
     # path puts it on the term as the same `ifelse` guard, ahead of every tier,

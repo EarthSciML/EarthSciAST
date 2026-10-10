@@ -446,6 +446,17 @@ pub(crate) enum Instr {
     /// identity is by construction (elementwise maps are independent across
     /// elements; no reductions are ever fused).
     Fused { spec: u32 },
+    /// Execute the lane program `lanes[spec]`: one scalar micro-program run
+    /// once per lane, each lane reading its own scalar sources and writing
+    /// its own `dy` positions (see [`LaneSpec`]). Defines no slot.
+    ///
+    /// The rerolling pass ([`super::reroll`]) emits it: scalar instructions
+    /// repeated with one structure over different scalars (one box of a
+    /// many-box chemistry document per repetition) become one lane each.
+    /// Per lane it applies exactly the kernels the scalar instructions
+    /// applied, in their order, to the same operand values, so every value
+    /// is the one the scalar program computed.
+    Lanes { spec: u32 },
 }
 
 impl Instr {
@@ -481,7 +492,8 @@ impl Instr {
             | Instr::Fallback { .. }
             | Instr::Export { .. }
             | Instr::DyWrite { .. }
-            | Instr::Fused { .. } => None,
+            | Instr::Fused { .. }
+            | Instr::Lanes { .. } => None,
         }
     }
 
@@ -495,6 +507,13 @@ impl Instr {
                 f(sw.out);
                 for &c in &sw.coords {
                     f(c);
+                }
+            }
+            Instr::Lanes { spec } => {
+                for w in &t.lanes[*spec as usize].writes {
+                    if let LaneDst::Slot(s) = w.dst {
+                        f(s);
+                    }
                 }
             }
             Instr::Fused { spec } => {
@@ -567,6 +586,19 @@ impl Instr {
                 }
             }
             Instr::Ramp { .. } | Instr::ConstArray { .. } | Instr::LoadForcing { .. } => {}
+            Instr::Lanes { spec } => {
+                let ls = &t.lanes[*spec as usize];
+                for inp in &ls.inputs {
+                    if inp.kind == LaneKind::Slot {
+                        for l in 0..ls.lanes as usize {
+                            op(&Operand::Slot(inp.ix.at(l)));
+                        }
+                    }
+                }
+                for sc in &ls.scalars {
+                    op(sc);
+                }
+            }
             Instr::Interp { x, y, .. } => {
                 op(x);
                 if let Some(y) = y {
@@ -650,6 +682,7 @@ impl Instr {
             Instr::Export { .. } => "Export",
             Instr::DyWrite { .. } => "DyWrite",
             Instr::Fused { .. } => "Fused",
+            Instr::Lanes { .. } => "Lanes",
         }
     }
 }
@@ -667,7 +700,7 @@ impl Instr {
 pub(crate) type GroupIx = u16;
 
 /// Reference to a value inside a fused micro-program.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum MRef {
     /// Temporary register defined by an earlier micro-op of the same group.
     Reg(GroupIx),
@@ -749,6 +782,26 @@ pub(crate) enum MicroOp {
         swap3: bool,
         out: GroupIx,
     },
+    /// An absorbed [`Instr::Scan`] along one axis of the group box: `row`
+    /// steps along that axis, each `post` flat elements apart (the extent of
+    /// the axes after it). Lane `q = flat % post` keeps its running fold of
+    /// `a` from `init` in carry slot `carry + q`, restarted where the step
+    /// index `(flat / post) % row` is 0 and carried across chunks and runs.
+    /// Inclusive: `acc = kernel(op)(acc, a); out = acc`; exclusive: `out =
+    /// acc; acc = kernel(op)(acc, a)`. A group visits its box in ascending
+    /// flat order, which visits every lane's steps in ascending order, so
+    /// every element folds the same terms in the same association as
+    /// `Instr::Scan`.
+    Scan {
+        op: BinCode,
+        a: MRef,
+        init: f64,
+        inclusive: bool,
+        row: u32,
+        post: u32,
+        carry: u32,
+        out: GroupIx,
+    },
 }
 
 /// One array input of a fused group.
@@ -780,6 +833,225 @@ pub(crate) struct FusedInput {
     /// `src[data_subscript(inputs[by][k], n)]`, the zero ghost when that is
     /// `None`; `inputs[by]` is the subscript array, an aligned input.
     pub index: Option<(GroupIx, usize)>,
+    /// `Some`: a folded [`Instr::Gather`] whose shifts would split the box
+    /// into too many runs to fold as a shifted read (a shift along the
+    /// innermost axis), read through its plan into this input's chunk
+    /// register one chunk at a time (see [`ChunkGather`]). An aligned input
+    /// otherwise.
+    pub gather: Option<Box<ChunkGather>>,
+}
+
+/// A same-rank gather plan with no fixed, broadcast or permuted axes, read
+/// over a flat range of its output box: the element at row-major output
+/// position `(i_0, .., i_{d-1})` is the source element at `src_off + Σ
+/// strides[a] · (so_a + i_a - o_a)` when every `i_a` lies in a segment
+/// `(o_a, len, so_a)` of axis `a`, and the zero ghost otherwise — the
+/// element `Instr::Gather` would write there (its segments are disjoint).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ChunkGather {
+    /// Per output axis: copy segments `(out_off, len, src_off)`, ascending in
+    /// `out_off`.
+    pub segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]>,
+    /// Per output axis: the source's row-major flat stride.
+    pub strides: SmallVec<[i64; 4]>,
+    /// The output box.
+    pub shape: DimU,
+    /// Read the whole box once when the group starts, into the executor's
+    /// scratch, and then like an aligned input — for rows so short, or a
+    /// group so light, that the per-row work of a chunk read costs more. The
+    /// choice changes no instruction, so it may depend on the box.
+    pub whole: bool,
+}
+
+impl ChunkGather {
+    /// The source coordinate along axis `a` at output coordinate `i`, or
+    /// `None` in the ghost.
+    #[inline(always)]
+    fn coord(&self, a: usize, i: usize) -> Option<usize> {
+        self.segs[a]
+            .iter()
+            .find(|&&(o, l, _)| o <= i && i < o + l)
+            .map(|&(o, _, so)| so + (i - o))
+    }
+
+    /// The flat source offset of output position `flat`, or `None` in the
+    /// ghost (the per-element definition the reference executor uses).
+    pub(crate) fn src_offset(&self, flat: usize) -> Option<i64> {
+        let mut rest = flat;
+        let mut off = 0i64;
+        for a in (0..self.shape.len()).rev() {
+            let i = rest % self.shape[a];
+            rest /= self.shape[a];
+            off += self.strides[a] * self.coord(a, i)? as i64;
+        }
+        Some(off)
+    }
+
+    /// Write output positions `at .. at + c` into `dst[0 .. c]`, one row of
+    /// the innermost axis at a time: the leading axes' source offset is
+    /// carried from row to row like an odometer, and each row is its
+    /// innermost-axis segments copied and the gaps between them zeroed. A
+    /// plain shift ([`Self::flat_shift`]) is copied in one piece instead.
+    ///
+    /// # Safety
+    /// `src` must hold the plan's source box row-major and `dst` `c`
+    /// elements, disjoint from it.
+    #[inline(always)]
+    pub(crate) unsafe fn fill(&self, src: *const f64, at: usize, c: usize, dst: *mut f64) {
+        if let Some(delta) = self.flat_shift() {
+            unsafe { self.fill_shifted(delta, src, at, c, dst) };
+            return;
+        }
+        let nd = self.shape.len();
+        let last = self.shape[nd - 1];
+        let s_last = self.strides[nd - 1];
+        // The leading coordinates of the first row, and each one's source
+        // contribution (`None` in the ghost).
+        let mut idx: SmallVec<[usize; 4]> = SmallVec::from_elem(0, nd - 1);
+        let mut part: SmallVec<[Option<i64>; 4]> = SmallVec::from_elem(None, nd - 1);
+        let mut rest = at / last;
+        for a in (0..nd - 1).rev() {
+            idx[a] = rest % self.shape[a];
+            rest /= self.shape[a];
+            part[a] = self.coord(a, idx[a]).map(|x| self.strides[a] * x as i64);
+        }
+        let mut col = at % last;
+        let mut k = 0usize;
+        while k < c {
+            let len = (c - k).min(last - col);
+            let off = part.iter().try_fold(0i64, |o, p| p.map(|p| o + p));
+            unsafe {
+                let d = std::slice::from_raw_parts_mut(dst.add(k), len);
+                match off {
+                    None => d.fill(0.0),
+                    Some(off) => {
+                        // Segments are disjoint; walk them in output order,
+                        // zeroing what lies between.
+                        let mut pos = col;
+                        for &(o, l, so) in &self.segs[nd - 1] {
+                            let lo = o.max(col);
+                            let hi = (o + l).min(col + len);
+                            if lo >= hi {
+                                continue;
+                            }
+                            if lo > pos {
+                                d[pos - col..lo - col].fill(0.0);
+                            }
+                            let s = src.offset((off + s_last * (so + lo - o) as i64) as isize);
+                            let out = &mut d[lo - col..hi - col];
+                            if s_last == 1 {
+                                out.copy_from_slice(std::slice::from_raw_parts(s, hi - lo));
+                            } else {
+                                for (j, x) in out.iter_mut().enumerate() {
+                                    *x = *s.offset(j as isize * s_last as isize);
+                                }
+                            }
+                            pos = pos.max(hi);
+                        }
+                        if pos < col + len {
+                            d[pos - col..].fill(0.0);
+                        }
+                    }
+                }
+            }
+            k += len;
+            col = 0;
+            // Next row: advance the leading odometer.
+            let mut a = nd - 1;
+            while a > 0 {
+                a -= 1;
+                idx[a] += 1;
+                if idx[a] < self.shape[a] {
+                    part[a] = self.coord(a, idx[a]).map(|x| self.strides[a] * x as i64);
+                    break;
+                }
+                idx[a] = 0;
+                part[a] = self.coord(a, 0).map(|x| self.strides[a] * x as i64);
+            }
+        }
+    }
+
+    /// The flat offset `delta` when the gather is one shift of a source laid
+    /// out like its output box (`strides` row-major over `shape`, one
+    /// non-empty segment per axis): output position `flat` inside the
+    /// segment box then reads source position `flat + delta`.
+    #[inline(always)]
+    fn flat_shift(&self) -> Option<i64> {
+        let mut stride = 1i64;
+        let mut delta = 0i64;
+        for a in (0..self.shape.len()).rev() {
+            let &[(o, l, so)] = &self.segs[a][..] else {
+                return None;
+            };
+            if self.strides[a] != stride || l == 0 {
+                return None;
+            }
+            delta += stride * (so as i64 - o as i64);
+            stride *= self.shape[a] as i64;
+        }
+        Some(delta)
+    }
+
+    /// [`Self::fill`] for a [`Self::flat_shift`] gather: the window's part of
+    /// the segment box's flat span copied in one piece, then the ghost
+    /// positions in it zeroed, axis by axis (each axis's out-of-segment
+    /// slabs, a ghost reached twice is zeroed twice).
+    ///
+    /// # Safety
+    /// As for [`Self::fill`].
+    #[inline(always)]
+    unsafe fn fill_shifted(&self, delta: i64, src: *const f64, at: usize, c: usize, dst: *mut f64) {
+        let nd = self.shape.len();
+        let (mut first, mut last, mut stride) = (0usize, 0usize, 1usize);
+        for a in (0..nd).rev() {
+            let (o, l, _) = self.segs[a][0];
+            first += stride * o;
+            last += stride * (o + l - 1);
+            stride *= self.shape[a];
+        }
+        let end = at + c;
+        let (lo, hi) = (at.max(first), end.min(last + 1));
+        if lo < hi {
+            // Every position of `[first, last]` reads in bounds: its ends
+            // read the segment box's first and last source elements.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    src.offset(lo as isize + delta as isize),
+                    dst.add(lo - at),
+                    hi - lo,
+                )
+            };
+        }
+        let mut inner = 1usize;
+        for a in (0..nd).rev() {
+            let (o, l, _) = self.segs[a][0];
+            let n = self.shape[a];
+            let blk = n * inner;
+            if o > 0 || o + l < n {
+                let gaps = [(0, o * inner), ((o + l) * inner, blk)];
+                let mut q = at - at % blk;
+                while q < end {
+                    for &(g0, g1) in &gaps {
+                        let (s, e) = ((q + g0).max(at), (q + g1).min(end));
+                        if s >= e {
+                            continue;
+                        }
+                        // One-element gaps (a unit shift's ghost row ends)
+                        // are stored directly rather than through `memset`.
+                        unsafe {
+                            if e - s == 1 {
+                                *dst.add(s - at) = 0.0;
+                            } else {
+                                std::slice::from_raw_parts_mut(dst.add(s - at), e - s).fill(0.0);
+                            }
+                        }
+                    }
+                    q += blk;
+                }
+            }
+            inner = blk;
+        }
+    }
 }
 
 /// Sentinel source offset: the input reads the gather's Dirichlet ghost
@@ -932,16 +1204,55 @@ pub(crate) struct FusedSpec {
     pub n_splat_regs: GroupIx,
     /// `(register, slot)` live-outs stored back to the slab.
     pub outputs: SmallVec<[(GroupIx, SlotId); 2]>,
+    /// `(micro-op, output)`: the micro-op writes that entry of `outputs`
+    /// straight to its destination instead of its register, which is then
+    /// not stored. It is the register's last writer, no later micro-op (nor
+    /// the reduction) reads the register, and no other output names it. A
+    /// group's outputs never share storage with its inputs (a `Fused`
+    /// instruction is not alias-safe for the slab coloring), so an early
+    /// store cannot change what a later micro-op reads. In ascending
+    /// micro-op order (the executor walks it alongside the micro-ops).
+    pub direct: SmallVec<[(u32, u32); 2]>,
+    /// Absorbed scans the executor runs in one loop with their single-use
+    /// `+ - * /` neighbours (see [`ScanFuse`]).
+    pub scan_fuse: SmallVec<[ScanFuse; 1]>,
     /// Precompiled run schedule (see [`RunSchedule`]); a group with no
     /// shifted inputs has the single run `(0, n_elems, [])`.
     pub schedule: RunSchedule,
     /// An absorbed [`Instr::Reduce`] over the group box, folding one register
     /// instead of storing it (see [`FusedReduce`]).
     pub reduce: Option<FusedReduce>,
+    /// For a group with an absorbed reduction whose box is a few leading
+    /// positions of one run each (run `k` covering `[k * n_inner, (k + 1) *
+    /// n_inner)`) and no scan: those runs, expanded. The executor then walks
+    /// the accumulator chunk by chunk, folding every position into a chunk
+    /// before the next — the same per-output fold order.
+    pub interleave: Option<Vec<FusedRun>>,
     /// Diagnostics: original instructions replaced (members incl. deleted
     /// folded gathers).
     pub n_fused_instrs: u32,
     pub n_folded_gathers: u32,
+}
+
+/// A [`MicroOp::Scan`] along the group box's last axis (`post == 1`) whose
+/// operand, when `pre`, is the `Bin` just before it (read by the scan
+/// alone), and whose value, when `post`, no micro-op but the `Bin` just
+/// after it reads (it may still be a live-out, which `keep` says). The
+/// neighbours are `+ - * /`, the scan a sum or a product. Under Float64 the
+/// executor runs them as one loop, element by element in order: `x =
+/// pre(..)`, the scan's combine, `out = post(..)` — the same kernels in the
+/// same order as the three passes, with the absorbed neighbours' registers
+/// never written. The latency-bound fold then carries the neighbours' loads
+/// and stores, which otherwise each take a pass of their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScanFuse {
+    /// The scan's micro-op index.
+    pub scan: u32,
+    pub pre: bool,
+    pub post: bool,
+    /// With `post`: the scan's value is also a live-out, so the loop stores
+    /// it to its register as well (unless no output it feeds is stored).
+    pub keep: bool,
 }
 
 /// The fold of a fused group's value over its box's LEADING axes — an
@@ -995,6 +1306,9 @@ pub struct FuseStats {
     /// Reductions absorbed into the group producing their source
     /// ([`FusedReduce`]; the `Reduce` instruction is deleted).
     pub n_reduces_folded: usize,
+    /// Scans absorbed into a group as [`MicroOp::Scan`] (the `Scan`
+    /// instruction is deleted).
+    pub n_scans_folded: usize,
     /// Group size histogram buckets: [2-3, 4-7, 8-15, 16-31, 32-63, 64+]
     /// member instructions.
     pub group_size_hist: [usize; 6],
@@ -1285,6 +1599,7 @@ pub(crate) struct SlotTables<'a> {
     pub assemblies: &'a [AssembleSpec],
     pub sweeps: &'a [SweepSpec],
     pub scalar_reads: &'a [ScalarReadSpec],
+    pub lanes: &'a [LaneSpec],
 }
 
 /// One forcing-buffer entry the program reads ([`Instr::LoadForcing`]).
@@ -1571,6 +1886,103 @@ pub(crate) struct DyWrite {
     pub scatter: Option<Vec<usize>>,
 }
 
+/// What the entries of a [`LaneTable`] address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum LaneKind {
+    /// A flat offset into the state vector (a scalar state's element).
+    State,
+    /// A position in the parameter vector.
+    Param,
+    /// A scalar slot.
+    Slot,
+}
+
+/// One `u32` per lane: a table, or `base + l * step` when the lanes are
+/// evenly spaced (stored without the table).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LaneIx {
+    Affine { base: u32, step: u32 },
+    Table(Vec<u32>),
+}
+
+impl LaneIx {
+    /// The compact form of `ix`.
+    pub(crate) fn of(ix: Vec<u32>) -> Self {
+        if let [b, n, ..] = ix[..]
+            && n >= b
+        {
+            let step = n - b;
+            if ix
+                .iter()
+                .enumerate()
+                .all(|(l, &v)| u64::from(b) + l as u64 * u64::from(step) == u64::from(v))
+            {
+                return LaneIx::Affine { base: b, step };
+            }
+        }
+        LaneIx::Table(ix)
+    }
+
+    /// Lane `l`'s entry.
+    #[inline(always)]
+    pub(crate) fn at(&self, l: usize) -> u32 {
+        match self {
+            LaneIx::Affine { base, step } => base + l as u32 * step,
+            LaneIx::Table(t) => t[l],
+        }
+    }
+}
+
+/// The per-lane scalar sources of one lane-program input, all of one kind.
+#[derive(Clone, Debug)]
+pub(crate) struct LaneTable {
+    pub kind: LaneKind,
+    pub ix: LaneIx,
+}
+
+/// Where a lane program's write lands.
+#[derive(Clone, Debug)]
+pub(crate) enum LaneDst {
+    /// Lane `l` writes `dy[pos.at(l)]`.
+    Dy(LaneIx),
+    /// The scalar slot (a one-lane program only): a value read after the
+    /// program.
+    Slot(SlotId),
+}
+
+/// One write of a lane program, after its micro-program.
+#[derive(Clone, Debug)]
+pub(crate) struct LaneWrite {
+    pub src: MRef,
+    pub dst: LaneDst,
+}
+
+/// A lane program ([`Instr::Lanes`]): `micro` runs once per lane over a
+/// register file of `n_regs` registers, `MRef::In(i)` reading lane `l`'s
+/// entry of `inputs[i]` and `MRef::Scal(i)` the operand `scalars[i]` (the
+/// same for every lane). Then each write stores its value at its lane's `dy`
+/// position, or (one lane only) in its slot. The `dy` positions of all lanes
+/// and writes are distinct, so the order lanes run in reaches no result.
+///
+/// A one-lane program is a compiled straight run of scalar instructions:
+/// its operands are all scalars, read once, and its micro-ops run one
+/// after another over a scalar register file.
+#[derive(Clone, Debug)]
+pub(crate) struct LaneSpec {
+    pub lanes: u32,
+    pub inputs: Vec<LaneTable>,
+    pub scalars: Vec<Operand>,
+    pub micro: Vec<MicroOp>,
+    pub n_regs: GroupIx,
+    pub writes: Vec<LaneWrite>,
+    /// `(micro-op, write)`: the micro-op stores its chunk straight into the
+    /// `dy` run of that write (an evenly spaced, unit-step `Dy` write),
+    /// which then does nothing. It is the last writer of the write's
+    /// register, nothing after it reads that register, and no other write
+    /// names it. Empty for a one-lane program.
+    pub direct: Vec<(u32, u32)>,
+}
+
 /// What kind of source rule a program rule entry describes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuleKind {
@@ -1643,6 +2055,11 @@ pub(crate) struct TapeProgram {
     pub n_const: u32,
     /// Instruction count of the SEGMENT section.
     pub n_segment: u32,
+    /// How many leading CONTINUOUS instructions a call whose exports are
+    /// off runs: the ones a derivative or a fault depends on. The rest
+    /// compute observeds only the observed and output passes read
+    /// (`prune`).
+    pub n_rhs: u32,
     pub slots: Vec<SlotDesc>,
     pub plans: Vec<GatherPlan>,
     pub regions: Vec<RegionSpec>,
@@ -1688,8 +2105,18 @@ pub(crate) struct TapeProgram {
     pub params_len: usize,
     /// Step 4: fused elementwise groups (`Instr::Fused` indexes here).
     pub fused: Vec<FusedSpec>,
+    /// Lane programs (`Instr::Lanes` indexes here).
+    pub lanes: Vec<LaneSpec>,
     /// Fusion-pass diagnostics (all-zero when fusion is disabled).
     pub fuse_stats: FuseStats,
+    /// Every box in the program is stored AXIS-REVERSED (see
+    /// [`super::layout`]): slot and state shapes, plans, regions, axis
+    /// fields and table positions all count axes from the last logical axis,
+    /// so a row-major slot is the column-major array the state vector holds.
+    /// A state block is then read in place and a whole-box `dy` write is one
+    /// copy. The boundaries with logical arrays (forcing loads, exports)
+    /// transpose. `false` is the program exactly as lowered.
+    pub col_major: bool,
 }
 
 impl TapeProgram {
@@ -1701,6 +2128,7 @@ impl TapeProgram {
             assemblies: &self.assemblies,
             sweeps: &self.sweeps,
             scalar_reads: &self.scalar_reads,
+            lanes: &self.lanes,
         }
     }
 

@@ -26,8 +26,28 @@ using OrderedCollections: OrderedDict
 # JSON node-kind predicates. `JSON3.Object <: AbstractDict` and
 # `JSON3.Array <: AbstractVector` on current JSON3, but the explicit union is
 # kept as belt-and-braces (and as documentation of the two families handled).
-_is_object(x) = (x isa AbstractDict || x isa JSON3.Object)
-_is_array(x)  = (x isa AbstractVector || x isa JSON3.Array)
+# The post-wire carriers are tested first: a concrete type is one type-tag
+# compare, an abstract one a subtype query, and these run once per node of
+# every whole-document walk.
+@inline _is_object(x) = (x isa OrderedDict{String,Any} || x isa Dict{String,Any} ||
+                         x isa AbstractDict || x isa JSON3.Object)
+@inline _is_array(x)  = (x isa Vector{Any} || x isa AbstractVector || x isa JSON3.Array)
+
+# A JSON leaf: neither an object nor an array (the concrete leaf types first,
+# as above).
+@inline _is_json_leaf(x) =
+    x isa Int64 || x isa Float64 || x isa String || x isa Bool || x isa Nothing ||
+    !(_is_object(x) || _is_array(x))
+
+# True when every element of `x` is a leaf (an inline number array, one ring
+# vertex). Walkers that look for objects, or that only rebuild containers, can
+# handle such an array in one tight loop instead of one call per element.
+function _leaves_only(x::AbstractVector)
+    for v in x
+        _is_json_leaf(v) || return false
+    end
+    return true
+end
 
 """
     _raw_get(x, key::String)
@@ -71,7 +91,12 @@ may mutate the result without touching the input.
 """
 _to_ordered(x) = _to_ordered_memo(x, IdDict{Any,Any}())
 
-function _to_ordered_memo(x, memo::IdDict{Any,Any})
+# `_to_ordered` for a consumer that only reads the result: a leaf-only
+# `Vector{Any}` (an inline number array) is shared with the input instead of
+# copied, so normalizing an already-native document allocates nothing per row.
+_to_ordered_shared(x) = _to_ordered_memo(x, IdDict{Any,Any}(), true)
+
+function _to_ordered_memo(x, memo::IdDict{Any,Any}, share_leaves::Bool=false)
     if x isa JSON3.Object || x isa JSON3.Array
         key = _view_key(x)
         r = get(memo, key, nothing)
@@ -85,16 +110,20 @@ function _to_ordered_memo(x, memo::IdDict{Any,Any})
         out = OrderedDict{String,Any}()
         memo[x] = out
         for (k, v) in pairs(x)
-            out[string(k)] = _to_ordered_memo(v, memo)
+            out[string(k)] = _to_ordered_memo(v, memo, share_leaves)
         end
         return out
     elseif _is_array(x)
+        # A leaf-only array holds nothing to share or normalize: copy it as is,
+        # without an identity-memo entry per (possibly millions of) row.
+        x isa Vector{Any} && _leaves_only(x) && return share_leaves ? x : copy(x)
         r = get(memo, x, nothing)
         r === nothing || return r
         out = Vector{Any}()
+        sizehint!(out, length(x))
         memo[x] = out
         for v in x
-            push!(out, _to_ordered_memo(v, memo))
+            push!(out, _to_ordered_memo(v, memo, share_leaves))
         end
         return out
     end
@@ -154,7 +183,9 @@ function _find_json_segs(hit, node)
         end
     elseif _is_array(node)
         for (i, v) in enumerate(node)
-            h = _find_json_segs(hit, v)
+            _is_json_leaf(v) && continue        # `hit` only ever sees objects
+            # The common nested `Vector{Any}` row takes a static call.
+            h = v isa Vector{Any} ? _find_json_segs(hit, v) : _find_json_segs(hit, v)
             h === nothing || return push!(h, i - 1)
         end
     end
@@ -166,8 +197,18 @@ end
 # validator walking for object nodes has nothing to do in such an array, so it
 # can return before registering it in its identity memo. Looks two levels down
 # only, so the check itself never recurses through a shared tree.
-_may_hold_object(x) =
-    any(c -> _is_object(c) || (_is_array(c) && any(g -> _is_array(g) || _is_object(g), c)), x)
+function _may_hold_object(x)
+    for c in x
+        _is_json_leaf(c) && continue
+        if c isa Vector{Any}
+            _leaves_only(c) || return true
+        else
+            _is_array(c) || return true
+            _leaves_only(c) || return true
+        end
+    end
+    return false
+end
 
 # Sentinel returned by a `_map_json` visitor to mean "no rewrite here — recurse
 # structurally into my children". A singleton type (not `nothing`) so that

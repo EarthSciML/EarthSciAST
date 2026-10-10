@@ -188,7 +188,7 @@ impl ForcingFeed {
         let buffer = self.buffer.borrow();
         for (fr, off) in &self.layout {
             let n = super::exec::forcing_len(fr);
-            super::exec::load_forcing(fr, &buffer, &self.declared, &mut f[*off..*off + n]);
+            super::exec::load_forcing(fr, &buffer, &self.declared, false, &mut f[*off..*off + n]);
         }
         f
     }
@@ -265,7 +265,9 @@ pub fn emit_rhs(compiled: &ArrayCompiled) -> Result<EmittedRhs, XlaEmitError> {
     }
     // `None` = the fusion pass off. The emitter is defined over the unfused
     // instruction set; see the module docs.
-    let (prog, _report) = compiled.build_tape_opts(&std::collections::HashSet::new(), None);
+    // Row-major: the emitter lowers every box in its logical axis order.
+    let (prog, _report) =
+        compiled.build_tape_layout(&std::collections::HashSet::new(), None, false);
     emit_program(&prog, compiled)
 }
 
@@ -275,6 +277,7 @@ pub(crate) fn emit_program(
     prog: &TapeProgram,
     compiled: &ArrayCompiled,
 ) -> Result<EmittedRhs, XlaEmitError> {
+    debug_assert!(!prog.col_major, "the emitter lowers row-major programs");
     let builder = XlaBuilder::new("earthsci_rhs");
     let mut em = Emitter::new(&builder, prog, compiled)?;
     let du = em.run()?;

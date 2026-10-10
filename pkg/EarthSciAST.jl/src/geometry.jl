@@ -243,6 +243,104 @@ function _planar_clip(subject::AbstractMatrix, clip::AbstractMatrix)::Matrix{Flo
     return _dedup_consecutive(ring)
 end
 
+# The planar `polygon_intersection_area` of two `[verts, 2]` rings without a
+# per-pair allocation: `_dedup_consecutive` of each operand, the
+# Sutherland–Hodgman clip, the dedup of its output and the closed-ring shoelace
+# of `_planar_shoelace_area`, each step the same operations in the same order
+# on the same values as `intersect_polygon` → `close_ring` →
+# `_polygon_area_via_faq`, kept in reusable task-local vertex buffers. Returns
+# `nothing` whenever the general path would do something else (an empty or
+# non-2-column operand, an operand with fewer than 3 distinct vertices, which
+# raises there), so the caller falls back to it.
+const _PtBuf = Vector{NTuple{2,Float64}}
+struct _ClipScratch
+    a::_PtBuf
+    b::_PtBuf
+    p::_PtBuf
+    q::_PtBuf
+end
+_clip_scratch() = get!(() -> _ClipScratch(_PtBuf(), _PtBuf(), _PtBuf(), _PtBuf()),
+                       task_local_storage(), :esm_planar_clip_scratch)::_ClipScratch
+
+function _dedup_into!(buf::_PtBuf, m::AbstractMatrix)
+    empty!(buf)
+    @inbounds for i in 1:size(m, 1)
+        x = Float64(m[i, 1]); y = Float64(m[i, 2])
+        if isempty(buf) || !_allclose_pt(x, y, buf[end][1], buf[end][2])
+            push!(buf, (x, y))
+        end
+    end
+    _dedup_wrap!(buf)
+end
+
+function _dedup_wrap!(buf::_PtBuf)
+    if length(buf) >= 2 && _allclose_pt(buf[1][1], buf[1][2], buf[end][1], buf[end][2])
+        pop!(buf)
+    end
+    return buf
+end
+
+function _planar_pia_noalloc(poly_a::AbstractMatrix, poly_b::AbstractMatrix)::Union{Float64,Nothing}
+    (size(poly_a, 2) == 2 && size(poly_b, 2) == 2 &&
+     size(poly_a, 1) > 0 && size(poly_b, 1) > 0) || return nothing
+    _bbox_disjoint(poly_a, poly_b) && return 0.0
+    sc = _clip_scratch()
+    sub = _dedup_into!(sc.a, poly_a)
+    clp = _dedup_into!(sc.b, poly_b)
+    (length(sub) >= 3 && length(clp) >= 3) || return nothing
+    # `_signed_area(clip) < 0` reverses the clip ring.
+    nclip = length(clp)
+    sacc = 0.0
+    @inbounds for i in 1:nclip
+        j = i == nclip ? 1 : i + 1
+        sacc += clp[i][1] * clp[j][2] - clp[j][1] * clp[i][2]
+    end
+    (0.5 * sacc < 0) && reverse!(clp)
+    output = sc.p
+    empty!(output)
+    append!(output, sub)
+    spare = sc.q
+    @inbounds for i in 1:nclip
+        isempty(output) && break
+        a = clp[i]
+        b = clp[i == nclip ? 1 : i + 1]
+        prev = output
+        output = spare
+        spare = prev
+        empty!(output)
+        m = length(prev)
+        for j in 1:m
+            p = prev[j]
+            q = prev[j == m ? 1 : j + 1]
+            p_in = _cross(a, b, p) >= 0.0
+            q_in = _cross(a, b, q) >= 0.0
+            if p_in
+                push!(output, p)
+                !q_in && push!(output, _segment_intersection(a, b, p, q))
+            elseif q_in
+                push!(output, _segment_intersection(a, b, p, q))
+            end
+        end
+    end
+    # `_dedup_consecutive` of the clip output (the subject buffer is free now).
+    ring = sc.a
+    empty!(ring)
+    @inbounds for pt in output
+        if isempty(ring) || !_allclose_pt(pt[1], pt[2], ring[end][1], ring[end][2])
+            push!(ring, pt)
+        end
+    end
+    _dedup_wrap!(ring)
+    n = length(ring)
+    n < 3 && return 0.0
+    acc = 0.0
+    @inbounds for v in 1:n
+        w = v == n ? 1 : v + 1
+        acc += 0.5 * (ring[v][1] * ring[w][2] - ring[w][1] * ring[v][2])
+    end
+    return abs(acc)
+end
+
 # --------------------------------------------------------------------------- #
 # Planar broad-phase — axis-aligned bounding-box reject
 # --------------------------------------------------------------------------- #

@@ -80,7 +80,7 @@
 # `DiscreteMaterializer.materialize!`) while `p` itself never moves — a `p`-keyed
 # validity stamp cannot see it change, so it must never enter the const tier. The
 # TIME tier's stamp carries the FORCING EPOCH precisely so it can: `_write_forcing!`
-# and `materialize!` bump `_FORCING_EPOCH` (compile.jl) on every in-place refresh,
+# and `materialize!` bump the build's forcing epoch (cadence_stamp.jl) on every in-place refresh,
 # and `_cse_t_stale` refills on the bump even at an unchanged `t`. Contract note:
 # DIRECT buffer mutation outside those two write paths must call
 # `notify_forcing_refresh!` if the RHS may next run at an already-seen `t`.

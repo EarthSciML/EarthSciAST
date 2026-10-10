@@ -377,6 +377,25 @@ impl std::fmt::Display for StructuralErrorCode {
 /// assert!(result.schema_errors.is_empty()); // Always empty for this function
 /// ```
 pub fn validate(esm_file: &EsmFile) -> ValidationResult {
+    validate_scoped(esm_file, ValidationScope::Full)
+}
+
+/// Which findings [`validate_scoped`] looks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ValidationScope {
+    /// Every finding: [`validate`].
+    Full,
+    /// The reference-integrity findings a build refuses on (an undeclared
+    /// variable, parameter, species, system, index set or data source, an
+    /// unresolved scoped reference, an undeclared event variable, a missing
+    /// required field), with the same paths and in the same order as
+    /// [`validate`] reports them; the checks that report only other codes are
+    /// skipped.
+    References,
+}
+
+/// [`validate`], limited to `scope`.
+pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> ValidationResult {
     let schema_errors = Vec::new();
     let mut structural_errors = Vec::new();
     let mut unit_warnings = Vec::new();
@@ -396,13 +415,19 @@ pub fn validate(esm_file: &EsmFile) -> ValidationResult {
                 model_name,
                 model,
                 &system_refs,
+                scope,
                 &mut structural_errors,
                 &mut unit_warnings,
             );
         }
 
         // Check for circular dependencies between models
-        crate::structural::check_circular_dependencies_in_models(models, &mut structural_errors);
+        if scope == ValidationScope::Full {
+            crate::structural::check_circular_dependencies_in_models(
+                models,
+                &mut structural_errors,
+            );
+        }
     }
 
     // Validate reaction systems

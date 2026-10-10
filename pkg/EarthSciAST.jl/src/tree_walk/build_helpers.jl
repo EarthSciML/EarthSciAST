@@ -120,6 +120,73 @@ function _translate_equation_sites!(sites::Union{Nothing,IdDict{OpExpr,OpExpr}},
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# THE SLOTS AN EQUATION BUILD HAS CLAIMED (`_compile_derivative_equations`'s
+# duplicate-derivative check). Single slots go in a bit set over the slot space,
+# made on the first such claim; a box whose slots are one contiguous run is
+# claimed as that range, so claiming it costs the same at any size and a build
+# that claims only such boxes (a materialized observed's fill) never makes the
+# bit set at all.
+# ─────────────────────────────────────────────────────────────────────────────
+mutable struct _Covered
+    n::Int
+    bits::BitVector                  # empty until the first single-slot claim
+    runs::Vector{UnitRange{Int}}     # disjoint claimed runs, sorted
+end
+_Covered(n::Int) = _Covered(n, BitVector(), UnitRange{Int}[])
+
+_cover_bits!(c::_Covered) =
+    (length(c.bits) == c.n || (c.bits = falses(c.n)); c.bits)
+
+# Whether a claimed run meets `lo:hi`: the runs are disjoint and sorted, so the
+# last one starting at or before `hi` is the only candidate.
+function _runs_meet(c::_Covered, lo::Int, hi::Int)
+    k = searchsortedlast(c.runs, hi; by = r -> r isa Int ? r : first(r))
+    return k >= 1 && last(c.runs[k]) >= lo
+end
+
+function Base.getindex(c::_Covered, i::Int)
+    1 <= i <= c.n || throw(BoundsError(c, i))
+    length(c.bits) == c.n && @inbounds(c.bits[i]) && return true
+    return _runs_meet(c, i, i)
+end
+
+function Base.setindex!(c::_Covered, v::Bool, i::Int)
+    1 <= i <= c.n || throw(BoundsError(c, i))
+    (v || length(c.bits) == c.n) && (_cover_bits!(c)[i] = v)
+    return c
+end
+
+# Release single-slot claims (a tier that claimed `outs` and then declined).
+function _uncover!(c::_Covered, outs)
+    length(c.bits) == c.n || return c
+    for i in outs
+        c.bits[i] = false
+    end
+    return c
+end
+
+# Whether any slot of `lo:hi` is claimed.
+function _cover_any(c::_Covered, lo::Int, hi::Int)
+    lo > hi && return false
+    (1 <= lo && hi <= c.n) || throw(BoundsError(c, lo:hi))
+    length(c.bits) == c.n && _bits_any(c.bits, lo, hi) && return true
+    return _runs_meet(c, lo, hi)
+end
+
+# Claim `lo:hi`, as bits (`run = false`) or as one range.
+function _cover_fill!(c::_Covered, lo::Int, hi::Int; run::Bool=false)
+    lo > hi && return c
+    (1 <= lo && hi <= c.n) || throw(BoundsError(c, lo:hi))
+    if run
+        insert!(c.runs, searchsortedlast(c.runs, lo; by = r -> r isa Int ? r : first(r)) + 1,
+                lo:hi)
+    else
+        fill!(view(_cover_bits!(c), lo:hi), true)
+    end
+    return c
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SHARED READ-ONLY `_EMPTY_*` SENTINELS — invariant: NEVER MUTATED.
 #
 # The `_EMPTY_*` constants scattered through this evaluator

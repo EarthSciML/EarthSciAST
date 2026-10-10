@@ -30,10 +30,9 @@ using LinearAlgebra   # wall2 Phase D: BLAS `mul!` accelerator for linear mat-ve
 # The threaded RHS tier needs a thread dispatch that does NOT allocate a task
 # per call (see access_kernel.jl, "Threaded cell axis"). Base
 # `Threads.@threads :static` allocates ~1.6 kB per dispatch; Polyester reuses a
-# persistent, spin-then-sleep pool. Polyester is a WEAK dependency: loading it
-# activates `EarthSciASTPolyesterExt`, which installs the batch runner via
-# `_set_batch_runner!`. Without Polyester loaded the RHS stays on the serial
-# path, so the common (unthreaded) case carries no mandatory dependency.
+# persistent, spin-then-sleep pool. It is a hard dependency: native threads its
+# compiled sections whenever Julia runs with more than one thread.
+using Polyester: Polyester
 using RuntimeGeneratedFunctions
 using Tullio
 

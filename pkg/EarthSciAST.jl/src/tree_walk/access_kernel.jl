@@ -121,7 +121,8 @@ const _AK_ARR_TBL_BOX        = UInt8(14)  # arr[conn[off + Σ(midx_d-1)·s_d]] (
 struct _AccDesc
     kind::UInt8
     arr::Vector{Float64}   # CONST_*, ARR_FIXED, FORCING_BOX (empty sentinel otherwise)
-    conn::Vector{Int}      # STATE_INDIRECT[_COL] (empty sentinel otherwise)
+    conn::Union{Vector{Int},UnitRange{Int}}  # STATE_INDIRECT[_COL], *_TBL_BOX (empty sentinel otherwise);
+                                             # a range is an identity table (`_state_slot_identity`)
     delta::Int             # STATE_AFFINE, CONST_AFFINE
     idx::Int               # STATE_FIXED, ARR_FIXED
     width::Int             # STATE_INDIRECT[_COL], CONST_EDGE
@@ -142,7 +143,8 @@ end
 const _AK_NO_ARR  = Float64[]
 const _AK_NO_CONN = Int[]
 
-@inline _mkacc(kind::UInt8; arr::Vector{Float64}=_AK_NO_ARR, conn::Vector{Int}=_AK_NO_CONN,
+@inline _mkacc(kind::UInt8; arr::Vector{Float64}=_AK_NO_ARR,
+               conn::Union{Vector{Int},UnitRange{Int}}=_AK_NO_CONN,
                delta::Int=0, idx::Int=0, width::Int=0, col::Int=0, dim::Int=0,
                s1::Int=0, s2::Int=0, s3::Int=0, off::Int=0, v::Float64=0.0,
                sx::Vector{Int}=_AK_NO_CONN) =
@@ -180,9 +182,9 @@ _AccStateFixed(idx::Int)                         = _mkacc(_AK_STATE_FIXED; idx=i
 _AccArrFixed(arr::Vector{Float64}, idx::Int)     = _mkacc(_AK_ARR_FIXED; arr=arr, idx=idx)
 _AccLoopIdx(dim::Int)                            = _mkacc(_AK_LOOP_IDX; dim=dim)
 _AccScalar(v::Float64)                           = _mkacc(_AK_SCALAR; v=v)
-_AccStateTblBox(conn::Vector{Int}, s1::Int, s2::Int, s3::Int, off::Int) =
+_AccStateTblBox(conn::Union{Vector{Int},UnitRange{Int}}, s1::Int, s2::Int, s3::Int, off::Int) =
     _mkacc(_AK_STATE_TBL_BOX; conn=conn, s1=s1, s2=s2, s3=s3, off=off)
-_AccStateTblBox(conn::Vector{Int}, s::AbstractVector{Int}, off::Int) =
+_AccStateTblBox(conn::Union{Vector{Int},UnitRange{Int}}, s::AbstractVector{Int}, off::Int) =
     _mkacc(_AK_STATE_TBL_BOX; conn=conn, s1=_box_s(s, 1), s2=_box_s(s, 2),
            s3=_box_s(s, 3), off=off, sx=_box_sx(s))
 _AccArrTblBox(arr::Vector{Float64}, conn::Vector{Int}, s1::Int, s2::Int, s3::Int, off::Int) =
@@ -965,10 +967,27 @@ end
            s isa _InterpSearchsortedLaneSpec
 end
 
+# A value-number key (`_acc_vn_key`) with its hash, compared type first. The
+# keys are tuples of several types; in a `Dict{Any}` two keys whose hashes share
+# a slot are compared with `isequal` on whatever pair of types they have, a
+# method compiled on first use. Which pairs meet depends on the hash values, so
+# on the document's sizes. Here keys of different types are unequal without a
+# call (no key equals one of another type: the leading tag and the payload
+# types keep the kinds apart), and `isequal` runs only on full-hash matches of
+# one type.
+struct _VNKey
+    k::Any
+    h::UInt
+end
+_VNKey(k) = _VNKey(k, hash(k))
+Base.hash(x::_VNKey, h::UInt) = hash(x.h, h)
+Base.isequal(a::_VNKey, b::_VNKey) =
+    a.h == b.h && typeof(a.k) === typeof(b.k) && isequal(a.k, b.k)
+
 function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     _acc_has_reduce(spine) && return (spine, _ACC_NO_CSE)
     inv_only = _acc_has_areduce(spine)
-    key_to_vn = Dict{Any,Int}()
+    key_to_vn = Dict{_VNKey,Int}()
     counts = Int[]; is_op = Bool[]; is_inv = Bool[]; rep = _Node[]
     # Occurrence counting must stay PER PATH (a value occurring on ≥2 paths is
     # exactly what earns a CSE slot — collapsing to distinct-node visits would
@@ -1004,7 +1023,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     vn_by_pos = Vector{Int}(undef, P)
     for (p, n) in enumerate(order)    # postorder ⇒ children already numbered
         childvns = Int[vn_by_pos[pos_of[c]] for c in n.children]
-        key = _acc_vn_key(n, childvns, acc)
+        key = _VNKey(_acc_vn_key(n, childvns, acc))
         vn = get(key_to_vn, key, 0)
         if vn == 0
             vn = length(counts) + 1
@@ -1098,8 +1117,8 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 # ("Threaded cell axis for the codegen tier", codegen_kernel.jl): the section
 # builder proves at build time that every emitted `du` slot is globally unique,
 # and the runtime then runs the generated function as `nchunks` static
-# contiguous cell-ordinal chunks. The pieces below are tier-agnostic: an
-# env-gated batch-runner hook, a verdict tally, and the partition arithmetic.
+# contiguous cell-ordinal chunks. The pieces below are tier-agnostic: a
+# verdict tally and the partition arithmetic.
 #
 # WHY THE CELL AXIS IS THE SAFE ONE. Every ⊕-fold a kernel hosts is WITHIN a
 # cell (`_NK_REDUCE` / `_NK_CONTRACTION` loops are per-cell); nothing
@@ -1110,28 +1129,18 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 # slot — which the codegen build's `_cg_covered_outs_disjoint` rules out up
 # front.
 #
-# OPT-IN, and deliberately so. Threading the cell axis is a large WIN on an
-# isolated RHS but can be a LOSS inside the ODE solve that RHS actually lives in:
-# a stiff solver calls the RHS in short bursts separated by linear-algebra work,
-# so the pool sleeps between calls and each dispatch pays a wake-up latency
-# — which is easily more than the parallel speedup. The default is therefore
-# OFF, and the opt-in is LOADING POLYESTER: the batch runner lives in
-# `EarthSciASTPolyesterExt` and is null until the user does `using Polyester`
-# (which activates the extension and calls `_set_batch_runner!`). Enable it (by
-# loading Polyester) for RHS-dominated workloads with cell counts far above
-# `ESS_THREADS_MIN_CELLS`, where per-dispatch work amortizes the wake-up;
-# measure the SOLVE, not the RHS, before trusting it. Raising that floor past a
-# section's cell count is how a serial run is forced without unloading
-# Polyester — chunking changes no bit, so it is not a choice of evaluator and
-# has no `compiler` value of its own.
+# ON BY DEFAULT. Polyester is a hard dependency and the chunked cell axis runs
+# whenever Julia has more than one thread; with one thread (`julia -t 1`, the
+# default without `JULIA_NUM_THREADS`) every section runs its serial `(1, 1)`
+# instance. Inside an ODE solve a stiff solver calls the RHS in short bursts
+# separated by linear-algebra work, so the pool may sleep between calls and a
+# dispatch pays a wake-up; the per-chunk cell floor (`ESS_THREADS_MIN_CELLS`)
+# keeps small sections serial for that reason. Raising that floor past a
+# section's cell count forces a serial run — chunking changes no bit, so it is
+# not a choice of evaluator and has no `compiler` value of its own.
 
-# The `nchunks`-way static batch runner, supplied by EarthSciASTPolyesterExt when
-# Polyester is loaded. Signature: `runner(chunkbody, nchunks)` calls
-# `chunkbody(c)` for `c in 1:nchunks`, in parallel, with a barrier at the end.
-# Null (⇒ serial path) until the extension installs it.
-const _BATCH_RUNNER = Ref{Any}(nothing)
-_set_batch_runner!(f) = (_BATCH_RUNNER[] = f; nothing)
-@inline _polyester_loaded() = _BATCH_RUNNER[] !== nothing
+# The dispatch itself is thread_dispatch.jl's: Polyester's worker pool, driven
+# without a per-call allocation.
 
 # One-time threading verdicts, in the `_CASCADE_TALLY` spirit: bumped once per
 # generated SECTION (not per eval) by `_sec_prep_threads!` (codegen_kernel.jl).
@@ -1139,7 +1148,8 @@ _set_batch_runner!(f) = (_BATCH_RUNNER[] = f; nothing)
 # `EarthSciAST._reset_thread_tally!()`.
 #   :cg_threaded              — the section's cell axes run as static chunks
 #   :cg_serial_small          — fewer than 2 chunks' worth of cells (summed
-#                               across the section's emitted kernels)
+#                               across the section's emitted kernels; a
+#                               contraction counts its fold terms too)
 #   :cg_serial_shared_outs    — two emitted cells (same or different kernel)
 #                               target the same `du` slot; the section never
 #                               chunks (see `_cg_covered_outs_disjoint`)
@@ -1155,8 +1165,7 @@ _reset_thread_tally!() = (empty!(_THREAD_TALLY); nothing)
 _thread_min_cells() =
     something(tryparse(Int, get(ENV, "ESS_THREADS_MIN_CELLS", "")), 512)
 
-@inline _threads_available() =
-    Threads.nthreads() > 1 && _polyester_loaded()
+@inline _threads_available() = Threads.nthreads() > 1
 
 # Total cells in a cell set, in the runners' own enumeration.
 function _cellset_ncells(cs::_CellSet)

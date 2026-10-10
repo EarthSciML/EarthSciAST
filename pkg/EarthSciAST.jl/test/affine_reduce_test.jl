@@ -164,6 +164,40 @@ _ar_sr_ics(n, m) = merge(Dict{String,Any}("y[$i]" => 0.1 * i for i in 1:n),
         @test get(tally, :affine_reduce, 0) >= 1
     end
 
+    # y[i] = ⊕_k K[i,k]·e[k] over a STATE matrix K: K's column-major block is
+    # contiguous along i and strided along k, so the kernel runs the
+    # interchanged nest (cells innermost) at Float64 and the per-cell nest
+    # under a dual number; both must be bitwise the interpreter's.
+    @testset "strided operand: interchanged nest ⊕=$red" for red in ("+", "*", "max", "min")
+        n, m = 13, 29
+        doc = _ar_sr_doc(n, m; red=red,
+                         body=_ar_op("*", _ar_idx("K", "i", "k"), _ar_idx("e", "k")))
+        doc["models"]["R"]["variables"]["K"] =
+            Dict("type" => "unknown", "shape" => Any["i", "k"])
+        push!(doc["models"]["R"]["equations"], Dict(
+            "lhs" => _ar_lhs("K", ["i", "k"], [("i", (1, n)), ("k", (1, m))]),
+            "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "k"],
+                          "ranges" => Dict("i" => Any[1, n], "k" => Any[1, m]),
+                          "expr" => _ar_op("*", -0.5, _ar_idx("K", "i", "k")))))
+        ics = merge(_ar_sr_ics(n, m),
+                    Dict{String,Any}("K[$i,$k]" => 0.001 * (1 + sin(0.7 * i * k + 0.3))
+                                     for i in 1:n, k in 1:m))
+        same, tally, (fn, u, pn, vn), (fi, ui, pi_, vi) = _ar_agree(doc, ics)
+        @test same
+        @test get(tally, :affine_reduce, 0) >= 1
+        ex = _AR.RuntimeGeneratedFunctions.get_expression(
+            getfield(getfield(fn, :kernel_section), :cgf))
+        @test occursin("eltype(du) === Float64", string(ex))
+        seed = Float64[0.3 + 0.01 * sin(i) for i in eachindex(u)]
+        seedi = similar(seed)
+        for (k, j) in vi
+            seedi[j] = seed[vn[k]]
+        end
+        gn = ForwardDiff.derivative(s -> _ar_du(fn, u .+ s .* seed, pn), 0.0)
+        gi = ForwardDiff.derivative(s -> _ar_du(fi, ui .+ s .* seedi, pi_), 0.0)
+        @test all(gn[vn[k]] === gi[j] for (k, j) in vi)
+    end
+
     @testset "ForwardDiff through the fold" begin
         same, _, (fn, u, pn, vn), (fi, ui, pi_, vi) =
             _ar_agree(_ar_sr_doc(10, 30), _ar_sr_ics(10, 30))

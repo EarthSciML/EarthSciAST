@@ -641,7 +641,17 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    time_slots::AbstractVector{Int},
                    dyn_slots::AbstractVector{Int},
                    scan_folds::AbstractVector{_ScanFold}=_ScanFold[],
-                   array_contractions=_make_contraction_section(_ArrayContraction[]))
+                   array_contractions=_make_contraction_section(_ArrayContraction[]);
+                   scalar=nothing, fused_scans::Tuple=(), nst::Int=0)
+    # The prefix scans: the unfused folds and the fused ones (scan_fused.jl).
+    scan_section = _make_scan_section(scan_folds, fused_scans)
+    # The scalar codegen tier (scalar_codegen.jl): with a scalar section the
+    # equations and the prelude run as generated code, and only what it left
+    # behind is walked.
+    scalar === nothing ||
+        return _make_rhs_scalar_cg(scalar, cse_prelude, cse_cache, acc_kernels,
+                                   const_slots, time_slots, scan_section,
+                                   array_contractions; nst=nst)
     # B1 codegen tier (codegen_kernel.jl): every kernel the emitter can model is
     # compiled ONCE, here at build time, into a single RuntimeGeneratedFunction
     # (bit-identical, eltype-generic); the rest keep the per-cell scalar
@@ -651,7 +661,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # `f!` below fills every prelude tier into that exact cache — at the same
     # value type `T` — before `kernel_section(du, u, p, t, T)` runs.
     kernel_section = _make_kernel_section(acc_kernels;
-                                          shared_cache=cse_cache)
+                                          shared_cache=cse_cache, nst=nst)
     function f!(du, u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         T = _rhs_value_type(u, p, t)
@@ -694,7 +704,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # These slots' defs read no state; they are pure functions of `p`, `t`, and
         # the CONTENTS of any live forcing buffer they gather (const_tier.jl). They
         # stay good in THIS buffer while `p` and `t` are egal to the stamp and no
-        # in-place forcing refresh has bumped `_FORCING_EPOCH` — exactly what
+        # in-place forcing refresh has bumped the build's forcing epoch — exactly what
         # `_cse_t_stale` tests. The payoff is the FD-Jacobian shape: N+1 calls at
         # the bit-same `t` with perturbed `u` evaluate the FastJX-style photolysis /
         # met-gather / w_time chains ONCE instead of N+1 times. A time def may read
@@ -738,9 +748,11 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # Each fold reads back the per-cell TERMS its own kernels just wrote
         # into `du` and accumulates them along the scanned axis in place. Runs
         # here, after the whole kernel section, so it is ordered behind every
-        # threaded chunk and every codegen'd loop nest. Empty on every model
-        # without a forward prefix reduction, which is the common case.
-        isempty(scan_folds) || _apply_scan_folds!(du, scan_folds)
+        # threaded chunk and every codegen'd loop nest. A fused scan
+        # (scan_fused.jl) computes its terms itself in the same pass. Empty on
+        # every model without a forward prefix reduction, which is the common
+        # case.
+        isempty(scan_section) || _apply_scan_folds!(du, u, p, t, scan_section)
 
         # ---- Whole-array contractions (ess-array-contraction) ----
         # Each runs its own output loop nest over disjoint `du` slots, so it is

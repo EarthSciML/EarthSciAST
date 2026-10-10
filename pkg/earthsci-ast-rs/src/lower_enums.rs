@@ -249,7 +249,7 @@ fn lower_mounted_enum_ops(source: &Value, node: &mut Value) -> Result<(), EnumLo
 fn find_enum_paths(view: &Value, hits: &mut Vec<String>) {
     crate::json_visit::visit_values(view, &mut |path, v| {
         if let Value::Object(obj) = v
-            && obj.get("op").and_then(|w| w.as_str()) == Some(ENUM_OP)
+            && crate::json_visit::small_get(obj, "op").and_then(|w| w.as_str()) == Some(ENUM_OP)
         {
             hits.push(path.to_string());
         }
@@ -312,7 +312,26 @@ pub fn lower_enums_mut(file: &mut crate::EsmFile) -> Result<(), EnumLoweringErro
 /// - `enum_invalid_args` — `enum` op has a non-positional or wrong-arity body
 /// - `invalid_enums_block` — top-level `enums` block is malformed
 pub fn lower_enums_raw(value: &mut Value) -> Result<(), EnumLoweringError> {
+    lower_enums_raw_scanned(value, true)
+}
+
+/// Whether `value` is an `enum`-op node, as [`lower_enums_raw`] finds them.
+pub(crate) fn is_enum_node(value: &Value) -> bool {
+    matches!(value, Value::Object(obj)
+        if crate::json_visit::small_get(obj, "op").and_then(|w| w.as_str()) == Some(ENUM_OP))
+}
+
+/// [`lower_enums_raw`] for a caller whose own walk of `value` already found
+/// whether it has any `enum`-op node ([`is_enum_node`]): `false` skips the
+/// search, leaving only the `enums` block check.
+pub(crate) fn lower_enums_raw_scanned(
+    value: &mut Value,
+    may_have_enum_ops: bool,
+) -> Result<(), EnumLoweringError> {
     let enums = parse_enums_block(value)?;
+    if !may_have_enum_ops {
+        return Ok(());
+    }
 
     // Fast path: no enum-op nodes anywhere; skip the rebuild.
     let mut paths: Vec<String> = Vec::new();

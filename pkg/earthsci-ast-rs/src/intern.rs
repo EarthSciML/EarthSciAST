@@ -63,7 +63,8 @@
 //!   persistent root tombstone). See the module docs there.
 
 use crate::types::{Expr, ExpressionNode};
-use rustc_hash::FxHashSet;
+use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -77,7 +78,11 @@ struct Interner {
     /// Reentrancy depth of [`InternScope`]s; the map is dropped when the
     /// outermost scope closes.
     depth: usize,
-    set: FxHashSet<Key>,
+    /// The canonical nodes by structural hash (nodes whose hashes collide
+    /// share a bucket). Keyed by the hash rather than by the node, so a
+    /// candidate is looked up before it is allocated: a duplicate is never
+    /// boxed, and the map never re-reads a stored node to rehash it.
+    set: FxHashMap<u64, SmallVec<[Arc<ExpressionNode>; 1]>>,
 }
 
 /// RAII guard arming the thread-local interner. Reentrant: nested scopes share
@@ -132,15 +137,15 @@ pub fn intern_node(node: ExpressionNode) -> Arc<ExpressionNode> {
         if !internable(&node) {
             return Arc::new(node);
         }
-        let key = Key(Arc::new(node));
-        match interner.set.get(&key) {
-            Some(canon) => Arc::clone(&canon.0),
-            None => {
-                let out = Arc::clone(&key.0);
-                interner.set.insert(key);
-                out
-            }
+        let mut hasher = rustc_hash::FxHasher::default();
+        node_hash(&node, &mut hasher);
+        let bucket = interner.set.entry(hasher.finish()).or_default();
+        if let Some(canon) = bucket.iter().find(|c| node_eq(c, &node)) {
+            return Arc::clone(canon);
         }
+        let out = Arc::new(node);
+        bucket.push(Arc::clone(&out));
+        out
     })
 }
 
@@ -150,22 +155,6 @@ pub fn intern_node(node: ExpressionNode) -> Arc<ExpressionNode> {
 /// carrying one is simply never shared.
 fn internable(node: &ExpressionNode) -> bool {
     node.value.is_none() && node.output.is_none() && node.join.is_none()
-}
-
-/// Interning key: an owned canonical candidate with structural hash/equality.
-struct Key(Arc<ExpressionNode>);
-
-impl PartialEq for Key {
-    fn eq(&self, other: &Self) -> bool {
-        node_eq(&self.0, &other.0)
-    }
-}
-impl Eq for Key {}
-
-impl Hash for Key {
-    fn hash<H: Hasher>(&self, h: &mut H) {
-        node_hash(&self.0, h);
-    }
 }
 
 /// Child-expression equality under the hash-consing invariant: leaves by value

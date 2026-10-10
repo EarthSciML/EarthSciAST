@@ -27,10 +27,9 @@
 # prefix_scan's 10^4 cells and source_receptor's 3162, where native needs
 # under 3 GB, and the oracle's memory would be charged to native's document.
 #
-# THREADS. Native threads its compiled sections only when Polyester is loaded
-# (the opt-in lives in EarthSciASTPolyesterExt), so this adapter always loads
-# it: with one thread native runs its serial path, and with `-t K` native runs
-# whatever it threads today. The result file's `threads` is Julia's thread
+# THREADS. Native threads its compiled sections by default whenever Julia has
+# more than one thread: with one thread native runs its serial path, and with
+# `-t K` native runs whatever it threads today. The result file's `threads` is Julia's thread
 # count, and `hand_loop_s` is then the threaded hand loop.
 #
 # ONE CHILD PROCESS PER FAMILY. The adapter measures each family's ladder in a
@@ -73,7 +72,6 @@ end
 
 using EarthSciAST
 using JSON3
-using Polyester
 
 const ESA = EarthSciAST
 const RGF = EarthSciAST.RuntimeGeneratedFunctions
@@ -241,7 +239,7 @@ function blank_result(entry)
         "family" => String(entry["family"]), "n" => Int(entry["n"]),
         "n_cells" => Int(entry["n_cells"]), "n_states" => Int(entry["n_states"]),
         "status" => "error", "reason" => nothing,
-        "build_s" => nothing, "code_size" => nothing,
+        "n_bytes" => nothing, "build_s" => nothing, "code_size" => nothing,
         "code_size_unit" => "emitted_expr_nodes+walked_nodes",
         "first_call_s" => nothing, "steady_rhs_s" => nothing, "allocs_per_call" => nothing,
         "hand_loop_s" => nothing, "hand_loop_max_abs_diff" => nothing, "dy_max_abs" => nothing,
@@ -316,6 +314,7 @@ function measure!(rec, path, entry, compiler, budget, interp_cap)
     fam = String(entry["family"])
     insp = ESA.BuildInspection()
     prob = nothing
+    rec["n_bytes"] = filesize(path)
     try
         rec["build_s"] = @elapsed prob = ESA.esm_problem(path, (0.0, 1.0);
                                                          compiler = compiler, inspect = insp)
@@ -502,7 +501,6 @@ function run_header(o, compiler)
         "binding" => "julia", "compiler" => String(compiler), "threads" => Threads.nthreads(),
         "commit" => git_commit(), "host" => gethostname(),
         "target" => string(Sys.MACHINE), "julia_version" => string(VERSION),
-        "polyester_loaded" => ESA._polyester_loaded(),
         "machine" => machine_note(), "load_average" => load_average(),
         "cpus" => Sys.CPU_THREADS, "max_rss_gb" => o["in-process"] ? nothing : _gb(_cap(o)),
         "timeout_s" => o["in-process"] ? nothing : o["timeout-s"])

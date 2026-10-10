@@ -31,8 +31,10 @@ WALL=${SCALING_TIME:-01:30:00}
 FAMILIES=${SCALING_FAMILIES:-$(python3 -c "import json,sys; print(' '.join(json.load(open(sys.argv[1]))['families']))" "$TIER/manifest.json")}
 
 mkdir -p "$SCALING_BUILD"/{docs,results,logs}
+# Loops aligned to 64 bytes: otherwise where a hot loop happens to land moves a
+# hand loop's time by tens of percent from one build to the next (README.md, Timing builds).
 (cd "$REPO/pkg/earthsci-ast-rs" &&
-    cargo build --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust)
+    RUSTFLAGS="${RUSTFLAGS:-} -C llvm-args=-align-loops=64" cargo build --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust)
 TARGET=${CARGO_TARGET_DIR:-$REPO/pkg/earthsci-ast-rs/target}
 BIN=$SCALING_BUILD/earthsci-scaling-adapter-rust
 cp "$TARGET/release/earthsci-scaling-adapter-rust" "$BIN"

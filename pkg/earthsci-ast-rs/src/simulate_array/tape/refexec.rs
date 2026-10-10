@@ -39,7 +39,13 @@ pub(super) fn run_reference(
     t: f64,
     dy: &mut [f64],
 ) -> RefRun {
-    let state_arrays = build_state_arrays(&compiled.var_shapes, state);
+    let mut state_arrays = build_state_arrays(&compiled.var_shapes, state);
+    // A column-major program reads every state box axis-reversed.
+    if prog.col_major {
+        for a in state_arrays.values_mut() {
+            *a = a.view().reversed_axes().as_standard_layout().into_owned();
+        }
+    }
     let mut obs: ArrMap = ArrMap::default();
     let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     let mut slots: Vec<Option<RefVal>> = vec![None; prog.slots.len()];
@@ -260,13 +266,19 @@ pub(super) fn run_reference(
                     fr,
                     &compiled.forcing.borrow(),
                     &compiled.declared_names,
+                    prog.col_major,
                     &mut buf,
                 );
+                let shape: Vec<usize> = if prog.col_major {
+                    fr.shape.iter().rev().copied().collect()
+                } else {
+                    fr.shape.to_vec()
+                };
                 slots[*out as usize] = Some(if fr.shape.is_empty() {
                     RefVal::Scalar(buf[0])
                 } else {
                     RefVal::Arr(
-                        ArrayD::from_shape_vec(IxDyn(&fr.shape[..]), buf)
+                        ArrayD::from_shape_vec(IxDyn(&shape), buf)
                             .expect("a forcing load fills its whole box"),
                     )
                 });
@@ -644,6 +656,9 @@ pub(super) fn run_reference(
                     .expect("exported slot is defined");
                 let arr = match v {
                     RefVal::Scalar(s) => ArrayD::from_elem(IxDyn(&[]), *s),
+                    RefVal::Arr(a) if prog.col_major => {
+                        a.view().reversed_axes().as_standard_layout().into_owned()
+                    }
                     RefVal::Arr(a) => a.clone(),
                 };
                 obs.insert(name, arr);
@@ -691,6 +706,15 @@ pub(super) fn run_reference(
                     .reduce
                     .as_ref()
                     .map_or_else(Vec::new, |r| vec![r.init; r.n_inner]);
+                let n_scans: usize = fs
+                    .micro
+                    .iter()
+                    .map(|m| match m {
+                        MicroOp::Scan { post, .. } => *post as usize,
+                        _ => 0,
+                    })
+                    .sum();
+                let mut carries = vec![0.0f64; n_scans];
                 let mut covered = 0usize;
                 for run in &fs.schedule.expanded() {
                     for k in 0..run.len as usize {
@@ -702,6 +726,13 @@ pub(super) fn run_reference(
                                 MRef::In(i) => {
                                     let inp = &fs.inputs[*i as usize];
                                     match inp.shifted_ix {
+                                        None if inp.gather.is_some() => {
+                                            let g = inp.gather.as_deref().expect("a chunk gather");
+                                            match g.src_offset(at) {
+                                                Some(o) => flats[*i as usize][o as usize],
+                                                None => 0.0,
+                                            }
+                                        }
                                         None => match inp.index {
                                             Some((by, n)) => {
                                                 match data_subscript(flats[by as usize][at], n) {
@@ -725,7 +756,7 @@ pub(super) fn run_reference(
                             }
                         };
                         for op in &fs.micro {
-                            eval_micro_op(op, &mut regs, get);
+                            eval_micro_op(op, &mut regs, at, &mut carries, get);
                         }
                         for (oi, &(reg, _)) in fs.outputs.iter().enumerate() {
                             outs[oi][at] = regs[reg as usize];
@@ -756,6 +787,68 @@ pub(super) fn run_reference(
                     slots[slot as usize] = Some(RefVal::Arr(arr));
                 }
             }
+            Instr::Lanes { spec } => {
+                // Lane by lane through the shared micro-op semantics, each
+                // input read through the reference resolver.
+                let ls = &prog.lanes[*spec as usize];
+                let scalar = |op: &Operand| match resolve(
+                    prog,
+                    &slots,
+                    &state_arrays,
+                    &obs,
+                    params,
+                    t,
+                    op,
+                ) {
+                    RefVal::Scalar(v) => v,
+                    RefVal::Arr(a) if a.ndim() == 0 => a[IxDyn(&[])],
+                    other => panic!("lane operand is {other:?}"),
+                };
+                let svals: Vec<f64> = ls.scalars.iter().map(scalar).collect();
+                let mut regs = vec![0.0f64; ls.n_regs as usize];
+                let mut published: Vec<(SlotId, f64)> = Vec::new();
+                for l in 0..ls.lanes as usize {
+                    let ins: Vec<f64> = ls
+                        .inputs
+                        .iter()
+                        .map(|inp| {
+                            let i = inp.ix.at(l);
+                            scalar(&match inp.kind {
+                                LaneKind::State => Operand::State(
+                                    prog.state_vars
+                                        .iter()
+                                        .position(|sv| {
+                                            sv.shape.is_empty() && sv.flat_offset == i as usize
+                                        })
+                                        .expect("a lane reads a scalar state")
+                                        as u32,
+                                ),
+                                LaneKind::Param => Operand::Param(i),
+                                LaneKind::Slot => Operand::Slot(i),
+                            })
+                        })
+                        .collect();
+                    let get = |m: &MRef, regs: &[f64]| match m {
+                        MRef::Reg(r) => regs[*r as usize],
+                        MRef::In(i) => ins[*i as usize],
+                        MRef::Scal(i) => svals[*i as usize],
+                    };
+                    for op in &ls.micro {
+                        // A lane program holds no scan, so no carries.
+                        eval_micro_op(op, &mut regs, l, &mut [], get);
+                    }
+                    for w in &ls.writes {
+                        let v = get(&w.src, &regs);
+                        match &w.dst {
+                            LaneDst::Dy(pos) => dy[pos.at(l) as usize] = v,
+                            LaneDst::Slot(s) => published.push((*s, v)),
+                        }
+                    }
+                }
+                for (s, v) in published {
+                    slots[s as usize] = Some(RefVal::Scalar(v));
+                }
+            }
             Instr::DyWrite { write } => {
                 let w = &prog.dy_writes[*write as usize];
                 let v = slots[w.slot as usize]
@@ -773,13 +866,30 @@ pub(super) fn run_reference(
                     (Some(flat), RefVal::Scalar(s)) => dy[flat] = *s,
                     (Some(flat), RefVal::Arr(a)) if a.ndim() == 0 => dy[flat] = a[IxDyn(&[])],
                     (None, RefVal::Arr(a)) => {
+                        // Back to logical axes for a column-major program.
                         let sv = &prog.state_vars[w.var as usize];
+                        let logical = |v: &[usize]| -> Vec<usize> {
+                            if prog.col_major {
+                                v.iter().rev().copied().collect()
+                            } else {
+                                v.to_vec()
+                            }
+                        };
+                        let mut origin = sv.origin.to_vec();
+                        if prog.col_major {
+                            origin.reverse();
+                        }
                         let vs = VarShape {
-                            shape: sv.shape.to_vec(),
-                            origin: sv.origin.to_vec(),
+                            shape: logical(&sv.shape),
+                            origin,
                             flat_offset: sv.flat_offset,
                         };
-                        scatter_col_major_offset(a.view(), dy, &vs, &w.dest_lo);
+                        let view = if prog.col_major {
+                            a.view().reversed_axes()
+                        } else {
+                            a.view()
+                        };
+                        scatter_col_major_offset(view, dy, &vs, &logical(&w.dest_lo));
                     }
                     other => panic!("malformed DyWrite: {other:?}"),
                 }

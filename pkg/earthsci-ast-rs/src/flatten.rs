@@ -2050,10 +2050,23 @@ fn is_structural_time_derivative(node: &ExpressionNode) -> bool {
 /// particular `0`. A SPATIAL `D` is untouched — it is a rewrite target for a
 /// discretization rule (§9.6.8) and that gate still owns it — and left-hand
 /// sides are never rewritten.
+///
+/// Returns whether any right-hand side carried a time derivative; when none
+/// did, nothing is rewritten and none is left.
 pub(crate) fn resolve_rhs_time_derivatives(
     equations: &mut [Equation],
     time_invariant: &HashSet<String>,
-) {
+) -> bool {
+    // Which right-hand sides carry a `D`: a document with none (every document
+    // that had none before this phase existed) keeps its equations untouched
+    // rather than being rebuilt through `substitute`.
+    let carriers: Vec<bool> = equations
+        .iter()
+        .map(|eq| contains_time_derivative(&eq.rhs))
+        .collect();
+    if !carriers.contains(&true) {
+        return false;
+    }
     let mut tables = DerivTables {
         tendency: HashMap::new(),
         definition: HashMap::new(),
@@ -2076,13 +2089,10 @@ pub(crate) fn resolve_rhs_time_derivatives(
         }
     }
     if tables.tendency.is_empty() && tables.definition.is_empty() {
-        return;
+        return true;
     }
-    for eq in equations.iter_mut() {
-        // Cheap pre-check: a document with no right-hand-side `D` at all — every
-        // document that had none before this phase existed — keeps its equations
-        // untouched rather than being rebuilt through `substitute`.
-        if !contains_time_derivative(&eq.rhs) {
+    for (eq, carries) in equations.iter_mut().zip(carriers) {
+        if !carries {
             continue;
         }
         // The quantity this equation DEFINES is not available to substitute
@@ -2101,6 +2111,7 @@ pub(crate) fn resolve_rhs_time_derivatives(
         };
         eq.rhs = tables.substitute(&eq.rhs, &mut active);
     }
+    true
 }
 
 /// The tendency and defining equations [`resolve_rhs_time_derivatives`] reads,

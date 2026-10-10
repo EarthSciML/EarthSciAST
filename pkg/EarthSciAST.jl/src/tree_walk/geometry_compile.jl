@@ -428,7 +428,7 @@ end
 @inline function _geo_gate_ok(gates, filt, u)
     if gates !== nothing
         @inbounds for gt in gates
-            gt.arrA[Int(u[gt.slotA])] == gt.arrB[Int(u[gt.slotB])] || return false
+            _geo_slot_eq(gt.arrA, gt.arrB, Int(u[gt.slotA]), Int(u[gt.slotB])) || return false
         end
     end
     if filt !== nothing
@@ -436,6 +436,10 @@ end
     end
     return true
 end
+
+# One equality gate's test, behind a barrier so the two key columns (`Any`
+# fields) are compared at their concrete types.
+_geo_slot_eq(a, b, i::Int, j::Int) = a[i] == b[j]
 
 # `polygon_intersection_area` of two resolved ring sources. Split out of the
 # `:geo_pia` arm so the operand types can be narrowed at the call site.

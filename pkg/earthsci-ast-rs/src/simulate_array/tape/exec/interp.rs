@@ -8,13 +8,11 @@
 use super::super::geom::{RingTable, run_poly_area};
 use super::fused::{dispatch_bin_kernel, dispatch_un_kernel, exec_fused};
 use super::kernels::{
-    copy_strided, ew_select, ew1, ew2, exec_gather, fill_strided, index_gather, reduce_rows,
-    scan_axis, seg_reduce, table_gather,
+    copy_strided, ew_select, ew1, ew2, exec_gather, fill_strided, index_gather, reduce_axis,
+    reduce_rows, scan_axis, seg_reduce, table_gather,
 };
 use super::oracle::run_rhs_oracle;
-use super::resolve::{
-    Rv, SrcView, cm_strides, resolve_rv, resolve_scalar, resolve_src, rm_strides,
-};
+use super::resolve::{Rv, SrcView, resolve_rv, resolve_scalar, resolve_src, rm_strides};
 use super::*;
 use crate::simulate_array::eval::latch_gather_fault;
 
@@ -51,6 +49,8 @@ pub(super) fn run_range(
     dy: &mut [f64],
     stats: &mut RhsStats,
 ) {
+    // The call's split width (see `par`), for the copies and lanes below.
+    let call_split = call_ways(exec);
     let TapeExec {
         slab,
         slot_off,
@@ -59,13 +59,29 @@ pub(super) fn run_range(
         export_sites,
         pending,
         plan_full,
+        asm_covered,
+        #[cfg(not(target_arch = "wasm32"))]
+        asm_parts,
         fregs,
         fscratch,
+        idx_tables,
+        lscratch,
         exports_active,
         simd,
+        dy_home,
+        dy_home_quiet,
+        #[cfg(not(target_arch = "wasm32"))]
+        seg_chains,
+        #[cfg(not(target_arch = "wasm32"))]
+        chain_scratch,
         ..
     } = exec;
     let exports_active = *exports_active;
+    let dy_home: &[usize] = if exports_active {
+        dy_home
+    } else {
+        dy_home_quiet
+    };
     let simd = *simd;
     let prog = env.prog;
     let slab_ptr = slab.as_mut_ptr();
@@ -86,6 +102,9 @@ pub(super) fn run_range(
     // and the 0-based frame cell its body is evaluating.
     let mut sweep: Option<(usize, SmallVec<[usize; 4]>)> = None;
     let mut pc = range.start;
+    // The next segmented-reduction chain that may split (see `chain`).
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut next_chain = seg_chains.partition_point(|c| c.start < range.start);
     while pc < range.end {
         while let Some(&(pos, skip)) = pending.last() {
             if pc == pos as usize {
@@ -126,6 +145,37 @@ pub(super) fn run_range(
         }
         if pc >= range.end {
             break;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if next_chain < seg_chains.len() {
+            while seg_chains.get(next_chain).is_some_and(|c| c.start < pc) {
+                next_chain += 1;
+            }
+            if let Some(ch) = seg_chains
+                .get(next_chain)
+                .filter(|c| c.start == pc && c.end <= range.end)
+            {
+                next_chain += 1;
+                let split = unsafe {
+                    super::chain::run_chain(
+                        ch,
+                        env,
+                        slab_ptr,
+                        slot_off,
+                        obs,
+                        chain_scratch,
+                        fscratch,
+                        idx_tables,
+                        simd,
+                        dy_home,
+                        dy.as_mut_ptr(),
+                    )
+                };
+                if split {
+                    pc = ch.end;
+                    continue;
+                }
+            }
         }
         // The instruction's own precision, armed for it alone (esm-spec
         // §11.3.1); a program without per-instruction precision skips this.
@@ -212,7 +262,7 @@ pub(super) fn run_range(
                 let plan = &prog.plans[*plan as usize];
                 let sv = resolve_src(src, env, slab_ptr, slot_off, obs);
                 let off = slot_off[*out as usize];
-                unsafe { exec_gather(plan, &sv, slab_ptr.add(off), full) };
+                unsafe { exec_gather(plan, &sv, slab_ptr.add(off), full, call_split) };
             }
             Instr::LoadElem { src, idx, out } => {
                 let sv = resolve_src(src, env, slab_ptr, slot_off, obs);
@@ -272,7 +322,8 @@ pub(super) fn run_range(
                     match av {
                         Rv::S(_) => panic!("array Copy from a scalar operand"),
                         Rv::V { ptr, strides } => unsafe {
-                            copy_strided(
+                            copy_strided_maybe_split(
+                                call_split,
                                 slab_ptr.add(off),
                                 &rm_strides(&desc.shape),
                                 ptr,
@@ -324,20 +375,56 @@ pub(super) fn run_range(
                 let desc = &prog.slots[*out as usize];
                 let off = slot_off[*out as usize];
                 let dst = unsafe { slab_ptr.add(off) };
-                unsafe { std::slice::from_raw_parts_mut(dst, desc.elems()).fill(0.0) };
+                let parts = &prog.assemblies[*table as usize].parts;
+                let covered = asm_covered[*table as usize];
                 let out_rm = rm_strides(&desc.shape);
-                for (src, region) in &prog.assemblies[*table as usize].parts {
-                    let spec = &prog.regions[*region as usize];
-                    let mut dbase = 0i64;
-                    for d in 0..desc.shape.len() {
-                        dbase += out_rm[d] * spec.dest_lo[d] as i64;
+                // A large assembly splits across the call's workers, each
+                // assembling its own share of the box (see `par`).
+                #[cfg(not(target_arch = "wasm32"))]
+                let split = super::par::ways_for(desc.elems(), call_split);
+                #[cfg(target_arch = "wasm32")]
+                let split = 1;
+                if split > 1 && !desc.shape.is_empty() {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        asm_parts.clear();
+                        for (src, region) in parts {
+                            let spec = &prog.regions[*region as usize];
+                            let mut dbase = 0i64;
+                            for d in 0..desc.shape.len() {
+                                dbase += out_rm[d] * spec.dest_lo[d] as i64;
+                            }
+                            let rv = resolve_rv(src, &spec.shape, env, slab_ptr, slot_off, obs);
+                            asm_parts.push(super::par::AsmPart::new(*region, dbase, rv));
+                        }
+                        unsafe {
+                            super::par::assemble(
+                                split,
+                                dst,
+                                &desc.shape,
+                                &prog.regions,
+                                asm_parts,
+                                covered,
+                            )
+                        };
                     }
-                    let sub_dst = unsafe { dst.offset(dbase as isize) };
-                    match resolve_rv(src, &spec.shape, env, slab_ptr, slot_off, obs) {
-                        Rv::S(v) => unsafe { fill_strided(sub_dst, &out_rm, &spec.shape, v) },
-                        Rv::V { ptr, strides } => unsafe {
-                            copy_strided(sub_dst, &out_rm, ptr, &strides, &spec.shape);
-                        },
+                } else {
+                    if !covered {
+                        unsafe { std::slice::from_raw_parts_mut(dst, desc.elems()).fill(0.0) };
+                    }
+                    for (src, region) in parts {
+                        let spec = &prog.regions[*region as usize];
+                        let mut dbase = 0i64;
+                        for d in 0..desc.shape.len() {
+                            dbase += out_rm[d] * spec.dest_lo[d] as i64;
+                        }
+                        let sub_dst = unsafe { dst.offset(dbase as isize) };
+                        match resolve_rv(src, &spec.shape, env, slab_ptr, slot_off, obs) {
+                            Rv::S(v) => unsafe { fill_strided(sub_dst, &out_rm, &spec.shape, v) },
+                            Rv::V { ptr, strides } => unsafe {
+                                copy_strided(sub_dst, &out_rm, ptr, &strides, &spec.shape);
+                            },
+                        }
                     }
                 }
             }
@@ -395,7 +482,7 @@ pub(super) fn run_range(
                 let off = slot_off[*out as usize];
                 let dst =
                     unsafe { std::slice::from_raw_parts_mut(slab_ptr.add(off), forcing_len(fr)) };
-                load_forcing(fr, &env.forcing.borrow(), env.declared, dst);
+                load_forcing(fr, &env.forcing.borrow(), env.declared, prog.col_major, dst);
             }
             Instr::Reduce {
                 op,
@@ -433,6 +520,22 @@ pub(super) fn run_range(
                         };
                     }
                     dispatch_bin_kernel!(op, fold_rows);
+                    pc += 1;
+                    continue;
+                }
+                // One folded axis anywhere in a contiguous source: each output
+                // cell folds its own run in axis order.
+                if axes.len() == 1 && sv.strides[..] == rm_strides(&sv.shape)[..] {
+                    let a = axes[0] as usize;
+                    let pre: usize = sv.shape[..a].iter().product();
+                    let post: usize = sv.shape[a + 1..].iter().product();
+                    let (src, len) = (sv.ptr, sv.shape[a]);
+                    macro_rules! fold_axis {
+                        ($f:expr) => {
+                            unsafe { reduce_axis(dst, src, pre, len, post, $f) }
+                        };
+                    }
+                    dispatch_bin_kernel!(op, fold_axis);
                     pc += 1;
                     continue;
                 }
@@ -648,25 +751,50 @@ pub(super) fn run_range(
                 if desc.scalar {
                     a[IxDyn(&[])] = unsafe { *slab_ptr.add(off) };
                 } else {
-                    let dst = a.as_slice_mut().expect("export arrays are standard layout");
-                    // `dst.len()`, not `desc.elems()`: an empty box keeps a
+                    // `a.len()`, not `desc.elems()`: an empty box keeps a
                     // one-element storage but publishes an empty array.
-                    debug_assert_eq!(dst.len(), desc.shape.iter().product::<usize>());
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            slab_ptr.add(off) as *const f64,
-                            dst.as_mut_ptr(),
-                            dst.len(),
-                        );
+                    debug_assert_eq!(a.len(), desc.shape.iter().product::<usize>());
+                    let n = a.len();
+                    let src = unsafe { std::slice::from_raw_parts(slab_ptr.add(off), n) };
+                    if prog.col_major && !super::super::layout::order_free(&desc.shape) {
+                        // The slot is the logical array axis-reversed; the
+                        // reversed view of the export walks in slot order.
+                        for (d, &v) in a.view_mut().reversed_axes().iter_mut().zip(src) {
+                            *d = v;
+                        }
+                    } else {
+                        a.as_slice_mut()
+                            .expect("export arrays are standard layout")
+                            .copy_from_slice(src);
                     }
                 }
             }
             Instr::Fused { spec } => {
-                let fs = &prog.fused[*spec as usize];
-                unsafe { exec_fused(fs, env, slab_ptr, slot_off, obs, fregs, fscratch, simd) };
+                let idx = &idx_tables[*spec as usize];
+                let dy_ptr = dy.as_mut_ptr();
+                unsafe {
+                    exec_fused(
+                        *spec as usize,
+                        env,
+                        slab_ptr,
+                        slot_off,
+                        obs,
+                        fregs,
+                        fscratch,
+                        idx,
+                        simd,
+                        dy_home,
+                        dy_ptr,
+                    )
+                };
             }
             Instr::DyWrite { write } => {
                 let w = &prog.dy_writes[*write as usize];
+                // Its fused group already stored the slot into `dy`.
+                if dy_home[w.slot as usize] != usize::MAX {
+                    pc += 1;
+                    continue;
+                }
                 let desc = &prog.slots[w.slot as usize];
                 let off = slot_off[w.slot as usize];
                 if let Some(pos) = &w.scatter {
@@ -684,8 +812,10 @@ pub(super) fn run_range(
                         dy[flat] = unsafe { *slab_ptr.add(off) };
                     }
                     None => {
+                        // A column-major program's slot has the state block's
+                        // own layout, so a whole-box write is one copy.
                         let sv = &prog.state_vars[w.var as usize];
-                        let cm = cm_strides(&sv.shape);
+                        let cm = dy_strides(prog, &sv.shape);
                         let mut dbase = sv.flat_offset as i64;
                         for d in 0..sv.shape.len() {
                             dbase += w.dest_lo[d] as i64 * cm[d];
@@ -694,7 +824,8 @@ pub(super) fn run_range(
                             sv.flat_offset + sv.shape.iter().product::<usize>().max(1) <= dy.len()
                         );
                         unsafe {
-                            copy_strided(
+                            copy_strided_maybe_split(
+                                call_split,
                                 dy.as_mut_ptr().offset(dbase as isize),
                                 &cm,
                                 slab_ptr.add(off) as *const f64,
@@ -705,6 +836,20 @@ pub(super) fn run_range(
                     }
                 }
             }
+            Instr::Lanes { spec } => unsafe {
+                super::lanes::exec_lanes(
+                    *spec as usize,
+                    &prog.lanes[*spec as usize],
+                    env,
+                    slab_ptr,
+                    slot_off,
+                    obs,
+                    lscratch,
+                    dy,
+                    simd,
+                    call_split,
+                )
+            },
         }
         pc += 1;
     }

@@ -82,7 +82,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-scaling-
 
+      # Loops aligned to 64 bytes so the hand loops time the same from one
+      # build to the next (tests/conformance/scaling/README.md, Timing builds).
       - name: Build the adapter (release)
+        env:
+          RUSTFLAGS: -C llvm-args=-align-loops=64
         run: cargo build --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust
 
       - name: Generate the ladder

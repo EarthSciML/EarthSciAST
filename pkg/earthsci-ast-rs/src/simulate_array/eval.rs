@@ -962,7 +962,7 @@ pub(crate) fn binary_kernel(op: &str) -> fn(f64, f64) -> f64 {
 ///
 /// [`BinCode::Unknown`] is the "not a binary kernel" code; its kernel is the NaN
 /// sentinel, matching `apply_binary`'s catch-all arm.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum BinCode {
     Add,
     Sub,
@@ -1233,7 +1233,7 @@ pub(crate) fn unary_kernel(op: &str) -> fn(f64) -> f64 {
 
 /// A unary operator resolved to a compact code — the counterpart of
 /// [`BinCode`], for the same reason (see its docs).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum UnCode {
     Exp,
     Ln,

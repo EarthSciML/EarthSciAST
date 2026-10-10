@@ -24,7 +24,7 @@ pub(super) const FCHUNK: usize = 1024;
 /// A micro-op operand resolved for one chunk: a pointer to `c` contiguous
 /// values, or a constant broadcast over the chunk.
 #[derive(Clone, Copy)]
-enum MSrc {
+pub(super) enum MSrc {
     P(*const f64),
     C(f64),
 }
@@ -35,7 +35,7 @@ enum MSrc {
 /// buffer (disjoint from the register file), so slice-based loops are sound —
 /// and vectorizable.
 #[inline(always)]
-unsafe fn fch1(dst: *mut f64, c: usize, a: MSrc, f: impl Fn(f64) -> f64 + Copy) {
+pub(super) unsafe fn fch1(dst: *mut f64, c: usize, a: MSrc, f: impl Fn(f64) -> f64 + Copy) {
     unsafe {
         let d = std::slice::from_raw_parts_mut(dst, c);
         match a {
@@ -59,7 +59,13 @@ unsafe fn fch1(dst: *mut f64, c: usize, a: MSrc, f: impl Fn(f64) -> f64 + Copy) 
 /// argument; the two operands may alias EACH OTHER, which shared slices
 /// permit).
 #[inline(always)]
-unsafe fn fch2(dst: *mut f64, c: usize, a: MSrc, b: MSrc, f: impl Fn(f64, f64) -> f64 + Copy) {
+pub(super) unsafe fn fch2(
+    dst: *mut f64,
+    c: usize,
+    a: MSrc,
+    b: MSrc,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
     unsafe {
         let d = std::slice::from_raw_parts_mut(dst, c);
         match (a, b) {
@@ -205,9 +211,337 @@ unsafe fn fch4(
     }
 }
 
+/// One chunk (`c` values at flat box offset `at`) of an absorbed scan along
+/// rows of `row` elements: the running value restarts at `init` at each
+/// row's first element and otherwise continues from `*carry`, which it
+/// leaves holding the value after the chunk's last element.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn fch_scan(
+    dst: *mut f64,
+    c: usize,
+    at: usize,
+    a: MSrc,
+    row: usize,
+    init: f64,
+    inclusive: bool,
+    carry: &mut f64,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    let mut acc = *carry;
+    let mut k = 0usize;
+    while k < c {
+        let pos = (at + k) % row;
+        if pos == 0 {
+            acc = init;
+        }
+        let end = k + (c - k).min(row - pos);
+        // Monomorphized over the operand kind and the scan flavour, so each
+        // piece is one plain dependency chain.
+        unsafe {
+            let d = std::slice::from_raw_parts_mut(dst.add(k), end - k);
+            match (a, inclusive) {
+                (MSrc::P(p), true) => {
+                    for (o, &x) in d
+                        .iter_mut()
+                        .zip(std::slice::from_raw_parts(p.add(k), end - k))
+                    {
+                        acc = f(acc, x);
+                        *o = acc;
+                    }
+                }
+                (MSrc::P(p), false) => {
+                    for (o, &x) in d
+                        .iter_mut()
+                        .zip(std::slice::from_raw_parts(p.add(k), end - k))
+                    {
+                        *o = acc;
+                        acc = f(acc, x);
+                    }
+                }
+                (MSrc::C(x), true) => {
+                    for o in d.iter_mut() {
+                        acc = f(acc, x);
+                        *o = acc;
+                    }
+                }
+                (MSrc::C(x), false) => {
+                    for o in d.iter_mut() {
+                        *o = acc;
+                        acc = f(acc, x);
+                    }
+                }
+            }
+        }
+        k = end;
+    }
+    *carry = acc;
+}
+
+/// One chunk of a [`ScanFuse`] (Float64): per element, in order, the scanned
+/// value (`pre`'s `op(a, b)`, else `src`), the scan's combine `sop` with the
+/// running value as in [`fch_scan`], and the stored value (`post`'s `op` of
+/// the scan's value and `other`, the scan's value on the right when `swap`;
+/// else the scan's value), and the scan's value again at `keep` when given.
+/// `dst` may be the register of an operand of `pre` or `post`: each element
+/// is read before it is written.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn fch_scan_fused(
+    dst: *mut f64,
+    c: usize,
+    at: usize,
+    row: usize,
+    init: f64,
+    inclusive: bool,
+    carry: &mut f64,
+    sop: BinCode,
+    pre: Option<(BinCode, MSrc, MSrc)>,
+    src: MSrc,
+    post: Option<(BinCode, MSrc, bool)>,
+    keep: Option<*mut f64>,
+) {
+    // The pieces between row starts, each one plain loop over operands read
+    // as (pointer, stride) — stride 0 for a constant — so the loop has no
+    // operand-kind branch.
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn pieces(
+        c: usize,
+        at: usize,
+        row: usize,
+        init: f64,
+        inclusive: bool,
+        carry: &mut f64,
+        f: impl Fn(f64, f64) -> f64,
+        x: impl Fn(usize) -> f64,
+        y: impl Fn(f64, usize) -> f64,
+        dst: *mut f64,
+        keep: Option<*mut f64>,
+    ) {
+        let mut acc = *carry;
+        let mut k = 0usize;
+        while k < c {
+            let pos = (at + k) % row;
+            if pos == 0 {
+                acc = init;
+            }
+            let end = k + (c - k).min(row - pos);
+            for j in k..end {
+                let v = if inclusive {
+                    acc = f(acc, x(j));
+                    acc
+                } else {
+                    let v = acc;
+                    acc = f(acc, x(j));
+                    v
+                };
+                if let Some(kp) = keep {
+                    unsafe { *kp.add(j) = v };
+                }
+                unsafe { *dst.add(j) = y(v, j) };
+            }
+            k = end;
+        }
+        *carry = acc;
+    }
+    let mut consts = [0.0f64; 3];
+    let mut strided = |m: MSrc, slot: usize| -> (*const f64, usize) {
+        match m {
+            MSrc::P(p) => (p, 1),
+            MSrc::C(v) => {
+                consts[slot] = v;
+                (std::ptr::null(), 0)
+            }
+        }
+    };
+    let (pa, sa, pb, sb) = match pre {
+        Some((_, a, b)) => {
+            let (pa, sa) = strided(a, 0);
+            let (pb, sb) = strided(b, 1);
+            (pa, sa, pb, sb)
+        }
+        None => {
+            let (pa, sa) = strided(src, 0);
+            (pa, sa, std::ptr::null(), 0)
+        }
+    };
+    let (po, so) = match post {
+        Some((_, o, _)) => strided(o, 2),
+        None => (std::ptr::null(), 0),
+    };
+    // A constant reads its slot of `consts`, which now holds every value.
+    let kp = consts.as_ptr();
+    let fix = |p: *const f64, slot: usize| {
+        if p.is_null() {
+            unsafe { kp.add(slot) }
+        } else {
+            p
+        }
+    };
+    let (pa, pb, po) = (fix(pa, 0), fix(pb, 1), fix(po, 2));
+    let ld = |p: *const f64, s: usize, j: usize| unsafe { *p.add(j * s) };
+    macro_rules! kernel {
+        (Add) => {
+            |x: f64, y: f64| x + y
+        };
+        (Sub) => {
+            |x: f64, y: f64| x - y
+        };
+        (Mul) => {
+            |x: f64, y: f64| x * y
+        };
+        (Div) => {
+            |x: f64, y: f64| x / y
+        };
+    }
+    macro_rules! with_post {
+        ($f:expr, $x:expr) => {
+            match post {
+                None => unsafe {
+                    pieces(
+                        c,
+                        at,
+                        row,
+                        init,
+                        inclusive,
+                        carry,
+                        $f,
+                        $x,
+                        |v, _| v,
+                        dst,
+                        keep,
+                    )
+                },
+                Some((op, _, swap)) => {
+                    macro_rules! go {
+                        ($g:tt) => {{
+                            let g = kernel!($g);
+                            if swap {
+                                unsafe {
+                                    pieces(
+                                        c,
+                                        at,
+                                        row,
+                                        init,
+                                        inclusive,
+                                        carry,
+                                        $f,
+                                        $x,
+                                        |v, j| g(ld(po, so, j), v),
+                                        dst,
+                                        keep,
+                                    )
+                                }
+                            } else {
+                                unsafe {
+                                    pieces(
+                                        c,
+                                        at,
+                                        row,
+                                        init,
+                                        inclusive,
+                                        carry,
+                                        $f,
+                                        $x,
+                                        |v, j| g(v, ld(po, so, j)),
+                                        dst,
+                                        keep,
+                                    )
+                                }
+                            }
+                        }};
+                    }
+                    match op {
+                        BinCode::Add => go!(Add),
+                        BinCode::Sub => go!(Sub),
+                        BinCode::Mul => go!(Mul),
+                        BinCode::Div => go!(Div),
+                        other => unreachable!("scan fusion post-op {other:?}"),
+                    }
+                }
+            }
+        };
+    }
+    macro_rules! with_pre {
+        ($f:expr) => {
+            match pre {
+                None => with_post!($f, |j| ld(pa, sa, j)),
+                Some((op, _, _)) => {
+                    macro_rules! go {
+                        ($h:tt) => {{
+                            let h = kernel!($h);
+                            with_post!($f, |j| h(ld(pa, sa, j), ld(pb, sb, j)))
+                        }};
+                    }
+                    match op {
+                        BinCode::Add => go!(Add),
+                        BinCode::Sub => go!(Sub),
+                        BinCode::Mul => go!(Mul),
+                        BinCode::Div => go!(Div),
+                        other => unreachable!("scan fusion pre-op {other:?}"),
+                    }
+                }
+            }
+        };
+    }
+    match sop {
+        BinCode::Add => with_pre!(kernel!(Add)),
+        BinCode::Mul => with_pre!(kernel!(Mul)),
+        other => unreachable!("scan fusion scan op {other:?}"),
+    }
+}
+
+/// One chunk of an absorbed scan whose lanes are `post` elements wide (an
+/// axis other than the last): position `at + k` is lane `(at + k) % post` at
+/// step `((at + k) / post) % row`; a lane restarts at `init` on step 0 and
+/// otherwise continues from its slot in `carry`.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn fch_scan_lanes(
+    dst: *mut f64,
+    c: usize,
+    at: usize,
+    a: MSrc,
+    row: usize,
+    post: usize,
+    init: f64,
+    inclusive: bool,
+    carry: &mut [f64],
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    let mut k = 0usize;
+    while k < c {
+        let q0 = (at + k) % post;
+        let step = ((at + k) / post) % row;
+        let len = (c - k).min(post - q0);
+        let acc = &mut carry[q0..q0 + len];
+        if step == 0 {
+            acc.fill(init);
+        }
+        unsafe {
+            let d = std::slice::from_raw_parts_mut(dst.add(k), len);
+            for (j, (o, y)) in d.iter_mut().zip(acc.iter_mut()).enumerate() {
+                let x = match a {
+                    MSrc::P(p) => *p.add(k + j),
+                    MSrc::C(v) => v,
+                };
+                if inclusive {
+                    *y = f(*y, x);
+                    *o = *y;
+                } else {
+                    *o = *y;
+                    *y = f(*y, x);
+                }
+            }
+        }
+        k += len;
+    }
+}
+
 /// The `vec_select` pick over one chunk.
 #[inline(always)]
-unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MSrc) {
+pub(super) unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MSrc) {
     // A constant condition is the filter-gate broadcast: whole-chunk pick.
     if let MSrc::C(cv) = cond {
         let pick = if cv != 0.0 { a } else { b };
@@ -297,6 +631,9 @@ macro_rules! dispatch_bin_kernel {
                 BinCode::Le => $apply!(|x, y| (x <= y) as i32 as f64),
                 BinCode::Gt => $apply!(|x, y| (x > y) as i32 as f64),
                 BinCode::Ge => $apply!(|x, y| (x >= y) as i32 as f64),
+                BinCode::Atan2 => $apply!(|x: f64, y: f64| x.atan2(y)),
+                BinCode::And => $apply!(|x: f64, y: f64| (x != 0.0 && y != 0.0) as i32 as f64),
+                BinCode::Or => $apply!(|x: f64, y: f64| (x != 0.0 || y != 0.0) as i32 as f64),
                 other => $apply!(binary_kernel_of(*other)),
             }
         }
@@ -326,6 +663,16 @@ macro_rules! dispatch_un_kernel {
                 UnCode::Tanh => $apply!(|x: f64| x.tanh()),
                 UnCode::Floor => $apply!(|x: f64| x.floor()),
                 UnCode::Ceil => $apply!(|x: f64| x.ceil()),
+                UnCode::Tan => $apply!(|x: f64| x.tan()),
+                UnCode::Asin => $apply!(|x: f64| x.asin()),
+                UnCode::Acos => $apply!(|x: f64| x.acos()),
+                UnCode::Atan => $apply!(|x: f64| x.atan()),
+                UnCode::Sinh => $apply!(|x: f64| x.sinh()),
+                UnCode::Cosh => $apply!(|x: f64| x.cosh()),
+                UnCode::Asinh => $apply!(|x: f64| x.asinh()),
+                UnCode::Acosh => $apply!(|x: f64| x.acosh()),
+                UnCode::Atanh => $apply!(|x: f64| x.atanh()),
+                UnCode::Not => $apply!(|x: f64| (x == 0.0) as i32 as f64),
                 UnCode::Sign => $apply!(|x: f64| {
                     if x > 0.0 {
                         1.0
@@ -351,6 +698,19 @@ pub(super) struct FusedScratch {
     bases: Vec<*const f64>,
     outs: Vec<(GroupIx, *mut f64)>,
     cursor: RunCursor,
+    /// The boxes of a group's whole-read gathers ([`ChunkGather::whole`]),
+    /// back to back, sized for the largest group's.
+    whole: Vec<f64>,
+    /// The sources of the current group's whole-read gathers, in input
+    /// order (their `bases` entries point into `whole`).
+    whole_src: Vec<*const f64>,
+    /// Per group, [`node_elems`] of its schedule: what lets a worker step
+    /// straight to the start of its share of the group.
+    node_elems: Vec<Vec<usize>>,
+    /// The register files and cursors of the workers a split group runs on
+    /// (native targets only; see `par`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) workers: super::par::FusedWorkers,
 }
 
 impl FusedScratch {
@@ -360,14 +720,136 @@ impl FusedScratch {
             svals: Vec::with_capacity(most(|f| f.scalars.len())),
             bases: Vec::with_capacity(most(|f| f.inputs.len())),
             outs: Vec::with_capacity(most(|f| f.outputs.len())),
-            cursor: RunCursor::with_room(most(|f| f.schedule.depth), most(n_shifted)),
+            cursor: RunCursor::with_room(
+                most(|f| f.schedule.depth),
+                most(n_shifted),
+                most(n_scans),
+            ),
+            whole: vec![0.0; most(whole_len)],
+            whole_src: Vec::with_capacity(most(|f| f.inputs.len())),
+            node_elems: prog
+                .fused
+                .iter()
+                .map(|f| node_elems(&f.schedule.nodes))
+                .collect(),
+            #[cfg(not(target_arch = "wasm32"))]
+            workers: super::par::FusedWorkers::for_program(prog),
         }
     }
 }
 
-fn n_shifted(fs: &FusedSpec) -> usize {
+pub(super) fn n_shifted(fs: &FusedSpec) -> usize {
     fs.inputs.iter().filter(|i| i.shifted_ix.is_some()).count()
 }
+
+/// The elements a group's whole-read gathers occupy in `FusedScratch::whole`.
+fn whole_len(fs: &FusedSpec) -> usize {
+    let n = fs.n_elems();
+    fs.inputs
+        .iter()
+        .filter(|i| i.gather.as_deref().is_some_and(|g| g.whole))
+        .count()
+        * n
+}
+
+/// The carry slots a group's absorbed scans use (one per lane).
+pub(super) fn n_scans(fs: &FusedSpec) -> usize {
+    fs.micro
+        .iter()
+        .map(|m| match m {
+            MicroOp::Scan { post, .. } => *post as usize,
+            _ => 0,
+        })
+        .sum()
+}
+
+/// The elements one execution of each schedule node covers: a run's length,
+/// or ONE repetition of a `Repeat`'s body (its whole span is that times its
+/// count). Pre-order, like the nodes.
+pub(super) fn node_elems(nodes: &[RunNode]) -> Vec<usize> {
+    fn span(nodes: &[RunNode], out: &mut [usize], i: usize) -> (usize, usize) {
+        match &nodes[i] {
+            RunNode::Run(r) => {
+                out[i] = r.len as usize;
+                (out[i], i + 1)
+            }
+            RunNode::Repeat { count, body, .. } => {
+                let end = i + 1 + *body as usize;
+                let (mut rep, mut j) = (0usize, i + 1);
+                while j < end {
+                    let (t, next) = span(nodes, out, j);
+                    rep += t;
+                    j = next;
+                }
+                out[i] = rep;
+                (rep * *count as usize, end)
+            }
+        }
+    }
+    let mut out = vec![0usize; nodes.len()];
+    let mut j = 0usize;
+    while j < nodes.len() {
+        j = span(nodes, &mut out, j).1;
+    }
+    out
+}
+
+/// The share of a fused group one execution of the chunk loop runs: the
+/// elements at flat positions `[lo, hi)` of the schedule's execution order,
+/// or, with a `period`, every element whose position modulo `period` lies in
+/// `[lo, hi)` (the inner positions of an absorbed reduction, each of which
+/// one worker then folds over every leading position, in order). Every
+/// element is computed by the same micro-ops whatever window it falls in, so
+/// splitting a group into windows cannot change a bit.
+#[derive(Clone, Copy)]
+pub(super) struct Window<'a> {
+    pub(super) lo: usize,
+    pub(super) hi: usize,
+    /// 0 for a plain window.
+    pub(super) period: usize,
+    /// [`node_elems`] of the group's schedule.
+    pub(super) node_elems: &'a [usize],
+}
+
+impl<'a> Window<'a> {
+    /// The whole group.
+    pub(super) fn all(node_elems: &'a [usize]) -> Self {
+        Window {
+            lo: 0,
+            hi: usize::MAX,
+            period: 0,
+            node_elems,
+        }
+    }
+
+    /// The first piece `[s, e)` (relative to the run) at or after `from` of
+    /// the run of `len` elements starting at schedule position `g0` that
+    /// falls in the window.
+    #[inline(always)]
+    fn piece(&self, g0: usize, len: usize, from: usize) -> Option<(usize, usize)> {
+        if self.period == 0 {
+            let s = from.max(self.lo.saturating_sub(g0));
+            let e = len.min(self.hi.saturating_sub(g0));
+            return (s < e).then_some((s, e));
+        }
+        let mut p = g0 + from;
+        while p < g0 + len {
+            let base = p - p % self.period;
+            let s = p.max(base + self.lo);
+            let e = (g0 + len).min(base + self.hi);
+            if s < e {
+                return Some((s - g0, e - g0));
+            }
+            p = base + self.period;
+        }
+        None
+    }
+}
+
+/// Unused bytes past the end of each buffer a split's worker writes (two
+/// cache lines, the pair the adjacent-line prefetcher moves together).
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) const PAD_BYTES: usize = 128;
 
 /// The executor's position in a [`RunSchedule`]: one frame per open
 /// [`RunNode::Repeat`], the offsets the open repetitions have stepped so far,
@@ -378,6 +860,9 @@ pub(super) struct RunCursor {
     frames: Vec<RepeatFrame>,
     in_delta: Vec<i64>,
     in_off: Vec<i64>,
+    /// Each absorbed scan's running value, carried from one chunk to the
+    /// next.
+    carries: Vec<f64>,
 }
 
 /// An open repetition: the `Repeat` node, its body's node range, and the
@@ -390,43 +875,173 @@ struct RepeatFrame {
 }
 
 impl RunCursor {
-    pub(super) fn with_room(depth: usize, n_shifted: usize) -> Self {
+    pub(super) fn with_room(depth: usize, n_shifted: usize, n_scans: usize) -> Self {
         RunCursor {
             frames: Vec::with_capacity(depth),
             in_delta: Vec::with_capacity(n_shifted),
             in_off: Vec::with_capacity(n_shifted),
+            carries: Vec::with_capacity(n_scans),
+        }
+    }
+
+    /// [`RunCursor::with_room`] for a split's worker: every buffer has
+    /// unused room for [`PAD_BYTES`] past its end, so what one worker writes
+    /// never shares a cache line with the next allocation (another worker's
+    /// cursor or registers).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn for_worker(depth: usize, n_shifted: usize, n_scans: usize) -> Self {
+        fn room<T>(n: usize) -> Vec<T> {
+            Vec::with_capacity(n + PAD_BYTES.div_ceil(std::mem::size_of::<T>().max(1)))
+        }
+        RunCursor {
+            frames: room(depth),
+            in_delta: room(n_shifted),
+            in_off: room(n_shifted),
+            carries: room(n_scans),
         }
     }
 
     #[cfg(test)]
     pub(super) fn for_spec(fs: &FusedSpec) -> Self {
-        Self::with_room(fs.schedule.depth, n_shifted(fs))
+        Self::with_room(fs.schedule.depth, n_shifted(fs), n_scans(fs))
     }
 }
 
-/// Execute one fused group. Iterates the precompiled run schedule; each run
-/// is strip-mined into `FCHUNK`-element chunks whose micro-ops execute over
-/// the register file, then live-out registers store to the slab. Per element
-/// this applies exactly the same scalar kernels in the same order as the
-/// unfused instructions (elementwise maps — chunking cannot change a bit).
-#[inline(never)]
+/// A folded data-subscript gather whose subscript array is fixed for the
+/// call: its source positions, resolved once when the sections that define
+/// the subscript run, so a steady call reads one `u32` per element instead of
+/// rounding and range-checking an `f64` subscript.
+pub(super) struct IndexTable {
+    /// The subscript array's slot (defined in the CONST or SEGMENT section).
+    subscript: SlotId,
+    /// The gathered source's extent along its data axis.
+    n: usize,
+    /// One position per element of the group box, or [`GATHER_GHOST`].
+    pos: Vec<u32>,
+    /// No position is the ghost, so the gather is a plain indexed load.
+    all_in: bool,
+}
+
+/// Per fused group, per input: the [`IndexTable`] of every folded
+/// data-subscript gather in a CONTINUOUS-section group whose subscript is a
+/// slot the CONST or SEGMENT section defines (an empty list for a group with
+/// none). Sized here, once; [`refill_index_tables`] only overwrites.
+pub(super) fn index_tables_for(prog: &TapeProgram) -> Vec<Vec<Option<IndexTable>>> {
+    let prime_end = (prog.n_const + prog.n_segment) as usize;
+    let tables = prog.tables();
+    let mut primed: Vec<bool> = vec![false; prog.slots.len()];
+    for ins in &prog.instrs[..prime_end] {
+        ins.for_each_def(&tables, |s| primed[s as usize] = true);
+    }
+    let mut out: Vec<Vec<Option<IndexTable>>> = prog.fused.iter().map(|_| Vec::new()).collect();
+    for ins in &prog.instrs[prime_end..] {
+        let Instr::Fused { spec } = ins else { continue };
+        let fs = &prog.fused[*spec as usize];
+        let n_elems = fs.n_elems();
+        let per_input: Vec<Option<IndexTable>> = fs
+            .inputs
+            .iter()
+            .map(|inp| {
+                let (by, n) = inp.index?;
+                let SrcRef::Slot(sub) = fs.inputs[by as usize].src else {
+                    return None;
+                };
+                (primed[sub as usize] && n < GATHER_GHOST as usize).then(|| IndexTable {
+                    subscript: sub,
+                    n,
+                    pos: vec![GATHER_GHOST; n_elems],
+                    all_in: false,
+                })
+            })
+            .collect();
+        if per_input.iter().any(Option::is_some) {
+            out[*spec as usize] = per_input;
+        }
+    }
+    out
+}
+
+/// Re-resolve every [`IndexTable`] from its subscript slot, after the
+/// sections that define the subscripts ran. The positions are
+/// [`data_subscript`]'s, so the gather reads the same elements it would
+/// resolve per call.
+///
+/// # Safety
+/// `slab_ptr` must be the slab `slot_off` lays out, with every table's
+/// subscript slot holding the table's element count.
+pub(super) unsafe fn refill_index_tables(
+    tables: &mut [Vec<Option<IndexTable>>],
+    slab_ptr: *const f64,
+    slot_off: &[usize],
+) {
+    for t in tables.iter_mut().flatten().flatten() {
+        let sub = unsafe {
+            std::slice::from_raw_parts(slab_ptr.add(slot_off[t.subscript as usize]), t.pos.len())
+        };
+        let mut all_in = true;
+        for (p, &v) in t.pos.iter_mut().zip(sub) {
+            *p = match data_subscript(v, t.n) {
+                Some(i) => i as u32,
+                None => {
+                    all_in = false;
+                    GATHER_GHOST
+                }
+            };
+        }
+        t.all_in = all_in;
+    }
+}
+
+/// A fused group's operands, resolved for one call (see [`resolve_fused`]).
+pub(super) struct Resolved<'a> {
+    pub(super) svals: &'a [f64],
+    pub(super) bases: &'a [*const f64],
+    pub(super) whole_src: &'a [*const f64],
+    pub(super) outs: &'a [(GroupIx, *mut f64)],
+    /// An absorbed reduction's accumulator (null without one).
+    pub(super) red: *mut f64,
+    pub(super) node_elems: &'a [usize],
+    pub(super) cursor: &'a mut RunCursor,
+}
+
+/// The workers of `scratch`, or a stand-in on wasm (which never splits).
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) type Workers = super::par::FusedWorkers;
+#[cfg(target_arch = "wasm32")]
+pub(super) type Workers = ();
+
+/// Resolve fused group `spec`'s operands for this call into `scratch`:
+/// scalar values, input base pointers (a whole-read gather's pointing at its
+/// scratch box, its source recorded in `whole_src`), output pointers (the
+/// slab, `dy` for a slot homed there, null for an unstored one) and the
+/// reduction's accumulator.
+///
+/// # Safety
+/// As for [`exec_fused`].
 #[allow(clippy::too_many_arguments)]
-pub(super) unsafe fn exec_fused(
-    fs: &FusedSpec,
+pub(super) unsafe fn resolve_fused<'a>(
+    spec: usize,
     env: &Env,
     slab_ptr: *mut f64,
     slot_off: &[usize],
     obs: &ArrMap,
-    fregs: &mut [f64],
-    scratch: &mut FusedScratch,
-    simd: SimdLevel,
-) {
+    scratch: &'a mut FusedScratch,
+    dy_home: &[usize],
+    dy: *mut f64,
+) -> (Resolved<'a>, &'a mut Workers) {
+    let fs = &env.prog.fused[spec];
     let FusedScratch {
         svals,
         bases,
         outs,
         cursor,
+        whole,
+        whole_src,
+        node_elems,
+        #[cfg(not(target_arch = "wasm32"))]
+        workers,
     } = scratch;
+    let node_elems = &node_elems[spec][..];
     // Resolve scalar inputs once.
     svals.clear();
     for op in &fs.scalars {
@@ -441,9 +1056,8 @@ pub(super) unsafe fn exec_fused(
                 unsafe { slab_ptr.add(slot_off[*s as usize]) as *const f64 }
             }
             SrcRef::State(ix) => {
-                let sv = &env.prog.state_vars[*ix as usize];
-                debug_assert_eq!(&sv.shape, &inp.src_shape);
-                unsafe { env.state_rm.as_ptr().add(sv.flat_offset) }
+                debug_assert_eq!(&env.prog.state_vars[*ix as usize].shape, &inp.src_shape);
+                super::resolve::state_ptr(env, *ix)
             }
             SrcRef::Obs(ix) => {
                 let name = &env.prog.obs_reads[*ix as usize];
@@ -461,35 +1075,198 @@ pub(super) unsafe fn exec_fused(
         };
         bases.push(p);
     }
-    // Output slab pointers.
+    // Whole-read gathers: the box read once, then addressed like an aligned
+    // input. The read itself happens with the group's chunks (each worker of
+    // a split reads the positions of its own window).
+    let n_elems = fs.n_elems();
+    let mut next = 0usize;
+    whole_src.clear();
+    for (inp, base) in fs.inputs.iter().zip(bases.iter_mut()) {
+        if inp.gather.as_deref().is_some_and(|g| g.whole) {
+            whole_src.push(*base);
+            *base = whole[next..next + n_elems].as_ptr();
+            next += n_elems;
+        }
+    }
+    // Output pointers: the slab, or `dy` for a slot homed there.
     outs.clear();
     for &(reg, slot) in &fs.outputs {
-        outs.push((reg, unsafe { slab_ptr.add(slot_off[slot as usize]) }));
+        let p = match dy_home.get(slot as usize) {
+            Some(&super::UNSTORED) => std::ptr::null_mut(),
+            Some(&off) if off != usize::MAX => unsafe { dy.add(off) },
+            _ => unsafe { slab_ptr.add(slot_off[slot as usize]) },
+        };
+        outs.push((reg, p));
     }
-    // An absorbed reduction's accumulator, seeded with its identity.
+    // An absorbed reduction's accumulator: its slot, or `dy` when homed
+    // there.
     let red: *mut f64 = match &fs.reduce {
-        Some(r) => unsafe {
-            let p = slab_ptr.add(slot_off[r.out as usize]);
-            std::slice::from_raw_parts_mut(p, r.n_inner).fill(r.init);
-            p
+        Some(r) => match dy_home.get(r.out as usize) {
+            Some(&off) if off != usize::MAX => unsafe { dy.add(off) },
+            _ => unsafe { slab_ptr.add(slot_off[r.out as usize]) },
         },
         None => std::ptr::null_mut(),
     };
+    // Zero-sized: no allocation.
+    #[cfg(target_arch = "wasm32")]
+    let workers: &'a mut Workers = Box::leak(Box::new(()));
+    (
+        Resolved {
+            svals,
+            bases,
+            whole_src,
+            outs,
+            red,
+            node_elems,
+            cursor,
+        },
+        workers,
+    )
+}
 
-    // Step 4b: run the chunked micro-program through the SIMD clone selected
-    // at executor construction. Same source, same scalar semantics — the
-    // `#[target_feature]` wrappers only widen the auto-vectorized lanes.
+/// Execute one fused group. Iterates the precompiled run schedule; each run
+/// is strip-mined into `FCHUNK`-element chunks whose micro-ops execute over
+/// the register file, then live-out registers store to the slab. Per element
+/// this applies exactly the same scalar kernels in the same order as the
+/// unfused instructions (elementwise maps — chunking cannot change a bit).
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn exec_fused(
+    spec: usize,
+    env: &Env,
+    slab_ptr: *mut f64,
+    slot_off: &[usize],
+    obs: &ArrMap,
+    fregs: &mut [f64],
+    scratch: &mut FusedScratch,
+    idx: &[Option<IndexTable>],
+    simd: SimdLevel,
+    dy_home: &[usize],
+    dy: *mut f64,
+) {
+    let fs = &env.prog.fused[spec];
+    let (r, _workers) =
+        unsafe { resolve_fused(spec, env, slab_ptr, slot_off, obs, scratch, dy_home, dy) };
+    let Resolved {
+        svals,
+        bases,
+        whole_src,
+        outs,
+        red,
+        node_elems,
+        cursor,
+    } = r;
+    // A large group is split into windows across the caller's worker
+    // threads (see `par`).
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ways = super::par::split_ways(fs, _workers.call_ways);
+        if ways > 1 {
+            unsafe {
+                _workers.run_split(
+                    fs, svals, bases, whole_src, outs, red, idx, node_elems, simd, ways,
+                )
+            };
+            return;
+        }
+    }
+    // Seeded with the reduction's identity (a split's workers seed their
+    // own cells).
+    if let Some(r) = &fs.reduce
+        && !seeds_itself(fs)
+    {
+        unsafe { std::slice::from_raw_parts_mut(red, r.n_inner).fill(r.init) };
+    }
+    unsafe { fill_whole(fs, bases, whole_src, 0, fs.n_elems(), 0) };
+    unsafe {
+        run_fused_window(
+            simd,
+            fs,
+            svals,
+            bases,
+            outs,
+            red,
+            idx,
+            fregs,
+            cursor,
+            Window::all(node_elems),
+        )
+    }
+}
+
+/// Read a group's whole-read gathers (sources `whole_src`, destinations their
+/// `bases` entries) at the flat positions `[lo, hi)`, or with a `period`, at
+/// the positions whose remainder modulo `period` lies in `[lo, hi)`: the
+/// positions a [`Window`] with the same bounds runs.
+///
+/// # Safety
+/// `bases` must be the group's resolved inputs with every whole-read gather's
+/// entry pointing at its `n_elems` scratch box, and `whole_src` their sources.
+pub(super) unsafe fn fill_whole(
+    fs: &FusedSpec,
+    bases: &[*const f64],
+    whole_src: &[*const f64],
+    lo: usize,
+    hi: usize,
+    period: usize,
+) {
+    if whole_src.is_empty() {
+        return;
+    }
+    let n = fs.n_elems();
+    let mut k = 0usize;
+    for (inp, &dst) in fs.inputs.iter().zip(bases) {
+        let Some(g) = inp.gather.as_deref().filter(|g| g.whole) else {
+            continue;
+        };
+        let (src, dst) = (whole_src[k], dst as *mut f64);
+        k += 1;
+        if period == 0 {
+            let hi = hi.min(n);
+            if lo < hi {
+                unsafe { g.fill(src, lo, hi - lo, dst.add(lo)) };
+            }
+            continue;
+        }
+        let mut base = 0usize;
+        while base < n {
+            let (a, b) = (base + lo, (base + hi).min(base + period).min(n));
+            if a < b {
+                unsafe { g.fill(src, a, b - a, dst.add(a)) };
+            }
+            base += period;
+        }
+    }
+}
+
+/// Run one window of a fused group through the SIMD clone selected at
+/// executor construction (Step 4b). Same source, same scalar semantics — the
+/// `#[target_feature]` wrappers only widen the auto-vectorized lanes.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+pub(super) unsafe fn run_fused_window(
+    simd: SimdLevel,
+    fs: &FusedSpec,
+    svals: &[f64],
+    bases: &[*const f64],
+    outs: &[(GroupIx, *mut f64)],
+    red: *mut f64,
+    idx: &[Option<IndexTable>],
+    fregs: &mut [f64],
+    cursor: &mut RunCursor,
+    win: Window,
+) {
     match simd {
         SimdLevel::Generic => unsafe {
-            exec_fused_runs_generic(fs, svals, bases, outs, red, fregs, cursor)
+            exec_fused_runs_generic(fs, svals, bases, outs, red, idx, fregs, cursor, win)
         },
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx2 => unsafe {
-            exec_fused_runs_avx2(fs, svals, bases, outs, red, fregs, cursor)
+            exec_fused_runs_avx2(fs, svals, bases, outs, red, idx, fregs, cursor, win)
         },
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 => unsafe {
-            exec_fused_runs_avx512(fs, svals, bases, outs, red, fregs, cursor)
+            exec_fused_runs_avx512(fs, svals, bases, outs, red, idx, fregs, cursor, win)
         },
     }
 }
@@ -497,29 +1274,184 @@ pub(super) unsafe fn exec_fused(
 /// Fold one chunk (`c` values at flat box offset `at`) into an absorbed
 /// reduction's accumulator: `acc[(at + k) % n_inner] = f(acc[..], v[k])`,
 /// ascending in `k` — contiguous pieces of the accumulator, one per crossing
-/// of a leading-axes position.
+/// of a leading-axes position. `acc` is where cell 0 would be: a split's
+/// worker backs only its own cells, so it may point before that buffer
+/// (hence the wrapping offset).
+///
+/// Every cell's first term sits at the first leading position (flat offset
+/// below `n_inner`), which the walk visits before the others, so there the
+/// cell is written as `f(init, v)` without reading it: the accumulator needs
+/// no seeding pass (see [`seeds_itself`]).
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 unsafe fn fold_chunk(
     acc: *mut f64,
     n_inner: usize,
     at: usize,
+    init: f64,
     v: *const f64,
     c: usize,
     f: impl Fn(f64, f64) -> f64 + Copy,
 ) {
     let mut k = 0usize;
     while k < c {
-        let o = (at + k) % n_inner;
+        let p = at + k;
+        let o = p % n_inner;
         let len = (c - k).min(n_inner - o);
         unsafe {
-            let a = std::slice::from_raw_parts_mut(acc.add(o), len);
+            let a = std::slice::from_raw_parts_mut(acc.wrapping_add(o), len);
             let x = std::slice::from_raw_parts(v.add(k), len);
-            for (y, &t) in a.iter_mut().zip(x) {
-                *y = f(*y, t);
+            if p < n_inner {
+                for (y, &t) in a.iter_mut().zip(x) {
+                    *y = f(init, t);
+                }
+            } else {
+                for (y, &t) in a.iter_mut().zip(x) {
+                    *y = f(*y, t);
+                }
             }
         }
         k += len;
     }
+}
+
+/// [`fold_chunk`] of the values `g(a[k], b[k])`, computed in the same loop
+/// instead of read back from a register: the group's last micro-op fused
+/// into its reduction (see [`fold_fused_op`]). Each element applies `g`
+/// then `f`, exactly the two kernels the unfused path applies.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn fold_chunk_bin(
+    acc: *mut f64,
+    n_inner: usize,
+    at: usize,
+    init: f64,
+    a: MSrc,
+    b: MSrc,
+    c: usize,
+    g: impl Fn(f64, f64) -> f64 + Copy,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    // One piece (inside the `unsafe` block below): `$x` / `$y` read the
+    // operands at piece element `$i`.
+    macro_rules! piece {
+        ($ac:expr, $len:expr, $first:expr, |$i:ident| $x:expr, $y:expr) => {{
+            let ac: &mut [f64] = $ac;
+            if $first {
+                for $i in 0..$len {
+                    *ac.get_unchecked_mut($i) = f(init, g($x, $y));
+                }
+            } else {
+                for $i in 0..$len {
+                    let r = ac.get_unchecked_mut($i);
+                    *r = f(*r, g($x, $y));
+                }
+            }
+        }};
+    }
+    let mut k = 0usize;
+    while k < c {
+        let p = at + k;
+        let o = p % n_inner;
+        let len = (c - k).min(n_inner - o);
+        let first = p < n_inner;
+        unsafe {
+            let ac = std::slice::from_raw_parts_mut(acc.wrapping_add(o), len);
+            match (a, b) {
+                (MSrc::P(pa), MSrc::P(pb)) => {
+                    let xa = std::slice::from_raw_parts(pa.add(k), len);
+                    let xb = std::slice::from_raw_parts(pb.add(k), len);
+                    piece!(
+                        ac,
+                        len,
+                        first,
+                        |i| *xa.get_unchecked(i),
+                        *xb.get_unchecked(i)
+                    )
+                }
+                (MSrc::P(pa), MSrc::C(y)) => {
+                    let xa = std::slice::from_raw_parts(pa.add(k), len);
+                    piece!(ac, len, first, |i| *xa.get_unchecked(i), y)
+                }
+                (MSrc::C(x), MSrc::P(pb)) => {
+                    let xb = std::slice::from_raw_parts(pb.add(k), len);
+                    piece!(ac, len, first, |i| x, *xb.get_unchecked(i))
+                }
+                (MSrc::C(x), MSrc::C(y)) => fold_piece_const(ac, first, init, x, y, g, f),
+            }
+        }
+        k += len;
+    }
+}
+
+/// One piece of [`fold_chunk_bin`] with both operands constant. Out of line:
+/// inlined, the compiler computes `g(x, y)` ahead of the operand match from
+/// whatever the operands hold, pointers included, and a pointer's bits read
+/// as a subnormal `f64` make that one multiply cost a microcode assist on
+/// every piece.
+#[cold]
+#[inline(never)]
+fn fold_piece_const(
+    ac: &mut [f64],
+    first: bool,
+    init: f64,
+    x: f64,
+    y: f64,
+    g: impl Fn(f64, f64) -> f64,
+    f: impl Fn(f64, f64) -> f64,
+) {
+    let v = g(x, y);
+    for r in ac.iter_mut() {
+        *r = f(if first { init } else { *r }, v);
+    }
+}
+
+/// The micro-op a group's absorbed reduction folds straight from: its last
+/// one, when it is a `+ - * /` [`MicroOp::Bin`] (or a [`MicroOp::Bin2`] of
+/// one scaled by a scalar, into a sum) writing the reduction's register,
+/// nothing else reads that register (not a stored output, not a direct
+/// store), the fold is a sum or product, and the arithmetic is Float64 (the
+/// fused loop composes the f64 kernels directly, as the scan fusion does).
+/// `None` runs the op and the fold as two passes.
+pub(in crate::simulate_array::tape) fn fold_fused_op(fs: &FusedSpec) -> Option<usize> {
+    use BinCode::{Add, Div, Mul, Sub};
+    let r = fs.reduce.as_ref()?;
+    let mi = fs.micro.len().checked_sub(1)?;
+    let (out, kinds_ok) = match &fs.micro[mi] {
+        MicroOp::Bin { op, out, .. } => (
+            out,
+            matches!(op, Add | Sub | Mul | Div) && matches!(r.op, Add | Mul),
+        ),
+        // A superop scaled by a scalar (`(a op1 b) op2 s`, either order),
+        // folded into a sum.
+        MicroOp::Bin2 {
+            op1,
+            op2,
+            c: MRef::Scal(_),
+            out,
+            ..
+        } => (
+            out,
+            matches!(op1, Add | Sub | Mul | Div) && matches!(op2, Mul | Div) && r.op == Add,
+        ),
+        _ => return None,
+    };
+    let ok = *out == r.reg
+        && kinds_ok
+        && fs.scan_fuse.is_empty()
+        && !fs.outputs.iter().any(|&(reg, _)| reg == r.reg)
+        && !fs.direct.iter().any(|&(m, _)| m as usize == mi)
+        && !crate::precision::is_f32();
+    ok.then_some(mi)
+}
+
+/// Whether a group's absorbed reduction writes every accumulator cell before
+/// reading it (see [`fold_chunk`]), so nothing seeds it: the group visits at
+/// least one leading position.
+pub(super) fn seeds_itself(fs: &FusedSpec) -> bool {
+    fs.reduce
+        .as_ref()
+        .is_some_and(|r| r.n_inner > 0 && fs.shape.iter().product::<usize>() >= r.n_inner)
 }
 
 /// The strip-mined chunk loop of [`exec_fused`], monomorphized per SIMD
@@ -527,16 +1459,39 @@ unsafe fn fold_chunk(
 /// so each wrapper compiles the WHOLE loop nest — micro-op dispatch, chunk
 /// kernels and stores — under its feature set).
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 unsafe fn exec_fused_runs(
     fs: &FusedSpec,
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
     red: *mut f64,
+    idx: &[Option<IndexTable>],
     fregs: &mut [f64],
     cursor: &mut RunCursor,
+    win: Window,
 ) {
     let rp = fregs.as_mut_ptr();
+    let cs = FCHUNK;
+    // Scan fusions run under Float64 only (their loop composes the f64
+    // arithmetic directly); otherwise the three passes run as written.
+    let scan_fused = !fs.scan_fuse.is_empty() && !crate::precision::is_f32();
+    // The last micro-op folded straight into the reduction, if it can be.
+    let fold_op = fold_fused_op(fs);
+    debug_assert!(fs.direct.windows(2).all(|w| w[0].0 < w[1].0));
+    // The outputs a micro-op stores directly (no end-of-chunk copy).
+    let direct_mask = fs
+        .direct
+        .iter()
+        .filter(|&&(_, k)| k < 128)
+        .fold(0u128, |m, &(_, k)| m | 1 << k);
+    let is_direct = |k: usize| {
+        if k < 128 {
+            direct_mask >> k & 1 != 0
+        } else {
+            fs.direct.iter().any(|&(_, d)| d as usize == k)
+        }
+    };
     // Bin3 splat registers: one FCHUNK broadcast per scalar plus a zero
     // register (the ghost read), filled once per call. The values are the
     // EXACT scalars / the exact `+0.0` ghost, so an all-pointer superop
@@ -547,98 +1502,74 @@ unsafe fn exec_fused_runs(
         debug_assert_eq!(fs.n_splat_regs as usize, svals.len() + 1);
         unsafe {
             for (i, &v) in svals.iter().enumerate() {
-                let p = rp.add((splat_base + i) * FCHUNK);
-                for k in 0..FCHUNK {
+                let p = rp.add((splat_base + i) * cs);
+                for k in 0..cs {
                     *p.add(k) = v;
                 }
             }
-            let z = rp.add(zero_ix * FCHUNK);
-            for k in 0..FCHUNK {
+            let z = rp.add(zero_ix * cs);
+            for k in 0..cs {
                 *z.add(k) = 0.0;
             }
         }
     }
-    // Walk the schedule in execution order: a `Repeat` opens a frame over
-    // its body, and each time the walk reaches the body's end it either
-    // steps every offset once more and goes back to the body's start, or
-    // (the last repetition done) takes the steps back off and closes.
-    let nodes = &fs.schedule.nodes;
     let RunCursor {
         frames,
         in_delta,
         in_off,
+        carries,
     } = cursor;
-    frames.clear();
-    in_delta.clear();
-    in_delta.resize(n_shifted(fs), 0);
-    in_off.clear();
-    in_off.resize(in_delta.len(), 0);
-    let mut out_delta = 0i64;
-    let mut i = 0usize;
-    loop {
-        while let Some(fr) = frames.last_mut()
-            && i == fr.end
-        {
-            let RunNode::Repeat {
-                count,
-                body,
-                out_step,
-                in_step,
-            } = &nodes[fr.node]
-            else {
-                unreachable!("a frame is opened by a Repeat node")
-            };
-            fr.left -= 1;
-            if fr.left > 0 {
-                out_delta += out_step;
-                for (d, s) in in_delta.iter_mut().zip(in_step) {
-                    *d += s;
-                }
-                i = fr.end - *body as usize;
-                break;
-            }
-            let back = *count as i64 - 1;
-            out_delta -= back * out_step;
-            for (d, s) in in_delta.iter_mut().zip(in_step) {
-                *d -= back * s;
-            }
-            frames.pop();
-        }
-        let run = match nodes.get(i) {
-            None => break,
-            Some(RunNode::Repeat { count, body, .. }) => {
-                frames.push(RepeatFrame {
-                    node: i,
-                    end: i + 1 + *body as usize,
-                    left: *count,
-                });
-                i += 1;
-                continue;
-            }
-            Some(RunNode::Run(run)) => run,
-        };
-        i += 1;
-        for ((o, &r), &d) in in_off.iter_mut().zip(&run.in_off).zip(in_delta.iter()) {
-            *o = if r == GHOST_OFF { r } else { r + d };
-        }
-        let in_off: &[i64] = in_off;
-        let out_off = (run.out_off as i64 + out_delta) as usize;
-        let mut done = 0usize;
-        let len = run.len as usize;
-        while done < len {
-            let c = (len - done).min(FCHUNK);
-            let at = out_off + done;
+    // Every scan restarts at flat offset 0, the first element the walk
+    // visits, so the carries need no reset here; size them only.
+    carries.clear();
+    carries.resize(n_scans(fs), 0.0);
+    // One chunk: `c` elements at flat box offset `at`, `done` elements
+    // into a run whose shifted inputs start at `in_off`.
+    macro_rules! chunk {
+        ($in_off:expr, $done:expr, $at:expr, $c:expr) => {{
+            let (in_off, done, at, c): (&[i64], usize, usize, usize) = ($in_off, $done, $at, $c);
             // Pre-load strided shifted inputs into their dedicated chunk
             // registers (a ghost run needs no load — reads resolve to 0.0).
             for (i, inp) in fs.inputs.iter().enumerate() {
                 if inp.load_reg == GroupIx::MAX {
                     continue;
                 }
+                // A gather read through its plan, one chunk at a time.
+                if let Some(g) = inp.gather.as_deref()
+                    && !g.whole
+                {
+                    unsafe { g.fill(bases[i], at, c, rp.add(inp.load_reg as usize * cs)) };
+                    continue;
+                }
                 // A folded data-subscript gather: one random read per element,
                 // through the subscript array's aligned chunk.
                 if let Some((by, n)) = inp.index {
+                    if let Some(Some(t)) = idx.get(i) {
+                        unsafe {
+                            let dst = std::slice::from_raw_parts_mut(
+                                rp.add(inp.load_reg as usize * cs),
+                                c,
+                            );
+                            let pos = &t.pos[at..at + c];
+                            let src = bases[i];
+                            if t.all_in {
+                                for (d, &p) in dst.iter_mut().zip(pos) {
+                                    *d = *src.add(p as usize);
+                                }
+                            } else {
+                                for (d, &p) in dst.iter_mut().zip(pos) {
+                                    *d = if p == GATHER_GHOST {
+                                        0.0
+                                    } else {
+                                        *src.add(p as usize)
+                                    };
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     unsafe {
-                        let dst = rp.add(inp.load_reg as usize * FCHUNK);
+                        let dst = rp.add(inp.load_reg as usize * cs);
                         let sub = bases[by as usize].add(at);
                         let src = bases[i];
                         for k in 0..c {
@@ -656,7 +1587,7 @@ unsafe fn exec_fused_runs(
                     continue;
                 }
                 unsafe {
-                    let dst = rp.add(inp.load_reg as usize * FCHUNK);
+                    let dst = rp.add(inp.load_reg as usize * cs);
                     let base =
                         bases[i].offset(o as isize + done as isize * inp.elem_stride as isize);
                     for k in 0..c {
@@ -666,14 +1597,16 @@ unsafe fn exec_fused_runs(
             }
             let msrc = |m: &MRef| -> MSrc {
                 match m {
-                    MRef::Reg(r) => MSrc::P(unsafe { rp.add(*r as usize * FCHUNK) as *const f64 }),
+                    MRef::Reg(r) => MSrc::P(unsafe { rp.add(*r as usize * cs) as *const f64 }),
                     MRef::Scal(i) => MSrc::C(svals[*i as usize]),
                     MRef::In(i) => {
                         let inp = &fs.inputs[*i as usize];
                         match inp.shifted_ix {
-                            None if inp.index.is_some() => MSrc::P(unsafe {
-                                rp.add(inp.load_reg as usize * FCHUNK) as *const f64
-                            }),
+                            None if inp.index.is_some()
+                                || inp.gather.as_deref().is_some_and(|g| !g.whole) =>
+                            {
+                                MSrc::P(unsafe { rp.add(inp.load_reg as usize * cs) as *const f64 })
+                            }
                             None => MSrc::P(unsafe { bases[*i as usize].add(at) }),
                             Some(s) => {
                                 let o = in_off[s as usize];
@@ -681,7 +1614,7 @@ unsafe fn exec_fused_runs(
                                     MSrc::C(0.0)
                                 } else if inp.load_reg != GroupIx::MAX {
                                     MSrc::P(unsafe {
-                                        rp.add(inp.load_reg as usize * FCHUNK) as *const f64
+                                        rp.add(inp.load_reg as usize * cs) as *const f64
                                     })
                                 } else if inp.elem_stride == 0 {
                                     // Constant along the run: one source
@@ -706,11 +1639,11 @@ unsafe fn exec_fused_runs(
                     MSrc::P(p) => p,
                     MSrc::C(v) => {
                         if v == 0.0 && v.is_sign_positive() {
-                            unsafe { rp.add(zero_ix * FCHUNK) as *const f64 }
+                            unsafe { rp.add(zero_ix * cs) as *const f64 }
                         } else {
                             match m {
                                 MRef::Scal(i) => unsafe {
-                                    rp.add((splat_base + *i as usize) * FCHUNK) as *const f64
+                                    rp.add((splat_base + *i as usize) * cs) as *const f64
                                 },
                                 _ => unreachable!("non-scalar constant operand"),
                             }
@@ -718,11 +1651,115 @@ unsafe fn exec_fused_runs(
                     }
                 }
             };
-            for op in &fs.micro {
+            // Where micro-op `mi` writes: its register, or straight into its
+            // output when it is that output's last writer and nothing after
+            // it reads the register (`FusedSpec::direct`).
+            // `direct` is in ascending micro-op order, and the micro loop asks
+            // in that order too, so a cursor finds each entry in one step; a
+            // query behind the cursor (a scan fusion asks for its post-op
+            // first) starts over.
+            let dnext = std::cell::Cell::new(0usize);
+            let dst_of = |mi: usize, out: GroupIx| -> *mut f64 {
+                let d = &fs.direct;
+                let mut p = dnext.get();
+                if p > 0 && d[p - 1].0 as usize >= mi {
+                    p = 0;
+                }
+                while p < d.len() && (d[p].0 as usize) < mi {
+                    p += 1;
+                }
+                dnext.set(p);
+                if p < d.len() && d[p].0 as usize == mi {
+                    let o = outs[d[p].1 as usize].1;
+                    if !o.is_null() {
+                        return unsafe { o.add(at) };
+                    }
+                }
+                unsafe { rp.add(out as usize * cs) }
+            };
+            for (mi, op) in fs.micro.iter().enumerate() {
+                if fold_op == Some(mi) {
+                    continue;
+                }
+                if scan_fused {
+                    let mut role = None;
+                    for f in &fs.scan_fuse {
+                        let s = f.scan as usize;
+                        if f.pre && s == mi + 1 || f.post && s + 1 == mi {
+                            role = Some(None);
+                        } else if s == mi {
+                            role = Some(Some(*f));
+                        }
+                    }
+                    match role {
+                        // Absorbed into its scan's loop.
+                        Some(None) => continue,
+                        Some(Some(f)) => {
+                            let MicroOp::Scan {
+                                op: sop,
+                                a,
+                                init,
+                                inclusive,
+                                row,
+                                carry,
+                                out,
+                                ..
+                            } = op
+                            else {
+                                unreachable!("a scan fusion names a scan")
+                            };
+                            let pre = f.pre.then(|| match &fs.micro[mi - 1] {
+                                MicroOp::Bin { op, a, b, .. } => (*op, msrc(a), msrc(b)),
+                                _ => unreachable!("a fused pre-op is a Bin"),
+                            });
+                            let (post, dst) = if f.post {
+                                let MicroOp::Bin {
+                                    op,
+                                    a,
+                                    b,
+                                    out: pout,
+                                } = &fs.micro[mi + 1]
+                                else {
+                                    unreachable!("a fused post-op is a Bin")
+                                };
+                                // `swap`: the scan's value is the right operand.
+                                let swap = *b == MRef::Reg(*out);
+                                let other = if swap { msrc(a) } else { msrc(b) };
+                                (Some((*op, other, swap)), dst_of(mi + 1, *pout))
+                            } else {
+                                (None, dst_of(mi, *out))
+                            };
+                            let src = if f.pre { MSrc::C(0.0) } else { msrc(a) };
+                            // The scan's own value, when it is also a live-out
+                            // that this call stores.
+                            let keep = (f.keep
+                                && outs.iter().any(|o| o.0 == *out && !o.1.is_null()))
+                            .then(|| dst_of(mi, *out));
+                            unsafe {
+                                fch_scan_fused(
+                                    dst,
+                                    c,
+                                    at,
+                                    *row as usize,
+                                    *init,
+                                    *inclusive,
+                                    &mut carries[*carry as usize],
+                                    *sop,
+                                    pre,
+                                    src,
+                                    post,
+                                    keep,
+                                )
+                            };
+                            continue;
+                        }
+                        None => {}
+                    }
+                }
                 match op {
                     MicroOp::Bin { op, a, b, out } => {
                         let (a, b) = (msrc(a), msrc(b));
-                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        let dst = dst_of(mi, *out);
                         // Monomorphized over the shared table — the same
                         // kernel bodies as the unfused `Instr::Bin` arm.
                         macro_rules! chunk {
@@ -734,7 +1771,7 @@ unsafe fn exec_fused_runs(
                     }
                     MicroOp::Un { op, a, out } => {
                         let a = msrc(a);
-                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        let dst = dst_of(mi, *out);
                         macro_rules! chunk {
                             ($f:expr) => {
                                 unsafe { fch1(dst, c, a, $f) }
@@ -744,15 +1781,51 @@ unsafe fn exec_fused_runs(
                     }
                     MicroOp::Neg { a, out } => {
                         let a = msrc(a);
-                        unsafe { fch1(rp.add(*out as usize * FCHUNK), c, a, |x| -x) };
+                        unsafe { fch1(dst_of(mi, *out), c, a, |x| -x) };
                     }
                     MicroOp::Select { cond, a, b, out } => {
                         let (cv, av, bv) = (msrc(cond), msrc(a), msrc(b));
-                        unsafe { fch_sel(rp.add(*out as usize * FCHUNK), c, cv, av, bv) };
+                        unsafe { fch_sel(dst_of(mi, *out), c, cv, av, bv) };
                     }
                     MicroOp::Mov { a, out } => {
                         let a = msrc(a);
-                        unsafe { fch1(rp.add(*out as usize * FCHUNK), c, a, |x| x) };
+                        unsafe { fch1(dst_of(mi, *out), c, a, |x| x) };
+                    }
+                    MicroOp::Scan {
+                        op,
+                        a,
+                        init,
+                        inclusive,
+                        row,
+                        post,
+                        carry,
+                        out,
+                    } => {
+                        let a = msrc(a);
+                        let dst = dst_of(mi, *out);
+                        let (row, post, init, inclusive) =
+                            (*row as usize, *post as usize, *init, *inclusive);
+                        let cv = &mut carries[*carry as usize..*carry as usize + post];
+                        if post == 1 {
+                            let cv = &mut cv[0];
+                            macro_rules! chunk {
+                                ($f:expr) => {
+                                    unsafe { fch_scan(dst, c, at, a, row, init, inclusive, cv, $f) }
+                                };
+                            }
+                            dispatch_bin_kernel!(op, chunk);
+                        } else {
+                            macro_rules! chunk {
+                                ($f:expr) => {
+                                    unsafe {
+                                        fch_scan_lanes(
+                                            dst, c, at, a, row, post, init, inclusive, cv, $f,
+                                        )
+                                    }
+                                };
+                            }
+                            dispatch_bin_kernel!(op, chunk);
+                        }
                     }
                     MicroOp::Bin2 {
                         op1,
@@ -764,7 +1837,7 @@ unsafe fn exec_fused_runs(
                         out,
                     } => {
                         let (av, bv, cv) = (msrc(a), msrc(b), msrc(c3));
-                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        let dst = dst_of(mi, *out);
                         // Under `element_type: "Float32"` the monomorphized
                         // closures below are hand-copied f64 arithmetic that
                         // never sees the precision, so compose the SAME two
@@ -850,7 +1923,7 @@ unsafe fn exec_fused_runs(
                         out,
                     } => {
                         let (pa, pb, pc, pd) = (msrc_p(a), msrc_p(b), msrc_p(c3), msrc_p(d4));
-                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        let dst = dst_of(mi, *out);
                         // See `Bin2`: Float32 composes the three shared kernels
                         // in the same order rather than the f64-only closures.
                         if crate::precision::is_f32() {
@@ -951,24 +2024,250 @@ unsafe fn exec_fused_runs(
                     }
                 }
             }
-            for &(reg, optr) in outs {
+            for (k, &(reg, optr)) in outs.iter().enumerate() {
+                if optr.is_null() || is_direct(k) {
+                    continue;
+                }
                 unsafe {
                     std::ptr::copy_nonoverlapping(
-                        rp.add(reg as usize * FCHUNK) as *const f64,
+                        rp.add(reg as usize * cs) as *const f64,
                         optr.add(at),
                         c,
                     );
                 }
             }
             if let Some(r) = &fs.reduce {
-                let v = unsafe { rp.add(r.reg as usize * FCHUNK) as *const f64 };
-                macro_rules! fold {
-                    ($f:expr) => {
-                        unsafe { fold_chunk(red, r.n_inner, at, v, c, $f) }
-                    };
+                if let Some(MicroOp::Bin2 {
+                    op1,
+                    a,
+                    b,
+                    op2,
+                    c: MRef::Scal(z),
+                    swap,
+                    ..
+                }) = fold_op.map(|mi| &fs.micro[mi])
+                {
+                    let (a, b, z) = (msrc(a), msrc(b), svals[*z as usize]);
+                    use BinCode::{Add, Div, Mul, Sub};
+                    // `g` composes the superop's two kernels in its order.
+                    macro_rules! ff {
+                        ($f1:expr, $f2:expr) => {{
+                            let (f1, f2) = ($f1, $f2);
+                            if *swap {
+                                unsafe {
+                                    fold_chunk_bin(
+                                        red,
+                                        r.n_inner,
+                                        at,
+                                        r.init,
+                                        a,
+                                        b,
+                                        c,
+                                        move |x, y| f2(z, f1(x, y)),
+                                        |x: f64, y: f64| x + y,
+                                    )
+                                }
+                            } else {
+                                unsafe {
+                                    fold_chunk_bin(
+                                        red,
+                                        r.n_inner,
+                                        at,
+                                        r.init,
+                                        a,
+                                        b,
+                                        c,
+                                        move |x, y| f2(f1(x, y), z),
+                                        |x: f64, y: f64| x + y,
+                                    )
+                                }
+                            }
+                        }};
+                    }
+                    let add = |x: f64, y: f64| x + y;
+                    let sub = |x: f64, y: f64| x - y;
+                    let mul = |x: f64, y: f64| x * y;
+                    let div = |x: f64, y: f64| x / y;
+                    match (op1, op2) {
+                        (Add, Mul) => ff!(add, mul),
+                        (Sub, Mul) => ff!(sub, mul),
+                        (Mul, Mul) => ff!(mul, mul),
+                        (Div, Mul) => ff!(div, mul),
+                        (Add, Div) => ff!(add, div),
+                        (Sub, Div) => ff!(sub, div),
+                        (Mul, Div) => ff!(mul, div),
+                        (Div, Div) => ff!(div, div),
+                        other => unreachable!(
+                            "fold fusion admits a + - * / then * / superop ({other:?})"
+                        ),
+                    }
+                } else if let Some(MicroOp::Bin { op, a, b, .. }) = fold_op.map(|mi| &fs.micro[mi])
+                {
+                    let (a, b) = (msrc(a), msrc(b));
+                    use BinCode::{Add, Div, Mul, Sub};
+                    macro_rules! ff {
+                        ($g:expr, $f:expr) => {
+                            unsafe { fold_chunk_bin(red, r.n_inner, at, r.init, a, b, c, $g, $f) }
+                        };
+                    }
+                    let add = |x: f64, y: f64| x + y;
+                    let sub = |x: f64, y: f64| x - y;
+                    let mul = |x: f64, y: f64| x * y;
+                    let div = |x: f64, y: f64| x / y;
+                    match (op, &r.op) {
+                        (Add, Add) => ff!(add, add),
+                        (Sub, Add) => ff!(sub, add),
+                        (Mul, Add) => ff!(mul, add),
+                        (Div, Add) => ff!(div, add),
+                        (Add, Mul) => ff!(add, mul),
+                        (Sub, Mul) => ff!(sub, mul),
+                        (Mul, Mul) => ff!(mul, mul),
+                        (Div, Mul) => ff!(div, mul),
+                        other => unreachable!("fold fusion admits + - * / into + * ({other:?})"),
+                    }
+                } else {
+                    let v = unsafe { rp.add(r.reg as usize * cs) as *const f64 };
+                    macro_rules! fold {
+                        ($f:expr) => {
+                            unsafe { fold_chunk(red, r.n_inner, at, r.init, v, c, $f) }
+                        };
+                    }
+                    dispatch_bin_kernel!(&r.op, fold);
                 }
-                dispatch_bin_kernel!(&r.op, fold);
             }
+        }};
+    }
+    // A reduction over a few leading positions, one run each, folds each
+    // chunk of its accumulator for every position before moving on, so the
+    // accumulator chunk stays in the fastest cache; each output still folds
+    // its terms in ascending position order.
+    if let (Some(runs), Some(r)) = (&fs.interleave, &fs.reduce) {
+        // A split runs the inner positions `[lo, hi)` of its window.
+        let (lo, hi) = if win.period == 0 {
+            (0, r.n_inner)
+        } else {
+            (win.lo, win.hi.min(r.n_inner))
+        };
+        let mut c0 = lo;
+        while c0 < hi {
+            let c = (hi - c0).min(cs);
+            for run in runs {
+                chunk!(&run.in_off, c0, run.out_off as usize + c0, c);
+            }
+            c0 += c;
+        }
+        return;
+    }
+    // Walk the schedule in execution order: a `Repeat` opens a frame over
+    // its body, and each time the walk reaches the body's end it either
+    // steps every offset once more and goes back to the body's start, or
+    // (the last repetition done) takes the steps back off and closes.
+    let nodes = &fs.schedule.nodes;
+    frames.clear();
+    in_delta.clear();
+    in_delta.resize(n_shifted(fs), 0);
+    in_off.clear();
+    in_off.resize(in_delta.len(), 0);
+    let mut out_delta = 0i64;
+    let mut i = 0usize;
+    // Elements of the schedule before node `i` (executed or stepped over).
+    let mut g = 0usize;
+    loop {
+        if win.period == 0 && g >= win.hi {
+            break;
+        }
+        while let Some(fr) = frames.last_mut()
+            && i == fr.end
+        {
+            let RunNode::Repeat {
+                count,
+                body,
+                out_step,
+                in_step,
+            } = &nodes[fr.node]
+            else {
+                unreachable!("a frame is opened by a Repeat node")
+            };
+            fr.left -= 1;
+            if fr.left > 0 {
+                out_delta += out_step;
+                for (d, s) in in_delta.iter_mut().zip(in_step) {
+                    *d += s;
+                }
+                i = fr.end - *body as usize;
+                break;
+            }
+            let back = *count as i64 - 1;
+            out_delta -= back * out_step;
+            for (d, s) in in_delta.iter_mut().zip(in_step) {
+                *d -= back * s;
+            }
+            frames.pop();
+        }
+        let run = match nodes.get(i) {
+            None => break,
+            Some(RunNode::Repeat {
+                count,
+                body,
+                out_step,
+                in_step,
+            }) => {
+                let rep = win.node_elems[i];
+                let span = rep * *count as usize;
+                if win.period == 0 && g + span <= win.lo {
+                    // Wholly before the window: step over the subtree.
+                    g += span;
+                    i += 1 + *body as usize;
+                    continue;
+                }
+                // Whole repetitions before the window are stepped over at
+                // once; the frame then counts down only the rest, and closing
+                // it still takes back `count - 1` steps in all.
+                let skip = if win.period == 0 && win.lo > g {
+                    (win.lo - g) / rep
+                } else {
+                    0
+                };
+                if skip > 0 {
+                    out_delta += skip as i64 * out_step;
+                    for (d, s) in in_delta.iter_mut().zip(in_step) {
+                        *d += skip as i64 * s;
+                    }
+                    g += skip * rep;
+                }
+                frames.push(RepeatFrame {
+                    node: i,
+                    end: i + 1 + *body as usize,
+                    left: *count - skip as u32,
+                });
+                i += 1;
+                continue;
+            }
+            Some(RunNode::Run(run)) => run,
+        };
+        i += 1;
+        let len = run.len as usize;
+        let g0 = g;
+        g += len;
+        let Some(first) = win.piece(g0, len, 0) else {
+            continue;
+        };
+        for ((o, &r), &d) in in_off.iter_mut().zip(&run.in_off).zip(in_delta.iter()) {
+            *o = if r == GHOST_OFF { r } else { r + d };
+        }
+        let in_off: &[i64] = in_off;
+        let out_off = (run.out_off as i64 + out_delta) as usize;
+        let (mut done, mut end) = first;
+        loop {
+            if done >= end {
+                match win.piece(g0, len, end) {
+                    Some(next) => (done, end) = next,
+                    None => break,
+                }
+                continue;
+            }
+            let c = (end - done).min(cs);
+            chunk!(in_off, done, out_off + done, c);
             done += c;
         }
     }
@@ -976,16 +2275,19 @@ unsafe fn exec_fused_runs(
 
 /// Baseline-codegen instantiation of the fused chunk loop.
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused_runs_generic(
     fs: &FusedSpec,
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
     red: *mut f64,
+    idx: &[Option<IndexTable>],
     fregs: &mut [f64],
     cursor: &mut RunCursor,
+    win: Window,
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, idx, fregs, cursor, win) }
 }
 
 /// AVX2 clone: identical Rust source compiled under `avx2` (+`fma` is NOT
@@ -994,21 +2296,23 @@ pub(super) unsafe fn exec_fused_runs_generic(
 /// support, so the `unsafe` target-feature contract holds.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused_runs_avx2(
     fs: &FusedSpec,
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
     red: *mut f64,
+    idx: &[Option<IndexTable>],
     fregs: &mut [f64],
     cursor: &mut RunCursor,
+    win: Window,
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, idx, fregs, cursor, win) }
 }
 
-/// AVX-512 clone (f+vl+dq+bw, all runtime-checked). Note LLVM keeps its
-/// preferred vector width at 256 bits for these targets unless told
-/// otherwise, so this may codegen close to the AVX2 clone.
+/// AVX-512 clone (f+vl+dq+bw, all runtime-checked), selected only on request
+/// (see `simd_level`): LLVM vectorizes these loops in 512-bit registers.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(
     enable = "avx512f",
@@ -1016,16 +2320,19 @@ pub(super) unsafe fn exec_fused_runs_avx2(
     enable = "avx512dq",
     enable = "avx512bw"
 )]
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused_runs_avx512(
     fs: &FusedSpec,
     svals: &[f64],
     bases: &[*const f64],
     outs: &[(GroupIx, *mut f64)],
     red: *mut f64,
+    idx: &[Option<IndexTable>],
     fregs: &mut [f64],
     cursor: &mut RunCursor,
+    win: Window,
 ) {
-    unsafe { exec_fused_runs(fs, svals, bases, outs, red, fregs, cursor) }
+    unsafe { exec_fused_runs(fs, svals, bases, outs, red, idx, fregs, cursor, win) }
 }
 
 /// The SINGLE definition of micro-op scalar semantics: one element of one
@@ -1047,6 +2354,9 @@ pub(super) unsafe fn exec_fused_runs_avx512(
 ///   then `swap3` for `Bin3`). The constituent kernels are applied strictly
 ///   in order — never contracted into a hardware FMA, which would change
 ///   bits.
+/// * `Scan` folds into `carries[carry + at % post]`, restarting at `init`
+///   where the element's flat box offset `at` is at step 0 of its lane; the
+///   caller visits the box in ascending flat order.
 /// * `get` resolves an [`MRef`] operand (register / broadcast scalar / array
 ///   input at the current element, including the [`GHOST_OFF`] `+0.0` read).
 ///   Operand reads are pure, so `Select` reading only the taken operand is
@@ -1059,6 +2369,8 @@ pub(super) unsafe fn exec_fused_runs_avx512(
 pub(in crate::simulate_array::tape) fn eval_micro_op(
     op: &MicroOp,
     regs: &mut [f64],
+    at: usize,
+    carries: &mut [f64],
     get: impl Fn(&MRef, &[f64]) -> f64,
 ) {
     match op {
@@ -1080,6 +2392,30 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
         }
         MicroOp::Mov { a, out } => {
             regs[*out as usize] = get(a, regs);
+        }
+        MicroOp::Scan {
+            op,
+            a,
+            init,
+            inclusive,
+            row,
+            post,
+            carry,
+            out,
+        } => {
+            let (row, post) = (*row as usize, *post as usize);
+            let acc = &mut carries[*carry as usize + at % post];
+            if (at / post).is_multiple_of(row) {
+                *acc = *init;
+            }
+            let x = get(a, regs);
+            if *inclusive {
+                *acc = binary_kernel_of(*op)(*acc, x);
+                regs[*out as usize] = *acc;
+            } else {
+                regs[*out as usize] = *acc;
+                *acc = binary_kernel_of(*op)(*acc, x);
+            }
         }
         MicroOp::Bin2 {
             op1,

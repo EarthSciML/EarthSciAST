@@ -7,7 +7,7 @@
 # ========================================================================
 
 # One `observed_field` answer: the forcing epoch it was computed at
-# (`_FORCING_EPOCH`) and the field. The field is state-free, so it moves only
+# (`_epoch_value`, cadence_stamp.jl) and the field. The field is state-free, so it moves only
 # when a live buffer is refreshed in place. It is filed under the build it
 # belongs to, named by the problem's `run_file` slot — each build allocates its
 # own and `remake` shares it — so a record reused for a second build, or a
@@ -188,9 +188,13 @@ mutable struct DiscreteMaterializer
     caches::Dict{String,Array{Float64}}
     materialize!::Function
     var_order::Vector{String}
+    # The forcing epoch of the build this sink belongs to (cadence_stamp.jl):
+    # bumped by `materialize!` and by a refresh of any buffer the build reads.
+    epoch::_ForcingEpoch
 end
 DiscreteMaterializer() =
-    DiscreteMaterializer(Dict{String,Array{Float64}}(), () -> nothing, String[])
+    DiscreteMaterializer(Dict{String,Array{Float64}}(), () -> nothing, String[],
+                         _new_forcing_epoch())
 
 # ============================================================
 # 2b. Build-pipeline stages
@@ -603,18 +607,16 @@ function _materialized_obs_dims(def::ASTExpr, shape, index_sets::AbstractDict,
             for n in idx_names
                 haskey(ranges, n) || return nothing
                 r = try
-                    collect(_expand_int_range(ranges[n]))
+                    _expand_int_range(ranges[n])
                 catch err
                     # A range this pass cannot read as a dense integer interval
                     # means "not a declared-dims producer" — decline. Running
-                    # out of memory MATERIALIZING one does not: `collect` on a
-                    # huge range is exactly how a document's own extents exhaust
-                    # the allocator, and declining here would hide that behind a
-                    # shape the caller reports some other way.
+                    # out of memory does not: declining here would hide that
+                    # behind a shape the caller reports some other way.
                     _is_resource_error(err) && rethrow()
                     return nothing
                 end
-                (!isempty(r) && r == collect(1:length(r))) || return nothing
+                (!isempty(r) && first(r) == 1 && _is_unit_run(r)) || return nothing
                 push!(dims, length(r))
             end
             produced = dims
@@ -2624,38 +2626,39 @@ function _build_discrete_materializer!(mut::DiscreteMaterializer,
     # 3. `materialize!`: every fill into its cache, in dependency order, with the
     #    `p` given (by default the one the caches already hold).
     filled_p = Ref{Any}(pp)
+    stamp = Ref{Any}(_pstamp(pp))
+    epoch = mut.epoch
     function materialize!(q = filled_p[])
         for fill in fills
             fill(q)
         end
         filled_p[] = q
+        stamp[] = _pstamp(q)
         # The caches just changed IN PLACE under readers gathering them via
         # `_NK_PARAM_GATHER` — invalidate the memoized time-cadence prelude slots
         # (B3, const_tier.jl): a refresh fires AT its tstop, so the next RHS call
         # is at a `t` the t-tier stamp may already hold.
-        _bump_forcing_epoch!()
+        _bump_epoch!(epoch)
         return nothing
     end
     materialize!()          # initial fill — valid caches for u0 seeding + first step
     mut.caches = caches
     mut.materialize! = materialize!
     mut.var_order = order
-    return _DiscreteRefill{typeof(pp),typeof(materialize!)}(filled_p, materialize!)
+    return _DiscreteRefill{typeof(pp),typeof(materialize!)}(stamp, materialize!)
 end
 
 # The right-hand side's check that the discrete caches hold its own `p`, and the
-# refill when they do not. The compare is the const tier's (`_cse_const_stale`):
-# egal on an `isbits` `p`, so a same-`p` call is a load and a bit compare and
-# never allocates, and a `p` that is not `isbits` refills on every call rather
-# than trust object identity. A `p` of another type than the build's — dual
+# refill when they do not. The compare is the const tier's (`_pstamp_same`,
+# cadence_stamp.jl): a same-`p` call is a compare and never allocates. A `p` of another type than the build's — dual
 # numbers, for a derivative with respect to parameters — leaves the caches as
 # they are: they hold Float64 values and cannot carry a derivative.
 struct _DiscreteRefill{P,F}
-    filled_p::Base.RefValue{Any}
+    stamp::Base.RefValue{Any}
     materialize!::F
 end
 @inline function (g::_DiscreteRefill{P})(p::P) where {P}
-    (isbits(p) && g.filled_p[] === p) || g.materialize!(p)
+    _pstamp_same(g.stamp[], p) || g.materialize!(p)
     return nothing
 end
 @inline (g::_DiscreteRefill)(p) = nothing
@@ -2779,29 +2782,133 @@ end
 # ============================================================
 #
 # The runtime half of `_collect_materialized_array_obs`. Each materialized array
-# observed owns a dense block of slots above the ODE state in ONE extended value
-# vector; `f!` copies the integrator's `u` into it, fills the observed blocks in
-# dependency order, and then runs the ordinary state RHS against the extended
-# vector. Since the reads compiled to plain state gathers, nothing downstream
-# (the affine box processor, the kernel-class merge, the codegen tier, the
-# cadence classifier) needed to learn a new leaf.
+# observed owns a dense block of slots above the ODE state in ONE extended slot
+# space; `f!` fills the observed blocks in dependency order and then runs the
+# ordinary state RHS against that space. Since the reads compiled to plain state
+# gathers, nothing downstream (the affine box processor, the kernel-class merge,
+# the codegen tier, the cadence classifier) needed to learn a new leaf.
+#
+# The slot space is TWO buffers (`_ObsSplitVec`): slots `1:n_states` are the
+# integrator's own `u` (and, for writes, its `du`), the slots above are the
+# observed buffer. So nothing copies the state per call. The generated kernels
+# pick the buffer per access at build time (`_cg_bufS` / `_cg_oview`, codegen
+# tier); every other reader goes through the view's own indexing.
 
-# The extended value vector. Two buffers — Float64 plus a lazily-allocated `alt`
+# One extended slot space over two buffers: slot `i <= n` is `u[i]`, slot
+# `i > n` is `o[i - n]`, for reads and writes alike. The element type is the
+# observed buffer's, the value type of the call.
+struct _ObsSplitVec{T,U,O} <: AbstractVector{T}
+    u::U
+    o::O
+    n::Int
+end
+_ObsSplitVec(u, o::AbstractVector{T}, n::Int) where {T} =
+    _ObsSplitVec{T,typeof(u),typeof(o)}(u, o, n)
+Base.size(s::_ObsSplitVec) = (s.n + length(s.o),)
+Base.IndexStyle(::Type{<:_ObsSplitVec}) = IndexLinear()
+@inline function Base.getindex(s::_ObsSplitVec, i::Int)
+    @boundscheck checkbounds(s, i)
+    n = s.n
+    return @inbounds(i <= n ? s.u[i] : s.o[i - n])
+end
+@inline function Base.setindex!(s::_ObsSplitVec, v, i::Int)
+    @boundscheck checkbounds(s, i)
+    n = s.n
+    @inbounds(i <= n ? (s.u[i] = v) : (s.o[i - n] = v))
+    return s
+end
+
+# The observed buffers. Two of them — Float64 plus a lazily-allocated `alt`
 # for the value type an AD-driven `f!` is called at — exactly like `_CSECache` /
 # `_AccScratch`, so the RHS stays zero-alloc at Float64 AND differentiable.
-# Allocated ONCE at build and reused across every RHS call.
+# Allocated ONCE at build and reused across every RHS call. `ustash` holds a
+# converted copy of a `u` that is not a `Vector` of the call's value type (a
+# Float64 state under `Dual` parameters, a wrapped array); a `Vector{T}` state
+# is read in place.
+#
+# Each buffer carries the cadence stamps of the prelude (`_CSECache`): `stamp64` /
+# `stampalt` the `p` its const-cadence observeds were filled for, and
+# `tp*`/`tt*`/`te*` the `(p, t, forcing epoch)` its time-cadence observeds were
+# filled for (`_pstamp`, cadence_stamp.jl). A freshly allocated `alt` holds no
+# valid block, so allocating one invalidates both of its stamps.
 mutable struct _ObsExtVec
     f64::Vector{Float64}
     alt::Any
+    stamp64::Any
+    stampalt::Any
+    tp64::Any
+    tt64::Float64
+    te64::UInt64
+    tpalt::Any
+    ttalt::Any
+    tealt::UInt64
+    epoch::_ForcingEpoch
+    ustash::Any
 end
-_ObsExtVec(n::Int) = _ObsExtVec(zeros(Float64, n), nothing)
+_ObsExtVec(n::Int, epoch::_ForcingEpoch = _new_forcing_epoch()) =
+    _ObsExtVec(_zeros_f64(n), nothing, _CSE_INVALID, _CSE_INVALID,
+               _CSE_INVALID, NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID, UInt64(0),
+               epoch, nothing)
+# The state part of the call's slot space: `u` itself when it is a `Vector{T}`,
+# else `u` converted into the stash, as the copy into one extended vector did.
+@inline _obsext_state(s::_ObsExtVec, u::Vector{T}, ::Type{T}) where {T} = u
+@inline function _obsext_state(s::_ObsExtVec, u, ::Type{T}) where {T}
+    b = s.ustash
+    if !(b isa Vector{T} && length(b) == length(u))
+        b = Vector{T}(undef, length(u))
+        s.ustash = b
+    end
+    copyto!(b, u)
+    return b::Vector{T}
+end
 @inline _obsext_buf(s::_ObsExtVec, ::Type{Float64}) = s.f64
 @inline function _obsext_buf(s::_ObsExtVec, ::Type{T}) where {T}
     b = s.alt
     b isa Vector{T} && return b
     nb = zeros(T, length(s.f64))
     s.alt = nb
+    s.stampalt = _CSE_INVALID
+    s.tpalt = _CSE_INVALID
     return nb
+end
+@inline _obsext_const_stale(s::_ObsExtVec, ::Type{Float64}, p) =
+    !_pstamp_same(s.stamp64, p)
+@inline _obsext_const_stale(s::_ObsExtVec, ::Type{T}, p) where {T} =
+    !_pstamp_same(s.stampalt, p)
+@inline function _obsext_mark_const!(s::_ObsExtVec, ::Type{Float64}, p)
+    s.stamp64 = _pstamp(p)
+    return nothing
+end
+@inline function _obsext_mark_const!(s::_ObsExtVec, ::Type{T}, p) where {T}
+    s.stampalt = _pstamp(p)
+    return nothing
+end
+# The time tier's test and mark, with `_cse_t_stale` / `_cse_mark_t!`'s rules:
+# `t` by egal (the Float64 buffer stamps only a Float64 `t`, the other only an
+# isbits one), `p` by `_pstamp_same`, and the build's forcing epoch.
+@inline _obsext_t_stale(s::_ObsExtVec, ::Type{Float64}, p, t) =
+    !(t === s.tt64 && s.te64 === _epoch_value(s.epoch) && _pstamp_same(s.tp64, p))
+@inline _obsext_t_stale(s::_ObsExtVec, ::Type{T}, p, t) where {T} =
+    !(s.ttalt === t && s.tealt === _epoch_value(s.epoch) && _pstamp_same(s.tpalt, p))
+@inline function _obsext_mark_t!(s::_ObsExtVec, ::Type{Float64}, p, t)
+    if t isa Float64
+        _pstamp_same(s.tp64, p) || (s.tp64 = _pstamp(p))
+        s.tt64 = t
+        s.te64 = _epoch_value(s.epoch)
+    else
+        s.tp64 === _CSE_INVALID || (s.tp64 = _CSE_INVALID)
+    end
+    return nothing
+end
+@inline function _obsext_mark_t!(s::_ObsExtVec, ::Type{T}, p, t) where {T}
+    if isbits(t)
+        _pstamp_same(s.tpalt, p) || (s.tpalt = _pstamp(p))
+        s.ttalt === t || (s.ttalt = t)
+        s.tealt = _epoch_value(s.epoch)
+    else
+        s.tpalt === _CSE_INVALID || (s.tpalt = _CSE_INVALID)
+    end
+    return nothing
 end
 
 # Synthesize the per-cell fill equation for one materialized array observed:
@@ -2939,24 +3046,95 @@ function _materialized_obs_levels(mat_defs::Dict{String,ASTExpr}, names,
     return [String[n for n in order if depth[n] == k] for k in 1:nlev]
 end
 
+# The CONST-cadence materialized observeds: those whose definition, followed
+# through every observed it reads (materialized or inlined), reaches only
+# literals, bound indices, scalar parameters and const arrays — no state, no
+# `t`, no live forcing buffer or discrete cache. Their buffers are a function
+# of `p` alone, so `f!` refills them only when `p` moves (the prelude const
+# tier's rule, const_tier.jl, applied to whole buffers).
+#
+# FAIL CLOSED. A name is const only when it is positively one of those leaves;
+# anything the walk does not recognize (the independent variable, a state, a
+# forcing buffer, a recurrence's self-read, a name bound by a construct other
+# than a `faq`'s indices) makes the observed dynamic, which costs a refill per
+# call and never a stale number.
+#
+# With `allowed` (the names of `t` and of the live buffers) the same walk finds
+# the observeds whose leaves may also be those: the observeds that read no
+# state, whose buffers are a function of `(p, t, forcing data)` — the
+# TIME-cadence ones, once the const ones are taken out.
+function _const_cadence_mat_obs(mat_defs::Dict{String,ASTExpr}, mat_vars,
+                                inline_obs::AbstractDict, dynamic::Set{String},
+                                param_sym_set::AbstractDict,
+                                const_registry::AbstractDict,
+                                allowed::Set{String} = Set{String}())
+    memo = Dict{String,Bool}()
+    visiting = Set{String}()
+    function bound_names(e::ASTExpr)
+        b = Set{String}()
+        foreach_subexpr_once(e) do x
+            if x isa OpExpr && _is_faq_op(x.op)
+                x.output_idx === nothing || foreach(i -> push!(b, string(i)), x.output_idx)
+                x.ranges === nothing || foreach(k -> push!(b, string(k)), keys(x.ranges))
+            end
+            nothing
+        end
+        return b
+    end
+    function name_const(n::String)
+        n in dynamic && return false
+        haskey(memo, n) && return memo[n]
+        n in visiting && return false
+        def = (n in mat_vars && haskey(mat_defs, n)) ? mat_defs[n] :
+              haskey(inline_obs, n) ? inline_obs[n] : nothing
+        def === nothing &&
+            return n in allowed || haskey(param_sym_set, Symbol(n)) ||
+                   haskey(const_registry, n)
+        push!(visiting, n)
+        b = bound_names(def)
+        c = all(r -> r in b || name_const(r), _referenced_var_names(def))
+        delete!(visiting, n)
+        memo[n] = c
+        return c
+    end
+    return Set{String}(n for n in mat_vars if name_const(n))
+end
+
 # Wrap the compiled state RHS with the per-call observed fills. Returns `f_state!`
 # UNCHANGED when nothing is materialized, so every model without a factored array
 # observed keeps a byte-identical closure (and its zero-allocation property).
 # `levels` is a vector of
 # `(scalar_nodes, kernel_section, scan_folds, array_contractions,
-# recurrence_sweeps)` in dependency order.
+# recurrence_sweeps)` in dependency order. `const_levels` has the same shape and
+# holds the const-cadence observeds (`_const_cadence_mat_obs`), which read no
+# `levels` entry; they run first, and only when the buffer's const stamp says
+# `p` moved or the buffer is new. `time_levels` holds the time-cadence ones,
+# which read only const ones and each other; they run next, and only when
+# `(p, t, the build's forcing epoch)` moved — so the columns of a Jacobian, all
+# at one `t`, fill them once.
 function _make_rhs_with_obs_buffers(f_state!, n_total::Int, n_states::Int,
-                                    levels::Tuple)
-    isempty(levels) && return f_state!
-    ext = _ObsExtVec(n_total)
+                                    levels::Tuple, const_levels::Tuple=(),
+                                    time_levels::Tuple=(),
+                                    epoch::_ForcingEpoch=_new_forcing_epoch())
+    isempty(levels) && isempty(const_levels) && isempty(time_levels) && return f_state!
+    ext = _ObsExtVec(n_total - n_states, epoch)
     function f!(du, u, p, t)
         T = _rhs_value_type(u, p, t)
-        ue = _obsext_buf(ext, T)
-        @inbounds copyto!(ue, 1, u, 1, n_states)
+        o = _obsext_buf(ext, T)
+        uv = _ObsSplitVec(_obsext_state(ext, u, T), o, n_states)
+        duv = _ObsSplitVec(du, o, n_states)
+        if !isempty(const_levels) && _obsext_const_stale(ext, T, p)
+            _fill_obs_levels!(const_levels, duv, uv, p, t, T)
+            _obsext_mark_const!(ext, T, p)
+        end
+        if !isempty(time_levels) && _obsext_t_stale(ext, T, p, t)
+            _fill_obs_levels!(time_levels, duv, uv, p, t, T)
+            _obsext_mark_t!(ext, T, p, t)
+        end
         # Fill the observed buffers level by level: a level's defs read only the
-        # state and STRICTLY LOWER levels, both already valid in `ue`.
-        _fill_obs_levels!(levels, ue, p, t, T)
-        f_state!(du, ue, p, t)
+        # state and STRICTLY LOWER levels, both already valid in `uv`.
+        _fill_obs_levels!(levels, duv, uv, p, t, T)
+        f_state!(du, uv, p, t)
         return nothing
     end
     return f!
@@ -2966,29 +3144,39 @@ end
 # `_KernelSection` call site is statically dispatched — a `Vector` of levels
 # would box each heterogeneously-parameterized section and cost an allocation
 # per level per RHS call (the RHS must stay allocation-free in steady state).
-@inline _fill_obs_levels!(::Tuple{}, ue, p, t, ::Type{T}) where {T} = nothing
-@inline function _fill_obs_levels!(levels::Tuple, ue, p, t, ::Type{T}) where {T}
+#
+# `ue` is the slot space a level writes (`du`) and reads (`u`): one full-length
+# vector, or the two views `f!` passes, which share the observed buffer and
+# differ in the state part (the integrator's `du` and `u`). A level writes only
+# its own observed slots — except a fused scan that also computes a state
+# equation from each value it folds (scan_fused.jl), which writes that
+# equation's `du` slots.
+@inline _fill_obs_levels!(levels::Tuple, ue, p, t, ::Type{T}) where {T} =
+    _fill_obs_levels!(levels, ue, ue, p, t, T)
+@inline _fill_obs_levels!(::Tuple{}, due, ue, p, t, ::Type{T}) where {T} = nothing
+@inline function _fill_obs_levels!(levels::Tuple, due, ue, p, t, ::Type{T}) where {T}
     lv = levels[1]
     ents = lv[1]
     @inbounds for k in eachindex(ents)
         e = ents[k]
-        ue[e[1]] = _eval_node(e[2], ue, p, t, T)
+        due[e[1]] = _eval_node(e[2], ue, p, t, T)
     end
-    lv[2](ue, ue, p, t, T)
+    lv[2](due, ue, p, t, T)
     # ess-scan: this level's forward prefix reductions accumulate in place over
     # the terms the kernel section just wrote — the same post-pass, in the same
     # position, that `_make_rhs` runs behind the state kernel section. Empty for
     # every level whose observeds carry no cumulative reduction.
     sf = lv[3]
-    isempty(sf) || _apply_scan_folds!(ue, sf)
+    isempty(sf) || _apply_scan_folds!(due, ue, p, t, sf)
     # ess-array-contraction: this level's whole-array contraction nests, in the
     # same position behind the kernel section that `_make_rhs` puts them in.
     ac = lv[4]
-    isempty(ac) || _apply_array_contractions!(ue, ue, p, t, ac, T)
+    isempty(ac) || _apply_array_contractions!(due, ue, p, t, ac, T)
     # This level's causal self-references, each one ordered sweep over its own
-    # buffer (recurrence_sweep.jl). Nothing else in the level reads them.
+    # buffer (recurrence_sweep.jl). Nothing else in the level reads them. A
+    # sweep reads and writes only observed slots, which both views share.
     _run_recurrence_sweeps!(lv[5], ue, p, t, T)
-    return _fill_obs_levels!(Base.tail(levels), ue, p, t, T)
+    return _fill_obs_levels!(Base.tail(levels), due, ue, p, t, T)
 end
 
 # ============================================================
@@ -3524,7 +3712,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # respect to the build: nothing downstream consults `inspect`.
     if inspect !== nothing
         for (k, arr) in parts.geom_setup_arrays
-            inspect.setup_arrays[String(k)] = Array{Float64}(arr)
+            # Published by reference, as the const arrays below are.
+            inspect.setup_arrays[String(k)] = arr isa Array{Float64} ? arr : Array{Float64}(arr)
         end
         for (k, arr) in const_registry
             inspect.const_arrays[String(k)] = arr
@@ -3579,6 +3768,11 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # ---- Live forcing buffers (ess-14f.3, JL-J0) ----
     # (see `_build_pgather` for the feasibility-gate design note)
     pgather = @_bench :build_pgather _build_pgather(param_arrays)
+    # This build's forcing epoch: the problem's (its discrete sink carries it),
+    # bumped by a refresh of any buffer the build reads.
+    forcing_epoch = materialize_out === nothing ? _new_forcing_epoch() :
+                    materialize_out.epoch
+    _register_forcing_buffers!(forcing_epoch, values(param_arrays))
 
     # ---- Discrete-cadence materialization: cache buffers + fill kernels ----
     # (the middle cadence phase; see DiscreteMaterializer). Each discrete var gets a
@@ -3679,14 +3873,52 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     mat_scan_fold_count = 0
     mat_array_contraction_count = 0
     mat_recurrence_count = 0
+    mat_const_levels = Any[]
+    mat_time_levels = Any[]
     recur_names = _recurrence_names(mat_defs, mat_vars)
+    # The const-cadence observeds fill in their own levels, ahead of the rest
+    # and only when `p` moves (`_make_rhs_with_obs_buffers`). The untiered
+    # build (`compiler = :interpreter`, the oracle) refills everything on every
+    # call, as its prelude does; the out-of-place product has no such skip.
+    mat_const = if form === :inplace && !_untiered() && !isempty(mat_vars)
+        dyn_seed = _state_base_names(layout.var_map, layout.array_var_info)
+        push!(dyn_seed, "t")
+        union!(dyn_seed, keys(pgather))
+        _const_cadence_mat_obs(mat_defs, mat_vars, raw_obs, dyn_seed,
+                               param_sym_set, const_registry)
+    else
+        Set{String}()
+    end
+    # The time-cadence observeds: no state anywhere below them, but `t` or a
+    # live buffer (a `param_arrays` buffer, a discrete cache) somewhere.
+    mat_time = if form === :inplace && !_untiered() && !isempty(mat_vars)
+        tleaves = Set{String}(keys(pgather))
+        push!(tleaves, "t")
+        setdiff!(_const_cadence_mat_obs(mat_defs, mat_vars, raw_obs,
+                     _state_base_names(layout.var_map, layout.array_var_info),
+                     param_sym_set, const_registry, tleaves), mat_const)
+    else
+        Set{String}()
+    end
+    level_plan = Tuple{Vector{String},Symbol}[]
+    pending_levels = Any[]
     if !isempty(mat_vars)
-        for lvl in _materialized_obs_levels(mat_defs, mat_vars, raw_obs)
+        isempty(mat_const) || foreach(l -> push!(level_plan, (l, :const)),
+            _materialized_obs_levels(mat_defs, mat_const, raw_obs))
+        isempty(mat_time) || foreach(l -> push!(level_plan, (l, :time)),
+            _materialized_obs_levels(mat_defs, mat_time, raw_obs))
+        foreach(l -> push!(level_plan, (l, :dynamic)),
+            _materialized_obs_levels(mat_defs,
+                setdiff(mat_vars, mat_const, mat_time), raw_obs))
+    end
+    if !isempty(level_plan)
+        for (lvl, lvl_cadence) in level_plan
             lvl_scalars = Tuple{Int,_Node}[]
             lvl_kernels = _AccKernel[]
             lvl_scans = _ScanFold[]
             lvl_acs = _ArrayContraction[]
             lvl_recurs = Any[]
+            lvl_owner = IdDict{Any,String}()
             for name in lvl
                 if name in recur_names
                     # A causal self-reference: an ordered sweep, not a fill
@@ -3712,7 +3944,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                     resolved_obs, array_var_info, var_map, const_registry,
                     pgather, param_sym_set, reg_funcs, n_total;
                     template_sites=template_sites,
-                    rhs_list_compiled=form === :oop)
+                    rhs_list_compiled=form === :oop,
+                    obs_nst=form === :inplace ? n_states : 0)
                 for (slot, ex) in se
                     push!(lvl_scalars,
                           (slot, _compile(ex, var_map, param_sym_set, reg_funcs)))
@@ -3720,21 +3953,24 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                 append!(lvl_scalars, pcs)
                 append!(lvl_kernels, aks)
                 append!(lvl_scans, sfs)
+                foreach(S -> (lvl_owner[S] = name), sfs)
                 append!(lvl_acs, acs)
             end
-            merged, _ = _merge_acc_kernel_classes(lvl_kernels)
             mat_scan_fold_count += length(lvl_scans)
             mat_array_contraction_count += length(lvl_acs)
             mat_recurrence_count += length(lvl_recurs)
             if form === :oop
+                merged, _ = _merge_acc_kernel_classes(lvl_kernels)
                 push!(mat_levels_oop,
                       (lvl_scalars, merged,
                        _OopAccPlan[_build_oop_acc_plan(K) for K in merged],
                        lvl_scans, lvl_acs))
             else
-                push!(mat_levels,
-                      (lvl_scalars, _make_kernel_section(merged), lvl_scans,
-                       _make_contraction_section(lvl_acs), Tuple(lvl_recurs)))
+                # The in-place sections are made once the state equations are
+                # compiled, so a fused scan can take in a state kernel that
+                # consumes it (`_scan_consumer_plan`).
+                push!(pending_levels, (lvl_owner, lvl_cadence, lvl_scalars, lvl_kernels,
+                                       lvl_scans, lvl_acs, lvl_recurs))
             end
         end
     end
@@ -3750,7 +3986,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             resolved_obs, array_var_info, var_map, const_registry, pgather,
             param_sym_set, reg_funcs, n_states; template_sites=template_sites,
             scalar_obs_inline=obs_plan.inline,
-            rhs_list_compiled=form === :oop)
+            rhs_list_compiled=form === :oop,
+            obs_nst=(form === :inplace && n_total > n_states) ? n_states : 0)
     # States without a D(...) equation get du=0 (integrator leaves them
     # at their initial value — a common pattern for reified constants).
 
@@ -3766,9 +4003,50 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # the (fewer) merged kernels. Bound ONCE to a fresh local (`acc_kernels`),
     # never reassigned, so every downstream closure captures it unboxed.
     # With the class merge off the build is the unmerged one, byte for byte.
+    # The in-place build keeps its affine box kernels out of the merge
+    # (`keep_affine`, oop_merge.jl), so the emitter compiles each as its own
+    # loop nest instead of a slot-table lane loop.
     # The per-cell reference is untouched either way: its trees live on
     # `percell_scalar`, never in the kernel list.
-    acc_kernels, class_merge_diag = @_bench :class_merge _merge_acc_kernel_classes(acc_kernels_pre)
+    # A state scan whose term kernel compiles into its fold's own pass
+    # (scan_fused.jl) leaves that kernel out of the merge and the section.
+    n_state_scan_folds = length(scan_folds)
+    state_fused_scans = ()
+    # The state RHS runs on the two-buffer slot space (`_ObsSplitVec`) only
+    # when something is materialized; its generated code then addresses each
+    # buffer directly.
+    obs_nst = n_total > n_states ? n_states : 0
+
+    # ---- The in-place observed levels' sections ----
+    # A scan whose term kernel compiles into its fold's own pass (scan_fused.jl)
+    # leaves that kernel out of the level's section, and a state kernel it
+    # takes in as its consumer leaves the state kernels.
+    if !isempty(pending_levels)
+        consumers = _scan_consumer_plan(pending_levels, acc_kernels_pre, n_states,
+            scalar_entries, percell_scalar, array_contractions,
+            (raw_obs, mat_defs, resolved_obs))
+        consumed = IdDict{Any,Bool}()
+        for (_, lvl_cadence, lvl_scalars, lvl_kernels, lvl_scans, lvl_acs,
+             lvl_recurs) in pending_levels
+            lvl_kernels, lvl_scans, lvl_fused =
+                _detach_fused_scans(lvl_kernels, lvl_scans; nst=n_states,
+                                    consumers=consumers, consumed=consumed)
+            merged, _ = _merge_acc_kernel_classes(lvl_kernels)
+            push!(lvl_cadence === :const ? mat_const_levels :
+                  lvl_cadence === :time ? mat_time_levels : mat_levels,
+                  (lvl_scalars, _make_kernel_section(merged; nst=n_states),
+                   _make_scan_section(lvl_scans, lvl_fused),
+                   _make_contraction_section(lvl_acs), Tuple(lvl_recurs)))
+        end
+        isempty(consumed) ||
+            (acc_kernels_pre = _AccKernel[K for K in acc_kernels_pre if !haskey(consumed, K)])
+    end
+    if form === :inplace
+        acc_kernels_pre, scan_folds, state_fused_scans =
+            _detach_fused_scans(acc_kernels_pre, scan_folds; nst=obs_nst)
+    end
+    acc_kernels, class_merge_diag = @_bench :class_merge _merge_acc_kernel_classes(acc_kernels_pre;
+        keep_affine = form === :inplace)
 
     # ---- Common-subexpression elimination on the scalar/indexed-D RHS (ess-r7h) ----
     # Batched compile of every scalar resolved-RHS expr: subexpressions sharing a
@@ -3784,6 +4062,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     rhs_list, scalar_prelude, scalar_cache, cse_diag =
         @_bench :cse_scalar _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs;
                             has_pgather = !isempty(pgather), obs_defs=obs_defs)
+    scalar_cache.epoch = forcing_epoch
 
     # ---- Cross-kernel / kernel↔prelude fn-CSE (perf plan B4; xcse.jl) ----
     # A lane-invariant fn/interp subtree appearing in several array kernels'
@@ -3808,6 +4087,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # independent oracle the acc≡per-cell differential tests compare against.
     # Empty on every default build. Appended AFTER the CSE pass so the
     # reference trees are exactly the `_compile` output, untouched by sharing.
+    n_scalar_rhs = length(rhs_list)
     isempty(percell_scalar) || append!(rhs_list, percell_scalar)
 
     # ---- Cadence tiers of the (now final) prelude (4qf + B3, const_tier.jl) ----
@@ -3823,6 +4103,17 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # has — so an FD Jacobian's N+1 same-`t` calls fill the time tier once.
     const_slots, time_slots, dyn_slots =
         _classify_const_slots(scalar_prelude, scalar_cache)
+
+    # ---- The scalar equations and the prelude as generated code (scalar_codegen.jl) ----
+    # `:inplace` only: the out-of-place product hands the compiled IR itself to a
+    # compiled backend. The per-cell reference entries past `n_scalar_rhs` stay
+    # walked. Their report rows move to the `*_codegen` tiers here.
+    scalar_section = form === :inplace ?
+        @_bench(:scalar_codegen, _build_scalar_section(rhs_list, n_scalar_rhs,
+            scalar_prelude, scalar_cache, const_slots, time_slots, dyn_slots,
+            acc_kernels)) : nothing
+    scalar_section === nothing ||
+        _retier_scalar_rules!(var_map, rhs_list, scalar_section)
 
     # ---- Default tspan ----
     tspan_default = _pick_tspan(tspan, model)
@@ -3855,8 +4146,11 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         rhs0 = _make_rhs_with_obs_buffers(
             _make_rhs(rhs_list, scalar_prelude, scalar_cache, acc_kernels,
                       const_slots, time_slots, dyn_slots, scan_folds,
-                      _make_contraction_section(array_contractions)),
-            n_total, n_states, Tuple(mat_levels))
+                      _make_contraction_section(array_contractions);
+                      scalar = scalar_section, fused_scans = state_fused_scans,
+                      nst = obs_nst),
+            n_total, n_states, Tuple(mat_levels), Tuple(mat_const_levels),
+            Tuple(mat_time_levels), forcing_epoch)
         discrete_refill === nothing ? rhs0 : _make_rhs_discrete_refill(rhs0, discrete_refill)
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
@@ -3900,7 +4194,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               # factored array-observed fills — a prefix reduction that defines a
               # materialized observed is the same rewrite in the same position,
               # just over the observed's buffer block instead of the state.
-              n_scan_folds = length(scan_folds) + mat_scan_fold_count,
+              n_scan_folds = n_state_scan_folds + mat_scan_fold_count,
               # ess-array-contraction: array einsums compiled to ONE loop nest
               # each (array_contraction.jl). Zero on every model whose reductions
               # stay under the tier's floor; counted here for the same reason
@@ -3957,7 +4251,10 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               # buffer cells that is, and the dependency depth the fills run in.
               n_mat_array_obs = length(mat_vars),
               n_mat_array_cells = n_total - n_states,
-              n_mat_levels = length(mat_levels),
+              n_mat_levels = length(mat_levels) + length(mat_const_levels) +
+                             length(mat_time_levels),
+              n_mat_const_levels = length(mat_const_levels),
+              n_mat_time_levels = length(mat_time_levels),
               # Parameter NAME → position in a vector `p` — the build's own copy
               # of what the public `param_map(p)` recomputes from the NamedTuple.
               # Here so an internal consumer never has to re-derive the order.
@@ -4013,18 +4310,10 @@ function _build_evaluator_impl_pools(model::Model; kwargs...)
     prev = _LANE_INTERN_POOL[]
     _LANE_INTERN_POOL[] = _lane_intern_disabled() ? nothing :
                           Dict{_LaneInternKey,Any}()
-    # Same lifetime, same save/restore: the identity slot tables the lane-affine
-    # STATE-BOX lowering addresses through (`_state_slot_identity`,
-    # stencil_affine.jl) are shared across every equation of THIS build and
-    # dropped with it.
-    prev_sb = _STATE_SLOT_TBL_POOL[]
-    _STATE_SLOT_TBL_POOL[] = _state_box_disabled() ? nothing :
-                             Dict{Tuple{String,Int,Int},Vector{Int}}()
     try
         return _build_evaluator_impl_inner(model; kwargs...)
     finally
         _LANE_INTERN_POOL[] = prev
-        _STATE_SLOT_TBL_POOL[] = prev_sb
     end
 end
 
@@ -4367,7 +4656,10 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
         # contraction loop's nodes into their own program; the in-place `f!`
         # walks `rhs_list` with `_eval_node`, so there the loop tier is an
         # interpreter and is retired (see `_compile_faq_equation!`).
-        rhs_list_compiled::Bool=false)
+        rhs_list_compiled::Bool=false,
+        # The state length of the two-buffer slot space the in-place RHS runs
+        # on (`_ObsSplitVec`), or 0; the contraction nests address by it.
+        obs_nst::Int=0)
     scalar_inline = scalar_obs_inline === nothing ? resolved_obs : scalar_obs_inline
     scalar_entries = Tuple{Int,ASTExpr}[]
     percell_scalar = Tuple{Int,_Node}[]
@@ -4376,7 +4668,7 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
     # ess-array-contraction whole-equation loop nests (array_contraction.jl);
     # empty unless a contraction clears the length floor.
     array_contractions = _ArrayContraction[]
-    covered = falses(n_states)
+    covered = _Covered(n_states)
     # A3: ONE cross-equation store for this build's whole equation loop — the
     # compile-once variant / bound-body caches and the shared obs-inline memo
     # move from per-equation to per-build (sound because every compile input
@@ -4435,7 +4727,8 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
                                        pgather, param_sym_set, reg_funcs;
                                        template_sites=template_sites, xeq=xeq,
                                        pooled_cells=pooled_cells,
-                                       rhs_list_compiled=rhs_list_compiled)
+                                       rhs_list_compiled=rhs_list_compiled,
+                                       obs_nst=obs_nst)
         end
     end
     # The pooled scalarizer-level emitter: one grouping over EVERY per-cell
@@ -4481,7 +4774,7 @@ end
 # runtime `ifelse` guard the box processor verifies affine.
 function _unrolled_contraction_body(rhs_body::ASTExpr, contract_names::Vector{String},
         contract_const, filt, oplus::String, zerobar::Float64)
-    iters = Vector{Int}[c::Vector{Int} for c in contract_const]
+    iters = Vector{Int}[convert(Vector{Int}, c) for c in contract_const]
     terms = ASTExpr[]
     _foreach_aggregate_term(rhs_body, contract_names, iters, nothing, filt, zerobar,
                             nothing) do term
@@ -4507,8 +4800,8 @@ function _affine_reduce_form(contract_names::Vector{String}, contract_const,
     rngs = UnitRange{Int}[]
     for c in contract_const
         (c === nothing || isempty(c)) && return nothing
+        _is_unit_run(c) || return nothing
         r = first(c):last(c)
-        c == collect(r) || return nothing
         push!(rngs, r)
     end
     prod(length, rngs) >= 2 || return nothing
@@ -4522,7 +4815,7 @@ function _fold_form_refusal(contract_names::Vector{String}, contract_const, oplu
         return "its ⊕ must be +, *, max or min, and this one is `$(oplus)`"
     for (name, c) in zip(contract_names, contract_const)
         (c === nothing || isempty(c)) && continue
-        c == collect(first(c):last(c)) ||
+        _is_unit_run(c) ||
             return "it folds unit-step ranges only, and `$(name)` steps " *
                    (length(c) >= 2 ? "by $(c[2] - c[1]) " : "") *
                    "from $(first(c)) to $(last(c))"
@@ -4733,11 +5026,11 @@ end
 
 # Returns `nothing` (same-range), a term range vector (staggered), or `:decline`.
 function _scan_term_iters(range_iters, axis::Int, citer, inclusive::Bool)
-    out = collect(range_iters[axis])
+    out = range_iters[axis]
     out == citer && return nothing
     (!inclusive && length(citer) == length(out) - 1 &&
      @views(out[1:end-1]) == citer) || return :decline
-    term_iters = copy(range_iters)
+    term_iters = AbstractVector{Int}[r for r in range_iters]
     term_iters[axis] = citer
     return term_iters
 end
@@ -4816,7 +5109,7 @@ function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
         range_iters, lhs_body::OpExpr, var_map::AbstractDict{String,Int},
         oplus::String, zerobar::Float64)
     nd = length(idx_names)
-    scan_range = collect(range_iters[axis])
+    scan_range = range_iters[axis]
     len = length(scan_range)
     # Unreachable — `_try_affine_stencil` already refused an empty range before
     # the caller got here — but a `nothing` return would leave the term kernels
@@ -4829,7 +5122,7 @@ function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
     outer_iters = Vector{Vector{Int}}(undef, nd)
     for d in 1:nd
         outer_iters[d] = d == axis ? Int[first(range_iters[d])] :
-                                     collect(range_iters[d])
+                                     convert(Vector{Int}, range_iters[d])
     end
     slots = Int[]
     sizehint!(slots, len * prod(length(it) for it in outer_iters; init=1))
@@ -4946,11 +5239,13 @@ const _CASCADE_ROUTING_TIER = Dict{Symbol,Symbol}(
     :percell_disabled   => :interpreter,
 )
 
-# A scalar equation lands on the scalar walker: interpreted, once per slot, on
+# A scalar equation is filed on the scalar walker: interpreted, once per slot, on
 # every right-hand-side call. `:scalar_loop` marks one whose resolved body keeps
 # a reduction as a runtime loop (`_resolve_scalar_faq`), so each of those calls
 # also walks that loop over its whole contracted length — per slot rather than
-# per cell, which is why it is reported rather than refused.
+# per cell, which is why it is reported rather than refused. Under `native` the
+# scalar codegen tier (scalar_codegen.jl) then emits the equation and moves its
+# row to `:scalar_codegen` / `:scalar_loop_codegen` (`_retier_scalar_rules!`).
 _scalar_rule_tier(e) = _has_contract_loop(e) ? :scalar_loop : :scalar
 function _has_contract_loop(e)
     e isa OpExpr || return false
@@ -5016,7 +5311,7 @@ _with_rule_alias(f, target::String, label::String) =
 const _REFUSAL_DIAGNOSTIC_TERMS = 1024
 
 function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
-        array_contractions, covered::BitVector,
+        array_contractions, covered::_Covered,
         eq::Equation, resolved_obs::Dict{String,ASTExpr},
         array_var_info, var_map::AbstractDict{String,Int},
         const_registry::AbstractDict, pgather::AbstractDict,
@@ -5033,7 +5328,10 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         # `_acc_from_cell_entries` once after the whole equation loop.
         pooled_cells=nothing,
         # See `_compile_derivative_equations`.
-        rhs_list_compiled::Bool=false)
+        rhs_list_compiled::Bool=false,
+        # The state length of the two-buffer slot space the in-place RHS runs
+        # on (`_ObsSplitVec`), or 0; the contraction nests address by it.
+        obs_nst::Int=0)
     lhs_op = eq.lhs::OpExpr
     idx_names = _output_idx_strings(lhs_op)
     ranges_dict = _ranges_dict(lhs_op)
@@ -5060,7 +5358,7 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # per-cell fallback via `_expand_contract_range`.
     contract_names = String[]
     contract_ranges = Vector{Any}[]            # raw [lo,hi]/[lo,step,hi]
-    contract_const  = Union{Vector{Int},Nothing}[]  # nothing ⇒ per-cell
+    contract_const  = Union{AbstractVector{Int},Nothing}[]  # nothing ⇒ per-cell
     # Semiring ⊕ and its 0̄ identity (§5.1). Default sum_product (+, 0̄=0).
     rhs_oplus = "+"
     rhs_zerobar = 0.0
@@ -5080,7 +5378,7 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
             push!(contract_ranges, rspec)
             push!(contract_const,
                   _is_const_int_range(rspec) ?
-                      collect(_expand_int_range(rspec)) : nothing)
+                      _dense_range_or_list(_expand_int_range(rspec)) : nothing)
         end
         # A POINTWISE aggregate (no contracted index) with a filter: each output
         # cell is one combination, which contributes its term where the
@@ -5095,7 +5393,7 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         end
     end
 
-    range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
+    range_iters = _output_range_iters(ranges_dict, idx_names)
     label = _faq_debug_label(lhs_body, idx_names, range_iters)
     # Open this rule's report entry first: every tier below either lands it
     # (through the routing tally) or refuses it, and a refusal raised several
@@ -5212,7 +5510,7 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
                  rhs_zerobar=rhs_zerobar, resolved_obs=resolved_obs,
                  array_var_info=array_var_info, var_map=var_map,
                  const_registry=const_registry, pgather=pgather,
-                 param_sym_set=param_sym_set, reg_funcs=reg_funcs)
+                 param_sym_set=param_sym_set, reg_funcs=reg_funcs, obs_nst=obs_nst)
     # The compile-once forms offered this equation, in order — what a refusal
     # below says declined it.
     offered = Symbol[]
@@ -5295,8 +5593,10 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         # order, so the post-pass can fold them. Only now, so a declined affine
         # build costs nothing.
         if scan !== nothing && affine_kernels !== nothing
-            scan_fold = _build_scan_fold(scan[1], scan[2], idx_names, range_iters,
-                                         lhs_body, var_map, rhs_oplus, rhs_zerobar)
+            sf = _build_scan_fold(scan[1], scan[2], idx_names, range_iters,
+                                  lhs_body, var_map, rhs_oplus, rhs_zerobar)
+            scan_fold = _ScanFold(sf.slots, sf.len, sf.oplus, sf.zerobar,
+                                  sf.inclusive, Any[affine_kernels...])
         end
     end
     if affine_kernels !== nothing
@@ -5555,7 +5855,7 @@ end
 # build time to resolve or compile anything — the cell loop below only reads each
 # cell's slot out of `var_map`, which is an integer lookup, not IR.
 function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
-        covered::BitVector;
+        covered::_Covered;
         idx_names::Vector{String}, ranges_dict, range_iters,
         contract_names::Vector{String}, contract_ranges,
         rhs_oplus::String, rhs_zerobar::Float64,
@@ -5567,7 +5867,7 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         # the admitted tuples become data (the TABLE form of `_ACFold`); a
         # filter is the per-cell expansion's `ifelse(filter, term, 0̄)` guard,
         # kept symbolic in the term.
-        agg_gates=nothing, agg_filter=nothing, contract_const=nothing)
+        agg_gates=nothing, agg_filter=nothing, contract_const=nothing, obs_nst::Int=0)
     # With no contracted index the equation is elementwise: the cell's value is
     # its term, written as it is with no fold and no seed (a pointwise filter is
     # already the term's `ifelse` guard, see `_compile_faq_equation!`).
@@ -5666,21 +5966,16 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     # equation goes back to the cascade, whose next and last form is the
     # per-cell build (refused by a strict compiler, with this reason).
     gen = _try_codegen_array_contraction(out_refs, los, stps, lens, outs, node;
-                                         fold=fold)
+                                         fold=fold, nst=obs_nst)
     if gen isa Symbol
         # Hand the cells back untouched: every one was unclaimed on entry (the
         # loop above throws on a second claim), so clearing restores `covered`.
-        covered[outs] .= false
+        _uncover!(covered, outs)
         _note_decline!(:array_contraction, gen)
         return nothing
     end
     return gen
 end
-
-# Sentinel term for enumerating a contraction's admitted tuples: the per-cell
-# expansion substitutes each tuple's values into it, so its arguments read back
-# as the tuple.
-const _AC_KEYS_OP = "__esm_ac_keys"
 
 # The admitted contracted tuples of every output cell, as the TABLE form of
 # `_ACFold` the nest walks. Enumerated by the SAME `_foreach_aggregate_term` the
@@ -5693,34 +5988,51 @@ function _array_contraction_table(contract_refs::Vector{Base.RefValue{Int}},
         contract_ranges, contract_const, agg_gates, oplus::String, zerobar::Float64,
         const_registry::AbstractDict)
     nc = length(contract_names)
-    sentinel = OpExpr(_AC_KEYS_OP, ASTExpr[VarExpr(n) for n in contract_names])
+    contract_const = _contract_lists(contract_const)
     n_cells = prod(length(r) for r in range_iters)
     seg = Vector{Int}(undef, n_cells + 1)
     seg[1] = 1
     cols = [Int[] for _ in 1:nc]
     iters = Vector{Vector{Int}}(undef, nc)
+    # A constant contracted range expands to the same list at every cell.
+    fixed = Bool[_is_const_int_range(contract_ranges[d]) for d in 1:nc]
     idx_env = Dict{String,Int}()
+    cells = length(range_iters) == 1 ? ((i,) for i in range_iters[1]) :
+                                       Iterators.product(range_iters...)
+    _ac_table_fill!(seg, cols, iters, fixed, idx_env, cells, idx_names, contract_names,
+                    contract_ranges, contract_const, agg_gates, zerobar, const_registry)
+    return _ACFold(contract_refs, Symbol(oplus), zerobar, seg, cols)
+end
+
+# `_array_contraction_table`'s cell loop, behind a barrier so it runs at the
+# concrete type of the cell iterator.
+function _ac_table_fill!(seg, cols, iters, fixed, idx_env, cells, idx_names,
+                         contract_names, contract_ranges, contract_const, agg_gates,
+                         zerobar, const_registry)
+    nc = length(contract_names)
     c = 0
-    for idx_tuple in Iterators.product(range_iters...)
+    for idx_tuple in cells
         c += 1
         for d in eachindex(idx_names)
             idx_env[idx_names[d]] = idx_tuple[d]
         end
         for d in 1:nc
             cc = contract_const === nothing ? nothing : contract_const[d]
-            iters[d] = cc === nothing ?
-                _expand_contract_range(contract_ranges[d], idx_env, const_registry) : cc
+            if cc !== nothing
+                iters[d] = cc
+            elseif c == 1 || !fixed[d]
+                iters[d] = _expand_contract_range(contract_ranges[d], idx_env, const_registry)
+            end
         end
-        _foreach_aggregate_term(sentinel, contract_names, iters, agg_gates, nothing,
-                                zerobar, idx_env) do t
-            ks = (t::OpExpr).args
+        _foreach_aggregate_term(nothing, contract_names, iters, agg_gates, nothing,
+                                zerobar, idx_env) do ks
             @inbounds for d in 1:nc
-                push!(cols[d], Int((ks[d]::IntExpr).value))
+                push!(cols[d], Int(ks[d]))
             end
         end
         seg[c + 1] = length(cols[1]) + 1
     end
-    return _ACFold(contract_refs, Symbol(oplus), zerobar, seg, cols)
+    return nothing
 end
 
 # ---- Stage: faq per-cell fallback ----
@@ -5741,7 +6053,7 @@ end
 # reference the acc≡per-cell differentials compare against. The
 # equation-derived inputs are keyword-only (several share a type, so
 # positional passing could silently swap two of them).
-function _compile_faq_percell!(percell_scalar, acc_kernels, covered::BitVector,
+function _compile_faq_percell!(percell_scalar, acc_kernels, covered::_Covered,
         lhs_body::OpExpr, rhs_body::ASTExpr;
         idx_names::Vector{String}, range_iters,
         contract_names::Vector{String}, contract_ranges, contract_const,
@@ -5751,6 +6063,7 @@ function _compile_faq_percell!(percell_scalar, acc_kernels, covered::BitVector,
         pgather::AbstractDict, param_sym_set, reg_funcs,
         contraction_loop::Bool=false,
         pooled_cells=nothing)   # `nothing` or `Vector{Tuple{Int,_Node}}` — see above
+    contract_const = _contract_lists(contract_const)
     cell_entries = Tuple{Int,_Node}[]
     cell_memo = _BuildMemo()
     # A scalar aggregate NESTED in this array-equation cell body must keep

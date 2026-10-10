@@ -39,6 +39,8 @@ struct Checked {
     rules: usize,
     /// Folds: `Reduce` instructions plus reductions fusion absorbed.
     reductions: usize,
+    /// Scans: `Scan` instructions plus scans fusion absorbed.
+    scans: usize,
     /// Instruction counts per opcode.
     opcodes: HashMap<String, usize>,
 }
@@ -99,6 +101,12 @@ fn check(doc: &Value) -> Checked {
             .find(|(k, _)| k == "Reduce")
             .map_or(0, |(_, n)| *n)
             + report.fuse.n_reduces_folded,
+        scans: report
+            .opcode_counts
+            .iter()
+            .find(|(k, _)| k == "Scan")
+            .map_or(0, |(_, n)| *n)
+            + report.fuse.n_scans_folded,
         opcodes: report.opcode_counts.iter().cloned().collect(),
     }
 }
@@ -238,7 +246,7 @@ fn a_prefix_scan_is_one_instruction() {
         )
     };
     let c = flat_in_n(make, 9, 400);
-    assert_eq!(c.count("Scan"), 1);
+    assert_eq!(c.scans, 1);
     assert_eq!(c.count("Region"), 0, "no per-step region writes");
 }
 
@@ -296,7 +304,7 @@ fn prefix_scans_along_either_axis_match_the_oracle() {
                 let a = check(&make(4));
                 let b = check(&make(60));
                 assert_eq!(a.code_size, b.code_size, "{cmp} {reduce} axis {axis}");
-                assert_eq!(b.count("Scan"), 1, "{cmp} {reduce} axis {axis}");
+                assert_eq!(b.scans, 1, "{cmp} {reduce} axis {axis}");
             }
         }
     }

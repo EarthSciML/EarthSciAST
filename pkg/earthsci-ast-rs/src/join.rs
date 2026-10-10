@@ -257,6 +257,11 @@ pub fn resolve_aggregate_joins(
     // what let an `on` key column name a genuine DATA COLUMN (a 1-D variable
     // over the index set its loop symbol draws from), so they are computed once
     // here and threaded into the per-node lowering too.
+    // Both passes below touch only expressions that carry a `join`; one look
+    // decides that for the whole model.
+    if !model_contains_join(model) {
+        return Ok(());
+    }
     let var_shapes = declared_var_shapes(model);
     resolve_overlap_join_syms(model);
     for eq in &mut model.equations {
@@ -308,6 +313,23 @@ pub fn resolve_expr_joins(
 /// descent copy-on-write splits every node it touches — so a join-free
 /// subtree (every subtree of a §9.7-expanded discretization) must be left
 /// alone entirely, not walked mutably.
+/// Whether any expression of `model` [`resolve_aggregate_joins`] lowers
+/// carries a `join` clause.
+fn model_contains_join(model: &Model) -> bool {
+    let eqs = model
+        .equations
+        .iter()
+        .chain(model.initialization_equations.iter().flatten());
+    let mut found = false;
+    for eq in eqs {
+        found = found || contains_join(&eq.lhs) || contains_join(&eq.rhs);
+    }
+    for var in model.variables.values() {
+        var.for_each_expression(&mut |expr| found = found || contains_join(expr));
+    }
+    found
+}
+
 fn contains_join(e: &Expr) -> bool {
     match e {
         Expr::Operator(node) => node.join.is_some() || node.any_child(&mut contains_join),

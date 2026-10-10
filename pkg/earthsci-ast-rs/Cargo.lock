@@ -969,6 +969,7 @@ dependencies = [
  "criterion",
  "diffsol",
  "earthsciio",
+ "faer",
  "getrandom 0.3.4",
  "indexmap",
  "js-sys",

@@ -49,6 +49,7 @@ python3 tests/conformance/scaling/generate.py --write-fixtures   # after changin
 # out-of-memory kill or passing --max-rss-gb is recorded and the run carries
 # on; the Julia adapter does the same with one child per family):
 cd pkg/earthsci-ast-rs
+export RUSTFLAGS="-C llvm-args=-align-loops=64"   # for timings: see Timing builds below
 cargo run --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust -- \
     --index ../../tests/conformance/scaling/fixtures/index.json --output rust-serial.json
 cargo run --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust -- \
@@ -66,6 +67,17 @@ lists the environment it reads (`SCALING_BUILD` is required):
 ```bash
 SCALING_BUILD=/scratch/$USER/scaling tests/conformance/scaling/sweep.sh
 ```
+
+### Timing builds
+
+Build the Rust adapter with `RUSTFLAGS="-C llvm-args=-align-loops=64"` for
+any timing run; `sweep.sh` and `scaling-sweep.yml` do. Without it, a hot loop
+starts wherever the code before it ends, so an unrelated change elsewhere in
+the binary can move a hand loop's time by tens of percent and flip a speed verdict
+either way. Built aligned, two commits whose hand loops are identical time
+those loops nearly the same. Aligned is not always the
+faster placement; it is the same placement every time. Compare timings only
+between binaries built the same way. The deterministic gates do not need it.
 
 ## Families
 
@@ -128,6 +140,7 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
    {"family": "stencil_2d", "n": 10000, "n_cells": 10000, "n_states": 10000,
     "status": "ok",
     "reason": null,
+    "n_bytes": 0,
     "build_s": 0.0,
     "code_size": 0,
     "code_size_unit": "tape_instructions",
@@ -145,6 +158,7 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
 | `load_average`, `cpus` (file level) | how busy the machine was when the run started, and its core count: a timing run wants a machine nothing else shares (an exclusive Slurm node, or an idle one) |
 | `status` | `"ok"`, `"refused"` (the compiler refused the document by name; `reason` is its text) or `"error"` (anything else, including a timeout or a killed child process; `reason` says which) |
 | `n`, `n_cells`, `n_states` | the nominal ladder size, the actual cell count, the state-vector length |
+| `n_bytes` | the document file's size in bytes (the `build_slope` gate's size allowance reads it) |
 | `build_s` | wall seconds of `esm_problem` (reading and parsing the file included), after a warm-up build of a trivial document in the same process |
 | `code_size`, `code_size_unit` | the size of what the compiler emitted. Rust: tape instructions over all three cadence sections. Julia: the adapter's stated measure |
 | `first_call_s` | the first right-hand-side call after the build (it primes build-once sections) |
@@ -196,8 +210,46 @@ Thresholds live in `manifest.json` under `gates`.
 | `code_size_flat` | deterministic | `code_size` is identical at every N that built, up to the gate's `slack` (0). A family's `gate_overrides` may state a slack per binding, with a `why` that bounds the spread: Rust's stencil and transport families state one, because fusion's fold decision depends on row length, while the lowered tape it can only shrink is flat (`code_size_detail.lowered`) |
 | `no_steady_alloc` | deterministic | `allocs_per_call` is 0 (null on a built document fails, unless the result declares it unmeasurable). A ledger entry for it states `max_bytes_per_call`, the most it excuses, and a measure past that bound is red (`EXCEEDS`) |
 | `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast. Checked against the interpreter when native refused |
-| `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns, over the smallest and largest N that built with at most 10^6 cells |
-| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise; `source_receptor`, whose work is N^2, lowers it to 2000 through `gate_overrides`) |
+| `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns plus the document-size allowance below, over the smallest and largest N that built with at most 10^6 cells |
+| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise). Two families stop short of 10^4 states and lower it to 2000 through `gate_overrides`: `source_receptor`, whose work is N^2, and `regrid`, whose ladder stops at 6324 states and whose call at 2000 states is already a few microseconds |
+
+### The build slope's document-size allowance
+
+The build includes reading the document, so a family that carries its data
+inline (`regrid`'s cell bounds, `unstructured_gather`'s neighbour table,
+`scalar_chemistry`'s equations) has a document that grows with N, and reading
+it costs time per state that no compiler can avoid. The gate pays for that
+reading and nothing else:
+
+```
+limit = max_ns_per_state + per_byte_ns[binding] * (n_bytes(Nmax) - n_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin))
+```
+
+`per_byte_ns` is per binding, because their loaders differ by about 2x: it is
+twice the binding's measured document load (no build) per byte of inline data,
+the load itself plus one more pass of the same cost for the build to read the
+values out of the loaded document into its own arrays (the manifest's
+`per_byte_ns_why` has the measurement). So a family whose build is the load
+and one read of its data passes, and whatever else the build does per state
+still has to fit in 20 ns. The rate is measured on data arrays; a document
+whose growth is equations rather than data (`scalar_chemistry`) loads at a
+higher rate per byte in both bindings, which the gate's own rate does not
+cover.
+
+A family whose document grows by equations states its own rate in its
+`gate_overrides.build_slope.per_byte_ns`, per binding, with a `why`. Only
+`scalar_chemistry` does: one scalar ODE per state, which the Julia loader
+validates and coerces equation by equation at about 3000 ns per byte, and the
+Rust loader at about 100. That per-equation load cost (schema validation, in
+Julia) is a known cost separate from the compiler, so the family's rate is
+twice it, by the same reasoning as above. It excuses loading, not compiling:
+the rest of the build must still fit in 20 ns per state.
+
+A document whose size does not grow with N (every stencil, `transport_3d`,
+`chemistry_grid`, `prefix_scan`, `source_receptor`: their size changes by a
+few bytes of digits) gets an allowance of about 0, so the gate is the plain 20
+ns/state there. A result without `n_bytes` (written before the adapters
+recorded it) gets no allowance either, and the row's note says so.
 
 The deterministic gates run in PR CI at the PR sizes (the Rust leg of
 `conformance-testing.yml`; `generate.py --check` runs in its lint job). The

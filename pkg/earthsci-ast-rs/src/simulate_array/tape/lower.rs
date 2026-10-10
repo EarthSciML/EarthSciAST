@@ -482,6 +482,8 @@ struct Chunk {
 pub(crate) struct TapeBuilder<'m> {
     var_shapes: &'m IndexMap<String, VarShape>,
     param_names: &'m [String],
+    /// Position in `param_names` of each name's first occurrence.
+    param_ix: FxHashMap<&'m str, usize>,
     /// Per-name observed cadence tier (from the driver's classifiers).
     obs_tier: FxHashMap<String, Cadence>,
     /// The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5). A gather on
@@ -544,7 +546,7 @@ pub(crate) struct TapeBuilder<'m> {
     state_vars: Vec<StateRef>,
     /// Position in `state_vars`; narrowed to the IR's `u32` by [`tape_index`]
     /// where it is emitted.
-    state_ix: FxHashMap<String, usize>,
+    state_ix: FxHashMap<&'m str, usize>,
     obs_reads: Vec<String>,
     obs_read_ix: FxHashMap<String, u32>,
     /// Every name the forcing buffer can serve, with the box a read of it
@@ -695,7 +697,7 @@ impl<'m> TapeBuilder<'m> {
         let mut state_vars = Vec::with_capacity(var_shapes.len());
         let mut state_ix = FxHashMap::default();
         for (name, vs) in var_shapes {
-            state_ix.insert(name.clone(), state_vars.len());
+            state_ix.insert(name.as_str(), state_vars.len());
             state_vars.push(StateRef {
                 name: name.clone(),
                 shape: vs.shape.iter().copied().collect(),
@@ -703,9 +705,14 @@ impl<'m> TapeBuilder<'m> {
                 flat_offset: vs.flat_offset,
             });
         }
+        let mut param_ix = FxHashMap::default();
+        for (i, name) in param_names.iter().enumerate() {
+            param_ix.entry(name.as_str()).or_insert(i);
+        }
         TapeBuilder {
             var_shapes,
             param_names,
+            param_ix,
             obs_tier,
             const_arrays,
             f32_document,
@@ -872,6 +879,7 @@ impl<'m> TapeBuilder<'m> {
             assemblies: &self.assemblies,
             sweeps: &self.sweeps,
             scalar_reads: &self.scalar_reads,
+            lanes: &[],
         }
     }
 
@@ -1322,7 +1330,7 @@ impl<'m> TapeBuilder<'m> {
                 }
             };
         }
-        if let Some(i) = self.param_names.iter().position(|p| p == name) {
+        if let Some(&i) = self.param_ix.get(name) {
             return Ok(LV::Param(tape_index(i, "parameters")?));
         }
         if let Some(lv) = self.forcing_read(name)? {
@@ -4393,7 +4401,7 @@ impl<'m> TapeBuilder<'m> {
                 ),
             };
         }
-        if let Some(i) = self.param_names.iter().position(|p| p == name) {
+        if let Some(&i) = self.param_ix.get(name) {
             return Ok(LV::Param(tape_index(i, "parameters")?));
         }
         if let Some(lv) = self.forcing_read(name)? {
@@ -5529,6 +5537,9 @@ pub(super) fn build_tape_program(
     // configuration (`None` = the unfused program, bitwise-identical
     // results — the arm `build_tape_opts` gives the fused-vs-unfused tests).
     fuse: Option<super::fuse::SuperopCfg>,
+    // Store the program axis-reversed where the state layout gains from it
+    // (`super::layout`); off for the XLA emitter, which reads logical boxes.
+    align_layout: bool,
 ) -> (TapeProgram, (usize, usize)) {
     let rhs_rules: &[RhsRule] = &compiled.rhs_rules;
     let observed_rules: &[AlgebraicRule] = &compiled.observed_rules;
@@ -5642,7 +5653,7 @@ pub(super) fn build_tape_program(
 
     // ---- flatten + fusion + liveness + coloring ----------------------------
     let vn_hits = b.vn_hits();
-    (b.finish(exports, fuse), vn_hits)
+    (b.finish(exports, fuse, align_layout), vn_hits)
 }
 
 impl<'m> TapeBuilder<'m> {
@@ -5718,7 +5729,7 @@ impl<'m> TapeBuilder<'m> {
                 ObsVal::External { shape, .. } => shape.clone(),
             };
         }
-        if self.param_names.iter().any(|p| p == name) {
+        if self.param_ix.contains_key(name) {
             return Some(DimU::new());
         }
         // A forcing read compiles against the box `forcing_read` loads; any
@@ -6253,7 +6264,10 @@ impl<'m> TapeBuilder<'m> {
                 )?;
                 let s = self.ensure_slot(&v);
                 let var_ix = tape_index(
-                    *self.state_ix.get(var_name).expect("state var known"),
+                    *self
+                        .state_ix
+                        .get(var_name.as_str())
+                        .expect("state var known"),
                     "state variables",
                 )?;
                 let w = self.dy_writes.len() as u32;
@@ -6508,6 +6522,7 @@ impl<'m> TapeBuilder<'m> {
         mut self,
         exports: Vec<(String, SlotId)>,
         fuse: Option<super::fuse::SuperopCfg>,
+        align_layout: bool,
     ) -> TapeProgram {
         let mut instrs: Vec<Instr> = Vec::new();
         let mut precision: Vec<Precision> = Vec::new();
@@ -6542,6 +6557,7 @@ impl<'m> TapeBuilder<'m> {
             precision,
             n_const,
             n_segment,
+            n_rhs: 0,
             slots: std::mem::take(&mut self.slots),
             plans: std::mem::take(&mut self.plans),
             regions: std::mem::take(&mut self.regions),
@@ -6565,10 +6581,19 @@ impl<'m> TapeBuilder<'m> {
             provenance,
             params_len: self.param_names.len(),
             fused: Vec::new(),
+            lanes: Vec::new(),
             fuse_stats: FuseStats::default(),
+            col_major: false,
         };
+        if align_layout {
+            super::layout::align_state_layout(&mut prog);
+        }
         if let Some(cfg) = fuse {
+            super::reroll::reroll_program(&mut prog);
             super::fuse::fuse_program(&mut prog, cfg);
+            super::prune::split_output_only(&mut prog);
+        } else {
+            prog.n_rhs = prog.section_range(Cadence::Continuous).len() as u32;
         }
         color_slab(&mut prog);
         prog
@@ -6679,6 +6704,7 @@ fn color_slab(prog: &mut TapeProgram) {
             Instr::Gather { .. }
                 | Instr::Region { .. }
                 | Instr::Fused { .. }
+                | Instr::Lanes { .. }
                 | Instr::Reduce { .. }
                 | Instr::Scan { .. }
                 | Instr::Assemble { .. }

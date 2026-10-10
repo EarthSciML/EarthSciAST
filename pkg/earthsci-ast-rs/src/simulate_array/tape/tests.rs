@@ -103,12 +103,30 @@ pub(super) fn ab_check(
         // Rebuild for the reference arm (the scratch consumed the first).
         compiled.build_tape_opts(&HashSet::new(), None).0
     };
+    // The fused program as lowered, without the state-layout alignment
+    // (`layout`), which `prog` may carry: both storage orders must agree.
+    let rm_build = || {
+        compiled
+            .build_tape_layout(&HashSet::new(), Some(default_cfg()), false)
+            .0
+    };
+    let prog_rm = rm_build();
+    assert!(!prog_rm.col_major);
+    let mut fast_rm = super::super::RhsScratch::new(&compiled.var_shapes);
+    fast_rm.install_tape(
+        std::rc::Rc::new(rm_build()),
+        std::rc::Rc::new(compiled.observed_rules.clone()),
+    );
     let mut fast_stats = RhsStats::default();
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, lo, hi);
         for &t in &[0.0, 0.37, 2.5] {
             let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
-            for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
+            for (label, p) in [
+                ("fused", &prog),
+                ("unfused", &prog_uf),
+                ("row-major fused", &prog_rm),
+            ] {
                 let mut dy = vec![0.0f64; n];
                 run_reference(p, &compiled, &state, &param_vec, t, &mut dy);
                 for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
@@ -122,7 +140,11 @@ pub(super) fn ab_check(
                     );
                 }
             }
-            for (label, scratch) in [("fused", &mut fast_scratch), ("unfused", &mut fast_uf)] {
+            for (label, scratch) in [
+                ("fused", &mut fast_scratch),
+                ("unfused", &mut fast_uf),
+                ("row-major fused", &mut fast_rm),
+            ] {
                 let mut dy_fast = vec![0.0f64; n];
                 compiled.debug_eval_rhs_into(
                     &state,
@@ -140,6 +162,33 @@ pub(super) fn ab_check(
                          ({:016x}) vs interpreter {b:?} ({:016x})",
                         a.to_bits(),
                         b.to_bits()
+                    );
+                }
+            }
+            // Every instruction split three wide, whatever its size, is the
+            // serial executor bit for bit.
+            #[cfg(not(target_arch = "wasm32"))]
+            for (label, scratch) in [
+                ("fused split", &mut fast_scratch),
+                ("row-major fused split", &mut fast_rm),
+            ] {
+                let mut dy_split = vec![0.0f64; n];
+                super::exec::force_split(Some(3));
+                compiled.debug_eval_rhs_into(
+                    &state,
+                    t,
+                    &param_vec,
+                    &mut dy_split,
+                    scratch,
+                    &mut fast_stats,
+                );
+                super::exec::force_split(None);
+                for (k, (a, b)) in dy_split.iter().zip(dy_ref.iter()).enumerate() {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "seed {seed} t {t}: dy[{k}] diverged: {label} exec {a:?} vs \
+                         interpreter {b:?}"
                     );
                 }
             }
@@ -899,6 +948,216 @@ fn ab_scalar_rules() {
     ab_check(doc, 0, -1.5, 1.5);
 }
 
+/// Scalar boxes declared species-major (every `a` before every `c`, the
+/// `scalar_chemistry` layout) and more of them than one lane chunk: the lane
+/// program reads its state and parameter lanes in place and stores each
+/// derivative straight into its `dy` run (`LaneSpec::direct`).
+#[test]
+fn ab_species_major_lanes_read_and_write_in_place() {
+    let boxes = 300;
+    let mut vars = serde_json::Map::new();
+    let mut eqs: Vec<serde_json::Value> = Vec::new();
+    vars.insert("k1".into(), json!({"type": "parameter", "default": 0.7}));
+    for sp in ["a", "c"] {
+        for b in 0..boxes {
+            vars.insert(format!("{sp}_{b}"), json!({"type": "unknown"}));
+        }
+    }
+    for b in 0..boxes {
+        vars.insert(
+            format!("kb_{b}"),
+            json!({"type": "parameter", "default": 0.01 * b as f64}),
+        );
+    }
+    for b in 0..boxes {
+        let (a, c, kb) = (format!("a_{b}"), format!("c_{b}"), format!("kb_{b}"));
+        let r = json!({"op": "*", "args": ["k1", a, c]});
+        eqs.push(json!({"lhs": {"op": "D", "args": [a], "wrt": "t"},
+            "rhs": {"op": "+", "args": [{"op": "-", "args": [r]},
+                {"op": "*", "args": [kb, {"op": "exp", "args": [{"op": "-", "args": [c]}]}]}]}}));
+        eqs.push(json!({"lhs": {"op": "D", "args": [c], "wrt": "t"},
+            "rhs": {"op": "-", "args": [r, {"op": "max", "args": [c, 0.5]}]}}));
+    }
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_reroll_species_major"},
+        "models": {"M": {"variables": vars, "equations": eqs}}
+    });
+    let prog = ab_check(doc, 0, 0.1, 2.0);
+    let ls = prog
+        .lanes
+        .iter()
+        .find(|ls| ls.lanes as usize == boxes)
+        .expect("the boxes run as one lane program");
+    assert!(
+        ls.inputs.iter().all(|i| matches!(
+            (i.kind, &i.ix),
+            (
+                LaneKind::State | LaneKind::Param,
+                LaneIx::Affine { step: 1, .. }
+            )
+        )),
+        "{:?}",
+        ls.inputs
+    );
+    assert_eq!(ls.direct.len(), ls.writes.len(), "{:?}", ls.writes);
+}
+
+/// Many scalar boxes of one mechanism (the `scalar_chemistry` shape): the
+/// rerolling pass shares each rate across the equations that read it and
+/// runs the boxes as the lanes of one lane program, bit-identical to the
+/// interpreter. Box `k` reads its own `kb_k` (a parameter input) and the
+/// shared `k1`, `t` and literals (scalar operands). The off-grid state `a_1x`
+/// sits between two boxes' `a` in the state order, so `a`'s lanes are not
+/// evenly spaced and go through a position table; an equation written another
+/// way runs in a one-lane block.
+#[test]
+fn ab_rerolled_scalar_boxes() {
+    let boxes = [1, 2, 3, 5, 8, 13, 21];
+    let mut vars = serde_json::Map::new();
+    let mut eqs: Vec<serde_json::Value> = Vec::new();
+    vars.insert("k1".into(), json!({"type": "parameter", "default": 0.7}));
+    for b in boxes {
+        let (a, c, kb) = (format!("a_{b}"), format!("c_{b}"), format!("kb_{b}"));
+        vars.insert(a.clone(), json!({"type": "unknown"}));
+        vars.insert(c.clone(), json!({"type": "unknown"}));
+        vars.insert(
+            kb.clone(),
+            json!({"type": "parameter", "default": 0.1 * b as f64}),
+        );
+        // r = k1 * a * c, read by both equations.
+        let r = json!({"op": "*", "args": ["k1", a, c]});
+        eqs.push(json!({"lhs": {"op": "D", "args": [a], "wrt": "t"},
+            "rhs": {"op": "+", "args": [
+                {"op": "-", "args": [r]},
+                {"op": "*", "args": [kb, {"op": "exp", "args": [{"op": "-", "args": [c]}]}]},
+                {"op": "*", "args": [0.25, "t"]}]}}));
+        eqs.push(json!({"lhs": {"op": "D", "args": [c], "wrt": "t"},
+            "rhs": {"op": "-", "args": [r, {"op": "max", "args": [c, 0.5]}]}}));
+    }
+    vars.insert("a_1x".into(), json!({"type": "unknown"}));
+    eqs.push(json!({"lhs": {"op": "D", "args": ["a_1x"], "wrt": "t"},
+        "rhs": {"op": "*", "args": ["a_1x", "a_1x", "k1"]}}));
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_reroll"},
+        "models": {"M": {"variables": vars, "equations": eqs}}
+    });
+    let prog = ab_check(doc, 0, 0.1, 2.0);
+    let lanes: Vec<&LaneSpec> = prog
+        .instrs
+        .iter()
+        .filter_map(|i| match i {
+            Instr::Lanes { spec } => Some(&prog.lanes[*spec as usize]),
+            _ => None,
+        })
+        .collect();
+    // The boxes' lane program, and one one-lane block holding the rest of
+    // the run (`0.25 * t` and the off-grid equation).
+    assert_eq!(lanes.len(), 2, "{:?}", prog.instrs);
+    let (blocks, multi): (Vec<&LaneSpec>, Vec<&LaneSpec>) =
+        lanes.into_iter().partition(|ls| ls.lanes == 1);
+    assert_eq!((blocks.len(), multi.len()), (1, 1));
+    assert!(blocks[0].inputs.is_empty());
+    // It writes the off-grid derivative, and `0.25 * t` back to its slot for
+    // the lanes to read.
+    let dsts: Vec<bool> = blocks[0]
+        .writes
+        .iter()
+        .map(|w| matches!(w.dst, LaneDst::Dy(_)))
+        .collect();
+    assert_eq!(dsts, vec![true, false], "{:?}", blocks[0].writes);
+    let ls = multi[0];
+    assert_eq!(ls.lanes as usize, boxes.len());
+    assert_eq!(ls.writes.len(), 2);
+    // The rate is computed once per lane: two `*` for r, `-r`, `-c`, `exp`,
+    // `* kb`, two `+`, `max`, the final `-`. `0.25 * t` reads no box, so it
+    // runs once outside and every lane reads it.
+    assert_eq!(ls.micro.len(), 10, "{:?}", ls.micro);
+    let kinds: Vec<LaneKind> = ls.inputs.iter().map(|i| i.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![LaneKind::State, LaneKind::State, LaneKind::Param],
+        "{:?}",
+        ls.inputs
+    );
+    assert!(
+        ls.inputs.iter().any(|i| matches!(i.ix, LaneIx::Table(_))),
+        "the off-grid state breaks one input's spacing"
+    );
+    assert!(
+        !prog
+            .instrs
+            .iter()
+            .any(|i| matches!(i, Instr::DyWrite { .. })),
+        "every derivative is written by a lane program"
+    );
+}
+
+/// Enough boxes for the folded strip loop (`exec/lane_fold.rs`), and not a
+/// whole number of strips, with every kind of chain and operand it handles:
+/// products led by a shared scalar, `-` and `/` chains, a negated value read
+/// by two folds and a negated fold result, a sum that becomes a unit-step
+/// derivative and one whose value is also read elsewhere, micro-ops no fold
+/// covers (`exp`, `max`), and inputs read in place, through a table (the
+/// off-grid `a_050x` breaks `a`'s spacing) and per lane from parameters.
+#[test]
+fn ab_folded_lane_strips() {
+    let boxes = 101;
+    let mut vars = serde_json::Map::new();
+    let mut eqs: Vec<serde_json::Value> = Vec::new();
+    vars.insert("k1".into(), json!({"type": "parameter", "default": 0.7}));
+    vars.insert("k2".into(), json!({"type": "parameter", "default": 1.3}));
+    for b in 0..boxes {
+        let [a, c, e, f, kb] = ["a", "c", "e", "f", "kb"].map(|v| format!("{v}_{b:03}"));
+        for v in [&a, &c, &e, &f] {
+            vars.insert(v.clone(), json!({"type": "unknown"}));
+        }
+        vars.insert(
+            kb.clone(),
+            json!({"type": "parameter", "default": 0.5 + 0.01 * b as f64}),
+        );
+        let r1 = json!({"op": "*", "args": ["k1", a, c]});
+        let r2 = json!({"op": "/", "args": [kb, c]});
+        let nr1 = json!({"op": "-", "args": [r1]});
+        eqs.push(json!({"lhs": {"op": "D", "args": [a], "wrt": "t"},
+            "rhs": {"op": "+", "args": [nr1, r2, {"op": "exp", "args": [{"op": "-", "args": [c]}]}]}}));
+        eqs.push(json!({"lhs": {"op": "D", "args": [c], "wrt": "t"},
+            "rhs": {"op": "-", "args": [{"op": "-", "args": [r1, {"op": "max", "args": [c, 0.5]}]}, e]}}));
+        eqs.push(json!({"lhs": {"op": "D", "args": [e], "wrt": "t"},
+            "rhs": {"op": "/", "args": [{"op": "/", "args": [{"op": "-", "args": [{"op": "*", "args": [a, e]}]}, kb]}, "k2"]}}));
+        eqs.push(json!({"lhs": {"op": "D", "args": [f], "wrt": "t"},
+            "rhs": {"op": "+", "args": [nr1, {"op": "*", "args": [r2, "k2", f]}]}}));
+    }
+    vars.insert("a_050x".into(), json!({"type": "unknown"}));
+    eqs.push(json!({"lhs": {"op": "D", "args": ["a_050x"], "wrt": "t"},
+        "rhs": {"op": "*", "args": ["a_050x", "k1"]}}));
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_folded_lanes"},
+        "models": {"M": {"variables": vars, "equations": eqs}}
+    });
+    let prog = ab_check(doc, 0, 0.1, 2.0);
+    let ls = prog
+        .lanes
+        .iter()
+        .find(|ls| ls.lanes as usize == boxes)
+        .expect("the boxes run as one lane program");
+    assert!(
+        ls.inputs.iter().any(|i| matches!(i.ix, LaneIx::Table(_))),
+        "{:?}",
+        ls.inputs
+    );
+    assert!(
+        ls.inputs
+            .iter()
+            .any(|i| i.kind == LaneKind::State && matches!(i.ix, LaneIx::Affine { step: 1, .. })),
+        "{:?}",
+        ls.inputs
+    );
+    assert!(ls.inputs.iter().any(|i| i.kind == LaneKind::Param));
+}
+
 // ---------------------------------------------------------------------------
 // Structural invariants.
 // ---------------------------------------------------------------------------
@@ -1134,9 +1393,387 @@ fn ab_prefix_scan_observeds() {
         }}
     });
     let prog = ab_check(doc, 0, -2.0, 2.0);
-    // Each scan is ONE `Scan` over its whole box, with no per-step writes.
-    assert_eq!(opcount(&prog, "Scan"), 2, "one Scan per scan observed");
+    // Each scan is ONE `Scan` over its whole box (an instruction, or a
+    // micro-op of the fused group that computes its source), with no
+    // per-step writes.
+    assert_eq!(
+        opcount(&prog, "Scan") + scan_micro_ops(&prog),
+        2,
+        "one Scan per scan observed"
+    );
     assert_eq!(opcount(&prog, "Region"), 0, "no per-step region writes");
+}
+
+/// Absorbed scans (`MicroOp::Scan`) over every fused group.
+fn scan_micro_ops(prog: &TapeProgram) -> usize {
+    prog.fused
+        .iter()
+        .flat_map(|f| &f.micro)
+        .filter(|m| matches!(m, MicroOp::Scan { .. }))
+        .count()
+}
+
+/// A scan joins the fused group that computes its source, and the scan's
+/// readers join it too (the identity read of the scanned observed and its
+/// export no longer split the group). Scans longer than the executor's
+/// chunk, with chunks that start mid-scan, exercise the carry from one chunk
+/// to the next and the restart at each scan's first step; the program's
+/// column-major layout puts the scanned axis first, so each lane of the box
+/// carries its own running value.
+#[test]
+fn ab_scan_absorbed_into_its_group() {
+    let (ni, nk) = (3, 1100);
+    let scan_obs = |cmp: &str| {
+        json!({"op": "faq", "args": [], "output_idx": ["i", "k"],
+            "reduce": "+",
+            "ranges": {"i": [1, ni], "k": [1, nk], "m": [1, nk]},
+            "filter": {"op": cmp, "args": ["m", "k"]},
+            "expr": {"op": "*", "args": [
+                {"op": "index", "args": ["u", "i", "m"]},
+                {"op": "index", "args": ["w", "i", "m"]}]}})
+    };
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_scan_fused"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["i", "k"]},
+                "w": {"type": "unknown", "shape": ["i", "k"]},
+                "P": {"type": "unknown", "shape": ["i", "k"]},
+                "Q": {"type": "unknown", "shape": ["i", "k"]}
+            },
+            "equations": [
+                {"lhs": "w", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
+                    "ranges": {"i": [1, ni], "k": [1, nk]},
+                    "expr": {"op": "+", "args": [1.0, {"op": "*", "args": [0.5,
+                        {"op": "sin", "args": [{"op": "*", "args": ["i", "k"]}]}]}]}}},
+                {"lhs": "P", "rhs": scan_obs("<=")},
+                {"lhs": "Q", "rhs": scan_obs("<")},
+                {
+                    "lhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
+                            "expr": {"op": "D", "args": [
+                                {"op": "index", "args": ["u", "i", "k"]}], "wrt": "t"},
+                            "ranges": {"i": [1, ni], "k": [1, nk]}},
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
+                            "ranges": {"i": [1, ni], "k": [1, nk]},
+                            "expr": {"op": "+", "args": [
+                                {"op": "*", "args": [-0.001,
+                                    {"op": "index", "args": ["P", "i", "k"]}]},
+                                {"op": "*", "args": [0.002,
+                                    {"op": "index", "args": ["Q", "i", "k"]}]}
+                            ]}}
+                }
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    assert_eq!(opcount(&prog, "Scan"), 0, "both scans are absorbed");
+    assert_eq!(scan_micro_ops(&prog), 2);
+    let cont = prog.section_range(Cadence::Continuous);
+    let fused_cont = prog.instrs[cont]
+        .iter()
+        .filter(|i| matches!(i, Instr::Fused { .. }))
+        .count();
+    assert_eq!(fused_cont, 1, "the scans and their reader run as one group");
+}
+
+/// Last-axis scans run in one loop with their single-use neighbours
+/// (`ScanFuse`), which fusion moves next to them: a weighted running sum
+/// (`u * w` in front, a scale behind), an exclusive sum, a running product,
+/// and a running sum of a scaled running sum (the `* 0.5` between the two
+/// joins one of them only). 2500 cells cross several executor chunks, so the
+/// carries run from one chunk to the next. The program a solve builds also
+/// publishes the scans' observeds, which a fused loop then stores too.
+#[test]
+fn ab_scan_fused_with_its_neighbours() {
+    let n = 2500;
+    let ranges = json!({"k": [1, n], "m": [1, n]});
+    let scan = |cmp: &str, red: &str, term: serde_json::Value| {
+        json!({"op": "faq", "args": [], "output_idx": ["k"], "reduce": red,
+            "ranges": ranges, "filter": {"op": cmp, "args": ["m", "k"]}, "expr": term})
+    };
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_scan_neighbours"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["k"]},
+                "v": {"type": "unknown", "shape": ["k"]},
+                "w": {"type": "unknown", "shape": ["k"]},
+                "P": {"type": "unknown", "shape": ["k"]},
+                "Q": {"type": "unknown", "shape": ["k"]},
+                "R": {"type": "unknown", "shape": ["k"]},
+                "z": {"type": "unknown", "shape": ["k"]},
+                "Z1": {"type": "unknown", "shape": ["k"]},
+                "Z2": {"type": "unknown", "shape": ["k"]}
+            },
+            "equations": [
+                {"lhs": "w", "rhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                    "ranges": {"k": [1, n]},
+                    "expr": {"op": "+", "args": [1.0, {"op": "*", "args": [0.5,
+                        {"op": "sin", "args": ["k"]}]}]}}},
+                {"lhs": "P", "rhs": scan("<=", "+", json!({"op": "*", "args": [
+                    {"op": "index", "args": ["u", "m"]}, {"op": "index", "args": ["w", "m"]}]}))},
+                {"lhs": "Q", "rhs": scan("<", "+", json!({"op": "-", "args": [
+                    {"op": "index", "args": ["v", "m"]}, 0.25]}))},
+                {"lhs": "R", "rhs": scan("<=", "*", json!({"op": "+", "args": [1.0,
+                    {"op": "*", "args": [1e-4, {"op": "index", "args": ["v", "m"]}]}]}))},
+                // A scan of a scaled scan: the `* 0.5` between them is
+                // absorbed behind the first one only.
+                {"lhs": "Z1", "rhs": scan("<=", "+", json!({"op": "*", "args": [
+                    {"op": "index", "args": ["z", "m"]}, 2.0]}))},
+                {"lhs": "Z2", "rhs": scan("<=", "+", json!({"op": "*", "args": [
+                    {"op": "index", "args": ["Z1", "m"]}, 0.5]}))},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                    "expr": {"op": "D", "args": [{"op": "index", "args": ["z", "k"]}], "wrt": "t"},
+                    "ranges": {"k": [1, n]}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["k"], "ranges": {"k": [1, n]},
+                    "expr": {"op": "*", "args": [{"op": "index", "args": ["Z2", "k"]}, 0.01]}}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                    "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "k"]}], "wrt": "t"},
+                    "ranges": {"k": [1, n]}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["k"], "ranges": {"k": [1, n]},
+                    "expr": {"op": "*", "args": [-0.001, {"op": "index", "args": ["P", "k"]}]}}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                    "expr": {"op": "D", "args": [{"op": "index", "args": ["v", "k"]}], "wrt": "t"},
+                    "ranges": {"k": [1, n]}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["k"], "ranges": {"k": [1, n]},
+                    "expr": {"op": "+", "args": [
+                        {"op": "/", "args": [{"op": "index", "args": ["Q", "k"]}, 3.0]},
+                        {"op": "index", "args": ["R", "k"]}]}}}
+            ]
+        }}
+    });
+    let prog = ab_check(doc.clone(), 0, -2.0, 2.0);
+    let fusions: Vec<ScanFuse> = prog
+        .fused
+        .iter()
+        .flat_map(|f| f.scan_fuse.iter().copied())
+        .collect();
+    assert!(scan_micro_ops(&prog) >= 4, "{fusions:?}");
+    assert!(
+        fusions.iter().filter(|f| f.pre && f.post).count() >= 2,
+        "the weighted sum and the scan of the scaled scan run with both \
+         neighbours: {fusions:?}"
+    );
+
+    // The program a solve builds publishes the scanned observeds: a quiet
+    // call stores none of them, a publishing call stores them from inside
+    // the fused loops (`keep`); both write the interpreter's `dy`.
+    let mut compiled = compile(doc);
+    compiled.runtime_mode = super::super::RuntimeMode::Native;
+    let (prog, _) = compiled.build_tape(&HashSet::new());
+    assert!(
+        prog.exports.iter().any(|(e, _)| e == "P"),
+        "fixture exports P"
+    );
+    assert!(
+        prog.fused.iter().flat_map(|f| &f.scan_fuse).any(|f| f.keep),
+        "{:?}",
+        prog.fused.iter().map(|f| &f.scan_fuse).collect::<Vec<_>>()
+    );
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let state = seeded_state(3 * n, 7, -2.0, 2.0);
+    let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+    let mut ctx = super::exec::TapeCtx::new(
+        std::rc::Rc::new(prog),
+        std::rc::Rc::new(compiled.observed_rules.clone()),
+    );
+    for publish in [false, true, false] {
+        ctx.set_exports_active(publish);
+        let mut dy = vec![f64::NAN; 3 * n];
+        let mut stats = RhsStats::default();
+        let call = super::super::RhsCall {
+            rhs_rules: &compiled.rhs_rules,
+            observed_rules: &compiled.observed_rules,
+            var_shapes: &compiled.var_shapes,
+            param_names: &compiled.param_names,
+            state: &state,
+            params: &param_vec,
+            forcing: &compiled.forcing,
+            t: 0.0,
+            declared: &compiled.declared_names,
+        };
+        super::exec::run_tape_call(
+            &mut ctx,
+            &call,
+            &super::super::ArrMap::default(),
+            &compiled.const_scope,
+            &super::super::ConstLitMemo::default(),
+            &mut dy,
+            &mut stats,
+        );
+        for (k, (a, b)) in dy.iter().zip(&dy_ref).enumerate() {
+            assert_eq!(a.to_bits(), b.to_bits(), "publish {publish}: dy[{k}]");
+        }
+        if publish {
+            // P[k] = sum over m <= k of u[m] * w[m], folded from 0.0.
+            let p = ctx.exec.obs.get("P").expect("P published");
+            let mut acc = 0.0f64;
+            for k in 0..n {
+                let w = 1.0 + 0.5 * ((k + 1) as f64).sin();
+                acc += state[k] * w;
+                assert_eq!(p[ndarray::IxDyn(&[k])].to_bits(), acc.to_bits(), "P[{k}]");
+            }
+        }
+    }
+}
+
+/// A ghost Laplacian along the innermost axis of a 3-D box whose rows are
+/// too short to fold as shifted reads: the gathers are read through their
+/// plans one chunk at a time inside the consumer's group (chunks start and
+/// end mid-row), together with a wrap along the outer axis.
+#[test]
+fn ab_chunk_gathers_on_short_rows() {
+    let build = |ni: i64, nk: i64| {
+        let nj = 4i64;
+        let ix3 = |i: serde_json::Value, k: serde_json::Value| json!({"op": "index", "args": ["u", i, "j", k]});
+        let lap = json!({"op": "+", "args": [
+            ix3(json!("i"), json!({"op": "-", "args": ["k", 1]})),
+            {"op": "*", "args": [-2.0, ix3(json!("i"), json!("k"))]},
+            ix3(json!("i"), json!({"op": "+", "args": ["k", 1]})),
+            {"op": "*", "args": [0.5, ix3(wrap(json!({"op": "+", "args": ["i", 1]}), 1, ni), json!("k"))]}
+        ]});
+        let ranges = json!({"i": [1, ni], "j": [1, nj], "k": [1, nk]});
+        let doc = json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "tape_chunk_gather"},
+            "models": {"M": {
+                "variables": {"u": {"type": "unknown", "shape": ["i", "j", "k"]}},
+                "equations": [{
+                    "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
+                            "expr": {"op": "D", "args": [
+                                {"op": "index", "args": ["u", "i", "j", "k"]}], "wrt": "t"},
+                            "ranges": ranges},
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j", "k"],
+                            "ranges": ranges, "expr": {"op": "*", "args": [0.25, lap]}}
+                }]
+            }}
+        });
+        ab_check(doc, 0, -2.0, 2.0)
+    };
+    // Long rows along both shifted axes (read per chunk), short ones (read
+    // whole), and a mix: absorbed either way, so the program is the same.
+    let progs: Vec<TapeProgram> = [(40, 40), (8, 6), (40, 6), (8, 40)]
+        .into_iter()
+        .map(|(ni, nk)| build(ni, nk))
+        .collect();
+    for prog in &progs {
+        assert!(
+            prog.fused
+                .iter()
+                .flat_map(|f| &f.inputs)
+                .any(|i| i.gather.is_some()),
+            "an innermost-axis shift is read through its plan"
+        );
+        assert_eq!(opcount(prog, "Gather"), 0, "no gather is materialized");
+        assert_eq!(
+            prog.instrs.len(),
+            progs[0].instrs.len(),
+            "the program is flat in the box"
+        );
+    }
+}
+
+/// The unstructured-mesh gather `sum_k kappa * (u[nbr[i, k]] - u[i])` over a
+/// constant neighbour table, with more cells than one executor chunk: the
+/// folded gather reads positions resolved when the CONST section runs, and
+/// the reduction over the four neighbour positions walks its accumulator
+/// chunk by chunk.
+#[test]
+fn ab_index_gather_reduction_interleaved() {
+    let n = 1500usize;
+    let nbr: Vec<Vec<f64>> = (0..n)
+        .map(|i| {
+            (0..4)
+                .map(|k| ((i * 7 + k * 389 + 1) % n + 1) as f64)
+                .collect()
+        })
+        .collect();
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_mesh_gather"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["cells"]},
+                "nbr": {"type": "unknown", "shape": ["cells", "nb"]},
+                "kappa": {"type": "parameter", "default": 0.1}
+            },
+            "equations": [
+                {"lhs": "nbr", "rhs": {"op": "const", "args": [], "value": nbr}},
+                {
+                    "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                            "expr": {"op": "D", "args": [
+                                {"op": "index", "args": ["u", "i"]}], "wrt": "t"},
+                            "ranges": {"i": [1, n]}},
+                    "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                            "ranges": {"i": [1, n], "k": [1, 4]},
+                            "expr": {"op": "*", "args": ["kappa", {"op": "-", "args": [
+                                {"op": "index", "args": ["u",
+                                    {"op": "index", "args": ["nbr", "i", "k"]}]},
+                                {"op": "index", "args": ["u", "i"]}]}]}}
+                }
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    assert!(
+        prog.fused
+            .iter()
+            .any(|f| f.interleave.is_some() && f.inputs.iter().any(|i| i.index.is_some())),
+        "the neighbour reduction runs interleaved over its folded gather"
+    );
+    assert!(
+        prog.fused
+            .iter()
+            .filter(|f| f.reduce.is_some())
+            .all(|f| super::exec::fold_fused_op(f).is_some()),
+        "the scaled difference folds straight into the accumulator"
+    );
+}
+
+/// A dense source-receptor contraction `dc[i] = sum_j K[i, j] e[j]` over a
+/// materialized non-uniform `K`, with more source positions than an
+/// interleaved reduction takes: the group folds each product straight into
+/// its accumulator.
+#[test]
+fn ab_dense_contraction_folds_its_product() {
+    let n = 40i64;
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_source_receptor"},
+        "models": {"M": {
+            "variables": {
+                "c": {"type": "unknown", "shape": ["i"]},
+                "e": {"type": "unknown", "shape": ["i"]},
+                "K": {"type": "unknown", "shape": ["i", "j"]}
+            },
+            "equations": [
+                {"lhs": "K", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                    "ranges": {"i": [1, n], "j": [1, n]},
+                    "expr": {"op": "*", "args": [0.001, {"op": "+", "args": [1,
+                        {"op": "sin", "args": [{"op": "*", "args": ["i", "j"]}]}]}]}}},
+                d_eq("c", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
+                    "reduce": "+",
+                    "ranges": {"i": [1, n], "j": [1, n]},
+                    "expr": {"op": "*", "args": [
+                        {"op": "index", "args": ["K", "i", "j"]}, idx("e", json!("j"))]}})),
+                d_eq("e", n, json!({"op": "*", "args": [-0.1, idx("e", json!("i"))]}))
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let red = prog
+        .fused
+        .iter()
+        .find(|f| f.reduce.is_some())
+        .expect("the contraction fuses with its reduction");
+    assert!(red.interleave.is_none());
+    assert!(
+        super::exec::fold_fused_op(red).is_some(),
+        "the product folds straight into the accumulator"
+    );
 }
 
 /// A declared observed whose whole body is a `makearray` (the boundary-
@@ -1354,9 +1991,12 @@ fn ab_model_file_if_available() {
 // ---------------------------------------------------------------------------
 
 /// Shifted-read gather folding, all three fold shapes at once on a 2-D box:
-/// a periodic WRAP along the leading axis (two-segment roll), a Dirichlet
-/// GHOST-edge shift (uncovered edge rows read `+0.0`), and a LINEAR
-/// level-slice read (constant element stride from a deeper box). The A/B
+/// a periodic WRAP (two-segment roll), a Dirichlet GHOST-edge shift
+/// (uncovered edge rows read `+0.0`), and a LINEAR level-slice read
+/// (constant element stride from a deeper box). The wrap and the ghost shift
+/// run along both axes: on a box this small only a shift along the axis
+/// stored leading folds, which is `i` as lowered and `j` in a column-major
+/// program (`layout`). The A/B
 /// harness proves byte equality of the fused program (shifted reads) against
 /// the unfused program (materialized gathers) and the legacy interpreter.
 #[test]
@@ -1369,12 +2009,16 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
     let lap_wrap = json!({"op": "+", "args": [
         idx2("u", wrap(json!({"op": "-", "args": ["i", 1]}), 1, ni), json!("j")),
         {"op": "*", "args": [-2.0, idx2("u", json!("i"), json!("j"))]},
-        idx2("u", wrap(json!({"op": "+", "args": ["i", 1]}), 1, ni), json!("j"))
+        idx2("u", wrap(json!({"op": "+", "args": ["i", 1]}), 1, ni), json!("j")),
+        idx2("u", json!("i"), wrap(json!({"op": "-", "args": ["j", 1]}), 1, nj)),
+        idx2("u", json!("i"), wrap(json!({"op": "+", "args": ["j", 1]}), 1, nj))
     ]});
     let lap_ghost = json!({"op": "+", "args": [
         idx2("v", json!({"op": "-", "args": ["i", 1]}), json!("j")),
         {"op": "*", "args": [-2.0, idx2("v", json!("i"), json!("j"))]},
-        idx2("v", json!({"op": "+", "args": ["i", 1]}), json!("j"))
+        idx2("v", json!({"op": "+", "args": ["i", 1]}), json!("j")),
+        idx2("v", json!("i"), json!({"op": "-", "args": ["j", 1]})),
+        idx2("v", json!("i"), json!({"op": "+", "args": ["j", 1]}))
     ]});
     let d2 = |var: &str, rhs: serde_json::Value| {
         json!({
@@ -1397,18 +2041,26 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
                 "u": {"type": "unknown", "shape": ["i", "j"]},
                 "v": {"type": "unknown", "shape": ["i", "j"]},
                 "w": {"type": "unknown", "shape": ["i", "j"]},
-                // s[i] = 0.5 * w[i, 3]: a linear (strided) slice read.
-                "s": {"type": "unknown", "shape": ["i"]}
+                // s[i] = 0.5 * w[i, 3] and r[j] = 0.5 * w[2, j]: linear slice
+                // reads, one of them strided in either storage order.
+                "s": {"type": "unknown", "shape": ["i"]},
+                "r": {"type": "unknown", "shape": ["j"]}
             },
             "equations": [
                 {"lhs": "s", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                           "ranges": {"i": [1, ni]},
                           "expr": {"op": "*", "args": [0.5,
                               {"op": "index", "args": ["w", "i", 3]}]}}},
+                {"lhs": "r", "rhs": {"op": "faq", "args": [], "output_idx": ["j"],
+                          "ranges": {"j": [1, nj]},
+                          "expr": {"op": "*", "args": [0.5,
+                              {"op": "index", "args": ["w", 2, "j"]}]}}},
                 d2("u", agg2(json!({"op": "*", "args": [0.25, lap_wrap]}))),
                 d2("v", agg2(json!({"op": "*", "args": [0.25, lap_ghost]}))),
                 d2("w", agg2(json!({"op": "*", "args": [
-                    {"op": "index", "args": ["s", "i"]},
+                    {"op": "+", "args": [
+                        {"op": "index", "args": ["s", "i"]},
+                        {"op": "index", "args": ["r", "j"]}]},
                     {"op": "index", "args": ["w", "i", "j"]}
                 ]})))
             ]
@@ -1443,6 +2095,84 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
 /// `Export` publish memcpys are skipped (nothing can read them); forcing
 /// them back on (the check-mode/diagnostic path) publishes the same values —
 /// and `dy` is bit-identical either way.
+/// An observed no derivative reads sits after the part of the section a
+/// right-hand-side call runs; a call that publishes runs it too and gets
+/// its value, and the derivatives are bit-identical either way.
+#[test]
+fn output_only_observeds_leave_the_rhs() {
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_output_only"},
+        "models": {"M": {
+            "variables": {
+                "x": {"type": "unknown"},
+                "s": {"type": "unknown"},
+                "o": {"type": "unknown"}
+            },
+            "equations": [
+                {"lhs": "o", "rhs": {"op": "*", "args": [{"op": "sin", "args": ["x"]}, 3.0]}},
+                {"lhs": "s", "rhs": {"op": "*", "args": [2.0, "x"]}},
+                {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                 "rhs": {"op": "neg", "args": ["s"]}}
+            ]
+        }}
+    });
+    ab_check(doc.clone(), 0, -1.0, 1.0);
+    let compiled = compile(doc);
+    let (prog, _) = compiled.build_tape(&HashSet::new());
+    let cont = prog.section_range(Cadence::Continuous).len() as u32;
+    assert!(
+        prog.n_rhs < cont,
+        "o's instructions leave the call: {:?}",
+        prog.instrs
+    );
+    let exported = prog.exports.iter().any(|(n, _)| n == "o");
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let state = vec![1.5f64];
+    let run_call = |ctx: &mut super::exec::TapeCtx, dy: &mut [f64]| {
+        let mut stats = RhsStats::default();
+        let call = super::super::RhsCall {
+            rhs_rules: &compiled.rhs_rules,
+            observed_rules: &compiled.observed_rules,
+            var_shapes: &compiled.var_shapes,
+            param_names: &compiled.param_names,
+            state: &state,
+            params: &param_vec,
+            forcing: &compiled.forcing,
+            t: 0.0,
+            declared: &compiled.declared_names,
+        };
+        super::exec::run_tape_call(
+            ctx,
+            &call,
+            &super::super::ArrMap::default(),
+            &compiled.const_scope,
+            &super::super::ConstLitMemo::default(),
+            dy,
+            &mut stats,
+        );
+    };
+    let mut ctx = super::exec::TapeCtx::new(
+        std::rc::Rc::new(prog),
+        std::rc::Rc::new(compiled.observed_rules.clone()),
+    );
+    let mut dy = vec![0.0f64; 1];
+    run_call(&mut ctx, &mut dy);
+    assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
+    ctx.set_exports_active(true);
+    let mut dy2 = vec![0.0f64; 1];
+    run_call(&mut ctx, &mut dy2);
+    assert_eq!(dy2[0].to_bits(), dy[0].to_bits());
+    if exported {
+        let o = ctx.exec.obs.get("o").expect("o published");
+        assert_eq!(
+            o[ndarray::IxDyn(&[])].to_bits(),
+            (1.5f64.sin() * 3.0).to_bits()
+        );
+    }
+}
+
 #[test]
 fn export_demotion_skips_unread_publishes() {
     let doc = json!({
@@ -2680,10 +3410,16 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
     });
     let prog = ab_check(doc.clone(), 0, -2.0, 2.0);
     let payloads: Vec<&ConstArrayData> = prog.const_data.iter().collect();
+    // A column-major program stores the box axis-reversed (`layout`).
+    let (shape, values): ([usize; 2], [f64; 6]) = if prog.col_major {
+        ([2, 3], [0.5, 2.0, -0.75, -1.25, 3.5, 1e-3])
+    } else {
+        ([3, 2], [0.5, -1.25, 2.0, 3.5, -0.75, 1e-3])
+    };
     assert!(
         payloads
             .iter()
-            .any(|d| d.shape[..] == [3, 2] && d.values == [0.5, -1.25, 2.0, 3.5, -0.75, 1e-3]),
+            .any(|d| d.shape[..] == shape && d.values == values),
         "the default's row-major data is a ConstArray payload: {payloads:?}"
     );
     // And against the per-cell oracle, not only the overlay.
@@ -2846,6 +3582,39 @@ fn ab_poly_area_spherical_dense() {
         .collect();
     let prog = ab_check(regrid_doc("spherical", src, tgt), 0, 0.5, 2.0);
     assert_eq!(only_poly_area(&prog).pairs, None);
+}
+
+/// The scaling tier's conservative regrid: a bin-skolem `join.on` gate whose
+/// bin maps read coordinates the document derives from its `const` rings
+/// (`src_lon[i] = min_v src_poly[i, v, 1]`), with no derived index set. The
+/// build evaluates those coordinates so value invention can key the bins and
+/// the gate drives the contractions, so a call applies the regrid over the
+/// admitted pairs only — no per-call instruction spans the `src × tgt` box —
+/// bit for bit as the interpreter does.
+#[test]
+fn ab_regrid_bin_skolem_gate_drives_the_apply() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/scaling/fixtures/regrid/regrid_N100.esm");
+    let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
+    let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
+    let prog = ab_check(doc, 0, 0.5, 2.0);
+    let n = 100usize;
+    let cont = (prog.n_const + prog.n_segment) as usize;
+    let mut seg = 0;
+    for ins in &prog.instrs[cont..] {
+        let elems = match ins {
+            Instr::Fused { spec } => prog.fused[*spec as usize].shape.iter().product::<usize>(),
+            _ => ins.out().map_or(0, |o| {
+                prog.slots[o as usize].shape.iter().product::<usize>()
+            }),
+        };
+        assert!(
+            elems <= 2 * n,
+            "a per-call instruction spans {elems} elements: {ins:?}"
+        );
+        seg += usize::from(matches!(ins, Instr::SegReduce { .. }));
+    }
+    assert_eq!(seg, 1, "the apply is one gated segmented sum");
 }
 
 /// The wholesale form — `polygon_intersection_area` of two whole `[V, 2]`
