@@ -118,6 +118,31 @@ fn validate_model_references(ctx: &ModelCtx<'_>, errors: &mut Vec<StructuralErro
     ctx.check_continuous_events(errors);
 }
 
+/// Whether a name is declared, for the event checks, which read both a model's
+/// [`DeclaredNames`] and a reaction system's plain set.
+trait DeclaredLookup {
+    fn declares(&self, name: &str) -> bool;
+}
+
+impl<S: std::hash::BuildHasher> DeclaredLookup for HashSet<String, S> {
+    fn declares(&self, name: &str) -> bool {
+        self.contains(name)
+    }
+}
+
+/// The names a model's expressions may read: its own variables, borrowed, and
+/// the implicitly declared (and, for a coupled model, document-declared) ones.
+struct DeclaredNames<'a> {
+    vars: HashSet<&'a str, rustc_hash::FxBuildHasher>,
+    other: HashSet<String, rustc_hash::FxBuildHasher>,
+}
+
+impl DeclaredLookup for DeclaredNames<'_> {
+    fn declares(&self, name: &str) -> bool {
+        self.vars.contains(name) || self.other.contains(name)
+    }
+}
+
 struct ModelCtx<'a> {
     esm_file: &'a EsmFile,
     model_name: &'a str,
@@ -131,7 +156,7 @@ struct ModelCtx<'a> {
     /// Computed on first use: the reference checks need it only for a
     /// `distinct` `faq` node.
     class: std::cell::OnceCell<crate::classification::Classification>,
-    defined_vars: HashSet<String, rustc_hash::FxBuildHasher>,
+    defined_vars: DeclaredNames<'a>,
     /// Which equations contain a `faq` node, noted by the equation reference
     /// check (which walks every equation first) so the aggregate check walks
     /// only those. `None` until the reference check has run.
@@ -151,15 +176,19 @@ impl<'a> ModelCtx<'a> {
         system_refs: &'a HashMap<String, SystemInfo>,
     ) -> Self {
         let model_path = format!("/models/{model_name}");
-        let mut defined_vars: HashSet<String, rustc_hash::FxBuildHasher> =
-            model.variables.keys().cloned().collect();
+        let mut defined_vars = DeclaredNames {
+            vars: model.variables.keys().map(String::as_str).collect(),
+            other: HashSet::default(),
+        };
 
         // esm-spec §4.9.1: three classes of symbol are in scope WITHOUT appearing in
         // the `variables` map, and none of them is an `undefined_variable`. Adding
         // them to the in-scope set here is what lets every reference check below —
         // equations, observed expressions, event conditions and event affects —
         // resolve them uniformly.
-        defined_vars.extend(implicitly_declared_symbols(esm_file));
+        defined_vars
+            .other
+            .extend(implicitly_declared_symbols(esm_file));
 
         let local_scoped = subsystem_scoped_refs(model);
 
@@ -175,7 +204,7 @@ impl<'a> ModelCtx<'a> {
         // Python `global_symbols`.
         let is_coupled = coupled_system_names(esm_file).contains(model_name);
         if is_coupled {
-            defined_vars.extend(document_declared_names(esm_file));
+            defined_vars.other.extend(document_declared_names(esm_file));
         }
 
         ModelCtx {
@@ -192,17 +221,17 @@ impl<'a> ModelCtx<'a> {
         }
     }
 
+    fn class(&self) -> &crate::classification::Classification {
+        self.class
+            .get_or_init(|| crate::classification::Classification::of(self.model))
+    }
+
     /// Every reference check routes through this one gate, which keeps the five
     /// call sites across the passes uniform. A coupled model is checked too (F-1) — its
     /// `defined_vars` was widened to the document scope in [`ModelCtx::new`] —
     /// so the gate no longer short-circuits. Unit propagation is a separate
     /// pass: the dimensions of what a model spells must agree regardless of
     /// which system owns a name.
-    fn class(&self) -> &crate::classification::Classification {
-        self.class
-            .get_or_init(|| crate::classification::Classification::of(self.model))
-    }
-
     fn check_refs(
         &self,
         expr: &crate::Expr,
@@ -258,7 +287,7 @@ impl<'a> ModelCtx<'a> {
         errs: &mut Vec<StructuralError>,
         seen: &mut RefWalkSeen,
     ) {
-        let is_declared = |name: &str| self.defined_vars.contains(name);
+        let is_declared = |name: &str| self.defined_vars.declares(name);
         let declared = NameScope::Set(&is_declared);
         let scope = if binders.is_empty() {
             declared
@@ -4291,11 +4320,11 @@ fn check_broadcast_fn_node(
     });
 }
 
-fn validate_discrete_event<S: std::hash::BuildHasher>(
+fn validate_discrete_event<D: DeclaredLookup + ?Sized>(
     event: &crate::DiscreteEvent,
     event_idx: usize,
     parent_path: &str,
-    defined_vars: &HashSet<String, S>,
+    defined_vars: &D,
     variables: &indexmap::IndexMap<String, crate::types::ModelVariable>,
     errors: &mut Vec<StructuralError>,
 ) {
@@ -4348,11 +4377,11 @@ fn validate_discrete_event<S: std::hash::BuildHasher>(
 /// Structural checks for a continuous event (esm-spec §6.3): every zero-cross
 /// `conditions` expression and every `affects`/`affect_neg` equation must
 /// reference only declared variables. Mirrors [`validate_discrete_event`].
-fn validate_continuous_event<S: std::hash::BuildHasher>(
+fn validate_continuous_event<D: DeclaredLookup + ?Sized>(
     event: &crate::ContinuousEvent,
     event_idx: usize,
     parent_path: &str,
-    defined_vars: &HashSet<String, S>,
+    defined_vars: &D,
     variables: &indexmap::IndexMap<String, crate::types::ModelVariable>,
     errors: &mut Vec<StructuralError>,
 ) {
@@ -4400,8 +4429,8 @@ fn validate_continuous_event<S: std::hash::BuildHasher>(
 /// What [`validate_event_affects`] checks a list of affect equations against:
 /// the scope and declarations the names must resolve in, plus what identifies
 /// the owning event (and its trigger, when discrete) in a finding.
-struct EventAffectsCtx<'a, S> {
-    defined_vars: &'a HashSet<String, S>,
+struct EventAffectsCtx<'a, D: ?Sized> {
+    defined_vars: &'a D,
     variables: &'a indexmap::IndexMap<String, crate::types::ModelVariable>,
     trigger: Option<&'a crate::DiscreteEventTrigger>,
     event_path: &'a str,
@@ -4415,9 +4444,9 @@ struct EventAffectsCtx<'a, S> {
 /// Shared affect-equation checks for discrete and continuous events: each
 /// LHS must be a declared variable, and each RHS expression must reference
 /// only declared names.
-fn validate_event_affects<S: std::hash::BuildHasher>(
+fn validate_event_affects<D: DeclaredLookup + ?Sized>(
     affects: &[crate::AffectEquation],
-    ctx: &EventAffectsCtx<'_, S>,
+    ctx: &EventAffectsCtx<'_, D>,
     errors: &mut Vec<StructuralError>,
 ) {
     let &EventAffectsCtx {
@@ -4458,7 +4487,7 @@ fn validate_event_affects<S: std::hash::BuildHasher>(
         // The assignment TARGET (LHS) must be a declared variable — a distinct
         // defect (`event_var_undeclared`) from an ordinary reference. The
         // carrying field (§7.1.2) is the affect's own `lhs`.
-        if !defined_vars.contains(&affect.lhs) {
+        if !defined_vars.declares(&affect.lhs) {
             errors.push(StructuralError {
                 path: format!("{event_path}/{location}/{affect_idx}/lhs"),
                 code: StructuralErrorCode::EventVarUndeclared,
@@ -4517,15 +4546,15 @@ fn remedy_for(variable: &str, trigger: Option<&crate::DiscreteEventTrigger>) -> 
 /// FIELD, §7.1.2). The independent variable, `_var`, and the spatial coordinates
 /// are already seeded into `defined_vars` (esm-spec §4.9.1), so they resolve like
 /// any other name; built-in function heads are skipped.
-fn validate_event_ref_expression<S: std::hash::BuildHasher>(
+fn validate_event_ref_expression<D: DeclaredLookup + ?Sized>(
     expr: &crate::Expr,
-    defined_vars: &HashSet<String, S>,
+    defined_vars: &D,
     path: &str,
     errors: &mut Vec<StructuralError>,
 ) {
     match expr {
         crate::Expr::Variable(var_name) => {
-            if !is_builtin_function_name(var_name) && !defined_vars.contains(var_name) {
+            if !is_builtin_function_name(var_name) && !defined_vars.declares(var_name) {
                 errors.push(StructuralError {
                     path: path.to_string(),
                     code: StructuralErrorCode::UndefinedVariable,
