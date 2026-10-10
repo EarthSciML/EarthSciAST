@@ -1250,11 +1250,13 @@ fn scan_without_templates(
     at: &JsonPath<'_>,
     in_templates: bool,
     out: &mut UntemplatedScan,
+    visit: &mut dyn FnMut(&JsonPath<'_>, &Value),
 ) {
+    visit(at, tree);
     match tree {
         Value::Array(arr) => {
             for (i, child) in arr.iter().enumerate() {
-                scan_without_templates(child, &JsonPath::Index(at, i), in_templates, out);
+                scan_without_templates(child, &JsonPath::Index(at, i), in_templates, out, visit);
                 if out.uses_apply {
                     return;
                 }
@@ -1276,7 +1278,7 @@ fn scan_without_templates(
             }
             for (k, v) in obj {
                 let skip = in_templates || k == "expression_templates";
-                scan_without_templates(v, &JsonPath::Key(at, k), skip, out);
+                scan_without_templates(v, &JsonPath::Key(at, k), skip, out, visit);
                 if out.uses_apply {
                     return;
                 }
@@ -1307,10 +1309,22 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
 pub(crate) fn lower_expression_templates_found(
     value: &mut Value,
 ) -> Result<bool, ExpressionTemplateError> {
+    lower_expression_templates_visiting(value, &mut |_, _| {}).map(|(found, _)| found)
+}
+
+/// [`lower_expression_templates_found`], also handing `visit` every value of
+/// the document, in pre-order, when the document has no template machinery:
+/// the second answer says whether it did (the whole document, unchanged by
+/// this pass, was visited), so a caller can fold its own read-only walk into
+/// this one. When it is `false`, what `visit` saw is incomplete.
+pub(crate) fn lower_expression_templates_visiting(
+    value: &mut Value,
+    visit: &mut dyn FnMut(&JsonPath<'_>, &Value),
+) -> Result<(bool, bool), ExpressionTemplateError> {
     reject_expression_templates_pre_v04(value)?;
 
     if value.as_object().is_none() {
-        return Ok(false);
+        return Ok((false, false));
     }
 
     // Fast path: files that neither declare `expression_templates` blocks nor
@@ -1319,12 +1333,12 @@ pub(crate) fn lower_expression_templates_found(
     // expanded form — and share the walk that looks for the op.
     if !declares_templates(value) {
         let mut scan = UntemplatedScan::default();
-        scan_without_templates(value, &JsonPath::Root(""), false, &mut scan);
+        scan_without_templates(value, &JsonPath::Root(""), false, &mut scan, visit);
         if !scan.uses_apply {
             if let Some(e) = scan.geometry.or(scan.makearray) {
                 return Err(e);
             }
-            return Ok(false);
+            return Ok((false, true));
         }
     }
 
@@ -1467,7 +1481,7 @@ pub(crate) fn lower_expression_templates_found(
     validate_makearray_regions(value, "")?;
     validate_makearray_regions_in_registries(&registries)?;
 
-    Ok(true)
+    Ok((true, false))
 }
 
 /// Geometry-kernel ops whose `manifold` scalar field is restricted to the

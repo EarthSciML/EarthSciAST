@@ -308,9 +308,22 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // Option B, RFC out-of-line-expression-templates). This pass now PRESERVES
     // surviving (non-eager) references and each component's
     // `expression_templates` block (they travel into emit, §9.6.4 rule 5).
-    let has_templates =
-        crate::lower_expression_templates::lower_expression_templates_found(&mut json_value)
-            .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+    // A document with no template machinery is left unchanged by this pass and
+    // the two after it (enum lowering finds nothing to lower without an `enum`
+    // node), so the template scan's walk also looks for `enum` nodes and
+    // reserved binders, which are then not walked for again.
+    let mut reserved = ReservedIndexScan::new(&json_value);
+    let mut has_enum_ops = false;
+    let (has_templates, scanned_whole) =
+        crate::lower_expression_templates::lower_expression_templates_visiting(
+            &mut json_value,
+            &mut |path, value| {
+                has_enum_ops |= crate::lower_enums::is_enum_node(value);
+                reserved.visit(path, value);
+            },
+        )
+        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+    let reserved = (scanned_whole && !has_enum_ops).then_some(reserved);
 
     // The typed IR / build path (simulate, flatten, graph, …) is Expand-at-build
     // (RFC out-of-line-expression-templates §7.7): expand every surviving
@@ -333,7 +346,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // Lower `enum`-op nodes to `const` integers using the file's `enums`
     // block (esm-spec §4.5 / §9.3). Mirrors the Julia / Python load-time
     // pass so that downstream consumers never see enum strings.
-    crate::lower_enums::lower_enums_raw(&mut json_value)
+    crate::lower_enums::lower_enums_raw_scanned(&mut json_value, has_enum_ops || !scanned_whole)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
     // Reject a `faq` binder that shadows a globally-scoped name (the
@@ -341,8 +354,11 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // binder a §9.6/§9.7 template body introduced is caught with the authored
     // ones. See `reject_reserved_index_symbols` for why this is a rejection
     // rather than a shadowing rule.
-    reject_reserved_index_symbols(&json_value)
-        .map_err(|e| EsmError::StructuralValidation(e.to_string()))?;
+    match reserved {
+        Some(scan) => scan.finish(),
+        None => reject_reserved_index_symbols(&json_value),
+    }
+    .map_err(|e| EsmError::StructuralValidation(e.to_string()))?;
 
     // Deserialize into our types. The interning scope makes every
     // structurally repeated operator subtree share ONE allocation as it is
@@ -797,26 +813,36 @@ fn compile_branch<'c>(
 pub(crate) fn reject_reserved_index_symbols(
     json_value: &Value,
 ) -> Result<(), crate::diagnostic::DiagnosticError> {
-    let independent = json_value
-        .get("domain")
-        .and_then(|d| d.get("independent_variable"))
-        .and_then(Value::as_str)
-        .unwrap_or("t");
-    let reserved = |name: &str| -> Option<&'static str> {
-        if name == independent {
-            Some("the document's independent variable")
-        } else if name == VAR_PLACEHOLDER {
-            Some("the §6.4 operator placeholder")
-        } else {
-            None
-        }
-    };
+    let mut scan = ReservedIndexScan::new(json_value);
+    crate::json_visit::visit_values(json_value, &mut |path, value| scan.visit(path, value));
+    scan.finish()
+}
 
-    // `(path, field, symbol, role)` for every offending binder, in document
-    // order. A symbol that is BOTH an `output_idx` entry and a `ranges` key of
-    // the same node is one mistake, so it is reported once, under `ranges`.
-    let mut offenders: Vec<String> = Vec::new();
-    crate::json_visit::visit_values(json_value, &mut |path, value| {
+/// [`reject_reserved_index_symbols`] as a visitor, so the walk can be shared:
+/// [`ReservedIndexScan::visit`] every value of the document in pre-order, then
+/// [`ReservedIndexScan::finish`].
+pub(crate) struct ReservedIndexScan {
+    independent: String,
+    /// `(path, field, symbol, role)` for every offending binder, in document
+    /// order, as the message lists them.
+    offenders: Vec<String>,
+}
+
+impl ReservedIndexScan {
+    pub(crate) fn new(json_value: &Value) -> Self {
+        let independent = json_value
+            .get("domain")
+            .and_then(|d| d.get("independent_variable"))
+            .and_then(Value::as_str)
+            .unwrap_or("t")
+            .to_string();
+        ReservedIndexScan {
+            independent,
+            offenders: Vec::new(),
+        }
+    }
+
+    pub(crate) fn visit(&mut self, path: &crate::json_visit::JsonPath<'_>, value: &Value) {
         let Some(obj) = value.as_object() else {
             return;
         };
@@ -824,6 +850,19 @@ pub(crate) fn reject_reserved_index_symbols(
         let Some(op) = crate::json_visit::small_get(obj, "op").and_then(Value::as_str) else {
             return;
         };
+        let independent = self.independent.as_str();
+        let reserved = |name: &str| -> Option<&'static str> {
+            if name == independent {
+                Some("the document's independent variable")
+            } else if name == VAR_PLACEHOLDER {
+                Some("the §6.4 operator placeholder")
+            } else {
+                None
+            }
+        };
+        // A symbol that is BOTH an `output_idx` entry and a `ranges` key of the
+        // same node is one mistake, so it is reported once, under `ranges`.
+        let offenders = &mut self.offenders;
         let mut seen: Vec<&str> = Vec::new();
         let mut record = |field: &str, sym: &str, role: &str| {
             offenders.push(format!(
@@ -851,25 +890,28 @@ pub(crate) fn reject_reserved_index_symbols(
                 }
             }
         }
-    });
-
-    if offenders.is_empty() {
-        return Ok(());
     }
-    Err(crate::diagnostic::err(
-        crate::diagnostic::codes::RESERVED_INDEX_SYMBOL,
-        format!(
-            "{}. Both '{independent}' (esm-spec §11.3) and '{VAR_PLACEHOLDER}' (§6.4) are \
-             implicitly declared in every model's expression scope (§4.9.1) and are resolved \
-             by name before the loop bindings, so a binder spelled with one of them declares \
-             a loop its body can never address — the reads inside the node see the \
-             independent variable's value instead of the index, silently (CONFORMANCE_SPEC \
-             §5.5.8 forbids the same silence for an unresolvable `join.on` key column). \
-             Rename the index symbol: an index symbol is the author's free choice \
-             (esm-spec §4.3.1)",
-            offenders.join("; ")
-        ),
-    ))
+
+    pub(crate) fn finish(self) -> Result<(), crate::diagnostic::DiagnosticError> {
+        if self.offenders.is_empty() {
+            return Ok(());
+        }
+        let independent = self.independent;
+        Err(crate::diagnostic::err(
+            crate::diagnostic::codes::RESERVED_INDEX_SYMBOL,
+            format!(
+                "{}. Both '{independent}' (esm-spec §11.3) and '{VAR_PLACEHOLDER}' (§6.4) are \
+                 implicitly declared in every model's expression scope (§4.9.1) and are resolved \
+                 by name before the loop bindings, so a binder spelled with one of them declares \
+                 a loop its body can never address — the reads inside the node see the \
+                 independent variable's value instead of the index, silently (CONFORMANCE_SPEC \
+                 §5.5.8 forbids the same silence for an unresolvable `join.on` key column). \
+                 Rename the index symbol: an index symbol is the author's free choice \
+                 (esm-spec §4.3.1)",
+                self.offenders.join("; ")
+            ),
+        ))
+    }
 }
 
 /// Run every post-schema structural check, collecting errors and returning
