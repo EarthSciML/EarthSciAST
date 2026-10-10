@@ -149,7 +149,12 @@ pub(super) unsafe fn exec_lanes(
     if code.is_some() && !same {
         filled.clear();
         filled.extend_from_slice(svals);
-        for (strip, &v) in splat.chunks_exact_mut(STRIP).zip(svals.iter()) {
+        for (strip, &v) in splat
+            .as_chunks_mut::<STRIP>()
+            .0
+            .iter_mut()
+            .zip(svals.iter())
+        {
             strip.fill(v);
         }
     }
