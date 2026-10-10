@@ -161,7 +161,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // canonical `faq` at the wire boundary, ahead of every other pass, so the
     // version gates, the schema, the typed tree and `emit` all see exactly one
     // tag (docs/content/rfcs/faq-node-rename.md).
-    prepare_document_ops(&mut json_value)?;
+    let authored = prepare_document_ops_scanned(&mut json_value)?;
 
     let base = options.base_path.clone().unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -254,9 +254,16 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     )?;
 
     // Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
-    crate::units::reject_const_units_pre_v12(&json_value).map_err(
-        |e: crate::diagnostic::DiagnosticError| EsmError::SchemaValidation(e.to_string()),
-    )?;
+    // Ref resolution is the one step since the authored walk that can add
+    // nodes; without a mount it added none, and the walk's answer stands.
+    let const_units = if authored.mounts {
+        crate::units::reject_const_units_pre_v12(&json_value)
+    } else {
+        crate::units::reject_const_units_pre_v12_found(&json_value, || authored.op_with_units)
+    };
+    const_units.map_err(|e: crate::diagnostic::DiagnosticError| {
+        EsmError::SchemaValidation(e.to_string())
+    })?;
 
     // Validate against schema
     validate_schema(&json_value)?;
@@ -1756,6 +1763,24 @@ fn is_iso8601_duration(s: &str) -> bool {
 /// The older `arrayop` spelling is NOT normalized: it was removed at esm 0.8.0
 /// and is rejected like any other unknown non-rewrite-target op.
 pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), EsmError> {
+    prepare_document_ops_scanned(value).map(|_| ())
+}
+
+/// What [`prepare_document_ops_scanned`]'s walk also noted about the authored
+/// document, for a later pass that would otherwise walk it again.
+pub(crate) struct AuthoredFacts {
+    /// The path of the first object, in pre-order, with both an `op` and a
+    /// `units` key (what [`crate::units::reject_const_units_pre_v12`] looks for).
+    pub(crate) op_with_units: Option<String>,
+    /// Whether any object has a `ref` or a `subsystems` key: without one,
+    /// subsystem ref resolution has nothing to splice in.
+    pub(crate) mounts: bool,
+}
+
+/// [`prepare_document_ops`], returning the [`AuthoredFacts`] its walk noted.
+pub(crate) fn prepare_document_ops_scanned(
+    value: &mut serde_json::Value,
+) -> Result<AuthoredFacts, EsmError> {
     // The three steps below read and rewrite `op` tags, so they share ONE walk
     // over the document: it finds the first `arrayop` node, the first
     // AUTHORED `faq` node (looked for only when the declared version is below
@@ -1776,6 +1801,10 @@ pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), 
         ..OpScan::default()
     };
     scan_document_ops(value, &crate::json_visit::JsonPath::Root(""), &mut scan);
+    let facts = AuthoredFacts {
+        op_with_units: scan.op_with_units.take(),
+        mounts: scan.mounts,
+    };
     // 1. `arrayop` was REMOVED at 0.8.0 — rejected by name, before anything else.
     if let Some(path) = scan.removed {
         return Err(EsmError::SchemaValidation(format!(
@@ -1816,7 +1845,7 @@ pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), 
              (docs/content/rfcs/faq-node-rename.md)."
         );
     }
-    Ok(())
+    Ok(facts)
 }
 
 /// What [`scan_document_ops`] found.
@@ -1834,6 +1863,9 @@ struct OpScan {
     faq: Option<String>,
     /// `aggregate` nodes rewritten to `faq`.
     rewritten: usize,
+    /// See [`AuthoredFacts`].
+    op_with_units: Option<String>,
+    mounts: bool,
 }
 
 /// Pre-order walk (the root included, a container before its elements, array
@@ -1849,7 +1881,16 @@ fn scan_document_ops(
     use crate::json_visit::JsonPath;
     match value {
         serde_json::Value::Object(map) => {
-            match crate::json_visit::small_get(map, "op").and_then(|v| v.as_str()) {
+            let op = crate::json_visit::small_get(map, "op");
+            if scan.op_with_units.is_none()
+                && op.is_some()
+                && crate::json_visit::small_get(map, "units").is_some()
+            {
+                scan.op_with_units = Some(at.to_string());
+            }
+            scan.mounts |= crate::json_visit::small_get(map, "ref").is_some()
+                || crate::json_visit::small_get(map, "subsystems").is_some();
+            match op.and_then(|v| v.as_str()) {
                 Some("arrayop") => {
                     scan.removed = Some(at.to_string());
                     return;
