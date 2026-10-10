@@ -92,16 +92,19 @@ fn worker(pool: &'static Pool, share: usize, mut seen: u64) {
 
 /// Run `job(0)`, ..., `job(ways - 1)`, each share on its own thread when the
 /// pool is free (share 0 on the calling thread), and return when all have.
+/// Shares beyond the threads the pool has run on the calling thread after its
+/// own, so every share runs whatever the pool could spawn.
 pub(super) fn run(ways: usize, job: &(dyn Fn(usize) + Sync)) {
+    let want = ways;
     let ways = ways.min((1 << WAYS_BITS) - 1);
-    if ways <= 1 {
+    if want <= 1 {
         job(0);
         return;
     }
     #[cfg(test)]
     DISPATCHES.fetch_add(1, Ordering::Relaxed);
     let pool = pool();
-    let serial = || (0..ways).for_each(job);
+    let serial = || (0..want).for_each(job);
     if pool.busy.swap(true, Ordering::Acquire) {
         serial();
         return;
@@ -137,7 +140,10 @@ pub(super) fn run(ways: usize, job: &(dyn Fn(usize) + Sync)) {
     for t in &workers[..ways - 1] {
         t.unpark();
     }
-    let own = catch_unwind(AssertUnwindSafe(|| job(0)));
+    let own = catch_unwind(AssertUnwindSafe(|| {
+        job(0);
+        (ways..want).for_each(job);
+    }));
     let mut spins = 0u32;
     while pool.pending.load(Ordering::Acquire) != 0 {
         if spins < SPIN {
@@ -161,3 +167,22 @@ pub(super) fn run(ways: usize, job: &(dyn Fn(usize) + Sync)) {
 /// Test hook: dispatches of more than one share so far, process-wide.
 #[cfg(test)]
 pub(crate) static DISPATCHES: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_share_runs_exactly_once() {
+        for ways in [1, 2, 3, 5, 9] {
+            let hits: Vec<AtomicUsize> = (0..ways).map(|_| AtomicUsize::new(0)).collect();
+            run(ways, &|s| {
+                hits[s].fetch_add(1, Ordering::Relaxed);
+            });
+            assert!(
+                hits.iter().all(|h| h.load(Ordering::Relaxed) == 1),
+                "ways = {ways}"
+            );
+        }
+    }
+}
