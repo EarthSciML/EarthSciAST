@@ -131,10 +131,11 @@ struct ModelCtx<'a> {
     /// Computed on first use: the reference checks need it only for a
     /// `distinct` `faq` node.
     class: std::cell::OnceCell<crate::classification::Classification>,
-    /// The model's UNKNOWNS, sorted. Sorted rather than declaration-ordered
-    /// because `Model::variables` is a `HashMap`, which discards the JSON key
-    /// order at parse: a stable answer is the only one this binding can give.
-    defined_vars: HashSet<String>,
+    defined_vars: HashSet<String, rustc_hash::FxBuildHasher>,
+    /// Which equations contain a `faq` node, noted by the equation reference
+    /// check (which walks every equation first) so the aggregate check walks
+    /// only those. `None` until the reference check has run.
+    faq_equations: std::cell::RefCell<Option<Vec<bool>>>,
     /// Scoped references this model's equations may use that are NOT top-level
     /// systems: the `<sub>.<var>` fields of each DataSource mounted as a
     /// subsystem (flatten lowers these to observeds `<model>.<sub>.<var>`).
@@ -150,7 +151,8 @@ impl<'a> ModelCtx<'a> {
         system_refs: &'a HashMap<String, SystemInfo>,
     ) -> Self {
         let model_path = format!("/models/{model_name}");
-        let mut defined_vars: HashSet<String> = model.variables.keys().cloned().collect();
+        let mut defined_vars: HashSet<String, rustc_hash::FxBuildHasher> =
+            model.variables.keys().cloned().collect();
 
         // esm-spec §4.9.1: three classes of symbol are in scope WITHOUT appearing in
         // the `variables` map, and none of them is an `undefined_variable`. Adding
@@ -184,6 +186,7 @@ impl<'a> ModelCtx<'a> {
             model_path,
             class: std::cell::OnceCell::new(),
             defined_vars,
+            faq_equations: std::cell::RefCell::new(None),
             local_scoped,
             is_coupled,
         }
@@ -242,7 +245,21 @@ impl<'a> ModelCtx<'a> {
         binders: &HashSet<String>,
         errs: &mut Vec<StructuralError>,
     ) {
-        let declared = NameScope::Set(&self.defined_vars);
+        self.check_refs_seen(expr, path, idx, binders, errs, &mut RefWalkSeen::default());
+    }
+
+    /// [`Self::check_refs_with`], noting what the walk met in `seen`.
+    fn check_refs_seen(
+        &self,
+        expr: &crate::Expr,
+        path: &str,
+        idx: usize,
+        binders: &HashSet<String>,
+        errs: &mut Vec<StructuralError>,
+        seen: &mut RefWalkSeen,
+    ) {
+        let is_declared = |name: &str| self.defined_vars.contains(name);
+        let declared = NameScope::Set(&is_declared);
         let scope = if binders.is_empty() {
             declared
         } else {
@@ -256,6 +273,7 @@ impl<'a> ModelCtx<'a> {
             path,
             idx,
             errs,
+            seen,
         );
     }
 
@@ -276,6 +294,9 @@ impl<'a> ModelCtx<'a> {
         if self.is_coupled {
             return;
         }
+        // The model's UNKNOWNS, sorted. Sorted rather than declaration-ordered
+        // because `Model::variables` is a `HashMap`, which discards the JSON key
+        // order at parse: a stable answer is the only one this binding can give.
         let unknown_vars: Vec<String> = self.class().unknowns();
         let defining_equations = count_defining_equations(&self.model.equations);
         if defining_equations != unknown_vars.len() {
@@ -427,9 +448,10 @@ impl<'a> ModelCtx<'a> {
         errors: &mut Vec<StructuralError>,
         warnings: &mut Vec<UnitWarning>,
     ) {
+        let mut faq = Vec::with_capacity(self.model.equations.len());
         for (eq_idx, equation) in self.model.equations.iter().enumerate() {
             let eq_path = format!("{}/equations/{eq_idx}", self.model_path);
-            self.check_one_equation_refs(eq_idx, equation, &eq_path, errors);
+            faq.push(self.check_one_equation_refs(eq_idx, equation, &eq_path, errors));
             for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
                 // A declared `const` unit string that does not resolve is a
                 // defect at the containing expression field (esm-spec §4.8.5).
@@ -455,23 +477,27 @@ impl<'a> ModelCtx<'a> {
                 warnings,
             );
         }
+        *self.faq_equations.borrow_mut() = Some(faq);
     }
 
     /// The reference-integrity part of [`Self::check_equations`].
     fn check_equation_refs(&self, errors: &mut Vec<StructuralError>) {
+        let mut faq = Vec::with_capacity(self.model.equations.len());
         for (eq_idx, equation) in self.model.equations.iter().enumerate() {
             let eq_path = format!("{}/equations/{eq_idx}", self.model_path);
-            self.check_one_equation_refs(eq_idx, equation, &eq_path, errors);
+            faq.push(self.check_one_equation_refs(eq_idx, equation, &eq_path, errors));
         }
+        *self.faq_equations.borrow_mut() = Some(faq);
     }
 
+    /// Returns whether the equation contains a `faq` node.
     fn check_one_equation_refs(
         &self,
         eq_idx: usize,
         equation: &crate::types::Equation,
         eq_path: &str,
         errors: &mut Vec<StructuralError>,
-    ) {
+    ) -> bool {
         // Reference integrity attaches to the containing expression FIELD
         // (§7.1.2): an undefined name on the RHS is reported at
         // `.../equations/<i>/rhs`, not at the whole equation. (Dimensional
@@ -480,9 +506,25 @@ impl<'a> ModelCtx<'a> {
         // A binder either side introduces is in scope on both: an indexed
         // definition `w[k+1] ~ faq{k}(…)` subscripts its LHS with the
         // RHS's loop index.
+        // Most equations bind nothing, and then the binders of both sides are
+        // the empty set: walk once on that assumption, and collect the binders
+        // and walk again only when the walk meets a binding node (or an `enum`
+        // node, whose subtree it does not enter).
+        let no_binders = HashSet::new();
+        let mut found = Vec::new();
+        let mut seen = RefWalkSeen::default();
+        for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
+            let path = format!("{eq_path}/{field}");
+            self.check_refs_seen(expr, &path, eq_idx, &no_binders, &mut found, &mut seen);
+        }
+        if !seen.binder && !seen.enum_node {
+            errors.append(&mut found);
+            return seen.faq;
+        }
         let mut eq_bound = HashSet::new();
-        collect_bound_symbols(&equation.lhs, &mut eq_bound);
-        collect_bound_symbols(&equation.rhs, &mut eq_bound);
+        let mut faq = false;
+        collect_bound_symbols_noting_faq(&equation.lhs, &mut eq_bound, &mut faq);
+        collect_bound_symbols_noting_faq(&equation.rhs, &mut eq_bound, &mut faq);
         // `eq_bound` holds every binder of both sides already.
         for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
             self.check_refs_with(
@@ -493,6 +535,7 @@ impl<'a> ModelCtx<'a> {
                 errors,
             );
         }
+        faq
     }
 
     /// Static `faq`-node constraints (RFC semiring-faq-unified-ir): an
@@ -527,6 +570,7 @@ impl<'a> ModelCtx<'a> {
             self.model_name,
             self.model,
             &is_state,
+            self.faq_equations.borrow().as_deref(),
             errors,
         );
     }
@@ -1769,6 +1813,7 @@ fn validate_aggregate_constraints(
     model_name: &str,
     model: &crate::Model,
     is_state: &dyn Fn(&str) -> bool,
+    faq_equations: Option<&[bool]>,
     errors: &mut Vec<StructuralError>,
 ) {
     let model_path = format!("/models/{model_name}");
@@ -1784,9 +1829,19 @@ fn validate_aggregate_constraints(
         .map(|(n, _)| n.as_str())
         .collect();
     for (eq_idx, equation) in model.equations.iter().enumerate() {
-        for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
-            let field_path = || format!("{model_path}/equations/{eq_idx}/{field}");
-            check_aggregates_in_expr(expr, &field_path, esm_file, is_state, &var_shapes, errors);
+        // An equation the reference check saw no `faq` node in has none to check.
+        if faq_equations.is_none_or(|faq| faq.get(eq_idx).copied().unwrap_or(true)) {
+            for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
+                let field_path = || format!("{model_path}/equations/{eq_idx}/{field}");
+                check_aggregates_in_expr(
+                    expr,
+                    &field_path,
+                    esm_file,
+                    is_state,
+                    &var_shapes,
+                    errors,
+                );
+            }
         }
         if recurrence_lhs_target(&equation.lhs).is_some_and(|(var, _)| array_shaped.contains(var)) {
             check_recurrence_equation(
@@ -3772,6 +3827,18 @@ fn bound_index_symbols(node: &crate::types::ExpressionNode) -> Vec<String> {
 /// bound (as a bare `index` position) in another. Scanning the whole expression
 /// once and holding the union in scope throughout it matches Go
 /// `collectBoundSymbols` / TS `collectIndexSymbols`.
+/// [`collect_bound_symbols`], also noting in `faq` whether a `faq` node was
+/// reached.
+fn collect_bound_symbols_noting_faq(expr: &crate::Expr, out: &mut HashSet<String>, faq: &mut bool) {
+    if let crate::Expr::Operator(node) = expr {
+        *faq |= node.op == "faq";
+        for sym in bound_index_symbols(node) {
+            out.insert(sym);
+        }
+        node.for_each_child(&mut |child| collect_bound_symbols_noting_faq(child, out, faq));
+    }
+}
+
 fn collect_bound_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
     if let crate::Expr::Operator(node) = expr {
         for sym in bound_index_symbols(node) {
@@ -3981,9 +4048,9 @@ fn collect_subsystem_scoped_refs<'a>(
     }
 }
 
-pub(crate) fn validate_expression_references_with_systems(
+pub(crate) fn validate_expression_references_with_systems<S: std::hash::BuildHasher>(
     expr: &crate::Expr,
-    defined_vars: &HashSet<String>,
+    defined_vars: &HashSet<String, S>,
     system_refs: &HashMap<String, SystemInfo>,
     local_scoped: &HashSet<String>,
     base_path: &str,
@@ -3992,12 +4059,13 @@ pub(crate) fn validate_expression_references_with_systems(
 ) {
     references_in_scope(
         expr,
-        &NameScope::Set(defined_vars),
+        &NameScope::Set(&|name: &str| defined_vars.contains(name)),
         system_refs,
         local_scoped,
         base_path,
         equation_index,
         errors,
+        &mut RefWalkSeen::default(),
     );
 }
 
@@ -4006,7 +4074,7 @@ pub(crate) fn validate_expression_references_with_systems(
 /// node does not copy the declared set.
 #[derive(Clone, Copy)]
 enum NameScope<'a> {
-    Set(&'a HashSet<String>),
+    Set(&'a dyn Fn(&str) -> bool),
     With(&'a NameScope<'a>, &'a [String]),
     WithSet(&'a NameScope<'a>, &'a HashSet<String>),
 }
@@ -4014,7 +4082,7 @@ enum NameScope<'a> {
 impl NameScope<'_> {
     fn contains(&self, name: &str) -> bool {
         match self {
-            NameScope::Set(s) => s.contains(name),
+            NameScope::Set(declared) => declared(name),
             NameScope::With(outer, names) => {
                 names.iter().any(|n| n == name) || outer.contains(name)
             }
@@ -4024,6 +4092,16 @@ impl NameScope<'_> {
 }
 
 /// [`validate_expression_references_with_systems`] over a [`NameScope`].
+/// What a [`references_in_scope`] walk met besides references: a node that
+/// binds index symbols, a `faq` node, an `enum` node (whose subtree it skips).
+#[derive(Default)]
+struct RefWalkSeen {
+    binder: bool,
+    faq: bool,
+    enum_node: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn references_in_scope(
     expr: &crate::Expr,
     defined_vars: &NameScope<'_>,
@@ -4032,6 +4110,7 @@ fn references_in_scope(
     base_path: &str,
     equation_index: usize,
     errors: &mut Vec<StructuralError>,
+    seen: &mut RefWalkSeen,
 ) {
     match expr {
         crate::Expr::Variable(var_name) => {
@@ -4120,8 +4199,10 @@ fn references_in_scope(
             // references. Reading them as variables reported every `enum` use
             // as two undefined variables.
             if op_node.op == "enum" {
+                seen.enum_node = true;
                 return;
             }
+            seen.faq |= op_node.op == "faq";
             // Recursively validate every expression-bearing child via the
             // canonical walker — args PLUS the sidecar fields (integral bounds,
             // aggregate/faq bodies, filter predicates, table axes,
@@ -4131,6 +4212,7 @@ fn references_in_scope(
             // for the descent so a bound loop index is not flagged as
             // undefined.
             let bound = bound_index_symbols(op_node);
+            seen.binder |= !bound.is_empty();
             let scope = if bound.is_empty() {
                 *defined_vars
             } else {
@@ -4145,6 +4227,7 @@ fn references_in_scope(
                     base_path,
                     equation_index,
                     errors,
+                    seen,
                 )
             });
         }
@@ -4208,11 +4291,11 @@ fn check_broadcast_fn_node(
     });
 }
 
-fn validate_discrete_event(
+fn validate_discrete_event<S: std::hash::BuildHasher>(
     event: &crate::DiscreteEvent,
     event_idx: usize,
     parent_path: &str,
-    defined_vars: &HashSet<String>,
+    defined_vars: &HashSet<String, S>,
     variables: &indexmap::IndexMap<String, crate::types::ModelVariable>,
     errors: &mut Vec<StructuralError>,
 ) {
@@ -4265,11 +4348,11 @@ fn validate_discrete_event(
 /// Structural checks for a continuous event (esm-spec §6.3): every zero-cross
 /// `conditions` expression and every `affects`/`affect_neg` equation must
 /// reference only declared variables. Mirrors [`validate_discrete_event`].
-fn validate_continuous_event(
+fn validate_continuous_event<S: std::hash::BuildHasher>(
     event: &crate::ContinuousEvent,
     event_idx: usize,
     parent_path: &str,
-    defined_vars: &HashSet<String>,
+    defined_vars: &HashSet<String, S>,
     variables: &indexmap::IndexMap<String, crate::types::ModelVariable>,
     errors: &mut Vec<StructuralError>,
 ) {
@@ -4317,8 +4400,8 @@ fn validate_continuous_event(
 /// What [`validate_event_affects`] checks a list of affect equations against:
 /// the scope and declarations the names must resolve in, plus what identifies
 /// the owning event (and its trigger, when discrete) in a finding.
-struct EventAffectsCtx<'a> {
-    defined_vars: &'a HashSet<String>,
+struct EventAffectsCtx<'a, S> {
+    defined_vars: &'a HashSet<String, S>,
     variables: &'a indexmap::IndexMap<String, crate::types::ModelVariable>,
     trigger: Option<&'a crate::DiscreteEventTrigger>,
     event_path: &'a str,
@@ -4332,9 +4415,9 @@ struct EventAffectsCtx<'a> {
 /// Shared affect-equation checks for discrete and continuous events: each
 /// LHS must be a declared variable, and each RHS expression must reference
 /// only declared names.
-fn validate_event_affects(
+fn validate_event_affects<S: std::hash::BuildHasher>(
     affects: &[crate::AffectEquation],
-    ctx: &EventAffectsCtx<'_>,
+    ctx: &EventAffectsCtx<'_, S>,
     errors: &mut Vec<StructuralError>,
 ) {
     let &EventAffectsCtx {
@@ -4434,9 +4517,9 @@ fn remedy_for(variable: &str, trigger: Option<&crate::DiscreteEventTrigger>) -> 
 /// FIELD, §7.1.2). The independent variable, `_var`, and the spatial coordinates
 /// are already seeded into `defined_vars` (esm-spec §4.9.1), so they resolve like
 /// any other name; built-in function heads are skipped.
-fn validate_event_ref_expression(
+fn validate_event_ref_expression<S: std::hash::BuildHasher>(
     expr: &crate::Expr,
-    defined_vars: &HashSet<String>,
+    defined_vars: &HashSet<String, S>,
     path: &str,
     errors: &mut Vec<StructuralError>,
 ) {
