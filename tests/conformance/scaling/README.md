@@ -49,6 +49,7 @@ python3 tests/conformance/scaling/generate.py --write-fixtures   # after changin
 # out-of-memory kill or passing --max-rss-gb is recorded and the run carries
 # on; the Julia adapter does the same with one child per family):
 cd pkg/earthsci-ast-rs
+export RUSTFLAGS="-C llvm-args=-align-loops=64"   # for timings: see Timing builds below
 cargo run --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust -- \
     --index ../../tests/conformance/scaling/fixtures/index.json --output rust-serial.json
 cargo run --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust -- \
@@ -66,6 +67,17 @@ lists the environment it reads (`SCALING_BUILD` is required):
 ```bash
 SCALING_BUILD=/scratch/$USER/scaling tests/conformance/scaling/sweep.sh
 ```
+
+### Timing builds
+
+Build the Rust adapter with `RUSTFLAGS="-C llvm-args=-align-loops=64"` for
+any timing run; `sweep.sh` and `scaling-sweep.yml` do. Without it, a hot loop
+starts wherever the code before it ends, so an unrelated change elsewhere in
+the binary can move a hand loop's time by tens of percent and flip a speed verdict
+either way. Built aligned, two commits whose hand loops are identical time
+those loops nearly the same. Aligned is not always the
+faster placement; it is the same placement every time. Compare timings only
+between binaries built the same way. The deterministic gates do not need it.
 
 ## Families
 
