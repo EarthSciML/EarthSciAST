@@ -1606,7 +1606,8 @@ fn lhs_name_errors_in(
 
 /// The variable a left-hand side names, read through its `faq` and `index`
 /// wrappers and a time derivative (`D(…)` with `wrt` absent or `t`: a parameter
-/// may have neither a definition nor dynamics); `None` for an `ic`, or an
+/// may have neither a definition nor dynamics. The axis is the LITERAL `t`,
+/// never `domain.independent_variable`, esm-spec §4.2); `None` for an `ic`, or an
 /// expression that names no single variable.
 fn lhs_defined_name(lhs: &serde_json::Value) -> Option<&str> {
     let mut e = lhs;

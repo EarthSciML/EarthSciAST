@@ -27,7 +27,7 @@
 //! native's `dy` with the interpreter's.
 //!
 //! `--threads T` sets the thread count of both native's right-hand side (the
-//! child's global rayon pool size, which the tape splits large calls across)
+//! child's `RAYON_NUM_THREADS`, the budget the tape splits large calls across)
 //! and the hand loop (its own fork-join, `fork_join.rs`); `--threads 1` runs
 //! both serially.
 
@@ -495,13 +495,18 @@ fn measure_one(one: &One) -> Map<String, Value> {
     let entry = &one.entry;
     let mut r = blank(entry, "ok");
     let family = entry["family"].as_str().unwrap_or("").to_string();
-    // Native splits a large call across the caller's rayon pool, which is the
-    // global one here: give it this run's thread count before anything uses it.
-    if let Err(e) = rayon::ThreadPoolBuilder::new()
-        .num_threads(one.threads)
-        .build_global()
-    {
-        return failed(r, format!("sizing the global thread pool: {e}"));
+    // Native splits a large call across `RAYON_NUM_THREADS` threads, read once
+    // per process, so the parent sets it on this child's environment.
+    let budget = std::env::var("RAYON_NUM_THREADS").ok();
+    if budget.as_deref().map(str::trim) != Some(one.threads.to_string().as_str()) {
+        return failed(
+            r,
+            format!(
+                "RAYON_NUM_THREADS is {budget:?}, not --threads {}: native would split \
+                 across a different thread count than the hand loop",
+                one.threads
+            ),
+        );
     }
 
     warm_up();
@@ -769,6 +774,7 @@ fn run_child(run: &Run, doc: &Path, entry: &Value) -> Value {
         .arg(run.threads.to_string())
         .arg("--oracle-max-states")
         .arg(run.oracle_max_states.to_string())
+        .env("RAYON_NUM_THREADS", run.threads.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn();

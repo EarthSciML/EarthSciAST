@@ -13,11 +13,14 @@
 //! fold, a scan, a `Reduce`) is ever divided. Work below a floor stays on the
 //! calling thread, so a small call pays nothing for the threading.
 //!
-//! The thread budget is the caller's rayon thread count
-//! (`rayon::current_num_threads`: the global pool's size, which
-//! `RAYON_NUM_THREADS` sets, or the size of the pool the caller runs in), so
-//! a caller already running inside a one-thread pool, or setting
-//! `RAYON_NUM_THREADS=1`, gets the serial executor.
+//! The thread budget is the size of the rayon pool the caller runs in, or,
+//! for a caller outside any rayon pool, `RAYON_NUM_THREADS` when set and
+//! otherwise the machine's available parallelism (read once per process). A
+//! caller already running inside a one-thread pool, or setting
+//! `RAYON_NUM_THREADS=1`, gets the serial executor. The budget is never read
+//! through `rayon::current_num_threads` from outside a pool: that would start
+//! rayon's global pool, one idle thread per core alongside [`super::pool`]'s
+//! workers, which do the actual work.
 
 use super::fused::{
     IndexTable, PAD_BYTES, RunCursor, Window, fill_whole, n_scans, n_shifted, run_fused_window,
@@ -61,21 +64,44 @@ pub(super) fn call_ways(call_work: usize) -> usize {
     if let Some(w) = FORCE.with(std::cell::Cell::get) {
         return w;
     }
-    let threads = rayon::current_num_threads();
+    let threads = rayon_threads();
     if threads <= 1 {
         return 1;
     }
     threads.min(call_work / MIN_WORK_PER_WORKER).max(1)
 }
 
-/// The threads a call may split across: the caller's rayon thread count, or
-/// the forced width while a test forces splits.
+/// The threads a call may split across: the caller's thread budget (see the
+/// module docs), or the forced width while a test forces splits.
 pub(super) fn thread_budget() -> usize {
     #[cfg(test)]
     if let Some(w) = FORCE.with(std::cell::Cell::get) {
         return w;
     }
-    rayon::current_num_threads()
+    rayon_threads()
+}
+
+/// The caller's thread budget: its rayon pool's size inside one, else the
+/// process default.
+fn rayon_threads() -> usize {
+    if rayon::current_thread_index().is_some() {
+        rayon::current_num_threads()
+    } else {
+        default_threads()
+    }
+}
+
+/// `RAYON_NUM_THREADS` when it is a positive integer (the size rayon itself
+/// would give its global pool), else the available parallelism.
+fn default_threads() -> usize {
+    static DEFAULT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *DEFAULT.get_or_init(|| {
+        std::env::var("RAYON_NUM_THREADS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+    })
 }
 
 /// Whether a test is forcing this thread's calls to split.

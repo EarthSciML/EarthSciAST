@@ -663,16 +663,19 @@ fn same_params(last: &[f64], params: &[f64]) -> bool {
 /// The `[start, end)` ranges of a `dy` of `n` elements that no `DyWrite` of
 /// `prog` is certain to write on every call: everything when a fallback rule
 /// may write it through the interpreter, else the complement of the writes
-/// in the CONTINUOUS section outside any conditional region (a `JmpIfZero`
-/// branch or a sweep body may not run).
+/// that every call runs: those in the CONTINUOUS section's leading
+/// [`TapeProgram::n_rhs`] instructions (the output-only tail after them is
+/// skipped while exports are off) outside any conditional region (a
+/// `JmpIfZero` branch or a sweep body may not run).
 fn dy_zero_ranges(prog: &TapeProgram, n: usize, n_fallback: usize) -> Vec<(usize, usize)> {
     if n_fallback > 0 {
         return vec![(0, n)];
     }
     let cont = prog.section_range(Cadence::Continuous);
+    let every_call = cont.start..cont.end.min(cont.start + prog.n_rhs as usize);
     let conditional = conditional_mask(prog);
     let mut written = vec![false; n];
-    for pc in cont {
+    for pc in every_call {
         if conditional[pc] {
             continue;
         }
