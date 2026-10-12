@@ -1,7 +1,7 @@
 {
   "tier": "scaling",
   "description": "Build and run-time scaling of compiler = native, from 10^2 to 10^6 cells, against hand-written reference loops. See README.md for the result format and what each gate means.",
-  "result_format_version": 1,
+  "result_format_version": 2,
   "families": {
     "stencil_1d": {
       "description": "1-D diffusion, zero-ghost boundaries.",
@@ -223,7 +223,7 @@
   "gates": {
     "builds": {
       "kind": "deterministic",
-      "description": "status is \"ok\": the document built under the compiler and its right-hand side ran. A refusal or error fails this gate, and every other gate is then unmeasurable for that (family, N)."
+      "description": "status is \"ok\": the document built under the compiler and its right-hand side ran. A refusal or error fails this gate, and every other gate is then unmeasurable for that (family, N). native is required for every document of every compiler-driven tier, so a native builds entry in the ledger is a manifest error."
     },
     "code_size_flat": {
       "kind": "deterministic",
@@ -242,19 +242,28 @@
     },
     "build_slope": {
       "kind": "timing",
-      "description": "(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin)) over the smallest and largest N that built, with Nmax <= 10^6 cells, under max_ns_per_state + per_byte_ns[binding] * (n_bytes(Nmax) - n_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin)): the build may also read the document bytes each added state brings, at twice the binding's measured load cost per byte of inline data. A document whose size does not grow with N, or a result without n_bytes, gets no allowance. Needs two built sizes.",
+      "description": "(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin)) over the smallest and largest N that built, with Nmax <= 10^6 cells, under max_ns_per_state + per_byte_ns[binding] * (n_bytes(Nmax) - n_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin)) + dense_page_ns[binding] * (dense_bytes(Nmax) - dense_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin)): the build may also read the document bytes each added state brings, at twice the binding's measured load cost per byte of inline data, and write the pages of the declared-dense arrays it materializes, at twice the binding's measured first-touch cost per byte. build_s is the fastest of the adapter's repeated warm builds of the document. A document whose size does not grow with N, or a result without n_bytes, gets no document allowance; a result without dense_bytes, or whose build writes no declared-dense array, gets no dense allowance. Needs two built sizes.",
       "max_ns_per_state": 20,
       "per_byte_ns": {
         "julia": 170,
         "rust": 85
       },
-      "per_byte_ns_why": "twice each binding's document load (no build) per byte of inline data, measured on regrid and unstructured_gather (the larger rate, regrid's) between the smallest and largest document of each, two rounds, cf30558cb, cores 18-19: Julia load_path 82-84 ns/byte (unstructured_gather 46-47), Rust serde_json parse plus typed load, the two steps esm_problem runs, 39-43 ns/byte (unstructured_gather 24-25). Twice: the load, plus one more pass of the same cost for the build to read the inline values out of the loaded document into its own arrays, the least a build that uses the data has to do"
+      "per_byte_ns_why": "twice each binding's document load (no build) per byte of inline data, measured on regrid and unstructured_gather (the larger rate, regrid's) between the smallest and largest document of each, two rounds, cf30558cb, cores 18-19: Julia load_path 82-84 ns/byte (unstructured_gather 46-47), Rust serde_json parse plus typed load, the two steps esm_problem runs, 39-43 ns/byte (unstructured_gather 24-25). Twice: the load, plus one more pass of the same cost for the build to read the inline values out of the loaded document into its own arrays, the least a build that uses the data has to do",
+      "dense_page_ns": {
+        "julia": 0.45,
+        "rust": 0.6
+      },
+      "dense_page_ns_why": "twice each binding's measured first-touch cost of writing fresh pages: 80 MB arrays (the size of one regrid overlap array at N = 3162) allocated and written in full, 15 rounds, three processes, local node core 4, 2026-10-12: Julia zeros(Float64, n) 0.21-0.23 ns/byte, Rust Vec::with_capacity then a write of every element 0.28-0.31 ns/byte (the larger value of each rounded up to 0.225 and 0.3). Twice: the first-touch write, plus one more pass of the same cost for the build to read the array back into its own tables, by the same reasoning as per_byte_ns. It pays for a declared-dense array the build materializes in full (dense_bytes, user ruling 2026-10-10 on #504), and nothing the build does per admitted element"
     },
     "speed": {
       "kind": "timing",
-      "description": "steady_rhs_s / hand_loop_s <= max_ratio, in each result file (serial and threaded runs are separate files). Applied from min_n_states states up (a family's gate_overrides may lower it), below which a call is a few microseconds and the ratio measures timer noise.",
+      "description": "steady_rhs_s / hand_loop_s <= max_ratio, in each result file (serial and threaded runs are separate files). Applied from min_n_states states up (a family's gate_overrides may lower it), below which a call is a few microseconds and the ratio measures timer noise. In a threaded file, a result whose serial hand loop (hand_loop_serial_s) takes less than small_call_floor.fork_joins times one empty fork-join of the hand loop's own pool (fork_join_s, same process) is too little work for threads to win: it is checked as steady_rhs_s / serial_steady_rhs_s <= max_ratio instead (threaded native no slower than serial native), and a result without those three fields gets no carve-out.",
       "max_ratio": 1.25,
-      "min_n_states": 10000
+      "min_n_states": 10000,
+      "small_call_floor": {
+        "fork_joins": 8,
+        "why": "PROPOSED, pending the user's confirmation (user ruling 2026-10-10, small-N carve-out). Measured on the local node, cores 4-5, two threads, 2026-10-12: one empty fork-join of the hand loop's pool is 0.20-0.23 us in Rust (fork_join.rs) and 0.23-0.26 us in Julia (an empty Polyester @batch), so 8 fork-joins is about 2 us of serial work, where a two-way split saves at most about 1 us against several fork-join-sized costs (the dispatch, the join and the cold lines a second core pulls). It is set below every ledgered threaded entry: the smallest serial hand loop at a gated size is Rust regrid at N = 1000 (about 5 us, 24 fork-joins), which the threaded hand loop still runs 1.75x faster. Rust chemistry_grid at N = 1000, the case the ruling named, takes about 70 us serially (about 330 fork-joins) and its threaded hand loop is 1.9x faster on two threads and 3.6x on four, so no floor that leaves out regrid N = 1000 and scalar_chemistry N = 10^4 covers it"
+      }
     }
   },
   "ledger": {
