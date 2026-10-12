@@ -80,13 +80,13 @@ const CELLS = [[r] for r in 1:NR]
     ESM._CELLWISE_FASTPATH_HITS[] = 0; ESM._CELLWISE_FASTPATH_MISS[] = 0
     dk = deathsK()
     fast = ESM.evaluate_cellwise(dk, CELLS; const_arrays=ca)
-    ref  = Float64[ESM._eval_cellwise(dk, [r]; const_arrays=ca) for r in 1:NR]
+    ref  = Float64[ESM._eval_cellwise(ESM._PerCellLicense(), dk, [r]; const_arrays=ca) for r in 1:NR]
     @test fast == ref                              # bit-identical
     @test ESM._CELLWISE_FASTPATH_MISS[] == 0       # nothing fell back
     @test ESM._CELLWISE_FASTPATH_HITS[] >= 1
 
     # (3) TotalPM25 (non-contracting over nested contractions).
     tp_fast = ESM.evaluate_cellwise(tpm_as_agg(), CELLS; const_arrays=ca)
-    tp_ref  = Float64[ESM._eval_cellwise(tpm_as_agg(), [r]; const_arrays=ca) for r in 1:NR]
+    tp_ref  = Float64[ESM._eval_cellwise(ESM._PerCellLicense(), tpm_as_agg(), [r]; const_arrays=ca) for r in 1:NR]
     @test tp_fast == tp_ref
 end

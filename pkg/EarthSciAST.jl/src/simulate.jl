@@ -548,15 +548,19 @@ function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
     end
     binding(c) = Dict{String,Any}(dims[d] => axes_[d][idx[(c - 1) * nd + d]]
                                   for d in eachindex(dims))
-    if _compiler_is_strict()
-        # An expression no form can evaluate — an undeclared name — is the
-        # caller's error, not a compiler's refusal, so the first cell is
-        # evaluated once, for its diagnostic only, before the refusal is raised.
-        isempty(slots) || evaluate_expr(expr, binding(1))
-        _refuse_percell_evaluation("seed_expression_ic!($(var_name))",
-            "the expression initial-state seed", length(slots);
-            one_cell = !isempty(slots))
-    end
+    # An expression no form can evaluate — an undeclared name — is the caller's
+    # error, not a compiler's refusal, so a strict compiler's probe evaluates
+    # the first cell, for its diagnostic only, before the refusal is raised.
+    lic = _percell_evaluation_license("seed_expression_ic!($(var_name))",
+        "the expression initial-state seed", length(slots);
+        one_cell = !isempty(slots),
+        probe = _ -> isempty(slots) || evaluate_expr(expr, binding(1)))
+    return _seed_expression_percell!(lic, u0, slots, expr, binding)
+end
+
+# The per-cell seed: the expression evaluated from its tree at every cell.
+function _seed_expression_percell!(::_PerCellLicense, u0::Vector{Float64},
+                                   slots::Vector{Int}, expr::ASTExpr, binding)
     for c in eachindex(slots)
         u0[slots[c]] = evaluate_expr(expr, binding(c))
     end

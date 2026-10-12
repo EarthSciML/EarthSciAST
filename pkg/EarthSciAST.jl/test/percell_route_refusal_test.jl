@@ -678,7 +678,7 @@ _pr_rank4_build(doc, compiler; kw...) =
         K = 2000
         gate = [_PR._JoinGate("i", "k", Dict(1 => 7),
                               Dict(k => (k == K ÷ 2 ? 7 : 0) for k in 1:K))]
-        diag(gates, n) = _PR._faq_diagnostic_cell(lhs, body;
+        diag(gates, n) = _PR._faq_diagnostic_cell(_PR._PerCellProbe(), lhs, body;
             idx_names = ["i"], range_iters = [[1]], contract_names = ["k"],
             contract_ranges = [Any[1, n]], contract_const = [collect(1:n)],
             rhs_zerobar = 0.0, agg_gates = gates, agg_filter = nothing,
@@ -752,7 +752,7 @@ _pr_rank4_build(doc, compiler; kw...) =
         # computed once, the per-cell resolve reports THAT attempt rather than
         # evaluating the constant again at this cell.
         rhs = _op("+", _v("nope"), _n(1.0))
-        e = err_of(() -> _PR._resolve_field_ic("u", rhs, [1], Dict{String,Any}(),
+        e = err_of(() -> _PR._resolve_field_ic(_PR._PerCellLicense(), "u", rhs, [1], Dict{String,Any}(),
                                                Dict{String,Any}();
                                                uniform = (nothing, ["as constant: SENTINEL"])))
         @test code_of(e) == "E_TREEWALK_UNSUPPORTED_EQUATION"

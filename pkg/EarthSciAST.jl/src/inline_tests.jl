@@ -583,19 +583,18 @@ function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector
         gated === nothing || return gated
     end
     _tally_cascade!(:cellwise_percell)
-    if _compiler_is_strict()
-        # A body NO form can evaluate is the document's error, not a compiler's
-        # refusal — an out-of-range const gather must still say
-        # `E_TREEWALK_CONSTARRAY_OOB` — so the first cell is evaluated once,
-        # for its diagnostic only, and the refusal is raised when it succeeds.
-        _eval_cellwise(expr, collect(Int, first(cells));
-                       const_arrays=const_arrays,
-                       registered_functions=registered_functions,
-                       params=params, t=t)
-        _refuse_percell_evaluation("(build-time observed / reference)",
-            "the build-time cellwise evaluator", length(cells))
-    end
-    vals = Float64[_eval_cellwise(expr, collect(Int, c);
+    # A body NO form can evaluate is the document's error, not a compiler's
+    # refusal — an out-of-range const gather must still say
+    # `E_TREEWALK_CONSTARRAY_OOB` — so a strict compiler's probe evaluates the
+    # first cell, for its diagnostic only, and the refusal is raised when it
+    # succeeds.
+    lic = _percell_evaluation_license("(build-time observed / reference)",
+        "the build-time cellwise evaluator", length(cells);
+        probe = pr -> _eval_cellwise(pr, expr, collect(Int, first(cells));
+                                     const_arrays=const_arrays,
+                                     registered_functions=registered_functions,
+                                     params=params, t=t))
+    vals = Float64[_eval_cellwise(lic, expr, collect(Int, c);
                                   const_arrays=const_arrays,
                                   registered_functions=registered_functions,
                                   params=params, t=t)
