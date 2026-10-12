@@ -22,8 +22,9 @@ distinction between them is load-bearing:
 
 * ``refused`` -- a :class:`~earthsci_ast.compiler.CompilerRefusedRuleError`,
   which names the rule this compiler cannot lower. It is a fact about COVERAGE,
-  and the runner reads it as a named exclusion (or, for a fixture that
-  ``required`` lists, as a failure).
+  and the runner reads it as a named exclusion, or as a failure for a fixture
+  whose ``required`` map lists it -- and always as a failure from
+  ``interpreter`` and ``native``.
 * ``unavailable`` -- the whole output, when the compiler does not exist in this
   binding at all. A fact about this BUILD, never about a document.
 * ``error`` -- anything else the load, the build or the run threw. It says

@@ -12,7 +12,8 @@
 //! Two sets of documents:
 //! - the scaling tier's committed small fixtures
 //!   (`tests/conformance/scaling/fixtures/`): the right-hand side at one
-//!   state, and a refusal only where the tier's Rust ledger expects one;
+//!   state, where any `native` refusal fails (native is required for every
+//!   document);
 //! - the documents of the inline-test tiers that need no filesystem
 //!   (`broadcast_alignment`, `scalar_operator_semantics`, every
 //!   `pde_inline_*`): the build-time fields and the whole trajectory at the

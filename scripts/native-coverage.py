@@ -8,11 +8,15 @@ plus every ``.esm`` in a checkout of EarthSciML/EarthSciModels — through
 NATIVE COVERAGE GAP. Each binding's gaps are listed, with the refusal's code,
 rule and reason, in a committed ledger
 (``tests/conformance/native_coverage/<binding>.json``), and the list may only
-shrink: the same one-way rule the compiler-agreement tier's per-fixture
-``required`` map and its named exclusions follow (CONFORMANCE_SPEC §5.44.3).
+shrink. Native is required for every document the interpreter builds
+(API_SPEC §5.8), so an entry may carry only an out-of-scope code
+(``unsupported_construct`` or ``unlowered_operator``) and both ledgers are
+empty.
 
 The check compares a fresh census against the ledger:
 
+  * a ledger entry whose code is not out-of-scope is RED — the ledger excuses
+    nothing in scope;
   * a gap the ledger does not name is RED — native lost coverage;
   * a ledger entry native now builds is RED, with "remove this entry" — a stale
     entry would let the same document regress again unnoticed;
@@ -24,7 +28,7 @@ The check compares a fresh census against the ledger:
   * a census that has no record for some corpus document is RED — a document
     the census lost is not a document native builds.
 
-Excluded from the gap list, as the research census classified them: documents
+Excluded from the gap list: documents
 under an ``invalid/`` directory (they are meant to fail, and a refusal there is
 not coverage), and library fragments (template or coupling libraries, which are
 not runnable documents).

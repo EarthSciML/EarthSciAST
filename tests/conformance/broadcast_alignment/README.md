@@ -99,7 +99,9 @@ requires and excludes the same pair is a manifest error the self-test rejects.
 
 A refusal is a **named exclusion** — reported with the binding, the compiler,
 the fixture and the code, and green — or a **failure**. It is never a silent
-skip and never a fallback.
+skip and never a fallback. A `native` refusal can be a named exclusion only
+for a construct outside `native`'s scope (`unsupported_construct`,
+`unlowered_operator`; `API_SPEC.md` §5.8); any other is a failure.
 
 The ledger is **empty**. It first held two entries, measured on 2026-09-22:
 Rust's strict `native` refused `broadcast_node_mixed_rank` and

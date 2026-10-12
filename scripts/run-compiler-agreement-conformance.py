@@ -18,13 +18,15 @@ The contract this implements lives in
     program (§5.44.1).
   * **A refusal is never a fallback.** A compiler that cannot run a document says
     so, naming the rule and the reason, and the run records a NAMED EXCLUSION —
-    never a pass, never a silent skip. From ``interpreter`` a refusal is always a
-    failure, because the interpreter is complete over the evaluable core.
+    never a pass, never a silent skip. From ``interpreter`` and ``native`` a
+    refusal is always a failure: the interpreter is complete over the evaluable
+    core, and ``native`` refuses by name only out-of-scope constructs this tier
+    carries none of (``API_SPEC.md`` §5.8).
   * **Two ledgers, never merged.** ``compilers.<value>.bindings_required`` governs
     AVAILABILITY (must this binding be able to ANSWER for this compiler); a
     fixture's ``required`` map governs REFUSALS (must this compiler run THIS
-    document). Merging them would make a coverage gap indistinguishable from a
-    missing runtime.
+    document; ``interpreter`` and ``native`` must run every one). Merging them
+    would make a coverage gap indistinguishable from a missing runtime.
   * **Fixtures are referenced, not authored.** Every fixture is a document the
     simulation tiers already own, named by path relative to ``tests/``.
 
@@ -34,8 +36,9 @@ Three modes, one harness (mirrors run-compiled-rhs-conformance.py):
     checks every COMMITTED golden's file shape and its agreement with whatever
     analytic anchor the fixture carries, and asserts the harness REJECTS a value
     moved off its band, a missing element, a missing save time, an error, an
-    ``interpreter`` refusal and a ``required`` refusal — while REPORTING an
-    unrequired refusal as a named exclusion. The always-on guard.
+    ``interpreter`` refusal, a ``native`` refusal and a ``required`` refusal —
+    while REPORTING an unrequired refusal from another compiler as a named
+    exclusion. The always-on guard.
   * ``--write-golden --bindings julia --compiler interpreter`` — mint
     ``golden/<id>.json`` from the reference. It refuses to mint from any other
     binding or any other compiler.
@@ -53,9 +56,10 @@ Usage:
 
 Exit codes:
     0  the self-test passed, or every required binding answered within tolerance
-       (an unrequired refusal and an unavailable optional compiler are green, and
-       both are named in the report and on the console)
-    1  a mismatch, an error, an `interpreter` refusal, a refusal from a binding a
+       (an unrequired refusal from `xla`, `mtk` or `sympy` and an unavailable
+       optional compiler are green, and both are named in the report and on the
+       console)
+    1  a mismatch, an error, an `interpreter` or `native` refusal, a refusal from a binding a
        fixture's `required` map names, an `unavailable` from a `bindings_required`
        binding, a broken adapter, or a self-test failure
     2  a manifest or configuration error (no run attempted)
@@ -1104,8 +1108,10 @@ def gate_fixture(
         every compiler; unlike a refusal it says nothing about what a compiler can
         run, so ``required`` does not excuse it.
       * ``refused`` — RED. Either the compiler is ``interpreter`` (complete over
-        the evaluable core, so a refusal there is a defect rather than coverage) or
-        the fixture's ``required`` map names this binding+compiler.
+        the evaluable core, so a refusal there is a defect rather than coverage),
+        or it is ``native`` (required for every fixture; it refuses by name only
+        out-of-scope constructs), or the fixture's ``required`` map names this
+        binding+compiler.
       * ``excluded`` — the same refusal from any other compiler the fixture does
         not require. Reported by name, rule and reason, and green for now. Never a
         pass and never a silent skip; this list IS the coverage backlog.

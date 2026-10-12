@@ -636,10 +636,12 @@ run_pde_simulation_conformance_self_test() {
 # The Julia adapters below pass `--compiler native` rather than inheriting the
 # library default, so that a change to that default can never change what a stage
 # measures. `native` is what these stages name because every fixture they carry
-# builds under it and the goldens were minted from numbers it reproduces exactly;
-# a stage whose fixtures a strict `native` REFUSES names `interpreter` instead,
-# and says so where it does. The compiler-agreement tier (§5.44) is where
-# `native`'s coverage is measured, not here.
+# is in its scope and the goldens were minted from numbers it reproduces exactly.
+# `native` refuses by name only the constructs outside its scope (events,
+# implicit equations, SDE noise, a spatial operator with no discretization rule:
+# API_SPEC §5.8), so only a stage whose fixtures carry one of those names
+# `interpreter` instead, and says so where it does. Any other `native` refusal
+# is a defect to fix, not a reason to name another compiler.
 
 # Julia is the reference binding. Its adapter (self-bootstrapping the dedicated
 # scripts/pde_sim_adapter env with OrdinaryDiffEqTsit5 + JSON3) re-evaluates the
@@ -932,13 +934,13 @@ run_compiled_rhs_conformance_compiled_rust() {
 # Three rulings shape these stages:
 #   * a model a compiler cannot lower is a REFUSAL, recorded as a NAMED EXCLUSION,
 #     never a pass and never a silent skip — and never a fallback to another
-#     compiler. From `interpreter` a refusal is always a failure, because the
-#     interpreter is complete over the evaluable core;
+#     compiler. From `interpreter` and `native` a refusal is always a failure: the
+#     interpreter is complete over the evaluable core, and `native` refuses by
+#     name only out-of-scope constructs (API_SPEC §5.8) that no fixture carries;
 #   * AVAILABILITY and REFUSAL are two ledgers. `bindings_required` says a binding
 #     must be able to ANSWER for a compiler; a fixture's `required` map says that
-#     compiler must be able to RUN that document. `interpreter` is required in all
-#     three bindings and `native` in julia, whose strict build has landed; the rust
-#     and python `native` stages stay legal visible skips until theirs do;
+#     compiler must be able to RUN that document. `interpreter` and `native` are
+#     both required in all three bindings, and `native` may never be optional;
 #   * a compiler whose runtime is not configured here reports `unavailable` WITH
 #     ITS REASON and skips. A broken adapter does not: it fails.
 #
@@ -991,7 +993,8 @@ run_native_coverage_self_test() {
 
 # Report the refusals and the unavailable compilers a run recorded, so a producer
 # that legitimately skipped or legitimately refused says so in the stage log rather
-# than passing in silence. The named-exclusion list IS the coverage backlog.
+# than passing in silence. The named-exclusion list IS the coverage backlog of
+# `xla`, `mtk` and `sympy`; a `native` or `interpreter` refusal is never on it.
 _compiler_agreement_report_ledgers() {
     local report="$1"
     [ -f "$report" ] || return 0
@@ -1134,9 +1137,10 @@ run_inline_tests_conformance_self_test() {
     return $rc
 }
 
-# The named exclusions a run recorded. This list IS the coverage backlog, so a
-# producer that legitimately refused a fixture says so in the stage log rather
-# than passing in silence.
+# The named exclusions a run recorded, so a producer that legitimately refused a
+# fixture says so in the stage log rather than passing in silence. A `native`
+# entry here can only be an out-of-scope construct; any other compiler's entries
+# are its coverage backlog.
 _inline_tests_report_ledgers() {
     local report="$1"
     [ -f "$report" ] || return 0
@@ -1233,8 +1237,10 @@ run_inline_tests_interpreter_julia()  { _run_inline_tests_stage julia interprete
 run_inline_tests_interpreter_rust()   { _run_inline_tests_stage rust interpreter; }
 run_inline_tests_interpreter_python() { _run_inline_tests_stage python interpreter; }
 
-# `native` is the strict default, and every fixture of every tier here BUILDS
-# under it today, so this stage additionally asserts that none of them refuses.
+# `native` is the strict default and is required for every fixture of every tier
+# here: each required binding's `required` list names it, and a refusal is red
+# unless a named exclusion records an out-of-scope code (`unsupported_construct`
+# or `unlowered_operator`, API_SPEC §5.8).
 run_inline_tests_native_julia()  { _run_inline_tests_stage julia native; }
 run_inline_tests_native_rust()   { _run_inline_tests_stage rust native; }
 run_inline_tests_native_python() { _run_inline_tests_stage python native; }
@@ -1245,11 +1251,10 @@ run_compiler_agreement_interpreter_julia()  { _run_compiler_agreement_stage juli
 run_compiler_agreement_interpreter_rust()   { _run_compiler_agreement_stage rust interpreter; }
 run_compiler_agreement_interpreter_python() { _run_compiler_agreement_stage python interpreter; }
 
-# `native` is the strict default: bindings_required in julia, whose strict build
-# has landed, and bindings_optional in rust and python until theirs do. A REFUSAL
-# here is governed by each fixture's
-# `required` map, not by that list — the named-exclusion list this produces IS the
-# coverage backlog, and this tier is where it is read and burned down.
+# `native` is the strict default: bindings_required in all three, and never
+# bindings_optional. A REFUSAL here is always red, whatever a fixture's
+# `required` map says: `native` refuses by name only out-of-scope constructs
+# (API_SPEC §5.8), and no fixture of this tier carries one.
 run_compiler_agreement_native_julia()  { _run_compiler_agreement_stage julia native; }
 run_compiler_agreement_native_rust()   { _run_compiler_agreement_stage rust native; }
 run_compiler_agreement_native_python() { _run_compiler_agreement_stage python native; }

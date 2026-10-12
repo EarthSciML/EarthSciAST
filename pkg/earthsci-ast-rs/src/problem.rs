@@ -240,6 +240,14 @@ pub enum Compiler {
     /// the rule and the deepest decline reason
     /// ([`crate::compile_error::CompileError::CompilerRefusedRule`]), not a
     /// quiet demotion to the per-cell oracle.
+    ///
+    /// It covers the whole evaluable core. The only documents it may refuse
+    /// are those carrying a construct outside its scope, each refused by name:
+    /// events, implicit equations and SDE noise (`unsupported_construct`) and
+    /// a spatial operator with no discretization rule (`unlowered_operator`,
+    /// refused under every compiler). Every compiler-driven conformance tier
+    /// requires `native` for every fixture, so any other refusal is a defect
+    /// in this crate.
     #[default]
     Native,
     /// The reference, and only the reference: the array runtime with the tape
