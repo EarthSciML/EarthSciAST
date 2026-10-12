@@ -30,7 +30,16 @@
 # THREADS. Native threads its compiled sections by default whenever Julia has
 # more than one thread: with one thread native runs its serial path, and with
 # `-t K` native runs whatever it threads today. The result file's `threads` is Julia's thread
-# count, and `hand_loop_s` is then the threaded hand loop.
+# count, and `hand_loop_s` is then the threaded hand loop. A threaded run also
+# records, in the same process, the serial hand loop, one empty `@batch` (the
+# hand loop's fork-join) and, for a small call, native's serial call (a second
+# build whose sections all stay serial): the inputs of the speed gate's
+# small-call floor (../README.md, "Gates").
+#
+# BUILDS. `build_s` is the fastest of repeated builds of the document while
+# they total under 1 s (at most 10), so a build of a few milliseconds is not
+# timer noise; `dense_bytes` is the bytes of the declared-dense arrays the
+# build materializes (its setup arrays, written in full).
 #
 # ONE CHILD PROCESS PER FAMILY. The adapter measures each family's ladder in a
 # child Julia process (this script with `--in-process --family F`) and watches
@@ -243,7 +252,8 @@ function blank_result(entry)
         "code_size_unit" => "emitted_expr_nodes+walked_nodes",
         "first_call_s" => nothing, "steady_rhs_s" => nothing, "allocs_per_call" => nothing,
         "hand_loop_s" => nothing, "hand_loop_max_abs_diff" => nothing, "dy_max_abs" => nothing,
-        "interpreter_max_abs_diff" => nothing,
+        "interpreter_max_abs_diff" => nothing, "build_repeats" => nothing,
+        "dense_bytes" => nothing, "serial_steady_rhs_s" => nothing, "fork_join_s" => nothing,
         # Julia's own fields, beyond the tier's format:
         "tiers" => nothing, "code_size_parts" => nothing, "hand_loop_serial_s" => nothing,
         "hand_loop_threads" => nothing, "hand_loop_checked_against" => nothing,
@@ -310,14 +320,36 @@ function dy_by_name(prob, du, names)
     return [du[vm[nm]] for nm in names]
 end
 
+const BUILD_BUDGET_S = 1.0
+const MAX_BUILDS = 10
+# A threaded run times native's serial call only where the serial hand loop
+# takes less than this, far above any small-call floor the gate applies.
+const SERIAL_NATIVE_CAP_S = 1e-3
+
+# Bytes of the declared-dense arrays a build wrote: its setup arrays, which it
+# allocates at their declared shape and fills.
+dense_bytes(insp) = sum(sizeof, values(insp.setup_arrays); init = 0)
+
 function measure!(rec, path, entry, compiler, budget, interp_cap)
     fam = String(entry["family"])
     insp = ESA.BuildInspection()
     prob = nothing
     rec["n_bytes"] = filesize(path)
     try
-        rec["build_s"] = @elapsed prob = ESA.esm_problem(path, (0.0, 1.0);
-                                                         compiler = compiler, inspect = insp)
+        best, spent, repeats = Inf, 0.0, 0
+        while repeats < MAX_BUILDS && (repeats == 0 || spent < BUILD_BUDGET_S)
+            prob = nothing
+            insp = ESA.BuildInspection()
+            GC.gc(false)
+            dt = @elapsed prob = ESA.esm_problem(path, (0.0, 1.0);
+                                                 compiler = compiler, inspect = insp)
+            best = min(best, dt)
+            spent += dt
+            repeats += 1
+        end
+        rec["build_s"] = best
+        rec["build_repeats"] = repeats
+        rec["dense_bytes"] = dense_bytes(insp)
     catch err
         err isa InterruptException && rethrow()
         rec["status"] = _refused(err) ? "refused" : "error"
@@ -373,6 +405,10 @@ function measure!(rec, path, entry, compiler, budget, interp_cap)
     end
     if du !== nothing
         hand_loop!(rec, prob, path, entry, du, budget, "native")
+        hs = rec["hand_loop_serial_s"]
+        if Threads.nthreads() > 1 && hs !== nothing && hs < SERIAL_NATIVE_CAP_S
+            serial_native!(rec, path, entry, compiler, dy_by_name(prob, du, names), budget)
+        end
     elseif iprob !== nothing
         # Native did not build; the hand loop is still checked, against the
         # interpreter, so it is known good before native reaches it.
@@ -382,6 +418,13 @@ function measure!(rec, path, entry, compiler, budget, interp_cap)
         hand_loop!(rec, iprob, path, entry, idu, budget, "interpreter")
     end
     return rec
+end
+
+# One empty fork-join of the threaded hand loop's pool.
+function empty_batch()
+    Polyester.@batch for _ in 1:Threads.nthreads()
+    end
+    return nothing
 end
 
 # Run the family's hand loop at the measured state of `prob`, record its max
@@ -413,6 +456,7 @@ function hand_loop!(rec, prob, path, entry, du, budget, against)
         rec["hand_loop_serial_s"] = tser
         rec["hand_loop_threads"] = Threads.nthreads()
         if Threads.nthreads() > 1
+            rec["fork_join_s"] = timeit(empty_batch; budget = budget)
             duh2 = fill(NaN, length(u))
             hand_threaded!(row!, duh2, u, PROBE_T, st)
             duh2 == duh || note("the threaded hand loop disagrees with the serial one")
@@ -423,6 +467,35 @@ function hand_loop!(rec, prob, path, entry, du, budget, against)
     catch err
         err isa InterruptException && rethrow()
         note("hand loop: " * _msg(err))
+    end
+    return
+end
+
+# Native's call with every section held serial, timed like `steady_rhs_s`: a
+# second build whose first call (where each section decides once whether it
+# chunks) runs with the per-chunk cell floor above any section's size. Its dy
+# must be bit-identical to the threaded call's (`ref`, in canonical order).
+function serial_native!(rec, path, entry, compiler, ref, budget)
+    fam = String(entry["family"])
+    try
+        prob = ESA.esm_problem(path, (0.0, 1.0); compiler = compiler)
+        u = probe_state(prob, fam, entry)
+        sdu = zeros(length(u))
+        f! = prob.f!
+        p = prob.p
+        withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
+            f!(sdu, u, p, PROBE_T)
+        end
+        if !isequal(dy_by_name(prob, sdu, canonical_names(fam, entry)), ref)
+            rec["status"] = "error"
+            rec["reason"] = "native's serial and threaded dy differ"
+            return
+        end
+        rec["serial_steady_rhs_s"] = timeit(() -> f!(sdu, u, p, PROBE_T); budget = budget)
+    catch err
+        err isa InterruptException && rethrow()
+        rec["reason"] = (rec["reason"] === nothing ? "" : rec["reason"] * "; ") *
+                        "serial native: " * _msg(err)
     end
     return
 end
