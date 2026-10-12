@@ -981,6 +981,16 @@ pub(in crate::simulate_array) fn run_tape_call(
         unsafe {
             fused::refill_index_tables(&mut exec.idx_tables, exec.slab.as_ptr(), &exec.slot_off)
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        unsafe {
+            chain::refill_compact(
+                &exec.seg_chains,
+                &mut exec.chain_scratch,
+                prog,
+                exec.slab.as_ptr(),
+                &exec.slot_off,
+            )
+        };
     } else if exec.primed_forcing_epoch != forcing_epoch {
         exec.primed_forcing_epoch = forcing_epoch;
         #[cfg(test)]
@@ -988,6 +998,16 @@ pub(in crate::simulate_array) fn run_tape_call(
         run_range(&env, const_end..prime_end, exec, dy, stats);
         unsafe {
             fused::refill_index_tables(&mut exec.idx_tables, exec.slab.as_ptr(), &exec.slot_off)
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        unsafe {
+            chain::refill_compact(
+                &exec.seg_chains,
+                &mut exec.chain_scratch,
+                prog,
+                exec.slab.as_ptr(),
+                &exec.slot_off,
+            )
         };
     }
     // With nothing reading the published observeds, the output-only tail of
