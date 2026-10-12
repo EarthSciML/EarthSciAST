@@ -745,19 +745,20 @@ fn serial_native(
         .build()
         .map_err(|e| format!("a one-thread rayon pool: {e}"))?;
     let job = OneThreadAtATime((compiled, state, params));
-    let (t, dy) = pool.install(move || {
-        let job = job;
-        let (compiled, state, params) = job.0;
-        let mut dy = vec![0.0f64; state.len()];
-        let mut stats = RhsStats::default();
-        let mut scratch = compiled.debug_new_scratch_taped();
-        compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats);
-        let t = median_time(|| {
-            compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats)
-        });
-        OneThreadAtATime((t, dy))
-    })
-    .0;
+    let (t, dy) = pool
+        .install(move || {
+            let job = job;
+            let (compiled, state, params) = job.0;
+            let mut dy = vec![0.0f64; state.len()];
+            let mut stats = RhsStats::default();
+            let mut scratch = compiled.debug_new_scratch_taped();
+            compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats);
+            let t = median_time(|| {
+                compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats)
+            });
+            OneThreadAtATime((t, dy))
+        })
+        .0;
     if max_abs_diff(&dy, threaded_dy) != 0.0 {
         return Err("native's serial and threaded dy differ".into());
     }
