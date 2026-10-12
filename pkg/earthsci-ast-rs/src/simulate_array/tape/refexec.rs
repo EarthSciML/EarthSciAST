@@ -7,11 +7,9 @@
 
 use super::super::eval::clip_area_value;
 use super::super::*;
-use super::exec::{eval_micro_op, forcing_len, load_forcing, run_rhs_oracle};
+use super::exec::{eval_micro_op, forcing_len, load_forcing};
 use super::ir::*;
 use ndarray::{ArrayD, ArrayViewD, Axis, IxDyn, Slice};
-use std::cell::RefCell;
-use std::collections::HashMap;
 
 /// One computed slot value.
 #[derive(Clone, Debug)]
@@ -26,7 +24,7 @@ pub(super) struct RefRun {
     /// (dead code, or an untaken `JmpIfZero` branch — which the short-circuit
     /// test asserts on).
     pub slots: Vec<Option<RefVal>>,
-    /// The runtime observed map (fallback rule outputs + exports).
+    /// The runtime observed map (the exports).
     pub obs: ArrMap,
 }
 
@@ -47,7 +45,6 @@ pub(super) fn run_reference(
         }
     }
     let mut obs: ArrMap = ArrMap::default();
-    let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     let mut slots: Vec<Option<RefVal>> = vec![None; prog.slots.len()];
 
     // Pending skip regions from taken JmpIfZero branches:
@@ -607,48 +604,6 @@ pub(super) fn run_reference(
                     pc += *n_true as usize; // skip straight to the false region
                 }
             }
-            Instr::Fallback { rule } => {
-                let info = &prog.rules[*rule as usize];
-                // Both fallback arms re-enter the interpreter under the same
-                // contract: no CSE memo, and an empty compiled-RHS
-                // derived-extents map.
-                let env = EvalEnv {
-                    state_arrays: &state_arrays,
-                    params,
-                    param_names: &compiled.param_names,
-                    t,
-                    derived_rings: &derived_rings,
-                    derived_extents: empty_derived_extents(),
-                    forcing: &compiled.forcing,
-                    cse: None,
-                    const_lits: None,
-                    const_arrays: &compiled.const_scope,
-                    declared: &compiled.declared_names,
-                };
-                match info.kind {
-                    RuleKind::Observed(i) => {
-                        let rule = &compiled.observed_rules[i];
-                        materialize_observeds_pass(
-                            &mut obs,
-                            std::slice::from_ref(rule),
-                            &ObsPass {
-                                env,
-                                force_scalar: false,
-                            },
-                            &mut RhsStats::default(),
-                        );
-                    }
-                    RuleKind::Rhs(i) => {
-                        run_rhs_oracle(
-                            &compiled.rhs_rules[i],
-                            &compiled.var_shapes,
-                            &env,
-                            &obs,
-                            dy,
-                        );
-                    }
-                }
-            }
             Instr::Export { slot, export } => {
                 let name = prog.exports[*export as usize].0.clone();
                 let v = slots[*slot as usize]
@@ -1031,8 +986,6 @@ fn exec_gather(plan: &GatherPlan, src: ArrayViewD<'_, f64>) -> ArrayD<f64> {
     result
 }
 
-// The per-cell oracle for one fallback RHS rule lives in `super::exec`
-// (`run_rhs_oracle`), shared between this reference executor and the
-// production fast executor so both fallback arms are the same code. Likewise
 // `eval_micro_op` is the shared single definition of micro-op scalar
-// semantics.
+// semantics, used by this reference executor and the production fast
+// executor alike.

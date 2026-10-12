@@ -577,15 +577,17 @@ fn measure_one(one: &One) -> Map<String, Value> {
     let mut stats = RhsStats::default();
 
     let mut scratch = compiled.debug_new_scratch_taped();
+    // A model whose tape declined a rule has no program, and the scratch
+    // would time the legacy evaluator instead.
+    if !scratch.has_tape() {
+        return failed(
+            r,
+            format!("{} rule(s) did not lower: no tape", tape.fallbacks.len()),
+        );
+    }
     let t = Instant::now();
     compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
     r.insert("first_call_s".into(), json!(t.elapsed().as_secs_f64()));
-    if stats.fallback_rules > 0 {
-        return failed(
-            r,
-            format!("{} rule(s) left the tape at run time", stats.fallback_rules),
-        );
-    }
     let native_dy = dy.clone();
     r.insert(
         "dy_max_abs".into(),

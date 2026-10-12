@@ -47,10 +47,9 @@ fn main() -> Result<(), String> {
         }
         let dt = t0.elapsed().as_secs_f64();
         eprintln!(
-            "[bench] {label}: {:.3} ms/RHS  (taped_rules={} fallback={} vec={} scalar={})",
+            "[bench] {label}: {:.3} ms/RHS  (taped_rules={} vec={} scalar={})",
             dt / iters as f64 * 1e3,
             stats.taped_rules,
-            stats.fallback_rules,
             stats.vectorized_rules,
             stats.scalar_rules
         );

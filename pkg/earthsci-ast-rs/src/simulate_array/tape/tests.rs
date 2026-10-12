@@ -11,6 +11,7 @@
 use super::super::{ArrayCompiled, DimU, RhsStats};
 use super::ir::*;
 use super::refexec::{RefVal, run_reference};
+use super::taped;
 use crate::types::EsmFile;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -57,29 +58,50 @@ pub(super) fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
         .collect()
 }
 
-/// Build BOTH tapes (fused and unfused), check the expected fallback count,
+/// The counterpart of [`ab_check`] for a document the tape cannot lower:
+/// BOTH builds (fused and unfused) must decline and leave no program, a
+/// scratch asked for a tape must get none, and the historical routing that
+/// then runs — the whole-array overlay over the per-cell oracle — must agree
+/// with the per-cell oracle bit for bit. Returns the fused build's decline.
+pub(super) fn declined_check(doc: serde_json::Value, lo: f64, hi: f64) -> DeclinedTape {
+    let compiled = compile(doc);
+    let (fused, report) = compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()));
+    let (unfused, _) = compiled.build_tape_opts(&HashSet::new(), None);
+    let Err(declined) = fused else {
+        panic!("the fixture must decline a rule:\n{report}");
+    };
+    assert!(unfused.is_err(), "the unfused build must decline too");
+    let mut scratch = compiled.debug_new_scratch_taped();
+    assert!(!scratch.has_tape(), "a declined build installs no tape");
+    let n = compiled.state_variable_names().len();
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let mut stats = RhsStats::default();
+    for seed in 0..3u64 {
+        let state = seeded_state(n, seed, lo, hi);
+        for &t in &[0.0, 0.7] {
+            let (oracle, _) = compiled.debug_eval_rhs(&state, t, &params, true);
+            let mut dy = vec![0.0f64; n];
+            compiled.debug_eval_rhs_into(&state, t, &param_vec, &mut dy, &mut scratch, &mut stats);
+            for (k, (a, b)) in dy.iter().zip(&oracle).enumerate() {
+                assert_eq!(a.to_bits(), b.to_bits(), "seed {seed} t {t} dy[{k}]");
+            }
+        }
+    }
+    assert_eq!(stats.taped_rules, 0, "no tape ran");
+    declined
+}
+
+/// Build BOTH tapes (fused and unfused), each of which must lower every rule,
 /// and assert bitwise `dy` equality against the production interpreter over
 /// several seeded states and times — for BOTH executors on BOTH programs:
 /// the reference executor (fresh run per state) and the Step 3b fast
 /// executor (one warm taped scratch per program across all of them). Returns
 /// the FUSED program.
-pub(super) fn ab_check(
-    doc: serde_json::Value,
-    expect_fallbacks: usize,
-    lo: f64,
-    hi: f64,
-) -> TapeProgram {
+pub(super) fn ab_check(doc: serde_json::Value, lo: f64, hi: f64) -> TapeProgram {
     let compiled = compile(doc);
-    let (prog, report) = compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()));
-    let (prog_uf, report_uf) = compiled.build_tape_opts(&HashSet::new(), None);
-    for rep in [&report, &report_uf] {
-        assert_eq!(
-            rep.fallbacks.len(),
-            expect_fallbacks,
-            "unexpected fallback set: {:?}",
-            rep.fallbacks
-        );
-    }
+    let (prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg())));
+    let (prog_uf, _) = taped(compiled.build_tape_opts(&HashSet::new(), None));
     assert!(
         prog_uf.fused.is_empty() && prog_uf.fuse_stats.n_groups == 0,
         "the unfused build must not fuse"
@@ -95,28 +117,19 @@ pub(super) fn ab_check(
     assert!(fast_scratch.has_tape(), "fixture scratch must carry a tape");
     // A second warm fast scratch carrying the UNFUSED program.
     let mut fast_uf = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_uf.install_tape(
-        std::rc::Rc::new(prog_uf),
-        std::rc::Rc::new(compiled.observed_rules.clone()),
-    );
+    fast_uf.install_tape(std::rc::Rc::new(prog_uf));
     let prog_uf = {
         // Rebuild for the reference arm (the scratch consumed the first).
-        compiled.build_tape_opts(&HashSet::new(), None).0
+        taped(compiled.build_tape_opts(&HashSet::new(), None)).0
     };
     // The fused program as lowered, without the state-layout alignment
     // (`layout`), which `prog` may carry: both storage orders must agree.
-    let rm_build = || {
-        compiled
-            .build_tape_layout(&HashSet::new(), Some(default_cfg()), false)
-            .0
-    };
+    let rm_build =
+        || taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0;
     let prog_rm = rm_build();
     assert!(!prog_rm.col_major);
     let mut fast_rm = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_rm.install_tape(
-        std::rc::Rc::new(rm_build()),
-        std::rc::Rc::new(compiled.observed_rules.clone()),
-    );
+    fast_rm.install_tape(std::rc::Rc::new(rm_build()));
     let mut fast_stats = RhsStats::default();
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, lo, hi);
@@ -238,7 +251,7 @@ fn idx(var: &str, e: serde_json::Value) -> serde_json::Value {
 /// Evaluate through the Step 3b FAST executor (warm taped scratch) and assert
 /// bitwise `dy` equality against `dy_ref`.
 /// A causal self-read of `var` at `pos` that the tape does NOT lower, so the
-/// recurrence around it stays a fallback rule: the read sits inside an
+/// recurrence around it is declined: the read sits inside an
 /// array-valued part of the cell body (`(j ↦ var[pos])[1]`, a one-element
 /// nested `faq`), and the tape's sweep evaluates a self-read one scalar cell
 /// at a time. Its value is the plain self-read's, bit for bit.
@@ -305,7 +318,7 @@ fn ab_multi_rule_stencil_wrap_and_ghost() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -3.0, 3.0);
+    let prog = ab_check(doc, -3.0, 3.0);
     // The wrap must have become a Gather with a two-segment (rolled) axis.
     assert!(
         prog.plans
@@ -335,7 +348,7 @@ fn ab_nested_aggregate() {
             ]
         }}
     });
-    ab_check(doc, 0, -2.0, 2.0);
+    ab_check(doc, -2.0, 2.0);
 }
 
 /// The same nested aggregate, but the inner `output_idx` REBINDS the enclosing
@@ -348,7 +361,7 @@ fn ab_nested_aggregate() {
 /// the inner aggregate's own index — so the hoist is sound and this must tape
 /// exactly like the `j` spelling above. Before the admission test learned about
 /// shadowing, this single rename was the difference between a 4-instruction
-/// tape and one `Instr::Fallback`.
+/// tape and a declined rule.
 #[test]
 fn ab_nested_aggregate_shadowing_enclosing_index() {
     let n = 8;
@@ -368,7 +381,7 @@ fn ab_nested_aggregate_shadowing_enclosing_index() {
             ]
         }}
     });
-    ab_check(doc, 0, -2.0, 2.0);
+    ab_check(doc, -2.0, 2.0);
 }
 
 /// The real `central_D_lon_*` shape: a `makearray` of boundary regions whose
@@ -419,7 +432,7 @@ fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     assert_eq!(prog.regions.len(), 3, "three makearray regions lowered");
 }
 
@@ -433,9 +446,10 @@ fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
 /// WRONG: the hoisted box drops the enclosing symbols, so `i` would fall
 /// through the resolver ladder onto a same-named state/observed/parameter.
 ///
-/// The model carries a second, fully taped rule so both executor arms run.
+/// The model carries a second rule the tape does lower; the model still has
+/// no tape.
 #[test]
-fn ab_nested_aggregate_capturing_enclosing_index_still_falls_back() {
+fn ab_nested_aggregate_capturing_enclosing_index_still_declines() {
     let n = 6;
     let inner = json!({"op": "faq", "args": [], "output_idx": ["j"],
     "ranges": {"j": [1, n]},
@@ -458,12 +472,12 @@ fn ab_nested_aggregate_capturing_enclosing_index_still_falls_back() {
     let (name, reason) = report
         .fallbacks
         .first()
-        .expect("the captured enclosing index must produce a fallback");
+        .expect("the captured enclosing index must decline the rule");
     assert!(
         reason.contains("enclosing bound index"),
-        "fallback on `{name}` must name the captured index, got: {reason}"
+        "the decline of `{name}` must name the captured index, got: {reason}"
     );
-    ab_check(doc, 1, -2.0, 2.0);
+    declined_check(doc, -2.0, 2.0);
 }
 
 /// Makearray with three regions (Dirichlet rows + interior stencil), the
@@ -491,7 +505,7 @@ fn ab_makearray_regions() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     assert_eq!(prog.regions.len(), 3, "three makearray regions lowered");
 }
 
@@ -517,7 +531,7 @@ fn ab_contraction_weights() {
             ]
         }}
     });
-    ab_check(doc, 0, -2.0, 2.0);
+    ab_check(doc, -2.0, 2.0);
 }
 
 /// A contraction gated by a §5.3 filter on an output symbol (`j <= i`), which
@@ -539,7 +553,7 @@ fn ab_contraction_with_filter_mask() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     let has_select = prog
         .instrs
         .iter()
@@ -582,7 +596,7 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
         }}
     });
     let compiled = compile(doc);
-    let (prog, report) = compiled.build_tape(&HashSet::new());
+    let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
     assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
     // Locate the JmpIfZero and collect the slots its TRUE region defines.
     let (jmp_at, n_true, n_false) = prog
@@ -663,7 +677,7 @@ fn ab_select_nan_semantics() {
     // The seeded range straddles zero, so both branches are live per cell and
     // the sqrt branch holds NaN at every negative cell.
     let compiled = compile(doc);
-    let (prog, report) = compiled.build_tape(&HashSet::new());
+    let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
     assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
     let nstates = compiled.state_variable_names().len();
     let params = HashMap::new();
@@ -711,7 +725,7 @@ fn ab_signed_zero() {
         }}
     });
     // Positive states: -0.0 * u = -0.0; sum with neg(0.0) = -0.0 exactly.
-    let prog = ab_check(doc, 0, 0.5, 2.0);
+    let prog = ab_check(doc, 0.5, 2.0);
     let _ = prog;
 }
 
@@ -739,7 +753,7 @@ fn ab_nary_fold_order() {
             ]
         }}
     });
-    ab_check(doc, 0, -2.0, 2.0);
+    ab_check(doc, -2.0, 2.0);
 }
 
 /// Sub-block dy scatter: `D(u[i+1]) = u[i]` writes a shifted sub-block of the
@@ -769,7 +783,7 @@ fn ab_subblock_dy_scatter() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     assert!(
         prog.dy_writes
             .iter()
@@ -817,7 +831,7 @@ fn ab_observed_chain_and_broadcast() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, 0.2, 2.0);
+    let prog = ab_check(doc, 0.2, 2.0);
     // `c` is CONST-tier (state-free, t-free): its instructions live in the
     // CONST section; the gather of `c` along j broadcasts over i.
     assert!(
@@ -838,15 +852,18 @@ fn ab_observed_chain_and_broadcast() {
 }
 
 /// A model with a construct the tape cannot lower (a recurrence whose
-/// self-read sits in an array-valued part of its body) becomes a FALLBACK
-/// rule; taped readers of the runtime observed map and dy still match the
-/// interpreter bit for bit.
+/// self-read sits in an array-valued part of its body) has NO program: the
+/// instruction set cannot hand a rule to the per-cell oracle, so the build
+/// yields the declined rule table instead. The decline names the producer
+/// alone — its taped reader and the derivative lower — and a scratch asked
+/// for a tape gets none, so the historical routing runs the whole model on
+/// the legacy evaluator, bit for bit the interpreter's.
 #[test]
-fn ab_fallback_rule_interop() {
+fn a_declined_rule_leaves_no_program() {
     let n = 3;
     let doc = json!({
         "esm": "1.1.0",
-        "metadata": {"name": "tape_fallback"},
+        "metadata": {"name": "tape_declined"},
         "index_sets": {"c": {"kind": "interval", "size": n}},
         "models": {"M": {
             "variables": {
@@ -856,8 +873,7 @@ fn ab_fallback_rule_interop() {
             },
             "equations": [
                 // A recurrence the tape does not lower
-                // ([`untaped_self_read`]): a fallback rule in the middle of a
-                // taped program.
+                // ([`untaped_self_read`]), between rules it does.
                 {"lhs": "k", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                     "ranges": {"i": [1, n]},
                     "expr": {"op": "ifelse", "args": [
@@ -875,21 +891,35 @@ fn ab_fallback_rule_interop() {
     });
     let compiled = compile(doc);
     let (prog, report) = compiled.build_tape(&HashSet::new());
-    assert!(
-        !report.fallbacks.is_empty(),
-        "the untaped recurrence must produce at least one fallback"
+    let Err(declined) = prog else {
+        panic!("a declined rule must leave no program:\n{report}");
+    };
+    let named: Vec<String> = declined
+        .declined_rules()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(named, vec!["k".to_string()], "{report}");
+    assert_eq!(declined.rules.len(), declined.reasons.len());
+    assert_eq!(report.n_rules, declined.rules.len());
+    assert_eq!(report.n_taped, declined.rules.len() - 1);
+    assert_eq!(
+        report.n_instr_const + report.n_instr_segment + report.n_instr_continuous,
+        0
     );
+
     let nstates = compiled.state_variable_names().len();
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let mut fast = compiled.debug_new_scratch_taped();
-    let mut fast_stats = RhsStats::default();
+    assert!(!fast.has_tape(), "a declined build installs no tape");
+    let mut stats = RhsStats::default();
     for seed in 0..3u64 {
         let state = seeded_state(nstates, seed, -1.0, 1.0);
         for &t in &[0.0, 1.3] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
+            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, true);
             let mut dy = vec![0.0f64; nstates];
-            run_reference(&prog, &compiled, &state, &param_vec, t, &mut dy);
+            compiled.debug_eval_rhs_into(&state, t, &param_vec, &mut dy, &mut fast, &mut stats);
             for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
                 assert_eq!(
                     a.to_bits(),
@@ -897,28 +927,9 @@ fn ab_fallback_rule_interop() {
                     "seed {seed} t {t} dy[{k}]: {a:?} vs {b:?}"
                 );
             }
-            let mut dy_fast = vec![0.0f64; nstates];
-            compiled.debug_eval_rhs_into(
-                &state,
-                t,
-                &param_vec,
-                &mut dy_fast,
-                &mut fast,
-                &mut fast_stats,
-            );
-            for (k, (a, b)) in dy_fast.iter().zip(dy_ref.iter()).enumerate() {
-                assert_eq!(
-                    a.to_bits(),
-                    b.to_bits(),
-                    "seed {seed} t {t} dy[{k}] (FAST): {a:?} vs {b:?}"
-                );
-            }
         }
     }
-    assert!(
-        fast_stats.fallback_rules > 0,
-        "the fast executor must have exercised the fallback arm"
-    );
+    assert_eq!(stats.taped_rules, 0, "no tape ran");
 }
 
 /// Scalar RHS rules (0-d states) through the scalar-`eval` mirror, including a
@@ -945,7 +956,7 @@ fn ab_scalar_rules() {
             ]
         }}
     });
-    ab_check(doc, 0, -1.5, 1.5);
+    ab_check(doc, -1.5, 1.5);
 }
 
 /// Scalar boxes declared species-major (every `a` before every `c`, the
@@ -983,7 +994,7 @@ fn ab_species_major_lanes_read_and_write_in_place() {
         "metadata": {"name": "tape_reroll_species_major"},
         "models": {"M": {"variables": vars, "equations": eqs}}
     });
-    let prog = ab_check(doc, 0, 0.1, 2.0);
+    let prog = ab_check(doc, 0.1, 2.0);
     let ls = prog
         .lanes
         .iter()
@@ -1043,7 +1054,7 @@ fn ab_rerolled_scalar_boxes() {
         "metadata": {"name": "tape_reroll"},
         "models": {"M": {"variables": vars, "equations": eqs}}
     });
-    let prog = ab_check(doc, 0, 0.1, 2.0);
+    let prog = ab_check(doc, 0.1, 2.0);
     let lanes: Vec<&LaneSpec> = prog
         .instrs
         .iter()
@@ -1137,7 +1148,7 @@ fn ab_folded_lane_strips() {
         "metadata": {"name": "tape_folded_lanes"},
         "models": {"M": {"variables": vars, "equations": eqs}}
     });
-    let prog = ab_check(doc, 0, 0.1, 2.0);
+    let prog = ab_check(doc, 0.1, 2.0);
     let ls = prog
         .lanes
         .iter()
@@ -1188,7 +1199,7 @@ fn coloring_invariants() {
     // The unfused program: this test pins the (shared) slab-coloring logic,
     // and needs enough surviving intermediates to actually recycle (the fused
     // program of this small fixture collapses to a couple of groups).
-    let (prog, report) = compiled.build_tape_opts(&HashSet::new(), None);
+    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), None));
     assert!(report.fallbacks.is_empty());
 
     // def / last-use per slot (linear order, re-defs count as uses).
@@ -1264,7 +1275,7 @@ fn value_numbering_scope_behaviour() {
         }}
     });
     let compiled = compile(doc);
-    let (prog, report) = compiled.build_tape(&HashSet::new());
+    let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
     assert!(report.fallbacks.is_empty());
     assert!(
         report.vn_scope_hits + report.vn_hoist_hits >= 1,
@@ -1331,7 +1342,7 @@ fn exports_materialize_as_observed_arrays() {
         }}
     });
     let compiled = compile(doc);
-    let (prog, report) = compiled.build_tape(&HashSet::new());
+    let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
     assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
@@ -1392,7 +1403,7 @@ fn ab_prefix_scan_observeds() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     // Each scan is ONE `Scan` over its whole box (an instruction, or a
     // micro-op of the fused group that computes its source), with no
     // per-step writes.
@@ -1466,7 +1477,7 @@ fn ab_scan_absorbed_into_its_group() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     assert_eq!(opcount(&prog, "Scan"), 0, "both scans are absorbed");
     assert_eq!(scan_micro_ops(&prog), 2);
     let cont = prog.section_range(Cadence::Continuous);
@@ -1544,7 +1555,7 @@ fn ab_scan_fused_with_its_neighbours() {
             ]
         }}
     });
-    let prog = ab_check(doc.clone(), 0, -2.0, 2.0);
+    let prog = ab_check(doc.clone(), -2.0, 2.0);
     let fusions: Vec<ScanFuse> = prog
         .fused
         .iter()
@@ -1562,7 +1573,7 @@ fn ab_scan_fused_with_its_neighbours() {
     // the fused loops (`keep`); both write the interpreter's `dy`.
     let mut compiled = compile(doc);
     compiled.runtime_mode = super::super::RuntimeMode::Native;
-    let (prog, _) = compiled.build_tape(&HashSet::new());
+    let (prog, _) = taped(compiled.build_tape(&HashSet::new()));
     assert!(
         prog.exports.iter().any(|(e, _)| e == "P"),
         "fixture exports P"
@@ -1576,10 +1587,7 @@ fn ab_scan_fused_with_its_neighbours() {
     let param_vec = compiled.debug_resolve_params(&params);
     let state = seeded_state(3 * n, 7, -2.0, 2.0);
     let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
-    let mut ctx = super::exec::TapeCtx::new(
-        std::rc::Rc::new(prog),
-        std::rc::Rc::new(compiled.observed_rules.clone()),
-    );
+    let mut ctx = super::exec::TapeCtx::new(std::rc::Rc::new(prog));
     for publish in [false, true, false] {
         ctx.set_exports_active(publish);
         let mut dy = vec![f64::NAN; 3 * n];
@@ -1595,15 +1603,7 @@ fn ab_scan_fused_with_its_neighbours() {
             t: 0.0,
             declared: &compiled.declared_names,
         };
-        super::exec::run_tape_call(
-            &mut ctx,
-            &call,
-            &super::super::ArrMap::default(),
-            &compiled.const_scope,
-            &super::super::ConstLitMemo::default(),
-            &mut dy,
-            &mut stats,
-        );
+        super::exec::run_tape_call(&mut ctx, &call, &mut dy, &mut stats);
         for (k, (a, b)) in dy.iter().zip(&dy_ref).enumerate() {
             assert_eq!(a.to_bits(), b.to_bits(), "publish {publish}: dy[{k}]");
         }
@@ -1651,7 +1651,7 @@ fn ab_chunk_gathers_on_short_rows() {
                 }]
             }}
         });
-        ab_check(doc, 0, -2.0, 2.0)
+        ab_check(doc, -2.0, 2.0)
     };
     // Long rows along both shifted axes (read per chunk), short ones (read
     // whole), and a mix: absorbed either way, so the program is the same.
@@ -1717,7 +1717,7 @@ fn ab_index_gather_reduction_interleaved() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     assert!(
         prog.fused
             .iter()
@@ -1763,7 +1763,7 @@ fn ab_dense_contraction_folds_its_product() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     let red = prog
         .fused
         .iter()
@@ -1816,7 +1816,7 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     // `g` is state-free — its instructions must land in the CONST section.
     assert!(prog.n_const > 0);
 }
@@ -1866,10 +1866,10 @@ fn check_fallback_ifelse_array_condition(reader: serde_json::Value) {
             .fallbacks
             .iter()
             .any(|(name, reason)| name == "m" && reason.contains("non-literal index")),
-        "`m` must be the fallback rule this test is about: {:?}",
+        "`m` must be the declined rule this test is about: {:?}",
         report.fallbacks
     );
-    ab_check(doc, 1, -1.0, 1.0);
+    declined_check(doc, -1.0, 1.0);
 }
 
 #[test]
@@ -1934,7 +1934,7 @@ fn ab_model_file_if_available() {
     let n = compiled.state_variable_names().len();
     let u0: Vec<f64> = seed_sol.state.iter().take(n).map(|row| row[0]).collect();
 
-    let (prog, report) = compiled.build_tape(&HashSet::new());
+    let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
     eprintln!("{report}");
     assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
 
@@ -2066,7 +2066,7 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     // Folding happened: fewer materialized gathers than plans, and at least
     // one group carries a wrap (multi-run), a ghost run, and a strided
     // (linear) input.
@@ -2091,7 +2091,7 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
     assert!(any_strided, "level-slice fold must produce a strided input");
 }
 
-/// Step 4 export demotion: with no fallback rules and no check mode, the
+/// Step 4 export demotion: with no explicit request, the
 /// `Export` publish memcpys are skipped (nothing can read them); forcing
 /// them back on (the check-mode/diagnostic path) publishes the same values —
 /// and `dy` is bit-identical either way.
@@ -2117,9 +2117,9 @@ fn output_only_observeds_leave_the_rhs() {
             ]
         }}
     });
-    ab_check(doc.clone(), 0, -1.0, 1.0);
+    ab_check(doc.clone(), -1.0, 1.0);
     let compiled = compile(doc);
-    let (prog, _) = compiled.build_tape(&HashSet::new());
+    let (prog, _) = taped(compiled.build_tape(&HashSet::new()));
     let cont = prog.section_range(Cadence::Continuous).len() as u32;
     assert!(
         prog.n_rhs < cont,
@@ -2143,20 +2143,9 @@ fn output_only_observeds_leave_the_rhs() {
             t: 0.0,
             declared: &compiled.declared_names,
         };
-        super::exec::run_tape_call(
-            ctx,
-            &call,
-            &super::super::ArrMap::default(),
-            &compiled.const_scope,
-            &super::super::ConstLitMemo::default(),
-            dy,
-            &mut stats,
-        );
+        super::exec::run_tape_call(ctx, &call, dy, &mut stats);
     };
-    let mut ctx = super::exec::TapeCtx::new(
-        std::rc::Rc::new(prog),
-        std::rc::Rc::new(compiled.observed_rules.clone()),
-    );
+    let mut ctx = super::exec::TapeCtx::new(std::rc::Rc::new(prog));
     let mut dy = vec![0.0f64; 1];
     run_call(&mut ctx, &mut dy);
     assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
@@ -2191,7 +2180,7 @@ fn export_demotion_skips_unread_publishes() {
         }}
     });
     let compiled = compile(doc);
-    let (prog, report) = compiled.build_tape(&HashSet::new());
+    let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
     assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
     assert!(
         prog.exports.iter().any(|(n, _)| n == "s"),
@@ -2214,23 +2203,12 @@ fn export_demotion_skips_unread_publishes() {
             t: 0.0,
             declared: &compiled.declared_names,
         };
-        super::exec::run_tape_call(
-            ctx,
-            &call,
-            &super::super::ArrMap::default(),
-            &compiled.const_scope,
-            &super::super::ConstLitMemo::default(),
-            dy,
-            &mut stats,
-        );
+        super::exec::run_tape_call(ctx, &call, dy, &mut stats);
     };
 
-    // Demoted (production default for a no-fallback model): the export is
+    // Demoted (the production default): the export is
     // never published into the observed map.
-    let mut ctx = super::exec::TapeCtx::new(
-        std::rc::Rc::new(prog),
-        std::rc::Rc::new(compiled.observed_rules.clone()),
-    );
+    let mut ctx = super::exec::TapeCtx::new(std::rc::Rc::new(prog));
     let mut dy = vec![0.0f64; 1];
     run_call(&mut ctx, &mut dy);
     assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
@@ -2239,7 +2217,7 @@ fn export_demotion_skips_unread_publishes() {
         "demoted export must not publish"
     );
 
-    // Re-enabled (fallbacks present, or an explicit request): the same call
+    // Re-enabled (an explicit request): the same call
     // publishes the computed value, and dy is unchanged.
     ctx.set_exports_active(true);
     let mut dy2 = vec![0.0f64; 1];
@@ -2251,164 +2229,6 @@ fn export_demotion_skips_unread_publishes() {
         3.0f64.to_bits(),
         "active export must publish the slot value"
     );
-}
-
-/// The fail-closed layer behind the export-ordering gate (CONFORMANCE_SPEC
-/// §5.23.1(2), §5.19.4). `compute_exports` places a taped observed's `Export`
-/// before the `Fallback` that reads it; this test builds the program a route
-/// that missed that gate would produce — the `Export` moved to just after its
-/// reader — and requires the read to FAULT naming the observed rather than
-/// resolve to a number: not a ghost `0.0` on the first call, and not the
-/// previous call's published value on a later one. Both executors must reach
-/// the same verdict (§5.23.1(3)).
-#[test]
-fn unpublished_export_read_by_a_fallback_fails_closed() {
-    let n = 3;
-    let doc = json!({
-        "esm": "1.1.0",
-        "metadata": {"name": "tape_unpublished_export"},
-        "index_sets": {"c": {"kind": "interval", "size": n}},
-        "models": {"M": {
-            "variables": {
-                "psi": {"type": "unknown", "shape": ["c"]},
-                "s": {"type": "unknown", "shape": ["c"]},
-                "k": {"type": "unknown", "shape": ["c"]}
-            },
-            "equations": [
-                // Taped, and exported because the fallback below reads it.
-                {"lhs": "s", "rhs": {"op": "+", "args": [1.0, "psi"]}},
-                // A recurrence the tape does not lower
-                // ([`untaped_self_read`]), so a Fallback.
-                {"lhs": "k", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
-                    "ranges": {"i": [1, n]},
-                    "expr": {"op": "ifelse", "args": [
-                        {"op": "<=", "args": ["i", 1]},
-                        idx("s", json!("i")),
-                        {"op": "+", "args": [
-                            idx("s", json!("i")),
-                            {"op": "*", "args": [
-                                0.5,
-                                untaped_self_read("k", json!({"op": "-", "args": ["i", 1]}))]}
-                        ]}
-                    ]}}},
-                {"lhs": {"op": "ic", "args": ["psi"]}, "rhs": 0.0},
-                {"lhs": {"op": "D", "args": ["psi"], "wrt": "t"},
-                 "rhs": {"op": "neg", "args": ["k"]}}
-            ]
-        }}
-    });
-    let compiled = compile(doc);
-    let nstates = compiled.state_variable_names().len();
-    let params = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
-    let state = seeded_state(nstates, 7, -1.0, 1.0);
-
-    // Positions of the `Export` publishing `s` and of the `Fallback` reading it.
-    let locate = |prog: &TapeProgram| {
-        let e = prog
-            .exports
-            .iter()
-            .position(|(n, _)| n == "s")
-            .expect("fixture must export `s`") as u32;
-        let export_pc = prog
-            .instrs
-            .iter()
-            .position(|i| matches!(i, Instr::Export { export, .. } if *export == e))
-            .expect("an Export for `s`");
-        let fallback_pc = prog
-            .instrs
-            .iter()
-            .position(|i| matches!(i, Instr::Fallback { .. }))
-            .expect("the recurrence is a Fallback");
-        (export_pc, fallback_pc)
-    };
-    let fast_call = |prog: TapeProgram, dy: &mut [f64], calls: usize| -> Vec<Option<String>> {
-        let mut ctx = super::exec::TapeCtx::new(
-            std::rc::Rc::new(prog),
-            std::rc::Rc::new(compiled.observed_rules.clone()),
-        );
-        (0..calls)
-            .map(|_| {
-                let _ = super::super::take_const_array_oob();
-                let mut stats = RhsStats::default();
-                let call = super::super::RhsCall {
-                    rhs_rules: &compiled.rhs_rules,
-                    observed_rules: &compiled.observed_rules,
-                    var_shapes: &compiled.var_shapes,
-                    param_names: &compiled.param_names,
-                    state: &state,
-                    params: &param_vec,
-                    forcing: &compiled.forcing,
-                    t: 0.0,
-                    declared: &compiled.declared_names,
-                };
-                dy.fill(0.0);
-                super::exec::run_tape_call(
-                    &mut ctx,
-                    &call,
-                    &super::super::ArrMap::default(),
-                    &compiled.const_scope,
-                    &super::super::ConstLitMemo::default(),
-                    dy,
-                    &mut stats,
-                );
-                super::super::take_const_array_oob()
-            })
-            .collect()
-    };
-
-    // Control: the gate's ordering runs clean on both executors, and they agree.
-    let (good, report) = compiled.build_tape(&HashSet::new());
-    assert_eq!(report.fallbacks.len(), 1, "{:?}", report.fallbacks);
-    let (export_pc, fallback_pc) = locate(&good);
-    assert!(
-        export_pc < fallback_pc,
-        "the gate publishes `s` before its reader"
-    );
-    let cont = good.section_range(Cadence::Continuous);
-    assert!(cont.contains(&export_pc) && cont.contains(&fallback_pc));
-    assert!(
-        good.instrs[export_pc..fallback_pc]
-            .iter()
-            .all(|i| !matches!(i, Instr::JmpIfZero { .. })),
-        "moving the Export must not cross a branch region"
-    );
-    let _ = super::super::take_const_array_oob();
-    let mut dy_ref = vec![0.0f64; nstates];
-    run_reference(&good, &compiled, &state, &param_vec, 0.0, &mut dy_ref);
-    assert_eq!(super::super::take_const_array_oob(), None);
-    let mut dy_fast = vec![0.0f64; nstates];
-    for fault in fast_call(good, &mut dy_fast, 2) {
-        assert_eq!(fault, None);
-    }
-    for (k, (a, b)) in dy_fast.iter().zip(dy_ref.iter()).enumerate() {
-        assert_eq!(a.to_bits(), b.to_bits(), "dy[{k}]: {a:?} vs {b:?}");
-    }
-
-    // The route that missed the gate: `Export` moved to just after its reader.
-    let (mut bad, _) = compiled.build_tape(&HashSet::new());
-    let instr = bad.instrs.remove(export_pc);
-    let prov = bad.provenance.remove(export_pc);
-    bad.instrs.insert(fallback_pc, instr);
-    bad.provenance.insert(fallback_pc, prov);
-    let (moved_export, moved_fallback) = locate(&bad);
-    assert!(moved_fallback < moved_export);
-
-    let names_s = |fault: &Option<String>| {
-        fault
-            .as_deref()
-            .is_some_and(|m| m.contains("E_TREEWALK_UNRESOLVED_ORDER") && m.contains("'s'"))
-    };
-    let _ = super::super::take_const_array_oob();
-    let mut dy = vec![0.0f64; nstates];
-    run_reference(&bad, &compiled, &state, &param_vec, 0.0, &mut dy);
-    let ref_fault = super::super::take_const_array_oob();
-    assert!(names_s(&ref_fault), "reference executor: {ref_fault:?}");
-    // Two calls on one warm executor: the first read would meet the zero
-    // prealloc, the second the value the first call published.
-    for (call, fault) in fast_call(bad, &mut dy, 2).iter().enumerate() {
-        assert!(names_s(fault), "fast executor call {call}: {fault:?}");
-    }
 }
 
 /// Step 4b superop composition: arith three-op chains must merge into `Bin3`
@@ -2456,7 +2276,7 @@ fn ab_superop_bin3_and_extended_pairs() {
     });
     // Default configuration (ext pairs on, Bin3 off) through the standard
     // fixture A/B: fused + unfused × reference + fast executors.
-    let prog = ab_check(doc.clone(), 0, -3.0, 3.0);
+    let prog = ab_check(doc.clone(), -3.0, 3.0);
     let has_bin3 = |p: &TapeProgram| {
         p.fused
             .iter()
@@ -2483,7 +2303,7 @@ fn ab_superop_bin3_and_extended_pairs() {
     // three-op chain must merge, splat registers must be provisioned, and
     // BOTH executors must stay bitwise equal to the production interpreter.
     let compiled = compile(doc);
-    let (prog3, _) = compiled.build_tape_opts(&HashSet::new(), Some(all_superops_cfg()));
+    let (prog3, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(all_superops_cfg())));
     assert!(
         has_bin3(&prog3),
         "expected a Bin3 superop with bin3 enabled"
@@ -2500,14 +2320,9 @@ fn ab_superop_bin3_and_extended_pairs() {
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let mut fast3 = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast3.install_tape(
-        std::rc::Rc::new(
-            compiled
-                .build_tape_opts(&HashSet::new(), Some(all_superops_cfg()))
-                .0,
-        ),
-        std::rc::Rc::new(compiled.observed_rules.clone()),
-    );
+    fast3.install_tape(std::rc::Rc::new(
+        taped(compiled.build_tape_opts(&HashSet::new(), Some(all_superops_cfg()))).0,
+    ));
     let mut stats = RhsStats::default();
     for seed in 0..4u64 {
         let state = seeded_state(n_state, seed, -3.0, 3.0);
@@ -2577,7 +2392,7 @@ fn dy_three_ways(doc: serde_json::Value, state: &[f64]) -> [Vec<f64>; 3] {
     let param_vec = compiled.debug_resolve_params(&params);
     let (dy_oracle, _) = compiled.debug_eval_rhs(state, 0.0, &params, true);
     let (dy_vec, _) = compiled.debug_eval_rhs(state, 0.0, &params, false);
-    let (prog, report) = compiled.build_tape(&HashSet::new());
+    let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
     assert!(
         report.fallbacks.is_empty(),
         "the tape must lower this model with no fallback, else the tape path is untested: {:?}",
@@ -2788,7 +2603,7 @@ fn ab_const_array_observed() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     assert_eq!(
         opcount(&prog, "ConstArray"),
         1,
@@ -2840,7 +2655,7 @@ fn ab_rank0_scalar_reductions() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     let folds = reductions(&prog);
     assert_eq!(folds.len(), 4, "one fold per reduction rule");
     for (src_shape, n_axes, out) in folds {
@@ -2877,7 +2692,7 @@ fn ab_rank0_reduction_two_contracted_axes() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -3.0, 3.0);
+    let prog = ab_check(doc, -3.0, 3.0);
     let folds = reductions(&prog);
     let (src_shape, n_axes, _) = folds.first().expect("a fold emitted");
     assert_eq!(*n_axes, 2);
@@ -2909,20 +2724,20 @@ fn ab_rank0_reduction_with_a_filter() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     assert_eq!(reductions(&prog).len(), 1, "one fold");
 }
 
-/// The shape cascade: an observed produced by a rule the tape REFUSES (a
-/// recurrence it does not lower, [`untaped_self_read`]) is still read on the
-/// tape by later rules, because its published box is inferable. Before, every
-/// reader bailed too.
+/// The shape cascade: an observed produced by a rule the tape DECLINES (a
+/// recurrence it does not lower, [`untaped_self_read`]) still lets its later
+/// readers lower, because its box is inferable, so the decline names the
+/// producer alone rather than its whole downstream cone.
 #[test]
-fn ab_reader_of_a_fallback_producer_stays_taped() {
+fn a_reader_of_a_declined_producer_is_not_declined() {
     let n = 6;
     let doc = json!({
         "esm": "1.1.0",
-        "metadata": {"name": "tape_fallback_producer_shape"},
+        "metadata": {"name": "tape_declined_producer_shape"},
         "models": {"M": {
             "variables": {
                 "u": {"type": "unknown", "shape": ["i"]},
@@ -2956,18 +2771,14 @@ fn ab_reader_of_a_fallback_producer_stays_taped() {
             ]
         }}
     });
-    // Exactly one fallback: the recurrence itself.
-    let prog = ab_check(doc, 1, -2.0, 2.0);
-    let fb: Vec<&str> = prog
-        .rules
-        .iter()
-        .filter(|r| matches!(r.status, RuleStatus::Fallback(_)))
-        .map(|r| r.name.as_str())
+    // Exactly one declined rule: the recurrence itself.
+    let declined = declined_check(doc, -2.0, 2.0);
+    let names: Vec<String> = declined
+        .declined_rules()
+        .into_iter()
+        .map(|(name, _)| name)
         .collect();
-    assert_eq!(fb, vec!["r"]);
-    // The readers resolve `r` through the runtime observed map at its
-    // inferred box.
-    assert!(prog.obs_reads.iter().any(|n| n == "r"));
+    assert_eq!(names, vec!["r".to_string()]);
 }
 
 /// The phase-2 spike fixture end to end: all three gaps at once (an
@@ -2981,7 +2792,7 @@ fn ab_elementwise_observed_gather_fixture() {
     let file = crate::parse::load_path(&path).expect("corpus fixture loads");
     let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
     for (label, fuse) in [("fused", Some(default_cfg())), ("unfused", None)] {
-        let (prog, report) = compiled.build_tape_opts(&HashSet::new(), fuse);
+        let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), fuse));
         assert!(
             report.fallbacks.is_empty(),
             "{label}: {:?}",
@@ -3129,14 +2940,14 @@ fn datetime_doc() -> serde_json::Value {
 /// unfused programs) and on the Step 3b fast executor.
 fn datetime_ab_check(doc: serde_json::Value, times: &[f64]) {
     let compiled = compile(doc);
-    let (prog, report) = compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()));
+    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg())));
     assert!(
         report.fallbacks.is_empty(),
         "the datetime family must lower with no fallback, else the tape path is \
          untested: {:?}",
         report.fallbacks
     );
-    let (prog_uf, _) = compiled.build_tape_opts(&HashSet::new(), None);
+    let (prog_uf, _) = taped(compiled.build_tape_opts(&HashSet::new(), None));
     let n = compiled.state_variable_names().len();
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
@@ -3216,7 +3027,7 @@ fn datetime_on_a_literal_time_folds_at_build_time() {
         }}
     });
     let compiled = compile(doc);
-    let (prog, report) = compiled.build_tape(&HashSet::new());
+    let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
     assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
     for op in ["Bin", "Un", "Select"] {
         assert_eq!(
@@ -3256,7 +3067,7 @@ fn interp_closed_functions_lower_to_one_instruction() {
         }}
     });
     let compiled = compile(doc);
-    let (prog, report) = compiled.build_tape(&HashSet::new());
+    let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
     assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
     assert_eq!(opcount(&prog, "Interp"), 1, "{report}");
     // The table is on the PROGRAM, and the `const` literal that carried it
@@ -3335,7 +3146,7 @@ fn ab_state_and_parameter_indices_past_u16() {
         "metadata": {"name": "tape_wide_state_indices"},
         "models": {"M": {"variables": vars, "equations": eqs}}
     });
-    let prog = ab_check(doc, 0, -1.0, 1.0);
+    let prog = ab_check(doc, -1.0, 1.0);
     assert_eq!(prog.state_vars.len(), n);
 }
 
@@ -3358,7 +3169,7 @@ fn ab_fused_box_past_u16_splits_into_groups() {
             "equations": [d_eq("u", n, agg(n, json!({"op": "+", "args": terms})))]
         }}
     });
-    let prog = ab_check(doc, 0, -1.0, 1.0);
+    let prog = ab_check(doc, -1.0, 1.0);
     assert!(
         prog.fused.len() > 1,
         "the box must be split across groups, got {}",
@@ -3408,7 +3219,7 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
             }]
         }}
     });
-    let prog = ab_check(doc.clone(), 0, -2.0, 2.0);
+    let prog = ab_check(doc.clone(), -2.0, 2.0);
     let payloads: Vec<&ConstArrayData> = prog.const_data.iter().collect();
     // A column-major program stores the box axis-reversed (`layout`).
     let (shape, values): ([usize; 2], [f64; 6]) = if prog.col_major {
@@ -3547,7 +3358,7 @@ fn ab_poly_area_planar_broad_phase() {
     tgt.push(quad(3.0, 1.0, 1.0, 1.0)); // shares an edge with src[3]
     tgt.push(quad(7.0, 1.0, 1.0, 1.0)); // shares a corner with src[6]
     tgt.push(quad(40.0, 40.0, 1.0, 1.0)); // overlaps nothing
-    let prog = ab_check(regrid_doc("planar", src, tgt), 0, 0.5, 2.0);
+    let prog = ab_check(regrid_doc("planar", src, tgt), 0.5, 2.0);
     let spec = only_poly_area(&prog);
     assert_eq!(
         spec.pairs,
@@ -3566,7 +3377,7 @@ fn ab_poly_area_planar_regular_grids() {
     let tgt: Vec<serde_json::Value> = (0..3)
         .flat_map(|i| (0..3).map(move |j| quad(1.7 * i as f64 - 0.3, 1.3 * j as f64, 1.7, 1.3)))
         .collect();
-    let prog = ab_check(regrid_doc("planar", src, tgt), 0, 0.5, 2.0);
+    let prog = ab_check(regrid_doc("planar", src, tgt), 0.5, 2.0);
     assert!(only_poly_area(&prog).pairs.is_some());
 }
 
@@ -3580,7 +3391,7 @@ fn ab_poly_area_spherical_dense() {
     let tgt: Vec<serde_json::Value> = (0..2)
         .map(|k| quad(10.0 * k as f64 + 5.0, 5.0, 10.0, 10.0))
         .collect();
-    let prog = ab_check(regrid_doc("spherical", src, tgt), 0, 0.5, 2.0);
+    let prog = ab_check(regrid_doc("spherical", src, tgt), 0.5, 2.0);
     assert_eq!(only_poly_area(&prog).pairs, None);
 }
 
@@ -3597,7 +3408,7 @@ fn ab_regrid_bin_skolem_gate_drives_the_apply() {
         .join("../../tests/conformance/scaling/fixtures/regrid/regrid_N100.esm");
     let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
     let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
-    let prog = ab_check(doc, 0, 0.5, 2.0);
+    let prog = ab_check(doc, 0.5, 2.0);
     let n = 100usize;
     let cont = (prog.n_const + prog.n_segment) as usize;
     let mut seg = 0;
@@ -3660,7 +3471,7 @@ fn ab_poly_area_wholesale_and_same_axis() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, 0.5, 2.0);
+    let prog = ab_check(doc, 0.5, 2.0);
     assert_eq!(opcount(&prog, "PolyArea"), 3);
     assert!(prog.geoms.iter().all(|g| g.pairs.is_none()));
 }
@@ -3708,7 +3519,7 @@ fn ab_intersect_polygon_build_time_ring() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, 0.5, 2.0);
+    let prog = ab_check(doc, 0.5, 2.0);
     assert_eq!(opcount(&prog, "PolyArea"), 0);
     assert!(
         prog.const_data
@@ -3751,7 +3562,7 @@ fn ab_index_gather_unstructured() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -1.0, 2.0);
+    let prog = ab_check(doc, -1.0, 2.0);
     // Fusion folds the gather into the group that consumes it: a pre-loaded
     // input rather than a materialized [k, i] box.
     assert_eq!(prog.index_gathers.len(), 1);
@@ -3799,7 +3610,7 @@ fn ab_index_gather_mixed_axes() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -1.0, 2.0);
+    let prog = ab_check(doc, -1.0, 2.0);
     assert_eq!(opcount(&prog, "IndexGather"), 2);
 }
 
@@ -3822,7 +3633,7 @@ fn ab_float32_variables_beside_float64_neighbours() {
         .expect("the fixture declares element types");
     let _env = env.enter();
     let compiled = ArrayCompiled::from_file(&annotated).expect("fixture compiles");
-    let (prog, report) = compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()));
+    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg())));
     assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
     assert_eq!(prog.precision.len(), prog.instrs.len());
     assert!(prog.precision.contains(&Precision::Float32));
@@ -3831,7 +3642,7 @@ fn ab_float32_variables_beside_float64_neighbours() {
     let n = compiled.state_variable_names().len();
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
-    let prog_uf = compiled.build_tape_opts(&HashSet::new(), None).0;
+    let prog_uf = taped(compiled.build_tape_opts(&HashSet::new(), None)).0;
     let mut fast = compiled.debug_new_scratch_taped();
     assert!(fast.has_tape());
     for seed in 0..4u64 {
@@ -3924,19 +3735,15 @@ fn recurrence_doc(n: i64) -> serde_json::Value {
 
 #[test]
 fn ab_recurrence_sweep() {
-    let prog = ab_check(recurrence_doc(6), 0, -2.0, 2.0);
+    let prog = ab_check(recurrence_doc(6), -2.0, 2.0);
     // One sweep, and nothing in its body fused.
     assert_eq!(opcount(&prog, "Sweep"), 1);
     assert!(opcount(&prog, "ScalarRead") > 0);
     // The body is lowered once: the program and the sweep's body do not grow
     // with the frame.
     let body_len = |p: &TapeProgram| p.sweeps[0].body_len;
-    let small = compile(recurrence_doc(6))
-        .build_tape_opts(&HashSet::new(), None)
-        .0;
-    let large = compile(recurrence_doc(600))
-        .build_tape_opts(&HashSet::new(), None)
-        .0;
+    let small = taped(compile(recurrence_doc(6)).build_tape_opts(&HashSet::new(), None)).0;
+    let large = taped(compile(recurrence_doc(600)).build_tape_opts(&HashSet::new(), None)).0;
     assert_eq!(body_len(&small), body_len(&large));
     assert_eq!(small.instrs.len(), large.instrs.len());
 }

@@ -11,7 +11,6 @@ use super::kernels::{
     copy_strided, ew_select, ew1, ew2, exec_gather, fill_strided, index_gather, reduce_axis,
     reduce_rows, scan_axis, seg_reduce, table_gather,
 };
-use super::oracle::run_rhs_oracle;
 use super::resolve::{Rv, SrcView, resolve_rv, resolve_scalar, resolve_src, rm_strides};
 use super::*;
 use crate::simulate_array::eval::latch_gather_fault;
@@ -47,7 +46,6 @@ pub(super) fn run_range(
     range: std::ops::Range<usize>,
     exec: &mut TapeExec,
     dy: &mut [f64],
-    stats: &mut RhsStats,
 ) {
     // The call's split width (see `par`), for the copies and lanes below.
     let call_split = call_ways(exec);
@@ -712,29 +710,9 @@ pub(super) fn run_range(
                     pc += *n_true as usize; // skip straight to the false region
                 }
             }
-            Instr::Fallback { rule } => {
-                let info = &prog.rules[*rule as usize];
-                match info.kind {
-                    RuleKind::Observed(i) => {
-                        materialize_observeds_pass(
-                            obs,
-                            std::slice::from_ref(&env.observed_rules[i]),
-                            &ObsPass {
-                                env: env.eval_env(),
-                                force_scalar: false,
-                            },
-                            stats,
-                        );
-                    }
-                    RuleKind::Rhs(i) => {
-                        run_rhs_oracle(&env.rhs_rules[i], env.var_shapes, &env.eval_env(), obs, dy);
-                    }
-                }
-            }
             Instr::Export { slot, export } => {
-                // Step 4 export demotion: no fallback rules, no check mode,
-                // no explicit request ⇒ nothing can read the published
-                // array — skip the publish memcpy.
+                // Step 4 export demotion: no explicit request ⇒ nothing can
+                // read the published array — skip the publish memcpy.
                 if !exports_active {
                     pc += 1;
                     continue;

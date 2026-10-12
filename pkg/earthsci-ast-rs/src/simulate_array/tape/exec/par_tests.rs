@@ -2,6 +2,7 @@
 //! evaluated with its calls split 2, 3, 4 and 7 wide (forced, whatever the
 //! size), must reproduce the serial call's `dy` to the bit.
 
+use super::super::taped;
 use super::par::force_split;
 use super::pool::DISPATCHES;
 use crate::{Compiler, ProblemOptions, Rhs, esm_problem};
@@ -102,7 +103,7 @@ fn the_regrid_apply_is_one_split_chain() {
     let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
     let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
     let compiled = crate::simulate_array::tape::tests::compile(doc);
-    let (prog, _) = compiled.build_tape(&std::collections::HashSet::new());
+    let (prog, _) = taped(compiled.build_tape(&std::collections::HashSet::new()));
     let exec = super::TapeExec::new(&prog);
     assert_eq!(exec.seg_chains.len(), 1, "one chain");
     let ch = &exec.seg_chains[0];

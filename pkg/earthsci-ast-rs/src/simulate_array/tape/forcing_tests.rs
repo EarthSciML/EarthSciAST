@@ -10,6 +10,7 @@
 use super::super::{ArrayCompiled, RhsScratch, RhsStats};
 use super::ir::*;
 use super::refexec::run_reference;
+use super::taped;
 use ndarray::{ArrayD, IxDyn};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -103,7 +104,7 @@ fn assert_bits(got: &[f64], want: &[f64], label: &str) {
 
 fn taped_scratch(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsScratch {
     let mut s = compiled.debug_new_scratch();
-    s.install_tape(Rc::new(prog), compiled.shared_observed_rules());
+    s.install_tape(Rc::new(prog));
     s
 }
 
@@ -134,15 +135,21 @@ fn forcing_reads_tape_bit_identically_through_every_executor() {
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let (prog, report) =
-        compiled.build_tape_opts(&HashSet::new(), Some(super::fuse::SuperopCfg::from_env()));
+        taped(compiled.build_tape_opts(&HashSet::new(), Some(super::fuse::SuperopCfg::from_env())));
     assert!(report.fallbacks.is_empty(), "{report}");
     // One load per forcing, however many rules read it: the ifelse branch
     // reuses the load the observed made.
     assert_eq!(opcount(&prog, "LoadForcing"), 2, "{report}");
-    let (prog_uf, _) = compiled.build_tape_opts(&HashSet::new(), None);
+    let (prog_uf, _) = taped(compiled.build_tape_opts(&HashSet::new(), None));
     let cfg = Some(super::fuse::SuperopCfg::from_env());
-    let mut fused = taped_scratch(&compiled, compiled.build_tape_opts(&HashSet::new(), cfg).0);
-    let mut unfused = taped_scratch(&compiled, compiled.build_tape_opts(&HashSet::new(), None).0);
+    let mut fused = taped_scratch(
+        &compiled,
+        taped(compiled.build_tape_opts(&HashSet::new(), cfg)).0,
+    );
+    let mut unfused = taped_scratch(
+        &compiled,
+        taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
+    );
     for seed in 0..3u64 {
         let state = state_of(n, seed);
         for &t in &[0.0, 0.5, 2.0] {
@@ -174,7 +181,7 @@ fn a_forcing_load_runs_in_the_section_its_cadence_allows() {
     let n = 5usize;
     let compiled = compile(n as i64);
     let sections = |discrete: &HashSet<String>| -> Vec<(String, Cadence)> {
-        let (prog, _) = compiled.build_tape_opts(discrete, None);
+        let (prog, _) = taped(compiled.build_tape_opts(discrete, None));
         prog.instrs
             .iter()
             .enumerate()
@@ -212,7 +219,7 @@ fn a_forcing_load_runs_in_the_section_its_cadence_allows() {
 fn the_forcing_program_does_not_grow_with_the_grid() {
     let shape = |n: i64| {
         let compiled = compile(n);
-        let (prog, report) = compiled.build_tape_opts(&HashSet::new(), None);
+        let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), None));
         assert!(report.fallbacks.is_empty(), "{report}");
         (prog.instrs.len(), report.opcode_counts)
     };
@@ -230,7 +237,10 @@ fn a_missing_forcing_entry_faults_as_the_interpreter_does() {
     compiled.debug_eval_rhs(&state, 0.0, &params, true);
     let want = crate::simulate_array::take_const_array_oob().expect("the oracle faults");
     assert!(want.starts_with("E_TREEWALK_UNBOUND_NAME: '"), "{want}");
-    let mut scratch = taped_scratch(&compiled, compiled.build_tape_opts(&HashSet::new(), None).0);
+    let mut scratch = taped_scratch(
+        &compiled,
+        taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
+    );
     let dy = fast(&compiled, &mut scratch, &state, 0.0, &param_vec);
     let got = crate::simulate_array::take_const_array_oob().expect("the tape faults");
     assert_eq!(got, want);
@@ -246,10 +256,10 @@ fn a_forcing_entry_of_another_shape_faults() {
     let compiled = compile(n as i64);
     feed(&compiled, n, 1.0, 0.7);
     let param_vec = compiled.debug_resolve_params(&HashMap::new());
-    let prog = Rc::new(compiled.build_tape_opts(&HashSet::new(), None).0);
+    let prog = Rc::new(taped(compiled.build_tape_opts(&HashSet::new(), None)).0);
     let scratch_for = |prog: &Rc<TapeProgram>| {
         let mut s = compiled.debug_new_scratch();
-        s.install_tape(Rc::clone(prog), compiled.shared_observed_rules());
+        s.install_tape(Rc::clone(prog));
         s
     };
     crate::simulate_array::take_const_array_oob();
@@ -290,7 +300,7 @@ fn the_forcing_epoch_reruns_the_segment_section_only() {
     let param_vec = compiled.debug_resolve_params(&params);
     let discrete: HashSet<String> = ["bc".to_string()].into();
     let (prog, report) =
-        compiled.build_tape_opts(&discrete, Some(super::fuse::SuperopCfg::from_env()));
+        taped(compiled.build_tape_opts(&discrete, Some(super::fuse::SuperopCfg::from_env())));
     assert!(report.fallbacks.is_empty(), "{report}");
     let mut scratch = taped_scratch(&compiled, prog);
     let state = state_of(n, 2);
@@ -460,11 +470,14 @@ fn a_scalar_forcing_is_shared_by_readers_of_two_precisions() {
         let params = HashMap::new();
         let param_vec = compiled.debug_resolve_params(&params);
         let cfg = Some(super::fuse::SuperopCfg::from_env());
-        let (prog, report) = compiled.build_tape_opts(&HashSet::new(), cfg);
+        let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), cfg));
         assert!(report.fallbacks.is_empty(), "{report}");
         assert_eq!(opcount(&prog, "LoadForcing"), 1, "{report}");
-        let prog_uf = compiled.build_tape_opts(&HashSet::new(), None).0;
-        let mut fused = taped_scratch(&compiled, compiled.build_tape_opts(&HashSet::new(), cfg).0);
+        let prog_uf = taped(compiled.build_tape_opts(&HashSet::new(), None)).0;
+        let mut fused = taped_scratch(
+            &compiled,
+            taped(compiled.build_tape_opts(&HashSet::new(), cfg)).0,
+        );
         let n = compiled.state_variable_names().len();
         let state = state_of(n, 3);
         let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
