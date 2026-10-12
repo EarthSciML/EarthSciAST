@@ -56,23 +56,14 @@
      "native"
     ],
     "python": [
-     "interpreter"
+     "interpreter",
+     "native"
     ],
     "rust": [
      "interpreter",
      "native"
     ]
-   },
-   "named_exclusions": [
-    {
-     "binding": "python",
-     "compilers": [
-      "native"
-     ],
-     "code": "compiler_refused_rule",
-     "reason": "Python's native compiler has no form for a ragged contracted range (the bound depends on the enclosing output index through its `offsets` factor) and refuses D(area_eff) by name. Python native is outside the phase-4 plan; its interpreter answers."
-    }
-   ]
+   }
   },
   {
    "id": "nearest_generator_ode",
