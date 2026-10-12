@@ -2157,6 +2157,10 @@ struct _CGBuilt{F,TB}
     # enabled when it holds).
     ncells::Int
     outs_disjoint::Bool
+    # The section's work estimate in emitted-node evaluations
+    # (`_acc_kernel_work` per cell, summed over the covered kernels' cells),
+    # what the threading verdict holds against the work floor.
+    work::Int
 end
 
 # Build-time SECTION-chunking safety check: are the emitted kernels' output
@@ -2170,12 +2174,46 @@ end
 function _cg_covered_outs_disjoint(acc_kernels::AbstractVector{_AccKernel},
                                    covered::Vector{Bool})
     ncells = 0
+    work = 0
     for (j, K) in enumerate(acc_kernels)
         covered[j] || continue
-        ncells += _cellset_ncells(K.cells)
+        nc = _cellset_ncells(K.cells)
+        ncells += nc
+        work = Base.Checked.checked_add(work,
+                                        Base.Checked.checked_mul(nc, _acc_kernel_work(K)))
     end
     return ncells, _cellsets_outs_unique(K.cells for (j, K) in enumerate(acc_kernels)
-                                         if covered[j])
+                                         if covered[j]), work
+end
+
+# One cell's work in a kernel, in node evaluations: every node of the spine and
+# of the per-cell CSE recipes counts one, a neighbour reduction's body counts
+# once per neighbour (the mean valence under a variable bound), and a template
+# sub-kernel counts its own work. The loop-invariant recipes run once per call
+# and do not count. A rough cost, used only to decide whether a section is
+# worth a thread dispatch.
+function _acc_kernel_work(K::_AccKernel)
+    w = _acc_node_work(K.spine, K)
+    for r in K.cse.recipes
+        w += _acc_node_work(r, K)
+    end
+    return max(w, 1)
+end
+function _acc_node_work(nd::_Node, K::_AccKernel)
+    nd.kind === _NK_SUBCALL && nd.payload isa _AccKernel &&
+        return 1 + _acc_kernel_work(nd.payload::_AccKernel)
+    s = 0
+    for c in nd.children
+        s += _acc_node_work(c, K)
+    end
+    if nd.kind === _NK_REDUCE
+        b = K.bound
+        reach = b isa _FixedBound ? b.k :
+                b isa _VarBound && !isempty(b.valence) ?
+                    cld(sum(b.valence), length(b.valence)) : 1
+        s *= max(reach, 1)
+    end
+    return 1 + s
 end
 
 # Per-generated-FUNCTION emitted-node cap. The node budget above bounds total
@@ -2688,7 +2726,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     # Threaded cell axis: total covered cells + the global out-slot
     # disjointness verdict, both facts of the BUILD (the runtime chunk verdict
     # is `_sec_prep_threads!`'s).
-    ncells, disjoint = _cg_covered_outs_disjoint(acc_kernels, covered)
+    ncells, disjoint, work = _cg_covered_outs_disjoint(acc_kernels, covered)
     # The runtime `tabs` argument: one HOMOGENEOUS container per group, converted
     # to the group's concrete element type (`Vector{Vector{Int}}`, …), packed in a
     # small tuple. `_cggrpG[pos]` then reads a concrete-element container.
@@ -2702,7 +2740,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
                              @__MODULE__, @__MODULE__, h) for h in ctx.helpers))
     end
     ntabs = sum(length, ctx.tab_objs; init=0)
-    return _CGBuilt(f, tabpack, covered, reasons, ncells, disjoint)
+    return _CGBuilt(f, tabpack, covered, reasons, ncells, disjoint, work)
 end
 
 # ---- Threaded cell axis for the codegen tier (RFC threaded-eval-tier) -------
@@ -2732,19 +2770,20 @@ end
 # `_chunk_ordinals`, and disjoint writes commute. Threaded `du` is bitwise
 # `===` serial `du`.
 #
-# One Julia thread ⇒ serial; a section total below the per-chunk min-cells
-# threshold (ESS_THREADS_MIN_CELLS) ⇒ serial.
+# One Julia thread ⇒ serial; a section's work below two chunks of the serial
+# work floor (`_thread_min_work`, ESS_THREADS_MIN_WORK) ⇒ serial.
 # Verdicts land in `_THREAD_TALLY` (`:cg_threaded` / `:cg_serial_small` /
 # `:cg_serial_shared_outs`), documented with the existing keys.
 
 # One-time threading verdict for one generated function's cell axes:
-# `state` is 0 unexamined, 1 chunked, -1 serial (too few cells), -2 serial
+# `state` is 0 unexamined, 1 chunked, -1 serial (too little work), -2 serial
 # (globally shared out-slots — permanent, decided at build).
 # `ncells`/`disjoint` are build facts (`_CGBuilt`); `nchunks` is fixed
 # at the first threaded call, so the partition is identical call to call.
-# `work` is what the min-cells floor is held against: the cell count, unless
-# a cell does more than one cell's worth (a contraction's fold terms count
-# too, array_contraction.jl); the chunk count never exceeds `ncells`.
+# `work` is what the work floor is held against: the section's node
+# evaluations per call (`_acc_kernel_work` per cell for a kernel section, the
+# fold terms for a contraction, array_contraction.jl), the cell count when the
+# builder gives none; the chunk count never exceeds `ncells`.
 # `job1`/`job2` hold the section's dispatch jobs (thread_dispatch.jl) for the
 # last two argument types it ran at, so a caller alternating between Float64
 # and dual-number calls (a solver and its Jacobian) reuses both.
@@ -2759,18 +2798,18 @@ mutable struct _SecTCache
 end
 _SecTCache(ncells::Int, disjoint::Bool, work::Int = ncells) =
     _SecTCache(0, ncells, disjoint, work, 1, nothing, nothing)
-_sec_tcache(cg::_CGBuilt) = _SecTCache(cg.ncells, cg.outs_disjoint)
+_sec_tcache(cg::_CGBuilt) = _SecTCache(cg.ncells, cg.outs_disjoint, cg.work)
 _sec_tcache(::Nothing) = _SecTCache(0, false)
 
 # Decide once whether this generated function may run chunked: size first
-# (the min-cells threshold guards per-DISPATCH work, and the section is one
-# dispatch), then the build-time disjointness verdict.
+# (the work floor guards per-DISPATCH work, and the section is one dispatch),
+# then the build-time disjointness verdict.
 function _sec_prep_threads!(tc::_SecTCache)
     tc.state == 0 || return tc
-    minc = _thread_min_cells()
-    nchunks = min(Threads.nthreads(), tc.ncells, max(1, div(tc.work, max(minc, 1))))
+    minw = _thread_min_work()
+    nchunks = min(Threads.nthreads(), tc.ncells, max(1, div(tc.work, max(minw, 1))))
     if nchunks < 2
-        tc.state = -1                 # too few cells to be worth a dispatch
+        tc.state = -1                 # too little work to be worth a dispatch
         _tally_thread!(:cg_serial_small)
         return tc
     end

@@ -800,13 +800,16 @@ function _sc_program(units::Vector{_ScUnit}, level::Vector{Int}, rhs_list, prelu
     end
     # The work a chunked call can share out: the statements of every class with
     # more than one member (a one-member class runs whole in one chunk).
+    # `work` weighs the same statements by their emitted nodes.
     nsplit = 0
+    work = 0
     for (ci, C) in enumerate(classes)
         (ok[ci] && length(C.members) > 1) || continue
         U = units[C.rep]
         nsplit += length(C.members) * (length(U.slots) + length(U.outs))
+        work += length(C.members) * max(C.nodes, 1)
     end
-    return _ScalarProgram(Tuple(gens), threaded, _SecTCache(nsplit, true)), emitted, resid
+    return _ScalarProgram(Tuple(gens), threaded, _SecTCache(nsplit, true, work)), emitted, resid
 end
 
 # Dependency levels of a cadence tier's slots: 1 + the deepest level among the
