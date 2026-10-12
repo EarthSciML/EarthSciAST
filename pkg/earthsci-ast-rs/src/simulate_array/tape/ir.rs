@@ -89,7 +89,7 @@
 //! Array operands within one instruction share one box (shape + 1-based
 //! origin), checked at lowering time — the same precondition `vec_combine`
 //! enforces at runtime (a mismatch there bails the rule to the oracle; here it
-//! marks the rule as a fallback).
+//! declines the rule, and with it the whole program: see [`DeclinedTape`]).
 
 // A few descriptor fields are read only by the test-gated reference executor
 // and the diagnostics, which the lib-only dead-code pass cannot see.
@@ -134,8 +134,9 @@ pub(crate) enum Operand {
     /// a scalar — exactly `eval_vec_variable`'s state arm.
     State(u32),
     /// The whole persistent observed array `obs_reads[i]`, resolved BY NAME in
-    /// the runtime observed map (origin all-1s; 0-d reads as a scalar). Used
-    /// for observeds produced by fallback rules or seeded static observeds.
+    /// the runtime observed map (origin all-1s; 0-d reads as a scalar). The
+    /// lowering produces one only for an observed whose own rule declined, and
+    /// a declined rule leaves no program, so a finished program holds none.
     Obs(u32),
 }
 
@@ -428,10 +429,6 @@ pub(crate) enum Instr {
         n_true: u32,
         n_false: u32,
     },
-    /// Evaluate fallback rule `rules[rule]` through the existing interpreter
-    /// (observed materialization or the per-cell RHS oracle), at exactly this
-    /// point in the program order.
-    Fallback { rule: u32 },
     /// Publish `slot` into the runtime observed map as `exports[export].0`
     /// (a scalar slot publishes a 0-d array).
     Export { slot: SlotId, export: u32 },
@@ -489,7 +486,6 @@ impl Instr {
             Instr::JmpIfZero { .. }
             | Instr::Sweep { .. }
             | Instr::Fault { .. }
-            | Instr::Fallback { .. }
             | Instr::Export { .. }
             | Instr::DyWrite { .. }
             | Instr::Fused { .. }
@@ -632,7 +628,7 @@ impl Instr {
             }
             Instr::JmpIfZero { cond, .. } => op(cond),
             Instr::Sweep { spec } => op(&t.sweeps[*spec as usize].result),
-            Instr::Fallback { .. } | Instr::Fault { .. } => {}
+            Instr::Fault { .. } => {}
             Instr::Export { slot, .. } => f(*slot),
             Instr::DyWrite { write } => f(t.dy_writes[*write as usize].slot),
             Instr::Fused { spec } => {
@@ -678,7 +674,6 @@ impl Instr {
             Instr::Sweep { .. } => "Sweep",
             Instr::ScalarRead { .. } => "ScalarRead",
             Instr::JmpIfZero { .. } => "JmpIfZero",
-            Instr::Fallback { .. } => "Fallback",
             Instr::Export { .. } => "Export",
             Instr::DyWrite { .. } => "DyWrite",
             Instr::Fused { .. } => "Fused",
@@ -1992,23 +1987,34 @@ pub(crate) enum RuleKind {
     Rhs(usize),
 }
 
-/// Whether a rule was lowered onto the tape or left to the interpreter.
-#[derive(Clone, Debug)]
-pub(crate) enum RuleStatus {
-    Taped,
-    /// Reason string mirrors the overlay's `note_bail` taxonomy: the DEEPEST
-    /// bail site reached while attempting to lower the rule.
-    Fallback(String),
-}
-
 /// One rule of the program, in evaluation order (observed rules in dependency
 /// order, then RHS rules).
+///
+/// A rule in a [`TapeProgram`] is on the tape: a program exists only when
+/// every rule lowered (see [`DeclinedTape`]), so there is no status to carry.
 #[derive(Clone, Debug)]
 pub(crate) struct RuleInfo {
     pub name: String,
     pub kind: RuleKind,
     pub cadence: Cadence,
-    pub status: RuleStatus,
+}
+
+/// The result of a tape build in which at least one rule did not lower.
+///
+/// There is no program. The instruction set has no way to hand a rule to the
+/// per-cell oracle, so a model with a rule the tape cannot express has no
+/// tape at all: a strict compiler refuses it at construction, and the
+/// historical routing runs the whole model on the legacy evaluator. The
+/// lowering still runs to the end so that every rule's cadence, and every
+/// declined rule's reason, is known to the compiler report.
+#[derive(Clone, Debug)]
+pub(crate) struct DeclinedTape {
+    /// Every rule of the model, in the order a program would have run them.
+    pub rules: Vec<RuleInfo>,
+    /// Parallel to `rules`: `None` for a rule that lowered, else the DEEPEST
+    /// decline reason reached while trying (the overlay's `note_bail`
+    /// taxonomy). At least one entry is `Some`.
+    pub reasons: Vec<Option<String>>,
 }
 
 /// One storage bucket of the slab: several slots may share it (recycling).
@@ -2093,10 +2099,11 @@ pub(crate) struct TapeProgram {
     /// indexes here).
     pub forcings: Vec<ForcingRef>,
     pub dy_writes: Vec<DyWrite>,
-    /// Observed values published back into the runtime observed map: names a
-    /// fallback rule or the samples/observed-trajectory dependency cone reads.
+    /// Observed values published back into the runtime observed map: names
+    /// the samples/observed-trajectory dependency cone reads, or every
+    /// observed when the tape serves the observed passes.
     pub exports: Vec<(String, SlotId)>,
-    /// All rules in program order, taped or fallback.
+    /// All rules in program order, every one of them taped.
     pub rules: Vec<RuleInfo>,
     pub slab: SlabLayout,
     /// Rule ordinal (into `rules`) per instruction, parallel to `instrs`.

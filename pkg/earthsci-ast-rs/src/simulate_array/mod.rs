@@ -360,13 +360,10 @@ pub struct RhsStats {
     /// or a forced-scalar reference run).
     pub obs_scalar_rules: usize,
     /// Step 3b: number of rules (observed + RHS) executed through the compiled
-    /// tape's fast executor on this call. Mirrors the
-    /// `vectorized_rules`/`scalar_rules` split for the tape path; zero on the
-    /// legacy interpreter path.
+    /// tape's fast executor on this call: every rule of the model, since a
+    /// tape exists only when every rule lowered. Zero on the legacy
+    /// interpreter path.
     pub taped_rules: usize,
-    /// Step 3b: number of rules the tape delegated to the interpreter
-    /// (`Instr::Fallback`) on this call.
-    pub fallback_rules: usize,
 }
 
 /// Eliminated algebraic-variable definition. Evaluated once per RHS call
@@ -817,9 +814,6 @@ pub struct ArrayCompiled {
     /// The tape programs this model has built ([`tape::TapeCache`], which says
     /// what a kept program depends on).
     tape_cache: tape::TapeCache,
-    /// `observed_rules` behind one `Rc`, for the taped scratches that carry
-    /// them beside the program.
-    shared_observed: std::cell::OnceCell<Rc<Vec<AlgebraicRule>>>,
 }
 
 /// A reuse pool of `f64` backing buffers for vectorized kernel intermediates.
