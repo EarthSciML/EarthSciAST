@@ -25,15 +25,8 @@
 #![allow(dead_code)]
 
 use earthsci_ast::simulate_array::RhsStats;
-use earthsci_ast::{
-    Alg, CompileError, Compiler, ProblemOptions, Rhs, SimulateError, SolveOptions, esm_problem,
-    solve,
-};
+use earthsci_ast::{Alg, Compiler, ProblemOptions, Rhs, SolveOptions, esm_problem, solve};
 use serde_json::Value;
-
-/// The scaling tier's manifest, for its Rust ledger.
-pub const SCALING_MANIFEST: &str =
-    include_str!("../../../../tests/conformance/scaling/manifest.json");
 
 macro_rules! scaling_fixture {
     ($fam:literal, $n:literal) => {
@@ -303,13 +296,6 @@ fn options(compiler: Compiler, model: Option<&str>) -> ProblemOptions {
     }
 }
 
-fn is_refusal(err: &SimulateError) -> bool {
-    matches!(
-        err,
-        SimulateError::Compile(CompileError::CompilerRefusedRule { .. })
-    )
-}
-
 /// The first position where two vectors differ in their bits, if any.
 fn first_bit_difference(a: &[f64], b: &[f64]) -> Option<(usize, f64, f64)> {
     if a.len() != b.len() {
@@ -321,45 +307,15 @@ fn first_bit_difference(a: &[f64], b: &[f64]) -> Option<(usize, f64, f64)> {
         .map(|i| (i, a[i], b[i]))
 }
 
-/// Whether the scaling tier's Rust ledger expects native to refuse
-/// (`family`, `n`): a `builds` entry for the family with no `n` or this `n`.
-pub fn ledger_expects_refusal(family: &str, n: u64) -> bool {
-    let manifest: Value = serde_json::from_str(SCALING_MANIFEST).expect("the manifest parses");
-    manifest["ledger"]["rust"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .any(|e| {
-            e["gate"] == "builds"
-                && e["family"] == family
-                && e.get("compiler").is_none_or(|c| c == "native")
-                && e.get("n")
-                    .is_none_or(|v| v.is_null() || v.as_u64() == Some(n))
-        })
-}
-
 /// Native and the interpreter give the same right-hand side, bit for bit, on
-/// one scaling fixture; or native refuses it and the ledger says it does.
+/// one scaling fixture. Native is required for every document, so a refusal
+/// fails.
 pub fn check_scaling_fixture(family: &str, n: u64, text: &str) {
     let doc: Value = serde_json::from_str(text).expect("the fixture parses");
     let interp = esm_problem(&doc, (0.0, 1.0), options(Compiler::Interpreter, None))
         .unwrap_or_else(|e| panic!("{family} N={n}: the interpreter does not build it: {e}"));
-    let expected_refusal = ledger_expects_refusal(family, n);
-    let native = match esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None)) {
-        Ok(p) => p,
-        Err(e) if is_refusal(&e) => {
-            assert!(
-                expected_refusal,
-                "{family} N={n}: native refuses a document the Rust ledger does not list: {e}"
-            );
-            return;
-        }
-        Err(e) => panic!("{family} N={n}: native fails to build: {e}"),
-    };
-    assert!(
-        !expected_refusal,
-        "{family} N={n}: native builds it now; remove its `builds` entry from the Rust ledger"
-    );
+    let native = esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None))
+        .unwrap_or_else(|e| panic!("{family} N={n}: native does not build it: {e}"));
     assert_rhs_agrees(&format!("{family} N={n}"), &native, &interp);
 }
 

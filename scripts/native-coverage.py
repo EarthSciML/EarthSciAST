@@ -542,11 +542,29 @@ def _census(args):
     return repo, models, outs, classify(outs)
 
 
+# The refusals native may give by name (API_SPEC §5.8): events, implicit
+# equations and SDE noise, and a spatial operator with no discretization rule.
+NATIVE_OUT_OF_SCOPE_CODES = ("unsupported_construct", "unlowered_operator")
+
+
+def out_of_scope_findings(ledger: dict[str, Any], ledger_name: str) -> list[str]:
+    """A committed ledger entry is red unless its code is an out-of-scope
+    refusal: native is required for every document the interpreter builds, so
+    the ledger excuses nothing else."""
+    return [
+        f"in-scope entry: {e['path']} is ledgered as {e['code']!r}, but native may refuse "
+        f"only {NATIVE_OUT_OF_SCOPE_CODES}. Fix native and remove this entry from {ledger_name}."
+        for e in ledger["entries"]
+        if e["code"] not in NATIVE_OUT_OF_SCOPE_CODES
+    ]
+
+
 def cmd_check(args) -> int:
     repo, models, outs, cls = _census(args)
     ledger_path = Path(args.ledger) if args.ledger else TIER_DIR / f"{args.binding}.json"
     ledger = load_ledger(ledger_path, args.binding)
     red = compare(cls["gaps"], outs, ledger, str(ledger_path), _load_corpus(args, repo, models))
+    red += out_of_scope_findings(ledger, str(ledger_path))
     counts = cls["counts"]
     print(
         f"native coverage ({args.binding}): {len(outs)} documents in the census; "
@@ -677,6 +695,12 @@ def _self_test() -> list[str]:
         if needle is not None and not any(needle in r for r in red):
             fails.append(f"{label}: expected a finding containing {needle!r}, got {red}")
 
+    if not out_of_scope_findings(ledger, "<ledger>"):
+        fails.append("a committed compiler_refused_rule entry must be an in-scope finding")
+    if out_of_scope_findings(
+        {"entries": [{"path": "x", "code": "unsupported_construct"}]}, "<ledger>"
+    ):
+        fails.append("an unsupported_construct entry is an out-of-scope refusal, not a finding")
     expect("exact match", base, None)
     new = copy.deepcopy(base)
     new["tests/valid/b.esm"]["native"] = refused()
