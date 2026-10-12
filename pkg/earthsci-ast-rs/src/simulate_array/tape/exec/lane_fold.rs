@@ -554,33 +554,89 @@ impl SOp {
             dadv: if moves { usize::MAX } else { 0 },
         }
     }
+}
 
-    /// Where its strip at offset `o` is stored.
+/// A fold term resolved for one call's strip loop: at strip offset `off`
+/// its lanes start at `p + (off & adv)`, each with its bits XORed with
+/// `neg` ([`SIGN`] or 0).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct RTerm {
+    pub p: *const f64,
+    pub adv: usize,
+    pub neg: u64,
+}
+
+impl RTerm {
+    /// `t` against one call's bases.
     #[inline(always)]
-    pub(super) fn dst(&self, bases: &[*mut f64; N_BASES], o: usize) -> *mut f64 {
-        bases[self.base].wrapping_add(self.off + (o & self.dadv))
+    pub(super) fn of(t: &TPtr, bases: &[*mut f64; N_BASES]) -> Self {
+        RTerm {
+            p: bases[t.base].wrapping_add(t.off),
+            adv: t.adv,
+            neg: t.neg,
+        }
     }
 }
 
-/// One strip of an `N`-term fold. The terms are read exactly once each, in
-/// order; `acc` lives in CPU registers.
-#[inline(always)]
-unsafe fn strip_n<const N: usize>(
-    o: &SOp,
-    t: &[TPtr],
-    b: &[*mut f64; N_BASES],
-    off: usize,
-    dst: *mut f64,
-    f: impl Fn(f64, f64) -> f64 + Copy,
-) {
-    let t: &[TPtr; N] = t[o.t as usize..][..N].try_into().expect("N terms");
-    unsafe { strip_terms(t, b, off, dst, f) }
+/// [`ROp::code`] of a micro-op that is not a fold.
+pub(super) const R_OTHER: u8 = 20;
+
+/// One operation of the strip loop resolved for one call: its value goes
+/// to `dst + (off & adv)` at strip offset `off`. A fold's `code` is its
+/// [`FoldOp`] times 5 plus its term count less one (4 for five or more), so
+/// one dispatch picks the kernel; its `n` terms are at `t`. For
+/// [`R_OTHER`], `n` is the micro-op's index in `LaneCode::ops`.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ROp {
+    pub code: u8,
+    pub n: u32,
+    pub t: *const RTerm,
+    pub dst: *mut f64,
+    pub adv: usize,
 }
 
+impl ROp {
+    /// `o` against one call's bases, its terms within `terms` (resolved
+    /// against the same bases, and not moved while this is in use).
+    #[inline(always)]
+    pub(super) fn of(o: &SOp, k: usize, terms: &[RTerm], bases: &[*mut f64; N_BASES]) -> Self {
+        let dst = bases[o.base].wrapping_add(o.off);
+        if o.kind == OTHER {
+            return ROp {
+                code: R_OTHER,
+                n: k as u32,
+                t: std::ptr::null(),
+                dst,
+                adv: o.dadv,
+            };
+        }
+        let t = &terms[o.t as usize..][..o.n as usize];
+        ROp {
+            code: o.kind * 5 + (o.n.clamp(1, 5) - 1) as u8,
+            n: o.n,
+            t: t.as_ptr(),
+            dst,
+            adv: o.dadv,
+        }
+    }
+
+    /// Where its strip at offset `off` is stored.
+    #[inline(always)]
+    pub(super) fn at(&self, off: usize) -> *mut f64 {
+        self.dst.wrapping_add(off & self.adv)
+    }
+}
+
+/// One strip of a fold over `t` (its terms, read exactly once each, in
+/// order); `acc` lives in CPU registers.
+///
+/// A term that is not negated is read as it lies, so the common case is a
+/// plain load into the operation. A negated one toggles its sign bit with
+/// its own mask, which the compiler cannot see is the sign bit: it must not
+/// rewrite `acc + (-t)` as `acc - t`, which differs for a NaN `t`.
 #[inline(always)]
 unsafe fn strip_terms(
-    t: &[TPtr],
-    b: &[*mut f64; N_BASES],
+    t: &[RTerm],
     off: usize,
     dst: *mut f64,
     f: impl Fn(f64, f64) -> f64 + Copy,
@@ -589,14 +645,20 @@ unsafe fn strip_terms(
     let mut acc = [0.0f64; STRIP];
     // SAFETY (every read below): the caller checked that each term's strip
     // lies in its vector (see `Strips::ends`).
-    let p0 = t0.ptr(b, off);
+    let p0 = t0.p.wrapping_add(off & t0.adv);
     for (k, a) in acc.iter_mut().enumerate() {
         *a = f64::from_bits(unsafe { *p0.add(k) }.to_bits() ^ t0.neg);
     }
     for tj in rest {
-        let p = tj.ptr(b, off);
-        for (k, a) in acc.iter_mut().enumerate() {
-            *a = f(*a, f64::from_bits(unsafe { *p.add(k) }.to_bits() ^ tj.neg));
+        let p = tj.p.wrapping_add(off & tj.adv);
+        if tj.neg != 0 {
+            for (k, a) in acc.iter_mut().enumerate() {
+                *a = f(*a, f64::from_bits(unsafe { *p.add(k) }.to_bits() ^ tj.neg));
+            }
+        } else {
+            for (k, a) in acc.iter_mut().enumerate() {
+                *a = f(*a, unsafe { *p.add(k) });
+            }
         }
     }
     // SAFETY: `dst` is a strip register or the fold's own `dy` run, disjoint
@@ -604,34 +666,48 @@ unsafe fn strip_terms(
     unsafe { std::ptr::copy_nonoverlapping(acc.as_ptr(), dst, STRIP) };
 }
 
-/// One strip (lanes `off .. off + STRIP` of the call) of the fold `o`,
-/// stored to `dst`.
+/// One strip (lanes `off .. off + STRIP` of the call) of the fold `o`.
+///
+/// # Safety
+/// `o` was resolved by [`ROp::of`] against this call's bases, and the
+/// terms it points to are still in place.
 #[inline(always)]
-pub(super) unsafe fn strip_fold(
-    o: &SOp,
-    t: &[TPtr],
-    b: &[*mut f64; N_BASES],
-    off: usize,
-    dst: *mut f64,
-) {
-    macro_rules! by_n {
-        ($f:expr) => {
-            unsafe {
-                match o.n {
-                    1 => strip_n::<1>(o, t, b, off, dst, $f),
-                    2 => strip_n::<2>(o, t, b, off, dst, $f),
-                    3 => strip_n::<3>(o, t, b, off, dst, $f),
-                    4 => strip_n::<4>(o, t, b, off, dst, $f),
-                    n => strip_terms(&t[o.t as usize..][..n as usize], b, off, dst, $f),
-                }
-            }
+pub(super) unsafe fn strip_fold(o: &ROp, off: usize) {
+    let dst = o.at(off);
+    // SAFETY: `ROp::of` took `t` and `n` from one in-bounds slice.
+    let t = unsafe { std::slice::from_raw_parts(o.t, o.n as usize) };
+    macro_rules! k {
+        ($n:literal, $f:expr) => {
+            // SAFETY: the code says the fold has exactly `$n` terms.
+            unsafe { strip_terms(&*(o.t as *const [RTerm; $n]), off, dst, $f) }
+        };
+        (_, $f:expr) => {
+            unsafe { strip_terms(t, off, dst, $f) }
         };
     }
-    match o.kind {
-        0 => by_n!(|x, y| x + y),
-        1 => by_n!(|x, y| x - y),
-        2 => by_n!(|x, y| x * y),
-        _ => by_n!(|x, y| x / y),
+    let (add, sub) = (|x: f64, y: f64| x + y, |x: f64, y: f64| x - y);
+    let (mul, div) = (|x: f64, y: f64| x * y, |x: f64, y: f64| x / y);
+    match o.code {
+        0 => k!(1, add),
+        1 => k!(2, add),
+        2 => k!(3, add),
+        3 => k!(4, add),
+        4 => k!(_, add),
+        5 => k!(1, sub),
+        6 => k!(2, sub),
+        7 => k!(3, sub),
+        8 => k!(4, sub),
+        9 => k!(_, sub),
+        10 => k!(1, mul),
+        11 => k!(2, mul),
+        12 => k!(3, mul),
+        13 => k!(4, mul),
+        14 => k!(_, mul),
+        15 => k!(1, div),
+        16 => k!(2, div),
+        17 => k!(3, div),
+        18 => k!(4, div),
+        _ => k!(_, div),
     }
 }
 
