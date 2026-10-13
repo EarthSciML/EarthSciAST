@@ -150,7 +150,7 @@ fn the_regrid_chain_folds_only_admitted_pairs() {
     let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
     let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
     let compiled = crate::simulate_array::tape::tests::compile(doc);
-    let (prog, _) = compiled.build_tape(&std::collections::HashSet::new());
+    let (prog, _) = taped(compiled.build_tape(&std::collections::HashSet::new()));
     let exec = super::TapeExec::new(&prog);
     assert!(
         exec.seg_chains[0].compact.is_some_and(|p| p.w.is_some()),
