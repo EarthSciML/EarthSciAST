@@ -256,27 +256,50 @@ def main():
     code, o = run(dg, [], gates=dense)
     assert code == 1, o  # a result without dense_bytes gets no dense allowance
 
-    # The small-call carve-out of the threaded speed gate (user ruling 2):
-    # below small_call_floor.fork_joins fork-joins of serial hand-loop work,
-    # threaded native is held to its own serial call instead of the threaded
-    # hand loop. 20000 states, threaded native 4.8x the threaded hand loop.
-    floor = {"speed": {"small_call_floor": {"fork_joins": 10}}}
+    # The small-N carve-out of the threaded speed gate (user ruling,
+    # round 2): below small_n_max a threaded result is held to native's own
+    # serial call instead of the threaded hand loop. chemistry_grid N = 1000
+    # (19800 states): threaded native 4.8x the threaded hand loop.
+    def grid(n, native_serial, **kw):
+        return [result("chemistry_grid", n, n_cells=n, n_states=20 * n, steady_rhs_s=4.8e-6,
+                       hand_loop_s=1e-6, serial_steady_rhs_s=native_serial, **kw)]
 
-    def small(hand_serial, native_serial, fork_join=1e-6):
-        return [result("stencil_1d", 20000, steady_rhs_s=4.8e-6, hand_loop_s=1e-6,
-                       hand_loop_serial_s=hand_serial, serial_steady_rhs_s=native_serial,
-                       fork_join_s=fork_join)]
-
-    code, o = run(small(5e-6, 4.5e-6), [], gates=floor, threads=4)
-    assert code == 0 and o[("stencil_1d", 20000, "speed")] == "pass", o
-    code, o = run(small(5e-6, 3e-6), [], gates=floor, threads=4)
-    assert code == 1 and o[("stencil_1d", 20000, "speed")] == "FAIL", o  # 1.6x its serial call
-    code, o = run(small(20e-6, 4.5e-6), [], gates=floor, threads=4)
-    assert code == 1 and o[("stencil_1d", 20000, "speed")] == "FAIL", o  # above the floor
-    code, o = run(small(5e-6, 4.5e-6), [], gates=floor, threads=1)
+    code, o = run(grid(1000, 4.5e-6), [], threads=4)
+    assert code == 0 and o[("chemistry_grid", 1000, "speed")] == "pass", o
+    code, o = run(grid(1000, 3e-6), [], threads=4)
+    assert code == 1 and o[("chemistry_grid", 1000, "speed")] == "FAIL", o  # 1.6x its serial call
+    code, o = run(grid(10000, 4.5e-6), [], threads=4)
+    assert code == 1 and o[("chemistry_grid", 10000, "speed")] == "FAIL", o  # from 10^4 up: unchanged
+    code, o = run(grid(1000, 4.5e-6), [], threads=1)
     assert code == 1, o  # a serial run has no carve-out
-    code, o = run(small(5e-6, None), [], gates=floor, threads=4)
+    code, o = run(grid(1000, None), [], threads=4)
     assert code == 1, o  # nor a result without the serial native measure
+    # N is the ladder size, not n_cells: scalar_chemistry at N = 10^4 has 500
+    # boxes and is gated against the hand loop.
+    sc = [result("scalar_chemistry", 10000, n_cells=500, steady_rhs_s=4.8e-6, hand_loop_s=1e-6,
+                 serial_steady_rhs_s=4.5e-6)]
+    code, o = run(sc, [], threads=4)
+    assert code == 1 and o[("scalar_chemistry", 10000, "speed")] == "FAIL", o
+
+    # --hosted: every gate runs, but a timing gate is red only past
+    # hosted_runner.max_timing_ratio (3) times its bar.
+    slow2 = [result("stencil_1d", 10000), result("stencil_1d", 100000, steady_rhs_s=2.9e-4)]
+    code, o = run(slow2, [], "--hosted")
+    assert code == 0 and o[("stencil_1d", 100000, "speed")] == "pass", o  # 2.9x
+    slow4 = [result("stencil_1d", 10000), result("stencil_1d", 100000, steady_rhs_s=3.1e-4)]
+    code, o = run(slow4, [], "--hosted")
+    assert code == 1 and o[("stencil_1d", 100000, "speed")] == "FAIL", o  # 3.1x
+    code, o = run(slow4, [], "--report-timing")
+    assert code == 0, o
+    # The build slope is reported there, never red: 500 ns/state.
+    slope = [result("stencil_1d", 100, build_s=0.0), result("stencil_1d", 1100, build_s=500e-6)]
+    code, o = run(slope, [])
+    assert code == 1 and o[("stencil_1d", None, "build_slope")] == "FAIL", o
+    code, o = run(slope, [], "--hosted")
+    assert code == 0 and o[("stencil_1d", None, "build_slope")] == "FAIL", o
+    # The deterministic gates are exact there.
+    code, o = run([result("stencil_1d", 100, allocs_per_call=8)], [], "--hosted")
+    assert code == 1 and o[("stencil_1d", 100, "no_steady_alloc")] == "FAIL", o
 
     # A family whose document grows by equations states its own per-byte rate
     # (scalar_chemistry's gate_overrides); the gate's data rate applies to the rest.

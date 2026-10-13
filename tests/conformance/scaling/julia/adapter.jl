@@ -31,10 +31,9 @@
 # more than one thread: with one thread native runs its serial path, and with
 # `-t K` native runs whatever it threads today. The result file's `threads` is Julia's thread
 # count, and `hand_loop_s` is then the threaded hand loop. A threaded run also
-# records, in the same process, the serial hand loop, one empty `@batch` (the
-# hand loop's fork-join) and, for a small call, native's serial call (a second
-# build whose sections all stay serial): the inputs of the speed gate's
-# small-call floor (../README.md, "Gates").
+# records, in the same process, the serial hand loop and, below N = 10^4,
+# native's serial call (a second build whose sections all stay serial), which
+# the threaded speed gate holds a small problem to (../README.md, "Gates").
 #
 # BUILDS. `build_s` is the fastest of repeated builds of the document while
 # they total under 1 s (at most 10), so a build of a few milliseconds is not
@@ -253,7 +252,7 @@ function blank_result(entry)
         "first_call_s" => nothing, "steady_rhs_s" => nothing, "allocs_per_call" => nothing,
         "hand_loop_s" => nothing, "hand_loop_max_abs_diff" => nothing, "dy_max_abs" => nothing,
         "interpreter_max_abs_diff" => nothing, "build_repeats" => nothing,
-        "dense_bytes" => nothing, "serial_steady_rhs_s" => nothing, "fork_join_s" => nothing,
+        "dense_bytes" => nothing, "serial_steady_rhs_s" => nothing,
         # Julia's own fields, beyond the tier's format:
         "tiers" => nothing, "code_size_parts" => nothing, "hand_loop_serial_s" => nothing,
         "hand_loop_threads" => nothing, "hand_loop_checked_against" => nothing,
@@ -322,9 +321,9 @@ end
 
 const BUILD_BUDGET_S = 1.0
 const MAX_BUILDS = 10
-# A threaded run times native's serial call only where the serial hand loop
-# takes less than this, far above any small-call floor the gate applies.
-const SERIAL_NATIVE_CAP_S = 1e-3
+# A threaded run times native's serial call below this ladder size N, where the
+# speed gate compares the threaded call with it (manifest gates.speed.small_n_max).
+const SERIAL_NATIVE_MAX_N = 10_000
 
 # Bytes of the declared-dense arrays a build wrote: its setup arrays, which it
 # allocates at their declared shape and fills.
@@ -405,8 +404,7 @@ function measure!(rec, path, entry, compiler, budget, interp_cap)
     end
     if du !== nothing
         hand_loop!(rec, prob, path, entry, du, budget, "native")
-        hs = rec["hand_loop_serial_s"]
-        if Threads.nthreads() > 1 && hs !== nothing && hs < SERIAL_NATIVE_CAP_S
+        if Threads.nthreads() > 1 && Int(entry["n"]) < SERIAL_NATIVE_MAX_N
             serial_native!(rec, path, entry, compiler, dy_by_name(prob, du, names), budget)
         end
     elseif iprob !== nothing
@@ -418,13 +416,6 @@ function measure!(rec, path, entry, compiler, budget, interp_cap)
         hand_loop!(rec, iprob, path, entry, idu, budget, "interpreter")
     end
     return rec
-end
-
-# One empty fork-join of the threaded hand loop's pool.
-function empty_batch()
-    Polyester.@batch for _ in 1:Threads.nthreads()
-    end
-    return nothing
 end
 
 # Run the family's hand loop at the measured state of `prob`, record its max
@@ -456,7 +447,6 @@ function hand_loop!(rec, prob, path, entry, du, budget, against)
         rec["hand_loop_serial_s"] = tser
         rec["hand_loop_threads"] = Threads.nthreads()
         if Threads.nthreads() > 1
-            rec["fork_join_s"] = timeit(empty_batch; budget = budget)
             duh2 = fill(NaN, length(u))
             hand_threaded!(row!, duh2, u, PROBE_T, st)
             duh2 == duh || note("the threaded hand loop disagrees with the serial one")

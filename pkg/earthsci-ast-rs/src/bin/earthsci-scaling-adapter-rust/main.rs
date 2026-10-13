@@ -32,9 +32,9 @@
 //! child's `RAYON_NUM_THREADS`, the budget the tape splits large calls across)
 //! and the hand loop (its own fork-join, `fork_join.rs`); `--threads 1` runs
 //! both serially. A threaded child also times, in the same process, the serial
-//! hand loop, one empty fork-join of the hand loop's pool, and (for a small
-//! call) native's call with its thread budget forced to one: the inputs of the
-//! speed gate's small-call floor (README "Gates").
+//! hand loop and, below N = 10^4, native's call with its thread budget forced
+//! to one: what the threaded speed gate holds a small problem to (README
+//! "Gates").
 
 mod fork_join;
 mod hand_loops;
@@ -105,9 +105,10 @@ const ALLOC_CALLS: u64 = 4;
 const BUILD_BUDGET_S: f64 = 1.0;
 const MAX_BUILDS: usize = 10;
 
-/// A threaded run times native's serial call only where the serial hand loop
-/// takes less than this, far above any small-call floor the gate applies.
-const SERIAL_NATIVE_CAP_S: f64 = 1e-3;
+/// A threaded run times native's serial call below this ladder size N, where
+/// the speed gate compares the threaded call with it (manifest
+/// `gates.speed.small_n_max`).
+const SERIAL_NATIVE_MAX_N: u64 = 10_000;
 
 /// Moves a borrow of the single-threaded compiled program onto the one-thread
 /// rayon pool that runs native's serial call.
@@ -478,7 +479,7 @@ fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
     m
 }
 
-const FIELDS: [&str; 19] = [
+const FIELDS: [&str; 18] = [
     "reason",
     "n_bytes",
     "build_s",
@@ -489,7 +490,6 @@ const FIELDS: [&str; 19] = [
     "dense_bytes",
     "serial_steady_rhs_s",
     "hand_loop_serial_s",
-    "fork_join_s",
     "code_size",
     "first_call_s",
     "steady_rhs_s",
@@ -675,22 +675,10 @@ fn measure_one(one: &One) -> Map<String, Value> {
             let hand = median_time(|| hl.run(&canon_state, &mut hdy, pool.as_ref()));
             r.insert("hand_loop_s".into(), json!(hand));
             let hand_serial = match &pool {
-                Some(p) => {
-                    let fork_join = median_time(|| p.run(&|_| {}));
-                    r.insert("fork_join_s".into(), json!(fork_join));
-                    median_time(|| hl.run(&canon_state, &mut hdy, None))
-                }
+                Some(_) => median_time(|| hl.run(&canon_state, &mut hdy, None)),
                 None => hand,
             };
             r.insert("hand_loop_serial_s".into(), json!(hand_serial));
-            if pool.is_some() && hand_serial < SERIAL_NATIVE_CAP_S {
-                match serial_native(&compiled, &state, &params, &native_dy) {
-                    Ok(t) => {
-                        r.insert("serial_steady_rhs_s".into(), json!(t));
-                    }
-                    Err(msg) => return failed(r, msg),
-                }
-            }
             r.insert(
                 "hand_loop_threads".into(),
                 json!(hl.threads_used(one.threads)),
@@ -699,6 +687,15 @@ fn measure_one(one: &One) -> Map<String, Value> {
         }
         Err(msg) => {
             r.insert("hand_loop_error".into(), json!(msg));
+        }
+    }
+
+    if one.threads > 1 && entry["n"].as_u64().is_some_and(|n| n < SERIAL_NATIVE_MAX_N) {
+        match serial_native(&compiled, &state, &params, &native_dy) {
+            Ok(t) => {
+                r.insert("serial_steady_rhs_s".into(), json!(t));
+            }
+            Err(msg) => return failed(r, msg),
         }
     }
 

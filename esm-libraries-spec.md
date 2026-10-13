@@ -561,7 +561,9 @@ what each value MEANS, which is the part a binding must not reinterpret.
   events, implicit equations and SDE noise (§9.6.6's `unsupported_construct`),
   and a spatial operator with no discretization rule (`unlowered_operator`,
   which every compiler refuses) — and a refusal of anything else is a defect
-  in the binding, not coverage still to come.
+  in the binding, not coverage still to come. The conformance tiers hold Julia
+  and Rust to this; Python's `native` gaps are recorded there as named
+  exclusions.
 - **`interpreter`** — *deliberately simple; the correctness check for the other
   compilers, and nothing else.* The reference evaluator, every fast tier off,
   complete over the evaluable core. It carries **no performance promise of any

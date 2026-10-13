@@ -20,6 +20,7 @@ tests/conformance/scaling/
 ├── generate.py          # the one shared generator (deterministic)
 ├── manifest.json        # families, size ladders, gates and thresholds, the ledger
 ├── check.py             # applies the gates and the ledger to result files
+├── sweep_issue.py       # turns a red clean sweep's check.py --json into a GitHub issue
 ├── test_check.py        # the checker's own test, on canned result files
 ├── sweep.sh             # the Slurm driver for the full ladder (submits sweep.sbatch jobs)
 ├── sweep.sbatch         # one sweep job: one family, every size, one thread mode
@@ -154,13 +155,12 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
     "dy_max_abs": 0.0,
     "interpreter_max_abs_diff": 0.0,
     "hand_loop_serial_s": 0.0,
-    "serial_steady_rhs_s": null,
-    "fork_join_s": null}]}
+    "serial_steady_rhs_s": null}]}
 ```
 
 `manifest.json`'s `result_format_version` is 2: version 1 had no
-`build_repeats`, `dense_bytes`, `hand_loop_serial_s`, `serial_steady_rhs_s` or
-`fork_join_s`, and its `build_s` was a single build. A version-1 file still
+`build_repeats`, `dense_bytes`, `hand_loop_serial_s` or `serial_steady_rhs_s`,
+and its `build_s` was a single build. A version-1 file still
 checks: a missing field turns off only the allowance or carve-out that reads it,
 and the row's note says so.
 
@@ -179,8 +179,7 @@ and the row's note says so.
 | `allocs_per_call` | bytes allocated per steady call (Rust: a counting global allocator in the adapter binary; Julia: `@allocated`) |
 | `hand_loop_s` | median steady time of the family's hand-written loop on the same state, timed the same way; threaded runs time the threaded loop |
 | `hand_loop_serial_s` | the serial hand loop, timed the same way in the same process (equal to `hand_loop_s` in a serial run) |
-| `fork_join_s` | threaded runs: the median time of one empty fork-join of the threaded hand loop's own pool at the run's thread count (Rust `fork_join.rs`, Julia an empty `Polyester.@batch`), same process; `null` in a serial run |
-| `serial_steady_rhs_s` | threaded runs, where the serial hand loop takes under 1 ms: native's steady call with its thread budget forced to one, same process (Rust: inside a one-thread rayon pool; Julia: a second build whose sections are all held serial). Its `dy` must be bit-identical to the threaded call's, or the result is an error. `null` otherwise |
+| `serial_steady_rhs_s` | threaded runs below N = 10^4 (the speed gate's `small_n_max`): native's steady call with its thread budget forced to one, same process (Rust: inside a one-thread rayon pool; Julia: a second build whose sections are all held serial). Its `dy` must be bit-identical to the threaded call's, or the result is an error. `null` otherwise |
 | `hand_loop_max_abs_diff` | max over the state of `abs(dy_hand - dy_compiler)` |
 | `dy_max_abs` | max over the state of `abs(dy_compiler)`, the scale for the hand-loop check |
 | `interpreter_max_abs_diff` | max `abs(dy_compiler - dy_interpreter)` at the same point, or `null` when the adapter did not run the interpreter (it does so only up to a size cap, since the interpreter walks per cell) |
@@ -227,7 +226,7 @@ Thresholds live in `manifest.json` under `gates`.
 | `no_steady_alloc` | deterministic | `allocs_per_call` is 0 (null on a built document fails, unless the result declares it unmeasurable). A ledger entry for it states `max_bytes_per_call`, the most it excuses, and a measure past that bound is red (`EXCEEDS`) |
 | `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast. Checked against the interpreter when native refused |
 | `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns plus the document-size and dense-array allowances below, over the smallest and largest N that built with at most 10^6 cells |
-| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise). Two families stop short of 10^4 states and lower it to 2000 through `gate_overrides`: `source_receptor`, whose work is N^2, and `regrid`, whose ladder stops at 6324 states and whose call at 2000 states is already a few microseconds. In a threaded file, a call below the small-call floor (below) is checked against native's own serial call instead |
+| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise). Two families stop short of 10^4 states and lower it to 2000 through `gate_overrides`: `source_receptor`, whose work is N^2, and `regrid`, whose ladder stops at 6324 states and whose call at 2000 states is already a few microseconds. In a threaded file, a result below N = 10^4 is checked against native's own serial call instead (below) |
 
 ### The build slope's document-size allowance
 
@@ -288,24 +287,48 @@ the measurement). It pays for the materialized shape, not for work per admitted
 element, which still has to fit the rest of the limit. A build that writes no
 declared-dense array (`dense_bytes` 0 at both ends, or `null`) gets nothing.
 
-### The threaded speed gate's small-call floor
+### The threaded speed gate below N = 10^4
 
-Threads cannot win on a call that is only a few fork-joins of work: dispatching
-the shares and joining them costs about as much as the work saved. Below a floor
-the threaded speed gate therefore asks a different question: not whether native
-keeps up with the threaded hand loop, but whether turning threads on made native
-slower than running it serially.
+At small N a threaded call has little work to divide, and a hand loop tuned for
+that one size can still win where a general compiler should not be made to
+chase it. Below `small_n_max` (10^4, the family's ladder size N, the N of the
+ledger) the threaded speed gate therefore asks a different question: not
+whether native keeps up with the threaded hand loop, but whether turning
+threads on made native slower than running it serially.
 
 ```
-small call:  hand_loop_serial_s < small_call_floor.fork_joins * fork_join_s
-then check:  steady_rhs_s / serial_steady_rhs_s <= max_ratio
+N < small_n_max (threaded files):  steady_rhs_s / serial_steady_rhs_s <= max_ratio
 ```
 
-Every quantity is measured in the same process as the result. The floor is
-mechanical, the same for every family: the serial hand loop's call against one
-empty fork-join of the hand loop's own pool, which native's implementation
-cannot move. A serial file, or a result without the three fields, gets no
-carve-out. The manifest's `small_call_floor.why` says how the number was chosen.
+Both times come from the same process: the adapters time native's call a
+second time with its thread budget forced to one. From N = 10^4 up the threaded
+gate is the ratio to the threaded hand loop as before. N is the ladder size and
+not `n_cells`, so `scalar_chemistry`, whose `n_cells` counts boxes (500 at
+N = 10^4), is gated against the hand loop from N = 10^4 like every other
+family. A serial file gets no carve-out, and a result without
+`serial_steady_rhs_s` (written before the adapters recorded it) is gated
+against the hand loop, with a note. The manifest's `small_n_why` records the
+ruling.
+
+### Gating on a hosted runner, and filing a red sweep
+
+A hosted CI runner is not a clean machine: its ratios move by several times
+between runs, in both directions (the manifest's `hosted_runner.why` has the
+numbers). `check.py --hosted` is the mode for it: the deterministic gates run
+exactly, the speed gate fails only past `hosted_runner.max_timing_ratio` (3),
+a regression the size of a fall-back to a slower path, which no noise
+produces, and the build slope is printed but never red (a millisecond of
+jitter over the PR sizes' few hundred states is hundreds of ns/state). The exact bars run on the
+scheduled clean sweep on the dedicated node (`sweep.sh`), whose `check.py
+--json` output `sweep_issue.py` turns into a GitHub issue naming every red row:
+
+```bash
+python3 tests/conformance/scaling/sweep_issue.py "$SCALING_BUILD/check.json"          # print the issue
+python3 tests/conformance/scaling/sweep_issue.py "$SCALING_BUILD/check.json" --file   # file it with gh
+```
+
+It prints nothing and exits 0 when the sweep is green, so a scheduled job can
+run it unconditionally.
 
 The deterministic gates run in PR CI at the PR sizes (the Rust leg of
 `conformance-testing.yml`; `generate.py --check` runs in its lint job). The
