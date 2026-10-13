@@ -51,16 +51,19 @@ pub(super) struct LaneScratch {
 }
 
 /// One thread's register file for a lane program's chunks or strips, and
-/// the folded program's terms and destinations resolved against this
-/// thread's call (rewritten at the start of each).
+/// a folded program's terms and operations resolved against this thread's
+/// call: re-resolved when the program or any of its bases differ from the
+/// call they were resolved for (`resolved`).
 struct LaneWorker {
     regs: Vec<f64>,
     terms: Vec<RTerm>,
     ops: Vec<ROp>,
+    resolved: Option<(*const LaneCode, [*mut f64; N_BASES])>,
 }
 
-// SAFETY: the resolved pointers are written and read only within one call
-// on the thread that runs it.
+// SAFETY: the resolved pointers are dereferenced only by a call whose own
+// program and bases equal the ones they were resolved from (`resolved`), on
+// the thread that runs that call.
 unsafe impl Send for LaneWorker {}
 
 impl LaneWorker {
@@ -69,6 +72,7 @@ impl LaneWorker {
             regs,
             terms: Vec::with_capacity(max_terms),
             ops: Vec::with_capacity(max_sops),
+            resolved: None,
         }
     }
 }
@@ -599,12 +603,16 @@ unsafe fn exec_folded_strips(
     bases[B_SPLAT] = prog.splat.as_ptr() as *mut f64;
     bases[B_DY] = dy.ptr.wrapping_add(lo);
     let b = &bases;
-    // Every term and destination against this call's bases, once.
-    wk.terms.clear();
-    wk.terms.extend(st.tptr.iter().map(|t| RTerm::of(t, b)));
-    wk.ops.clear();
-    let terms = &wk.terms[..];
-    wk.ops.extend(st.sops.iter().enumerate().map(|(k, o)| ROp::of(o, k, terms, b)));
+    // Every term and operation against this call's bases, once.
+    let key = (code as *const LaneCode, bases);
+    if wk.resolved != Some(key) {
+        wk.terms.clear();
+        wk.terms.extend(st.tptr.iter().map(|t| RTerm::of(t, b)));
+        wk.ops.clear();
+        let terms = &wk.terms[..];
+        wk.ops.extend(st.sops.iter().enumerate().map(|(k, o)| ROp::of(o, k, terms, b)));
+        wk.resolved = Some(key);
+    }
     let ops = &wk.ops[..];
     let mut off = 0;
     loop {
