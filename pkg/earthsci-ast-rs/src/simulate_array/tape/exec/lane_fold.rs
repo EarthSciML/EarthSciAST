@@ -635,12 +635,7 @@ impl ROp {
 /// its own mask, which the compiler cannot see is the sign bit: it must not
 /// rewrite `acc + (-t)` as `acc - t`, which differs for a NaN `t`.
 #[inline(always)]
-unsafe fn strip_terms(
-    t: &[RTerm],
-    off: usize,
-    dst: *mut f64,
-    f: impl Fn(f64, f64) -> f64 + Copy,
-) {
+unsafe fn strip_terms(t: &[RTerm], off: usize, dst: *mut f64, f: impl Fn(f64, f64) -> f64 + Copy) {
     let (t0, rest) = t.split_first().expect("a fold has a term");
     let mut acc = [0.0f64; STRIP];
     // SAFETY (every read below): the caller checked that each term's strip

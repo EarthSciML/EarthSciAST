@@ -18,8 +18,8 @@
 
 use super::fused::{MSrc, dispatch_bin_kernel, dispatch_un_kernel, fch_sel, fch1, fch2};
 use super::lane_fold::{
-    B_DY, B_PARAM, B_REG, B_SPLAT, B_STATE, LOp, LaneCode, N_BASES, R_OTHER, ROp, RTerm,
-    SSTRIDE, STRIP, strip_fold,
+    B_DY, B_PARAM, B_REG, B_SPLAT, B_STATE, LOp, LaneCode, N_BASES, R_OTHER, ROp, RTerm, SSTRIDE,
+    STRIP, strip_fold,
 };
 use super::resolve::resolve_scalar;
 use super::*;
@@ -610,7 +610,12 @@ unsafe fn exec_folded_strips(
         wk.terms.extend(st.tptr.iter().map(|t| RTerm::of(t, b)));
         wk.ops.clear();
         let terms = &wk.terms[..];
-        wk.ops.extend(st.sops.iter().enumerate().map(|(k, o)| ROp::of(o, k, terms, b)));
+        wk.ops.extend(
+            st.sops
+                .iter()
+                .enumerate()
+                .map(|(k, o)| ROp::of(o, k, terms, b)),
+        );
         wk.resolved = Some(key);
     }
     let ops = &wk.ops[..];
