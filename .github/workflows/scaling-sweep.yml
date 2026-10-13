@@ -5,13 +5,13 @@ name: Scaling sweep (scheduled)
 # (build cost per state, right-hand side against the hand-written loop) as
 # well as the deterministic ones.
 #
-# Reported, not merge-blocking: a hosted runner is not a clean machine, and
-# the plan makes the timing gates block only at its phase 6. So the report job
-# runs check.py with --report-timing: a timing failure is printed, and only a
-# deterministic one (an unledgered refusal, tape growth, steady allocation, a
-# hand loop that disagrees, a missing result, or a stale ledger entry) turns
-# the run red. The numbers that go into the ledger come from the Slurm driver
-# (tests/conformance/scaling/sweep.sh) on an exclusive node, not from here.
+# A hosted runner is not a clean machine, so the report job runs check.py
+# with --hosted: every deterministic failure (a refusal, tape growth, steady
+# allocation, a hand loop that disagrees, a missing result, or a stale ledger
+# entry) turns the run red, and the speed gate does only past a ratio of 3 (a
+# fall-back-sized regression); the build slope is reported. The exact bars, and the numbers that go into
+# the ledger, come from the clean sweep on the dedicated node
+# (tests/conformance/scaling/sweep.sh), not from here.
 #
 # A hosted runner has 16 GB. Each adapter measures in a child process it kills
 # past --max-rss-gb (12 here, leaving the runner itself room), so a document
@@ -208,11 +208,11 @@ jobs:
           path: scaling-results
           merge-multiple: true
 
-      - name: check.py (timing gates reported, not red)
+      - name: check.py (speed red past 3x; build slope reported)
         run: |
           set +e
           python3 tests/conformance/scaling/check.py scaling-results/*.json \
-            --report-timing --require sweep --json scaling-check.json > scaling-check.txt 2>&1
+            --hosted --require sweep --json scaling-check.json > scaling-check.txt 2>&1
           status=$?
           {
             echo '## Scaling sweep'

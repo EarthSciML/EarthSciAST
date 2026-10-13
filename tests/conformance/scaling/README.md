@@ -358,12 +358,12 @@ python3 tests/conformance/scaling/sweep_issue.py "$SCALING_BUILD/check.json" --f
 It prints nothing and exits 0 when the sweep is green, so a scheduled job can
 run it unconditionally.
 
-The deterministic gates run in PR CI at the PR sizes (the Rust leg of
-`conformance-testing.yml`; `generate.py --check` runs in its lint job). The
-timing gates need a clean machine and the big sizes: they run on the scheduled
-`scaling-sweep.yml` (with `check.py --report-timing`, so they print but never
-go red) and through `sweep.sh`, and do not block merges yet: plan phase 6
-makes them block once the ledger is empty.
+PR CI runs every gate at the PR sizes with `check.py --hosted` (the Julia and
+Rust legs of `conformance-testing.yml`; `generate.py --check` runs in its lint
+job), so a deterministic failure or a speed ratio past 3 blocks the merge. The scheduled `scaling-sweep.yml` runs the full ladder the same way.
+The exact timing bars need a clean machine and the big sizes: they run through
+`sweep.sh` on the dedicated node, and a red sweep is filed with
+`sweep_issue.py` (above).
 The ledger's timing entries come from `sweep.sh` on an exclusive node.
 
 The Rust wasm suite (`pkg/earthsci-ast-rs/tests/wasm_suite.rs`) also builds
