@@ -257,11 +257,11 @@
     },
     "speed": {
       "kind": "timing",
-      "description": "steady_rhs_s / hand_loop_s <= max_ratio, in each result file (serial and threaded runs are separate files). Applied from min_n_states states up (a family's gate_overrides may lower it), below which a call is a few microseconds and the ratio measures timer noise. In a threaded file, a result whose ladder size N is below small_n_max is checked instead as steady_rhs_s / serial_steady_rhs_s <= max_ratio (threaded native no slower than serial native, same process); a result without serial_steady_rhs_s is gated against the hand loop as before.",
+      "description": "steady_rhs_s / hand_loop_s <= max_ratio, in each result file (serial and threaded runs are separate files). Applied from min_n_states states up (a family's gate_overrides may lower it), below which a call is a few microseconds and the ratio measures timer noise. In a threaded file, a result with fewer than small_n_max cells (n_cells) is checked instead as steady_rhs_s / serial_steady_rhs_s <= max_ratio (threaded native no slower than serial native, same process); a result without serial_steady_rhs_s is gated against the hand loop as before.",
       "max_ratio": 1.25,
       "min_n_states": 10000,
       "small_n_max": 10000,
-      "small_n_why": "User ruling 2026-10-12 (small-N carve-out, round 2): below N = 10^4 a threaded call is held to native's own serial call rather than the threaded hand loop, so turning threads on must never make a small problem slower; from 10^4 up the threaded gate is unchanged, and issue #502 must meet it there. N is the family's ladder size (the N of the ledger), not n_cells, so scalar_chemistry, whose n_cells counts boxes (500 at N = 10^4), is gated from N = 10^4 like every other family"
+      "small_n_why": "User rulings 2026-10-12 (small-N carve-out) and 2026-10-13 (keyed on cells): a threaded call over fewer than 10^4 cells is a few microseconds of work, so below small_n_max cells it is held to native's own serial call rather than the threaded hand loop, and turning threads on must never make a small problem slower. From 10^4 cells up the threaded gate is unchanged, and issue #502 must meet it there. Every family's N = 10^4 rung has at least 10^4 cells except scalar_chemistry, whose n_cells counts boxes (500 at N = 10^4, 5000 at 10^5, a threaded call of about 4 us at 10^4), so it falls under the carve-out through N = 10^5"
     }
   },
   "hosted_runner": {

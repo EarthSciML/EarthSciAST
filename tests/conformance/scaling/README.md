@@ -179,7 +179,7 @@ and the row's note says so.
 | `allocs_per_call` | bytes allocated per steady call (Rust: a counting global allocator in the adapter binary; Julia: `@allocated`) |
 | `hand_loop_s` | median steady time of the family's hand-written loop on the same state, timed the same way; threaded runs time the threaded loop |
 | `hand_loop_serial_s` | the serial hand loop, timed the same way in the same process (equal to `hand_loop_s` in a serial run) |
-| `serial_steady_rhs_s` | threaded runs below N = 10^4 (the speed gate's `small_n_max`): native's steady call with its thread budget forced to one, same process (Rust: inside a one-thread rayon pool; Julia: a second build whose sections are all held serial). Its `dy` must be bit-identical to the threaded call's, or the result is an error. `null` otherwise |
+| `serial_steady_rhs_s` | threaded runs below 10^4 cells (`n_cells` under the speed gate's `small_n_max`): native's steady call with its thread budget forced to one, same process (Rust: inside a one-thread rayon pool; Julia: a second build whose sections are all held serial). Its `dy` must be bit-identical to the threaded call's, or the result is an error. `null` otherwise |
 | `hand_loop_max_abs_diff` | max over the state of `abs(dy_hand - dy_compiler)` |
 | `dy_max_abs` | max over the state of `abs(dy_compiler)`, the scale for the hand-loop check |
 | `interpreter_max_abs_diff` | max `abs(dy_compiler - dy_interpreter)` at the same point, or `null` when the adapter did not run the interpreter (it does so only up to a size cap, since the interpreter walks per cell) |
@@ -226,7 +226,7 @@ Thresholds live in `manifest.json` under `gates`.
 | `no_steady_alloc` | deterministic | `allocs_per_call` is 0 (null on a built document fails, unless the result declares it unmeasurable). A ledger entry for it states `max_bytes_per_call`, the most it excuses, and a measure past that bound is red (`EXCEEDS`) |
 | `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast. Checked against the interpreter when native refused |
 | `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns plus the document-size and dense-array allowances below, over the smallest and largest N that built with at most 10^6 cells |
-| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise). Two families stop short of 10^4 states and lower it to 2000 through `gate_overrides`: `source_receptor`, whose work is N^2, and `regrid`, whose ladder stops at 6324 states and whose call at 2000 states is already a few microseconds. In a threaded file, a result below N = 10^4 is checked against native's own serial call instead (below) |
+| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise). Two families stop short of 10^4 states and lower it to 2000 through `gate_overrides`: `source_receptor`, whose work is N^2, and `regrid`, whose ladder stops at 6324 states and whose call at 2000 states is already a few microseconds. In a threaded file, a result below 10^4 cells is checked against native's own serial call instead (below) |
 
 ### The build slope's document-size allowance
 
@@ -287,25 +287,25 @@ the measurement). It pays for the materialized shape, not for work per admitted
 element, which still has to fit the rest of the limit. A build that writes no
 declared-dense array (`dense_bytes` 0 at both ends, or `null`) gets nothing.
 
-### The threaded speed gate below N = 10^4
+### The threaded speed gate below 10^4 cells
 
-At small N a threaded call has little work to divide, and a hand loop tuned for
-that one size can still win where a general compiler should not be made to
-chase it. Below `small_n_max` (10^4, the family's ladder size N, the N of the
-ledger) the threaded speed gate therefore asks a different question: not
-whether native keeps up with the threaded hand loop, but whether turning
-threads on made native slower than running it serially.
+Over fewer than 10^4 cells a threaded call is a few microseconds of work: there
+is little to divide, and a hand loop tuned for that one size can still win
+where a general compiler should not be made to chase it. Below `small_n_max`
+cells (`n_cells`, 10^4) the threaded speed gate therefore asks a different
+question: not whether native keeps up with the threaded hand loop, but whether
+turning threads on made native slower than running it serially.
 
 ```
-N < small_n_max (threaded files):  steady_rhs_s / serial_steady_rhs_s <= max_ratio
+n_cells < small_n_max (threaded files):  steady_rhs_s / serial_steady_rhs_s <= max_ratio
 ```
 
 Both times come from the same process: the adapters time native's call a
-second time with its thread budget forced to one. From N = 10^4 up the threaded
-gate is the ratio to the threaded hand loop as before. N is the ladder size and
-not `n_cells`, so `scalar_chemistry`, whose `n_cells` counts boxes (500 at
-N = 10^4), is gated against the hand loop from N = 10^4 like every other
-family. A serial file gets no carve-out, and a result without
+second time with its thread budget forced to one. From 10^4 cells up the
+threaded gate is the ratio to the threaded hand loop as before. Every family's
+N = 10^4 rung has at least 10^4 cells, except `scalar_chemistry`, whose
+`n_cells` counts boxes (500 at N = 10^4, 5000 at 10^5): its threaded calls are
+a few microseconds, and it falls under the carve-out through N = 10^5. A serial file gets no carve-out, and a result without
 `serial_steady_rhs_s` (written before the adapters recorded it) is gated
 against the hand loop, with a note. The manifest's `small_n_why` records the
 ruling.

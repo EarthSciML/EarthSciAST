@@ -173,8 +173,8 @@ def small_call(run, r, gate):
     """Whether a threaded result falls under `speed`'s small-N carve-out, and a
     note saying why.
 
-    Below `small_n_max` (the family's ladder size N, the N of the ledger) a
-    threaded result is not compared with the threaded hand loop: native's
+    Below `small_n_max` cells (`n_cells`, the actual cell count) a threaded
+    result is not compared with the threaded hand loop: native's
     threaded call must instead be no slower than its own serial call
     (`serial_steady_rhs_s`, measured in the same process) by the same
     `max_ratio`. A serial run gets no carve-out, and neither does a result
@@ -183,12 +183,14 @@ def small_call(run, r, gate):
     limit = gate.get("small_n_max")
     if not limit or (run.get("threads") or 1) == 1:
         return False, ""
-    n = r.get("n", r.get("n_cells")) or 0
-    if n >= limit:
+    cells = r.get("n_cells", r.get("n")) or 0
+    if cells >= limit:
         return False, ""
     if not r.get("serial_steady_rhs_s"):
-        return False, f"N < {limit:g} but no serial_steady_rhs_s: gated against the hand loop"
-    return True, f"N < {limit:g}: threaded native / serial native"
+        return False, (
+            f"{cells} cells < {limit:g} but no serial_steady_rhs_s: gated against the hand loop"
+        )
+    return True, f"{cells} cells < {limit:g}: threaded native / serial native"
 
 
 def code_size_slack(run, gates, family_spec):

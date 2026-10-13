@@ -274,12 +274,17 @@ def main():
     assert code == 1, o  # a serial run has no carve-out
     code, o = run(grid(1000, None), [], threads=4)
     assert code == 1, o  # nor a result without the serial native measure
-    # N is the ladder size, not n_cells: scalar_chemistry at N = 10^4 has 500
-    # boxes and is gated against the hand loop.
+    # The floor is n_cells, not the ladder size: scalar_chemistry at N = 10^4
+    # has 500 boxes and falls under it; transport_3d's N = 10^4 rung has 10648
+    # cells and does not.
     sc = [result("scalar_chemistry", 10000, n_cells=500, steady_rhs_s=4.8e-6, hand_loop_s=1e-6,
                  serial_steady_rhs_s=4.5e-6)]
     code, o = run(sc, [], threads=4)
-    assert code == 1 and o[("scalar_chemistry", 10000, "speed")] == "FAIL", o
+    assert code == 0 and o[("scalar_chemistry", 10000, "speed")] == "pass", o
+    tr = [result("transport_3d", 10000, n_cells=10648, steady_rhs_s=4.8e-6, hand_loop_s=1e-6,
+                 serial_steady_rhs_s=4.5e-6)]
+    code, o = run(tr, [], threads=4)
+    assert code == 1 and o[("transport_3d", 10000, "speed")] == "FAIL", o
 
     # --hosted: every gate runs, but a timing gate is red only past
     # hosted_runner.max_timing_ratio (3) times its bar.

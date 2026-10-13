@@ -31,7 +31,7 @@
 # more than one thread: with one thread native runs its serial path, and with
 # `-t K` native runs whatever it threads today. The result file's `threads` is Julia's thread
 # count, and `hand_loop_s` is then the threaded hand loop. A threaded run also
-# records, in the same process, the serial hand loop and, below N = 10^4,
+# records, in the same process, the serial hand loop and, below 10^4 cells,
 # native's serial call (a second build whose sections all stay serial), which
 # the threaded speed gate holds a small problem to (../README.md, "Gates").
 #
@@ -321,9 +321,10 @@ end
 
 const BUILD_BUDGET_S = 1.0
 const MAX_BUILDS = 10
-# A threaded run times native's serial call below this ladder size N, where the
-# speed gate compares the threaded call with it (manifest gates.speed.small_n_max).
-const SERIAL_NATIVE_MAX_N = 10_000
+# A threaded run times native's serial call below this many cells (`n_cells`),
+# where the speed gate compares the threaded call with it (manifest
+# gates.speed.small_n_max).
+const SERIAL_NATIVE_MAX_CELLS = 10_000
 
 # Bytes of the declared-dense arrays a build wrote: its setup arrays, which it
 # allocates at their declared shape and fills.
@@ -404,7 +405,7 @@ function measure!(rec, path, entry, compiler, budget, interp_cap)
     end
     if du !== nothing
         hand_loop!(rec, prob, path, entry, du, budget, "native")
-        if Threads.nthreads() > 1 && Int(entry["n"]) < SERIAL_NATIVE_MAX_N
+        if Threads.nthreads() > 1 && Int(entry["n_cells"]) < SERIAL_NATIVE_MAX_CELLS
             serial_native!(rec, path, entry, compiler, dy_by_name(prob, du, names), budget)
         end
     elseif iprob !== nothing

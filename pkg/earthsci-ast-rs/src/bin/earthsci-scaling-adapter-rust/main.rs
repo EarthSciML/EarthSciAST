@@ -32,7 +32,7 @@
 //! child's `RAYON_NUM_THREADS`, the budget the tape splits large calls across)
 //! and the hand loop (its own fork-join, `fork_join.rs`); `--threads 1` runs
 //! both serially. A threaded child also times, in the same process, the serial
-//! hand loop and, below N = 10^4, native's call with its thread budget forced
+//! hand loop and, below 10^4 cells, native's call with its thread budget forced
 //! to one: what the threaded speed gate holds a small problem to (README
 //! "Gates").
 
@@ -105,10 +105,10 @@ const ALLOC_CALLS: u64 = 4;
 const BUILD_BUDGET_S: f64 = 1.0;
 const MAX_BUILDS: usize = 10;
 
-/// A threaded run times native's serial call below this ladder size N, where
-/// the speed gate compares the threaded call with it (manifest
-/// `gates.speed.small_n_max`).
-const SERIAL_NATIVE_MAX_N: u64 = 10_000;
+/// A threaded run times native's serial call below this many cells
+/// (`n_cells`), where the speed gate compares the threaded call with it
+/// (manifest `gates.speed.small_n_max`).
+const SERIAL_NATIVE_MAX_CELLS: u64 = 10_000;
 
 /// Moves a borrow of the single-threaded compiled program onto the one-thread
 /// rayon pool that runs native's serial call.
@@ -690,7 +690,11 @@ fn measure_one(one: &One) -> Map<String, Value> {
         }
     }
 
-    if one.threads > 1 && entry["n"].as_u64().is_some_and(|n| n < SERIAL_NATIVE_MAX_N) {
+    if one.threads > 1
+        && entry["n_cells"]
+            .as_u64()
+            .is_some_and(|c| c < SERIAL_NATIVE_MAX_CELLS)
+    {
         match serial_native(&compiled, &state, &params, &native_dy) {
             Ok(t) => {
                 r.insert("serial_steady_rhs_s".into(), json!(t));
