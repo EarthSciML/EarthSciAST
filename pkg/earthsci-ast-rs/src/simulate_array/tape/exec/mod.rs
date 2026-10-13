@@ -71,6 +71,8 @@ mod par_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(super) use par::force_split;
 #[cfg(not(target_arch = "wasm32"))]
+mod plan;
+#[cfg(not(target_arch = "wasm32"))]
 mod pool;
 mod resolve;
 #[cfg(test)]
@@ -110,7 +112,7 @@ unsafe fn copy_strided_maybe_split(
 fn call_ways(exec: &TapeExec) -> usize {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        exec.fscratch.workers.call_ways
+        exec.scratch.fscratch.workers.call_ways
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -257,21 +259,13 @@ pub(crate) struct TapeExec {
     /// output box, so its zero fill can be skipped (every element is
     /// overwritten by a part).
     asm_covered: Vec<bool>,
-    /// The resolved parts of the assembly being split (native targets
-    /// only), sized by the first split so steady calls do not allocate.
-    #[cfg(not(target_arch = "wasm32"))]
-    asm_parts: Vec<par::AsmPart>,
     /// Step 4 epochs: the parameter / forcing epochs the CONST resp. SEGMENT
     /// sections last primed under (0 = never primed; live epochs start at 1).
     /// Checked per call as two integer compares — see `run_tape_call`.
     primed_param_epoch: u64,
     primed_forcing_epoch: u64,
-    /// Step 4: chunk register file for fused groups
-    /// (`max n_regs over specs × FCHUNK` doubles, recycled across groups).
-    fregs: Vec<f64>,
-    /// A fused group's resolved operands, sized for the largest group so a
-    /// call never allocates.
-    fscratch: fused::FusedScratch,
+    /// The calling thread's scratch for straight-line instructions.
+    scratch: Scratch,
     /// Per fused group: the resolved positions of its folded gathers whose
     /// subscripts the CONST or SEGMENT section defines, refilled each time
     /// those sections run.
@@ -299,6 +293,33 @@ pub(crate) struct TapeExec {
     seg_chains: Vec<chain::SegChain>,
     #[cfg(not(target_arch = "wasm32"))]
     chain_scratch: chain::ChainScratch,
+    /// The phases a threaded call runs in (see `plan`), built by the first
+    /// call at a split width and kept while the width holds.
+    #[cfg(not(target_arch = "wasm32"))]
+    plan: Option<plan::CallPlan>,
+    /// The scratch of each thread beside the calling one in a planned call,
+    /// grown the first time a call forks wider.
+    #[cfg(not(target_arch = "wasm32"))]
+    peers: Vec<Scratch>,
+    /// The program's own slot offsets, from which a plan lays out the slots
+    /// it moves (`slot_off` is the current plan's layout once one is built).
+    #[cfg(not(target_arch = "wasm32"))]
+    base_slot_off: Vec<usize>,
+}
+
+/// One thread's mutable scratch for straight-line instructions (see
+/// [`interp::exec_straight`]): the calling thread's lives in [`TapeExec`].
+pub(super) struct Scratch {
+    /// Step 4: chunk register file for fused groups
+    /// (`max n_regs over specs × FCHUNK` doubles, recycled across groups).
+    fregs: Vec<f64>,
+    /// A fused group's resolved operands, sized for the largest group so a
+    /// call never allocates.
+    fscratch: fused::FusedScratch,
+    /// The resolved parts of the assembly being split (native targets
+    /// only), sized by the first split so steady calls do not allocate.
+    #[cfg(not(target_arch = "wasm32"))]
+    asm_parts: Vec<par::AsmPart>,
 }
 
 impl TapeExec {
@@ -382,6 +403,8 @@ impl TapeExec {
             .unwrap_or(0);
         #[cfg(not(target_arch = "wasm32"))]
         let seg_chains = chain::seg_chains(prog, &slot_off);
+        #[cfg(not(target_arch = "wasm32"))]
+        let slot_off_base = slot_off.clone();
         TapeExec {
             slab,
             slot_off,
@@ -400,12 +423,14 @@ impl TapeExec {
             dy_home_quiet: Vec::new(),
             plan_full,
             asm_covered: assemblies_covered(prog),
-            #[cfg(not(target_arch = "wasm32"))]
-            asm_parts: Vec::new(),
             primed_param_epoch: 0,
             primed_forcing_epoch: 0,
-            fregs: vec![0.0f64; max_fregs * FCHUNK],
-            fscratch: fused::FusedScratch::for_program(prog),
+            scratch: Scratch {
+                fregs: vec![0.0f64; max_fregs * FCHUNK],
+                fscratch: fused::FusedScratch::for_program(prog),
+                #[cfg(not(target_arch = "wasm32"))]
+                asm_parts: Vec::new(),
+            },
             idx_tables: fused::index_tables_for(prog),
             lscratch: lanes::LaneScratch::for_program(prog),
             exports_active: false,
@@ -417,6 +442,12 @@ impl TapeExec {
             seg_chains,
             #[cfg(not(target_arch = "wasm32"))]
             chain_scratch: chain::ChainScratch::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            plan: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            peers: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            base_slot_off: slot_off_base,
         }
     }
 }
@@ -583,6 +614,42 @@ pub(in crate::simulate_array::tape) fn forcing_len(fr: &ForcingRef) -> usize {
     } else {
         fr.shape.iter().product()
     }
+}
+
+/// Run the call's continuous instructions `range`: as a plan of phases when
+/// the call splits and publishes nothing (see `plan`), else through the
+/// instruction loop.
+fn run_continuous(env: &Env, range: std::ops::Range<usize>, exec: &mut TapeExec, dy: &mut [f64]) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ways = call_ways(exec);
+        if ways > 1 && !exec.exports_active {
+            if !exec.plan.as_ref().is_some_and(|p| p.fits(&range, ways)) {
+                exec.plan = plan::CallPlan::build(
+                    env.prog,
+                    range.clone(),
+                    ways,
+                    &exec.seg_chains,
+                    &exec.dy_home_quiet,
+                    &exec.base_slot_off,
+                );
+                // Every later call, planned or not, runs in the plan's
+                // layout: the slots it moved hold no value across calls.
+                if let Some(p) = &exec.plan {
+                    if exec.slab.len() < p.slab_len {
+                        exec.slab.resize(p.slab_len, 0.0);
+                    }
+                    exec.slot_off.clone_from(&p.slot_off);
+                }
+            }
+            if let Some(p) = exec.plan.take() {
+                plan::run_plan(&p, env, exec, dy);
+                exec.plan = Some(p);
+                return;
+            }
+        }
+    }
+    run_range(env, range, exec, dy);
 }
 
 #[cfg(test)]
@@ -849,8 +916,8 @@ pub(in crate::simulate_array) fn run_tape_call(
     let exec = &mut ctx.exec;
     #[cfg(not(target_arch = "wasm32"))]
     {
-        exec.fscratch.workers.call_ways = par::call_ways(exec.call_work);
-        exec.fscratch.workers.threads = par::thread_budget();
+        exec.scratch.fscratch.workers.call_ways = par::call_ways(exec.call_work);
+        exec.scratch.fscratch.workers.threads = par::thread_budget();
     }
     // Zero what no rule writes; every other element is overwritten below.
     if exec.dy_zero_len != dy.len() {
@@ -858,6 +925,10 @@ pub(in crate::simulate_array) fn run_tape_call(
         exec.dy_home = dy_homes(prog, dy.len());
         exec.dy_home_quiet = quiet_homes(prog, &exec.dy_home);
         exec.dy_zero_len = dy.len();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            exec.plan = None;
+        }
     }
     for &(a, b) in &exec.dy_zero {
         dy[a..b].fill(0.0);
@@ -943,7 +1014,7 @@ pub(in crate::simulate_array) fn run_tape_call(
     } else {
         prime_end + prog.n_rhs as usize
     };
-    run_range(&env, prime_end..end, exec, dy);
+    run_continuous(&env, prime_end..end, exec, dy);
     exec.state_rm = state_rm;
     exec.mirror = mirror;
 

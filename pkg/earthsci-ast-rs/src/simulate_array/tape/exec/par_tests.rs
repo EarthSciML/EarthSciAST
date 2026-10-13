@@ -197,3 +197,122 @@ fn the_regrid_chain_folds_only_admitted_pairs() {
         }
     }
 }
+
+/// The fewest pool dispatches any of a few steady calls of `path` made with
+/// its calls forced `ways` wide (the counter is process-wide and other tests
+/// split too).
+fn steady_dispatches(path: &Path, ways: usize) -> usize {
+    let opts = ProblemOptions {
+        compiler: Some(Compiler::Native),
+        rhs: Rhs::Always,
+        ..Default::default()
+    };
+    let prob = esm_problem(path, (0.0, 1.0), opts).expect("the fixture builds");
+    let c = prob.debug_array_compiled().expect("a right-hand side");
+    let n = c.state_variable_names().len();
+    let state: Vec<f64> = (0..n).map(|k| 1.0 + 0.1 * (k as f64).sin()).collect();
+    let params = c.debug_resolve_params(&HashMap::new());
+    let mut scratch = c.debug_new_scratch_taped();
+    let mut stats = crate::simulate_array::RhsStats::default();
+    let mut dy = vec![0.0; n];
+    force_split(Some(ways));
+    c.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
+    let steady = (0..10)
+        .map(|_| {
+            let before = DISPATCHES.load(Ordering::Relaxed);
+            c.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
+            DISPATCHES.load(Ordering::Relaxed) - before
+        })
+        .min()
+        .unwrap_or(usize::MAX);
+    force_split(None);
+    steady
+}
+
+/// A chemistry grid's call is twenty species' advection (a face group, the
+/// assembled box and the interior group each) and the mechanism: split one
+/// instruction at a time it entered the pool about forty times. Planned in
+/// phases of independent instructions, with the species' recycled storage
+/// given apart, it forks once per phase.
+#[test]
+fn a_chemistry_call_forks_once_per_phase() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/scaling/fixtures/chemistry_grid/chemistry_grid_N1000.esm");
+    let forks = steady_dispatches(&path, 4);
+    assert!(
+        forks <= 6,
+        "a steady chemistry call made {forks} fork-joins"
+    );
+}
+
+/// `dy` of `path` through the production scratch, its calls forced `ways`
+/// wide, or `None` when the document does not build a native right-hand side
+/// (that is another tier's concern).
+fn try_rhs(path: &Path, ways: usize) -> Option<Vec<f64>> {
+    let opts = ProblemOptions {
+        compiler: Some(Compiler::Native),
+        rhs: Rhs::Always,
+        ..Default::default()
+    };
+    let run = || {
+        let prob = esm_problem(path, (0.0, 1.0), opts).ok()?;
+        let c = prob.debug_array_compiled()?;
+        let n = c.state_variable_names().len();
+        let state: Vec<f64> = (0..n)
+            .map(|k| 1.0 + 0.1 * ((k as f64) * 0.37).sin())
+            .collect();
+        let params = c.debug_resolve_params(&HashMap::new());
+        let mut scratch = c.debug_new_scratch_taped();
+        let mut stats = crate::simulate_array::RhsStats::default();
+        let mut dy = vec![0.0; n];
+        force_split(Some(ways));
+        c.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
+        c.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
+        force_split(None);
+        Some(dy)
+    };
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
+        .ok()
+        .flatten();
+    force_split(None);
+    out
+}
+
+/// Every conformance and valid document that builds a native right-hand side
+/// gives the serial call's `dy` to the bit when its calls are forced to split
+/// (planned in phases, see `plan`), so the plan's reordering and storage
+/// moves are checked well beyond the scaling families.
+#[test]
+fn split_calls_match_serial_across_the_corpus() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests");
+    let mut docs = Vec::new();
+    let mut stack = vec![root.join("conformance"), root.join("valid")];
+    while let Some(dir) = stack.pop() {
+        for e in std::fs::read_dir(&dir).expect("the test corpus") {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "esm") {
+                docs.push(p);
+            }
+        }
+    }
+    docs.sort();
+    let mut checked = 0usize;
+    for path in &docs {
+        let Some(serial) = try_rhs(path, 1) else {
+            continue;
+        };
+        let split =
+            try_rhs(path, 3).unwrap_or_else(|| panic!("{}: split call failed", path.display()));
+        for (k, (a, b)) in serial.iter().zip(&split).enumerate() {
+            assert!(
+                a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()),
+                "{}: dy[{k}] split 3 wide is {b:?}, serial {a:?}",
+                path.display()
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked >= 50, "only {checked} documents built");
+}
