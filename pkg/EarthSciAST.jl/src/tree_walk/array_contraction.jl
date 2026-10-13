@@ -621,7 +621,7 @@ end
 # contraction, a TABLE fold's admitted pairs) is chunked at fewer cells than a
 # section whose cells are one expression each.
 function _ac_work(ncells::Int, fold::Union{Nothing,_ACFold}, body::_Node)
-    tw = _cg_node_tree_size(body)
+    tw = _node_work(body)
     fold === nothing && return Base.Checked.checked_mul(ncells, 1 + tw)
     terms = if _acfold_is_table(fold)
         fold.seg[end] - 1

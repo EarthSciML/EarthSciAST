@@ -1170,6 +1170,14 @@ _reset_thread_tally!() = (empty!(_THREAD_TALLY); nothing)
 # a tuning threshold, not a refusal boundary — both sides of it evaluate the
 # same bits, so no compiler refuses a rule for crossing it.
 const _THREAD_MIN_WORK_DEFAULT = 6000
+
+# The least cells per chunk for a section whose loops may read-modify-write
+# each `du` slot once per reduced term (an interchanged affine reduction): the
+# cache line two neighbouring chunks share at their boundary is then written by
+# both threads on every term, so a chunk must hold enough cells to outweigh
+# that traffic. Not read from the environment: ESS_THREADS_MIN_WORK set to 0
+# still leaves it, and set past a section's work still forces it serial.
+const _THREAD_MIN_RMW_CELLS = 512
 function _thread_min_work()
     v = tryparse(Int, get(ENV, "ESS_THREADS_MIN_WORK", ""))
     v === nothing && (v = tryparse(Int, get(ENV, "ESS_THREADS_MIN_CELLS", "")))
