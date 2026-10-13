@@ -257,14 +257,16 @@
     },
     "speed": {
       "kind": "timing",
-      "description": "steady_rhs_s / hand_loop_s <= max_ratio, in each result file (serial and threaded runs are separate files). Applied from min_n_states states up (a family's gate_overrides may lower it), below which a call is a few microseconds and the ratio measures timer noise. In a threaded file, a result whose serial hand loop (hand_loop_serial_s) takes less than small_call_floor.fork_joins times one empty fork-join of the hand loop's own pool (fork_join_s, same process) is too little work for threads to win: it is checked as steady_rhs_s / serial_steady_rhs_s <= max_ratio instead (threaded native no slower than serial native), and a result without those three fields gets no carve-out.",
+      "description": "steady_rhs_s / hand_loop_s <= max_ratio, in each result file (serial and threaded runs are separate files). Applied from min_n_states states up (a family's gate_overrides may lower it), below which a call is a few microseconds and the ratio measures timer noise. In a threaded file, a result whose ladder size N is below small_n_max is checked instead as steady_rhs_s / serial_steady_rhs_s <= max_ratio (threaded native no slower than serial native, same process); a result without serial_steady_rhs_s is gated against the hand loop as before.",
       "max_ratio": 1.25,
       "min_n_states": 10000,
-      "small_call_floor": {
-        "fork_joins": 8,
-        "why": "PROPOSED, pending the user's confirmation (user ruling 2026-10-10, small-N carve-out). Measured on the local node, cores 4-5, two threads, 2026-10-12: one empty fork-join of the hand loop's pool is 0.20-0.23 us in Rust (fork_join.rs) and 0.23-0.26 us in Julia (an empty Polyester @batch), so 8 fork-joins is about 2 us of serial work, where a two-way split saves at most about 1 us against several fork-join-sized costs (the dispatch, the join and the cold lines a second core pulls). It is set below every ledgered threaded entry: the smallest serial hand loop at a gated size is Rust regrid at N = 1000 (about 5 us, 24 fork-joins), which the threaded hand loop still runs 1.75x faster. Rust chemistry_grid at N = 1000, the case the ruling named, takes about 70 us serially (about 330 fork-joins) and its threaded hand loop is 1.9x faster on two threads and 3.6x on four, so no floor that leaves out regrid N = 1000 and scalar_chemistry N = 10^4 covers it"
-      }
+      "small_n_max": 10000,
+      "small_n_why": "User ruling 2026-10-12 (small-N carve-out, round 2): below N = 10^4 a threaded call is held to native's own serial call rather than the threaded hand loop, so turning threads on must never make a small problem slower; from 10^4 up the threaded gate is unchanged, and issue #502 must meet it there. N is the family's ladder size (the N of the ledger), not n_cells, so scalar_chemistry, whose n_cells counts boxes (500 at N = 10^4), is gated from N = 10^4 like every other family"
     }
+  },
+  "hosted_runner": {
+    "max_timing_ratio": 3,
+    "why": "User ruling 2026-10-12 (blocking the timing gates, option C): a hosted runner is not a clean machine. In the 2026-10-12 scheduled sweep (4 vCPUs, the code of 4c2a9bb9d) against the local clean sweep, speed ratios moved by up to 4.6x and the verdict flipped at 20 of 124 gated points, but no point that passes locally read above 2.81. check.py --hosted holds every timing gate to 3 times its bar, which catches a fall-back-sized regression and nothing finer; the exact bars run on the scheduled clean sweep on the dedicated node (sweep.sh)"
   },
   "ledger": {
     "rust": [

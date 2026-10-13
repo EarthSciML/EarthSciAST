@@ -2,7 +2,8 @@
 """Apply the scaling tier's gates and known-failure ledger to adapter result files.
 
     check.py RESULT.json [RESULT.json ...] [--gates deterministic|all]
-             [--require pr|sweep] [--manifest PATH] [--json OUT]
+             [--require pr|sweep] [--report-timing | --hosted]
+             [--manifest PATH] [--json OUT]
 
 Prints one row per (file, family, N, gate) with the measured value and one of
     pass      the gate holds
@@ -20,7 +21,8 @@ Prints one row per (file, family, N, gate) with the measured value and one of
               document that built is a FAIL: a missing measurement)
     MISSING   --require named a (family, N) no result file covers   (red)
 Exit status 0 when nothing is red, 1 otherwise. With --report-timing the
-timing gates are printed but never red. The gates, thresholds and the
+timing gates are printed but never red; with --hosted (a hosted CI runner)
+a timing gate is red only past hosted_runner.max_timing_ratio times its bar. The gates, thresholds and the
 ledger live in manifest.json; README.md says what each gate means.
 """
 
@@ -147,7 +149,10 @@ def per_result_checks(run, r, gates, family_spec):
         if small:
             h = r.get("serial_steady_rhs_s")
             note = why if big else note
+        elif why and big:
+            note = why
         ratio = s / h if (ok and s is not None and h) else None
+        bound = HOSTED_RATIO if HOSTED_RATIO else g["max_ratio"]
         out.append(
             Check(
                 run,
@@ -155,7 +160,7 @@ def per_result_checks(run, r, gates, family_spec):
                 n,
                 "speed",
                 TIMING,
-                None if (ratio is None or not big) else ratio <= g["max_ratio"],
+                None if (ratio is None or not big) else ratio <= bound,
                 ratio,
                 note,
             )
@@ -164,29 +169,25 @@ def per_result_checks(run, r, gates, family_spec):
 
 
 def small_call(run, r, gate):
-    """Whether a threaded result falls under `speed`'s small-call floor, and a
+    """Whether a threaded result falls under `speed`'s small-N carve-out, and a
     note saying why.
 
-    Below the floor a whole call is too little work for threads to win: the
-    serial hand loop takes less than `small_call_floor.fork_joins` times one
-    empty fork-join of the hand loop's own pool (`fork_join_s`, measured in the
-    same process). There the threaded run is not compared with the threaded
-    hand loop; native's threaded call must instead be no slower than its own
-    serial call (`serial_steady_rhs_s`, same process) by the same `max_ratio`.
-    A serial run, or a result without the three measurements (written before
-    the adapters recorded them), gets no carve-out."""
-    floor = (gate.get("small_call_floor") or {}).get("fork_joins")
-    if not floor or (run.get("threads") or 1) == 1:
+    Below `small_n_max` (the family's ladder size N, the N of the ledger) a
+    threaded result is not compared with the threaded hand loop: native's
+    threaded call must instead be no slower than its own serial call
+    (`serial_steady_rhs_s`, measured in the same process) by the same
+    `max_ratio`. A serial run gets no carve-out, and neither does a result
+    without `serial_steady_rhs_s` (written before the adapters recorded it),
+    which is then gated against the hand loop as before, with a note."""
+    limit = gate.get("small_n_max")
+    if not limit or (run.get("threads") or 1) == 1:
         return False, ""
-    hs, fj, ns = r.get("hand_loop_serial_s"), r.get("fork_join_s"), r.get("serial_steady_rhs_s")
-    if hs is None or not fj or not ns:
+    n = r.get("n", r.get("n_cells")) or 0
+    if n >= limit:
         return False, ""
-    if hs >= floor * fj:
-        return False, ""
-    return True, (
-        f"small call: serial hand loop {hs * 1e6:.3g} us < {floor:g} fork-joins of "
-        f"{fj * 1e6:.3g} us; threaded native / serial native"
-    )
+    if not r.get("serial_steady_rhs_s"):
+        return False, f"N < {limit:g} but no serial_steady_rhs_s: gated against the hand loop"
+    return True, f"N < {limit:g}: threaded native / serial native"
 
 
 def code_size_slack(run, gates, family_spec):
@@ -254,6 +255,9 @@ def family_checks(run, fam, results, gates, family_spec):
                 **family_spec.get("gate_overrides", {}).get("build_slope", {}),
             }
             limit, why = build_slope_limit(run, g, lo, hi)
+            if HOSTED_RATIO:
+                limit *= HOSTED_RATIO
+                why += f"; x{HOSTED_RATIO:g} on a hosted runner"
             out.append(
                 Check(
                     run,
@@ -267,6 +271,11 @@ def family_checks(run, fam, results, gates, family_spec):
                 )
             )
     return out
+
+
+# The bound every timing ratio is held to under --hosted (manifest
+# `hosted_runner.max_timing_ratio`), or None for the exact bars.
+HOSTED_RATIO = None
 
 
 def build_slope_limit(run, gate, lo, hi):
@@ -402,10 +411,21 @@ def main(argv=None):
         help="evaluate and print the timing gates, but never go red on one "
         "(the scheduled sweep, until plan phase 6 makes them block)",
     )
+    ap.add_argument(
+        "--hosted",
+        action="store_true",
+        help="a hosted CI runner, not a clean machine: every gate runs, but a timing "
+        "gate fails only past the manifest's hosted_runner.max_timing_ratio times its "
+        "bar (a fall-back-sized regression); the exact bars belong to the clean sweep",
+    )
     ap.add_argument("--json", help="also write the rows as JSON here")
     a = ap.parse_args(argv)
+    if a.hosted and a.report_timing:
+        ap.error("--hosted and --report-timing are exclusive")
 
     manifest = load(a.manifest)
+    global HOSTED_RATIO
+    HOSTED_RATIO = manifest["hosted_runner"]["max_timing_ratio"] if a.hosted else None
     gates = dict(manifest["gates"])
     if a.gates == "deterministic":
         gates = {k: v for k, v in gates.items() if v["kind"] == DETERMINISTIC}
