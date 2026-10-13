@@ -9,6 +9,7 @@
 use super::super::{ArrayCompiled, RhsStats};
 use super::ir::*;
 use super::refexec::run_reference;
+use super::taped;
 use super::tests::seeded_state;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -86,8 +87,8 @@ fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
         bin3: false,
         ext_pairs: true,
     };
-    let (prog, report) = compiled.build_tape_opts(&HashSet::new(), Some(cfg));
-    let (prog_uf, report_uf) = compiled.build_tape_opts(&HashSet::new(), None);
+    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(cfg)));
+    let (prog_uf, report_uf) = taped(compiled.build_tape_opts(&HashSet::new(), None));
     let unfused_len = prog_uf.instrs.len();
     for rep in [&report, &report_uf] {
         assert!(
@@ -101,10 +102,9 @@ fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
     let param_vec = compiled.debug_resolve_params(&params);
     let mut fast = compiled.debug_new_scratch_taped();
     let mut fast_uf = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_uf.install_tape(
-        std::rc::Rc::new(compiled.build_tape_opts(&HashSet::new(), None).0),
-        std::rc::Rc::new(compiled.observed_rules.clone()),
-    );
+    fast_uf.install_tape(std::rc::Rc::new(
+        taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
+    ));
     let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, 0.25, 2.5);

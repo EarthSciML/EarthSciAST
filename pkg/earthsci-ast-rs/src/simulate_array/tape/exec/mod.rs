@@ -20,9 +20,13 @@
 //! **State access**: a state variable's flat block is column-major over its
 //! logical shape, i.e. it *is* a strided view with strides
 //! `[1, s0, s0·s1, …]`. Instructions read the flat state vector directly
-//! through those strides — no per-call refill or copy. The legacy
-//! `state_arrays` map is refilled only when the program carries fallback
-//! rules (which evaluate through the interpreter's `EvalCtx`).
+//! through those strides — no per-call refill or copy.
+//!
+//! **No interpreter**: the executor is handed no rule, no `EvalCtx` and none
+//! of the interpreter's per-variable state arrays, and the instruction set
+//! has no arm that would want them (a program exists only when every rule
+//! lowered; see [`DeclinedTape`]). Per-cell evaluation is unreachable from
+//! here by construction.
 //!
 //! **Scalar slots** live in the slab like array slots (their storages are
 //! 1-element buckets assigned by the same coloring); a scalar read is one
@@ -42,9 +46,8 @@
 //! the per-call entry; `resolve` turns an operand into a scalar or a strided
 //! view; `kernels` holds the strided loops those views feed; `fused` holds
 //! the chunked fused-group executor together with the kernel dispatch tables
-//! both executors expand; `interp` is the instruction loop that drives them;
-//! and `oracle` is the per-cell fallback evaluator, kept apart because the
-//! test-only reference executor shares it.
+//! both executors expand; and `interp` is the instruction loop that drives
+//! them.
 
 use super::super::*;
 use super::ir::*;
@@ -61,7 +64,6 @@ mod interp;
 mod kernels;
 mod lane_fold;
 mod lanes;
-mod oracle;
 #[cfg(not(target_arch = "wasm32"))]
 mod par;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -77,14 +79,12 @@ mod resolve;
 mod simd_tests;
 
 // Re-exported at the `exec` boundary for the test-only reference executor
-// (`super::refexec`), which shares the micro-op scalar semantics and the
-// per-cell fallback oracle so the two executors cannot drift.
+// (`super::refexec`), which shares the micro-op scalar semantics so the two
+// executors cannot drift.
 #[cfg(test)]
 pub(super) use fused::eval_micro_op;
 #[cfg(test)]
 pub(super) use fused::fold_fused_op;
-#[cfg(test)]
-pub(super) use oracle::run_rhs_oracle;
 
 use fused::FCHUNK;
 use interp::run_range;
@@ -208,8 +208,7 @@ pub(crate) struct TapeExec {
     /// slots, which no reachable instruction references).
     slot_off: Vec<usize>,
     /// Runtime observed map: holds an export only while it is PUBLISHED (its
-    /// `Export` has run in the current execution of its section); fallback
-    /// observed rules insert their own outputs.
+    /// `Export` has run in the current execution of its section).
     pub(crate) obs: ArrMap,
     /// Export target arrays, preallocated and indexed like `prog.exports`:
     /// `Some` while the export is unpublished, `None` while its entry lives in
@@ -274,15 +273,13 @@ pub(crate) struct TapeExec {
     /// The lane programs' chunk registers.
     lscratch: lanes::LaneScratch,
     /// Step 4 export demotion: `Export` instructions only execute when
-    /// something can read the published arrays — a fallback rule is present,
-    /// or a caller explicitly requested them
-    /// ([`TapeCtx::set_exports_active`]). With no possible reader they are
+    /// a caller explicitly requested them ([`TapeCtx::set_exports_active`]):
+    /// nothing inside a call reads the published arrays. With no possible reader they are
     /// skipped (the exported values themselves are still computed — they are
     /// ordinary slots — only the publish memcpy is elided).
     exports_active: bool,
-    /// Rule counts, cached off the program for the per-call stats.
+    /// Rule count, cached off the program for the per-call stats.
     pub(crate) n_taped: usize,
-    pub(crate) n_fallback: usize,
     /// Step 4b: the SIMD clone this executor runs its fused loops through,
     /// selected ONCE at executor construction (never per element).
     simd: SimdLevel,
@@ -366,11 +363,6 @@ impl TapeExec {
                 _ => None,
             })
             .collect();
-        let n_fallback = prog
-            .rules
-            .iter()
-            .filter(|r| matches!(r.status, RuleStatus::Fallback(_)))
-            .count();
         let mirror: Vec<bool> = prog
             .state_vars
             .iter()
@@ -441,9 +433,8 @@ impl TapeExec {
             },
             idx_tables: fused::index_tables_for(prog),
             lscratch: lanes::LaneScratch::for_program(prog),
-            exports_active: n_fallback > 0,
-            n_taped: prog.rules.len() - n_fallback,
-            n_fallback,
+            exports_active: false,
+            n_taped: prog.rules.len(),
             simd: simd_level(),
             #[cfg(not(target_arch = "wasm32"))]
             call_work: par::program_work(prog),
@@ -499,10 +490,6 @@ fn assemblies_covered(prog: &TapeProgram) -> Vec<bool> {
 /// on a scratch means "legacy interpreter path".
 pub(in crate::simulate_array) struct TapeCtx {
     pub(crate) prog: Rc<TapeProgram>,
-    /// The FULL dependency-ordered observed rule list the program's
-    /// `RuleKind::Observed(i)` indices resolve against (the per-call
-    /// `observed_rules` argument is the driver's varying subset).
-    pub(in crate::simulate_array) observed_rules: Rc<Vec<AlgebraicRule>>,
     pub(crate) exec: TapeExec,
     /// Step 4 epoch counters (see `run_tape_call`). The parameter epoch is
     /// bumped whenever the caller's params slice differs, bit for bit, from
@@ -517,14 +504,10 @@ pub(in crate::simulate_array) struct TapeCtx {
 }
 
 impl TapeCtx {
-    pub(in crate::simulate_array) fn new(
-        prog: Rc<TapeProgram>,
-        observed_rules: Rc<Vec<AlgebraicRule>>,
-    ) -> Self {
+    pub(in crate::simulate_array) fn new(prog: Rc<TapeProgram>) -> Self {
         let exec = TapeExec::new(&prog);
         TapeCtx {
             prog,
-            observed_rules,
             exec,
             param_epoch: 0,
             forcing_epoch: 1,
@@ -541,9 +524,8 @@ impl TapeCtx {
         self.forcing_epoch += 1;
     }
 
-    /// Force `Export` instructions on/off (production derives this from the
-    /// fallback count; a harvesting scratch turns them on because it IS the
-    /// reader).
+    /// Force `Export` instructions on/off (off by default; a harvesting
+    /// scratch turns them on because it IS the reader).
     pub(crate) fn set_exports_active(&mut self, on: bool) {
         self.exec.exports_active = on;
     }
@@ -566,13 +548,7 @@ impl TapeCtx {
 /// interpreter loop can split-borrow the mutable executor pieces beside it.
 struct Env<'a> {
     prog: &'a TapeProgram,
-    observed_rules: &'a [AlgebraicRule],
-    rhs_rules: &'a [RhsRule],
-    var_shapes: &'a IndexMap<String, VarShape>,
-    param_names: &'a [String],
-    state_arrays: &'a ArrMap,
     forcing: &'a RefCell<HashMap<String, ArrayD<f64>>>,
-    derived_rings: &'a RefCell<HashMap<String, ArrayD<f64>>>,
     state: &'a [f64],
     /// Row-major per-variable mirror of `state` (see `TapeExec::state_rm`).
     state_rm: &'a [f64],
@@ -580,37 +556,9 @@ struct Env<'a> {
     mirror: &'a [bool],
     params: &'a [f64],
     t: f64,
-    /// The model's const-array registry (§5.5.5), for the fallback arms that
-    /// re-enter the per-cell oracle.
-    const_arrays: &'a ConstArrayScope,
-    /// The inline-`const`-literal memo (see `EvalCtx::const_lits`). The fallback
-    /// arms are exactly where a transcribed lookup table is gathered per cell,
-    /// so the tape's oracle re-entry carries it.
-    const_lits: &'a ConstLitMemo,
-    /// The model's declared-name set (see `EvalCtx::declared`), likewise for
-    /// the fallback arms.
+    /// The model's declared-name set (see `EvalCtx::declared`), for the
+    /// forcing load's missing-entry fault.
     declared: &'a HashSet<String>,
-}
-
-impl<'a> Env<'a> {
-    /// The interpreter environment for the fallback arms that re-enter the
-    /// per-cell oracle: no CSE memo, and the compiled-RHS derived-extents map
-    /// is empty (see `EvalCtx::derived_extents`).
-    fn eval_env(&self) -> EvalEnv<'a> {
-        EvalEnv {
-            state_arrays: self.state_arrays,
-            params: self.params,
-            param_names: self.param_names,
-            t: self.t,
-            derived_rings: self.derived_rings,
-            derived_extents: empty_derived_extents(),
-            forcing: self.forcing,
-            cse: None,
-            const_lits: Some(self.const_lits),
-            const_arrays: self.const_arrays,
-            declared: self.declared,
-        }
-    }
 }
 
 /// [`Instr::LoadForcing`]'s element semantics, shared by the fast and the
@@ -671,13 +619,7 @@ pub(in crate::simulate_array::tape) fn forcing_len(fr: &ForcingRef) -> usize {
 /// Run the call's continuous instructions `range`: as a plan of phases when
 /// the call splits and publishes nothing (see `plan`), else through the
 /// instruction loop.
-fn run_continuous(
-    env: &Env,
-    range: std::ops::Range<usize>,
-    exec: &mut TapeExec,
-    dy: &mut [f64],
-    stats: &mut RhsStats,
-) {
+fn run_continuous(env: &Env, range: std::ops::Range<usize>, exec: &mut TapeExec, dy: &mut [f64]) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let ways = call_ways(exec);
@@ -701,13 +643,13 @@ fn run_continuous(
                 }
             }
             if let Some(p) = exec.plan.take() {
-                plan::run_plan(&p, env, exec, dy, stats);
+                plan::run_plan(&p, env, exec, dy);
                 exec.plan = Some(p);
                 return;
             }
         }
     }
-    run_range(env, range, exec, dy, stats);
+    run_range(env, range, exec, dy);
 }
 
 #[cfg(test)]
@@ -734,16 +676,12 @@ fn same_params(last: &[f64], params: &[f64]) -> bool {
 }
 
 /// The `[start, end)` ranges of a `dy` of `n` elements that no `DyWrite` of
-/// `prog` is certain to write on every call: everything when a fallback rule
-/// may write it through the interpreter, else the complement of the writes
+/// `prog` is certain to write on every call: the complement of the writes
 /// that every call runs: those in the CONTINUOUS section's leading
 /// [`TapeProgram::n_rhs`] instructions (the output-only tail after them is
 /// skipped while exports are off) outside any conditional region (a
 /// `JmpIfZero` branch or a sweep body may not run).
-fn dy_zero_ranges(prog: &TapeProgram, n: usize, n_fallback: usize) -> Vec<(usize, usize)> {
-    if n_fallback > 0 {
-        return vec![(0, n)];
-    }
+fn dy_zero_ranges(prog: &TapeProgram, n: usize) -> Vec<(usize, usize)> {
     let cont = prog.section_range(Cadence::Continuous);
     let every_call = cont.start..cont.end.min(cont.start + prog.n_rhs as usize);
     let conditional = conditional_mask(prog);
@@ -944,22 +882,15 @@ pub(super) fn dy_strides(prog: &TapeProgram, shape: &[usize]) -> DimI {
 /// run the CONTINUOUS section. Writes every element of `dy` (zero where no
 /// rule writes it) and bumps `stats`.
 /// The caller supplies the shared per-call inputs as an [`RhsCall`] (the
-/// remaining [`Env`] fields — the program, the FULL observed-rule list, the
-/// intra-call ring registry, and the row-major state mirror — are owned by
-/// the tape context or created inside the call).
+/// remaining [`Env`] fields — the program and the row-major state mirror —
+/// are owned by the tape context).
 pub(in crate::simulate_array) fn run_tape_call(
     ctx: &mut TapeCtx,
     call: &RhsCall,
-    state_arrays: &ArrMap,
-    const_arrays: &ConstArrayScope,
-    const_lits: &ConstLitMemo,
     dy: &mut [f64],
     stats: &mut RhsStats,
 ) {
     let &RhsCall {
-        rhs_rules,
-        var_shapes,
-        param_names,
         state,
         params,
         forcing,
@@ -990,7 +921,7 @@ pub(in crate::simulate_array) fn run_tape_call(
     }
     // Zero what no rule writes; every other element is overwritten below.
     if exec.dy_zero_len != dy.len() {
-        exec.dy_zero = dy_zero_ranges(prog, dy.len(), exec.n_fallback);
+        exec.dy_zero = dy_zero_ranges(prog, dy.len());
         exec.dy_home = dy_homes(prog, dy.len());
         exec.dy_home_quiet = quiet_homes(prog, &exec.dy_home);
         exec.dy_zero_len = dy.len();
@@ -1020,27 +951,16 @@ pub(in crate::simulate_array) fn run_tape_call(
             );
         }
     }
-    // Intra-call FAQ ring registry for fallback rules (`HashMap::new` does not
-    // allocate until first insertion, so a fully-taped call touches no heap).
-    let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     let state_rm = std::mem::take(&mut exec.state_rm);
     let mirror = std::mem::take(&mut exec.mirror);
     let env = Env {
         prog,
-        observed_rules: &ctx.observed_rules,
-        rhs_rules,
-        var_shapes,
-        param_names,
-        state_arrays,
         forcing,
-        derived_rings: &derived_rings,
         state,
         state_rm: &state_rm,
         mirror: &mirror,
         params,
         t,
-        const_arrays,
-        const_lits,
         declared,
     };
 
@@ -1054,17 +974,37 @@ pub(in crate::simulate_array) fn run_tape_call(
         exec.primed_forcing_epoch = forcing_epoch;
         #[cfg(test)]
         SECTION_PRIMES.with(|c| c.set((c.get().0 + 1, c.get().1)));
-        run_range(&env, 0..prime_end, exec, dy, stats);
+        run_range(&env, 0..prime_end, exec, dy);
         unsafe {
             fused::refill_index_tables(&mut exec.idx_tables, exec.slab.as_ptr(), &exec.slot_off)
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        unsafe {
+            chain::refill_compact(
+                &exec.seg_chains,
+                &mut exec.chain_scratch,
+                prog,
+                exec.slab.as_ptr(),
+                &exec.slot_off,
+            )
         };
     } else if exec.primed_forcing_epoch != forcing_epoch {
         exec.primed_forcing_epoch = forcing_epoch;
         #[cfg(test)]
         SECTION_PRIMES.with(|c| c.set((c.get().0, c.get().1 + 1)));
-        run_range(&env, const_end..prime_end, exec, dy, stats);
+        run_range(&env, const_end..prime_end, exec, dy);
         unsafe {
             fused::refill_index_tables(&mut exec.idx_tables, exec.slab.as_ptr(), &exec.slot_off)
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        unsafe {
+            chain::refill_compact(
+                &exec.seg_chains,
+                &mut exec.chain_scratch,
+                prog,
+                exec.slab.as_ptr(),
+                &exec.slot_off,
+            )
         };
     }
     // With nothing reading the published observeds, the output-only tail of
@@ -1074,10 +1014,9 @@ pub(in crate::simulate_array) fn run_tape_call(
     } else {
         prime_end + prog.n_rhs as usize
     };
-    run_continuous(&env, prime_end..end, exec, dy, stats);
+    run_continuous(&env, prime_end..end, exec, dy);
     exec.state_rm = state_rm;
     exec.mirror = mirror;
 
     stats.taped_rules += exec.n_taped;
-    stats.fallback_rules += exec.n_fallback;
 }

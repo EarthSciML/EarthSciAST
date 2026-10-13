@@ -6,8 +6,10 @@
 //! this pass performs is the overlay's own `pub(super)` classifier
 //! (`classify_axis_role`, `parse_wrap_axis_any`, `lhs_constant_shifts`,
 //! `subblock_dest`, `vec_op_code`, …), and every construct `eval_vec_op`
-//! would bail on becomes a *fallback rule* carrying the bail reason — so a
-//! rule is taped essentially when the overlay vectorizes it today.
+//! would bail on becomes a *declined rule* carrying the bail reason — so a
+//! rule is taped essentially when the overlay vectorizes it today. A model
+//! with a declined rule gets no program at all ([`DeclinedTape`]): the
+//! instruction set cannot hand a rule to the per-cell oracle.
 //!
 //! *Essentially*, because there is exactly one deliberate exception, and it
 //! is documented where it lives ([`TapeBuilder::lower_scalar_reduction`]): a
@@ -59,7 +61,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
-// Bail (fallback) plumbing.
+// Bail plumbing.
 // ---------------------------------------------------------------------------
 
 /// Why a rule could not be lowered. Carries the DEEPEST bail site, mirroring
@@ -446,14 +448,16 @@ struct ScopeFrame {
     journal: Vec<(VnKey, Option<LV>)>,
 }
 
-/// What a (taped or fallback) observed rule left behind for later readers.
+/// What a (taped or declined) observed rule left behind for later readers.
 #[derive(Clone, Debug)]
 enum ObsVal {
     /// Taped: the produced value, origin-normalized to all-1s.
     Taped(LV),
-    /// Produced by a fallback rule (read through the runtime observed map).
+    /// Produced by a declined rule. The build is already declined, so this
+    /// only lets later rules keep lowering, for their own decline reasons;
+    /// a read of it becomes an `Operand::Obs` in a program that is discarded.
     /// `shape` is the statically known array shape (`Some(empty)` = 0-d),
-    /// `None` = statically unknown (readers must themselves fall back).
+    /// `None` = statically unknown (readers then decline too).
     External { shape: Option<DimU>, tier: Cadence },
 }
 
@@ -490,8 +494,8 @@ pub(crate) struct TapeBuilder<'m> {
     /// one of these may not compile to this module's ghost-0 fill: an
     /// out-of-range const-array index resolves by the factor's declared
     /// boundary policy, and with no declared policy it is
-    /// `E_TREEWALK_CONSTARRAY_OOB`. Each out-of-range arm therefore BAILS to
-    /// the per-cell oracle fallback when the base is one; an in-range gather
+    /// `E_TREEWALK_CONSTARRAY_OOB`. Each out-of-range arm therefore declines
+    /// the rule when the base is one; an in-range gather
     /// compiles exactly as before.
     const_arrays: &'m ConstArrayScope,
     /// The DOCUMENT's working precision, read off the compiled model rather
@@ -565,6 +569,9 @@ pub(crate) struct TapeBuilder<'m> {
     forcing_journal: Vec<u32>,
     dy_writes: Vec<DyWrite>,
     rules: Vec<RuleInfo>,
+    /// Parallel to `rules`: the deepest decline reason of each rule that did
+    /// not lower. Any `Some` means the build yields no program.
+    declined: Vec<Option<String>>,
     /// Per-section chunk streams (index = Cadence as usize).
     streams: [Vec<Chunk>; 3],
     /// Home-stream chunk index per rule ordinal (for export insertion).
@@ -748,6 +755,7 @@ impl<'m> TapeBuilder<'m> {
             forcing_journal: Vec::new(),
             dy_writes: Vec::new(),
             rules: Vec::new(),
+            declined: Vec::new(),
             streams: [Vec::new(), Vec::new(), Vec::new()],
             rule_home_chunk: Vec::new(),
             cur_rule: 0,
@@ -4378,7 +4386,7 @@ impl<'m> TapeBuilder<'m> {
 
     /// Mirror of `lookup_variable` (no loop binds on the compiled-rule path):
     /// `t`, state, observed, parameter, else bail (production would read
-    /// forcing or the NaN sentinel — the fallback interpreter handles both).
+    /// forcing or the NaN sentinel — the interpreter handles both).
     fn resolve_wholesale_var(&mut self, name: &str) -> LResult<LV> {
         if name == "t" {
             return Ok(LV::Time);
@@ -4907,8 +4915,8 @@ impl<'m> TapeBuilder<'m> {
     }
 
     /// `eval_faq` mirror (a standalone aggregate evaluated wholesale):
-    /// prefix scans get the running-fold lowering, rank-0 reductions stay
-    /// per-cell (fallback), everything else goes through the same overlay
+    /// prefix scans get the running-fold lowering, rank-0 reductions the
+    /// scalar-reduction lowering, everything else goes through the same overlay
     /// entry as the compiled rules.
     fn lower_wholesale_aggregate(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
         let level = self.enter_fault_level(None);
@@ -5527,7 +5535,8 @@ impl<'m> TapeBuilder<'m> {
 
 /// Result of building the tape for one compiled model (the rules, tables and
 /// const-array registry are read straight off `compiled`). Returns the
-/// program and the `(scope, hoist)` value-numbering hit counts.
+/// program — or, when any rule declined, the [`DeclinedTape`] in its place —
+/// and the `(scope, hoist)` value-numbering hit counts.
 pub(super) fn build_tape_program(
     compiled: &ArrayCompiled,
     const_names: &HashSet<String>,
@@ -5540,16 +5549,12 @@ pub(super) fn build_tape_program(
     // Store the program axis-reversed where the state layout gains from it
     // (`super::layout`); off for the XLA emitter, which reads logical boxes.
     align_layout: bool,
-) -> (TapeProgram, (usize, usize)) {
+) -> (Result<TapeProgram, DeclinedTape>, (usize, usize)) {
     let rhs_rules: &[RhsRule] = &compiled.rhs_rules;
     let observed_rules: &[AlgebraicRule] = &compiled.observed_rules;
     let var_shapes = &compiled.var_shapes;
     let param_names: &[String] = &compiled.param_names;
     let const_arrays: &ConstArrayScope = &compiled.const_scope;
-    let observed_names: HashSet<String> = observed_rules
-        .iter()
-        .map(|r| observed_rule_var(r).clone())
-        .collect();
     let mut obs_tier: FxHashMap<String, Cadence> = FxHashMap::default();
     for r in observed_rules {
         let name = observed_rule_var(r);
@@ -5581,7 +5586,6 @@ pub(super) fn build_tape_program(
             name: name.clone(),
             kind: RuleKind::Observed(i),
             cadence: tier,
-            status: RuleStatus::Taped,
         });
         let txn = b.txn();
         // The rule's own working precision, as `materialize_observeds_pass`
@@ -5597,10 +5601,8 @@ pub(super) fn build_tape_program(
             }
             Err(bail) => {
                 b.rollback(txn);
-                let ord = b.cur_rule;
-                b.emit(Instr::Fallback { rule: ord }, b.home);
-                b.rules[ord as usize].status = RuleStatus::Fallback(bail.reason);
-                let shape = b.fallback_observed_shape(rule);
+                b.declined[b.cur_rule as usize] = Some(bail.reason);
+                let shape = b.declined_observed_shape(rule);
                 b.obs_defined.insert(name, ObsVal::External { shape, tier });
             }
         }
@@ -5628,50 +5630,51 @@ pub(super) fn build_tape_program(
             name,
             kind: RuleKind::Rhs(i),
             cadence: Cadence::Continuous,
-            status: RuleStatus::Taped,
         });
         let txn = b.txn();
         match b.lower_rhs_rule(rule).and_then(|()| b.flush_rule_fault()) {
             Ok(()) => {}
             Err(bail) => {
                 b.rollback(txn);
-                let ord = b.cur_rule;
-                b.emit(Instr::Fallback { rule: ord }, b.home);
-                b.rules[ord as usize].status = RuleStatus::Fallback(bail.reason);
+                b.declined[b.cur_rule as usize] = Some(bail.reason);
             }
         }
         b.end_rule();
     }
 
+    // ---- a declined rule leaves no program ---------------------------------
+    let vn_hits = b.vn_hits();
+    if b.declined.iter().any(Option::is_some) {
+        let declined = DeclinedTape {
+            rules: std::mem::take(&mut b.rules),
+            reasons: std::mem::take(&mut b.declined),
+        };
+        return (Err(declined), vn_hits);
+    }
+
     // ---- exports -----------------------------------------------------------
-    let exports = b.compute_exports(
-        observed_rules,
-        rhs_rules,
-        &observed_names,
-        compiled.tape_serves_passes(),
-    );
+    let exports = b.compute_exports(observed_rules, compiled.tape_serves_passes());
 
     // ---- flatten + fusion + liveness + coloring ----------------------------
-    let vn_hits = b.vn_hits();
-    (b.finish(exports, fuse, align_layout), vn_hits)
+    (Ok(b.finish(exports, fuse, align_layout)), vn_hits)
 }
 
 impl<'m> TapeBuilder<'m> {
-    /// The statically-known runtime shape of a FALLBACK observed rule's
-    /// published array (origin-1 convention), or `None` when it cannot be
-    /// known without evaluating.
+    /// The statically-known runtime shape of a DECLINED observed rule's
+    /// array (origin-1 convention), or `None` when it cannot be known without
+    /// evaluating.
     ///
-    /// This is what closes the shape cascade. A rule that reads an observed
-    /// resolves it to [`LV::Obs`], and every array instruction needs that
-    /// value's box at build time; before this existed, a `None` here made
-    /// EVERY reader of a per-cell-produced observed bail too, so one
-    /// unsupported producer took its whole downstream cone with it. The shapes
+    /// This is what closes the shape cascade in the decline list. A rule that
+    /// reads an observed resolves it to [`LV::Obs`], and every array
+    /// instruction needs that value's box at build time; a `None` here makes
+    /// every reader of the declined observed decline too, so one unsupported
+    /// producer would be reported with its whole downstream cone. The shapes
     /// come from the same places the interpreter's do — `var_shapes` for a
     /// state, the already-recorded shape for an earlier observed, the `faq`
     /// ranges / `makearray` bounding box / `const` literal for a materializing
     /// operator — so a claimed box is the box the interpreter will publish.
     /// Anything not derivable stays `None`, which is the old behaviour.
-    fn fallback_observed_shape(&self, rule: &AlgebraicRule) -> Option<DimU> {
+    fn declined_observed_shape(&self, rule: &AlgebraicRule) -> Option<DimU> {
         match rule {
             // The per-cell (and vectorized) ArrayLoop paths both materialize
             // the padded `[1, hi]` box; so does the recurrence sweep over its
@@ -5857,6 +5860,7 @@ impl<'m> TapeBuilder<'m> {
         self.cur_rule = self.rules.len() as u32;
         self.home = info.cadence;
         self.rules.push(info);
+        self.declined.push(None);
         self.rule_home_chunk.push(None);
         self.scope_frames.clear();
         self.branch_bufs.clear();
@@ -6284,14 +6288,13 @@ impl<'m> TapeBuilder<'m> {
         }
     }
 
-    /// Names to publish into the runtime observed map: everything a fallback
-    /// rule reads, plus the samples/observed-trajectory dependency cone
-    /// (mirroring `append_scalar_observed_trajectories`'s probe seeds).
+    /// Names to publish into the runtime observed map: the samples/
+    /// observed-trajectory dependency cone (mirroring
+    /// `append_scalar_observed_trajectories`'s probe seeds), or every observed
+    /// under `export_all`.
     fn compute_exports(
         &mut self,
         observed_rules: &[AlgebraicRule],
-        rhs_rules: &[RhsRule],
-        observed_names: &HashSet<String>,
         // The STRICT compilers, `native` and `xla` (API_SPEC §5.8): export
         // EVERY observed, because under them the build-time hoist, the
         // per-segment seed, the inspection snapshot and the output-node pass
@@ -6310,38 +6313,7 @@ impl<'m> TapeBuilder<'m> {
             }
         }
 
-        // (a) Direct observed reads of every fallback rule body: the
-        // interpreter resolves them through the runtime observed map, so a
-        // taped producer must publish there.
-        for info in self.rules.clone() {
-            if !matches!(info.status, RuleStatus::Fallback(_)) {
-                continue;
-            }
-            let mut refs = HashSet::new();
-            match info.kind {
-                RuleKind::Observed(i) => {
-                    collect_expr_var_refs(observed_rule_body(&observed_rules[i]), &mut refs)
-                }
-                RuleKind::Rhs(i) => match &rhs_rules[i] {
-                    RhsRule::Scalar { body, .. } | RhsRule::IndexedScalar { body, .. } => {
-                        collect_expr_var_refs(body, &mut refs)
-                    }
-                    RhsRule::ArrayLoop { body, filter, .. } => {
-                        collect_expr_var_refs(body, &mut refs);
-                        if let Some(f) = filter {
-                            collect_expr_var_refs(f, &mut refs);
-                        }
-                    }
-                },
-            }
-            for r in refs {
-                if observed_names.contains(&r) {
-                    needed.insert(r);
-                }
-            }
-        }
-
-        // (b) The samples pass' probe cone: potentially-scalar observeds and
+        // The samples pass' probe cone: potentially-scalar observeds and
         // their transitive dependencies (driver's `dependency_cone` seeds).
         let prune_valid = observed_rules
             .iter()
@@ -6376,7 +6348,7 @@ impl<'m> TapeBuilder<'m> {
         sorted.sort();
         for name in sorted {
             let Some(ObsVal::Taped(lv)) = self.obs_defined.get(&name).cloned() else {
-                continue; // fallback-produced: already in the map at run time
+                continue;
             };
             // Find the producing rule and append the Export to its home chunk.
             let Some(rule_ord) = self
@@ -6423,19 +6395,11 @@ impl<'m> TapeBuilder<'m> {
     /// into its home stream — a scalar observed whose whole value folded to a
     /// literal, say, or one whose value was hoisted to an earlier section.
     ///
-    /// Appending at the END is what issue #207 was: a later rule that BAILED
-    /// to the oracle (`Instr::Fallback`) resolves its observed reads through
-    /// the runtime observed map, and the producer's `Instr::Export` — the
-    /// memcpy that publishes into that map — then ran *after* the fallback that
-    /// reads it. The fallback saw the preallocated `0.0`. In the reported
-    /// document that zero became a const-array subscript of `0 - 159`, i.e.
-    /// `E_TREEWALK_CONSTARRAY_OOB … index -159`; a fallback over a
-    /// state-variable gather would instead have silently read the zero ghost.
-    ///
-    /// Inserting in rule order is both sufficient and safe. Sufficient: an
+    /// Inserting in rule order publishes each observed before any later rule
+    /// runs, which is the order the interpreter's observed map fills in: an
     /// observed can only be read by a LATER rule than the one defining it
     /// (`observed_rules` is dependency-ordered), so the producer's place
-    /// precedes every reader's chunk in this stream. Safe: every stream is
+    /// precedes every reader's chunk in this stream. It is safe: every stream is
     /// built in nondecreasing rule order (rules are lowered in ordinal order
     /// and [`Self::emit`] appends), so the insertion preserves that order; and
     /// the value being exported is either a literal filled by the instruction
@@ -6552,6 +6516,12 @@ impl<'m> TapeBuilder<'m> {
         if precision.iter().all(|&p| p == build) {
             precision.clear();
         }
+        // Only a read of a declined observed resolves through the runtime
+        // observed map, and a declined build never reaches here.
+        assert!(
+            self.obs_reads.is_empty(),
+            "a finished tape reads no observed by name"
+        );
         let mut prog = TapeProgram {
             instrs,
             precision,

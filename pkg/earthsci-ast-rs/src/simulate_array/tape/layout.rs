@@ -23,8 +23,7 @@
 //! are stored. The constructs whose ORDER is a logical row-major walk — a
 //! multi-axis reduction, a reshape, a compressed-row reduction's output
 //! cells, a recurrence sweep, a scatter that writes one position twice — keep
-//! the program as lowered, as does anything that exchanges arrays with the
-//! interpreter (a fallback rule, an observed read through the runtime map).
+//! the program as lowered, as does an observed read through the runtime map.
 
 use super::ir::*;
 use smallvec::SmallVec;
@@ -141,7 +140,7 @@ fn reversible(prog: &TapeProgram) -> bool {
             }
             None => true,
         },
-        Instr::PolyArea { .. } | Instr::Sweep { .. } | Instr::Fallback { .. } => false,
+        Instr::PolyArea { .. } | Instr::Sweep { .. } => false,
         // The pass runs ahead of fusion and rerolling.
         Instr::Fused { .. } | Instr::Lanes { .. } => false,
     })

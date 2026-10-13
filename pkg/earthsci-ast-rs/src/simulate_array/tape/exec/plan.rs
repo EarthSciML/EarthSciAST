@@ -440,15 +440,6 @@ impl CallPlan {
     pub(super) fn fits(&self, range: &std::ops::Range<usize>, ways: usize) -> bool {
         self.ways == ways && self.range == *range
     }
-
-    /// The fork-joins one call of this plan makes.
-    #[cfg(test)]
-    pub(super) fn forks(&self) -> usize {
-        self.steps
-            .iter()
-            .filter(|s| matches!(s, Step::Fork { threads, .. } if *threads > 1))
-            .count()
-    }
 }
 
 /// The calling thread's view of a phase, shared with the pool's workers.
@@ -494,13 +485,7 @@ impl PhaseJob<'_> {
 
 /// Run `plan` for this call: its loop steps through the instruction loop on
 /// this thread, its phases as one fork-join each.
-pub(super) fn run_plan(
-    plan: &CallPlan,
-    env: &Env,
-    exec: &mut TapeExec,
-    dy: &mut [f64],
-    stats: &mut RhsStats,
-) {
+pub(super) fn run_plan(plan: &CallPlan, env: &Env, exec: &mut TapeExec, dy: &mut [f64]) {
     let prog = env.prog;
     while exec.peers.len() + 1 < plan.ways {
         exec.peers.push(Scratch {
@@ -512,7 +497,7 @@ pub(super) fn run_plan(
     for step in &plan.steps {
         let (tasks, threads) = match step {
             Step::Loop(r) => {
-                super::interp::run_range(env, r.clone(), exec, dy, stats);
+                super::interp::run_range(env, r.clone(), exec, dy);
                 continue;
             }
             Step::Fork { tasks, threads } => (&plan.tasks[tasks.clone()], *threads),

@@ -20,9 +20,9 @@
 //! as one unit, so its skip counts and cell order stay as they are. Needed
 //! instructions only read values defined before them by needed
 //! instructions, so moving the others after them changes no value; the
-//! moved ones keep their relative order. A program with a fallback rule or
-//! a by-name observed read in the section is left as it is: those read the
-//! published map, which the `Export` instructions fill in program order.
+//! moved ones keep their relative order. A program with a by-name observed
+//! read in the section is left as it is: that reads the published map,
+//! which the `Export` instructions fill in program order.
 
 use super::ir::*;
 
@@ -36,7 +36,6 @@ pub(super) fn split_output_only(prog: &mut TapeProgram) {
     for ins in &prog.instrs[sec.clone()] {
         let mut obs = false;
         match ins {
-            Instr::Fallback { .. } => return,
             Instr::Gather { src, .. }
             | Instr::LoadElem { src, .. }
             | Instr::Reduce { src, .. }

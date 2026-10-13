@@ -498,13 +498,17 @@ pub struct SolutionMetadata {
     /// Number of rejected integrator steps (best-effort).
     pub n_rejected_steps: usize,
     /// `(rule name, reason)` for every rule the array driver could NOT compile
-    /// onto the vectorized tape and therefore evaluated with the per-cell
-    /// oracle — one full re-walk of the rule body per grid cell per RHS call.
+    /// onto the vectorized tape. A model with any such rule has no tape at
+    /// all: the strict compilers refuse it at construction, so this is only
+    /// ever non-empty on the historical routing (`compile_array`), which then
+    /// runs the WHOLE model on the interpreter — the whole-array overlay, and
+    /// the per-cell oracle wherever the overlay declines.
     ///
     /// A non-empty list is a performance diagnosis, not an error: the answer is
-    /// bit-identical either way, but the cost of a fallback rule grows with the
-    /// cell count while a taped rule's does not, so a single fallback in a
-    /// tendency equation can be the difference between a second and an hour.
+    /// bit-identical either way, but the interpreter's cost can grow far
+    /// faster with the cell count than the tape's, so a single declined rule
+    /// in a tendency equation can be the difference between a second and an
+    /// hour.
     /// See `esm-spec.md` §9.6.10 for the authoring patterns that keep rules
     /// vectorizable.
     ///

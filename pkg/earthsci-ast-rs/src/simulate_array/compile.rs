@@ -1052,7 +1052,6 @@ impl ArrayCompiled {
             unvalued_shaped_params,
             held_at_ic: held_at_ic_names,
             tape_cache: tape::TapeCache::new(),
-            shared_observed: std::cell::OnceCell::new(),
         })
     }
 }
