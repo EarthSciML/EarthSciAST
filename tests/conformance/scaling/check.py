@@ -22,7 +22,8 @@ Prints one row per (file, family, N, gate) with the measured value and one of
     MISSING   --require named a (family, N) no result file covers   (red)
 Exit status 0 when nothing is red, 1 otherwise. With --report-timing the
 timing gates are printed but never red; with --hosted (a hosted CI runner)
-a timing gate is red only past hosted_runner.max_timing_ratio times its bar. The gates, thresholds and the
+the speed gate is red only past hosted_runner.max_timing_ratio (instead of
+max_ratio) and the build slope is printed but never red. The gates, thresholds and the
 ledger live in manifest.json; README.md says what each gate means.
 """
 
@@ -255,9 +256,6 @@ def family_checks(run, fam, results, gates, family_spec):
                 **family_spec.get("gate_overrides", {}).get("build_slope", {}),
             }
             limit, why = build_slope_limit(run, g, lo, hi)
-            if HOSTED_RATIO:
-                limit *= HOSTED_RATIO
-                why += f"; x{HOSTED_RATIO:g} on a hosted runner"
             out.append(
                 Check(
                     run,
@@ -273,8 +271,8 @@ def family_checks(run, fam, results, gates, family_spec):
     return out
 
 
-# The bound every timing ratio is held to under --hosted (manifest
-# `hosted_runner.max_timing_ratio`), or None for the exact bars.
+# The bound the speed ratio is held to under --hosted (manifest
+# `hosted_runner.max_timing_ratio`), or None for the exact bar.
 HOSTED_RATIO = None
 
 
@@ -414,9 +412,10 @@ def main(argv=None):
     ap.add_argument(
         "--hosted",
         action="store_true",
-        help="a hosted CI runner, not a clean machine: every gate runs, but a timing "
-        "gate fails only past the manifest's hosted_runner.max_timing_ratio times its "
-        "bar (a fall-back-sized regression); the exact bars belong to the clean sweep",
+        help="a hosted CI runner, not a clean machine: the deterministic gates run "
+        "exactly, the speed gate fails only past the manifest's "
+        "hosted_runner.max_timing_ratio (a fall-back-sized regression), and the build "
+        "slope is reported, not red; the exact bars belong to the clean sweep",
     )
     ap.add_argument("--json", help="also write the rows as JSON here")
     a = ap.parse_args(argv)
@@ -539,6 +538,12 @@ def main(argv=None):
 
     for r in rows:
         if a.report_timing and r["kind"] == TIMING:
+            continue
+        # A hosted runner holds the speed ratio to its wider bound and only
+        # reports the build slope, which no bound on a shared machine makes
+        # stable (a millisecond of jitter over a few hundred states is
+        # hundreds of ns/state).
+        if a.hosted and r["gate"] == "build_slope":
             continue
         # Several files share a family (serial and threaded, one per binding),
         # so every message names the binding and thread mode.

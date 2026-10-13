@@ -291,13 +291,12 @@ def main():
     assert code == 1 and o[("stencil_1d", 100000, "speed")] == "FAIL", o  # 3.1x
     code, o = run(slow4, [], "--report-timing")
     assert code == 0, o
-    # The build slope is held to 3 times its limit there too: 50 ns/state
-    # fails the plain 20 and passes 60.
-    slope = [result("stencil_1d", 100, build_s=0.0), result("stencil_1d", 1100, build_s=50e-6)]
+    # The build slope is reported there, never red: 500 ns/state.
+    slope = [result("stencil_1d", 100, build_s=0.0), result("stencil_1d", 1100, build_s=500e-6)]
     code, o = run(slope, [])
     assert code == 1 and o[("stencil_1d", None, "build_slope")] == "FAIL", o
     code, o = run(slope, [], "--hosted")
-    assert code == 0 and o[("stencil_1d", None, "build_slope")] == "pass", o
+    assert code == 0 and o[("stencil_1d", None, "build_slope")] == "FAIL", o
     # The deterministic gates are exact there.
     code, o = run([result("stencil_1d", 100, allocs_per_call=8)], [], "--hosted")
     assert code == 1 and o[("stencil_1d", 100, "no_steady_alloc")] == "FAIL", o

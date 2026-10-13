@@ -266,7 +266,7 @@
   },
   "hosted_runner": {
     "max_timing_ratio": 3,
-    "why": "User ruling 2026-10-12 (blocking the timing gates, option C): a hosted runner is not a clean machine. In the 2026-10-12 scheduled sweep (4 vCPUs, the code of 4c2a9bb9d) against the local clean sweep, speed ratios moved by up to 4.6x and the verdict flipped at 20 of 124 gated points, but no point that passes locally read above 2.81. check.py --hosted holds every timing gate to 3 times its bar, which catches a fall-back-sized regression and nothing finer; the exact bars run on the scheduled clean sweep on the dedicated node (sweep.sh)"
+    "why": "User ruling 2026-10-12 (blocking the timing gates, option C): a hosted runner is not a clean machine. In the 2026-10-12 scheduled sweep (4 vCPUs, the code of 4c2a9bb9d) against the local clean sweep, speed ratios moved by up to 4.6x and the verdict flipped at 20 of 124 gated points, but no point that passes locally read above 2.81. check.py --hosted holds the speed ratio to 3 instead of 1.25, which catches a fall-back-sized regression and nothing finer, and only reports the build slope, whose PR-size span (a few hundred states) turns a millisecond of jitter into hundreds of ns/state; the exact bars run on the scheduled clean sweep on the dedicated node (sweep.sh)"
   },
   "ledger": {
     "rust": [

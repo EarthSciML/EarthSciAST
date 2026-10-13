@@ -314,10 +314,11 @@ ruling.
 
 A hosted CI runner is not a clean machine: its ratios move by several times
 between runs, in both directions (the manifest's `hosted_runner.why` has the
-numbers). `check.py --hosted` is the mode for it: every gate runs, the
-deterministic ones exactly, but a timing gate fails only past
-`hosted_runner.max_timing_ratio` (3) times its bar, a regression the size of a
-fall-back to a slower path, which no noise produces. The exact bars run on the
+numbers). `check.py --hosted` is the mode for it: the deterministic gates run
+exactly, the speed gate fails only past `hosted_runner.max_timing_ratio` (3),
+a regression the size of a fall-back to a slower path, which no noise
+produces, and the build slope is printed but never red (a millisecond of
+jitter over the PR sizes' few hundred states is hundreds of ns/state). The exact bars run on the
 scheduled clean sweep on the dedicated node (`sweep.sh`), whose `check.py
 --json` output `sweep_issue.py` turns into a GitHub issue naming every red row:
 
