@@ -319,8 +319,9 @@ _pr_rank4_build(doc, compiler; kw...) =
     # ordinary `k[i] = 2·i` are read through the compiled observed program,
     # and with both code-generation budgets at zero (refusal boundaries under
     # `native`) that program cannot be built — which is how a read native
-    # cannot compile is provoked here. The document's right-hand side is
-    # scalar, so the budgets refuse nothing else.
+    # cannot compile is provoked here. The problem is built first, at the
+    # default budgets: under zero budgets its scalar equation would itself be
+    # left on the scalar walker, which native refuses at build.
     mk_doc() = Dict{String,Any}("esm" => "1.1.0",
         "metadata" => Dict("name" => "pr_observed_routes"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
@@ -348,8 +349,9 @@ _pr_rank4_build(doc, compiler; kw...) =
                             "ESS_DUAL_CODEGEN_NODE_BUDGET" => "0")
 
     @testset "observed_field: a read native cannot compile refuses" begin
+        p0 = esm_problem(mk_doc(), (0.0, 1.0))
         @test _pr_refuses(() -> no_codegen() do
-                              observed_field(esm_problem(mk_doc(), (0.0, 1.0)), "h")
+                              observed_field(p0, "h")
                           end, "refuses 'M.h'")
         pn = esm_problem(mk_doc(), (0.0, 1.0))
         pi_ = esm_problem(mk_doc(), (0.0, 1.0); compiler = :interpreter)

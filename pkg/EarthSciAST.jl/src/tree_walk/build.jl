@@ -4143,7 +4143,9 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     scalar_section = form === :inplace ?
         @_bench(:scalar_codegen, _build_scalar_section(rhs_list, n_scalar_rhs,
             scalar_prelude, scalar_cache, const_slots, time_slots, dyn_slots,
-            acc_kernels)) : nothing
+            acc_kernels; rule_of = s -> var_map isa StateLayout ?
+                                        _slot_key(var_map, s) : "state slot $s")) :
+        nothing
     scalar_section === nothing ||
         _retier_scalar_rules!(var_map, rhs_list, scalar_section)
 

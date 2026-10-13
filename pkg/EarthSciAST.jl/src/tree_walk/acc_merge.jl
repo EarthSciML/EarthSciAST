@@ -662,6 +662,12 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # value type `T` — before `kernel_section(du, u, p, t, T)` runs.
     kernel_section = _make_kernel_section(acc_kernels;
                                           shared_cache=cse_cache, nst=nst)
+    # Without a scalar section every prelude slot and scalar equation is walked:
+    # the interpreter's walker, which takes a license (scalar_codegen.jl).
+    n_slots = length(const_slots) + length(time_slots) + length(dyn_slots)
+    walk = _scalar_walk_license(n_slots + length(rhs_list) > 0,
+        isempty(rhs_list) ? "the scalar prelude" : "state slot $(rhs_list[1][1])",
+        "$(length(rhs_list)) scalar equations and $n_slots shared-subexpression slots")
     function f!(du, u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         T = _rhs_value_type(u, p, t)
@@ -693,10 +699,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # (sweeps, `remake`) and under ForwardDiff-over-parameters its VALUES are
         # `Dual`s. Freezing these slots would zero every parameter sensitivity.
         if !isempty(const_slots) && _cse_const_stale(cse_cache, T, p)
-            @inbounds for i in eachindex(const_slots)
-                s = const_slots[i]
-                cache[s] = _eval_node(cse_prelude[s], u, p, t, T)
-            end
+            _walk_prelude_slots!(walk, cache, const_slots, cse_prelude, u, p, t, T)
             _cse_mark_const!(cse_cache, T, p)
         end
 
@@ -714,10 +717,7 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # Memoizing on `t` is safe under step rejection: the defs carry no history,
         # so revisiting a `t` reuses/recomputes the same pure function of it.
         if !isempty(time_slots) && _cse_t_stale(cse_cache, T, p, t)
-            @inbounds for i in eachindex(time_slots)
-                s = time_slots[i]
-                cache[s] = _eval_node(cse_prelude[s], u, p, t, T)
-            end
+            _walk_prelude_slots!(walk, cache, time_slots, cse_prelude, u, p, t, T)
             _cse_mark_t!(cse_cache, T, p, t)
         end
 
@@ -725,14 +725,8 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # A dynamic def may read const/time slots (valid or filled, above) and lower
         # dynamic slots (filled by this loop, which is ascending) — so every read is
         # already filled, exactly as in the single-loop prelude this replaces.
-        @inbounds for i in eachindex(dyn_slots)
-            s = dyn_slots[i]
-            cache[s] = _eval_node(cse_prelude[s], u, p, t, T)
-        end
-        @inbounds for k in 1:length(rhs_list)
-            idx_and_node = rhs_list[k]
-            du[idx_and_node[1]] = _eval_node(idx_and_node[2], u, p, t, T)
-        end
+        _walk_prelude_slots!(walk, cache, dyn_slots, cse_prelude, u, p, t, T)
+        _walk_scalar_rhs!(walk, du, rhs_list, u, p, t, T)
 
         # ---- Access kernels (the unified array IR, access_kernel.jl) ----
         # Each resolves its gathers at runtime from an access-descriptor table over
