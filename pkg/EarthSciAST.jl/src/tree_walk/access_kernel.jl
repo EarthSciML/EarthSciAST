@@ -1134,9 +1134,9 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 # default without `JULIA_NUM_THREADS`) every section runs its serial `(1, 1)`
 # instance. Inside an ODE solve a stiff solver calls the RHS in short bursts
 # separated by linear-algebra work, so the pool may sleep between calls and a
-# dispatch pays a wake-up; the per-chunk cell floor (`ESS_THREADS_MIN_CELLS`)
+# dispatch pays a wake-up; the per-chunk work floor (`ESS_THREADS_MIN_WORK`)
 # keeps small sections serial for that reason. Raising that floor past a
-# section's cell count forces a serial run — chunking changes no bit, so it is
+# section's work forces a serial run — chunking changes no bit, so it is
 # not a choice of evaluator and has no `compiler` value of its own.
 
 # The dispatch itself is thread_dispatch.jl's: Polyester's worker pool, driven
@@ -1147,9 +1147,10 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 # Read it via `EarthSciAST._THREAD_TALLY`, reset with
 # `EarthSciAST._reset_thread_tally!()`.
 #   :cg_threaded              — the section's cell axes run as static chunks
-#   :cg_serial_small          — fewer than 2 chunks' worth of cells (summed
-#                               across the section's emitted kernels; a
-#                               contraction counts its fold terms too)
+#   :cg_serial_small          — fewer than 2 chunks' worth of work (node
+#                               evaluations summed across the section's
+#                               emitted kernels' cells; a contraction counts
+#                               its fold terms too)
 #   :cg_serial_shared_outs    — two emitted cells (same or different kernel)
 #                               target the same `du` slot; the section never
 #                               chunks (see `_cg_covered_outs_disjoint`)
@@ -1157,13 +1158,31 @@ const _THREAD_TALLY = Dict{Symbol,Int}()
 _tally_thread!(k::Symbol) = (_THREAD_TALLY[k] = get(_THREAD_TALLY, k, 0) + 1; nothing)
 _reset_thread_tally!() = (empty!(_THREAD_TALLY); nothing)
 
-# Minimum cells per chunk. Below this a section is not worth a thread dispatch
-# (a whole section below it stays serial), which keeps small models on the
-# untouched serial path. Override with ESS_THREADS_MIN_CELLS: a tuning
-# threshold, not a refusal boundary — both sides of it evaluate the same bits,
-# so no compiler refuses a rule for crossing it.
-_thread_min_cells() =
-    something(tryparse(Int, get(ENV, "ESS_THREADS_MIN_CELLS", "")), 512)
+# The serial work floor: the least work, in node evaluations (the `work` of a
+# section's `_SecTCache`), one chunk of a thread dispatch must carry. A section
+# with less than two chunks' worth runs serially, so turning threads on never
+# makes a small section slower than its serial run. The default is the cost of
+# one empty fork-join of Polyester's pool over the cost of one node evaluation
+# in the cheapest generated loops (array_contraction.jl, codegen_kernel.jl),
+# both measured on a 4-thread run: a chunk below it would spend about as long
+# being dispatched as computing. Override with ESS_THREADS_MIN_WORK
+# (ESS_THREADS_MIN_CELLS, the floor's earlier name, is read when it is unset):
+# a tuning threshold, not a refusal boundary — both sides of it evaluate the
+# same bits, so no compiler refuses a rule for crossing it.
+const _THREAD_MIN_WORK_DEFAULT = 6000
+
+# The least cells per chunk for a section whose loops may read-modify-write
+# each `du` slot once per reduced term (an interchanged affine reduction): the
+# cache line two neighbouring chunks share at their boundary is then written by
+# both threads on every term, so a chunk must hold enough cells to outweigh
+# that traffic. Not read from the environment: ESS_THREADS_MIN_WORK set to 0
+# still leaves it, and set past a section's work still forces it serial.
+const _THREAD_MIN_RMW_CELLS = 512
+function _thread_min_work()
+    v = tryparse(Int, get(ENV, "ESS_THREADS_MIN_WORK", ""))
+    v === nothing && (v = tryparse(Int, get(ENV, "ESS_THREADS_MIN_CELLS", "")))
+    return something(v, _THREAD_MIN_WORK_DEFAULT)
+end
 
 @inline _threads_available() = Threads.nthreads() > 1
 

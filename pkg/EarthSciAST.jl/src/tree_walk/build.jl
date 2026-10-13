@@ -4061,6 +4061,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             lvl_kernels, lvl_scans, lvl_fused =
                 _detach_fused_scans(lvl_kernels, lvl_scans; nst=n_states,
                                     consumers=consumers, consumed=consumed)
+            lvl_cadence === :dynamic &&
+                (lvl_acs = _ac_take_consumers(lvl_acs, acc_kernels_pre, n_states, consumed))
             merged, _ = _merge_acc_kernel_classes(lvl_kernels)
             push!(lvl_cadence === :const ? mat_const_levels :
                   lvl_cadence === :time ? mat_time_levels : mat_levels,
@@ -6006,7 +6008,12 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         _note_decline!(:array_contraction, gen)
         return nothing
     end
-    return gen
+    # On the two-buffer slot space an observed's nest can take in the state
+    # kernel that consumes it (`_ac_take_consumers`), which needs it emitted again.
+    obs_nst > 0 || return gen
+    return _with_remit(gen, outs,
+        cons -> _try_codegen_array_contraction(out_refs, los, stps, lens, outs, node;
+                                               fold=fold, nst=obs_nst, consumer=cons))
 end
 
 # The admitted contracted tuples of every output cell, as the TABLE form of

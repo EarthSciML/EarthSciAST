@@ -22,10 +22,10 @@
 #   4. THREADED EXECUTION (subprocess, `julia -t 4`, mirroring the
 #      in-process env-toggle discipline of the other codegen tests):
 #      du bit-identity threaded vs a serial oracle — the same program built
-#      with the min-cells floor above the section, which is what keeps a
+#      with the work floor above the section, which is what keeps a
 #      section off the threaded route — and vs a `compiler=:interpreter`
-#      build; `:cg_threaded` in `_THREAD_TALLY`; the min-cells threshold
-#      (`:cg_serial_small` at the 512-cell default on a small section); and
+#      build; `:cg_threaded` in `_THREAD_TALLY`; the serial work floor
+#      (`:cg_serial_small` at the default on a small section); and
 #      the budget-0 OVERFLOW function threading the same way.
 using Test
 using EarthSciAST
@@ -128,7 +128,7 @@ end
 _cgt_du(f!, u, p, t) = (d = similar(u); fill!(d, 0.0); f!(d, u, p, t); d)
 _cgt_alloc(f!, du, u, p, t) = (f!(du, u, p, t); f!(du, u, p, t); @allocated f!(du, u, p, t))
 
-# The serial oracle: the SAME program built with the per-chunk min-cells floor
+# The serial oracle: the SAME program built with the per-chunk work floor
 # above the whole section, which is what keeps a section off the threaded
 # route. It has to be a fresh build — the verdict caches on a section's first
 # call, so moving the floor afterwards changes nothing.
@@ -157,7 +157,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
         @test Threads.nthreads() >= 2
         @test ESM._threads_available()
 
-        N = 512                       # 1024 cells: 2 chunks at the 512 default
+        N = 2048                      # 4096 cells: past two chunks of work at the default
         model = _cgt_1d_model(N)
         ics = _cgt_1d_ics(N)
         probes = [(u, t) for u in (nothing, :probe) for t in (0.0, 0.7)]
@@ -186,10 +186,10 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             @test get(ESM._THREAD_TALLY, :cg_threaded, 0) >= 1
         end
 
-        @testset "min-cells threshold: small section stays serial" begin
+        @testset "work floor: small section stays serial" begin
             ESM._reset_thread_tally!()
             fS, uS, pS, _ = _cgt_build(_cgt_1d_model(48), _cgt_1d_ics(48))
-            du = _cgt_du(fS, uS, pS, 0.3)     # 96 cells < 512 ⇒ serial verdict
+            du = _cgt_du(fS, uS, pS, 0.3)     # 96 cells, under two chunks of work ⇒ serial
             @test getfield(getfield(fS, :kernel_section), :tcache).state == -1
             @test get(ESM._THREAD_TALLY, :cg_serial_small, 0) >= 1
             @test get(ESM._THREAD_TALLY, :cg_threaded, 0) == 0
@@ -218,27 +218,35 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             @test get(ESM._THREAD_TALLY, :cg_serial_shared_outs, 0) == 1
             tc2 = ESM._SecTCache(1_000_000, true)
             @test ESM._sec_prep_threads!(tc2).state == 1
-            @test tc2.nchunks == min(Threads.nthreads(), 1_000_000 ÷ 512)
+            @test tc2.nchunks == min(Threads.nthreads(), 1_000_000 ÷ ESM._thread_min_work())
         end
 
         @testset "contraction verdict weighs fold terms, chunks never exceed cells" begin
             r = Ref(0)
-            @test ESM._ac_work(10, nothing) == 10
-            @test ESM._ac_work(10, ESM._ACFold([r], :+, 0.0, [1:1:3])) == 10 + 10 * 3
-            @test ESM._ac_work(2, ESM._ACFold([r], :+, 0.0, [1, 3, 6], [[1, 2, 1, 2, 3]])) == 2 + 5
-            # 600 cells alone stay serial at the 512 floor; their fold terms do not.
+            # A term of three nodes: each fold term costs its nodes, each cell
+            # its store.
+            body = ESM._mknode(kind=ESM._NK_OP, op=:*,
+                               children=ESM._Node[ESM._mknode(kind=ESM._NK_LITERAL, literal=2.0),
+                                                  ESM._mknode(kind=ESM._NK_LITERAL, literal=3.0)])
+            @test ESM._ac_work(10, nothing, body) == 10 * (1 + 3)
+            @test ESM._ac_work(10, ESM._ACFold([r], :+, 0.0, [1:1:3]), body) == 10 + 10 * 3 * 3
+            @test ESM._ac_work(2, ESM._ACFold([r], :+, 0.0, [1, 3, 6], [[1, 2, 1, 2, 3]]), body) ==
+                  2 + 5 * 3
+            # 600 cells alone stay serial at the floor; their fold terms do not.
+            minw = ESM._thread_min_work()
             @test ESM._sec_prep_threads!(ESM._SecTCache(600, true)).state == -1
-            tc3 = ESM._SecTCache(600, true, ESM._ac_work(600, ESM._ACFold([r], :+, 0.0, [1:1:5])))
+            w3 = ESM._ac_work(600, ESM._ACFold([r], :+, 0.0, [1:1:20]), body)
+            tc3 = ESM._SecTCache(600, true, w3)
             @test ESM._sec_prep_threads!(tc3).state == 1
-            @test tc3.nchunks == min(Threads.nthreads(), 3600 ÷ 512)
+            @test tc3.nchunks == min(Threads.nthreads(), w3 ÷ minw)
             tc4 = ESM._SecTCache(2, true, 1_000_000)
             @test ESM._sec_prep_threads!(tc4).state == 1
             @test tc4.nchunks == 2
         end
 
         @testset "a join-gated TABLE contraction threads below the cell floor, bit-identically" begin
-            # The scaling tier's regrid at 1000 cells: 1000 output cells (under two
-            # chunks' worth at the 512 floor) folding about 2000 admitted pairs.
+            # The scaling tier's regrid at 1000 cells: 1000 output cells folding
+            # about 2000 admitted pairs (1500 past the parameter gate).
             doc = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "scaling",
                            "fixtures", "regrid", "regrid_N1000.esm")
             function rhs(compiler, env...)
@@ -258,8 +266,11 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             du_ser = rhs(:native, "ESS_THREADS_MIN_CELLS" => "100000000")
             ESM._reset_thread_tally!()
             du_thr = rhs(:native)
-            # Both sections chunk: the 2000-cell state kernels and the contraction.
-            @test get(ESM._THREAD_TALLY, :cg_threaded, 0) == 2
+            # The contraction chunks, with the state kernel that consumes its
+            # observed folded in; the state kernel left (1000 cells of one
+            # product each) is under the work floor and runs serially.
+            @test get(ESM._THREAD_TALLY, :cg_threaded, 0) == 1
+            @test get(ESM._THREAD_TALLY, :cg_serial_small, 0) >= 1
             du_int = rhs(:interpreter)
             @test length(du_thr) == 2000
             @test all(du_thr[k] === du_ser[k] for k in keys(du_thr))
@@ -329,7 +340,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
         end
 
         @testset "an error in a chunk reaches the caller" begin
-            Ns = 1024
+            Ns = 8192
             body = _op("sqrt", _idx("u", _v("i")))
             vars = Dict{String,ESM.ModelVariable}("u" => ESM.ModelVariable(ESM.UnknownVariable))
             m = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, Ns),

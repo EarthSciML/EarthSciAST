@@ -123,6 +123,39 @@ end
         @test all(gn[pn.var_map[k]] == gi[j] for (k, j) in pi_.var_map)
     end
 
+    @testset "a parameter gate folds only the entries it admits, refilled when p moves" begin
+        # The regrid's apply folds W[i,j]·F_src[i] under the gate A_ij > atol,
+        # which reads only a build constant and a parameter: the nest folds the
+        # entries the gate admits at the current `p`, and D(F_tgt) is computed
+        # in the same pass from the value it stores.
+        path = _act_fixture("tests/conformance/scaling/fixtures/regrid/regrid_N100.esm")
+        same, tally, _, (pn, u), (pi_, ui) = _act_agree(path)
+        @test same
+        @test get(tally, :array_contraction_consumer, 0) == 1
+        f = pn.f!
+        gens = f.levels[1][4].gens
+        @test length(gens) == 1 && gens[1].mask !== nothing
+        # Every parameter value takes the interpreter's result bit for bit,
+        # through each refill and back: atol past the half-overlaps closes
+        # their gates, a negative atol opens the zero-overlap ones too.
+        key = Symbol("Regrid.atol")
+        for atol in (0.6, -1.0, pn.p[key], 0.6)
+            pn2 = merge(pn.p, NamedTuple{(key,)}((atol,)))
+            pi2 = merge(pi_.p, NamedTuple{(key,)}((atol,)))
+            dn = similar(u); fill!(dn, NaN); f(dn, u, pn2, 0.3)
+            di = similar(ui); fill!(di, NaN); pi_.f!(di, ui, pi2, 0.3)
+            @test all(dn[pn.var_map[k]] === di[j] for (k, j) in pi_.var_map)
+        end
+        # A derivative through the parameters (a dual-valued `p`).
+        kd = Symbol("Regrid.kd")
+        dk(prob, uu) = ForwardDiff.derivative(
+            x -> (d = zeros(typeof(x), length(uu));
+                  prob.f!(d, uu, merge(prob.p, NamedTuple{(kd,)}((x,))), 0.3); d),
+            prob.p[kd])
+        gn, gi = dk(pn, u), dk(pi_, ui)
+        @test all(gn[pn.var_map[k]] === gi[j] for (k, j) in pi_.var_map)
+    end
+
     @testset "two contracted indices fold into one accumulator ($(tier))" for
             (asc, tier) in ((false, :array_contraction_codegen), (true, :affine_reduce))
         # Non-integer data, so the association of the fold shows in the last

@@ -87,8 +87,8 @@ end
 
 # Threading is deliberately NOT a plan field. A chunked kernel is
 # value-identical to the serial one by construction — the chunks write disjoint
-# slots — so it is not a choice of evaluator; how many cells are worth a thread
-# dispatch is a tuning threshold (`ESS_THREADS_MIN_CELLS`), read on the
+# slots — so it is not a choice of evaluator; how much work is worth a thread
+# dispatch is a tuning threshold (`ESS_THREADS_MIN_WORK`), read on the
 # right-hand-side call where the build's plan is no longer in scope.
 
 _plan_all(name::Symbol, strict::Bool, on::Bool) =
