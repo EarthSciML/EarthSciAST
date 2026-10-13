@@ -106,7 +106,7 @@ the binding, the compiler and the code on every run, and it is green only
 because the ledger names it. If a binding gains the rule, the runner prints a
 "stale exclusion" note rather than failing the binding that got better, and the
 entry is then trimmed by hand and `required` widened — exclusions only go away.
-A `native` exclusion must carry an out-of-scope code (`unsupported_construct`,
+A Julia or Rust `native` exclusion must carry an out-of-scope code (`unsupported_construct`,
 `unlowered_operator`; `API_SPEC.md` §5.8) or exclude the interpreter too; any
 other is a manifest error.
 

@@ -6349,12 +6349,14 @@ The gate:
 * an **`interpreter` refusal** is always RED — the interpreter is complete over
   the evaluable core by `esm-libraries-spec.md` §2.5.10, so a refusal there is
   a defect, not coverage;
-* a **`native` refusal** is always RED, whatever the fixture's `required` map
-  says. `native` covers the whole evaluable core and refuses by name only the
-  constructs outside its scope (`API_SPEC.md` §5.8: events, implicit equations,
-  SDE noise, a spatial operator with no discretization rule), and no fixture of
-  this tier carries one. `native` may not appear on any `bindings_optional`
-  list; the manifest validator rejects it;
+* a **`native` refusal** from Julia or Rust is always RED, whatever the
+  fixture's `required` map says. `native` covers the whole evaluable core and
+  refuses by name only the constructs outside its scope (`API_SPEC.md` §5.8:
+  events, implicit equations, SDE noise, a spatial operator with no
+  discretization rule), and no fixture of this tier carries one; neither
+  binding may list `native` on `bindings_optional`, which the manifest
+  validator rejects. Python is exempt from this rule: its `native` refusal is
+  governed by the `required` map like the specialty compilers' below;
 * a **refusal from `xla`, `mtk` or `sympy`** is a **named exclusion** — reported
   with the binding, the compiler, the fixture, the rule and the reason, in the
   report and on the console, and green for now. It is never a pass and never a
@@ -6717,10 +6719,12 @@ The gate:
   compiler, the fixture and the code, in the report and on the console, and
   green — only where the fixture's `named_exclusions` ledger names that
   `(binding, compiler)` AND the code matches. The ledger cannot excuse an
-  in-scope `native` refusal: a `native` exclusion must carry
+  in-scope Julia or Rust `native` refusal: there a `native` exclusion must carry
   `unsupported_construct` or `unlowered_operator` (`API_SPEC.md` §5.8), or
   exclude the interpreter as well — the binding then runs the document under no
   compiler, which is not a `native` gap — and anything else is a manifest error.
+  Python is exempt: a Python `native` exclusion may carry any code, but its
+  `native` gap must still be a named exclusion.
   An unnamed refusal, or one whose code has drifted from the ledger, is RED. It
   is never a pass and never a silent skip;
 * an **`unavailable`** is RED for a binding the manifest lists in
@@ -6738,8 +6742,9 @@ The gate:
 able to ANSWER at all; a fixture's `required` map (binding → the compilers that
 must run THIS document) says which compilers must not refuse it. Each
 `bindings_required` binding's `required` list MUST name `native`, unless a
-named exclusion of `native` that the gate above admits leaves it out; the
-self-test rejects a manifest that does not. Merging the two ledgers would make
+named exclusion of `native` that the gate above admits leaves it out (for
+Python, any named exclusion of `native`); the self-test rejects a manifest
+that does not. Merging the two ledgers would make
 a coverage gap indistinguishable from a missing runtime. A fixture
 that both REQUIRES and EXCLUDES the same `(binding, compiler)` is a manifest
 error the self-test rejects, because it says two things at once.

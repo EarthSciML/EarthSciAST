@@ -934,13 +934,15 @@ run_compiled_rhs_conformance_compiled_rust() {
 # Three rulings shape these stages:
 #   * a model a compiler cannot lower is a REFUSAL, recorded as a NAMED EXCLUSION,
 #     never a pass and never a silent skip — and never a fallback to another
-#     compiler. From `interpreter` and `native` a refusal is always a failure: the
-#     interpreter is complete over the evaluable core, and `native` refuses by
-#     name only out-of-scope constructs (API_SPEC §5.8) that no fixture carries;
+#     compiler. From `interpreter`, and from Julia and Rust `native`, a refusal is
+#     always a failure: the interpreter is complete over the evaluable core, and
+#     `native` refuses by name only out-of-scope constructs (API_SPEC §5.8) that
+#     no fixture carries. Python `native` is governed by the `required` map;
 #   * AVAILABILITY and REFUSAL are two ledgers. `bindings_required` says a binding
 #     must be able to ANSWER for a compiler; a fixture's `required` map says that
 #     compiler must be able to RUN that document. `interpreter` and `native` are
-#     both required in all three bindings, and `native` may never be optional;
+#     both required in all three bindings, and Julia and Rust may never list
+#     `native` as optional;
 #   * a compiler whose runtime is not configured here reports `unavailable` WITH
 #     ITS REASON and skips. A broken adapter does not: it fails.
 #
@@ -1238,9 +1240,10 @@ run_inline_tests_interpreter_rust()   { _run_inline_tests_stage rust interpreter
 run_inline_tests_interpreter_python() { _run_inline_tests_stage python interpreter; }
 
 # `native` is the strict default and is required for every fixture of every tier
-# here: each required binding's `required` list names it, and a refusal is red
-# unless a named exclusion records an out-of-scope code (`unsupported_construct`
-# or `unlowered_operator`, API_SPEC §5.8).
+# here: each required binding's `required` list names it, and a Julia or Rust
+# refusal is red unless a named exclusion records an out-of-scope code
+# (`unsupported_construct` or `unlowered_operator`, API_SPEC §5.8). Python is
+# exempt: its native gaps are named exclusions with any code.
 run_inline_tests_native_julia()  { _run_inline_tests_stage julia native; }
 run_inline_tests_native_rust()   { _run_inline_tests_stage rust native; }
 run_inline_tests_native_python() { _run_inline_tests_stage python native; }
@@ -1252,9 +1255,10 @@ run_compiler_agreement_interpreter_rust()   { _run_compiler_agreement_stage rust
 run_compiler_agreement_interpreter_python() { _run_compiler_agreement_stage python interpreter; }
 
 # `native` is the strict default: bindings_required in all three, and never
-# bindings_optional. A REFUSAL here is always red, whatever a fixture's
-# `required` map says: `native` refuses by name only out-of-scope constructs
-# (API_SPEC §5.8), and no fixture of this tier carries one.
+# bindings_optional in Julia or Rust. A Julia or Rust REFUSAL here is always red,
+# whatever a fixture's `required` map says: `native` refuses by name only
+# out-of-scope constructs (API_SPEC §5.8), and no fixture of this tier carries
+# one. A Python refusal is red because every `required` map names native.
 run_compiler_agreement_native_julia()  { _run_compiler_agreement_stage julia native; }
 run_compiler_agreement_native_rust()   { _run_compiler_agreement_stage rust native; }
 run_compiler_agreement_native_python() { _run_compiler_agreement_stage python native; }

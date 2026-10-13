@@ -546,9 +546,10 @@ def esm_problem(
           refuse are those carrying a construct outside its scope — events,
           implicit equations and SDE noise (``unsupported_construct``) and a
           spatial operator with no discretization rule
-          (``unlowered_operator``, refused under every compiler). Every
-          compiler-driven conformance tier requires ``native`` for every
-          fixture, so any other refusal is a defect in this binding.
+          (``unlowered_operator``, refused under every compiler). The
+          conformance tiers hold Julia and Rust ``native`` to that for every
+          fixture; this binding is exempt, and its ``native`` gaps are
+          recorded there as named exclusions.
         * ``"interpreter"`` — the reference: every fast tier off, the per-cell
           ``faq`` evaluator for every aggregate, source codegen and the
           shape-inference interval hull off. No performance promise of any
