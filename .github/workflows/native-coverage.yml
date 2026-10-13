@@ -5,15 +5,18 @@ name: Native Coverage
 # EarthSciML/EarthSciModels is built through `esm_problem` under `native` and
 # under `interpreter`, in Julia and in Rust, and the documents the interpreter
 # builds and native does not are checked against the committed ledger of each
-# binding. The ledger only shrinks:
+# binding. Native is required for every document the interpreter builds, so
+# both ledgers are empty and an entry may carry only an out-of-scope code
+# (`unsupported_construct`, `unlowered_operator`; API_SPEC §5.8):
 #
+#   * a ledger entry with any other code is RED;
 #   * a document native newly refuses is RED;
 #   * a ledgered document native now builds is RED until its entry is removed.
 #
 # Weekly rather than per push. The sweep builds about 1,200 documents twice per
 # binding, and half the corpus is another repository's, so a push here is not
 # what moves most of it. `workflow_dispatch` runs it on demand, e.g. on a branch
-# that burns entries down.
+# that changes native.
 #
 # The two bindings are separate jobs: each is its own verdict, and one binding's
 # red must not hide the other's.

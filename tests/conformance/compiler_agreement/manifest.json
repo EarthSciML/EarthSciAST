@@ -20,7 +20,7 @@
         "python"
       ],
       "bindings_optional": [],
-      "note": "The strict default. All three strict builds have landed and all three crossed the one-way ratchet, so julia, rust and python must each ANSWER for `native`; `bindings_optional` is empty. A REFUSAL is governed by each fixture's `required` map, not by this list."
+      "note": "The strict default. All three strict builds have landed and all three crossed the one-way ratchet, so julia, rust and python must each ANSWER for `native`; `bindings_optional` is empty and must stay so. A REFUSAL is always red, whatever a fixture's `required` map says: native covers the whole evaluable core and refuses by name only out-of-scope constructs (API_SPEC \u00a75.8), none of which this tier carries."
     },
     "xla": {
       "bindings_required": [

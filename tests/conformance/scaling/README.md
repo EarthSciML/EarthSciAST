@@ -142,6 +142,8 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
     "reason": null,
     "n_bytes": 0,
     "build_s": 0.0,
+    "build_repeats": 10,
+    "dense_bytes": 0,
     "code_size": 0,
     "code_size_unit": "tape_instructions",
     "first_call_s": 0.0,
@@ -150,8 +152,17 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
     "hand_loop_s": 0.0,
     "hand_loop_max_abs_diff": 0.0,
     "dy_max_abs": 0.0,
-    "interpreter_max_abs_diff": 0.0}]}
+    "interpreter_max_abs_diff": 0.0,
+    "hand_loop_serial_s": 0.0,
+    "serial_steady_rhs_s": null,
+    "fork_join_s": null}]}
 ```
+
+`manifest.json`'s `result_format_version` is 2: version 1 had no
+`build_repeats`, `dense_bytes`, `hand_loop_serial_s`, `serial_steady_rhs_s` or
+`fork_join_s`, and its `build_s` was a single build. A version-1 file still
+checks: a missing field turns off only the allowance or carve-out that reads it,
+and the row's note says so.
 
 | field | meaning |
 |---|---|
@@ -159,12 +170,17 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
 | `status` | `"ok"`, `"refused"` (the compiler refused the document by name; `reason` is its text) or `"error"` (anything else, including a timeout or a killed child process; `reason` says which) |
 | `n`, `n_cells`, `n_states` | the nominal ladder size, the actual cell count, the state-vector length |
 | `n_bytes` | the document file's size in bytes (the `build_slope` gate's size allowance reads it) |
-| `build_s` | wall seconds of `esm_problem` (reading and parsing the file included), after a warm-up build of a trivial document in the same process |
+| `build_s` | wall seconds of `esm_problem` (reading and parsing the file included), after a warm-up build in the same process: the fastest of `build_repeats` builds of the document, repeated while they total under 1 s and at most 10 times. A build of a few milliseconds varies by a large fraction of itself between runs, and one sample of it at each end of the ladder made the build slope swing by hundreds of ns/state |
+| `build_repeats` | how many builds `build_s` is the fastest of |
+| `dense_bytes` | bytes of the declared-dense arrays the build writes in full: an array the document declares at a shape (`regrid`'s overlap arrays, source x target) that the build materializes at that shape. Julia: the build's setup arrays. Rust: `null`, since its build materializes no declared shape (a declared-dense `faq` becomes tape sections that run on the first call). `null` gets no dense allowance |
 | `code_size`, `code_size_unit` | the size of what the compiler emitted. Rust: tape instructions over all three cadence sections. Julia: the adapter's stated measure |
 | `first_call_s` | the first right-hand-side call after the build (it primes build-once sections) |
 | `steady_rhs_s` | median of repeated calls after the first: at least 5 calls and at least 0.25 s of calls, at most 1000 |
 | `allocs_per_call` | bytes allocated per steady call (Rust: a counting global allocator in the adapter binary; Julia: `@allocated`) |
 | `hand_loop_s` | median steady time of the family's hand-written loop on the same state, timed the same way; threaded runs time the threaded loop |
+| `hand_loop_serial_s` | the serial hand loop, timed the same way in the same process (equal to `hand_loop_s` in a serial run) |
+| `fork_join_s` | threaded runs: the median time of one empty fork-join of the threaded hand loop's own pool at the run's thread count (Rust `fork_join.rs`, Julia an empty `Polyester.@batch`), same process; `null` in a serial run |
+| `serial_steady_rhs_s` | threaded runs, where the serial hand loop takes under 1 ms: native's steady call with its thread budget forced to one, same process (Rust: inside a one-thread rayon pool; Julia: a second build whose sections are all held serial). Its `dy` must be bit-identical to the threaded call's, or the result is an error. `null` otherwise |
 | `hand_loop_max_abs_diff` | max over the state of `abs(dy_hand - dy_compiler)` |
 | `dy_max_abs` | max over the state of `abs(dy_compiler)`, the scale for the hand-loop check |
 | `interpreter_max_abs_diff` | max `abs(dy_compiler - dy_interpreter)` at the same point, or `null` when the adapter did not run the interpreter (it does so only up to a size cap, since the interpreter walks per cell) |
@@ -206,12 +222,12 @@ Thresholds live in `manifest.json` under `gates`.
 
 | gate | kind | holds when |
 |---|---|---|
-| `builds` | deterministic | `status` is `"ok"`. A refusal or error fails it, and the other gates are then unmeasurable for that (family, N) |
+| `builds` | deterministic | `status` is `"ok"`. A refusal or error fails it, and the other gates are then unmeasurable for that (family, N). `native` is required for every document of every compiler-driven tier, so this gate takes no ledger entry: a native `builds` entry is a manifest error |
 | `code_size_flat` | deterministic | `code_size` is identical at every N that built, up to the gate's `slack` (0). A family's `gate_overrides` may state a slack per binding, with a `why` that bounds the spread: Rust's stencil and transport families state one, because fusion's fold decision depends on row length, while the lowered tape it can only shrink is flat (`code_size_detail.lowered`) |
 | `no_steady_alloc` | deterministic | `allocs_per_call` is 0 (null on a built document fails, unless the result declares it unmeasurable). A ledger entry for it states `max_bytes_per_call`, the most it excuses, and a measure past that bound is red (`EXCEEDS`) |
 | `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast. Checked against the interpreter when native refused |
-| `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns plus the document-size allowance below, over the smallest and largest N that built with at most 10^6 cells |
-| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise). Two families stop short of 10^4 states and lower it to 2000 through `gate_overrides`: `source_receptor`, whose work is N^2, and `regrid`, whose ladder stops at 6324 states and whose call at 2000 states is already a few microseconds |
+| `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns plus the document-size and dense-array allowances below, over the smallest and largest N that built with at most 10^6 cells |
+| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise). Two families stop short of 10^4 states and lower it to 2000 through `gate_overrides`: `source_receptor`, whose work is N^2, and `regrid`, whose ladder stops at 6324 states and whose call at 2000 states is already a few microseconds. In a threaded file, a call below the small-call floor (below) is checked against native's own serial call instead |
 
 ### The build slope's document-size allowance
 
@@ -251,26 +267,66 @@ few bytes of digits) gets an allowance of about 0, so the gate is the plain 20
 ns/state there. A result without `n_bytes` (written before the adapters
 recorded it) gets no allowance either, and the row's note says so.
 
+### The build slope's dense-array allowance
+
+A document may declare an array dense over a large index space: `regrid`'s
+`A_ij` and `W_ij` are declared over source x target, N^2 elements, although
+only the admitted pairs are ever non-zero. A build that materializes the
+declared shape writes N^2 pages, which costs time per state that grows with N
+however good the compiler is. The gate pays for those page writes and nothing
+else, by the same rule in both bindings:
+
+```
++ dense_page_ns[binding] * (dense_bytes(Nmax) - dense_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin))
+```
+
+`dense_page_ns` is twice the binding's measured cost of writing fresh pages
+(allocating an array and writing every element once, so each page is faulted in
+and zeroed): the write, plus one more pass of the same cost for the build to
+read the array back into its own tables (the manifest's `dense_page_ns_why` has
+the measurement). It pays for the materialized shape, not for work per admitted
+element, which still has to fit the rest of the limit. A build that writes no
+declared-dense array (`dense_bytes` 0 at both ends, or `null`) gets nothing.
+
+### The threaded speed gate's small-call floor
+
+Threads cannot win on a call that is only a few fork-joins of work: dispatching
+the shares and joining them costs about as much as the work saved. Below a floor
+the threaded speed gate therefore asks a different question: not whether native
+keeps up with the threaded hand loop, but whether turning threads on made native
+slower than running it serially.
+
+```
+small call:  hand_loop_serial_s < small_call_floor.fork_joins * fork_join_s
+then check:  steady_rhs_s / serial_steady_rhs_s <= max_ratio
+```
+
+Every quantity is measured in the same process as the result. The floor is
+mechanical, the same for every family: the serial hand loop's call against one
+empty fork-join of the hand loop's own pool, which native's implementation
+cannot move. A serial file, or a result without the three fields, gets no
+carve-out. The manifest's `small_call_floor.why` says how the number was chosen.
+
 The deterministic gates run in PR CI at the PR sizes (the Rust leg of
 `conformance-testing.yml`; `generate.py --check` runs in its lint job). The
 timing gates need a clean machine and the big sizes: they run on the scheduled
 `scaling-sweep.yml` (with `check.py --report-timing`, so they print but never
-go red) and through `sweep.sh`, and do not block merges until plan phase 6.
+go red) and through `sweep.sh`, and do not block merges yet: plan phase 6
+makes them block once the ledger is empty.
 The ledger's timing entries come from `sweep.sh` on an exclusive node.
 
 The Rust wasm suite (`pkg/earthsci-ast-rs/tests/wasm_suite.rs`) also builds
 every committed fixture here under native and the interpreter on wasm32 and
-requires bit-identical right-hand sides; a native refusal passes there only
-where the Rust ledger has a `builds` entry for it.
+requires bit-identical right-hand sides; a native refusal fails it.
 
 ## The known-failure ledger
 
 `manifest.json` `ledger.<binding>` lists what fails today:
 
 ```json
-{"family": "regrid", "n": 1000, "gate": "builds", "threads": "serial",
- "measured": "refused: polygon_intersection_area has no tape lowering",
- "reason": "geometry leaf not lowered", "phase": 3}
+{"family": "regrid", "n": 1000, "gate": "speed", "threads": "serial",
+ "measured": 1.4155, "reason": "the apply's fused group trails the hand loop",
+ "phase": 5}
 ```
 
 `n` omitted means every N of the family (and the family-level gates, which
@@ -279,8 +335,8 @@ so a run that stops below it (the PR sizes) neither matches the entry nor
 marks it stale; `provisional` says a timing entry was measured on a machine
 that was not clean; `threads` (`"serial"` or `"threaded"`) omitted means both;
 `compiler` defaults to `"native"`. `phase` is the plan phase expected to fix
-it: 2 for build time and code size, 3 or 4 for refusals, 5 for speed and
-threading.
+it: 2 for build time and code size, 5 for speed and threading (a refusal is
+never ledgered: see the `builds` gate).
 
 A `no_steady_alloc` entry must also state `max_bytes_per_call`, a positive
 integer: the entry excuses an allocation up to that many bytes per call and no

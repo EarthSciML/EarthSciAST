@@ -556,8 +556,12 @@ what each value MEANS, which is the part a binding must not reinterpret.
   vectorized tiers, for **every** document, whatever its shape. A binding MUST
   NOT switch strategy inside `native` on document content: a scalar document
   and a gridded one are built by the same machinery, so that what ran is a
-  property of the name and not of the input. A rule `native` cannot express is
-  a refusal (below).
+  property of the name and not of the input. `native` covers the whole
+  evaluable core: it MAY refuse (below) only the constructs outside its scope —
+  events, implicit equations and SDE noise (§9.6.6's `unsupported_construct`),
+  and a spatial operator with no discretization rule (`unlowered_operator`,
+  which every compiler refuses) — and a refusal of anything else is a defect
+  in the binding, not coverage still to come.
 - **`interpreter`** — *deliberately simple; the correctness check for the other
   compilers, and nothing else.* The reference evaluator, every fast tier off,
   complete over the evaluable core. It carries **no performance promise of any
@@ -651,7 +655,8 @@ different thing and stay**: a node budget, a box cap, a threading floor, a
 planner ratio. Under a strict `native` a threshold is a **refusal boundary**
 rather than a fallback trigger — crossing it produces `compiler_refused_rule`,
 not a quiet demotion — and a binding that carries one MUST document it as such,
-because moving it changes which documents build.
+because moving it off its default can make `native` refuse an in-scope
+document, which is a defect.
 
 ---
 

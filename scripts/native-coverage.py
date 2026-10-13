@@ -8,11 +8,15 @@ plus every ``.esm`` in a checkout of EarthSciML/EarthSciModels — through
 NATIVE COVERAGE GAP. Each binding's gaps are listed, with the refusal's code,
 rule and reason, in a committed ledger
 (``tests/conformance/native_coverage/<binding>.json``), and the list may only
-shrink: the same one-way rule the compiler-agreement tier's per-fixture
-``required`` map and its named exclusions follow (CONFORMANCE_SPEC §5.44.3).
+shrink. Native is required for every document the interpreter builds
+(API_SPEC §5.8), so an entry may carry only an out-of-scope code
+(``unsupported_construct`` or ``unlowered_operator``) and both ledgers are
+empty.
 
 The check compares a fresh census against the ledger:
 
+  * a ledger entry whose code is not out-of-scope is RED — the ledger excuses
+    nothing in scope;
   * a gap the ledger does not name is RED — native lost coverage;
   * a ledger entry native now builds is RED, with "remove this entry" — a stale
     entry would let the same document regress again unnoticed;
@@ -24,7 +28,7 @@ The check compares a fresh census against the ledger:
   * a census that has no record for some corpus document is RED — a document
     the census lost is not a document native builds.
 
-Excluded from the gap list, as the research census classified them: documents
+Excluded from the gap list: documents
 under an ``invalid/`` directory (they are meant to fail, and a refusal there is
 not coverage), and library fragments (template or coupling libraries, which are
 not runnable documents).
@@ -542,11 +546,29 @@ def _census(args):
     return repo, models, outs, classify(outs)
 
 
+# The refusals native may give by name (API_SPEC §5.8): events, implicit
+# equations and SDE noise, and a spatial operator with no discretization rule.
+NATIVE_OUT_OF_SCOPE_CODES = ("unsupported_construct", "unlowered_operator")
+
+
+def out_of_scope_findings(ledger: dict[str, Any], ledger_name: str) -> list[str]:
+    """A committed ledger entry is red unless its code is an out-of-scope
+    refusal: native is required for every document the interpreter builds, so
+    the ledger excuses nothing else."""
+    return [
+        f"in-scope entry: {e['path']} is ledgered as {e['code']!r}, but native may refuse "
+        f"only {NATIVE_OUT_OF_SCOPE_CODES}. Fix native and remove this entry from {ledger_name}."
+        for e in ledger["entries"]
+        if e["code"] not in NATIVE_OUT_OF_SCOPE_CODES
+    ]
+
+
 def cmd_check(args) -> int:
     repo, models, outs, cls = _census(args)
     ledger_path = Path(args.ledger) if args.ledger else TIER_DIR / f"{args.binding}.json"
     ledger = load_ledger(ledger_path, args.binding)
     red = compare(cls["gaps"], outs, ledger, str(ledger_path), _load_corpus(args, repo, models))
+    red += out_of_scope_findings(ledger, str(ledger_path))
     counts = cls["counts"]
     print(
         f"native coverage ({args.binding}): {len(outs)} documents in the census; "
@@ -677,6 +699,12 @@ def _self_test() -> list[str]:
         if needle is not None and not any(needle in r for r in red):
             fails.append(f"{label}: expected a finding containing {needle!r}, got {red}")
 
+    if not out_of_scope_findings(ledger, "<ledger>"):
+        fails.append("a committed compiler_refused_rule entry must be an in-scope finding")
+    if out_of_scope_findings(
+        {"entries": [{"path": "x", "code": "unsupported_construct"}]}, "<ledger>"
+    ):
+        fails.append("an unsupported_construct entry is an out-of-scope refusal, not a finding")
     expect("exact match", base, None)
     new = copy.deepcopy(base)
     new["tests/valid/b.esm"]["native"] = refused()

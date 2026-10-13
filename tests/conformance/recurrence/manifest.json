@@ -154,23 +154,14 @@
           "native"
         ],
         "python": [
-          "interpreter"
+          "interpreter",
+          "native"
         ],
         "rust": [
           "interpreter",
           "native"
         ]
-      },
-      "named_exclusions": [
-        {
-          "binding": "python",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Python's native compiler refuses a recurrence whose cell body is a reduction: it has no ordered-sweep form of the fold, and its vectorized tiers reorder or batch, which CONFORMANCE_SPEC 5.19.2 forbids. The interpreter runs it."
-        }
-      ]
+      }
     },
     {
       "id": "05_recurrence_two_axes",
@@ -255,23 +246,14 @@
           "native"
         ],
         "python": [
-          "interpreter"
+          "interpreter",
+          "native"
         ],
         "rust": [
           "interpreter",
           "native"
         ]
-      },
-      "named_exclusions": [
-        {
-          "binding": "python",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Python's native compiler refuses a recurrence whose cell body is a reduction: it has no ordered-sweep form of the fold, and its vectorized tiers reorder or batch, which CONFORMANCE_SPEC 5.19.2 forbids. The interpreter runs it."
-        }
-      ]
+      }
     },
     {
       "id": "08_recurrence_parameter_valued_lag",
@@ -347,23 +329,14 @@
           "native"
         ],
         "python": [
-          "interpreter"
+          "interpreter",
+          "native"
         ],
         "rust": [
           "interpreter",
           "native"
         ]
-      },
-      "named_exclusions": [
-        {
-          "binding": "python",
-          "compilers": [
-            "native"
-          ],
-          "code": "compiler_refused_rule",
-          "reason": "Python's native compiler refuses a recurrence whose cell body is a reduction: it has no ordered-sweep form of the fold, and its vectorized tiers reorder or batch, which CONFORMANCE_SPEC 5.19.2 forbids. The interpreter runs it."
-        }
-      ]
+      }
     }
   ]
 }

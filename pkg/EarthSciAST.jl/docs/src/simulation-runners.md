@@ -13,7 +13,7 @@ value means in Julia and how much of it is reachable today.
 
 | `compiler` | Role | Julia runner | Status |
 |---|---|---|---|
-| `:native` | The universally fast option, with no heavy external dependency — hence the default. Every kernel lands on a codegen, affine or whole-array tier; a rule that would need a per-cell tree walk is a build error naming the rule and the reason, never a quiet demotion. | the tiered tree-walk build (`RuntimeGeneratedFunctions` codegen, already a package dependency) | **live.** It is what you get when you name nothing |
+| `:native` | The universally fast option, with no heavy external dependency — hence the default. Every kernel lands on a codegen, affine or whole-array tier, never a quiet demotion to a per-cell tree walk. It covers the whole evaluable core and refuses by name only the constructs outside its scope: events, implicit equations and SDE noise (`unsupported_construct`; `:mtk` runs the first two) and a spatial operator with no discretization rule (`unlowered_operator`, which every compiler refuses). Any other refusal under `:native` is a defect in this package. | the tiered tree-walk build (`RuntimeGeneratedFunctions` codegen, already a package dependency) | **live.** It is what you get when you name nothing |
 | `:interpreter` | Deliberately simple: the correctness check for the other compilers. Every fast tier off, complete over the evaluable core, no performance promise of any kind. | the same tree walk with the per-cell runner for every kernel | **live.** Ask for it by name; no environment variable selects it |
 | `:xla` | Specialty: needs a heavy external dependency. StableHLO emitted directly and compiled through Reactant; a hard error on anything it cannot lower. | the direct emitter in the Reactant extension | **live.** `esm_problem(…; compiler = :xla)` with `using Reactant` in the session; `compiler_unavailable` naming Reactant without it |
 | `:mtk` | Specialty: only some documents — but it is the one runner that executes **events and implicit equations**. Data handed in at the call, a continuous spatial dimension, a geometry operator and a time derivative of an expression are refused by name. | `ModelingToolkit.System` → `mtkcompile` → `ODEProblem`, through the package extension | **live** with `ModelingToolkit` loaded. `esm_problem(…; compiler = :mtk)`; without the package it is `compiler_unavailable` naming it |
@@ -29,7 +29,8 @@ No environment variable selects an evaluation strategy. The `ESS_*` variables
 that remain are tuning thresholds — a node budget, a per-function size cap, a
 threading floor, a tier's admission floor — and under a strict `:native` each
 is a **refusal boundary**: crossing it produces `compiler_refused_rule` rather
-than a quiet demotion, so moving one changes which documents build. Two
+than a quiet demotion. Moving one off its default can therefore make `:native`
+refuse an in-scope document, which the conformance tiers report as a defect. Two
 experimental emission tiers ship off and are opted into by name
 (`ESS_CG_SUBCALL_FN`, `ESS_NESTED_TEMPLATE_BOUNDARY`); neither is an oracle,
 and nothing in the corpus depends on either.

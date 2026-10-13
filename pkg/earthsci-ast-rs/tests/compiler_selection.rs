@@ -23,8 +23,10 @@
 //!      with those observeds served from the tape — the pass that used to run
 //!      off it, once per solve, through the whole-array overlay.
 //!
-//! Not pinned here: which documents `native` refuses today. That is the
-//! coverage backlog, and `CONFORMANCE_SPEC.md` §5.44 is where it is read.
+//! Not pinned here: that `native` refuses nothing in scope. It may refuse
+//! only out-of-scope constructs (API_SPEC §5.8), and the compiler-driven
+//! conformance tiers (`CONFORMANCE_SPEC.md` §5.44, §5.45, §5.44.6) are where
+//! any other refusal turns red.
 
 #![cfg(all(feature = "solve", not(target_arch = "wasm32")))]
 
