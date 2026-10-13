@@ -18,8 +18,8 @@
 
 use super::fused::{MSrc, dispatch_bin_kernel, dispatch_un_kernel, fch_sel, fch1, fch2};
 use super::lane_fold::{
-    B_DY, B_PARAM, B_REG, B_SPLAT, B_STATE, LOp, LaneCode, N_BASES, OTHER, SSTRIDE, STRIP,
-    strip_fold,
+    B_DY, B_PARAM, B_REG, B_SPLAT, B_STATE, LOp, LaneCode, N_BASES, R_OTHER, ROp, RTerm, SSTRIDE,
+    STRIP, strip_fold,
 };
 use super::resolve::resolve_scalar;
 use super::*;
@@ -45,11 +45,36 @@ pub(super) struct LaneScratch {
     /// grown the first time a call splits wider.
     #[cfg(not(target_arch = "wasm32"))]
     workers: Vec<LaneWorker>,
+    /// The most terms and strip operations of any folded program.
+    max_terms: usize,
+    max_sops: usize,
 }
 
-/// One thread's register file for a lane program's chunks or strips.
+/// One thread's register file for a lane program's chunks or strips, and
+/// a folded program's terms and operations resolved against this thread's
+/// call: re-resolved when the program or any of its bases differ from the
+/// call they were resolved for (`resolved`).
 struct LaneWorker {
     regs: Vec<f64>,
+    terms: Vec<RTerm>,
+    ops: Vec<ROp>,
+    resolved: Option<(*const LaneCode, [*mut f64; N_BASES])>,
+}
+
+// SAFETY: the resolved pointers are dereferenced only by a call whose own
+// program and bases equal the ones they were resolved from (`resolved`), on
+// the thread that runs that call.
+unsafe impl Send for LaneWorker {}
+
+impl LaneWorker {
+    fn new(regs: Vec<f64>, max_terms: usize, max_sops: usize) -> Self {
+        LaneWorker {
+            regs,
+            terms: Vec::with_capacity(max_terms),
+            ops: Vec::with_capacity(max_sops),
+            resolved: None,
+        }
+    }
 }
 
 impl LaneScratch {
@@ -91,15 +116,18 @@ impl LaneScratch {
                 None => (Vec::new(), Vec::new()),
             })
             .collect();
+        let max_terms = codes.iter().flatten().map(|c| c.strips.tptr.len()).max();
+        let max_sops = codes.iter().flatten().map(|c| c.strips.sops.len()).max();
+        let (max_terms, max_sops) = (max_terms.unwrap_or(0), max_sops.unwrap_or(0));
         LaneScratch {
             codes,
-            own: LaneWorker {
-                regs: vec![0.0; regs],
-            },
+            own: LaneWorker::new(vec![0.0; regs], max_terms, max_sops),
             svals: Vec::with_capacity(svals),
             splats,
             #[cfg(not(target_arch = "wasm32"))]
             workers: Vec::new(),
+            max_terms,
+            max_sops,
         }
     }
 }
@@ -128,7 +156,11 @@ pub(super) unsafe fn exec_lanes(
         splats,
         #[cfg(not(target_arch = "wasm32"))]
         workers,
+        max_terms,
+        max_sops,
     } = scratch;
+    #[cfg(target_arch = "wasm32")]
+    let _ = (max_terms, max_sops);
     svals.clear();
     for op in &ls.scalars {
         svals.push(resolve_scalar(op, env, slab_ptr, slot_off, obs));
@@ -180,9 +212,11 @@ pub(super) unsafe fn exec_lanes(
         let ways = super::par::lane_ways(lanes, super::par::lane_cost(ls), ways);
         if ways > 1 {
             while workers.len() < ways {
-                workers.push(LaneWorker {
-                    regs: super::par::padded(own.regs.len()),
-                });
+                workers.push(LaneWorker::new(
+                    super::par::padded(own.regs.len()),
+                    *max_terms,
+                    *max_sops,
+                ));
             }
             let sh = SplitLanes {
                 prog: &prog,
@@ -569,6 +603,22 @@ unsafe fn exec_folded_strips(
     bases[B_SPLAT] = prog.splat.as_ptr() as *mut f64;
     bases[B_DY] = dy.ptr.wrapping_add(lo);
     let b = &bases;
+    // Every term and operation against this call's bases, once.
+    let key = (code as *const LaneCode, bases);
+    if wk.resolved != Some(key) {
+        wk.terms.clear();
+        wk.terms.extend(st.tptr.iter().map(|t| RTerm::of(t, b)));
+        wk.ops.clear();
+        let terms = &wk.terms[..];
+        wk.ops.extend(
+            st.sops
+                .iter()
+                .enumerate()
+                .map(|(k, o)| ROp::of(o, k, terms, b)),
+        );
+        wk.resolved = Some(key);
+    }
+    let ops = &wk.ops[..];
     let mut off = 0;
     loop {
         for &i in &st.gathered {
@@ -582,14 +632,16 @@ unsafe fn exec_folded_strips(
                 MRef::Scal(i) => MSrc::C(prog.svals[*i as usize]),
             }
         };
-        for so in &st.sops {
-            if so.kind == OTHER {
-                let LOp::Other(m) = &code.ops[so.n as usize] else {
-                    unreachable!("an OTHER entry is a micro-op")
+        for op in ops {
+            if op.code == R_OTHER {
+                let LOp::Other(m) = &code.ops[op.n as usize] else {
+                    unreachable!("an R_OTHER entry is a micro-op")
                 };
-                unsafe { micro_chunk(m, &msrc, so.dst(b, off), STRIP) };
+                unsafe { micro_chunk(m, &msrc, op.at(off), STRIP) };
             } else {
-                unsafe { strip_fold(so, &st.tptr, b, off, so.dst(b, off)) };
+                // SAFETY: resolved above against this call's bases; the
+                // terms are not touched again until the next call.
+                unsafe { strip_fold(op, off) };
             }
         }
         for (w, src) in ls.writes.iter().zip(&code.writes) {
