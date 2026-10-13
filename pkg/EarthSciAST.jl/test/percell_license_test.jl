@@ -116,6 +116,10 @@ end
             _LC._percell_discrete_fill   => lic,     # the discrete materializer
             _LC._seed_expression_percell! => lic,    # `seed_expression_ic!`
             _LC._walk_kernels!           => lic,     # the kernel section's runner
+            # The scalar walker: its `nothing` methods are empty, and the
+            # section (or `_make_rhs`) holds no license only with nothing to walk.
+            _LC._walk_prelude_slots!     => Union{lic,Nothing},
+            _LC._walk_scalar_rhs!        => Union{lic,Nothing},
             _LC._compile_faq_percell!    => Union{lic,_LC._OopCells},  # per-cell build
         ]
         for (f, want) in routines

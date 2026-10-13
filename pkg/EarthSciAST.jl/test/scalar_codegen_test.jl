@@ -61,7 +61,7 @@ function _scg_model(B::Int)
     return ESM.Model(vars, eqs)
 end
 
-function _scg_build(model; compiler::Symbol=:native)
+function _scg_build(model; compiler=:native)
     insp = ESM.BuildInspection()
     f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model; compiler=compiler,
                                                         inspect=insp)
@@ -130,13 +130,30 @@ _scg_tiers(rep) = Dict(ESM.tier_histogram(rep))
         @test map(ESM._cg_expr_size, e3) == map(ESM._cg_expr_size, e7)
     end
 
-    @testset "node budget 0 keeps the walker, and says so" begin
+    @testset "node budget 0: native refuses the walker by name" begin
+        # Past the emitted-node budget every class stays on the scalar walker,
+        # which is the interpreter's: strict native refuses the document,
+        # naming the first walked equation's state, and the interpreter runs it.
         withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
-            bn = _scg_build(_scg_model(3))
+            err = try
+                _scg_build(_scg_model(3)); nothing
+            catch e
+                e
+            end
+            @test err isa ESM.TreeWalkError
+            @test err.code == ESM.ERROR_CODES.COMPILER_REFUSED_RULE
+            @test occursin("compiler=:native refuses 'A_1'", err.detail)
+            @test occursin("could not be modelled by the scalar code generator", err.detail)
+            @test occursin("scalar equation", err.detail)
             bi = _scg_build(_scg_model(3); compiler=:interpreter)
-            @test _scg_tiers(bn.report) == Dict(:scalar => 10)
-            @test !isempty(getfield(bn.f!, :cse_prelude))
-            @test _scg_agree(bn, bi)
+            @test all(isfinite, _scg_du(bi.f!, bi.u0, bi.p, 0.8))
+            # A non-strict native keeps the walker, says so in its report, and
+            # agrees with the interpreter bit for bit.
+            lax = ESM._plan_with(ESM._compiler_plan(:native); strict = false)
+            bl = _scg_build(_scg_model(3); compiler=lax)
+            @test _scg_tiers(bl.report) == Dict(:scalar => 10)
+            @test !isempty(getfield(bl.f!, :cse_prelude))
+            @test _scg_agree(bl, bi)
         end
     end
 

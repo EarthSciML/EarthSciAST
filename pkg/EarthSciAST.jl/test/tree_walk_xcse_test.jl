@@ -61,7 +61,7 @@ end
 # `:interpreter`, which is the differential oracle: value-identity must hold
 # through xcse and the kernel-class merge composed, since the class merge runs
 # BEFORE xcse on `:inplace` builds too.
-_xc_build(model; ics=Dict{String,Float64}(), compiler::Symbol=:native, kw...) =
+_xc_build(model; ics=Dict{String,Float64}(), compiler=:native, kw...) =
     ESM._build_evaluator_impl(model; initial_conditions=ics, compiler=compiler,
                               kw...)
 
@@ -198,14 +198,16 @@ end
         # `_AccKernel` with its inv recipes walkable. Fully emitted, the
         # per-kernel interp calls are compiled into the generated function and
         # vanish from the introspectable set; the hoisting under test is
-        # identical either way.
+        # identical either way. Built non-strict: at a zero budget the scalar
+        # prelude is walked too, which strict native refuses.
+        lax = ESM._plan_with(ESM._compiler_plan(:native); strict = false)
         withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
             # On this fully-shared fixture the kernel-CLASS merge is what
             # achieves evaluate-once: all K bands are one class, and the merge
             # keeps their value-identical interp chain as ONE preserved inv
             # tier on the single merged kernel — 1 fn eval per call, no scalar
             # slot minted for xcse to hoist onto.
-            fmg!, _, _, _, _, dmg = _xc_build(_xc_fastjx(K, N; nshared=K)[1]; ics)
+            fmg!, _, _, _, _, dmg = _xc_build(_xc_fastjx(K, N; nshared=K)[1]; ics, compiler = lax)
             @test dmg.n_acc_kernels == 1
             @test dmg.n_classmerge_in == K
             @test dmg.n_xcse_slots == 0
@@ -220,7 +222,7 @@ end
             # is `cos(0.1·t)` — ops, not a registered fn — so it does not add
             # to this count; what it adds is the slots pinned above.)
             fu!, _, _, _, _, du = _xc_build(_xc_fastjx_unmerged(K, N)[1];
-                                            ics=_xc_fastjx_unmerged(K, N)[2])
+                                            ics=_xc_fastjx_unmerged(K, N)[2], compiler = lax)
             @test du.n_acc_kernels == K
             @test du.n_xcse_slots == 2
             preludeu = getfield(fu!, :cse_prelude)
