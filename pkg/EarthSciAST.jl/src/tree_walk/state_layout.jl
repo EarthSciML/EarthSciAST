@@ -405,6 +405,17 @@ function _foreach_cell_lex(f, cs::_DiscoveredCells)
     return nothing
 end
 
+# The first cell `_foreach_cell_lex` visits, as a fresh vector; `nothing` for an
+# empty set.
+function _first_cell_lex(cs::_DiscoveredCells)
+    first = nothing
+    _foreach_cell_lex(cs) do idx
+        first === nothing && (first = copy(idx))
+        nothing
+    end
+    return first
+end
+
 # ---------------------------------------------------------------------------
 # Initial conditions with inline array profiles
 # ---------------------------------------------------------------------------

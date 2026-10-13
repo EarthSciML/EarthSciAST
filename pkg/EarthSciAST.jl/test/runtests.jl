@@ -168,6 +168,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # Every per-cell route under a strict `native`: refused by name, or compiled
     # once and reported under a tier that says so.
     include("percell_route_refusal_test.jl")
+    include("percell_license_test.jl")
     # The compiled observed program: observed_field(prob, name; u, t), inline
     # assertions and sink fields read through it, bit for bit the interpreter's.
     include("observed_program_test.jl")

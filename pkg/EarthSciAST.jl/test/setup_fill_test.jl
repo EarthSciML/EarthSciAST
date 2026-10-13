@@ -65,7 +65,7 @@ emitted(sf) = EA.RuntimeGeneratedFunctions.get_expression(getfield(sf.section, :
             @test sf !== nothing
             @test sf.tier === :affine
             buf = EA._run_setup_fill(sf)
-            ref = [EA._eval_cellwise(coord_ic(n), [i]; params = params) for i in 1:n]
+            ref = [EA._eval_cellwise(EA._PerCellLicense(), coord_ic(n), [i]; params = params) for i in 1:n]
             @test all(buf .=== ref)
             push!(codes, emitted(sf))
         end
@@ -80,7 +80,7 @@ emitted(sf) = EA.RuntimeGeneratedFunctions.get_expression(getfield(sf.section, :
             sf = compiled(stencil(n), n; const_arrays = ca, params = Dict("dx" => 0.25))
             @test sf !== nothing
             buf = EA._run_setup_fill(sf)
-            ref = [EA._eval_cellwise(stencil(n), [i]; const_arrays = ca,
+            ref = [EA._eval_cellwise(EA._PerCellLicense(), stencil(n), [i]; const_arrays = ca,
                                      params = Dict("dx" => 0.25)) for i in 1:n]
             @test all(buf .=== ref)
             push!(codes, emitted(sf))

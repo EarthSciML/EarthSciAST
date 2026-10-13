@@ -48,7 +48,7 @@ make_conc2(N_src) = _op("faq"; output_idx = Any["i", "j"], semiring = "sum_produ
 
 # The exact per-cell reference (pre-Phase-C path): resolve+compile+eval one cell.
 _percell(expr, cells; ca, params = Dict{String,Float64}()) =
-    Float64[ESM._eval_cellwise(expr, collect(Int, c); const_arrays = ca, params = params)
+    Float64[ESM._eval_cellwise(ESM._PerCellLicense(), expr, collect(Int, c); const_arrays = ca, params = params)
             for c in cells]
 
 @testset "wall2 Phase C — compile-once cellwise evaluator" begin

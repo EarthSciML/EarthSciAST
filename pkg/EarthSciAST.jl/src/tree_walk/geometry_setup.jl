@@ -1387,19 +1387,18 @@ function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
         end
     end
     _SETUP_MAP_FASTPATH_MISS[] += 1
-    if _compiler_is_strict() && all(>(0), exts)
-        # A map no form can evaluate is the document's error, not a compiler's
-        # refusal, so the per-cell reference is run at one cell, for its
-        # diagnostic only, before the refusal is raised: the cell the compiled
-        # sweep failed at, or else the first.
-        at = something(failed_at[], ones(Int, length(exts)))
-        _eval_cellwise(rhs, at; const_arrays=ca,
-                       registered_functions=registered_functions, params=params)
-    end
-    _refuse_percell_evaluation(_current_rule_label(),
-        "the setup MAP materializer", prod(exts); one_cell = true)
+    # A map no form can evaluate is the document's error, not a compiler's
+    # refusal, so a strict compiler's probe runs the per-cell reference at one
+    # cell, for its diagnostic only, before the refusal is raised: the cell the
+    # compiled sweep failed at, or else the first.
+    lic = _percell_evaluation_license(_current_rule_label(),
+        "the setup MAP materializer", prod(exts); one_cell = true,
+        probe = pr -> all(>(0), exts) &&
+            _eval_cellwise(pr, rhs, something(failed_at[], ones(Int, length(exts)));
+                           const_arrays=ca, registered_functions=registered_functions,
+                           params=params))
     _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
-    return _fill_map_percell(rhs, exts, ca, registered_functions, params)
+    return _fill_map_percell(lic, rhs, exts, ca, registered_functions, params)
 end
 
 # Compile-once cell sweep: one preallocated `cell` buffer, rebound per cell. On
@@ -1425,11 +1424,12 @@ end
 # The REFERENCE cell sweep — the original per-cell loop, unchanged. It is both
 # the fallback for anything the fast path declines and the oracle a build with
 # the compile-once tier off runs.
-function _fill_map_percell(rhs::OpExpr, exts::Vector{Int}, ca::AbstractDict,
-                           registered_functions::AbstractDict, params::AbstractDict)
+function _fill_map_percell(lic::_PerCellLicense, rhs::OpExpr, exts::Vector{Int},
+                           ca::AbstractDict, registered_functions::AbstractDict,
+                           params::AbstractDict)
     arr = zeros(Float64, exts...)
     for I in CartesianIndices(Tuple(exts))
-        arr[I] = _eval_cellwise(rhs, Int[Tuple(I)...]; const_arrays=ca,
+        arr[I] = _eval_cellwise(lic, rhs, Int[Tuple(I)...]; const_arrays=ca,
                                 registered_functions=registered_functions,
                                 params=params)
     end
@@ -1548,23 +1548,16 @@ function _materialize_setup_wholearray(rhs::OpExpr, env::AbstractDict,
         return arr
     end
     # Otherwise the stencil is resolved and compiled from scratch at every
-    # output cell. A strict compiler refuses that once its first cell has
-    # evaluated, so that a stencil no form can evaluate raises the document's
-    # own error instead.
-    if _compiler_is_strict() && all(>(0), exts)
-        _eval_cellwise(rhs, ones(Int, length(exts)); const_arrays=ca,
-                       registered_functions=registered_functions, params=params)
-    end
-    _refuse_percell_evaluation(_current_rule_label(),
-        "the whole-array setup materializer", prod(exts); one_cell = true)
+    # output cell. A strict compiler refuses that once its probe has evaluated
+    # the first cell, so that a stencil no form can evaluate raises the
+    # document's own error instead.
+    lic = _percell_evaluation_license(_current_rule_label(),
+        "the whole-array setup materializer", prod(exts); one_cell = true,
+        probe = pr -> all(>(0), exts) &&
+            _eval_cellwise(pr, rhs, ones(Int, length(exts)); const_arrays=ca,
+                           registered_functions=registered_functions, params=params))
     _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
-    arr = zeros(Float64, exts...)
-    for I in CartesianIndices(Tuple(exts))
-        arr[I] = _eval_cellwise(rhs, Int[Tuple(I)...]; const_arrays=ca,
-                                registered_functions=registered_functions,
-                                params=params)
-    end
-    return arr
+    return _fill_map_percell(lic, rhs, exts, ca, registered_functions, params)
 end
 
 # The dense source array of a setup-time `reshape`: a bare reference to an
