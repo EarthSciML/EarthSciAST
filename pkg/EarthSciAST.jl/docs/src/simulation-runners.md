@@ -265,8 +265,7 @@ cross-binding operator codes):
 | `unlowered_operator` | A rewrite-target op (`grad`, a spatial or right-hand-side `D`, a user op) that no rewrite rule lowered. Cross-binding code (esm-spec §9.6.6). |
 | `E_TREEWALK_UNSUPPORTED_OP` | An internal pipeline defect: the removed `call` op, or an `index` that reached compilation unresolved. |
 | `E_TREEWALK_UNSUPPORTED_SHAPE` | A variable still has `shape` set — the model is not yet scalarized. |
-| `E_TREEWALK_UNSUPPORTED_BROWNIAN` | Brownian variables are not supported by the deterministic ODE walker. |
-| `unsupported_construct` | The model declares a continuous event, a discrete event, or an implicit equation (an expression LHS such as `s - f(s) ~ 0`). The walker runs none of them, so `:native` and `:interpreter` both refuse; build with `compiler = :mtk`, which runs all three (esm-spec §9.6.6). |
+| `unsupported_construct` | The model declares a continuous event, a discrete event, an implicit equation (an expression LHS such as `s - f(s) ~ 0`), or Wiener noise (a parameter whose `update.kind` is `wiener`). The walker runs none of them, so `:native` and `:interpreter` both refuse; `compiler = :mtk` runs the events and implicit equations, and no compiler integrates an SDE (esm-spec §9.6.6). |
 | `E_TREEWALK_UNSUPPORTED_EQUATION` | Any other equation LHS that is neither `D(state, wrt=t)` nor an observed-variable assignment. |
 | `E_TREEWALK_UNBOUND_VARIABLE` | Free variable is neither a state, parameter, nor `t`. |
 | `E_TREEWALK_DUPLICATE_DERIVATIVE` | More than one equation defines `D(state, wrt=t)` for the same state. |
