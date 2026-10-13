@@ -44,6 +44,12 @@ fn phase_min_work() -> usize {
     }
 }
 
+/// The largest slot (in elements) the plan gives storage of its own. A
+/// recycled storage is still in cache when the next slot takes it; a slot
+/// moved out of it is not, and past this size the cache misses cost more
+/// than the fork-joins the move saves.
+const MOVE_MAX_ELEMS: usize = 1 << 15;
+
 /// The most instructions a plan places; a longer section runs as before.
 const MAX_PLANNED: usize = 1 << 13;
 
@@ -386,7 +392,11 @@ impl CallPlan {
                 };
                 let wait = last_write[b as usize].max(last_read[b as usize]);
                 let elems = prog.slots[s as usize].elems().max(1);
-                if wait > phase && movable(s) && n_moved + elems <= budget {
+                if wait > phase
+                    && movable(s)
+                    && elems <= MOVE_MAX_ELEMS
+                    && n_moved + elems <= budget
+                {
                     // Cache-line aligned, as a split cuts its box.
                     slab_len = slab_len.div_ceil(8) * 8;
                     slot_off[s as usize] = slab_len;
