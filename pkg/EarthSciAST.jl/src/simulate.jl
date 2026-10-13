@@ -993,10 +993,18 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
 
   **`:native` (the default) is STRICT.** It is this package's compiled tiers —
   the affine stencil build, the `RuntimeGeneratedFunctions` emitter and the
-  whole-array forms — for every document whatever its shape, and a rule those
-  tiers cannot express is a BUILD error naming the rule and the deepest decline
-  reason, never a quiet demotion to a slower path. In Julia it refuses exactly
-  three things:
+  whole-array forms — for every document whatever its shape, and never a quiet
+  demotion to a slower path. It covers the whole evaluable core, and the only
+  documents it may refuse are those carrying a construct outside its scope,
+  each refused by name: events, implicit equations and SDE noise
+  (`unsupported_construct`; `:mtk` runs the first two) and a spatial operator
+  with no discretization rule (`unlowered_operator`, refused under every
+  compiler). Every compiler-driven conformance tier requires `:native` for
+  every fixture, so any other refusal is a defect in this package.
+
+  The strictness is enforced as a BUILD error, `compiler_refused_rule`, naming
+  the rule and the deepest decline reason, raised at exactly three points —
+  each one a compiled tier declining where it must not:
 
   1. **An access kernel both codegen emissions declined.** Such a kernel runs
      on `_run_acc_kernel!` — a tree walk once per output cell, on every
@@ -1025,7 +1033,7 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
 
   `:interpreter` is the reference and carries no performance promise: every
   fast tier off, one tree walk per output cell. Pick it to check another
-  compiler, or to run a document `:native` refuses. It keeps the build-time
+  compiler. It keeps the build-time
   MEMOS (the template expansion memo, the reference-preserving template image),
   which change build wall time and not one evaluated bit.
 
@@ -1057,8 +1065,9 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
   Naming `:native` is exactly the default: no environment variable selects an
   evaluation strategy, so the keyword is the whole answer (esm-libraries-spec
   §2.5.10). The `ESS_*` variables that remain are tuning thresholds — under a
-  strict `native` each is a refusal boundary, so moving one changes which
-  documents build, not how fast they run.
+  strict `native` each is a refusal boundary: moving one off its default can
+  make `native` refuse an in-scope document, a defect, rather than run it
+  more slowly.
 
 Julia extension-seam keywords (§2.5.2 explicitly allows these; NOT stable API):
 `const_arrays`, `param_arrays` (forwarded to the build — the

@@ -10,7 +10,10 @@ What each ledger is for, since conflating them is the failure this file exists t
 prevent: `compilers.<value>.bindings_required` governs AVAILABILITY (must this
 binding be able to ANSWER for this compiler), and a fixture's `required` map
 governs REFUSALS (must this compiler run THIS document). A compiler can be
-required to exist and still be allowed to refuse a particular fixture.
+required to exist and still be allowed to refuse a particular fixture, except
+the interpreter and `native`, which no `required` map can excuse: both must run
+every fixture. The refusal and availability arms are therefore exercised through
+`mtk` (julia must answer for it) and `xla` (optional for julia).
 
 Every run works on a COPY of the committed manifest, materialized under the test's
 own temporary directory with its own `golden/`. Nothing here writes to
@@ -96,26 +99,26 @@ def _drop_anchors_unrequired(manifest: dict) -> None:
     unrequired(manifest)
 
 
-def _drop_anchors_native_optional(manifest: dict) -> None:
-    """`drop_anchors` + `native_optional`, the pair every test of the optional
+def _drop_anchors_xla_optional(manifest: dict) -> None:
+    """`drop_anchors` + `xla_optional`, the pair every test of the optional
     availability arm needs: a canned trajectory the anchors would reject, gated
-    against a stub-minted golden, under a ledger that makes `native` optional."""
+    against a stub-minted golden, under a ledger that makes `xla` optional."""
     drop_anchors(manifest)
-    native_optional(manifest)
+    xla_optional(manifest)
 
 
-def native_optional(manifest: dict) -> None:
-    """Put `native` on the OPTIONAL arm of the availability ledger for every binding.
+def xla_optional(manifest: dict) -> None:
+    """Put `xla` on the OPTIONAL arm of the availability ledger for every binding.
 
     A test about the optional arm must CONSTRUCT that arm rather than borrow
-    whichever arm the committed ledger happens to be on: `native` crosses to
-    `bindings_required` one binding at a time as each strict build lands, and a
-    test that read the committed ledger would quietly change what it asserts on
-    the day a binding crossed. Every fixture's `required` map is emptied with
-    it: a fixture may not require a compiler its binding need not offer."""
+    whichever arm the committed ledger happens to be on: a compiler crosses to
+    `bindings_required` one binding at a time, and a test that read the
+    committed ledger would quietly change what it asserts on the day a binding
+    crossed. Every fixture's `required` map is emptied with it: a fixture may
+    not require a compiler its binding need not offer."""
     unrequired(manifest)
-    manifest["compilers"]["native"] = {
-        **manifest["compilers"]["native"],
+    manifest["compilers"]["xla"] = {
+        **manifest["compilers"]["xla"],
         "bindings_required": [],
         "bindings_optional": ["julia", "rust", "python"],
     }
@@ -314,10 +317,10 @@ def test_anchor_rejects_wrong_physics(tmp_path):
 def test_unrequired_refusal_is_a_named_exclusion_and_green(tmp_path):
     manifest = materialize(tmp_path, _drop_anchors_unrequired)
     mint_golden(manifest)
-    proc, payload = produce(manifest, "native", tmp_path, scenario="all_refused")
+    proc, payload = produce(manifest, "mtk", tmp_path, scenario="all_refused")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert payload["status"] == "ok"
-    assert set(statuses(payload, "native").values()) == {"excluded"}
+    assert set(statuses(payload, "mtk").values()) == {"excluded"}
     assert payload["refusals"], "a refusal must never be a silent skip"
     for r in payload["refusals"]:
         assert r["verdict"] == "named exclusion"
@@ -338,6 +341,29 @@ def test_interpreter_refusal_is_always_red(tmp_path):
     assert all(r["verdict"] == "fail" for r in payload["refusals"])
 
 
+def test_native_refusal_is_always_red(tmp_path):
+    """`native` is required for every fixture of every compiler-driven tier, so an
+    empty `required` map does not turn its refusal into a named exclusion."""
+    manifest = materialize(tmp_path, _drop_anchors_unrequired)
+    mint_golden(manifest)
+    proc, payload = produce(manifest, "native", tmp_path, scenario="all_refused")
+    assert proc.returncode == 1
+    assert set(statuses(payload, "native").values()) == {"refused"}
+    assert all(r["verdict"] == "fail" for r in payload["refusals"])
+
+
+def test_native_cannot_be_optional_for_any_binding(tmp_path):
+    def patch(manifest):
+        drop_anchors(manifest)
+        manifest["compilers"]["native"]["bindings_required"] = ["julia"]
+        manifest["compilers"]["native"]["bindings_optional"] = ["rust", "python"]
+
+    manifest = materialize(tmp_path, patch)
+    proc = run_runner(manifest, "--self-test")
+    assert proc.returncode == 1
+    assert "every binding must answer for native" in proc.stderr
+
+
 def test_required_refusal_is_red_and_the_rest_stay_exclusions(tmp_path):
     """The ratchet: a fixture that names a binding+compiler in `required` turns that
     compiler's refusal red, and leaves every other fixture's refusal a named
@@ -345,15 +371,13 @@ def test_required_refusal_is_red_and_the_rest_stay_exclusions(tmp_path):
 
     def patch(manifest):
         _drop_anchors_unrequired(manifest)
-        manifest["compilers"]["native"]["bindings_required"] = ["julia"]
-        manifest["compilers"]["native"]["bindings_optional"] = ["rust", "python"]
-        manifest["fixtures"][0]["required"]["julia"] = ["native"]
+        manifest["fixtures"][0]["required"]["julia"] = ["mtk"]
 
     manifest = materialize(tmp_path, patch)
     mint_golden(manifest)
-    proc, payload = produce(manifest, "native", tmp_path, scenario="all_refused")
+    proc, payload = produce(manifest, "mtk", tmp_path, scenario="all_refused")
     assert proc.returncode == 1
-    seen = statuses(payload, "native")
+    seen = statuses(payload, "mtk")
     ratcheted = json.loads(manifest.read_text())["fixtures"][0]["id"]
     assert seen.pop(ratcheted) == "refused"
     assert set(seen.values()) == {"excluded"}
@@ -366,8 +390,8 @@ def test_a_fixture_cannot_require_a_compiler_the_ledger_does_not(tmp_path):
 
     def patch(manifest):
         drop_anchors(manifest)
-        native_optional(manifest)
-        manifest["fixtures"][0]["required"]["julia"] = ["native"]
+        xla_optional(manifest)
+        manifest["fixtures"][0]["required"]["julia"] = ["xla"]
 
     manifest = materialize(tmp_path, patch)
     proc = run_runner(manifest, "--self-test")
@@ -379,11 +403,11 @@ def test_a_fixture_cannot_require_a_compiler_the_ledger_does_not(tmp_path):
 
 
 def test_unavailable_optional_compiler_is_green_and_named(tmp_path):
-    manifest = materialize(tmp_path, _drop_anchors_native_optional)
+    manifest = materialize(tmp_path, _drop_anchors_xla_optional)
     mint_golden(manifest)
-    proc, payload = produce(manifest, "native", tmp_path, scenario="unavailable")
+    proc, payload = produce(manifest, "xla", tmp_path, scenario="unavailable")
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert payload["compilers"]["native"]["bindings"]["julia"]["status"] == "unavailable"
+    assert payload["compilers"]["xla"]["bindings"]["julia"]["status"] == "unavailable"
     assert payload["unavailable"][0]["binding"] == "julia"
     assert payload["unavailable"][0]["reason"]
     assert "not available" in proc.stdout
@@ -403,7 +427,7 @@ def test_a_missing_adapter_is_unavailable_not_a_crash(tmp_path):
     """No adapter registered and none on disk: the same FACT as an adapter saying
     the compiler is not configured here, so it is governed by the availability
     ledger — green for an optional binding, with the reason printed."""
-    manifest = materialize(tmp_path, _drop_anchors_native_optional)
+    manifest = materialize(tmp_path, _drop_anchors_xla_optional)
     mint_golden(manifest)
     report = tmp_path / "missing.json"
     proc = run_runner(
@@ -411,7 +435,7 @@ def test_a_missing_adapter_is_unavailable_not_a_crash(tmp_path):
         "--bindings",
         "julia",
         "--compiler",
-        "native",
+        "xla",
         "--output",
         str(report),
         adapter=False,
@@ -419,7 +443,7 @@ def test_a_missing_adapter_is_unavailable_not_a_crash(tmp_path):
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     payload = json.loads(report.read_text())
-    assert payload["compilers"]["native"]["bindings"]["julia"]["status"] == "unavailable"
+    assert payload["compilers"]["xla"]["bindings"]["julia"]["status"] == "unavailable"
     assert "adapter not found" in payload["unavailable"][0]["reason"]
 
 
@@ -443,12 +467,12 @@ def test_the_mixed_table_separates_all_four_adapter_outcomes(tmp_path):
     """One run, four different verdicts: the runner must not collapse them."""
     manifest = materialize(tmp_path, _drop_anchors_unrequired)
     mint_golden(manifest)
-    proc, payload = produce(manifest, "native", tmp_path, scenario="mixed")
+    proc, payload = produce(manifest, "mtk", tmp_path, scenario="mixed")
     assert proc.returncode == 1
     # The `mixed` table is positional, so read the verdicts back through the
     # manifest's own fixture order — the report is written with sorted keys.
     ids = [fx["id"] for fx in json.loads(manifest.read_text())["fixtures"]]
-    seen = statuses(payload, "native")
+    seen = statuses(payload, "mtk")
     assert [seen[i] for i in ids[:4]] == ["ok", "mismatch", "excluded", "error"]
 
 
@@ -532,7 +556,7 @@ def test_assert_available_passes_only_when_the_compiler_ran(tmp_path):
 def test_assert_available_fails_on_a_skip(tmp_path):
     """The runner exits 0 on a legal skip, which is exactly the hole this script
     fills for a workflow whose point is that the compiler ran."""
-    manifest = materialize(tmp_path, _drop_anchors_native_optional)
+    manifest = materialize(tmp_path, _drop_anchors_xla_optional)
     mint_golden(manifest)
     report = tmp_path / "skipped.json"
     proc = run_runner(
@@ -540,13 +564,13 @@ def test_assert_available_fails_on_a_skip(tmp_path):
         "--bindings",
         "julia",
         "--compiler",
-        "native",
+        "xla",
         "--output",
         str(report),
         scenario="unavailable",
     )
     assert proc.returncode == 0
-    assert _assert_available(report, "julia", "native").returncode == 1
+    assert _assert_available(report, "julia", "xla").returncode == 1
 
 
 def test_assert_available_rejects_a_report_about_another_compiler(tmp_path):

@@ -52,12 +52,15 @@ cross-binding drift in the last bit is red.
 
 Each fixture's `required` map names the compilers that MUST run it, and its
 `named_exclusions` the refusals that are expected, each with its code. A refusal
-is one or the other, never a silent skip. As of this writing:
+is one or the other, never a silent skip. `native` is required for every
+fixture (`API_SPEC.md` §5.8): a `native` exclusion must carry an out-of-scope
+code (`unsupported_construct`, `unlowered_operator`) or exclude the interpreter
+too, as `06`'s does. As of this writing:
 
 | Binding | `interpreter` | `native` |
 |---|---|---|
 | Julia | all but `06` | all but `06` — an emitted ordered sweep, bit for bit with the interpreter's walk |
-| Python | all ten | all but `04`, `07` and the `tests/valid` document, whose cell body is a reduction (named exclusions) |
+| Python | all ten | all but `04`, `07` and the `tests/valid` document, whose cell body is a reduction. No ledger excuses these refusals, so the three Python `native` stages are red until Python `native` runs them |
 | Rust | all ten | all ten — an ordered `Sweep` on the tape whose cell body runs one cell at a time, bit for bit with the interpreter's walk (`06` included, rounded to binary32 at every cell) |
 
 `06` (binary32) is refused by Julia under both compilers: Julia evaluates in

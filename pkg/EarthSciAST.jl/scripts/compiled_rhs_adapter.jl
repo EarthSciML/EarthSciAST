@@ -26,8 +26,10 @@
 # `--compiler` is REQUIRED (CONFORMANCE_SPEC §5.44.5): a problem-building stage
 # NAMES the compiler it runs, so that a change to the library's default can never
 # change what this tier measures. The stages pass `native`, because every fixture
-# here builds under it; a stage whose fixtures a strict `native` refuses is the
-# one that names `interpreter` instead, and says why where it does so.
+# here is in its scope. `native` refuses by name only out-of-scope constructs
+# (events, implicit equations, SDE noise, a spatial operator with no
+# discretization rule: API_SPEC §5.8); only a stage whose fixtures carry one
+# names `interpreter` instead, and says why where it does so.
 #
 # TWO ENGINES, ONE ADAPTER:
 #

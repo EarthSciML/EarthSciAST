@@ -41,9 +41,10 @@ use crate::simulate::{Alg, SolveOptions};
 use crate::types::EsmFile;
 
 /// The coded diagnostics a refusal can carry. A message naming one of these is
-/// this binding declining to evaluate the document, which the tier records as a
-/// NAMED EXCLUSION under the fixture's ledger — never as a wrong answer, and
-/// never as a silent skip. Anything else is an ordinary assertion failure.
+/// this binding declining to evaluate the document, which the tier gates as a
+/// REFUSAL — a named exclusion only where the fixture's ledger admits it, never
+/// a wrong answer and never a silent skip. Anything else is an ordinary
+/// assertion failure.
 const REFUSAL_CODES: [&str; 5] = [
     "compiler_refused_rule",
     "compiler_unavailable",

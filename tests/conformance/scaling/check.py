@@ -142,6 +142,11 @@ def per_result_checks(run, r, gates, family_spec):
         g = {**gates["speed"], **family_spec.get("gate_overrides", {}).get("speed", {})}
         s, h = r.get("steady_rhs_s"), r.get("hand_loop_s")
         big = (r.get("n_states") or 0) >= g.get("min_n_states", 0)
+        note = "" if big else f"below {g.get('min_n_states')} states"
+        small, why = small_call(run, r, g)
+        if small:
+            h = r.get("serial_steady_rhs_s")
+            note = why if big else note
         ratio = s / h if (ok and s is not None and h) else None
         out.append(
             Check(
@@ -152,10 +157,36 @@ def per_result_checks(run, r, gates, family_spec):
                 TIMING,
                 None if (ratio is None or not big) else ratio <= g["max_ratio"],
                 ratio,
-                "" if big else f"below {g.get('min_n_states')} states",
+                note,
             )
         )
     return out
+
+
+def small_call(run, r, gate):
+    """Whether a threaded result falls under `speed`'s small-call floor, and a
+    note saying why.
+
+    Below the floor a whole call is too little work for threads to win: the
+    serial hand loop takes less than `small_call_floor.fork_joins` times one
+    empty fork-join of the hand loop's own pool (`fork_join_s`, measured in the
+    same process). There the threaded run is not compared with the threaded
+    hand loop; native's threaded call must instead be no slower than its own
+    serial call (`serial_steady_rhs_s`, same process) by the same `max_ratio`.
+    A serial run, or a result without the three measurements (written before
+    the adapters recorded them), gets no carve-out."""
+    floor = (gate.get("small_call_floor") or {}).get("fork_joins")
+    if not floor or (run.get("threads") or 1) == 1:
+        return False, ""
+    hs, fj, ns = r.get("hand_loop_serial_s"), r.get("fork_join_s"), r.get("serial_steady_rhs_s")
+    if hs is None or not fj or not ns:
+        return False, ""
+    if hs >= floor * fj:
+        return False, ""
+    return True, (
+        f"small call: serial hand loop {hs * 1e6:.3g} us < {floor:g} fork-joins of "
+        f"{fj * 1e6:.3g} us; threaded native / serial native"
+    )
 
 
 def code_size_slack(run, gates, family_spec):
@@ -251,21 +282,38 @@ def build_slope_limit(run, gate, lo, hi):
     load cost, so what the compiler adds on top still has to fit
     `max_ns_per_state`. A document whose size does not grow with N gets no
     allowance. A result without `n_bytes` (written before the adapters
-    recorded it) gets none either, so the gate is the plain one there."""
+    recorded it) gets none either, so the gate is the plain one there.
+
+    The gate's `dense_page_ns` (same form) adds the same kind of allowance for
+    `dense_bytes`, the bytes of declared-dense arrays the build writes in full:
+    a document that declares an array dense over source x target makes a
+    build that materializes it write N^2 pages, at the binding's measured
+    first-touch cost per byte times the factor `dense_page_ns_why` states. A
+    result without `dense_bytes` gets no such allowance."""
     base = gate["max_ns_per_state"]
-    per_byte = gate.get("per_byte_ns", 0)
-    if isinstance(per_byte, dict):
-        per_byte = per_byte.get(run.get("binding"), 0)
-    if not per_byte:
-        return base, ""
-    b_lo, b_hi = lo.get("n_bytes"), hi.get("n_bytes")
-    if b_lo is None or b_hi is None:
-        return base, " (no n_bytes in the result: no size allowance)"
-    bytes_per_state = max(0.0, (b_hi - b_lo) / (hi["n_states"] - lo["n_states"]))
-    allowance = per_byte * bytes_per_state
-    return base + allowance, (
-        f" = {base:.4g} + {allowance:.4g} for {bytes_per_state:.3g} document bytes/state"
-    )
+    limit, why = base, ""
+    for field, rate_key, what in (
+        ("n_bytes", "per_byte_ns", "document"),
+        ("dense_bytes", "dense_page_ns", "dense-array"),
+    ):
+        rate = gate.get(rate_key, 0)
+        if isinstance(rate, dict):
+            rate = rate.get(run.get("binding"), 0)
+        if not rate:
+            continue
+        b_lo, b_hi = lo.get(field), hi.get(field)
+        if b_lo is None or b_hi is None:
+            why += f" (no {field} in the result: no {what} allowance)"
+            continue
+        per_state = max(0.0, (b_hi - b_lo) / (hi["n_states"] - lo["n_states"]))
+        if per_state == 0:
+            continue
+        allowance = rate * per_state
+        limit += allowance
+        why += f" + {allowance:.4g} for {per_state:.3g} {what} bytes/state"
+    if limit == base:
+        return base, why
+    return limit, f" = {base:.4g}{why}"
 
 
 def threads_label(run):
@@ -296,12 +344,17 @@ ENTRY_BOUNDS = {"no_steady_alloc": "max_bytes_per_call"}
 
 
 def ledger_shape_errors(ledgers):
-    """Every ledger entry of a bounded gate that lacks its bound, and every
-    bound on a gate that has none."""
+    """Every ledger entry of a bounded gate that lacks its bound, every bound
+    on a gate that has none, and every native `builds` entry."""
     errs = []
     for binding, entries in ledgers.items():
         for i, e in enumerate(entries):
             where = f"ledger.{binding}[{i}] ({e.get('family')} {e.get('gate')})"
+            if e.get("gate") == "builds" and e.get("compiler", "native") == "native":
+                errs.append(
+                    f"{where}: native is required for every document of every compiler-driven "
+                    f"tier, so a native refusal or error cannot be ledgered"
+                )
             field = ENTRY_BOUNDS.get(e.get("gate"))
             for other in set(ENTRY_BOUNDS.values()) - {field}:
                 if other in e:

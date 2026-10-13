@@ -19,7 +19,9 @@
 //! recorded as not attempted.
 //!
 //! Per document the child: builds a warm-up problem (one-time process costs),
-//! times `esm_problem` on the document, reads the tape length off the compiled
+//! times `esm_problem` on the document (the fastest of several builds while
+//! they are short, so a build of a few milliseconds is not timer noise),
+//! reads the tape length off the compiled
 //! model, evaluates the right-hand side once (first call) and then repeatedly
 //! (steady), counts the bytes a steady call allocates through the counting
 //! global allocator below, times the family's hand-written loop on the same
@@ -29,7 +31,10 @@
 //! `--threads T` sets the thread count of both native's right-hand side (the
 //! child's `RAYON_NUM_THREADS`, the budget the tape splits large calls across)
 //! and the hand loop (its own fork-join, `fork_join.rs`); `--threads 1` runs
-//! both serially.
+//! both serially. A threaded child also times, in the same process, the serial
+//! hand loop, one empty fork-join of the hand loop's pool, and (for a small
+//! call) native's call with its thread budget forced to one: the inputs of the
+//! speed gate's small-call floor (README "Gates").
 
 mod fork_join;
 mod hand_loops;
@@ -92,6 +97,25 @@ const MIN_CALLS: usize = 5;
 const MAX_CALLS: usize = 1000;
 const MIN_TOTAL_S: f64 = 0.25;
 const ALLOC_CALLS: u64 = 4;
+
+/// Builds of one document are repeated while they total under this many
+/// seconds, up to [`MAX_BUILDS`], and `build_s` is the fastest: a build of a
+/// few milliseconds varies by a large fraction of itself from run to run,
+/// which a single sample would carry straight into the build slope.
+const BUILD_BUDGET_S: f64 = 1.0;
+const MAX_BUILDS: usize = 10;
+
+/// A threaded run times native's serial call only where the serial hand loop
+/// takes less than this, far above any small-call floor the gate applies.
+const SERIAL_NATIVE_CAP_S: f64 = 1e-3;
+
+/// Moves a borrow of the single-threaded compiled program onto the one-thread
+/// rayon pool that runs native's serial call.
+struct OneThreadAtATime<T>(T);
+// SAFETY: the pool's thread uses the value only inside `install`, while the
+// calling thread is blocked in that call, so no two threads touch it at once,
+// and `install` orders the hand-over both ways.
+unsafe impl<T> Send for OneThreadAtATime<T> {}
 
 /// Median wall seconds of `f`, over at least `MIN_CALLS` calls and at least
 /// `MIN_TOTAL_S` seconds of calls, at most `MAX_CALLS`.
@@ -454,10 +478,18 @@ fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
     m
 }
 
-const FIELDS: [&str; 14] = [
+const FIELDS: [&str; 19] = [
     "reason",
     "n_bytes",
     "build_s",
+    "build_repeats",
+    // Bytes of declared-dense arrays the build writes in full: not measured
+    // here. Native's build lowers a declared-dense faq to tape sections that
+    // run on the first call; it materializes no declared shape itself.
+    "dense_bytes",
+    "serial_steady_rhs_s",
+    "hand_loop_serial_s",
+    "fork_join_s",
     "code_size",
     "first_call_s",
     "steady_rhs_s",
@@ -513,28 +545,39 @@ fn measure_one(one: &One) -> Map<String, Value> {
     if let Ok(meta) = std::fs::metadata(&one.doc) {
         r.insert("n_bytes".into(), json!(meta.len()));
     }
-    let t = Instant::now();
-    let built = esm_problem(one.doc.as_path(), (0.0, 1.0), options(Compiler::Native));
-    let build_s = t.elapsed().as_secs_f64();
-    let prob = match built {
-        Ok(p) => p,
-        Err(err) => {
-            let refused = matches!(
-                err,
-                SimulateError::Compile(CompileError::CompilerRefusedRule { .. })
-            );
-            r.insert(
-                "status".into(),
-                json!(if refused { "refused" } else { "error" }),
-            );
-            r.insert("reason".into(), json!(err.to_string()));
-            if refused {
-                check_hand_loop_against_interpreter(one, &family, &mut r);
+    let mut prob = None;
+    let (mut build_s, mut spent, mut repeats) = (f64::INFINITY, 0.0, 0usize);
+    while repeats < MAX_BUILDS && (repeats == 0 || spent < BUILD_BUDGET_S) {
+        // The previous build goes first, so a repeat never holds two.
+        drop(prob.take());
+        let t = Instant::now();
+        let built = esm_problem(one.doc.as_path(), (0.0, 1.0), options(Compiler::Native));
+        let dt = t.elapsed().as_secs_f64();
+        match built {
+            Ok(p) => prob = Some(p),
+            Err(err) => {
+                let refused = matches!(
+                    err,
+                    SimulateError::Compile(CompileError::CompilerRefusedRule { .. })
+                );
+                r.insert(
+                    "status".into(),
+                    json!(if refused { "refused" } else { "error" }),
+                );
+                r.insert("reason".into(), json!(err.to_string()));
+                if refused {
+                    check_hand_loop_against_interpreter(one, &family, &mut r);
+                }
+                return r;
             }
-            return r;
         }
-    };
+        build_s = build_s.min(dt);
+        spent += dt;
+        repeats += 1;
+    }
+    let prob = prob.expect("at least one build ran");
     r.insert("build_s".into(), json!(build_s));
+    r.insert("build_repeats".into(), json!(repeats));
     let Some(compiled) = prob.debug_array_compiled() else {
         return failed(r, "the problem has no right-hand side (static)".into());
     };
@@ -631,6 +674,23 @@ fn measure_one(one: &One) -> Map<String, Value> {
             );
             let hand = median_time(|| hl.run(&canon_state, &mut hdy, pool.as_ref()));
             r.insert("hand_loop_s".into(), json!(hand));
+            let hand_serial = match &pool {
+                Some(p) => {
+                    let fork_join = median_time(|| p.run(&|_| {}));
+                    r.insert("fork_join_s".into(), json!(fork_join));
+                    median_time(|| hl.run(&canon_state, &mut hdy, None))
+                }
+                None => hand,
+            };
+            r.insert("hand_loop_serial_s".into(), json!(hand_serial));
+            if pool.is_some() && hand_serial < SERIAL_NATIVE_CAP_S {
+                match serial_native(&compiled, &state, &params, &native_dy) {
+                    Ok(t) => {
+                        r.insert("serial_steady_rhs_s".into(), json!(t));
+                    }
+                    Err(msg) => return failed(r, msg),
+                }
+            }
             r.insert(
                 "hand_loop_threads".into(),
                 json!(hl.threads_used(one.threads)),
@@ -670,6 +730,41 @@ fn measure_one(one: &One) -> Map<String, Value> {
         }
     }
     r
+}
+
+/// Native's steady call with its thread budget forced to one (it runs inside a
+/// one-thread rayon pool, whose size is the budget there), timed like
+/// `steady_rhs_s`; an error when its `dy` is not bit-identical to the threaded
+/// call's.
+fn serial_native(
+    compiled: &earthsci_ast::simulate_array::ArrayCompiled,
+    state: &[f64],
+    params: &[f64],
+    threaded_dy: &[f64],
+) -> Result<f64, String> {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .map_err(|e| format!("a one-thread rayon pool: {e}"))?;
+    let job = OneThreadAtATime((compiled, state, params));
+    let (t, dy) = pool
+        .install(move || {
+            let job = job;
+            let (compiled, state, params) = job.0;
+            let mut dy = vec![0.0f64; state.len()];
+            let mut stats = RhsStats::default();
+            let mut scratch = compiled.debug_new_scratch_taped();
+            compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats);
+            let t = median_time(|| {
+                compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats)
+            });
+            OneThreadAtATime((t, dy))
+        })
+        .0;
+    if max_abs_diff(&dy, threaded_dy) != 0.0 {
+        return Err("native's serial and threaded dy differ".into());
+    }
+    Ok(t)
 }
 
 /// Where native refuses a document, check the family's hand loop against the

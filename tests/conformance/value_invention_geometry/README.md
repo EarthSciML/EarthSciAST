@@ -57,9 +57,11 @@ Referenced from `tests/valid/geometry/`: `intersect_polygon_planar_ode`
 
 ## Ledger
 
-One named exclusion: Python's `native` compiler refuses `edge_enumeration_ode`
-(a ragged contracted range has no form there). Python native is outside the
-native-coverage plan; its interpreter answers.
+Empty. `native` is required for every fixture (`API_SPEC.md` §5.8), so no
+ledger entry can excuse an in-scope `native` refusal. Python's `native`
+compiler refuses `edge_enumeration_ode` (a ragged contracted range has no form
+there; its interpreter answers), which makes that stage red until Python
+`native` runs it.
 
 ## What did not move here
 

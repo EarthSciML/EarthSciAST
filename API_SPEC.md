@@ -578,10 +578,13 @@ a Rust `Compiler` enum carried on `ProblemOptions`.
 BUILD error, not a quiet demotion to a slower path. This is the rule
 `CONFORMANCE_SPEC.md` §5.38.3 already applies to the compiled backends,
 generalized: a compiler either runs the whole document or names what it
-refused. The consequence is accepted — documents that build today refuse under
-`native` until the tiers grow — and those refusals are tracked as named
-exclusions by the compiler-agreement tier (§5.44 of `CONFORMANCE_SPEC.md`)
-rather than hidden by a fallback.
+refused. `native` covers every document in the evaluable core, so its
+refusals are reserved for the constructs outside its scope, each refused by
+name: events, implicit equations and SDE noise (`unsupported_construct`, which
+`mtk` runs for the first two), and a spatial operator with no discretization
+rule (`unlowered_operator`, refused under every compiler). Every
+compiler-driven conformance tier requires `native` for every fixture; a
+`native` refusal of anything else is a defect, and no tier ledger excuses it.
 
 **A binding that does not implement a value refuses it.** Never by selecting
 another one: the point of naming a compiler is that the caller knows which ran.
