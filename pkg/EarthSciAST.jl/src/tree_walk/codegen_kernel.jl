@@ -2157,6 +2157,14 @@ struct _CGBuilt{F,TB}
     # enabled when it holds).
     ncells::Int
     outs_disjoint::Bool
+    # The section's work estimate in emitted-node evaluations
+    # (`_acc_kernel_work` per cell, summed over the covered kernels' cells),
+    # what the threading verdict holds against the work floor.
+    work::Int
+    # Whether a covered kernel is one affine reduction, which the emitter may
+    # interchange into a read-modify-write of each `du` slot per reduced term
+    # (`_cg_areduce_interchanged`); see `_THREAD_MIN_RMW_CELLS`.
+    rmw::Bool
 end
 
 # Build-time SECTION-chunking safety check: are the emitted kernels' output
@@ -2170,12 +2178,74 @@ end
 function _cg_covered_outs_disjoint(acc_kernels::AbstractVector{_AccKernel},
                                    covered::Vector{Bool})
     ncells = 0
+    work = 0
+    rmw = false
     for (j, K) in enumerate(acc_kernels)
         covered[j] || continue
-        ncells += _cellset_ncells(K.cells)
+        nc = _cellset_ncells(K.cells)
+        ncells += nc
+        rmw |= K.spine.kind === _NK_AREDUCE
+        work = Base.Checked.checked_add(work,
+                                        Base.Checked.checked_mul(nc, _acc_kernel_work(K)))
     end
     return ncells, _cellsets_outs_unique(K.cells for (j, K) in enumerate(acc_kernels)
-                                         if covered[j])
+                                         if covered[j]), work, rmw
+end
+
+# One cell's work in a kernel, in node evaluations: every node of the spine and
+# of the per-cell CSE recipes counts one, a loop's body counts once per
+# iteration (a neighbour reduction's mean valence, an affine reduction's or a
+# contraction loop's range), and a template sub-kernel counts its own work.
+# The loop-invariant recipes run once per call and do not count. A rough cost,
+# used only to decide whether a section is worth a thread dispatch.
+function _acc_kernel_work(K::_AccKernel)
+    w = _acc_node_work(K.spine, K)
+    for r in K.cse.recipes
+        w += _acc_node_work(r, K)
+    end
+    return max(w, 1)
+end
+function _acc_node_work(nd::_Node, K::_AccKernel)
+    nd.kind === _NK_SUBCALL && nd.payload isa _AccKernel &&
+        return 1 + _acc_kernel_work(nd.payload::_AccKernel)
+    s = 0
+    for c in nd.children
+        s += _acc_node_work(c, K)
+    end
+    if nd.kind === _NK_REDUCE
+        b = K.bound
+        reach = b isa _FixedBound ? b.k :
+                b isa _VarBound && !isempty(b.valence) ?
+                    cld(sum(b.valence), length(b.valence)) : 1
+        s *= max(reach, 1)
+    else
+        s *= _node_loop_reach(nd)
+    end
+    return 1 + s
+end
+
+# The iterations a looping node runs its body for (1 for any other node).
+function _node_loop_reach(nd::_Node)
+    pl = nd.payload
+    if nd.kind === _NK_AREDUCE && pl isa _AReduceSpec
+        r = 1
+        for rg in pl.ranges
+            r = Base.Checked.checked_mul(r, max(length(rg), 1))
+        end
+        return r
+    elseif nd.kind === _NK_CONTRACTION_LOOP && pl isa _ContractLoop
+        return max(length(pl.lo:pl.step:pl.hi), 1)
+    end
+    return 1
+end
+
+# A scalar spine's work in node evaluations, loops counted per iteration.
+function _node_work(nd::_Node)
+    s = 0
+    for c in nd.children
+        s += _node_work(c)
+    end
+    return 1 + s * _node_loop_reach(nd)
 end
 
 # Per-generated-FUNCTION emitted-node cap. The node budget above bounds total
@@ -2688,7 +2758,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     # Threaded cell axis: total covered cells + the global out-slot
     # disjointness verdict, both facts of the BUILD (the runtime chunk verdict
     # is `_sec_prep_threads!`'s).
-    ncells, disjoint = _cg_covered_outs_disjoint(acc_kernels, covered)
+    ncells, disjoint, work, rmw = _cg_covered_outs_disjoint(acc_kernels, covered)
     # The runtime `tabs` argument: one HOMOGENEOUS container per group, converted
     # to the group's concrete element type (`Vector{Vector{Int}}`, …), packed in a
     # small tuple. `_cggrpG[pos]` then reads a concrete-element container.
@@ -2702,7 +2772,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
                              @__MODULE__, @__MODULE__, h) for h in ctx.helpers))
     end
     ntabs = sum(length, ctx.tab_objs; init=0)
-    return _CGBuilt(f, tabpack, covered, reasons, ncells, disjoint)
+    return _CGBuilt(f, tabpack, covered, reasons, ncells, disjoint, work, rmw)
 end
 
 # ---- Threaded cell axis for the codegen tier (RFC threaded-eval-tier) -------
@@ -2732,19 +2802,20 @@ end
 # `_chunk_ordinals`, and disjoint writes commute. Threaded `du` is bitwise
 # `===` serial `du`.
 #
-# One Julia thread ⇒ serial; a section total below the per-chunk min-cells
-# threshold (ESS_THREADS_MIN_CELLS) ⇒ serial.
+# One Julia thread ⇒ serial; a section's work below two chunks of the serial
+# work floor (`_thread_min_work`, ESS_THREADS_MIN_WORK) ⇒ serial.
 # Verdicts land in `_THREAD_TALLY` (`:cg_threaded` / `:cg_serial_small` /
 # `:cg_serial_shared_outs`), documented with the existing keys.
 
 # One-time threading verdict for one generated function's cell axes:
-# `state` is 0 unexamined, 1 chunked, -1 serial (too few cells), -2 serial
+# `state` is 0 unexamined, 1 chunked, -1 serial (too little work), -2 serial
 # (globally shared out-slots — permanent, decided at build).
 # `ncells`/`disjoint` are build facts (`_CGBuilt`); `nchunks` is fixed
 # at the first threaded call, so the partition is identical call to call.
-# `work` is what the min-cells floor is held against: the cell count, unless
-# a cell does more than one cell's worth (a contraction's fold terms count
-# too, array_contraction.jl); the chunk count never exceeds `ncells`.
+# `work` is what the work floor is held against: the section's node
+# evaluations per call (`_acc_kernel_work` per cell for a kernel section, the
+# fold terms for a contraction, array_contraction.jl), the cell count when the
+# builder gives none; the chunk count never exceeds `ncells`.
 # `job1`/`job2` hold the section's dispatch jobs (thread_dispatch.jl) for the
 # last two argument types it ran at, so a caller alternating between Float64
 # and dual-number calls (a solver and its Jacobian) reuses both.
@@ -2756,21 +2827,23 @@ mutable struct _SecTCache
     nchunks::Int
     job1::Any
     job2::Any
+    rmw::Bool        # `_CGBuilt.rmw`: chunks also keep `_THREAD_MIN_RMW_CELLS` cells
 end
-_SecTCache(ncells::Int, disjoint::Bool, work::Int = ncells) =
-    _SecTCache(0, ncells, disjoint, work, 1, nothing, nothing)
-_sec_tcache(cg::_CGBuilt) = _SecTCache(cg.ncells, cg.outs_disjoint)
+_SecTCache(ncells::Int, disjoint::Bool, work::Int = ncells, rmw::Bool = false) =
+    _SecTCache(0, ncells, disjoint, work, 1, nothing, nothing, rmw)
+_sec_tcache(cg::_CGBuilt) = _SecTCache(cg.ncells, cg.outs_disjoint, cg.work, cg.rmw)
 _sec_tcache(::Nothing) = _SecTCache(0, false)
 
 # Decide once whether this generated function may run chunked: size first
-# (the min-cells threshold guards per-DISPATCH work, and the section is one
-# dispatch), then the build-time disjointness verdict.
+# (the work floor guards per-DISPATCH work, and the section is one dispatch),
+# then the build-time disjointness verdict.
 function _sec_prep_threads!(tc::_SecTCache)
     tc.state == 0 || return tc
-    minc = _thread_min_cells()
-    nchunks = min(Threads.nthreads(), tc.ncells, max(1, div(tc.work, max(minc, 1))))
+    minw = _thread_min_work()
+    nchunks = min(Threads.nthreads(), tc.ncells, max(1, div(tc.work, max(minw, 1))))
+    tc.rmw && (nchunks = min(nchunks, max(1, div(tc.ncells, _THREAD_MIN_RMW_CELLS))))
     if nchunks < 2
-        tc.state = -1                 # too few cells to be worth a dispatch
+        tc.state = -1                 # too little work to be worth a dispatch
         _tally_thread!(:cg_serial_small)
         return tc
     end
@@ -2845,7 +2918,13 @@ end
 # pre-codegen RHS. Emitted kernels write disjoint du slots from residual ones
 # (each state slot has exactly one equation/cell), so running the generated
 # section first is value-identical to the original in-order kernel loop.
-struct _KernelSection{F,TB,G,GTB}
+#
+# The per-cell runner is the interpreter's: a section that runs any kernel on
+# it, at any value type, holds a `_PerCellLicense` in `walk` (W), and one that
+# runs none holds `nothing`. The constructor checks the two agree, so a strict
+# plan, which has no license, cannot build a section that walks; with
+# `W === Nothing` the runner's loops are not in the compiled call at all.
+struct _KernelSection{F,TB,G,GTB,W}
     cgf::F
     cgtabs::TB
     n_emitted::Int                # kernels compiled into the generated function
@@ -2873,6 +2952,35 @@ struct _KernelSection{F,TB,G,GTB}
     # a serial call runs back to back (1 = one pass per kernel). See
     # `_section_tiles`.
     ntiles::Int
+    walk::W
+    function _KernelSection(cgf::F, cgtabs::TB, n_emitted::Int, kernels::Vector{_AccKernel},
+                            dualf::G, dualtabs::GTB, n_dual_emitted::Int,
+                            dual_resid::Vector{Int}, f64cg::Bool, tcache::_SecTCache,
+                            dual_tcache::_SecTCache, ntiles::Int,
+                            walk::W) where {F,TB,G,GTB,W<:Union{Nothing,_PerCellLicense}}
+        _section_walks(kernels, G !== Nothing, f64cg, dual_resid) == (W !== Nothing) ||
+            throw(ArgumentError("a kernel section holds a per-cell license exactly " *
+                                "when it runs a kernel on the per-cell runner"))
+        return new{F,TB,G,GTB,W}(cgf, cgtabs, n_emitted, kernels, dualf, dualtabs,
+                                 n_dual_emitted, dual_resid, f64cg, tcache,
+                                 dual_tcache, ntiles, walk)
+    end
+end
+
+# True when a section with these residual `kernels` runs any of them on the
+# per-cell runner at some value type: every one when there is no overflow
+# function, and with one, those it declined (`dual_resid`) — at Float64 too
+# only when the Float64 routing is armed, and otherwise all of them there.
+_section_walks(kernels, has_dual::Bool, f64cg::Bool, dual_resid) =
+    !isempty(kernels) && !(has_dual && f64cg && isempty(dual_resid))
+
+# The per-cell runner over `kernels[idx]`, in order.
+@inline function _walk_kernels!(::_PerCellLicense, du, u, p, t, kernels, idx,
+                                ::Type{T}) where {T}
+    @inbounds for j in idx
+        _run_acc_kernel!(du, u, p, t, kernels[j], T)
+    end
+    return nothing
 end
 
 # SERIAL TILING. The primary function runs chunk `c` of every emitted kernel
@@ -2903,50 +3011,33 @@ end
     return nothing
 end
 
-@inline function (s::_KernelSection{F,TB,G})(du, u, p, t, ::Type{T}) where {F,TB,G,T}
+@inline function (s::_KernelSection{F,TB,G,GTB,W})(du, u, p, t,
+                                                   ::Type{T}) where {F,TB,G,GTB,W,T}
     if F !== Nothing
         # PRIMARY generated function, chunked when the section verdict allows
         # (threaded cell axis above), at every value type. Any serial verdict
         # (small, shared outs, one thread) runs it tiled serially.
         _run_cg_maybe_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache, s.ntiles)
     end
-    kernels = s.kernels
-    if G !== Nothing && T !== Float64
-        # Dual fast path: the overflow function covers every kernel not in
-        # `dual_resid`. Emitted kernels write disjoint du slots from residual
-        # ones (each state slot has exactly one equation/cell), so the order
-        # generated-first is value-identical to the in-order kernel loop.
+    if G !== Nothing && (T !== Float64 || s.f64cg)
+        # The overflow function covers every residual kernel not in
+        # `dual_resid`: under a non-Float64 `T` always (Duals run compiled code),
+        # and at Float64 when the Float64 overflow routing (ess-f64ofl) is
+        # armed — bit-identical to the interpreter by the emitter's contract,
+        # CHUNKED whenever the section verdict allows, serial `(1, 1)`
+        # otherwise. In particular, a shared-outs section
+        # (`:cg_serial_shared_outs`) under threading runs it SERIAL; that
+        # verdict needs two equations writing one state slot, which no real
+        # build has produced. Emitted kernels write disjoint du slots from
+        # residual ones (each state slot has exactly one equation/cell), so the
+        # order generated-first is value-identical to the in-order kernel loop.
+        # Kernels the overflow emission itself declined keep the interpreter.
         _run_cg_maybe_threaded!(s.dualf, s.dualtabs, du, u, p, t, s.dual_tcache)
-        @inbounds for j in s.dual_resid
-            _run_acc_kernel!(du, u, p, t, kernels[j], T)
-        end
+        W === Nothing || _walk_kernels!(s.walk, du, u, p, t, s.kernels, s.dual_resid, T)
         return nothing
     end
-    if G !== Nothing && T === Float64 && s.f64cg
-        # Float64 overflow routing (ess-f64ofl): budget-declined kernels run
-        # the SAME compiled overflow function as the Dual path, bit-identical
-        # to the interpreter by the emitter's contract — CHUNKED whenever the
-        # section verdict allows, serial `(1, 1)` otherwise. In particular, a
-        # shared-outs section (`:cg_serial_shared_outs`) under threading runs
-        # the overflow RGF SERIAL: before the lane-tape retirement this case
-        # fell back to the tape, whose per-kernel chunking (barriers between
-        # kernels) could still thread it. That is an accepted theoretical
-        # regression — the verdict has never been produced by any real build
-        # (globally shared out-slots require two equations writing one state
-        # slot; the threaded-codegen work could not construct it outside a
-        # hand-poisoned cache), and serial-compiled is still far faster than
-        # the per-cell interpreter. Kernels the overflow emission itself
-        # declined keep the interpreter, in the same order as the plain loop
-        # below.
-        _run_cg_maybe_threaded!(s.dualf, s.dualtabs, du, u, p, t, s.dual_tcache)
-        @inbounds for j in s.dual_resid
-            _run_acc_kernel!(du, u, p, t, kernels[j], Float64)
-        end
-        return nothing
-    end
-    @inbounds for j in 1:length(kernels)
-        _run_acc_kernel!(du, u, p, t, kernels[j], T)
-    end
+    W === Nothing ||
+        _walk_kernels!(s.walk, du, u, p, t, s.kernels, eachindex(s.kernels), T)
     return nothing
 end
 
@@ -2961,43 +3052,32 @@ end
 # the `:foreign_scratch` decline for shared-prelude reads.
 # A kernel BOTH emissions declined runs on `_run_acc_kernel!` — the `_eval_acc`
 # tree walk, once per output cell, on every right-hand-side call (§0 of the
-# phase-0 census). That is the one thing a compiled compiler promises not to do,
-# so a strict compiler refuses at BUILD, naming the rule the cascade has open
-# and the reason the OVERFLOW emission gave: the primary pass's reasons are not
-# refusals, since the overflow pass compiles what the budget declined.
-function _refuse_interpreted_kernels(kernels::AbstractVector{_AccKernel},
-                                     resid::AbstractVector{Int},
-                                     reasons::AbstractVector{Symbol},
-                                     emission_empty::Bool)
-    (_compiler_is_strict() && !isempty(resid)) || return nothing
-    why = :emission_produced_nothing
-    if !emission_empty
-        for j in resid
-            j <= length(reasons) || continue
-            reasons[j] === :none && continue
-            why = reasons[j]
-            break
+# phase-0 census). That is the interpreter's runner, so the section needs a
+# license for it; a strict compiler refuses at BUILD instead, naming the rule
+# the cascade has open and the reason the OVERFLOW emission gave: the primary
+# pass's reasons are not refusals, since the overflow pass compiles what the
+# budget declined.
+function _kernel_walk_license(kernels::AbstractVector{_AccKernel},
+                              resid::AbstractVector{Int},
+                              reasons::AbstractVector{Symbol},
+                              emission_empty::Bool)
+    return _percell_license(_current_rule_label("the assembled right-hand side"), _ -> begin
+        why = :emission_produced_nothing
+        if !emission_empty
+            for j in resid
+                j <= length(reasons) || continue
+                reasons[j] === :none && continue
+                why = reasons[j]
+                break
+            end
         end
-    end
-    _refuse_rule(_current_rule_label("the assembled right-hand side"),
         "$(length(resid)) of $(length(kernels)) access kernel" *
         (length(kernels) == 1 ? "" : "s") * " reached the end of both codegen " *
         "emissions undeclared (deepest reason: $why), so they would run on the " *
         "per-cell tree-walk kernel runner on every right-hand-side call. Build " *
         "with compiler=:interpreter to run it, or grow the emitter to cover " *
-        "this construct")
-end
-
-# The same promise for the per-cell scalar entries that ride `rhs_list`: each is
-# a compiled `_Node` tree that the in-place `f!` walks with `_eval_node`, one per
-# output cell, on every right-hand-side call. No emission is attempted for them,
-# so there is no deeper reason to carry than the count.
-function _refuse_interpreted_cells(cells::AbstractVector)
-    (_compiler_is_strict() && !isempty(cells)) || return nothing
-    _refuse_rule(_current_rule_label("the assembled right-hand side"),
-        "$(length(cells)) array cell" * (length(cells) == 1 ? "" : "s") *
-        " would run as per-cell trees on the scalar walker (`_eval_node`) on " *
-        "every right-hand-side call. Build with compiler=:interpreter to run it")
+        "this construct"
+    end)
 end
 
 function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
@@ -3029,12 +3109,13 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
          _build_codegen_rhs(kernels; budget=_dual_codegen_node_budget(),
                             tally=:dual_codegen, shared_cache=shared_cache, nst=nst)
     if dg === nothing
-        _refuse_interpreted_kernels(kernels, collect(Int, 1:length(kernels)),
+        walk = isempty(kernels) ? nothing :
+               _kernel_walk_license(kernels, collect(Int, 1:length(kernels)),
                                     primary_reasons, isempty(primary_reasons))
         return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                               nothing, nothing, 0, collect(Int, 1:length(kernels)),
                               false, _sec_tcache(cg), _sec_tcache(nothing),
-                              _cg_section_tiles(cg, n_emitted))
+                              _cg_section_tiles(cg, n_emitted), walk)
     end
     # Float64 overflow routing (ess-f64ofl): armed whenever the overflow
     # function exists and the plan has not turned the routing off. A build with
@@ -3043,11 +3124,16 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
     f64cg = _f64_overflow_codegen_enabled()
     f64cg && _tally_cascade!(:f64_overflow_armed)
     dual_resid = Int[j for j in eachindex(dg.covered) if !dg.covered[j]]
-    _refuse_interpreted_kernels(kernels, dual_resid, dg.reasons, false)
+    # With the Float64 routing off, Float64 calls run every residual kernel on
+    # the per-cell runner, not just the ones the overflow emission declined.
+    walk = !_section_walks(kernels, true, f64cg, dual_resid) ? nothing :
+           f64cg ? _kernel_walk_license(kernels, dual_resid, dg.reasons, false) :
+           _kernel_walk_license(kernels, collect(Int, 1:length(kernels)),
+                                fill(:f64_overflow_routing_off, length(kernels)), false)
     return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                           dg.f, dg.tabs, count(dg.covered), dual_resid, f64cg,
                           _sec_tcache(cg), _sec_tcache(dg),
-                          _cg_section_tiles(cg, n_emitted))
+                          _cg_section_tiles(cg, n_emitted), walk)
 end
 
 _cg_section_tiles(::Nothing, ::Int) = 1

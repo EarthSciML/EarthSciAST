@@ -319,8 +319,9 @@ _pr_rank4_build(doc, compiler; kw...) =
     # ordinary `k[i] = 2·i` are read through the compiled observed program,
     # and with both code-generation budgets at zero (refusal boundaries under
     # `native`) that program cannot be built — which is how a read native
-    # cannot compile is provoked here. The document's right-hand side is
-    # scalar, so the budgets refuse nothing else.
+    # cannot compile is provoked here. The problem is built first, at the
+    # default budgets: under zero budgets its scalar equation would itself be
+    # left on the scalar walker, which native refuses at build.
     mk_doc() = Dict{String,Any}("esm" => "1.1.0",
         "metadata" => Dict("name" => "pr_observed_routes"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
@@ -348,8 +349,9 @@ _pr_rank4_build(doc, compiler; kw...) =
                             "ESS_DUAL_CODEGEN_NODE_BUDGET" => "0")
 
     @testset "observed_field: a read native cannot compile refuses" begin
+        p0 = esm_problem(mk_doc(), (0.0, 1.0))
         @test _pr_refuses(() -> no_codegen() do
-                              observed_field(esm_problem(mk_doc(), (0.0, 1.0)), "h")
+                              observed_field(p0, "h")
                           end, "refuses 'M.h'")
         pn = esm_problem(mk_doc(), (0.0, 1.0))
         pi_ = esm_problem(mk_doc(), (0.0, 1.0); compiler = :interpreter)
@@ -678,7 +680,7 @@ _pr_rank4_build(doc, compiler; kw...) =
         K = 2000
         gate = [_PR._JoinGate("i", "k", Dict(1 => 7),
                               Dict(k => (k == K ÷ 2 ? 7 : 0) for k in 1:K))]
-        diag(gates, n) = _PR._faq_diagnostic_cell(lhs, body;
+        diag(gates, n) = _PR._faq_diagnostic_cell(_PR._PerCellProbe(), lhs, body;
             idx_names = ["i"], range_iters = [[1]], contract_names = ["k"],
             contract_ranges = [Any[1, n]], contract_const = [collect(1:n)],
             rhs_zerobar = 0.0, agg_gates = gates, agg_filter = nothing,
@@ -752,7 +754,7 @@ _pr_rank4_build(doc, compiler; kw...) =
         # computed once, the per-cell resolve reports THAT attempt rather than
         # evaluating the constant again at this cell.
         rhs = _op("+", _v("nope"), _n(1.0))
-        e = err_of(() -> _PR._resolve_field_ic("u", rhs, [1], Dict{String,Any}(),
+        e = err_of(() -> _PR._resolve_field_ic(_PR._PerCellLicense(), "u", rhs, [1], Dict{String,Any}(),
                                                Dict{String,Any}();
                                                uniform = (nothing, ["as constant: SENTINEL"])))
         @test code_of(e) == "E_TREEWALK_UNSUPPORTED_EQUATION"

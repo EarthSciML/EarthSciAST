@@ -145,12 +145,10 @@ function _compile_setup_fill(def::ASTExpr, lo::Vector{Int}, hi::Vector{Int};
 end
 
 # True when a kernel section would run any kernel on the interpreted per-cell
-# runner at Float64 (see `_KernelSection`'s call).
-function _section_interprets(s::_KernelSection)
-    isempty(s.kernels) && return false
-    s.dualf !== nothing && s.f64cg && return !isempty(s.dual_resid)
-    return true
-end
+# runner (see `_KernelSection`): exactly when it holds a license for it. Under
+# a strict plan the section cannot be built at all, and the refusal is a
+# decline here.
+_section_interprets(s::_KernelSection) = s.walk !== nothing
 
 """
     _run_setup_fill(sf::_SetupFill) -> Vector{Float64}

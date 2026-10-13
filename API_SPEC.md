@@ -582,9 +582,11 @@ refused. `native` covers every document in the evaluable core, so its
 refusals are reserved for the constructs outside its scope, each refused by
 name: events, implicit equations and SDE noise (`unsupported_construct`, which
 `mtk` runs for the first two), and a spatial operator with no discretization
-rule (`unlowered_operator`, refused under every compiler). Every
-compiler-driven conformance tier requires `native` for every fixture; a
-`native` refusal of anything else is a defect, and no tier ledger excuses it.
+rule (`unlowered_operator`, refused under every compiler). In Julia and Rust,
+the bindings the native plan covers, every compiler-driven conformance tier
+requires `native` for every fixture; a `native` refusal of anything else is a
+defect, and no tier ledger excuses it. Python is exempt: its `native` gaps are
+recorded as named exclusions in the tiers that meet them.
 
 **A binding that does not implement a value refuses it.** Never by selecting
 another one: the point of naming a compiler is that the caller knows which ran.

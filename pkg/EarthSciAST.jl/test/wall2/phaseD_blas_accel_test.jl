@@ -58,7 +58,7 @@ _blas(expr, cells; ca, params = Dict{String,Float64}()) =
     ESM.evaluate_cellwise(expr, cells; const_arrays = ca, params = params, blas_accel = true)
 # The pre-Phase-C per-cell reference (SMALL N only — allocation-heavy at scale).
 _percell(expr, cells; ca, params = Dict{String,Float64}()) =
-    Float64[ESM._eval_cellwise(expr, collect(Int, c); const_arrays = ca, params = params)
+    Float64[ESM._eval_cellwise(ESM._PerCellLicense(), expr, collect(Int, c); const_arrays = ca, params = params)
             for c in cells]
 # Does the BLAS recogniser engage on this shape?
 _engages(expr, cells, ca; params = Dict{String,Float64}()) =

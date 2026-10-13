@@ -152,9 +152,11 @@ end
 # kernel that reads the observed's slots, through one affine descriptor that
 # maps its cells onto the fold's slots one to one and in order, with a body
 # `_scan_consumer_node_ok` accepts.
-function _scan_consumer(S::_ScanFold, Ks::AbstractVector{_AccKernel}, nst::Int)
-    isempty(S.slots) && return nothing
-    lo, hi = extrema(S.slots)
+_scan_consumer(S::_ScanFold, Ks::AbstractVector{_AccKernel}, nst::Int) =
+    _scan_consumer(S.slots, Ks, nst)
+function _scan_consumer(slots::Vector{Int}, Ks::AbstractVector{_AccKernel}, nst::Int)
+    isempty(slots) && return nothing
+    lo, hi = extrema(slots)
     found = nothing
     for K in Ks
         _scan_kernel_reads(K, lo, hi) || continue
@@ -187,7 +189,7 @@ function _scan_consumer(S::_ScanFold, Ks::AbstractVector{_AccKernel}, nst::Int)
      all(_scan_consumer_node_ok, K.cse.inv_recipes)) || return nothing
     any(r -> _scan_node_reads(r, ix), K.cse.inv_recipes) && return nothing
     delta = K.acc[ix].delta
-    _cellset_is_shifted(K.cells, S.slots, delta) || return nothing
+    _cellset_is_shifted(K.cells, slots, delta) || return nothing
     return (K, ix, delta)
 end
 
@@ -313,8 +315,10 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int=0, consumer=not
         consumer[4] || _tally_cascade!(:scan_fused_store_dropped)
     end
     # Fewer than two lanes leave nothing to split; the verdict sees no cells.
+    # Each slot computes its term as well as folding it.
+    nsl = nlanes >= 2 ? length(S.slots) : 0
     return _FusedScan(f, tabpack, nlanes,
-                      _SecTCache(nlanes >= 2 ? length(S.slots) : 0, true))
+                      _SecTCache(nsl, true, nsl * (1 + _acc_kernel_work(K))))
 end
 
 # Split the in-place build's prefix scans into the fused ones and the rest.

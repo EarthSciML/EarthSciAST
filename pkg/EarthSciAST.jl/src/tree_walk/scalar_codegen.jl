@@ -53,6 +53,9 @@
 # `:scalar` / `:scalar_loop` row in the compiler report; an emitted equation's
 # row says `:scalar_codegen` / `:scalar_loop_codegen`. A const or time tier
 # with any slot the emitter cannot model keeps the walker for that whole tier.
+# The walker is the interpreter's, so a section that leaves anything on it
+# holds a `_PerCellLicense` (compiler.jl), and a strict compiler refuses the
+# document by name instead of building one.
 # `compiler = :interpreter` turns the tier off (plan field `scalar_codegen`),
 # and every equation and slot is walked: that is the differential oracle.
 # ========================================================================
@@ -800,13 +803,16 @@ function _sc_program(units::Vector{_ScUnit}, level::Vector{Int}, rhs_list, prelu
     end
     # The work a chunked call can share out: the statements of every class with
     # more than one member (a one-member class runs whole in one chunk).
+    # `work` weighs the same statements by their emitted nodes.
     nsplit = 0
+    work = 0
     for (ci, C) in enumerate(classes)
         (ok[ci] && length(C.members) > 1) || continue
         U = units[C.rep]
         nsplit += length(C.members) * (length(U.slots) + length(U.outs))
+        work += length(C.members) * max(C.nodes, 1)
     end
-    return _ScalarProgram(Tuple(gens), threaded, _SecTCache(nsplit, true)), emitted, resid
+    return _ScalarProgram(Tuple(gens), threaded, _SecTCache(nsplit, true, work)), emitted, resid
 end
 
 # Dependency levels of a cadence tier's slots: 1 + the deepest level among the
@@ -834,13 +840,60 @@ end
 # Everything `_make_rhs` needs: a program per cadence tier (or `nothing`,
 # leaving that tier on the walker), the dynamic program, and what the walker
 # still has to do (`resid_dyn` slots, `resid_rhs` equations).
-struct _ScalarSection{CP,TP,DP}
+struct _ScalarSection{CP,TP,DP,W}
     constp::CP
     timep::TP
     dynp::DP
     resid_dyn::Vector{Int}
     resid_rhs::Vector{Tuple{Int,_Node}}
     emitted_outs::Vector{Int}        # `rhs_list` positions now compiled
+    walk::W                          # `_PerCellLicense` when anything is walked
+    function _ScalarSection(constp::CP, timep::TP, dynp::DP, resid_dyn::Vector{Int},
+                            resid_rhs::Vector{Tuple{Int,_Node}}, emitted_outs::Vector{Int},
+                            walk::W) where {CP,TP,DP,W<:Union{Nothing,_PerCellLicense}}
+        (W === Nothing && !(isempty(resid_dyn) && isempty(resid_rhs))) &&
+            throw(ArgumentError("a scalar section that leaves slots or equations " *
+                                "on the walker must hold a per-cell license"))
+        return new{CP,TP,DP,W}(constp, timep, dynp, resid_dyn, resid_rhs,
+                               emitted_outs, walk)
+    end
+end
+
+# The scalar walker: prelude slots and equations evaluated from their trees on
+# every call. With no license there is nothing to walk (the section and
+# `_make_rhs` build none then), and the calls are empty.
+@inline function _walk_prelude_slots!(::_PerCellLicense, cache, slots, prelude,
+                                      u, p, t, ::Type{T}) where {T}
+    @inbounds for i in eachindex(slots)
+        s = slots[i]
+        cache[s] = _eval_node(prelude[s], u, p, t, T)
+    end
+    return nothing
+end
+@inline _walk_prelude_slots!(::Nothing, cache, slots, prelude, u, p, t, ::Type{T}) where {T} =
+    nothing
+@inline function _walk_scalar_rhs!(::_PerCellLicense, du, entries, u, p, t,
+                                   ::Type{T}) where {T}
+    @inbounds for k in 1:length(entries)
+        idx_and_node = entries[k]
+        du[idx_and_node[1]] = _eval_node(idx_and_node[2], u, p, t, T)
+    end
+    return nothing
+end
+@inline _walk_scalar_rhs!(::Nothing, du, entries, u, p, t, ::Type{T}) where {T} = nothing
+
+# The license for the scalar walker, or `nothing` when nothing is left on it.
+# `what` names the walked pieces for the refusal; `rule` the first walked
+# equation's state, or the prelude when only slots are walked.
+function _scalar_walk_license(walks::Bool, rule::AbstractString, what::AbstractString)
+    walks || return nothing
+    return _percell_license(rule,
+        "$what could not be modelled by the scalar code generator (a node kind " *
+        "it has no arm for, a read of another section's scratch, or past the " *
+        "build's emitted-node budget, ESS_CODEGEN_NODE_BUDGET), so they " *
+        "would be evaluated as trees by the scalar walker on every " *
+        "right-hand-side call. Build with compiler=:interpreter to run it, or " *
+        "grow the scalar emitter to cover this construct")
 end
 
 # A cadence tier: emitted whole, or not at all.
@@ -864,7 +917,8 @@ function _build_scalar_section(rhs_list::AbstractVector{Tuple{Int,_Node}}, n_rhs
                                const_slots::AbstractVector{Int},
                                time_slots::AbstractVector{Int},
                                dyn_slots::AbstractVector{Int},
-                               acc_kernels::AbstractVector{_AccKernel})
+                               acc_kernels::AbstractVector{_AccKernel};
+                               rule_of = slot -> "state slot $slot")
     _scalar_codegen_disabled() && return nothing
     constp = _sc_tier_program(const_slots, prelude, cache)
     timep = _sc_tier_program(time_slots, prelude, cache)
@@ -884,7 +938,16 @@ function _build_scalar_section(rhs_list::AbstractVector{Tuple{Int,_Node}}, n_rhs
     emitted_outs = sort!(reduce(vcat, (good[u].outs for u in emitted); init = Int[]))
     isempty(emitted) || _tally_cascade!(:scalar_codegen)
     isempty(resid_units) || _tally_cascade!(:scalar_codegen_decline)
-    return _ScalarSection(constp, timep, dynp, resid_dyn, resid_rhs, emitted_outs)
+    n_slots = length(resid_dyn) + (constp === nothing ? length(const_slots) : 0) +
+              (timep === nothing ? length(time_slots) : 0)
+    what = join(filter(!isempty, [
+        isempty(resid_rhs) ? "" : "$(length(resid_rhs)) scalar equation" *
+                                  (length(resid_rhs) == 1 ? "" : "s"),
+        n_slots == 0 ? "" : "$n_slots shared-subexpression slot" *
+                            (n_slots == 1 ? "" : "s")]), " and ")
+    rule = isempty(resid_rhs) ? "the scalar prelude" : rule_of(resid_rhs[1][1])
+    walk = _scalar_walk_license(n_slots + length(resid_rhs) > 0, rule, what)
+    return _ScalarSection(constp, timep, dynp, resid_dyn, resid_rhs, emitted_outs, walk)
 end
 
 # Re-tier the report rows of the scalar equations the section compiled. A
@@ -936,6 +999,7 @@ function _make_rhs_scalar_cg(sec::_ScalarSection, full_prelude::AbstractVector{_
     cse_prelude = walks_prelude ? collect(_Node, full_prelude) : _Node[]
     const_walk = constp === nothing ? collect(Int, const_slots) : Int[]
     time_walk = timep === nothing ? collect(Int, time_slots) : Int[]
+    walk = sec.walk
     has_const = !isempty(const_slots)
     has_time = !isempty(time_slots)
     function f!(du, u, p, t)
@@ -944,10 +1008,7 @@ function _make_rhs_scalar_cg(sec::_ScalarSection, full_prelude::AbstractVector{_
         cache = _cse_buf(cse_cache, T)
         if has_const && _cse_const_stale(cse_cache, T, p)
             if constp === nothing
-                @inbounds for i in eachindex(const_walk)
-                    s = const_walk[i]
-                    cache[s] = _eval_node(cse_prelude[s], u, p, t, T)
-                end
+                _walk_prelude_slots!(walk, cache, const_walk, cse_prelude, u, p, t, T)
             else
                 constp(du, u, p, t, cache, T)
             end
@@ -955,24 +1016,15 @@ function _make_rhs_scalar_cg(sec::_ScalarSection, full_prelude::AbstractVector{_
         end
         if has_time && _cse_t_stale(cse_cache, T, p, t)
             if timep === nothing
-                @inbounds for i in eachindex(time_walk)
-                    s = time_walk[i]
-                    cache[s] = _eval_node(cse_prelude[s], u, p, t, T)
-                end
+                _walk_prelude_slots!(walk, cache, time_walk, cse_prelude, u, p, t, T)
             else
                 timep(du, u, p, t, cache, T)
             end
             _cse_mark_t!(cse_cache, T, p, t)
         end
         dynp(du, u, p, t, cache, T)
-        @inbounds for i in eachindex(resid_dyn)
-            s = resid_dyn[i]
-            cache[s] = _eval_node(cse_prelude[s], u, p, t, T)
-        end
-        @inbounds for k in 1:length(resid_rhs)
-            idx_and_node = resid_rhs[k]
-            du[idx_and_node[1]] = _eval_node(idx_and_node[2], u, p, t, T)
-        end
+        _walk_prelude_slots!(walk, cache, resid_dyn, cse_prelude, u, p, t, T)
+        _walk_scalar_rhs!(walk, du, resid_rhs, u, p, t, T)
         kernel_section(du, u, p, t, T)
         isempty(scan_section) || _apply_scan_folds!(du, u, p, t, scan_section)
         isempty(array_contractions) ||

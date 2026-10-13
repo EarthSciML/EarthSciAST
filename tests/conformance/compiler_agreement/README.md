@@ -32,7 +32,8 @@ Design decisions of record (2026-09-21) that this tier implements:
 > fixture carries. Julia, Rust and Python each answer for both `interpreter`
 > and `native` with no refusals on any fixture, and all three are
 > `bindings_required` for each. Every fixture's `required` map names `native`
-> for all three, so a `native` refusal anywhere in the tier is red; Python is `bindings_required` for `sympy`,
+> for all three, so a `native` refusal anywhere in the tier is red (for Julia
+> and Rust whatever the map says; for Python because the map names it); Python is `bindings_required` for `sympy`,
 > which refuses the four array fixtures by name and runs the two scalar ones.
 > **Julia is `bindings_required` for `mtk`** as of 2026-09-22:
 > `esm_problem(…; compiler = :mtk)` builds every one of the six fixtures
@@ -252,10 +253,11 @@ Field rules:
   gets when nobody has an opinion, and a conformance tier has one
   (`API_SPEC.md` §5.8).
 * **`required`** maps a binding to the compilers that MUST run this fixture.
-  It governs `xla`, `mtk` and `sympy`; `interpreter` and `native` are required
-  for every fixture whatever the map says, so a refusal from either is RED. The
-  maps still name `native` for Julia, Rust and Python, which restates that rule
-  rather than granting it. Each name added is a one-way ratchet, the same shape
+  It governs `xla`, `mtk`, `sympy` and Python's `native`; `interpreter`, and
+  `native` in Julia and Rust, are required for every fixture whatever the map
+  says, so a refusal from either is RED. The maps still name `native` for
+  Julia, Rust and Python: for the first two that restates the rule, and for
+  Python it is what makes a Python `native` refusal red. Each name added is a one-way ratchet, the same shape
   `compiled_rhs`'s `compiled_required` has.
 
 **The two ledgers mean different things and must never be merged.** The
@@ -503,12 +505,14 @@ adapter.
 * an **`interpreter` refusal** is always RED: the interpreter is complete over
   the evaluable core (`esm-libraries-spec.md` §2.5.10), so a refusal there is a
   defect rather than coverage;
-* a **`native` refusal** is always RED, for the same reason the interpreter's
-  is: `native` covers the whole evaluable core and refuses by name only the
-  constructs outside its scope (events, implicit equations, SDE noise, a spatial
-  operator with no discretization rule; `API_SPEC.md` §5.8), none of which a
-  fixture here carries. No fixture's `required` map can excuse it, and `native`
-  may not appear on `bindings_optional`;
+* a **`native` refusal from Julia or Rust** is always RED, for the same reason
+  the interpreter's is: `native` covers the whole evaluable core and refuses by
+  name only the constructs outside its scope (events, implicit equations, SDE
+  noise, a spatial operator with no discretization rule; `API_SPEC.md` §5.8),
+  none of which a fixture here carries. No fixture's `required` map can excuse
+  it, and neither binding may list `native` on `bindings_optional`. Python is
+  exempt from this rule: its `native` refusal is governed by the `required`
+  map;
 * a **refusal from any other compiler** is a **named exclusion** — reported with
   the binding, the compiler, the fixture, the rule and the reason, in the report
   and on the console, and green for now — unless this fixture's `required` map

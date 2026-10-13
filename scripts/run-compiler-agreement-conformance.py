@@ -102,10 +102,23 @@ COMPILERS = ("interpreter", "native", "xla", "mtk", "sympy")
 
 # The compilers no fixture's `required` map can excuse. The interpreter is the
 # oracle, complete over the evaluable core; `native` is required for every
-# fixture of every compiler-driven tier, and refuses by name only the
-# out-of-scope constructs (events, implicit equations, SDEs, spatial operators
-# with no discretization rule: API_SPEC §5.8), which this tier carries none of.
+# fixture of every compiler-driven tier in NATIVE_STRICT_BINDINGS, and refuses
+# by name only the out-of-scope constructs (events, implicit equations, SDEs,
+# spatial operators with no discretization rule: API_SPEC §5.8), which this
+# tier carries none of.
 ALWAYS_REQUIRED = ("interpreter", "native")
+
+# The bindings the native rule binds: the native plan's two. In any other
+# binding (Python) a native refusal is governed by the fixture's `required`
+# map, like the specialty compilers'.
+NATIVE_STRICT_BINDINGS = ("julia", "rust")
+
+
+def always_required(binding: str, compiler: str) -> bool:
+    """Whether no `required` map can excuse this binding's refusal under this compiler."""
+    if compiler == "native":
+        return binding in NATIVE_STRICT_BINDINGS
+    return compiler in ALWAYS_REQUIRED
 
 # §5.44.2's integration SAFETY FACTOR, applied to the integration half of a
 # `derived` band and to nothing else. A manifest states it per fixture; this is
@@ -560,7 +573,11 @@ def _validate_ledgers(manifest: dict, path: Path) -> None:
                 f"{path}: compilers[{name}] lists {sorted(both)} as both required and optional"
             )
     for c in ALWAYS_REQUIRED:
-        optional = (compilers.get(c) or {}).get("bindings_optional") or []
+        optional = [
+            b
+            for b in (compilers.get(c) or {}).get("bindings_optional") or []
+            if always_required(b, c)
+        ]
         if optional:
             raise ManifestError(
                 f"{path}: compilers[{c}].bindings_optional lists {sorted(optional)}, but every "
@@ -1130,7 +1147,7 @@ def gate_fixture(
         rule = produced.get("rule") or "(adapter named no rule)"
         reason = produced.get("reason") or "(adapter gave no reason)"
         is_reference = compiler == "interpreter"
-        is_strict = compiler in ALWAYS_REQUIRED
+        is_strict = always_required(binding, compiler)
         is_required = compiler in fixture_required(fixture, binding)
         if is_reference:
             why = (
@@ -1358,6 +1375,15 @@ def _negative_controls(fixture: dict, classes: dict, rc: int) -> int:
         v["status"] == "refused",
         "neg/refusal_native",
         f"a `native` refusal fails the gate even unrequired (got {v['status']!r})",
+    )
+
+    v = gate_fixture("python", "native", fx, refusal, golden, [], classes)
+    rc = _report_control(
+        rc,
+        v["status"] == "excluded",
+        "neg/refusal_native_python",
+        f"an unrequired python `native` refusal is a named exclusion: the native rule binds "
+        f"julia and rust (got {v['status']!r})",
     )
 
     v = gate_fixture("julia", "mtk", fx, refusal, golden, [], classes)
