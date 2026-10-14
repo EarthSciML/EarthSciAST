@@ -601,6 +601,9 @@ pub(super) struct ROp {
 /// three and four terms, bit `j - 1` of `s` set when term `j` is); 15 for
 /// five or more.
 fn shape(t: &[RTerm]) -> u8 {
+    if t.len() > 4 {
+        return 15;
+    }
     let s = t
         .iter()
         .skip(1)
