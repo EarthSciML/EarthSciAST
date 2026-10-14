@@ -642,7 +642,7 @@ const INTERLEAVE_BUDGET_S = 5.0  # seconds of interleaved building per family, a
 # smaller end's build taken beside it. Builds of a few milliseconds drift by a
 # large fraction of the slope's whole allowance between ladder steps and within
 # the re-timing itself; a difference of builds taken side by side cancels it.
-# A young collection runs before every build, outside its time. A family whose
+# The collector runs before every build, never inside one. A family whose
 # builds would not fit INTERLEAVE_MIN pairs in INTERLEAVE_BUDGET_S keeps the
 # ladder's build_s (the fields stay null).
 function interleave_slope_ends!(results, fam, o, compiler)
@@ -658,10 +658,20 @@ function interleave_slope_ends!(results, fam, o, compiler)
     path(r) = joinpath(o["docs"], only(e["path"] for e in index["documents"]
                                        if e["family"] == fam && e["n"] == r["n"]))
     plo, phi = path(lo), path(hi)
+    # The collector stays out of every timed build: a young collection before
+    # it, and none inside. Otherwise a collection of the ladder's garbage lands
+    # inside whichever build crosses the threshold, in a pattern that favours
+    # one end.
     function build(p)
         GC.gc(false)
-        return @elapsed ESA.esm_problem(p, (0.0, 1.0); compiler = compiler)
+        GC.enable(false)
+        try
+            return @elapsed ESA.esm_problem(p, (0.0, 1.0); compiler = compiler)
+        finally
+            GC.enable(true)
+        end
     end
+    GC.gc(true)
     try
         build(plo); build(phi)
         tl, th = Float64[], Float64[]

@@ -244,8 +244,10 @@ size, taken minutes apart, can therefore read a slope several times the true
 one in either direction. So after a family's ladder the adapters rebuild the
 two documents the slope is fitted between (the smallest and largest
 `n_states` that built, at most 10^6 cells) in pairs in one process, in the
-order lo hi, hi lo, lo hi, ... up to 100 pairs and within 5 s in all (Julia
-runs a young collection before each build, outside its time). The slope is
+order lo hi, hi lo, lo hi, ... up to 100 pairs and within 5 s in all. Julia's
+collector runs before each of these builds and never inside one: otherwise a
+collection of the ladder's garbage lands in whichever build crosses the
+threshold, in a pattern that can favour one end by tens of ns/state. The slope is
 fitted from the median over pairs of the larger build minus the smaller
 (`build_interleaved_diff_s`): drift lands on both builds of a pair alike and
 cancels, where separate medians of the two ends still carried it, and the
