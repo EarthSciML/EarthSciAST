@@ -613,7 +613,7 @@ unsafe fn exec_folded_strips(
             st.sops
                 .iter()
                 .enumerate()
-                .map(|(k, o)| ROp::of(o, k, terms, b)),
+                .map(|(k, o)| ROp::of(o, k, terms, &st.tptr, b)),
         );
         wk.resolved = Some(key);
     }

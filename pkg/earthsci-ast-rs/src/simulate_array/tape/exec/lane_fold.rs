@@ -579,13 +579,14 @@ impl RTerm {
 }
 
 /// [`ROp::code`] of a micro-op that is not a fold.
-pub(super) const R_OTHER: u8 = 20;
+pub(super) const R_OTHER: u8 = 128;
 
 /// One operation of the strip loop resolved for one call: its value goes
 /// to `dst + (off & adv)` at strip offset `off`. A fold's `code` is its
-/// [`FoldOp`] times 5 plus its term count less one (4 for five or more), so
-/// one dispatch picks the kernel; its `n` terms are at `t`. For
-/// [`R_OTHER`], `n` is the micro-op's index in `LaneCode::ops`.
+/// [`FoldOp`] times 32, plus 16 when its first term is a scalar, plus its
+/// shape ([`shape`]), so one dispatch picks the kernel; its `n` terms are
+/// at `t`. For [`R_OTHER`], `n` is the
+/// micro-op's index in `LaneCode::ops`.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ROp {
     pub code: u8,
@@ -595,11 +596,36 @@ pub(super) struct ROp {
     pub adv: usize,
 }
 
+/// A fold's kernel shape: for up to four terms, its term count and which of
+/// its terms after the first are negated (`1 + s`, `3 + s`, `7 + s` for two,
+/// three and four terms, bit `j - 1` of `s` set when term `j` is); 15 for
+/// five or more.
+fn shape(t: &[RTerm]) -> u8 {
+    let s = t
+        .iter()
+        .skip(1)
+        .enumerate()
+        .fold(0u8, |s, (j, tj)| s | (u8::from(tj.neg != 0) << j));
+    match t.len() {
+        1 => 0,
+        2 => 1 + s,
+        3 => 3 + s,
+        4 => 7 + s,
+        _ => 15,
+    }
+}
+
 impl ROp {
-    /// `o` against one call's bases, its terms within `terms` (resolved
-    /// against the same bases, and not moved while this is in use).
+    /// `o` against one call's bases, its terms within `terms` (`tptr`
+    /// resolved against the same bases, and not moved while this is in use).
     #[inline(always)]
-    pub(super) fn of(o: &SOp, k: usize, terms: &[RTerm], bases: &[*mut f64; N_BASES]) -> Self {
+    pub(super) fn of(
+        o: &SOp,
+        k: usize,
+        terms: &[RTerm],
+        tptr: &[TPtr],
+        bases: &[*mut f64; N_BASES],
+    ) -> Self {
         let dst = bases[o.base].wrapping_add(o.off);
         if o.kind == OTHER {
             return ROp {
@@ -612,7 +638,7 @@ impl ROp {
         }
         let t = &terms[o.t as usize..][..o.n as usize];
         ROp {
-            code: o.kind * 5 + (o.n.clamp(1, 5) - 1) as u8,
+            code: o.kind * 32 + 16 * u8::from(tptr[o.t as usize].base == B_SPLAT) + shape(t),
             n: o.n,
             t: t.as_ptr(),
             dst,
@@ -627,38 +653,78 @@ impl ROp {
     }
 }
 
-/// One strip of a fold over `t` (its terms, read exactly once each, in
-/// order); `acc` lives in CPU registers.
-///
-/// A term that is not negated is read as it lies, so the common case is a
-/// plain load into the operation. A negated one toggles its sign bit with
-/// its own mask, which the compiler cannot see is the sign bit: it must not
-/// rewrite `acc + (-t)` as `acc - t`, which differs for a NaN `t`.
+// A fold's accumulator, `acc`, lives in CPU registers across its terms,
+// each read exactly once, in order. A negated term toggles its sign bit
+// with its own mask, which the compiler cannot see is the sign bit: it
+// must not rewrite `acc + (-t)` as `acc - t`, which differs for a NaN `t`.
+
+/// `acc` from the first term, its mask applied. A scalar's strip holds one
+/// value, so `SCAL` reads just that one (a rate constant leads most folds,
+/// and its whole strip need not stay in cache).
 #[inline(always)]
-unsafe fn strip_terms(t: &[RTerm], off: usize, dst: *mut f64, f: impl Fn(f64, f64) -> f64 + Copy) {
-    let (t0, rest) = t.split_first().expect("a fold has a term");
-    let mut acc = [0.0f64; STRIP];
-    // SAFETY (every read below): the caller checked that each term's strip
-    // lies in its vector (see `Strips::ends`).
-    let p0 = t0.p.wrapping_add(off & t0.adv);
-    for (k, a) in acc.iter_mut().enumerate() {
-        *a = f64::from_bits(unsafe { *p0.add(k) }.to_bits() ^ t0.neg);
+unsafe fn first<const SCAL: bool>(t: &RTerm, off: usize) -> [f64; STRIP] {
+    if SCAL {
+        // SAFETY: a scalar's strip is its splat, which lies in its buffer.
+        return [f64::from_bits(unsafe { *t.p }.to_bits() ^ t.neg); STRIP];
     }
-    for tj in rest {
-        let p = tj.p.wrapping_add(off & tj.adv);
-        if tj.neg != 0 {
-            for (k, a) in acc.iter_mut().enumerate() {
-                *a = f(*a, f64::from_bits(unsafe { *p.add(k) }.to_bits() ^ tj.neg));
-            }
-        } else {
-            for (k, a) in acc.iter_mut().enumerate() {
-                *a = f(*a, unsafe { *p.add(k) });
-            }
+    let mut acc = [0.0f64; STRIP];
+    // SAFETY (every term read here and in `apply`): the caller checked that
+    // each term's strip lies in its vector (see `Strips::ends`).
+    let p = t.p.wrapping_add(off & t.adv);
+    for (k, a) in acc.iter_mut().enumerate() {
+        *a = f64::from_bits(unsafe { *p.add(k) }.to_bits() ^ t.neg);
+    }
+    acc
+}
+
+/// `acc = f(acc, t)` over a strip, `t` read through its mask when `NEG`.
+///
+/// `NEG` is fixed per kernel rather than tested per term: with a branch per
+/// term the compiler sinks both paths' operation below the load, so a plain
+/// term no longer loads into its operation and the loaded strip needs
+/// registers of its own, which spills the accumulator.
+#[inline(always)]
+unsafe fn apply<const NEG: bool>(
+    acc: &mut [f64; STRIP],
+    t: &RTerm,
+    off: usize,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    let p = t.p.wrapping_add(off & t.adv);
+    if NEG {
+        for (k, a) in acc.iter_mut().enumerate() {
+            *a = f(*a, f64::from_bits(unsafe { *p.add(k) }.to_bits() ^ t.neg));
         }
+    } else {
+        for (k, a) in acc.iter_mut().enumerate() {
+            *a = f(*a, unsafe { *p.add(k) });
+        }
+    }
+}
+
+/// A fold of any number of terms, every one read through its mask.
+#[inline(always)]
+unsafe fn strip_any(t: &[RTerm], off: usize, dst: *mut f64, f: impl Fn(f64, f64) -> f64 + Copy) {
+    let mut acc = unsafe { first::<false>(&t[0], off) };
+    for tj in &t[1..] {
+        unsafe { apply::<true>(&mut acc, tj, off, f) };
     }
     // SAFETY: `dst` is a strip register or the fold's own `dy` run, disjoint
     // from every term.
     unsafe { std::ptr::copy_nonoverlapping(acc.as_ptr(), dst, STRIP) };
+}
+
+/// A fold of a fixed shape: term `j` read through its mask when `neg`.
+macro_rules! fixed {
+    ($t:expr, $off:expr, $dst:expr, $f:expr, $s:literal; $($j:literal $neg:literal),*) => {{
+        let t: *const RTerm = $t;
+        // SAFETY: the shape says the fold has this many terms.
+        #[allow(unused_mut)]
+        let mut acc = unsafe { first::<$s>(&*t, $off) };
+        $( unsafe { apply::<$neg>(&mut acc, &*t.add($j), $off, $f) }; )*
+        // SAFETY: as in `strip_any`.
+        unsafe { std::ptr::copy_nonoverlapping(acc.as_ptr(), $dst, STRIP) };
+    }};
 }
 
 /// One strip (lanes `off .. off + STRIP` of the call) of the fold `o`.
@@ -669,40 +735,46 @@ unsafe fn strip_terms(t: &[RTerm], off: usize, dst: *mut f64, f: impl Fn(f64, f6
 #[inline(always)]
 pub(super) unsafe fn strip_fold(o: &ROp, off: usize) {
     let dst = o.at(off);
-    // SAFETY: `ROp::of` took `t` and `n` from one in-bounds slice.
-    let t = unsafe { std::slice::from_raw_parts(o.t, o.n as usize) };
-    macro_rules! k {
-        ($n:literal, $f:expr) => {
-            // SAFETY: the code says the fold has exactly `$n` terms.
-            unsafe { strip_terms(&*(o.t as *const [RTerm; $n]), off, dst, $f) }
-        };
-        (_, $f:expr) => {
-            unsafe { strip_terms(t, off, dst, $f) }
+    let t = o.t;
+    macro_rules! by_shape {
+        ($f:expr, $s:literal) => {
+            match o.code % 16 {
+                0 => fixed!(t, off, dst, $f, $s;),
+                1 => fixed!(t, off, dst, $f, $s; 1 false),
+                2 => fixed!(t, off, dst, $f, $s; 1 true),
+                3 => fixed!(t, off, dst, $f, $s; 1 false, 2 false),
+                4 => fixed!(t, off, dst, $f, $s; 1 true, 2 false),
+                5 => fixed!(t, off, dst, $f, $s; 1 false, 2 true),
+                6 => fixed!(t, off, dst, $f, $s; 1 true, 2 true),
+                7 => fixed!(t, off, dst, $f, $s; 1 false, 2 false, 3 false),
+                8 => fixed!(t, off, dst, $f, $s; 1 true, 2 false, 3 false),
+                9 => fixed!(t, off, dst, $f, $s; 1 false, 2 true, 3 false),
+                10 => fixed!(t, off, dst, $f, $s; 1 true, 2 true, 3 false),
+                11 => fixed!(t, off, dst, $f, $s; 1 false, 2 false, 3 true),
+                12 => fixed!(t, off, dst, $f, $s; 1 true, 2 false, 3 true),
+                13 => fixed!(t, off, dst, $f, $s; 1 false, 2 true, 3 true),
+                14 => fixed!(t, off, dst, $f, $s; 1 true, 2 true, 3 true),
+                // SAFETY: `ROp::of` took `t` and `n` from one in-bounds slice.
+                _ => unsafe {
+                    strip_any(std::slice::from_raw_parts(t, o.n as usize), off, dst, $f)
+                },
+            }
         };
     }
-    let (add, sub) = (|x: f64, y: f64| x + y, |x: f64, y: f64| x - y);
-    let (mul, div) = (|x: f64, y: f64| x * y, |x: f64, y: f64| x / y);
-    match o.code {
-        0 => k!(1, add),
-        1 => k!(2, add),
-        2 => k!(3, add),
-        3 => k!(4, add),
-        4 => k!(_, add),
-        5 => k!(1, sub),
-        6 => k!(2, sub),
-        7 => k!(3, sub),
-        8 => k!(4, sub),
-        9 => k!(_, sub),
-        10 => k!(1, mul),
-        11 => k!(2, mul),
-        12 => k!(3, mul),
-        13 => k!(4, mul),
-        14 => k!(_, mul),
-        15 => k!(1, div),
-        16 => k!(2, div),
-        17 => k!(3, div),
-        18 => k!(4, div),
-        _ => k!(_, div),
+    macro_rules! by_lead {
+        ($f:expr) => {
+            if o.code & 16 != 0 {
+                by_shape!($f, true)
+            } else {
+                by_shape!($f, false)
+            }
+        };
+    }
+    match o.code / 32 {
+        0 => by_lead!(|x: f64, y: f64| x + y),
+        1 => by_lead!(|x: f64, y: f64| x - y),
+        2 => by_lead!(|x: f64, y: f64| x * y),
+        _ => by_lead!(|x: f64, y: f64| x / y),
     }
 }
 
