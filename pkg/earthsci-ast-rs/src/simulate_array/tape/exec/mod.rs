@@ -207,19 +207,14 @@ pub(crate) struct TapeExec {
     /// Per-slot flat offset into the slab (`usize::MAX` for never-defined
     /// slots, which no reachable instruction references).
     slot_off: Vec<usize>,
-    /// Runtime observed map: holds an export only while it is PUBLISHED (its
-    /// `Export` has run in the current execution of its section).
+    /// The published observeds: an export enters it the first time its
+    /// `Export` runs, and later publishes overwrite it in place. Nothing in
+    /// a call reads it; it is for the caller that asked for exports.
     pub(crate) obs: ArrMap,
     /// Export target arrays, preallocated and indexed like `prog.exports`:
-    /// `Some` while the export is unpublished, `None` while its entry lives in
-    /// `obs`. An `Export` moves the entry into `obs` and memcpys into it, and
-    /// `run_range` moves it back out before re-running its section, so a read
-    /// that precedes the publish finds no entry and FAULTS (CONFORMANCE_SPEC
-    /// §5.23.1(2), §5.19.4) instead of reading the zero prealloc or the
-    /// previous call's value. Moving an entry never allocates.
+    /// `Some` until the export's first publish moves it into `obs`, so no
+    /// publish allocates.
     parked: Vec<Option<(String, ArrayD<f64>)>>,
-    /// `(pc, export)` for every `Export` instruction, in program order.
-    export_sites: Vec<(usize, u32)>,
     /// Pending `(resume_pc, skip)` records for taken `JmpIfZero` branches
     /// (the reference executor's discipline). Capacity preallocated.
     pending: Vec<(u32, u32)>,
@@ -354,15 +349,6 @@ impl TapeExec {
                 Some((name.clone(), ArrayD::<f64>::zeros(IxDyn(&shape))))
             })
             .collect();
-        let export_sites = prog
-            .instrs
-            .iter()
-            .enumerate()
-            .filter_map(|(pc, i)| match i {
-                Instr::Export { export, .. } => Some((pc, *export)),
-                _ => None,
-            })
-            .collect();
         let mirror: Vec<bool> = prog
             .state_vars
             .iter()
@@ -410,7 +396,6 @@ impl TapeExec {
             slot_off,
             obs,
             parked,
-            export_sites,
             pending: Vec::with_capacity(16),
             state_rm: vec![0.0f64; n_state],
             mirror_vars: (0..mirror.len() as u32)

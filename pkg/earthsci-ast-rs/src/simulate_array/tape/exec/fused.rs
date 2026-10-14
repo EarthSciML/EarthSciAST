@@ -1035,7 +1035,6 @@ pub(super) unsafe fn resolve_fused<'a>(
     env: &Env,
     slab_ptr: *mut f64,
     slot_off: &[usize],
-    obs: &ArrMap,
     scratch: &'a mut FusedScratch,
     dy_home: &[usize],
     dy: *mut f64,
@@ -1056,7 +1055,7 @@ pub(super) unsafe fn resolve_fused<'a>(
     // Resolve scalar inputs once.
     svals.clear();
     for op in &fs.scalars {
-        svals.push(resolve_scalar(op, env, slab_ptr, slot_off, obs));
+        svals.push(resolve_scalar(op, env, slab_ptr, slot_off));
     }
     // Resolve array input base pointers once.
     bases.clear();
@@ -1069,19 +1068,6 @@ pub(super) unsafe fn resolve_fused<'a>(
             SrcRef::State(ix) => {
                 debug_assert_eq!(&env.prog.state_vars[*ix as usize].shape, &inp.src_shape);
                 super::resolve::state_ptr(env, *ix)
-            }
-            SrcRef::Obs(ix) => {
-                let name = &env.prog.obs_reads[*ix as usize];
-                let a = obs
-                    .get(name)
-                    .unwrap_or_else(|| panic!("observed `{name}` not materialized before read"));
-                assert_eq!(
-                    a.shape(),
-                    &inp.src_shape[..],
-                    "fused input `{name}` box mismatch"
-                );
-                assert!(a.is_standard_layout());
-                a.as_ptr()
             }
         };
         bases.push(p);
@@ -1151,7 +1137,6 @@ pub(super) unsafe fn exec_fused(
     env: &Env,
     slab_ptr: *mut f64,
     slot_off: &[usize],
-    obs: &ArrMap,
     fregs: &mut [f64],
     scratch: &mut FusedScratch,
     idx: &[Option<IndexTable>],
@@ -1161,7 +1146,7 @@ pub(super) unsafe fn exec_fused(
 ) {
     let fs = &env.prog.fused[spec];
     let (r, _workers) =
-        unsafe { resolve_fused(spec, env, slab_ptr, slot_off, obs, scratch, dy_home, dy) };
+        unsafe { resolve_fused(spec, env, slab_ptr, slot_off, scratch, dy_home, dy) };
     let Resolved {
         svals,
         bases,
@@ -1222,7 +1207,6 @@ pub(super) unsafe fn exec_fused_share(
     env: &Env,
     slab_ptr: *mut f64,
     slot_off: &[usize],
-    obs: &ArrMap,
     scratch: &mut FusedScratch,
     idx: &[Option<IndexTable>],
     simd: SimdLevel,
@@ -1233,7 +1217,7 @@ pub(super) unsafe fn exec_fused_share(
 ) {
     let fs = &env.prog.fused[spec];
     let (r, workers) =
-        unsafe { resolve_fused(spec, env, slab_ptr, slot_off, obs, scratch, dy_home, dy) };
+        unsafe { resolve_fused(spec, env, slab_ptr, slot_off, scratch, dy_home, dy) };
     unsafe {
         workers.run_own_share(
             fs,

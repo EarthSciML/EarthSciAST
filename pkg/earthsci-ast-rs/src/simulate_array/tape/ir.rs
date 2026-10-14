@@ -133,11 +133,6 @@ pub(crate) enum Operand {
     /// the current state vector (origin all-1s). A 0-d state variable reads as
     /// a scalar — exactly `eval_vec_variable`'s state arm.
     State(u32),
-    /// The whole persistent observed array `obs_reads[i]`, resolved BY NAME in
-    /// the runtime observed map (origin all-1s; 0-d reads as a scalar). The
-    /// lowering produces one only for an observed whose own rule declined, and
-    /// a declined rule leaves no program, so a finished program holds none.
-    Obs(u32),
 }
 
 /// An array source for [`Instr::Gather`] / [`Instr::LoadElem`].
@@ -145,7 +140,6 @@ pub(crate) enum Operand {
 pub(crate) enum SrcRef {
     Slot(SlotId),
     State(u32),
-    Obs(u32),
 }
 
 /// One tape instruction. See the module docs for the semantics contract.
@@ -2092,9 +2086,6 @@ pub(crate) struct TapeProgram {
     /// Run-time-subscript reads (`Instr::ScalarRead` indexes here).
     pub scalar_reads: Vec<ScalarReadSpec>,
     pub state_vars: Vec<StateRef>,
-    /// Observed names resolved through the runtime observed map
-    /// (`Operand::Obs`/`SrcRef::Obs` index here).
-    pub obs_reads: Vec<String>,
     /// Forcing-buffer entries the program loads (`Instr::LoadForcing`
     /// indexes here).
     pub forcings: Vec<ForcingRef>,

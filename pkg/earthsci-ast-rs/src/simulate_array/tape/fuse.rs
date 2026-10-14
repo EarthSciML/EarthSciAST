@@ -190,7 +190,6 @@ fn same_src(a: &SrcRef, b: &SrcRef) -> bool {
     match (a, b) {
         (SrcRef::Slot(x), SrcRef::Slot(y)) => x == y,
         (SrcRef::State(x), SrcRef::State(y)) => x == y,
-        (SrcRef::Obs(x), SrcRef::Obs(y)) => x == y,
         _ => false,
     }
 }
@@ -306,7 +305,6 @@ impl GBuilder {
         let operand = match src {
             SrcRef::Slot(s) => Operand::Slot(*s),
             SrcRef::State(i) => Operand::State(*i),
-            SrcRef::Obs(_) => return false,
         };
         let Some(r @ (ResOp::Existing(MRef::Reg(_) | MRef::In(_)) | ResOp::NewAligned(..))) =
             self.resolve(&operand, prog)
@@ -390,10 +388,6 @@ impl GBuilder {
                     None
                 }
             }
-            // An observed operand's rank (0-d scalar vs array) is resolved at
-            // run time by the unfused executor; keep such instructions
-            // unfused rather than guess.
-            Operand::Obs(_) => None,
         }
     }
 
@@ -2309,12 +2303,11 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
     }
 
     let prog = fx.prog;
-    // With no observed read in the program, nothing reads the observed map
-    // or `dy` during a call, so an `Export` or a `DyWrite` only has to run
-    // before its section ends: one of a slot an open group defines is held
-    // back until that group flushes instead of flushing it early (which lets
-    // the next equation over the same box join the group).
-    let defer = prog.obs_reads.is_empty();
+    // Nothing reads the observed map or `dy` during a call, so an `Export`
+    // or a `DyWrite` only has to run before its section ends: one of a slot
+    // an open group defines is held back until that group flushes instead of
+    // flushing it early (which lets the next equation over the same box join
+    // the group).
     let mut i = range.start;
     while i < range.end {
         let ins = &prog.instrs[i];
@@ -2323,8 +2316,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             Instr::DyWrite { write } => Some(prog.dy_writes[*write as usize].slot),
             _ => None,
         };
-        if defer
-            && let Some(slot) = deferrable
+        if let Some(slot) = deferrable
             && let Some(gi) = open.iter().position(|g| g.defines(slot))
         {
             open[gi].deferred.push(i as u32);

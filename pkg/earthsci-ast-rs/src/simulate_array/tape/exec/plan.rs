@@ -230,7 +230,7 @@ impl CallPlan {
         dy_home: &[usize],
         base_off: &[usize],
     ) -> Option<CallPlan> {
-        if ways < 2 || range.len() > MAX_PLANNED || !prog.obs_reads.is_empty() {
+        if ways < 2 || range.len() > MAX_PLANNED {
             return None;
         }
         let tables = prog.tables();
@@ -515,7 +515,6 @@ pub(super) fn run_plan(plan: &CallPlan, env: &Env, exec: &mut TapeExec, dy: &mut
         let TapeExec {
             slab,
             slot_off,
-            obs,
             plan_full,
             asm_covered,
             idx_tables,
@@ -529,7 +528,6 @@ pub(super) fn run_plan(plan: &CallPlan, env: &Env, exec: &mut TapeExec, dy: &mut
             env,
             slab_ptr: slab.as_mut_ptr(),
             slot_off,
-            obs,
             plan_full,
             asm_covered,
             idx_tables,

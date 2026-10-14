@@ -81,19 +81,10 @@ fn transpose_values(values: &[f64], shape: &[usize]) -> Vec<f64> {
     out
 }
 
-fn op_ok(op: &Operand) -> bool {
-    !matches!(op, Operand::Obs(_))
-}
-
-fn src_ok(src: &SrcRef) -> bool {
-    !matches!(src, SrcRef::Obs(_))
-}
-
 fn src_shape<'a>(prog: &'a TapeProgram, src: &SrcRef) -> &'a [usize] {
     match src {
         SrcRef::Slot(s) => &prog.slots[*s as usize].shape,
         SrcRef::State(ix) => &prog.state_vars[*ix as usize].shape,
-        SrcRef::Obs(_) => &[],
     }
 }
 
@@ -102,36 +93,31 @@ fn src_shape<'a>(prog: &'a TapeProgram, src: &SrcRef) -> &'a [usize] {
 fn reversible(prog: &TapeProgram) -> bool {
     let slot_free = |s: SlotId| order_free(&prog.slots[s as usize].shape);
     prog.instrs.iter().all(|i| match i {
-        Instr::Bin { a, b, .. } => op_ok(a) && op_ok(b),
-        Instr::Un { a, .. }
-        | Instr::Neg { a, .. }
-        | Instr::Copy { a, .. }
-        | Instr::Calendar { a, .. } => op_ok(a),
-        Instr::Fill { v, .. } => op_ok(v),
-        Instr::Select { cond, a, b, .. } => op_ok(cond) && op_ok(a) && op_ok(b),
-        Instr::Interp { x, y, .. } => op_ok(x) && y.as_ref().is_none_or(op_ok),
-        Instr::Region { src, .. } => op_ok(src),
-        Instr::Assemble { table, .. } => prog.assemblies[*table as usize]
-            .parts
-            .iter()
-            .all(|(op, _)| op_ok(op)),
-        Instr::Gather { src, .. }
-        | Instr::LoadElem { src, .. }
-        | Instr::TableGather { src, .. } => src_ok(src),
-        Instr::IndexGather { src, idx, .. } => src_ok(src) && op_ok(idx),
-        Instr::Ramp { .. }
+        Instr::Bin { .. }
+        | Instr::Un { .. }
+        | Instr::Neg { .. }
+        | Instr::Copy { .. }
+        | Instr::Calendar { .. }
+        | Instr::Fill { .. }
+        | Instr::Select { .. }
+        | Instr::Interp { .. }
+        | Instr::Region { .. }
+        | Instr::Assemble { .. }
+        | Instr::Gather { .. }
+        | Instr::LoadElem { .. }
+        | Instr::TableGather { .. }
+        | Instr::IndexGather { .. }
+        | Instr::Scan { .. }
+        | Instr::Ramp { .. }
         | Instr::ConstArray { .. }
         | Instr::LoadForcing { .. }
         | Instr::Fault { .. }
         | Instr::JmpIfZero { .. }
         | Instr::Export { .. } => true,
-        Instr::Reduce { src, axes, .. } => src_ok(src) && axes.len() <= 1,
-        Instr::Scan { src, .. } => src_ok(src),
+        Instr::Reduce { axes, .. } => axes.len() <= 1,
         Instr::SegReduce { out, .. } => slot_free(*out),
-        Instr::Reshape { src, out } => {
-            src_ok(src) && order_free(src_shape(prog, src)) && slot_free(*out)
-        }
-        Instr::ScalarRead { src, .. } => src_ok(src) && order_free(src_shape(prog, src)),
+        Instr::Reshape { src, out } => order_free(src_shape(prog, src)) && slot_free(*out),
+        Instr::ScalarRead { src, .. } => order_free(src_shape(prog, src)),
         Instr::DyWrite { write } => match &prog.dy_writes[*write as usize].scatter {
             Some(pos) => {
                 let mut seen = pos.clone();

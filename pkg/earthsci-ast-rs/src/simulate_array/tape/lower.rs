@@ -337,7 +337,7 @@ fn lhs_scatter_positions(
 
 /// A lowering-time value: what the overlay's `VecValue` is at runtime, made
 /// symbolic. Scalar kinds are `Lit`/`Param`/`Time`/`Scalar` (a scalar slot)
-/// plus 0-d `StateView`/`ObsView`; array kinds carry a box (shape + origin).
+/// plus a 0-d `StateView`; array kinds carry a box (shape + origin).
 #[derive(Clone, Debug)]
 enum LV {
     Lit(f64),
@@ -350,13 +350,6 @@ enum LV {
     /// Whole persistent state array `state_vars[ix]` (origin all-1s; 0-d ⇒
     /// scalar semantics) — the zero-copy `VecValue::View` analogue.
     State(u32),
-    /// Whole observed array resolved by name at run time (`obs_reads[ix]`),
-    /// with its statically known shape (empty ⇒ 0-d scalar semantics).
-    Obs {
-        ix: u32,
-        shape: DimU,
-        tier: Cadence,
-    },
 }
 
 /// The lowering-time output box (the `VecBox` analogue with owned lo/shape).
@@ -453,12 +446,9 @@ struct ScopeFrame {
 enum ObsVal {
     /// Taped: the produced value, origin-normalized to all-1s.
     Taped(LV),
-    /// Produced by a declined rule. The build is already declined, so this
-    /// only lets later rules keep lowering, for their own decline reasons;
-    /// a read of it becomes an `Operand::Obs` in a program that is discarded.
-    /// `shape` is the statically known array shape (`Some(empty)` = 0-d),
-    /// `None` = statically unknown (readers then decline too).
-    External { shape: Option<DimU>, tier: Cadence },
+    /// Produced by a declined rule: the build already has no program, and a
+    /// rule that reads it declines too, at the read.
+    Declined,
 }
 
 /// Where, in the per-cell oracle's evaluation of one rule, a fail-closed
@@ -551,8 +541,6 @@ pub(crate) struct TapeBuilder<'m> {
     /// Position in `state_vars`; narrowed to the IR's `u32` by [`tape_index`]
     /// where it is emitted.
     state_ix: FxHashMap<&'m str, usize>,
-    obs_reads: Vec<String>,
-    obs_read_ix: FxHashMap<String, u32>,
     /// Every name the forcing buffer can serve, with the box a read of it
     /// compiles against ([`ForcingInputs`]).
     forcing_shapes: FxHashMap<String, DimU>,
@@ -744,8 +732,6 @@ impl<'m> TapeBuilder<'m> {
             sweep: None,
             state_vars,
             state_ix,
-            obs_reads: Vec::new(),
-            obs_read_ix: FxHashMap::default(),
             forcing_shapes: forcing.shapes.clone(),
             forcing_unsized: forcing.unsized_.clone(),
             discrete_forcing: forcing.discrete,
@@ -970,13 +956,6 @@ impl<'m> TapeBuilder<'m> {
                     Some((sv.shape.clone(), DimI::from_elem(1, sv.shape.len())))
                 }
             }
-            LV::Obs { shape, .. } => {
-                if shape.is_empty() {
-                    None
-                } else {
-                    Some((shape.clone(), DimI::from_elem(1, shape.len())))
-                }
-            }
         }
     }
 
@@ -985,7 +964,6 @@ impl<'m> TapeBuilder<'m> {
             LV::Lit(_) | LV::Param(_) => Cadence::Const,
             LV::Time | LV::State(_) => Cadence::Continuous,
             LV::Scalar(s) | LV::Arr(s) => self.slots[*s as usize].cadence,
-            LV::Obs { tier, .. } => *tier,
         }
     }
 
@@ -996,7 +974,6 @@ impl<'m> TapeBuilder<'m> {
             LV::Time => Operand::Time,
             LV::Scalar(s) | LV::Arr(s) => Operand::Slot(*s),
             LV::State(ix) => Operand::State(*ix),
-            LV::Obs { ix, .. } => Operand::Obs(*ix),
         }
     }
 
@@ -1004,19 +981,8 @@ impl<'m> TapeBuilder<'m> {
         match lv {
             LV::Arr(s) => SrcRef::Slot(*s),
             LV::State(ix) => SrcRef::State(*ix),
-            LV::Obs { ix, .. } => SrcRef::Obs(*ix),
             _ => unreachable!("src_of called on a scalar LV"),
         }
-    }
-
-    fn obs_read(&mut self, name: &str) -> LResult<u32> {
-        if let Some(&ix) = self.obs_read_ix.get(name) {
-            return Ok(ix);
-        }
-        let ix = tape_index(self.obs_reads.len(), "observed reads")?;
-        self.obs_reads.push(name.to_string());
-        self.obs_read_ix.insert(name.to_string(), ix);
-        Ok(ix)
     }
 
     /// A read of `name` served by the forcing buffer: `lookup_variable`'s last
@@ -1324,17 +1290,8 @@ impl<'m> TapeBuilder<'m> {
         if let Some(ov) = self.obs_defined.get(name).cloned() {
             return match ov {
                 ObsVal::Taped(lv) => Ok(lv),
-                ObsVal::External {
-                    shape: Some(shape),
-                    tier,
-                } => {
-                    let ix = self.obs_read(name)?;
-                    Ok(LV::Obs { ix, shape, tier })
-                }
-                ObsVal::External { shape: None, .. } => {
-                    bail_tape!(
-                        "variable: observed `{name}` has a statically-unknown shape (fallback producer)"
-                    )
+                ObsVal::Declined => {
+                    bail_tape!("variable: observed `{name}` is produced by a declined rule")
                 }
             };
         }
@@ -3893,7 +3850,7 @@ impl<'m> TapeBuilder<'m> {
         };
         // Mirror of the top-level bare-View bail: the oracle scalarizes a bare
         // whole-array body, so the overlay refuses it — and so do we.
-        if matches!(&v, LV::State(_) | LV::Obs { .. }) && self.lv_box(&v).is_some() {
+        if matches!(&v, LV::State(_)) && self.lv_box(&v).is_some() {
             bail_tape!("faq: body reduced to a bare whole-array view (oracle scalarizes it)");
         }
         match self.lv_box(&v) {
@@ -4053,7 +4010,7 @@ impl<'m> TapeBuilder<'m> {
             .map(|t| t.unwrap_or(LV::Lit(identity)));
         self.pop_scope();
         let term = term?;
-        if matches!(&term, LV::State(_) | LV::Obs { .. }) && self.lv_box(&term).is_some() {
+        if matches!(&term, LV::State(_)) && self.lv_box(&term).is_some() {
             bail_tape!("contracted: term reduced to a bare whole-array view");
         }
         let src = match self.lv_box(&term) {
@@ -4397,16 +4354,9 @@ impl<'m> TapeBuilder<'m> {
         if let Some(ov) = self.obs_defined.get(name).cloned() {
             return match ov {
                 ObsVal::Taped(lv) => Ok(lv),
-                ObsVal::External {
-                    shape: Some(shape),
-                    tier,
-                } => {
-                    let ix = self.obs_read(name)?;
-                    Ok(LV::Obs { ix, shape, tier })
+                ObsVal::Declined => {
+                    bail_tape!("variable: observed `{name}` is produced by a declined rule")
                 }
-                ObsVal::External { shape: None, .. } => bail_tape!(
-                    "variable: observed `{name}` has a statically-unknown shape (fallback producer)"
-                ),
             };
         }
         if let Some(&i) = self.param_ix.get(name) {
@@ -5068,7 +5018,7 @@ impl<'m> TapeBuilder<'m> {
                         // No tuple is kept: the body never runs.
                         LV::Lit(0.0) => return Ok(None),
                         LV::Lit(_) => None,
-                        LV::State(_) | LV::Obs { .. } if self.lv_box(&fv).is_some() => {
+                        LV::State(_) if self.lv_box(&fv).is_some() => {
                             bail_tape!("reduction: filter reduced to a bare whole-array view")
                         }
                         fv => Some(fv),
@@ -5087,7 +5037,7 @@ impl<'m> TapeBuilder<'m> {
             // Same bail as `lower_faq`: the oracle scalarizes a bare
             // whole-array body (`eval(body).as_scalar()` ⇒ NaN), which this
             // box lowering does not reproduce.
-            if matches!(&v, LV::State(_) | LV::Obs { .. }) && self.lv_box(&v).is_some() {
+            if matches!(&v, LV::State(_)) && self.lv_box(&v).is_some() {
                 bail_tape!("reduction: body reduced to a bare whole-array view");
             }
             Ok(Some(match keep {
@@ -5241,7 +5191,7 @@ impl<'m> TapeBuilder<'m> {
         let term = term.and_then(|v| {
             // The oracle scalarizes a bare whole-array body (NaN); see the
             // same bail in `lower_faq`.
-            if matches!(&v, LV::State(_) | LV::Obs { .. }) && self.lv_box(&v).is_some() {
+            if matches!(&v, LV::State(_)) && self.lv_box(&v).is_some() {
                 bail_tape!("scan: body reduced to a bare whole-array view");
             }
             match self.lv_box(&v) {
@@ -5509,7 +5459,7 @@ impl<'m> TapeBuilder<'m> {
                 );
                 out
             }
-            LV::State(_) | LV::Obs { .. } => {
+            LV::State(_) => {
                 let (shape, origin, scalar) = match self.lv_box(lv) {
                     None => (DimU::new(), DimI::new(), true),
                     Some((s, o)) => (s, o, false),
@@ -5602,8 +5552,7 @@ pub(super) fn build_tape_program(
             Err(bail) => {
                 b.rollback(txn);
                 b.declined[b.cur_rule as usize] = Some(bail.reason);
-                let shape = b.declined_observed_shape(rule);
-                b.obs_defined.insert(name, ObsVal::External { shape, tier });
+                b.obs_defined.insert(name, ObsVal::Declined);
             }
         }
         b.end_rule();
@@ -5660,202 +5609,6 @@ pub(super) fn build_tape_program(
 }
 
 impl<'m> TapeBuilder<'m> {
-    /// The statically-known runtime shape of a DECLINED observed rule's
-    /// array (origin-1 convention), or `None` when it cannot be known without
-    /// evaluating.
-    ///
-    /// This is what closes the shape cascade in the decline list. A rule that
-    /// reads an observed resolves it to [`LV::Obs`], and every array
-    /// instruction needs that value's box at build time; a `None` here makes
-    /// every reader of the declined observed decline too, so one unsupported
-    /// producer would be reported with its whole downstream cone. The shapes
-    /// come from the same places the interpreter's do — `var_shapes` for a
-    /// state, the already-recorded shape for an earlier observed, the `faq`
-    /// ranges / `makearray` bounding box / `const` literal for a materializing
-    /// operator — so a claimed box is the box the interpreter will publish.
-    /// Anything not derivable stays `None`, which is the old behaviour.
-    fn declined_observed_shape(&self, rule: &AlgebraicRule) -> Option<DimU> {
-        match rule {
-            // The per-cell (and vectorized) ArrayLoop paths both materialize
-            // the padded `[1, hi]` box; so does the recurrence sweep over its
-            // frame.
-            AlgebraicRule::ArrayLoop { output_ranges, .. }
-            | AlgebraicRule::Recurrence { output_ranges, .. } => Some(
-                output_ranges
-                    .iter()
-                    .map(|(_, hi)| (*hi).max(0) as usize)
-                    .collect(),
-            ),
-            // `materialize_observeds_pass` stores `eval(body)` verbatim, except
-            // that a scalar on a variable with a declared shape fills that
-            // shape; an undeclared scalar stays a 0-d array.
-            AlgebraicRule::Scalar {
-                body,
-                declared_shape,
-                ..
-            } => match (self.wholesale_shape(body), declared_shape) {
-                (Some(s), Some(d)) if s.is_empty() => Some(d.iter().copied().collect()),
-                (s, _) => s,
-            },
-        }
-    }
-
-    /// Shape-only mirror of [`Self::lower_wholesale`]: what box would
-    /// `eval(e)` produce, without lowering (or evaluating) anything? `None`
-    /// = not statically derivable. `Some(empty)` = a scalar / 0-d value.
-    ///
-    /// Deliberately partial and deliberately conservative: every arm that
-    /// cannot pin the box exactly returns `None`, because a WRONG box here is
-    /// not a missed optimization — a reader would compile a kernel against a
-    /// box the interpreter does not publish.
-    fn wholesale_shape(&self, e: &Expr) -> Option<DimU> {
-        match e {
-            Expr::Number(_) | Expr::Integer(_) => Some(DimU::new()),
-            Expr::Variable(name) => self.wholesale_var_shape(name),
-            Expr::Operator(node) => self.wholesale_op_shape(node),
-        }
-    }
-
-    fn wholesale_var_shape(&self, name: &str) -> Option<DimU> {
-        if name == "t" {
-            return Some(DimU::new());
-        }
-        if let Some(&ix) = self.state_ix.get(name) {
-            return Some(self.state_vars[ix].shape.clone());
-        }
-        if let Some(ov) = self.obs_defined.get(name) {
-            return match ov {
-                ObsVal::Taped(lv) => Some(match self.lv_box(lv) {
-                    None => DimU::new(),
-                    Some((s, _)) => s,
-                }),
-                ObsVal::External { shape, .. } => shape.clone(),
-            };
-        }
-        if self.param_ix.contains_key(name) {
-            return Some(DimU::new());
-        }
-        // A forcing read compiles against the box `forcing_read` loads; any
-        // other name is the NaN sentinel, whose shape nothing pins.
-        self.forcing_shapes.get(name).cloned()
-    }
-
-    /// Broadcast two operand shapes the way `combine` does for the shapes the
-    /// TAPE admits: equal boxes, or a scalar against a box. A rank/extent
-    /// mismatch is ndarray's trailing-pad broadcast, which the tape does not
-    /// lower and this pass does not predict.
-    fn broadcast_shape(a: Option<DimU>, b: Option<DimU>) -> Option<DimU> {
-        let (a, b) = (a?, b?);
-        if a.is_empty() {
-            Some(b)
-        } else if b.is_empty() || a == b {
-            Some(a)
-        } else {
-            None
-        }
-    }
-
-    fn wholesale_op_shape(&self, node: &Arc<ExpressionNode>) -> Option<DimU> {
-        self.wholesale_op_shape_named(node.op.as_str(), node)
-    }
-
-    /// [`Self::wholesale_op_shape`] with the operator name given separately,
-    /// for the `broadcast` re-entry [`Self::lower_wholesale_op_named`] makes.
-    fn wholesale_op_shape_named(&self, op: &str, node: &Arc<ExpressionNode>) -> Option<DimU> {
-        match op {
-            "broadcast" => {
-                let fn_name = node.broadcast_fn.as_deref()?;
-                if !crate::op_registry::is_scalar_operator(fn_name) {
-                    return None;
-                }
-                self.wholesale_op_shape_named(fn_name, node)
-            }
-            "true" | "false" => Some(DimU::new()),
-            "+" | "-" | "*" | "/" | "^" | "pow" | "min" | "max" | "and" | "or" | "atan2" | "=="
-            | "!=" | "<" | "<=" | ">" | ">=" => {
-                let mut acc = self.wholesale_shape(node.args.first()?)?;
-                for a in &node.args[1..] {
-                    acc = Self::broadcast_shape(Some(acc), self.wholesale_shape(a))?;
-                }
-                Some(acc)
-            }
-            "neg" | "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
-            | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh"
-            | "asinh" | "acosh" | "atanh" | "not" | "Pre" => {
-                self.wholesale_shape(node.args.first()?)
-            }
-            // Mirrors `eval_ifelse`: a scalar condition picks ONE branch at run
-            // time, so the shape is pinned only when both branches agree; an
-            // array condition selects element-wise over the broadcast of the
-            // condition and both branches, so a scalar-branch `ifelse` over an
-            // array test publishes the TEST's box.
-            "ifelse" => {
-                if node.args.len() != 3 {
-                    return Some(DimU::new()); // the NaN sentinel
-                }
-                let c = self.wholesale_shape(&node.args[0])?;
-                let t = self.wholesale_shape(&node.args[1])?;
-                let f = self.wholesale_shape(&node.args[2])?;
-                if c.is_empty() {
-                    return (t == f).then_some(t);
-                }
-                Self::broadcast_shape(Self::broadcast_shape(Some(c), Some(t)), Some(f))
-            }
-            "D" => Some(DimU::new()), // the NaN sentinel
-            // The fused geometry leaf is a scalar area (or the NaN sentinel).
-            "polygon_intersection_area" => Some(DimU::new()),
-            "const" => match eval_const(node) {
-                Value::Scalar(_) => Some(DimU::new()),
-                Value::Array(a) => Some(a.shape().iter().copied().collect()),
-            },
-            // `index_into` with a full index yields one element; a partial
-            // index yields a sub-array whose extents this pass does not chase.
-            "index" => {
-                let (base, idx) = node.args.split_first()?;
-                let bshape = self.wholesale_shape(base)?;
-                if bshape.is_empty() {
-                    return idx.is_empty().then(DimU::new);
-                }
-                (idx.len() >= bshape.len()).then(DimU::new)
-            }
-            // `eval_faq` materializes exactly its output box (rank-0 ⇒ a 0-d
-            // array), whichever inner path it takes.
-            "faq" => {
-                let spec = faq_spec(node)?;
-                Some(
-                    spec.ranges
-                        .iter()
-                        .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
-                        .collect(),
-                )
-            }
-            // `eval_makearray` assembles the regions' bounding box.
-            "makearray" => {
-                let regions = node.regions.as_ref()?;
-                let first = regions.first()?;
-                let ndim = first.len();
-                if regions.iter().any(|r| r.len() != ndim) {
-                    return None;
-                }
-                let mut lo = vec![i64::MAX; ndim];
-                let mut hi = vec![i64::MIN; ndim];
-                for region in regions {
-                    for (d, r) in region.iter().enumerate() {
-                        let [r_lo, r_hi] = crate::types::region_bounds(r)?;
-                        lo[d] = lo[d].min(r_lo);
-                        hi[d] = hi[d].max(r_hi);
-                    }
-                }
-                Some(
-                    (0..ndim)
-                        .map(|d| (hi[d] - lo[d] + 1).max(0) as usize)
-                        .collect(),
-                )
-            }
-            _ => None,
-        }
-    }
-
     fn begin_rule(&mut self, info: RuleInfo) {
         self.cur_rule = self.rules.len() as u32;
         self.home = info.cadence;
@@ -6516,12 +6269,6 @@ impl<'m> TapeBuilder<'m> {
         if precision.iter().all(|&p| p == build) {
             precision.clear();
         }
-        // Only a read of a declined observed resolves through the runtime
-        // observed map, and a declined build never reaches here.
-        assert!(
-            self.obs_reads.is_empty(),
-            "a finished tape reads no observed by name"
-        );
         let mut prog = TapeProgram {
             instrs,
             precision,
@@ -6542,7 +6289,6 @@ impl<'m> TapeBuilder<'m> {
             sweeps: std::mem::take(&mut self.sweeps),
             scalar_reads: std::mem::take(&mut self.scalar_reads),
             state_vars: std::mem::take(&mut self.state_vars),
-            obs_reads: std::mem::take(&mut self.obs_reads),
             forcings: std::mem::take(&mut self.forcings),
             dy_writes: std::mem::take(&mut self.dy_writes),
             exports,

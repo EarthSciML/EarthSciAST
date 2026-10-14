@@ -855,7 +855,8 @@ fn ab_observed_chain_and_broadcast() {
 /// self-read sits in an array-valued part of its body) has NO program: the
 /// instruction set cannot hand a rule to the per-cell oracle, so the build
 /// yields the declined rule table instead. The decline names the producer
-/// alone — its taped reader and the derivative lower — and a scratch asked
+/// and, at their reads, the observed and derivative downstream of it; a
+/// scratch asked
 /// for a tape gets none, so the historical routing runs the whole model on
 /// the legacy evaluator, bit for bit the interpreter's.
 #[test]
@@ -899,10 +900,10 @@ fn a_declined_rule_leaves_no_program() {
         .into_iter()
         .map(|(name, _)| name)
         .collect();
-    assert_eq!(named, vec!["k".to_string()], "{report}");
+    assert_eq!(named, ["k", "a", "D(psi)"], "{report}");
     assert_eq!(declined.rules.len(), declined.reasons.len());
     assert_eq!(report.n_rules, declined.rules.len());
-    assert_eq!(report.n_taped, declined.rules.len() - 1);
+    assert_eq!(report.n_taped, declined.rules.len() - 3);
     assert_eq!(
         report.n_instr_const + report.n_instr_segment + report.n_instr_continuous,
         0
@@ -2728,12 +2729,11 @@ fn ab_rank0_reduction_with_a_filter() {
     assert_eq!(reductions(&prog).len(), 1, "one fold");
 }
 
-/// The shape cascade: an observed produced by a rule the tape DECLINES (a
-/// recurrence it does not lower, [`untaped_self_read`]) still lets its later
-/// readers lower, because its box is inferable, so the decline names the
-/// producer alone rather than its whole downstream cone.
+/// A rule that reads an observed the tape DECLINES (a recurrence it does not
+/// lower, [`untaped_self_read`]) declines at the read, naming the observed:
+/// there is no operand for a value that is not on the tape.
 #[test]
-fn a_reader_of_a_declined_producer_is_not_declined() {
+fn a_reader_of_a_declined_observed_declines_at_the_read() {
     let n = 6;
     let doc = json!({
         "esm": "1.1.0",
@@ -2771,14 +2771,17 @@ fn a_reader_of_a_declined_producer_is_not_declined() {
             ]
         }}
     });
-    // Exactly one declined rule: the recurrence itself.
     let declined = declined_check(doc, -2.0, 2.0);
-    let names: Vec<String> = declined
-        .declined_rules()
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect();
-    assert_eq!(names, vec!["r".to_string()]);
+    let rules = declined.declined_rules();
+    let names: Vec<&str> = rules.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["r", "g", "D(u)"]);
+    for (name, reason) in &rules[1..] {
+        assert!(
+            reason.contains("observed `r` is produced by a declined rule")
+                || reason.contains("observed `g` is produced by a declined rule"),
+            "{name}: {reason}"
+        );
+    }
 }
 
 /// The phase-2 spike fixture end to end: all three gaps at once (an

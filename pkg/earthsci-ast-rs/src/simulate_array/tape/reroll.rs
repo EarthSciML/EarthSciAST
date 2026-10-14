@@ -112,7 +112,6 @@ fn batchable(ins: &Instr, prog: &TapeProgram, n_defs: &[u32]) -> bool {
         d.scalar && n_defs[*out as usize] == 1
     };
     let ok_operand = |o: &Operand| match o {
-        Operand::Obs(_) => false,
         Operand::State(i) => prog.state_vars[*i as usize].shape.is_empty(),
         Operand::Slot(s) => prog.slots[*s as usize].scalar,
         Operand::Lit(_) | Operand::Param(_) | Operand::Time => true,
@@ -263,7 +262,6 @@ fn op_key(o: &Operand) -> [u64; 2] {
         Operand::Param(p) => [2, *p as u64],
         Operand::Time => [3, 0],
         Operand::State(i) => [4, *i as u64],
-        Operand::Obs(i) => [5, *i as u64],
     }
 }
 
@@ -621,7 +619,6 @@ impl Ctx<'_> {
                     },
                     Operand::State(ix) => Leaf::State(ix),
                     Operand::Param(p) => Leaf::Param(p),
-                    Operand::Obs(_) => unreachable!("not batchable"),
                 };
                 let j = *leaf_ix.entry(leaf).or_insert_with(|| {
                     leaves.push(leaf);

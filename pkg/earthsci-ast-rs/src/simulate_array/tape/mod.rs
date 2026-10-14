@@ -53,12 +53,9 @@
 //!   association the interpreter would. It is the one construct the tape
 //!   lowers that the whole-array overlay declines outright.
 //!
-//! A third piece of the same work is not an instruction: the lowering
-//! records every observed's statically inferable box, including the ones
-//! produced by rules that DECLINED, so a reader of a declined observed still
-//! lowers or declines for its own reason, and the decline list names the
-//! producer alone rather than its whole downstream cone
-//! (`TapeBuilder::declined_observed_shape`).
+//! A rule that reads an observed whose own rule declined declines too, at
+//! the read: there is no operand for a value that is not on the tape, so the
+//! decline list names the producer and every rule that reads it.
 //!
 //! ## Closed functions
 //!

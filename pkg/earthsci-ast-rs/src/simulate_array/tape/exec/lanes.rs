@@ -141,7 +141,6 @@ pub(super) unsafe fn exec_lanes(
     env: &Env,
     slab_ptr: *mut f64,
     slot_off: &[usize],
-    obs: &ArrMap,
     scratch: &mut LaneScratch,
     dy: &mut [f64],
     simd: SimdLevel,
@@ -163,7 +162,7 @@ pub(super) unsafe fn exec_lanes(
     let _ = (max_terms, max_sops);
     svals.clear();
     for op in &ls.scalars {
-        svals.push(resolve_scalar(op, env, slab_ptr, slot_off, obs));
+        svals.push(resolve_scalar(op, env, slab_ptr, slot_off));
     }
     if ls.lanes == 1 && ls.inputs.is_empty() {
         exec_block(ls, svals, &mut own.regs, slab_ptr, slot_off, dy);

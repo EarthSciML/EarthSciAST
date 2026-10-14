@@ -282,7 +282,6 @@ fn tuple_instr(prog: &TapeProgram, ins: &Instr, n_pairs: usize, t: &mut Touches)
             match src {
                 SrcRef::Slot(s) => t.push((*s, Class::Any, false)),
                 SrcRef::State(_) => {}
-                SrcRef::Obs(_) => return false,
             }
             *out
         }
@@ -657,7 +656,6 @@ fn tuple_arg(o: &Operand, env: &Env, slab_ptr: *mut f64, slot_off: &[usize]) -> 
                 Arg::P(super::resolve::state_ptr(env, *ix))
             }
         }
-        Operand::Obs(_) => return None,
     })
 }
 
@@ -696,7 +694,6 @@ pub(super) unsafe fn run_chain(
     env: &Env,
     slab_ptr: *mut f64,
     slot_off: &[usize],
-    obs: &ArrMap,
     scratch: &mut ChainScratch,
     fscratch: &mut FusedScratch,
     idx_tables: &[Vec<Option<IndexTable>>],
@@ -730,7 +727,6 @@ pub(super) unsafe fn run_chain(
                 src: match src {
                     SrcRef::Slot(s) => at(*s),
                     SrcRef::State(ix) => super::resolve::state_ptr(env, *ix),
-                    SrcRef::Obs(_) => return false,
                 },
                 pos: prog.gather_tables[*table as usize].pos.as_ptr(),
             },
@@ -770,7 +766,6 @@ pub(super) unsafe fn run_chain(
                     env,
                     slab_ptr,
                     slot_off,
-                    obs,
                     fscratch,
                     dy_home,
                     dy,
