@@ -37,7 +37,8 @@
 #
 # BUILDS. `build_s` is the fastest of repeated builds of the document while
 # they total under 1 s (at most 10), so a build of a few milliseconds is not
-# timer noise; `dense_bytes` is the bytes of the declared-dense arrays the
+# timer noise; after a family's ladder, the two ends of its build slope are
+# rebuilt alternately (`build_s_interleaved`, see interleave_slope_ends!); `dense_bytes` is the bytes of the declared-dense arrays the
 # build materializes (its setup arrays, written in full).
 #
 # ONE CHILD PROCESS PER FAMILY. The adapter measures each family's ladder in a
@@ -252,6 +253,8 @@ function blank_result(entry)
         "first_call_s" => nothing, "steady_rhs_s" => nothing, "allocs_per_call" => nothing,
         "hand_loop_s" => nothing, "hand_loop_max_abs_diff" => nothing, "dy_max_abs" => nothing,
         "interpreter_max_abs_diff" => nothing, "build_repeats" => nothing,
+        "build_s_interleaved" => nothing, "build_interleaved_repeats" => nothing,
+        "build_interleaved_diff_s" => nothing,
         "dense_bytes" => nothing, "serial_steady_rhs_s" => nothing,
         # Julia's own fields, beyond the tier's format:
         "tiers" => nothing, "code_size_parts" => nothing, "hand_loop_serial_s" => nothing,
@@ -620,9 +623,67 @@ function run_in_process(o)
             write_results(o["output"], header, results)
             log_result(rec)
         end
+        interleave_slope_ends!(results, fam, o, compiler)
+        write_results(o["output"], header, results)
     end
     write_results(o["output"], header, results)
     return 0
+end
+
+const INTERLEAVE_MAX = 100       # interleaved builds per end, at most
+const INTERLEAVE_MIN = 10        # fewer would not beat the ladder's own minimum
+const INTERLEAVE_BUDGET_S = 5.0  # seconds of interleaved building per family, at most
+
+# The two documents ../check.py fits family `fam`'s build slope between (the
+# smallest and largest n_states that built, at most 10^6 cells), rebuilt
+# alternately in this process: `build_s_interleaved` is the median of each
+# end's builds, `build_interleaved_repeats` how many each got, and the larger
+# end's `build_interleaved_diff_s` the median over pairs of its build minus the
+# smaller end's build taken beside it. Builds of a few milliseconds drift by a
+# large fraction of the slope's whole allowance between ladder steps and within
+# the re-timing itself; a difference of builds taken side by side cancels it.
+# A young collection runs before every build, outside its time. A family whose
+# builds would not fit INTERLEAVE_MIN pairs in INTERLEAVE_BUDGET_S keeps the
+# ladder's build_s (the fields stay null).
+function interleave_slope_ends!(results, fam, o, compiler)
+    built = [r for r in results if r["family"] == fam && r["status"] == "ok" &&
+             r["build_s"] !== nothing && r["n_cells"] <= 1_000_000]
+    length(built) < 2 && return
+    lo = built[argmin([r["n_states"] for r in built])]
+    hi = built[argmax([r["n_states"] for r in built])]
+    lo["n_states"] == hi["n_states"] && return
+    repeats = min(INTERLEAVE_MAX, floor(Int, INTERLEAVE_BUDGET_S / (lo["build_s"] + hi["build_s"])))
+    repeats < INTERLEAVE_MIN && return
+    index = JSON3.read(read(joinpath(o["docs"], "index.json"), String), Dict{String,Any})
+    path(r) = joinpath(o["docs"], only(e["path"] for e in index["documents"]
+                                       if e["family"] == fam && e["n"] == r["n"]))
+    plo, phi = path(lo), path(hi)
+    function build(p)
+        GC.gc(false)
+        return @elapsed ESA.esm_problem(p, (0.0, 1.0); compiler = compiler)
+    end
+    try
+        build(plo); build(phi)
+        tl, th = Float64[], Float64[]
+        for k in 1:repeats            # lo hi hi lo ...
+            if isodd(k)
+                push!(tl, build(plo)); push!(th, build(phi))
+            else
+                push!(th, build(phi)); push!(tl, build(plo))
+            end
+        end
+        med(t) = sort(t)[length(t) ÷ 2 + 1]
+        for (r, t) in ((lo, tl), (hi, th))
+            r["build_s_interleaved"] = med(t)
+            r["build_interleaved_repeats"] = repeats
+        end
+        hi["build_interleaved_diff_s"] = med(th .- tl)
+        println(stderr, "[$fam] build slope ends re-timed, $repeats interleaved builds each")
+    catch err
+        err isa InterruptException && rethrow()
+        println(stderr, "[$fam] interleaved builds failed: " * _msg(err))
+    end
+    return
 end
 
 # ---------------------------------------------------------------------------

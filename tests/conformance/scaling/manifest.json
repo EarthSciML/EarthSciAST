@@ -1,7 +1,7 @@
 {
   "tier": "scaling",
   "description": "Build and run-time scaling of compiler = native, from 10^2 to 10^6 cells, against hand-written reference loops. See README.md for the result format and what each gate means.",
-  "result_format_version": 2,
+  "result_format_version": 3,
   "families": {
     "stencil_1d": {
       "description": "1-D diffusion, zero-ghost boundaries.",
@@ -242,7 +242,7 @@
     },
     "build_slope": {
       "kind": "timing",
-      "description": "(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin)) over the smallest and largest N that built, with Nmax <= 10^6 cells, under max_ns_per_state + per_byte_ns[binding] * (n_bytes(Nmax) - n_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin)) + dense_page_ns[binding] * (dense_bytes(Nmax) - dense_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin)): the build may also read the document bytes each added state brings, at twice the binding's measured load cost per byte of inline data, and write the pages of the declared-dense arrays it materializes, at twice the binding's measured first-touch cost per byte. build_s is the fastest of the adapter's repeated warm builds of the document. A document whose size does not grow with N, or a result without n_bytes, gets no document allowance; a result without dense_bytes, or whose build writes no declared-dense array, gets no dense allowance. Needs two built sizes.",
+      "description": "(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin)) over the smallest and largest N that built, with Nmax <= 10^6 cells, under max_ns_per_state + per_byte_ns[binding] * (n_bytes(Nmax) - n_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin)) + dense_page_ns[binding] * (dense_bytes(Nmax) - dense_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin)): the build may also read the document bytes each added state brings, at twice the binding's measured load cost per byte of inline data, and write the pages of the declared-dense arrays it materializes, at twice the binding's measured first-touch cost per byte. The build-time difference is build_interleaved_diff_s when the larger end has it (the median over up to 100 pairs of the two ends built side by side in one process after the ladder, alternating which goes first, so drift cancels within each pair), and build_s(Nmax) - build_s(Nmin) otherwise (each the fastest of the adapter's repeated warm builds of the document). A document whose size does not grow with N, or a result without n_bytes, gets no document allowance; a result without dense_bytes, or whose build writes no declared-dense array, gets no dense allowance. Needs two built sizes.",
       "max_ns_per_state": 20,
       "per_byte_ns": {
         "julia": 170,

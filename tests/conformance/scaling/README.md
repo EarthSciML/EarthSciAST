@@ -144,6 +144,9 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
     "n_bytes": 0,
     "build_s": 0.0,
     "build_repeats": 10,
+    "build_s_interleaved": null,
+    "build_interleaved_repeats": null,
+    "build_interleaved_diff_s": null,
     "dense_bytes": 0,
     "code_size": 0,
     "code_size_unit": "tape_instructions",
@@ -158,11 +161,13 @@ files). Fields that cannot be measured are `null`, never omitted and never 0.
     "serial_steady_rhs_s": null}]}
 ```
 
-`manifest.json`'s `result_format_version` is 2: version 1 had no
-`build_repeats`, `dense_bytes`, `hand_loop_serial_s` or `serial_steady_rhs_s`,
-and its `build_s` was a single build. A version-1 file still
-checks: a missing field turns off only the allowance or carve-out that reads it,
-and the row's note says so.
+`manifest.json`'s `result_format_version` is 3. Version 2 had no
+`build_s_interleaved`, `build_interleaved_repeats` or
+`build_interleaved_diff_s`; version 1 had none of
+those nor `build_repeats`, `dense_bytes`, `hand_loop_serial_s` or
+`serial_steady_rhs_s`, and its `build_s` was a single build. Older files still
+check: a missing field turns off only what reads it (the build slope then fits
+`build_s`, and an allowance or carve-out is off), and the row's note says so.
 
 | field | meaning |
 |---|---|
@@ -172,6 +177,8 @@ and the row's note says so.
 | `n_bytes` | the document file's size in bytes (the `build_slope` gate's size allowance reads it) |
 | `build_s` | wall seconds of `esm_problem` (reading and parsing the file included), after a warm-up build in the same process: the fastest of `build_repeats` builds of the document, repeated while they total under 1 s and at most 10 times. A build of a few milliseconds varies by a large fraction of itself between runs, and one sample of it at each end of the ladder made the build slope swing by hundreds of ns/state |
 | `build_repeats` | how many builds `build_s` is the fastest of |
+| `build_s_interleaved`, `build_interleaved_repeats` | on the two documents the build slope is fitted between only: the median of `build_interleaved_repeats` builds of each, taken alternately in one process after the family's ladder (below). `null` elsewhere, and for a family whose builds would not fit 10 pairs in 5 s |
+| `build_interleaved_diff_s` | on the larger of those two documents only: the median over the interleaved pairs of its build minus the smaller document's build taken beside it, which the build slope is fitted from |
 | `dense_bytes` | bytes of the declared-dense arrays the build writes in full: an array the document declares at a shape (`regrid`'s overlap arrays, source x target) that the build materializes at that shape. Julia: the build's setup arrays. Rust: `null`, since its build materializes no declared shape (a declared-dense `faq` becomes tape sections that run on the first call). `null` gets no dense allowance |
 | `code_size`, `code_size_unit` | the size of what the compiler emitted. Rust: tape instructions over all three cadence sections. Julia: the adapter's stated measure |
 | `first_call_s` | the first right-hand-side call after the build (it primes build-once sections) |
@@ -225,8 +232,27 @@ Thresholds live in `manifest.json` under `gates`.
 | `code_size_flat` | deterministic | `code_size` is identical at every N that built, up to the gate's `slack` (0). A family's `gate_overrides` may state a slack per binding, with a `why` that bounds the spread: Rust's stencil and transport families state one, because fusion's fold decision depends on row length, while the lowered tape it can only shrink is flat (`code_size_detail.lowered`) |
 | `no_steady_alloc` | deterministic | `allocs_per_call` is 0 (null on a built document fails, unless the result declares it unmeasurable). A ledger entry for it states `max_bytes_per_call`, the most it excuses, and a measure past that bound is red (`EXCEEDS`) |
 | `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast. Checked against the interpreter when native refused |
-| `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns plus the document-size and dense-array allowances below, over the smallest and largest N that built with at most 10^6 cells |
+| `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns, with `build_interleaved_diff_s` in place of the difference when the larger end has it (below), plus the document-size and dense-array allowances below, over the smallest and largest N that built with at most 10^6 cells |
 | `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise). Two families stop short of 10^4 states and lower it to 2000 through `gate_overrides`: `source_receptor`, whose work is N^2, and `regrid`, whose ladder stops at 6324 states and whose call at 2000 states is already a few microseconds. In a threaded file, a result below 10^4 cells is checked against native's own serial call instead (below) |
+
+### The build slope's two ends
+
+A build of a few milliseconds drifts by a fraction of a millisecond between one
+step of a ladder and the next in the same process, while the slope's whole
+allowance over a family that stops at 3162 is about 0.12 ms. One minimum per
+size, taken minutes apart, can therefore read a slope several times the true
+one in either direction. So after a family's ladder the adapters rebuild the
+two documents the slope is fitted between (the smallest and largest
+`n_states` that built, at most 10^6 cells) in pairs in one process, in the
+order lo hi, hi lo, lo hi, ... up to 100 pairs and within 5 s in all (Julia
+runs a young collection before each build, outside its time). The slope is
+fitted from the median over pairs of the larger build minus the smaller
+(`build_interleaved_diff_s`): drift lands on both builds of a pair alike and
+cancels, where separate medians of the two ends still carried it, and the
+alternating order puts each end first in half the pairs, since a build that
+follows a build of the same document runs warmer. A family whose builds are
+too long for 10 pairs in 5 s keeps the ladder's `build_s`, which is already
+large against the noise there. The thresholds are unchanged.
 
 ### The build slope's document-size allowance
 

@@ -306,6 +306,18 @@ def main():
     code, o = run([result("stencil_1d", 100, allocs_per_call=8)], [], "--hosted")
     assert code == 1 and o[("stencil_1d", 100, "no_steady_alloc")] == "FAIL", o
 
+    # The median of the interleaved build pairs replaces build_s when the
+    # ends carry it: build_s reads 50 ns/state, the paired difference 10.
+    il = [result("stencil_1d", 100, build_s=0.0, build_s_interleaved=1e-3,
+                 build_interleaved_repeats=100),
+          result("stencil_1d", 1100, build_s=50e-6, build_s_interleaved=1e-3 + 60e-6,
+                 build_interleaved_repeats=100, build_interleaved_diff_s=10e-6)]
+    code, o = run(il, [])
+    assert code == 0 and o[("stencil_1d", None, "build_slope")] == "pass", o
+    del il[1]["build_interleaved_diff_s"]
+    code, o = run(il, [])
+    assert code == 1 and o[("stencil_1d", None, "build_slope")] == "FAIL", o  # no pairs: build_s
+
     # A family whose document grows by equations states its own per-byte rate
     # (scalar_chemistry's gate_overrides); the gate's data rate applies to the rest.
     def chem(fam, build_hi):

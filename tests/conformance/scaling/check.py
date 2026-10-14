@@ -252,7 +252,19 @@ def family_checks(run, fam, results, gates, family_spec):
             )
         else:
             lo, hi = cand[0], cand[-1]
-            ns = (hi["build_s"] - lo["build_s"]) / (hi["n_states"] - lo["n_states"]) * 1e9
+            b_lo, b_hi, how = lo["build_s"], hi["build_s"], ""
+            # The adapters re-time the two ends side by side after the ladder
+            # (README, "The build slope's two ends"); the median of the paired
+            # differences replaces the ladder's minima when the larger end
+            # carries it.
+            diff = hi.get("build_interleaved_diff_s")
+            if diff is not None and lo.get("build_s_interleaved") is not None:
+                b_lo, b_hi = 0.0, diff
+                how = (
+                    f", median of {hi.get('build_interleaved_repeats')} interleaved "
+                    f"build pairs"
+                )
+            ns = (b_hi - b_lo) / (hi["n_states"] - lo["n_states"]) * 1e9
             g = {
                 **gates["build_slope"],
                 **family_spec.get("gate_overrides", {}).get("build_slope", {}),
@@ -267,7 +279,7 @@ def family_checks(run, fam, results, gates, family_spec):
                     TIMING,
                     ns < limit,
                     ns,
-                    f"ns/state over N={lo.get('n')}..{hi.get('n')}; limit {limit:.4g}{why}",
+                    f"ns/state over N={lo.get('n')}..{hi.get('n')}{how}; limit {limit:.4g}{why}",
                 )
             )
     return out
