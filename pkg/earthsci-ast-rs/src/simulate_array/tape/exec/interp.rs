@@ -322,6 +322,7 @@ pub(super) struct Cx<'a> {
 /// Whether `ins` is straight-line: it reads and writes only slab slots, the
 /// state, the parameters, `t` and `dy`, moves no control and publishes
 /// nothing, so [`exec_straight`] runs it on any thread.
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn is_straight(ins: &Instr) -> bool {
     !matches!(
         ins,
