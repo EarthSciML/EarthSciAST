@@ -218,6 +218,66 @@
           "why": "the document grows by equations, not inline data, and each binding's loader costs far more per byte of equations than per byte of data: Julia load_path about 3000 ns/byte (100..10^4 states; its per-equation schema validation and coercion, a known cost separate from the compiler), Rust serde_json parse plus typed load about 100 ns/byte (100..10^5), measured on cf30558cb, cores 18-19, two rounds. Twice that, by the same reasoning as the gate's own per_byte_ns. It excuses loading, not compiling: the rest of the build must still fit max_ns_per_state"
         }
       }
+    },
+    "gather_index": {
+      "description": "A gather through a data-dependent index array: each cell's class cls[i] = 1 + mod(7919 i - 1, 64) is computed by the document, and D(u[i]) = -rate[cls[i]] u[i] + emis[cls[i]] reads two 64-entry inline const tables through it (the isrm member-index gather, the rrtm jt lookup).",
+      "size_meaning": "cells",
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ]
+    },
+    "column_search": {
+      "description": "A per-column level search used as a subscript (the YSU kpbl shape): cnt[c] counts the levels of column c whose state exceeds 1, and D(u[c,l]) = -0.1 u[c,l] + 0.01 u[c, max(1, cnt[c])], so the subscript is computed from the state on every call.",
+      "size_meaning": "cells (nominal; 20 levels, columns = round(N/20))",
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ]
+    },
+    "column_sum": {
+      "description": "A rank-0 column sum nested in a 3-D faq body (the rrtm o3_clim shape): D(u[i,j,k]) = -0.1 u[i,j,k] + 0.001 sum_l u[i,j,l]. The sum does not depend on k, so the hand loop computes it once per column.",
+      "size_meaning": "cells (nominal; 20 levels, side = round(sqrt(N/20)))",
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ]
+    },
+    "join_keyed": {
+      "description": "A value-equality join on const-cadence computed keys evaluated at build (the moves and isrm shape, CONFORMANCE_SPEC 5.5.8): about four of the N rows match each of the N cells, so the build must drive the enumeration from the match set rather than test the N^2 product. The right-hand side reads the joined sum: D(u[i]) = -0.1 u[i] + 0.001 agg[i].",
+      "size_meaning": "cells = rows (keys = N/4)",
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ]
     }
   },
   "gates": {
