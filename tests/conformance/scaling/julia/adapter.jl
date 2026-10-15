@@ -499,7 +499,8 @@ end
 
 # Native's call with every section held serial, timed like `steady_rhs_s`: a
 # second build whose first call (where each section decides once whether it
-# chunks) runs with the per-chunk cell floor above any section's size. Its dy
+# chunks) runs with the per-chunk work floor (`ESS_THREADS_MIN_WORK`) above
+# any section's work. Its dy
 # must be bit-identical to the threaded call's (`ref`, in canonical order).
 function serial_native!(rec, path, entry, compiler, ref, budget)
     fam = String(entry["family"])
@@ -509,7 +510,10 @@ function serial_native!(rec, path, entry, compiler, ref, budget)
         sdu = zeros(length(u))
         f! = prob.f!
         p = prob.p
-        withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
+        # Both names, so a floor already set in the environment under either
+        # cannot hold the serial build threaded.
+        floor = string(typemax(Int))
+        withenv("ESS_THREADS_MIN_WORK" => floor, "ESS_THREADS_MIN_CELLS" => floor) do
             f!(sdu, u, p, PROBE_T)
         end
         if !isequal(dy_by_name(prob, sdu, canonical_names(fam, entry)), ref)
