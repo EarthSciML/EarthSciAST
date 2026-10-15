@@ -350,9 +350,6 @@ struct Emitter<'a> {
     /// Per `prog.state_vars` index: the state array as the tape reads it
     /// (row-major over its shape; rank 0 for a 0-d variable).
     state: Vec<XlaOp>,
-    /// Observed values published by [`Instr::Export`], keyed by name — the
-    /// only channel an [`Operand::Obs`] can resolve through here.
-    obs: HashMap<String, XlaOp>,
     /// `dy` accumulator, one ROW-MAJOR block per state variable, in
     /// `var_order`. `None` = nothing written yet (stays zero).
     blocks: Vec<Option<XlaOp>>,
@@ -453,7 +450,6 @@ impl<'a> Emitter<'a> {
             t,
             slots: vec![None; prog.slots.len()],
             state: Vec::new(),
-            obs: HashMap::new(),
             blocks: vec![None; var_order.len()],
             var_order,
             var_ix,
@@ -596,18 +592,7 @@ impl<'a> Emitter<'a> {
                 .clone()
                 .ok_or_else(|| self.err(format!("read of slot {s} before its definition"))),
             Operand::State(ix) => Ok(self.state[*ix as usize].clone()),
-            Operand::Obs(ix) => self.obs_value(*ix as usize),
         }
-    }
-
-    fn obs_value(&self, ix: usize) -> R<XlaOp> {
-        let name = &self.prog.obs_reads[ix];
-        self.obs.get(name).cloned().ok_or_else(|| {
-            self.err(format!(
-                "observed `{name}` is read but never published on the tape, which \
-                 this emitter cannot reproduce"
-            ))
-        })
     }
 
     fn src(&self, s: &SrcRef) -> R<XlaOp> {
@@ -616,7 +601,6 @@ impl<'a> Emitter<'a> {
                 .clone()
                 .ok_or_else(|| self.err(format!("gather source slot {id} is undefined"))),
             SrcRef::State(ix) => Ok(self.state[*ix as usize].clone()),
-            SrcRef::Obs(ix) => self.obs_value(*ix as usize),
         }
     }
 
@@ -1092,13 +1076,10 @@ impl<'a> Emitter<'a> {
                 }
                 self.define(*out, cur);
             }
-            Instr::Export { slot, export } => {
-                let name = self.prog.exports[*export as usize].0.clone();
-                let v = self.slots[*slot as usize]
-                    .clone()
-                    .ok_or_else(|| self.err("exported slot is undefined"))?;
-                self.obs.insert(name, v);
-            }
+            // An export publishes an observed for the passes the tape serves
+            // outside the right-hand side; the emitted program's only output
+            // is `du`, and every in-program read is by slot.
+            Instr::Export { .. } => {}
             Instr::DyWrite { write } => {
                 let w = self.prog.dy_writes[*write as usize].clone();
                 self.emit_dy_write(&w)?;
