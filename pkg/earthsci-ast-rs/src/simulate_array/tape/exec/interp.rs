@@ -8,12 +8,12 @@
 use super::super::geom::{RingTable, run_poly_area};
 use super::fused::{dispatch_bin_kernel, dispatch_un_kernel, exec_fused};
 use super::kernels::{
-    copy_strided, ew_select, ew1, ew2, exec_gather, fill_strided, index_gather, reduce_axis,
-    reduce_rows, scan_axis, seg_reduce, table_gather,
+    copy_strided, data_gather, data_gather_sub, ew_select, ew1, ew2, exec_gather, fill_strided,
+    index_gather, reduce_axis, reduce_rows, scan_axis, seg_reduce, table_gather,
 };
 use super::resolve::{Rv, SrcView, resolve_rv, resolve_scalar, resolve_src, rm_strides};
 use super::*;
-use crate::simulate_array::eval::latch_gather_fault;
+use crate::simulate_array::eval::{latch_gather_fault, latch_ordered_fault};
 
 /// A resolved source viewed as a ring table.
 fn ring_table(v: &SrcView) -> RingTable<'_> {
@@ -176,7 +176,8 @@ pub(super) fn run_range(
                 load_forcing(fr, &env.forcing.borrow(), env.declared, prog.col_major, dst);
             }
             Instr::Fault { fault } => {
-                latch_gather_fault(prog.faults[*fault as usize].clone());
+                let (rule, key) = &prog.fault_order[*fault as usize];
+                latch_ordered_fault(*rule, key, || prog.faults[*fault as usize].clone());
             }
             Instr::Sweep { spec } => {
                 let sw = &prog.sweeps[*spec as usize];
@@ -330,6 +331,7 @@ pub(super) fn is_straight(ins: &Instr) -> bool {
             | Instr::Fault { .. }
             | Instr::Sweep { .. }
             | Instr::ScalarRead { .. }
+            | Instr::DataGather { faults: true, .. }
             | Instr::JmpIfZero { .. }
             | Instr::Export { .. }
             | Instr::Lanes { .. }
@@ -776,6 +778,30 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             let iv = resolve_rv(idx, &spec.shape, env, slab_ptr, slot_off);
             let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
             unsafe { index_gather(dst, spec, &sv, &iv) };
+        }
+        Instr::DataGather {
+            src,
+            spec,
+            out,
+            faults,
+        } => {
+            let spec = &prog.data_gathers[*spec as usize];
+            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let subs: SmallVec<[Rv; 4]> = spec
+                .subs
+                .iter()
+                .map(|o| resolve_rv(o, &spec.shape, env, slab_ptr, slot_off))
+                .collect();
+            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let faulted = unsafe { data_gather(dst, spec, &sv, &subs) };
+            if faulted {
+                debug_assert!(*faults, "only a faulting DataGather reports a fault");
+                let first =
+                    spec.first_fault(|d, k| unsafe { data_gather_sub(&subs[d], &spec.shape, k) });
+                if let (Some((key, msg)), Some(order)) = (first, &spec.order) {
+                    latch_ordered_fault(order.rule, &key, || msg);
+                }
+            }
         }
         Instr::TableGather { src, table, out } => {
             let sv = resolve_src(src, env, slab_ptr, slot_off);

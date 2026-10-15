@@ -193,6 +193,7 @@ pub(super) fn instr_work(prog: &TapeProgram, ins: &Instr) -> usize {
         | Instr::Copy { out, .. }
         | Instr::IndexGather { out, .. }
         | Instr::TableGather { out, .. }
+        | Instr::DataGather { out, .. }
         | Instr::Scan { out, .. } => prog.slots[*out as usize].elems(),
         Instr::Lanes { spec } => {
             let ls = &prog.lanes[*spec as usize];

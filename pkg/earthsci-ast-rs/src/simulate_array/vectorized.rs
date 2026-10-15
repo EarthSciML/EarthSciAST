@@ -1468,7 +1468,19 @@ pub(super) fn eval_vec_index<'a>(
     // IN-RANGE const-array gather (the overwhelmingly common stencil-weight /
     // geometry-table read) keeps the exact vectorized path it had.
     let const_base = ctx.const_arrays.is_const_base(&node.args[0]);
-    let arg0 = eval_vec(&node.args[0], bx, ctx, pool, ops)?;
+    let arg0 = match &node.args[0] {
+        // An inline `const` array literal is read whole, as the oracle's
+        // gather reads it (`const_lit_array`): a 1-origin array. Only here —
+        // an array literal in an elementwise position stays off this path.
+        Expr::Operator(lit) if lit.op == "const" && is_inline_const_array(lit) => {
+            let arr = const_lit_array(lit, ctx.const_lits)?;
+            let mut data = pool.take_array_uninit(arr.shape());
+            data.assign(&*arr);
+            let origin = DimI::from_elem(1, data.ndim());
+            VecValue::Owned { data, origin }
+        }
+        base => eval_vec(base, bx, ctx, pool, ops)?,
+    };
     let n = node.args.len() - 1;
     // `index(scalar)` with a single arg is the identity; a scalar is otherwise
     // not indexable on the fast path.
@@ -1535,13 +1547,9 @@ pub(super) fn eval_vec_index<'a>(
             }
             // Either unclassifiable, or affine in an output symbol another
             // source axis already claimed (a repeated index — a diagonal
-            // gather, which is not a whole-array slice) → oracle.
-            _ => {
-                arg0.release(pool);
-                bail_vec!(
-                    "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select"
-                );
-            }
+            // gather): no slice form, so every subscript is evaluated over
+            // the box and the source read element by element.
+            _ => return eval_vec_data_gather(node, bx, ctx, pool, ops, arg0, const_base),
         }
     }
 
@@ -1800,6 +1808,126 @@ pub(super) fn eval_vec_index<'a>(
     drop(rvb);
     drop(rv);
     arg0.release(pool);
+    Some(VecValue::Owned {
+        data: result,
+        origin: bx.lo.iter().copied().collect(),
+    })
+}
+
+/// `index(A, s…)` with each subscript evaluated over the whole box (a scalar,
+/// or an array over the box) and `A` read once per element, exactly as the
+/// oracle's `index_into` reads it at each cell: the subscript rounded, the
+/// zero ghost out of range for a state or observed source, the declared
+/// boundary policy for a const array. A const-array element that would fault
+/// (`E_TREEWALK_CONSTARRAY_OOB`) bails to the oracle, as every other
+/// out-of-range const gather here does, so the oracle latches it in its own
+/// order.
+fn eval_vec_data_gather<'a>(
+    node: &ExpressionNode,
+    bx: &VecBox,
+    ctx: &EvalCtx<'a>,
+    pool: &mut Pool,
+    ops: &mut usize,
+    arg0: VecValue<'a>,
+    const_base: bool,
+) -> Option<VecValue<'a>> {
+    use crate::value_invention::BoundaryKind;
+    let src_shape: DimU = arg0.shape().expect("array").iter().copied().collect();
+    if arg0.origin().expect("array").iter().any(|&o| o != 1) {
+        arg0.release(pool);
+        bail_vec!("index: computed-subscript read of a source not at origin 1");
+    }
+    let name = match &node.args[0] {
+        Expr::Variable(v) => v.as_str(),
+        _ => INLINE_CONST_NAME,
+    };
+    let policy: SmallVec<[Option<BoundaryKind>; 4]> = (0..src_shape.len())
+        .map(|d| {
+            const_base.then(|| {
+                if src_shape[d] == 0 {
+                    BoundaryKind::Error
+                } else {
+                    ctx.const_arrays.boundary(name, d)
+                }
+            })
+        })
+        .collect();
+    let mut subs: SmallVec<[VecValue<'a>; 4]> = SmallVec::new();
+    for e in &node.args[1..] {
+        let Some(v) = eval_vec(e, bx, ctx, pool, ops) else {
+            for s in subs {
+                s.release(pool);
+            }
+            arg0.release(pool);
+            return None;
+        };
+        let fits = match (v.shape(), v.origin()) {
+            (None, _) => true,
+            (Some(s), Some(o)) => s == bx.shape && o == bx.lo,
+            _ => false,
+        };
+        subs.push(v);
+        if !fits {
+            for s in subs {
+                s.release(pool);
+            }
+            arg0.release(pool);
+            bail_vec!("index: a computed subscript's box is not the output box");
+        }
+    }
+    let mut result = pool.take_array_uninit(bx.shape);
+    let mut ok = true;
+    {
+        let src = arg0.view().expect("array");
+        let views: SmallVec<[(Option<ArrayViewD<'_, f64>>, f64); 4]> = subs
+            .iter()
+            .map(|s| match s {
+                VecValue::Scalar(x) => (None, *x),
+                other => (other.view(), 0.0),
+            })
+            .collect();
+        let mut at: DimU = DimU::from_elem(0, src_shape.len());
+        'cells: for (cell, out) in result.indexed_iter_mut() {
+            let mut ghost = false;
+            for (d, (view, scalar)) in views.iter().enumerate() {
+                let v = match view {
+                    Some(a) => a[&cell],
+                    None => *scalar,
+                };
+                // `eval_index_args`, then `index_into` on this axis.
+                let r = v.round() as i64;
+                let n_d = src_shape[d] as i64;
+                at[d] = if (1..=n_d).contains(&r) {
+                    (r - 1) as usize
+                } else {
+                    match policy[d] {
+                        None => {
+                            ghost = true;
+                            0
+                        }
+                        Some(BoundaryKind::Periodic) if n_d >= 1 => {
+                            (r - 1).rem_euclid(n_d) as usize
+                        }
+                        Some(BoundaryKind::Clamp) if n_d >= 1 => (r.clamp(1, n_d) - 1) as usize,
+                        Some(_) => {
+                            ok = false;
+                            break 'cells;
+                        }
+                    }
+                };
+            }
+            *out = if ghost { 0.0 } else { src[&at[..]] };
+        }
+    }
+    *ops += 1;
+    for s in subs {
+        s.release(pool);
+    }
+    arg0.release(pool);
+    if !ok {
+        pool.give_array(result);
+        bail_vec!("index: const-array gather out of range (§5.5.5)");
+    }
     Some(VecValue::Owned {
         data: result,
         origin: bx.lo.iter().copied().collect(),

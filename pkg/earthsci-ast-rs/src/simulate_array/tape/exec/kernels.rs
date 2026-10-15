@@ -826,6 +826,115 @@ pub(super) unsafe fn index_gather(dst: *mut f64, spec: &IndexGatherSpec, src: &S
     }
 }
 
+/// `Instr::DataGather`: `dst` (contiguous row-major over `spec.shape`)
+/// receives, per element, what [`DataGatherSpec::at`] resolves its
+/// subscripts `subs` to: the source element, the zero ghost, or `NaN` at a
+/// fault. Returns whether any element faulted; the caller then finds the
+/// one the oracle latches first ([`DataGatherSpec::first_fault`]).
+///
+/// # Safety
+/// `src` must be a live row-major view of `spec.src_shape`, each `subs[d]` a
+/// scalar or a live view aligned to `spec.shape`, and `dst` must hold
+/// `spec.shape`'s elements without aliasing any of them.
+pub(super) unsafe fn data_gather(
+    dst: *mut f64,
+    spec: &DataGatherSpec,
+    src: &SrcView,
+    subs: &[Rv],
+) -> bool {
+    debug_assert_eq!(&src.shape[..], &spec.src_shape[..], "DataGather source box");
+    debug_assert!(src.strides[..] == rm_strides(&src.shape)[..]);
+    let shape = &spec.shape[..];
+    let nd = shape.len();
+    let n = total(shape);
+    let mut faulted = false;
+    let read = |at: DataAt, faulted: &mut bool| -> f64 {
+        match at {
+            DataAt::Elem(p) => unsafe { *src.ptr.add(p) },
+            DataAt::Ghost => 0.0,
+            DataAt::Fault { .. } => {
+                *faulted = true;
+                f64::NAN
+            }
+        }
+    };
+    // One subscript read contiguously (or a scalar): the common
+    // `c[j[i]]` shape, without the per-subscript odometer.
+    if let [sub] = subs {
+        let (ip, step): (*const f64, isize) = match sub {
+            Rv::S(v) => (v as *const f64, 0),
+            Rv::V { ptr, strides } if is_contig(strides, shape) => (*ptr, 1),
+            Rv::V { .. } => (std::ptr::null(), 0),
+        };
+        if !ip.is_null() {
+            for k in 0..n {
+                let v = unsafe { *ip.offset(k as isize * step) };
+                let x = read(spec.at(|_| v), &mut faulted);
+                unsafe { *dst.add(k) = x };
+            }
+            return faulted;
+        }
+    }
+    let m = subs.len();
+    let mut ptrs: SmallVec<[*const f64; 4]> = SmallVec::with_capacity(m);
+    let mut strs: SmallVec<[DimI; 4]> = SmallVec::with_capacity(m);
+    for sub in subs {
+        match sub {
+            Rv::S(v) => {
+                ptrs.push(v as *const f64);
+                strs.push(DimI::from_elem(0, nd));
+            }
+            Rv::V { ptr, strides } => {
+                ptrs.push(*ptr);
+                strs.push(strides.clone());
+            }
+        }
+    }
+    let mut offs: SmallVec<[i64; 4]> = SmallVec::from_elem(0, m);
+    let mut pos: DimU = DimU::from_elem(0, nd);
+    for k in 0..n {
+        let at = spec.at(|d| unsafe { *ptrs[d].offset(offs[d] as isize) });
+        let x = read(at, &mut faulted);
+        unsafe { *dst.add(k) = x };
+        let mut a = nd;
+        while a > 0 {
+            a -= 1;
+            pos[a] += 1;
+            for d in 0..m {
+                offs[d] += strs[d][a];
+            }
+            if pos[a] < shape[a] {
+                break;
+            }
+            for d in 0..m {
+                offs[d] -= strs[d][a] * shape[a] as i64;
+            }
+            pos[a] = 0;
+        }
+    }
+    faulted
+}
+
+/// Subscript `d` of a [`data_gather`] at row-major element `k` of `shape`.
+///
+/// # Safety
+/// As for [`data_gather`].
+pub(super) unsafe fn data_gather_sub(sub: &Rv, shape: &[usize], k: usize) -> f64 {
+    match sub {
+        Rv::S(v) => *v,
+        Rv::V { ptr, strides } => {
+            let mut rest = k;
+            let mut off = 0i64;
+            for a in (0..shape.len()).rev() {
+                let n = shape[a].max(1);
+                off += (rest % n) as i64 * strides[a];
+                rest /= n;
+            }
+            unsafe { *ptr.offset(off as isize) }
+        }
+    }
+}
+
 /// `Instr::TableGather`: `dst[k] = src[pos[k]]`, the zero ghost where
 /// `pos[k]` is [`GATHER_GHOST`]. `pos` holds ROW-MAJOR flat positions into
 /// `src.shape`, which a source with other strides (a state array read in

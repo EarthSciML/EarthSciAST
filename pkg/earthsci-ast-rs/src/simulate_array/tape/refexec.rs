@@ -535,9 +535,46 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(RefVal::Arr(arr));
             }
             Instr::Fault { fault } => {
-                crate::simulate_array::eval::latch_gather_fault(
-                    prog.faults[*fault as usize].clone(),
-                );
+                let (rule, key) = &prog.fault_order[*fault as usize];
+                crate::simulate_array::eval::latch_ordered_fault(*rule, key, || {
+                    prog.faults[*fault as usize].clone()
+                });
+            }
+            Instr::DataGather { src, spec, out, .. } => {
+                let spec = &prog.data_gathers[*spec as usize];
+                let sv = resolve_src(prog, &slots, &state_arrays, src);
+                assert_eq!(sv.shape(), &spec.src_shape[..], "DataGather source box");
+                // Every subscript at the output box, row-major.
+                let subs: Vec<Vec<f64>> = spec
+                    .subs
+                    .iter()
+                    .map(|o| {
+                        let v = resolve(prog, &slots, &state_arrays, params, t, o);
+                        to_shape(&v, &spec.shape).iter().copied().collect()
+                    })
+                    .collect();
+                let flat: Vec<f64> = sv.iter().copied().collect();
+                let vals: Vec<f64> = (0..spec.shape.iter().product::<usize>())
+                    .map(|k| match spec.at(|d| subs[d][k]) {
+                        DataAt::Elem(p) => flat[p],
+                        DataAt::Ghost => 0.0,
+                        DataAt::Fault { .. } => f64::NAN,
+                    })
+                    .collect();
+                if let (Some((key, msg)), Some(order)) =
+                    (spec.first_fault(|d, k| subs[d][k]), &spec.order)
+                {
+                    crate::simulate_array::eval::latch_ordered_fault(order.rule, &key, || msg);
+                }
+                let val = if prog.slots[*out as usize].scalar {
+                    RefVal::Scalar(vals[0])
+                } else {
+                    RefVal::Arr(
+                        ArrayD::from_shape_vec(IxDyn(&spec.shape[..]), vals)
+                            .expect("DataGather output box"),
+                    )
+                };
+                slots[*out as usize] = Some(val);
             }
             Instr::Sweep { spec } => {
                 let sw = &prog.sweeps[*spec as usize];
