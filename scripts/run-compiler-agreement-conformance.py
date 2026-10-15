@@ -120,6 +120,7 @@ def always_required(binding: str, compiler: str) -> bool:
         return binding in NATIVE_STRICT_BINDINGS
     return compiler in ALWAYS_REQUIRED
 
+
 # §5.44.2's integration SAFETY FACTOR, applied to the integration half of a
 # `derived` band and to nothing else. A manifest states it per fixture; this is
 # what a block that omits it gets. See `integration_factor` for why it exists.

@@ -1469,8 +1469,12 @@ def _availability_controls(
     py_bare["required"]["python"] = ["interpreter"]
     py_named = copy.deepcopy(py_bare)
     py_named["named_exclusions"] = [
-        {"binding": "python", "compilers": ["native"], "code": "compiler_refused_rule",
-         "reason": "x"}
+        {
+            "binding": "python",
+            "compilers": ["native"],
+            "code": "compiler_refused_rule",
+            "reason": "x",
+        }
     ]
     check(
         rejects(py_bare) and not rejects(py_named),
