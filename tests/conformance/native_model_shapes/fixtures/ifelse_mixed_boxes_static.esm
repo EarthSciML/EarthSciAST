@@ -1,0 +1,485 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "ifelse_mixed_boxes_static",
+  "description": "An `ifelse` whose condition is a runtime SCALAR and whose branches have different shapes (a scalar `0.0` or a scalar observed against an array element), the eqice `strain_term` shape, with the condition false, true, and (dynamic variant) flipping during the run on a state. Static variant: no state, so every value is a build-time observed.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": 4
+  }
+ },
+ "models": {
+  "IfelseMixedBoxes": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "p": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      10.0,
+      20.0,
+      30.0,
+      40.0
+     ],
+     "shape": [
+      "rows"
+     ]
+    },
+    "x": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "flag": {
+     "type": "parameter",
+     "units": "1",
+     "default": 0.0
+    },
+    "flag_on": {
+     "type": "parameter",
+     "units": "1",
+     "default": 1.0
+    },
+    "marg": {
+     "type": "parameter",
+     "units": "1",
+     "default": 1.0
+    },
+    "excl": {
+     "type": "parameter",
+     "units": "1",
+     "default": 0.0
+    },
+    "ks": {
+     "type": "parameter",
+     "units": "1",
+     "default": 2.0
+    },
+    "rho": {
+     "type": "parameter",
+     "units": "1",
+     "default": 4.0
+    },
+    "sig": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      1.0,
+      2.0,
+      3.0,
+      4.0
+     ],
+     "shape": [
+      "rows"
+     ]
+    },
+    "tot": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "y_off": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "y_on": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "strain": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "y_scalar_branch": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "x",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "r"
+      ],
+      "ranges": {
+       "r": {
+        "from": "rows"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        2.0,
+        {
+         "op": "index",
+         "args": [
+          "p",
+          "r"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "tot",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "r": {
+        "from": "rows"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "p",
+        "r"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "y_off",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "rows"
+       }
+      },
+      "expr": {
+       "op": "ifelse",
+       "args": [
+        {
+         "op": ">",
+         "args": [
+          "flag",
+          0.5
+         ]
+        },
+        0.0,
+        {
+         "op": "index",
+         "args": [
+          "x",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "y_on",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "rows"
+       }
+      },
+      "expr": {
+       "op": "ifelse",
+       "args": [
+        {
+         "op": ">",
+         "args": [
+          "flag_on",
+          0.5
+         ]
+        },
+        0.0,
+        {
+         "op": "index",
+         "args": [
+          "x",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "strain",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "rows"
+       }
+      },
+      "expr": {
+       "op": "ifelse",
+       "args": [
+        {
+         "op": "and",
+         "args": [
+          {
+           "op": ">",
+           "args": [
+            "marg",
+            0.5
+           ]
+          },
+          {
+           "op": ">",
+           "args": [
+            "excl",
+            0.5
+           ]
+          }
+         ]
+        },
+        0.0,
+        {
+         "op": "ifelse",
+         "args": [
+          {
+           "op": "<=",
+           "args": [
+            "i",
+            "ks"
+           ]
+          },
+          {
+           "op": "/",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "sig",
+              "i"
+             ]
+            },
+            "rho"
+           ]
+          },
+          0.0
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "y_scalar_branch",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "rows"
+       }
+      },
+      "expr": {
+       "op": "ifelse",
+       "args": [
+        {
+         "op": ">",
+         "args": [
+          "flag_on",
+          0.5
+         ]
+        },
+        "tot",
+        {
+         "op": "index",
+         "args": [
+          "x",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "y_off",
+       "time": 0.0,
+       "expected": 20.0,
+       "coords": {
+        "rows": 1
+       }
+      },
+      {
+       "variable": "y_off",
+       "time": 0.0,
+       "expected": 40.0,
+       "coords": {
+        "rows": 2
+       }
+      },
+      {
+       "variable": "y_off",
+       "time": 0.0,
+       "expected": 60.0,
+       "coords": {
+        "rows": 3
+       }
+      },
+      {
+       "variable": "y_off",
+       "time": 0.0,
+       "expected": 80.0,
+       "coords": {
+        "rows": 4
+       }
+      },
+      {
+       "variable": "y_on",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "rows": 1
+       }
+      },
+      {
+       "variable": "y_on",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "rows": 2
+       }
+      },
+      {
+       "variable": "y_on",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "rows": 3
+       }
+      },
+      {
+       "variable": "y_on",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "rows": 4
+       }
+      },
+      {
+       "variable": "strain",
+       "time": 0.0,
+       "expected": 0.25,
+       "coords": {
+        "rows": 1
+       }
+      },
+      {
+       "variable": "strain",
+       "time": 0.0,
+       "expected": 0.5,
+       "coords": {
+        "rows": 2
+       }
+      },
+      {
+       "variable": "strain",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "rows": 3
+       }
+      },
+      {
+       "variable": "strain",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "rows": 4
+       }
+      },
+      {
+       "variable": "y_scalar_branch",
+       "time": 0.0,
+       "expected": 100.0,
+       "coords": {
+        "rows": 1
+       }
+      },
+      {
+       "variable": "y_scalar_branch",
+       "time": 0.0,
+       "expected": 100.0,
+       "coords": {
+        "rows": 2
+       }
+      },
+      {
+       "variable": "y_scalar_branch",
+       "time": 0.0,
+       "expected": 100.0,
+       "coords": {
+        "rows": 3
+       }
+      },
+      {
+       "variable": "y_scalar_branch",
+       "time": 0.0,
+       "expected": 100.0,
+       "coords": {
+        "rows": 4
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

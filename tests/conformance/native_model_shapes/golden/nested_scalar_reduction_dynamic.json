@@ -1,0 +1,319 @@
+{
+  "fixture": "nested_scalar_reduction_dynamic",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "y",
+      "actual": 4000.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "y",
+      "actual": 8000.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "y",
+      "actual": 12000.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "y",
+      "actual": 16000.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "frac",
+      "actual": 0.1
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "frac",
+      "actual": 0.2
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "frac",
+      "actual": 0.3
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "frac",
+      "actual": 0.4
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "frac",
+      "actual": 0.25
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "frac",
+      "actual": 0.25
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "frac",
+      "actual": 0.25
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "frac",
+      "actual": 0.25
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "frac",
+      "actual": 0.0625
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 14,
+      "variable": "frac",
+      "actual": 0.1875
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 15,
+      "variable": "frac",
+      "actual": 0.3125
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 16,
+      "variable": "frac",
+      "actual": 0.4375
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 17,
+      "variable": "below",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 18,
+      "variable": "below",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 19,
+      "variable": "below",
+      "actual": 3.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 20,
+      "variable": "below",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 21,
+      "variable": "below",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 22,
+      "variable": "below",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 23,
+      "variable": "below",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 24,
+      "variable": "below",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 25,
+      "variable": "below",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 26,
+      "variable": "below",
+      "actual": 0.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 27,
+      "variable": "below",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 28,
+      "variable": "below",
+      "actual": 4.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 29,
+      "variable": "colsum",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 30,
+      "variable": "colsum",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 31,
+      "variable": "colsum",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 32,
+      "variable": "colsum",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 33,
+      "variable": "colsum",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 34,
+      "variable": "colsum",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 35,
+      "variable": "colsum",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 36,
+      "variable": "colsum",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 37,
+      "variable": "colsum",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 38,
+      "variable": "colsum",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 39,
+      "variable": "colsum",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 40,
+      "variable": "colsum",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 41,
+      "variable": "u",
+      "actual": 0.3678794411714488
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 42,
+      "variable": "u",
+      "actual": 0.3678794411714488
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 43,
+      "variable": "u",
+      "actual": 0.3678794411714488
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 44,
+      "variable": "u",
+      "actual": 0.3678794411714488
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 45,
+      "variable": "u",
+      "actual": 0.3678794411714488
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 46,
+      "variable": "u",
+      "actual": 0.3678794411714488
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 47,
+      "variable": "u",
+      "actual": 0.3678794411714488
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 48,
+      "variable": "u",
+      "actual": 0.3678794411714488
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 49,
+      "variable": "u",
+      "actual": 0.3678794411714488
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 50,
+      "variable": "u",
+      "actual": 0.3678794411714488
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 51,
+      "variable": "u",
+      "actual": 0.3678794411714488
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 52,
+      "variable": "u",
+      "actual": 0.3678794411714488
+    }
+  ]
+}

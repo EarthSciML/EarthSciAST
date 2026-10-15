@@ -1,0 +1,302 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "polygon_area_in_faq_static",
+  "description": "`polygon_intersection_area` as the body of a `faq`, reading partial-rank ring slices `index(ring, r)` (the isrm polygon `E_*` shape), with and without an `overlap` gate over the rings' bounding boxes; the third cell overlaps nothing. Static variant: no state, so every value is a build-time observed.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "index_sets": {
+  "cells": {
+   "kind": "interval",
+   "size": 3
+  },
+  "recs": {
+   "kind": "interval",
+   "size": 1
+  },
+  "vert": {
+   "kind": "interval",
+   "size": 4
+  },
+  "xy": {
+   "kind": "interval",
+   "size": 2
+  }
+ },
+ "models": {
+  "PolygonAreaInFaq": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "cring": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      [
+       [
+        0.0,
+        0.0
+       ],
+       [
+        1.0,
+        0.0
+       ],
+       [
+        1.0,
+        1.0
+       ],
+       [
+        0.0,
+        1.0
+       ]
+      ],
+      [
+       [
+        1.0,
+        0.0
+       ],
+       [
+        2.0,
+        0.0
+       ],
+       [
+        2.0,
+        1.0
+       ],
+       [
+        1.0,
+        1.0
+       ]
+      ],
+      [
+       [
+        3.0,
+        3.0
+       ],
+       [
+        4.0,
+        3.0
+       ],
+       [
+        4.0,
+        4.0
+       ],
+       [
+        3.0,
+        4.0
+       ]
+      ]
+     ],
+     "shape": [
+      "cells",
+      "vert",
+      "xy"
+     ]
+    },
+    "pring": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      [
+       [
+        0.5,
+        0.25
+       ],
+       [
+        1.5,
+        0.25
+       ],
+       [
+        1.5,
+        1.25
+       ],
+       [
+        0.5,
+        1.25
+       ]
+      ]
+     ],
+     "shape": [
+      "recs",
+      "vert",
+      "xy"
+     ]
+    },
+    "out": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cells"
+     ]
+    },
+    "out_gated": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cells"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "out",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "c"
+      ],
+      "ranges": {
+       "c": {
+        "from": "cells"
+       },
+       "r": {
+        "from": "recs"
+       }
+      },
+      "reduce": "+",
+      "expr": {
+       "op": "polygon_intersection_area",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "pring",
+          "r"
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "cring",
+          "c"
+         ]
+        }
+       ],
+       "manifold": "planar"
+      }
+     }
+    },
+    {
+     "lhs": "out_gated",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "c"
+      ],
+      "ranges": {
+       "c": {
+        "from": "cells"
+       },
+       "r": {
+        "from": "recs"
+       }
+      },
+      "reduce": "+",
+      "join": [
+       {
+        "overlap": {
+         "src_env": [
+          "pring"
+         ],
+         "tgt_env": [
+          "cring"
+         ],
+         "eps": 0.0
+        }
+       }
+      ],
+      "expr": {
+       "op": "polygon_intersection_area",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "pring",
+          "r"
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "cring",
+          "c"
+         ]
+        }
+       ],
+       "manifold": "planar"
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "out",
+       "time": 0.0,
+       "expected": 0.375,
+       "coords": {
+        "cells": 1
+       }
+      },
+      {
+       "variable": "out",
+       "time": 0.0,
+       "expected": 0.375,
+       "coords": {
+        "cells": 2
+       }
+      },
+      {
+       "variable": "out",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cells": 3
+       }
+      },
+      {
+       "variable": "out_gated",
+       "time": 0.0,
+       "expected": 0.375,
+       "coords": {
+        "cells": 1
+       }
+      },
+      {
+       "variable": "out_gated",
+       "time": 0.0,
+       "expected": 0.375,
+       "coords": {
+        "cells": 2
+       }
+      },
+      {
+       "variable": "out_gated",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cells": 3
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,256 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "join_ingested_column_computed_key",
+  "description": "A value-equality `join` of an INGESTED key column (rows.parquet `monthID`, 8, 10, 8, 3) against a const-cadence computed key `want[k] = k + 7` (CONFORMANCE_SPEC §5.5.8): the moves fixture shape, where the join is a build-time observed of a document that ingests.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "data_sources": {
+  "rows_table": {
+   "kind": "static",
+   "source": {
+    "url_template": "./data/rows.parquet"
+   },
+   "extent": {
+    "metaparameter": "n_rows"
+   },
+   "metadata": {
+    "esio_format": "parquet",
+    "note": "Committed beside this document; a test may override the URL."
+   }
+  }
+ },
+ "metaparameters": {
+  "n_rows": {
+   "type": "integer",
+   "default": 0,
+   "description": "Rows in rows.parquet, discovered by the source's own extent (4)."
+  }
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": "n_rows"
+  },
+  "keys": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "JoinIngestedColumnComputedKey": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "m_month": {
+     "type": "parameter",
+     "units": "1",
+     "default": 0.0,
+     "shape": [
+      "rows"
+     ],
+     "update": {
+      "kind": "data",
+      "source": "rows_table",
+      "from": {
+       "file_variable": "monthID"
+      }
+     }
+    },
+    "m_val": {
+     "type": "parameter",
+     "units": "1",
+     "default": 0.0,
+     "shape": [
+      "rows"
+     ],
+     "update": {
+      "kind": "data",
+      "source": "rows_table",
+      "from": {
+       "file_variable": "val"
+      }
+     }
+    },
+    "want": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "keys"
+     ]
+    },
+    "total": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "keys"
+     ]
+    },
+    "count": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "keys"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "want",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "keys"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        "k",
+        7.0
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "total",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "keys"
+       },
+       "j": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "join": [
+       {
+        "on": [
+         [
+          "want",
+          "m_month"
+         ]
+        ]
+       }
+      ],
+      "expr": {
+       "op": "index",
+       "args": [
+        "m_val",
+        "j"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "count",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "keys"
+       },
+       "j": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "join": [
+       {
+        "on": [
+         [
+          "want",
+          "m_month"
+         ]
+        ]
+       }
+      ],
+      "expr": 1.0
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "total",
+       "time": 0.0,
+       "expected": 5.0,
+       "coords": {
+        "keys": 1
+       }
+      },
+      {
+       "variable": "total",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "keys": 2
+       }
+      },
+      {
+       "variable": "total",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "keys": 3
+       }
+      },
+      {
+       "variable": "count",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "keys": 1
+       }
+      },
+      {
+       "variable": "count",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "keys": 2
+       }
+      },
+      {
+       "variable": "count",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "keys": 3
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}
