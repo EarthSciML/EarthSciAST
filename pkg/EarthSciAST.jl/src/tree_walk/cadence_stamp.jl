@@ -83,6 +83,37 @@ function _pcontent_same(a::AbstractArray, b::AbstractArray)
     return true
 end
 
+# ---- Primal parameter stamps --------------------------------------------------
+#
+# A value that depends on `p` only through its primal (a gate tested against
+# zero, which a dual number answers from its value) is the same for a `Float64`
+# `p` and for a dual-valued `p` with the same primal. Stamping it with
+# `_pstamp(_pprimal(p))` and testing with `_pprimal_same` lets a solver that
+# alternates between the two, or a Jacobian taken in several chunks of
+# different partials, keep it. The test does not allocate: it compares `s`
+# against the primal of each number in `p` where it stands.
+_pprimal(x::Number) = _value(x)
+_pprimal(x::Union{Tuple,NamedTuple}) = map(_pprimal, x)
+_pprimal(x::AbstractArray) = map(_pprimal, x)
+_pprimal(x) = x
+
+@inline _pprimal_same(s, p) = isbits(p) ? s === _pprimal(p) : _pvalue_same(s, p)
+
+_pvalue_same(a, b) = a === b
+_pvalue_same(a, b::Number) = a === _value(b)
+_pvalue_same(::Tuple{}, ::Tuple{}) = true
+@inline _pvalue_same(a::Tuple, b::Tuple) = length(a) == length(b) &&
+    _pvalue_same(first(a), first(b)) && _pvalue_same(Base.tail(a), Base.tail(b))
+@inline _pvalue_same(a::NamedTuple{N}, b::NamedTuple{N}) where {N} =
+    _pvalue_same(Tuple(a), Tuple(b))
+function _pvalue_same(a::AbstractArray, b::AbstractArray)
+    axes(a) == axes(b) || return false
+    @inbounds for i in eachindex(a, b)
+        _pvalue_same(a[i], b[i]) || return false
+    end
+    return true
+end
+
 # ---- The forcing epoch --------------------------------------------------------
 #
 # A time-tier value may gather a LIVE forcing buffer (a `param_arrays` buffer or

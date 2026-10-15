@@ -87,9 +87,11 @@ function _cx_forced(N)
                 "rhs" => _cx_ao(body))])))
 end
 
-# `D(y) = -(y / 2 / 3)` with the division spelled as ONE three-argument `/`:
-# a document `native` builds and the direct emitter has no lowering for, so it
-# is the emitter's own refusal, not the build's, that `:xla` has to name.
+# `D(y) = -(y / 2 / 3)` with the division spelled as ONE three-argument `/`.
+# The operator registry declares `/` binary, so the interpreter and `native`
+# reject the document with the walker's arity error; the out-of-place build
+# `:xla` lowers does not walk it, and the direct emitter is the first to see
+# it, so it is the emitter's own refusal that `:xla` has to name.
 function _cx_unsupported()
     Dict{String,Any}(
         "esm" => "1.1.0", "metadata" => Dict{String,Any}("name" => "U"),
@@ -265,8 +267,12 @@ _cx_du(prob, u, t) = (du = zeros(Float64, length(u));
         @test occursin("state equation", err4.detail)
         @test occursin("cannot lower", err4.detail)
         @test occursin("`/`", err4.detail)
-        # `native` builds the same document, so this is the emitter's refusal.
-        @test compiler(esm_problem(_cx_unsupported(), (0.0, 1.0))) === :native
+        # `native` rejects the same document with the walker's arity error,
+        # not a refusal, so the refusal above is the emitter's.
+        err5 = _cx_catch(() -> esm_problem(_cx_unsupported(), (0.0, 1.0)))
+        @test err5 isa TreeWalkError
+        @test err5.code == "E_TREEWALK_ARITY"
+        @test occursin("/ expects 2 args, got 3", err5.detail)
     end
 
     @testset "the device: a typo is a configuration error, a missing GPU is unavailable" begin

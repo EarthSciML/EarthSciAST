@@ -884,8 +884,12 @@ end
 
 # The license for the scalar walker, or `nothing` when nothing is left on it.
 # `what` names the walked pieces for the refusal; `rule` the first walked
-# equation's state, or the prelude when only slots are walked.
-function _scalar_walk_license(walks::Bool, rule::AbstractString, what::AbstractString)
+# equation's state, or the prelude when only slots are walked. A strict
+# compiler first checks the operator arities of the walked trees (`walked()`
+# returns them), so a malformed document (a three-operand `/`) raises the walker's
+# own arity error rather than a refusal that blames the compiler.
+function _scalar_walk_license(walks::Bool, rule::AbstractString, what::AbstractString,
+                              walked = () -> ())
     walks || return nothing
     return _percell_license(rule,
         "$what could not be modelled by the scalar code generator (a node kind " *
@@ -893,7 +897,31 @@ function _scalar_walk_license(walks::Bool, rule::AbstractString, what::AbstractS
         "build's emitted-node budget, ESS_CODEGEN_NODE_BUDGET), so they " *
         "would be evaluated as trees by the scalar walker on every " *
         "right-hand-side call. Build with compiler=:interpreter to run it, or " *
-        "grow the scalar emitter to cover this construct")
+        "grow the scalar emitter to cover this construct";
+        probe = _ -> foreach(_sc_check_arity, walked()))
+end
+
+# The operator arities the registry declares (esm-spec §4.2), by node op.
+const _SC_OP_ARITY = Dict{Symbol,UnitRange{Int}}(
+    Symbol(s.name) => s.arity for s in _OP_TABLE if s.arity !== nothing)
+
+# Throw the walker's `E_TREEWALK_ARITY` for the first operator node in `nd`
+# whose child count the registry does not allow.
+function _sc_check_arity(nd::_Node)
+    if nd.kind === _NK_OP
+        ar = get(_SC_OP_ARITY, nd.op, nothing)
+        n = length(nd.children)
+        if ar !== nothing && !(n in ar)
+            want = first(ar) == last(ar) ? "$(first(ar))" :
+                   last(ar) == typemax(Int) ? "at least $(first(ar))" :
+                   last(ar) == first(ar) + 1 ? "$(first(ar)) or $(last(ar))" :
+                   "$(first(ar)) to $(last(ar))"
+            throw(TreeWalkError("E_TREEWALK_ARITY",
+                                "$(nd.op) expects $want args, got $n"))
+        end
+    end
+    foreach(_sc_check_arity, nd.children)
+    return nothing
 end
 
 # A cadence tier: emitted whole, or not at all.
@@ -946,7 +974,10 @@ function _build_scalar_section(rhs_list::AbstractVector{Tuple{Int,_Node}}, n_rhs
         n_slots == 0 ? "" : "$n_slots shared-subexpression slot" *
                             (n_slots == 1 ? "" : "s")]), " and ")
     rule = isempty(resid_rhs) ? "the scalar prelude" : rule_of(resid_rhs[1][1])
-    walk = _scalar_walk_license(n_slots + length(resid_rhs) > 0, rule, what)
+    walked() = vcat(_Node[nd for (_, nd) in resid_rhs], _Node[prelude[s] for s in resid_dyn],
+                    constp === nothing ? _Node[prelude[s] for s in const_slots] : _Node[],
+                    timep === nothing ? _Node[prelude[s] for s in time_slots] : _Node[])
+    walk = _scalar_walk_license(n_slots + length(resid_rhs) > 0, rule, what, walked)
     return _ScalarSection(constp, timep, dynp, resid_dyn, resid_rhs, emitted_outs, walk)
 end
 

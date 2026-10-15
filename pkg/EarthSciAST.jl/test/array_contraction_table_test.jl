@@ -135,6 +135,8 @@ end
         f = pn.f!
         gens = f.levels[1][4].gens
         @test length(gens) == 1 && gens[1].mask !== nothing
+        # No contraction the right-hand side keeps holds its re-emission closure.
+        @test all(g -> g.remit === nothing, (g for lvl in f.levels for g in lvl[4].gens))
         # Every parameter value takes the interpreter's result bit for bit,
         # through each refill and back: atol past the half-overlaps closes
         # their gates, a negative atol opens the zero-overlap ones too.
@@ -154,6 +156,27 @@ end
             prob.p[kd])
         gn, gi = dk(pn, u), dk(pi_, ui)
         @test all(gn[pn.var_map[k]] === gi[j] for (k, j) in pi_.var_map)
+        # A solver differentiating through `p` alternates Float64 and dual-valued
+        # calls at one primal; the gate's admitted entries are the same for
+        # both, so the mask is filled once and kept across the alternation, and
+        # each call still takes the interpreter's result.
+        mask = gens[1].mask
+        pd = merge(pn.p, NamedTuple{(kd,)}((ForwardDiff.Dual(pn.p[kd], 1.0),)))
+        pdi = merge(pi_.p, NamedTuple{(kd,)}((ForwardDiff.Dual(pi_.p[kd], 1.0),)))
+        dref = similar(ui); fill!(dref, NaN); pi_.f!(dref, ui, pi_.p, 0.3)
+        ddref = zeros(eltype(pdi[kd]), length(ui)); pi_.f!(ddref, ui, pdi, 0.3)
+        f(similar(u), u, pn.p, 0.3)
+        fills = mask.fills
+        for _ in 1:3
+            dn = similar(u); fill!(dn, NaN); f(dn, u, pn.p, 0.3)
+            @test all(dn[pn.var_map[k]] === dref[j] for (k, j) in pi_.var_map)
+            dd = zeros(eltype(pd[kd]), length(u)); f(dd, u, pd, 0.3)
+            @test all(dd[pn.var_map[k]] == ddref[j] for (k, j) in pi_.var_map)
+        end
+        @test mask.fills == fills
+        # A move of the primal still refills.
+        f(similar(u), u, merge(pn.p, NamedTuple{(key,)}((0.6,))), 0.3)
+        @test mask.fills == fills + 1
     end
 
     @testset "two contracted indices fold into one accumulator ($(tier))" for

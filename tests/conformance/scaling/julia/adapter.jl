@@ -39,7 +39,8 @@
 # they total under 1 s (at most 10), so a build of a few milliseconds is not
 # timer noise; after a family's ladder, the two ends of its build slope are
 # rebuilt alternately (`build_s_interleaved`, see interleave_slope_ends!); `dense_bytes` is the bytes of the declared-dense arrays the
-# build materializes (its setup arrays, written in full).
+# build materializes (the setup arrays it writes in full at the shape the
+# document declares them; see dense_bytes).
 #
 # ONE CHILD PROCESS PER FAMILY. The adapter measures each family's ladder in a
 # child Julia process (this script with `--in-process --family F`) and watches
@@ -329,9 +330,40 @@ const MAX_BUILDS = 10
 # gates.speed.small_n_max).
 const SERIAL_NATIVE_MAX_CELLS = 10_000
 
-# Bytes of the declared-dense arrays a build wrote: its setup arrays, which it
-# allocates at their declared shape and fills.
-dense_bytes(insp) = sum(sizeof, values(insp.setup_arrays); init = 0)
+# The declared extents of every shaped variable in the document at `path`,
+# keyed by the flattened name the build's setup arrays use. A variable whose
+# shape names an index set without a declared size is left out.
+function declared_extents(path)
+    flat = ESA.flatten(ESA.load_path(path); base_path = dirname(path))
+    sets = flat.index_sets
+    ext = Dict{String,Vector{Int}}()
+    for vars in (flat.state_variables, flat.parameters, flat.observed_variables),
+        (name, v) in vars
+        (v.shape === nothing || isempty(v.shape)) && continue
+        prefix = first(rsplit(name, '.'; limit = 2))
+        dims = Int[]
+        for s in v.shape
+            iset = get(sets, String(s), get(sets, prefix * "." * String(s), nothing))
+            (iset === nothing || iset.size === nothing) && break
+            push!(dims, iset.size)
+        end
+        length(dims) == length(v.shape) && (ext[name] = dims)
+    end
+    return ext
+end
+
+# Bytes of the declared-dense arrays a build wrote: the setup arrays that the
+# document declares at a shape over sized index sets and that the build
+# materialized at exactly that shape. Any other setup array (an index or
+# geometry table the build derives at its own extent) is not counted.
+function dense_bytes(insp, extents)
+    total = 0
+    for (name, arr) in insp.setup_arrays
+        dims = get(extents, name, nothing)
+        dims !== nothing && collect(size(arr)) == dims && (total += sizeof(arr))
+    end
+    return total
+end
 
 function measure!(rec, path, entry, compiler, budget, interp_cap)
     fam = String(entry["family"])
@@ -352,7 +384,7 @@ function measure!(rec, path, entry, compiler, budget, interp_cap)
         end
         rec["build_s"] = best
         rec["build_repeats"] = repeats
-        rec["dense_bytes"] = dense_bytes(insp)
+        rec["dense_bytes"] = dense_bytes(insp, declared_extents(path))
     catch err
         err isa InterruptException && rethrow()
         rec["status"] = _refused(err) ? "refused" : "error"
@@ -467,7 +499,8 @@ end
 
 # Native's call with every section held serial, timed like `steady_rhs_s`: a
 # second build whose first call (where each section decides once whether it
-# chunks) runs with the per-chunk cell floor above any section's size. Its dy
+# chunks) runs with the per-chunk work floor (`ESS_THREADS_MIN_WORK`) above
+# any section's work. Its dy
 # must be bit-identical to the threaded call's (`ref`, in canonical order).
 function serial_native!(rec, path, entry, compiler, ref, budget)
     fam = String(entry["family"])
@@ -477,7 +510,10 @@ function serial_native!(rec, path, entry, compiler, ref, budget)
         sdu = zeros(length(u))
         f! = prob.f!
         p = prob.p
-        withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
+        # Both names, so a floor already set in the environment under either
+        # cannot hold the serial build threaded.
+        floor = string(typemax(Int))
+        withenv("ESS_THREADS_MIN_WORK" => floor, "ESS_THREADS_MIN_CELLS" => floor) do
             f!(sdu, u, p, PROBE_T)
         end
         if !isequal(dy_by_name(prob, sdu, canonical_names(fam, entry)), ref)

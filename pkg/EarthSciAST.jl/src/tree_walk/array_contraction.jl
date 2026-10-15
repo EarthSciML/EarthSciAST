@@ -62,26 +62,35 @@ struct _ArrayContraction{F,TB,M}
     mask::M                     # `nothing`, or the TABLE fold's `_ACMask`
     # The build's way back to this emission: `(outs, emit)`, `emit(consumer)`
     # re-emitting the same nest with a state consumer (`_ac_take_consumers`);
-    # `nothing` once a consumer is in, or when the builder kept none.
-    remit::Any
+    # `nothing` once a consumer is in, when the builder kept none, and on every
+    # contraction a section holds (`_ac_drop_remit`). The closure captures the
+    # nest's whole fold, per-entry columns included, so a contraction that
+    # outlived the build with it would keep a second copy of its table.
+    remit::Union{Nothing,Tuple{Vector{Int},Function}}
 end
 _ArrayContraction(f, tabs, tcache::_SecTCache, mask = nothing) =
     _ArrayContraction(f, tabs, tcache, mask, nothing)
 _with_remit(g::_ArrayContraction, outs::Vector{Int}, emit) =
     _ArrayContraction(g.f, g.tabs, g.tcache, g.mask, (outs, emit))
+_ac_drop_remit(g::_ArrayContraction) = g.remit === nothing ? g :
+    _ArrayContraction(g.f, g.tabs, g.tcache, g.mask, nothing)
 
 # A TABLE fold whose term is `ifelse(gate, term, 0)` under `+`, with a gate
 # that reads only build constants and parameters (the regrid's `A_ij > atol`
 # filter), has a gate that is fixed while `p` is. The call then folds only the
 # entries whose gate holds, over compacted copies of the per-entry columns its
 # term reads, and `f` here refills those copies (and the compacted segments)
-# whenever `p` moved since the last fill (`stamp`, `_pstamp`). Bit-identical to
+# whenever the primal of `p` moved since the last fill (`stamp`, `_pprimal`):
+# the gate is tested against zero, which a dual number answers from its value,
+# so a dual-valued `p` with the primal of the last fill keeps it, and one copy
+# serves both value types. `fills` counts the refills. Bit-identical to
 # folding every entry: a closed gate adds the `Float64` 0 to an accumulator
 # seeded with +0.0, which leaves it unchanged (a sum seeded with +0.0 is never
 # -0.0, and a dual number's partials pass through `+ 0.0` untouched).
 mutable struct _ACMask{F}
     f::F
     stamp::Any
+    fills::Int
 end
 
 # Emission context for a scalar spine. `loops` maps a loop counter `Ref` — the
@@ -525,7 +534,7 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
                       end),
                  :(return nothing)))
         mask = _ACMask(RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-                           @__MODULE__, @__MODULE__, mex), _CSE_INVALID)
+                           @__MODULE__, @__MODULE__, mex), _CSE_INVALID, 0)
     end
     tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
     # Output slots are globally unique — each was claimed in `covered` at build,
@@ -606,12 +615,13 @@ function _ac_emit_gated(ctx::_CGCtx, kc::_CGScalarCtx, entries::_ACEntries,
     return cell, maskloop
 end
 
-# Refill a gated fold's compacted entries when `p` moved since the last fill.
-# On the calling thread, before any chunk runs.
+# Refill a gated fold's compacted entries when the primal of `p` moved since
+# the last fill. On the calling thread, before any chunk runs.
 @inline function _ac_mask_refresh!(m::_ACMask, tabs, du, u, p, t)
-    _pstamp_same(m.stamp, p) && return nothing
+    _pprimal_same(m.stamp, p) && return nothing
     m.f(du, u, p, t, tabs, 1, 1)
-    m.stamp = _pstamp(p)
+    m.stamp = _pstamp(_pprimal(p))
+    m.fills += 1
     return nothing
 end
 
@@ -690,8 +700,10 @@ struct _ContractionSection{G}
     gens::G                         # tuple of `_ArrayContraction`
 end
 
+# The section is what the right-hand side keeps, so the re-emission closures
+# (`remit`), which only the build's consumer pass reads, are dropped here.
 _make_contraction_section(acs::AbstractVector) =
-    _ContractionSection(Tuple(acs))
+    _ContractionSection(Tuple(map(_ac_drop_remit, acs)))
 
 Base.isempty(s::_ContractionSection) = isempty(s.gens)
 
