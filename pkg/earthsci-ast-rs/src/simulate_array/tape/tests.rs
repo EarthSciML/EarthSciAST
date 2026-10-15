@@ -59,11 +59,11 @@ pub(super) fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
 }
 
 /// The counterpart of [`ab_check`] for a document the tape cannot lower:
-/// BOTH builds (fused and unfused) must decline and leave no program, a
-/// scratch asked for a tape must get none, and the historical routing that
-/// then runs — the whole-array overlay over the per-cell oracle — must agree
-/// with the per-cell oracle bit for bit. Returns the fused build's decline.
-pub(super) fn declined_check(doc: serde_json::Value, lo: f64, hi: f64) -> DeclinedTape {
+/// BOTH builds (fused and unfused) must decline and leave no program, and a
+/// scratch asked for a tape must be refused, naming the declined rule — never
+/// handed back without a tape to run the legacy evaluator. Returns the fused
+/// build's decline.
+pub(super) fn declined_check(doc: serde_json::Value) -> DeclinedTape {
     let compiled = compile(doc);
     let (fused, report) = compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()));
     let (unfused, _) = compiled.build_tape_opts(&HashSet::new(), None);
@@ -71,25 +71,32 @@ pub(super) fn declined_check(doc: serde_json::Value, lo: f64, hi: f64) -> Declin
         panic!("the fixture must decline a rule:\n{report}");
     };
     assert!(unfused.is_err(), "the unfused build must decline too");
-    let mut scratch = compiled.debug_new_scratch_taped();
-    assert!(!scratch.has_tape(), "a declined build installs no tape");
-    let n = compiled.state_variable_names().len();
-    let params = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
-    let mut stats = RhsStats::default();
-    for seed in 0..3u64 {
-        let state = seeded_state(n, seed, lo, hi);
-        for &t in &[0.0, 0.7] {
-            let (oracle, _) = compiled.debug_eval_rhs(&state, t, &params, true);
-            let mut dy = vec![0.0f64; n];
-            compiled.debug_eval_rhs_into(&state, t, &param_vec, &mut dy, &mut scratch, &mut stats);
-            for (k, (a, b)) in dy.iter().zip(&oracle).enumerate() {
-                assert_eq!(a.to_bits(), b.to_bits(), "seed {seed} t {t} dy[{k}]");
-            }
-        }
-    }
-    assert_eq!(stats.taped_rules, 0, "no tape ran");
+    assert_refused(&compiled, &declined);
     declined
+}
+
+/// A scratch asked of a model whose tape declined is refused with
+/// `compiler_refused_rule`, naming the first declined rule and its reason.
+fn assert_refused(compiled: &ArrayCompiled, declined: &DeclinedTape) {
+    let (rule, reason) = declined
+        .declined_rules()
+        .into_iter()
+        .next()
+        .expect("a declined tape names at least one rule");
+    match compiled.debug_new_scratch_taped() {
+        Ok(_) => panic!("a declined build must not hand back a scratch"),
+        Err(crate::simulate::SimulateError::Compile(
+            crate::compile_error::CompileError::CompilerRefusedRule {
+                rule: r,
+                reason: why,
+                ..
+            },
+        )) => {
+            assert_eq!(r, rule);
+            assert_eq!(why, reason);
+        }
+        Err(e) => panic!("expected compiler_refused_rule, got {e:?}"),
+    }
 }
 
 /// Build BOTH tapes (fused and unfused), each of which must lower every rule,
@@ -113,7 +120,9 @@ pub(super) fn ab_check(doc: serde_json::Value, lo: f64, hi: f64) -> TapeProgram 
     let n = compiled.state_variable_names().len();
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
-    let mut fast_scratch = compiled.debug_new_scratch_taped();
+    let mut fast_scratch = compiled
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     assert!(fast_scratch.has_tape(), "fixture scratch must carry a tape");
     // A second warm fast scratch carrying the UNFUSED program.
     let mut fast_uf = super::super::RhsScratch::new(&compiled.var_shapes);
@@ -477,7 +486,7 @@ fn ab_nested_aggregate_capturing_enclosing_index_still_declines() {
         reason.contains("enclosing bound index"),
         "the decline of `{name}` must name the captured index, got: {reason}"
     );
-    declined_check(doc, -2.0, 2.0);
+    declined_check(doc);
 }
 
 /// Makearray with three regions (Dirichlet rows + interior stencil), the
@@ -644,7 +653,9 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
         );
     }
     // FAST executor: same short-circuit, same bits, no inf/NaN leakage.
-    let mut fast = compiled.debug_new_scratch_taped();
+    let mut fast = compiled
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     assert_fast_matches(
         &compiled,
         &mut fast,
@@ -682,7 +693,9 @@ fn ab_select_nan_semantics() {
     let nstates = compiled.state_variable_names().len();
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
-    let mut fast = compiled.debug_new_scratch_taped();
+    let mut fast = compiled
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     for seed in 0..4u64 {
         let state = seeded_state(nstates, seed, -2.0, 2.0);
         assert!(state.iter().any(|&x| x < 0.0), "fixture needs negatives");
@@ -856,9 +869,8 @@ fn ab_observed_chain_and_broadcast() {
 /// instruction set cannot hand a rule to the per-cell oracle, so the build
 /// yields the declined rule table instead. The decline names the producer
 /// and, at their reads, the observed and derivative downstream of it; a
-/// scratch asked
-/// for a tape gets none, so the historical routing runs the whole model on
-/// the legacy evaluator, bit for bit the interpreter's.
+/// scratch asked for a tape is refused, naming the rule, rather than handed
+/// back to run the whole model on the legacy evaluator.
 #[test]
 fn a_declined_rule_leaves_no_program() {
     let n = 3;
@@ -909,28 +921,7 @@ fn a_declined_rule_leaves_no_program() {
         0
     );
 
-    let nstates = compiled.state_variable_names().len();
-    let params = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
-    let mut fast = compiled.debug_new_scratch_taped();
-    assert!(!fast.has_tape(), "a declined build installs no tape");
-    let mut stats = RhsStats::default();
-    for seed in 0..3u64 {
-        let state = seeded_state(nstates, seed, -1.0, 1.0);
-        for &t in &[0.0, 1.3] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, true);
-            let mut dy = vec![0.0f64; nstates];
-            compiled.debug_eval_rhs_into(&state, t, &param_vec, &mut dy, &mut fast, &mut stats);
-            for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
-                assert_eq!(
-                    a.to_bits(),
-                    b.to_bits(),
-                    "seed {seed} t {t} dy[{k}]: {a:?} vs {b:?}"
-                );
-            }
-        }
-    }
-    assert_eq!(stats.taped_rules, 0, "no tape ran");
+    assert_refused(&compiled, &declined);
 }
 
 /// Scalar RHS rules (0-d states) through the scalar-`eval` mirror, including a
@@ -1870,7 +1861,7 @@ fn check_fallback_ifelse_array_condition(reader: serde_json::Value) {
         "`m` must be the declined rule this test is about: {:?}",
         report.fallbacks
     );
-    declined_check(doc, -1.0, 1.0);
+    declined_check(doc);
 }
 
 #[test]
@@ -1941,7 +1932,9 @@ fn ab_model_file_if_available() {
 
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
-    let mut fast = compiled.debug_new_scratch_taped();
+    let mut fast = compiled
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     let mut fast_stats = RhsStats::default();
     for seed in 0..3u64 {
         // Multiplicative perturbation keeps positive fields positive.
@@ -2771,7 +2764,7 @@ fn a_reader_of_a_declined_observed_declines_at_the_read() {
             ]
         }}
     });
-    let declined = declined_check(doc, -2.0, 2.0);
+    let declined = declined_check(doc);
     let rules = declined.declined_rules();
     let names: Vec<&str> = rules.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(names, ["r", "g", "D(u)"]);
@@ -2829,7 +2822,9 @@ fn ab_elementwise_observed_gather_fixture() {
     let n = compiled.state_variable_names().len();
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
-    let mut fast = compiled.debug_new_scratch_taped();
+    let mut fast = compiled
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     for seed in 0..3u64 {
         let state = seeded_state(n, seed, -2.0, 2.0);
         for &t in &[0.0, 1.0] {
@@ -2954,7 +2949,9 @@ fn datetime_ab_check(doc: serde_json::Value, times: &[f64]) {
     let n = compiled.state_variable_names().len();
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
-    let mut scratch = compiled.debug_new_scratch_taped();
+    let mut scratch = compiled
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     let state = vec![0.0f64; n];
     for &t in times {
         let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
@@ -3243,7 +3240,9 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
     let param_vec = compiled.debug_resolve_params(&params);
     let state = seeded_state(n, 7, -2.0, 2.0);
     let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
-    let mut scratch = compiled.debug_new_scratch_taped();
+    let mut scratch = compiled
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     let mut dy = vec![0.0f64; n];
     compiled.debug_eval_rhs_into(
         &state,
@@ -3646,7 +3645,9 @@ fn ab_float32_variables_beside_float64_neighbours() {
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let prog_uf = taped(compiled.build_tape_opts(&HashSet::new(), None)).0;
-    let mut fast = compiled.debug_new_scratch_taped();
+    let mut fast = compiled
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     assert!(fast.has_tape());
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, -1.0, 1.0);

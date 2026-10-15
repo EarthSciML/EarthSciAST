@@ -100,7 +100,9 @@ fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
     let n = compiled.state_variable_names().len();
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
-    let mut fast = compiled.debug_new_scratch_taped();
+    let mut fast = compiled
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     let mut fast_uf = super::super::RhsScratch::new(&compiled.var_shapes);
     fast_uf.install_tape(std::rc::Rc::new(
         taped(compiled.build_tape_opts(&HashSet::new(), None)).0,

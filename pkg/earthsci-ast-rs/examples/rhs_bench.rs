@@ -28,7 +28,9 @@ fn main() -> Result<(), String> {
             continue;
         }
         let mut scratch = if taped {
-            compiled.debug_new_scratch_taped()
+            compiled
+                .debug_new_scratch_taped()
+                .expect("the tape lowers every rule")
         } else {
             compiled.debug_new_scratch()
         };

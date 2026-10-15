@@ -90,7 +90,9 @@ fn rhs_at_probe(prob: &earthsci_ast::EsmProblem, compiler: Compiler, id: &str) -
     } else {
         let params = compiled.debug_resolve_params(prob.p());
         let mut dy = vec![0.0; n];
-        let mut scratch = compiled.debug_new_scratch_taped();
+        let mut scratch = compiled
+            .debug_new_scratch_taped()
+            .expect("the tape lowers every rule");
         let mut stats = earthsci_ast::simulate_array::RhsStats::default();
         compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
         assert!(

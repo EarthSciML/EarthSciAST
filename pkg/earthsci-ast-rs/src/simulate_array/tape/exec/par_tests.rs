@@ -49,7 +49,9 @@ fn rhs(path: &Path, ways: Option<usize>) -> Vec<f64> {
         .map(|k| 1.0 + 0.1 * ((k as f64) * 0.37).sin())
         .collect();
     let params = c.debug_resolve_params(&HashMap::new());
-    let mut scratch = c.debug_new_scratch_taped();
+    let mut scratch = c
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     let mut stats = crate::simulate_array::RhsStats::default();
     let mut dy = vec![0.0; n];
     force_split(ways);
@@ -120,7 +122,9 @@ fn the_regrid_apply_is_one_split_chain() {
     let n = c.state_variable_names().len();
     let state: Vec<f64> = (0..n).map(|k| 1.0 + 0.1 * (k as f64).sin()).collect();
     let params = c.debug_resolve_params(&HashMap::new());
-    let mut scratch = c.debug_new_scratch_taped();
+    let mut scratch = c
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     let mut stats = crate::simulate_array::RhsStats::default();
     let mut dy = vec![0.0; n];
     force_split(Some(4));
@@ -173,7 +177,9 @@ fn the_regrid_chain_folds_only_admitted_pairs() {
         .expect("an atol parameter")
         .clone();
     for ways in [1, 3] {
-        let mut scratch = c.debug_new_scratch_taped();
+        let mut scratch = c
+            .debug_new_scratch_taped()
+            .expect("the tape lowers every rule");
         let mut stats = crate::simulate_array::RhsStats::default();
         let mut dy = vec![0.0; n];
         // Target strips overlap their sources by 1.0 or 0.5: an atol of 0.6
@@ -212,7 +218,9 @@ fn steady_dispatches(path: &Path, ways: usize) -> usize {
     let n = c.state_variable_names().len();
     let state: Vec<f64> = (0..n).map(|k| 1.0 + 0.1 * (k as f64).sin()).collect();
     let params = c.debug_resolve_params(&HashMap::new());
-    let mut scratch = c.debug_new_scratch_taped();
+    let mut scratch = c
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     let mut stats = crate::simulate_array::RhsStats::default();
     let mut dy = vec![0.0; n];
     force_split(Some(ways));
@@ -262,7 +270,9 @@ fn try_rhs(path: &Path, ways: usize) -> Option<Vec<f64>> {
             .map(|k| 1.0 + 0.1 * ((k as f64) * 0.37).sin())
             .collect();
         let params = c.debug_resolve_params(&HashMap::new());
-        let mut scratch = c.debug_new_scratch_taped();
+        let mut scratch = c
+            .debug_new_scratch_taped()
+            .expect("the tape lowers every rule");
         let mut stats = crate::simulate_array::RhsStats::default();
         let mut dy = vec![0.0; n];
         force_split(Some(ways));

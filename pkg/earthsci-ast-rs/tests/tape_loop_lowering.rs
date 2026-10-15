@@ -68,7 +68,9 @@ fn check(doc: &Value) -> Checked {
     let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
 
     let param_vec = compiled.debug_resolve_params(&params);
-    let mut scratch = compiled.debug_new_scratch_taped();
+    let mut scratch = compiled
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     let mut stats = RhsStats::default();
     let mut taped = vec![0.0; n];
     compiled.debug_eval_rhs_into(

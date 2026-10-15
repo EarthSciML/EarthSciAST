@@ -624,15 +624,12 @@ fn measure_one(one: &One) -> Map<String, Value> {
     let mut dy = vec![0.0f64; n];
     let mut stats = RhsStats::default();
 
-    let mut scratch = compiled.debug_new_scratch_taped();
-    // A model whose tape declined a rule has no program, and the scratch
-    // would time the legacy evaluator instead.
-    if !scratch.has_tape() {
-        return failed(
-            r,
-            format!("{} rule(s) did not lower: no tape", tape.fallbacks.len()),
-        );
-    }
+    // A model whose tape declined a rule has no program: refused, naming the
+    // rule, rather than timing another evaluator.
+    let mut scratch = match compiled.debug_new_scratch_taped() {
+        Ok(s) => s,
+        Err(e) => return failed(r, format!("the tape declined a rule: {e}")),
+    };
     let t = Instant::now();
     compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
     r.insert("first_call_s".into(), json!(t.elapsed().as_secs_f64()));
@@ -759,7 +756,9 @@ fn serial_native(
             let (compiled, state, params) = job.0;
             let mut dy = vec![0.0f64; state.len()];
             let mut stats = RhsStats::default();
-            let mut scratch = compiled.debug_new_scratch_taped();
+            let mut scratch = compiled
+                .debug_new_scratch_taped()
+                .expect("the measured scratch above was taped");
             compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats);
             let t = median_time(|| {
                 compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats)
