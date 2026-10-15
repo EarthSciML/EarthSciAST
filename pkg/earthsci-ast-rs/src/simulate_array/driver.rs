@@ -609,16 +609,17 @@ impl ArrayCompiled {
     /// production RHS closure carries. Exposed for the fast-executor A/B,
     /// allocation-steady-state and invalidation tests, driven through
     /// [`Self::debug_eval_rhs_into`].
+    ///
+    /// A model whose tape declined a rule has no program to install, so this
+    /// is the same refusal a solve raises ([`Self::strict_tape`]): a scratch
+    /// without a tape would run the legacy evaluator, and a tape-versus-legacy
+    /// comparison would then compare the legacy evaluator with itself.
     #[doc(hidden)]
-    pub fn debug_new_scratch_taped(&self) -> RhsScratch {
+    pub fn debug_new_scratch_taped(&self) -> Result<RhsScratch, SimulateError> {
         let mut s = RhsScratch::new(&self.var_shapes);
         s.set_const_arrays(Rc::clone(&self.const_scope));
-        // A model whose tape declined has no program: the scratch then runs
-        // the legacy evaluator, as the historical routing does.
-        if let (Ok(prog), _) = self.tape(&HashSet::new()) {
-            s.install_tape(prog);
-        }
-        s
+        s.install_tape(self.strict_tape(&HashSet::new())?);
+        Ok(s)
     }
 
     /// The precision environment this model was compiled under (the
@@ -1584,7 +1585,7 @@ impl ArrayCompiled {
         // itself the defect: the hoist evaluated every CONST-tier observed
         // through the whole-array overlay, once per solve, before the tape the
         // caller asked for had been built at all.
-        let (tape, tape_fallbacks) = self.build_solve_tape(discrete_forcing)?;
+        let tape = self.build_solve_tape(discrete_forcing)?;
 
         let cadence = self.partition_observed_cadence(discrete_forcing);
         let setup = self.hoist_static_observeds(cadence, &ic_vec, &param_vec, t0, tape.as_ref());
@@ -1633,7 +1634,6 @@ impl ArrayCompiled {
                 solution_metadata(
                     solver_name,
                     &stats,
-                    tape_fallbacks,
                     self.merged_renames.clone(),
                     self.namespace.clone(),
                 ),
@@ -1669,7 +1669,6 @@ impl ArrayCompiled {
             solution_metadata(
                 solver_name,
                 &stats,
-                tape_fallbacks,
                 self.merged_renames.clone(),
                 self.namespace.clone(),
             ),
@@ -1908,31 +1907,26 @@ impl ArrayCompiled {
     /// the static-observed hoist above). [`crate::Compiler::Interpreter`]
     /// builds no tape at all — it IS the per-cell oracle.
     ///
-    /// Under a STRICT compiler the tape is mandatory: a build that declined
-    /// a rule is a refusal ([`Self::strict_tape`]), never a solve on another
-    /// evaluator. Under the historical routing a declined build leaves no
-    /// tape and the whole model runs on the legacy evaluator; the declined
-    /// rules ride out on [`SolutionMetadata::tape_fallbacks`] so a caller —
-    /// including the wasm/JS host, which has no other window into the build —
-    /// can name the offending rule and the reason (the numbers are
-    /// bit-identical either way, only the runtime differs).
+    /// The tape is mandatory under every routing but the `interpreter`: a
+    /// build that declined a rule is a refusal ([`Self::strict_tape`], naming
+    /// the rule and the reason), never a solve of the whole model on another
+    /// evaluator. That holds for the historical routing (`compile_array`) as
+    /// much as for the strict compilers — its right-hand side is the tape,
+    /// and a model whose tape declined would otherwise run every rule per
+    /// cell with nothing but the runtime to show for it.
     #[cfg(feature = "solve")]
     fn build_solve_tape(
         &self,
         discrete_forcing: &HashSet<String>,
-    ) -> Result<(SolveTape, Vec<(String, String)>), SimulateError> {
+    ) -> Result<SolveTape, SimulateError> {
         // `interpreter` (API_SPEC §5.8) is the reference and nothing else: no
         // tape, and the whole-array overlay off under it, so every rule is
         // walked per cell. It is the compiler the caller named, and the only
         // way to reach the oracle.
         if self.is_interpreter() {
-            return Ok((None, Vec::new()));
+            return Ok(None);
         }
-        if self.tape_serves_passes() {
-            return Ok((Some(self.strict_tape(discrete_forcing)?), Vec::new()));
-        }
-        let (prog, report) = self.tape(discrete_forcing);
-        Ok((prog.ok(), report.fallbacks.clone()))
+        Ok(Some(self.strict_tape(discrete_forcing)?))
     }
 
     /// DISCRETE: integrate in segments split on the refresh boundaries. Segment
@@ -3306,8 +3300,8 @@ pub(super) fn expr_blocks_output_pruning(expr: &Expr) -> bool {
     node.any_child(&mut expr_blocks_output_pruning)
 }
 
-/// The solve-wide tape program (`None` => legacy interpreter: the
-/// `interpreter` compiler, or a declined tape under the historical routing).
+/// The solve-wide tape program (`None` only under the `interpreter`
+/// compiler, which builds no tape).
 #[cfg(feature = "solve")]
 type SolveTape = Option<Rc<TapeProgram>>;
 
@@ -3316,7 +3310,6 @@ type SolveTape = Option<Rc<TapeProgram>>;
 fn solution_metadata(
     solver_name: &str,
     stats: &SolveStats,
-    tape_fallbacks: Vec<(String, String)>,
     merged_variable_renames: HashMap<String, String>,
     namespace: Option<String>,
 ) -> SolutionMetadata {
@@ -3326,7 +3319,9 @@ fn solution_metadata(
         n_jacobian_calls: stats.n_jacobian_calls,
         n_accepted_steps: stats.n_accepted_steps,
         n_rejected_steps: stats.n_rejected_steps,
-        tape_fallbacks,
+        // A rule the tape declined is a refusal before any solve
+        // ([`ArrayCompiled::strict_tape`]), so a finished solve has none.
+        tape_fallbacks: Vec::new(),
         // Rides to the caller so a name-keyed read of the result can resolve a
         // spelling the merge deleted (issue #230).
         merged_variable_renames,

@@ -356,7 +356,9 @@ fn assert_rhs_agrees(
         .collect();
     let params = nc.debug_resolve_params(native.p());
     let mut dy = vec![0.0f64; state.len()];
-    let mut scratch = nc.debug_new_scratch_taped();
+    let mut scratch = nc
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     let mut stats = RhsStats::default();
     nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
     assert!(scratch.has_tape(), "{label}: the tape declined a rule");
@@ -539,7 +541,9 @@ pub fn check_geometry_doc(id: &str, text: &str) {
         .collect();
     let params = nc.debug_resolve_params(native.p());
     let mut dy = vec![0.0f64; state.len()];
-    let mut scratch = nc.debug_new_scratch_taped();
+    let mut scratch = nc
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     let mut stats = RhsStats::default();
     nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
     assert!(scratch.has_tape(), "{id}: the tape declined a rule");

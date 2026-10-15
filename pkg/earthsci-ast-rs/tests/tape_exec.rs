@@ -92,7 +92,9 @@ fn taped_rhs_matches_the_interpreter_on_every_call() {
         let compiled = compile(n);
         let nstates = compiled.state_variable_names().len();
         let params = compiled.debug_resolve_params(&HashMap::new());
-        let mut scratch = compiled.debug_new_scratch_taped();
+        let mut scratch = compiled
+            .debug_new_scratch_taped()
+            .expect("the tape lowers every rule");
         assert!(scratch.has_tape(), "N={n}: scratch must carry a tape");
         let mut dy = vec![0.0f64; nstates];
         let mut stats = RhsStats::default();
@@ -131,7 +133,9 @@ fn a_parameter_change_reprimes_the_const_section() {
 
     // A taped scratch already primed on `p_lo` — its CONST slab holds values
     // built from a_geom = 3.
-    let mut reused = compiled.debug_new_scratch_taped();
+    let mut reused = compiled
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     assert!(reused.has_tape());
     for _ in 0..4 {
         compiled.debug_eval_rhs_into(&s, 0.0, &p_lo, &mut dy, &mut reused, &mut stats);
@@ -143,7 +147,9 @@ fn a_parameter_change_reprimes_the_const_section() {
     let at_hi_reused = hex(&dy);
 
     // A pristine taped scratch is the reference for what `p_hi` must produce.
-    let mut fresh = compiled.debug_new_scratch_taped();
+    let mut fresh = compiled
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     compiled.debug_eval_rhs_into(&s, 0.0, &p_hi, &mut dy, &mut fresh, &mut stats);
     let at_hi_fresh = hex(&dy);
 

@@ -112,14 +112,6 @@ const MAX_BUILDS: usize = 10;
 /// (manifest `gates.speed.small_n_max`).
 const SERIAL_NATIVE_MAX_CELLS: u64 = 10_000;
 
-/// Moves a borrow of the single-threaded compiled program onto the one-thread
-/// rayon pool that runs native's serial call.
-struct OneThreadAtATime<T>(T);
-// SAFETY: the pool's thread uses the value only inside `install`, while the
-// calling thread is blocked in that call, so no two threads touch it at once,
-// and `install` orders the hand-over both ways.
-unsafe impl<T> Send for OneThreadAtATime<T> {}
-
 /// Median wall seconds of `f`, over at least `MIN_CALLS` calls and at least
 /// `MIN_TOTAL_S` seconds of calls, at most `MAX_CALLS`.
 fn median_time(mut f: impl FnMut()) -> f64 {
@@ -624,15 +616,12 @@ fn measure_one(one: &One) -> Map<String, Value> {
     let mut dy = vec![0.0f64; n];
     let mut stats = RhsStats::default();
 
-    let mut scratch = compiled.debug_new_scratch_taped();
-    // A model whose tape declined a rule has no program, and the scratch
-    // would time the legacy evaluator instead.
-    if !scratch.has_tape() {
-        return failed(
-            r,
-            format!("{} rule(s) did not lower: no tape", tape.fallbacks.len()),
-        );
-    }
+    // A model whose tape declined a rule has no program: refused, naming the
+    // rule, rather than timing another evaluator.
+    let mut scratch = match compiled.debug_new_scratch_taped() {
+        Ok(s) => s,
+        Err(e) => return failed(r, format!("the tape declined a rule: {e}")),
+    };
     let t = Instant::now();
     compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
     r.insert("first_call_s".into(), json!(t.elapsed().as_secs_f64()));
@@ -700,7 +689,7 @@ fn measure_one(one: &One) -> Map<String, Value> {
             .as_u64()
             .is_some_and(|c| c < SERIAL_NATIVE_MAX_CELLS)
     {
-        match serial_native(&compiled, &state, &params, &native_dy) {
+        match serial_native(&one.doc, &names, &state, &params, &native_dy) {
             Ok(t) => {
                 r.insert("serial_steady_rhs_s".into(), json!(t));
             }
@@ -742,8 +731,13 @@ fn measure_one(one: &One) -> Map<String, Value> {
 /// one-thread rayon pool, whose size is the budget there), timed like
 /// `steady_rhs_s`; an error when its `dy` is not bit-identical to the threaded
 /// call's.
+///
+/// The compiled model holds single-threaded caches, so it cannot move onto the
+/// pool's thread: the pool thread builds its own from the same document, which
+/// lays the state out identically (checked against `names`).
 fn serial_native(
-    compiled: &earthsci_ast::simulate_array::ArrayCompiled,
+    doc: &Path,
+    names: &[String],
     state: &[f64],
     params: &[f64],
     threaded_dy: &[f64],
@@ -752,21 +746,26 @@ fn serial_native(
         .num_threads(1)
         .build()
         .map_err(|e| format!("a one-thread rayon pool: {e}"))?;
-    let job = OneThreadAtATime((compiled, state, params));
-    let (t, dy) = pool
-        .install(move || {
-            let job = job;
-            let (compiled, state, params) = job.0;
-            let mut dy = vec![0.0f64; state.len()];
-            let mut stats = RhsStats::default();
-            let mut scratch = compiled.debug_new_scratch_taped();
-            compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats);
-            let t = median_time(|| {
-                compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats)
-            });
-            OneThreadAtATime((t, dy))
-        })
-        .0;
+    let (t, dy) = pool.install(|| -> Result<(f64, Vec<f64>), String> {
+        let prob = esm_problem(doc, (0.0, 1.0), options(Compiler::Native))
+            .map_err(|e| format!("native's serial build: {e}"))?;
+        let compiled = prob
+            .debug_array_compiled()
+            .ok_or("native's serial build has no right-hand side")?;
+        if compiled.state_variable_names() != names {
+            return Err("native's serial build lays the state out differently".into());
+        }
+        let mut dy = vec![0.0f64; state.len()];
+        let mut stats = RhsStats::default();
+        let mut scratch = compiled
+            .debug_new_scratch_taped()
+            .map_err(|e| format!("the tape declined a rule: {e}"))?;
+        compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats);
+        let t = median_time(|| {
+            compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats)
+        });
+        Ok((t, dy))
+    })?;
     if max_abs_diff(&dy, threaded_dy) != 0.0 {
         return Err("native's serial and threaded dy differ".into());
     }
