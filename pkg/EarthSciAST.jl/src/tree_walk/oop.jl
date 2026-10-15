@@ -837,7 +837,8 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # discrete-cadence refresh reaches the compiled program (`sync_forcing!`).
     host_bufs, buffer_index = _forcing_buffer_container(pgather)
     return _OopRHS(_CompiledIR(rhs_list, cse_prelude, acc_kernels, acc_plans,
-                               scan_folds, mat_levels, array_contractions,
+                               scan_folds, mat_levels,
+                               map!(_ac_drop_remit, similar(array_contractions), array_contractions),
                                rhs_batches, mat_batches, n_states, n_total),
                    host_bufs, buffer_index)
 end

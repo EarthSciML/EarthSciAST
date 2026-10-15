@@ -62,13 +62,18 @@ struct _ArrayContraction{F,TB,M}
     mask::M                     # `nothing`, or the TABLE fold's `_ACMask`
     # The build's way back to this emission: `(outs, emit)`, `emit(consumer)`
     # re-emitting the same nest with a state consumer (`_ac_take_consumers`);
-    # `nothing` once a consumer is in, or when the builder kept none.
-    remit::Any
+    # `nothing` once a consumer is in, when the builder kept none, and on every
+    # contraction a section holds (`_ac_drop_remit`). The closure captures the
+    # nest's whole fold, per-entry columns included, so a contraction that
+    # outlived the build with it would keep a second copy of its table.
+    remit::Union{Nothing,Tuple{Vector{Int},Function}}
 end
 _ArrayContraction(f, tabs, tcache::_SecTCache, mask = nothing) =
     _ArrayContraction(f, tabs, tcache, mask, nothing)
 _with_remit(g::_ArrayContraction, outs::Vector{Int}, emit) =
     _ArrayContraction(g.f, g.tabs, g.tcache, g.mask, (outs, emit))
+_ac_drop_remit(g::_ArrayContraction) = g.remit === nothing ? g :
+    _ArrayContraction(g.f, g.tabs, g.tcache, g.mask, nothing)
 
 # A TABLE fold whose term is `ifelse(gate, term, 0)` under `+`, with a gate
 # that reads only build constants and parameters (the regrid's `A_ij > atol`
@@ -695,8 +700,10 @@ struct _ContractionSection{G}
     gens::G                         # tuple of `_ArrayContraction`
 end
 
+# The section is what the right-hand side keeps, so the re-emission closures
+# (`remit`), which only the build's consumer pass reads, are dropped here.
 _make_contraction_section(acs::AbstractVector) =
-    _ContractionSection(Tuple(acs))
+    _ContractionSection(Tuple(map(_ac_drop_remit, acs)))
 
 Base.isempty(s::_ContractionSection) = isempty(s.gens)
 
