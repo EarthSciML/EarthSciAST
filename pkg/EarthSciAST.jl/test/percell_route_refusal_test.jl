@@ -312,6 +312,36 @@ _pr_rank4_build(doc, compiler; kw...) =
         @test !any(r -> r.tier === :setup_percell, rows)
     end
 
+    # A field ic over an EMPTY cell set never reaches the per-cell seed or its
+    # probe: the fold names the empty target first, under every compiler.
+    @testset "a field ic over an empty cell set is the document's error" begin
+        eqs(rhs) = Any[
+            Dict("lhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                    "ranges" => Dict("i" => Dict("from" => "x")),
+                    "expr" => Dict("op" => "D", "wrt" => "t",
+                        "args" => Any[Dict("op" => "index", "args" => Any["f", "i"])])),
+                 "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                    "ranges" => Dict("i" => Dict("from" => "x")), "expr" => 0.0)),
+            Dict("lhs" => Dict("op" => "ic", "args" => Any["f"]), "rhs" => rhs)]
+        doc(rhs) = Dict{String,Any}("esm" => "1.1.0",
+            "metadata" => Dict("name" => "pr_empty_ic"),
+            "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 0)),
+            "models" => Dict("N" => Dict{String,Any}(
+                "variables" => Dict("f" => Dict("type" => "unknown", "shape" => Any["x"])),
+                "equations" => eqs(rhs))))
+        for rhs in (1.5, Dict("op" => "sin", "args" => Any[
+                        Dict("op" => "index", "args" => Any["f", 1])])),
+            c in (:native, :interpreter)
+            e = try
+                esm_problem(doc(rhs), (0.0, 1.0); compiler = c); nothing
+            catch err
+                err
+            end
+            @test e isa _PR.TreeWalkError && e.code == "E_TREEWALK_UNSUPPORTED_EQUATION"
+            @test occursin("resolves to no array cells", sprint(showerror, e))
+        end
+    end
+
     # ── Output-time observeds and inline-test assertions (#481, #482) ─────────
     # `h` is a makearray observed: the build-time cellwise sweep cannot keep a
     # region choice symbolic, so under `interpreter` reading it takes the
