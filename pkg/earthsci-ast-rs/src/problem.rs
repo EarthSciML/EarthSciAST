@@ -240,6 +240,14 @@ pub enum Compiler {
     /// the rule and the deepest decline reason
     /// ([`crate::compile_error::CompileError::CompilerRefusedRule`]), not a
     /// quiet demotion to the per-cell oracle.
+    ///
+    /// It covers the whole evaluable core. The only documents it may refuse
+    /// are those carrying a construct outside its scope, each refused by name:
+    /// events, implicit equations and SDE noise (`unsupported_construct`) and
+    /// a spatial operator with no discretization rule (`unlowered_operator`,
+    /// refused under every compiler). Every compiler-driven conformance tier
+    /// requires `native` for every fixture, so any other refusal is a defect
+    /// in this crate.
     #[default]
     Native,
     /// The reference, and only the reference: the array runtime with the tape
@@ -2130,8 +2138,8 @@ pub fn esm_problem<'a>(
 
     // ---- (5c) `xla`: emit and compile, here, once. ------------------------
     // AFTER the gate above, so a rule that never reached the tape is refused
-    // by name (with its cadence tier) rather than as whatever `Instr::Fallback`
-    // the emitter would have met. At construction rather than at the first
+    // by name with its cadence tier and component, rather than by the
+    // emitter's own unqualified refusal of the declined tape. At construction rather than at the first
     // step, because §2.5.10 puts the refusal at construction and because XLA
     // compilation is the expensive step: a Problem pays it once, and every
     // segment and every Jacobian call reuses the one executable.
@@ -2623,10 +2631,10 @@ fn static_observed_fields(
 /// overlay, which is what makes the gate honest rather than merely necessary.
 ///
 /// `xla` is gated HERE as well as by its emitter, and the order matters: this
-/// gate names the rule and its cadence tier, while an emitter refusal can only
-/// name the instruction it choked on. A rule that never reached the tape is
-/// therefore reported as itself rather than as whatever `Instr::Fallback` the
-/// emitter would have met.
+/// gate names the rule, its component and its cadence tier, while an emitter
+/// refusal names only the rule as the compiled model spells it, or the
+/// instruction it choked on. A rule that never reached the tape is therefore
+/// reported here, in full.
 fn build_compiler_report(
     backend: &Backend,
     model_name: Option<&str>,

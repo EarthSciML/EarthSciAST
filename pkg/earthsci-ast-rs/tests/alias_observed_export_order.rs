@@ -50,7 +50,9 @@ fn compiled(name: &str) -> ArrayCompiled {
 /// what the solver's RHS closure carries.
 fn taped_rhs(c: &ArrayCompiled, state: &[f64], t: f64) -> Vec<f64> {
     let params = c.debug_resolve_params(&HashMap::new());
-    let mut scratch = c.debug_new_scratch_taped();
+    let mut scratch = c
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
     assert!(
         scratch.has_tape(),
         "this test is about the TAPED path; without a tape it proves nothing"

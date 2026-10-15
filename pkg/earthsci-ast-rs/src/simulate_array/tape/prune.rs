@@ -20,9 +20,7 @@
 //! as one unit, so its skip counts and cell order stay as they are. Needed
 //! instructions only read values defined before them by needed
 //! instructions, so moving the others after them changes no value; the
-//! moved ones keep their relative order. A program with a fallback rule or
-//! a by-name observed read in the section is left as it is: those read the
-//! published map, which the `Export` instructions fill in program order.
+//! moved ones keep their relative order.
 
 use super::ir::*;
 
@@ -31,30 +29,7 @@ use super::ir::*;
 pub(super) fn split_output_only(prog: &mut TapeProgram) {
     let sec = prog.section_range(Cadence::Continuous);
     prog.n_rhs = sec.len() as u32;
-    let by_name = |o: &Operand| matches!(o, Operand::Obs(_));
     let tables = prog.tables();
-    for ins in &prog.instrs[sec.clone()] {
-        let mut obs = false;
-        match ins {
-            Instr::Fallback { .. } => return,
-            Instr::Gather { src, .. }
-            | Instr::LoadElem { src, .. }
-            | Instr::Reduce { src, .. }
-            | Instr::Scan { src, .. }
-            | Instr::TableGather { src, .. }
-            | Instr::Reshape { src, .. }
-            | Instr::IndexGather { src, .. }
-            | Instr::ScalarRead { src, .. } => obs |= matches!(src, SrcRef::Obs(_)),
-            Instr::PolyArea { a, b, .. } => {
-                obs |= matches!(a, SrcRef::Obs(_)) || matches!(b, SrcRef::Obs(_))
-            }
-            _ => {}
-        }
-        obs |= operands_of(ins, &tables).iter().any(by_name);
-        if obs {
-            return;
-        }
-    }
 
     // Units: a region header with its body, or one instruction.
     let mut units: Vec<std::ops::Range<usize>> = Vec::new();
@@ -144,42 +119,4 @@ pub(super) fn split_output_only(prog: &mut TapeProgram) {
         prog.precision.splice(sec, prec);
     }
     prog.n_rhs = n_needed as u32;
-}
-
-/// The plain operands of `ins` (its slot, state, parameter, time and literal
-/// reads), for the by-name check.
-fn operands_of(ins: &Instr, t: &SlotTables) -> Vec<Operand> {
-    let mut v = Vec::new();
-    match ins {
-        Instr::Bin { a, b, .. } => v.extend([*a, *b]),
-        Instr::Un { a, .. }
-        | Instr::Neg { a, .. }
-        | Instr::Calendar { a, .. }
-        | Instr::Copy { a, .. }
-        | Instr::Fill { v: a, .. } => v.push(*a),
-        Instr::Select { cond, a, b, .. } => v.extend([*cond, *a, *b]),
-        Instr::Interp { x, y, .. } => {
-            v.push(*x);
-            v.extend(*y);
-        }
-        Instr::Region { src, .. } => v.push(*src),
-        Instr::IndexGather { idx, .. } => v.push(*idx),
-        Instr::JmpIfZero { cond, .. } => v.push(*cond),
-        Instr::Assemble { table, .. } => {
-            v.extend(t.assemblies[*table as usize].parts.iter().map(|(o, _)| *o))
-        }
-        Instr::ScalarRead { spec, .. } => v.extend(t.scalar_reads[*spec as usize].subs.iter()),
-        Instr::Sweep { spec } => v.push(t.sweeps[*spec as usize].result),
-        Instr::Fused { spec } => {
-            let fs = &t.fused[*spec as usize];
-            v.extend(fs.scalars.iter().copied());
-            v.extend(fs.inputs.iter().filter_map(|i| match i.src {
-                SrcRef::Obs(ix) => Some(Operand::Obs(ix)),
-                _ => None,
-            }));
-        }
-        Instr::Lanes { spec } => v.extend(t.lanes[*spec as usize].scalars.iter().copied()),
-        _ => {}
-    }
-    v
 }

@@ -207,7 +207,9 @@ fn measure_steady_state_allocs_with(label: &str, compiled: &ArrayCompiled, taped
     let state = sample_state(n);
     let params = compiled.debug_resolve_params(&HashMap::new());
     let mut scratch = if taped {
-        let s = compiled.debug_new_scratch_taped();
+        let s = compiled
+            .debug_new_scratch_taped()
+            .expect("the tape lowers every rule");
         assert!(s.has_tape(), "{label}: taped scratch must carry a tape");
         s
     } else {
@@ -224,10 +226,6 @@ fn measure_steady_state_allocs_with(label: &str, compiled: &ArrayCompiled, taped
     compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut probe);
     if taped {
         assert!(probe.taped_rules >= 1, "{label}: RHS did not run the tape");
-        assert_eq!(
-            probe.fallback_rules, 0,
-            "{label}: the tape fell back to the interpreter"
-        );
     } else {
         assert_eq!(probe.vectorized_rules, 1, "{label}: RHS did not vectorize");
         assert_eq!(

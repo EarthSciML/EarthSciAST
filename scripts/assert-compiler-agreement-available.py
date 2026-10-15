@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Assert that a `compiler_agreement` run's compiler actually RAN, rather than skipping.
 
-Why this exists. ``tests/conformance/compiler_agreement/manifest.json`` leaves
-``compilers.native.bindings_required`` empty and lists julia, rust and python as
-``bindings_optional`` — and likewise for ``xla``, ``mtk`` and ``sympy``. That is
-deliberate and correct for the main conformance workflow: a checkout with no
-Reactant, no ``XLA_EXTENSION_DIR`` and no strict native build must report the
-compiler as ``unavailable``, print the reason, and move on — a visible skip, never
-a silent pass.
+Why this exists. ``tests/conformance/compiler_agreement/manifest.json`` lists a
+binding as ``bindings_optional`` for a compiler whose runtime a checkout may lack
+— julia for ``xla`` today, which needs Reactant. (``interpreter`` and ``native``
+are ``bindings_required`` in every binding and are never optional.) That is
+deliberate and correct for the main conformance workflow: a checkout without the
+runtime must report the compiler as ``unavailable``, print the reason, and move
+on — a visible skip, never a silent pass.
 
 The consequence is that ``run-compiler-agreement-conformance.py`` exits 0 on that
 skip. A workflow whose whole point is that a particular compiler ran would go

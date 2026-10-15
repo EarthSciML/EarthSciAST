@@ -105,15 +105,10 @@ impl RhsScratch {
     }
 
     /// Install a compiled tape program (Step 3b). Called by the driver on the
-    /// production RHS closure's scratch; `observed_rules` is the FULL
-    /// dependency-ordered rule list the program's fallback indices resolve
-    /// against. Subsequent [`evaluate_rhs_with_scratch`] calls run the tape.
-    pub(super) fn install_tape(
-        &mut self,
-        prog: Rc<TapeProgram>,
-        observed_rules: Rc<Vec<AlgebraicRule>>,
-    ) {
-        self.tape = Some(TapeCtx::new(prog, observed_rules));
+    /// production RHS closure's scratch. Subsequent
+    /// [`evaluate_rhs_with_scratch`] calls run the tape.
+    pub(super) fn install_tape(&mut self, prog: Rc<TapeProgram>) {
+        self.tape = Some(TapeCtx::new(prog));
     }
 
     /// The forcing buffer was refreshed: an installed tape re-runs its
@@ -133,9 +128,9 @@ impl RhsScratch {
     /// Force the tape's `Export` publishes on, so a caller can read every
     /// observed's value back after a call.
     ///
-    /// Production derives this from the fallback count — with nothing able to
-    /// read a published array the publish is a pure cost — so a scratch built
-    /// to HARVEST observeds has to say so. No-op on a scratch with no tape.
+    /// Production leaves it off — with nothing able to read a published
+    /// array the publish is a pure cost — so a scratch built to HARVEST
+    /// observeds has to say so. No-op on a scratch with no tape.
     pub(super) fn set_exports_active(&mut self, on: bool) {
         if let Some(tape) = self.tape.as_mut() {
             tape.set_exports_active(on);
@@ -760,41 +755,22 @@ pub(super) fn evaluate_rhs_with_scratch(
     stats: &mut RhsStats,
     scratch: &mut RhsScratch,
 ) {
-    // ess-cse / inline-const memo: both tables are keyed by AST node ADDRESS, so
-    // a scratch handed a DIFFERENT rule set must discard them rather than answer
-    // for a node that no longer exists. `cse` is retargeted inside the legacy
-    // arm; the const-literal memo is read by the tape's fallback arms too, so it
-    // is retargeted here, on the same key, ahead of the dispatch.
-    scratch.const_lits.retarget(rule_set_key(call));
     let _overlay = super::vectorized::OverlayGuard::armed(force_scalar);
     if force_scalar || scratch.tape.is_none() {
+        // ess-cse / inline-const memo: both tables are keyed by AST node
+        // ADDRESS, so a scratch handed a DIFFERENT rule set must discard them
+        // rather than answer for a node that no longer exists. `cse` is
+        // retargeted inside the legacy arm, the const-literal memo here, on
+        // the same key.
+        scratch.const_lits.retarget(rule_set_key(call));
         dy.fill(0.0);
         evaluate_rhs_legacy(call, dy, force_scalar, stats, scratch);
         return;
     }
-    // Take the tape out so the fallback arms below can borrow the whole
-    // scratch without recursing back onto the tape path.
-    let mut tape = scratch.tape.take().expect("tape checked Some");
-
-    // Fallback rules evaluate through the interpreter's `EvalCtx`, which
-    // reads the legacy per-variable state arrays: refill them only then (a
-    // fully-taped program reads the flat state directly through strided
-    // views and skips this entirely).
-    if tape.exec.n_fallback > 0 {
-        refill_state_arrays(&mut scratch.state_arrays, call.var_shapes, call.state);
-    }
-    let const_scope = Rc::clone(&scratch.const_arrays);
-    run_tape_call(
-        &mut tape,
-        call,
-        &scratch.state_arrays,
-        &const_scope,
-        &scratch.const_lits,
-        dy,
-        stats,
-    );
-
-    scratch.tape = Some(tape);
+    // The tape reads the flat state directly through strided views, and the
+    // interpreter's per-variable state arrays are not handed to it.
+    let tape = scratch.tape.as_mut().expect("tape checked Some");
+    run_tape_call(tape, call, dy, stats);
 }
 
 /// The legacy interpreter RHS path (pre-Step-3b `evaluate_rhs_with_scratch`),

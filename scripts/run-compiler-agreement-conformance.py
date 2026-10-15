@@ -18,13 +18,15 @@ The contract this implements lives in
     program (§5.44.1).
   * **A refusal is never a fallback.** A compiler that cannot run a document says
     so, naming the rule and the reason, and the run records a NAMED EXCLUSION —
-    never a pass, never a silent skip. From ``interpreter`` a refusal is always a
-    failure, because the interpreter is complete over the evaluable core.
+    never a pass, never a silent skip. From ``interpreter`` and ``native`` a
+    refusal is always a failure: the interpreter is complete over the evaluable
+    core, and ``native`` refuses by name only out-of-scope constructs this tier
+    carries none of (``API_SPEC.md`` §5.8).
   * **Two ledgers, never merged.** ``compilers.<value>.bindings_required`` governs
     AVAILABILITY (must this binding be able to ANSWER for this compiler); a
     fixture's ``required`` map governs REFUSALS (must this compiler run THIS
-    document). Merging them would make a coverage gap indistinguishable from a
-    missing runtime.
+    document; ``interpreter`` and ``native`` must run every one). Merging them
+    would make a coverage gap indistinguishable from a missing runtime.
   * **Fixtures are referenced, not authored.** Every fixture is a document the
     simulation tiers already own, named by path relative to ``tests/``.
 
@@ -34,8 +36,9 @@ Three modes, one harness (mirrors run-compiled-rhs-conformance.py):
     checks every COMMITTED golden's file shape and its agreement with whatever
     analytic anchor the fixture carries, and asserts the harness REJECTS a value
     moved off its band, a missing element, a missing save time, an error, an
-    ``interpreter`` refusal and a ``required`` refusal — while REPORTING an
-    unrequired refusal as a named exclusion. The always-on guard.
+    ``interpreter`` refusal, a ``native`` refusal and a ``required`` refusal —
+    while REPORTING an unrequired refusal from another compiler as a named
+    exclusion. The always-on guard.
   * ``--write-golden --bindings julia --compiler interpreter`` — mint
     ``golden/<id>.json`` from the reference. It refuses to mint from any other
     binding or any other compiler.
@@ -53,9 +56,10 @@ Usage:
 
 Exit codes:
     0  the self-test passed, or every required binding answered within tolerance
-       (an unrequired refusal and an unavailable optional compiler are green, and
-       both are named in the report and on the console)
-    1  a mismatch, an error, an `interpreter` refusal, a refusal from a binding a
+       (an unrequired refusal from `xla`, `mtk` or `sympy` and an unavailable
+       optional compiler are green, and both are named in the report and on the
+       console)
+    1  a mismatch, an error, an `interpreter` or `native` refusal, a refusal from a binding a
        fixture's `required` map names, an `unavailable` from a `bindings_required`
        binding, a broken adapter, or a self-test failure
     2  a manifest or configuration error (no run attempted)
@@ -95,6 +99,27 @@ DEFAULT_OUTPUT = Path("conformance-results/compiler_agreement/report.json")
 # manifest error rather than a new compiler: the vocabulary is closed precisely so
 # a typo cannot quietly become a tier nobody gates.
 COMPILERS = ("interpreter", "native", "xla", "mtk", "sympy")
+
+# The compilers no fixture's `required` map can excuse. The interpreter is the
+# oracle, complete over the evaluable core; `native` is required for every
+# fixture of every compiler-driven tier in NATIVE_STRICT_BINDINGS, and refuses
+# by name only the out-of-scope constructs (events, implicit equations, SDEs,
+# spatial operators with no discretization rule: API_SPEC §5.8), which this
+# tier carries none of.
+ALWAYS_REQUIRED = ("interpreter", "native")
+
+# The bindings the native rule binds: the native plan's two. In any other
+# binding (Python) a native refusal is governed by the fixture's `required`
+# map, like the specialty compilers'.
+NATIVE_STRICT_BINDINGS = ("julia", "rust")
+
+
+def always_required(binding: str, compiler: str) -> bool:
+    """Whether no `required` map can excuse this binding's refusal under this compiler."""
+    if compiler == "native":
+        return binding in NATIVE_STRICT_BINDINGS
+    return compiler in ALWAYS_REQUIRED
+
 
 # §5.44.2's integration SAFETY FACTOR, applied to the integration half of a
 # `derived` band and to nothing else. A manifest states it per fixture; this is
@@ -547,6 +572,17 @@ def _validate_ledgers(manifest: dict, path: Path) -> None:
         if both:
             raise ManifestError(
                 f"{path}: compilers[{name}] lists {sorted(both)} as both required and optional"
+            )
+    for c in ALWAYS_REQUIRED:
+        optional = [
+            b
+            for b in (compilers.get(c) or {}).get("bindings_optional") or []
+            if always_required(b, c)
+        ]
+        if optional:
+            raise ManifestError(
+                f"{path}: compilers[{c}].bindings_optional lists {sorted(optional)}, but every "
+                f"binding must answer for {c}: it is required for every fixture"
             )
     for fx in manifest["fixtures"]:
         for binding, names in (fx.get("required") or {}).items():
@@ -1090,8 +1126,10 @@ def gate_fixture(
         every compiler; unlike a refusal it says nothing about what a compiler can
         run, so ``required`` does not excuse it.
       * ``refused`` — RED. Either the compiler is ``interpreter`` (complete over
-        the evaluable core, so a refusal there is a defect rather than coverage) or
-        the fixture's ``required`` map names this binding+compiler.
+        the evaluable core, so a refusal there is a defect rather than coverage),
+        or it is ``native`` (required for every fixture; it refuses by name only
+        out-of-scope constructs), or the fixture's ``required`` map names this
+        binding+compiler.
       * ``excluded`` — the same refusal from any other compiler the fixture does
         not require. Reported by name, rule and reason, and green for now. Never a
         pass and never a silent skip; this list IS the coverage backlog.
@@ -1110,25 +1148,31 @@ def gate_fixture(
         rule = produced.get("rule") or "(adapter named no rule)"
         reason = produced.get("reason") or "(adapter gave no reason)"
         is_reference = compiler == "interpreter"
+        is_strict = always_required(binding, compiler)
         is_required = compiler in fixture_required(fixture, binding)
         if is_reference:
             why = (
                 "the interpreter is complete over the evaluable core "
                 "(esm-libraries-spec §2.5.10), so a refusal there is a defect"
             )
+        elif is_strict:
+            why = (
+                "native is required for every fixture of every compiler-driven tier "
+                "(API_SPEC §5.8), whatever the fixture's `required` map says"
+            )
         elif is_required:
             why = f"the fixture's `required` map lists {binding}/{compiler}"
         else:
             why = ""
         return {
-            "status": "refused" if (is_reference or is_required) else "excluded",
+            "status": "refused" if (is_strict or is_required) else "excluded",
             "rule": rule,
             "reason": reason,
             "required": is_required,
             "interpreter": is_reference,
             "problems": (
                 [f"{binding}/{compiler} refused a fixture it must run — {why}: {rule} — {reason}"]
-                if (is_reference or is_required)
+                if (is_strict or is_required)
                 else []
             ),
         }
@@ -1329,11 +1373,29 @@ def _negative_controls(fixture: dict, classes: dict, rc: int) -> int:
     v = gate_fixture("julia", "native", fx, refusal, golden, [], classes)
     rc = _report_control(
         rc,
+        v["status"] == "refused",
+        "neg/refusal_native",
+        f"a `native` refusal fails the gate even unrequired (got {v['status']!r})",
+    )
+
+    v = gate_fixture("python", "native", fx, refusal, golden, [], classes)
+    rc = _report_control(
+        rc,
+        v["status"] == "excluded",
+        "neg/refusal_native_python",
+        f"an unrequired python `native` refusal is a named exclusion: the native rule binds "
+        f"julia and rust (got {v['status']!r})",
+    )
+
+    v = gate_fixture("julia", "mtk", fx, refusal, golden, [], classes)
+    rc = _report_control(
+        rc,
         v["status"] == "excluded" and bool(v.get("rule")) and bool(v.get("reason")),
         "neg/refusal_excluded",
         (
-            f"an unrequired non-interpreter refusal is a named exclusion carrying its rule "
-            f"and reason (got {v['status']!r}, rule {v.get('rule')!r})"
+            f"an unrequired refusal from a compiler other than the interpreter and native "
+            f"is a named exclusion carrying its rule and reason (got {v['status']!r}, "
+            f"rule {v.get('rule')!r})"
         ),
     )
     return rc

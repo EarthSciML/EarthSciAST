@@ -18,9 +18,9 @@
 //!
 //! ## Hard error, never a fallback
 //!
-//! A model carrying ANY instruction this emitter cannot lower — a
-//! [`Instr::Fallback`] rule above all, which by definition wants the
-//! interpreter back — is a **compile error** naming the rule and the reason
+//! A model whose tape declined a rule (there is then no program at all; see
+//! [`DeclinedTape`]), or whose program carries ANY instruction this emitter
+//! cannot lower, is a **compile error** naming the rule and the reason
 //! ([`XlaEmitError`]). There is no mixed execution and no interpreter arm: the
 //! adapter turns the error into the tier's `refused` outcome and moves on to
 //! the next fixture. This is the ruling of 2026-09-13 made mechanical.
@@ -268,7 +268,24 @@ pub fn emit_rhs(compiled: &ArrayCompiled) -> Result<EmittedRhs, XlaEmitError> {
     // Row-major: the emitter lowers every box in its logical axis order.
     let (prog, _report) =
         compiled.build_tape_layout(&std::collections::HashSet::new(), None, false);
-    emit_program(&prog, compiled)
+    match prog {
+        Ok(prog) => emit_program(&prog, compiled),
+        Err(declined) => {
+            let (rule, reason) = declined
+                .declined_rules()
+                .into_iter()
+                .next()
+                .expect("a declined tape names at least one rule");
+            Err(XlaEmitError::new(
+                rule,
+                format!(
+                    "rule is not on the tape (the lowering bailed: {reason}); a \
+                     compiled program cannot re-enter the interpreter, so the whole \
+                     model is refused"
+                ),
+            ))
+        }
+    }
 }
 
 /// Emit an already-built program. Split out so a test can drive a program it
@@ -333,9 +350,6 @@ struct Emitter<'a> {
     /// Per `prog.state_vars` index: the state array as the tape reads it
     /// (row-major over its shape; rank 0 for a 0-d variable).
     state: Vec<XlaOp>,
-    /// Observed values published by [`Instr::Export`], keyed by name — the
-    /// only channel an [`Operand::Obs`] can resolve through here.
-    obs: HashMap<String, XlaOp>,
     /// `dy` accumulator, one ROW-MAJOR block per state variable, in
     /// `var_order`. `None` = nothing written yet (stays zero).
     blocks: Vec<Option<XlaOp>>,
@@ -436,7 +450,6 @@ impl<'a> Emitter<'a> {
             t,
             slots: vec![None; prog.slots.len()],
             state: Vec::new(),
-            obs: HashMap::new(),
             blocks: vec![None; var_order.len()],
             var_order,
             var_ix,
@@ -579,19 +592,7 @@ impl<'a> Emitter<'a> {
                 .clone()
                 .ok_or_else(|| self.err(format!("read of slot {s} before its definition"))),
             Operand::State(ix) => Ok(self.state[*ix as usize].clone()),
-            Operand::Obs(ix) => self.obs_value(*ix as usize),
         }
-    }
-
-    fn obs_value(&self, ix: usize) -> R<XlaOp> {
-        let name = &self.prog.obs_reads[ix];
-        self.obs.get(name).cloned().ok_or_else(|| {
-            self.err(format!(
-                "observed `{name}` is read but never published on the tape — it comes \
-                 from a fallback rule or a build-time seed, neither of which this \
-                 emitter can reproduce"
-            ))
-        })
     }
 
     fn src(&self, s: &SrcRef) -> R<XlaOp> {
@@ -600,7 +601,6 @@ impl<'a> Emitter<'a> {
                 .clone()
                 .ok_or_else(|| self.err(format!("gather source slot {id} is undefined"))),
             SrcRef::State(ix) => Ok(self.state[*ix as usize].clone()),
-            SrcRef::Obs(ix) => self.obs_value(*ix as usize),
         }
     }
 
@@ -861,12 +861,12 @@ impl<'a> Emitter<'a> {
     /// an explicit tuple of every live value crossing the branch, for no
     /// difference in the numbers.)
     ///
-    /// A branch carrying a side effect — a `DyWrite`, an `Export`, a
-    /// `Fallback` — is refused rather than guessed at.
+    /// A branch carrying a side effect — a `DyWrite` or an `Export` — is
+    /// refused rather than guessed at.
     fn emit_branch(&mut self, cond: &Operand, t0: usize, f0: usize, f1: usize) -> R<()> {
         for pc in t0..f1 {
             match &self.prog.instrs[pc] {
-                Instr::DyWrite { .. } | Instr::Export { .. } | Instr::Fallback { .. } => {
+                Instr::DyWrite { .. } | Instr::Export { .. } => {
                     return Err(self.err(format!(
                         "instruction {} inside a JmpIfZero branch has an effect beyond \
                          its slot; this emitter lowers branches as `select` over both \
@@ -1076,13 +1076,10 @@ impl<'a> Emitter<'a> {
                 }
                 self.define(*out, cur);
             }
-            Instr::Export { slot, export } => {
-                let name = self.prog.exports[*export as usize].0.clone();
-                let v = self.slots[*slot as usize]
-                    .clone()
-                    .ok_or_else(|| self.err("exported slot is undefined"))?;
-                self.obs.insert(name, v);
-            }
+            // An export publishes an observed for the passes the tape serves
+            // outside the right-hand side; the emitted program's only output
+            // is `du`, and every in-program read is by slot.
+            Instr::Export { .. } => {}
             Instr::DyWrite { write } => {
                 let w = self.prog.dy_writes[*write as usize].clone();
                 self.emit_dy_write(&w)?;
@@ -1283,21 +1280,6 @@ impl<'a> Emitter<'a> {
                      program cannot report: {}",
                     self.prog.faults[*fault as usize]
                 )));
-            }
-            Instr::Fallback { rule } => {
-                let info = &self.prog.rules[*rule as usize];
-                let reason = match &info.status {
-                    RuleStatus::Fallback(r) => r.clone(),
-                    RuleStatus::Taped => "<taped rule reached through Fallback>".to_string(),
-                };
-                return Err(XlaEmitError::new(
-                    info.name.clone(),
-                    format!(
-                        "rule is not on the tape (the lowering bailed: {reason}); a \
-                         compiled program cannot re-enter the interpreter, so the whole \
-                         model is refused"
-                    ),
-                ));
             }
             Instr::JmpIfZero { .. } => {
                 return Err(self.err("JmpIfZero reached emit_one (handled by emit_range)"));

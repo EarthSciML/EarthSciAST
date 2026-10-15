@@ -312,6 +312,74 @@ _pr_rank4_build(doc, compiler; kw...) =
         @test !any(r -> r.tier === :setup_percell, rows)
     end
 
+    # A field ic over an EMPTY cell set never reaches the per-cell seed or its
+    # probe: the fold names the empty target first, under every compiler.
+    @testset "a field ic over an empty cell set is the document's error" begin
+        eqs(rhs) = Any[
+            Dict("lhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                    "ranges" => Dict("i" => Dict("from" => "x")),
+                    "expr" => Dict("op" => "D", "wrt" => "t",
+                        "args" => Any[Dict("op" => "index", "args" => Any["f", "i"])])),
+                 "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                    "ranges" => Dict("i" => Dict("from" => "x")), "expr" => 0.0)),
+            Dict("lhs" => Dict("op" => "ic", "args" => Any["f"]), "rhs" => rhs)]
+        doc(rhs) = Dict{String,Any}("esm" => "1.1.0",
+            "metadata" => Dict("name" => "pr_empty_ic"),
+            "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 0)),
+            "models" => Dict("N" => Dict{String,Any}(
+                "variables" => Dict("f" => Dict("type" => "unknown", "shape" => Any["x"])),
+                "equations" => eqs(rhs))))
+        for rhs in (1.5, Dict("op" => "sin", "args" => Any[
+                        Dict("op" => "index", "args" => Any["f", 1])])),
+            c in (:native, :interpreter)
+            e = try
+                esm_problem(doc(rhs), (0.0, 1.0); compiler = c); nothing
+            catch err
+                err
+            end
+            @test e isa _PR.TreeWalkError && e.code == "E_TREEWALK_UNSUPPORTED_EQUATION"
+            @test occursin("resolves to no array cells", sprint(showerror, e))
+        end
+    end
+
+    # An operator with a child count its registry row does not allow (a
+    # three-operand `/`) is a malformed document, which the interpreter rejects
+    # with its arity error. `native` rejects it with the same error rather than
+    # a refusal that blames the compiler; `min`, which is n-ary, builds.
+    @testset "a malformed operator arity is the document's error under native" begin
+        doc(rhs) = Dict{String,Any}("esm" => "1.1.0",
+            "metadata" => Dict("name" => "pr_arity"),
+            "models" => Dict("U" => Dict{String,Any}(
+                "variables" => Dict("y" => Dict("type" => "unknown", "default" => 2.0),
+                                    "z" => Dict("type" => "unknown", "default" => 0.5)),
+                "equations" => Any[
+                    Dict("lhs" => Dict("op" => "D", "args" => Any["y"], "wrt" => "t"),
+                         "rhs" => rhs),
+                    Dict("lhs" => Dict("op" => "D", "args" => Any["z"], "wrt" => "t"),
+                         "rhs" => 0.0)])))
+        op(o, a...) = Dict("op" => o, "args" => Any[a...])
+        for (rhs, needle) in ((op("neg", op("/", "y", 2.0, 3.0)), "/ expects 2 args, got 3"),
+                              (op("-", "y", 2.0, "z"), "- expects 1 or 2 args"),
+                              (op("^", "y", 2.0, "z"), "^ expects 2 args, got 3"),
+                              (op("atan2", "y", 2.0, "z"), "atan2 expects 2 args, got 3"))
+            for c in (:native, :interpreter)
+                e = try
+                    p = esm_problem(doc(rhs), (0.0, 1.0); compiler = c)
+                    p.f!(zeros(2), p.u0, p.p, 0.0); nothing
+                catch err
+                    err
+                end
+                @test e isa _PR.TreeWalkError && e.code == "E_TREEWALK_ARITY"
+                @test occursin(needle, sprint(showerror, e))
+            end
+        end
+        pn = esm_problem(doc(op("min", "y", 2.0, "z")), (0.0, 1.0))
+        pi_ = esm_problem(doc(op("min", "y", 2.0, "z")), (0.0, 1.0); compiler = :interpreter)
+        dn, di = zeros(2), zeros(2)
+        pn.f!(dn, pn.u0, pn.p, 0.0); pi_.f!(di, pi_.u0, pi_.p, 0.0)
+        @test dn == di == [0.5, 0.0]
+    end
+
     # ── Output-time observeds and inline-test assertions (#481, #482) ─────────
     # `h` is a makearray observed: the build-time cellwise sweep cannot keep a
     # region choice symbolic, so under `interpreter` reading it takes the
@@ -319,8 +387,9 @@ _pr_rank4_build(doc, compiler; kw...) =
     # ordinary `k[i] = 2·i` are read through the compiled observed program,
     # and with both code-generation budgets at zero (refusal boundaries under
     # `native`) that program cannot be built — which is how a read native
-    # cannot compile is provoked here. The document's right-hand side is
-    # scalar, so the budgets refuse nothing else.
+    # cannot compile is provoked here. The problem is built first, at the
+    # default budgets: under zero budgets its scalar equation would itself be
+    # left on the scalar walker, which native refuses at build.
     mk_doc() = Dict{String,Any}("esm" => "1.1.0",
         "metadata" => Dict("name" => "pr_observed_routes"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
@@ -348,8 +417,9 @@ _pr_rank4_build(doc, compiler; kw...) =
                             "ESS_DUAL_CODEGEN_NODE_BUDGET" => "0")
 
     @testset "observed_field: a read native cannot compile refuses" begin
+        p0 = esm_problem(mk_doc(), (0.0, 1.0))
         @test _pr_refuses(() -> no_codegen() do
-                              observed_field(esm_problem(mk_doc(), (0.0, 1.0)), "h")
+                              observed_field(p0, "h")
                           end, "refuses 'M.h'")
         pn = esm_problem(mk_doc(), (0.0, 1.0))
         pi_ = esm_problem(mk_doc(), (0.0, 1.0); compiler = :interpreter)
@@ -678,7 +748,7 @@ _pr_rank4_build(doc, compiler; kw...) =
         K = 2000
         gate = [_PR._JoinGate("i", "k", Dict(1 => 7),
                               Dict(k => (k == K ÷ 2 ? 7 : 0) for k in 1:K))]
-        diag(gates, n) = _PR._faq_diagnostic_cell(lhs, body;
+        diag(gates, n) = _PR._faq_diagnostic_cell(_PR._PerCellProbe(), lhs, body;
             idx_names = ["i"], range_iters = [[1]], contract_names = ["k"],
             contract_ranges = [Any[1, n]], contract_const = [collect(1:n)],
             rhs_zerobar = 0.0, agg_gates = gates, agg_filter = nothing,
@@ -752,7 +822,7 @@ _pr_rank4_build(doc, compiler; kw...) =
         # computed once, the per-cell resolve reports THAT attempt rather than
         # evaluating the constant again at this cell.
         rhs = _op("+", _v("nope"), _n(1.0))
-        e = err_of(() -> _PR._resolve_field_ic("u", rhs, [1], Dict{String,Any}(),
+        e = err_of(() -> _PR._resolve_field_ic(_PR._PerCellLicense(), "u", rhs, [1], Dict{String,Any}(),
                                                Dict{String,Any}();
                                                uniform = (nothing, ["as constant: SENTINEL"])))
         @test code_of(e) == "E_TREEWALK_UNSUPPORTED_EQUATION"

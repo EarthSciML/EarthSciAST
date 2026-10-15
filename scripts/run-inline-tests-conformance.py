@@ -110,6 +110,20 @@ COMPILERS = ("interpreter", "native", "xla", "mtk", "sympy")
 # that cannot run a document. It is only ever the whole-output `unavailable`.
 UNAVAILABLE_CODE = "compiler_unavailable"
 
+# The refusals `native` may give by name: the constructs out of its scope
+# (events, implicit equations and SDE noise are `unsupported_construct`; a
+# spatial operator with no discretization rule is `unlowered_operator`).
+# `native` is required for every fixture of every compiler-driven tier in the
+# bindings below, so there a named exclusion of it must carry one of these
+# codes, or exclude the interpreter as well (the binding runs the document
+# under no compiler, which is not a native gap). API_SPEC §5.8.
+NATIVE_OUT_OF_SCOPE_CODES = ("unsupported_construct", "unlowered_operator")
+
+# The bindings the native rule binds: the native plan's two. Any other binding
+# (Python) may leave native out of a fixture's `required` list, but only under
+# a named exclusion, so each of its native gaps stays listed and visible.
+NATIVE_STRICT_BINDINGS = ("julia", "rust")
+
 # The §6.6.4 default when no level supplies a bound.
 DEFAULT_ASSERTION_REL = 1e-6
 DEFAULT_ASSERTION_ABS = 0.0
@@ -288,6 +302,33 @@ def _validate_ledgers(path: Path, fid: str, fx: dict, bindings_required: list) -
                     f"`required` says that compiler must run this document; a named "
                     f"exclusion says it refuses it. One of the two is stale."
                 )
+        if (
+            b in NATIVE_STRICT_BINDINGS
+            and "native" in compilers
+            and "interpreter" not in compilers
+            and ex["code"] not in NATIVE_OUT_OF_SCOPE_CODES
+        ):
+            raise ManifestError(
+                f"{path}: fixtures[{fid}] names a {b}/native exclusion with code "
+                f"{ex['code']!r}. {b} native is required for every fixture; it may refuse "
+                f"only the out-of-scope constructs, by code {NATIVE_OUT_OF_SCOPE_CODES}"
+            )
+
+    for b in bindings_required:
+        if "native" in (req.get(b) or []):
+            continue
+        if excluded_reason(fx, b, "native") is None:
+            raise ManifestError(
+                f"{path}: fixtures[{fid}].required[{b}] does not list native. Only a named "
+                f"exclusion may leave it out"
+                + (
+                    f", and for {b}, one with an out-of-scope code {NATIVE_OUT_OF_SCOPE_CODES} "
+                    f"(or one that excludes the interpreter too): native is required for "
+                    f"every fixture of every compiler-driven tier"
+                    if b in NATIVE_STRICT_BINDINGS
+                    else ""
+                )
+            )
 
 
 def excluded_reason(fx: dict, binding: str, compiler: str) -> dict | None:
@@ -1366,7 +1407,7 @@ def _availability_controls(
         "reason": "synthetic",
     }
     ledgered = copy.deepcopy(fx)
-    ledgered["required"] = {b: [] for b in manifest["bindings_required"]}
+    ledgered["required"] = {b: ["native"] for b in manifest["bindings_required"]}
     ledgered["named_exclusions"] = [
         {"binding": "julia", "compilers": ["xla"], "code": UNAVAILABLE_CODE, "reason": "x"}
     ]
@@ -1389,6 +1430,57 @@ def _availability_controls(
         rejected,
         "control/unavailable-named-exclusion-is-a-manifest-error",
         f"a named exclusion recording {UNAVAILABLE_CODE!r} was accepted by the manifest",
+    )
+
+    # native is required for every fixture: leaving it out of a required
+    # binding's list, or excusing its refusal with an in-scope code, is a
+    # manifest error; an out-of-scope code excuses it.
+    def rejects(f):
+        try:
+            _validate_ledgers(Path("<self-test>"), f["id"], f, manifest["bindings_required"])
+        except ManifestError:
+            return True
+        return False
+
+    b0 = NATIVE_STRICT_BINDINGS[0]
+    no_native = copy.deepcopy(fx)
+    no_native["required"] = {b: ["native"] for b in manifest["bindings_required"]}
+    no_native["required"][b0] = ["interpreter"]
+    no_native.pop("named_exclusions", None)
+    in_scope = copy.deepcopy(no_native)
+    in_scope["named_exclusions"] = [
+        {"binding": b0, "compilers": ["native"], "code": "compiler_refused_rule", "reason": "x"}
+    ]
+    out_of_scope = copy.deepcopy(no_native)
+    out_of_scope["named_exclusions"] = [
+        {"binding": b0, "compilers": ["native"], "code": "unsupported_construct", "reason": "x"}
+    ]
+    check(
+        rejects(no_native) and rejects(in_scope) and not rejects(out_of_scope),
+        "control/native-is-required-for-every-fixture",
+        f"native left out of {b0}'s required list: rejected={rejects(no_native)}; excused "
+        f"by compiler_refused_rule: rejected={rejects(in_scope)}; excused by "
+        f"unsupported_construct: rejected={rejects(out_of_scope)} (want True, True, False)",
+    )
+    # Python is outside the native rule: an in-scope code excuses its native
+    # gap, but the gap must still be a named exclusion.
+    py_bare = copy.deepcopy(no_native)
+    py_bare["required"] = {b: ["native"] for b in manifest["bindings_required"]}
+    py_bare["required"]["python"] = ["interpreter"]
+    py_named = copy.deepcopy(py_bare)
+    py_named["named_exclusions"] = [
+        {
+            "binding": "python",
+            "compilers": ["native"],
+            "code": "compiler_refused_rule",
+            "reason": "x",
+        }
+    ]
+    check(
+        rejects(py_bare) and not rejects(py_named),
+        "control/python-native-gap-is-a-named-exclusion",
+        f"python native left out unnamed: rejected={rejects(py_bare)}; named with "
+        f"compiler_refused_rule: rejected={rejects(py_named)} (want True, False)",
     )
 
 

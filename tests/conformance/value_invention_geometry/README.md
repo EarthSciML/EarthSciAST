@@ -57,9 +57,12 @@ Referenced from `tests/valid/geometry/`: `intersect_polygon_planar_ode`
 
 ## Ledger
 
-One named exclusion: Python's `native` compiler refuses `edge_enumeration_ode`
-(a ragged contracted range has no form there). Python native is outside the
-native-coverage plan; its interpreter answers.
+One entry. In Julia and Rust `native` is required for every fixture
+(`API_SPEC.md` §5.8), so no ledger entry can excuse an in-scope `native`
+refusal there. Python is exempt: its `native` compiler refuses
+`edge_enumeration_ode` (a ragged contracted range has no form there; its
+interpreter answers), recorded as a named exclusion with
+`compiler_refused_rule`.
 
 ## What did not move here
 

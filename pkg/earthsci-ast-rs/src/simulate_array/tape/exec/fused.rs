@@ -736,6 +736,17 @@ impl FusedScratch {
             workers: super::par::FusedWorkers::for_program(prog),
         }
     }
+
+    /// The scratch of a thread that runs groups beside the calling thread
+    /// (see `plan`): its whole-read boxes start empty and grow the first
+    /// time a group needs them.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn for_peer(prog: &TapeProgram) -> Self {
+        FusedScratch {
+            whole: Vec::new(),
+            ..Self::for_program(prog)
+        }
+    }
 }
 
 pub(super) fn n_shifted(fs: &FusedSpec) -> usize {
@@ -1024,7 +1035,6 @@ pub(super) unsafe fn resolve_fused<'a>(
     env: &Env,
     slab_ptr: *mut f64,
     slot_off: &[usize],
-    obs: &ArrMap,
     scratch: &'a mut FusedScratch,
     dy_home: &[usize],
     dy: *mut f64,
@@ -1045,7 +1055,7 @@ pub(super) unsafe fn resolve_fused<'a>(
     // Resolve scalar inputs once.
     svals.clear();
     for op in &fs.scalars {
-        svals.push(resolve_scalar(op, env, slab_ptr, slot_off, obs));
+        svals.push(resolve_scalar(op, env, slab_ptr, slot_off));
     }
     // Resolve array input base pointers once.
     bases.clear();
@@ -1059,19 +1069,6 @@ pub(super) unsafe fn resolve_fused<'a>(
                 debug_assert_eq!(&env.prog.state_vars[*ix as usize].shape, &inp.src_shape);
                 super::resolve::state_ptr(env, *ix)
             }
-            SrcRef::Obs(ix) => {
-                let name = &env.prog.obs_reads[*ix as usize];
-                let a = obs
-                    .get(name)
-                    .unwrap_or_else(|| panic!("observed `{name}` not materialized before read"));
-                assert_eq!(
-                    a.shape(),
-                    &inp.src_shape[..],
-                    "fused input `{name}` box mismatch"
-                );
-                assert!(a.is_standard_layout());
-                a.as_ptr()
-            }
         };
         bases.push(p);
     }
@@ -1080,6 +1077,10 @@ pub(super) unsafe fn resolve_fused<'a>(
     // a split reads the positions of its own window).
     let n_elems = fs.n_elems();
     let mut next = 0usize;
+    #[cfg(not(target_arch = "wasm32"))]
+    if whole.len() < whole_len(fs) {
+        whole.resize(whole_len(fs), 0.0);
+    }
     whole_src.clear();
     for (inp, base) in fs.inputs.iter().zip(bases.iter_mut()) {
         if inp.gather.as_deref().is_some_and(|g| g.whole) {
@@ -1136,7 +1137,6 @@ pub(super) unsafe fn exec_fused(
     env: &Env,
     slab_ptr: *mut f64,
     slot_off: &[usize],
-    obs: &ArrMap,
     fregs: &mut [f64],
     scratch: &mut FusedScratch,
     idx: &[Option<IndexTable>],
@@ -1146,7 +1146,7 @@ pub(super) unsafe fn exec_fused(
 ) {
     let fs = &env.prog.fused[spec];
     let (r, _workers) =
-        unsafe { resolve_fused(spec, env, slab_ptr, slot_off, obs, scratch, dy_home, dy) };
+        unsafe { resolve_fused(spec, env, slab_ptr, slot_off, scratch, dy_home, dy) };
     let Resolved {
         svals,
         bases,
@@ -1192,6 +1192,47 @@ pub(super) unsafe fn exec_fused(
             Window::all(node_elems),
         )
     }
+}
+
+/// Run share `w` of fused group `spec` split `ways` wide (see
+/// [`super::par::split_ways`]) on this thread, resolving its operands into
+/// this thread's `scratch`.
+///
+/// # Safety
+/// As for [`exec_fused`].
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn exec_fused_share(
+    spec: usize,
+    env: &Env,
+    slab_ptr: *mut f64,
+    slot_off: &[usize],
+    scratch: &mut FusedScratch,
+    idx: &[Option<IndexTable>],
+    simd: SimdLevel,
+    dy_home: &[usize],
+    dy: *mut f64,
+    w: usize,
+    ways: usize,
+) {
+    let fs = &env.prog.fused[spec];
+    let (r, workers) =
+        unsafe { resolve_fused(spec, env, slab_ptr, slot_off, scratch, dy_home, dy) };
+    unsafe {
+        workers.run_own_share(
+            fs,
+            r.svals,
+            r.bases,
+            r.whole_src,
+            r.outs,
+            r.red,
+            idx,
+            r.node_elems,
+            simd,
+            w,
+            ways,
+        )
+    };
 }
 
 /// Read a group's whole-read gathers (sources `whole_src`, destinations their

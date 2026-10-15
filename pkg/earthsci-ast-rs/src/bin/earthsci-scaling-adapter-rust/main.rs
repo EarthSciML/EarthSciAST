@@ -19,7 +19,11 @@
 //! recorded as not attempted.
 //!
 //! Per document the child: builds a warm-up problem (one-time process costs),
-//! times `esm_problem` on the document, reads the tape length off the compiled
+//! times `esm_problem` on the document (the fastest of several builds while
+//! they are short, so a build of a few milliseconds is not timer noise; after
+//! the run, one more child rebuilds each family's two build-slope ends
+//! alternately, `interleave_slope_ends`),
+//! reads the tape length off the compiled
 //! model, evaluates the right-hand side once (first call) and then repeatedly
 //! (steady), counts the bytes a steady call allocates through the counting
 //! global allocator below, times the family's hand-written loop on the same
@@ -29,7 +33,10 @@
 //! `--threads T` sets the thread count of both native's right-hand side (the
 //! child's `RAYON_NUM_THREADS`, the budget the tape splits large calls across)
 //! and the hand loop (its own fork-join, `fork_join.rs`); `--threads 1` runs
-//! both serially.
+//! both serially. A threaded child also times, in the same process, the serial
+//! hand loop and, below 10^4 cells, native's call with its thread budget forced
+//! to one: what the threaded speed gate holds a small problem to (README
+//! "Gates").
 
 mod fork_join;
 mod hand_loops;
@@ -92,6 +99,18 @@ const MIN_CALLS: usize = 5;
 const MAX_CALLS: usize = 1000;
 const MIN_TOTAL_S: f64 = 0.25;
 const ALLOC_CALLS: u64 = 4;
+
+/// Builds of one document are repeated while they total under this many
+/// seconds, up to [`MAX_BUILDS`], and `build_s` is the fastest: a build of a
+/// few milliseconds varies by a large fraction of itself from run to run,
+/// which a single sample would carry straight into the build slope.
+const BUILD_BUDGET_S: f64 = 1.0;
+const MAX_BUILDS: usize = 10;
+
+/// A threaded run times native's serial call below this many cells
+/// (`n_cells`), where the speed gate compares the threaded call with it
+/// (manifest `gates.speed.small_n_max`).
+const SERIAL_NATIVE_MAX_CELLS: u64 = 10_000;
 
 /// Median wall seconds of `f`, over at least `MIN_CALLS` calls and at least
 /// `MIN_TOTAL_S` seconds of calls, at most `MAX_CALLS`.
@@ -454,10 +473,20 @@ fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
     m
 }
 
-const FIELDS: [&str; 14] = [
+const FIELDS: [&str; 21] = [
     "reason",
     "n_bytes",
     "build_s",
+    "build_repeats",
+    "build_s_interleaved",
+    "build_interleaved_repeats",
+    "build_interleaved_diff_s",
+    // Bytes of declared-dense arrays the build writes in full: not measured
+    // here. Native's build lowers a declared-dense faq to tape sections that
+    // run on the first call; it materializes no declared shape itself.
+    "dense_bytes",
+    "serial_steady_rhs_s",
+    "hand_loop_serial_s",
     "code_size",
     "first_call_s",
     "steady_rhs_s",
@@ -513,28 +542,39 @@ fn measure_one(one: &One) -> Map<String, Value> {
     if let Ok(meta) = std::fs::metadata(&one.doc) {
         r.insert("n_bytes".into(), json!(meta.len()));
     }
-    let t = Instant::now();
-    let built = esm_problem(one.doc.as_path(), (0.0, 1.0), options(Compiler::Native));
-    let build_s = t.elapsed().as_secs_f64();
-    let prob = match built {
-        Ok(p) => p,
-        Err(err) => {
-            let refused = matches!(
-                err,
-                SimulateError::Compile(CompileError::CompilerRefusedRule { .. })
-            );
-            r.insert(
-                "status".into(),
-                json!(if refused { "refused" } else { "error" }),
-            );
-            r.insert("reason".into(), json!(err.to_string()));
-            if refused {
-                check_hand_loop_against_interpreter(one, &family, &mut r);
+    let mut prob = None;
+    let (mut build_s, mut spent, mut repeats) = (f64::INFINITY, 0.0, 0usize);
+    while repeats < MAX_BUILDS && (repeats == 0 || spent < BUILD_BUDGET_S) {
+        // The previous build goes first, so a repeat never holds two.
+        drop(prob.take());
+        let t = Instant::now();
+        let built = esm_problem(one.doc.as_path(), (0.0, 1.0), options(Compiler::Native));
+        let dt = t.elapsed().as_secs_f64();
+        match built {
+            Ok(p) => prob = Some(p),
+            Err(err) => {
+                let refused = matches!(
+                    err,
+                    SimulateError::Compile(CompileError::CompilerRefusedRule { .. })
+                );
+                r.insert(
+                    "status".into(),
+                    json!(if refused { "refused" } else { "error" }),
+                );
+                r.insert("reason".into(), json!(err.to_string()));
+                if refused {
+                    check_hand_loop_against_interpreter(one, &family, &mut r);
+                }
+                return r;
             }
-            return r;
         }
-    };
+        build_s = build_s.min(dt);
+        spent += dt;
+        repeats += 1;
+    }
+    let prob = prob.expect("at least one build ran");
     r.insert("build_s".into(), json!(build_s));
+    r.insert("build_repeats".into(), json!(repeats));
     let Some(compiled) = prob.debug_array_compiled() else {
         return failed(r, "the problem has no right-hand side (static)".into());
     };
@@ -576,16 +616,15 @@ fn measure_one(one: &One) -> Map<String, Value> {
     let mut dy = vec![0.0f64; n];
     let mut stats = RhsStats::default();
 
-    let mut scratch = compiled.debug_new_scratch_taped();
+    // A model whose tape declined a rule has no program: refused, naming the
+    // rule, rather than timing another evaluator.
+    let mut scratch = match compiled.debug_new_scratch_taped() {
+        Ok(s) => s,
+        Err(e) => return failed(r, format!("the tape declined a rule: {e}")),
+    };
     let t = Instant::now();
     compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
     r.insert("first_call_s".into(), json!(t.elapsed().as_secs_f64()));
-    if stats.fallback_rules > 0 {
-        return failed(
-            r,
-            format!("{} rule(s) left the tape at run time", stats.fallback_rules),
-        );
-    }
     let native_dy = dy.clone();
     r.insert(
         "dy_max_abs".into(),
@@ -629,6 +668,11 @@ fn measure_one(one: &One) -> Map<String, Value> {
             );
             let hand = median_time(|| hl.run(&canon_state, &mut hdy, pool.as_ref()));
             r.insert("hand_loop_s".into(), json!(hand));
+            let hand_serial = match &pool {
+                Some(_) => median_time(|| hl.run(&canon_state, &mut hdy, None)),
+                None => hand,
+            };
+            r.insert("hand_loop_serial_s".into(), json!(hand_serial));
             r.insert(
                 "hand_loop_threads".into(),
                 json!(hl.threads_used(one.threads)),
@@ -637,6 +681,19 @@ fn measure_one(one: &One) -> Map<String, Value> {
         }
         Err(msg) => {
             r.insert("hand_loop_error".into(), json!(msg));
+        }
+    }
+
+    if one.threads > 1
+        && entry["n_cells"]
+            .as_u64()
+            .is_some_and(|c| c < SERIAL_NATIVE_MAX_CELLS)
+    {
+        match serial_native(&one.doc, &names, &state, &params, &native_dy) {
+            Ok(t) => {
+                r.insert("serial_steady_rhs_s".into(), json!(t));
+            }
+            Err(msg) => return failed(r, msg),
         }
     }
 
@@ -668,6 +725,51 @@ fn measure_one(one: &One) -> Map<String, Value> {
         }
     }
     r
+}
+
+/// Native's steady call with its thread budget forced to one (it runs inside a
+/// one-thread rayon pool, whose size is the budget there), timed like
+/// `steady_rhs_s`; an error when its `dy` is not bit-identical to the threaded
+/// call's.
+///
+/// The compiled model holds single-threaded caches, so it cannot move onto the
+/// pool's thread: the pool thread builds its own from the same document, which
+/// lays the state out identically (checked against `names`).
+fn serial_native(
+    doc: &Path,
+    names: &[String],
+    state: &[f64],
+    params: &[f64],
+    threaded_dy: &[f64],
+) -> Result<f64, String> {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .map_err(|e| format!("a one-thread rayon pool: {e}"))?;
+    let (t, dy) = pool.install(|| -> Result<(f64, Vec<f64>), String> {
+        let prob = esm_problem(doc, (0.0, 1.0), options(Compiler::Native))
+            .map_err(|e| format!("native's serial build: {e}"))?;
+        let compiled = prob
+            .debug_array_compiled()
+            .ok_or("native's serial build has no right-hand side")?;
+        if compiled.state_variable_names() != names {
+            return Err("native's serial build lays the state out differently".into());
+        }
+        let mut dy = vec![0.0f64; state.len()];
+        let mut stats = RhsStats::default();
+        let mut scratch = compiled
+            .debug_new_scratch_taped()
+            .map_err(|e| format!("the tape declined a rule: {e}"))?;
+        compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats);
+        let t = median_time(|| {
+            compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats)
+        });
+        Ok((t, dy))
+    })?;
+    if max_abs_diff(&dy, threaded_dy) != 0.0 {
+        return Err("native's serial and threaded dy differ".into());
+    }
+    Ok(t)
 }
 
 /// Where native refuses a document, check the family's hand loop against the
@@ -761,15 +863,25 @@ fn gb(bytes: u64) -> String {
 const DEFAULT_MAX_RSS: u64 = 12 << 30;
 
 fn run_child(run: &Run, doc: &Path, entry: &Value) -> Value {
+    let args = [
+        "--one".as_ref(),
+        doc.as_os_str(),
+        "--entry".as_ref(),
+        entry.to_string().as_ref(),
+    ]
+    .map(std::ffi::OsStr::to_os_string);
+    run_child_with(run, &args, entry)
+}
+
+/// Run this binary as a watched child with `args` (plus the run's thread
+/// settings) and return the record it printed, or an error record for `entry`.
+fn run_child_with(run: &Run, args: &[std::ffi::OsString], entry: &Value) -> Value {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => return error_record(entry, format!("cannot find this executable: {e}")),
     };
     let spawned = Command::new(exe)
-        .arg("--one")
-        .arg(doc)
-        .arg("--entry")
-        .arg(entry.to_string())
+        .args(args)
         .arg("--threads")
         .arg(run.threads.to_string())
         .arg("--oracle-max-states")
@@ -993,7 +1105,135 @@ fn run_all(run: &Run) -> Result<(), String> {
         // finished.
         write_output(run, &header, &results)?;
     }
+    interleave_slope_ends(run, base, docs, &mut results);
     write_output(run, &header, &results)
+}
+
+/// Interleaved builds per end, at most, for the build slope's two ends.
+const INTERLEAVE_MAX: usize = 100;
+/// Fewer interleaved builds than this would not beat the ladder's own minimum.
+const INTERLEAVE_MIN: usize = 10;
+/// Seconds of interleaved building a family may spend, at most.
+const INTERLEAVE_BUDGET_S: f64 = 5.0;
+
+/// The two documents `check.py` fits each family's build slope between (the
+/// smallest and largest `n_states` that built, at most 10^6 cells), rebuilt
+/// alternately in one child process: `build_s_interleaved` is the median of
+/// each end's builds, `build_interleaved_repeats` how many each got, and the
+/// larger end's `build_interleaved_diff_s` the median over pairs of its build
+/// minus the smaller end's build taken beside it. Builds of a few milliseconds
+/// drift by a large fraction of the slope's whole allowance between ladder
+/// steps and within the re-timing itself; a difference of builds taken side by
+/// side cancels it. A
+/// family whose builds would not fit [`INTERLEAVE_MIN`] pairs in
+/// [`INTERLEAVE_BUDGET_S`] keeps the ladder's `build_s` (the fields stay null).
+fn interleave_slope_ends(run: &Run, base: &Path, docs: &[Value], results: &mut [Value]) {
+    let mut families: Vec<String> = Vec::new();
+    for r in results.iter() {
+        let f = r["family"].as_str().unwrap_or("").to_string();
+        if !families.contains(&f) {
+            families.push(f);
+        }
+    }
+    for fam in families {
+        let built: Vec<usize> = (0..results.len())
+            .filter(|&i| {
+                let r = &results[i];
+                r["family"] == fam.as_str()
+                    && r["status"] == "ok"
+                    && r["build_s"].is_f64()
+                    && r["n_cells"].as_u64().is_some_and(|c| c <= 1_000_000)
+            })
+            .collect();
+        let states = |i: usize| results[i]["n_states"].as_u64().unwrap_or(0);
+        let (Some(lo), Some(hi)) = (
+            built.iter().copied().min_by_key(|&i| states(i)),
+            built.iter().copied().max_by_key(|&i| states(i)),
+        ) else {
+            continue;
+        };
+        if states(lo) == states(hi) {
+            continue;
+        }
+        let pair_s = results[lo]["build_s"].as_f64().unwrap_or(f64::INFINITY)
+            + results[hi]["build_s"].as_f64().unwrap_or(f64::INFINITY);
+        let repeats = ((INTERLEAVE_BUDGET_S / pair_s) as usize).min(INTERLEAVE_MAX);
+        if repeats < INTERLEAVE_MIN {
+            continue;
+        }
+        let path_of = |i: usize| {
+            docs.iter()
+                .find(|e| e["family"] == fam.as_str() && e["n"] == results[i]["n"])
+                .map(|e| base.join(e["path"].as_str().unwrap_or("")))
+        };
+        let (Some(lo_doc), Some(hi_doc)) = (path_of(lo), path_of(hi)) else {
+            continue;
+        };
+        let args = [
+            "--interleave".as_ref(),
+            lo_doc.as_os_str(),
+            hi_doc.as_os_str(),
+            "--repeats".as_ref(),
+            repeats.to_string().as_ref(),
+        ]
+        .map(std::ffi::OsStr::to_os_string);
+        let out = run_child_with(run, &args, &results[lo].clone());
+        match (out["lo"].as_f64(), out["hi"].as_f64(), out["diff"].as_f64()) {
+            (Some(l), Some(h), Some(d)) => {
+                for (i, v) in [(lo, l), (hi, h)] {
+                    results[i]["build_s_interleaved"] = json!(v);
+                    results[i]["build_interleaved_repeats"] = json!(repeats);
+                }
+                results[hi]["build_interleaved_diff_s"] = json!(d);
+                eprintln!(
+                    "scaling-adapter-rust: {fam} build slope ends re-timed, {repeats} interleaved builds each"
+                );
+            }
+            _ => eprintln!(
+                "scaling-adapter-rust: {fam} interleaved builds failed: {}",
+                out["reason"].as_str().unwrap_or("no result")
+            ),
+        }
+    }
+}
+
+/// The child of [`interleave_slope_ends`]: builds `lo` and `hi` in the order
+/// lo hi hi lo, `repeats` times each, after one untimed build of each, and
+/// prints the median of each end's builds and the median over pairs of
+/// `hi - lo`.
+fn interleave(lo: &Path, hi: &Path, repeats: usize) -> Value {
+    warm_up();
+    let build = |doc: &Path| -> Result<f64, String> {
+        let t = Instant::now();
+        let built = esm_problem(doc, (0.0, 1.0), options(Compiler::Native));
+        let dt = t.elapsed().as_secs_f64();
+        drop(built.map_err(|e| e.to_string())?);
+        Ok(dt)
+    };
+    let run = || -> Result<(f64, f64, f64), String> {
+        build(lo)?;
+        build(hi)?;
+        let (mut l, mut h) = (Vec::with_capacity(repeats), Vec::with_capacity(repeats));
+        for k in 0..repeats {
+            if k % 2 == 0 {
+                l.push(build(lo)?);
+                h.push(build(hi)?);
+            } else {
+                h.push(build(hi)?);
+                l.push(build(lo)?);
+            }
+        }
+        let median = |v: &mut Vec<f64>| {
+            v.sort_by(|a, b| a.total_cmp(b));
+            v[v.len() / 2]
+        };
+        let mut d: Vec<f64> = h.iter().zip(&l).map(|(h, l)| h - l).collect();
+        Ok((median(&mut l), median(&mut h), median(&mut d)))
+    };
+    match run() {
+        Ok((l, h, d)) => json!({"lo": l, "hi": h, "diff": d, "repeats": repeats}),
+        Err(msg) => json!({"status": "error", "reason": msg}),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1003,6 +1243,7 @@ fn run_all(run: &Run) -> Result<(), String> {
 enum Mode {
     Run(Run),
     One(One),
+    Interleave(PathBuf, PathBuf, usize),
 }
 
 fn parse_args(args: Vec<String>) -> Result<Mode, String> {
@@ -1017,6 +1258,8 @@ fn parse_args(args: Vec<String>) -> Result<Mode, String> {
     let mut oracle_max_states = 20_000usize;
     let mut one = None;
     let mut entry = None;
+    let mut interleave_docs = None;
+    let mut repeats = INTERLEAVE_MAX;
     let num = |v: Option<String>, what: &str| -> Result<u64, String> {
         v.ok_or(format!("{what} needs a value"))?
             .parse()
@@ -1042,12 +1285,21 @@ fn parse_args(args: Vec<String>) -> Result<Mode, String> {
                 oracle_max_states = num(it.next(), "--oracle-max-states")? as usize
             }
             "--one" => one = it.next().map(PathBuf::from),
+            "--interleave" => {
+                let lo = it.next().ok_or("--interleave needs two documents")?;
+                let hi = it.next().ok_or("--interleave needs two documents")?;
+                interleave_docs = Some((PathBuf::from(lo), PathBuf::from(hi)));
+            }
+            "--repeats" => repeats = num(it.next(), "--repeats")? as usize,
             "--entry" => {
                 let s = it.next().ok_or("--entry needs a value")?;
                 entry = Some(serde_json::from_str(&s).map_err(|e| format!("--entry: {e}"))?);
             }
             other => return Err(format!("unexpected argument {other:?}")),
         }
+    }
+    if let Some((lo, hi)) = interleave_docs {
+        return Ok(Mode::Interleave(lo, hi, repeats.max(1)));
     }
     if let Some(doc) = one {
         return Ok(Mode::One(One {
@@ -1079,6 +1331,10 @@ fn main() -> ExitCode {
             let peak = proc_status_bytes("self", "VmHWM:");
             r.insert("peak_rss_bytes".into(), json!(peak));
             println!("{RESULT_TAG}{}", Value::Object(r));
+            ExitCode::SUCCESS
+        }
+        Ok(Mode::Interleave(lo, hi, repeats)) => {
+            println!("{RESULT_TAG}{}", interleave(&lo, &hi, repeats));
             ExitCode::SUCCESS
         }
         Ok(Mode::Run(run)) => match run_all(&run) {

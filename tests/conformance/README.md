@@ -48,7 +48,7 @@ tests/conformance/
 │   └── rejections.json             #   the eight malformed self-references every binding rejects
 ├── value_invention_geometry/       # value invention and setup geometry feeding a right-hand side (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract, and what each binding refused before it
-│   ├── manifest.json               #   `"runner": "inline_tests"`; one named exclusion (Python native)
+│   ├── manifest.json               #   `"runner": "inline_tests"`
 │   ├── fixtures/<id>.esm           #   three documents authored here (three more are REFERENCED)
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
 ├── array_expression_forms/         # shape ops under `index`, positional broadcast, arrayed definitions (§5.45.4)

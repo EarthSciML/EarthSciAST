@@ -2,7 +2,8 @@
 """Apply the scaling tier's gates and known-failure ledger to adapter result files.
 
     check.py RESULT.json [RESULT.json ...] [--gates deterministic|all]
-             [--require pr|sweep] [--manifest PATH] [--json OUT]
+             [--require pr|sweep] [--report-timing | --hosted]
+             [--manifest PATH] [--json OUT]
 
 Prints one row per (file, family, N, gate) with the measured value and one of
     pass      the gate holds
@@ -20,7 +21,9 @@ Prints one row per (file, family, N, gate) with the measured value and one of
               document that built is a FAIL: a missing measurement)
     MISSING   --require named a (family, N) no result file covers   (red)
 Exit status 0 when nothing is red, 1 otherwise. With --report-timing the
-timing gates are printed but never red. The gates, thresholds and the
+timing gates are printed but never red; with --hosted (a hosted CI runner)
+the speed gate is red only past hosted_runner.max_timing_ratio (instead of
+max_ratio) and the build slope is printed but never red. The gates, thresholds and the
 ledger live in manifest.json; README.md says what each gate means.
 """
 
@@ -142,7 +145,15 @@ def per_result_checks(run, r, gates, family_spec):
         g = {**gates["speed"], **family_spec.get("gate_overrides", {}).get("speed", {})}
         s, h = r.get("steady_rhs_s"), r.get("hand_loop_s")
         big = (r.get("n_states") or 0) >= g.get("min_n_states", 0)
+        note = "" if big else f"below {g.get('min_n_states')} states"
+        small, why = small_call(run, r, g)
+        if small:
+            h = r.get("serial_steady_rhs_s")
+            note = why if big else note
+        elif why and big:
+            note = why
         ratio = s / h if (ok and s is not None and h) else None
+        bound = HOSTED_RATIO if HOSTED_RATIO else g["max_ratio"]
         out.append(
             Check(
                 run,
@@ -150,12 +161,36 @@ def per_result_checks(run, r, gates, family_spec):
                 n,
                 "speed",
                 TIMING,
-                None if (ratio is None or not big) else ratio <= g["max_ratio"],
+                None if (ratio is None or not big) else ratio <= bound,
                 ratio,
-                "" if big else f"below {g.get('min_n_states')} states",
+                note,
             )
         )
     return out
+
+
+def small_call(run, r, gate):
+    """Whether a threaded result falls under `speed`'s small-N carve-out, and a
+    note saying why.
+
+    Below `small_n_max` cells (`n_cells`, the actual cell count) a threaded
+    result is not compared with the threaded hand loop: native's
+    threaded call must instead be no slower than its own serial call
+    (`serial_steady_rhs_s`, measured in the same process) by the same
+    `max_ratio`. A serial run gets no carve-out, and neither does a result
+    without `serial_steady_rhs_s` (written before the adapters recorded it),
+    which is then gated against the hand loop as before, with a note."""
+    limit = gate.get("small_n_max")
+    if not limit or (run.get("threads") or 1) == 1:
+        return False, ""
+    cells = r.get("n_cells", r.get("n")) or 0
+    if cells >= limit:
+        return False, ""
+    if not r.get("serial_steady_rhs_s"):
+        return False, (
+            f"{cells} cells < {limit:g} but no serial_steady_rhs_s: gated against the hand loop"
+        )
+    return True, f"{cells} cells < {limit:g}: threaded native / serial native"
 
 
 def code_size_slack(run, gates, family_spec):
@@ -217,7 +252,19 @@ def family_checks(run, fam, results, gates, family_spec):
             )
         else:
             lo, hi = cand[0], cand[-1]
-            ns = (hi["build_s"] - lo["build_s"]) / (hi["n_states"] - lo["n_states"]) * 1e9
+            b_lo, b_hi, how = lo["build_s"], hi["build_s"], ""
+            # The adapters re-time the two ends side by side after the ladder
+            # (README, "The build slope's two ends"); the median of the paired
+            # differences replaces the ladder's minima when the larger end
+            # carries it.
+            diff = hi.get("build_interleaved_diff_s")
+            if diff is not None and lo.get("build_s_interleaved") is not None:
+                b_lo, b_hi = 0.0, diff
+                how = (
+                    f", median of {hi.get('build_interleaved_repeats')} interleaved "
+                    f"build pairs"
+                )
+            ns = (b_hi - b_lo) / (hi["n_states"] - lo["n_states"]) * 1e9
             g = {
                 **gates["build_slope"],
                 **family_spec.get("gate_overrides", {}).get("build_slope", {}),
@@ -232,10 +279,15 @@ def family_checks(run, fam, results, gates, family_spec):
                     TIMING,
                     ns < limit,
                     ns,
-                    f"ns/state over N={lo.get('n')}..{hi.get('n')}; limit {limit:.4g}{why}",
+                    f"ns/state over N={lo.get('n')}..{hi.get('n')}{how}; limit {limit:.4g}{why}",
                 )
             )
     return out
+
+
+# The bound the speed ratio is held to under --hosted (manifest
+# `hosted_runner.max_timing_ratio`), or None for the exact bar.
+HOSTED_RATIO = None
 
 
 def build_slope_limit(run, gate, lo, hi):
@@ -251,21 +303,38 @@ def build_slope_limit(run, gate, lo, hi):
     load cost, so what the compiler adds on top still has to fit
     `max_ns_per_state`. A document whose size does not grow with N gets no
     allowance. A result without `n_bytes` (written before the adapters
-    recorded it) gets none either, so the gate is the plain one there."""
+    recorded it) gets none either, so the gate is the plain one there.
+
+    The gate's `dense_page_ns` (same form) adds the same kind of allowance for
+    `dense_bytes`, the bytes of declared-dense arrays the build writes in full:
+    a document that declares an array dense over source x target makes a
+    build that materializes it write N^2 pages, at the binding's measured
+    first-touch cost per byte times the factor `dense_page_ns_why` states. A
+    result without `dense_bytes` gets no such allowance."""
     base = gate["max_ns_per_state"]
-    per_byte = gate.get("per_byte_ns", 0)
-    if isinstance(per_byte, dict):
-        per_byte = per_byte.get(run.get("binding"), 0)
-    if not per_byte:
-        return base, ""
-    b_lo, b_hi = lo.get("n_bytes"), hi.get("n_bytes")
-    if b_lo is None or b_hi is None:
-        return base, " (no n_bytes in the result: no size allowance)"
-    bytes_per_state = max(0.0, (b_hi - b_lo) / (hi["n_states"] - lo["n_states"]))
-    allowance = per_byte * bytes_per_state
-    return base + allowance, (
-        f" = {base:.4g} + {allowance:.4g} for {bytes_per_state:.3g} document bytes/state"
-    )
+    limit, why = base, ""
+    for field, rate_key, what in (
+        ("n_bytes", "per_byte_ns", "document"),
+        ("dense_bytes", "dense_page_ns", "dense-array"),
+    ):
+        rate = gate.get(rate_key, 0)
+        if isinstance(rate, dict):
+            rate = rate.get(run.get("binding"), 0)
+        if not rate:
+            continue
+        b_lo, b_hi = lo.get(field), hi.get(field)
+        if b_lo is None or b_hi is None:
+            why += f" (no {field} in the result: no {what} allowance)"
+            continue
+        per_state = max(0.0, (b_hi - b_lo) / (hi["n_states"] - lo["n_states"]))
+        if per_state == 0:
+            continue
+        allowance = rate * per_state
+        limit += allowance
+        why += f" + {allowance:.4g} for {per_state:.3g} {what} bytes/state"
+    if limit == base:
+        return base, why
+    return limit, f" = {base:.4g}{why}"
 
 
 def threads_label(run):
@@ -296,12 +365,17 @@ ENTRY_BOUNDS = {"no_steady_alloc": "max_bytes_per_call"}
 
 
 def ledger_shape_errors(ledgers):
-    """Every ledger entry of a bounded gate that lacks its bound, and every
-    bound on a gate that has none."""
+    """Every ledger entry of a bounded gate that lacks its bound, every bound
+    on a gate that has none, and every native `builds` entry."""
     errs = []
     for binding, entries in ledgers.items():
         for i, e in enumerate(entries):
             where = f"ledger.{binding}[{i}] ({e.get('family')} {e.get('gate')})"
+            if e.get("gate") == "builds" and e.get("compiler", "native") == "native":
+                errs.append(
+                    f"{where}: native is required for every document of every compiler-driven "
+                    f"tier, so a native refusal or error cannot be ledgered"
+                )
             field = ENTRY_BOUNDS.get(e.get("gate"))
             for other in set(ENTRY_BOUNDS.values()) - {field}:
                 if other in e:
@@ -349,10 +423,22 @@ def main(argv=None):
         help="evaluate and print the timing gates, but never go red on one "
         "(the scheduled sweep, until plan phase 6 makes them block)",
     )
+    ap.add_argument(
+        "--hosted",
+        action="store_true",
+        help="a hosted CI runner, not a clean machine: the deterministic gates run "
+        "exactly, the speed gate fails only past the manifest's "
+        "hosted_runner.max_timing_ratio (a fall-back-sized regression), and the build "
+        "slope is reported, not red; the exact bars belong to the clean sweep",
+    )
     ap.add_argument("--json", help="also write the rows as JSON here")
     a = ap.parse_args(argv)
+    if a.hosted and a.report_timing:
+        ap.error("--hosted and --report-timing are exclusive")
 
     manifest = load(a.manifest)
+    global HOSTED_RATIO
+    HOSTED_RATIO = manifest["hosted_runner"]["max_timing_ratio"] if a.hosted else None
     gates = dict(manifest["gates"])
     if a.gates == "deterministic":
         gates = {k: v for k, v in gates.items() if v["kind"] == DETERMINISTIC}
@@ -466,6 +552,12 @@ def main(argv=None):
 
     for r in rows:
         if a.report_timing and r["kind"] == TIMING:
+            continue
+        # A hosted runner holds the speed ratio to its wider bound and only
+        # reports the build slope, which no bound on a shared machine makes
+        # stable (a millisecond of jitter over a few hundred states is
+        # hundreds of ns/state).
+        if a.hosted and r["gate"] == "build_slope":
             continue
         # Several files share a family (serial and threaded, one per binding),
         # so every message names the binding and thread mode.

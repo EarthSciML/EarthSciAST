@@ -1,9 +1,8 @@
 //! Operand resolution: turning an `Operand` / `SrcRef` into the scalar,
 //! consumer-aligned strided view, or full source view a kernel consumes.
 //!
-//! Split from the kernels because this is where the three address spaces —
-//! slab slots, the flat state vector, the runtime observed map — are
-//! unified; past this boundary the loops see only `(pointer, shape,
+//! Split from the kernels because this is where the two address spaces —
+//! slab slots and the flat state vector — are unified; past this boundary the loops see only `(pointer, shape,
 //! strides)` and never consult the program again.
 
 use super::*;
@@ -72,7 +71,6 @@ pub(super) fn resolve_scalar(
     env: &Env,
     slab_ptr: *const f64,
     slot_off: &[usize],
-    obs: &ArrMap,
 ) -> f64 {
     match op {
         Operand::Lit(v) => *v,
@@ -90,14 +88,6 @@ pub(super) fn resolve_scalar(
             debug_assert!(sv.shape.is_empty(), "scalar read of array state");
             env.state[sv.flat_offset]
         }
-        Operand::Obs(ix) => {
-            let name = &env.prog.obs_reads[*ix as usize];
-            let a = obs
-                .get(name)
-                .unwrap_or_else(|| panic!("observed `{name}` not materialized before read"));
-            assert_eq!(a.ndim(), 0, "scalar read of array observed `{name}`");
-            a[IxDyn(&[])]
-        }
     }
 }
 
@@ -108,7 +98,6 @@ pub(super) fn resolve_rv(
     env: &Env,
     slab_ptr: *const f64,
     slot_off: &[usize],
-    obs: &ArrMap,
 ) -> Rv {
     match op {
         Operand::Lit(v) => Rv::S(*v),
@@ -139,21 +128,6 @@ pub(super) fn resolve_rv(
                 }
             }
         }
-        Operand::Obs(ix) => {
-            let name = &env.prog.obs_reads[*ix as usize];
-            let a = obs
-                .get(name)
-                .unwrap_or_else(|| panic!("observed `{name}` not materialized before read"));
-            if a.ndim() == 0 {
-                Rv::S(a[IxDyn(&[])])
-            } else {
-                assert_eq!(a.shape(), shape, "observed `{name}` box mismatch");
-                Rv::V {
-                    ptr: a.as_ptr(),
-                    strides: a.strides().iter().map(|&s| s as i64).collect(),
-                }
-            }
-        }
     }
 }
 
@@ -163,7 +137,6 @@ pub(super) fn resolve_src(
     env: &Env,
     slab_ptr: *const f64,
     slot_off: &[usize],
-    obs: &ArrMap,
 ) -> SrcView {
     match src {
         SrcRef::Slot(s) => {
@@ -180,17 +153,6 @@ pub(super) fn resolve_src(
                 ptr: state_ptr(env, *ix),
                 shape: sv.shape.clone(),
                 strides: rm_strides(&sv.shape),
-            }
-        }
-        SrcRef::Obs(ix) => {
-            let name = &env.prog.obs_reads[*ix as usize];
-            let a = obs
-                .get(name)
-                .unwrap_or_else(|| panic!("observed `{name}` not materialized before read"));
-            SrcView {
-                ptr: a.as_ptr(),
-                shape: a.shape().iter().copied().collect(),
-                strides: a.strides().iter().map(|&s| s as i64).collect(),
             }
         }
     }

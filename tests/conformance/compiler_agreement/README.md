@@ -21,7 +21,9 @@ Design decisions of record (2026-09-21) that this tier implements:
   program, and a byte comparison on one must not be asserted.
 * A compiler that cannot run a document **refuses** it, naming the rule and the
   reason. It never falls back. A refusal is a **named exclusion**, never a pass
-  and never a silent skip — except from `interpreter`, where it is a failure.
+  and never a silent skip — except from `interpreter` and `native`, where it is
+  a failure: `native` refuses by name only the constructs outside its scope
+  (`API_SPEC.md` §5.8), and this tier carries none of them.
 * Fixtures are **referenced by path** from the tiers that already own them.
   Nothing about a document's physics is decided here.
 
@@ -30,7 +32,8 @@ Design decisions of record (2026-09-21) that this tier implements:
 > fixture carries. Julia, Rust and Python each answer for both `interpreter`
 > and `native` with no refusals on any fixture, and all three are
 > `bindings_required` for each. Every fixture's `required` map names `native`
-> for all three, so a `native` refusal anywhere in the tier is red; Python is `bindings_required` for `sympy`,
+> for all three, so a `native` refusal anywhere in the tier is red (for Julia
+> and Rust whatever the map says; for Python because the map names it); Python is `bindings_required` for `sympy`,
 > which refuses the four array fixtures by name and runs the two scalar ones.
 > **Julia is `bindings_required` for `mtk`** as of 2026-09-22:
 > `esm_problem(…; compiler = :mtk)` builds every one of the six fixtures
@@ -250,18 +253,20 @@ Field rules:
   gets when nobody has an opinion, and a conformance tier has one
   (`API_SPEC.md` §5.8).
 * **`required`** maps a binding to the compilers that MUST run this fixture.
-  Every fixture requires `native` of Julia, Rust and Python (2026-09-24): each
-  answered all six within tolerance, so a `native` refusal of any of them is now
-  RED rather than a named exclusion. Each name added is a one-way ratchet, the
-  same shape `compiled_rhs`'s `compiled_required` has.
+  It governs `xla`, `mtk`, `sympy` and Python's `native`; `interpreter`, and
+  `native` in Julia and Rust, are required for every fixture whatever the map
+  says, so a refusal from either is RED. The maps still name `native` for
+  Julia, Rust and Python: for the first two that restates the rule, and for
+  Python it is what makes a Python `native` refusal red. Each name added is a one-way ratchet, the same shape
+  `compiled_rhs`'s `compiled_required` has.
 
 **The two ledgers mean different things and must never be merged.** The
 top-level `compilers.<value>.bindings_required` / `bindings_optional` lists
 govern **availability**: whether a binding must be able to ANSWER for that
 compiler at all. A fixture's `required` map governs **refusals**: whether that
-compiler must be able to run THIS document. A compiler can be required to exist
-and still be allowed to refuse a particular fixture, which is the normal state
-of a coverage backlog; the reverse — required on a fixture but not required to
+compiler must be able to run THIS document. A compiler other than `interpreter`
+and `native` can be required to exist and still be allowed to refuse a
+particular fixture — `sympy` refusing an array document, say; the reverse — required on a fixture but not required to
 exist — is a manifest error the runner reports.
 * **`anchor`** names where the independent reference comes from, or `none`. A
   fixture that CAN carry one MUST, because without it the Julia leg is only a
@@ -500,6 +505,14 @@ adapter.
 * an **`interpreter` refusal** is always RED: the interpreter is complete over
   the evaluable core (`esm-libraries-spec.md` §2.5.10), so a refusal there is a
   defect rather than coverage;
+* a **`native` refusal from Julia or Rust** is always RED, for the same reason
+  the interpreter's is: `native` covers the whole evaluable core and refuses by
+  name only the constructs outside its scope (events, implicit equations, SDE
+  noise, a spatial operator with no discretization rule; `API_SPEC.md` §5.8),
+  none of which a fixture here carries. No fixture's `required` map can excuse
+  it, and neither binding may list `native` on `bindings_optional`. Python is
+  exempt from this rule: its `native` refusal is governed by the `required`
+  map;
 * a **refusal from any other compiler** is a **named exclusion** — reported with
   the binding, the compiler, the fixture, the rule and the reason, in the report
   and on the console, and green for now — unless this fixture's `required` map
@@ -522,8 +535,9 @@ Two cases the outcome table does not name, decided by the runner:
   optional compiler's build failing is a build failure, and letting it read as a
   legal skip is how a whole lane goes untested while the log says "skipped".
 
-The named-exclusion list under a strict `native` default IS the coverage
-backlog, and this tier is where it is read and burned down.
+The named-exclusion list is therefore the coverage backlog of `xla`, `mtk` and
+`sympy` alone, and this tier is where it is read and burned down. `native` has
+no backlog to list.
 
 A fixture's `required` map is also checked against the availability ledger: a
 fixture that requires `<binding>/<compiler>` to RUN it while
@@ -563,7 +577,8 @@ fixture's run resolves and every anchor point lands on a saved row; every
 COMMITTED golden's file shape and its agreement with the anchor it carries; and
 then the negative controls — a value moved off its band, a missing element, a
 missing save time, an error (required and not), a `required` refusal, an
-`interpreter` refusal, an unrequired refusal reported as a named exclusion with
+`interpreter` refusal, an unrequired `native` refusal failing anyway, an
+unrequired refusal from another compiler reported as a named exclusion with
 its rule and reason, both arms of the availability ledger, and the §5.44.2
 arithmetic itself including the scaled `reduction` floor. The controls run
 against a SYNTHETIC reference rather than a committed golden, so the harness is
@@ -581,8 +596,8 @@ Exit codes:
 
 | Code | When |
 |---|---|
-| 0 | the self-test passed, or every required binding answered within tolerance. An unrequired refusal and an unavailable optional compiler are both green, and both are named in the report AND on the console |
-| 1 | a mismatch; an `error`; an `interpreter` refusal; a refusal from a binding+compiler a fixture's `required` map names; an `unavailable` (or an unregistered adapter) from a `bindings_required` binding; a broken adapter; or a self-test failure |
+| 0 | the self-test passed, or every required binding answered within tolerance. An unrequired refusal from `xla`, `mtk` or `sympy` and an unavailable optional compiler are both green, and both are named in the report AND on the console |
+| 1 | a mismatch; an `error`; an `interpreter` or `native` refusal; a refusal from a binding+compiler a fixture's `required` map names; an `unavailable` (or an unregistered adapter) from a `bindings_required` binding; a broken adapter; or a self-test failure |
 | 2 | a manifest or configuration error and no run attempted: the manifest is missing or malformed, the two ledgers contradict each other, a tolerance override carries no reason, a requested compiler is not in the manifest, a requested binding is `scope_excluded`, or a golden is missing for a producer run |
 
 Because the runner exits 0 on a legal skip, a workflow whose point is that a
@@ -656,6 +671,7 @@ and the Julia stages run for real with the gate above deciding.
    integration tolerances, its tolerance block and an anchor if the fixture can
    carry one.
 3. Mint its golden with `--write-golden --bindings julia` and commit it.
-4. Run every compiler. A refusal is a finding to record in the report, not a
+4. Run every compiler. An `interpreter` or `native` refusal is a defect to fix
+   in the binding; any other refusal is a finding to record in the report, not a
    reason to drop the fixture. Add each compiler that answers within tolerance
    to the fixture's `required` map, so that it cannot regress unnoticed.

@@ -49,12 +49,15 @@
 # refused rather than folded in binary64 (`_check_recurrence_precision`).
 
 # One recurrence of one fill route: the compiled body and fold, the sweep
-# geometry, and — under `native` — the generated function that runs it.
-# Concretely parameterized so a level holds its sweeps in a tuple and every call
-# is statically dispatched (`_fill_obs_levels!` explains why).
+# geometry, and how it runs — `gen`, the generated function (`native`), or the
+# `_PerCellLicense` the walked form needs (`interpreter`; compiler.jl), so a
+# strict plan cannot build a sweep that walks. `nothing` marks the draft the
+# emitter reads, which has no run method. Concretely parameterized so a level
+# holds its sweeps in a tuple and every call is statically dispatched
+# (`_fill_obs_levels!` explains why).
 struct _RecurrenceSweep{F,TB}
     name::String
-    gen::F                              # generated sweep, or `nothing` (walked)
+    gen::F                              # generated sweep, license (walked), or draft
     tabs::TB                            # its by-type tab containers
     body::_Node                         # the cell's term (no fold)
     fold::Union{Nothing,_ACFold}        # the cell's reduction, if it contracts
@@ -271,26 +274,29 @@ function _compile_recurrence_sweep(name::String, def::ASTExpr, dims::Vector{Int}
         end
     end
     ncells = prod(dims)
-    walked = _RecurrenceSweep(name, nothing, (), body, fold, out_refs, rg.cur,
-                              order, copy(dims), blk.base, copy(blk.strides), ncells)
+    draft = _RecurrenceSweep(name, nothing, (), body, fold, out_refs, rg.cur,
+                             order, copy(dims), blk.base, copy(blk.strides), ncells)
     if _codegen_disabled()
-        _compiler_is_strict() && _refuse_rule(name,
+        return _walked_recurrence(draft, _percell_license(name,
             "an ordered recurrence sweep (esm-spec §4.3.1.1) under this compiler has " *
-            "only its walked form, which evaluates the body as a tree per cell")
-        _note_recurrence!(:recurrence_walk)
-        return walked
+            "only its walked form, which evaluates the body as a tree per cell"))
     end
-    gen = _try_codegen_recurrence(walked)
+    gen = _try_codegen_recurrence(draft)
     if gen isa Symbol
-        _compiler_is_strict() && _refuse_rule(name,
+        return _walked_recurrence(draft, _percell_license(name,
             "the emitter for its ordered recurrence sweep (esm-spec §4.3.1.1) " *
             "declined ($(gen)), and the walked form evaluates the body as a tree per " *
-            "cell. Build with compiler=:interpreter to run it")
-        _note_recurrence!(:recurrence_walk)
-        return walked
+            "cell. Build with compiler=:interpreter to run it"))
     end
     _note_recurrence!(:recurrence_sweep)
     return gen
+end
+
+# The walked form of a drafted sweep: the interpreter's, so it carries a license.
+function _walked_recurrence(d::_RecurrenceSweep{Nothing}, lic::_PerCellLicense)
+    _note_recurrence!(:recurrence_walk)
+    return _RecurrenceSweep(d.name, lic, (), d.body, d.fold, d.out_refs, d.cur,
+                            d.order, d.dims, d.base, d.strides, d.ncells)
 end
 
 # The cascade tally and the compiler report row for one recurrence: `native`'s
@@ -303,7 +309,8 @@ function _note_recurrence!(k::Symbol)
     rec === nothing || (rec.tally[k] = get(rec.tally, k, 0) + 1)
     return nothing
 end
-_recurrence_tier(sw::_RecurrenceSweep) = sw.gen === nothing ? :interpreter : :recurrence_sweep
+_recurrence_tier(sw::_RecurrenceSweep) =
+    sw.gen isa _PerCellLicense ? :interpreter : :recurrence_sweep
 
 # ---- Run ---------------------------------------------------------------------
 
@@ -313,7 +320,7 @@ _recurrence_tier(sw::_RecurrenceSweep) = sw.gen === nothing ? :interpreter : :re
     return _run_recurrence_sweeps!(Base.tail(sws), ue, p, t, T)
 end
 
-@inline function _run_recurrence_sweep!(sw::_RecurrenceSweep{Nothing}, ue, p, t,
+@inline function _run_recurrence_sweep!(sw::_RecurrenceSweep{_PerCellLicense}, ue, p, t,
                                         ::Type{T}) where {T}
     _walk_recurrence!(sw, ue, p, t, T)
     return nothing
@@ -327,7 +334,8 @@ end
 # The walked form: the cells in sweep order, each evaluated and published before
 # the next. Position `c` decodes into the output indices with the last axis of
 # `order` fastest.
-function _walk_recurrence!(sw::_RecurrenceSweep, ue, p, t, ::Type{T}) where {T}
+function _walk_recurrence!(sw::_RecurrenceSweep{_PerCellLicense}, ue, p, t,
+                           ::Type{T}) where {T}
     refs = sw.out_refs
     order = sw.order
     dims = sw.dims

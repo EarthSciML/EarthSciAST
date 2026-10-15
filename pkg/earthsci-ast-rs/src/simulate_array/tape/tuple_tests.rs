@@ -37,7 +37,7 @@ fn the_corpus_join_and_ragged_documents_lower_to_segmented_reductions() {
             1,
         ),
     ] {
-        let prog = ab_check(corpus(rel), 0, -2.0, 2.0);
+        let prog = ab_check(corpus(rel), -2.0, 2.0);
         assert_eq!(count(&prog, "SegReduce"), reductions, "{rel}");
     }
 }
@@ -96,7 +96,7 @@ fn self_join_doc(n: usize) -> Value {
 fn a_self_join_materializes_its_matches_and_its_tape_is_flat_in_n() {
     let mut sizes = Vec::new();
     for n in [16usize, 300] {
-        let prog = ab_check(self_join_doc(n), 0, -2.0, 2.0);
+        let prog = ab_check(self_join_doc(n), -2.0, 2.0);
         assert_eq!(count(&prog, "SegReduce"), 2);
         for t in &prog.seg_tables {
             assert_eq!(
@@ -152,7 +152,7 @@ fn a_many_to_many_data_column_join_folds_in_the_interpreters_order() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -3.0, 3.0);
+    let prog = ab_check(doc, -3.0, 3.0);
     let matches = (0..nl)
         .map(|a| (0..nr).filter(|&b| kl[a] == kr[b]).count())
         .sum::<usize>();
@@ -202,7 +202,7 @@ fn a_gate_on_an_output_index_restricts_each_cells_run() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     assert_eq!(count(&prog, "SegReduce"), 1);
     let per_cell = |c: f64| rec_cell.iter().filter(|&&x| x == c).count() as u32;
     let mut rows = vec![0u32];
@@ -257,7 +257,7 @@ fn a_ragged_gather_of_a_two_dimensional_state_reads_it_in_place() {
             ]
         }}
     });
-    let prog = ab_check(doc, 0, -2.0, 2.0);
+    let prog = ab_check(doc, -2.0, 2.0);
     assert_eq!(count(&prog, "SegReduce"), 1);
     assert_eq!(prog.seg_tables[0].rows, vec![0, 2, 5, 6]);
     // The gather of `u` sees one ghost: row 2's member 5 lies past node 4.

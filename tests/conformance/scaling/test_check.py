@@ -38,7 +38,7 @@ def result(family, n, **kw):
     return r
 
 
-def run(results, ledger, *args, binding="rust", gates=None):
+def run(results, ledger, *args, binding="rust", gates=None, threads=1):
     with open(os.path.join(HERE, "manifest.json")) as fh:
         manifest = json.load(fh)
     manifest = copy.deepcopy(manifest)
@@ -53,7 +53,8 @@ def run(results, ledger, *args, binding="rust", gates=None):
             json.dump(manifest, fh)
         with open(rp, "w") as fh:
             json.dump(
-                {"binding": binding, "compiler": "native", "threads": 1, "results": results}, fh
+                {"binding": binding, "compiler": "native", "threads": threads, "results": results},
+                fh,
             )
         code = check.main([rp, "--manifest", mp, "--json", op, *args])
         with open(op) as fh:
@@ -130,8 +131,11 @@ def main():
     code, o = run(refused, [])
     assert code == 1 and o[("regrid", 100, "builds")] == "FAIL", o
     assert o[("regrid", 100, "no_steady_alloc")] == "skip"
+    # native is required for every document, so a refusal cannot be ledgered:
+    # a builds entry is a manifest error.
     code, o = run(refused, [{"family": "regrid", "gate": "builds", "phase": 3}])
-    assert code == 0, o
+    assert code == 1, o
+    assert check.ledger_shape_errors({"rust": [{"family": "regrid", "gate": "builds"}]})
 
     # A timing gate that now passes under a ledger entry is reported, not red.
     big = [result("stencil_1d", 10000), result("stencil_1d", 100000)]
@@ -180,7 +184,7 @@ def main():
     assert code == 0 and o[("stencil_1d", 100, "hand_loop_agrees")] == "ledgered", o
     # A refused document's hand loop is checked against the interpreter only up
     # to its size cap: a null there stays unmeasured.
-    code, o = run(refused, [{"family": "regrid", "gate": "builds", "phase": 3}])
+    code, o = run(refused, [])
     assert o[("regrid", 100, "hand_loop_agrees")] == "skip", o
 
     # regrid's speed gate applies from 2000 states (its ladder stops at 6324),
@@ -230,6 +234,89 @@ def main():
         {"binding": "rust"}, {"max_ns_per_state": 20, "per_byte_ns": 10}, *grows(0, 31000)
     )
     assert abs(lim - 320) < 1e-9, lim
+
+    # The dense-array allowance (user ruling 1): dense_page_ns times the
+    # declared-dense bytes the build writes per added state, added to the
+    # document allowance. 1000 dense bytes/state at 0.5 ns/byte under Rust
+    # allows 20 + 300 + 500 ns/state.
+    dense = {"build_slope": {"max_ns_per_state": 20, "per_byte_ns": {"rust": 10},
+                             "dense_page_ns": {"rust": 0.5}}}
+    code, o = run(grows(810e-9 * 1000, 31000, dense_bytes=0), [], gates=dense)
+    assert code == 1, o  # dense_bytes flat: no dense allowance
+    dg = grows(810e-9 * 1000, 31000)
+    dg[0]["dense_bytes"], dg[1]["dense_bytes"] = 0, 1_000_000
+    code, o = run(dg, [], gates=dense)
+    assert code == 0 and o[("unstructured_gather", None, "build_slope")] == "pass", o
+    dg[1]["build_s"] = 830e-9 * 1000
+    code, o = run(dg, [], gates=dense)
+    assert code == 1 and o[("unstructured_gather", None, "build_slope")] == "FAIL", o
+    for r in dg:
+        del r["dense_bytes"]
+    dg[1]["build_s"] = 810e-9 * 1000
+    code, o = run(dg, [], gates=dense)
+    assert code == 1, o  # a result without dense_bytes gets no dense allowance
+
+    # The small-N carve-out of the threaded speed gate (user ruling,
+    # round 2): below small_n_max a threaded result is held to native's own
+    # serial call instead of the threaded hand loop. chemistry_grid N = 1000
+    # (19800 states): threaded native 4.8x the threaded hand loop.
+    def grid(n, native_serial, **kw):
+        return [result("chemistry_grid", n, n_cells=n, n_states=20 * n, steady_rhs_s=4.8e-6,
+                       hand_loop_s=1e-6, serial_steady_rhs_s=native_serial, **kw)]
+
+    code, o = run(grid(1000, 4.5e-6), [], threads=4)
+    assert code == 0 and o[("chemistry_grid", 1000, "speed")] == "pass", o
+    code, o = run(grid(1000, 3e-6), [], threads=4)
+    assert code == 1 and o[("chemistry_grid", 1000, "speed")] == "FAIL", o  # 1.6x its serial call
+    code, o = run(grid(10000, 4.5e-6), [], threads=4)
+    assert code == 1 and o[("chemistry_grid", 10000, "speed")] == "FAIL", o  # from 10^4 up: unchanged
+    code, o = run(grid(1000, 4.5e-6), [], threads=1)
+    assert code == 1, o  # a serial run has no carve-out
+    code, o = run(grid(1000, None), [], threads=4)
+    assert code == 1, o  # nor a result without the serial native measure
+    # The floor is n_cells, not the ladder size: scalar_chemistry at N = 10^4
+    # has 500 boxes and falls under it; transport_3d's N = 10^4 rung has 10648
+    # cells and does not.
+    sc = [result("scalar_chemistry", 10000, n_cells=500, steady_rhs_s=4.8e-6, hand_loop_s=1e-6,
+                 serial_steady_rhs_s=4.5e-6)]
+    code, o = run(sc, [], threads=4)
+    assert code == 0 and o[("scalar_chemistry", 10000, "speed")] == "pass", o
+    tr = [result("transport_3d", 10000, n_cells=10648, steady_rhs_s=4.8e-6, hand_loop_s=1e-6,
+                 serial_steady_rhs_s=4.5e-6)]
+    code, o = run(tr, [], threads=4)
+    assert code == 1 and o[("transport_3d", 10000, "speed")] == "FAIL", o
+
+    # --hosted: every gate runs, but a timing gate is red only past
+    # hosted_runner.max_timing_ratio (3) times its bar.
+    slow2 = [result("stencil_1d", 10000), result("stencil_1d", 100000, steady_rhs_s=2.9e-4)]
+    code, o = run(slow2, [], "--hosted")
+    assert code == 0 and o[("stencil_1d", 100000, "speed")] == "pass", o  # 2.9x
+    slow4 = [result("stencil_1d", 10000), result("stencil_1d", 100000, steady_rhs_s=3.1e-4)]
+    code, o = run(slow4, [], "--hosted")
+    assert code == 1 and o[("stencil_1d", 100000, "speed")] == "FAIL", o  # 3.1x
+    code, o = run(slow4, [], "--report-timing")
+    assert code == 0, o
+    # The build slope is reported there, never red: 500 ns/state.
+    slope = [result("stencil_1d", 100, build_s=0.0), result("stencil_1d", 1100, build_s=500e-6)]
+    code, o = run(slope, [])
+    assert code == 1 and o[("stencil_1d", None, "build_slope")] == "FAIL", o
+    code, o = run(slope, [], "--hosted")
+    assert code == 0 and o[("stencil_1d", None, "build_slope")] == "FAIL", o
+    # The deterministic gates are exact there.
+    code, o = run([result("stencil_1d", 100, allocs_per_call=8)], [], "--hosted")
+    assert code == 1 and o[("stencil_1d", 100, "no_steady_alloc")] == "FAIL", o
+
+    # The median of the interleaved build pairs replaces build_s when the
+    # ends carry it: build_s reads 50 ns/state, the paired difference 10.
+    il = [result("stencil_1d", 100, build_s=0.0, build_s_interleaved=1e-3,
+                 build_interleaved_repeats=100),
+          result("stencil_1d", 1100, build_s=50e-6, build_s_interleaved=1e-3 + 60e-6,
+                 build_interleaved_repeats=100, build_interleaved_diff_s=10e-6)]
+    code, o = run(il, [])
+    assert code == 0 and o[("stencil_1d", None, "build_slope")] == "pass", o
+    del il[1]["build_interleaved_diff_s"]
+    code, o = run(il, [])
+    assert code == 1 and o[("stencil_1d", None, "build_slope")] == "FAIL", o  # no pairs: build_s
 
     # A family whose document grows by equations states its own per-byte rate
     # (scalar_chemistry's gate_overrides); the gate's data rate applies to the rest.

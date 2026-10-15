@@ -123,6 +123,62 @@ end
         @test all(gn[pn.var_map[k]] == gi[j] for (k, j) in pi_.var_map)
     end
 
+    @testset "a parameter gate folds only the entries it admits, refilled when p moves" begin
+        # The regrid's apply folds W[i,j]·F_src[i] under the gate A_ij > atol,
+        # which reads only a build constant and a parameter: the nest folds the
+        # entries the gate admits at the current `p`, and D(F_tgt) is computed
+        # in the same pass from the value it stores.
+        path = _act_fixture("tests/conformance/scaling/fixtures/regrid/regrid_N100.esm")
+        same, tally, _, (pn, u), (pi_, ui) = _act_agree(path)
+        @test same
+        @test get(tally, :array_contraction_consumer, 0) == 1
+        f = pn.f!
+        gens = f.levels[1][4].gens
+        @test length(gens) == 1 && gens[1].mask !== nothing
+        # No contraction the right-hand side keeps holds its re-emission closure.
+        @test all(g -> g.remit === nothing, (g for lvl in f.levels for g in lvl[4].gens))
+        # Every parameter value takes the interpreter's result bit for bit,
+        # through each refill and back: atol past the half-overlaps closes
+        # their gates, a negative atol opens the zero-overlap ones too.
+        key = Symbol("Regrid.atol")
+        for atol in (0.6, -1.0, pn.p[key], 0.6)
+            pn2 = merge(pn.p, NamedTuple{(key,)}((atol,)))
+            pi2 = merge(pi_.p, NamedTuple{(key,)}((atol,)))
+            dn = similar(u); fill!(dn, NaN); f(dn, u, pn2, 0.3)
+            di = similar(ui); fill!(di, NaN); pi_.f!(di, ui, pi2, 0.3)
+            @test all(dn[pn.var_map[k]] === di[j] for (k, j) in pi_.var_map)
+        end
+        # A derivative through the parameters (a dual-valued `p`).
+        kd = Symbol("Regrid.kd")
+        dk(prob, uu) = ForwardDiff.derivative(
+            x -> (d = zeros(typeof(x), length(uu));
+                  prob.f!(d, uu, merge(prob.p, NamedTuple{(kd,)}((x,))), 0.3); d),
+            prob.p[kd])
+        gn, gi = dk(pn, u), dk(pi_, ui)
+        @test all(gn[pn.var_map[k]] === gi[j] for (k, j) in pi_.var_map)
+        # A solver differentiating through `p` alternates Float64 and dual-valued
+        # calls at one primal; the gate's admitted entries are the same for
+        # both, so the mask is filled once and kept across the alternation, and
+        # each call still takes the interpreter's result.
+        mask = gens[1].mask
+        pd = merge(pn.p, NamedTuple{(kd,)}((ForwardDiff.Dual(pn.p[kd], 1.0),)))
+        pdi = merge(pi_.p, NamedTuple{(kd,)}((ForwardDiff.Dual(pi_.p[kd], 1.0),)))
+        dref = similar(ui); fill!(dref, NaN); pi_.f!(dref, ui, pi_.p, 0.3)
+        ddref = zeros(eltype(pdi[kd]), length(ui)); pi_.f!(ddref, ui, pdi, 0.3)
+        f(similar(u), u, pn.p, 0.3)
+        fills = mask.fills
+        for _ in 1:3
+            dn = similar(u); fill!(dn, NaN); f(dn, u, pn.p, 0.3)
+            @test all(dn[pn.var_map[k]] === dref[j] for (k, j) in pi_.var_map)
+            dd = zeros(eltype(pd[kd]), length(u)); f(dd, u, pd, 0.3)
+            @test all(dd[pn.var_map[k]] == ddref[j] for (k, j) in pi_.var_map)
+        end
+        @test mask.fills == fills
+        # A move of the primal still refills.
+        f(similar(u), u, merge(pn.p, NamedTuple{(key,)}((0.6,))), 0.3)
+        @test mask.fills == fills + 1
+    end
+
     @testset "two contracted indices fold into one accumulator ($(tier))" for
             (asc, tier) in ((false, :array_contraction_codegen), (true, :affine_reduce))
         # Non-integer data, so the association of the fold shows in the last

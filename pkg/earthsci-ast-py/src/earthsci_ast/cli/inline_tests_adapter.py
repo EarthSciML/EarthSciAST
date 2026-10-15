@@ -21,8 +21,9 @@ them that is load-bearing:
   diagnostic (an operator with no evaluation rule declines at evaluation rather
   than at build, and calling that "every number is wrong" would file a refusal
   in the same bucket as a numeric defect). The runner reads a refusal as a
-  named exclusion, or -- for a fixture whose ``required`` map names this
-  compiler -- as a failure.
+  named exclusion only where the fixture's ledger names it, and as a failure
+  otherwise. (Julia and Rust ``native`` may be excused only for an out-of-scope
+  construct; Python ``native`` is exempt from that rule.)
 * ``unavailable`` -- the whole output, when the compiler does not exist in this
   binding at all. A fact about this BUILD, never about a document.
   :func:`~earthsci_ast.inline_tests.run_inline_tests` catches a build failure

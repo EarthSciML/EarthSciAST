@@ -30,13 +30,13 @@ use std::collections::HashSet;
 ///
 /// It exists because the passes it replaces evaluated the SAME rules through
 /// the whole-array overlay, with the per-cell oracle beneath it and no entry in
-/// any fallback report — the silent demotion `esm-libraries-spec.md` §2.5.10
-/// refuses, and one that a gate over `Instr::Fallback` alone cannot see,
-/// because the overlay declines on its own terms. Serving them from the tape
+/// any decline report — the silent demotion `esm-libraries-spec.md` §2.5.10
+/// refuses, and one that a gate over the tape's declined rules alone cannot
+/// see, because the overlay declines on its own terms. Serving them from the tape
 /// makes the gate honest: there is no second evaluator left to disagree.
 ///
-/// The production RHS scratch keeps its exports OFF (with no fallback rule
-/// nothing can read them, and the publish is a memcpy per observed per call),
+/// The production RHS scratch keeps its exports OFF (nothing inside a call
+/// reads them, and the publish is a memcpy per observed per call),
 /// so this carries its own scratch and its own slab.
 #[cfg(feature = "solve")]
 struct TapedObserveds {
@@ -48,10 +48,10 @@ struct TapedObserveds {
 
 #[cfg(feature = "solve")]
 impl TapedObserveds {
-    fn new(compiled: &ArrayCompiled, tape: &(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)) -> Self {
+    fn new(compiled: &ArrayCompiled, tape: &Rc<TapeProgram>) -> Self {
         let mut scratch = RhsScratch::new(&compiled.var_shapes);
         scratch.set_const_arrays(Rc::clone(&compiled.const_scope));
-        scratch.install_tape(Rc::clone(&tape.0), Rc::clone(&tape.1));
+        scratch.install_tape(Rc::clone(tape));
         scratch.set_exports_active(true);
         TapedObserveds {
             scratch,
@@ -609,13 +609,17 @@ impl ArrayCompiled {
     /// production RHS closure carries. Exposed for the fast-executor A/B,
     /// allocation-steady-state and invalidation tests, driven through
     /// [`Self::debug_eval_rhs_into`].
+    ///
+    /// A model whose tape declined a rule has no program to install, so this
+    /// is the same refusal a solve raises ([`Self::strict_tape`]): a scratch
+    /// without a tape would run the legacy evaluator, and a tape-versus-legacy
+    /// comparison would then compare the legacy evaluator with itself.
     #[doc(hidden)]
-    pub fn debug_new_scratch_taped(&self) -> RhsScratch {
+    pub fn debug_new_scratch_taped(&self) -> Result<RhsScratch, SimulateError> {
         let mut s = RhsScratch::new(&self.var_shapes);
         s.set_const_arrays(Rc::clone(&self.const_scope));
-        let (prog, _report) = self.tape(&HashSet::new());
-        s.install_tape(prog, self.shared_observed_rules());
-        s
+        s.install_tape(self.strict_tape(&HashSet::new())?);
+        Ok(s)
     }
 
     /// The precision environment this model was compiled under (the
@@ -789,8 +793,7 @@ impl ArrayCompiled {
         let mut scratch = RhsScratch::new(&self.var_shapes);
         scratch.set_const_arrays(Rc::clone(&self.const_scope));
         if self.tape_serves_passes() {
-            let (prog, _report) = self.tape(&HashSet::new());
-            scratch.install_tape(prog, self.shared_observed_rules());
+            scratch.install_tape(self.strict_tape(&HashSet::new())?);
             scratch.set_exports_active(true);
         }
         let mut dy: Vec<f64> = Vec::new();
@@ -1582,7 +1585,7 @@ impl ArrayCompiled {
         // itself the defect: the hoist evaluated every CONST-tier observed
         // through the whole-array overlay, once per solve, before the tape the
         // caller asked for had been built at all.
-        let (tape, tape_fallbacks) = self.build_solve_tape(discrete_forcing);
+        let tape = self.build_solve_tape(discrete_forcing)?;
 
         let cadence = self.partition_observed_cadence(discrete_forcing);
         let setup = self.hoist_static_observeds(cadence, &ic_vec, &param_vec, t0, tape.as_ref());
@@ -1631,7 +1634,6 @@ impl ArrayCompiled {
                 solution_metadata(
                     solver_name,
                     &stats,
-                    tape_fallbacks,
                     self.merged_renames.clone(),
                     self.namespace.clone(),
                 ),
@@ -1667,7 +1669,6 @@ impl ArrayCompiled {
             solution_metadata(
                 solver_name,
                 &stats,
-                tape_fallbacks,
                 self.merged_renames.clone(),
                 self.namespace.clone(),
             ),
@@ -1754,7 +1755,7 @@ impl ArrayCompiled {
         ic_vec: &[f64],
         param_vec: &[f64],
         t0: f64,
-        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
+        tape: Option<&Rc<TapeProgram>>,
     ) -> SolveSetup {
         let sa0 = build_state_arrays(&self.var_shapes, ic_vec);
         // The two STRICT compilers, `native` and `xla` (API_SPEC §5.8): the
@@ -1830,7 +1831,7 @@ impl ArrayCompiled {
         param_vec: &[f64],
         t0: f64,
         boundaries: &[f64],
-        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
+        tape: Option<&Rc<TapeProgram>>,
     ) {
         // Under either strict compiler: one taped read-out at t0 answers BOTH
         // halves of this sink — the static observeds (which the hoist no
@@ -1906,31 +1907,26 @@ impl ArrayCompiled {
     /// the static-observed hoist above). [`crate::Compiler::Interpreter`]
     /// builds no tape at all — it IS the per-cell oracle.
     ///
-    /// The build report's fallback list is kept, not dropped: a rule the
-    /// tape could not compile is evaluated by the per-cell oracle, whose
-    /// cost grows with the cell count, and that is invisible from the
-    /// outside (the numbers are bit-identical — only the runtime differs).
-    /// It rides out on [`SolutionMetadata::tape_fallbacks`] so a caller —
-    /// including the wasm/JS host, which has no other window into the
-    /// build — can name the offending rule and the reason.
+    /// The tape is mandatory under every routing but the `interpreter`: a
+    /// build that declined a rule is a refusal ([`Self::strict_tape`], naming
+    /// the rule and the reason), never a solve of the whole model on another
+    /// evaluator. That holds for the historical routing (`compile_array`) as
+    /// much as for the strict compilers — its right-hand side is the tape,
+    /// and a model whose tape declined would otherwise run every rule per
+    /// cell with nothing but the runtime to show for it.
     #[cfg(feature = "solve")]
     fn build_solve_tape(
         &self,
         discrete_forcing: &HashSet<String>,
-    ) -> (SolveTape, Vec<(String, String)>) {
-        let mut tape_fallbacks: Vec<(String, String)> = Vec::new();
+    ) -> Result<SolveTape, SimulateError> {
         // `interpreter` (API_SPEC §5.8) is the reference and nothing else: no
         // tape, and the whole-array overlay off under it, so every rule is
         // walked per cell. It is the compiler the caller named, and the only
         // way to reach the oracle.
-        let tape: SolveTape = if self.is_interpreter() {
-            None
-        } else {
-            let (prog, report) = self.tape(discrete_forcing);
-            tape_fallbacks = report.fallbacks.clone();
-            Some((prog, self.shared_observed_rules()))
-        };
-        (tape, tape_fallbacks)
+        if self.is_interpreter() {
+            return Ok(None);
+        }
+        Ok(Some(self.strict_tape(discrete_forcing)?))
     }
 
     /// DISCRETE: integrate in segments split on the refresh boundaries. Segment
@@ -2077,7 +2073,7 @@ impl ArrayCompiled {
         param_vec: &[f64],
         setup: &SolveSetup,
         output_observed: &[String],
-        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
+        tape: Option<&Rc<TapeProgram>>,
     ) -> Result<Solution, SimulateError> {
         let mut state_variable_names = self.state_variable_names().to_vec();
         self.append_observed_trajectories(
@@ -2138,7 +2134,7 @@ impl ArrayCompiled {
         opts: &SolveOptions,
         // Step 3b: the solve-wide tape program + the FULL observed rule list
         // its fallback indices resolve against. `None` ⇒ legacy interpreter.
-        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
+        tape: Option<&Rc<TapeProgram>>,
         // The solve's kept scratches, or `None` for a pair built for this
         // segment alone (see [`SolveScratches`]).
         scratches: Option<&SolveScratches>,
@@ -2273,8 +2269,8 @@ impl ArrayCompiled {
             // Step 3b: the production RHS closure's scratch gets the compiled
             // tape. Its CONST/SEGMENT sections prime on the first call, and a
             // kept scratch re-runs SEGMENT after each forcing refresh.
-            if let Some((prog, full_obs)) = tape {
-                s.install_tape(Rc::clone(prog), Rc::clone(full_obs));
+            if let Some(prog) = tape {
+                s.install_tape(Rc::clone(prog));
             }
             *rhs_scratch.borrow_mut() = Some(s);
         }
@@ -2287,11 +2283,10 @@ impl ArrayCompiled {
         // construction is deterministic, so results are bit-identical either way.
         let jac_seed = Rc::clone(&seg_seed);
         let const_scope_jac = Rc::clone(&self.const_scope);
-        let tape_jac: Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)> =
-            match (self.tape_serves_passes(), tape) {
-                (true, Some((prog, full_obs))) => Some((Rc::clone(prog), Rc::clone(full_obs))),
-                _ => None,
-            };
+        let tape_jac: Option<Rc<TapeProgram>> = match (self.tape_serves_passes(), tape) {
+            (true, Some(prog)) => Some(Rc::clone(prog)),
+            _ => None,
+        };
         // `interpreter`: the per-cell oracle for the right-hand side too, not
         // just for the observeds. The strict compilers and the legacy routing
         // pass `false` and take the whole-array overlay where the tape is
@@ -2420,8 +2415,8 @@ impl ArrayCompiled {
                 // The tape is bit-identical to the legacy path (that is what
                 // the compiler-agreement tier asserts, CONFORMANCE_SPEC
                 // §5.44), so the differenced Jacobian is unchanged.
-                if let Some((prog, full_obs)) = &tape_jac {
-                    s.install_tape(Rc::clone(prog), Rc::clone(full_obs));
+                if let Some(prog) = &tape_jac {
+                    s.install_tape(Rc::clone(prog));
                 }
                 s
             });
@@ -2601,7 +2596,7 @@ impl ArrayCompiled {
         static_names: &HashSet<String>,
         varying_rules: &[AlgebraicRule],
         requested: &[String],
-        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
+        tape: Option<&Rc<TapeProgram>>,
     ) {
         if self.observed_rules.is_empty() || time.is_empty() {
             return;
@@ -2885,7 +2880,7 @@ impl ArrayCompiled {
         static_names: &HashSet<String>,
         varying_rules: &[AlgebraicRule],
         requested: &[String],
-        tape: &(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>),
+        tape: &Rc<TapeProgram>,
     ) {
         let wanted = self.resolve_requested_observeds(requested);
         // WHICH observeds become rows is decided exactly as the overlay path
@@ -3305,17 +3300,16 @@ pub(super) fn expr_blocks_output_pruning(expr: &Expr) -> bool {
     node.any_child(&mut expr_blocks_output_pruning)
 }
 
-/// The solve-wide tape program plus the FULL observed rule list its fallback
-/// indices resolve against (`None` => legacy interpreter).
+/// The solve-wide tape program (`None` only under the `interpreter`
+/// compiler, which builds no tape).
 #[cfg(feature = "solve")]
-type SolveTape = Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>;
+type SolveTape = Option<Rc<TapeProgram>>;
 
 /// The run's [`SolutionMetadata`] — one construction for both driver exits.
 #[cfg(feature = "solve")]
 fn solution_metadata(
     solver_name: &str,
     stats: &SolveStats,
-    tape_fallbacks: Vec<(String, String)>,
     merged_variable_renames: HashMap<String, String>,
     namespace: Option<String>,
 ) -> SolutionMetadata {
@@ -3325,7 +3319,9 @@ fn solution_metadata(
         n_jacobian_calls: stats.n_jacobian_calls,
         n_accepted_steps: stats.n_accepted_steps,
         n_rejected_steps: stats.n_rejected_steps,
-        tape_fallbacks,
+        // A rule the tape declined is a refusal before any solve
+        // ([`ArrayCompiled::strict_tape`]), so a finished solve has none.
+        tape_fallbacks: Vec::new(),
         // Rides to the caller so a name-keyed read of the result can resolve a
         // spelling the merge deleted (issue #230).
         merged_variable_renames,
@@ -3371,7 +3367,7 @@ struct SegmentedRun<'a> {
     param_vec: &'a [f64],
     setup: &'a SolveSetup,
     opts: &'a SolveOptions,
-    tape: Option<&'a (Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
+    tape: Option<&'a Rc<TapeProgram>>,
     scratches: Option<&'a SolveScratches>,
 }
 

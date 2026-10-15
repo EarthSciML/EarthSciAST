@@ -432,14 +432,15 @@ jobs:
           julia --project=pkg/EarthSciAST.jl scripts/generate-pushdown-goldens.jl
           git diff --exit-code -- tests/
 
-      # The scaling tier's deterministic gates for Julia native
+      # The scaling tier's gates for Julia native
       # (tests/conformance/scaling/README.md): at the committed PR sizes
       # (10^2 and 10^3), code size is flat in N, a steady right-hand-side call
       # allocates nothing, every document builds, and each hand-written loop
-      # reproduces native's dy, with Julia's known-failure ledger applied. The
-      # timing gates need a clean machine and run in the Slurm sweep instead,
-      # so the adapter samples each call only the minimum five times
-      # (`--budget 0`) and skips the interpreter oracle, which the
+      # reproduces native's dy, with Julia's known-failure ledger applied.
+      # `check.py --hosted` also holds the speed ratio to 3 (a fall-back-sized
+      # regression) and reports the build slope: a hosted runner is not a
+      # clean machine, and the exact bars run on the scheduled clean sweep.
+      # The adapter skips the interpreter oracle, which the
       # compiler-agreement tier already covers. One Julia, like the goldens:
       # code size and allocation are properties of the emitted program, not of
       # the Julia version. `--in-process` measures in this one process: the
@@ -447,15 +448,15 @@ jobs:
       # scheduled sweep's guard against a document that outgrows the runner)
       # would load the package once per family. `!cancelled()` so a red
       # goldens check above still reports this gate.
-      - name: Scaling tier, deterministic gates (Julia native)
+      - name: Scaling tier, PR gates (Julia native)
         if: ${{ !cancelled() }}
         run: |
           julia --project=pkg/EarthSciAST.jl/scripts/scaling_env \
             tests/conformance/scaling/julia/adapter.jl \
             --docs tests/conformance/scaling/fixtures --output scaling-julia-serial.json \
-            --budget 0 --interpreter-max-states 0 --in-process
+            --interpreter-max-states 0 --in-process
           python3 tests/conformance/scaling/check.py scaling-julia-serial.json \
-            --gates deterministic --require pr
+            --hosted --require pr
 
   typescript-tests:
     runs-on: ubuntu-latest
@@ -665,24 +666,25 @@ jobs:
               conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio
           fi
 
-      # The scaling tier's DETERMINISTIC gates at the PR sizes
-      # (tests/conformance/scaling/README.md): each document builds or is a
-      # ledgered refusal, the tape length is flat in N, a steady right-hand
-      # side allocates nothing, and each hand-written loop reproduces native's
-      # dy. The known-failure ledger in its manifest.json applies, one way: an
-      # unledgered failure is red, and so is a ledger entry that now passes.
-      # The test step above already built the adapter binary with this exact
-      # feature list, so this costs the run and nothing else. The timing gates
-      # need a clean machine and the big sizes; they run in scaling-sweep.yml.
-      - name: Scaling tier (deterministic gates, PR sizes)
+      # The scaling tier's gates at the PR sizes
+      # (tests/conformance/scaling/README.md): each document builds, the tape
+      # length is flat in N, a steady right-hand side allocates nothing, and
+      # each hand-written loop reproduces native's dy. The known-failure ledger
+      # in its manifest.json applies, one way: an unledgered failure is red,
+      # and so is a ledger entry that now passes. `check.py --hosted` also
+      # holds the speed ratio to 3 (a fall-back-sized regression), so the
+      # adapter is a release build with aligned loops (README, Timing builds);
+      # the exact bars run on the scheduled clean sweep.
+      - name: Scaling tier (PR gates, PR sizes)
         if: ${{ !cancelled() && matrix.rust == 'stable' }}
+        env:
+          RUSTFLAGS: -C llvm-args=-align-loops=64
         run: |
-          cargo run --features \
-            conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio \
+          cargo run --release --features conformance-adapters,parallel \
             --bin earthsci-scaling-adapter-rust -- \
             --index ../../tests/conformance/scaling/fixtures/index.json --output scaling-rust.json
           python3 ../../tests/conformance/scaling/check.py scaling-rust.json \
-            --gates deterministic --require pr
+            --hosted --require pr
 
       # `cargo test` does NOT build bench targets -- that needs `--benches` or
       # `--all-targets` -- so nothing above ever compiles benches/benchmarks.rs,

@@ -25,11 +25,20 @@
 //! [`Instr::Copy`] / [`Instr::Region`] / [`Instr::Fill`] / [`Instr::Ramp`];
 //! control flow is the one structured [`Instr::JmpIfZero`]; and the
 //! boundaries with the rest of the runtime are [`Instr::Export`],
-//! [`Instr::DyWrite`], [`Instr::LoadForcing`] (the forcing buffer, read in the
-//! CONST or SEGMENT section) and [`Instr::Fallback`].
+//! [`Instr::DyWrite`] and [`Instr::LoadForcing`] (the forcing buffer, read in
+//! the CONST or SEGMENT section).
+//!
+//! There is no instruction that hands a rule to the per-cell oracle. A
+//! program exists only when every rule lowered; a build with a rule the tape
+//! cannot express yields a [`DeclinedTape`] instead, which names each
+//! declined rule and its reason and holds nothing to execute. So `native`,
+//! which runs nothing but this tape, cannot reach per-cell evaluation: the
+//! per-cell code lives only in the interpreter (`evaluate_rhs_legacy`, the
+//! observed passes), which the historical routing runs for a model whose tape
+//! declined.
 //!
 //! Two instructions carry data or a fold rather than a per-element map, and
-//! both exist so a whole downstream cone of rules stops falling back:
+//! both exist so a whole downstream cone of rules stops declining:
 //!
 //! * [`Instr::ConstArray`] materializes an inline array literal into a
 //!   CONST-section slot — one instruction and one store per solve, whatever
@@ -44,11 +53,9 @@
 //!   association the interpreter would. It is the one construct the tape
 //!   lowers that the whole-array overlay declines outright.
 //!
-//! A third piece of the same work is not an instruction: the lowering
-//! records every observed's statically inferable box, including the ones
-//! produced by rules that FELL BACK, so an `Operand::Obs` read of a
-//! per-cell-produced observed still carries a box and its readers stay on
-//! the tape (`TapeBuilder::wholesale_shape`).
+//! A rule that reads an observed whose own rule declined declines too, at
+//! the read: there is no operand for a value that is not on the tape, so the
+//! decline list names the producer and every rule that reads it.
 //!
 //! ## Closed functions
 //!
@@ -59,8 +66,7 @@
 //! remainders, comparisons and selects on integer-valued `f64`s), so all
 //! three executors gained it at once and none of them can drift from
 //! another. The `interp.*` entries of the same registry are not lowered: they
-//! read a table, and a rule that calls one becomes a fallback naming the
-//! function.
+//! read a table, and a rule that calls one declines, naming the function.
 
 #[cfg(test)]
 mod array_tests;
@@ -93,7 +99,7 @@ pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
 pub(crate) use ir::*;
 use lower::build_tape_program;
 
-use super::{AlgebraicRule, ArrayCompiled};
+use super::ArrayCompiled;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt;
@@ -108,7 +114,10 @@ pub struct TapeBuildReport {
     pub n_rules: usize,
     /// Rules fully lowered onto the tape.
     pub n_taped: usize,
-    /// `(rule name, deepest bail reason)` for every fallback rule.
+    /// `(rule name, deepest bail reason)` for every rule that did not lower.
+    /// Non-empty means the build produced no program at all (the instruction
+    /// counts below are then zero): the model runs on the interpreter under
+    /// the historical routing, and a strict compiler refuses it.
     pub fallbacks: Vec<(String, String)>,
     pub n_instr_const: usize,
     pub n_instr_segment: usize,
@@ -141,13 +150,16 @@ impl fmt::Display for TapeBuildReport {
         writeln!(f, "tape build report")?;
         writeln!(
             f,
-            "  rules: {} taped / {} fallback (of {})",
+            "  rules: {} taped / {} declined (of {})",
             self.n_taped,
             self.fallbacks.len(),
             self.n_rules
         )?;
         for (name, reason) in &self.fallbacks {
-            writeln!(f, "    fallback {name}: {reason}")?;
+            writeln!(f, "    declined {name}: {reason}")?;
+        }
+        if !self.fallbacks.is_empty() {
+            return writeln!(f, "  no program: a declined rule leaves no tape");
         }
         writeln!(
             f,
@@ -221,7 +233,7 @@ pub(crate) struct TapeRuleRecord {
     /// `"continuous"` (every right-hand-side call).
     pub cadence: &'static str,
     /// `None` when the rule lowered onto the tape; otherwise the DEEPEST
-    /// decline reason reached while trying.
+    /// decline reason reached while trying (and the model has no tape).
     pub fallback_reason: Option<String>,
 }
 
@@ -237,19 +249,11 @@ pub(crate) fn make_report(prog: &TapeProgram, vn_hits: (usize, usize)) -> TapeBu
         .map(|(k, v)| (k.to_string(), v))
         .collect();
     opcode_counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let fallbacks: Vec<(String, String)> = prog
-        .rules
-        .iter()
-        .filter_map(|r| match &r.status {
-            RuleStatus::Fallback(reason) => Some((r.name.clone(), reason.clone())),
-            RuleStatus::Taped => None,
-        })
-        .collect();
     let n_cont = prog.instrs.len() - (prog.n_const + prog.n_segment) as usize;
     TapeBuildReport {
         n_rules: prog.rules.len(),
-        n_taped: prog.rules.len() - fallbacks.len(),
-        fallbacks,
+        n_taped: prog.rules.len(),
+        fallbacks: Vec::new(),
         n_instr_const: prog.n_const as usize,
         n_instr_segment: prog.n_segment as usize,
         n_instr_continuous: n_cont,
@@ -268,6 +272,70 @@ pub(crate) fn make_report(prog: &TapeProgram, vn_hits: (usize, usize)) -> TapeBu
         fuse: prog.fuse_stats.clone(),
     }
 }
+
+/// The report of a build that declined: the rule counts and the declined
+/// rules, and nothing about a program, because there is none.
+pub(crate) fn make_declined_report(
+    declined: &DeclinedTape,
+    vn_hits: (usize, usize),
+) -> TapeBuildReport {
+    let fallbacks = declined.declined_rules();
+    TapeBuildReport {
+        n_rules: declined.rules.len(),
+        n_taped: declined.rules.len() - fallbacks.len(),
+        fallbacks,
+        vn_scope_hits: vn_hits.0,
+        vn_hoist_hits: vn_hits.1,
+        ..TapeBuildReport::default()
+    }
+}
+
+impl DeclinedTape {
+    /// `(rule name, reason)` for every rule that did not lower, in rule order.
+    pub(crate) fn declined_rules(&self) -> Vec<(String, String)> {
+        self.rules
+            .iter()
+            .zip(&self.reasons)
+            .filter_map(|(r, why)| why.as_ref().map(|why| (r.name.clone(), why.clone())))
+            .collect()
+    }
+}
+
+impl RuleInfo {
+    /// `"observed"` or `"state derivative"`, as the compiler report spells it.
+    pub(crate) fn kind_name(&self) -> &'static str {
+        match self.kind {
+            RuleKind::Observed(_) => "observed",
+            RuleKind::Rhs(_) => "state derivative",
+        }
+    }
+
+    /// The cadence tier's name in the compiler report.
+    pub(crate) fn cadence_name(&self) -> &'static str {
+        match self.cadence {
+            Cadence::Const => "const",
+            Cadence::Segment => "segment",
+            Cadence::Continuous => "continuous",
+        }
+    }
+}
+
+/// Test seam: the program of a build every rule of which lowered, panicking
+/// with the build report when one declined.
+#[cfg(test)]
+pub(crate) fn taped(
+    (prog, report): (Result<TapeProgram, DeclinedTape>, TapeBuildReport),
+) -> (TapeProgram, TapeBuildReport) {
+    match prog {
+        Ok(prog) => (prog, report),
+        Err(_) => panic!("the tape declined a rule:\n{report}"),
+    }
+}
+
+/// What a model's tape build produced: the program, or — when any rule did
+/// not lower — the [`DeclinedTape`] in its place. Either way the build's
+/// report rides beside it.
+pub(crate) type TapeBuild = Result<Rc<TapeProgram>, Rc<DeclinedTape>>;
 
 /// A tape program this model built, with its report, kept so that every pass
 /// that runs the tape — the construction-time gate, a state-free evaluation,
@@ -306,7 +374,7 @@ struct CachedTape {
     forcing_buffer: Vec<(String, Vec<usize>)>,
     precision: crate::precision::Precision,
     serves_passes: bool,
-    prog: Rc<TapeProgram>,
+    prog: TapeBuild,
     report: Rc<TapeBuildReport>,
 }
 
@@ -321,10 +389,11 @@ impl TapeCache {
 impl ArrayCompiled {
     /// The production tape for `discrete_forcing`, built on first use and then
     /// served from [`TapeCache`]: see there for what a kept program depends on.
+    /// `Err` when a rule did not lower: there is then no program to run.
     pub(crate) fn tape(
         &self,
         discrete_forcing: &HashSet<String>,
-    ) -> (Rc<TapeProgram>, Rc<TapeBuildReport>) {
+    ) -> (TapeBuild, Rc<TapeBuildReport>) {
         let mut forcing: Vec<String> = discrete_forcing.iter().cloned().collect();
         forcing.sort();
         let forcing_buffer = self.forcing_buffer_signature();
@@ -336,23 +405,53 @@ impl ArrayCompiled {
                 && e.precision == precision
                 && e.serves_passes == serves_passes
         }) {
-            return (Rc::clone(&e.prog), Rc::clone(&e.report));
+            return (e.prog.clone(), Rc::clone(&e.report));
         }
         let (prog, report) = self.build_tape(discrete_forcing);
-        let (prog, report) = (Rc::new(prog), Rc::new(report));
+        let (prog, report) = (prog.map(Rc::new).map_err(Rc::new), Rc::new(report));
         self.tape_cache.entries.borrow_mut().push(CachedTape {
             discrete_forcing: forcing,
             forcing_buffer,
             precision,
             serves_passes,
-            prog: Rc::clone(&prog),
+            prog: prog.clone(),
             report: Rc::clone(&report),
         });
         (prog, report)
     }
 
-    /// The observed rules a taped scratch carries beside its program, shared
-    /// rather than copied per install.
+    /// The tape a STRICT compiler (`native`, `xla`) runs for
+    /// `discrete_forcing`. A build that declined a rule has no program, so
+    /// this is the strict compilers' refusal (`compiler_refused_rule`, naming
+    /// the first declined rule and its reason) — there is nothing else for
+    /// them to run. `esm_problem` raises the same refusal at construction,
+    /// with the component-qualified rule name, before any pass gets here.
+    pub(crate) fn strict_tape(
+        &self,
+        discrete_forcing: &HashSet<String>,
+    ) -> Result<Rc<TapeProgram>, crate::simulate::SimulateError> {
+        let declined = match self.tape(discrete_forcing).0 {
+            Ok(prog) => return Ok(prog),
+            Err(declined) => declined,
+        };
+        let (k, reason) = declined
+            .reasons
+            .iter()
+            .enumerate()
+            .find_map(|(k, why)| why.clone().map(|why| (k, why)))
+            .expect("a declined tape names at least one rule");
+        let rule = &declined.rules[k];
+        Err(crate::simulate::SimulateError::Compile(
+            crate::compile_error::CompileError::CompilerRefusedRule {
+                compiler: if self.is_xla() { "xla" } else { "native" },
+                kind: rule.kind_name(),
+                rule: rule.name.clone(),
+                tier: rule.cadence_name(),
+                reason,
+            },
+        ))
+    }
+
     /// Every entry the forcing buffer holds, as `(name, shape)` sorted by name:
     /// the part of the buffer a tape build reads (see [`TapeCache`]).
     fn forcing_buffer_signature(&self) -> Vec<(String, Vec<usize>)> {
@@ -404,20 +503,13 @@ impl ArrayCompiled {
         }
     }
 
-    pub(super) fn shared_observed_rules(&self) -> Rc<Vec<AlgebraicRule>> {
-        Rc::clone(
-            self.shared_observed
-                .get_or_init(|| Rc::new(self.observed_rules.clone())),
-        )
-    }
-
     /// Build the tape program for this model, uncached. Production passes go
     /// through [`Self::tape`]; this is the build itself, for the tests that
     /// take a program apart.
     pub(crate) fn build_tape(
         &self,
         discrete_forcing: &HashSet<String>,
-    ) -> (TapeProgram, TapeBuildReport) {
+    ) -> (Result<TapeProgram, DeclinedTape>, TapeBuildReport) {
         self.build_tape_opts(discrete_forcing, Some(fuse::SuperopCfg::from_env()))
     }
 
@@ -427,7 +519,7 @@ impl ArrayCompiled {
         &self,
         discrete_forcing: &HashSet<String>,
         fuse: Option<fuse::SuperopCfg>,
-    ) -> (TapeProgram, TapeBuildReport) {
+    ) -> (Result<TapeProgram, DeclinedTape>, TapeBuildReport) {
         self.build_tape_layout(discrete_forcing, fuse, true)
     }
 
@@ -439,13 +531,16 @@ impl ArrayCompiled {
         discrete_forcing: &HashSet<String>,
         fuse: Option<fuse::SuperopCfg>,
         align_layout: bool,
-    ) -> (TapeProgram, TapeBuildReport) {
+    ) -> (Result<TapeProgram, DeclinedTape>, TapeBuildReport) {
         let const_names = self.classify_static_observeds(discrete_forcing);
         let seg_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
         let forcing = self.forcing_inputs(discrete_forcing);
         let (prog, vn_hits) =
             build_tape_program(self, &const_names, &seg_names, &forcing, fuse, align_layout);
-        let report = make_report(&prog, vn_hits);
+        let report = match &prog {
+            Ok(prog) => make_report(prog, vn_hits),
+            Err(declined) => make_declined_report(declined, vn_hits),
+        };
         (prog, report)
     }
 
@@ -462,7 +557,10 @@ impl ArrayCompiled {
     #[doc(hidden)]
     pub fn debug_tape_listing(&self) -> String {
         use std::fmt::Write;
-        let (prog, _) = self.tape(&HashSet::new());
+        let (prog, report) = self.tape(&HashSet::new());
+        let Ok(prog) = prog else {
+            return report.to_string();
+        };
         let mut out = String::new();
         for (pc, ins) in prog.instrs.iter().enumerate() {
             let boxed = ins
@@ -535,24 +633,18 @@ impl ArrayCompiled {
     ) -> (Vec<TapeRuleRecord>, TapeBuildReport) {
         let (prog, report) = self.tape(discrete_forcing);
         let report = (*report).clone();
-        let records = prog
-            .rules
+        let (rules, reasons): (&[RuleInfo], &[Option<String>]) = match &prog {
+            Ok(prog) => (&prog.rules, &[]),
+            Err(declined) => (&declined.rules, &declined.reasons),
+        };
+        let records = rules
             .iter()
-            .map(|r| TapeRuleRecord {
+            .enumerate()
+            .map(|(k, r)| TapeRuleRecord {
                 name: r.name.clone(),
-                kind: match r.kind {
-                    RuleKind::Observed(_) => "observed",
-                    RuleKind::Rhs(_) => "state derivative",
-                },
-                cadence: match r.cadence {
-                    Cadence::Const => "const",
-                    Cadence::Segment => "segment",
-                    Cadence::Continuous => "continuous",
-                },
-                fallback_reason: match &r.status {
-                    RuleStatus::Taped => None,
-                    RuleStatus::Fallback(reason) => Some(reason.clone()),
-                },
+                kind: r.kind_name(),
+                cadence: r.cadence_name(),
+                fallback_reason: reasons.get(k).cloned().flatten(),
             })
             .collect();
         (records, report)
@@ -563,6 +655,9 @@ impl ArrayCompiled {
     pub fn debug_dump_fuse_stats(&self) {
         let (prog, report) = self.tape(&HashSet::new());
         eprintln!("{report}");
+        let Ok(prog) = prog else {
+            return;
+        };
         let mut by_regs: Vec<&FusedSpec> = prog.fused.iter().collect();
         by_regs.sort_by_key(|f| std::cmp::Reverse(f.n_regs));
         let max_regs = by_regs.first().map(|f| f.n_regs).unwrap_or(0);

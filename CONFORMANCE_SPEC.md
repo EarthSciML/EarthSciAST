@@ -6349,13 +6349,20 @@ The gate:
 * an **`interpreter` refusal** is always RED — the interpreter is complete over
   the evaluable core by `esm-libraries-spec.md` §2.5.10, so a refusal there is
   a defect, not coverage;
-* a **refusal from any other compiler** is a **named exclusion** — reported with
-  the binding, the compiler, the fixture, the rule and the reason, in the report
-  and on the console, and green for now. It is never a pass and never a silent
-  skip. The manifest's per-fixture `required` map (binding → the compilers that
-  MUST run it) flips it to RED as coverage lands, a one-way ratchet exactly as
-  §5.38.3's `compiled_required` is. Every fixture requires `native` of Julia,
-  Rust and Python, the three bindings that answer it on all six;
+* a **`native` refusal** from Julia or Rust is always RED, whatever the
+  fixture's `required` map says. `native` covers the whole evaluable core and
+  refuses by name only the constructs outside its scope (`API_SPEC.md` §5.8:
+  events, implicit equations, SDE noise, a spatial operator with no
+  discretization rule), and no fixture of this tier carries one; neither
+  binding may list `native` on `bindings_optional`, which the manifest
+  validator rejects. Python is exempt from this rule: its `native` refusal is
+  governed by the `required` map like the specialty compilers' below;
+* a **refusal from `xla`, `mtk` or `sympy`** is a **named exclusion** — reported
+  with the binding, the compiler, the fixture, the rule and the reason, in the
+  report and on the console, and green for now. It is never a pass and never a
+  silent skip. The manifest's per-fixture `required` map (binding → the
+  compilers that MUST run it) flips it to RED as coverage lands, a one-way
+  ratchet exactly as §5.38.3's `compiled_required` is;
 * an **`unavailable`** compiler is reported with its reason and skipped, but
   only for a binding the manifest lists in that compiler's `bindings_optional`;
   an unavailable compiler in a `bindings_required` binding is RED. Availability
@@ -6367,8 +6374,9 @@ The gate:
   says nothing about what a compiler can run, so `required` does not excuse it.
 
 This is §5.38.3's split, generalized from the two compiled backends to every
-member of the vocabulary. The refusal list under a strict `native` default IS
-the coverage backlog, and this tier is where it is read.
+member of the vocabulary. The named-exclusion list is the coverage backlog of
+`xla`, `mtk` and `sympy`, and this tier is where it is read; `native` and the
+interpreter have none.
 
 #### 5.44.4 Shape
 
@@ -6384,8 +6392,9 @@ the coverage backlog, and this tier is where it is read.
 `scripts/run-compiler-agreement-conformance.py --self-test` is the always-on
 guard and needs no live binding: the committed goldens reproduce every carried
 anchor, and the harness rejects a value moved outside its band, a missing
-element, a missing save time, and a refusal from a `required` binding — while
-reporting an unrequired refusal as a named exclusion.
+element, a missing save time, an `interpreter` or `native` refusal, and a
+refusal from a `required` binding — while reporting an unrequired refusal from
+another compiler as a named exclusion.
 
 The producer stages in `scripts/test-conformance.sh` are one per binding per
 compiler, named `compiler-agreement <compiler> producer (<binding>)`:
@@ -6440,19 +6449,18 @@ stage measures — while its goldens still say what it measured before. Every su
 stage's adapter therefore takes the compiler as an argument and every stage
 passes one explicitly. Which value is the stage's own to state:
 
-* `native` where every fixture the stage carries BUILDS under it. This is the
-  ordinary case, and it is the stronger one: the stage keeps exercising the
-  compiled tiers its goldens were minted from, and additionally asserts that
-  none of its fixtures refuses.
-* `interpreter` for a stage whose fixtures a strict `native` REFUSES, with the
-  reason written where the stage names it. Naming the reference evaluator keeps
-  that stage measuring what it is for instead of going red over a refusal it
-  does not test, and the refusal itself belongs to this tier's named-exclusion
-  ledger rather than to that stage.
+* `native` wherever the stage's fixtures are in its scope. This is the ordinary
+  case, and it is the stronger one: the stage keeps exercising the compiled
+  tiers its goldens were minted from, and additionally asserts that none of its
+  fixtures refuses.
+* `interpreter` (or `mtk`) for a stage whose fixtures carry a construct outside
+  `native`'s scope — events, implicit equations, SDE noise (`API_SPEC.md`
+  §5.8) — with the reason written where the stage names it. Naming another
+  compiler there keeps that stage measuring what it is for; it is never a way to
+  route around an in-scope `native` refusal, which is a defect to fix.
 
-Either way the compiler is an argument and never an inheritance, and this tier
-remains the only place `native`'s coverage is measured. Without that, the whole
-harness goes red for reasons unrelated to what each stage tests.
+Either way the compiler is an argument and never an inheritance. Without that,
+the whole harness goes red for reasons unrelated to what each stage tests.
 
 ### 5.45 A Doubly-Defined Unknown Is Refused, Never Tie-Broken (normative)
 
@@ -6560,8 +6568,9 @@ register the code.
 This tier's `required` maps hold six fixtures to a trajectory. The **native
 coverage ledger** (`tests/conformance/native_coverage/`, contract in its
 `README.md`) holds the whole corpus to something weaker and wider: wherever the
-`interpreter` BUILDS a document, `native` builds it too, or the document is
-named in the ledger. The corpus is every `.esm` under `tests/` plus every `.esm`
+`interpreter` BUILDS a document, `native` builds it too, unless the document
+carries a construct outside `native`'s scope and is named in the ledger with
+that refusal's code. The corpus is every `.esm` under `tests/` plus every `.esm`
 in EarthSciML/EarthSciModels; a census builds each through `esm_problem` under
 both compilers in Julia (`pkg/EarthSciAST.jl/scripts/compiler_census.jl`) and in
 Rust (`pkg/earthsci-ast-rs/examples/compiler_census.rs`). A document under an
@@ -6571,10 +6580,13 @@ side (Julia's does), a build whose call throws does not count as building.
 
 Each binding's ledger (`julia.json`, `rust.json`) lists every document the
 interpreter builds and native does not, with native's code, the refused rule
-and the reason — a named exclusion keyed by document. Its count may only fall,
-the same one-way rule as `required` above. `scripts/native-coverage.py check`
-compares a census against it and is RED on a document native newly refuses; on
-a ledgered document native now builds, until the entry is removed; on an entry
+and the reason, keyed by document. An entry may only carry an out-of-scope code
+(`unsupported_construct` or `unlowered_operator`, `API_SPEC.md` §5.8); any other
+entry is RED, because `native` is required for every document the interpreter
+builds and the ledger excuses nothing in scope. Both ledgers are empty, and
+each one's count may only fall. `scripts/native-coverage.py check` compares a
+census against it and is RED on an entry with an in-scope code; on a document
+native newly refuses; on a ledgered document native now builds, until the entry is removed; on an entry
 that stopped being a gap in any other way; on an entry whose code drifted; and
 on a census missing a corpus document. A document the census timed out on is
 inconclusive, since finishing inside the wall clock depends on the machine's
@@ -6706,9 +6718,15 @@ The gate:
 * a **refusal** is a **named exclusion** — reported with the binding, the
   compiler, the fixture and the code, in the report and on the console, and
   green — only where the fixture's `named_exclusions` ledger names that
-  `(binding, compiler)` AND the code matches. An unnamed refusal, or one whose
-  code has drifted from the ledger, is RED. It is never a pass and never a
-  silent skip;
+  `(binding, compiler)` AND the code matches. The ledger cannot excuse an
+  in-scope Julia or Rust `native` refusal: there a `native` exclusion must carry
+  `unsupported_construct` or `unlowered_operator` (`API_SPEC.md` §5.8), or
+  exclude the interpreter as well — the binding then runs the document under no
+  compiler, which is not a `native` gap — and anything else is a manifest error.
+  Python is exempt: a Python `native` exclusion may carry any code, but its
+  `native` gap must still be a named exclusion.
+  An unnamed refusal, or one whose code has drifted from the ledger, is RED. It
+  is never a pass and never a silent skip;
 * an **`unavailable`** is RED for a binding the manifest lists in
   `bindings_required`, and a reported skip otherwise. It is only ever the WHOLE
   output: a binding's inline-test runner catches a build failure per assertion,
@@ -6722,8 +6740,12 @@ The gate:
 
 **The two ledgers are never merged.** `bindings_required` says a binding must be
 able to ANSWER at all; a fixture's `required` map (binding → the compilers that
-must run THIS document) says which compilers must not refuse it. Merging them
-would make a coverage gap indistinguishable from a missing runtime. A fixture
+must run THIS document) says which compilers must not refuse it. Each
+`bindings_required` binding's `required` list MUST name `native`, unless a
+named exclusion of `native` that the gate above admits leaves it out (for
+Python, any named exclusion of `native`); the self-test rejects a manifest
+that does not. Merging the two ledgers would make
+a coverage gap indistinguishable from a missing runtime. A fixture
 that both REQUIRES and EXCLUDES the same `(binding, compiler)` is a manifest
 error the self-test rejects, because it says two things at once.
 

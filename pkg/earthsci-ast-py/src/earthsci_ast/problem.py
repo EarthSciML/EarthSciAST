@@ -542,6 +542,14 @@ def esm_problem(
           right-hand side once at ``(u0, p, t0)``, and the output-time observed
           pass once, so the refusal is a construction error wherever the
           per-cell walk would have been reached (esm-libraries-spec §2.5.10).
+          ``native`` covers the whole evaluable core: the only documents it may
+          refuse are those carrying a construct outside its scope — events,
+          implicit equations and SDE noise (``unsupported_construct``) and a
+          spatial operator with no discretization rule
+          (``unlowered_operator``, refused under every compiler). The
+          conformance tiers hold Julia and Rust ``native`` to that for every
+          fixture; this binding is exempt, and its ``native`` gaps are
+          recorded there as named exclusions.
         * ``"interpreter"`` — the reference: every fast tier off, the per-cell
           ``faq`` evaluator for every aggregate, source codegen and the
           shape-inference interval hull off. No performance promise of any

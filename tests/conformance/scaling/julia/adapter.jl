@@ -30,7 +30,17 @@
 # THREADS. Native threads its compiled sections by default whenever Julia has
 # more than one thread: with one thread native runs its serial path, and with
 # `-t K` native runs whatever it threads today. The result file's `threads` is Julia's thread
-# count, and `hand_loop_s` is then the threaded hand loop.
+# count, and `hand_loop_s` is then the threaded hand loop. A threaded run also
+# records, in the same process, the serial hand loop and, below 10^4 cells,
+# native's serial call (a second build whose sections all stay serial), which
+# the threaded speed gate holds a small problem to (../README.md, "Gates").
+#
+# BUILDS. `build_s` is the fastest of repeated builds of the document while
+# they total under 1 s (at most 10), so a build of a few milliseconds is not
+# timer noise; after a family's ladder, the two ends of its build slope are
+# rebuilt alternately (`build_s_interleaved`, see interleave_slope_ends!); `dense_bytes` is the bytes of the declared-dense arrays the
+# build materializes (the setup arrays it writes in full at the shape the
+# document declares them; see dense_bytes).
 #
 # ONE CHILD PROCESS PER FAMILY. The adapter measures each family's ladder in a
 # child Julia process (this script with `--in-process --family F`) and watches
@@ -243,7 +253,10 @@ function blank_result(entry)
         "code_size_unit" => "emitted_expr_nodes+walked_nodes",
         "first_call_s" => nothing, "steady_rhs_s" => nothing, "allocs_per_call" => nothing,
         "hand_loop_s" => nothing, "hand_loop_max_abs_diff" => nothing, "dy_max_abs" => nothing,
-        "interpreter_max_abs_diff" => nothing,
+        "interpreter_max_abs_diff" => nothing, "build_repeats" => nothing,
+        "build_s_interleaved" => nothing, "build_interleaved_repeats" => nothing,
+        "build_interleaved_diff_s" => nothing,
+        "dense_bytes" => nothing, "serial_steady_rhs_s" => nothing,
         # Julia's own fields, beyond the tier's format:
         "tiers" => nothing, "code_size_parts" => nothing, "hand_loop_serial_s" => nothing,
         "hand_loop_threads" => nothing, "hand_loop_checked_against" => nothing,
@@ -310,14 +323,68 @@ function dy_by_name(prob, du, names)
     return [du[vm[nm]] for nm in names]
 end
 
+const BUILD_BUDGET_S = 1.0
+const MAX_BUILDS = 10
+# A threaded run times native's serial call below this many cells (`n_cells`),
+# where the speed gate compares the threaded call with it (manifest
+# gates.speed.small_n_max).
+const SERIAL_NATIVE_MAX_CELLS = 10_000
+
+# The declared extents of every shaped variable in the document at `path`,
+# keyed by the flattened name the build's setup arrays use. A variable whose
+# shape names an index set without a declared size is left out.
+function declared_extents(path)
+    flat = ESA.flatten(ESA.load_path(path); base_path = dirname(path))
+    sets = flat.index_sets
+    ext = Dict{String,Vector{Int}}()
+    for vars in (flat.state_variables, flat.parameters, flat.observed_variables),
+        (name, v) in vars
+        (v.shape === nothing || isempty(v.shape)) && continue
+        prefix = first(rsplit(name, '.'; limit = 2))
+        dims = Int[]
+        for s in v.shape
+            iset = get(sets, String(s), get(sets, prefix * "." * String(s), nothing))
+            (iset === nothing || iset.size === nothing) && break
+            push!(dims, iset.size)
+        end
+        length(dims) == length(v.shape) && (ext[name] = dims)
+    end
+    return ext
+end
+
+# Bytes of the declared-dense arrays a build wrote: the setup arrays that the
+# document declares at a shape over sized index sets and that the build
+# materialized at exactly that shape. Any other setup array (an index or
+# geometry table the build derives at its own extent) is not counted.
+function dense_bytes(insp, extents)
+    total = 0
+    for (name, arr) in insp.setup_arrays
+        dims = get(extents, name, nothing)
+        dims !== nothing && collect(size(arr)) == dims && (total += sizeof(arr))
+    end
+    return total
+end
+
 function measure!(rec, path, entry, compiler, budget, interp_cap)
     fam = String(entry["family"])
     insp = ESA.BuildInspection()
     prob = nothing
     rec["n_bytes"] = filesize(path)
     try
-        rec["build_s"] = @elapsed prob = ESA.esm_problem(path, (0.0, 1.0);
-                                                         compiler = compiler, inspect = insp)
+        best, spent, repeats = Inf, 0.0, 0
+        while repeats < MAX_BUILDS && (repeats == 0 || spent < BUILD_BUDGET_S)
+            prob = nothing
+            insp = ESA.BuildInspection()
+            GC.gc(false)
+            dt = @elapsed prob = ESA.esm_problem(path, (0.0, 1.0);
+                                                 compiler = compiler, inspect = insp)
+            best = min(best, dt)
+            spent += dt
+            repeats += 1
+        end
+        rec["build_s"] = best
+        rec["build_repeats"] = repeats
+        rec["dense_bytes"] = dense_bytes(insp, declared_extents(path))
     catch err
         err isa InterruptException && rethrow()
         rec["status"] = _refused(err) ? "refused" : "error"
@@ -373,6 +440,9 @@ function measure!(rec, path, entry, compiler, budget, interp_cap)
     end
     if du !== nothing
         hand_loop!(rec, prob, path, entry, du, budget, "native")
+        if Threads.nthreads() > 1 && Int(entry["n_cells"]) < SERIAL_NATIVE_MAX_CELLS
+            serial_native!(rec, path, entry, compiler, dy_by_name(prob, du, names), budget)
+        end
     elseif iprob !== nothing
         # Native did not build; the hand loop is still checked, against the
         # interpreter, so it is known good before native reaches it.
@@ -423,6 +493,39 @@ function hand_loop!(rec, prob, path, entry, du, budget, against)
     catch err
         err isa InterruptException && rethrow()
         note("hand loop: " * _msg(err))
+    end
+    return
+end
+
+# Native's call with every section held serial, timed like `steady_rhs_s`: a
+# second build whose first call (where each section decides once whether it
+# chunks) runs with the per-chunk work floor (`ESS_THREADS_MIN_WORK`) above
+# any section's work. Its dy
+# must be bit-identical to the threaded call's (`ref`, in canonical order).
+function serial_native!(rec, path, entry, compiler, ref, budget)
+    fam = String(entry["family"])
+    try
+        prob = ESA.esm_problem(path, (0.0, 1.0); compiler = compiler)
+        u = probe_state(prob, fam, entry)
+        sdu = zeros(length(u))
+        f! = prob.f!
+        p = prob.p
+        # Both names, so a floor already set in the environment under either
+        # cannot hold the serial build threaded.
+        floor = string(typemax(Int))
+        withenv("ESS_THREADS_MIN_WORK" => floor, "ESS_THREADS_MIN_CELLS" => floor) do
+            f!(sdu, u, p, PROBE_T)
+        end
+        if !isequal(dy_by_name(prob, sdu, canonical_names(fam, entry)), ref)
+            rec["status"] = "error"
+            rec["reason"] = "native's serial and threaded dy differ"
+            return
+        end
+        rec["serial_steady_rhs_s"] = timeit(() -> f!(sdu, u, p, PROBE_T); budget = budget)
+    catch err
+        err isa InterruptException && rethrow()
+        rec["reason"] = (rec["reason"] === nothing ? "" : rec["reason"] * "; ") *
+                        "serial native: " * _msg(err)
     end
     return
 end
@@ -556,9 +659,77 @@ function run_in_process(o)
             write_results(o["output"], header, results)
             log_result(rec)
         end
+        interleave_slope_ends!(results, fam, o, compiler)
+        write_results(o["output"], header, results)
     end
     write_results(o["output"], header, results)
     return 0
+end
+
+const INTERLEAVE_MAX = 100       # interleaved builds per end, at most
+const INTERLEAVE_MIN = 10        # fewer would not beat the ladder's own minimum
+const INTERLEAVE_BUDGET_S = 5.0  # seconds of interleaved building per family, at most
+
+# The two documents ../check.py fits family `fam`'s build slope between (the
+# smallest and largest n_states that built, at most 10^6 cells), rebuilt
+# alternately in this process: `build_s_interleaved` is the median of each
+# end's builds, `build_interleaved_repeats` how many each got, and the larger
+# end's `build_interleaved_diff_s` the median over pairs of its build minus the
+# smaller end's build taken beside it. Builds of a few milliseconds drift by a
+# large fraction of the slope's whole allowance between ladder steps and within
+# the re-timing itself; a difference of builds taken side by side cancels it.
+# The collector runs before every build, never inside one. A family whose
+# builds would not fit INTERLEAVE_MIN pairs in INTERLEAVE_BUDGET_S keeps the
+# ladder's build_s (the fields stay null).
+function interleave_slope_ends!(results, fam, o, compiler)
+    built = [r for r in results if r["family"] == fam && r["status"] == "ok" &&
+             r["build_s"] !== nothing && r["n_cells"] <= 1_000_000]
+    length(built) < 2 && return
+    lo = built[argmin([r["n_states"] for r in built])]
+    hi = built[argmax([r["n_states"] for r in built])]
+    lo["n_states"] == hi["n_states"] && return
+    repeats = min(INTERLEAVE_MAX, floor(Int, INTERLEAVE_BUDGET_S / (lo["build_s"] + hi["build_s"])))
+    repeats < INTERLEAVE_MIN && return
+    index = JSON3.read(read(joinpath(o["docs"], "index.json"), String), Dict{String,Any})
+    path(r) = joinpath(o["docs"], only(e["path"] for e in index["documents"]
+                                       if e["family"] == fam && e["n"] == r["n"]))
+    plo, phi = path(lo), path(hi)
+    # The collector stays out of every timed build: a young collection before
+    # it, and none inside. Otherwise a collection of the ladder's garbage lands
+    # inside whichever build crosses the threshold, in a pattern that favours
+    # one end.
+    function build(p)
+        GC.gc(false)
+        GC.enable(false)
+        try
+            return @elapsed ESA.esm_problem(p, (0.0, 1.0); compiler = compiler)
+        finally
+            GC.enable(true)
+        end
+    end
+    GC.gc(true)
+    try
+        build(plo); build(phi)
+        tl, th = Float64[], Float64[]
+        for k in 1:repeats            # lo hi hi lo ...
+            if isodd(k)
+                push!(tl, build(plo)); push!(th, build(phi))
+            else
+                push!(th, build(phi)); push!(tl, build(plo))
+            end
+        end
+        med(t) = sort(t)[length(t) ÷ 2 + 1]
+        for (r, t) in ((lo, tl), (hi, th))
+            r["build_s_interleaved"] = med(t)
+            r["build_interleaved_repeats"] = repeats
+        end
+        hi["build_interleaved_diff_s"] = med(th .- tl)
+        println(stderr, "[$fam] build slope ends re-timed, $repeats interleaved builds each")
+    catch err
+        err isa InterruptException && rethrow()
+        println(stderr, "[$fam] interleaved builds failed: " * _msg(err))
+    end
+    return
 end
 
 # ---------------------------------------------------------------------------

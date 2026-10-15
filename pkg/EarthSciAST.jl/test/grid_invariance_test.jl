@@ -81,8 +81,11 @@ function _gi_build(N)
     end
     withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
         ESM._reset_cascade_tally!()
+        # Non-strict: at a zero budget the scalar equation is walked too, which
+        # strict native refuses.
         f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(_gi_model(N);
-            initial_conditions=ics)
+            initial_conditions=ics,
+            compiler=ESM._plan_with(ESM._compiler_plan(:native); strict = false))
         (f=f, u0=u0, p=p, vm=vm, diag=diag, tally=copy(ESM._CASCADE_TALLY),
          kernels=getfield(getfield(f, :kernel_section), :kernels),
          n_emitted=getfield(getfield(f, :kernel_section), :n_emitted))

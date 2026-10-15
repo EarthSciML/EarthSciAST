@@ -46,6 +46,25 @@ pub(in crate::simulate_array::tape) struct SegChain {
     /// instructions define, so a pass that folds them as it goes need not
     /// store them.
     private: bool,
+    /// The chain's position in [`seg_chains`]' list.
+    id: usize,
+    /// How the chain's tuples drop to the unmasked ones, when it can.
+    pub(super) compact: Option<CompactPlan>,
+}
+
+/// A chain that is a gather `t1 = src[pos]` and a product `t2 = t1 * w`
+/// summed under a mask the CONST or SEGMENT section defines, with `w` a
+/// scalar or a tuple slot those sections define too. Which tuples the mask
+/// admits, and their weights, change only when those sections re-run, so the
+/// admitted tuples' positions and weights are gathered into a table of their
+/// own then (see [`refill_compact`]) and every call folds only those.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CompactPlan {
+    mask: SlotId,
+    /// The gather's position table.
+    table: u32,
+    /// The product's other operand, when it is a tuple slot.
+    pub(super) w: Option<SlotId>,
 }
 
 /// How a slot is addressed by the chain's workers.
@@ -81,13 +100,68 @@ pub(super) fn seg_chains(prog: &TapeProgram, slot_off: &[usize]) -> Vec<SegChain
         let hi = (pc + 1 + body).min(guarded.len());
         guarded[pc + 1..hi].fill(true);
     }
+    // Slots the continuous section writes: a compacted table may only copy
+    // values that hold for every call between two primes.
+    let tables = prog.tables();
+    let mut per_call = vec![false; prog.slots.len()];
+    for ins in &prog.instrs[cont..] {
+        ins.for_each_def(&tables, |s| per_call[s as usize] = true);
+    }
     let mut out = Vec::new();
     for seg in cont..prog.instrs.len() {
-        if let Some(ch) = plan_one(prog, slot_off, cont, seg, &guarded) {
+        if let Some(mut ch) = plan_one(prog, slot_off, cont, seg, &guarded) {
+            ch.id = out.len();
+            ch.compact = compact_plan(prog, &ch, &per_call);
             out.push(ch);
         }
     }
     out
+}
+
+/// The compaction of chain `ch`, if it is a masked sum of gathered products
+/// whose mask and weights only the CONST and SEGMENT sections write.
+fn compact_plan(prog: &TapeProgram, ch: &SegChain, per_call: &[bool]) -> Option<CompactPlan> {
+    let Instr::SegReduce {
+        op: BinCode::Add,
+        src,
+        mask: Some(mask),
+        ..
+    } = &prog.instrs[ch.seg]
+    else {
+        return None;
+    };
+    let [
+        Instr::TableGather { table, out: t1, .. },
+        Instr::Bin {
+            op: BinCode::Mul,
+            a,
+            b,
+            out: t2,
+        },
+    ] = &prog.instrs[ch.start..ch.seg]
+    else {
+        return None;
+    };
+    if !ch.private || t2 != src || per_call[*mask as usize] {
+        return None;
+    }
+    let is_t1 = |o: &Operand| matches!(o, Operand::Slot(s) if s == t1);
+    let w = match (is_t1(a), is_t1(b)) {
+        (true, false) => b,
+        (false, true) => a,
+        _ => return None,
+    };
+    let w = match w {
+        Operand::Lit(_) | Operand::Param(_) | Operand::Time => None,
+        Operand::Slot(s) if prog.slots[*s as usize].scalar => None,
+        Operand::Slot(s) if !per_call[*s as usize] => Some(*s),
+        _ => return None,
+    };
+    Some(CompactPlan {
+        mask: *mask,
+        table: *table,
+        w,
+    })
 }
 
 fn plan_one(
@@ -177,6 +251,8 @@ fn plan_one(
         n_out,
         work,
         private,
+        id: 0,
+        compact: None,
     })
 }
 
@@ -206,7 +282,6 @@ fn tuple_instr(prog: &TapeProgram, ins: &Instr, n_pairs: usize, t: &mut Touches)
             match src {
                 SrcRef::Slot(s) => t.push((*s, Class::Any, false)),
                 SrcRef::State(_) => {}
-                SrcRef::Obs(_) => return false,
             }
             *out
         }
@@ -463,6 +538,72 @@ impl SumOfProducts {
 #[derive(Default)]
 pub(in crate::simulate_array::tape) struct ChainScratch {
     ops: Vec<Op>,
+    /// Per chain, its admitted tuples (see [`CompactPlan`]), or `None`.
+    compact: Vec<Option<Compacted>>,
+}
+
+/// A chain's tuples the mask admits, as of the last prime: per output cell
+/// `rows[c] .. rows[c + 1]`, each with its gather position and, when the
+/// product's other operand is a tuple slot, its weight.
+#[derive(Default)]
+struct Compacted {
+    rows: Vec<u32>,
+    pos: Vec<u32>,
+    w: Vec<f64>,
+}
+
+/// Rebuild every compacted chain's admitted tuples from the mask and weights
+/// the CONST and SEGMENT sections just wrote. Allocates only the first time.
+///
+/// # Safety
+/// `slab_ptr` must be the slab `slot_off` lays out, with the CONST and
+/// SEGMENT sections of this program run.
+pub(super) unsafe fn refill_compact(
+    chains: &[SegChain],
+    scratch: &mut ChainScratch,
+    prog: &TapeProgram,
+    slab_ptr: *const f64,
+    slot_off: &[usize],
+) {
+    if scratch.compact.len() != chains.len() {
+        scratch.compact.clear();
+        scratch.compact.resize_with(chains.len(), || None);
+    }
+    for ch in chains {
+        let Some(plan) = ch.compact else { continue };
+        let Instr::SegReduce { table, .. } = &prog.instrs[ch.seg] else {
+            unreachable!("a chain's reduction is a SegReduce")
+        };
+        let rows = &prog.seg_tables[*table as usize].rows;
+        let n_pairs = *rows.last().expect("a planned chain has cells") as usize;
+        let read = |s: SlotId| unsafe {
+            std::slice::from_raw_parts(slab_ptr.add(slot_off[s as usize]), n_pairs)
+        };
+        let mask = read(plan.mask);
+        let w = plan.w.map(read);
+        let pos = &prog.gather_tables[plan.table as usize].pos;
+        let c = scratch.compact[ch.id].get_or_insert_with(|| Compacted {
+            rows: Vec::with_capacity(rows.len()),
+            pos: Vec::with_capacity(n_pairs),
+            w: Vec::with_capacity(if w.is_some() { n_pairs } else { 0 }),
+        });
+        c.rows.clear();
+        c.pos.clear();
+        c.w.clear();
+        c.rows.push(0);
+        for r in rows.windows(2) {
+            for k in r[0] as usize..r[1] as usize {
+                // The predicate the masked fold applies.
+                if mask[k] != 0.0 {
+                    c.pos.push(pos[k]);
+                    if let Some(w) = w {
+                        c.w.push(w[k]);
+                    }
+                }
+            }
+            c.rows.push(c.pos.len() as u32);
+        }
+    }
 }
 
 /// The workers' view of one call's chain.
@@ -515,7 +656,6 @@ fn tuple_arg(o: &Operand, env: &Env, slab_ptr: *mut f64, slot_off: &[usize]) -> 
                 Arg::P(super::resolve::state_ptr(env, *ix))
             }
         }
-        Operand::Obs(_) => return None,
     })
 }
 
@@ -554,7 +694,6 @@ pub(super) unsafe fn run_chain(
     env: &Env,
     slab_ptr: *mut f64,
     slot_off: &[usize],
-    obs: &ArrMap,
     scratch: &mut ChainScratch,
     fscratch: &mut FusedScratch,
     idx_tables: &[Vec<Option<IndexTable>>],
@@ -588,7 +727,6 @@ pub(super) unsafe fn run_chain(
                 src: match src {
                     SrcRef::Slot(s) => at(*s),
                     SrcRef::State(ix) => super::resolve::state_ptr(env, *ix),
-                    SrcRef::Obs(_) => return false,
                 },
                 pos: prog.gather_tables[*table as usize].pos.as_ptr(),
             },
@@ -628,7 +766,6 @@ pub(super) unsafe fn run_chain(
                     env,
                     slab_ptr,
                     slot_off,
-                    obs,
                     fscratch,
                     dy_home,
                     dy,
@@ -638,6 +775,21 @@ pub(super) unsafe fn run_chain(
         }
         None => (None, &mut fscratch.workers),
     };
+    let mut sop = SumOfProducts::of(&scratch.ops, *op, *init, seg_src, seg_mask, ch.private);
+    let (mut rows, mut seg_mask) = (rows, seg_mask);
+    // Fold only the admitted tuples. Dropping a masked term is exact: the
+    // masked fold leaves the accumulator as it is for each (see
+    // `SumOfProducts::run`), and the admitted ones keep their order.
+    if let (Some(sp), Some(Some(c))) = (&mut sop, scratch.compact.get(ch.id))
+        && !sp.store
+    {
+        sp.pos = c.pos.as_ptr();
+        if ch.compact.is_some_and(|p| p.w.is_some()) {
+            sp.w = Arg::P(c.w.as_ptr());
+        }
+        rows = &c.rows;
+        seg_mask = None;
+    }
     let job = Job {
         ops: &scratch.ops,
         rows,
@@ -649,7 +801,7 @@ pub(super) unsafe fn run_chain(
         n_out: ch.n_out,
         ways,
         idx: ch.fused.map_or(&[][..], |s| &idx_tables[s as usize][..]),
-        sop: SumOfProducts::of(&scratch.ops, *op, *init, seg_src, seg_mask, ch.private),
+        sop,
         fused: resolved,
         simd,
         precision: crate::precision::active(),

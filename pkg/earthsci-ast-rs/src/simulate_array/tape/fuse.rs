@@ -34,8 +34,8 @@
 //!   inside `JmpIfZero` regions, which are hard barriers copied verbatim);
 //! * any instruction that READS a slot defined by an open group flushes that
 //!   group first, so no reader ever precedes the `Fused` that defines it;
-//! * `Fallback` (which touches the runtime observed map) and `JmpIfZero`
-//!   regions flush every open group, so side-effectful ordering is preserved;
+//! * `JmpIfZero` regions flush every open group, so their exact skip counts
+//!   are preserved;
 //! * passed-through instructions keep their original relative order.
 //!
 //! Coloring runs AFTER fusion, so liveness (and the alias discipline — a
@@ -190,7 +190,6 @@ fn same_src(a: &SrcRef, b: &SrcRef) -> bool {
     match (a, b) {
         (SrcRef::Slot(x), SrcRef::Slot(y)) => x == y,
         (SrcRef::State(x), SrcRef::State(y)) => x == y,
-        (SrcRef::Obs(x), SrcRef::Obs(y)) => x == y,
         _ => false,
     }
 }
@@ -306,7 +305,6 @@ impl GBuilder {
         let operand = match src {
             SrcRef::Slot(s) => Operand::Slot(*s),
             SrcRef::State(i) => Operand::State(*i),
-            SrcRef::Obs(_) => return false,
         };
         let Some(r @ (ResOp::Existing(MRef::Reg(_) | MRef::In(_)) | ResOp::NewAligned(..))) =
             self.resolve(&operand, prog)
@@ -390,10 +388,6 @@ impl GBuilder {
                     None
                 }
             }
-            // An observed operand's rank (0-d scalar vs array) is resolved at
-            // run time by the unfused executor; keep such instructions
-            // unfused rather than guess.
-            Operand::Obs(_) => None,
         }
     }
 
@@ -2309,17 +2303,11 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
     }
 
     let prog = fx.prog;
-    // With no fallback rule and no observed read in the program, nothing
-    // reads the observed map or `dy` during a call, so an `Export` or a
-    // `DyWrite` only has to run before its section ends: one of a slot an
-    // open group defines is held back until that group flushes instead of
+    // Nothing reads the observed map or `dy` during a call, so an `Export`
+    // or a `DyWrite` only has to run before its section ends: one of a slot
+    // an open group defines is held back until that group flushes instead of
     // flushing it early (which lets the next equation over the same box join
     // the group).
-    let defer = prog.obs_reads.is_empty()
-        && !prog
-            .instrs
-            .iter()
-            .any(|x| matches!(x, Instr::Fallback { .. }));
     let mut i = range.start;
     while i < range.end {
         let ins = &prog.instrs[i];
@@ -2328,8 +2316,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             Instr::DyWrite { write } => Some(prog.dy_writes[*write as usize].slot),
             _ => None,
         };
-        if defer
-            && let Some(slot) = deferrable
+        if let Some(slot) = deferrable
             && let Some(gi) = open.iter().position(|g| g.defines(slot))
         {
             open[gi].deferred.push(i as u32);
@@ -2341,8 +2328,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
         // the body runs once per cell, in order, and its cells are not
         // independent, so nothing in it may join a group: CONFORMANCE_SPEC
         // §5.19.2), conditional regions (copied verbatim — their skip counts
-        // must stay exact and phi slots are double-defined inside) and
-        // fallback rules (interpreter side effects).
+        // must stay exact and phi slots are double-defined inside).
         if let Instr::Sweep { spec } = ins {
             for g in open.drain(..) {
                 flush_one(g, fx);
@@ -2367,14 +2353,6 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                 fx.sink.passthrough(prog, j);
             }
             i = zone_end;
-            continue;
-        }
-        if matches!(ins, Instr::Fallback { .. }) {
-            for g in open.drain(..) {
-                flush_one(g, fx);
-            }
-            fx.sink.passthrough(prog, i);
-            i += 1;
             continue;
         }
 

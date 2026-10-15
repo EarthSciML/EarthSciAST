@@ -476,11 +476,10 @@ fn metadata_json(sol: &crate::simulate::Solution) -> serde_json::Value {
         "nJacobianCalls": sol.metadata.n_jacobian_calls,
         "nAcceptedSteps": sol.metadata.n_accepted_steps,
         "nRejectedSteps": sol.metadata.n_rejected_steps,
-        // Rules the vectorized tape could not compile, so the per-cell oracle
-        // evaluated them: `[{rule, reason}, …]`, empty when the tape covered
-        // everything. Same numbers either way — but a fallback's cost grows with
-        // the cell count, so this is the only way a browser host can tell "slow
-        // model" from "slow spelling of a fast model".
+        // Rules the vectorized tape could not compile: `[{rule, reason}, …]`.
+        // Always empty here: `solve` builds through `esm_problem`, whose
+        // strict compilers refuse such a model at construction, and the
+        // `interpreter` builds no tape. Kept so the metadata shape is stable.
         "tapeFallbacks": sol.metadata.tape_fallbacks.iter()
             .map(|(rule, reason)| serde_json::json!({"rule": rule, "reason": reason}))
             .collect::<Vec<_>>(),
@@ -567,9 +566,9 @@ pub fn observed_fields(
 /// the build alone (milliseconds) and answers the same question up front.
 ///
 /// Returns `{ nRules, nTaped, fallbacks: [{ rule, reason }, …] }`. A non-empty
-/// `fallbacks` is not an error — the numbers are bit-identical either way — but
-/// a fallback rule is re-walked once per grid cell per RHS call, so its cost
-/// grows with the grid where a taped rule's does not. See `esm-spec.md` §9.6.10
+/// `fallbacks` means the model has no tape at all: `native` (the default
+/// compiler) refuses it, naming the first of them, and only the `interpreter`
+/// can run it. See `esm-spec.md` §9.6.10
 /// for the authoring patterns that keep rules vectorizable.
 ///
 /// Files whose RHS is not array-compilable at all (pure scalar ODE systems)

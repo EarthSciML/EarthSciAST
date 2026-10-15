@@ -67,10 +67,12 @@ fn rhs_both(rel: &str, arrays: &[(&str, ArrayD<f64>)], p: &[(&str, f64)]) -> Has
             let _precision = comp.debug_precision_env().enter();
             let params = comp.debug_resolve_params(prob.p());
             let mut dy = vec![0.0f64; state.len()];
-            let mut scratch = comp.debug_new_scratch_taped();
+            let mut scratch = comp
+                .debug_new_scratch_taped()
+                .expect("the tape lowers every rule");
             let mut stats = RhsStats::default();
             comp.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
-            assert_eq!(stats.fallback_rules, 0, "{rel}: a rule left the tape");
+            assert!(scratch.has_tape(), "{rel}: the tape declined a rule");
             dy
         } else {
             comp.debug_eval_rhs(&state, 0.0, prob.p(), true).0

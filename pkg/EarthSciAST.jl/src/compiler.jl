@@ -87,8 +87,8 @@ end
 
 # Threading is deliberately NOT a plan field. A chunked kernel is
 # value-identical to the serial one by construction — the chunks write disjoint
-# slots — so it is not a choice of evaluator; how many cells are worth a thread
-# dispatch is a tuning threshold (`ESS_THREADS_MIN_CELLS`), read on the
+# slots — so it is not a choice of evaluator; how much work is worth a thread
+# dispatch is a tuning threshold (`ESS_THREADS_MIN_WORK`), read on the
 # right-hand-side call where the build's plan is no longer in scope.
 
 _plan_all(name::Symbol, strict::Bool, on::Bool) =
@@ -460,14 +460,100 @@ function _refuse_rule(rule::AbstractString, reason::AbstractString)
 end
 
 # True when the compiler in force refuses a rule it cannot express rather than
-# demoting it. Every refusal site is guarded by this, so `:interpreter` — which
-# is DEFINED as the slow path — never trips one.
+# demoting it. Read only by the per-cell license below: no route decides on
+# strictness itself.
 _compiler_is_strict() = _compiler_plan_now().strict
 
-"""
-    _refuse_percell_evaluation(rule, what, cells) -> nothing or never returns
+# ---------------------------------------------------------------------------
+# The per-cell license
+# ---------------------------------------------------------------------------
+#
+# "No fallback" is a property of the TYPES, not a check at each route. Every
+# routine that works per cell — that resolves and compiles an expression once
+# per cell at construction, or walks a tree once per cell on a right-hand-side
+# call, a data refresh or an output read — takes a `_PerCellLicense` as its
+# first argument, and so does every evaluator structure that walks per cell (a
+# kernel section's per-cell runner, the walked recurrence sweep). Those
+# routines and structures ARE the interpreter: `compiler = :interpreter` runs
+# them, and nothing a strict compiler builds can.
+#
+# A license is a value only a NON-strict plan can produce: its one constructor
+# reads the plan in force and refuses under a strict one. Under `native` (and
+# `xla` and `mtk`) no license exists, so no per-cell routine can be called and
+# no walking structure can be built. A route asks for one through
+# `_percell_license`, which, under a strict plan, raises the route's named
+# refusal instead of returning.
+#
+# The one per-cell evaluation a strict plan performs is a PROBE: a refusal
+# whose subject no form can evaluate must report the document's own error (an
+# undeclared name, an out-of-range gather), not "this compiler cannot run it",
+# so it evaluates one cell first and discards the value. A probe is a
+# `_PerCellProbe`, accepted only by the single-cell routines; every loop over
+# cells and every walking structure takes the license alone.
+#
+# The out-of-place product (`form = :oop`) has a token of its own,
+# `_OopCells`: its per-cell build scalarizes cells for a whole-program
+# compiler to lower, and is never a host evaluator (tree_walk/oop.jl).
 
-The refusal for a materialization that RESOLVES AND COMPILES the expression once
+"""
+    _PerCellLicense
+
+Proof that the plan in force may evaluate per cell (see the section comment
+above). Its only constructor refuses under a strict plan; routes obtain one
+through [`_percell_license`](@ref), which names the rule in the refusal.
+"""
+struct _PerCellLicense
+    plan::Symbol
+    function _PerCellLicense()
+        plan = _compiler_plan_now()
+        # Reached only by a route that skipped `_percell_license`; the route's
+        # own refusal would have named its rule.
+        plan.strict && throw(TreeWalkError(ERROR_CODES.COMPILER_REFUSED_RULE,
+            "compiler=:$(plan.name) refuses a per-cell evaluation: a strict " *
+            "compiler has no per-cell route (esm-libraries-spec §2.5.10). Build " *
+            "with compiler=:interpreter to run it"))
+        return new(plan.name)
+    end
+end
+
+"""
+    _PerCellProbe
+
+Permission to evaluate ONE cell for a refusal's diagnostic, its value discarded.
+Accepted only by single-cell routines (`_PerCellAccess`), never by a loop over
+cells or a structure that walks per call.
+"""
+struct _PerCellProbe end
+
+const _PerCellAccess = Union{_PerCellLicense,_PerCellProbe}
+
+"""
+    _OopCells
+
+The out-of-place product's permission to build an array equation one output
+cell at a time: the cells become lanes of the compiled program a whole-program
+backend lowers (`form = :oop`), never trees a host evaluator walks. Made only by
+the out-of-place build.
+"""
+struct _OopCells end
+
+"""
+    _percell_license(rule, reason; probe = nothing) -> _PerCellLicense
+
+A license under a non-strict plan. Under a strict one, run `probe(_PerCellProbe())`
+(when given) for its diagnostic, then raise `compiler_refused_rule` naming `rule`
+with `reason` — a string, or a function of the probe's result.
+"""
+function _percell_license(rule::AbstractString, reason; probe = nothing)
+    _compiler_is_strict() || return _PerCellLicense()
+    r = probe === nothing ? nothing : probe(_PerCellProbe())
+    _refuse_rule(rule, reason isa AbstractString ? reason : reason(r))
+end
+
+"""
+    _percell_evaluation_license(rule, what, cells; probe, one_cell) -> _PerCellLicense
+
+The license for a materialization that RESOLVES AND COMPILES the expression once
 per cell. §2.5.10 puts every evaluation a compiler performs for the problem
 under the refusal rule, not the right-hand side alone: the materialization of
 constants and static observeds at construction, the initial-state seed and the
@@ -476,20 +562,20 @@ cell, and each of them makes the compiler's name describe nothing if it is
 allowed to happen quietly.
 
 A compile-once sweep that then evaluates an ALREADY COMPILED node per cell is
-not one of these and never reaches here: what is refused is re-deriving the
-program for every cell.
+not one of these and never asks: what is refused is re-deriving the program for
+every cell.
 """
-function _refuse_percell_evaluation(rule::AbstractString, what::AbstractString,
-                                    cells::Union{Nothing,Integer}; one_cell::Bool = false)
-    _compiler_is_strict() || return nothing
+function _percell_evaluation_license(rule::AbstractString, what::AbstractString,
+                                     cells::Union{Nothing,Integer};
+                                     probe = nothing, one_cell::Bool = false)
     over = cells === nothing ? "" :
            ", over $cells cell" * (cells == 1 ? "" : "s")
-    _refuse_rule(rule,
-        "$what resolves and compiles the expression once per cell$over, " *
+    reason = "$what resolves and compiles the expression once per cell$over, " *
         "because the compile-once form declined it. That is a tree walk per " *
         "cell at construction time, which esm-libraries-spec §2.5.10 puts " *
         "under the same rule as the right-hand side. Build with " *
-        "compiler=:interpreter to run it" * (one_cell ? ". " * _ONE_CELL_NOTE : ""))
+        "compiler=:interpreter to run it" * (one_cell ? ". " * _ONE_CELL_NOTE : "")
+    return _percell_license(rule, reason; probe = probe)
 end
 
 # Said by every refusal raised once ONE cell of a per-cell route has been

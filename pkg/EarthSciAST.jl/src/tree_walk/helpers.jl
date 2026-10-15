@@ -825,7 +825,7 @@ function _field_ic_uniform(target::AbstractString, rhs::EarthSciAST.ASTExpr,
 end
 
 """
-    _resolve_field_ic(target, rhs, cell, const_arrays, registered_functions) -> Float64
+    _resolve_field_ic(access, target, rhs, cell, const_arrays, registered_functions) -> Float64
 
 Resolve one grid cell's initial value for a scoped-reference / array `ic`
 equation (spec §11.4.1). `cell` is the 1-based integer index tuple of the
@@ -845,8 +845,12 @@ element. Supported RHS forms, in order:
 Anything else (e.g. a loaded expression the seed path cannot fold) is a hard
 error, so a scoped-reference ic that cannot be resolved is never silently
 dropped.
+
+Step 3 resolves and compiles once per cell, so `access` is a `_PerCellLicense`
+or a refusal's one-cell probe (compiler.jl).
 """
-function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
+function _resolve_field_ic(access::_PerCellAccess, target::AbstractString,
+                           rhs::EarthSciAST.ASTExpr,
                            cell::Vector{Int}, const_arrays, registered_functions;
                            params::AbstractDict=_EMPTY_PARAMS,
                            uniform=_field_ic_uniform(target, rhs, length(cell),
@@ -862,10 +866,9 @@ function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
     if rhs isa OpExpr
         # THE per-cell step: `_eval_cellwise` re-runs `_index_at_cell` →
         # `_resolve_indices` → `_compile` for this one cell, so seeding a field
-        # costs one whole lowering per cell. Steps (1) and (2) above do not,
-        # which is why the refusal sits here and not at the caller's loop.
+        # costs one whole lowering per cell. Steps (1) and (2) above do not.
         v = try
-            _eval_cellwise(rhs, cell; const_arrays=const_arrays,
+            _eval_cellwise(access, rhs, cell; const_arrays=const_arrays,
                            registered_functions=registered_functions,
                            params=params)
         catch err
@@ -873,18 +876,7 @@ function _resolve_field_ic(target::AbstractString, rhs::EarthSciAST.ASTExpr,
             push!(_errs, "as coordinate expression: $(sprint(showerror, err))")
             nothing
         end
-        if v !== nothing
-            # Refused only once this step has been shown to be the one that
-            # SERVES the seed: a document no step can seed is a document
-            # diagnostic (step 4 below), not a compiler refusal, and saying
-            # "your compiler cannot run this" about it would name the wrong
-            # thing entirely.
-            # No cell count: this entry point is called once per cell, so what
-            # it can report is the shape of the cost, not its extent.
-            _refuse_percell_evaluation("ic($(target))",
-                "the coordinate-expression initial-state seed", nothing)
-            return v
-        end
+        v === nothing || return v
     end
     # (4) Unsupported RHS — a clear error, never a silent drop.
     _fld = rhs isa VarExpr ? " (no const_arrays entry named '$(rhs.name)')" : ""
@@ -971,7 +963,10 @@ end
 # argument existed the slot was the literal `0.0` at every call site, so a
 # `t`-dependent observed asserted at any other time read ZERO and reported a
 # plausible-looking wrong number (issue #406).
-function _eval_cellwise(expr::EarthSciAST.ASTExpr, cell::Vector{Int};
+#
+# One resolve and compile per call, so per cell: it takes a license (or a
+# refusal's one-cell probe), compiler.jl.
+function _eval_cellwise(::_PerCellAccess, expr::EarthSciAST.ASTExpr, cell::Vector{Int};
                         const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                         registered_functions::AbstractDict=Dict{String,Function}(),
                         params::AbstractDict=_EMPTY_PARAMS,

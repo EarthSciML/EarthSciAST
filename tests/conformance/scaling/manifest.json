@@ -1,7 +1,7 @@
 {
   "tier": "scaling",
   "description": "Build and run-time scaling of compiler = native, from 10^2 to 10^6 cells, against hand-written reference loops. See README.md for the result format and what each gate means.",
-  "result_format_version": 1,
+  "result_format_version": 3,
   "families": {
     "stencil_1d": {
       "description": "1-D diffusion, zero-ghost boundaries.",
@@ -223,7 +223,7 @@
   "gates": {
     "builds": {
       "kind": "deterministic",
-      "description": "status is \"ok\": the document built under the compiler and its right-hand side ran. A refusal or error fails this gate, and every other gate is then unmeasurable for that (family, N)."
+      "description": "status is \"ok\": the document built under the compiler and its right-hand side ran. A refusal or error fails this gate, and every other gate is then unmeasurable for that (family, N). native is required for every document of every compiler-driven tier, so a native builds entry in the ledger is a manifest error."
     },
     "code_size_flat": {
       "kind": "deterministic",
@@ -242,20 +242,31 @@
     },
     "build_slope": {
       "kind": "timing",
-      "description": "(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin)) over the smallest and largest N that built, with Nmax <= 10^6 cells, under max_ns_per_state + per_byte_ns[binding] * (n_bytes(Nmax) - n_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin)): the build may also read the document bytes each added state brings, at twice the binding's measured load cost per byte of inline data. A document whose size does not grow with N, or a result without n_bytes, gets no allowance. Needs two built sizes.",
+      "description": "(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin)) over the smallest and largest N that built, with Nmax <= 10^6 cells, under max_ns_per_state + per_byte_ns[binding] * (n_bytes(Nmax) - n_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin)) + dense_page_ns[binding] * (dense_bytes(Nmax) - dense_bytes(Nmin)) / (n_states(Nmax) - n_states(Nmin)): the build may also read the document bytes each added state brings, at twice the binding's measured load cost per byte of inline data, and write the pages of the declared-dense arrays it materializes, at twice the binding's measured first-touch cost per byte. The build-time difference is build_interleaved_diff_s when the larger end has it (the median over up to 100 pairs of the two ends built side by side in one process after the ladder, alternating which goes first, so drift cancels within each pair), and build_s(Nmax) - build_s(Nmin) otherwise (each the fastest of the adapter's repeated warm builds of the document). A document whose size does not grow with N, or a result without n_bytes, gets no document allowance; a result without dense_bytes, or whose build writes no declared-dense array, gets no dense allowance. Needs two built sizes.",
       "max_ns_per_state": 20,
       "per_byte_ns": {
         "julia": 170,
         "rust": 85
       },
-      "per_byte_ns_why": "twice each binding's document load (no build) per byte of inline data, measured on regrid and unstructured_gather (the larger rate, regrid's) between the smallest and largest document of each, two rounds, cf30558cb, cores 18-19: Julia load_path 82-84 ns/byte (unstructured_gather 46-47), Rust serde_json parse plus typed load, the two steps esm_problem runs, 39-43 ns/byte (unstructured_gather 24-25). Twice: the load, plus one more pass of the same cost for the build to read the inline values out of the loaded document into its own arrays, the least a build that uses the data has to do"
+      "per_byte_ns_why": "twice each binding's document load (no build) per byte of inline data, measured on regrid and unstructured_gather (the larger rate, regrid's) between the smallest and largest document of each, two rounds, cf30558cb, cores 18-19: Julia load_path 82-84 ns/byte (unstructured_gather 46-47), Rust serde_json parse plus typed load, the two steps esm_problem runs, 39-43 ns/byte (unstructured_gather 24-25). Twice: the load, plus one more pass of the same cost for the build to read the inline values out of the loaded document into its own arrays, the least a build that uses the data has to do",
+      "dense_page_ns": {
+        "julia": 0.45,
+        "rust": 0.6
+      },
+      "dense_page_ns_why": "twice each binding's measured first-touch cost of writing fresh pages: 80 MB arrays (the size of one regrid overlap array at N = 3162) allocated and written in full, 15 rounds, three processes, local node core 4, 2026-10-12: Julia zeros(Float64, n) 0.21-0.23 ns/byte, Rust Vec::with_capacity then a write of every element 0.28-0.31 ns/byte (the larger value of each rounded up to 0.225 and 0.3). Twice: the first-touch write, plus one more pass of the same cost for the build to read the array back into its own tables, by the same reasoning as per_byte_ns. It pays for a declared-dense array the build materializes in full (dense_bytes, user ruling 2026-10-10 on #504), and nothing the build does per admitted element"
     },
     "speed": {
       "kind": "timing",
-      "description": "steady_rhs_s / hand_loop_s <= max_ratio, in each result file (serial and threaded runs are separate files). Applied from min_n_states states up (a family's gate_overrides may lower it), below which a call is a few microseconds and the ratio measures timer noise.",
+      "description": "steady_rhs_s / hand_loop_s <= max_ratio, in each result file (serial and threaded runs are separate files). Applied from min_n_states states up (a family's gate_overrides may lower it), below which a call is a few microseconds and the ratio measures timer noise. In a threaded file, a result with fewer than small_n_max cells (n_cells) is checked instead as steady_rhs_s / serial_steady_rhs_s <= max_ratio (threaded native no slower than serial native, same process); a result without serial_steady_rhs_s is gated against the hand loop as before.",
       "max_ratio": 1.25,
-      "min_n_states": 10000
+      "min_n_states": 10000,
+      "small_n_max": 10000,
+      "small_n_why": "User rulings 2026-10-12 (small-N carve-out) and 2026-10-13 (keyed on cells): a threaded call over fewer than 10^4 cells is a few microseconds of work, so below small_n_max cells it is held to native's own serial call rather than the threaded hand loop, and turning threads on must never make a small problem slower. From 10^4 cells up the threaded gate is unchanged, and issue #502 must meet it there. Every family's N = 10^4 rung has at least 10^4 cells except scalar_chemistry, whose n_cells counts boxes (500 at N = 10^4, 5000 at 10^5, a threaded call of about 4 us at 10^4), so it falls under the carve-out through N = 10^5"
     }
+  },
+  "hosted_runner": {
+    "max_timing_ratio": 3,
+    "why": "User ruling 2026-10-12 (blocking the timing gates, option C): a hosted runner is not a clean machine. In the 2026-10-12 scheduled sweep (4 vCPUs, the code of 4c2a9bb9d) against the local clean sweep, speed ratios moved by up to 4.6x and the verdict flipped at 20 of 124 gated points, but no point that passes locally read above 2.81. check.py --hosted holds the speed ratio to 3 instead of 1.25, which catches a fall-back-sized regression and nothing finer, and only reports the build slope, whose PR-size span (a few hundred states) turns a millisecond of jitter into hundreds of ns/state; the exact bars run on the scheduled clean sweep on the dedicated node (sweep.sh)"
   },
   "ledger": {
     "rust": [
@@ -264,219 +275,32 @@
         "gate": "speed",
         "n": 1000,
         "threads": "serial",
-        "measured": 1.3985,
+        "measured": 1.3865,
         "reason": "at 1000 cells native's fixed per-call cost in the chunked executor (group setup, per-element register traffic) is not amortized; from 10^4 cells it is under 1x",
         "phase": 5,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
-      },
-      {
-        "family": "scalar_chemistry",
-        "gate": "speed",
-        "n": 10000,
-        "threads": "serial",
-        "measured": 1.252,
-        "reason": "the equations run as tape lane programs in strips, which still trail the hand-written per-box loop by about 1.2-1.25x; at 10^5 it is under 1.25x",
-        "phase": 5,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
-      },
-      {
-        "family": "chemistry_grid",
-        "n": 1000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 4.8215,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10",
-        "reason": "at this size the threaded call does not amortize its fixed cost (fork-join dispatch, the window split, gather fills per window) as well as the threaded hand loop does; from 10^5 states it is at or under 1.25x",
-        "phase": 5
-      },
-      {
-        "family": "chemistry_grid",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 1.3545,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10",
-        "reason": "at this size the threaded call does not amortize its fixed cost (fork-join dispatch, the window split, gather fills per window) as well as the threaded hand loop does; from 10^5 states it is at or under 1.25x",
-        "phase": 5
-      },
-      {
-        "family": "scalar_chemistry",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 1.48,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10",
-        "reason": "the equations run as tape lane programs in strips, which still trail the hand-written per-box loop by about 1.2-1.25x, and the lane-range split adds dispatch that a 10^4-state call does not cover",
-        "phase": 5
-      },
-      {
-        "family": "scalar_chemistry",
-        "n": 100000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 1.291,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10",
-        "reason": "the equations run as tape lane programs in strips, which still trail the hand-written per-box loop by about 1.2-1.25x, and the lane-range split adds dispatch that a 10^4-state call does not cover",
-        "phase": 5
-      },
-      {
-        "family": "source_receptor",
-        "n": 1000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 1.415,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10",
-        "reason": "at 1000 receptors the reduction's chunked-executor overhead and the fork-join dispatch are not amortized; 3162 passes",
-        "phase": 5
-      },
-      {
-        "family": "transport_3d",
-        "n": 10000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 1.2865,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10",
-        "reason": "at this size the threaded call does not amortize its fixed cost (fork-join dispatch, the window split, gather fills per window) as well as the threaded hand loop does; from 10^5 states it is at or under 1.25x",
-        "phase": 5
+        "provisional": "sweep at fbb6d2cb0 with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 24-27 pinned (one NUMA node), nothing else of ours running there, median of 4 runs, 2026-10-14"
       },
       {
         "family": "unstructured_gather",
         "n": 10000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": 1.319,
-        "reason": "the per-window gather fill and dispatch are not amortized as well as in the threaded hand loop (10^6 passes)",
+        "measured": 1.359,
+        "reason": "each of the four shares of the split fused reduction runs about 30-40% slower than a quarter of the serial call, on the calling thread and the workers alike; not wake-up, page placement, frequency, false sharing or imbalance (issue #505).; runs of one clean sweep range from 1.12 to 1.43",
         "phase": 5,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
+        "provisional": "sweep at fbb6d2cb0 with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 24-27 pinned (one NUMA node), nothing else of ours running there, median of 4 runs, 2026-10-14"
       },
       {
         "family": "unstructured_gather",
         "n": 100000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": 1.1205,
-        "reason": "the per-window gather fill and dispatch are not amortized as well as in the threaded hand loop (10^6 passes)",
+        "measured": 1.145,
+        "reason": "each of the four shares of the split fused reduction runs about 30-40% slower than a quarter of the serial call, on the calling thread and the workers alike; not wake-up, page placement, frequency, false sharing or imbalance (issue #505).; runs of one clean sweep range from 1.12 to 1.43",
         "phase": 5,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
-      },
-      {
-        "family": "regrid",
-        "n": 1000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 1.5725,
-        "reason": "the apply (gather, weight product, segmented sum, fused group over the targets) is split by target cell in one dispatch, but at 1000-3162 targets each worker's share does not amortize the dispatch, and the serial gap carries over",
-        "phase": 5,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
-      },
-      {
-        "family": "regrid",
-        "n": 3162,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": 1.534,
-        "reason": "the apply (gather, weight product, segmented sum, fused group over the targets) is split by target cell in one dispatch, but at 1000-3162 targets each worker's share does not amortize the dispatch, and the serial gap carries over",
-        "phase": 5,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
-      },
-      {
-        "family": "regrid",
-        "n": 1000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": 1.4155,
-        "reason": "native's apply over the admitted pairs is one chain run as a single gather-product-sum pass followed by the fused group, and still trails the hand loop's one pass per target; the gap is not yet profiled. It read 1.07-1.10 in earlier sweeps only because the hand loop's placement in those unaligned builds was about 10% slower",
-        "phase": 5,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
-      },
-      {
-        "family": "regrid",
-        "n": 3162,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": 1.377,
-        "reason": "native's apply over the admitted pairs is one chain run as a single gather-product-sum pass followed by the fused group, and still trails the hand loop's one pass per target; the gap is not yet profiled. It read 1.07-1.10 in earlier sweeps only because the hand loop's placement in those unaligned builds was about 10% slower",
-        "phase": 5,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
-      },
-      {
-        "family": "source_receptor",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": "-282.6 ns per state (ns/state over N=100..3162)",
-        "reason": "timing noise, not growth: the build takes about 6 ms at every size from 100 to 3162 receptors with about 0.5 ms of jitter, so the fitted slope swings between about -800 and +100 ns/state from run to run; the gate has no noise floor for builds this small",
-        "phase": 5,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
-      },
-      {
-        "family": "source_receptor",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "-310.2 ns per state (ns/state over N=100..3162)",
-        "reason": "timing noise, not growth: the build takes about 6 ms at every size from 100 to 3162 receptors with about 0.5 ms of jitter, so the fitted slope swings between about -800 and +100 ns/state from run to run; the gate has no noise floor for builds this small",
-        "phase": 5,
-        "provisional": "sweep at 8e737ec4e with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 12-15 pinned, nothing else of ours running, interleaved with three other adapter builds, median of 4 runs, 2026-10-10"
+        "provisional": "sweep at fbb6d2cb0 with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 24-27 pinned (one NUMA node), nothing else of ours running there, median of 4 runs, 2026-10-14"
       }
     ],
-    "julia": [
-      {
-        "family": "regrid",
-        "gate": "build_slope",
-        "threads": "serial",
-        "measured": "9266 ns per state (ns/state over N=100..3162)",
-        "provisional": "sweep at 8e737ec4e on the local node: cores 12-15 pinned, nothing else of ours running, median of 2 full runs (2026-10-09) and, for regrid, 5 more regrid-only runs (2026-10-10)",
-        "reason": "build cost per state at or just over the inline-data allowance; what grows with N is loading the document's inline cell tables, the page faults of first writes to the overlap arrays, which are declared dense over source x target, and the build's linear work over the admitted pairs (value invention, the pair tables)",
-        "phase": 2
-      },
-      {
-        "family": "regrid",
-        "gate": "build_slope",
-        "threads": "threaded",
-        "measured": "1.039e+04 ns per state (ns/state over N=100..3162)",
-        "provisional": "sweep at 8e737ec4e on the local node: cores 12-15 pinned, nothing else of ours running, median of 2 full runs (2026-10-09) and, for regrid, 5 more regrid-only runs (2026-10-10)",
-        "reason": "as for the serial entry; the threaded build also sets up per-thread state, and the fitted slope swings by about 1500 ns/state between runs",
-        "phase": 2
-      },
-      {
-        "family": "regrid",
-        "n": 1000,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": "native / hand loop = 1.4",
-        "reason": "native's threaded regrid splits the admitted pairs by target, but at 1000 targets each share does not amortize the dispatch as well as the threaded hand loop's @batch split does; 3162 passes",
-        "phase": 5,
-        "provisional": "sweep at 8e737ec4e on the local node: cores 12-15 pinned, nothing else of ours running, median of 2 full runs (2026-10-09) and, for regrid, 5 more regrid-only runs (2026-10-10)"
-      },
-      {
-        "family": "regrid",
-        "n": 1000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 1.14",
-        "reason": "borderline, from the reference rather than native: native's call takes 3.8-4.1 us at every run, while the hand loop's takes 2.9-3.7 us depending on the process, so single runs read 1.02-1.34",
-        "phase": 5,
-        "provisional": "sweep at 8e737ec4e on the local node: cores 12-15 pinned, nothing else of ours running, median of 2 full runs (2026-10-09) and, for regrid, 5 more regrid-only runs (2026-10-10)"
-      },
-      {
-        "family": "regrid",
-        "n": 3162,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": "native / hand loop = 1.05",
-        "reason": "borderline, from the reference rather than native: native's call takes 3.8-4.1 us at every run, while the hand loop's takes 2.9-3.7 us depending on the process, so single runs read 1.02-1.34",
-        "phase": 5,
-        "provisional": "sweep at 8e737ec4e on the local node: cores 12-15 pinned, nothing else of ours running, median of 2 full runs (2026-10-09) and, for regrid, 5 more regrid-only runs (2026-10-10)"
-      },
-      {
-        "family": "regrid",
-        "n": 3162,
-        "gate": "speed",
-        "threads": "threaded",
-        "measured": "native / hand loop = 1.2",
-        "reason": "borderline: single runs read 1.14-1.27 as the hand loop's time moves between processes",
-        "phase": 5,
-        "provisional": "sweep at 8e737ec4e on the local node: cores 12-15 pinned, nothing else of ours running, median of 2 full runs (2026-10-09) and, for regrid, 5 more regrid-only runs (2026-10-10)"
-      }
-    ]
+    "julia": []
   }
 }

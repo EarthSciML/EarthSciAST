@@ -166,34 +166,40 @@ pub(super) fn program_work(prog: &TapeProgram) -> usize {
         .map(|sv| sv.shape.iter().product::<usize>())
         .sum();
     for ins in &prog.instrs[start..] {
-        work = work.saturating_add(match ins {
-            Instr::Fused { spec } => {
-                let fs = &prog.fused[*spec as usize];
-                fs.shape
-                    .iter()
-                    .product::<usize>()
-                    .saturating_mul(fused_cost(fs))
-            }
-            Instr::DyWrite { write } => {
-                prog.slots[prog.dy_writes[*write as usize].slot as usize].elems()
-            }
-            Instr::Bin { out, .. }
-            | Instr::Un { out, .. }
-            | Instr::Neg { out, .. }
-            | Instr::Select { out, .. }
-            | Instr::Gather { out, .. }
-            | Instr::Copy { out, .. }
-            | Instr::IndexGather { out, .. }
-            | Instr::TableGather { out, .. }
-            | Instr::Scan { out, .. } => prog.slots[*out as usize].elems(),
-            Instr::Lanes { spec } => {
-                let ls = &prog.lanes[*spec as usize];
-                (ls.lanes as usize).saturating_mul(lane_cost(ls) + 1)
-            }
-            _ => 0,
-        });
+        work = work.saturating_add(instr_work(prog, ins));
     }
     work
+}
+
+/// The estimated element-operations of one instruction (0 for those that
+/// move control or a few scalars).
+pub(super) fn instr_work(prog: &TapeProgram, ins: &Instr) -> usize {
+    match ins {
+        Instr::Fused { spec } => {
+            let fs = &prog.fused[*spec as usize];
+            fs.shape
+                .iter()
+                .product::<usize>()
+                .saturating_mul(fused_cost(fs))
+        }
+        Instr::DyWrite { write } => {
+            prog.slots[prog.dy_writes[*write as usize].slot as usize].elems()
+        }
+        Instr::Bin { out, .. }
+        | Instr::Un { out, .. }
+        | Instr::Neg { out, .. }
+        | Instr::Select { out, .. }
+        | Instr::Gather { out, .. }
+        | Instr::Copy { out, .. }
+        | Instr::IndexGather { out, .. }
+        | Instr::TableGather { out, .. }
+        | Instr::Scan { out, .. } => prog.slots[*out as usize].elems(),
+        Instr::Lanes { spec } => {
+            let ls = &prog.lanes[*spec as usize];
+            (ls.lanes as usize).saturating_mul(lane_cost(ls) + 1)
+        }
+        _ => 0,
+    }
 }
 
 /// Operations per element of a fused group: its micro-ops, strided loads and
@@ -290,51 +296,85 @@ pub(super) unsafe fn copy_strided(
     sstr: &[i64],
     shape: &[usize],
 ) {
-    let tot: usize = shape.iter().product();
-    let axis = (0..shape.len())
-        .filter(|&d| shape[d] > 1)
-        .max_by_key(|&d| dstr[d].unsigned_abs());
-    let ways = match axis {
-        Some(d) => ways_for(tot, call).min(shape[d]),
-        None => 1,
-    };
-    let Some(d) = axis.filter(|_| ways > 1) else {
+    let ways = copy_ways(call, dstr, shape);
+    if ways <= 1 {
         unsafe { super::kernels::copy_strided(dst, dstr, src, sstr, shape) };
         return;
-    };
+    }
     let (dp, sp) = (SendPtr(dst), SendPtr(src as *mut f64));
+    pool::run(ways, &move |w| {
+        let (dp, sp) = (dp, sp);
+        unsafe { copy_strided_share(ways, w, dp.0, dstr, sp.0, sstr, shape) };
+    });
+}
+
+/// The axis [`copy_strided`] splits a copy along: the longest-strided one
+/// in the destination.
+fn copy_axis(dstr: &[i64], shape: &[usize]) -> Option<usize> {
+    (0..shape.len())
+        .filter(|&d| shape[d] > 1)
+        .max_by_key(|&d| dstr[d].unsigned_abs())
+}
+
+/// The workers [`copy_strided`] splits a copy across under call width
+/// `call` (1: it runs whole).
+pub(super) fn copy_ways(call: usize, dstr: &[i64], shape: &[usize]) -> usize {
+    let tot: usize = shape.iter().product();
+    copy_axis(dstr, shape).map_or(1, |d| ways_for(tot, call).min(shape[d]))
+}
+
+/// Share `w` of [`copy_strided`] split `ways` wide (as [`copy_ways`] gave
+/// it): the whole copy for share 0 of an unsplit copy, nothing for a share
+/// past the split.
+///
+/// # Safety
+/// As for `copy_strided`.
+pub(super) unsafe fn copy_strided_share(
+    ways: usize,
+    w: usize,
+    dst: *mut f64,
+    dstr: &[i64],
+    src: *const f64,
+    sstr: &[i64],
+    shape: &[usize],
+) {
+    let d = copy_axis(dstr, shape).unwrap_or(0);
+    if ways <= 1 {
+        if w == 0 {
+            unsafe { super::kernels::copy_strided(dst, dstr, src, sstr, shape) };
+        }
+        return;
+    }
+    if w >= ways {
+        return;
+    }
+    let tot: usize = shape.iter().product();
     let rm = rm_strides(shape);
     if dstr[..] == rm[..] && sstr[..] == rm[..] {
         // A contiguous copy is cut where a fused group over the same box is
         // (`share`), so each worker copies what it computed.
-        pool::run(ways, &move |w| {
-            let (dp, sp) = (dp, sp);
-            let (a, b) = share_at(tot, w, ways, dp.0);
-            if a < b {
-                unsafe { std::ptr::copy_nonoverlapping(sp.0.add(a), dp.0.add(a), b - a) };
-            }
-        });
+        let (a, b) = share_at(tot, w, ways, dst);
+        if a < b {
+            unsafe { std::ptr::copy_nonoverlapping(src.add(a), dst.add(a), b - a) };
+        }
         return;
     }
     let rows = shape[d];
-    pool::run(ways, &move |w| {
-        let (dp, sp) = (dp, sp);
-        let (a, b) = (rows * w / ways, rows * (w + 1) / ways);
-        if a >= b {
-            return;
-        }
-        let mut part: DimU = shape.iter().copied().collect();
-        part[d] = b - a;
-        unsafe {
-            super::kernels::copy_strided(
-                dp.0.offset(a as isize * dstr[d] as isize),
-                dstr,
-                sp.0.offset(a as isize * sstr[d] as isize) as *const f64,
-                sstr,
-                &part,
-            )
-        };
-    });
+    let (a, b) = (rows * w / ways, rows * (w + 1) / ways);
+    if a >= b {
+        return;
+    }
+    let mut part: DimU = shape.iter().copied().collect();
+    part[d] = b - a;
+    unsafe {
+        super::kernels::copy_strided(
+            dst.offset(a as isize * dstr[d] as isize),
+            dstr,
+            src.offset(a as isize * sstr[d] as isize),
+            sstr,
+            &part,
+        )
+    };
 }
 
 /// One resolved part of a split `makearray` assembly: its region (an index
@@ -345,6 +385,9 @@ pub(in crate::simulate_array::tape) struct AsmPart {
     dbase: i64,
     src: Rv,
 }
+
+// SAFETY: a part's source is only read, by every share of its assembly.
+unsafe impl Sync for AsmPart {}
 
 impl AsmPart {
     pub(super) fn new(region: u32, dbase: i64, src: Rv) -> Self {
@@ -369,6 +412,26 @@ pub(super) unsafe fn assemble(
     parts: &[AsmPart],
     covered: bool,
 ) {
+    let dp = SendPtr(dst);
+    pool::run(ways, &move |w| {
+        let dp = dp;
+        unsafe { assemble_share(w, ways, dp.0, shape, regions, parts, covered) };
+    });
+}
+
+/// Share `w` of [`assemble`] under width `ways`.
+///
+/// # Safety
+/// As for `assemble`.
+pub(super) unsafe fn assemble_share(
+    w: usize,
+    ways: usize,
+    dst: *mut f64,
+    shape: &[usize],
+    regions: &[RegionSpec],
+    parts: &[AsmPart],
+    covered: bool,
+) {
     let n: usize = shape.iter().product();
     let out_rm = rm_strides(shape);
     let sh = AsmShared {
@@ -376,16 +439,12 @@ pub(super) unsafe fn assemble(
         regions,
         parts,
         out_rm: &out_rm,
-        n,
         covered,
     };
-    pool::run(ways, &move |w| {
-        let sh = &sh;
-        let (lo, hi) = share_at(sh.n, w, ways, sh.dst.0);
-        if lo < hi {
-            unsafe { assemble_window(sh, lo, hi) };
-        }
-    });
+    let (lo, hi) = share_at(n, w, ways, dst);
+    if lo < hi {
+        unsafe { assemble_window(&sh, lo, hi) };
+    }
 }
 
 /// A split assembly, shared read-only by its workers.
@@ -394,7 +453,6 @@ struct AsmShared<'a> {
     regions: &'a [RegionSpec],
     parts: &'a [AsmPart],
     out_rm: &'a [i64],
-    n: usize,
     covered: bool,
 }
 
@@ -639,34 +697,10 @@ impl FusedWorkers {
         ways: usize,
     ) {
         self.grow(ways);
-        // A reduction splits its inner positions: worker `w` takes the same
-        // `[lo, hi)` of them at every leading position, so the accumulator
-        // cells each worker folds into are its own.
-        let (n, period) = match &fs.reduce {
-            Some(r) => (r.n_inner, r.n_inner),
-            None => (fs.shape.iter().product(), 0),
-        };
-        // Row starts, for a group with an absorbed scan (see `split_ways`);
-        // else cache lines of the accumulator or the first output.
-        let row = scan_row(fs);
-        let anchor = match outs.first() {
-            _ if !red.is_null() => red as usize,
-            Some(&(_, p)) => p as usize,
-            None => 0,
-        };
-        let cut = |w: usize| match row {
-            Some(row) => share_aligned(n, w, ways, row),
-            None => share_at(n, w, ways, anchor as *const f64),
-        };
-        // Each worker of a split reduction folds into cells of its own, in
-        // memory no other worker writes: folding into adjacent ranges of
-        // the shared accumulator lets the hardware prefetchers pull a
-        // neighbour's lines away from it every leading position.
-        let init = fs.reduce.as_ref().map(|r| r.init);
-        let seeded = seeds_itself(fs);
-        if init.is_some() {
+        let g = SplitGeom::of(fs, outs, red, ways);
+        if g.init.is_some() {
             for (w, wk) in self.workers[..ways].iter_mut().enumerate() {
-                let (lo, hi) = cut(w);
+                let (lo, hi) = g.cut(w);
                 if wk.acc.len() < hi.saturating_sub(lo) {
                     wk.acc = padded(hi - lo);
                 }
@@ -687,51 +721,152 @@ impl FusedWorkers {
         let ws = WorkersPtr(self.workers.as_mut_ptr());
         pool::run(ways, &move |w| {
             let (sh, ws) = (sh, ws);
-            let (lo, hi) = cut(w);
-            if lo >= hi {
-                return;
-            }
             // SAFETY: share `w` runs exactly once per dispatch, so each
             // worker state has one user.
             let wk = unsafe { &mut *ws.0.add(w) };
-            // The caller's precision is thread-local; carry it over.
-            let _p = crate::precision::enter(sh.precision);
-            // A reduction's cells `[lo, hi)` live in the worker's own buffer,
-            // addressed as if it started at cell 0.
-            let red = match init {
-                Some(init) => {
-                    let acc = &mut wk.acc[..hi - lo];
-                    if !seeded {
-                        acc.fill(init);
-                    }
-                    acc.as_mut_ptr().wrapping_sub(lo)
-                }
-                None => sh.red,
-            };
-            unsafe {
-                fill_whole(sh.fs, sh.bases, sh.whole_src, lo, hi, period);
-                run_fused_window(
-                    sh.simd,
-                    sh.fs,
-                    sh.svals,
-                    sh.bases,
-                    sh.outs,
-                    red,
-                    sh.idx,
-                    &mut wk.fregs,
-                    &mut wk.cursor,
-                    Window {
-                        lo,
-                        hi,
-                        period,
-                        node_elems: sh.node_elems,
-                    },
-                );
-                if init.is_some() {
-                    std::ptr::copy_nonoverlapping(wk.acc.as_ptr(), sh.red.add(lo), hi - lo);
-                }
-            }
+            unsafe { fused_share(&sh, wk, &g, w) };
         });
+    }
+
+    /// Run share `w` of fused group `fs` split `ways` wide on this thread,
+    /// with this thread's own worker state: the window [`Self::run_split`]
+    /// gives worker `w`.
+    ///
+    /// # Safety
+    /// As for [`Self::run_split`].
+    #[allow(clippy::too_many_arguments)]
+    pub(super) unsafe fn run_own_share(
+        &mut self,
+        fs: &FusedSpec,
+        svals: &[f64],
+        bases: &[*const f64],
+        whole_src: &[*const f64],
+        outs: &[(GroupIx, *mut f64)],
+        red: *mut f64,
+        idx: &[Option<IndexTable>],
+        node_elems: &[usize],
+        simd: SimdLevel,
+        w: usize,
+        ways: usize,
+    ) {
+        self.grow(1);
+        let g = SplitGeom::of(fs, outs, red, ways);
+        let (lo, hi) = g.cut(w);
+        let wk = &mut self.workers[0];
+        if g.init.is_some() && wk.acc.len() < hi.saturating_sub(lo) {
+            wk.acc = padded(hi - lo);
+        }
+        let sh = Shared {
+            fs,
+            svals,
+            bases,
+            whole_src,
+            outs,
+            red,
+            idx,
+            node_elems,
+            simd,
+            precision: crate::precision::active(),
+        };
+        unsafe { fused_share(&sh, wk, &g, w) };
+    }
+}
+
+/// Where a split fused group is cut: the same for every share, whichever
+/// thread computes it.
+struct SplitGeom {
+    n: usize,
+    period: usize,
+    row: Option<usize>,
+    anchor: usize,
+    ways: usize,
+    init: Option<f64>,
+    seeded: bool,
+}
+
+impl SplitGeom {
+    fn of(fs: &FusedSpec, outs: &[(GroupIx, *mut f64)], red: *mut f64, ways: usize) -> Self {
+        // A reduction splits its inner positions: worker `w` takes the same
+        // `[lo, hi)` of them at every leading position, so the accumulator
+        // cells each worker folds into are its own.
+        let (n, period) = match &fs.reduce {
+            Some(r) => (r.n_inner, r.n_inner),
+            None => (fs.shape.iter().product(), 0),
+        };
+        // Row starts, for a group with an absorbed scan (see `split_ways`);
+        // else cache lines of the accumulator or the first output.
+        let anchor = match outs.first() {
+            _ if !red.is_null() => red as usize,
+            Some(&(_, p)) => p as usize,
+            None => 0,
+        };
+        SplitGeom {
+            n,
+            period,
+            row: scan_row(fs),
+            anchor,
+            ways,
+            // Each worker of a split reduction folds into cells of its own,
+            // in memory no other worker writes: folding into adjacent ranges
+            // of the shared accumulator lets the hardware prefetchers pull a
+            // neighbour's lines away from it every leading position.
+            init: fs.reduce.as_ref().map(|r| r.init),
+            seeded: seeds_itself(fs),
+        }
+    }
+
+    fn cut(&self, w: usize) -> (usize, usize) {
+        match self.row {
+            Some(row) => share_aligned(self.n, w, self.ways, row),
+            None => share_at(self.n, w, self.ways, self.anchor as *const f64),
+        }
+    }
+}
+
+/// Share `w` of a split fused group, on worker state `wk` (whose `acc` holds
+/// at least the share's accumulator cells).
+unsafe fn fused_share(sh: &Shared, wk: &mut FusedWorker, g: &SplitGeom, w: usize) {
+    let (lo, hi) = g.cut(w);
+    if lo >= hi {
+        return;
+    }
+    let period = g.period;
+    // The caller's precision is thread-local; carry it over.
+    let _p = crate::precision::enter(sh.precision);
+    // A reduction's cells `[lo, hi)` live in the worker's own buffer,
+    // addressed as if it started at cell 0.
+    let red = match g.init {
+        Some(init) => {
+            let acc = &mut wk.acc[..hi - lo];
+            if !g.seeded {
+                acc.fill(init);
+            }
+            acc.as_mut_ptr().wrapping_sub(lo)
+        }
+        None => sh.red,
+    };
+    unsafe {
+        fill_whole(sh.fs, sh.bases, sh.whole_src, lo, hi, period);
+        run_fused_window(
+            sh.simd,
+            sh.fs,
+            sh.svals,
+            sh.bases,
+            sh.outs,
+            red,
+            sh.idx,
+            &mut wk.fregs,
+            &mut wk.cursor,
+            Window {
+                lo,
+                hi,
+                period,
+                node_elems: sh.node_elems,
+            },
+        );
+        if g.init.is_some() {
+            std::ptr::copy_nonoverlapping(wk.acc.as_ptr(), sh.red.add(lo), hi - lo);
+        }
     }
 }
 

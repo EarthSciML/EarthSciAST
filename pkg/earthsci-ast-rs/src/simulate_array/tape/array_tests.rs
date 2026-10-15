@@ -14,6 +14,7 @@
 use super::super::{ArrayCompiled, ConstArrayScope, RhsScratch, RhsStats};
 use super::ir::*;
 use super::refexec::run_reference;
+use super::taped;
 use crate::simulate_array::take_const_array_oob;
 use crate::value_invention::BoundaryKind;
 use serde_json::json;
@@ -62,7 +63,7 @@ fn cfg() -> super::fuse::SuperopCfg {
 fn scratch_with(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsScratch {
     let mut s = RhsScratch::new(&compiled.var_shapes);
     s.set_const_arrays(Rc::clone(&compiled.const_scope));
-    s.install_tape(Rc::new(prog), Rc::new(compiled.observed_rules.clone()));
+    s.install_tape(Rc::new(prog));
     s
 }
 
@@ -73,7 +74,7 @@ fn scratch_with(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsScratch {
 /// section primes, which a warm scratch has already done. Returns the fused
 /// program.
 pub(super) fn ab(compiled: &ArrayCompiled, param_maps: &[HashMap<String, f64>]) -> TapeProgram {
-    let (prog, report) = compiled.build_tape_opts(&HashSet::new(), Some(cfg()));
+    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(cfg())));
     assert!(
         report.fallbacks.is_empty(),
         "fallbacks: {:?}",
@@ -106,7 +107,7 @@ fn compare_at(compiled: &ArrayCompiled, params: &HashMap<String, f64>, state: &[
     assert_eq!(f_overlay, f_oracle, "overlay fault");
     for fused in [true, false] {
         let label = if fused { "fused" } else { "unfused" };
-        let p = compiled.build_tape_opts(&HashSet::new(), fused.then(cfg)).0;
+        let p = taped(compiled.build_tape_opts(&HashSet::new(), fused.then(cfg))).0;
         let mut dy = vec![0.0f64; n];
         run_reference(&p, compiled, state, &pv, t, &mut dy);
         let f_ref = take_const_array_oob();
@@ -301,7 +302,12 @@ fn const_gather_boundary_policies_resolve_at_build() {
     };
     // Unfused: whether fusion folds a many-segment gather depends on the run
     // count, which is not the question here.
-    let unfused_len = |c: &ArrayCompiled| c.build_tape_opts(&HashSet::new(), None).0.instrs.len();
+    let unfused_len = |c: &ArrayCompiled| {
+        taped(c.build_tape_opts(&HashSet::new(), None))
+            .0
+            .instrs
+            .len()
+    };
     for kind in [BoundaryKind::Clamp, BoundaryKind::Periodic] {
         let (small, large) = (build(16, kind), build(64, kind));
         assert_eq!(opcount(&ab(&small, &no_params()), "Fault"), 0);
@@ -631,8 +637,7 @@ fn filtered_rank0_reduction() {
                     d_eq("u", n, idx(json!("u"), &[json!("i")])),
                 ],
             ));
-            let prog = ab(&compiled, &no_params());
-            assert_eq!(opcount(&prog, "Fallback"), 0);
+            ab(&compiled, &no_params());
         }
     }
 }
