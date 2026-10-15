@@ -342,6 +342,44 @@ _pr_rank4_build(doc, compiler; kw...) =
         end
     end
 
+    # An operator with a child count its registry row does not allow (a
+    # three-operand `/`) is a malformed document, which the interpreter rejects
+    # with its arity error. `native` rejects it with the same error rather than
+    # a refusal that blames the compiler; `min`, which is n-ary, builds.
+    @testset "a malformed operator arity is the document's error under native" begin
+        doc(rhs) = Dict{String,Any}("esm" => "1.1.0",
+            "metadata" => Dict("name" => "pr_arity"),
+            "models" => Dict("U" => Dict{String,Any}(
+                "variables" => Dict("y" => Dict("type" => "unknown", "default" => 2.0),
+                                    "z" => Dict("type" => "unknown", "default" => 0.5)),
+                "equations" => Any[
+                    Dict("lhs" => Dict("op" => "D", "args" => Any["y"], "wrt" => "t"),
+                         "rhs" => rhs),
+                    Dict("lhs" => Dict("op" => "D", "args" => Any["z"], "wrt" => "t"),
+                         "rhs" => 0.0)])))
+        op(o, a...) = Dict("op" => o, "args" => Any[a...])
+        for (rhs, needle) in ((op("neg", op("/", "y", 2.0, 3.0)), "/ expects 2 args, got 3"),
+                              (op("-", "y", 2.0, "z"), "- expects 1 or 2 args"),
+                              (op("^", "y", 2.0, "z"), "^ expects 2 args, got 3"),
+                              (op("atan2", "y", 2.0, "z"), "atan2 expects 2 args, got 3"))
+            for c in (:native, :interpreter)
+                e = try
+                    p = esm_problem(doc(rhs), (0.0, 1.0); compiler = c)
+                    p.f!(zeros(2), p.u0, p.p, 0.0); nothing
+                catch err
+                    err
+                end
+                @test e isa _PR.TreeWalkError && e.code == "E_TREEWALK_ARITY"
+                @test occursin(needle, sprint(showerror, e))
+            end
+        end
+        pn = esm_problem(doc(op("min", "y", 2.0, "z")), (0.0, 1.0))
+        pi_ = esm_problem(doc(op("min", "y", 2.0, "z")), (0.0, 1.0); compiler = :interpreter)
+        dn, di = zeros(2), zeros(2)
+        pn.f!(dn, pn.u0, pn.p, 0.0); pi_.f!(di, pi_.u0, pi_.p, 0.0)
+        @test dn == di == [0.5, 0.0]
+    end
+
     # ── Output-time observeds and inline-test assertions (#481, #482) ─────────
     # `h` is a makearray observed: the build-time cellwise sweep cannot keep a
     # region choice symbolic, so under `interpreter` reading it takes the

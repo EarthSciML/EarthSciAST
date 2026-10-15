@@ -667,7 +667,8 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
     n_slots = length(const_slots) + length(time_slots) + length(dyn_slots)
     walk = _scalar_walk_license(n_slots + length(rhs_list) > 0,
         isempty(rhs_list) ? "the scalar prelude" : "state slot $(rhs_list[1][1])",
-        "$(length(rhs_list)) scalar equations and $n_slots shared-subexpression slots")
+        "$(length(rhs_list)) scalar equations and $n_slots shared-subexpression slots",
+        () -> vcat(_Node[nd for (_, nd) in rhs_list], cse_prelude))
     function f!(du, u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         T = _rhs_value_type(u, p, t)
