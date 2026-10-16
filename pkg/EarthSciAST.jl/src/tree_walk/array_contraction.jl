@@ -480,7 +480,7 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
             extrema((los[d], los[d] + (lens[d] - 1) * steps[d])))
     end
     advance = nothing
-    for (qv, iv, lo, len, st) in reverse(stepper)
+    for (qv, iv, lo, len, st) in reverse(stepper[2:end])
         inner = advance === nothing ? Any[] : Any[advance]
         advance = quote
             $qv += 1
@@ -489,6 +489,34 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
                 $qv = 0
                 $iv = $lo
                 $(inner...)
+            end
+        end
+    end
+    # The chunk walked a row of the first output dimension at a time: the
+    # cells of a row are one counted loop, the odometer carries between rows.
+    function rowloop(store)
+        isempty(stepper) && return quote
+            $store
+        end
+        q1, iv1, lo1, len1, st1 = stepper[1]
+        nr = _cg_name(ctx, "nrow"); is = _cg_name(ctx, "ivs")
+        cs = _cg_name(ctx, "cs"); kk = _cg_name(ctx, "kk")
+        return quote
+            while true
+                local $nr = min($len1 - $q1, $bv - $cv + 1)
+                local $is = $iv1
+                local $cs = $cv
+                for $kk in 0:($nr - 1)
+                    local $iv1 = $is + $kk * $st1
+                    local $cv = $cs + $kk
+                    $store
+                end
+                $cv = $cs + $nr - 1
+                $cv == $bv && break
+                $cv += 1
+                $q1 = 0
+                $iv1 = $lo1
+                $(advance === nothing ? nothing : advance)
             end
         end
     end
@@ -545,12 +573,7 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
                 if $av < $bv
                     local $cv = $av + 1
                     $(start...)
-                    while true
-                        du[$outref] = $cell
-                        $cv == $bv && break
-                        $cv += 1
-                        $(something(advance, nothing))
-                    end
+                    $(rowloop(:(du[$outref] = $cell)))
                 end
             end
         end
