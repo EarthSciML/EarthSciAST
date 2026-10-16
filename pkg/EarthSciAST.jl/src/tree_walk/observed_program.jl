@@ -93,7 +93,7 @@ function _def_state_time_refs(def::ASTExpr, state_names::Set{String})
         e isa OpExpr || return nothing
         if e.output_idx !== nothing
             for s in e.output_idx
-                push!(bound, String(s))
+                s isa AbstractString && push!(bound, String(s))
             end
         end
         if e.ranges !== nothing
