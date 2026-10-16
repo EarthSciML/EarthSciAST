@@ -2522,9 +2522,9 @@ fn document_has_unresolved_mount(doc: &JsonValue) -> bool {
 
 #[cfg(test)]
 mod first_cell_stop_tests {
-    //! A strict compiler's refusal of a per-cell pipeline observed comes after
-    //! ONE cell of the walk, not after all of them — counted with the
-    //! evaluator's per-cell test hook, never timed.
+    //! A strict compiler never walks a pipeline observed past its first cell:
+    //! the walk stops there and the observed is lowered on the tape instead —
+    //! counted with the evaluator's per-cell test hook, never timed.
 
     use crate::compile_error::CompileError;
     use crate::problem::{Compiler, ProblemOptions, esm_problem};
@@ -2596,34 +2596,31 @@ mod first_cell_stop_tests {
         )
     }
 
-    /// The refusal of `d` under `native` — (kind, rule, reason) — and how many
-    /// cells the per-cell walks evaluated on the way to it.
-    fn refused(d: &Value) -> ((&'static str, String, String), u64) {
-        let before = per_cell_cells();
-        let err = build(d, Compiler::Native).expect_err("native refuses a per-cell walk");
-        let cells = per_cell_cells() - before;
-        match err {
-            SimulateError::Compile(CompileError::CompilerRefusedRule {
-                kind,
-                rule,
-                reason,
-                ..
-            }) => ((kind, rule, reason), cells),
-            other => panic!("expected compiler_refused_rule, got {other:?}"),
-        }
-    }
-
     const LARGE: usize = 200_000;
 
+    /// `native`'s build of `d` and the cells the per-cell walks evaluated on
+    /// the way to it.
+    fn native_cells(d: &Value) -> (crate::problem::EsmProblem, u64) {
+        let before = per_cell_cells();
+        let prob = build(d, Compiler::Native).expect("native builds it on the tape");
+        (prob, per_cell_cells() - before)
+    }
+
+    fn bits(p: &crate::problem::EsmProblem, name: &str) -> Vec<u64> {
+        crate::problem::observed_field(p, name)
+            .expect("field")
+            .iter()
+            .map(|x| x.to_bits())
+            .collect()
+    }
+
     #[test]
-    fn a_large_prefix_scan_is_refused_after_one_cell() {
-        let (small, _) = refused(&cumulative(3));
-        let (large, cells) = refused(&cumulative(LARGE));
-        // The same refusal, naming the same observed for the same reason.
-        assert_eq!(large, small);
-        assert_eq!(large.0, "build-time observed");
-        assert_eq!(large.1, "Rel.cum");
-        assert_eq!(cells, 1, "the walk must stop at its first cell");
+    fn a_large_prefix_scan_is_taped_after_at_most_one_walked_cell() {
+        let (native, cells) = native_cells(&cumulative(LARGE));
+        assert!(
+            cells <= 1,
+            "the walk must stop at its first cell, walked {cells}"
+        );
 
         // The reference evaluator still walks every cell, to the same answer.
         let before = per_cell_cells();
@@ -2632,22 +2629,20 @@ mod first_cell_stop_tests {
         let cum = crate::problem::observed_field(&prob, "Rel.cum").expect("cum");
         let n = LARGE as f64;
         assert_eq!(cum.iter().last().copied(), Some(5.0 * n * (n + 1.0)));
+        assert_eq!(bits(&native, "Rel.cum"), bits(&prob, "Rel.cum"));
     }
 
     #[test]
-    fn a_large_recurrence_is_refused_after_one_cell() {
-        let (small, _) = refused(&recurrence(3));
-        let (large, cells) = refused(&recurrence(LARGE));
-        assert_eq!(large, small);
-        assert_eq!(large.1, "Rel.s");
-        assert!(large.2.contains("causal self-reference"), "{}", large.2);
-        assert_eq!(cells, 1, "the sweep must stop at its first cell");
+    fn a_large_recurrence_is_taped_without_a_walked_cell() {
+        let (native, cells) = native_cells(&recurrence(LARGE));
+        assert_eq!(cells, 0, "a recurrence goes straight to the tape's sweep");
 
         let before = per_cell_cells();
         let prob = build(&recurrence(LARGE), Compiler::Interpreter).expect("interpreter");
         assert_eq!(per_cell_cells() - before, LARGE as u64);
         let s = crate::problem::observed_field(&prob, "Rel.s").expect("s");
         assert_eq!(s.iter().last().copied(), Some(LARGE as f64));
+        assert_eq!(bits(&native, "Rel.s"), bits(&prob, "Rel.s"));
     }
 
     /// A record-to-cell binning producer whose record coordinate `X` is a
@@ -2718,7 +2713,7 @@ mod first_cell_stop_tests {
     }
 
     #[test]
-    fn a_large_per_cell_coordinate_is_refused_after_one_cell() {
+    fn a_large_per_cell_coordinate_is_taped_after_at_most_one_walked_cell() {
         let run = |n: usize, compiler: Compiler| {
             let (d, const_arrays) = binning(n);
             let before = per_cell_cells();
@@ -2734,27 +2729,21 @@ mod first_cell_stop_tests {
             );
             (r, per_cell_cells() - before)
         };
-        let reason = |r: Result<crate::problem::EsmProblem, SimulateError>| match r {
-            Err(SimulateError::Compile(CompileError::CompilerRefusedRule {
-                kind,
-                rule,
-                reason,
-                ..
-            })) => (kind, rule, reason),
-            other => panic!("expected compiler_refused_rule, got {other:?}"),
-        };
-        let (small, _) = run(3, Compiler::Native);
-        let (large, cells) = run(LARGE, Compiler::Native);
-        let large = reason(large);
-        assert_eq!(large, reason(small));
-        assert_eq!(large.0, "build-time observed");
-        assert_eq!(large.1, "Rel.X");
-        assert_eq!(cells, 1, "the coordinate pass must stop at its first cell");
+        let (native, cells) = run(LARGE, Compiler::Native);
+        let native = native.expect("native builds it on the tape");
+        assert!(
+            cells <= 1,
+            "the coordinate pass must stop at its first cell, walked {cells}"
+        );
+        assert_eq!(native.members()["bins"].len(), LARGE, "one record per cell");
 
         let (interp, cells) = run(1000, Compiler::Interpreter);
         let prob = interp.expect("the interpreter builds it");
         assert_eq!(cells, 1000);
         assert_eq!(prob.members()["bins"].len(), 1000, "one record per cell");
+        let (native_small, _) = run(1000, Compiler::Native);
+        let native_small = native_small.expect("native");
+        assert_eq!(native_small.members()["bins"], prob.members()["bins"]);
     }
 
     /// A document error in the first cell is still the document's error, not
