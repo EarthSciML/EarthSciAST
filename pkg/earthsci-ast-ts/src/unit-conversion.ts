@@ -74,6 +74,21 @@ function ratioFromNumber(x: number): Ratio {
 }
 
 /**
+ * The exact rational a literal `^` exponent denotes, or `null` when it is not a
+ * small rational — the same conversion {@link ExactScale.power} applies to a
+ * literal exponent, exposed fallibly for constant-exponent folding
+ * (esm-spec §4.8.3 `^`).
+ */
+export function exponentRatio(x: number): { n: number; d: number } | null {
+  if (!Number.isFinite(x)) return null
+  try {
+    return ratioFromNumber(x)
+  } catch {
+    return null
+  }
+}
+
+/**
  * The EXACT scale of a unit relative to SI (esm-spec §4.8.1 "Scales are EXACT"):
  * a product of prime powers and a power of π, each with a rational exponent, so
  * `mi` is 2^4 * 3^2 * 5^-3 * 11 * 127. Multiplying units adds exponents,
@@ -180,6 +195,17 @@ export class ExactScale {
   /** The scale of a unit raised to a (rational) power. */
   power(exponent: number): ExactScale {
     const r = ratioFromNumber(exponent)
+    return this.powerRational(r.n, r.d)
+  }
+
+  /**
+   * The scale raised to the EXACT rational `num/den` (safe integers, `den` > 0).
+   * A constant-expression exponent (`T^(3/2)` spelled `{op: "/", args: [3, 2]}`)
+   * folds to such a rational, and its denominator need not be one
+   * {@link ExactScale.power}'s float recovery would find.
+   */
+  powerRational(num: number, den: number): ExactScale {
+    const r = makeRatio(num, den)
     const primes = new Map<number, Ratio>()
     for (const [p, e] of this.primes) primes.set(p, makeRatio(e.n * r.n, e.d * r.d))
     return new ExactScale(primes, makeRatio(this.piExp.n * r.n, this.piExp.d * r.d)).normalized()

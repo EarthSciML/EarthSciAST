@@ -12,6 +12,7 @@
 import type { Expression, ExpressionNode, EsmFile, Model } from './types.js'
 import {
   ExactScale,
+  exponentRatio,
   type CanonicalDims,
   type ParsedUnit,
   parseUnitForConversion,
@@ -23,7 +24,7 @@ import {
   isRewriteTargetDerivative,
   REWRITE_TARGET_DERIVATIVE_ARITY,
 } from './op-registry.js'
-import { forEachComponent, forEachEquation } from './traverse.js'
+import { forEachComponent, forEachEquation, isReferenceStub } from './traverse.js'
 import { observedDefinitions } from './classification.js'
 import { ERROR_CODES } from './errors.js'
 
@@ -236,6 +237,111 @@ function powerUnit(base: ParsedUnit, exp: number): ParsedUnit {
   return { dims, scale: Math.pow(base.scale, exp), exact: base.exact.power(exp) }
 }
 
+/** {@link powerUnit} for an EXACT rational exponent `r.n / r.d`. */
+function powerUnitRational(base: ParsedUnit, r: Rational): ParsedUnit {
+  const exp = r.n / r.d
+  const dims: CanonicalDims = {}
+  for (const [k, v] of Object.entries(base.dims)) {
+    if (v == null || v === 0) continue
+    dims[k as keyof CanonicalDims] = v * exp
+  }
+  pruneZeros(dims)
+  return { dims, scale: Math.pow(base.scale, exp), exact: base.exact.powerRational(r.n, r.d) }
+}
+
+/** An exact rational in lowest terms with a positive denominator. */
+interface Rational {
+  n: number
+  d: number
+}
+
+function gcd(a: number, b: number): number {
+  let x = Math.abs(a)
+  let y = Math.abs(b)
+  while (y !== 0) [x, y] = [y, x % y]
+  return x
+}
+
+/**
+ * `n/d` reduced, or `null` when either part leaves the safe-integer range
+ * (the binding's rational type overflows) or `d` is zero.
+ */
+function rational(n: number, d: number): Rational | null {
+  if (!Number.isSafeInteger(n) || !Number.isSafeInteger(d) || d === 0) return null
+  const g = gcd(n, d) || 1
+  const sign = d < 0 ? -1 : 1
+  return { n: (sign * n) / g + 0, d: Math.abs(d) / g }
+}
+
+/**
+ * The exact rational value of a CONSTANT-EXPRESSION `^` exponent, or `null`
+ * when it does not fold (esm-spec §4.8.3 `^`).
+ *
+ * It folds when it is a numeric literal (converted exactly as a literal
+ * exponent always has been); a `const` that declares no units, or units that
+ * are dimensionless at exact scale 1 (`"1"`, `""`, `"dimensionless"`) — its
+ * `value` IS the pure number it denotes; or `+`, `*` (one or more operands),
+ * `-` (unary negation, or a left fold of two or more) or `/` (exactly two
+ * operands, nonzero divisor) over constant expressions, nested to any depth.
+ * Anything else — a variable, an expression containing one, a `const` whose
+ * unit is dimensional or scaled (`%`), any other op, overflow, division by
+ * zero — is SYMBOLIC, and the power stays undeterminable for a dimensional or
+ * scaled base (§4.8.4). Mirrors Python's `constant_exponent_value`.
+ */
+export function constantExponentValue(expr: Expression): Rational | null {
+  const literal = literalValue(expr)
+  if (literal !== null) return exponentRatio(literal)
+  if (typeof expr !== 'object' || expr === null) return null
+  const node = expr as ExpressionNode
+  if (node.op === 'const') {
+    const declared = (node as { units?: string }).units
+    if (declared !== undefined) {
+      const unit = tryParseUnit(declared)
+      if (unit === null || !isDimensionless(unit) || !unit.exact.isOne()) return null
+    }
+    const value = (node as { value?: unknown }).value
+    if (typeof value === 'number') return exponentRatio(value)
+    if (isNumericLiteral(value as Expression))
+      return exponentRatio((value as { value: number }).value)
+    return null
+  }
+  const args = node.args ?? []
+  if (args.length === 0) return null
+  const values: Rational[] = []
+  for (const a of args) {
+    const v = constantExponentValue(a as Expression)
+    if (v === null) return null
+    values.push(v)
+  }
+  const add = (a: Rational, b: Rational, sign: 1 | -1): Rational | null =>
+    rational(a.n * b.d + sign * b.n * a.d, a.d * b.d)
+  switch (node.op) {
+    case '+':
+    case '-': {
+      if (node.op === '-' && values.length === 1) return rational(-values[0].n, values[0].d)
+      let acc: Rational | null = values[0]
+      for (const v of values.slice(1)) {
+        acc = add(acc, v, node.op === '+' ? 1 : -1)
+        if (acc === null) return null
+      }
+      return acc
+    }
+    case '*': {
+      let acc: Rational | null = values[0]
+      for (const v of values.slice(1)) {
+        acc = rational(acc.n * v.n, acc.d * v.d)
+        if (acc === null) return null
+      }
+      return acc
+    }
+    case '/':
+      if (values.length !== 2 || values[1].n === 0) return null
+      return rational(values[0].n * values[1].d, values[0].d * values[1].n)
+    default:
+      return null
+  }
+}
+
 /**
  * Check dimensional consistency of an expression.
  *
@@ -422,6 +528,21 @@ function computeDimensions(
     return finish(arrayElementDimensions(node, unitBindings, memo))
   }
 
+  if (op === 'faq') {
+    // The checker does not model the array operators, so the faq's OWN unit is
+    // undeterminable (esm-spec §4.8.4) — but the expressions it evaluates are
+    // checked like any other (§4.8.3, EarthSciAST#414): its `filter`, a boolean
+    // whose value never reaches the node's unit, and its `expr` body. A
+    // provable mismatch inside either is recorded here.
+    for (const part of [node.filter, node.expr, ...args]) {
+      if (part === undefined || part === null) continue
+      diagnostics.push(
+        ...checkDimensionsMemo(part as Expression, unitBindings, memo, elements).diagnostics,
+      )
+    }
+    return unknown()
+  }
+
   const argResults = args.map((arg) => checkDimensionsMemo(arg, unitBindings, memo, elements))
   for (const r of argResults) diagnostics.push(...r.diagnostics)
 
@@ -514,6 +635,11 @@ function computeDimensions(
       if (isDimensionless(base) && base.exact.isOne()) return finish(dimensionless())
 
       const expValue = literalValue(args[1])
+      // A CONSTANT-EXPRESSION exponent (`3/2`, `-(1)`, a unit-1 `const`) is
+      // read by VALUE exactly like a literal of the same value (esm-spec §4.8.3
+      // `^`); only an exponent that does not fold is symbolic.
+      const folded = expValue === null ? constantExponentValue(args[1]) : null
+      if (folded !== null) return finish(powerUnitRational(base, folded))
       if (expValue === null) {
         // A SYMBOLIC exponent on a dimensional base is INDETERMINATE, not
         // wrong. `k * [X]^n` — a rate law with a fitted reaction order — is
@@ -1059,7 +1185,15 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
       // {@link bindingsForComponent}); subsystem-local names stay unbound (see
       // the docstring's BINDINGS note), preserving the legacy
       // mismatch-suppression.
-      const bindings = bindingsForComponent(unitBindings, scopedName, component)
+      // A scoped reference — into a subsystem or a top-level component, mounted
+      // by `{ref}` or written inline — has the units its target declares
+      // (esm-spec §4.8.4, EarthSciAST#414); leaving it unbound skipped every
+      // check across a mount edge.
+      const bindings = withScopedReferenceUnits(
+        bindingsForComponent(unitBindings, scopedName, component),
+        file,
+        component,
+      )
 
       // Flag any unparseable variable-unit declarations in this component. For
       // an INLINE SUBSYSTEM this is the only pass that sees them — the top-level
@@ -1197,6 +1331,101 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
   )
 
   return dedupeUnparseable(warnings)
+}
+
+/** Declared unit strings of a component's own members: a model's `variables`,
+ * a reaction system's `species` and `parameters`. */
+function componentMemberUnits(component: unknown): Array<[string, string]> {
+  const out: Array<[string, string]> = []
+  const c = component as Record<string, unknown>
+  for (const key of ['variables', 'species', 'parameters']) {
+    const table = c[key]
+    if (table === null || typeof table !== 'object' || Array.isArray(table)) continue
+    for (const [name, decl] of Object.entries(table as Record<string, { units?: unknown }>)) {
+      const units = decl?.units
+      if (typeof units === 'string' && units) out.push([name, units])
+    }
+  }
+  return out
+}
+
+/** The resolved (non-`{ref}`) subsystems of a component. */
+function resolvedSubsystems(component: unknown): Array<[string, unknown]> {
+  const subs = (component as { subsystems?: Record<string, unknown> }).subsystems
+  if (!subs || typeof subs !== 'object') return []
+  return Object.entries(subs).filter(
+    ([, sub]) =>
+      sub !== null &&
+      typeof sub === 'object' &&
+      !isReferenceStub(sub as Parameters<typeof isReferenceStub>[0]),
+  )
+}
+
+/** Register `<prefix>.<member>` for every member of `component` and,
+ * recursively, of every resolved subsystem it carries. */
+function collectScopedUnits(prefix: string, component: unknown, out: Map<string, string>): void {
+  for (const [name, units] of componentMemberUnits(component)) out.set(`${prefix}.${name}`, units)
+  for (const [subName, sub] of resolvedSubsystems(component)) {
+    collectScopedUnits(`${prefix}.${subName}`, sub, out)
+  }
+}
+
+/**
+ * Scoped name -> declared unit string, for every scoped reference an expression
+ * in `component` can make (esm-spec §4.8.4, §4.9.2; EarthSciAST#414).
+ *
+ * A mounted component is, after resolution, the same as one written inline
+ * (§4.7 "Resolution timing"), so a variable reached across a `{ref}` mount edge
+ * — a `subsystems.<k>` mount or a top-level `models.<k>` mount — carries the
+ * units its declaration states. Two kinds of path are covered: (a)
+ * `<System>.<member>` naming a top-level model or reaction system, recursively
+ * through its subsystems; (b) `<sub>.<member>` relative to `component`'s own
+ * subsystems, recursively, which wins over (a) on a collision. An unresolved
+ * `{ref}` subsystem contributes nothing. Mirrors Python's
+ * `scoped_reference_units`.
+ */
+export function scopedReferenceUnits(
+  file: EsmFile | undefined,
+  component: unknown,
+): Map<string, string> {
+  const out = new Map<string, string>()
+  if (file) {
+    for (const table of [file.models, file.reaction_systems]) {
+      for (const [name, entry] of Object.entries((table ?? {}) as Record<string, unknown>)) {
+        if (entry === null || typeof entry !== 'object') continue
+        if (isReferenceStub(entry as Parameters<typeof isReferenceStub>[0])) continue
+        collectScopedUnits(name, entry, out)
+      }
+    }
+  }
+  for (const [subName, sub] of resolvedSubsystems(component)) {
+    collectScopedUnits(subName, sub, out)
+  }
+  return out
+}
+
+/**
+ * `bindings` extended with every scoped reference of `component` (see
+ * {@link scopedReferenceUnits}). A name `bindings` already binds WITHOUT a dot
+ * — the component's own bare names — is never overwritten; a scoped key is
+ * (re)bound to the declared unit, and left unbound when that unit does not
+ * parse (it is reported at its own declaration).
+ */
+export function withScopedReferenceUnits(
+  bindings: Map<string, ParsedUnit>,
+  file: EsmFile | undefined,
+  component: unknown,
+): Map<string, ParsedUnit> {
+  const scoped = scopedReferenceUnits(file, component)
+  if (scoped.size === 0) return bindings
+  const view = new Map(bindings)
+  for (const [name, units] of scoped) {
+    if (!name.includes('.') && view.has(name)) continue
+    const parsed = tryParseUnit(units)
+    if (parsed === null) view.delete(name)
+    else view.set(name, parsed)
+  }
+  return view
 }
 
 /**

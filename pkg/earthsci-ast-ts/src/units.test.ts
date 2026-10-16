@@ -5,12 +5,15 @@ import {
   checkDimensions,
   validateUnits,
   dimsEqual,
+  constantExponentValue,
+  scopedReferenceUnits,
   type ParsedUnit,
   type CanonicalDims,
 } from './units.js'
 import { loadString } from './parse.js'
 import { validateText } from './validate.js'
-import { readFixture } from './test-helpers.js'
+import { readFixture, fixturesDir } from './test-helpers.js'
+import { readFileSync } from 'node:fs'
 import type { Expression, EsmFile } from './types.js'
 import { ExactScale } from './unit-conversion.js'
 
@@ -1003,6 +1006,226 @@ describe('Unit parsing and dimensional analysis', () => {
             e.path === '/models/BadUnitsModel/variables/invalid_log',
         ),
       ).toBe(true)
+    })
+  })
+})
+
+// EarthSciAST#414 + constant exponents (esm-spec §4.7, §4.8.3, §4.8.4).
+describe('scoped references, faq filters and constant exponents', () => {
+  const env = (entries: Record<string, string>): Map<string, ParsedUnit> =>
+    new Map(Object.entries(entries).map(([k, u]) => [k, parseUnit(u)]))
+  const mismatches = (r: { diagnostics: Array<{ code: string }> }) =>
+    r.diagnostics.filter((d) => d.code === 'dimensional_mismatch')
+
+  describe("R1: a scoped reference carries its target's declared units", () => {
+    const doc = (rhs: string, declared: string): EsmFile =>
+      ({
+        esm: '1.2.0',
+        metadata: { name: 'scoped' },
+        models: {
+          Leaf: {
+            variables: { p: { type: 'parameter', units: 'kPa', default: 1 } },
+            equations: [],
+            subsystems: {
+              Deep: {
+                variables: { q: { type: 'parameter', units: 'h', default: 1 } },
+                equations: [],
+              },
+            },
+          },
+          Probe: {
+            variables: { probe: { type: 'unknown', units: declared } },
+            equations: [{ lhs: 'probe', rhs }],
+            subsystems: {
+              Sub: {
+                variables: { p: { type: 'parameter', units: 'kg', default: 1 } },
+                equations: [],
+              },
+              Gone: { ref: 'nowhere.esm' },
+            },
+          },
+        },
+      }) as unknown as EsmFile
+
+    it('collects top-level, nested and own-subsystem scoped names; skips {ref} stubs', () => {
+      const file = doc('Leaf.p', 'kPa')
+      const scoped = scopedReferenceUnits(file, file.models!.Probe)
+      expect(scoped.get('Leaf.p')).toBe('kPa')
+      expect(scoped.get('Leaf.Deep.q')).toBe('h')
+      expect(scoped.get('Probe.Sub.p')).toBe('kg')
+      expect(scoped.get('Sub.p')).toBe('kg')
+      expect([...scoped.keys()].some((k) => k.startsWith('Gone.'))).toBe(false)
+      expect(scoped.has('probe')).toBe(false)
+    })
+
+    const unitErrors = (file: EsmFile) =>
+      validateUnits(file).filter((w) => w.code === 'dimensional_mismatch')
+
+    it('checks an equation across a top-level reference (dimension and scale)', () => {
+      expect(unitErrors(doc('Leaf.p', 'kPa'))).toHaveLength(0)
+      expect(unitErrors(doc('Leaf.p', 'kg')).length).toBeGreaterThan(0)
+      expect(unitErrors(doc('Leaf.p', 'Pa')).length).toBeGreaterThan(0)
+    })
+
+    it('checks a reference through a nested subsystem', () => {
+      expect(unitErrors(doc('Leaf.Deep.q', 'h'))).toHaveLength(0)
+      expect(unitErrors(doc('Leaf.Deep.q', 's')).length).toBeGreaterThan(0)
+    })
+
+    it("checks a reference relative to the component's own subsystem", () => {
+      expect(unitErrors(doc('Sub.p', 'kg'))).toHaveLength(0)
+      expect(unitErrors(doc('Sub.p', 'm')).length).toBeGreaterThan(0)
+    })
+
+    it('leaves a reference into an unresolved {ref} stub undeterminable', () => {
+      expect(unitErrors(doc('Gone.x', 'kg'))).toHaveLength(0)
+    })
+  })
+
+  describe("R2: an faq's filter and body are walked", () => {
+    const faq = (filter: Expression | undefined, expr: Expression): Expression =>
+      ({
+        op: 'faq',
+        args: [],
+        semiring: 'sum_product',
+        output_idx: [],
+        ranges: { i: { from: 'rows' } },
+        join: [],
+        ...(filter === undefined ? {} : { filter }),
+        expr,
+      }) as unknown as Expression
+    const b = env({ x: 'm', z: 'kg', y: 'm' })
+
+    it('reports a mismatch inside the filter, and the faq stays undeterminable', () => {
+      const r = checkDimensions(faq({ op: '<=', args: ['x', 'z'] }, 'x'), b)
+      expect(mismatches(r)).toHaveLength(1)
+      expect(r.dimensions).toBeNull()
+    })
+
+    it('reports a mismatch inside the body', () => {
+      const r = checkDimensions(faq(undefined, { op: '+', args: ['x', 'z'] }), b)
+      expect(mismatches(r)).toHaveLength(1)
+      expect(r.dimensions).toBeNull()
+    })
+
+    it('accepts a consistent filter and body', () => {
+      const r = checkDimensions(
+        faq({ op: '<=', args: ['x', 'y'] }, { op: '+', args: ['x', 'y'] }),
+        b,
+      )
+      expect(mismatches(r)).toHaveLength(0)
+      expect(r.dimensions).toBeNull()
+    })
+  })
+
+  describe('R3: a constant-expression exponent folds to an exact rational', () => {
+    const c = (value: number, units?: string): Expression =>
+      ({
+        op: 'const',
+        args: [],
+        value,
+        ...(units === undefined ? {} : { units }),
+      }) as unknown as Expression
+    const fold = (e: Expression) => constantExponentValue(e)
+
+    it('folds literals, unit-1 consts and + - * / to any depth', () => {
+      expect(fold(2)).toEqual({ n: 2, d: 1 })
+      expect(fold({ op: '/', args: [3, 2] })).toEqual({ n: 3, d: 2 })
+      expect(fold({ op: '-', args: [1] })).toEqual({ n: -1, d: 1 })
+      expect(fold({ op: '-', args: [5, 3, 1] })).toEqual({ n: 1, d: 1 })
+      expect(
+        fold({
+          op: '/',
+          args: [
+            { op: '+', args: [1, 2] },
+            { op: '*', args: [4, 2] },
+          ],
+        }),
+      ).toEqual({ n: 3, d: 8 })
+      expect(fold(c(0.5, '1'))).toEqual({ n: 1, d: 2 })
+      expect(fold(c(3))).toEqual({ n: 3, d: 1 })
+      expect(fold(c(2, 'dimensionless'))).toEqual({ n: 2, d: 1 })
+      expect(fold({ op: '/', args: [1, 3001] })).toEqual({ n: 1, d: 3001 })
+    })
+
+    it('does not fold variables, scaled or dimensional consts, other ops, x/0, overflow', () => {
+      expect(fold('n')).toBeNull()
+      expect(fold({ op: '+', args: ['n', 1] })).toBeNull()
+      expect(fold(c(50, '%'))).toBeNull()
+      expect(fold(c(2, 'm'))).toBeNull()
+      expect(fold({ op: 'sqrt', args: [4] })).toBeNull()
+      expect(fold({ op: '/', args: [1, 0] })).toBeNull()
+      expect(fold({ op: '/', args: [1, 2, 3] })).toBeNull()
+      expect(fold({ op: '*', args: [2 ** 40, 2 ** 40] })).toBeNull()
+    })
+
+    const b = env({ T: 'K', L: 'm', n: '1', pct: '%', km: 'km' })
+
+    it('raises dimension and exact scale to the folded value, like a literal', () => {
+      const r = checkDimensions({ op: '^', args: ['T', { op: '/', args: [3, 2] }] }, b)
+      expect(r.dimensions).not.toBeNull()
+      expect(dimsEqual(r.dimensions!.dims, { K: 1.5 })).toBe(true)
+      const k = checkDimensions({ op: '^', args: ['km', { op: '-', args: [5, 3] }] }, b)
+      expect(k.dimensions!.exact.equals(parseUnit('km^2').exact)).toBe(true)
+      const l = checkDimensions({ op: '^', args: ['L', c(0.5, '1')] }, b)
+      expect(dimsEqual(l.dimensions!.dims, { m: 0.5 })).toBe(true)
+    })
+
+    it('keeps a symbolic exponent undeterminable', () => {
+      for (const exp of ['n', { op: '+', args: ['n', 1] }, c(50, '%')] as Expression[]) {
+        const r = checkDimensions({ op: '^', args: ['L', exp] }, b)
+        expect(r.dimensions).toBeNull()
+        expect(mismatches(r)).toHaveLength(0)
+      }
+      // ...while a dimensionless scale-1 base stays dimensionless.
+      const d = checkDimensions({ op: '^', args: ['n', 'n'] }, b)
+      expect(d.dimensions).not.toBeNull()
+      expect(dimsEqual(d.dimensions!.dims, {})).toBe(true)
+    })
+
+    it('still rejects a dimensional exponent', () => {
+      const r = checkDimensions({ op: '^', args: ['L', 'T'] }, b)
+      expect(mismatches(r)).toHaveLength(1)
+    })
+  })
+
+  describe("fixture verdicts through validateText (refs resolved from the file's directory)", () => {
+    const run = (dir: 'valid' | 'invalid', name: string) => {
+      const path = fixturesDir(dir, name)
+      return validateText(readFileSync(path, 'utf-8'), { basePath: fixturesDir(dir) })
+    }
+    it.each([
+      'units_mount_leaf.esm',
+      'units_mount_subsystem_consistent.esm',
+      'units_mount_toplevel_consistent.esm',
+      'units_faq_filter_consistent.esm',
+      'units_constant_exponent_folding.esm',
+      'units_symbolic_exponent_undeterminable.esm',
+    ])('%s validates', (name) => {
+      const r = run('valid', name)
+      expect(r.structural_errors).toEqual([])
+      expect(r.is_valid).toBe(true)
+    })
+    it.each([
+      ['units_mount_subsystem_wrong_dimension.esm', ['/models/Probe/variables/probe']],
+      ['units_mount_subsystem_scale_mismatch.esm', ['/models/Probe/variables/probe']],
+      ['units_mount_toplevel_wrong_dimension.esm', ['/models/Probe/variables/probe']],
+      ['units_mount_toplevel_scale_mismatch.esm', ['/models/Probe/variables/probe']],
+      ['units_faq_filter_mismatch.esm', ['/models/Probe/variables/n_short']],
+      ['units_faq_body_mismatch.esm', ['/models/Probe/variables/total']],
+      [
+        'units_constant_exponent_mismatch.esm',
+        ['/models/Powers/variables/T_32', '/models/Powers/variables/L_const'],
+      ],
+    ])('%s is rejected at its pins', (name, paths) => {
+      const r = run('invalid', name)
+      expect(r.is_valid).toBe(false)
+      for (const p of paths) {
+        expect(
+          r.structural_errors.some((e) => e.code === 'unit_inconsistency' && e.path === p),
+          `${name}: no unit_inconsistency at ${p}`,
+        ).toBe(true)
+      }
     })
   })
 })

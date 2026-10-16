@@ -25,7 +25,8 @@ import {
   stripNumericLiterals,
 } from '../numeric-literal.js'
 import { ERROR_CODES } from '../errors.js'
-import { type UnitWarning } from '../units.js'
+import { type UnitWarning, validateUnits } from '../units.js'
+import { forEachComponent } from '../traverse.js'
 import type { EsmFile } from '../types.js'
 import type { ValidationError, ValidationResult, StructuralError } from './types.js'
 import { isInlineModel } from './expr-utils.js'
@@ -321,7 +322,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           implicitNames(esmFile),
         ),
       )
-      errors.push(...validateReactionRateUnits(reactionSystem, systemPath))
+      errors.push(...validateReactionRateUnits(reactionSystem, systemPath, esmFile))
       errors.push(...validateReactionSystemICs(reactionSystem, systemName, systemPath))
       // §4.3.4: a reaction system's `constraint_equations` and event bodies are
       // expression positions like any other, so a `broadcast` node hiding in
@@ -337,7 +338,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           if ('ref' in subsystem) continue
           const subsystemPath = `${systemPath}/subsystems/${subsystemName}`
           errors.push(...validateReactionConsistency(subsystem, subsystemPath, esmFile))
-          errors.push(...validateReactionRateUnits(subsystem, subsystemPath))
+          errors.push(...validateReactionRateUnits(subsystem, subsystemPath, esmFile))
         }
       }
     }
@@ -566,7 +567,22 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
         // ambiguous target, cycle) is a real diagnostic and is reported with the
         // resolver's own code by the catch below.
         if (options.basePath !== undefined) {
+          let mounts = false
+          forEachComponent(
+            esmFile,
+            (visit) => {
+              if (visit.isReference) mounts = true
+            },
+            { recurse: true },
+          )
           resolveSubsystemRefsSync(esmFile, options.basePath)
+          // The load-time dimensional pass ran BEFORE the mounts were inlined, so
+          // it saw every `{ref}` as an opaque stub and every reference across a
+          // mount edge as undeterminable. A mounted component is the same as an
+          // inline one after resolution (esm-spec §4.7), and a scoped reference
+          // carries its target's declared units (§4.8.4, EarthSciAST#414), so
+          // re-run the pass on the resolved document.
+          if (mounts) unit_warnings.splice(0, unit_warnings.length, ...validateUnits(esmFile))
         }
 
         // Perform structural validation

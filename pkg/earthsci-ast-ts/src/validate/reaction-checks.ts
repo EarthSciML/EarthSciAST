@@ -9,6 +9,7 @@ import { ERROR_CODES } from '../errors.js'
 import {
   checkDimensions,
   tryParseUnit,
+  withScopedReferenceUnits,
   isDimensionless,
   dimsEqual,
   type CanonicalDims,
@@ -242,11 +243,18 @@ function rateUnitStringFromExpression(rate: Expression, reactionSystem: Reaction
 export function validateReactionRateUnits(
   reactionSystem: ReactionSystem,
   systemPath: string,
+  esmFile?: EsmFile,
 ): StructuralError[] {
   const errors: StructuralError[] = []
   if (!reactionSystem.reactions) return errors
 
-  const bindings = buildReactionSystemUnitBindings(reactionSystem)
+  // Scoped references (`Other.k`, `Sub.k`) carry their target's declared units
+  // (esm-spec §4.8.4, EarthSciAST#414).
+  const bindings = withScopedReferenceUnits(
+    buildReactionSystemUnitBindings(reactionSystem),
+    esmFile,
+    reactionSystem,
+  )
   const speciesMap = reactionSystem.species || {}
 
   for (let i = 0; i < reactionSystem.reactions.length; i++) {
