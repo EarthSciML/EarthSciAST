@@ -519,6 +519,11 @@ pub(crate) struct TapeBuilder<'m> {
     /// path rejects the construct (CONFORMANCE_SPEC §5.6.1) before a tape is
     /// built, and the tape declines it too.
     array_bool_reductions: bool,
+    /// The scalar parameters a join key column reads, with the values the
+    /// build baked them at (`crate::join::join_key_cone`): build-time data
+    /// to [`TapeBuilder::fold_const_observed`], since a substitution of one
+    /// is refused (CONFORMANCE_SPEC §5.5.8). Empty for a standalone rule.
+    baked_params: FxHashMap<String, f64>,
     /// [`TapeBuilder::fold_const_observed`]'s memo.
     folded: std::cell::RefCell<FxHashMap<String, Option<(DimU, std::rc::Rc<Vec<f64>>)>>>,
 
@@ -754,6 +759,7 @@ impl<'m> TapeBuilder<'m> {
             f32_document,
             inline_params: None,
             observed_rules: &[],
+            baked_params: FxHashMap::default(),
             array_bool_reductions: false,
             folded: std::cell::RefCell::new(FxHashMap::default()),
             slots: Vec::new(),
@@ -5983,6 +5989,36 @@ impl<'m> TapeBuilder<'m> {
 /// const-array registry are read straight off `compiled`). Returns the
 /// program — or, when any rule declined, the [`DeclinedTape`] in its place —
 /// and the `(scope, hoist)` value-numbering hit counts.
+/// The scalar parameters a join key column of `compiled` reads, at their
+/// baked values (their defaults, which the build set from the caller's `p`).
+fn baked_join_key_params(compiled: &ArrayCompiled) -> FxHashMap<String, f64> {
+    let bodies: FxHashMap<&str, &Expr> = compiled
+        .observed_rules
+        .iter()
+        .map(|r| (observed_rule_var(r).as_str(), observed_rule_body(r)))
+        .collect();
+    fn rhs_body(r: &RhsRule) -> &Expr {
+        match r {
+            RhsRule::Scalar { body, .. }
+            | RhsRule::IndexedScalar { body, .. }
+            | RhsRule::ArrayLoop { body, .. } => body,
+        }
+    }
+    let roots = compiled
+        .observed_rules
+        .iter()
+        .map(observed_rule_body)
+        .chain(compiled.rhs_rules.iter().map(rhs_body));
+    let cone = crate::join::join_key_cone(roots, |n| bodies.get(n).copied());
+    compiled
+        .param_names
+        .iter()
+        .zip(&compiled.param_defaults)
+        .filter(|(n, _)| cone.contains(n.as_str()))
+        .filter_map(|(n, d)| d.map(|v| (n.clone(), v)))
+        .collect()
+}
+
 pub(super) fn build_tape_program(
     compiled: &ArrayCompiled,
     const_names: &HashSet<String>,
@@ -6024,6 +6060,7 @@ pub(super) fn build_tape_program(
     );
     b.inline_params = Some(&compiled.inline_param_arrays);
     b.observed_rules = observed_rules;
+    b.baked_params = baked_join_key_params(compiled);
 
     // ---- observed rules, in dependency order -------------------------------
     for (i, rule) in observed_rules.iter().enumerate() {

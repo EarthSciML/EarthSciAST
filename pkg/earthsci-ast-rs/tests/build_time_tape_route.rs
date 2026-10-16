@@ -8,12 +8,12 @@
 //!   `"taped"`;
 //! * a join keyed on a CONST-cadence computed observed (CONFORMANCE_SPEC
 //!   §5.5.8) is folded at build time, so the gate still drives enumeration;
-//!   one keyed on a parameter-dependent observed is still refused, naming why.
+//!   one keyed on a parameter-dependent observed bakes the parameter.
 
 use std::collections::HashMap;
 
 use earthsci_ast::{
-    CompileError, Compiler, EsmProblem, ProblemOptions, SimulateError, esm_problem, observed_field,
+    Compiler, EsmProblem, ProblemOptions, SimulateError, esm_problem, observed_field,
 };
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
@@ -317,14 +317,16 @@ fn a_join_keyed_on_a_const_cadence_observed_builds_natively() {
     assert_eq!(values(&native, "M.total"), vec![2.0, 2.0]);
 }
 
-/// A key column that reads a parameter is not build-time data — a caller may
-/// change the parameter between solves — so the join is still refused, and the
-/// refusal says why.
+/// A key column that reads a scalar parameter bakes that parameter
+/// (CONFORMANCE_SPEC §5.5.8): the match set is built once from its value, so
+/// the join builds natively, under both compilers the caller's `p` decides the
+/// value, and a later substitution of it is refused by name.
 #[test]
-fn a_join_keyed_on_a_parameter_dependent_observed_is_refused_naming_why() {
+fn a_join_keyed_on_a_parameter_dependent_observed_bakes_the_parameter() {
     let doc = model_doc(
         json!({"rows": {"kind": "interval", "size": 4}, "keys": {"kind": "interval", "size": 2}}),
         json!({"offset": {"type": "parameter", "units": "1", "default": 0.0},
+               "scale": {"type": "parameter", "units": "1", "default": 3.0},
                "row_key": {"type": "unknown", "shape": ["rows"], "units": "1"},
                "want": {"type": "unknown", "shape": ["keys"], "units": "1"},
                "total": {"type": "unknown", "shape": ["keys"], "units": "1"}}),
@@ -337,19 +339,51 @@ fn a_join_keyed_on_a_parameter_dependent_observed_is_refused_naming_why() {
                 "ranges": {"k": {"from": "keys"}}, "expr": {"op": "+", "args": ["k", "offset"]}}},
             {"lhs": "total", "rhs": {"op": "faq", "args": [], "semiring": "sum_product",
                 "output_idx": ["k"], "ranges": {"k": {"from": "keys"}, "r": {"from": "rows"}},
-                "join": [{"on": [["want", "row_key"]]}], "expr": 1.0}},
+                "join": [{"on": [["want", "row_key"]]}], "expr": "scale"}},
         ]),
     );
-    let none = HashMap::new();
-    match build(&doc, Compiler::Native, false, &none) {
-        Err(SimulateError::Compile(CompileError::CompilerRefusedRule { rule, reason, .. })) => {
-            assert!(rule.ends_with("total"), "{rule}");
-            assert!(reason.contains("want` is not build-time data"), "{reason}");
-            assert!(reason.contains("reads a parameter"), "{reason}");
+    let with_p = |compiler, p: &[(&str, f64)]| {
+        esm_problem(
+            &doc,
+            (0.0, 1.0),
+            ProblemOptions {
+                compiler: Some(compiler),
+                p: p.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+                ..Default::default()
+            },
+        )
+    };
+    for p in [&[][..], &[("offset", 1.0)][..]] {
+        let native = with_p(Compiler::Native, p).expect("native builds the baked join");
+        let interp = with_p(Compiler::Interpreter, p).expect("interpreter");
+        assert_eq!(bits(&native, "M.total"), bits(&interp, "M.total"), "{p:?}");
+        let want = if p.is_empty() {
+            vec![6.0, 6.0]
+        } else {
+            vec![6.0, 0.0]
+        };
+        assert_eq!(values(&native, "M.total"), want, "{p:?}");
+        for prob in [&native, &interp] {
+            for name in ["offset", "M.offset"] {
+                let change = earthsci_ast::Remake {
+                    p: [(name.to_string(), 5.0)].into_iter().collect(),
+                    ..Default::default()
+                };
+                match earthsci_ast::remake(prob, &change) {
+                    Err(SimulateError::UnsubstitutableBinding { name: n, class }) => {
+                        assert_eq!(n, name);
+                        assert!(class.contains("baked"), "{class}");
+                    }
+                    Err(e) => panic!("expected unsubstitutable_binding, got {e}"),
+                    Ok(_) => panic!("remake must refuse the baked `{name}`"),
+                }
+            }
+            // A parameter no key reads is not baked.
+            let change = earthsci_ast::Remake {
+                p: [("scale".to_string(), 5.0)].into_iter().collect(),
+                ..Default::default()
+            };
+            assert!(earthsci_ast::remake(prob, &change).is_ok());
         }
-        Err(e) => panic!("expected compiler_refused_rule, got {e}"),
-        Ok(_) => panic!("a parameter-dependent key must not be folded"),
     }
-    let interp = build(&doc, Compiler::Interpreter, false, &none).expect("interpreter");
-    assert_eq!(values(&interp, "M.total"), vec![2.0, 2.0]);
 }

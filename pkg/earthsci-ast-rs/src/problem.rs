@@ -2008,6 +2008,14 @@ pub fn esm_problem<'a>(
                 build.baked_parameters.push(name);
             }
         }
+        // A scalar parameter a join key column reads decides the join's match
+        // set, which the build constructs once (CONFORMANCE_SPEC §5.5.8): it
+        // is baked the same way, under every compiler.
+        for name in bind_join_key_params(f, &opts.p) {
+            if !build.baked_parameters.contains(&name) {
+                build.baked_parameters.push(name);
+            }
+        }
         build.baked_parameters.sort();
     }
 
@@ -3867,6 +3875,33 @@ fn bind_value_invention_params(file: &mut EsmFile, p: &HashMap<String, f64>) -> 
         }
     }
     used
+}
+
+/// Bake every scalar parameter a join key column reads
+/// ([`crate::join::join_key_parameters`]): a caller's `p` entry lands on its
+/// `default`, which the build folds into the match set, and the parameter is
+/// recorded — under both its model-qualified and its bare name, whichever a
+/// later [`remake`] spells — so a substitution of it is refused. Baked whether
+/// or not the caller passed a value: the declared default is a build-time
+/// value just the same.
+fn bind_join_key_params(file: &mut EsmFile, p: &HashMap<String, f64>) -> Vec<String> {
+    let mut baked = Vec::new();
+    let Some(models) = file.models.as_mut() else {
+        return baked;
+    };
+    for (mname, m) in models.iter_mut() {
+        for v in crate::join::join_key_parameters(m) {
+            let qualified = format!("{mname}.{v}");
+            if let Some(&x) = p.get(&qualified).or_else(|| p.get(&v))
+                && let Some(var) = m.variables.get_mut(&v)
+            {
+                var.default = Some(crate::types::InlineValue::Scalar(x));
+            }
+            baked.push(qualified);
+            baked.push(v);
+        }
+    }
+    baked
 }
 
 /// Whether any equation of the raw document has a time derivative on its
