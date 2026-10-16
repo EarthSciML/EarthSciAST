@@ -1468,16 +1468,18 @@ pub(super) fn eval_vec_index<'a>(
     // IN-RANGE const-array gather (the overwhelmingly common stencil-weight /
     // geometry-table read) keeps the exact vectorized path it had.
     let const_base = ctx.const_arrays.is_const_base(&node.args[0]);
+    // An inline array literal is a gather source here, at the all-1s origin
+    // the oracle's `eval_index` reads it at. Elsewhere a bare array literal
+    // stays declined (`VecOp::Const`): the oracle scalarizes it.
     let arg0 = match &node.args[0] {
-        // An inline `const` array literal is read whole, as the oracle's
-        // gather reads it (`const_lit_array`): a 1-origin array. Only here —
-        // an array literal in an elementwise position stays off this path.
-        Expr::Operator(lit) if lit.op == "const" && is_inline_const_array(lit) => {
-            let arr = const_lit_array(lit, ctx.const_lits)?;
-            let mut data = pool.take_array_uninit(arr.shape());
-            data.assign(&*arr);
-            let origin = DimI::from_elem(1, data.ndim());
-            VecValue::Owned { data, origin }
+        Expr::Operator(c) if c.op == "const" && is_inline_const_array(c) => {
+            match eval_const_memo(c, ctx.const_lits) {
+                Value::Array(a) => VecValue::Owned {
+                    origin: DimI::from_elem(1, a.ndim()),
+                    data: *a,
+                },
+                Value::Scalar(_) => bail_vec!("index: malformed inline `const` literal"),
+            }
         }
         base => eval_vec(base, bx, ctx, pool, ops)?,
     };

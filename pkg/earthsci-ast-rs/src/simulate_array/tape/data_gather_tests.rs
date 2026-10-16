@@ -337,3 +337,36 @@ fn computed_subscript_gathers_do_not_grow_with_the_box() {
     assert_eq!(len(16), len(256));
     ab(&build(16), &params(&[("o", 1.0)]));
 }
+
+/// A run-time-subscript const gather in an elementwise `ifelse` arm faults
+/// only at the cells whose condition takes that arm: the rule's fault scan
+/// checks those, in the oracle's order, against the rule's other faults.
+#[test]
+fn guarded_run_time_subscript_faults_only_where_taken() {
+    let n = 6;
+    let pos = json!({"op": ">", "args": [idx(json!("u"), &[json!("i")]), 0.0]});
+    for body in [
+        json!({"op": "ifelse", "args": [pos.clone(), idx(json!("C"), &[state_sub(3)]), 0.0]}),
+        json!({"op": "ifelse", "args": [pos.clone(), 0.0, idx(json!("C"), &[state_sub(4)])]}),
+        json!({"op": "ifelse", "args": [pos.clone(), idx(json!("C"), &[plus(json!("o"), json!("i"))]), 1.0]}),
+        plus(
+            json!({"op": "ifelse", "args": [pos, idx(json!("C"), &[state_sub(4)]), 0.0]}),
+            idx(json!("C"), &[plus(json!("o"), json!("i"))]),
+        ),
+    ] {
+        let compiled = compile(doc(
+            json!({
+                "u": {"type": "unknown", "shape": ["i"]},
+                "o": {"type": "parameter", "default": 0.0},
+                "C": {"type": "unknown", "shape": ["c"]}
+            }),
+            vec![
+                json!({"lhs": "C", "rhs": lit(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])}),
+                d_eq("u", n, body),
+            ],
+        ));
+        let mut maps = params(&[("o", 0.0)]);
+        maps.extend(params(&[("o", 2.0)]));
+        ab(&compiled, &maps);
+    }
+}

@@ -531,6 +531,8 @@ pub(crate) struct TapeBuilder<'m> {
     next_tuple: u32,
     /// Fail-closed fault messages (`Instr::Fault` indexes here).
     faults: Vec<String>,
+    /// Conditional fault scans (`Instr::FaultScan` indexes here).
+    fault_scans: Vec<FaultScanSpec>,
     /// Recurrence sweeps (`Instr::Sweep` indexes here).
     sweeps: Vec<SweepSpec>,
     /// Run-time-subscript reads (`Instr::ScalarRead` indexes here).
@@ -591,9 +593,26 @@ pub(crate) struct TapeBuilder<'m> {
     fault_prefix: FaultKey,
     /// Depth of positions the oracle evaluates for only SOME cells or tuples:
     /// the arms of an elementwise `ifelse`, a filtered term. A fault there
-    /// may not fire where the tape would place it, so it is lowered only
-    /// when an earlier certain fault makes it irrelevant.
+    /// may not fire where the tape would place it, so it goes to the rule's
+    /// [`Instr::FaultScan`] ([`Self::note_fault`]).
     lazy_depth: u32,
+    /// Faults noted so far ([`Self::note_fault`]), lazily evaluated ones
+    /// included: a lowering that cannot place a fault compares it.
+    fault_notes: u32,
+    /// The conditions that lead the oracle to the position being lowered,
+    /// outermost first: one per lazily evaluated position the lowering
+    /// can describe (an elementwise `ifelse` arm, a filtered term, a
+    /// runtime-scalar branch), with the polarity that admits it.
+    reach: Vec<(LV, bool)>,
+    /// The current rule's faults at lazily evaluated positions, each with
+    /// the key of the first cell it can fault at: one [`Instr::FaultScan`]
+    /// decides at run time which (if any) the oracle meets first
+    /// ([`Self::flush_rule_fault`]).
+    lazy_faults: Vec<(FaultKey, FaultCand)>,
+    /// Lazy faults noted so far: a value lowered while one was noted is not
+    /// value-numbered, so a read the oracle evaluates everywhere cannot
+    /// reuse it and lose its own fault.
+    lazy_fault_notes: u32,
 
     // Diagnostics ------------------------------------------------------------
     vn_scope_hits: usize,
@@ -648,6 +667,7 @@ struct RuleTxn {
     gather_tables: usize,
     seg_tables: usize,
     faults: usize,
+    fault_scans: usize,
     sweeps: usize,
     scalar_reads: usize,
     data_gathers: usize,
@@ -684,6 +704,8 @@ struct SubTxn {
     forcing_journal: usize,
     fault_first: Option<(FaultKey, String)>,
     fault_seq: i64,
+    faults: usize,
+    lazy_faults: usize,
 }
 
 impl<'m> TapeBuilder<'m> {
@@ -733,6 +755,7 @@ impl<'m> TapeBuilder<'m> {
             tuple_frames: Vec::new(),
             next_tuple: 1,
             faults: Vec::new(),
+            fault_scans: Vec::new(),
             sweeps: Vec::new(),
             scalar_reads: Vec::new(),
             fault_order: Vec::new(),
@@ -763,6 +786,10 @@ impl<'m> TapeBuilder<'m> {
             fault_seq: 0,
             fault_prefix: FaultKey::new(),
             lazy_depth: 0,
+            fault_notes: 0,
+            reach: Vec::new(),
+            lazy_faults: Vec::new(),
+            lazy_fault_notes: 0,
             vn_scope_hits: 0,
             vn_hoist_hits: 0,
         }
@@ -883,6 +910,7 @@ impl<'m> TapeBuilder<'m> {
             scalar_reads: &self.scalar_reads,
             data_gathers: &self.data_gathers,
             lanes: &[],
+            fault_scans: &self.fault_scans,
         }
     }
 
@@ -1154,10 +1182,21 @@ impl<'m> TapeBuilder<'m> {
 
     /// Record a fault the oracle latches at `cell` (0-based) of `bx` — or,
     /// with `None`, at the point of a single evaluation — keeping the rule's
-    /// first. A fault that may not fire (in a branch, or a lazily evaluated
-    /// position) is admitted only when an earlier certain fault makes it
-    /// unobservable.
-    fn note_fault(&mut self, at: Option<(&LBox, &[i64])>, msg: String) -> LResult<()> {
+    /// first. `cell` is the first cell in the oracle's visiting order at
+    /// which the read faults; `what` says at which cells it faults and with
+    /// what message (`None`: at every cell, with `msg`).
+    ///
+    /// A fault that may not fire (in a branch, or a lazily evaluated
+    /// position) is dropped when an earlier certain fault makes it
+    /// unobservable, and otherwise becomes a candidate of the rule's
+    /// [`Instr::FaultScan`]: the run decides whether the oracle reaches a
+    /// faulting cell, from the conditions on the way to it ([`Self::reach`]).
+    fn note_fault(
+        &mut self,
+        at: Option<(&LBox, &[i64])>,
+        msg: String,
+        what: Option<FaultWhat>,
+    ) -> LResult<()> {
         if self.sweep.is_some() {
             // The order of a build-time fault is placed by the box it sits in;
             // inside a recurrence body the cells come from the sweep instead,
@@ -1165,6 +1204,7 @@ impl<'m> TapeBuilder<'m> {
             let head: String = msg.chars().take_while(|c| *c != ':').collect();
             bail_tape!("fault: `{head}` inside a recurrence body");
         }
+        self.fault_notes += 1;
         let mut key = self.fault_prefix.clone();
         if let Some((bx, cell)) = at {
             key.extend(Self::fault_cell_key(bx, cell));
@@ -1173,20 +1213,111 @@ impl<'m> TapeBuilder<'m> {
         self.fault_seq += 1;
         let preceded = self.fault_first.as_ref().is_some_and(|(k, _)| *k < key);
         if self.in_branch() || self.lazy_depth > 0 {
+            self.lazy_fault_notes += 1;
             if preceded {
                 return Ok(());
             }
-            let head: String = msg.chars().take_while(|c| *c != ':').collect();
-            bail_tape!(
-                "fault: `{head}` where the oracle evaluates only some cells (a conditional \
-                 branch or a filtered term), with no earlier fault in the rule to settle \
-                 which one it latches"
-            );
+            let Some(cand) = self.lazy_fault_cand(at.map(|(b, _)| b), &key, msg.clone(), what)
+            else {
+                let head: String = msg.chars().take_while(|c| *c != ':').collect();
+                bail_tape!(
+                    "fault: `{head}` where the oracle evaluates only some cells (a conditional \
+                     branch or a filtered term), behind a condition the run-time fault scan \
+                     cannot read at the faulting cells"
+                );
+            };
+            self.lazy_faults.push((key, cand));
+            return Ok(());
         }
         if !preceded {
             self.fault_first = Some((key, msg));
         }
         Ok(())
+    }
+
+    /// The [`FaultScan`](Instr::FaultScan) candidate for a fault at a lazily
+    /// evaluated position over `bx` (`None`: a single evaluation) whose first
+    /// possible key is `key`: `None` when some lazily evaluated position on
+    /// the way to it has no condition in [`Self::reach`] (a tuple-list
+    /// body), or a condition over a box other than the read's own, which
+    /// the scan cannot read cell by cell.
+    fn lazy_fault_cand(
+        &mut self,
+        bx: Option<&LBox>,
+        key: &FaultKey,
+        msg: String,
+        what: Option<FaultWhat>,
+    ) -> Option<FaultCand> {
+        if bx.is_some_and(|b| b.tuple != 0)
+            || self.reach.len() != self.lazy_depth as usize + self.branch_bufs.len()
+        {
+            return None;
+        }
+        let mut path = Vec::with_capacity(self.reach.len());
+        for (lv, want) in &self.reach {
+            let array = match self.lv_box(lv) {
+                None => false,
+                Some((s, o)) => {
+                    let b = bx.filter(|b| !b.syms.is_empty())?;
+                    if !matches!(lv, LV::Arr(_)) || s != b.shape || o != b.lo {
+                        return None;
+                    }
+                    true
+                }
+            };
+            path.push(PathCond {
+                op: self.op_of(lv),
+                want: *want,
+                array,
+            });
+        }
+        let what = match what {
+            Some(w) => w,
+            None => {
+                let m = tape_index(self.faults.len(), "faults").ok()?;
+                self.faults.push(msg);
+                FaultWhat::Every(m)
+            }
+        };
+        let cells = bx.is_some_and(|b| !b.syms.is_empty());
+        let (shape, lo, visit, cvals) = match bx {
+            Some(b) => (
+                if cells { b.shape.clone() } else { DimU::new() },
+                if cells { b.lo.clone() } else { DimI::new() },
+                if cells {
+                    (0..b.shape.len()).map(|k| b.visit_axis(k) as u8).collect()
+                } else {
+                    SmallVec::new()
+                },
+                b.cvals.clone(),
+            ),
+            None => (DimU::new(), DimI::new(), SmallVec::new(), SmallVec::new()),
+        };
+        Some(FaultCand {
+            prefix: self.fault_prefix.iter().copied().collect(),
+            cells,
+            shape,
+            lo,
+            visit,
+            cvals,
+            seq: *key.last().expect("a fault key ends with its sequence number"),
+            path,
+            what,
+        })
+    }
+
+    /// Lower `f` at a lazily evaluated position the oracle reaches where
+    /// `cond` is nonzero (`want`) or zero (`!want`).
+    fn reached_where<T>(
+        &mut self,
+        cond: &LV,
+        want: bool,
+        f: impl FnOnce(&mut Self) -> LResult<T>,
+    ) -> LResult<T> {
+        self.reach.push((cond.clone(), want));
+        let r = f(self);
+        self.reach.pop();
+        r
     }
 
     /// Enter a box the oracle evaluates whole at each cell of `parent` (a
@@ -1224,8 +1355,11 @@ impl<'m> TapeBuilder<'m> {
                 if let Some(hit) = self.vn_get(key, bx) {
                     return Ok(hit);
                 }
+                let lazy_notes = self.lazy_fault_notes;
                 let lv = self.lower_op(node, bx)?;
-                self.vn_put(key, &lv, bx);
+                if self.lazy_fault_notes == lazy_notes {
+                    self.vn_put(key, &lv, bx);
+                }
                 Ok(lv)
             }
         }
@@ -2312,20 +2446,26 @@ impl<'m> TapeBuilder<'m> {
         match self.lv_box(&cond) {
             // Runtime SCALAR condition: short-circuit via JmpIfZero — the
             // untaken branch's instructions are never executed.
-            None => self.lower_branchy_ifelse(cond, &node.args[1], &node.args[2], |s, e| {
+            None => self.lower_branchy_ifelse(cond, &node.args[1], &node.args[2], true, |s, e| {
                 s.lower_expr(e, bx)
             }),
             // ARRAY condition: evaluate BOTH branches and select elementwise
             // (`vec_select`). The oracle, walking the box cell by cell, takes
             // one arm per cell, so each arm is a lazily evaluated position.
             Some(_) => {
-                let lazy = u32::from(!bx.syms.is_empty());
-                self.lazy_depth += lazy;
-                let arms = self
-                    .lower_expr(&node.args[1], bx)
-                    .and_then(|a| Ok((a, self.lower_expr(&node.args[2], bx)?)));
-                self.lazy_depth -= lazy;
-                let (a, b) = arms?;
+                let lazy = !bx.syms.is_empty();
+                let arm = |s: &mut Self, e: &Expr, want: bool| {
+                    if lazy {
+                        s.lazy_depth += 1;
+                        let v = s.reached_where(&cond, want, |s| s.lower_expr(e, bx));
+                        s.lazy_depth -= 1;
+                        v
+                    } else {
+                        s.lower_expr(e, bx)
+                    }
+                };
+                let a = arm(self, &node.args[1], true)?;
+                let b = arm(self, &node.args[2], false)?;
                 self.emit_select(cond, a, b)
             }
         }
@@ -2405,7 +2545,7 @@ impl<'m> TapeBuilder<'m> {
             LV::Lit(_) => self.lower_expr(body, bx).map(Some),
             keep => {
                 self.lazy_depth += 1;
-                let term = self.lower_expr(body, bx);
+                let term = self.reached_where(&keep, true, |s| s.lower_expr(body, bx));
                 self.lazy_depth -= 1;
                 self.emit_select(keep, term?, excluded).map(Some)
             }
@@ -2764,18 +2904,48 @@ impl<'m> TapeBuilder<'m> {
         let kind = self.gather_kind(base, &src_shape);
         let faults = matches!(&kind, ScalarReadKind::ConstArray { policy, .. }
             if policy.iter().any(|p| matches!(p, BoundaryKind::Error)));
-        let order = if faults {
+        let lazy = faults && self.lazy_depth > 0;
+        let order = if lazy {
+            // The oracle reads this gather only at the cells its conditions
+            // admit: the rule's `FaultScan` checks those cells, and the
+            // instruction itself only reads `NaN` where one would fault.
+            let ScalarReadKind::ConstArray { name, policy } = &kind else {
+                unreachable!("only a const-array gather faults");
+            };
+            let dims = subs
+                .iter()
+                .zip(policy.iter())
+                .zip(src_shape.iter())
+                .map(|((s, p), &n)| OobDim {
+                    n: n as i64,
+                    error: matches!(p, BoundaryKind::Error),
+                    sub: match s {
+                        LV::Lit(v) => OobSub::Fixed(subscript_of(*v)),
+                        other => OobSub::Data {
+                            op: self.op_of(other),
+                            array: self.lv_box(other).is_some(),
+                        },
+                    },
+                })
+                .collect();
+            let what = FaultWhat::ConstOob {
+                name: name.clone(),
+                dims,
+            };
+            let msg = format!("E_TREEWALK_CONSTARRAY_OOB: const array '{name}'");
+            match bx {
+                Some(b) => {
+                    let first: SmallVec<[i64; 4]> = SmallVec::from_elem(0, b.shape.len());
+                    self.note_fault(Some((b, &first)), msg, Some(what))?;
+                }
+                None => self.note_fault(None, msg, Some(what))?,
+            }
+            None
+        } else if faults {
             if self.sweep.is_some() {
                 bail_tape!(
                     "fault: `E_TREEWALK_CONSTARRAY_OOB` of a computed-subscript gather inside \
                      a recurrence body"
-                );
-            }
-            if self.lazy_depth > 0 {
-                bail_tape!(
-                    "fault: `E_TREEWALK_CONSTARRAY_OOB` where the oracle evaluates only some \
-                     cells (a conditional branch or a filtered term), with no earlier fault in \
-                     the rule to settle which one it latches"
                 );
             }
             let (axes, tail) = match bx {
@@ -2785,10 +2955,7 @@ impl<'m> TapeBuilder<'m> {
                     } else {
                         (0..b.shape.len()).map(|k| b.visit_axis(k) as u8).collect()
                     };
-                    (
-                        axes,
-                        b.cvals.iter().copied().collect::<SmallVec<[i64; 8]>>(),
-                    )
+                    (axes, b.cvals.iter().copied().collect::<SmallVec<[i64; 8]>>())
                 }
                 None => (SmallVec::new(), SmallVec::new()),
             };
@@ -2805,6 +2972,7 @@ impl<'m> TapeBuilder<'m> {
         } else {
             None
         };
+        let faults = order.is_some();
         let spec = tape_index(self.data_gathers.len(), "computed-subscript gathers")?;
         self.data_gathers.push(DataGatherSpec {
             subs: subs.iter().map(|s| self.op_of(s)).collect(),
@@ -3089,9 +3257,9 @@ impl<'m> TapeBuilder<'m> {
         match bx {
             Some(b) => {
                 let first: SmallVec<[i64; 4]> = SmallVec::from_elem(0, b.shape.len());
-                self.note_fault(Some((b, &first)), msg)?;
+                self.note_fault(Some((b, &first)), msg, None)?;
             }
-            None => self.note_fault(None, msg)?,
+            None => self.note_fault(None, msg, None)?,
         }
         Ok(LV::Lit(f64::NAN))
     }
@@ -3188,7 +3356,45 @@ impl<'m> TapeBuilder<'m> {
             let msg =
                 self.const_oob_first(bx, name, src_shape, mapped, fixed_raw, fixed_oob, &runs);
             let cell = msg.0;
-            self.note_fault(Some((bx, &cell)), msg.1)?;
+            // Which cells fault, for a read the oracle evaluates at only some
+            // of them: per source dim, its subscript at each cell.
+            let what = (self.in_branch() || self.lazy_depth > 0).then(|| {
+                let dims = (0..src_shape.len())
+                    .map(|d| {
+                        let sub = match fixed_raw.iter().find(|(fd, _)| *fd == d) {
+                            Some(&(_, raw)) => OobSub::Fixed(raw),
+                            None => {
+                                let (a, ax) = mapped
+                                    .iter()
+                                    .enumerate()
+                                    .find_map(|(a, m)| {
+                                        m.as_ref().filter(|(md, _)| *md == d).map(|(_, ax)| (a, ax))
+                                    })
+                                    .expect("every source dim is fixed or mapped");
+                                let raw = (0..bx.shape[a] as i64)
+                                    .map(|p| match ax {
+                                        AxisIndex::Affine(k) => bx.lo[a] + p + k,
+                                        AxisIndex::Wrap { k, period, lo } => {
+                                            wrap_subscript(bx.lo[a], p, (*k, *lo, *period))
+                                        }
+                                    })
+                                    .collect();
+                                OobSub::Axis { axis: a as u8, raw }
+                            }
+                        };
+                        OobDim {
+                            n: src_shape[d] as i64,
+                            error: matches!(policy(d), BoundaryKind::Error),
+                            sub,
+                        }
+                    })
+                    .collect();
+                FaultWhat::ConstOob {
+                    name: name.to_string(),
+                    dims,
+                }
+            });
+            self.note_fault(Some((bx, &cell)), msg.1, what)?;
         }
 
         let n_mapped = mapped.iter().filter(|m| m.is_some()).count();
@@ -3926,14 +4132,11 @@ impl<'m> TapeBuilder<'m> {
             }
             return self.lower_cell_contraction(&spec, bx);
         }
-        // A rank-0 aggregate NESTED in a box stays per-cell, mirroring
-        // `eval_vec_nested_aggregate`'s own bail: the enclosing rule would
-        // otherwise be taped under semantics the overlay does not implement.
-        // (The WHOLESALE rank-0 case is different and IS lowered — see
-        // [`Self::lower_scalar_reduction`] — because there the reference is
-        // the per-cell oracle, which the fold order reproduces exactly.)
+        // A rank-0 aggregate nested in a box: the overlay declines it
+        // (`eval_vec_nested_aggregate`), so the reference is the per-cell
+        // oracle, which reduces it afresh at every cell of the box.
         if spec.ranges.is_empty() {
-            bail_tape!("aggregate: rank-0 output (scalar reduction, nested in a box)");
+            return self.lower_nested_scalar_reduction(node, &spec, bx);
         }
         if bx.tuple != 0 {
             bail_tape!("aggregate: nested inside a tuple-list contraction body");
@@ -3967,6 +4170,141 @@ impl<'m> TapeBuilder<'m> {
         );
         self.leave_fault_level(level);
         v
+    }
+
+    /// A rank-0 `faq` nested in the box `bx`, which the per-cell oracle
+    /// reduces at every cell of the box with [`reduce_contraction`]: `acc =
+    /// identity`, then `acc = acc ⊕ term` per contraction tuple, the last
+    /// contracted name fastest.
+    ///
+    /// A body that reads none of the box's symbols reduces to the same value
+    /// at every cell, by the same fold: it is lowered once, as the wholesale
+    /// scalar reduction ([`Self::lower_scalar_reduction`]), and its faults
+    /// sort at the box's first cell, where the oracle meets them first.
+    ///
+    /// A body that does read them is a reduction PER CELL: the body over the
+    /// box extended by the contracted axes (they lead, in `contract_names`
+    /// order) and one [`Instr::Reduce`] folding those axes away, which visits
+    /// each cell's terms in the oracle's order. An excluded tuple is skipped
+    /// as [`Self::lower_scalar_reduction`] skips it.
+    fn lower_nested_scalar_reduction(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        spec: &ArrayOpSpec,
+        bx: &LBox,
+    ) -> LResult<LV> {
+        if bx.tuple != 0 {
+            bail_tape!("aggregate: rank-0 output nested inside a tuple-list contraction body");
+        }
+        if nested_aggregate_capture(spec, bx.syms.iter().chain(bx.cnames.iter())).is_none() {
+            let level = self.enter_fault_level(Some(bx));
+            let v = self.lower_wholesale_aggregate_in_level(node);
+            self.leave_fault_level(level);
+            return v;
+        }
+        if spec.has_drivable_overlap() || node.key.is_some() || node.distinct == Some(true) {
+            bail_tape!("aggregate: a gated or keyed rank-0 output that reads its enclosing box");
+        }
+        if !bx.cnames.is_empty() {
+            bail_tape!(
+                "aggregate: a rank-0 output that reads its enclosing box, inside an unrolled \
+                 contraction"
+            );
+        }
+        let nc = spec.contract_names.len();
+        if nc == 0 {
+            bail_tape!("aggregate: a rank-0 output with no contracted index reads its box");
+        }
+        let combine_op = scalar_combine_op(spec.reduce);
+        let identity = spec.reduce.identity();
+        let mut ext_syms: Vec<String> = spec.contract_names.clone();
+        ext_syms.extend(bx.syms.iter().cloned());
+        let mut ext_lo = DimI::new();
+        let mut ext_shape = DimU::new();
+        for d in &spec.contract_dims {
+            let (l, n) = match d {
+                ContractDim::Static(l, h) => (*l, (h - l + 1).max(0) as usize),
+                ContractDim::Derived { from_faq } if self.ring_extent(from_faq).is_some() => {
+                    (1, self.ring_extent(from_faq).unwrap_or(0).max(0) as usize)
+                }
+                other => bail_tape!(
+                    "aggregate: a rank-0 output that reads its enclosing box, over a \
+                     non-static contraction dim ({other:?})"
+                ),
+            };
+            ext_lo.push(l);
+            ext_shape.push(n);
+        }
+        // An empty window enumerates no tuple: the fold is the identity.
+        if ext_shape.contains(&0) {
+            return Ok(self.emit_fill(&LV::Lit(identity), &bx.shape, &bx.lo, Cadence::Const));
+        }
+        if nc + bx.shape.len() > MAX_RANK {
+            bail_tape!("aggregate: a rank-0 output's promoted box rank out of range");
+        }
+        ext_lo.extend(bx.lo.iter().copied());
+        ext_shape.extend(bx.shape.iter().copied());
+        let elems = ext_shape
+            .iter()
+            .try_fold(1usize, |acc, &n| acc.checked_mul(n))
+            .filter(|&n| n <= MAX_PROMOTED_ELEMS);
+        if elems.is_none() {
+            bail_tape!("aggregate: a rank-0 output's promoted box is too large");
+        }
+        // The oracle walks the box's cells, then each cell's tuples.
+        let visit: SmallVec<[u8; 4]> = (0..bx.shape.len())
+            .map(|k| (nc + bx.visit_axis(k)) as u8)
+            .chain((0..nc).map(|a| a as u8))
+            .collect();
+        let ebx = LBox {
+            syms: &ext_syms,
+            lo: ext_lo.clone(),
+            shape: ext_shape.clone(),
+            cnames: &[],
+            cvals: SmallVec::new(),
+            tuple: 0,
+            visit,
+        };
+        let skip = match spec.reduce {
+            ReduceKind::Sum => -0.0,
+            other => other.identity(),
+        };
+        // A fault here would sort by the promoted box's cells, which do not
+        // place it among the enclosing box's own faults: refused instead.
+        let notes = self.fault_notes;
+        self.push_scope();
+        let term = self.lower_filtered(spec.body, spec.filter, &ebx, LV::Lit(skip));
+        self.pop_scope();
+        let term = term?;
+        if self.fault_notes != notes {
+            bail_tape!(
+                "fault: a fail-closed fault inside a rank-0 output that reads its enclosing box"
+            );
+        }
+        let Some(term) = term else {
+            // The filter is the literal false: no tuple is kept.
+            return Ok(self.emit_fill(&LV::Lit(identity), &bx.shape, &bx.lo, Cadence::Const));
+        };
+        if matches!(&term, LV::State(_)) && self.lv_box(&term).is_some() {
+            bail_tape!("aggregate: a rank-0 output's term reduced to a bare whole-array view");
+        }
+        let src = match self.lv_box(&term) {
+            None => self.emit_fill(&term, &ext_shape, &ext_lo, Cadence::Const),
+            Some((s, o)) if s == ext_shape && o == ext_lo => term,
+            Some(_) => bail_tape!("aggregate: a rank-0 output's term box does not match its box"),
+        };
+        let sec = self.placement(self.lv_cadence(&src));
+        let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
+        let instr = Instr::Reduce {
+            op: combine_op,
+            init: identity,
+            src: self.src_of(&src),
+            axes: (0..nc as u8).collect(),
+            src_shape: ext_shape,
+            out,
+        };
+        self.emit(instr, sec);
+        Ok(LV::Arr(out))
     }
 
     // -- faq (the try_eval_faq_vectorized mirror) ---------------------
@@ -4482,7 +4820,7 @@ impl<'m> TapeBuilder<'m> {
             LV::Lit(_) => term(self),
             keep if self.lv_box(&keep).is_none() => {
                 let mut term = Some(term);
-                self.lower_branchy(keep, |s, taken| {
+                self.lower_branchy(keep, false, |s, taken| {
                     if taken {
                         (term.take().expect("the kept arm is lowered once"))(s)
                     } else {
@@ -4624,9 +4962,13 @@ impl<'m> TapeBuilder<'m> {
                 }
                 match self.lv_box(&cond) {
                     None => {
-                        self.lower_branchy_ifelse(cond, &node.args[1], &node.args[2], |s, e| {
-                            s.lower_wholesale(e)
-                        })
+                        self.lower_branchy_ifelse(
+                            cond,
+                            &node.args[1],
+                            &node.args[2],
+                            false,
+                            |s, e| s.lower_wholesale(e),
+                        )
                     }
                     Some(_) => {
                         let a = self.lower_wholesale(&node.args[1])?;
@@ -4750,9 +5092,13 @@ impl<'m> TapeBuilder<'m> {
                 return self.lower_wholesale_shaped(taken, shape);
             }
             if self.lv_box(&cond).is_none() {
-                return self.lower_branchy_ifelse(cond, &node.args[1], &node.args[2], |s, e| {
-                    s.lower_wholesale_shaped(e, shape)
-                });
+                return self.lower_branchy_ifelse(
+                    cond,
+                    &node.args[1],
+                    &node.args[2],
+                    false,
+                    |s, e| s.lower_wholesale_shaped(e, shape),
+                );
             }
             let a = self.lower_wholesale(&node.args[1])?;
             let b = self.lower_wholesale(&node.args[2])?;
@@ -5035,7 +5381,8 @@ impl<'m> TapeBuilder<'m> {
                 match resolve_const_index(policy, one_based, dim) {
                     Some(i0) => idx.push(i0),
                     None => {
-                        self.note_fault(None, const_oob_message(name, one_based, dim, d))?;
+                        let msg = const_oob_message(name, one_based, dim, d);
+                        self.note_fault(None, msg, None)?;
                         return Ok(LV::Lit(f64::NAN));
                     }
                 }
@@ -5219,13 +5566,15 @@ impl<'m> TapeBuilder<'m> {
                 }
             };
             // A kept-only body is evaluated by the oracle at kept tuples alone.
-            if keep.is_some() {
-                self.lazy_depth += 1;
-            }
-            let v = self.lower_expr(spec.body, &bx);
-            if keep.is_some() {
-                self.lazy_depth -= 1;
-            }
+            let v = match &keep {
+                None => self.lower_expr(spec.body, &bx),
+                Some(fv) => {
+                    self.lazy_depth += 1;
+                    let v = self.reached_where(fv, true, |s| s.lower_expr(spec.body, &bx));
+                    self.lazy_depth -= 1;
+                    v
+                }
+            };
             let v = v?;
             // Same bail as `lower_faq`: the oracle scalarizes a bare
             // whole-array body (`eval(body).as_scalar()` ⇒ NaN), which this
@@ -5524,22 +5873,31 @@ impl<'m> TapeBuilder<'m> {
         cond: LV,
         t_expr: &Expr,
         f_expr: &Expr,
+        in_box: bool,
         mut low: F,
     ) -> LResult<LV>
     where
         F: FnMut(&mut Self, &Expr) -> LResult<LV>,
     {
-        self.lower_branchy(cond, |s, taken| low(s, if taken { t_expr } else { f_expr }))
+        self.lower_branchy(cond, in_box, |s, taken| {
+            low(s, if taken { t_expr } else { f_expr })
+        })
     }
 
     /// A runtime-scalar-condition branch (JmpIfZero + phi) whose arms are
-    /// lowered by `arm(self, true)` and `arm(self, false)`.
-    fn lower_branchy<F>(&mut self, cond: LV, mut arm: F) -> LResult<LV>
+    /// lowered by `arm(self, true)` and `arm(self, false)`. `in_box` says the
+    /// arms are values over an output box, where a scalar arm broadcasts
+    /// against an array one; on the wholesale path the oracle's result shape
+    /// follows the taken arm, so mixed arms stay refused there.
+    fn lower_branchy<F>(&mut self, cond: LV, in_box: bool, mut arm: F) -> LResult<LV>
     where
         F: FnMut(&mut Self, bool) -> LResult<LV>,
     {
         let mark = self.push_branch();
-        let tv = match arm(self, true) {
+        self.reach.push((cond.clone(), true));
+        let tv = arm(self, true);
+        self.reach.pop();
+        let tv = match tv {
             Ok(v) => v,
             Err(e) => {
                 self.pop_branch(mark);
@@ -5548,7 +5906,10 @@ impl<'m> TapeBuilder<'m> {
         };
         let mut tbuf = self.pop_branch(mark);
         let mark = self.push_branch();
-        let fv = match arm(self, false) {
+        self.reach.push((cond.clone(), false));
+        let fv = arm(self, false);
+        self.reach.pop();
+        let fv = match fv {
             Ok(v) => v,
             Err(e) => {
                 self.pop_branch(mark);
@@ -5558,27 +5919,32 @@ impl<'m> TapeBuilder<'m> {
         let mut fbuf = self.pop_branch(mark);
         let tb = self.lv_box(&tv);
         let fb = self.lv_box(&fv);
+        // One arm a scalar and the other an array over a box: the join is
+        // that box, and the scalar arm broadcasts into it. The per-cell oracle
+        // takes the same arm at every cell (the condition is one scalar), so
+        // each cell reads the scalar or its own element, as the join does.
         let (shape, origin, scalar) = match (&tb, &fb) {
             (None, None) => (DimU::new(), DimI::new(), true),
             (Some((s, o)), Some((s2, o2))) if s == s2 && o == o2 => (s.clone(), o.clone(), false),
+            (Some((s, o)), None) | (None, Some((s, o)))
+                if in_box && matches!((&tv, &fv), (LV::Arr(_), _) | (_, LV::Arr(_))) =>
+            {
+                (s.clone(), o.clone(), false)
+            }
             _ => bail_tape!("ifelse: branch value boxes differ under a runtime scalar condition"),
         };
         let phi = self.new_slot(&shape, &origin, scalar, self.home);
         let prec = crate::precision::active();
-        tbuf.push((
-            Instr::Copy {
-                a: self.op_of(&tv),
-                out: phi,
-            },
-            prec,
-        ));
-        fbuf.push((
-            Instr::Copy {
-                a: self.op_of(&fv),
-                out: phi,
-            },
-            prec,
-        ));
+        let join = |s: &Self, v: &LV, arm_box: &Option<(DimU, DimI)>| {
+            let a = s.op_of(v);
+            if arm_box.is_none() && !scalar {
+                Instr::Fill { v: a, out: phi }
+            } else {
+                Instr::Copy { a, out: phi }
+            }
+        };
+        tbuf.push((join(self, &tv, &tb), prec));
+        fbuf.push((join(self, &fv, &fb), prec));
         let jmp = Instr::JmpIfZero {
             cond: self.op_of(&cond),
             n_true: tbuf.len() as u32,
@@ -5815,6 +6181,8 @@ impl<'m> TapeBuilder<'m> {
         self.fault_seq = 0;
         self.fault_prefix.clear();
         self.lazy_depth = 0;
+        self.reach.clear();
+        self.lazy_faults.clear();
     }
 
     /// Emit the lowered rule's first fault (if any) as one [`Instr::Fault`],
@@ -5822,8 +6190,62 @@ impl<'m> TapeBuilder<'m> {
     /// the CONST section runs first, so it latches before anything else of
     /// this rule — which is where the oracle, walking the rule cell by cell,
     /// latches its first fault — and after every earlier rule's.
+    ///
+    /// A rule with faults at lazily evaluated positions that the first
+    /// certain one does not precede gets one [`Instr::FaultScan`] instead,
+    /// holding them and the certain one: it runs after everything its
+    /// conditions read, at the end of the rule in the latest section any of
+    /// them is computed in.
     fn flush_rule_fault(&mut self) -> LResult<()> {
-        let Some((key, msg)) = self.fault_first.take() else {
+        let lazy = std::mem::take(&mut self.lazy_faults);
+        let first = self.fault_first.take();
+        let mut cands: Vec<FaultCand> = lazy
+            .into_iter()
+            .filter(|(k, _)| first.as_ref().is_none_or(|(fk, _)| k < fk))
+            .map(|(_, c)| c)
+            .collect();
+        if !cands.is_empty() {
+            if let Some((key, msg)) = first {
+                let m = tape_index(self.faults.len(), "faults")?;
+                self.faults.push(msg);
+                self.fault_order.push((self.cur_rule, key.clone()));
+                let (seq, prefix) = key.split_last().expect("a fault key ends with its sequence");
+                cands.push(FaultCand {
+                    prefix: prefix.iter().copied().collect(),
+                    cells: false,
+                    shape: DimU::new(),
+                    lo: DimI::new(),
+                    visit: SmallVec::new(),
+                    cvals: SmallVec::new(),
+                    seq: *seq,
+                    path: Vec::new(),
+                    what: FaultWhat::Every(m),
+                });
+            }
+            let mut sec = Cadence::Const;
+            for c in &cands {
+                for pc in &c.path {
+                    let cad = match pc.op {
+                        Operand::Lit(_) | Operand::Param(_) => Cadence::Const,
+                        Operand::Slot(sl) => self.slots[sl as usize].cadence,
+                        _ => Cadence::Continuous,
+                    };
+                    sec = sec.max(cad);
+                }
+            }
+            let spec = tape_index(self.fault_scans.len(), "fault scans")?;
+            self.fault_scans.push(FaultScanSpec {
+                rule: self.cur_rule,
+                cands,
+            });
+            self.push_stream(
+                Instr::FaultScan { spec },
+                crate::precision::active(),
+                sec.min(self.home),
+            );
+            return Ok(());
+        }
+        let Some((key, msg)) = first else {
             return Ok(());
         };
         let fault = tape_index(self.faults.len(), "faults")?;
@@ -5867,6 +6289,7 @@ impl<'m> TapeBuilder<'m> {
             gather_tables: self.gather_tables.len(),
             seg_tables: self.seg_tables.len(),
             faults: self.faults.len(),
+            fault_scans: self.fault_scans.len(),
             sweeps: self.sweeps.len(),
             scalar_reads: self.scalar_reads.len(),
             data_gathers: self.data_gathers.len(),
@@ -5899,6 +6322,7 @@ impl<'m> TapeBuilder<'m> {
         self.tuple_frames.clear();
         self.faults.truncate(txn.faults);
         self.fault_order.truncate(txn.faults);
+        self.fault_scans.truncate(txn.fault_scans);
         self.sweeps.truncate(txn.sweeps);
         self.scalar_reads.truncate(txn.scalar_reads);
         self.data_gathers.truncate(txn.data_gathers);
@@ -5921,6 +6345,8 @@ impl<'m> TapeBuilder<'m> {
         self.fault_first = None;
         self.fault_prefix.clear();
         self.lazy_depth = 0;
+        self.reach.clear();
+        self.lazy_faults.clear();
     }
 
     /// Forget the forcing loads recorded since `mark`: their instructions were
@@ -5957,6 +6383,8 @@ impl<'m> TapeBuilder<'m> {
             forcing_journal: self.forcing_journal.len(),
             fault_first: self.fault_first.clone(),
             fault_seq: self.fault_seq,
+            faults: self.faults.len(),
+            lazy_faults: self.lazy_faults.len(),
         }
     }
 
@@ -5997,6 +6425,8 @@ impl<'m> TapeBuilder<'m> {
         self.rollback_forcing_loads(txn.forcing_journal);
         self.fault_first = txn.fault_first;
         self.fault_seq = txn.fault_seq;
+        self.faults.truncate(txn.faults);
+        self.lazy_faults.truncate(txn.lazy_faults);
     }
 
     /// Lower one observed rule; returns the recorded observed value.
@@ -6485,6 +6915,7 @@ impl<'m> TapeBuilder<'m> {
             gather_tables: std::mem::take(&mut self.gather_tables),
             seg_tables: std::mem::take(&mut self.seg_tables),
             faults: std::mem::take(&mut self.faults),
+            fault_scans: std::mem::take(&mut self.fault_scans),
             sweeps: std::mem::take(&mut self.sweeps),
             scalar_reads: std::mem::take(&mut self.scalar_reads),
             fault_order: std::mem::take(&mut self.fault_order),

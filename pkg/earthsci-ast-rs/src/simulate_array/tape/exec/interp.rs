@@ -179,6 +179,18 @@ pub(super) fn run_range(
                 let (rule, key) = &prog.fault_order[*fault as usize];
                 latch_ordered_fault(*rule, key, || prog.faults[*fault as usize].clone());
             }
+            Instr::FaultScan { spec } => {
+                let scan = &prog.fault_scans[*spec as usize];
+                let first = scan.first(&prog.faults, |op, cell| match (op, cell) {
+                    (Operand::Slot(s), Some((shape, c))) => unsafe {
+                        *slab_ptr.add(slot_off[*s as usize] + slab_flat(shape, c, prog.col_major))
+                    },
+                    _ => resolve_scalar(op, env, slab_ptr, slot_off),
+                });
+                if let Some((key, msg)) = first {
+                    latch_ordered_fault(scan.rule, &key, || msg);
+                }
+            }
             Instr::Sweep { spec } => {
                 let sw = &prog.sweeps[*spec as usize];
                 debug_assert!(sweep.is_none(), "recurrence sweeps do not nest");
@@ -329,6 +341,7 @@ pub(super) fn is_straight(ins: &Instr) -> bool {
         ins,
         Instr::LoadForcing { .. }
             | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
             | Instr::Sweep { .. }
             | Instr::ScalarRead { .. }
             | Instr::DataGather { faults: true, .. }
@@ -794,8 +807,9 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                 .collect();
             let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
             let faulted = unsafe { data_gather(dst, spec, &sv, &subs) };
-            if faulted {
-                debug_assert!(*faults, "only a faulting DataGather reports a fault");
+            // A gather in a lazily evaluated position reads `NaN` at a fault
+            // and leaves the latching to its rule's `FaultScan`.
+            if faulted && *faults {
                 let first =
                     spec.first_fault(|d, k| unsafe { data_gather_sub(&subs[d], &spec.shape, k) });
                 if let (Some((key, msg)), Some(order)) = (first, &spec.order) {
