@@ -3805,7 +3805,9 @@ fn a_rank_0_faq_nested_in_a_box_is_taped_per_cell_and_once() {
     );
     let prog = ab_check(doc, -2.0, 2.0);
     assert!(
-        prog.instrs.iter().any(|i| matches!(i, Instr::Reduce { .. }))
+        prog.instrs
+            .iter()
+            .any(|i| matches!(i, Instr::Reduce { .. }))
             || prog.fused.iter().any(|f| f.reduce.is_some()),
         "the reductions are folds, not unrolled terms"
     );
@@ -3855,7 +3857,10 @@ fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
         taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0,
     ];
     assert!(
-        progs[0].instrs.iter().any(|i| matches!(i, Instr::FaultScan { .. })),
+        progs[0]
+            .instrs
+            .iter()
+            .any(|i| matches!(i, Instr::FaultScan { .. })),
         "the guarded reads lower to a fault scan"
     );
     // Hand-picked states (column-major `u`): none reached, only the j = 2
@@ -3878,14 +3883,17 @@ fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
         for (k, prog) in progs.iter().enumerate() {
             let mut dy = vec![0.0f64; n];
             run_reference(prog, &compiled, state, &param_vec, 0.0, &mut dy);
-            assert_eq!(crate::simulate_array::take_const_array_oob(), want, "program {k} ref");
+            assert_eq!(
+                crate::simulate_array::take_const_array_oob(),
+                want,
+                "program {k} ref"
+            );
             let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
             scratch.install_tape(std::rc::Rc::new(match k {
                 0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
                 1 => taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
                 _ => {
-                    taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false))
-                        .0
+                    taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0
                 }
             }));
             let mut dy_fast = vec![0.0f64; n];
@@ -3897,11 +3905,19 @@ fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
                 &mut scratch,
                 &mut RhsStats::default(),
             );
-            assert_eq!(crate::simulate_array::take_const_array_oob(), want, "program {k} fast");
+            assert_eq!(
+                crate::simulate_array::take_const_array_oob(),
+                want,
+                "program {k} fast"
+            );
             let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
             assert_eq!(bits(&dy_fast), bits(&dy_ref), "program {k}: dy");
             assert_eq!(bits(&dy), bits(&dy_ref), "program {k}: reference dy");
         }
     }
-    assert_eq!(fired, [true, true], "the states cover both a fault and none");
+    assert_eq!(
+        fired,
+        [true, true],
+        "the states cover both a fault and none"
+    );
 }

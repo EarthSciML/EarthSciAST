@@ -1300,7 +1300,9 @@ impl<'m> TapeBuilder<'m> {
             lo,
             visit,
             cvals,
-            seq: *key.last().expect("a fault key ends with its sequence number"),
+            seq: *key
+                .last()
+                .expect("a fault key ends with its sequence number"),
             path,
             what,
         })
@@ -2955,7 +2957,10 @@ impl<'m> TapeBuilder<'m> {
                     } else {
                         (0..b.shape.len()).map(|k| b.visit_axis(k) as u8).collect()
                     };
-                    (axes, b.cvals.iter().copied().collect::<SmallVec<[i64; 8]>>())
+                    (
+                        axes,
+                        b.cvals.iter().copied().collect::<SmallVec<[i64; 8]>>(),
+                    )
                 }
                 None => (SmallVec::new(), SmallVec::new()),
             };
@@ -4961,15 +4966,13 @@ impl<'m> TapeBuilder<'m> {
                     };
                 }
                 match self.lv_box(&cond) {
-                    None => {
-                        self.lower_branchy_ifelse(
-                            cond,
-                            &node.args[1],
-                            &node.args[2],
-                            false,
-                            |s, e| s.lower_wholesale(e),
-                        )
-                    }
+                    None => self.lower_branchy_ifelse(
+                        cond,
+                        &node.args[1],
+                        &node.args[2],
+                        false,
+                        |s, e| s.lower_wholesale(e),
+                    ),
                     Some(_) => {
                         let a = self.lower_wholesale(&node.args[1])?;
                         let b = self.lower_wholesale(&node.args[2])?;
@@ -6209,7 +6212,9 @@ impl<'m> TapeBuilder<'m> {
                 let m = tape_index(self.faults.len(), "faults")?;
                 self.faults.push(msg);
                 self.fault_order.push((self.cur_rule, key.clone()));
-                let (seq, prefix) = key.split_last().expect("a fault key ends with its sequence");
+                let (seq, prefix) = key
+                    .split_last()
+                    .expect("a fault key ends with its sequence");
                 cands.push(FaultCand {
                     prefix: prefix.iter().copied().collect(),
                     cells: false,
