@@ -505,17 +505,50 @@ function _collect_materialized_array_obs(model::Model, equations::Vector{Equatio
     # inlined. The gather TARGET itself is exempt: `index(obs, i…)` naming a
     # materialized observed is exactly the buffer read.
     if !isempty(out)
+        dynamic = _state_time_observeds(defs, Set{String}(ode_states(model)), out)
         hits = Set{String}()
         seen = _ObsSeen()
         for eq in equations
             _array_obs_structural_refs!(eq.lhs, out, hits, seen)
             _array_obs_structural_refs!(eq.rhs, out, hits, seen)
         end
+        # A state- or time-dependent observed read in a subscript is a
+        # run-time gather either way, so only its other structural uses keep
+        # it inlined.
+        if !isempty(dynamic)
+            setdiff!(hits, dynamic)
+            seen = _ObsSeen()
+            for eq in equations
+                _array_obs_structural_refs!(eq.lhs, dynamic, hits, seen;
+                                            runtime_subscripts=true)
+                _array_obs_structural_refs!(eq.rhs, dynamic, hits, seen;
+                                            runtime_subscripts=true)
+            end
+        end
         # esm 1.0.0: an observed's definition is an equation, so the loop above
         # has already seen every one of them.
         setdiff!(out, hits)
     end
     return out
+end
+
+# The names in `cands` whose definition reads a continuous state or `t`,
+# directly or through the other observeds in `defs`.
+function _state_time_observeds(defs::AbstractDict, state_names::Set{String},
+                               cands::Set{String})
+    memo = Dict{String,Bool}()
+    function dyn(n::String, stack::Set{String})
+        haskey(memo, n) && return memo[n]
+        (haskey(defs, n) && !(n in stack)) || return false
+        push!(stack, n)
+        d = defs[n]
+        st, tm = _def_state_time_refs(d, state_names)
+        r = st || tm || any(m -> m != n && dyn(m, stack), _referenced_var_names(d))
+        delete!(stack, n)
+        memo[n] = r
+        return r
+    end
+    return Set{String}(n for n in cands if dyn(n, Set{String}()))
 end
 
 # STRUCTURAL-POSITION scan for ARRAY observeds — `_obs_structural_refs!`
@@ -526,7 +559,7 @@ end
 # is skipped while every SUBSCRIPT (and a computed target) still flags.
 # Shares the (node, mode) visited-set discipline of `_obs_structural_refs!`.
 function _array_obs_structural_refs!(e::ASTExpr, names::Set{String}, hits::Set{String},
-                                     seen)
+                                     seen; runtime_subscripts::Bool=false)
     e isa OpExpr || return nothing
     bits = get(seen, e, 0x00)
     bits == 0x00 || return nothing   # spine-visited, or mark-all (its superset)
@@ -538,12 +571,20 @@ function _array_obs_structural_refs!(e::ASTExpr, names::Set{String}, hits::Set{S
         # or an inline array PRODUCER whose region/aggregate body is an ordinary
         # EXPRESSION position (`_resolve_index_of_{makearray,faq}` resolves
         # the selected value through `_resolve_indices`), so recurse into it
-        # rather than flagging its whole subtree.
+        # rather than flagging its whole subtree. With `runtime_subscripts`,
+        # a subscript is scanned like any expression: the caller passes only
+        # observeds that read the state or `t`, whose value no build knows, so
+        # a subscript reading them is a run-time gather (`_subscript_is_runtime`)
+        # whether they are inlined or read from their buffer.
         for k in 2:length(e.args)
-            _obs_mark_refs!(e.args[k], names, hits, seen)
+            runtime_subscripts ?
+                _array_obs_structural_refs!(e.args[k], names, hits, seen;
+                                            runtime_subscripts=true) :
+                _obs_mark_refs!(e.args[k], names, hits, seen)
         end
         isempty(e.args) ||
-            _array_obs_structural_refs!(e.args[1], names, hits, seen)
+            _array_obs_structural_refs!(e.args[1], names, hits, seen;
+                                        runtime_subscripts=runtime_subscripts)
         return nothing
     end
     if e.ranges !== nothing
@@ -563,15 +604,19 @@ function _array_obs_structural_refs!(e::ASTExpr, names::Set{String}, hits::Set{S
         end
     end
     for a in e.args
-        _array_obs_structural_refs!(a, names, hits, seen)
+        _array_obs_structural_refs!(a, names, hits, seen;
+                                    runtime_subscripts=runtime_subscripts)
     end
     e.expr_body === nothing ||
-        _array_obs_structural_refs!(e.expr_body::ASTExpr, names, hits, seen)
+        _array_obs_structural_refs!(e.expr_body::ASTExpr, names, hits, seen;
+                                    runtime_subscripts=runtime_subscripts)
     e.filter === nothing ||
-        _array_obs_structural_refs!(e.filter::ASTExpr, names, hits, seen)
+        _array_obs_structural_refs!(e.filter::ASTExpr, names, hits, seen;
+                                    runtime_subscripts=runtime_subscripts)
     if e.values !== nothing
         for v in e.values
-            _array_obs_structural_refs!(v, names, hits, seen)
+            _array_obs_structural_refs!(v, names, hits, seen;
+                                        runtime_subscripts=runtime_subscripts)
         end
     end
     return nothing

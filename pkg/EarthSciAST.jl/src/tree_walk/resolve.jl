@@ -448,7 +448,7 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
     idx_exprs = Dict{String,ASTExpr}()
     for d in 1:nd
         a = idx_args[d]
-        if _subscript_is_runtime(a)
+        if _subscript_is_runtime(a, const_arrays)
             symbolic[d] = true
             idx_exprs[output_idx_strs[d]] = a           # keep symbolic
         else
@@ -1090,14 +1090,19 @@ _refs_bound_sym(::ASTExpr, ::Set{String}) = false
 # True iff a subscript's value is known only at run time: it references a name
 # no integer environment binds here — a bound output-index symbol, or a
 # parameter, a state, an observed or `t` (esm-spec §4.3.2 lets a subscript be
-# any integer-valued expression). After loop substitution every other name a
+# any integer-valued expression) — or reads an array producer. After loop substitution every other name a
 # subscript holds is an array in an `index` head position or a binder of a
 # producer inside it. `local` holds names that do not count: a producer's own
 # binders, and for a caller that keeps bound symbols on its own path, those.
-function _subscript_is_runtime(e::ASTExpr, local_names::Set{String})::Bool
+function _subscript_is_runtime(e::ASTExpr, local_names::Set{String},
+                               const_arrays::Union{Nothing,AbstractDict}=nothing)::Bool
     e isa VarExpr && return !((e::VarExpr).name in local_names)
     e isa OpExpr || return false
     o = e::OpExpr
+    # An array producer read at the subscript (`c[j[i]]` with `j` an inlined
+    # faq) has no integer evaluation; resolved, it is the producer's body at
+    # that subscript, evaluated in floating point as the run time would.
+    _is_array_producer(o) && return true
     inner = local_names
     binders = String[]
     o.output_idx === nothing || for x in o.output_idx
@@ -1108,19 +1113,28 @@ function _subscript_is_runtime(e::ASTExpr, local_names::Set{String})::Bool
     end
     isempty(binders) || (inner = union(local_names, binders))
     for (k, a) in enumerate(o.args)
-        (k == 1 && o.op == "index" && a isa VarExpr) && continue
-        _subscript_is_runtime(a, inner) && return true
+        if k == 1 && o.op == "index" && a isa VarExpr
+            # A gather from anything but a const array (a state, a
+            # materialized observed) reads a run-time value.
+            (const_arrays === nothing || haskey(const_arrays, (a::VarExpr).name)) ||
+                return true
+            continue
+        end
+        _subscript_is_runtime(a, inner, const_arrays) && return true
     end
-    o.expr_body === nothing || (_subscript_is_runtime(o.expr_body, inner) && return true)
-    o.filter === nothing || (_subscript_is_runtime(o.filter, inner) && return true)
+    o.expr_body === nothing ||
+        (_subscript_is_runtime(o.expr_body, inner, const_arrays) && return true)
+    o.filter === nothing ||
+        (_subscript_is_runtime(o.filter, inner, const_arrays) && return true)
     if o.values !== nothing
         for v in o.values
-            _subscript_is_runtime(v, inner) && return true
+            _subscript_is_runtime(v, inner, const_arrays) && return true
         end
     end
     return false
 end
-_subscript_is_runtime(e::ASTExpr) = _subscript_is_runtime(e, _EMPTY_BOUND_SYMS)
+_subscript_is_runtime(e::ASTExpr, const_arrays::AbstractDict) =
+    _subscript_is_runtime(e, _EMPTY_BOUND_SYMS, const_arrays)
 
 # ── Guarded out-of-range reads ───────────────────────────────────────────────
 # esm-spec evaluates `ifelse` lazily and `and` / `or` with short circuit, so a
@@ -1214,11 +1228,11 @@ function _resolve_const_array_gather(vals::AbstractArray, name::String,
         throw(TreeWalkError("E_TREEWALK_CONSTARRAY_NDIM",
               "const array '$(name)' is $(ndims(vals))D " *
               "but got $(length(idx_args_expr)) indices"))
-    if any(_subscript_is_runtime, idx_args_expr)
+    if any(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr)
         sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
         for d in 1:ndims(vals)
             a = idx_args_expr[d]
-            if _subscript_is_runtime(a)
+            if _subscript_is_runtime(a, const_arrays)
                 sub_nodes[d] = _resolve_indices(a, array_var_info, var_map,
                                                 const_arrays, pgather, memo, bound_syms)
             else
@@ -1564,7 +1578,8 @@ function _resolve_indices_op(expr::OpExpr,
             # A subscript computed at run time from a parameter, a state or an
             # observed (bound symbols keep their own path) reads its slot the
             # same way.
-            if any(a -> _refs_loopvar(a) || _subscript_is_runtime(a, bound_syms), idx_args)
+            if any(a -> _refs_loopvar(a) || _subscript_is_runtime(a, bound_syms, const_arrays),
+                   idx_args)
                 return _resolve_state_gather(vname, lo, hi, idx_args, array_var_info,
                                              var_map, const_arrays, pgather, memo, bound_syms)
             end
