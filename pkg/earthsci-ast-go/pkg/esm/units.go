@@ -1264,7 +1264,7 @@ func isIdentCont(c byte) bool {
 //     real unit ("not_a_unit"). The file is wrong. → HARD ERROR.
 //   - UnitFindingAnalysis — the checker cannot DETERMINE a dimension: a
 //     symbolic (non-literal) exponent, an operator with no dimensional rule
-//     (index/fn/aggregate/table_lookup), a malformed arity. That is a statement
+//     (fn/table_lookup), a malformed arity. That is a statement
 //     about the checker, not a defect in the file. → WARNING.
 //
 // An unknown VARIABLE is likewise never a mismatch (it propagates as "unknown"
@@ -1335,78 +1335,14 @@ func PropagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 // unknown-op arm and return an indeterminate (nil) dimension: their dimension
 // is undeterminable until a discretization rewrite lowers them (esm-spec §4.2 /
 // §9.6.8), so the units layer reports nothing.
+//
+// The array operators carry a unit here (esm-spec §4.8.3): index, reshape and
+// transpose have their source array's; concat's operands and makearray's
+// region values agree like the operands of `+`; a broadcast has the unit of its
+// fn applied to its operands; an faq's unit is decided by its ⊕. The
+// evaluation path (the angle rewrite, normalizeAngleArguments) reads the same
+// function, so checker and evaluator agree on every array element's unit.
 func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
-	return propagateDimensionIn(expr, env, false)
-}
-
-// propagateElementDimension is the EVALUATION-PATH reading of propagateDimension:
-// the same rules, plus an array operator carrying its ELEMENT's unit. The
-// checker has no rule for the array operators (esm-spec §4.8.4: they are
-// undeterminable there), but an evaluator that meets cos(index(lat, i)) with
-// lat in deg reads a number in degrees all the same, and §4.8.3 requires it
-// converted. Only the angle rewrite (normalizeAngleArguments) calls it, so no
-// checker verdict depends on it.
-func propagateElementDimension(expr Expression, env map[string]Unit) (*Unit, error) {
-	return propagateDimensionIn(expr, env, true)
-}
-
-// propagateArrayElement is the element unit of an array operator under the
-// evaluation-path reading. The rules are the Rust binding's propagate_array_dim
-// (units.rs), case for case, so every binding's angle rewrite folds the factor
-// into the same arguments: an faq has its body's unit; a makearray has the
-// unit its value regions share; a broadcast has the unit of its fn applied to
-// its operands; index, reshape, transpose and concat have their source array's.
-func propagateArrayElement(node ExprNode, env map[string]Unit) (*Unit, error) {
-	dimensionless := func() (*Unit, error) { return &Unit{Scale: 1}, nil }
-	switch node.Op {
-	case "faq":
-		if node.Expr != nil {
-			return propagateElementDimension(node.Expr, env)
-		}
-		if len(node.Args) == 0 {
-			return dimensionless()
-		}
-		return propagateElementDimension(node.Args[0], env)
-	case "makearray":
-		if len(node.Values) == 0 {
-			return dimensionless()
-		}
-		var first *Unit
-		complete := true
-		for _, v := range node.Values {
-			u, err := propagateElementDimension(v, env)
-			if err != nil {
-				return nil, err
-			}
-			if u == nil {
-				complete = false
-				continue
-			}
-			if first == nil {
-				first = u
-				continue
-			}
-			if !first.Dim.Equal(u.Dim) || !first.Exact.Equal(u.Exact) {
-				return nil, nil
-			}
-		}
-		if !complete {
-			return nil, nil
-		}
-		return first, nil
-	case "broadcast":
-		if node.Fn == nil {
-			return nil, nil
-		}
-		return propagateExprNode(ExprNode{Op: *node.Fn, Args: node.Args}, env, true)
-	}
-	if len(node.Args) == 0 {
-		return dimensionless()
-	}
-	return propagateElementDimension(node.Args[0], env)
-}
-
-func propagateDimensionIn(expr Expression, env map[string]Unit, elements bool) (*Unit, error) {
 	switch e := expr.(type) {
 	case nil:
 		return nil, nil
@@ -1438,21 +1374,15 @@ func propagateDimensionIn(expr Expression, env map[string]Unit, elements bool) (
 		// not double-report it.
 		return nil, nil
 	case ExprNode:
-		return propagateExprNode(e, env, elements)
+		return propagateExprNode(e, env)
 	case *ExprNode:
-		return propagateExprNode(*e, env, elements)
+		return propagateExprNode(*e, env)
 	default:
 		return nil, nil
 	}
 }
 
-func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit, error) {
-	if elements {
-		switch node.Op {
-		case "faq", "makearray", "index", "reshape", "transpose", "concat", "broadcast":
-			return propagateArrayElement(node, env)
-		}
-	}
+func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 	switch node.Op {
 	case "+", "-":
 		// Every operand whose dimension is known must agree, and the result is
@@ -1468,29 +1398,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		// `biomass + 0.5` — with the literal silently carrying its sibling's
 		// unit. It costs no coverage: a genuine inconsistency (`length + mass`)
 		// is between two DECLARED quantities and is still caught.
-		var first *Unit
-		for i, arg := range node.Args {
-			u, err := propagateDimensionIn(arg, env, elements)
-			if err != nil {
-				return nil, err
-			}
-			if u == nil {
-				continue
-			}
-			if first == nil {
-				first = u
-				continue
-			}
-			if !first.Dim.Equal(u.Dim) {
-				return nil, mismatchErrf("dimensional mismatch in %q: arg 0 has %s, arg %d has %s",
-					node.Op, first.Dim, i, u.Dim)
-			}
-			if !first.Exact.Equal(u.Exact) {
-				return nil, mismatchErrf("scale mismatch in %q: arg 0 has %s at scale %s, arg %d at scale %s",
-					node.Op, first.Dim, first.Exact, i, u.Exact)
-			}
-		}
-		return first, nil
+		return agreeingUnit(node.Op, node.Args, env)
 
 	case "*":
 		// A single indeterminate factor makes the whole product indeterminate.
@@ -1501,7 +1409,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		// a mismatch against the declared µg/m³.
 		result := Unit{Scale: 1}
 		for _, arg := range node.Args {
-			u, err := propagateDimensionIn(arg, env, elements)
+			u, err := propagateDimension(arg, env)
 			if err != nil {
 				return nil, err
 			}
@@ -1516,11 +1424,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		if len(node.Args) != 2 {
 			return nil, analysisErrf("'/' requires exactly 2 arguments, got %d", len(node.Args))
 		}
-		num, err := propagateDimensionIn(node.Args[0], env, elements)
+		num, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
-		den, err := propagateDimensionIn(node.Args[1], env, elements)
+		den, err := propagateDimension(node.Args[1], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1534,11 +1442,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		if len(node.Args) != 2 {
 			return nil, analysisErrf("'%s' requires exactly 2 arguments, got %d", node.Op, len(node.Args))
 		}
-		base, err := propagateDimensionIn(node.Args[0], env, elements)
+		base, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
-		expDim, err := propagateDimensionIn(node.Args[1], env, elements)
+		expDim, err := propagateDimension(node.Args[1], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1575,28 +1483,79 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		return &r, nil
 
 	case "faq":
-		// The checker does not model the array operators, so the faq's own unit
-		// is undeterminable (esm-spec §4.8.4) -- but the expressions it evaluates
-		// are checked like any other (§4.8.3): its `filter`, a boolean whose
-		// value never enters the result, and its `expr` body. A mismatch in
-		// either is reported (EarthSciAST#414).
+		// The expressions an faq evaluates are checked like any other (esm-spec
+		// §4.8.3, EarthSciAST#414): its `filter`, a boolean whose value never
+		// enters the result, and its `expr` body. Both are ALWAYS walked, so a
+		// mismatch in either is reported whatever the ⊕ is. The node's own unit
+		// is then decided by its ⊕ (faqUnit).
 		if node.Filter != nil {
-			if _, err := propagateDimensionIn(node.Filter, env, elements); err != nil {
+			if _, err := propagateDimension(node.Filter, env); err != nil {
 				return nil, err
 			}
 		}
-		if node.Expr != nil {
-			if _, err := propagateDimensionIn(node.Expr, env, elements); err != nil {
+		if node.Expr == nil {
+			return nil, nil
+		}
+		body, err := propagateDimension(node.Expr, env)
+		if err != nil {
+			return nil, err
+		}
+		return faqUnit(node, body), nil
+
+	case "index", "reshape", "transpose":
+		// The unit of the source array (args[0]). An index's subscripts are
+		// positions, not part of the unit. With no source the unit is
+		// undeterminable, never dimensionless.
+		if len(node.Args) == 0 {
+			return nil, nil
+		}
+		return propagateDimension(node.Args[0], env)
+
+	case "concat":
+		// concat's operands behave like those of an n-ary `+`: every
+		// determinable operand must agree in dimension and scale, an
+		// undeterminable one is skipped, and the result is the shared unit
+		// (undeterminable when none is known).
+		return agreeingUnit(node.Op, node.Args, env)
+
+	case "makearray":
+		// The region values behave like the operands of `+`. A bare-literal
+		// region is skipped and takes the other regions' unit; no determinable
+		// value (or no values at all) is undeterminable.
+		var first *Unit
+		for _, v := range node.Values {
+			u, err := propagateDimension(v, env)
+			if err != nil {
 				return nil, err
 			}
+			if u == nil {
+				continue
+			}
+			if first == nil {
+				first = u
+				continue
+			}
+			if !first.Dim.Equal(u.Dim) || !first.Exact.Equal(u.Exact) {
+				return nil, mismatchErrf("'makearray' regions must share units: %s at scale %s vs %s at scale %s",
+					first.Dim, first.Exact, u.Dim, u.Exact)
+			}
 		}
-		return nil, nil
+		return first, nil
+
+	case "broadcast":
+		// broadcast(fn=F, args) is {op: F, args} applied element-wise, so it has
+		// that node's unit under the ordinary rules. A missing fn is a structural
+		// error elsewhere; its unit is undeterminable.
+		if node.Fn == nil {
+			return nil, nil
+		}
+		return propagateExprNode(ExprNode{Op: *node.Fn, Args: node.Args}, env)
 
 	case "sqrt":
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("sqrt requires 1 argument, got %d", len(node.Args))
 		}
-		base, err := propagateDimensionIn(node.Args[0], env, elements)
+		base, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1618,7 +1577,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		arg, err := propagateDimensionIn(node.Args[0], env, elements)
+		arg, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1648,7 +1607,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		arg, err := propagateDimensionIn(node.Args[0], env, elements)
+		arg, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1668,11 +1627,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		if len(node.Args) != 2 {
 			return nil, analysisErrf("'atan2' requires 2 arguments, got %d", len(node.Args))
 		}
-		y, err := propagateDimensionIn(node.Args[0], env, elements)
+		y, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
-		x, err := propagateDimensionIn(node.Args[1], env, elements)
+		x, err := propagateDimension(node.Args[1], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1691,7 +1650,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		arg, err := propagateDimensionIn(node.Args[0], env, elements)
+		arg, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1710,7 +1669,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		return propagateDimensionIn(node.Args[0], env, elements)
+		return propagateDimension(node.Args[0], env)
 
 	case OpDerivative:
 		// A REWRITE-TARGET `D` may carry trailing auxiliary boundary operands
@@ -1723,7 +1682,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		if !isRewriteTargetDerivative(node) && len(node.Args) != 1 {
 			return nil, analysisErrf("'D' requires 1 argument, got %d", len(node.Args))
 		}
-		varDim, err := propagateDimensionIn(node.Args[0], env, elements)
+		varDim, err := propagateDimension(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1755,7 +1714,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		// operands are, including when none is known (esm-spec §4.8.3).
 		var first *Unit
 		for i, arg := range node.Args {
-			u, err := propagateDimensionIn(arg, env, elements)
+			u, err := propagateDimension(arg, env)
 			if err != nil {
 				return nil, err
 			}
@@ -1783,7 +1742,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		// mismatch inside one (`not(x [m] > z [kg])`) is reported (esm-spec
 		// §4.8.3).
 		for _, arg := range node.Args {
-			if _, err := propagateDimensionIn(arg, env, elements); err != nil {
+			if _, err := propagateDimension(arg, env); err != nil {
 				return nil, err
 			}
 		}
@@ -1800,12 +1759,12 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		if len(node.Args) != 3 {
 			return nil, analysisErrf("'ifelse' requires 3 arguments, got %d", len(node.Args))
 		}
-		if _, err := propagateDimensionIn(node.Args[0], env, elements); err != nil {
+		if _, err := propagateDimension(node.Args[0], env); err != nil {
 			return nil, err
 		}
 		var first *Unit
 		for _, arg := range node.Args[1:] {
-			u, err := propagateDimensionIn(arg, env, elements)
+			u, err := propagateDimension(arg, env)
 			if err != nil {
 				return nil, err
 			}
@@ -1840,30 +1799,8 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		return &u, nil
 
 	case "min", "max":
-		// Return dimension of first operand; require others to match.
-		var first *Unit
-		for i, arg := range node.Args {
-			u, err := propagateDimensionIn(arg, env, elements)
-			if err != nil {
-				return nil, err
-			}
-			if u == nil {
-				continue
-			}
-			if first == nil {
-				first = u
-				continue
-			}
-			if !first.Dim.Equal(u.Dim) {
-				return nil, mismatchErrf("dimensional mismatch in %q: arg 0 has %s, arg %d has %s",
-					node.Op, first.Dim, i, u.Dim)
-			}
-			if !first.Exact.Equal(u.Exact) {
-				return nil, mismatchErrf("scale mismatch in %q: arg 0 has %s at scale %s, arg %d at scale %s",
-					node.Op, first.Dim, first.Exact, i, u.Exact)
-			}
-		}
-		return first, nil
+		// The `+` rule: known operands agree, unknown ones are skipped.
+		return agreeingUnit(node.Op, node.Args, env)
 	}
 	// Unknown / unmodeled operator (including the open-tier rewrite-target sugar
 	// grad/div/laplacian, which have no privileged dimensional rule): propagate
@@ -1871,6 +1808,84 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 	// returns nothing. Their dimension is undeterminable until a discretization
 	// rewrite lowers them (esm-spec §4.2 / §9.6.8).
 	return nil, nil
+}
+
+// agreeingUnit is the `+` rule over operands args (esm-spec §4.8.3): every
+// operand whose unit is determinable must agree in dimension AND scale (a
+// disagreement is a provable mismatch), an undeterminable operand is skipped,
+// and the result is the shared unit -- undeterminable when no operand is known.
+func agreeingUnit(op string, args []any, env map[string]Unit) (*Unit, error) {
+	var first *Unit
+	for i, arg := range args {
+		u, err := propagateDimension(arg, env)
+		if err != nil {
+			return nil, err
+		}
+		if u == nil {
+			continue
+		}
+		if first == nil {
+			first = u
+			continue
+		}
+		if !first.Dim.Equal(u.Dim) {
+			return nil, mismatchErrf("dimensional mismatch in %q: arg 0 has %s, arg %d has %s",
+				op, first.Dim, i, u.Dim)
+		}
+		if !first.Exact.Equal(u.Exact) {
+			return nil, mismatchErrf("scale mismatch in %q: arg 0 has %s at scale %s, arg %d at scale %s",
+				op, first.Dim, first.Exact, i, u.Exact)
+		}
+	}
+	return first, nil
+}
+
+// faqUnit is the unit of an faq node whose body has unit body (esm-spec
+// §4.8.3). The ⊗ is written by the author inside `expr`, so it is already
+// typed by the ordinary rules, and `join` clauses are key equalities that
+// contribute no factor. What remains is the ⊕ over the contracted indices,
+// read from `semiring` when present, else `reduce` (default "+"):
+//
+//   - sum_product / max_product / min_sum / max_sum, or reduce "+", "max",
+//     "min": the body's unit;
+//   - reduce "*": the body's unit when the body is a pure number
+//     (dimensionless at exact scale 1), else undeterminable -- the power is
+//     the range length, which the checker does not know;
+//   - bool_and_or: dimensionless (a boolean), whatever the body is;
+//   - value invention (`distinct: true`, or a `key`): undeterminable, the
+//     result is ids, not a quantity. So is an unknown ⊕ spelling, which is
+//     rejected elsewhere.
+func faqUnit(node ExprNode, body *Unit) *Unit {
+	if (node.Distinct != nil && *node.Distinct) || node.Key != nil {
+		return nil
+	}
+	plus := "+"
+	if node.Semiring != nil {
+		switch *node.Semiring {
+		case "sum_product":
+			plus = "+"
+		case "max_product", "max_sum":
+			plus = "max"
+		case "min_sum":
+			plus = "min"
+		case "bool_and_or":
+			return &Unit{Scale: 1}
+		default:
+			return nil
+		}
+	} else if node.Reduce != nil {
+		plus = *node.Reduce
+	}
+	switch plus {
+	case "+", "max", "min":
+		return body
+	case "*":
+		if body != nil && isPureNumber(body) {
+			return body
+		}
+		return nil
+	}
+	return nil
 }
 
 // rejectConstUnitsPreV12 rejects declared `units` on any expression node in a

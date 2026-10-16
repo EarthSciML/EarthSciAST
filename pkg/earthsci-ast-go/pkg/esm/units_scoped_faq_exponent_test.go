@@ -142,14 +142,14 @@ func TestPropagateDimensionFaqWalksFilterAndBody(t *testing.T) {
 		return ExprNode{Op: "faq", Args: []any{}, Filter: filter, Expr: body}
 	}
 
-	// Consistent filter and body: no error, and the faq's own unit stays
-	// undeterminable (the checker does not type array operators).
+	// Consistent filter and body: no error, and (default reduce "+") the faq
+	// has its body's unit.
 	u, err := PropagateDimension(faq(cmp("x", "y"), ExprNode{Op: "+", Args: []any{"x", "y"}}), env)
 	if err != nil {
 		t.Fatalf("consistent faq errored: %v", err)
 	}
-	if u != nil {
-		t.Errorf("faq result must stay undeterminable, got %s", u.Dim)
+	if u == nil || !u.Dim.Equal(env["x"].Dim) {
+		t.Errorf("faq result must have its body's unit m, got %v", u)
 	}
 
 	// Mismatch in the filter.
@@ -161,10 +161,10 @@ func TestPropagateDimensionFaqWalksFilterAndBody(t *testing.T) {
 		t.Errorf("body x [m] + z [kg] must be a mismatch, got %v", err)
 	}
 	// The filter's boolean never contributes a unit: a dimensionless filter
-	// over lengths does not make the faq dimensionless.
+	// over lengths does not make the faq dimensionless, so x * faq(.., x) is m^2.
 	u, err = PropagateDimension(ExprNode{Op: "*", Args: []any{"x", faq(cmp("x", "y"), "x")}}, env)
-	if err != nil || u != nil {
-		t.Errorf("x * faq(...) must be undeterminable without error, got %v, %v", u, err)
+	if err != nil || u == nil || !u.Dim.Equal(env["x"].Dim.Power(2)) {
+		t.Errorf("x * faq(x <= y, x) must be m^2 without error, got %v, %v", u, err)
 	}
 }
 

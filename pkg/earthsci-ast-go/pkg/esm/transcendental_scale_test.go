@@ -176,9 +176,9 @@ func TestFlattenConvertsDegreesAndLeavesRadiansAlone(t *testing.T) {
 
 // TestFlattenConvertsADegreeArrayElement pins that an array element carries its
 // array's unit on the evaluation path, so cos(index(lat, i)) with lat in deg
-// converts like cos(lat) does. The checker has no rule for index or faq
-// (esm-spec §4.8.4), and the rewrite used to read the argument with the
-// checker's rules, so it left every array element unconverted.
+// converts like cos(lat) does. The rewrite reads the argument with the
+// checker's own rules, which type index and faq (esm-spec §4.8.3); it once
+// read it with rules that had none, and left every array element unconverted.
 func TestFlattenConvertsADegreeArrayElement(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
@@ -242,15 +242,16 @@ func TestFlattenConvertsADegreeArrayElement(t *testing.T) {
 	if r := Validate(file); !r.IsValid {
 		t.Fatalf("the fixture must stay valid, got %+v", r.StructuralErrors)
 	}
-	// And the checker still has no rule for an array element.
-	env := map[string]Unit{}
-	if u, err := ParseUnit("deg"); err == nil {
-		env["lat"] = u
-	} else {
+	// And the checker gives an array element its array's unit, the same one
+	// the rewrite read.
+	deg, err := ParseUnit("deg")
+	if err != nil {
 		t.Fatalf("parse deg: %v", err)
 	}
-	if u, err := propagateDimension(ExprNode{Op: "index", Args: []any{"lat", 1.0}}, env); err != nil || u != nil {
-		t.Fatalf("the checker must report index as undeterminable, got %v, %v", u, err)
+	env := map[string]Unit{"lat": deg}
+	if u, err := propagateDimension(ExprNode{Op: "index", Args: []any{"lat", 1.0}}, env); err != nil || u == nil ||
+		!u.Dim.Equal(deg.Dim) || !u.Exact.Equal(deg.Exact) {
+		t.Fatalf("the checker must give index(lat, 1) lat's unit deg, got %v, %v", u, err)
 	}
 }
 

@@ -165,13 +165,14 @@ var transformingFixtures = map[string]string{
 
 	// Subsystem `{"ref": ...}` resolution: the mount is replaced in place by
 	// the referenced file's spliced-in variables and equations.
-	"lib_calendar_subsystem_inclusion.esm":  "subsystem ref resolution",
-	"lib_solar_subsystem_inclusion.esm":     "subsystem ref resolution",
-	"subsystem_index_set_merge.esm":         "subsystem ref resolution + index_sets merge",
-	"mount_rename_two_columns.esm":          "subsystem ref resolution + index_sets merge under a mount-edge index_set_rename",
-	"mount_rename_two_columns_toplevel.esm": "top-level `models.<k>` {ref} resolution + index_sets merge under a mount-edge index_set_rename",
-	"units_mount_subsystem_consistent.esm":  "subsystem ref resolution",
-	"units_mount_toplevel_consistent.esm":   "top-level `models.<k>` {ref} resolution",
+	"lib_calendar_subsystem_inclusion.esm":       "subsystem ref resolution",
+	"lib_solar_subsystem_inclusion.esm":          "subsystem ref resolution",
+	"subsystem_index_set_merge.esm":              "subsystem ref resolution + index_sets merge",
+	"mount_rename_two_columns.esm":               "subsystem ref resolution + index_sets merge under a mount-edge index_set_rename",
+	"mount_rename_two_columns_toplevel.esm":      "top-level `models.<k>` {ref} resolution + index_sets merge under a mount-edge index_set_rename",
+	"units_mount_subsystem_consistent.esm":       "subsystem ref resolution",
+	"units_mount_toplevel_consistent.esm":        "top-level `models.<k>` {ref} resolution",
+	"units_array_mount_index_faq_consistent.esm": "top-level `models.<k>` {ref} resolution + index_sets merge",
 
 	// An assembly mounted by another assembly: the mount form composes with
 	// itself, so the inner edge is consumed at load too and BOTH levels are
