@@ -1096,6 +1096,7 @@ def _validate_observed_dimensions(
             UnparseableUnitError,
             exact_scale_of,
             parse_unit,
+            scoped_reference_units,
         )
 
         if not PINT_AVAILABLE:
@@ -1114,6 +1115,17 @@ def _validate_observed_dimensions(
                 known[name] = parse_unit(var.units)
             except UnparseableUnitError:
                 continue  # reported by _check_unparseable_units; not our finding
+        # A scoped reference -- into a subsystem or a top-level component, mounted
+        # by {ref} or written inline -- has the units its target declares
+        # (esm-spec §4.8.4, EarthSciAST#414). Treating it as undeterminable
+        # skipped every check across a mount edge.
+        for name, units in scoped_reference_units(esm_file, model).items():
+            if name in known:
+                continue
+            try:
+                known[name] = parse_unit(units)
+            except UnparseableUnitError:
+                continue
 
         validator = UnitValidator()
         validator.known_units = known

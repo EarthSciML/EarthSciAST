@@ -1112,6 +1112,142 @@ class UnitConversionResult:
     error_message: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# Scoped references carry their target's units (esm-spec §4.8.4, issue #414)
+# ---------------------------------------------------------------------------
+
+
+def _component_member_units(component: Any) -> dict[str, str]:
+    """Declared unit strings of a component's own members: a model's
+    ``variables``, a reaction system's ``species`` and ``parameters``."""
+    out: dict[str, str] = {}
+    variables = getattr(component, "variables", None)
+    if isinstance(variables, dict):
+        for name, var in variables.items():
+            units = getattr(var, "units", None)
+            if units:
+                out[name] = units
+    for attr in ("species", "parameters"):
+        members = getattr(component, attr, None)
+        if isinstance(members, dict):
+            items = list(members.items())
+        elif isinstance(members, list):
+            items = [(getattr(m, "name", None), m) for m in members]
+        else:
+            continue
+        for name, member in items:
+            units = getattr(member, "units", None)
+            if isinstance(name, str) and units:
+                out[name] = units
+    return out
+
+
+def _collect_scoped_units(prefix: str, component: Any, out: dict[str, str]) -> None:
+    """Register ``<prefix>.<member>`` for every member of ``component`` and,
+    recursively, of every subsystem it carries (esm-spec §4.9.2: a scoped
+    reference is a dot path of arbitrary depth)."""
+    for name, units in _component_member_units(component).items():
+        out[f"{prefix}.{name}"] = units
+    for sub_name, sub in (getattr(component, "subsystems", None) or {}).items():
+        if isinstance(sub, dict):
+            continue  # an unresolved {"ref": ...} edge: nothing is known about it
+        _collect_scoped_units(f"{prefix}.{sub_name}", sub, out)
+
+
+def scoped_reference_units(esm_file: EsmFile | None, component: Any) -> dict[str, str]:
+    """Scoped name -> declared unit string, for every scoped reference an
+    expression in ``component`` can make (esm-spec §4.9.2).
+
+    A mounted component is, after resolution, the same as one written inline
+    (§4.7 "Resolution timing"), so a variable reached across a ``{ref}`` mount
+    edge -- a ``subsystems.<k>`` mount or a top-level ``models.<k>`` mount --
+    carries the units its declaration states, exactly as a local one does
+    (§4.8.4). Two kinds of path are covered, with the same precedence the
+    reference-integrity check uses: ``<System>.<member>`` naming a top-level
+    model or reaction system (and its subsystems), and ``<sub>.<member>``
+    relative to ``component``'s own subsystems, which wins on a collision.
+    """
+    out: dict[str, str] = {}
+    if esm_file is not None:
+        for name, model in (esm_file.models or {}).items():
+            _collect_scoped_units(name, model, out)
+        for name, rs in (esm_file.reaction_systems or {}).items():
+            _collect_scoped_units(name, rs, out)
+    for sub_name, sub in (getattr(component, "subsystems", None) or {}).items():
+        if isinstance(sub, dict):
+            continue
+        _collect_scoped_units(sub_name, sub, out)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Constant exponents (esm-spec §4.8.3 `^`)
+# ---------------------------------------------------------------------------
+
+
+def _literal_rational(value: Any) -> Fraction | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return Fraction(str(value))
+
+
+def constant_exponent_value(expr: Any) -> Fraction | None:
+    """The exact rational value of a CONSTANT-EXPRESSION exponent, or ``None``.
+
+    esm-spec §4.8.3 `^`: an exponent folds when it is a numeric literal; a
+    ``const`` that declares no units, or a dimensionless unit at scale 1 (its
+    value IS the pure number it denotes); or ``+``, ``*`` (one or more
+    operands), ``-`` (unary negation, or a left fold of two or more) or ``/``
+    (exactly two operands, nonzero divisor) over constant expressions, nested to
+    any depth. Anything else -- a variable, an expression containing one, a
+    ``const`` at a scale other than 1 (``%``: its value and its quantity
+    disagree), any other operator -- is SYMBOLIC and leaves the power of a
+    dimensional base undeterminable (§4.8.4).
+    """
+    literal = _literal_rational(expr)
+    if literal is not None:
+        return literal
+    if not isinstance(expr, ExprNode):
+        return None
+    op = expr.op
+    if op == "const":
+        if expr.units is not None:
+            try:
+                unit = parse_unit(expr.units)
+            except UnparseableUnitError:
+                return None
+            if unit.dimensionality or not exact_scale_of(unit).is_one():
+                return None
+        return _literal_rational(expr.value)
+    args = list(expr.args or [])
+    if not args:
+        return None
+    values = [constant_exponent_value(a) for a in args]
+    if any(v is None for v in values):
+        return None
+    if op == "+":
+        return sum(values, Fraction(0))
+    if op == "*":
+        product = Fraction(1)
+        for v in values:
+            product *= v
+        return product
+    if op == "-":
+        if len(values) == 1:
+            return -values[0]
+        result = values[0]
+        for v in values[1:]:
+            result -= v
+        return result
+    if op == "/":
+        if len(values) != 2 or values[1] == 0:
+            return None
+        return values[0] / values[1]
+    return None
+
+
 class UnitValidator:
     """Validator for dimensional consistency in ESM format structures."""
 
@@ -1128,6 +1264,9 @@ class UnitValidator:
         # an array operator carries its ELEMENT's unit (see `_type_array_element`).
         # The checker leaves it off, so no checker verdict depends on it.
         self.element_units = False
+        # The document being validated, so a component's scoped references
+        # (`Leaf.p`, `sub.v`) can be typed from their targets' declarations.
+        self._document: EsmFile | None = None
 
     def validate_esm_file(self, esm_file: EsmFile) -> UnitValidationResult:
         """
@@ -1140,6 +1279,7 @@ class UnitValidator:
             UnitValidationResult with validation status and any issues found
         """
         result = UnitValidationResult(is_valid=True)
+        self._document = esm_file
 
         if esm_file.models:
             self._merge_component_results(
@@ -1216,6 +1356,11 @@ class UnitValidator:
                         f"Invalid unit '{var_info.units}' for variable '{var_name}': {e}",
                     )
 
+        # Scoped references reach across subsystem and top-level mounts and
+        # carry their targets' declared units (esm-spec §4.8.4). An unparseable
+        # target unit is reported at its own declaration, not here.
+        self._register_scoped_units(model)
+
         # Validate equations. An observed unknown's DEFINING equation is
         # skipped here and typed below instead, under the VARIABLE's name --
         # where 0.x reported it, and where an author looks. Typing it in both
@@ -1264,6 +1409,7 @@ class UnitValidator:
 
         # Scope the known-units registry to this component (see validate_model).
         self.known_units = {}
+        self._register_scoped_units(rs)
 
         # Register species units
         if rs.species:
@@ -1309,6 +1455,17 @@ class UnitValidator:
 
         result.is_valid = len(result.errors) == 0
         return result
+
+    def _register_scoped_units(self, component: Any) -> None:
+        """Add every resolvable scoped reference of ``component`` to
+        ``known_units`` (see :func:`scoped_reference_units`)."""
+        for name, units in scoped_reference_units(self._document, component).items():
+            if name in self.known_units:
+                continue
+            try:
+                self.known_units[name] = parse_unit(units)
+            except UnparseableUnitError:
+                continue
 
     def validate_equation(self, equation, equation_id: str) -> UnitValidationResult:
         """
@@ -1603,6 +1760,18 @@ class UnitValidator:
         if self.element_units and node.op in _ARRAY_ELEMENT_OPS:
             return self._type_array_element(node)
 
+        if node.op == "faq":
+            # The checker does not model the array operators, so the faq's own
+            # unit is undeterminable (esm-spec §4.8.4) -- but the expressions it
+            # evaluates are checked like any other (§4.8.3): its `filter`, a
+            # boolean over the node's ranges, and its `expr` body. A mismatch in
+            # either raises here (EarthSciAST#414).
+            if node.filter is not None:
+                self._type(node.filter)
+            if node.expr is not None:
+                self._type(node.expr)
+            return None
+
         if not node.args:
             return None
 
@@ -1694,13 +1863,13 @@ class UnitValidator:
                 and base.scale.is_one()
             ):
                 return self._dimensionless
-            if (
-                len(node.args) > 1
-                and isinstance(node.args[1], (int, float))
-                and not isinstance(node.args[1], bool)
-            ):
-                power = Fraction(str(node.args[1]))
-                return _Typed(base.dim ** node.args[1], base.scale**power)
+            # The exponent is read BY VALUE: a literal, or any constant
+            # expression over literals (`3/2`, `-(1)`), folds to an exact
+            # rational (esm-spec §4.8.3). A symbolic exponent stays unknown.
+            power = constant_exponent_value(node.args[1]) if len(node.args) > 1 else None
+            if power is not None:
+                dim_exp = power.numerator if power.denominator == 1 else float(power)
+                return _Typed(base.dim**dim_exp, base.scale**power)
             return None
 
         if op == "D":
