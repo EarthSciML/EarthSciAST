@@ -115,8 +115,21 @@ end
 
 # The row-major (last index fastest) cells of a dense `1…dims` box — the order
 # every observed-field surface returns.
-_row_major_cells(dims::Vector{Int}) =
-    sort!(vec(Vector{Int}[collect(Int, Tuple(I)) for I in CartesianIndices(Tuple(dims))]))
+# Walked in that order directly: the first index of the REVERSED box varies
+# fastest, so each reversed multi-index read back to front is the next cell.
+function _row_major_cells(dims::AbstractVector{<:Integer})
+    n = length(dims)
+    out = Vector{Vector{Int}}(undef, prod(dims; init=1))
+    k = 0
+    for I in CartesianIndices(Tuple(reverse(dims)))
+        c = Vector{Int}(undef, n)
+        @inbounds for d in 1:n
+            c[d] = I[n - d + 1]
+        end
+        out[k += 1] = c
+    end
+    return out
+end
 
 # The program for build name `name`, built on first request and kept on the
 # context, or `nothing` when the name is not an observed this route can take

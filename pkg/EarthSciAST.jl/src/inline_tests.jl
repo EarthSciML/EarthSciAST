@@ -1215,15 +1215,10 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # them BY NAME — so it is only usable if every one of them resolves.
     raw = get(insp.observed_defs, qualified, _bare_get(insp.observed_defs))
     expr = inlined === nothing ? raw : inlined
-    # `vec` flattens the comprehension to a `Vector{Vector{Int}}` for ANY rank:
-    # over a rank≥2 `CartesianIndices` the comprehension yields a `Matrix`
-    # (higher-D array), and `sort!` on that throws `UndefKeywordError: dims`.
-    # The trailing `sort!` fixes the cell order to lexicographic (row-major,
-    # last index fastest) regardless of the flatten order — matching
-    # `_state_cells` and the Python (`np.ndindex`) / Rust (row-major enum)
-    # observed-field ordering, so `field`/`reference` pair cell-for-cell.
-    cells = sort!(vec(Vector{Int}[collect(Int, Tuple(I))
-                                  for I in CartesianIndices(Tuple(exts))]))
+    # The cell order is lexicographic (row-major, last index fastest) —
+    # matching `_state_cells` and the Python (`np.ndindex`) / Rust (row-major
+    # enum) observed-field ordering, so `field`/`reference` pair cell-for-cell.
+    cells = _row_major_cells(exts)
     # The build-time route reads the state out of `var_map` at `u`, when the
     # caller gave a state and not the scope itself.
     if u !== nothing && var_map !== nothing && isempty(state_arrays) &&
@@ -1243,7 +1238,10 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
         bufkey = _const_array_key(insp, String(mname), String(variable))
         buf = bufkey === nothing ? nothing : insp.const_arrays[bufkey]
         if buf isa AbstractArray && eltype(buf) <: Real && size(buf) == Tuple(exts)
-            return (Float64[Float64(buf[c...]) for c in cells], cells)
+            # Row-major is column-major of the axes reversed.
+            vals = ndims(buf) <= 1 ? Vector{Float64}(vec(buf)) :
+                   Vector{Float64}(vec(permutedims(buf, ndims(buf):-1:1)))
+            return (vals, cells)
         end
     end
     # NEITHER form published (#176). The build's observed graph is keyed by what
@@ -1457,8 +1455,7 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
         lookup(n) === nothing && continue
         ex = extents(n); ex === nothing && continue
         any(<=(0), ex) && continue
-        cells = sort!(vec(Vector{Int}[collect(Int, Tuple(I))
-                                      for I in CartesianIndices(Tuple(ex))]))
+        cells = _row_major_cells(ex)
         # Try the un-inlined body first — it reads the buffers already filled, so
         # it is the cheap one — and fall back to the fully substituted body when
         # it cannot resolve. Both compute the same number: the substituted form
