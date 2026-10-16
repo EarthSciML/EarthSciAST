@@ -334,6 +334,10 @@ scaling_family!(scaling_source_receptor, "source_receptor");
 scaling_family!(scaling_regrid, "regrid");
 scaling_family!(scaling_unstructured_gather, "unstructured_gather");
 scaling_family!(scaling_scalar_chemistry, "scalar_chemistry");
+scaling_family!(scaling_gather_index, "gather_index");
+scaling_family!(scaling_column_search, "column_search");
+scaling_family!(scaling_column_sum, "column_sum");
+scaling_family!(scaling_join_keyed, "join_keyed");
 
 /// The corpus geometry documents the tape lowers (`polygon_intersection_area`,
 /// a build-time `intersect_polygon` ring), native against the interpreter.

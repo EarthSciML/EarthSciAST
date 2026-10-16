@@ -293,6 +293,14 @@ function canonical_names(fam, entry)
         return vcat(_rowmajor("SourceReceptor.c", (n,)), _rowmajor("SourceReceptor.e", (n,)))
     elseif fam == "regrid"
         return vcat(_rowmajor("Regrid.F_src", (n,)), _rowmajor("Regrid.F_tgt", (n,)))
+    elseif fam == "gather_index"
+        return _rowmajor("Classes.u", (n,))
+    elseif fam == "column_search"
+        return _rowmajor("Column.u", (sh("ncol"), sh("nlev")))
+    elseif fam == "column_sum"
+        return _rowmajor("Columns.u", (sh("side"), sh("side"), sh("nlev")))
+    elseif fam == "join_keyed"
+        return _rowmajor("Join.u", (n,))
     elseif fam == "scalar_chemistry"
         return ["Boxes." * s * "_" * string(b) for b in 1:sh("boxes") for s in POLLU_SPECIES]
     end

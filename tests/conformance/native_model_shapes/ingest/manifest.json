@@ -1,0 +1,50 @@
+{
+ "category": "native_model_shapes_ingest",
+ "version": "1.0",
+ "description": "The native_model_shapes documents whose shape only appears on the BUILD-TIME path: each one ingests a committed parquet table through its own `data_sources`, so a binding evaluates its rules in the build pipeline rather than on the right-hand-side path. Every assertion is the document's own, computed by hand. Each binding runs every document under `interpreter` and `native`; both must pass every assertion and native must equal the interpreter bit for bit. `url_overrides` maps each source to its table, relative to this directory, for a runner that does not resolve the document's relative `url_template` itself.",
+ "bindings_required": [
+  "rust"
+ ],
+ "binding_notes": {
+  "julia": "Not gated here: parquet needs Parquet2, which is not in EarthSciAST.jl's test target. Julia evaluates these shapes through the same evaluator as the non-ingesting fixtures of ../manifest.json, which it is gated on.",
+  "python": "Out of the scope of the native-models round; see ../README.md."
+ },
+ "fixtures": [
+  {
+   "id": "join_ingested_column_computed_key",
+   "path": "join_ingested_column_computed_key.esm",
+   "model": "JoinIngestedColumnComputedKey",
+   "url_overrides": {
+    "rows_table": "data/rows.parquet"
+   },
+   "note": "A value-equality join of an ingested key column against a const-cadence computed key (moves fixtures, 479 rules; moves F57/F58 controls once ingesting)."
+  },
+  {
+   "id": "recurrence_in_ingesting_doc",
+   "path": "recurrence_in_ingesting_doc.esm",
+   "model": "RecurrenceInIngestingDoc",
+   "url_overrides": {
+    "rows_table": "data/rows.parquet"
+   },
+   "note": "A causal self-reference in a document that ingests (moves F24b; nr-logging-county and nr-airtoxics-lawn-garden-county fold rules)."
+  },
+  {
+   "id": "gather_through_ingested_index",
+   "path": "gather_through_ingested_index.esm",
+   "model": "GatherThroughIngestedIndex",
+   "url_overrides": {
+    "rows_table": "data/rows.parquet"
+   },
+   "note": "A gather through an ingested index column (the isrm member-index and per-record layer gathers)."
+  },
+  {
+   "id": "overlap_join_over_ingested_cells",
+   "path": "overlap_join_over_ingested_cells.esm",
+   "model": "OverlapJoinOverIngestedCells",
+   "url_overrides": {
+    "cells_table": "data/cells.parquet"
+   },
+   "note": "An overlap-gated containment binning over ingested cell envelopes (every isrm E_* rule)."
+  }
+ ]
+}

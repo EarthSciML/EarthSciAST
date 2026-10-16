@@ -1388,7 +1388,8 @@ namespacing:
    categorical set) or its integer IDs (an interval), known at build time.
 2. otherwise a **data column**: a declared **1-D variable** whose single shape
    index set names one of that node's ranges. Its values are the key values,
-   read as data.
+   read as data. The variable may be supplied data or a computed observed, as
+   long as it is build-time constant (below).
 
 A binding **MUST** support both. Case 2 is not an exotic extension: a relational
 port — EPA MOVES/NONROAD is the motivating one — joins one table's
@@ -1567,6 +1568,42 @@ the same requirement §5.5.6 places on an overlap gate's envelope factors. A
 binding that memoises the match set MUST NOT serve a stale one; the reference
 keys its memo on the resolved gate's identity plus the lengths and a content
 fingerprint of the data columns.
+
+**What counts as build-time constant (normative).** A data column (case 2
+above) is build-time constant when it is any of:
+
+* an array supplied to the build: a column ingested from a `data_sources`
+  entry whose source carries no `temporal` block (§5.7.2's `CONST` refinement),
+  or a factor a caller provides;
+* a shaped parameter carrying inline data (esm-spec §6.3);
+* an unknown whose defining equation's right-hand side is an array `const`
+  node;
+* a **const-cadence computed observed**: an unknown whose defining equation
+  computes it — a `faq`, a `makearray` or any other expression — from nothing
+  but index symbols, index-set sizes, literals, inline `const` arrays and other
+  columns this list admits. Its §5.7 cadence class is `CONST`: it reads no
+  state, not the independent variable, and no scalar parameter (a value a
+  caller can rebind after the build through the parameter vector).
+
+The last case is build-time data exactly as the first three are: its value is
+fixed once the document and its build-time inputs are, so it can be evaluated
+once, before the gate is built. A binding MUST accept it as a key column, on
+either side of a pair, and the gate drives enumeration over it exactly as over
+any other key column (above): a computed key is not a reason to fall back to
+the full product, which would turn an `O(|matches|)` node into an `O(∏ranges)`
+one. The motivating shape is a relational port's derived key, computed from an index
+(`want[k] = k + 7`) and joined against another table's column. Cross-binding
+conformance: the shared fixtures
+`tests/conformance/native_model_shapes/fixtures/join_on_computed_key_static.esm`
+and its `_dynamic` twin (computed keys against a computed and a parameter
+column), and
+`tests/conformance/native_model_shapes/ingest/join_ingested_column_computed_key.esm`
+(an ingested column against a computed key, which a binding evaluates on its
+build-time path).
+
+A column whose value depends on a state, on the independent variable or on a
+scalar parameter is not build-time constant and cannot key a gate built once:
+the match set would go stale as soon as that value moved.
 
 **The lowered key comparison is EXACT, not the document's working precision
 (normative).** The paragraph above makes the `filter` the load-bearing part of
@@ -6764,6 +6801,7 @@ binding that got better is the one way a ratchet can run backwards.
 | `value_invention_geometry` | build-time value invention (a `distinct` producer over a ragged set, an `argmin` arg-witness buffer, a bin-skolem candidate set) and setup-time polygon geometry (`intersect_polygon`, `polygon_intersection_area` over unequal rings) feeding a right-hand side, every producer input a constant factor held in the document (esm-spec §4.2) |
 | `array_expression_forms` | esm-spec §4.3.5 `index` over a `reshape` / `transpose` / `concat` (an element of the operand at other subscripts), a positional §4.3.4 `broadcast` of anonymous operands, and a §6.3.1 arrayed definition of an observed whose shape was never declared |
 | `bool_and_or_reductions` | §5.6.1 scalar (rank-0) `bool_and_or` reductions: a crisp OR over the admitted terms, 0 when none is non-zero, under every compiler |
+| `native_model_shapes` | the shapes the downstream models need from `native`: computed and data-dependent subscripts, reversed / offset / clamped / mod-floor subscripts into const arrays, a rank-0 `faq` nested in an array `faq`, an `ifelse` with a scalar condition and branches of different shapes, an out-of-range const subscript no cell takes, an initial condition gathered from a const array, a `join` keyed on a computed observed (§5.5.8), an overlap-gated `faq`, and `polygon_intersection_area` in a `faq`; each as a state-free document and as one a right-hand side reads |
 
 Each tier's `README.md` is its contract and records what did NOT move into it.
 A tier is added by writing that README, a manifest with `"runner":

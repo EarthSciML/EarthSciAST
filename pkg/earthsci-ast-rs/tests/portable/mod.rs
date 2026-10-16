@@ -71,6 +71,14 @@ pub const SCALING_FIXTURES: &[(&str, u64, &str)] = &[
     scaling_fixture!("unstructured_gather", 1000),
     scaling_fixture!("scalar_chemistry", 100),
     scaling_fixture!("scalar_chemistry", 1000),
+    scaling_fixture!("gather_index", 100),
+    scaling_fixture!("gather_index", 1000),
+    scaling_fixture!("column_search", 100),
+    scaling_fixture!("column_search", 1000),
+    scaling_fixture!("column_sum", 100),
+    scaling_fixture!("column_sum", 1000),
+    scaling_fixture!("join_keyed", 100),
+    scaling_fixture!("join_keyed", 1000),
 ];
 
 macro_rules! tier_doc {

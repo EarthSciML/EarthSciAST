@@ -1122,7 +1122,7 @@ INLINE_TESTS_RUNNER="$SCRIPT_DIR/run-inline-tests-conformance.py"
 # Every tier whose manifest declares `"runner": "inline_tests"`. Listed
 # explicitly rather than globbed: a tier appears in the gate because someone put
 # it there, and a manifest that lands without a stage should be noticed.
-INLINE_TESTS_TIERS=(broadcast_alignment scalar_operator_semantics faq_pointwise_filter recurrence value_invention_geometry array_expression_forms bool_and_or_reductions)
+INLINE_TESTS_TIERS=(broadcast_alignment scalar_operator_semantics faq_pointwise_filter recurrence value_invention_geometry array_expression_forms bool_and_or_reductions native_model_shapes)
 
 run_inline_tests_conformance_self_test() {
     local rc=0 tier manifest
@@ -1200,6 +1200,11 @@ _run_inline_tests_stage() {
     for tier in "${INLINE_TESTS_TIERS[@]}"; do
         manifest="$TESTS_DIR/conformance/$tier/manifest.json"
         report="$OUTPUT_DIR/inline_tests/${tier}_${binding}_${compiler}_report.json"
+        # A binding the tier's manifest scope-excludes is not run against it.
+        if python3 -c 'import json, sys; sys.exit(0 if sys.argv[2] in json.load(open(sys.argv[1])).get("scope_excluded", {}) else 1)' "$manifest" "$binding"; then
+            log "Skipping inline-test conformance ($tier / $binding / $compiler): the tier scope-excludes $binding"
+            continue
+        fi
         log "Running inline-test conformance ($tier / $binding / $compiler)..."
         case "$binding" in
             julia)

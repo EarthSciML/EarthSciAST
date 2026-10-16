@@ -35,6 +35,10 @@ scaling_family!(source_receptor);
 scaling_family!(regrid);
 scaling_family!(unstructured_gather);
 scaling_family!(scalar_chemistry);
+scaling_family!(gather_index);
+scaling_family!(column_search);
+scaling_family!(column_sum);
+scaling_family!(join_keyed);
 
 #[test]
 fn geometry_documents() {

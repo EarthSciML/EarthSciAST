@@ -1,0 +1,559 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "mod_floor_unflatten_static",
+  "description": "A flat index unflattened by mod/floor arithmetic, `X[1 + mod(i-1, 2), 1 + floor((i-1)/2)]` written with `floor` (the rrtm `pfrac_bNN_flat` shape), on an observed, a parameter and an inline `const` base. Static variant: no state, so every value is a build-time observed.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "index_sets": {
+  "g": {
+   "kind": "interval",
+   "size": 2
+  },
+  "l": {
+   "kind": "interval",
+   "size": 3
+  },
+  "flat": {
+   "kind": "interval",
+   "size": 6
+  }
+ },
+ "models": {
+  "ModFloorUnflatten": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "q": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      [
+       1.0,
+       2.0,
+       3.0
+      ],
+      [
+       4.0,
+       5.0,
+       6.0
+      ]
+     ],
+     "shape": [
+      "g",
+      "l"
+     ]
+    },
+    "X": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "g",
+      "l"
+     ]
+    },
+    "y_obs": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "flat"
+     ]
+    },
+    "y_param": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "flat"
+     ]
+    },
+    "y_const": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "flat"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "X",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "a",
+       "b"
+      ],
+      "ranges": {
+       "a": {
+        "from": "g"
+       },
+       "b": {
+        "from": "l"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        1.0,
+        {
+         "op": "index",
+         "args": [
+          "q",
+          "a",
+          "b"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "y_obs",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "flat"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X",
+        {
+         "op": "+",
+         "args": [
+          1,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "-",
+             "args": [
+              "i",
+              1
+             ]
+            },
+            {
+             "op": "*",
+             "args": [
+              2,
+              {
+               "op": "floor",
+               "args": [
+                {
+                 "op": "/",
+                 "args": [
+                  {
+                   "op": "-",
+                   "args": [
+                    "i",
+                    1
+                   ]
+                  },
+                  2
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "+",
+         "args": [
+          1,
+          {
+           "op": "floor",
+           "args": [
+            {
+             "op": "/",
+             "args": [
+              {
+               "op": "-",
+               "args": [
+                "i",
+                1
+               ]
+              },
+              2
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "y_param",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "flat"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        1.0,
+        {
+         "op": "index",
+         "args": [
+          "q",
+          {
+           "op": "+",
+           "args": [
+            1,
+            {
+             "op": "-",
+             "args": [
+              {
+               "op": "-",
+               "args": [
+                "i",
+                1
+               ]
+              },
+              {
+               "op": "*",
+               "args": [
+                2,
+                {
+                 "op": "floor",
+                 "args": [
+                  {
+                   "op": "/",
+                   "args": [
+                    {
+                     "op": "-",
+                     "args": [
+                      "i",
+                      1
+                     ]
+                    },
+                    2
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "+",
+           "args": [
+            1,
+            {
+             "op": "floor",
+             "args": [
+              {
+               "op": "/",
+               "args": [
+                {
+                 "op": "-",
+                 "args": [
+                  "i",
+                  1
+                 ]
+                },
+                2
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "y_const",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "flat"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        {
+         "op": "const",
+         "args": [],
+         "value": [
+          [
+           10.0,
+           20.0,
+           30.0
+          ],
+          [
+           40.0,
+           50.0,
+           60.0
+          ]
+         ]
+        },
+        {
+         "op": "+",
+         "args": [
+          1,
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "-",
+             "args": [
+              "i",
+              1
+             ]
+            },
+            {
+             "op": "*",
+             "args": [
+              2,
+              {
+               "op": "floor",
+               "args": [
+                {
+                 "op": "/",
+                 "args": [
+                  {
+                   "op": "-",
+                   "args": [
+                    "i",
+                    1
+                   ]
+                  },
+                  2
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "+",
+         "args": [
+          1,
+          {
+           "op": "floor",
+           "args": [
+            {
+             "op": "/",
+             "args": [
+              {
+               "op": "-",
+               "args": [
+                "i",
+                1
+               ]
+              },
+              2
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "y_obs",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "flat": 1
+       }
+      },
+      {
+       "variable": "y_obs",
+       "time": 0.0,
+       "expected": 4.0,
+       "coords": {
+        "flat": 2
+       }
+      },
+      {
+       "variable": "y_obs",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "flat": 3
+       }
+      },
+      {
+       "variable": "y_obs",
+       "time": 0.0,
+       "expected": 5.0,
+       "coords": {
+        "flat": 4
+       }
+      },
+      {
+       "variable": "y_obs",
+       "time": 0.0,
+       "expected": 3.0,
+       "coords": {
+        "flat": 5
+       }
+      },
+      {
+       "variable": "y_obs",
+       "time": 0.0,
+       "expected": 6.0,
+       "coords": {
+        "flat": 6
+       }
+      },
+      {
+       "variable": "y_param",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "flat": 1
+       }
+      },
+      {
+       "variable": "y_param",
+       "time": 0.0,
+       "expected": 4.0,
+       "coords": {
+        "flat": 2
+       }
+      },
+      {
+       "variable": "y_param",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "flat": 3
+       }
+      },
+      {
+       "variable": "y_param",
+       "time": 0.0,
+       "expected": 5.0,
+       "coords": {
+        "flat": 4
+       }
+      },
+      {
+       "variable": "y_param",
+       "time": 0.0,
+       "expected": 3.0,
+       "coords": {
+        "flat": 5
+       }
+      },
+      {
+       "variable": "y_param",
+       "time": 0.0,
+       "expected": 6.0,
+       "coords": {
+        "flat": 6
+       }
+      },
+      {
+       "variable": "y_const",
+       "time": 0.0,
+       "expected": 10.0,
+       "coords": {
+        "flat": 1
+       }
+      },
+      {
+       "variable": "y_const",
+       "time": 0.0,
+       "expected": 40.0,
+       "coords": {
+        "flat": 2
+       }
+      },
+      {
+       "variable": "y_const",
+       "time": 0.0,
+       "expected": 20.0,
+       "coords": {
+        "flat": 3
+       }
+      },
+      {
+       "variable": "y_const",
+       "time": 0.0,
+       "expected": 50.0,
+       "coords": {
+        "flat": 4
+       }
+      },
+      {
+       "variable": "y_const",
+       "time": 0.0,
+       "expected": 30.0,
+       "coords": {
+        "flat": 5
+       }
+      },
+      {
+       "variable": "y_const",
+       "time": 0.0,
+       "expected": 60.0,
+       "coords": {
+        "flat": 6
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}
