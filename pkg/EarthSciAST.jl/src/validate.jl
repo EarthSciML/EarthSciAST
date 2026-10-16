@@ -550,7 +550,7 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
             # is why `validate()` accepted every dimensionally-inconsistent
             # fixture in the shared corpus.
             append!(errors, validate_model_unit_consistency(
-                _units_view(file, model_name, model), "/models/$model_name"))
+                _units_view(file, model_name, model), "/models/$model_name"; file=file))
         end
     end
 
@@ -1797,7 +1797,7 @@ function _units_view(file::EsmFile, model_name::AbstractString, model::Model)
 end
 
 """
-    validate_model_unit_consistency(model::Model, path::String) -> Vector{StructuralError}
+    validate_model_unit_consistency(model::Model, path::String; file=nothing) -> Vector{StructuralError}
 
 Promote every units finding in `model` to a structural error under its own
 esm-spec §4.8.4 code — `unit_inconsistency` for a PROVABLE dimensional
@@ -1805,20 +1805,24 @@ inconsistency, `unit_parse_error` for a unit string that names no real unit.
 Both are hard errors; a GENUINELY UNDETERMINABLE dimension is not a finding at
 all. The findings (and the "provable vs unknown" discipline that makes them
 trustworthy) come from [`model_unit_findings`](@ref) in units.jl; this function
-only attaches the model's JSON pointer and recurses into subsystems.
+only attaches the model's JSON pointer and recurses into subsystems. `file`,
+the document holding `model`, lets a scoped reference into a top-level
+component be typed from its target's declaration (esm-spec §4.8.4).
 
 This is what wires the units engine into `validate()`. Before the 2026-07-14
 audit the engine had no caller outside its own test file.
 """
-function validate_model_unit_consistency(model::Model, path::String)::Vector{StructuralError}
+function validate_model_unit_consistency(model::Model, path::String;
+                                         file=nothing)::Vector{StructuralError}
     errors = StructuralError[]
 
-    for f in model_unit_findings(model)
+    for f in model_unit_findings(model; file=file)
         push!(errors, StructuralError("$path/$(f.subpath)", f.message, f.code))
     end
 
     for (subsys_name, subsys) in model_subsystems(model)
-        append!(errors, validate_model_unit_consistency(subsys, "$path/subsystems/$subsys_name"))
+        append!(errors, validate_model_unit_consistency(subsys, "$path/subsystems/$subsys_name";
+                                                        file=file))
     end
 
     return errors

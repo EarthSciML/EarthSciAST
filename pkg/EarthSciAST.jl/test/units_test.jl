@@ -690,4 +690,187 @@ using Unitful
         end
     end
 
+    # esm-spec §4.8.3 `^`: an exponent is read BY VALUE, and a CONSTANT
+    # EXPRESSION over literals folds to the exact rational it denotes.
+    @testset "Constant-expression exponents fold" begin
+        E = EarthSciAST.ASTExpr
+        D = EarthSciAST.get_expression_dimensions
+        F = EarthSciAST.expression_unit_findings
+        C = EarthSciAST._constant_exponent_value
+        cnst(v; units=nothing) = OpExpr("const", E[]; value=v, units=units)
+        var_units = Dict("T" => "K", "L" => "m", "P" => "%", "n" => "",
+                         "alpha" => "", "z" => "kg")
+        pow(b, e) = OpExpr("^", E[VarExpr(b), e])
+
+        # The folding itself.
+        @test C(OpExpr("/", E[IntExpr(3), IntExpr(2)])) == 3 // 2
+        @test C(OpExpr("-", E[IntExpr(1)])) == -1 // 1
+        @test C(OpExpr("-", E[IntExpr(5), IntExpr(3), IntExpr(1)])) == 1 // 1
+        @test C(OpExpr("/", E[OpExpr("+", E[IntExpr(1), IntExpr(2)]),
+                              OpExpr("*", E[IntExpr(4), IntExpr(2)])])) == 3 // 8
+        @test C(OpExpr("+", E[NumExpr(0.5)])) == 1 // 2
+        @test C(cnst(0.5; units="1")) == 1 // 2
+        @test C(cnst(3)) == 3 // 1
+        @test C(cnst(2; units="dimensionless")) == 2 // 1
+        # Not foldable: a scaled or dimensional const, a variable, another op,
+        # a division by zero or a 3-operand `/`, an Int overflow.
+        @test C(cnst(2; units="%")) === nothing
+        @test C(cnst(2; units="m")) === nothing
+        @test C(VarExpr("alpha")) === nothing
+        @test C(OpExpr("+", E[IntExpr(1), VarExpr("alpha")])) === nothing
+        @test C(OpExpr("sqrt", E[IntExpr(4)])) === nothing
+        @test C(OpExpr("/", E[IntExpr(1), IntExpr(0)])) === nothing
+        @test C(OpExpr("/", E[IntExpr(8), IntExpr(2), IntExpr(2)])) === nothing
+        @test C(OpExpr("*", E[IntExpr(typemax(Int)), IntExpr(2)])) === nothing
+
+        # A folded exponent raises the base exactly as the literal would.
+        @test D(pow("T", OpExpr("/", E[IntExpr(3), IntExpr(2)])), var_units) == u"K"^(3 // 2)
+        @test D(pow("T", OpExpr("-", E[IntExpr(1)])), var_units) == u"K"^-1
+        @test D(pow("L", OpExpr("-", E[IntExpr(5), IntExpr(3)])), var_units) == u"m"^2
+        @test D(pow("L", cnst(0.5; units="1")), var_units) == u"m"^(1 // 2)
+        @test D(pow("L", cnst(3)), var_units) == u"m"^3
+        # …and the same for the `pow` alias.
+        @test D(OpExpr("pow", E[VarExpr("L"), OpExpr("/", E[IntExpr(1), IntExpr(2)])]),
+                var_units) == u"m"^(1 // 2)
+
+        # A SYMBOLIC exponent stays undeterminable for a dimensional or scaled
+        # base, with no finding — a fitted reaction order is ordinary physics.
+        for e in (VarExpr("alpha"), OpExpr("+", E[IntExpr(1), VarExpr("alpha")]),
+                  cnst(2; units="%"), OpExpr("/", E[IntExpr(1), IntExpr(0)]))
+            @test D(pow("L", e), var_units) === nothing
+            @test isempty(F(pow("L", e), var_units))
+            @test D(pow("P", e), var_units) === nothing
+            # A dimensionless scale-1 base stays dimensionless under it.
+            @test D(pow("n", e), var_units) == Unitful.NoUnits
+        end
+        # A DIMENSIONAL const exponent is not folded and is still refused.
+        @test any(occursin("Exponent must be dimensionless", m)
+                  for m in F(pow("L", cnst(2; units="m")), var_units))
+        @test !isempty(F(pow("L", VarExpr("z")), var_units))
+    end
+
+    # esm-spec §4.8.3: an faq's `filter` and `expr` body are walked with the
+    # ordinary operator rules; the faq's own unit stays undeterminable (the
+    # checker does not model the array operators, §4.8.4).
+    @testset "faq filter and body are walked" begin
+        E = EarthSciAST.ASTExpr
+        D = EarthSciAST.get_expression_dimensions
+        F = EarthSciAST.expression_unit_findings
+        var_units = Dict("x" => "m", "y" => "m", "z" => "kg")
+        faq(; body, filter=nothing) = OpExpr("faq", E[]; expr_body=body, filter=filter,
+                                             output_idx=String[])
+        good = faq(body=OpExpr("+", E[VarExpr("x"), VarExpr("y")]),
+                   filter=OpExpr("<=", E[VarExpr("x"), VarExpr("y")]))
+        @test isempty(F(good, var_units))
+        @test D(good, var_units) === nothing
+
+        bad_filter = faq(body=VarExpr("x"), filter=OpExpr("<=", E[VarExpr("x"), VarExpr("z")]))
+        @test length(F(bad_filter, var_units)) == 1
+        @test D(bad_filter, var_units) === nothing
+
+        bad_body = faq(body=OpExpr("+", E[VarExpr("x"), VarExpr("z")]))
+        @test length(F(bad_body, var_units)) == 1
+
+        # A mismatch inside a nested faq is still found.
+        @test length(F(OpExpr("*", E[VarExpr("x"), bad_body]), var_units)) == 1
+    end
+
+    # esm-spec §4.8.4 (EarthSciAST#414): a scoped reference carries its
+    # target's declared units, across a subsystem or a top-level mount.
+    @testset "Scoped references carry their target's units" begin
+        E = EarthSciAST.ASTExpr
+        MV = EarthSciAST.ModelVariable
+        U, P = EarthSciAST.UnknownVariable, EarthSciAST.ParameterVariable
+        leaf = EarthSciAST.Model(
+            Dict("p" => MV(P; units="kPa", default=1.0)), EarthSciAST.Equation[];
+            subsystems=Dict("inner" => EarthSciAST.Model(
+                Dict("q" => MV(P; units="m", default=1.0)), EarthSciAST.Equation[])))
+        probe(units, rhs) = EarthSciAST.Model(
+            Dict("probe" => MV(U; units=units)),
+            [EarthSciAST.Equation(VarExpr("probe"), rhs)];
+            subsystems=Dict("Sub" => leaf,
+                            "Pending" => EarthSciAST.SubsystemRef("./missing.esm")))
+        codes(m; kw...) = [(f.subpath, f.code) for f in EarthSciAST.model_unit_findings(m; kw...)]
+        bad = [("variables/probe", EarthSciAST.UNIT_DIMENSION_MISMATCH)]
+
+        # Relative to the model's own subsystems, at any depth.
+        @test isempty(codes(probe("kPa", VarExpr("Sub.p"))))
+        @test codes(probe("Pa", VarExpr("Sub.p"))) == bad      # scale mismatch
+        @test codes(probe("kg", VarExpr("Sub.p"))) == bad      # dimension mismatch
+        @test isempty(codes(probe("m", VarExpr("Sub.inner.q"))))
+        @test codes(probe("kg", VarExpr("Sub.inner.q"))) == bad
+        # An unresolved {ref} subsystem contributes nothing: undeterminable.
+        @test isempty(codes(probe("kg", VarExpr("Pending.x"))))
+
+        # Through a top-level component of the document.
+        md = EarthSciAST.Metadata("scoped-units")
+        top_probe(units, rhs) = EarthSciAST.Model(
+            Dict("probe" => MV(U; units=units)), [EarthSciAST.Equation(VarExpr("probe"), rhs)])
+        for (units, want) in (("kPa", []), ("Pa", bad), ("kg", bad))
+            m = top_probe(units, VarExpr("Leaf.p"))
+            file = EarthSciAST.EsmFile("0.1.0", md; models=Dict("Leaf" => leaf, "Probe" => m))
+            @test codes(m; file=file) == want
+            # Without the document the top-level path is unknown, so no finding.
+            @test isempty(codes(m))
+        end
+
+        # Precedence: the model's own bare name is never overwritten, and the
+        # relative path wins over a same-named top-level path.
+        shadow = EarthSciAST.Model(Dict("p" => MV(P; units="s", default=1.0)), EarthSciAST.Equation[])
+        rel = probe("kPa", VarExpr("Sub.p"))
+        file = EarthSciAST.EsmFile("0.1.0", md; models=Dict("Sub" => shadow, "Probe" => rel))
+        @test EarthSciAST.scoped_reference_units(file, rel)["Sub.p"] == "kPa"
+        @test isempty(codes(rel; file=file))
+        own = EarthSciAST.Model(
+            Dict("probe" => MV(U; units="s"), "Sub.p" => MV(P; units="s", default=1.0)),
+            [EarthSciAST.Equation(VarExpr("probe"), VarExpr("Sub.p"))];
+            subsystems=Dict("Sub" => leaf))
+        @test isempty(codes(own))
+
+        # A reaction system's species and parameters are reachable too.
+        rs = EarthSciAST.ReactionSystem([EarthSciAST.Species("O3"; units="mol/m^3")],
+                                        EarthSciAST.Reaction[];
+                                        parameters=[EarthSciAST.Parameter("k", 1.0; units="1/s")])
+        m = top_probe("mol/m^3/s", OpExpr("*", E[VarExpr("Chem.k"), VarExpr("Chem.O3")]))
+        file = EarthSciAST.EsmFile("0.1.0", md; models=Dict("Probe" => m),
+                                   reaction_systems=Dict("Chem" => rs))
+        @test isempty(codes(m; file=file))
+        m2 = top_probe("mol/m^3", OpExpr("*", E[VarExpr("Chem.k"), VarExpr("Chem.O3")]))
+        file2 = EarthSciAST.EsmFile("0.1.0", md; models=Dict("Probe" => m2),
+                                    reaction_systems=Dict("Chem" => rs))
+        @test codes(m2; file=file2) == bad
+    end
+
+    # The shared fixtures for the three rules, through the public front door
+    # (`load_path`, so every {ref} mount resolves, then `validate`).
+    @testset "Mount / faq / constant-exponent unit fixtures" begin
+        tests_root = joinpath(@__DIR__, "..", "..", "..", "tests")
+        for f in ("units_mount_leaf.esm", "units_mount_subsystem_consistent.esm",
+                  "units_mount_toplevel_consistent.esm", "units_faq_filter_consistent.esm",
+                  "units_constant_exponent_folding.esm",
+                  "units_symbolic_exponent_undeterminable.esm")
+            @testset "valid: $f" begin
+                r = EarthSciAST.validate(EarthSciAST.load_path(joinpath(tests_root, "valid", f)))
+                @test r.is_valid
+                @test isempty(r.structural_errors)
+            end
+        end
+        for (f, pins) in (
+                "units_mount_subsystem_wrong_dimension.esm" => ["/models/Probe/variables/probe"],
+                "units_mount_subsystem_scale_mismatch.esm" => ["/models/Probe/variables/probe"],
+                "units_mount_toplevel_wrong_dimension.esm" => ["/models/Probe/variables/probe"],
+                "units_mount_toplevel_scale_mismatch.esm" => ["/models/Probe/variables/probe"],
+                "units_faq_filter_mismatch.esm" => ["/models/Probe/variables/n_short"],
+                "units_faq_body_mismatch.esm" => ["/models/Probe/variables/total"],
+                "units_constant_exponent_mismatch.esm" => ["/models/Powers/variables/T_32",
+                                                           "/models/Powers/variables/L_const"])
+            @testset "invalid: $f" begin
+                r = EarthSciAST.validate(EarthSciAST.load_path(joinpath(tests_root, "invalid", f)))
+                @test !r.is_valid
+                @test [(e.error_type, e.path) for e in r.structural_errors] ==
+                      [("unit_inconsistency", p) for p in pins]
+            end
+        end
+    end
+
 end

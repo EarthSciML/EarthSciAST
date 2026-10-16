@@ -635,6 +635,148 @@ function _literal_value(e::ASTExpr)
     return nothing
 end
 
+# A literal exponent as an exact rational, converted the way `_power_rule`
+# always converted a literal (an integral value exactly; anything else through
+# `rationalize`). `nothing` for a non-finite value or a non-number.
+function _exponent_rational(v)::Union{Rational{Int}, Nothing}
+    (v isa Real && !(v isa Bool)) || return nothing
+    isfinite(v) || return nothing
+    try
+        return isinteger(v) ? Rational{Int}(Int(v)) : rationalize(Int, float(v))
+    catch
+        return nothing  # outside Int's range
+    end
+end
+
+"""
+    _constant_exponent_value(e) -> Union{Rational{Int}, Nothing}
+
+The exact rational value of a CONSTANT-EXPRESSION exponent (esm-spec §4.8.3
+`^`), or `nothing` when it is symbolic. It folds a numeric literal; a `const`
+that declares no `units`, or a dimensionless unit at exact scale 1; and `+`,
+`*` (one or more operands), `-` (unary negation, or a left fold of two or more)
+and `/` (exactly two operands, nonzero divisor) over constant expressions,
+nested to any depth. Anything else — a variable, an expression containing one,
+a `const` that is dimensional or scaled (`%`), any other operator, an `Int`
+overflow, a division by zero — is symbolic.
+"""
+function _constant_exponent_value(e::ASTExpr)::Union{Rational{Int}, Nothing}
+    lit = _literal_value(e)
+    lit !== nothing && return _exponent_rational(lit)
+    e isa OpExpr || return nothing
+    op = e.op
+    if op == "const"
+        if e.units !== nothing
+            u = parse_units(e.units)
+            u === nothing && return nothing
+            (dimension(u) == dimension(Unitful.NoUnits) && isone(_exact_scale(u))) ||
+                return nothing
+        end
+        return _exponent_rational(e.value)
+    end
+    op in ("+", "*", "-", "/") || return nothing
+    isempty(e.args) && return nothing
+    vals = Rational{Int}[]
+    for a in e.args
+        v = _constant_exponent_value(a)
+        v === nothing && return nothing
+        push!(vals, v)
+    end
+    try
+        if op == "+"
+            return sum(vals)
+        elseif op == "*"
+            return prod(vals)
+        elseif op == "-"
+            length(vals) == 1 && return -vals[1]
+            return foldl(-, vals)
+        else  # "/"
+            (length(vals) == 2 && !iszero(vals[2])) || return nothing
+            return vals[1] / vals[2]
+        end
+    catch err
+        err isa OverflowError && return nothing
+        rethrow()
+    end
+end
+
+# ---------------------------------------------------------------------------
+# SCOPED REFERENCES (esm-spec §4.8.4, §4.9.2; EarthSciAST#414).
+#
+# After load a mounted component — `subsystems.<k>: {ref}` or a top-level
+# `models.<k>: {ref}` — is the same as one written inline (§4.7 "Resolution
+# timing"), so a scoped reference to one of its members carries the units the
+# member declares, exactly as a local name does. Treating `Leaf.p` as
+# undeterminable skipped every dimensional check across a mount edge.
+# ---------------------------------------------------------------------------
+
+# Declared unit strings of a component's own members: a model's `variables`,
+# a reaction system's `species` and `parameters`.
+function _component_member_units(c)::Vector{Pair{String, String}}
+    out = Pair{String, String}[]
+    if c isa Model
+        for (name, var) in c.variables
+            var.units !== nothing && !isempty(var.units) && push!(out, name => var.units)
+        end
+    elseif c isa ReactionSystem
+        for s in c.species
+            s.units !== nothing && !isempty(s.units) && push!(out, s.name => s.units)
+        end
+        for p in c.parameters
+            p.units !== nothing && !isempty(p.units) && push!(out, p.name => p.units)
+        end
+    end
+    return out
+end
+
+# Register `<prefix>.<member>` for every member of `c` and, recursively, of
+# every RESOLVED subsystem it carries. An unresolved `SubsystemRef` contributes
+# nothing. A later write wins, which is how the relative paths take precedence.
+function _collect_scoped_units!(out::AbstractDict{String, String}, prefix::AbstractString, c)
+    for (name, units) in _component_member_units(c)
+        out["$prefix.$name"] = units
+    end
+    (c isa Model || c isa ReactionSystem) || return out
+    for (sub_name, sub) in c.subsystems
+        (sub isa Model || sub isa ReactionSystem) || continue
+        _collect_scoped_units!(out, "$prefix.$sub_name", sub)
+    end
+    return out
+end
+
+"""
+    scoped_reference_units(file, component) -> Dict{String, String}
+
+Scoped name → declared unit string, for every scoped reference an expression in
+`component` can make (esm-spec §4.9.2): `<System>.<member>` (and deeper, through
+that system's subsystems) for every top-level model and reaction system of
+`file`, and `<sub>.<member>` (and deeper) relative to `component`'s own
+subsystems — the relative path wins on a collision. A member with no `units` is
+absent; `file === nothing` contributes only the relative paths.
+"""
+function scoped_reference_units(file, component)::Dict{String, String}
+    out = Dict{String, String}()
+    if file !== nothing
+        if file.models !== nothing
+            for (name, m) in file.models
+                _collect_scoped_units!(out, name, m)
+            end
+        end
+        if file.reaction_systems !== nothing
+            for (name, rs) in file.reaction_systems
+                _collect_scoped_units!(out, name, rs)
+            end
+        end
+    end
+    if component isa Model || component isa ReactionSystem
+        for (sub_name, sub) in component.subsystems
+            (sub isa Model || sub isa ReactionSystem) || continue
+            _collect_scoped_units!(out, sub_name, sub)
+        end
+    end
+    return out
+end
+
 # ---------------------------------------------------------------------------
 # EXACT UNIT SCALES (esm-spec §4.8.1 "Scales are EXACT").
 #
@@ -1020,8 +1162,11 @@ function _power_rule(expr, var_units, findings)
 
     # The exponent is read by VALUE off the AST, not through the engine: the
     # engine reports every literal as indeterminate (fabrication #1), and a
-    # literal exponent is precisely the case that makes `^` computable.
-    power = _literal_value(expr.args[2])
+    # literal exponent is precisely the case that makes `^` computable. A
+    # CONSTANT EXPRESSION over literals (`3/2`, `-(1)`, a unitless `const`)
+    # folds to the exact rational it denotes and is used exactly as that
+    # literal would be (esm-spec §4.8.3); anything else is symbolic.
+    power = _constant_exponent_value(expr.args[2])
 
     if power === nothing
         # Non-literal exponent: it must still be dimensionless, and THAT is
@@ -1046,7 +1191,7 @@ function _power_rule(expr, var_units, findings)
     # Unitful represents rational powers, so `x^0.5` on `m^2` is `m`; a power it
     # cannot represent is unknown, not an inconsistency.
     try
-        return isinteger(power) ? base_dim^Int(power) : base_dim^rationalize(float(power))
+        return isinteger(power) ? base_dim^Int(power) : base_dim^power
     catch
         return nothing
     end
@@ -1428,6 +1573,16 @@ function _expr_dimensions!(findings::Vector{String}, expr::ASTExpr,
         rule !== nothing && return rule(expr, var_units, findings)
         var_units isa _ElementUnits && expr.op in _ARRAY_ELEMENT_OPS &&
             return _array_element_rule(expr, var_units, findings)
+        if expr.op == "faq"
+            # The checker does not model the array operators, so the faq's own
+            # unit stays undeterminable (esm-spec §4.8.4) — but the expressions
+            # it evaluates are checked like any other (§4.8.3): its `filter`, a
+            # boolean whose value never reaches the faq's unit, and its `expr`
+            # body. A provable mismatch in either is a finding (EarthSciAST#414).
+            expr.filter !== nothing && _expr_dimensions!(findings, expr.filter, var_units)
+            expr.expr_body !== nothing && _expr_dimensions!(findings, expr.expr_body, var_units)
+            return nothing
+        end
         # Operator without a dimensional rule (comparisons, aggregate ops,
         # registered-function calls, …): degrade silently — the result is
         # unknown, not an authoring error.
@@ -1618,9 +1773,12 @@ const UNIT_DIMENSION_MISMATCH = ERROR_CODES.UNIT_INCONSISTENCY
 const UNIT_PARSE_ERROR = ERROR_CODES.UNIT_PARSE_ERROR
 
 """
-    model_unit_findings(model::Model) -> Vector{UnitFinding}
+    model_unit_findings(model::Model; file=nothing) -> Vector{UnitFinding}
 
-Every units finding in `model`. Callers prefix their JSON pointer and promote
+Every units finding in `model`. A scoped reference (`sub.v`, `Leaf.p`) has the
+units its target declares: relative to `model`'s own subsystems always, and to
+the top-level models and reaction systems of `file` (the `EsmFile` holding
+`model`) when one is given — see [`scoped_reference_units`](@ref). Callers prefix their JSON pointer and promote
 each finding to a structural error under its own code; see
 `validate_model_unit_consistency` in validate.jl, the single structural caller.
 
@@ -1647,7 +1805,7 @@ recursion), keeping this function's pointers purely model-local.
 Iteration over `model.variables` is sorted by name so the finding order is
 deterministic regardless of Dict hashing.
 """
-function model_unit_findings(model::Model)::Vector{UnitFinding}
+function model_unit_findings(model::Model; file=nothing)::Vector{UnitFinding}
     # Only EXPLICITLY declared units enter the environment, and only those that
     # RESOLVE. A variable with no declared units is unknown, not dimensionless;
     # one whose declared units do not resolve is reported separately below and
@@ -1657,6 +1815,16 @@ function model_unit_findings(model::Model)::Vector{UnitFinding}
     for (name, var) in model.variables
         var.units !== nothing && !isempty(var.units) &&
             parse_units(var.units) !== nothing && (var_units[name] = var.units)
+    end
+    # Scoped references — into this model's own subsystems and, given the
+    # document, into its top-level components — carry their targets' declared
+    # units (esm-spec §4.8.4, EarthSciAST#414). The model's own bare names are
+    # never overwritten; an unresolvable target unit is reported at its own
+    # declaration, so it is simply left unknown here.
+    for (name, units) in scoped_reference_units(file, model)
+        haskey(var_units, name) && continue
+        parse_units(units) === nothing && continue
+        var_units[name] = units
     end
 
     out = UnitFinding[]
