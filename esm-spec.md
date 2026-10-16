@@ -1179,6 +1179,8 @@ A stencil gather of a **const array** (a pre-computed factor: Fornberg weights, 
 
 The `index` base is a const array when it is **either** a `const` node written inline (`index({"op": "const", "value": [...]}, k)`) **or** a variable whose defining equation is a `const` node. The two spellings are the same data and gather identically: an inline literal has no declared boundary policy, so an out-of-range index on it raises `E_TREEWALK_CONSTARRAY_OOB` and never reads the zero ghost. Any other array-valued base — a state, an observed computed from other quantities, a `reshape` or `broadcast` result — is not a const array. Each index is checked against **its own** dimension, so `index(A, 4, 1)` on a 3×2 array is out of range even though a flattened offset for it would fall inside the array.
 
+*Only a read that happens can fault (normative).* An out-of-range const-array read raises `E_TREEWALK_CONSTARRAY_OOB` only for a cell whose evaluation actually takes it. A read in the branch of an `ifelse` that the condition does not select for that cell, or in a `faq` term that the node's `filter` excludes, is never performed and never faults, under every compiler. The same read in a branch or term that IS taken raises the error exactly as an unguarded read does. The guard is how a document says "this neighbour does not exist here" (`ifelse(i > 1, c[i-1], 0)`), so a binding that evaluates both branches eagerly, or every term before filtering, rejects a correct document. See `CONFORMANCE_SPEC.md` §5.5.5.
+
 #### 4.3.4 `broadcast`
 
 `broadcast` applies a scalar operator element-wise to one or more broadcast-compatible arrays. The operator is named in the `fn` field; the operands are in `args`.
