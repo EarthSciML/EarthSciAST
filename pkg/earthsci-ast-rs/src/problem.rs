@@ -1865,6 +1865,13 @@ pub fn esm_problem<'a>(
                     crate::prepare::Route::Overlay => {
                         outside_rule_row(compiler, rule, r.kind, None, false)
                     }
+                    crate::prepare::Route::Tape => CompilerRuleReport {
+                        rule,
+                        kind: r.kind,
+                        cadence: "const",
+                        tier: "taped",
+                        reason: None,
+                    },
                     crate::prepare::Route::PerCell(why) => {
                         outside_rule_row(compiler, rule, r.kind, Some(why.clone()), false)
                     }

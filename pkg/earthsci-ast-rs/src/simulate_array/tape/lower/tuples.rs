@@ -86,6 +86,19 @@ struct TupleList {
     cols: Vec<Vec<f64>>,
 }
 
+/// The `(positions, keys)` of a 1-D data column keyed by each value's bits,
+/// `-0.0` folded onto `+0.0` so that every pair `==` admits shares a key.
+fn float_key_column(a: &ndarray::ArrayD<f64>) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
+    if a.ndim() != 1 {
+        return None;
+    }
+    let keys = a
+        .iter()
+        .map(|&v| crate::relational::Key::Int((if v == 0.0 { 0.0 } else { v }).to_bits() as i64))
+        .collect();
+    Some(((1..=a.len() as i64).collect(), keys))
+}
+
 /// One contracted dimension's enumeration source within one output cell.
 enum Src<'a> {
     Range(i64, i64),
@@ -109,17 +122,11 @@ impl TapeBuilder<'_> {
         join: Option<&[JoinClause]>,
     ) -> LResult<LV> {
         // A scalar reduction may be `bool_and_or`; an array-valued one may not
-        // (CONFORMANCE_SPEC §5.6.1).
+        // (CONFORMANCE_SPEC §5.6.1), outside the build pipeline.
         let combine_op = if ranges.is_empty() {
             scalar_combine_op(reduce)
         } else {
-            let Some(op) = reduce_combine_op(reduce) else {
-                bail_tape!(
-                    "contracted: an array-valued bool_and_or reduction (the numeric \
-                     evaluators reject it, CONFORMANCE_SPEC §5.6.1)"
-                );
-            };
-            op
+            self.array_combine_op(reduce, "contracted")?
         };
         // With nothing contracted the interpreter returns the body itself,
         // not `identity ⊕ body` (they differ on a `-0.0` term): each output
@@ -381,16 +388,37 @@ impl TapeBuilder<'_> {
     }
 
     /// The build-time value of the variable `name` — an observed whose value
-    /// the build knows — as `(shape, row-major values)`; a scalar has an
-    /// empty shape and one value.
+    /// the build knows, or a CONST-cadence observed it can fold
+    /// ([`Self::fold_const_observed`]) — as `(shape, row-major values)`; a
+    /// scalar has an empty shape and one value.
     pub(super) fn known_named(&self, name: &str) -> Option<(DimU, Rc<Vec<f64>>)> {
         match self.obs_defined.get(name)? {
             ObsVal::Taped(LV::Lit(x)) => Some((DimU::new(), Rc::new(vec![*x]))),
             ObsVal::Taped(LV::Arr(s)) => {
                 let shape = self.slots[*s as usize].shape.clone();
-                Some((shape, self.known_values(*s)?))
+                match self.known_values(*s) {
+                    Some(v) => Some((shape, v)),
+                    None => self.fold_const_observed(name),
+                }
             }
             _ => None,
+        }
+    }
+
+    /// Why an observed's value is not build-time data, for a refusal that
+    /// names it: empty for a name that is not one of this program's
+    /// observeds.
+    fn not_foldable_note(&self, name: &str) -> &'static str {
+        if self
+            .observed_rules
+            .iter()
+            .any(|r| observed_rule_var(r) == name)
+        {
+            " (an observed whose value reads a parameter, a state, the time or a forcing \
+             input, directly or through another observed, so it is not constant at build \
+             time; CONFORMANCE_SPEC §5.5.8)"
+        } else {
+            ""
         }
     }
 
@@ -453,11 +481,21 @@ impl TapeBuilder<'_> {
             if g.cols_l.len() != g.cols_r.len() || g.cols_l.is_empty() {
                 continue;
             }
-            let side = |cols: &[crate::join::KeyColumn]| -> LResult<_> {
+            // `exact_ints`: each data column must hold exact integers, which is
+            // what the interpreter drives on. A clause over other values is
+            // not a gate there — the filter's `==` decides every pair of the
+            // full product — so here it drives on the values' bits instead
+            // (`float_key_column`): the same pairs the filter admits, and
+            // a NaN pair the filter then rejects, so the walk is still the
+            // filtered product's order-preserving subsequence.
+            let side = |cols: &[crate::join::KeyColumn], exact_ints: bool| -> LResult<_> {
                 let mut parts = Vec::with_capacity(cols.len());
                 for c in cols {
                     parts.push(match c {
                         crate::join::KeyColumn::Const { positions, values } => {
+                            if !exact_ints {
+                                return Ok(None);
+                            }
                             const_key_column(positions, values)
                         }
                         crate::join::KeyColumn::Column(name) => {
@@ -472,25 +510,44 @@ impl TapeBuilder<'_> {
                                 })
                                 .ok_or_else(|| Bail {
                                     reason: format!(
-                                        "aggregate: join key column `{name}` is not build-time data"
+                                        "aggregate: join key column `{name}` is not build-time \
+                                         data{}",
+                                        self.not_foldable_note(name)
                                     ),
                                 })?;
-                            data_key_column(&a).ok_or_else(|| Bail {
-                                reason: format!(
-                                    "aggregate: join key column `{name}` is not a 1-D column of \
-                                     exact integers"
+                            let col = if exact_ints {
+                                data_key_column(&a)
+                            } else {
+                                float_key_column(&a)
+                            };
+                            match col {
+                                Some(col) => col,
+                                None if exact_ints => return Ok(None),
+                                None => bail_tape!(
+                                    "aggregate: join key column `{name}` is not a 1-D column"
                                 ),
-                            })?
+                            }
                         }
                     });
                 }
-                composite_side_keys(parts).ok_or_else(|| Bail {
+                composite_side_keys(parts).map(Some).ok_or_else(|| Bail {
                     reason: "aggregate: a composite join key's columns disagree in length"
                         .to_string(),
                 })
             };
-            let (pos_l, keys_l) = side(&g.cols_l)?;
-            let (pos_r, keys_r) = side(&g.cols_r)?;
+            let sides = match (side(&g.cols_l, true)?, side(&g.cols_r, true)?) {
+                (Some(l), Some(r)) => Some((l, r)),
+                _ => match (side(&g.cols_l, false)?, side(&g.cols_r, false)?) {
+                    (Some(l), Some(r)) => Some((l, r)),
+                    _ => None,
+                },
+            };
+            let Some(((pos_l, keys_l), (pos_r, keys_r))) = sides else {
+                bail_tape!(
+                    "aggregate: a join clause pairs a literal key with a column that is not \
+                     exact integers"
+                );
+            };
             let (index, n_src, n_tgt) = index_from_sides((pos_l, keys_l, pos_r, keys_r));
             gates.push(BuiltGate {
                 sym_src: g.sym_l.clone(),
